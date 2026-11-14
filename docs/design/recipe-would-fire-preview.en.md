@@ -16,10 +16,10 @@ parent: architecture-and-design.en.md
 >
 > **Related**: [ADR-024 Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md); tracking issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657). A recipe is the alert rule a tenant defines for themselves in the portal; this doc designs the preview that confirms, right there, whether it would fire.
 >
-> This design is implemented: the service lives in `components/recipe-preview/`, a `helm/recipe-preview` chart exists. The portal used to reach it through da-portal's reverse proxy (`portal.recipePreviewUrl`); that path was removed with [ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md), and the service is moving into the tenant-api pod behind a route under `/api/` (in progress). It runs in try-local first; production deployment is deferred (the image and a `recipe-preview/v*` tag have not been released). This doc focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
+> This design is implemented: the service lives in `components/recipe-preview/`. The portal used to reach it through da-portal's reverse proxy (`portal.recipePreviewUrl`); that path was removed with [ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md). It is now a container in the tenant-api pod (the tenant-api chart's `recipePreview`, on by default): the portal calls `POST /api/v1/tenants/{id}/recipe-preview`, and tenant-api authorizes the caller and forwards over a Unix socket inside the pod. The standalone `helm/recipe-preview` chart is gone. The image is built with `tools/v*`; the next tools release ships the first one, and until then try-local is the only place it runs. This doc focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
 > - **Settled**: the backend's shape (a standalone Python service, try-local first), the API contract, the production guardrails.
 > - **First scope**: the threshold recipe (`>` `>=` `<` `<=` `==`) + absence (gap detection — the synthetic series simply doesn't emit the metric).
-> - **Deferred**: production deployment, the remaining recipe types, historical backtest (triggers for each in §9).
+> - **Deferred**: the remaining recipe types, historical backtest (triggers for each in §9). Production deployment was here too; #1040 landed it.
 
 ## 1. The problem
 
@@ -47,13 +47,13 @@ A second copy in the frontend will get these wrong, and **a wrong preview is wor
 
 ## 3. Preview backend: a standalone Python service (try-local first)
 
-**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in try-local (the local docker-compose trial stack); production deployment is deferred.
+**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in try-local (the local docker-compose trial stack). Production deployment was deferred at first; it has since landed with #1040, as a container in the tenant-api pod (see the header above).
 
 Why a standalone service rather than folding it into the existing tenant-api:
 
 | Option | Upside | Cost |
 |---|---|---|
-| **A. Standalone Python service (chosen)** | Also Python, so it can **call the compiler directly** (see 5.3), zero cross-language rewrite; `promtool` need not go into the production core image; if an eval hangs, the impact is contained in this one service | Needs its own nginx route + auth; production is a new deployment → so it ships try-local first |
+| **A. Standalone Python service (chosen)** | Also Python, so it can **call the compiler directly** (see 5.3), zero cross-language rewrite; `promtool` need not go into the production core image; if an eval hangs, the impact is contained in this one service | Originally: its own nginx route + auth, and production a new deployment → so it shipped try-local first. Now: no route or auth of its own — it is a container in the tenant-api pod, called by tenant-api over a pod-local Unix socket after authorization (#1040) |
 | B. Extend the existing tenant-api (Go calling out to a subprocess) | Reuses tenant-api's existing route + auth; production in one shot | Image grows; couples "eval" into the "write" critical path; repeatedly forking a subprocess inside a long-running service risks concurrency issues |
 
 Why A, in one line: the platform consistently keeps production lean and contains failure impact, and the preview's near-term users are in the local trial stage — no reason to couple eval into the production write path for that. (Full A/B comparison is in the [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) thread.)
@@ -129,22 +129,30 @@ A Prometheus rule compares "series" (labelled time series), not a single number.
 
 ### 5.2 Eval mechanism: a proof-by-contradiction that makes `promtool` tell you
 
-`promtool test rules` is an **assert** tool — you give it "which alerts you expect to fire" and it checks; but it won't volunteer "who fired", and the preview is exactly what doesn't know the answer. So we use it in reverse: feed the synthetic input + **assert "no alert fires"** (`exp_alerts: []`), then read `promtool`'s reaction — **no objection means nothing fired; an objection means something fired**.
+`promtool test rules` is an **assert** tool — you give it "which alerts you expect to fire" and it checks; but it won't volunteer "who fired", and the preview is exactly what doesn't know the answer. So we use it in reverse: the same synthetic input is written as **two test groups that assert opposite answers**, and we see which one does not hold.
 
-| `promtool` result | verdict |
-|---|---|
-| success (returncode 0) | no alert fired → `inactive` |
-| failure, output containing `FAILED:` + a non-empty `got:` (the alerts that actually fired) | an alert fired → `firing`; that block carries the labels + annotations |
-| failure **without** the above signature | compile/syntax error, timeout, killed, etc. → `error` (**must never be treated as firing**) |
+- `fires` group: asserts the alert **does** fire (`ALERTS{alertname=…, alertstate="firing"}` exists).
+- `quiet` group: asserts it does **not** fire, and also asserts that a recording rule the service adds to the rule file (`da_preview_loaded`) exists — proof the rule file was loaded and evaluated.
 
-Two details that must be followed (skip them and the answer is wrong):
+The result is always read from `promtool test rules --junit`'s report (one testcase per group), never from console text ([#3611](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3611)):
 
-1. **The eval time must be greater than the recipe's `for:` window.** Before `for:` is satisfied an alert is *pending* (not yet firing), and "assert nothing fires" does **not** count pending as a violation → `promtool` returns success → the preview wrongly reports "doesn't fire" (even though the value already crossed the threshold). So the synthetic test's eval time must be **strictly greater than `for:`** (e.g. `for: 30m` → eval at 35m), and the series must be long enough to span `for:`.
-2. **A non-zero returncode does not mean "fired".** An out-of-memory kill (OOM), a missing `promtool`, or a malformed synthetic test file all return non-zero. Blindly treating "non-zero" as firing would report an infrastructure error as firing. So a firing verdict **must also** see the failure signature (`FAILED:` + `got:`); otherwise it is `error`, surfacing the real error.
+| `fires` group | `quiet` group | verdict |
+|---|---|---|
+| holds | does not hold | `firing` |
+| does not hold | holds | `inactive` |
+| anything else (both fail, both hold, an `<error>` in the report, the wrong groups, an exit status that disagrees, no report) | | `error` (**must never be read as fired or not fired**) |
 
-To make sure a compile failure is never mislabeled as "fired", gate in three layers: ① a recipe the exporter rejects (no threshold row served) → `error`, with the exporter's reason; ② the compiled rules first pass `promtool check rules` (syntax) → failure is `error`; ③ only after syntax passes do we run the proof-by-contradiction above.
+Why two groups: `promtool` records **any** error inside a group — input series it cannot read, a rule that fails to load, a rule that errors when evaluated — as the very same `<failure>` an assertion that does not hold gets. With a single group, "did not run" reads as "fired". With two opposite groups, a real evaluation fails exactly one; one that could not evaluate fails both. A rule file promtool did not load is no error to it (it simply has no rules to run); the `quiet` group's load proof catches that.
 
-> Verified locally: value 1500 > threshold 1000 → failure, output carries the full alert; value 500 → success. The whole thing uses existing tools — no separate Prometheus instance needed.
+Three details that must be followed (skip them and the answer is wrong):
+
+1. **The eval time must be greater than the recipe's `for:` window.** Before `for:` is satisfied an alert is *pending* (not yet firing), and both groups look only at `alertstate="firing"` → too early an eval time reads as `inactive` (even though the value already crossed the threshold). So the synthetic test's eval time must be **strictly greater than `for:`** (e.g. `for: 30m` → eval at 35m), and the series must be long enough to span `for:`.
+2. **The test value must be a finite JSON number.** A string (even `"1500"`), a boolean, `NaN` or `Infinity` is `error` before `promtool` runs; the value is written in the same normalized form as the threshold. `promtool`'s series grammar is not Python's `float()`: `"1500\n"` reads as a single sample that is stale by eval time, which would be a false `inactive`.
+3. **The groups' names and the verdict table are one definition** (`_recipe_preview._FIRES` / `_QUIET` / `_VERDICT`), and the rule file name is written once, so the side that writes the test and the side that reads the report cannot disagree.
+
+To make sure a compile failure is never mislabeled as "fired", gate in three layers: ① a recipe the exporter rejects (no threshold row served) → `error`, with the exporter's reason; ② the compiled rules first pass `promtool check rules` (its exit status) → failure is `error`; ③ only after that do we run the two opposite groups above.
+
+> Verified locally (promtool 3.15.1): value 1500 > threshold 1000 → `fires` holds, `quiet` does not; value 500 → the reverse; an input it cannot read or a rule that errors when evaluated → both fail. The whole thing uses existing tools — no separate Prometheus instance needed.
 
 ### 5.3 Single-recipe compilation + reusing the compiler directly
 
@@ -181,7 +189,6 @@ The mechanism: the service hardcodes the supported set (`SUPPORTED_RECIPES_MVP` 
 
 | Deferred item | Trigger |
 |---|---|
-| Production deployment of the preview service | A real production customer authoring in the portal who needs preview (when the local trial isn't enough). Re-evaluate the deployment shape then |
 | Remaining recipe types | Domain experts / tenants actually need previews for these types |
 | Historical backtest ("how many times did my real data fire in the past 24h") | The recipe's recording rule lands; `for:` semantics ready |
 | Rule-pack impact-matrix CI (assess fleet-wide impact before changing a rule-pack) | A rule-pack change causes an unexpected fleet-wide alert shift, or a pre-merge impact assessment is needed. Note: the preview uses synthetic input and does **not** need this one's snapshot data |

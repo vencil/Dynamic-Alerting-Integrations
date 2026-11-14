@@ -301,12 +301,15 @@ exposed, 1 = one ingress, …).
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
 | `networkPolicy.scrapeNamespaceLabel` | `kubernetes.io/metadata.name: monitoring` | Namespace label selector for the Prometheus that scrapes `auditLog.metrics.port` (where Prometheus runs, not this chart; any pod there, so a kube-prometheus-stack Prometheus in that namespace is admitted). `null` = any namespace (`namespaceSelector: {}`); `{}` does not clear it — Helm merges maps |
+| `networkPolicy.restrictEgress` | `true` | Egress only to DNS and TCP `upstream.port` in the upstream's namespace. Set `false` only to supply your own egress policy (e.g. an upstream outside the cluster) |
+| `networkPolicy.upstreamNamespace` | `""` | Namespace of the upstream for that egress rule. Empty = read from `upstream.host` (`<svc>` = this release's namespace, `<svc>.<ns>.svc[.cluster.local]` = `<ns>`, lower-cased); any other host form (an IP, an external name) fails the render |
+| `networkPolicy.upstreamPort` | `""` | The upstream POD port for that egress rule. Empty = `upstream.port`. Set it when the upstream Service maps one port to another |
 | `serviceMonitor.enabled` | `false` | Prometheus Operator only: a ServiceMonitor for the metrics port (needs `auditLog.enabled`), no `jobLabel`; `serviceMonitor.labels` defaults to `release: kube-prometheus-stack` |
 | `auditLog.enabled` | `true` | Master switch for the metrics pipeline (audit-metrics + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
 | `auditLog.volumeSizeLimit` | `1Gi` | `emptyDir` cap for the audit-log mirror. Disk-backed (node ephemeral storage, not RAM). The headroom is deliberate: under a flood of rejected requests, logrotate has to rotate the file before the `emptyDir` fills and the kubelet evicts the pod |
 | `auditLog.image.repository` | `federation-audit-sidecar` | logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
-| `auditLog.image.tag` | `alpine3.23.6-1` | `alpine<version>-<build revision>`. Bump it whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
+| `auditLog.image.tag` | `alpine3.24.4-1` | `alpine<version>-<build revision>`. Bump it whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
 | `auditLog.metrics.image.*` | `timberio/vector:0.61.0-distroless-libc` + digest | The audit-metrics sidecar — kept identical to `helm/vector`'s image (one Vector version, one Renovate bump) |
 | `auditLog.metrics.port` | `3903` | `/metrics` port; the Service's scrape annotations point here |
 | `auditLog.metrics.resources` | 10m/48Mi req, 100m/128Mi limit | Measured ~42 MiB RSS |

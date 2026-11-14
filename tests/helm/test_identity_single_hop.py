@@ -43,7 +43,7 @@ _OWNER_CHART = "tenant-api"
 #: they need a value to install at all, so their ci/ sets are the only view.
 #: Any other default-render failure fails the fixture.
 _REFUSES_DEFAULTS = {
-    "victorialogs": "needs auth.consumers[].existingSecret",
+    "victorialogs": "needs a Secret for every consumer in auth.existingSecrets",
 }
 #: One more tenant-api render: an OIDC provider with an extra claim header, so
 #: the configured-header list below is shown to come from the config file
@@ -147,6 +147,7 @@ def _is_oauth2_proxy_config(doc: dict) -> bool:
 
 # ── §9 item 3: one oauth2-proxy ─────────────────────────────────────────────
 
+# adr-check: ADR-027/9.3a
 def test_the_only_oauth2_proxy_is_in_the_tenant_api_pod(renders: dict[str, list[dict]]) -> None:
     found: dict[str, list[str]] = {}
     for key, docs in renders.items():
@@ -162,6 +163,7 @@ def test_the_only_oauth2_proxy_is_in_the_tenant_api_pod(renders: dict[str, list[
         assert len(where) == 1, f"{key}: {where}"
 
 
+# adr-check: ADR-027/9.3a
 def test_no_raw_manifest_runs_an_oauth2_proxy() -> None:
     docs = _k8s_manifests()
     assert any(_containers(d) for _, d in docs), "k8s/: no workload found — vacuous"
@@ -199,6 +201,7 @@ def test_the_header_list_comes_from_the_rendered_config(renders: dict[str, list[
     assert _CLAIM_HEADER in names, sorted(names)
 
 
+# adr-check: ADR-027/9.5a
 def test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header(
         renders: dict[str, list[dict]]) -> None:
     pat = _pattern(_identity_headers(renders))
@@ -213,6 +216,7 @@ def test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header
     assert not hits, "an identity header outside oauth2-proxy's own config:\n" + "\n".join(hits)
 
 
+# adr-check: ADR-027/9.5a
 def test_no_raw_manifest_or_rule_pack_names_an_identity_header(
         renders: dict[str, list[dict]]) -> None:
     pat = _pattern(_identity_headers(renders))

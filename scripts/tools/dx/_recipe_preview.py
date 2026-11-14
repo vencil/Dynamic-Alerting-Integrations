@@ -19,17 +19,19 @@ absent series can't stand in for them:
     guaranteed to match an arbitrary regex, so a preview could silently report
     a false "inactive". Refusing is honest; lying is not.
 
-Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so we run an
-INVERTED assert (synthetic input + `exp_alerts: []`): returncode 0 → nothing
-fired (inactive); returncode != 0 → it fired. A compile error must NOT be
-mislabeled as firing, so we gate with the exporter's verdict on the recipe +
-`promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
+Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so the same
+synthetic input is written as two groups asserting OPPOSITE answers (`fires`:
+the alert fires; `quiet`: it does not, and the pack loaded) and the verdict is
+which one held, read from the JUnit report — see `_FIRES` / `_VERDICT` (#3611).
+A compile error must NOT be mislabeled as firing, so we gate with the
+exporter's verdict on the recipe + `promtool check rules` BEFORE the test
+(§5.2 layering).
 """
 import json
+import math
 import os
 import re
 import shutil
-import subprocess
 import time
 import sys
 import tempfile
@@ -42,6 +44,7 @@ sys.path.insert(0, _THIS_DIR)
 import compile_custom_alerts as cc  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402  (on the path compile_custom_alerts adds)
 import _lib_parse_cache  # noqa: E402
+import _lib_engine as engine  # noqa: E402  (#3611: a promtool run counts only on its proof)
 
 # `threshold` covers >, >=, <, <=, == (all value-crossing, flat series). `absence`
 # is presence-based — fires where a DECLARING tenant's metric had no sample over
@@ -99,7 +102,10 @@ def _window_minutes(window):
     return _duration_minutes(window)
 
 
-_PROMTOOL = shutil.which("promtool")
+#: Located, or the NoVerdict naming why not: promtool is this service's
+#: optional engine — without it a preview says "cannot evaluate locally"
+#: rather than failing (#3611 Q1: a customer tool's value-add engine).
+_PROMTOOL = engine.locate("promtool")
 
 _TIMEOUT = 60
 
@@ -115,22 +121,31 @@ def _timeout_left(deadline):
     return min(_TIMEOUT, max(0.01, deadline - time.monotonic()))
 
 
-def _promtool(args, work, deadline):
-    """One promtool run in *work*, bounded by *deadline*. encoding is
-    explicit: promtool echoes the rule's own annotations, which are UTF-8.
-    Left to the locale codec, a non-UTF-8 host (cp950) raises inside
-    subprocess's reader thread, the output arrives EMPTY, and a firing verdict
-    silently degrades to `error`."""
-    return _run([_PROMTOOL, *args], cwd=work, capture_output=True, text=True,
-                timeout=_timeout_left(deadline), encoding="utf-8", errors="replace")
-
-
-#: The subprocess seam promtool runs go through (tests replace it).
-_run = subprocess.run
-
 # The one-tenant conf.d the recipe is judged in: a fixed file name, so the
 # tenant id (the caller's) never becomes a path.
 _TENANT_FILE = "tenant.yaml"
+
+# ── the promtool test: one definition the builder writes and the verdict reads ──
+# (#3611, owner ruling 2026-11-12). promtool reports EVERY error inside a test
+# group — unreadable input series, a rule that fails to load or to evaluate —
+# as the same JUnit <failure> an assertion that did not hold gets (upstream
+# cmd/promtool/unittest.go: tc.Fail). So no single group's failure can be read
+# as "the alert fired". Two groups assert OPPOSITE answers on one input: a real
+# evaluation fails exactly one of them; anything that kept promtool from
+# evaluating fails both. The quiet group also asserts a recording rule this
+# service adds to the pack it writes, so "inactive" carries proof the pack
+# loaded (a rule_files entry promtool cannot find loads no rules, silently).
+
+_PACK_FILE = "rule-pack-custom-alerts.yaml"
+_TEST_FILE = "preview_test.yaml"
+_LOADED_RECORD = "da_preview_loaded"
+_LOADED_GROUP = {"name": "da-preview-loaded",
+                 "rules": [{"record": _LOADED_RECORD, "expr": "vector(1)"}]}
+_FIRES, _QUIET = "fires", "quiet"
+
+#: (fires passed, quiet passed) → state. Every other combination — both
+#: failed, both passed, a group missing — is no verdict (state: error).
+_VERDICT = {(True, False): "firing", (False, True): "inactive"}
 
 
 def _labels(d):
@@ -166,6 +181,14 @@ class Judged:
     @property
     def alertname(self):
         return f"Custom_{self.slug}"
+
+
+def _finite_or_inf(v):
+    """*v* as a float, or inf when it does not fit one (an int past 1e308)."""
+    try:
+        return float(v)
+    except OverflowError:
+        return math.inf
 
 
 def _fmt_value(v):
@@ -217,10 +240,14 @@ def judge(recipe, tenant, confd, deadline=None):
 
 
 def build_preview_test(recipe, tenant, value, judged):
-    """Build a promtool test (YAML str) for a supported recipe — inverted assert.
+    """Build a promtool test (YAML str) for a supported recipe — two opposite groups.
 
     The `user_threshold` series is the row the exporter serves for the recipe
     (its labels, severity and value, `judged.row`), not one assembled here.
+    *value* is a finite int / float (the caller checks it) and is written in
+    the threshold's own canonical form (`_fmt_value`), never as given.
+
+    The test is the two opposite groups described at `_FIRES` / `_QUIET`.
 
     POLYMORPHIC by recipe type (a flat series can't fake every shape):
       - threshold (>, >=, <, <=, ==): the observed metric @ the scenario `value`
@@ -275,7 +302,8 @@ def build_preview_test(recipe, tenant, value, judged):
         selectors = dict(judged.spec.get("selectors") or {})
         metric_labels = {"tenant": tenant, **selectors}
         input_series = [
-            {"series": f"{row['metric']}{_labels(metric_labels)}", "values": f"{value}x{n}"},
+            {"series": f"{row['metric']}{_labels(metric_labels)}",
+             "values": f"{_fmt_value(value)}x{n}"},
             {"series": f"user_threshold{_labels(ut_labels)}", "values": f"{thr_value}x{n}"},
             _md(n),
         ]
@@ -288,20 +316,27 @@ def build_preview_test(recipe, tenant, value, judged):
     # selector value that contains a single quote (e.g. `it's`): the `'` closed the
     # scalar early → promtool parse error → a would-actually-deploy recipe was
     # mislabeled state:error. safe_dump escapes per YAML rules, so any exact-selector
-    # value round-trips to the same string promtool sees. (`exp_alerts: []` = the
-    # inverted assert; sort_keys=False keeps promtool's expected key order.)
+    # value round-trips to the same string promtool sees. (sort_keys=False keeps
+    # promtool's expected key order.)
+    firing = (f"(count(ALERTS{_labels({'alertname': judged.alertname, 'alertstate': 'firing'})})"
+              f" > bool 0) or vector(0)")
+
+    def group(name, fires, extra=()):
+        return {"name": name, "interval": "1m", "input_series": input_series,
+                "promql_expr_test": [
+                    {"expr": firing, "eval_time": f"{eval_min}m",
+                     "exp_samples": [{"labels": "{}", "value": 1 if fires else 0}]},
+                    *extra]}
+
+    # `{tenant=""}`: the service's record has no labels, every synthetic
+    # series carries the tenant — a recipe whose metric is named like the
+    # record is not counted with it.
+    loaded = {"expr": f'count({_LOADED_RECORD}{{tenant=""}})', "eval_time": f"{eval_min}m",
+              "exp_samples": [{"labels": "{}", "value": 1}]}
     doc_obj = {
-        "rule_files": ["rule-pack-custom-alerts.yaml"],
+        "rule_files": [_PACK_FILE],
         "evaluation_interval": "1m",
-        "tests": [{
-            "interval": "1m",
-            "input_series": input_series,
-            "alert_rule_test": [{
-                "eval_time": f"{eval_min}m",
-                "alertname": judged.alertname,
-                "exp_alerts": [],
-            }],
-        }],
+        "tests": [group(_FIRES, True), group(_QUIET, False, [loaded])],
     }
     return yaml.safe_dump(doc_obj, sort_keys=False, allow_unicode=True)
 
@@ -309,28 +344,6 @@ def build_preview_test(recipe, tenant, value, judged):
 def _err(reason, alertname=None):
     return {"alertname": alertname, "supported": True,
             "states": [{"state": "error", "reason": reason}], "warnings": []}
-
-
-def classify_promtool_result(returncode, output):
-    """Map a promtool `test rules` (run with `exp_alerts: []`) result to a state.
-
-    rc != 0 alone is NOT "firing": promtool exits non-zero for OOM/kill, a
-    missing binary, or a test-file parse error too. Treating any of those as
-    "firing" would be a false positive (the exact false-confidence the design
-    forbids). So FIRING requires the alert-mismatch signature promtool prints
-    when an alert fires against our empty expectation — `FAILED:` plus a
-    non-empty `got:` block. Anything
-    else with rc != 0 is an infrastructure/parse error → `error`.
-
-      rc == 0                      → inactive (nothing fired)
-      rc != 0 + FAILED: + got:[    → firing
-      rc != 0 otherwise            → error
-    """
-    if returncode == 0:
-        return "inactive"
-    if "FAILED:" in output and "got:[" in output:
-        return "firing"
-    return "error"
 
 
 def preview_recipe(recipe, tenant, scenario, deadline=None):
@@ -412,10 +425,13 @@ def preview_recipe(recipe, tenant, scenario, deadline=None):
             if value is None:
                 return _err("scenario.value is required for a threshold preview",
                             alertname=alertname)
-            try:
-                float(value)
-            except (TypeError, ValueError):
-                return _err(f"scenario.value must be numeric, got {value!r}",
+            # A JSON number only: a string (even "1500") is refused, so text
+            # promtool's series grammar reads differently ("1500\n" is one
+            # sample, then stale) never reaches it; bool is an int to Python,
+            # and NaN / Infinity are numbers to json.loads (#3611, 2026-11-12).
+            if (type(value) not in (int, float)
+                    or not math.isfinite(_finite_or_inf(value))):
+                return _err(f"scenario.value must be a finite JSON number, got {value!r}",
                             alertname=alertname)
         # absence sizes its eval_time from `window`; one the preview cannot size
         # (beyond a day) fails closed to error — never guess a window → wrong
@@ -426,37 +442,43 @@ def preview_recipe(recipe, tenant, scenario, deadline=None):
                         f"like 10m / 1h30m / 500ms, at most {_MAX_WINDOW_MIN}m)",
                         alertname=alertname)
 
-        if _PROMTOOL is None:
+        if isinstance(_PROMTOOL, engine.NoVerdict):
             return {"alertname": alertname, "supported": True, "states": [],
                     "warnings": ["promtool not available — cannot evaluate locally"]}
 
-        pack_path = work / "rule-pack-custom-alerts.yaml"
+        pack_path = work / _PACK_FILE
 
-        # ── render → syntax gate → inverted-assert. Every failure here is
-        # fail-closed to state:error rather than ever mislabel an infra / IO /
-        # timeout failure as firing (§5.2 layering). `except OSError` catches
-        # promtool vanishing after the `which` probe or an unwritable temp dir,
-        # so the {state:error} contract holds even then. ──
+        # ── render → syntax gate → two opposite groups. Every step's verdict is
+        # read from what proves the step ran (_lib_engine's promtool proofs:
+        # exit 0 for `check rules`, the JUnit report for `test rules`, never
+        # console text — #3611 Q2); anything else is state:error, never a
+        # firing / inactive guess. `except OSError`: an unwritable temp dir. ──
         try:
-            pack_path.write_text(cc._render(judged.pack.groups), encoding="utf-8", newline="\n")
-            chk = _promtool(["check", "rules", pack_path.name], work, deadline)
-            if chk.returncode != 0:
-                return _err(f"compiled rule failed promtool check: "
-                            f"{(chk.stderr or chk.stdout).strip()[:300]}",
-                            alertname=alertname)
+            pack_path.write_text(cc._render([*judged.pack.groups, _LOADED_GROUP]),
+                                 encoding="utf-8", newline="\n")
+            chk = engine.run(_PROMTOOL, "check-rules", ["check", "rules", pack_path.name],
+                             cwd=str(work), timeout=_timeout_left(deadline))
+            if isinstance(chk, engine.NoVerdict):
+                return _err(f"promtool check rules on the compiled rule: "
+                            f"{chk.message()[:300]}", alertname=alertname)
             test_doc = build_preview_test(recipe, tenant, value, judged)
-            (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8", newline="\n")
-            res = _promtool(["test", "rules", "preview_test.yaml"], work, deadline)
-        except subprocess.TimeoutExpired as exc:
-            return _err(f"promtool timed out (>{exc.timeout:g}s)", alertname=alertname)
+            (work / _TEST_FILE).write_text(test_doc, encoding="utf-8", newline="\n")
+            junit = work / "preview_test.junit.xml"
+            res = engine.run(_PROMTOOL, "test-rules",
+                             ["test", "rules", "--junit", junit.name, _TEST_FILE],
+                             cwd=str(work), timeout=_timeout_left(deadline),
+                             expect={"junit": str(junit), "cases": {_FIRES, _QUIET}})
         except OSError as exc:
             return _err(f"promtool eval failed: {exc}", alertname=alertname)
 
-        out = (res.stdout or "") + (res.stderr or "")
-        state = classify_promtool_result(res.returncode, out)
-        if state == "error":
-            return _err(f"promtool eval error (rc={res.returncode}): "
-                        f"{out.strip()[:300] or 'no output'}", alertname=alertname)
+        if isinstance(res, engine.NoVerdict):
+            return _err(f"promtool eval error: {res.message()[:300]}", alertname=alertname)
+        state = _VERDICT.get((res.data[_FIRES], res.data[_QUIET]))
+        if state is None:
+            return _err("promtool did not evaluate the rule on this input: the "
+                        f"{_FIRES!r} and {_QUIET!r} test groups "
+                        + ("both failed" if not any(res.data.values()) else "both passed"),
+                        alertname=alertname)
         severity = judged.row["severity"]
         thr_value = _fmt_value(judged.row["value"])
         mode = judged.row["labels"].get("mode")

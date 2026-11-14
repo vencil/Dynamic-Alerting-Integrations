@@ -226,7 +226,13 @@ def render_routes(conf_d: str | os.PathLike[str], *,
             refused = (proc.returncode == 1
                        or (proc.returncode == 2 and GENERATOR_TREE_REFUSAL in proc.stderr))
             kind = "config" if refused and not crashed else "tool"
-            raise RenderError(RenderFailure(kind, f"route generator exited {proc.returncode}: {last}"))
+            said = f"route generator exited {proc.returncode}: {last}"
+            # #3724: a tree a declared input named that changed since its
+            # judgement (the child saw it gone) is the run's refusal — never
+            # one part of the diff left "not computed".
+            import _lib_parse_cache  # lazy, as the other readers here
+            _lib_parse_cache.refuse_changed(conf_d, said)
+            raise RenderError(RenderFailure(kind, said))
         if not out.exists():
             # Nothing written at rc 0. Since #1211 gap 2 a tree with no tenant
             # is still written (the base and the platform routes), so this is

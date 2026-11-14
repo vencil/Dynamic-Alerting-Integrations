@@ -33,6 +33,15 @@
 !/docs/interactive/
 !/docs/assets/
 !/docs/.nojekyll
+# …except a locally built docs/assets/dist/ (gitignored, #3738): da-portal's
+# `portal-build` stage builds its own bundles and the final stage takes them
+# from there, so a host copy would only bloat the upload.
+/docs/assets/dist/
+
+# da-portal's `portal-build` stage COPYs tools/portal/ and runs `npm ci` itself
+# (#3738). A host node_modules in the context would overwrite the one `npm ci`
+# just installed — host-platform esbuild binary included — and bloat the upload.
+/tools/portal/node_modules/
 
 # Re-include the eval-core files the recipe-preview image COPYs from the
 # repo-root context (#657 PR 2); /scripts/ is excluded above. Same exclude-

@@ -11,7 +11,7 @@
 #   rabbitmq_queue_messages: 100000   # messages — Queue depth warning
 #       未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
 #   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
-#       未啟用（待驗證）：佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
 #   rabbitmq_connections: 1000   # count — Connection count warning
 #       未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定
 #   rabbitmq_consumers: 5   # count — Minimum consumer count warning
@@ -24,9 +24,8 @@
 # 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
 # 它讀的是 defaults[base]，base 沒有值就整列丟棄
 # （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base 都**未**標 [chart-default]
-# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
-# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
+# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
 # 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
 # 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
 # critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
@@ -286,7 +285,6 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "rabbitmq_consumers"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Low RabbitMQ consumer count on {{ $labels.tenant }}"

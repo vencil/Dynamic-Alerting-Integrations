@@ -82,6 +82,8 @@ ALLOWED = {
         (1, 'the commit-scope source of truth, a repo data file read only by lints'),
     ('scripts/tools/lint/check_cross_ns_url_consistency.py', 'load_config'):
         (1, "this lint's own config data file"),
+    ('scripts/tools/dx/renovate_fixup.py', '_yaml'):
+        (1, 'the federation-e2e and try-local docker compose files (read by compose-go) and the nightly-image-scan workflow (read by GitHub Actions); no Go consumer in this repo'),
     ('scripts/tools/lint/check_cross_ns_url_consistency.py', 'scan_compose'):
         (1, "try-local/docker-compose.yaml, read by docker compose (compose-go); da-tools ships no compose reading"),
     ('scripts/tools/lint/check_devcontainer_dep_parity.py', 'ci_packages'):
@@ -91,6 +93,8 @@ ALLOWED = {
     ('scripts/tools/lint/check_image_pin_capability.py', '_StrictLoader'):
         (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
             "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
+    ('scripts/tools/lint/check_image_pin_capability.py', 'builds_recipe_preview'):
+        (1, '.github/workflows/release.yaml at a pinned tools/v* tag (git show); read by GitHub Actions, no Go consumer'),
     ('scripts/tools/lint/check_image_pin_capability.py', 'load_all_strict'):
         (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
             "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),

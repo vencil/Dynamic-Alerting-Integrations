@@ -225,7 +225,7 @@ verdict (`passed` / `failed` / `voided`); see
 | Service | Image / Build | Role |
 |---|---|---|
 | `threshold-exporter` | `build: ../../components/threshold-exporter/app` | Watches `fixture/active/conf.d/`, emits `user_threshold` + `da_config_last_{scan,reload}_complete_unixtime_seconds` gauges (T1/T2 anchors) |
-| `prometheus` | `prom/prometheus:v3.15.1` | Scrapes exporter + pushgateway; evaluates `actual_metric_value > user_threshold` rule |
+| `prometheus` | `prom/prometheus:v3.16.0` | Scrapes exporter + pushgateway; evaluates `actual_metric_value > user_threshold` rule |
 | `pushgateway` | `prom/pushgateway:v1.11.5` | Receives driver-injected `actual_metric_value{tenant=bench-run-N}` |
 | `alertmanager` | `prom/alertmanager:v0.34.2` | Routes firing/resolved alerts to receiver (`send_resolved: true`) |
 | `receiver` | `build: ./receiver` | Custom Go ring-buffer webhook target; `/posts?since=...&tenant_id=...` query API |

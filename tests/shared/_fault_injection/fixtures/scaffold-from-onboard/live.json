@@ -1,0 +1,8 @@
+{
+  "tenants": ["tenant-x", "tenant-y"],
+  "db_types": {"tenant-x": ["mariadb"], "tenant-y": ["postgresql", "redis"]},
+  "routing_hints": {
+    "tenant-x": {"receiver_type": "webhook", "group_wait": "30s",
+                 "group_interval": "5m", "repeat_interval": "4h"}
+  }
+}

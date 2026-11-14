@@ -51,6 +51,11 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      is_threshold_number_text: "#3457 fullmatch of the pattern generated from the recipe contract; held row by row to Go's grammar_ok column of threshold_value_matrix.json and to the grammar written as a digit count over 150k generated strings by tests/shared/test_threshold_value_parity.py"
+      threshold_number: "#3457 is_threshold_number_text then float + isfinite; held row by row to Go's float_ok column and number by the same file (test_python_reads_a_threshold_number_as_the_matrix_says)"
+      threshold_number_text: "#3457 repr, or the 17-digit exponent form when repr is outside the grammar; round trip through threshold_number run over 50k random floats and the edge values by test_threshold_number_text_reads_back_as_the_number"
+      threshold_trim: "#3457 strips the code points generated from the threshold value matrix's header (Go's strings.TrimSpace); held row by row to Go's value_part column by tests/shared/test_threshold_value_parity.py::test_python_trims_as_the_matrix_says, the set itself by test_python_trim_set_is_the_matrix_header"
+      written_threshold_number: "#3457 type dispatch over threshold_trim + threshold_number (a str) or float() (a decoded number); every branch example-pinned through its callers in tests/ops/test_threshold_recommend.py and tests/ops/test_config_diff.py, the str branch row by row in test_python_trims_as_the_matrix_says"
       url_problem: "#3528 the one URL judgement; scheme dispatch property-tested through its wrapper _lib_prometheus._validate_url_scheme (tests/shared/test_property_tools.py), every unusable shape run through every URL flag's parser by tests/shared/test_caller_path_manifest.py"
       url_type: "#3528 constructor of the UrlArg argparse type; run per flag by tests/shared/test_caller_path_manifest.py::test_a_url_flag_refuses_an_unusable_value_by_name"
       url_list_type: "#3528 constructor of the separator-list UrlArg; run by the same gate (federation-check --edge-urls)"
@@ -180,6 +185,8 @@ modules:
       _walk_misread_scalars: "The one walk behind find_misread_scalars and misread_scalar_nodes (#2164, #2695); exercised through both"
       schema_scalar_types: "Scalar-type union over schema branches (#2164); string / boolean / mixed verdicts pinned in tests/shared/test_yaml_misread_scalars.py"
       MisreadScalar.message: "Operator-facing text (#2164); suggestion shapes (key / sequence item / null) pinned in tests/shared/test_yaml_misread_scalars.py"
+      find_nondecimal_numbers: "parse-tree nodes × schema walk for number-only fields (#3764); spelling matrix, plain-decimal / string controls, schema-only verdict flip (integer / number / mixed / string) and both entries pinned in tests/shared/test_yaml_nondecimal_numbers.py"
+      NondecimalNumber.message: "Operator-facing text (#3764); the suggested plain-decimal line pinned in tests/shared/test_yaml_nondecimal_numbers.py"
       _schema_expand: "$ref / allOf / anyOf / oneOf expansion (#2164); cross-file $ref and unloaded-ref KeyError pinned in tests/shared/test_yaml_misread_scalars.py"
       _schema_key_children: "properties / patternProperties / additionalProperties child lookup (#2164); exercised through find_misread_scalars pins"
       _schema_item_children: "items / additionalItems child lookup (#2164); sequence-item pin in tests/shared/test_yaml_misread_scalars.py"
@@ -425,8 +432,8 @@ modules:
       _matchers_gate_label_present: "#1132 presence-gate predicate (does a side exclude the empty string for a label); fully covered by test_generate_routes_orchestration.py::TestEqualLabelGatedInvariant (matchall/exact/neg-empty/legacy-map cases)"
       find_ungated_equal_label_inhibits: "#1132 ungated-equal-label finder; covered by TestEqualLabelGatedInvariant (gated/ungated/partial/legacy-map/malformed) + the committed-configmap regression guard"
       assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
-      is_routing_tree_error: "#2326 one-line prefix test on ROUTING_TREE_ERROR_PREFIX; example-pinned by test_generate_routes_nested_tree.py (validate-config schema row FAIL)"
-      is_field_type_error: "#2906 one-line prefix test on FIELD_TYPE_ERROR_PREFIX; example-pinned by test_grar_field_types.py (validate-config schema row FAIL)"
+      is_routing_tree_error: "#2326 one-line prefix test on ROUTING_TREE_ERROR_PREFIX; example-pinned by test_generate_routes_nested_tree.py (validate-config routes row FAIL)"
+      is_field_type_error: "#2906 one-line prefix test on FIELD_TYPE_ERROR_PREFIX; example-pinned by test_grar_field_types.py (validate-config routes row FAIL)"
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"
       value_type_text: "#2906 message helper (type + value of a decoded value); no law to property-test"
       routing_block_file_reference_errors: "#3257 whole-block walk of a routing block with _lib_validation.file_reference_paths (match label names exempt); every block and every rendered receiver position example-pinned by tests/shared/test_receiver_file_reference_rule.py, incl. the subset test against routing_block_receivers"

@@ -40,38 +40,34 @@ import (
 // of every tenant carries that piece as a segment with Error set. At `at`
 // itself the run already failed (exit 2) before reaching here — servedValues'
 // Gather is that piece's.
+//
+// #3808: each tenant is read alone, at its own cuts only, and its readings
+// are let go once its schedules are written — a tenant's user_threshold rows
+// depend on its own map and the config-wide settings, never on another
+// tenant's (row_count.go, not_served.go). The one effect that crosses
+// tenants is the Gather: two rows of one tenant giving one series fail the
+// scrape for all. So a first pass finds, tenant by tenant, the parts of the
+// day its rows cannot be gathered; their bounds cut every tenant's day, and
+// each such part carries the error the whole tree's Gather gives there (read
+// over the tenants failing in it, which are the ones it names). The document
+// is, byte for byte, the one reading the whole tree at every cut of the tree
+// gave (served_schedules_differential_test.go).
 func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
 	expiries []config.ResolvedThresholdExpiry, name keyNamer,
 ) error {
-	cuts := cfg.ScheduleCuts()
-	ends := make([]int, len(cuts))
-	for i := range cuts {
-		ends[i] = config.MinutesPerDay
-		if i+1 < len(cuts) {
-			ends[i] = cuts[i+1]
-		}
-	}
-	// The piece that holds `at` is the reading Values came from.
 	utc := at.UTC()
-	cur := sort.SearchInts(cuts, utc.Hour()*60+utc.Minute()+1) - 1
+	atMinute := utc.Hour()*60 + utc.Minute()
 
-	passes := make([]map[string]map[string]reading, len(cuts))
-	gatherErrs := make([]string, len(cuts))
-	for i, m := range cuts {
-		r, gerr, err := readingsAt(cfg.AtMinuteOfDay(m), at, name)
-		if err == nil && gerr != "" && i == cur {
-			err = fmt.Errorf("internal: the schedule reading at --at cannot be gathered, the served values could: %s", gerr)
-		}
-		if err != nil {
-			return fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
-		}
-		passes[i], gatherErrs[i] = r, gerr
+	ungatherable, err := ungatherableParts(cfg, at, name)
+	if err != nil {
+		return err
 	}
-
-	for tenant, tv := range tenants {
-		if err := sameAsValues(tenant, tv, passes[cur][tenant]); err != nil {
-			return err
-		}
+	if gerr := ungatherable.at(atMinute); gerr != "" {
+		cuts := cfg.ScheduleCuts()
+		ends := cutEnds(cuts)
+		i := sort.SearchInts(cuts, atMinute+1) - 1
+		return fmt.Errorf("from %s to %s UTC: internal: the schedule reading at --at cannot be gathered, the served values could: %s",
+			hhmm(cuts[i]), hhmm(ends[i]), gerr)
 	}
 
 	expiryOf := map[string]map[string]config.ResolvedThresholdExpiry{}
@@ -86,51 +82,215 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 		expiryOf[te.Tenant][canon] = te
 	}
 
-	for tenant, tv := range tenants {
-		schedules := map[string]servedSchedule{}
-		keys := map[string]bool{}
-		for _, p := range passes {
-			for k := range p[tenant] {
-				keys[k] = true
+	names := make([]string, 0, len(tenants))
+	for tenant := range tenants {
+		names = append(names, tenant)
+	}
+	sort.Strings(names)
+	for _, tenant := range names {
+		tv := tenants[tenant]
+		one := onlyTenants(cfg, []string{tenant})
+		own := one.ScheduleCuts()
+		seen := map[int]bool{}
+		for _, m := range own {
+			seen[m] = true
+		}
+		for _, m := range ungatherable.bounds {
+			if m < config.MinutesPerDay {
+				seen[m] = true
 			}
 		}
-		for k := range expiryOf[tenant] {
-			keys[k] = true
+		cuts := make([]int, 0, len(seen))
+		for m := range seen {
+			cuts = append(cuts, m)
 		}
-		// #3140: why a segment serves no row, read off the key's written
-		// value at the segment's start (nullReason). k is the served,
-		// canonical name, so a retired spelling is found under it; when the
-		// tenant writes both, the canonical one is read (keys' shadowed).
-		writtenOf := map[string]string{}
-		for wk := range cfg.Tenants[tenant] {
-			canon, isAlias := config.CanonicalKeyFor(wk)
-			if _, canonWritten := cfg.Tenants[tenant][canon]; isAlias && canonWritten {
+		sort.Ints(cuts)
+		ends := cutEnds(cuts)
+		ownEnds := cutEnds(own)
+
+		// The tenant's reading in each piece: the one at the start of its own
+		// piece holding it (its rows change at its own cuts only), none where
+		// the tree cannot be gathered.
+		passes := make([]map[string]map[string]reading, len(cuts))
+		gatherErrs := make([]string, len(cuts))
+		readAt, read := -1, map[string]map[string]reading(nil)
+		for i, m := range cuts {
+			if gatherErrs[i] = ungatherable.at(m); gatherErrs[i] != "" {
 				continue
 			}
-			writtenOf[name(tenant, canon)] = wk
-		}
-		recorded := recordedReasons(cfg, tenant, at)
-		view := cfg.FamilyView(tenant)
-		for k := range keys {
-			why := func(minute int) string {
-				return nullReason(cfg, tenant, k, writtenOf[k], at, minute, recorded, view)
-			}
-			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
-			if te, ok := expiryOf[tenant][k]; ok {
-				sv, written := cfg.Tenants[tenant][te.MetricKey]
-				if !written || sv.Expiry == nil {
-					return fmt.Errorf("internal: tenant %s: the expiry of %q has no `expires:` in the merged config", tenant, te.MetricKey)
+			j := sort.SearchInts(own, m+1) - 1
+			if j != readAt {
+				r, gerr, err := readingsAt(one.AtMinuteOfDay(own[j]), at, name)
+				if err == nil && gerr != "" {
+					err = fmt.Errorf("internal: tenant %s: its rows cannot be gathered, yet the first pass found they could: %s", tenant, gerr)
 				}
-				expired := te.Expired
-				sch.Expires = sv.Expiry.Expires
-				sch.Expired = &expired
+				if err != nil {
+					return fmt.Errorf("from %s to %s UTC: %w", hhmm(own[j]), hhmm(ownEnds[j]), err)
+				}
+				readAt, read = j, r
 			}
-			schedules[k] = sch
+			passes[i] = map[string]map[string]reading{tenant: read[tenant]}
+			if m <= atMinute && atMinute < ends[i] {
+				if err := sameAsValues(tenant, tv, read[tenant]); err != nil {
+					return err
+				}
+			}
+		}
+
+		schedules, err := tenantSchedules(cfg, at, tenant, cuts, ends, passes, gatherErrs, expiryOf[tenant], name)
+		if err != nil {
+			return err
 		}
 		tv.Schedules = &schedules
 		tenants[tenant] = tv
 	}
 	return nil
+}
+
+// tenantSchedules is the tenant's schedules over the pieces [cuts[i],
+// ends[i]) of the day, read as passes (the tenant's entry only is used) with
+// gatherErrs; expiries is the tenant's time-boxed keys by served name.
+func tenantSchedules(cfg *config.ThresholdConfig, at time.Time, tenant string, cuts, ends []int,
+	passes []map[string]map[string]reading, gatherErrs []string,
+	expiries map[string]config.ResolvedThresholdExpiry, name keyNamer,
+) (map[string]servedSchedule, error) {
+	schedules := map[string]servedSchedule{}
+	keys := map[string]bool{}
+	for _, p := range passes {
+		for k := range p[tenant] {
+			keys[k] = true
+		}
+	}
+	for k := range expiries {
+		keys[k] = true
+	}
+	// #3140: why a segment serves no row, read off the key's written
+	// value at the segment's start (nullReason). k is the served,
+	// canonical name, so a retired spelling is found under it; when the
+	// tenant writes both, the canonical one is read (keys' shadowed).
+	writtenOf := map[string]string{}
+	for wk := range cfg.Tenants[tenant] {
+		canon, isAlias := config.CanonicalKeyFor(wk)
+		if _, canonWritten := cfg.Tenants[tenant][canon]; isAlias && canonWritten {
+			continue
+		}
+		writtenOf[name(tenant, canon)] = wk
+	}
+	recorded := recordedReasons(cfg, tenant, at)
+	view := cfg.FamilyView(tenant)
+	for k := range keys {
+		why := func(minute int) string {
+			return nullReason(cfg, tenant, k, writtenOf[k], at, minute, recorded, view)
+		}
+		sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
+		if te, ok := expiries[k]; ok {
+			sv, written := cfg.Tenants[tenant][te.MetricKey]
+			if !written || sv.Expiry == nil {
+				return nil, fmt.Errorf("internal: tenant %s: the expiry of %q has no `expires:` in the merged config", tenant, te.MetricKey)
+			}
+			expired := te.Expired
+			sch.Expires = sv.Expiry.Expires
+			sch.Expired = &expired
+		}
+		schedules[k] = sch
+	}
+	return schedules, nil
+}
+
+// cutEnds is, for each piece starting at cuts[i], where it ends: the next
+// cut, or the end of the day.
+func cutEnds(cuts []int) []int {
+	ends := make([]int, len(cuts))
+	for i := range cuts {
+		ends[i] = config.MinutesPerDay
+		if i+1 < len(cuts) {
+			ends[i] = cuts[i+1]
+		}
+	}
+	return ends
+}
+
+// ungatherableDay is where in the day the whole tree's /metrics cannot be
+// gathered: the pieces [bounds[i], bounds[i+1]) with errs[i] set, errs[i]
+// the error the whole tree's Gather gives there ("" where it gathers). The
+// last bound ends the last such piece; no bounds, no such piece.
+type ungatherableDay struct {
+	bounds []int
+	errs   []string
+}
+
+// at is the Gather error of the piece holding minute, "" when it gathers.
+func (u ungatherableDay) at(minute int) string {
+	i := sort.SearchInts(u.bounds, minute+1) - 1
+	if i < 0 || i >= len(u.errs) {
+		return ""
+	}
+	return u.errs[i]
+}
+
+// ungatherableParts reads every tenant of cfg alone at its own cuts, keeping
+// only where its rows cannot be gathered, and reads the tenants failing in
+// each part so found together, for the error text the whole tree's Gather
+// gives there: it names every series two keys give, of every tenant.
+func ungatherableParts(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (ungatherableDay, error) {
+	type failing struct {
+		from, to int
+		tenant   string
+	}
+	var fails []failing
+	names := make([]string, 0, len(cfg.Tenants))
+	for tenant := range cfg.Tenants {
+		names = append(names, tenant)
+	}
+	sort.Strings(names)
+	for _, tenant := range names {
+		one := onlyTenants(cfg, []string{tenant})
+		cuts := one.ScheduleCuts()
+		ends := cutEnds(cuts)
+		for i, m := range cuts {
+			_, gerr, err := readingsAt(one.AtMinuteOfDay(m), at, name)
+			if err != nil {
+				return ungatherableDay{}, fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
+			}
+			if gerr != "" {
+				fails = append(fails, failing{m, ends[i], tenant})
+			}
+		}
+	}
+	if len(fails) == 0 {
+		return ungatherableDay{}, nil
+	}
+	seen := map[int]bool{}
+	for _, f := range fails {
+		seen[f.from], seen[f.to] = true, true
+	}
+	var u ungatherableDay
+	for m := range seen {
+		u.bounds = append(u.bounds, m)
+	}
+	sort.Ints(u.bounds)
+	u.errs = make([]string, len(u.bounds)-1)
+	for i := range u.errs {
+		m := u.bounds[i]
+		var in []string
+		for _, f := range fails {
+			if f.from <= m && m < f.to {
+				in = append(in, f.tenant)
+			}
+		}
+		if len(in) == 0 {
+			continue
+		}
+		_, gerr, err := readingsAt(onlyTenants(cfg, in).AtMinuteOfDay(m), at, name)
+		if err == nil && gerr == "" {
+			err = fmt.Errorf("internal: tenants %v cannot be gathered one by one, yet can together", in)
+		}
+		if err != nil {
+			return ungatherableDay{}, fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(u.bounds[i+1]), err)
+		}
+		u.errs[i] = gerr
+	}
+	return u, nil
 }
 
 // daySegments is key k's day over the pieces [cuts[i], ends[i]), adjacent

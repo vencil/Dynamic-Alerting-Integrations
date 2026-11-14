@@ -156,7 +156,7 @@ python3 scripts/ops/configmap_assemble.py \
 
 ⚠️ 幾件文件以前沒說的事：
 
-- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**（完整清單在 `validate_config --json` 的 `schema` 列的 `skipped_nested_files`，見 [cli-reference](../cli-reference.md#hierarchical-confd)），而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
+- **組裝是扁平的**：只有 `CONFDIR` **頂層**的檔會進 ConfigMap（ConfigMap 的 key 平面表達不出子目錄）。`examples/` 與任何階層式子目錄（`region-eu/` 之類）底下的租戶**不會**進去——stderr 的 `WARN` 會**具名前 5 個、其餘以 `(+N more)` 計數**，而 exporter 在叢集上是遞迴讀的（ADR-016/017），兩邊會不一致。
 - **樹上有讀不到的路徑就整個拒絕**：`da-guard` 驗證會點名的每一條路徑——**斷鏈 symlink**、**取了 config 名字的目錄**（`db-x.yaml/`）、指向目錄的 symlink、FIFO、列不出內容的子目錄、exporter 解不開的檔（YAML 語法錯、多文件）——這一步都會在 stderr 逐條 `ERROR:` 點名（**全部列出、不截斷**），然後 **rc 2**、什麼都不寫。⛔ 以前這類載體只印 `WARN`、照樣組出少一個租戶的 ConfigMap，那個租戶在叢集上沒有告警；現在要先修好或移走它們才組得出來。其他 conf.d 工具也是同一個行為（#3206）。
 - **副檔名大小寫與 exporter 一致**：`DB-A.YAML`、`db-b.YML` 這類載體現在**會**進 ConfigMap。⚠️ 連帶效果：如果你同時有 `db-a.yaml` 與 `DB-A.YAML` 且兩者宣告同一個租戶，這一步會擋下來（以前是靜默丟掉大寫那個、印綠燈）。
 - **這一步失敗時不會刪掉舊產物**：`.build/threshold-config.yaml` 若是前一次跑出來的，它會**原封不動留著**（留半個檔比留舊檔更糟）。⛔ 所以 `kubectl apply` 那一步一定要接在 assemble **成功**之後——非 fail-fast 的 pipeline 會把**舊**設定推上去。
@@ -184,7 +184,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   -o deploy/alertmanager-configmap.yaml
 ```
 
-PATH 上有 `amtool` 時會自動用它驗證 ConfigMap 裡的 `alertmanager.yml`，被拒收就結束碼 1 且不寫出 `-o`；沒有 `amtool` 會印 NOTICE 說明未經驗證（#2219）。da-tools 映像內含 `amtool`（與部署的 Alertmanager 同一個 image；#2294），在映像裡跑預設就會驗證。⚠️ v2.9.0 映像不內含 `amtool` <!-- image-caveat: v2.9.0 -->
+ConfigMap 裡的 `alertmanager.yml` 一律先交給 Alertmanager 自己的設定載入器（`da-read`）；拒收就結束碼 1 且不寫出 `-o`，PATH 上有沒有 `amtool` 不影響結論（#2219、#3689、#3793）。da-tools 映像內含 `da-read`。⚠️ v2.9.0 映像沒有 `da-read` <!-- image-caveat: v2.9.0 -->
 
 產出的 YAML 可直接 `kubectl apply` 或由 ArgoCD/Flux 自動 sync。與方式 A（threshold-config）搭配使用，實現 threshold-exporter 和 Alertmanager 配置的完整 GitOps 閉環。
 

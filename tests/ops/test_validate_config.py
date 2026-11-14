@@ -67,42 +67,6 @@ class TestYAMLSyntax:
             assert result["status"] == vc.PASS
 
 
-class TestSchemaCheck:
-    """Check 2: Schema validation."""
-
-    def test_valid_config_passes(self):
-        """Config with known keys should pass."""
-        # ⛔ TWO levels: `dirname(__file__)` is `tests/ops`. With one,
-        # this resolved to `tests/components/...`, which has never
-        # existed, and the skip guard below hid that on every machine
-        # including CI — a permanently-skipped test reads exactly like
-        # a passing one in the summary line.
-        conf_dir = os.path.join(os.path.dirname(__file__), "..", "..",
-                                "components", "threshold-exporter",
-                                "config", "conf.d")
-        if not os.path.isdir(conf_dir):
-            pytest.skip("Config dir not found")
-        result = vc.check_schema(conf_dir)
-        assert result["status"] in (vc.PASS, vc.WARN)
-
-    def test_an_unknown_key_is_not_this_rows(self):
-        """ADR-038 §11: whether a key is read is the unread_keys row's (the
-        shared key verdict); the route generator judges no key name."""
-        with tempfile.TemporaryDirectory() as d:
-            # Defaults file
-            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
-            # Tenant with unknown key
-            with open(os.path.join(d, "tenant-x.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"tenant-x": {
-                    "_unknown_reserved": "foo"
-                }}}, f)
-            result = vc.check_schema(d)
-            assert result["status"] == vc.PASS, result
-            assert not any("_unknown_reserved" in detail
-                           for detail in result["details"]), result
-
-
 class TestRouteCheck:
     """Check 3: Route validation."""
 
@@ -121,7 +85,7 @@ class TestRouteCheck:
             result = vc.check_routes(d)
             assert result["status"] in (vc.PASS, vc.WARN)
 
-    def test_no_routing_passes(self, amtool_accepts):
+    def test_no_routing_passes(self):
         """Config with no routing should pass (no routes generated)."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
@@ -267,7 +231,7 @@ class TestCustomRulesCheck:
         check_custom_rules wrapper runs without exception, not that
         all rules pass lint.
         """
-        rule_packs_dir = os.path.join(  # two levels: see TestSchemaCheck
+        rule_packs_dir = os.path.join(  # two levels up from tests/ops
             os.path.dirname(__file__), "..", "..", "rule-packs")
         if not os.path.isdir(rule_packs_dir):
             pytest.skip("rule-packs dir not found")
@@ -410,7 +374,6 @@ class TestIntegration:
         """Full validation on the real config dir should pass."""
         results = []
         results.append(vc.check_yaml_syntax(self.CONF_DIR))
-        results.append(vc.check_schema(self.CONF_DIR))
         results.append(vc.check_routes(self.CONF_DIR))
 
         for r in results:
@@ -793,10 +756,14 @@ class TestRoutesWithPolicy:
     """Route validation with policy file."""
 
     def test_routes_with_policy(self):
-        with tempfile.TemporaryDirectory() as d:
-            policy_path = os.path.join(d, "policy.yaml")
+        with tempfile.TemporaryDirectory() as top:
+            # The policy file is not part of the conf.d: inside it, it is a
+            # tenant file with a key no reader reads.
+            policy_path = os.path.join(top, "policy.yaml")
             with open(policy_path, "w", encoding="utf-8") as f:
                 yaml.dump({"allowed_domains": ["hooks.example.com"]}, f)
+            d = os.path.join(top, "conf.d")
+            os.mkdir(d)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connections": 80}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
@@ -1242,7 +1209,7 @@ class TestRunCheckContract:
         def boom(_arg):
             b"\xb4\xfa".decode("utf-8")
 
-        result = vc._run_check("schema", boom, "some-dir")
+        result = vc._run_check("routes", boom, "some-dir")
         assert result["status"] == vc.FAIL
         assert not result.get("caller_error"), (
             "an undecodable input file must exit 1 like any other finding "
@@ -1252,7 +1219,7 @@ class TestRunCheckContract:
         def boom():
             raise PermissionError(13, "Permission denied")
 
-        result = vc._run_check("schema", boom)
+        result = vc._run_check("routes", boom)
         assert result["status"] == vc.FAIL
         assert result["caller_error"] is True
 
@@ -1286,7 +1253,7 @@ class TestRunCheckContract:
         ⛔ The keyword argument is REQUIRED on purpose. An earlier version
         of this control gave it a default, so a wrapper that dropped
         ``**kwargs`` — which is how ``--strict`` would silently stop
-        reaching ``check_schema`` — kept it green.
+        reaching ``check_routes`` — kept it green.
         """
         seen = {}
 
@@ -1501,16 +1468,16 @@ def _caveat_fragment() -> str:
 
 
 
-def _generic_schema_hint() -> str:
-    """The stock advice for the `schema` row, read from the shipped table.
+def _generic_routes_hint() -> str:
+    """The stock advice for the `routes` row, read from the shipped table.
 
-    ⛔ Never retyped. Blind review reworded `_CHECK_HINTS["schema"]` — an
+    ⛔ Never retyped. Blind review reworded a `_CHECK_HINTS` entry — an
     ordinary copy edit — and measured two positive assertions going red
     while **four** `"Remove unknown keys" not in …` controls silently became
     vacuous, because a reworded string satisfies a `not in` on the old
     wording. The same trap the caveat constants were hoisted for.
     """
-    return vc._CHECK_HINTS["schema"][0].split(".")[0]
+    return vc._CHECK_HINTS["routes"][0].split(".")[0]
 
 
 def _report_row(out: str, check: str) -> str:
@@ -1844,10 +1811,13 @@ class TestUnwatchedHalvesFoundByMutation:
             _as_run(vc.main())
         out = capsys.readouterr().out
         assert "…" in out, out
-        row = _report_row(out, "routes")
-        assert row.count(".yaml") <= 5, (
+        # The caveat line of a row, not the row: the routes row is
+        # `generate-routes --validate`, which names every file it refused.
+        (caveat,) = [ln for ln in _report_row(out, "routes").splitlines()
+                     if _caveat_fragment() in ln]
+        assert caveat.count(".yaml") <= 5, (
             "the caveat is listing every unreadable file instead of the "
-            f"first five\n{row}")
+            f"first five\n{caveat}")
 
     def test_two_files_with_the_same_name_at_different_depths(self, tmp_path):
         """⛔ The relative-path label had no fixture.
@@ -1953,7 +1923,6 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
             "root_defaults",
             "routes",
-            "schema",
             # #3157. The same scan as `tenant_uniqueness` below, so the same
             # caveat: it skips what it cannot parse.
             "tenant_file_name",
@@ -1962,6 +1931,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # four above: without it the row asserts "no duplicate
             # declaration" about a tree it did not finish reading.
             "tenant_uniqueness",
+            # #3691. Reads the tree through da-guard served-values under
+            # `--config-dir`.
+            "tier_inversion",
             # ADR-038. Reads the tree through da-guard (served-values and
             # effective) under `--config-dir`, like `profiles`.
             "unread_keys",
@@ -1979,8 +1951,7 @@ class TestACheckThatExitsTheProcessStillLeavesAReport:
     """⛔ `SystemExit` is not an `Exception`, and the catcher had to learn it.
 
     `_parse_config_files` calls `sys.exit(EXIT_CALLER_ERROR)` when the config
-    directory has gone; `check_schema` / `check_routes` both
-    reach it. `main()` checks
+    directory has gone; a check that reads the tree can reach it. `main()` checks
     `isdir` first, so firing it needs a TOCTOU — a GitOps ConfigMap projected
     volume swaps `..data` atomically — and then the process dies before
     `print_report`: #1448's own symptom, through the wrapper written to stop
@@ -1995,7 +1966,7 @@ class TestACheckThatExitsTheProcessStillLeavesAReport:
         def boom():
             sys.exit(2)
 
-        row = vc._run_check("schema", boom)
+        row = vc._run_check("routes", boom)
         assert row["status"] == vc.FAIL
         assert row["caller_error"] is True
         assert any("exited the process" in d for d in row["details"]), row
@@ -2028,14 +1999,11 @@ class TestACheckThatExitsTheProcessStillLeavesAReport:
         assert vc._run_check("routes", lambda: sentinel) is sentinel
 
 
-class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
-    """⛔ `check_schema` is a multiplexer; the advice line is keyed on its name.
-
-    Its details carry unknown-key WARNs *and* ADR-007 policy ERRORs, so a run
-    whose only finding is a broken `_domain_policy.yaml` — zero keys reported
-    — still ended with "Remove unknown keys or add them to the schema". That
-    is the destructive advice this branch exists to stop, on a path that has
-    nothing to do with keys.
+class TestTheRoutesRowAdvisesOnWhatBlockedIt:
+    """⛔ The routes row carries every finding of `generate-routes --validate`,
+    while the generic advice line is keyed on the row's name: a run whose
+    only blocking finding is a broken `_domain_policy.yaml` must get the
+    policy advice, not "check _routing for invalid receiver types".
     """
 
     @staticmethod
@@ -2059,11 +2027,9 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
         with pytest.raises(SystemExit):
             _as_run(vc.main())
         out = capsys.readouterr().out
-        assert "[FAIL] schema" in out, out
-        assert _generic_schema_hint() not in out, (
-            "the row reported no keys at all and still told the customer to "
-            f"remove some\n{out}")
-        assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
+        assert "[FAIL] routes" in out, out
+        assert _generic_routes_hint() not in out, out
+        assert vc.POLICY_ONLY_HINT in out, out
 
     def test_a_misplaced_policy_block_gets_move_advice(self, tmp_path, capsys,
                                                        cli_argv):
@@ -2083,11 +2049,11 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
-        assert "[FAIL] schema" in out, out
-        assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
+        assert "[FAIL] routes" in out, out
+        assert vc.POLICY_ONLY_HINT in out, out
         assert ("move a misplaced domain_policies block into _domain_policy.yaml"
-                in vc.POLICY_ONLY_SCHEMA_HINT)
-        assert _generic_schema_hint() not in out, out
+                in vc.POLICY_ONLY_HINT)
+        assert _generic_routes_hint() not in out, out
 
     def test_an_unquoted_matcher_value_gets_quote_advice(self, tmp_path,
                                                          capsys, cli_argv):
@@ -2111,18 +2077,17 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
-        assert "[FAIL] schema" in out, out
+        assert "[FAIL] routes" in out, out
         assert "overrides[0].alertname must be a string, got bool True" in out, out
-        assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
-        assert "quote the matcher value in YAML" in vc.POLICY_ONLY_SCHEMA_HINT
-        assert _generic_schema_hint() not in out, out
+        assert vc.POLICY_ONLY_HINT in out, out
+        assert "quote the matcher value in YAML" in vc.POLICY_ONLY_HINT
+        assert _generic_routes_hint() not in out, out
 
     def test_a_policy_only_warn_gets_policy_advice(self, tmp_path, capsys,
                                                    cli_argv):
         """#2490: without --strict a domain-policy timing breach is a WARN
         in this row (it used to be PASS when the old parser could not read
-        the value). The same set-difference as the FAIL branch picks the
-        advice: no key was reported, so no "Remove unknown keys"."""
+        the value), and gets the policy advice, not the generic one."""
         d = self._tree(
             tmp_path,
             "domain_policies:\n  fin:\n    tenants: [db-a]\n"
@@ -2136,15 +2101,17 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
         with pytest.raises(SystemExit):
             _as_run(vc.main())
         out = capsys.readouterr().out
-        assert "[WARN] schema" in out, out
+        assert "[WARN] routes" in out, out
         assert "exceeds max '1h'" in out, out
-        assert _generic_schema_hint() not in out, out
-        assert vc.POLICY_ONLY_SCHEMA_WARN_HINT in out, out
+        assert _generic_routes_hint() not in out, out
+        assert vc.POLICY_ONLY_WARN_HINT in out, out
 
-    def test_a_misspelt_key_is_not_this_rows(self, tmp_path, capsys,
-                                             cli_argv):
-        """ADR-038 §11: a misspelt key is the unread_keys row's; this row
-        judges no key name, so it neither reports nor advises on one."""
+    def test_a_misspelt_key_is_named_by_the_key_verdict_only(self, tmp_path,
+                                                             capsys, cli_argv):
+        """ADR-038 §11 (#3016): a misspelt key is the shared key verdict's.
+        The retired `unknown key … not in defaults` wording does not come
+        back; the routes row, which is `generate-routes --validate`, FAILs
+        with the verdict's `unread … (no_row)` line, as unread_keys does."""
         d = self._tree(
             tmp_path,
             "domain_policies:\n  fin:\n    tenants: [db-a]\n")
@@ -2152,11 +2119,15 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             "tenants:\n  db-b:\n    mysql_thredas_running: 90\n",
             encoding="utf-8")
         cli_argv("validate_config", "--config-dir", d)
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             _as_run(vc.main())
         out = capsys.readouterr().out
+        assert exc.value.code == 1, out
         assert "not in defaults" not in out, out
-        assert "[PASS] schema" in out, out
+        row = _report_row(out, "routes")
+        assert row.startswith("[FAIL] routes"), row
+        assert "key verdict: db-b.yaml: error: unread `mysql_thredas_running` (no_row)" in row, row
+        assert "[FAIL] unread_keys" in out, out
 
 
 class TestTenantUniqueness:
@@ -3004,9 +2975,8 @@ class TestScheduleNullHelpers:
 
 class TestJsonSchemaRow:
     """Check 1c (#2695): conf.d against its JSON Schemas, by calling
-    `lint/check_confd_schema.py`'s verdict. Before it the only row with
-    "schema" in its name was the route generator's key check, so a tree that
-    lint rejects read `[PASS] schema` at rc 0. A misread scalar is
+    `lint/check_confd_schema.py`'s verdict. Before it no row applied the
+    JSON Schema, so a tree that lint rejects passed at rc 0. A misread scalar is
     `yaml_quoting`'s finding and must not be reported a second time here."""
 
     _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
@@ -3155,7 +3125,7 @@ class TestJsonSchemaRow:
         under `_routing_defaults`) while the generator's key check passes —
         the issue's own shape. ⚠️ Not `_routing_defaults.overrides` as filed:
         #2723 (PR-6c) made the schema accept it, so a misspelt key stands in.
-        #2960: the generator now names that key too, so the `schema` row
+        #2960: the generator now names that key too, so the `routes` row
         fails beside `json_schema` instead of passing — the json_schema row
         must still report the schema's own refusal.
         """
@@ -3167,9 +3137,9 @@ class TestJsonSchemaRow:
             "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
         })
         rc, rows = self._run(d, capsys, cli_argv)
-        assert rows["schema"]["status"] == "fail", rows["schema"]
+        assert rows["routes"]["status"] == "fail", rows["routes"]
         assert any("'overides' is not read by the route generator" in x
-                   for x in rows["schema"]["details"]), rows["schema"]
+                   for x in rows["routes"]["details"]), rows["routes"]
         row = rows["json_schema"]
         assert row["status"] == "fail", row
         assert any("'overides' was unexpected" in x and "/_routing_defaults" in x
@@ -3354,8 +3324,8 @@ class TestJsonSchemaRow:
 
     def test_without_jsonschema_the_row_says_it_did_not_check(
             self, tmp_path, monkeypatch, capsys, cli_argv):
-        """WARN, not a caller error — `routes` without amtool is the
-        precedent. The exit code stays what the other rows make it."""
+        """WARN, not a caller error: every other row still gave its
+        verdict. The exit code stays what the other rows make it."""
         monkeypatch.setitem(sys.modules, "jsonschema", None)
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
@@ -3387,7 +3357,7 @@ class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
     `yaml_quoting` / `json_schema` rows and check_confd_schema ended as a
     caller error (rc 2). parse-tree's selection decides now
     (`ConfdReader.not_read`): the loser is skipped and named, and the
-    `schema` row's `unselected_defaults_carrier` finding is what fails."""
+    `routes` row's `unselected_defaults_carrier` finding is what fails."""
 
     @staticmethod
     def _tree(tmp_path):
@@ -3409,8 +3379,8 @@ class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
         rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
         assert exc.value.code == 1, rows
         assert not any(r.get("caller_error") for r in rows.values()), rows
-        assert rows["schema"]["status"] == vc.FAIL, rows["schema"]
-        assert any("_defaults.yml is not read" in x for x in rows["schema"]["details"]), rows
+        assert rows["routes"]["status"] == vc.FAIL, rows["routes"]
+        assert any("_defaults.yml is not read" in x for x in rows["routes"]["details"]), rows
         assert rows["yaml_quoting"]["status"] == vc.PASS, rows["yaml_quoting"]
         assert rows["json_schema"]["status"] == vc.PASS, rows["json_schema"]
         assert "_defaults.yml (unselected_defaults_carrier)" in rows["json_schema"]["details"][0]

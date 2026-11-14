@@ -647,7 +647,13 @@ def _batch(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
     if status == REFUSED:
         raise EditsRefused([EditRefused(r, command) for r in results if r["status"] == REFUSED])
     blamed = next((r for r in results if r["status"] == CALLER_ERROR), None)
-    raise EditCallerError(blamed if blamed is not None else doc, command)
+    error = EditCallerError(blamed if blamed is not None else doc, command)
+    # #3724: on a tree a declared input named that changed since its
+    # judgement, this is that change — a refusal naming the flag, never an
+    # edit a tool reports as refused by the tree.
+    import _lib_parse_cache  # lazy: it imports modules that import this one
+    _lib_parse_cache.refuse_changed(root, str(error))
+    raise error
 
 
 def _one(command: str, root: "Path | str", body: dict, dry_run: bool,

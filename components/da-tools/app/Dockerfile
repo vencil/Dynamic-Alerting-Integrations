@@ -95,14 +95,14 @@ COPY da-read.${TARGETARCH} /usr/local/bin/da-read
 RUN chmod +x /usr/local/bin/da-read
 
 # ── Bundle amtool (issue 2294) ────────────────────────────────────
-# `generate-routes` hands the config it writes / applies / --validates to
-# `amtool check-config` when amtool is on PATH (#2219 / #2260). Every CI
-# template `da-tools init --ci` generates runs inside THIS image, so without
-# amtool here customers are not validated by Alertmanager's parser by default.
+# `explain-route --trace` asks Alertmanager's own routing engine (`amtool
+# config routes test`, #2293). Whether Alertmanager accepts a config is not
+# amtool's call here: `generate-routes` and `generator-service` ask da-read
+# (#3793).
 #
 # ⛔ The ref below must stay byte-identical to the Alertmanager image in
 # k8s/03-monitoring/deployment-alertmanager.yaml (the version SSOT): amtool
-# must be the parser production runs. Enforced by
+# must be the routing engine production runs. Enforced by
 # tests/ops/test_da_tools_amtool_pin_parity.py; renovate.json bumps both.
 # buildx resolves this ref per TARGETPLATFORM, which relies on the digest
 # being the multi-arch index (the form Renovate pins). Upstream's Dockerfile

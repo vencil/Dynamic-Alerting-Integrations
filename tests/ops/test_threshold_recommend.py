@@ -881,7 +881,10 @@ class TestRecommendThresholdLowerGuard0:
     """guard 0 (domain, first): non-numeric / out-of-(0,1) current all force_manual,
     never export, never crash (esp. current==1.0 → no divide-by-zero)."""
 
-    @pytest.mark.parametrize("cur", ["1", "1.0", "disable", "95", "0", "1.2"])
+    @pytest.mark.parametrize("cur", ["1", "1.0", "disable", "95", "0", "1.2",
+                                     # #3457: `float()` reads each of these as 0.5 or
+                                     # 0.95; the exporter reads none of them.
+                                     "0x1p-1", "0_.95", "0.9_5", "٠.٩٥", "0.95\x1f", "0.95:critical"])
     def test_domain_guard_force_manual_no_export(self, cur):
         rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", cur,
                                            _floor_samples(0.97), 100)
@@ -1040,11 +1043,11 @@ class TestAnalyzeTenantLowerBound:
             "observed_series": "tenant:db2_bufferpool_hit_ratio:min",
             "recommendation_mode": "percentile-lower",
         },
-        "kafka_active_controllers": {
+        "kafka_broker_count": {
             "scope": "tenant", "direction": "<",
-            "candidates": ["tenant:kafka_active_controllers:max"],
+            "candidates": ["tenant:kafka_broker_count:max"],
             "recommendation_mode": "not-applicable",
-            "reason": "by-design not-applicable — invariant (#916)",
+            "reason": "by-design not-applicable — topology floor (#916)",
         },
     }
 
@@ -1059,7 +1062,7 @@ class TestAnalyzeTenantLowerBound:
         assert report.recommended_changes == 1
 
     def test_not_applicable_key_skipped_by_design(self):
-        report = tr.analyze_tenant("db-x", {"kafka_active_controllers": "1"},
+        report = tr.analyze_tenant("db-x", {"kafka_broker_count": "3"},
                                    dry_run=False, prometheus_url="http://p:9090",
                                    observed_map=self.LOWER_MAP)
         rec = report.keys[0]
@@ -1689,19 +1692,108 @@ class TestUpperBoundFloor2964:
 
     @pytest.mark.parametrize("value,text", [
         (80, "80"), (80.0, "80"), (0.43, "0.43"), (0.098765433, "0.098765433"),
-        (150000.37, "150000.37"), (0.00001, "0.00001"), (1e20, "100000000000000000000")])
+        (150000.37, "150000.37"), (0.00001, "0.00001"),
+        (12345678901234567890, "12345678901234567890"),
+        # #3457: past 20 digits written out, the exponent form.
+        (1e20, "1e+20"), (10**20, "1e+20"), (1e21, "1e+21"), (1.5e-25, "1.5e-25"),
+        (1.2345678901234567e-4, "1.2345678901234567e-04")])
     def test_format_threshold_value_is_lossless(self, value, text):
         assert tr._format_threshold_value(value) == text
 
+    def test_format_threshold_value_is_always_a_threshold_number(self):
+        """Whatever is recommended is written as a text the exporter reads
+        back as the same number: a patch never sets a threshold the exporter
+        refuses."""
+        import random
+        import struct
+        import _lib_validation
+        rng = random.Random(3457)
+        values = [0, 1, 80, 80.0, 0.43, 1e19, 1e20, 1e21, 1e300, 5e-324, 1e-25, 0.1 + 0.2,
+                  10**19, 10**20, 2**64, 99999999999999999999, 1.2345678901234567e-4]
+        values += [abs(struct.unpack("<d", struct.pack("<Q", rng.getrandbits(64)))[0]) for _ in range(20_000)]
+        checked = 0
+        for v in values:
+            if isinstance(v, float) and not math.isfinite(v):
+                continue
+            text = tr._format_threshold_value(v)
+            assert _lib_validation.threshold_number(text) == float(v), (v, text)
+            checked += 1
+        assert checked > 10_000
+
+    def test_a_recommendation_past_20_digits_is_written_as_the_exporter_reads_it(self):
+        """The reported case: current 1e21, every observation 1e19 — the
+        tighten target is a 21-digit integer written out."""
+        values = [1e19] * _N_7D
+        rec = tr.recommend_threshold("k", "1e21", tr.compute_percentiles(values),
+                                     len(values), 100, values=values)
+        assert rec.recommended is not None and rec.recommended >= 1e20
+        import _lib_validation
+        text = tr._format_threshold_value(rec.recommended)
+        assert _lib_validation.threshold_number(text) == float(rec.recommended), text
+        assert len(str(int(rec.recommended))) > 20, "the sample no longer shows the case"
+
+    # ── a current no number is read from goes to manual review (#3457) ──
+    @pytest.mark.parametrize("current", ["1_000", "0x1p4", "\\u0661\\u0662\\u0663", "123456789012345678901",
+                                         "abc", "85:critical", "inf", "", True])
+    def test_an_unreadable_current_is_routed_to_manual_review(self, current):
+        """`float()` read `1_000` and recommended from it; now no number is
+        read, and the key must not just drop out as `skipped`: it is
+        `force_manual`, which threshold_govern lists for review."""
+        import threshold_govern as tg
+        rec = self._rec(current, _gauss())
+        assert rec.recommended is None and rec.force_manual is True
+        assert "not a number" in rec.guardrail_reason
+        report = tr.TenantRecommendation(tenant="db-x", keys=[rec])
+        (listed,) = tg.collect_force_manual([report])
+        assert (listed.tenant, listed.key) == ("db-x", "connections")
+        assert tr._skip_comment_body(rec)[0] == "manual"
+
+    @pytest.mark.parametrize("current", ["disable", " Disabled ", "OFF", "false"])
+    def test_a_switched_off_key_is_skipped_not_manual(self, current):
+        """A key switched off has no threshold to recommend for: skipped, as
+        before, and not listed for review."""
+        import threshold_govern as tg
+        rec = self._rec(current, _gauss())
+        assert rec.recommended is None and rec.force_manual is False
+        assert tg.collect_force_manual([tr.TenantRecommendation(tenant="db-x", keys=[rec])]) == []
+        assert tr._skip_comment_body(rec)[0] == "skipped"
+
     # ── a non-finite current (YAML .inf / .nan) ────────────────────────
-    @pytest.mark.parametrize("current", [float("inf"), float("-inf"), float("nan"),
-                                         "inf", "nan"])
+    @pytest.mark.parametrize("current", [float("inf"), float("-inf"), float("nan")])
     def test_non_finite_current_is_manual_review(self, current):
         values = _gauss()
         rec = tr.recommend_threshold("k", current, tr.compute_percentiles(values),
                                      len(values), 100, values=values)
         assert rec.recommended is None and rec.delta_pct is None
         assert rec.reason == "non-finite current value — manual review needed"
+
+    # ── a current the exporter does not read as a number (#3457) ────────
+    @pytest.mark.parametrize("current", [
+        "1_000", "0x1p4", "0x1F", "١٢٣", "123456789012345678901", "\x1c85", "85\x1f",
+        "inf", "nan", "Infinity", "85:critical", "disable", "", "abc", True, None, [85]])
+    def test_a_current_the_exporter_does_not_read_is_manual_review(self, current):
+        """The current threshold is read by the exporter's grammar. `float()`
+        reads `1_000` as 1000 and the Arabic-Indic digits as 123; the exporter
+        serves neither, so a recommendation computed from them would be
+        relative to a threshold that is not in force."""
+        values = _gauss()
+        rec = tr.recommend_threshold("k", current, tr.compute_percentiles(values),
+                                     len(values), 100, values=values)
+        assert rec.recommended is None and rec.delta_pct is None
+        assert rec.reason == "non-numeric current value, manual review needed"
+        assert rec.current_value == current
+
+    @pytest.mark.parametrize("current, same_as", [
+        (" 85 ", "85"), ("\t85\u0085", "85"), ("+85", "85"), ("85.", "85.0"), ("8.5e1", "85.0"), (85, "85")])
+    def test_a_current_the_exporter_reads_is_recommended_from_its_number(self, current, same_as):
+        """The exporter trims its own set of characters (U+0085 among them,
+        U+001C to U+001F not) and reads every decimal spelling: so does this."""
+        values = _gauss()
+        pcts = tr.compute_percentiles(values)
+        got = tr.recommend_threshold("k", current, pcts, len(values), 100, values=values)
+        want = tr.recommend_threshold("k", same_as, pcts, len(values), 100, values=values)
+        assert got.recommended is not None and want.recommended is not None
+        assert (got.recommended, got.delta_pct) == (want.recommended, want.delta_pct)
 
     # ── defences: unreachable today, so a broken rounding helper stands in ──
     def test_defence_relax_never_comes_out_as_a_decrease(self, monkeypatch):

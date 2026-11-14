@@ -11,7 +11,7 @@
 #       ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #       未啟用（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待 #1320
 #   oracle_tablespace_used_percent: 85   # % — Tablespace usage warning
-#       未啟用（待驗證）：佔 tablespace 的百分比可跨部署，但 85 尚未經 shadow 報表驗證
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
@@ -21,7 +21,8 @@
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 # 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   oracle_wait_time_rate: 50   # s/s — Wait time rate (5m)
-#       未啟用（依部署而定）：尚無實測；正常的等待輪廓因工作負載而異（#1320 暫維持宣告）
+#       未啟用（尚未量測，#1320）：尚無實測；#1320 在有訊號前維持宣告
+#       未啟用（依部署而定）：正常的等待輪廓因工作負載而異
 #   oracle_process_count: 300   # count — Active processes warning
 #       ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #       未啟用（待改比值）：#1176 量到例行備份達 560 個 process；可攜的形式是佔 PROCESSES 上限的比例，待 #1320
@@ -34,9 +35,8 @@
 # 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
 # 它讀的是 defaults[base]，base 沒有值就整列丟棄
 # （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base 都**未**標 [chart-default]
-# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
-# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
+# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
 # 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
 # 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
 # critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是

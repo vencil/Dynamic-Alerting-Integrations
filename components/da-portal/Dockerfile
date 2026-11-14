@@ -1,11 +1,13 @@
 # da-portal — Self-hosted Interactive Tools & Tenant Self-Service Portal
 #
-# Tools are pre-built into ESM bundles (esbuild, `make portal-build`) and served
-# as static files — no runtime build/transpile in the browser. Vendor JS
-# (React / Tailwind / Lucide) is bundled for air-gapped / offline deployment,
-# with CDN fallback otherwise.
+# Tools are pre-built into ESM bundles (esbuild) and served as static files —
+# no runtime build/transpile in the browser. The bundles are built from
+# tools/portal/ in the `portal-build` stage below (#3738); docs/assets/dist/ is
+# not in git and .dockerignore keeps a host-built copy out of the context. Vendor JS (React / Tailwind /
+# Lucide) is bundled for air-gapped / offline deployment, with CDN fallback
+# otherwise.
 #
-# Build:  make portal-build && docker build -t da-portal:v2.8.0 -f components/da-portal/Dockerfile .
+# Build:  docker build -t da-portal:v2.8.0 -f components/da-portal/Dockerfile .
 # Run:    docker run -p 8080:80 da-portal:v2.8.0
 #
 # Customisation via volume mounts:
@@ -13,7 +15,28 @@
 #   -v ./my-flows.json:/usr/share/nginx/html/assets/flows.json
 #   -v ./my-nginx.conf:/etc/nginx/conf.d/default.conf
 
-FROM nginx:1.30-alpine3.23
+# ── Stage 1: build the portal bundles from source (#3738) ──────────
+# --platform=$BUILDPLATFORM: the output is plain JS, identical for every target
+# arch, so the multi-arch release build runs this stage once, natively, instead
+# of under QEMU. Node major = the dev container's
+# (docs/internal/toolchain-versions.md);
+# tests/shared/test_toolchain_pin_parity.py binds it.
+# The digest pins the exact image (Renovate's "Dockerfile base images" group
+# refreshes it); its major is not Renovate's to move — see renovate.json.
+FROM --platform=$BUILDPLATFORM node:24-alpine3.23@sha256:3946fb783fdce8a2812136ea694bc95c698c4f4096f3fd18568dc27a8ac389dc AS portal-build
+
+# build.mjs writes ../../docs/assets/dist relative to itself, so keep the
+# repo layout: the bundles land in /src/docs/assets/dist/.
+WORKDIR /src/tools/portal
+# Lockfile first so the dependency layer is cached across source-only changes.
+# node_modules never comes from the context (.dockerignore excludes it).
+COPY tools/portal/package.json tools/portal/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY tools/portal/ ./
+RUN npm run build
+
+# ── Stage 2: the nginx image that serves them ───────────────────────
+FROM nginx:1.31-alpine3.23
 
 LABEL org.opencontainers.image.title="da-portal" \
       org.opencontainers.image.description="Dynamic Alerting Interactive Tools Portal" \
@@ -52,11 +75,12 @@ COPY --chown=nginx:nginx components/da-portal/nginx.conf /etc/nginx/conf.d/defau
 # ── Interactive Tools Hub (index + changelog) ─────────────────
 COPY --chown=nginx:nginx docs/interactive/ /usr/share/nginx/html/interactive/
 
-# ── Pre-built tool bundles (esbuild ESM output; `make portal-build`) ──
+# ── Tool bundles (esbuild ESM output from the portal-build stage) ──
 # jsx-loader.html loads /assets/dist/<tool>.js at runtime; the legacy
 # in-browser Babel transpile path is gone, so these bundles MUST be in the
-# image or every tool 404s.
-COPY --chown=nginx:nginx docs/assets/dist/ /usr/share/nginx/html/assets/dist/
+# image or every tool 404s. Taken from the stage above, never from a
+# docs/assets/dist/ in the build context (#3738).
+COPY --from=portal-build --chown=nginx:nginx /src/docs/assets/dist/ /usr/share/nginx/html/assets/dist/
 
 # ── Getting Started Wizard ────────────────────────────────────
 # Path follows the portal monorepo restructure (PR #279, TD-042, 2026-05-07):

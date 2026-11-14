@@ -229,7 +229,8 @@ def test_validate_config_and_generate_routes_print_no_notice(tmp_path):
 @pytest.mark.parametrize("tool", [_GENERATOR, _VALIDATE, _TESTER, _EXPLAIN],
                          ids=lambda p: p.stem)
 def test_every_tool_reads_policy_through_the_one_resolver(tool):
-    """結構閘門：這四支只經 `resolve_policy` 讀 --policy，不直接叫
+    """結構閘門：這四支只經 `resolve_policy` 讀 --policy（validate-config 交給產生器的
+    `validate_tree`，由它讀），不直接叫
     `load_policy` / `load_policy_document`，也不自己宣告 `--policy`。"""
     tree = ast.parse(tool.read_text(encoding="utf-8"))
     # the resolver's (and the flag's) own body is where the file is read
@@ -240,7 +241,10 @@ def test_every_tool_reads_policy_through_the_one_resolver(tool):
              for n in ast.walk(tree)
              if isinstance(n, ast.Call)
              for n in [n.func] if isinstance(n, (ast.Attribute, ast.Name))}
-    if tool != _GENERATOR:
+    if tool == _VALIDATE:
+        # its one reader of --policy is the generator's `validate_tree`
+        assert "validate_tree" in names and "resolve_policy" not in names, tool.name
+    elif tool != _GENERATOR:
         assert "resolve_policy" in names, tool.name
     else:
         assert "resolve_policy" in names or "resolve_policy" in {
@@ -344,7 +348,12 @@ def test_validate_config_a_tenant_named_domain_is_not_an_allowlist_finding(tmp_p
     rows = {r["check"]: r for r in json.loads(res.stdout)}
     assert res.returncode == bare.returncode, res.stdout + res.stderr
     assert "policy" not in rows, rows
-    assert rows["routes"] == {r["check"]: r for r in json.loads(bare.stdout)}["routes"]
+    # The same row but for the line that says a policy was loaded.
+    bare_row = {r["check"]: r for r in json.loads(bare.stdout)}["routes"]
+    loaded = "Policy: 1 allowed domain pattern(s) loaded"
+    assert loaded in rows["routes"]["details"], rows["routes"]
+    assert {**rows["routes"],
+            "details": [d for d in rows["routes"]["details"] if d != loaded]} == bare_row
     assert rows["routes"]["suggested_action"] != gar.POLICY_REFUSAL_REMEDY, rows["routes"]
 
 

@@ -6,10 +6,10 @@ version: v2.9.0
 lang: zh
 id: ADR-027
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: tenant-api
 created_at: 2026-07-03
-updated_at: 2026-11-07
+updated_at: 2026-11-13
 ---
 
 # ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分
@@ -18,11 +18,13 @@ updated_at: 2026-11-07
 
 ## 狀態
 
-🟡 **Proposed**（2026-11-04 改寫；同日 owner 裁決原待決的三項：瀏覽器入口、threshold-govern、範圍軸 shadow 模式）。owner 核可全文後昇格 Accepted。
+✅ **Accepted**（2026-11-13，owner 核可）。§9 的每個子句都有對應的檢查，見「實作位置」。全文於 2026-11-04 改寫，同日 owner 裁決瀏覽器入口、threshold-govern 與範圍軸 shadow 模式三項。
 
 2026-11-05 修訂：§10 改為實測結果，採用 oauth2-proxy 的結構化設定檔（alpha config）；tenant-api 由同一份設定檔決定信任哪些 header（§2、§7）；§6 的「一次生效」限於會拒絕舊設定的變更。
 
 2026-11-07 修訂：§7 的離線檢查也列出標記讀不到、卻被有範圍限制的規則套到的租戶，沒有限制規則套到的壞檔不再影響結束碼；環境與 domain 標記改由不受任何範圍限制的平台管理員變更，只限部分環境或 domain 的管理員不再能改；標記讀不到的租戶檔也只由這種管理員經 API 覆寫；標記與寫入範圍改在寫入鎖內、對寫入實際落地的那棵樹判定，兩種寫入模式相同。
+
+2026-11-13 修訂：§9 的每個子句有固定編號，§實作位置 改由原始碼中的 `adr-check:` 標記產生，沒有檢查的子句自動列出；§5 與 §9 第 4 項的「simulate 回原 body」改為如實的「`code` 與 `error` 文字不變」，因 tenant-api 的錯誤回應另帶 `request_id`。
 
 引用檢查（§9 第 8 項）已上線：repo 內以草稿編號引用本 ADR 的地方已改寫，舊編號對照表刪除。
 
@@ -115,7 +117,7 @@ tenant-api 唯一接受的身分來源，是同一個 pod 裡的 oauth2-proxy �
 - `/api/` 前綴 → tenant-api 的 UDS。portal 對後端的每一個呼叫都必須在這個前綴下，包括原本的 `/preview`。
 - 其餘路徑 → 同一個 pod 裡的 portal 靜態檔容器。這個容器不讀身分 header，也不把請求轉送到任何地方。
 - `/api/` 下未登入或 session 過期的請求回 401，不轉址到 IdP；portal 收到 401 時導去登入，不改顯示示範資料。
-- 原本由 da-portal nginx 回的「simulate 未提供」501，改由 tenant-api 回，狀態碼與 body 不變。
+- 原本由 da-portal nginx 回的「simulate 未提供」501，改由 tenant-api 回，狀態碼、`code` 與 `error` 文字不變（tenant-api 的錯誤回應另帶 `request_id`）。
 
 連帶的變更：
 
@@ -154,17 +156,48 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 
 ### 9. 決定以測試與 lint 表達
 
-本文是說明；下列檢查才是這些決定的單一來源。實作完成後，§實作位置 列出各檢查的檔名。
+本文是說明；下列檢查才是這些決定的單一來源。每個子句有固定編號（例如 `3b`）。實作某個子句的測試或 CI 步驟，在原始碼上一行標記 `adr-check: ADR-027/9.3b`；§實作位置 由這些標記產生，沒有任何標記的子句列為尚無檢查。
 
-1. TCP 只註冊 §3 列舉的路徑（精確比對），其餘回 404；TCP 上帶任何身分 header 回 400。（§2、§3）
-2. 架構測試：從 header 建立身分只發生在 UDS listener 的路徑上；rate limit、request log 與驗證旁路都不讀身分 header。（§2）
-3. chart render 測試：整個部署只有一個 oauth2-proxy，且 `/api/` 未登入回 401；只有 tenant-api 與 oauth2-proxy 掛載 human socket；UDS 必定存在；oauth2-proxy 與 tenant-api 掛載同一份設定檔；正式部署的 oauth2-proxy 沒有任何涵蓋 `/api/` 的免登入條件（§3 的開發拓撲依 ADR-022 隔離，不在此限）。portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。（§2、§5）
-4. portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下；simulate 路徑回 501 與原 body。（§5）
-5. 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件；§6 刪除的 chart key 不存在；threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。§6 刪除的環境變數不在 tenant-api 的已知清單裡。（§4、§5、§6）
-6. oauth2-proxy 設定檔不符合 §2 的形狀時 tenant-api 拒絕啟動，fixture 至少涵蓋：保留 client 值、固定值、前綴、claim 對錯、缺 email 或 group、環境變數參照、非標準拼法的欄位名稱；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記、或覆寫標記讀不到的租戶檔，即被拒絕；這項判定與寫入範圍都在寫入鎖內、對寫入落地的那棵樹進行。（§7）
-7. `tenant-api config check` 對每條範圍軸列出未標記與標記讀不到的租戶並非零退出，以固定 fixture 測試，並逐條規則比對它與 server 租戶清單的判定一致；CI 對 repo 內的範例設定執行它。（§7）
-8. 引用檢查：repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
-9. CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`），並以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。（§10）
+1. TCP 平面（§2、§3）：
+   - **1a** TCP 只註冊 §3 列舉的路徑（精確比對）。
+   - **1b** 其餘路徑回 404。
+   - **1c** TCP 上帶任何身分 header 回 400。
+2. 身分只在 UDS 平面建立，以架構測試表達（§2）：
+   - **2a** 從 header 建立身分只發生在 UDS listener 的路徑上。
+   - **2b** rate limit、request log 與驗證旁路都不讀身分 header。
+3. chart render（§2、§5）：
+   - **3a** 整個部署只有一個 oauth2-proxy。
+   - **3b** `/api/` 未登入回 401。
+   - **3c** 只有 tenant-api 與 oauth2-proxy 掛載 human socket。
+   - **3d** UDS 必定存在。
+   - **3e** oauth2-proxy 與 tenant-api 掛載同一份設定檔。
+   - **3f** 正式部署的 oauth2-proxy 沒有任何涵蓋 `/api/` 的免登入條件（§3 的開發拓撲依 ADR-022 隔離，不在此限）。
+   - **3g** portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。
+4. portal（§5）：
+   - **4a** portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下。
+   - **4b** simulate 路徑回 501，`code` 與 `error` 文字與原本相同。
+5. 不轉送身分、刪除的設定不存在（§4、§5、§6）：
+   - **5a** 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件。
+   - **5b** 同一掃描中，§6 刪除的 chart key 不存在。
+   - **5c** 同一掃描中，threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。
+   - **5d** §6 刪除的環境變數不在 tenant-api 的已知清單裡。
+6. 授權範圍（§7）：
+   - **6a** oauth2-proxy 設定檔不符合 §2 的形狀時，tenant-api 拒絕啟動。
+   - **6b** 解析時拒絕不符的形狀，fixture 至少涵蓋：保留 client 值、固定值、前綴、claim 對錯、缺 email 或 group、環境變數參照、非標準拼法的欄位名稱。
+   - **6c** 沒有規則的 `_rbac.yaml` 拒絕所有存取。
+   - **6d** 不存在恢復 open mode 的開關。
+   - **6e** 非平台管理員的寫入若變更租戶的環境或 domain 標記、或覆寫標記讀不到的租戶檔，即被拒絕。
+   - **6f** 6e 的判定與寫入範圍都在寫入鎖內、對寫入落地的那棵樹進行。
+7. 離線檢查（§7）：
+   - **7a** `tenant-api config check` 對每條範圍軸列出未標記與標記讀不到的租戶並非零退出，以固定 fixture 測試。
+   - **7b** 它與 server 租戶清單的判定逐條規則一致。
+   - **7c** CI 對 repo 內的範例設定執行它。
+8. 引用檢查（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）：
+   - **8a** repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）。
+   - **8b** `ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。
+9. oauth2-proxy 設定檢查（§10）：
+   - **9a** CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`）。
+   - **9b** CI 以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。
 
 ### 10. oauth2-proxy 的分流設定
 
@@ -244,7 +277,41 @@ upstreamConfig:
 
 ## 實作位置
 
-尚未實作。實作 PR 合併後在此列出 §9 各檢查的檔名。
+由 `scripts/tools/dx/gen_adr_checks.py` 依原始碼中的 `adr-check:` 標記產生，不要手改；改了標記後執行 `python3 scripts/tools/dx/gen_adr_checks.py --write`。路徑相對於 repo 根目錄，括號內是標記下方的測試或 CI 步驟。
+
+<!-- BEGIN GENERATED: adr-checks section=9 -->
+- **1a**：`components/tenant-api/cmd/server/tcp_router_test.go`（`TestTCPRouter_RegistersOnlyTheProbeRoutes`）
+- **1b**：`components/tenant-api/cmd/server/tcp_router_test.go`（`TestTCPRouter_EverythingElseIs404`）
+- **1c**：`components/tenant-api/cmd/server/tcp_router_test.go`（`TestTCPRouter_IdentityHeaderIs400`）
+- **2a**：`components/tenant-api/internal/rbac/devbypass_test.go`（`TestResolveIdentity_IgnoresHeadersOnTCP`）；`components/tenant-api/internal/rbac/identity_arch_test.go`（`TestHeaderResolutionOnlyInResolveIdentity`、`TestIdentityHeaderNamesOnlyInTheirOwners`）
+- **2b**：`components/tenant-api/internal/rbac/identity_arch_test.go`（`TestRateLimitLogAndBypassReadNoRequestHeader`）
+- **3a**：`tests/helm/test_identity_single_hop.py`（`test_no_raw_manifest_runs_an_oauth2_proxy`、`test_the_only_oauth2_proxy_is_in_the_tenant_api_pod`）
+- **3b**：`tests/oauth2-proxy/chart_test.go`（`TestChartAPIRouteIsTheSameInEveryVariant`）；`tests/oauth2-proxy/image_config_test.sh`
+- **3c**：`tests/helm/test_human_socket_guard.py`（`test_render_default_points_upstream_at_socket`）；`tests/helm/test_tenant_api_portal_container.py`（`test_portal_container_mounts_no_identity_or_secret`）
+- **3d**：`components/tenant-api/cmd/server/tcp_router_test.go`（`TestCheckIdentityPlaneFlags`）；`tests/helm/test_human_socket_guard.py`（`test_deployment_wires_the_socket`、`test_render_default_points_upstream_at_socket`、`test_render_without_proxy_fails`、`test_socket_path_is_a_chart_constant`）
+- **3e**：`tests/helm/test_oauth2_proxy_alpha_config.py`（`test_both_containers_read_the_same_file`）
+- **3f**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`、`TestChartOAuth2ProxyEnvIsAllowlisted`）
+- **3g**：`tests/helm/test_tenant_api_portal_container.py`（`test_portal_runs_the_charts_config_and_it_forwards_nothing`）
+- **4a**：`tools/portal/tests/api-fetch.test.ts`（`apiFetch: the path`）；`tools/portal/tests/network-calls-only-in-api-fetch.test.ts`（`network calls only in apiFetch`）
+- **4b**：`components/tenant-api/cmd/server/simulate_route_test.go`（`TestSimulateNotProvided`）；`tests/shared/test_portal_simulate_not_provided.py`（`test_tenant_api_answers_the_same_body`、`test_tenant_api_answers_the_same_code`）
+- **5a**：`tests/helm/test_identity_single_hop.py`（`test_no_raw_manifest_or_rule_pack_names_an_identity_header`、`test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header`）
+- **5b**：`tests/helm/test_tenant_api_machine_identity_removed.py`（`test_a_removed_key_fails_the_render`、`test_values_yaml_carries_no_removed_key`）；`tests/helm/test_tenant_api_scope_switches_removed.py`（`test_a_removed_key_fails_the_render`、`test_values_yaml_carries_no_removed_key`）
+- **5c**：`tests/shared/test_threshold_govern_write_path_removed.py`（`test_no_chart_mentions_threshold_govern`、`test_no_network_policy_admits_the_threshold_govern_pod`、`test_no_threshold_govern_cronjob`、`test_no_threshold_governance_stale_alert`、`test_tenant_api_chart_has_no_threshold_govern_allowance`）
+- **5d**：`components/tenant-api/cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesSettingsADR027Removed`）
+- **6a**：`components/tenant-api/cmd/server/identity_config_startup_test.go`（`TestMainRefusesAnAmbiguousOAuth2ProxyConfig`）
+- **6b**：`components/tenant-api/internal/proxyconfig/proxyconfig_test.go`（`TestLoad_RefusesAmbiguousShapes`、`TestParse_Refusals`）
+- **6c**：`components/tenant-api/internal/rbac/empty_config_mode_test.go`（`TestEmptyRuleSet_EveryEntryPointDenies`、`TestEmptyRuleSet_LegacyShimsDeny`）
+- **6d**：`components/tenant-api/cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesSettingsADR027Removed`）；`tests/helm/test_tenant_api_scope_switches_removed.py`（`test_a_removed_key_fails_the_render`、`test_the_default_render_sets_no_removed_variable`、`test_values_yaml_carries_no_removed_key`）
+- **6e**：`components/tenant-api/internal/handler/label_guard_test.go`（`TestLabelGuardBatchDirect`、`TestLabelGuardPutDirect`、`TestLabelGuardPutNewTenant`、`TestLabelGuardPutPRModeUnreadableBase`、`TestLabelGuardUnreadableLabelsBefore`）
+- **6f**：`components/tenant-api/internal/handler/fresh_base_scope_test.go`（`TestPRModeOrgScopeJudgedOnFreshBase`、`TestPRModeScopeAuthoritativeOnFreshBase`、`TestPRModeScopeJudgedEvenWhenTheTreeMovedMidRequest`）；`components/tenant-api/internal/handler/label_guard_test.go`（`TestLabelGuardBatchDirectRelabelLandsFirst`、`TestLabelGuardBatchPRModeBaseDrift`、`TestLabelGuardPutDirectRelabelLandsFirst`、`TestLabelGuardPutPRModeBaseDrift`、`TestLabelGuardPutPRModeUnreadableBase`、`TestScopeGateDirectNoopFirstOpStillJudged`、`TestScopeGateDirectRelabelLandsFirst`）
+- **7a**：`components/tenant-api/cmd/server/scope_check_test.go`（`TestConfigCheckScope_Fixture`）
+- **7b**：`components/tenant-api/internal/handler/scope_gap_planes_test.go`（`TestScopeGapsMatchEveryPlane`）
+- **7c**：`.github/workflows/ci.yml`（`Scope check on the try-local sample config (ADR-027 §7)`）
+- **8a**：`tests/lint/test_check_adr_section_refs.py`（`test_existing_sections_pass`、`test_missing_sections_fail`、`test_the_repository_is_clean`）
+- **8b**：`tests/lint/test_check_adr_section_refs.py`（`test_draft_code_needs_adr_027_before_it`、`test_withdrawn_draft_codes_fail`）
+- **9a**：`.github/workflows/ci.yml`（`Run --config-test in the chart's oauth2-proxy image (by digest)`）；`tests/oauth2-proxy/image_config_test.sh`
+- **9b**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）；`tests/oauth2-proxy/routing_test.go`（`TestADRSection10Routing`）；`tests/oauth2-proxy/version_test.go`（`TestLibraryVersionIsTheChartImage`）
+<!-- END GENERATED: adr-checks -->
 
 ## 相關
 

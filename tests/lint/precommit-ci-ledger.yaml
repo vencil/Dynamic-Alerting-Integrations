@@ -126,12 +126,6 @@ hooks:
     workflow: .github/workflows/docs-ci.yaml
     job: head-blob-hygiene
     note: Runs the same check_head_blob_hygiene.py --ci; no job `if:`.
-- id: trk-index-coverage
-  category: b
-  evidence:
-    pytest:
-    - tests/lint/test_check_trk_index_coverage.py
-    - tests/dx/test_tool_in_process_entrypoints.py
 - id: cli-coverage-check
   category: b
   evidence:
@@ -319,12 +313,6 @@ hooks:
   evidence:
     pytest:
     - tests/lint/test_check_critical_tier_twins.py
-- id: dist-source-consistency-check
-  category: exempt
-  evidence:
-    reason: Reads only `git diff --cached`; CI has nothing staged, so it is green by construction.
-      The stronger CI counterpart is the ci.yml portal step "Verify committed dist matches
-      fresh build".
 - id: playwright-rtl-drift-check
   category: b
   evidence:

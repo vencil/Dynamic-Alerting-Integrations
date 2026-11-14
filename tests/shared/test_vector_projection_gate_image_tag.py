@@ -34,8 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONTEXT = "helm/vector/projection-gate"
 _VALUES = "helm/vector/values.yaml"
 
-_RECIPE_DIGEST = "170d79df559a91901b43cf1ed7dfd0af44ddd5eb804d4e5239f3426dec203e52"
-_EXPECTED_TAG = "0.1.1"
+_RECIPE_DIGEST = "dcc1abf63e165784b24315771d180b5662e769a49249024609dad2ae73088efc"
+_EXPECTED_TAG = "0.1.2"
 
 
 def _instruction_lines(dockerfile: Path) -> list[str]:

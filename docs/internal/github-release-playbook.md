@@ -53,11 +53,11 @@ Token 只能存在 VM 的 `~/.git-credentials` 和 `~/.bashrc`（session 結束�
 | `ghcr.io/vencil/threshold-exporter` | `cmd/threshold-exporter/` | `exporter/v*` |
 | `ghcr.io/vencil/da-tools` | `scripts/tools/` | `tools/v*` |
 | `ghcr.io/vencil/da-portal` (+ OCI chart) | `portal/` | `portal/v*` |
-| `ghcr.io/vencil/recipe-preview` (+ OCI chart) ⛔ **尚未發布**（#1352 案例 B：`recipe-preview/v*` 零 tag，這條線從未被切過，兩個產物今天都不存在）| `scripts/tools/dx/`（bundled eval core）| `recipe-preview/v*` |
+| `ghcr.io/vencil/recipe-preview`（無 chart；tenant-api chart 的容器）⛔ **尚未發布**：#1040 起隨 `tools/v*` 建置，`tools/v2.9.0` 以前只由從未切過的 `recipe-preview/v*` 線建置，所以下一個 `tools/v*` 才是它的第一個 image | `components/recipe-preview/` + `scripts/tools/dx/`（bundled eval core）| `tools/v*` |
 | ~~`ghcr.io/vencil/dynamic-alerting` (platform OCI)~~ ⛔ **不存在**：`release.yaml` 的 trigger 不含 `v*`，也沒有任何 job 推這個 package；`v*` 只是平台版號的錨點 | — | `v*` |
 | `ghcr.io/vencil/tenant-api` | `cmd/tenant-api/` | `tenant-api/v*` |
 
-chart 的發佈狀態記在 `scripts/tools/lint/check_chart_pull_surface.py`（#1269）：真的推到 `oci://ghcr.io/vencil/charts/` 過的只有 threshold-exporter 與 tenant-api。da-portal 與 recipe-preview 有 push 步驟但這條線還沒帶著它發過版，列在 `UNRELEASED`——該線第一次發版後，release 收尾時把它從表裡拿掉。其餘 7 個（federation-*、vector、victorialogs、chargeback-aggregator、mariadb-instance）不發佈、只從 git checkout 安裝，列在 `GIT_ONLY` 並附理由；新 chart 沒有推也沒列表就會被擋。`GIT_ONLY` 與 `UNRELEASED` 的 chart，security advisory 不寫 chart 版號，而是寫修法 commit 與第一個含它的平台 tag。
+chart 的發佈狀態記在 `scripts/tools/lint/check_chart_pull_surface.py`（#1269）：真的推到 `oci://ghcr.io/vencil/charts/` 過的只有 threshold-exporter 與 tenant-api。da-portal 有 push 步驟但這條線還沒帶著它發過版，列在 `UNRELEASED`——該線第一次發版後，release 收尾時把它從表裡拿掉。其餘 7 個（federation-*、vector、victorialogs、chargeback-aggregator、mariadb-instance）不發佈、只從 git checkout 安裝，列在 `GIT_ONLY` 並附理由；新 chart 沒有推也沒列表就會被擋。`GIT_ONLY` 與 `UNRELEASED` 的 chart，security advisory 不寫 chart 版號，而是寫修法 commit 與第一個含它的平台 tag。
 
 推完 tag 後用 `gh api /users/vencil/packages?package_type=container` 驗證 package 是否更新，或直接在瀏覽器 <https://github.com/vencil?tab=packages> 確認。
 
@@ -136,6 +136,8 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 
 **#1269 / #1295 — 未發布的 draft advisory 也是 hard gate**：`make pre-tag` 另含 `draft-advisory-check`（它要呼叫 `gh`，所以 PATH 上必須有 `gh`）。draft advisory 不出現在任何維護者會例行掃的清單，GitHub 也無到期提醒，所以「等發版再一起發」這個決定沒有東西會叫醒你——唯一必然發生的事件是發版本身。有 draft 就中止並印出 GHSA id；`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。決定「這次不發」用 `ADVISORY_ACK=1 make pre-tag` 明示。⚠️ **它只涵蓋這條本地路徑**：`release.yaml` 由 tag push 觸發且沒有任何機制強制 pre-tag 先跑，所以直接 push tag 仍會繞過——這一點與 Layer 3 的 discipline 要求是同一個理由。
 
+**#1269 — advisory 的 patched 版號要真的存在**：`make pre-tag` 另含 `advisory-patched-check`（`scripts/tools/dx/check_advisory_patched_versions.py`），draft 與已發布的 advisory 都檢查，**不受 `ADVISORY_ACK` 影響**。每一列 package 名稱的括號標明它屬於哪個版號空間（`container image: ghcr.io/…`、`Helm chart: oci://…`、`Helm chart, git-only: helm/<dir>`、`platform release: git tag v*`）。patched 有填就必須在該空間存在；沒填而空間裡已有比受影響版本都新的版本，就是忘了回填。需要 `gh`、能連 ghcr.io，git-only 列還需要非 shallow 的 clone；任一做不到就中止。⚠️ 它擋不住「帶修正的那次發版」本身：pre-tag 時新版本還不存在。順序是 tag → 發布 → 回填 patched → 發布 advisory；漏了回填，下一次 pre-tag 會擋。
+
 > **Release wrap-up agent discipline（#474 Layer 3）**：tag push 前，wrap-up agent **必須**跑 `make pre-tag`（含 draft-advisory-check + docker-build-all + trivy-scan-all），或手動等價指令。⛔ **這條 discipline 沒有因為 #1295 把 advisory 檢查機械化而變得可省**——那道 gate 掛在 `make pre-tag` 上，而沒有任何東西強制 tag push 前一定要跑過它；**跳過 pre-tag 直接 push tag，等於同時跳過那道 gate**。Makefile 是 authoritative-but-incomplete contract — agent 負責 audit「Makefile 涵蓋什麼 vs `release.yaml` 實際做什麼」。這是 #468 author-time checklist 的 release 類比：機械 gate 漏的，discipline gate 補。系統化版本見 TRK-306 `vibe-release` skill（規劃中）。
 
 #### Trigger-asymmetry workflow audit（#474 generalization）
@@ -156,40 +158,41 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 
 ### Step 3: 建立 Tag
 
-六條版號線各有對應 tag：
+每條版號線各有對應 tag。⛔ 線的清單以 `release.yaml` 的 `on.push.tags` 為準（另加平台 tag `v*`）；下表是操作說明，增刪線時兩邊一起改：
 
 | 版號線 | Tag 格式 | 建立方式 | CI 觸發（release.yaml） |
 |--------|---------|---------|---------|
 | Platform (docs) | `v1.9.0` | `git tag v1.9.0` | **不觸發 build**（僅作 GitHub Release 錨點） |
 | Exporter (Go) | `exporter/v1.8.0` | `make release-tag-exporter`（從 Chart.yaml 推導） | `release-exporter` job → Docker image + Helm chart |
-| da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image |
+| da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image；`release-recipe-preview` job → recipe-preview image（#1040，無 chart） |
 | da-portal (Static) | `portal/v2.0.0` | `make release-tag-portal` | `release-portal` job → Docker image + Helm chart（#1352 案例 A 起） |
-| recipe-preview (Python) | `recipe-preview/v2.9.0` ⛔ 從未切過 | `make release-tag-recipe-preview`（從 Chart.yaml 推導；#657 同步升） | `release-recipe-preview` job → Docker image + Helm chart（job 完整可用，但至今沒有任何一次執行紀錄） |
 | tenant-api (Go) | `tenant-api/v2.4.0` | `git tag tenant-api/v2.4.0` | `release-tenant-api` job → Docker image + Helm chart |
 
 **Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
 
-**六線版號策略：** 六條獨立版號線（`v*` platform、`exporter/v*`、`tools/v*`、`portal/v*`、`recipe-preview/v*`、`tenant-api/v*`）各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。
+**版號線策略：** 各條版號線各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。⚠️ recipe-preview 改了就要切 `tools/v*`：它的 image 只隨那條線建置。
 
 > **⛔ Component tag 版號 = 該 component 的 `Chart.yaml` `version`**（**不是** `appVersion`，**不是**平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate：`grep '^version:' <chart>` ≠ tag → `ERROR: Chart.yaml version (X) != tag (Y)` → fail。
-> - **exporter / portal / recipe-preview** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`、`recipe-preview/v2.9.0`）。recipe-preview 之所以**同步升而非獨立 cadence**：它打包平台 compiler 的 byte-identical 快照，獨立版號會讓 bundled compiler 悄悄漂離平台 rule-pack（#657 PR-D2）。⛔ 這是**設計**不是**紀錄**：`recipe-preview/v2.9.0` 只是這條規則推導出來的名字，實際上 origin 沒有任何 `recipe-preview/v*` tag（#1352 案例 B），所以那個「同步升」至今一次都沒發生過。
+> - **exporter / portal** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`）。
+> - ⛔ **tenant-api 要排在 tools 之後**（#1040）：`release-tenant-api` 在 `helm push` 前跑 `check_image_refs_resolve.py --scope rendered --chart helm/tenant-api`，chart 預設值引用的每個 image（含 generator 與 recipe-preview，tag 跟隨 da-tools pin）都要能匿名拉到，否則 chart 不發布。所以 da-tools pin 指向的 `tools/v*` 必須先發布完成。
+>   - 第二道（[#3228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3228)）：同一個 job 在建置 image **之前**跑 `check_image_pin_capability.py --chart helm/tenant-api --refuse-exemptions`——拉得到還不夠，pin 住的 image 要真的含 chart 讓它跑的程式（`generator-service`、recipe-preview image），且**不接受** `EXEMPTIONS` 登記的豁免（PR gate 接受、release 不接受）。被擋時不要刪或改登記豁免來過關：先發帶那些程式的 `tools/v*`、`bump_docs.py --tools` 移動 `generator.image.tag`、刪掉屆時不再對應任何 workload 的豁免（gate 會以 `ORPHANED EXEMPTION` 要求刪除），再重發 tenant-api。
+> - **recipe-preview** 沒有自己的線（#1040）：image 由 `tools/v*` 建置，版號 = da-tools `VERSION`。它打包平台 compiler 的快照，與同一個 tag 建出的 da-tools（generator 容器）是同一份 compiler；tenant-api chart 的 recipe-preview 容器 tag 預設跟隨 `generator.image.tag`，所以兩者一起移動。
 > - **tenant-api** chart 是 **per-change**（每次 PR bump，dev-rule #7），版號會走在平台線前面，故 tenant-api **以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台 2.9.0**。硬壓 chart 回平台版 = 降級，禁止。
 >   - **tenant-api 的 `appVersion` 一律等於 `version`**（[#3228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3228)）：image 由同一個 commit 建、標 `:v<version>`，chart 預設跑 `:v<appVersion>`，兩者不同就是讓 chart 跑別版 binary。`bump_docs.py --tenant-api <ver>` 兩個一起改；`release-tenant-api` job 的 `Verify Chart.yaml appVersion matches version and tag` 與 `tests/helm/test_image_tag_derivation.py` 在不相等時 fail。
 
 ```bash
-# 情況 A：六線全升（所有 component 有變更）
+# 情況 A：全部的線都升（所有 component 有變更）
 git tag v<PLATFORM>
 make release-tag-exporter                       # 從 exporter Chart.yaml version 推導 exporter/v<EXP_CHART_VER>
 git tag tools/v<TOOLS>
 git tag portal/v<PORTAL>
-make release-tag-recipe-preview                 # 從 recipe-preview Chart.yaml version 推導（同步升 = 平台同版）
 git tag tenant-api/v<TENANT_API_CHART_VER>      # = helm/tenant-api/Chart.yaml 的 version（非平台版）
 
 # ⛔ 逐個 push，不要把 >3 個 tag 塞進同一次 git push：
 #    GitHub Actions 對「單次 push 含多個 tag」有觸發上限，>3 個 → release.yaml
 #    完全不觸發（靜默，0 個 run）。燒過 v2.9.0：4 tag 一次 push → 0 觸發 →
-#    刪 remote tag + 逐個重推才生效。六線時更要逐個推。
-for t in exporter/v<EXP_CHART_VER> tools/v<TOOLS> portal/v<PORTAL> recipe-preview/v<RP_CHART_VER> tenant-api/v<TENANT_API_CHART_VER>; do
+#    刪 remote tag + 逐個重推才生效。線多時更要逐個推。
+for t in exporter/v<EXP_CHART_VER> tools/v<TOOLS> portal/v<PORTAL> tenant-api/v<TENANT_API_CHART_VER>; do
   git push origin "$t"; sleep 8      # 推一個、確認 release.yaml 觸發、再推下一個
 done
 git push origin v<PLATFORM>          # 平台 anchor 不觸發 build，最後推；它是 GitHub Release umbrella
@@ -232,7 +235,7 @@ GitHub Release page 是客戶下載 binary 必經的入口；release body 兼任
 - ✅ <feature/component> — `<test surface>`
 - ✅ Trivy <version> CVE audit — <X HIGH + Y CRITICAL → 0/0 clean OR 殘留說明>
 - ✅ `make pr-preflight` 全綠
-- ✅ `make pre-tag` 全綠（version-check + lint-docs + changelog-fragments-consumed + draft-advisory-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
+- ✅ `make pre-tag` 全綠（version-check + lint-docs + changelog-fragments-consumed + draft-advisory-check + advisory-patched-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
 
 ## Known limits
 <已知但未在本 release 解的問題。每條一行，連到 issue / docs/api 的 §「Known gaps」>
@@ -454,22 +457,46 @@ bash smoke.sh   # 需 curl + jq
 | 11 | Release `already_exists`（tag 已被 CI 或先前操作建立） | 先 GET `/releases/tags/<tag>` 取 `id`，再 PATCH `/releases/<id>` 更新 name + body |
 | 12 | 合併版號時遺漏語義更新 | 全局 sed 改版號後，需手動校正：CHANGELOG（合併 section）、da-tools 版號表（Git Tag + 說明）、architecture 底部版本戳（日期 + 功能摘要 + CLI 命令數） |
 | 13 | 刪除遠端 tag 會連帶刪除關聯 Release | `git push origin :refs/tags/v*` 刪除 tag 後，GitHub 自動刪除該 tag 的 Release；重推 tag 後須重新 `POST /releases` 建立 |
-| 14 | Re-tag 完整 SOP（同版號新 commit） | ① 修正經 PR merge 進 main → ② 逐一刪遠端 tag → ③ 刪本地 tag → ④ 建新 tag on HEAD → ⑤ **逐一** push tag → ⑥ 重建 Release（因 #13 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
+| 14 | ⛔ 已發布的版號不能重打（[#3848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3848)） | `release.yaml` 寫 registry 與 GitHub Release 只經 `scripts/tools/dx/release_publish.py`，它先檢查再發布：映像正式 tag 已存在而 `org.opencontainers.image.revision` 不是這次的 commit（或沒有這個 label）、chart 逐檔比對不同，job 失敗，什麼都不寫。修正 → 經 PR merge 進 main → **升版號、打新 tag**。同一個 commit 的 run 失敗（例如網路斷掉）直接 re-run：已發布的映像與 chart 會被認出來而跳過；Release 資產**不覆蓋**——全在就不傳、全不在就全傳，只有一部分（上傳中途斷掉）時 job 失敗，先用 `gh release delete-asset <tag> <name>` 刪掉已上傳的那幾個再 re-run（重 build 的封存檔 bytes 不同，不能混用）。只有該 tag 的每條 job 都**還沒發布任何東西**（例如全被 Trivy 擋在 promote 之前）才可刪 tag、在新 commit 上重打同名 tag（下一節）；刪 tag 會連帶刪 Release（#13），要重建 |
 | 15 | ~~`mkdocs gh-deploy` 連續失敗~~ | 🗄️ 已歸檔（workaround 已轉移至 Windows-MCP #29-30）。詳見 [archive/lessons-learned.md](archive/lessons-learned.md) |
 | 16 | `bump_docs.py` 漏網規則 | 每次 release 前先跑 `bump_docs.py --what-if` 審計所有規則。新增 component 時須同步加入版號線（`--tenant-api` 等） |
 | 17 | Rule Pack 計數混淆 | `rule-packs/` yaml 檔案數 ≠ pack 總數（後者另含 platform / liveness 等 ConfigMap-only pack）。**一律以 `platform-data.json` 的 `totals.packs` 為準，勿在文件寫死數字**（曾寫死 15，liveness 加入後即過期） |
 | 18 | Cowork VM mount 製造 phantom lock | 詳見 [Windows-MCP Playbook #27](windows-mcp-playbook.md)。Release 場景的 workaround：fresh `git clone --depth 1` 到暫存目錄做 tag 操作 |
 | 19 | 新 component 上線遺漏版號工具 | 新增 component 時，除了 `release.yaml` 加 job，還須：① `bump_docs.py` 加版號線 ② `validate_docs_versions.py` 加規則 ③ Dockerfile base image 驗證 |
+| 20 | `latest` 可能倒退 | `latest` 指向「最後一個成功發布的 run」，不是最高版號：舊版號的延遲 re-run 或 backport 發布會把 `latest` 移回舊版（[#3848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3848)）。發 backport 後若要 `latest` 回到最高版號，就再發一次最高版號線的新版 |
 
 ### Release-gate 陷阱（component `release.yaml` 實戰，v2.9.0 首次五線 GA）
 
-每個 component job 在 tag push 後依序跑（**先掃再發布**，[#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278)）：`Verify Chart.yaml version matches tag` → build + push **候選 tag** `:candidate-<run_id>-<run_attempt>`（`id: build`）→ multi-arch verify（對 digest）→（有 chart 的）`helm package` + 封包內容檢查（只產本地 `.tgz`）→ `Scan image with Trivy`（**HIGH/CRITICAL hard gate**，`exit-code 1` + `ignore-unfixed`，`image-ref` 是 `<image>@${{ steps.build.outputs.digest }}`）→（da-tools / recipe-preview）cosign 簽 digest → `Promote scanned digest to release tags`（`docker buildx imagetools create` 把 `:v<version>` + `:latest` 指到同一 digest，並逐一回讀比對）→ `Verify image digest`（#445 L3，查正式 tag）→ `helm push` ／（da-tools）SBOM、archive、GitHub Release。**任一步 fail abort 後續**；Trivy 紅燈時正式 tag、chart、簽章、Release 一件都不會出現。順序由 `tests/ops/test_release_scan_before_publish.py` 解析 YAML 守住。
+每個 component job 在 tag push 後依序跑（**先掃再發布**，[#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278)）：`Verify Chart.yaml version matches tag` → build + push **候選 tag** `:candidate-<run_id>-<run_attempt>`（`id: build`）→ multi-arch verify（對 digest）→（有 chart 的）`helm package` + 封包內容檢查（只產本地 `.tgz`）→ `Scan image with Trivy`（**HIGH/CRITICAL hard gate**，`exit-code 1` + `ignore-unfixed`，`image-ref` 是 `<image>@${{ steps.build.outputs.digest }}`）→ `Publish image (#3848)`（`release_publish.py image`：先確認版號未發布〔陷阱表 #14〕，再〔da-tools / recipe-preview〕cosign 簽 digest、`docker buildx imagetools create` 把 `:latest`、`:v<version>` 依序指到同一 digest 並逐一回讀比對）→ `Verify image digest`（#445 L3，查正式 tag）→ `Publish Helm chart (#3848)`（`release_publish.py chart`，內含 `helm push`）／（da-tools）SBOM、archive、`release_publish.py assets`（GitHub Release，不覆蓋既有資產）。**任一步 fail abort 後續**；Trivy 紅燈時正式 tag、chart、簽章、Release 一件都不會出現。順序由 `tests/ops/test_release_scan_before_publish.py` 解析 YAML 守住。
 
 > **候選 tag 不清理（刻意）**：GHCR 的「版本」就是 digest，tag 只是掛在版本上的標籤；成功的 release 裡候選 tag 與正式 tag 掛在**同一個版本**上，刪「候選那個版本」等於刪掉剛發布的映像，而 GHCR API 沒有「只拿掉一個 tag」的操作。所以成功路徑上候選 tag 只是同一 digest 的無害別名。失敗路徑留下一個只有候選 tag 的孤兒版本：不是 `latest`、不被任何 chart 或文件引用、tag 名不是 semver（Renovate／semver 排序工具不會挑到它）。要清就另開 job 用 `actions/delete-package-versions`（需要 repo 對該 package 有 Admin 角色），只刪**沒有 `v*` tag** 的 `candidate-*` 版本——這是後續選項，目前不做。
 >
 > **何時重新評估（owner 拍板，2026-09-29）**：出現下列任一情況就開票做清理（建議形狀是獨立的排程 workflow，把刪除權限與發版 job 隔開）：① 第一次有 release 被 Trivy gate 擋下而留下孤兒版本；② 任一 package 的孤兒 `candidate-*` 版本累積到 3 個。量法（公開 package 可匿名）：對 `https://ghcr.io/v2/vencil/<image>/tags/list` 數 `candidate-` 開頭的 tag，扣掉與某個 `v*` tag 同 digest 的那些。⚠️ 過濾條件必須是「該版本**沒有任何** `v*` tag」，不能只看「帶 candidate tag」：GHCR 的版本就是 digest，可重現 build 會讓後來成功的 release 落在同一個 digest，只看 candidate tag 會把已發布的映像一起刪掉。孤兒映像在公開 package 裡任何人都拉得到，而它正是因為含可修 HIGH/CRITICAL 才被擋——這是選擇先不做時接受的殘留。
 >
-> **重打 tag**：掃描擋下時沒有任何正式產物，patch 後刪掉 git tag、在新 commit 上重打同名 tag 即可；舊 run 的候選 tag 不會被新 run 覆寫（`run_id` 不同）。
+> **重打 tag 只限「還沒發布任何東西」**：掃描在 promote 之前擋下時沒有任何正式產物，patch 後刪掉 git tag、在新 commit 上重打同名 tag 即可——發布前的檢查問到 registry 回 404，當作第一次發布；舊 run 的候選 tag 不會被新 run 覆寫（`run_id` 不同）。⛔ 只要該版號的正式 tag 或 chart 已經出現過（`tools/v*` 一個 tag 有兩條 job，任一條 promote 了就算），就不能重打：檢查會讀到不同的 revision 而讓 job 失敗，只能升版號發新版（[#3848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3848)）。
+>
+> **`latest` 與中途失敗**：要發布時 `latest` 先寫、版號 tag 最後寫。所以中途失敗留下的是「`latest` 已移動、版號 tag 不存在」，同一個 commit re-run 時版號仍視為未發布，會重新寫兩個 tag（re-run 是重 build，digest 會換成新的那個）。反過來，版號已發布時 re-run 什麼都不寫、`latest` 也不動。
+>
+> **第一次發布一個 repository**（下一次是 `charts/da-portal` 與 `recipe-preview`）：匿名查詢時 ghcr 對不存在的 repository 與私有的一樣回 401/403，所以發布步驟帶 `GITHUB_TOKEN` 再問一次。2026-11-13 實測（Actions run 43448765258，`packages: write`）：token 200、manifest `404 MANIFEST_UNKNOWN`，判為第一次發布。
+>
+> **發布步驟意外 rc 2（寫著 `refused with the given credentials`）時的手動處理**：owner 在本機用有 `read:packages`／`write:packages` 的 PAT 登入（`docker login ghcr.io`、`helm registry login ghcr.io`），先確認版號真的不存在，再照 wrapper 的順序發布，最後 re-run 失敗的 job，它會認出已發布而跳過。映像要用**失敗那次 run 掃過的候選 digest**，不要重 build：
+>
+> ```bash
+> export REGISTRY_USERNAME=<user> REGISTRY_PASSWORD=<PAT>
+> IMG=ghcr.io/vencil/<image>; VERSION=<x.y.z>; REVISION=<該 tag 的 commit sha>
+> DIGEST=$(docker buildx imagetools inspect "$IMG:candidate-<run_id>-<run_attempt>" --format '{{.Manifest.Digest}}')
+> python3 scripts/tools/dx/check_release_immutable.py image --ref "$IMG:v$VERSION" --revision "$REVISION"  # 必須印 ✅ publish
+> cosign sign --yes "$IMG@$DIGEST"                                   # 只有 da-tools、recipe-preview（release.yaml 帶 --sign 的）
+> docker buildx imagetools create --tag "$IMG:latest" "$IMG@$DIGEST"   # latest 先
+> docker buildx imagetools create --tag "$IMG:v$VERSION" "$IMG@$DIGEST" # 版號最後
+> docker buildx imagetools inspect "$IMG:v$VERSION" --format '{{.Manifest.Digest}}'  # 必須等於 $DIGEST
+>
+> # chart：用失敗那次 run 同一個 commit 重新 helm package 出來的 .tgz
+> python3 scripts/tools/dx/check_release_immutable.py chart --tgz .build/<chart>-<x.y.z>.tgz --registry oci://ghcr.io/vencil/charts  # 必須印 ✅ publish
+> helm push .build/<chart>-<x.y.z>.tgz oci://ghcr.io/vencil/charts
+> ```
+>
+> `<run_id>`、`<run_attempt>` 是失敗那次 run 的編號（Actions 頁面網址與 attempt 數）；cosign keyless 在本機會開瀏覽器走 OIDC，簽章身分因此是 owner 而不是 workflow——客戶若以 workflow 身分驗章，這一版要在 Release 說明裡註明。
 
 v2.9.0 首次真實五線 release 連續觸發下列三類：
 
@@ -673,7 +700,7 @@ foreach ($r in $fails) {
 16. **推送 + 等 CI 全綠 + Release**
     - release PR merge 進 main 後，對 main HEAD 推對應 tag
     - **等所有 Release workflow 完成並 success 後**才建 GitHub Release
-    - 若 CI 失敗：修正走新的 PR merge 進 main → 依本檔「Release 流程陷阱」表的 #14 re-tag
+    - 若 CI 失敗：同一個 commit 的暫時性失敗直接 re-run；要改 code 的，修正走新的 PR merge 進 main，再依本檔「Release 流程陷阱」表的 #14——該版號已有東西發布就升版號，什麼都還沒發布才可重打同名 tag
     - GitHub Pages 部署確認
     - 建立 GitHub Release（英文敘述）
 

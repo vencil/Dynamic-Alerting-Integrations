@@ -33,8 +33,13 @@ import yaml
 CHART = Path(__file__).resolve().parents[2] / "helm" / "victorialogs"
 pytestmark = pytest.mark.skipif(shutil.which("helm") is None, reason="helm CLI not on PATH")
 
-TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],"existingSecret":"vl-vector"},'
-                 '{"name":"federation-gateway","paths":["/select/.*"],"existingSecret":"vl-gw"}]')
+TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],'
+                 '"from":{"namespace":"vector"}},'
+                 '{"name":"federation-gateway","paths":["/select/.*"],'
+                 '"from":{"podLabels":{"app.kubernetes.io/name":"federation-gateway"}}}]')
+TWO_SECRETS = 'auth.existingSecrets={"vector":"vl-vector","federation-gateway":"vl-gw"}'
+# Rendered WITHOUT the baseline, so the Secrets are exactly these two.
+TWO = ("--set-json", TWO_CONSUMERS, "--set-json", TWO_SECRETS)
 
 
 # The default is auth.mode=enforce, which refuses to render until every
@@ -113,8 +118,8 @@ def test_probes_reach_victorialogs_through_vmauth() -> None:
     """kubelet probes the pod IP; VictoriaLogs is on loopback, so its probes go
     through vmauth, which forwards /health without credentials in both modes."""
     for mode in ("observe", "enforce"):
-        sets = ["--set", f"auth.mode={mode}"] + (["--set-json", TWO_CONSUMERS] if mode == "enforce" else [])
-        docs = _render(*sets)
+        sets = ["--set", f"auth.mode={mode}"] + (list(TWO) if mode == "enforce" else [])
+        docs = _render(*sets, baseline=mode != "enforce")
         vl = _containers(docs)["victorialogs"]
         for probe in ("readinessProbe", "livenessProbe"):
             get = vl[probe]["httpGet"]
@@ -145,7 +150,7 @@ def test_only_vector_can_write_and_nobody_can_delete_by_default() -> None:
 
 
 def test_enforce_passes_only_probes_and_metrics_without_credentials() -> None:
-    unauth = _auth(_render("--set", "auth.mode=enforce", "--set-json", TWO_CONSUMERS))["unauthorized_user"]
+    unauth = _auth(_render("--set", "auth.mode=enforce", *TWO, baseline=False))["unauthorized_user"]
     paths = sorted(p for e in unauth["url_map"] for p in e["src_paths"])
     assert paths == ["/health", "/metrics", "/ping"], paths
 
@@ -158,7 +163,7 @@ def test_observe_still_passes_unauthenticated_traffic() -> None:
 
 
 def test_each_consumer_is_held_to_its_paths() -> None:
-    users = {u["username"]: u for u in _auth(_render("--set-json", TWO_CONSUMERS))["users"]}
+    users = {u["username"]: u for u in _auth(_render(*TWO, baseline=False))["users"]}
     assert users["vector"]["url_map"][0]["src_paths"] == ["/insert/.*"]
     assert users["federation-gateway"]["url_map"][0]["src_paths"] == ["/select/.*"]
     for u in users.values():
@@ -169,7 +174,7 @@ def test_each_consumer_is_held_to_its_paths() -> None:
 
 
 def test_passwords_come_from_secrets_not_the_configmap() -> None:
-    docs = _render("--set-json", TWO_CONSUMERS)
+    docs = _render(*TWO, baseline=False)
     users = _auth(docs)["users"]
     for u in users:
         assert re.fullmatch(r"%\{VMAUTH_PASSWORD_[A-Z0-9_]+\}", u["password"]), u
@@ -187,18 +192,42 @@ def test_observe_skips_consumers_without_a_secret() -> None:
 
 
 @pytest.mark.parametrize("args, needle", [
-    (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"],"existingSecret":"s"},'
-                    '{"name":"b","paths":["/y"]}]'], "missing: b."),
+    (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"]},{"name":"b","paths":["/y"]}]',
+      "--set-json", 'auth.existingSecrets={"a":"s"}'], "missing: b."),
     (["--set", "auth.mode=open"], "auth.mode must be observe or enforce"),
-    (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"],"existingSecret":"s"},'
-                    '{"name":"a","paths":["/y"],"existingSecret":"s"}]'], "is listed twice"),
-    (["--set-json", 'auth.consumers=[{"name":"a","paths":[],"existingSecret":"s"}]'], "paths is empty"),
-    (["--set-json", 'auth.consumers=[{"name":"A_b","paths":["/x"],"existingSecret":"s"}]'], "lowercase letters"),
+    (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"]},{"name":"a","paths":["/y"]}]',
+      "--set-json", 'auth.existingSecrets={"a":"s"}'], "is listed twice"),
+    (["--set-json", 'auth.consumers=[{"name":"a","paths":[]}]',
+      "--set-json", 'auth.existingSecrets={"a":"s"}'], "paths is empty"),
+    (["--set-json", 'auth.consumers=[{"name":"A_b","paths":["/x"]}]'], "lowercase letters"),
     (["--set", "auth.mode=enforce", "--set-json", "auth.consumers=[]"], "would lock every consumer out"),
+    # #3847: a key naming no consumer (a typo) — the Secret would never be used
+    (["--set", "auth.existingSecrets.vectr=s"], "auth.existingSecrets names vectr, which auth.consumers does not list"),
+    # #3847: values from <0.7.0 named the Secret on the consumer
+    (["--set-json", 'auth.consumers=[{"name":"vector","paths":["/insert/.*"],"existingSecret":"s",'
+                    '"from":{"namespace":"vector"}}]'], "auth.consumers[vector].existingSecret was removed"),
+    (["--set-json", 'auth.existingSecrets={"vector":{"name":"s"}}'], "auth.existingSecrets.vector must be a Secret name"),
+    (["--set-json", 'auth.existingSecrets=["s"]'], "auth.existingSecrets must be a map"),
+    # #3847: `default` must not turn a wrongly typed 0 / false into "missing"
+    (["--set", "auth.mode=observe", "--set", "auth.existingSecrets.vector=0"],
+     "auth.existingSecrets.vector must be a Secret name"),
+    (["--set", "auth.existingSecrets.vector=false"], "auth.existingSecrets.vector must be a Secret name"),
 ])
 def test_render_refuses(args: list[str], needle: str) -> None:
     out = _helm(*args)
     assert out.returncode != 0 and needle in out.stderr, (out.returncode, out.stderr[-400:])
+
+
+def test_a_later_values_file_can_drop_secrets_with_null(tmp_path: Path) -> None:
+    """Layered values: the baseline names all five Secrets, a later file keeps
+    two consumers. Helm keeps its `~` keys as null (it deletes nulls only
+    against chart defaults), so the unknown-key check must read null as "no
+    Secret" — otherwise the only way out is editing the earlier file (#3847)."""
+    drop = tmp_path / "drop.yaml"
+    drop.write_text("auth:\n  existingSecrets:\n    grafana: ~\n    chargeback-aggregator: ~\n"
+                    "    federation-reconciler: \"\"\n", encoding="utf-8")
+    users = _auth(_render("-f", str(drop), "--set-json", TWO_CONSUMERS))["users"]
+    assert sorted(u["username"] for u in users) == ["federation-gateway", "vector"], users
 
 
 def test_unauthenticated_traffic_is_not_capped_below_the_global_limit() -> None:
@@ -211,9 +240,9 @@ def test_unauthenticated_traffic_is_not_capped_below_the_global_limit() -> None:
 
 def test_pod_rolls_when_the_auth_config_changes() -> None:
     def checksum(*args: str) -> str:
-        ann = _one(_render(*args), "Deployment")["spec"]["template"]["metadata"]["annotations"]
+        ann = _one(_render(*args, baseline=not args), "Deployment")["spec"]["template"]["metadata"]["annotations"]
         return ann["checksum/vmauth"]
-    assert checksum() != checksum("--set-json", TWO_CONSUMERS)
+    assert checksum() != checksum(*TWO)
 
 
 # ── enforce is the default (#1295 phase 3) ──────────────────────────────────
@@ -232,14 +261,15 @@ def test_a_bare_install_names_every_consumer_it_must_provision() -> None:
     assert "auth.mode=observe" in out.stderr, "the error must name the migration way out"
 
 
-def test_render_baseline_restates_the_registry() -> None:
-    """Helm replaces lists wholesale, so the baseline repeats the registry; it
-    must repeat it exactly, or every test using it judges a different store."""
-    def strip(consumers: list[dict]) -> list[dict]:
-        return [{k: v for k, v in c.items() if k != "existingSecret"} for c in consumers]
-    baseline = yaml.safe_load(BASELINE.read_text(encoding="utf-8"))["auth"]["consumers"]
-    assert strip(baseline) == strip(_values()["auth"]["consumers"])
-    assert all(c.get("existingSecret") for c in baseline), "the baseline must name a Secret per consumer"
+def test_render_baseline_names_a_secret_per_consumer_and_nothing_else() -> None:
+    """The baseline only names Secrets (#3847): restating the registry there was
+    a second copy that had to be held equal to values.yaml."""
+    baseline = yaml.safe_load(BASELINE.read_text(encoding="utf-8"))["auth"]
+    assert "consumers" not in baseline, "the baseline must not restate the registry (#3847)"
+    names = [c["name"] for c in _values()["auth"]["consumers"]]
+    assert sorted(baseline["existingSecrets"]) == sorted(names), (
+        "the baseline names a Secret for exactly the registry's consumers")
+    assert all(baseline["existingSecrets"].values()), "every baseline Secret name is non-empty"
 
 
 
@@ -272,6 +302,8 @@ def test_upgrade_checks_named_secrets_exist_before_recreating_the_pod() -> None:
         r'\(dict "consumers" \$out "secrets" \$found\) -\}\}\n'
         r'\{\{- if \$broken -\}\}\n\{\{- fail ', block)
     assert gate, "the upgrade gate must look up every mounted Secret and fail on any problem"
+    assert '(printf "auth.existingSecrets names Secrets this namespace' in block[gate.end():], (
+        "the upgrade error must point at auth.existingSecrets, where the Secrets are named (#3847)")
     assert _values()["auth"]["checkSecretsOnUpgrade"] is True, "the check must be on by default"
     assert _helm().returncode == 0, "offline render must not treat an unreachable cluster as missing Secrets"
 

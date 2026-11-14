@@ -48,7 +48,7 @@ helm install chargeback ./helm/chargeback-aggregator -n monitoring
 
 # Authenticate to the store's vmauth (#1295): a Secret (key `password`)
 # holding the same value as helm/victorialogs'
-# auth.consumers[name=chargeback-aggregator].existingSecret. In `monitoring`
+# auth.existingSecrets.chargeback-aggregator. In `monitoring`
 # both sides can name the same Secret. Runbook §1.2 has the steps.
 helm upgrade chargeback ./helm/chargeback-aggregator -n monitoring \
   --reuse-values --set victorialogs.auth.existingSecret=victorialogs-chargeback
@@ -58,6 +58,20 @@ helm upgrade chargeback ./helm/chargeback-aggregator -n monitoring \
   --reuse-values --set manualJob.enabled=true
 kubectl logs -n monitoring -l app.kubernetes.io/name=chargeback-aggregator --tail=50
 ```
+
+## NetworkPolicy
+
+`networkPolicy.enabled` (default on) gives the aggregator's pods egress to DNS
+and to VictoriaLogs on 9428 only. The documented namespace, `monitoring`,
+default-denies egress (`k8s/03-monitoring/network-policies.yaml`); without this
+policy every run fails before its first query. If VictoriaLogs runs in another
+namespace, set `networkPolicy.victorialogsNamespaceLabel` to match it **and**
+set VictoriaLogs' `auth.consumers[chargeback-aggregator].from.namespace` to the
+aggregator's namespace: `podLabels` alone admit pods of the store's own namespace only.
+The policy selects the store by `app.kubernetes.io/name: victorialogs` on
+9428; a store not installed from `helm/victorialogs`, or on another port,
+needs `networkPolicy.enabled: false`. ⚠️ New in 0.4.0: upgrading turns this
+policy on.
 
 ## Retention
 

@@ -359,17 +359,108 @@ def test_unjudged_credential_place_fails(tmp_path: Path) -> None:
     assert "[SCHEMA] docs/c.md:2 (credential_unjudged)" in r.stdout, r.stdout
 
 
-def test_expect_invalid_counts_a_plaintext_credential(tmp_path: Path) -> None:
+def test_expect_invalid_does_not_mask_a_plaintext_credential(tmp_path: Path) -> None:
+    """#3748: a schema error on purpose (`send_resolved: yes`) must not hide
+    a credential written out in the same unit: credentials are never one of
+    an `.expect-invalid` unit's expected violations."""
     attrs = " {.confd .expect-invalid}"
-    r = _run(_mkrepo(tmp_path, "c.md", _slack(_SECRET_VALUE, attrs)))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    body = _slack(_SECRET_VALUE, attrs).replace(
+        "\n```\n", "\n        send_resolved: yes\n```\n")
+    r = _run(_mkrepo(tmp_path, "c.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/c.md:2 (credential_plaintext)" in r.stdout, r.stdout
     assert "docs/c.md:2 — 1 violation(s) on purpose" in r.stdout, r.stdout
     assert "s3cr3t" not in r.stdout + r.stderr
+    # The credential as a Secret reference: the schema error alone, on purpose.
     (tmp_path / "docs" / "c.md").write_text(
-        _slack("{secret: {key: slack-api-url}}", attrs), encoding="utf-8")
+        body.replace(_SECRET_VALUE, "{secret: {key: slack-api-url}}"), encoding="utf-8")
     r = _run(tmp_path)
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+def test_a_credential_alone_is_no_expected_violation(tmp_path: Path) -> None:
+    """A unit wrong only by its credential is no counter-example of the
+    schema: the credential and the unmet expectation are both reported."""
+    r = _run(_mkrepo(tmp_path, "c.md", _slack(_SECRET_VALUE, " {.confd .expect-invalid}")))
     assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[SCHEMA] docs/c.md:2 (credential_plaintext)" in r.stdout, r.stdout
     assert "[SCHEMA] docs/c.md:2 (expect-invalid)" in r.stdout, r.stdout
+
+
+# ── #3748: conf.d written as YAML, in any shape the generator reads ─────
+
+
+def test_a_unit_refused_as_declared_is_listed_as_exempt(tmp_path: Path) -> None:
+    """A refused unit has no reading any check judges: it is listed beside
+    the `.illustrative` exemptions, never left out silently."""
+    body = ("```yaml {.confd .expect-refused=tag_not_allowed}\ntenants:\n  t1:\n"
+            "    _routing:\n      !!merge q: {receiver: {type: slack}}\n```\n")
+    r = _run(_mkrepo(tmp_path, "r.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "Units exempted (.expect-refused, refused on purpose): 1" in r.stdout, r.stdout
+    assert "docs/r.md:2 — refused as tag_not_allowed" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("body", [
+    (f"```yaml\nfinance:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
+     f"        api_url: {_SECRET_VALUE}\n```\n"),
+    f"```yaml\nfinance: {{t1: {{_routing: {{receiver: {{type: slack, api_url: {_SECRET_VALUE}}}}}}}}}\n```\n",
+], ids=["block", "flow"])
+def test_a_routing_block_two_levels_down_is_judged(tmp_path: Path, body: str) -> None:
+    """The issue's `finance: {t1: {_routing: …}}`: no conf.d example by its
+    top two levels, so no schema reads it, yet the generator would refuse
+    the file. Judged as the generator judges a file: its scan reads a
+    routing block at any depth, in block or flow form alike."""
+    r = _run(_mkrepo(tmp_path, "d.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/d.md:2 (credential_unjudged)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+def _helm(api_url: str) -> str:
+    return ("```yaml {.helm-values}\n# values.yaml\nthresholdConfig:\n"
+            "  defaults:\n    mysql_connections: 80\n  tenants:\n    t1:\n"
+            "      _routing:\n        receiver:\n          type: slack\n"
+            f"          api_url: {api_url}\n```\n")
+
+
+def test_helm_values_thresholdconfig_is_judged_as_the_conf_d_it_renders(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "h.md", _helm(_SECRET_VALUE)))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/h.md:2 (credential_plaintext)" in r.stdout, r.stdout
+    assert "helm-values thresholdConfig → t1.yaml" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+    (tmp_path / "docs" / "h.md").write_text(
+        _helm("{secret: {key: slack-api-url}}"), encoding="utf-8")
+    r = _run(tmp_path)
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "platform                 1" in r.stdout and "tenant-file              1" in r.stdout
+
+
+_F4 = {
+    "deep": "finance:\n  t1:\n    _routing:\n      receiver: {{type: slack, api_url: {v}}}\n",
+    "type-typo": "tenants:\n  t1:\n    _routing:\n      receiver: {{type: slakc, api_url: {v}}}\n",
+    "nested-routes": ("tenants:\n  t1:\n    _routing:\n      receiver: {{type: webhook, url: "
+                      "{{secret: {{key: w}}}}}}\n      routes:\n        - match: {{a: b}}\n"
+                      "          routes:\n            - receiver: {{type: slack, api_url: {v}}}\n"),
+    "routing-list": "tenants:\n  t1:\n    _routing:\n      - receiver: {{type: slack, api_url: {v}}}\n",
+}
+
+
+@pytest.mark.parametrize("value", [_SECRET_VALUE, "{secret: {key: slack-api-url}}"],
+                         ids=["plaintext", "secret-ref"])
+@pytest.mark.parametrize("shape", sorted(_F4))
+def test_expect_invalid_does_not_absorb_an_unjudged_place(tmp_path: Path, shape: str,
+                                                          value: str) -> None:
+    """#3748 (blind review F4): `.expect-invalid` absorbs schema errors only.
+    A receiver the generator cannot judge — at a place its walk does not
+    read, or of an unknown type — is reported whatever it holds: it is
+    where a credential goes unjudged."""
+    body = "```yaml {.confd .expect-invalid}\n" + _F4[shape].format(v=value) + "```\n"
+    r = _run(_mkrepo(tmp_path, "u.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/u.md:2 (credential_unjudged)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
 
 
 def _profiles(api_url: str) -> str:

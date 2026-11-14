@@ -86,12 +86,9 @@ lang: zh
 |---|---|---|---|---|---|
 | KafkaHighConsumerLag | warning | 靜音 | [tier] {{ $labels.tenant }}: consumer lag elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_consumer_lag:max |
 | KafkaHighConsumerLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical consumer lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_consumer_lag:max |
-| KafkaUnderReplicatedPartitions | warning | 靜音 | [tier] {{ $labels.tenant }}: under-replicated partitions  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:max |
-| KafkaUnderReplicatedPartitionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical under-replication  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:max |
-| KafkaNoActiveController | critical | 靜音 | [tier] {{ $labels.tenant }}: no active Kafka controller  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_active_controllers:max |
+| KafkaUnderReplicatedPartitions | warning | 靜音 | [tier] {{ $labels.tenant }}: under-replicated partitions  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:sum |
+| KafkaUnderReplicatedPartitionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical under-replication  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:sum |
 | KafkaLowBrokerCount | warning | 靜音 | [tier] {{ $labels.tenant }}: broker count below minimum  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_broker_count:max |
-| KafkaHighRequestRate | warning | 靜音 | [tier] {{ $labels.tenant }}: message rate threshold exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_request_rate:sum |
-| KafkaHighRequestRateCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical message rate  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_request_rate:sum |
 
 ---
 
@@ -121,6 +118,7 @@ lang: zh
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
 | TenantExporterAbsent | critical | 照常觸發 | No healthy up{job="tenant-exporters"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels. | 確認相關元件已啟動、配置正確；檢查元件日誌 | tenant_expected_exporter |
+| TenantExporterReplicaDown | warning | 靜音 | Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tena | 立即檢查伺服器狀態、網路連線；查看系統日誌 | up |
 
 ---
 

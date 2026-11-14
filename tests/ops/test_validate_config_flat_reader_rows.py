@@ -224,7 +224,7 @@ def test_the_corpus_exercises_every_row(tmp_path, cli_argv, capsys):
 def test_the_skipped_file_is_named_in_json(tmp_path, cli_argv, capsys):
     """The skipped path reaches --json, not only stderr.
 
-    #2326: the routing rows (schema / routes) read the whole tree
+    #2326: the routes row reads the whole tree
     now, so the flat reader left to exercise is `policy_dsl`'s root-carrier
     lookup — the corpus entry whose `_policies` live in `prod/_defaults.yaml`.
     """
@@ -241,20 +241,16 @@ def test_the_skipped_file_is_named_in_json(tmp_path, cli_argv, capsys):
 
 
 def test_the_routing_rows_read_a_nested_tenant(tmp_path, cli_argv, capsys):
-    """#2326: a nested tenant's problem is FOUND by the routing rows, not
+    """#2326: a nested tenant's problem is FOUND by the routes row, not
     merely admitted as skipped — the hierarchical twin FAILs where the flat
     twin does, and names no skipped file."""
     case = next(c for c in _CORPUS if c[0] == "receiver-not-an-object")
     (_frc, flat), (_hrc, hier) = _twins(case, tmp_path, cli_argv, capsys)
-    for n in ("schema", "routes"):
-        if n not in flat:
-            continue
-        assert flat[n]["status"] == hier[n]["status"], (n, flat[n], hier[n])
-        assert not hier[n].get("skipped_nested_files"), (n, hier[n])
+    assert flat["routes"]["status"] == hier["routes"]["status"] == vc.FAIL, (flat, hier)
+    assert not hier["routes"].get("skipped_nested_files"), hier["routes"]
 
 
-def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
-                                         amtool_accepts):
+def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys):
     """Negative control: no spurious WARN on a tree every reader can see."""
     d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, None)
     rc, rows = _run(d, ["--policy", "{policy}"], tmp_path, cli_argv, capsys)
@@ -264,7 +260,7 @@ def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
     assert rc == 0, rc
 
 
-def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path, amtool_accepts):
+def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     """The exception is structural, not a list: a check that returns before
     reaching a tenant reader was never told anything by one.
 
@@ -283,7 +279,7 @@ def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path, amtool_accepts)
     # routes the nested tenant (before, it was the flat row that WARNed).
     assert routes["status"] == vc.PASS, routes
     assert "skipped_nested_files" not in routes, routes
-    assert routes["details"][0] == "1 routes, 1 receivers, 1 inhibit_rules", routes
+    assert "Validation: 1 route(s), 1 receiver(s), 1 inhibit rule(s)" in routes["details"], routes
 
 
 def test_a_nested_tenant_alone_does_not_flag_a_root_carrier_lookup(tmp_path):

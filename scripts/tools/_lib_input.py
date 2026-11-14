@@ -26,10 +26,17 @@ when a refusal is raised, as in `_lib_paths`.
   there": a tool never stats a declared input itself — a second look can
   disagree with the first (config-diff's ``isdir`` read a base side removed
   after it was judged as a first import, rc 1, stderr empty), and the reader
-  that opens it later fails closed on what is gone. ⚠️ Not mechanised yet:
-  #3724 (a fault-injection gate — the input made to vanish at each look a
-  tool takes at it itself; a stat-based gate ran into early refusals and
-  shared readers, #3721).
+  that opens it later fails closed on what is gone: a refusal naming the
+  flag (``_lib_exitcodes.InputChanged``), never an answer from less input.
+  What holds it is the fault-injection gate (``JUDGED_EVENT`` below, #3724).
+* ``JUDGED_EVENT`` (#3724) — the audit event (``sys.audit``) raised when
+  the judgement of a declared input is done: ``(flag, path)``, once per
+  path a flag names. Python raises it to audit hooks only — none is
+  installed in a shipped run, so it costs a lookup. The fault-injection
+  gate (``tests/shared/test_declared_input_fault_injection.py``) takes it
+  as the line after which every look at the path is the tool's own: it
+  removes the input at each such look, and the run must refuse it, named,
+  or answer exactly what it answers with the input in place.
 * ``require_listed(flag, path, root, *, lang)`` (#3693) — a directory
   da-guard lists (``DA_GUARD_LISTS``) whose root entry it reports
   ``unlistable_dir`` is ``dir_not_accessible``: ⛔ the one wording of it,
@@ -97,8 +104,25 @@ import stat
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
+import sys
+
 from _lib_label import safe_label
 from _lib_paths import _DETAIL, _STAT_MISSING, classify_path, raise_path_problems
+
+#: The audit event raised when a declared input's judgement is done (#3724;
+#: see the module docstring): ``(flag, path)``.
+JUDGED_EVENT = "da.input.judged"
+
+
+def judged(flag: Optional[str], path: "str | os.PathLike[str]") -> None:
+    """Say that the judgement of the input *flag* names at *path* is done
+    (:data:`JUDGED_EVENT`). ⛔ Only the judgement says it: `selected`,
+    `document`, and for a directory da-guard lists the code that ends its
+    judgement — `_lib_parse_cache.record_judgement` for a tenant tree
+    (`declared_trees`, or a tool that judges its trees itself),
+    migrate-to-operator's own for its `--source-dir` (manifests)."""
+    sys.audit(JUDGED_EVENT, flag, os.fspath(path))
+
 
 #: ``select``: the directory is the input and da-guard lists it (the
 #: exporter's walk); ``selected`` returns the directory itself.
@@ -539,16 +563,18 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
         items = value.split(spec.separator)
         raise_path_problems([classify_path(i, "dir", lang=lang, flag=spec.flag) for i in items])
         value.absent = False
-        return [Path(i) for i in items]
+        return [Path(i) for i in items]  # DA_GUARD_LISTS only: `declared_trees` judges
     problem = classify_path(value, "dir", lang=lang, flag=spec.flag)
     if problem is not None:
         nothing = (spec.missing if value.given else spec.absent_default) == ABSENT_EMPTY
         if not (nothing and _nothing_at(value)):
             raise _caller_error(problem.message, problem.reason)
         value.absent = True
+        judged(spec.flag, value)
         return []
     value.absent = False
     if spec.select == DA_GUARD_LISTS:
+        # Not judged yet: what da-guard lists there is (`declared_trees`).
         return [Path(value)]
     try:
         names = _list(value)
@@ -560,6 +586,7 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
     chosen = spec.select.choose(Path(value), names)
     if not chosen and spec.empty == EMPTY_REFUSED:
         raise refuse_empty(_label(value, spec.flag), spec.select.wanted, lang=lang)
+    judged(spec.flag, value)
     return chosen
 
 
@@ -643,11 +670,14 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
         raise _caller_error(f"{label}: {safe_label(exc.detail(lang))}",
                             "file_unreadable") from exc
     if doc.fmt == "csv":
-        return _csv_records(data, doc.columns, doc.formats, label, lang)
+        records = _csv_records(data, doc.columns, doc.formats, label, lang)
+        judged(spec.flag, value)
+        return records
     if data is None and doc.empty_is is not None:
         data = doc.empty_is()  # judged by the top-level check like any value
     if not isinstance(data, doc.top):
         raise refuse_top(label, kind_of(data), doc.top, lang=lang)
+    judged(spec.flag, value)
     return data
 
 

@@ -13,12 +13,15 @@ every other copy is GENERATED from it:
              its `required` and its whole `allOf` (each recipe's required /
              forbidden fields and fixed op, `==` only on the eq recipes,
              group_by only where a recipe takes it); the rest of each
-             property is hand-written and kept
+             property is hand-written and kept. Also the `pattern` of its
+             thresholdScalar: a threshold number or a disable word, then an
+             optional `:severity` (#3457)
   - Portal : tools/portal/src/interactive/tools/_common/data/recipe-enums.json
              and recipe-status.json (imported by recipe-builder)
   - Python : the block between the GENERATED markers in
              scripts/tools/_lib_constants.py (the forecast's longest
-             lookback)
+             lookback, the pattern of a threshold number, the characters
+             trimmed around one)
   - Policy : the compiled pack's forecast `max_range_duration` (the longest
              lookback a compiled forecast reads) in
              .github/custom-rule-policy.yaml and its copy in
@@ -28,9 +31,14 @@ every other copy is GENERATED from it:
              `default:` in rule-packs/recipes/*.yaml, whose params must be
              exactly the recipe's (the rest is hand-written and kept)
 
-The portal's severity pair is not the recipe contract's: it is the threshold
-grammar's, read from tests/shared/threshold_value_matrix.json (which Go
-generates from config.ThresholdSeverities()).
+The grammar of a threshold number is the contract's patterns.thresholdNumber.
+The rest of a threshold value's grammar is not the recipe contract's: the
+severity pair, the characters trimmed around each half and the disable words
+(with the characters Go lower-cases into each of their letters) are read from
+the header of tests/shared/threshold_value_matrix.json, which Go writes from
+the exporter's own readers. The portal and the Python constants get the
+severities and the trim set; the schema's thresholdScalar pattern is composed
+from all of it.
 
 Usage:
   gen_recipe_contract.py [--root DIR] [--check | --update]
@@ -91,16 +99,43 @@ def _repo_root():
     return require_project_root(_THIS_DIR)
 
 
+#: The members of the threshold value matrix's header this generator reads.
+GRAMMAR_MEMBERS = ("severities", "trim_code_points", "disable_words", "disable_letters")
+
+
 def load(root):
-    """``(contract, severities)`` read from *root*."""
+    """``(contract, grammar)`` read from *root*: the recipe contract, and the
+    header of the threshold value matrix (GRAMMAR_MEMBERS)."""
     try:
         contract = json.loads((Path(root) / CONTRACT_REL).read_text(encoding="utf-8"))
-        severities = json.loads((Path(root) / SEVERITY_REL).read_text(encoding="utf-8"))["severities"]
+        matrix = json.loads((Path(root) / SEVERITY_REL).read_text(encoding="utf-8"))
+        grammar = {name: matrix[name] for name in GRAMMAR_MEMBERS}
     except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError) as e:
         raise ContractError(f"cannot read the contract: {e}") from e
-    if not isinstance(severities, list) or not severities:
-        raise ContractError(f"{SEVERITY_REL}: severities must be a non-empty list")
-    return contract, severities
+    _check_grammar(grammar)
+    return contract, grammar
+
+
+def _check_grammar(g):
+    """Raise ContractError unless *g* is the shape the patterns are built from."""
+    def ascii_lower(word):
+        return isinstance(word, str) and word != "" and word.isascii() and word.isalpha() and word.islower()
+
+    def code_points(v):
+        return (isinstance(v, list) and v != []
+                and all(isinstance(cp, int) and not isinstance(cp, bool) and 0 <= cp <= 0x10FFFF for cp in v))
+
+    for name in ("severities", "disable_words"):
+        if not isinstance(g[name], list) or not g[name] or not all(ascii_lower(w) for w in g[name]):
+            raise ContractError(f"{SEVERITY_REL}: {name} must be a non-empty list of lower-case ASCII words")
+    if not code_points(g["trim_code_points"]):
+        raise ContractError(f"{SEVERITY_REL}: trim_code_points must be a non-empty list of code points")
+    letters = g["disable_letters"]
+    wanted = {ch for w in g["disable_words"] for ch in w}
+    if not isinstance(letters, dict) or set(letters) != wanted or not all(
+            code_points(v) and ord(ch) in v for ch, v in letters.items()):
+        raise ContractError(f"{SEVERITY_REL}: disable_letters must give, for each letter of disable_words "
+                            "and no other, the code points that lower-case into it")
 
 
 def _inner(pattern):
@@ -150,6 +185,54 @@ def schema_members(c):
     ]
 
 
+# ------------------------------------------------- threshold value grammar
+
+_THRESHOLD_SCALAR = ["definitions", "thresholdScalar"]
+#: The characters that mean something inside a character class in one of the
+#: three regex dialects the pattern is read by (Go RE2, ECMAScript, Python).
+_CLASS_SPECIAL = frozenset(map(ord, "\\]^-["))
+
+
+def _char_class(code_points):
+    """A character class of exactly *code_points*; three or more consecutive
+    ones as a range."""
+    cps = sorted(set(code_points))
+    if _CLASS_SPECIAL.intersection(cps):
+        raise ContractError(f"{SEVERITY_REL}: a code point of {cps} needs escaping in a character class")
+    out, i = [], 0
+    while i < len(cps):
+        j = i
+        while j + 1 < len(cps) and cps[j + 1] == cps[j] + 1:
+            j += 1
+        if j - i >= 2:
+            out.append(f"{chr(cps[i])}-{chr(cps[j])}")
+        else:
+            out.extend(chr(cp) for cp in cps[i:j + 1])
+        i = j + 1
+    return "[" + "".join(out) + "]"
+
+
+def threshold_scalar_pattern(c, g):
+    """The pattern of a threshold value as the exporter's
+    splitThresholdSeverity and its row resolvers read it: trimmed, a
+    threshold number (the contract's patterns.thresholdNumber) or a disable
+    word, then optionally `:` and a severity, each half trimmed. Neither
+    alternative holds a `:`, so the one `:` it allows is the last one — the
+    one the exporter splits at.
+
+    A disable word is matched the way Go lower-cases it (`DİSABLE`), a
+    severity in ASCII letters of either case. What a pattern cannot say stays
+    the exporter's: a number of the grammar must also be finite (`1e999` is
+    not served), and a threshold ROW reads `disable:<severity>` as a value it
+    cannot read where a custom alert reads it as its opt-out."""
+    ws = _char_class(g["trim_code_points"]) + "*"
+    disable = "|".join("".join(_char_class(g["disable_letters"][ch]) for ch in word)
+                       for word in g["disable_words"])
+    severity = "|".join("".join(f"[{ch.upper()}{ch}]" for ch in word) for word in g["severities"])
+    number = _inner(c["patterns"]["thresholdNumber"])
+    return f"^{ws}(?:{number}|{disable}){ws}(?::{ws}(?:{severity}){ws})?$"
+
+
 # "No group_by" means none listed: an empty list is accepted, as Go
 # (len(spec.GroupBy) > 0) accepts it.
 _NO_GROUP_BY = {"maxItems": 0}
@@ -186,8 +269,9 @@ def schema_all_of(c):
     return out
 
 
-def render_schema(text, c):
-    """*text* with the contract's members of customAlertInstance set."""
+def render_schema(text, c, g):
+    """*text* with the contract's members of customAlertInstance and the
+    pattern of thresholdScalar set."""
     props = [m[0] for m in members(text, locate(text, _PROPS))]
     fields = [f["name"] for f in c["fields"]]
     if sorted(props) != sorted(fields):
@@ -197,6 +281,9 @@ def render_schema(text, c):
     for path, name, value in schema_members(c):
         text = _set_compact(text, _PROPS + path, name, value)
     text = _set_compact(text, _INSTANCE, "required", c["base_required"])
+    # ASCII-escaped: the pattern holds U+00A0, U+2028 and other characters an
+    # editor shows as nothing.
+    text = _set_compact(text, _THRESHOLD_SCALAR, "pattern", threshold_scalar_pattern(c, g), ascii_only=True)
     return _set_pretty(text, _INSTANCE, "allOf", schema_all_of(c))
 
 
@@ -210,14 +297,14 @@ def _set_pretty(text, obj_path, name, items):
     raise ContractError(f"{SCHEMA_REL}: {'.'.join(obj_path)} has no {name!r} member to set")
 
 
-def _set_compact(text, obj_path, name, value):
+def _set_compact(text, obj_path, name, value, ascii_only=False):
     """*text* with the existing member *name* of the object at *obj_path* set
     to *value*, written on one line the way the schema writes its enums. The
     member must already be there: where a new one goes is a hand-written
     choice, so a missing one is an error, not an insertion."""
     for key, _kstart, vstart, vend in members(text, locate(text, obj_path)):
         if key == name:
-            return text[:vstart] + json.dumps(value, ensure_ascii=False) + text[vend:]
+            return text[:vstart] + json.dumps(value, ensure_ascii=ascii_only) + text[vend:]
     raise ContractError(f"{SCHEMA_REL}: {'.'.join(obj_path)} has no {name!r} member to set")
 
 
@@ -227,10 +314,12 @@ def _dump(doc):
     return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
 
 
-def render_portal_enums(c, severities):
+def render_portal_enums(c, g):
     slo = c["slo_burn_rate"]
+    severities = g["severities"]
     return _dump({
-        "_generated": _HEADER + " severity / severityDefault come from " + SEVERITY_REL + ".",
+        "_generated": (_HEADER + " severity / severityDefault / thresholdTrim come from "
+                       + SEVERITY_REL + "."),
         "recipe": [r["name"] for r in c["recipes"]],
         "op": c["op"]["enum"],
         "opDefault": c["op"]["default"],
@@ -242,6 +331,7 @@ def render_portal_enums(c, severities):
         "modeDefault": c["mode"]["default"],
         "severity": severities,
         "severityDefault": severities[0],
+        "thresholdTrim": g["trim_code_points"],
         "groupBy": c["group_by"]["enum"],
         "quantileDefault": c["quantile"]["default"],
         "quantileRange": [c["quantile"]["exclusive_minimum"], c["quantile"]["exclusive_maximum"]],
@@ -299,11 +389,21 @@ def forecast_max_lookback(c):
     return _duration(max(factor * longest, _seconds(f["lookback_floor"])))
 
 
-def render_constants(c):
+def _py_str(s):
+    """*s* as a Python string literal on one line."""
+    if not s.isascii() or not s.isprintable():
+        raise ContractError(f"cannot write {s!r} as a one-line ASCII literal")
+    return json.dumps(s)
+
+
+def render_constants(c, g):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
         f"# block from {CONTRACT_REL}. DO NOT EDIT.",
         f'FORECAST_MAX_LOOKBACK: Final[str] = "{forecast_max_lookback(c)}"',
+        f'THRESHOLD_NUMBER_PATTERN: Final[str] = {_py_str(c["patterns"]["thresholdNumber"])}',
+        "THRESHOLD_TRIM_CODE_POINTS: Final[frozenset[int]] = frozenset(("
+        + ", ".join(f"0x{cp:X}" for cp in sorted(set(g["trim_code_points"]))) + "))",
         PY_END,
     ]) + "\n"
 
@@ -407,13 +507,13 @@ def render_recipe_yaml(text, c, rel):
 
 # ---------------------------------------------------------------- main
 
-def targets(root, c, severities):
+def targets(root, c, g):
     """``[(relpath, render(current_text) -> wanted_text)]``."""
     out = [
-        (SCHEMA_REL, lambda t: render_schema(t, c)),
-        (PORTAL_ENUMS_REL, lambda _t: render_portal_enums(c, severities)),
+        (SCHEMA_REL, lambda t: render_schema(t, c, g)),
+        (PORTAL_ENUMS_REL, lambda _t: render_portal_enums(c, g)),
         (PORTAL_STATUS_REL, lambda _t: render_portal_status(c)),
-        (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c), CONSTANTS_REL)),
+        (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c, g), CONSTANTS_REL)),
     ]
     for rel in (POLICY_REL, *GOVERNANCE_DOC_RELS):
         out.append((rel, lambda t, rel=rel: render_max_lookback(t, c, rel)))
@@ -430,9 +530,9 @@ def targets(root, c, severities):
 
 def run(root, update):
     """Stale relpaths; writes the stale files when *update*."""
-    c, severities = load(root)
+    c, grammar = load(root)
     stale = []
-    for rel, render in targets(root, c, severities):
+    for rel, render in targets(root, c, grammar):
         path = Path(root) / rel
         try:
             current = path.read_text(encoding="utf-8") if path.exists() or rel not in WHOLE_FILE_TARGETS else ""

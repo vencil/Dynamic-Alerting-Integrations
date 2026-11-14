@@ -117,6 +117,7 @@ await page.route('**/api/v1/me', async (route) => {
 ## Setup
 
 ```bash
+make portal-build              # 從 repo 根目錄；docs/assets/dist/ 不在 git 裡（#3738），不先 build 工具頁會 404
 cd tests/e2e
 npm install
 npx playwright install chromium

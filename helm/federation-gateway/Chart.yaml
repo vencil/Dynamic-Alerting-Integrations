@@ -59,7 +59,13 @@ type: application
 #         sidecar's audit-metrics.vector.yaml uses no component or option
 #         0.58-0.61 removed or changed. No value keys change. PATCH.
 # 0.7.0 — #1295: victorialogs.auth {username, existingSecret}. Only a non-empty existingSecret is mode-checked: with any mode but victorialogs it fails the render; username alone is ignored there, and an empty username falls back to the chart name. The Secret is mounted as a file and revoked_check.lua replaces Authorization with HTTP basic auth on every forwarded log query, re-reading the file on the revoked-set cadence (rotation without restart); a credential that never loaded answers 503. No Secret = no change.
-version: 0.7.0
+# 0.7.1 — #3715: auditLog.image.tag alpine3.23.6-1 -> alpine3.24.4-1 (audit-sidecar/Dockerfile
+#         FROM alpine 3.23.6 -> 3.24.4). No digest knob, so only the tag rolls
+#         the pods. No value keys change. PATCH.
+#         ⚠️ REQUIRES ACTION: rebuild audit-sidecar/Dockerfile and push it as
+#         alpine3.24.4-1 BEFORE upgrading, or logrotate hits ImagePullBackOff.
+# 0.8.0 — #1295: the NetworkPolicy also restricts egress, to DNS and TCP upstream.port in the upstream's namespace (`networkPolicy.upstreamNamespace`, else read from upstream.host `<svc>.<ns>.svc`). Before, the gateway had no egress at all in a namespace that defaults to deny, as k8s/03-monitoring does. ⚠️ BREAKING: an upstream.host that is not a Service name (external FQDN, IP) fails the render until upstreamNamespace is set or `networkPolicy.restrictEgress: false`; the rule matches the destination POD port: where the upstream Service maps ports, set `networkPolicy.upstreamPort`
+version: 0.8.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

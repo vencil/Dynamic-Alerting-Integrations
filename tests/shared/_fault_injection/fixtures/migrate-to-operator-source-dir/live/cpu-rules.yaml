@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-cpu
+data:
+  cpu-rules.yaml: |
+    groups:
+      - name: cpu_alerts
+        rules:
+          - alert: HighCPU
+            expr: cpu_usage > 80
+            for: 5m
+            labels:
+              severity: warning
+          - alert: CriticalCPU
+            expr: cpu_usage > 95
+            for: 2m
+            labels:
+              severity: critical

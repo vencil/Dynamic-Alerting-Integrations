@@ -10,11 +10,11 @@ HTTP/1.1 on a Unix socket (no network port) and serves:
 * ``POST /v1/validate`` — judge a base commit plus writes; answers 200 with
   ``result`` ``pass`` / ``findings`` / ``rejected`` whenever this process
   reaches a verdict for that request, 400 for a malformed request, 503 when
-  the container cannot judge at all (``VALIDATOR_UNAVAILABLE``: no amtool,
+  the container cannot judge at all (``VALIDATOR_UNAVAILABLE``: no da-read,
   no da-guard, a generator older than the policy's ``min_generator_version``;
   ``POLICY_UNAVAILABLE``: the deployment ``--policy`` file is unusable);
 * ``GET /v1/status`` — policy availability, generator and da-guard versions,
-  amtool and da-guard availability, readiness;
+  da-read and da-guard availability, readiness;
 * ``GET /metrics`` — Prometheus text format.
 
 Defaults of every limit are in ``--help``; this docstring does not repeat
@@ -348,14 +348,28 @@ def _via_flag(flag: Optional[str]) -> str:
     return f" (--da-guard-binary {flag!r})" if _given(flag) else ""
 
 
+def _pin_readers() -> None:
+    """Each reader binary found now, written absolute to its variable
+    (``_lib_consumer_read.absolute_reader_binaries``, a ``$PATH`` hit
+    included). ⛔ Before every check
+    of one, not only at start: the judgement process inherits the variables
+    and resolves the readers from its own job directory, where a relative
+    ``$PATH`` entry names another place — so what a check finds must be what
+    the judgement runs. A reader that appears on ``$PATH`` after start is
+    found, and pinned, by the next check; once pinned, that path is the
+    reader until the service restarts."""
+    _lib_consumer_read.absolute_reader_binaries(pin_path_hits=True)
+
+
 def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
     """Why the judgement process cannot run da-guard — the one it resolves
     ($DA_GUARD_BINARY, then PATH) is missing, not executable, or does not
     answer ``--version`` (a wrong architecture, a broken interpreter line)
-    — or None. Checked before every judgement, like amtool (ADR-036 §3):
+    — or None. Checked before every judgement, like da-read (ADR-036 §3):
     without it the key verdict (ADR-038 §5) cannot be given. The run is
     repeated only when the file changes; its result, good or bad, is kept."""
     import guard_dispatch
+    _pin_readers()
     exe = guard_dispatch.DISPATCHER.resolve_binary(None)
     if exe is None:
         return (f"da-guard is not found ({_da_guard_named(flag)}): without it "
@@ -374,6 +388,28 @@ def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
     if not _DA_GUARD_RAN[0][1]:
         return (f"da-guard at {exe}{_via_flag(flag)} does not run (`--version` failed): "
                 "the key verdict cannot be given")
+    return None
+
+
+def da_read_problem() -> Optional[str]:
+    """Why the judgement process cannot run da-read — the one the route
+    generator's Alertmanager check resolves ($DA_READ_BINARY, then PATH:
+    ``_lib_consumer_read.da_read_binary``) is missing or is not an executable
+    file — or None. Checked before every judgement (ADR-036 §3): without it
+    Alertmanager's loader cannot be asked whether it accepts the rendered
+    config, so no verdict is given."""
+    _pin_readers()
+    exe = _lib_consumer_read.da_read_binary()
+    if exe is None:
+        return ("da-read is not found ($DA_READ_BINARY, then PATH): without it "
+                "Alertmanager's reading of the rendered config cannot be asked "
+                "for, so no verdict is given")
+    try:
+        st = os.stat(exe)
+    except OSError as exc:
+        return f"da-read at {exe} cannot be read ({exc}): no verdict is given"
+    if not (stat.S_ISREG(st.st_mode) and os.access(exe, os.X_OK)):
+        return f"da-read at {exe} is not an executable file: no verdict is given"
     return None
 
 
@@ -693,11 +729,9 @@ class Service:
         remaining = ticket.deadline_at - self.loop.time()
         if remaining <= 0:
             return _rejected("deadline", "the deadline passed while queued")
-        if shutil.which("amtool") is None:
-            return _unavailable(
-                "VALIDATOR_UNAVAILABLE", "amtool_missing",
-                "amtool is not on PATH: without it the generator's check of the "
-                "rendered Alertmanager config is skipped, so no verdict is given")
+        missing = da_read_problem()
+        if missing is not None:
+            return _unavailable("VALIDATOR_UNAVAILABLE", "da_read_missing", missing)
         missing = da_guard_problem(self.s.da_guard_binary)
         if missing is not None:
             return _unavailable("VALIDATOR_UNAVAILABLE", "da_guard_missing", missing)
@@ -740,9 +774,9 @@ class Service:
     async def _warm(self, commit: str) -> None:
         """#2901 E2: run the generator's conf.d read (``load_tenant_tree`` —
         every parse a judgement makes happens there) on *commit*'s tree, no
-        writes, no verdict, no amtool — only to fill the cache (E1). Ended
-        at once when a request arrives; bounded by --warm-seconds; never on
-        a request's clock."""
+        writes, no verdict, no Alertmanager reading — only to fill the cache
+        (E1). Ended at once when a request arrives; bounded by --warm-seconds;
+        never on a request's clock."""
         outcome = "failed"
         job_dir = None
         try:
@@ -943,7 +977,7 @@ class Service:
 
     def _status(self) -> Response:
         policy = self._policy_now()
-        amtool = shutil.which("amtool") is not None
+        da_read = da_read_problem() is None
         da_guard = da_guard_problem(self.s.da_guard_binary) is None
         too_old = (generator_version_problem(self.generator_version,
                                              policy.min_generator_version)
@@ -956,9 +990,9 @@ class Service:
             "generator_version": self.generator_version,
             "generator_too_old": too_old,
             "da_guard_version": self.da_guard_version,
-            "amtool_available": amtool,
+            "da_read_available": da_read,
             "da_guard_available": da_guard,
-            "ready": policy.available and amtool and da_guard and too_old is None,
+            "ready": policy.available and da_read and da_guard and too_old is None,
             "cache_base_coverage_ratio": self.store.coverage(),
             "warm": {"ref": self.s.warm_ref or None, "commit": self.warm_commit,
                      "error": self.warm_error, "running": self.warming,
@@ -1016,7 +1050,7 @@ class Service:
         out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",
                 "# TYPE da_generator_cache_base_coverage_ratio gauge",
                 f"da_generator_cache_base_coverage_ratio {self.store.coverage()}"]
-        out += ["# HELP da_generator_orphans_reaped_total Exited processes left by judgements (amtool and its children) collected by this subreaper.",
+        out += ["# HELP da_generator_orphans_reaped_total Exited processes left by judgements (da-guard, da-read and their children) collected by this subreaper.",
                 "# TYPE da_generator_orphans_reaped_total counter",
                 f"da_generator_orphans_reaped_total {self.metrics.orphans_reaped}",
                 "# HELP da_generator_connections Open client connections (admission slots in use).",
@@ -1045,8 +1079,9 @@ class Service:
 
     def _reap_orphans(self) -> int:
         """#2901 R3: collect the zombies of processes a judgement started
-        (amtool, its children). This process is a child subreaper, so they are
-        re-parented here when the judgement ends — whether or not it is PID 1.
+        (da-guard, da-read, their children). This process is a child
+        subreaper, so they are re-parented here when the judgement ends —
+        whether or not it is PID 1.
 
         ⛔ Only between runs: ``waitpid(-1)`` would also collect the running
         judgement and take its exit status from ``wait4``. At most one direct
@@ -1414,7 +1449,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Absolute: the judgement process runs in its own job directory, and so
     # does every reader binary it runs — da-guard (#2906 review), and the
     # da-read / da-crdecode of the route generator (#3424).
-    _lib_consumer_read.absolute_reader_binaries()
+    _pin_readers()
     for name in ("socket", "repo", "work_dir", "policy"):
         value = getattr(settings, name)
         if value is not None:

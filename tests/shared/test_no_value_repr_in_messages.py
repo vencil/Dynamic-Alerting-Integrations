@@ -71,7 +71,7 @@ ALLOWED: dict[tuple[str, str, str, str], str] = {
     ("_grar_render.py", "load_base_config", "!r", "path"):
         "the --base-config path argument, not its content",
     ("_grar_render.py", "_run_binary", "!r", "argv[0]"):
-        "the program the tool runs (amtool, da-guard), not a conf.d value",
+        "the program the tool runs (kubectl, curl), not a conf.d value",
     ("_grar_validate.py", "_load_shared_secrets", "!r", "policy_path"): _POLICY,
     ("_grar_validate.py", "_load_shared_secrets", "!r", "alias"): _POLICY,
     ("_grar_validate.py", "_load_shared_secrets", "!r", "name"): _POLICY,

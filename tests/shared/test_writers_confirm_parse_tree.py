@@ -434,10 +434,10 @@ def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
     # not declare is undeliverable, which da-guard write refuses (#3671).
     import da_assembler
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 1\n  mem: 1\n", encoding="utf-8")
-    da_assembler.reconcile_one(_cr({"tenant-a": {}}, {"cpu": 10**20, "mem": 0.5}),
+    da_assembler.reconcile_one(_cr({"tenant-a": {}}, {"cpu": 10**18, "mem": 0.5}),
                                tmp_path, cli=True)
     text = (tmp_path / "ok" / "_defaults.yaml").read_text(encoding="utf-8")
-    assert "cpu: 100000000000000000000.0\n" in text and "mem: 0.5\n" in text, text
+    assert "cpu: 1000000000000000000.0\n" in text and "mem: 0.5\n" in text, text
     sv = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
                          str(tmp_path)], capture_output=True, text=True, encoding="utf-8",
                         timeout=120, check=False)
@@ -455,6 +455,14 @@ def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
                                    tmp_path, cli=True)
     assert exc.value.code == 2
     assert not (tmp_path / "ok3").exists()
+    # #3457: a threshold number has at most 20 digits, and the edit contract
+    # writes a float as digits, `.`, digits — so 10**20 (22 digits written)
+    # is a value the exporter does not read, refused the same way.
+    with pytest.raises(SystemExit) as exc:
+        da_assembler.reconcile_one(_cr({"tenant-e": {}}, {"cpu": 10**20}, name="ok4"),
+                                   tmp_path, cli=True)
+    assert exc.value.code == 2
+    assert not (tmp_path / "ok4").exists()
 
 
 def test_da_assembler_refuses_a_tenant_id_and_a_name_before_any_write(tmp_path):
@@ -1055,23 +1063,6 @@ def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path
 
 
 # ── E2 review follow-ups ─────────────────────────────────────────────────
-
-def test_scaffold_generate_profile_goes_through_da_guard_write(tmp_path, monkeypatch):
-    # `_profiles.yaml` is a conf.d file: written by `da-guard write`; a value
-    # the edit contract has no type for (inf) is not written (#3206 10c-3).
-    import scaffold_tenant as st
-    real = st.generate_profile
-    monkeypatch.setattr(st, "generate_profile", lambda name, dbs, tier="prod": {
-        "profiles": {name: {**real(name, dbs, tier=tier)["profiles"][name],
-                            "probe_key": float("inf")}}})
-    out = tmp_path / "out"
-    monkeypatch.setattr(sys, "argv", ["scaffold_tenant.py", "--generate-profile", "p1",
-                                      "--db", "mariadb", "-o", str(out)])
-    with pytest.raises(SystemExit) as exc:
-        st.main()
-    assert exc.value.code == 2
-    assert _bytes(out) == {}
-
 
 def test_scaffold_from_onboard_writes_all_tenants_or_none(tmp_path):
     hints = tmp_path / "hints.json"
@@ -1742,12 +1733,22 @@ def test_migrate_rule_rerun_replaces_both_files(tmp_path):
 
 
 def test_migrate_rule_writes_a_default_past_18_digits_as_a_float(tmp_path):
-    # 1e20 is the int 100000000000000000000: past the edit contract's 18
+    # 1e18 is the int 1000000000000000000: past the edit contract's 18
     # characters, it goes as the float it is to the exporter (float64).
-    r, out = _mr(tmp_path, "1e20")
+    r, out = _mr(tmp_path, "1e18")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "custom_app_queue_depth: 100000000000000000000.0\n" in (
+    assert "custom_app_queue_depth: 1000000000000000000.0\n" in (
         out / _MR_CONFD / "_defaults.yaml").read_text(encoding="utf-8")
+
+
+def test_migrate_rule_refuses_a_default_the_exporter_does_not_read(tmp_path):
+    # #3457: 1e20 would be written `100000000000000000000.0`, 22 digits; a
+    # threshold number has at most 20, so the exporter would serve no default
+    # for the key. da-guard write refuses the tree and nothing is written.
+    r, out = _mr(tmp_path, "1e20")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "is not a number the exporter reads" in r.stderr, r.stderr
+    assert not out.exists(), sorted(_bytes(out))
 
 
 def test_migrate_rule_without_da_guard_is_exit_2(tmp_path):
@@ -1821,15 +1822,16 @@ def test_generate_tenant_fixture_writes_what_reads_back(tmp_path):
 def test_generate_tenant_fixture_refuses_a_generated_text_that_reads_back_differently(
         tmp_path):
     # `inf` is a Python float written `inf`, which yaml.v3 reads as the
-    # string "inf" (the exporter would drop the whole `defaults:` block).
-    # All or none: the output directory holds nothing but itself — no
-    # tenant file, no domain directory, no staging directory beside it.
+    # string "inf" (the exporter would serve no default for the key). Since
+    # #3457 the argument is judged by the exporter's grammar of a threshold
+    # number before anything is generated: exit 2, and no output directory —
+    # no tenant file, no domain directory, no staging directory beside it.
     out = tmp_path / "conf.d"
     r = _fx(out, "--extra-defaults", "bench_trigger=inf")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "_defaults.yaml" in r.stderr and "bench_trigger" in r.stderr, r.stderr
-    assert list(out.iterdir()) == []
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["conf.d"]
+    assert "--extra-defaults" in r.stderr and "bench_trigger" in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert sorted(p.name for p in tmp_path.iterdir()) == []
 
 
 def test_generate_tenant_fixture_is_the_same_bytes_whatever_the_hash_seed(tmp_path):

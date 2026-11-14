@@ -59,8 +59,8 @@ read the bytes of the produced `.tgz`.
 ⚠️ The reason is NOT that helm is unobtainable. An earlier revision of this
 docstring said so and was wrong: `get.helm.sh` is indeed blocked by egress
 policy, but `go install helm.sh/helm/v3/cmd/helm@vX` builds it from source in
-about two minutes, and CI already installs it (`azure/setup-helm@v4`, three
-jobs in ci.yml and three in release.yaml). The real reason is placement: this
+about two minutes, and CI already installs it (`azure/setup-helm` in jobs of
+ci.yml and release.yaml). The real reason is placement: this
 gate runs in pre-commit's *automatic* stage, where a 107 MB toolchain fetch
 does not belong. A tarball-reading assertion is a separate check for the
 manual stage or a CI job, and is tracked as such rather than smuggled in here.
@@ -140,6 +140,12 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
             "published artifact, which is a release decision, not a lint fix.",
         ),
         ".helmignore": (SHIP, "helm's own packing control file"),
+        "values-config-validation.yaml": (
+            EXCLUDE,
+            "#3353: the Container SAST L2 render variant that turns the "
+            "config-validation CronJob on so kube-linter judges it — an input "
+            "to that gate, not a deployment profile.",
+        ),
     },
     "helm/da-portal": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
@@ -159,15 +165,6 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
             "changing what the first published da-portal .tgz contains.",
         ),
     },
-    "helm/recipe-preview": {
-        "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
-        "values.yaml": (SHIP, "the chart's default values"),
-        ".helmignore": (
-            SHIP,
-            "helm's own packing control file; added in #1018 to keep the Pod "
-            "Security gate's ci/ value sets out of the package.",
-        ),
-    },
     "helm/tenant-api": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),
@@ -182,7 +179,9 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
 }
 
 _HELM_PACKAGE_RE = re.compile(r"helm\s+package\s+(?P<target>[^\s]+)")
-_HELM_PUSH_RE = re.compile(r"helm\s+push\b")
+# release.yaml pushes charts only through release_publish.py chart (#3848),
+# which runs `helm push` itself; that call site counts as a push.
+_HELM_PUSH_RE = re.compile(r"helm\s+push\b|release_publish\.py\s+chart\b")
 # The chart NAME out of a `helm push .build/<name>-<version>.tgz` call. The
 # version half is templated by design and in three dialects — GitHub Actions
 # `${{ … }}`, Make `$(…)`, shell `${…}` — so it is matched and discarded. Only
@@ -191,7 +190,7 @@ _HELM_PUSH_RE = re.compile(r"helm\s+push\b")
 # draft and the refusal is what surfaced it, which is the behaviour this gate
 # wants from its own machinery too.
 _PUSHED_ARCHIVE_RE = re.compile(
-    r"helm\s+push\s+(?:\S*/)?(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*?)"
+    r"(?:helm\s+push|release_publish\.py\s+chart\s+--tgz)\s+\"?(?:\S*/)?(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*?)"
     r"-(?:\$\{\{[^}]*\}\}|\$\([^)]*\)|\$\{[^}]*\}|[0-9][A-Za-z0-9.+_-]*)\.tgz"
 )
 # A comment that merely mentions `helm package` is not a call site. Found by

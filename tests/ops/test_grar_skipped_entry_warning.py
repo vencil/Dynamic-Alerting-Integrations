@@ -124,9 +124,6 @@ CASES = [
      {"team/_defaults.yaml": "_routing_defaults:\n  routes: []\n",
       "team/t1.yaml": _TENANT_HEAD + _RECEIVER},
      None, "'routes' is not supported here"),
-    ("parse:invalid-tenant-id",
-     {"t1.yaml": "tenants:\n  Bad_Tenant:\n" + _RECEIVER}, None,
-     "is not a valid tenant id"),
     # _grar_routes
     ("routes:group-by-element", _with_receiver("      group_by: [1]\n"), None,
      "group_by[0] is int"),
@@ -209,7 +206,7 @@ def _stream(gar, config_dir: Path, allowed_domains) -> list[str]:
 def test_clamp_warn_naming_skipping_does_not_block(tmp_path, value):
     d = _write_tree(tmp_path, {"skipping.yaml": _TENANT_HEAD.replace(
         "t1", "skipping") + _RECEIVER + f"      repeat_interval: \"{value}\"\n"})
-    # No amtool on PATH → WARN, not FAIL; the children write UTF-8.
+    # WARN, not FAIL; the children write UTF-8.
     env = {**os.environ, "PATH": str(tmp_path), "PYTHONIOENCODING": "utf-8"}
     vc = subprocess.run(
         [sys.executable, str(OPS_DIR / "validate_config.py"),
@@ -266,7 +263,7 @@ def test_new_predicate_blocks_what_the_old_one_did(tmp_path, mods, files,
 def test_mark_survives_to_every_predicate_caller(tmp_path, mods, monkeypatch,
                                                  files, allowed, marker):
     """Spy on the predicate at each call site (`_validate_mode` /
-    `evaluate_generated_config`, validate-config's schema and routes rows,
+    `evaluate_generated_config`, validate-config's routes row,
     `--validate` with nothing to render) and require that every line naming
     the trigger arrives still marked — a caller that re-formatted it would
     deliver a plain str here."""
@@ -279,14 +276,13 @@ def test_mark_survives_to_every_predicate_caller(tmp_path, mods, monkeypatch,
 
     monkeypatch.setattr(gar, "blocking_generation_errors", spy)
     monkeypatch.setattr(render, "blocking_generation_errors", spy)
-    monkeypatch.setenv("PATH", str(tmp_path))   # no amtool
+    monkeypatch.setenv("PATH", str(tmp_path))   # an empty PATH
     d = _write_tree(tmp_path, files)
     policy = None
     if allowed is not None:
         policy = tmp_path / "policy.yaml"
         policy.write_text(f"allowed_domains: {allowed!r}\n", encoding="utf-8")
 
-    vc.check_schema(str(d))
     vc.check_routes(str(d), None if policy is None else str(policy))
     argv = ["generate_alertmanager_routes.py", "--config-dir", str(d),
             "--validate"] + ([] if policy is None else ["--policy", str(policy)])

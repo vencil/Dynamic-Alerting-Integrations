@@ -123,6 +123,15 @@ spec:
   policyTypes:
     - Egress
   egress:
+    # VictoriaLogs /metrics in this namespace (monitoring-components job, the
+    # Service's prometheus.io/port). helm/victorialogs admits `app: prometheus`.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: victorialogs
+      ports:
+        - protocol: TCP
+          port: 9428
     # Scrape targets in tenant namespaces (mysqld-exporter 9104, threshold-exporter 8080)
     - to:
         - namespaceSelector: {}
@@ -315,6 +324,28 @@ spec:
       ports:
         - protocol: TCP
           port: 9090
+    # VictoriaLogs data source (configmap-grafana.yaml, victorialogs:9428 in
+    # this namespace). helm/victorialogs admits `app: grafana` on its side;
+    # without this half the datasource could never connect.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: victorialogs
+      ports:
+        - protocol: TCP
+          port: 9428
+    # grafana.com: GF_PLUGINS_PREINSTALL_SYNC (deployment-grafana.yaml)
+    # installs the VictoriaLogs datasource plugin at startup. Same shape and
+    # caveat as allow-alertmanager-egress's 443 rule above. Pre-baking the
+    # plugin into the image (the note beside that env var) removes the need.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32  # Block cloud metadata endpoint
+      ports:
+        - protocol: TCP
+          port: 443
     # DNS resolution
     - to:
         - namespaceSelector: {}

@@ -86,7 +86,7 @@ Open any `conf.d/<tenant name>.yaml`: apart from the header comments, it is `ten
 
 ## Exercise 2: Configure Tenant Thresholds
 
-Replace the content of each tenant file with the following (keep or drop the header comments). Every snippet keeps the two outer levels init generated, `tenants:` → `<tenant name>:`. Without them validation finds no tenants and still reports a pass (see the note in Exercise 3).
+Replace the content of each tenant file with the following (keep or drop the header comments). Every snippet keeps the two outer levels init generated, `tenants:` → `<tenant name>:`. Without them validation finds no tenants and the report is FAIL (see the note in Exercise 3).
 
 **conf.d/prod-mariadb.yaml** — E-Commerce database:
 
@@ -141,7 +141,6 @@ tenants:
     kafka_consumer_lag: "50000"
     kafka_consumer_lag_critical: "200000"
     kafka_broker_count: "3"
-    kafka_active_controllers: "1"
     kafka_under_replicated_partitions: "0"
     jvm_gc_pause: "0.8"
     jvm_memory: "85"
@@ -239,7 +238,7 @@ A domain policy names the tenants it constrains in its `tenants:` list. The bloc
 
 ## Exercise 3: Validate All Configs
 
-Every `docker run` from here on passes `--user $(id -u):$(id -g)`: the conf.d files `init` wrote are mode 0600 and owned by you, so the image's default user cannot read them (`validate-config` reports them as unreadable files).
+Every `docker run` from here on passes `--user $(id -u):$(id -g)`: the container runs as you, so what it writes into your directory (such as `.output/`) is yours. The conf.d files `init` wrote are mode `0644` and its directories `0755`, readable by any user.
 
 ```bash
 docker run --rm \
@@ -249,7 +248,7 @@ docker run --rm \
   validate-config --config-dir /data/conf.d
 ```
 
-Expected output (measured after doing Exercises 1 and 2 as written):
+Expected output (an abridged illustration; the real report has more check rows):
 
 ```
 ============================================================
@@ -259,11 +258,11 @@ Expected output (measured after doing Exercises 1 and 2 as written):
 [PASS] yaml_syntax
        8 files parsed successfully
 
-[PASS] schema
-       No schema warnings
-
 [PASS] routes
-       5 routes, 5 receivers, 5 inhibit_rules
+       ...
+       Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+       ...
+       OK: all configs valid
 
 [PASS] profiles
        5 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
@@ -275,17 +274,17 @@ Expected output (measured after doing Exercises 1 and 2 as written):
        5 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 6 pass | 0 warn | 0 fail
+  Total: 5 checks | 5 pass | 0 warn | 0 fail
 ------------------------------------------------------------
   Result: PASS
 ```
 
-The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
+The exit code is `0`: it is non-zero only when a check is `fail` (`1`; `2` for a caller error or a tree whose shape the routing plane cannot use as input), and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
 
-- The `schema` row also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
+- The `routes` row is `generate-routes --validate`, so it also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
 - The `profiles` row is about threshold profiles (`_profiles.yaml` and a tenant's `_profile`), not routing profiles, so it still reads `0 profiles defined in _profiles.yaml` after Exercise 2.
 
-⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. Every check then reads PASS while nothing was validated.
+⚠️ If `tenant_uniqueness` says `0 tenant(s)`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. The report is then FAIL: the `routes` and `unread_keys` rows name those keys as `unread … (tenant_file_top_level)`.
 
 **Checkpoint**: Can you explain why `group_wait: "2s"` produces a WARN under `routes`, and why the value that takes effect is 5s? (Hint: the guardrail range is 5s–5m; a value below the floor is clamped to 5s — a warning, not a failure)
 

@@ -141,6 +141,10 @@ type KeyFinding struct {
 	File     *string  `json:"file"`
 	Tenants  []string `json:"tenants"`
 	Reason   *string  `json:"reason"`
+	// Hint (#3829): a retired threshold key's hint, naming the key that
+	// replaces it; nil for any other finding, and from a generator image
+	// before it sent one.
+	Hint *string `json:"hint"`
 	// Blocks is the shared verdict's own answer to whether this finding
 	// refuses a write (da-guard key-verdict's `blocks`, #3016); nil from a
 	// generator image before it sent one.
@@ -231,7 +235,7 @@ type Status struct {
 	GeneratorVersion *string `json:"generator_version"`
 	GeneratorTooOld  *string `json:"generator_too_old"`
 	DAGuardVersion   *string `json:"da_guard_version"`
-	AmtoolAvailable  bool    `json:"amtool_available"`
+	DAReadAvailable  bool    `json:"da_read_available"`
 	// DAGuardAvailable is nil from an image older than the shared key
 	// verdict tenant-api refuses on (ADR-038 decision 5): such an image
 	// passes writes without one, so it cannot judge them (ReadyForVerdicts).

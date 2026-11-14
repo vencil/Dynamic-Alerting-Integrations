@@ -115,17 +115,75 @@ class TestRunCmd:
 # import_dashboard — mutating path
 # ---------------------------------------------------------------------------
 class TestImportDashboard:
-    def test_missing_file_returns_fail_result(self, tmp_path):
+    def test_a_missing_file_is_refused_naming_its_flag(self, tmp_path):
+        """#3724: a file of --dashboard-dir gone since the directory was
+        judged is a refusal naming the flag and the file (rc 2), read once
+        by `_lib_input.read_bytes` — not a per-file "fail" row, and not
+        judged again under `--dashboard` (#3276's check named the wrong flag)."""
+        from _lib_exitcodes import CallerError
         ghost = tmp_path / "ghost.json"
-        results = gi.import_dashboard(str(ghost), "cm", "ns")
-        assert len(results) == 1
-        assert results[0]["status"] == "fail"
-        assert results[0]["detail"] == f"--dashboard {ghost}: {os.strerror(errno.ENOENT)}"
+        with pytest.raises(CallerError) as exc:
+            gi.read_dashboards([(str(ghost), "cm", None, "--dashboard-dir")])
+        assert str(exc.value) == f"--dashboard-dir {ghost}: {os.strerror(errno.ENOENT)}"
+
+    def test_every_dashboard_is_read_before_any_is_imported(self, tmp_path, monkeypatch):
+        """#3724: a --dashboard-dir file gone after the judgement is refused
+        before kubectl is run for any of them — not after the ones before it
+        were applied to the cluster."""
+        from _lib_exitcodes import CallerError
+        d = tmp_path / "dd"
+        d.mkdir()
+        for name in ("a.json", "b.json"):
+            (d / name).write_text('{"title": "T"}', encoding="utf-8")
+        calls = []
+        monkeypatch.setattr(gi.subprocess, "check_output", lambda cmd, **_k: calls.append(cmd))
+        monkeypatch.setattr(gi.subprocess, "run", lambda *a, **_k: calls.append(a))
+        real = gi._lib_input.selected
+
+        def selected_then_gone(*a, **k):
+            chosen = real(*a, **k)
+            (d / "b.json").unlink()
+            return chosen
+
+        monkeypatch.setattr(gi._lib_input, "selected", selected_then_gone)
+        monkeypatch.setattr(sys, "argv", ["grafana_import.py", "--dashboard-dir", str(d)])
+        with pytest.raises(CallerError, match="--dashboard-dir .*b.json"):
+            gi.main()
+        assert calls == []
+
+    def test_kubectl_reads_the_bytes_read_not_the_callers_path(self, tmp_path, monkeypatch):
+        """#3724: the dashboard is read once (`_lib_input.read_bytes`);
+        kubectl's `--from-file` is a copy of those bytes, never the caller's
+        path — kubectl reading it again could see it gone, or other bytes."""
+        f = tmp_path / "d.json"
+        raw = b'{"title": "T"}'
+        f.write_bytes(raw)
+        seen = {}
+
+        def check_output(cmd, **_kw):
+            for a in cmd:
+                if a.startswith("--from-file="):  # the create (the label run has none)
+                    source = a.split("=", 2)[2]
+                    seen["source"], seen["bytes"] = source, Path(source).read_bytes()
+            return "kind: ConfigMap"
+
+        monkeypatch.setattr(gi.subprocess, "check_output", check_output)
+        monkeypatch.setattr(gi.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+            a, 0, "", ""))
+        gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        assert seen["source"] != str(f) and seen["bytes"] == raw, seen
+
+    def test_a_nesting_too_deep_is_invalid_json_not_a_crash(self, tmp_path):
+        f = tmp_path / "deep.json"
+        f.write_text("[" * 200_000, encoding="utf-8")
+        results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        assert [r["status"] for r in results] == ["fail"]
+        assert results[0]["detail"].startswith("Invalid JSON")
 
     def test_invalid_json_returns_fail_result(self, tmp_path):
         f = tmp_path / "bad.json"
         f.write_text("{not json", encoding="utf-8")
-        results = gi.import_dashboard(str(f), "cm", "ns")
+        results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
         assert len(results) == 1
         assert results[0]["status"] == "fail"
         assert "Invalid JSON" in results[0]["detail"]
@@ -139,7 +197,8 @@ class TestImportDashboard:
 
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "Test Dashboard"}), encoding="utf-8")
-        results = gi.import_dashboard(str(f), "grafana-dash", "monitoring", dry_run=True)
+        results = gi.import_dashboard(str(f), "grafana-dash", "monitoring", dry_run=True,
+                                      raw=f.read_bytes())
         statuses = [r["status"] for r in results]
         assert "dry-run" in statuses
         assert all(s != "fail" for s in statuses)
@@ -151,7 +210,7 @@ class TestImportDashboard:
         def boom(*args, **kwargs):
             raise subprocess.CalledProcessError(1, "kubectl")
         monkeypatch.setattr(gi.subprocess, "check_output", boom)
-        results = gi.import_dashboard(str(f), "cm", "ns")
+        results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
         # Only the create failure is recorded; label step is skipped.
         assert len(results) == 1
         assert results[0]["action"] == "create_configmap"
@@ -170,7 +229,7 @@ class TestImportDashboard:
         proc.stderr = ""
         monkeypatch.setattr(gi.subprocess, "run", lambda *a, **kw: proc)
 
-        results = gi.import_dashboard(str(f), "cm", "monitoring")
+        results = gi.import_dashboard(str(f), "cm", "monitoring", raw=f.read_bytes())
         actions = [r["action"] for r in results]
         statuses = [r["status"] for r in results]
         assert "create_configmap" in actions
@@ -188,7 +247,7 @@ class TestImportDashboard:
         proc.stderr = "apply error"
         monkeypatch.setattr(gi.subprocess, "run", lambda *a, **kw: proc)
 
-        results = gi.import_dashboard(str(f), "cm", "ns")
+        results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
         # Apply fails, label should not be attempted.
         assert len(results) == 1
         assert results[0]["status"] == "fail"

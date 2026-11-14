@@ -20,7 +20,8 @@ input, and both were read as a clean scan (rc 0, "OK").
 evidence differs: ``kube-linter lint --format json`` always prints a document
 with ``Reports`` and ``Summary`` when it linted something; ``helm template``
 prints the rendered manifests; ``hadolint --no-fail --format json`` prints a
-JSON array and exits 0; ``pint lint`` logs ``entries=N``. A call whose
+JSON array and exits 0, and reports the caller's canary on stdin at the
+registered levels (#3643); ``pint lint`` logs ``entries=N``. A call whose
 (engine, subcommand) has no registered proof is a programming error
 (``KeyError``), not a silent pass.
 
@@ -45,6 +46,7 @@ import json
 import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
@@ -235,15 +237,65 @@ def _helm_template(proc: subprocess.CompletedProcess, expect: dict) -> str:
     return proc.stdout
 
 
+#: The unindented `name:` / `version:` lines helm prints for a chart.
+_HELM_CHART_NAME = re.compile(r"^name:[ \t]*\S", re.M)
+_HELM_CHART_VERSION = re.compile(r"^version:[ \t]*\S", re.M)
+
+
+def _helm_show_chart(proc: subprocess.CompletedProcess, expect: dict) -> str:
+    """``helm show chart <archive>``: rc 0 and Chart.yaml as helm read it —
+    a `name:` and a `version:` line. Anything else did not read a chart."""
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise NoProof(lines[0] if lines else "helm show chart failed")
+    out = proc.stdout or ""
+    if not (_HELM_CHART_NAME.search(out) and _HELM_CHART_VERSION.search(out)):
+        raise NoProof("printed no chart name / version")
+    return out
+
+
+def _helm_push(proc: subprocess.CompletedProcess, expect: dict) -> str:
+    """``helm push``: rc 0. Its printed summary differs across helm majors, so
+    it is not the proof; the caller reads the registry back instead
+    (release_publish.py chart)."""
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise NoProof(lines[0] if lines else "helm push failed")
+    return (proc.stdout or "") + (proc.stderr or "")
+
+
 _HADOLINT_FIELDS = frozenset({"file", "line", "code", "level", "message"})
 
 
+#: The name hadolint reports a Dockerfile read from stdin under (measured,
+#: v2.12.0: ``"file": "-"``, whatever its position among the file arguments).
+_HADOLINT_STDIN = "-"
+
+
 def _hadolint(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
-    """``hadolint --no-fail --format json``: exit 0 means "ran" (--no-fail),
-    and stdout is a JSON array (a clean run prints ``[]``) whose items carry
-    the fields every finding has — one without ``level`` would be classified
-    as the lowest severity (PR #3610 review)."""
-    _requires(proc, "--no-fail", "--format", "json")
+    """``hadolint --no-fail --format json <files> -``: exit 0 means "ran"
+    (--no-fail), and stdout is a JSON array (a clean run prints ``[]``) whose
+    items carry the fields every finding has — one without ``level`` would be
+    classified as the lowest severity (PR #3610 review).
+
+    ⛔ That it ran does not show it ran **with the caller's levels** (#3643):
+    a config file hadolint cannot parse is dropped whole, a mistyped key or
+    rule code is dropped silently, ``HADOLINT_*`` variables override the
+    command line, and an inline ``# hadolint ignore=`` removes a finding —
+    all at exit 0 with a well-formed array (measured, v2.12.0 and v2.14.0).
+    So the same run also lints a canary Dockerfile the caller sends on stdin,
+    and ``expect["canary"]`` (rule code → the levels it must come back with,
+    one per expected hit) is compared with what came back for ``-``: only
+    ``code`` and ``level`` are read, no message text (#3611 Q2). A code that
+    is missing, comes back at another level, or comes back more often than
+    expected is no verdict. The canary's own findings are then removed, so
+    ``data`` is the findings on the caller's files only."""
+    _requires(proc, "--no-fail", "--format", "json", "--disable-ignore-pragma",
+              _HADOLINT_STDIN)
+    canary = expect.get("canary")
+    if not canary:
+        raise ValueError("the hadolint proof needs expect['canary'] "
+                         "(rule code -> expected levels on stdin)")
     if proc.returncode != 0:
         raise NoProof("non-zero exit under --no-fail")
     out = (proc.stdout or "").strip()
@@ -256,7 +308,15 @@ def _hadolint(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
     if not (isinstance(doc, list)
             and all(isinstance(f, dict) and _HADOLINT_FIELDS <= f.keys() for f in doc)):
         raise NoProof(f"stdout is not a JSON array of findings: {out[:500]}")
-    return doc
+    for code, levels in canary.items():
+        got = sorted(f["level"] for f in doc
+                     if f["file"] == _HADOLINT_STDIN and f["code"] == code)
+        if got != sorted(levels):
+            raise NoProof(
+                f"the canary on stdin came back with {code} at {got}, expected "
+                f"{sorted(levels)}: the registered levels / trusted registries "
+                "were not the ones applied")
+    return [f for f in doc if f["file"] != _HADOLINT_STDIN]
 
 
 _ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -292,10 +352,12 @@ def _json_stdout(proc: subprocess.CompletedProcess) -> Any:
         raise NoProof(f"stdout is not JSON: {out[:300]}") from None
 
 
-def _node_babel_parse(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
-    """lint_jsx_babel's driver (``node -e``): rc 0 and exactly one ``{path,
-    ok}`` result per JSX file it was handed (``expect["paths"]``) — the same
-    paths, each once. A missing or doubled path is a file never parsed."""
+def _node_esbuild_parse(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
+    """lint_jsx_syntax's driver (``node -e``, esbuild from the portal's
+    lockfile, #3669): rc 0 and exactly one ``{path, ok}`` result per source
+    file it was handed (``expect["paths"]``) — the same paths, each once. A
+    missing or doubled path is a file never parsed; a non-zero exit (esbuild
+    not installed: rc 3, the remedy on stderr) is no run."""
     if proc.returncode != 0:
         raise NoProof("non-zero exit")
     doc = _json_stdout(proc)
@@ -341,15 +403,82 @@ def _mmdc_render(proc: subprocess.CompletedProcess, expect: dict) -> bool:
     return True
 
 
+def _promtool_check_rules(proc: subprocess.CompletedProcess, expect: dict) -> bool:
+    """``promtool check rules <file>``: exit 0 is the proof. It prints no
+    structured output, and its text (``SUCCESS: N rules found``) is not read
+    (#3611 Q2); any other exit
+    — a rule that does not parse, a path that does not exist (both rc 1,
+    measured on 3.15.1) — is no verdict here. The caller knows how many rules
+    it wrote: it rendered the file."""
+    if proc.returncode != 0:
+        raise NoProof("the rule file did not validate")
+    return True
+
+
+def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dict[str, bool]:
+    """``promtool test rules --junit <xml> <test>``: which test groups passed,
+    ``{group name: passed}``, read from the JUnit report ``expect["junit"]``
+    — never from the console (#3611).
+
+    ⛔ A ``<failure>`` is NOT "the assertion did not hold". promtool reports
+    every error inside a test group — input series that do not parse, a rule
+    file that does not load, a rule that errors when evaluated, and an
+    assertion that does not hold — as the same ``<failure>`` (``tc.Fail`` in
+    upstream ``cmd/promtool/unittest.go``; measured on 3.15.1). Only the
+    caller's test design can tell them apart (recipe-preview: two groups that
+    assert opposite answers on one input), so this proof returns each group's
+    pass / fail and judges nothing more.
+
+    It does prove the report is the run asked for: one ``<testsuite>``, its
+    testcases exactly the groups named in ``expect["cases"]`` (each once —
+    promtool names a case after its group), no ``<error>`` (``ts.Abort``: the
+    file itself could not be read or parsed) and no ``<skipped>``, and an exit
+    status that agrees (0 exactly when nothing failed).
+
+    ⚠️ A ``rule_files`` entry that does not exist is not an error to promtool:
+    it loads no rules (rc 0 if the assertions then hold). Nothing here can see
+    that; the caller must assert something only its rule file produces."""
+    _requires(proc, "--junit")
+    try:
+        # The report promtool just wrote into the caller's temp dir, not
+        # outside input (same footing as coverage_delta's Cobertura read).
+        root = ElementTree.parse(expect["junit"]).getroot()  # nosec B314  # promtool's own report in the caller's mkdtemp
+    except (OSError, ElementTree.ParseError) as exc:
+        raise NoProof(f"no readable JUnit report: {exc}") from None
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    if len(suites) != 1:
+        raise NoProof(f"{len(suites)} test suites in the JUnit report, expected 1")
+    cases = suites[0].findall("testcase")
+    error = suites[0].find("testcase/error")
+    if error is not None:
+        raise NoProof("promtool could not run the test: " + (error.text or "").strip()[:300])
+    if suites[0].find("testcase/skipped") is not None:
+        raise NoProof("a test group was skipped")
+    names = [c.get("name") for c in cases]
+    if None in names or sorted(names) != sorted(expect["cases"]):
+        raise NoProof(f"the report's test groups {sorted(map(str, names))} are not "
+                      f"the ones the test file defines {sorted(expect['cases'])}")
+    passed = {c.get("name"): c.find("failure") is None for c in cases}
+    if proc.returncode not in (0, 1):   # 0 all held, 1 one failed (3.15.1); else killed / crashed
+        raise NoProof(f"exit status {proc.returncode} is neither a pass nor a test failure")
+    if (proc.returncode == 0) != all(passed.values()):
+        raise NoProof(f"exit status {proc.returncode} disagrees with the report")
+    return passed
+
+
 #: (engine, subcommand) → proof. The key is the pair, not the engine: one
 #: engine's subcommands prove a run differently (helm ``template`` vs
 #: ``package``; node runs a different driver for each tool).
 PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]] = {
     ("hadolint", "lint"): _hadolint,
     ("helm", "template"): _helm_template,
+    ("helm", "show-chart"): _helm_show_chart,
+    ("helm", "push"): _helm_push,
     ("kube-linter", "lint"): _kube_linter_lint,
     ("mmdc", "render"): _mmdc_render,
-    ("node", "babel-parse"): _node_babel_parse,
+    ("node", "esbuild-parse"): _node_esbuild_parse,
     ("node", "cli-playground"): _node_cli_playground,
     ("pint", "lint"): _pint_lint,
+    ("promtool", "check-rules"): _promtool_check_rules,
+    ("promtool", "test-rules"): _promtool_test_rules,
 }

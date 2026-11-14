@@ -1,6 +1,0 @@
-# Patterns to ignore when building Helm chart packages (one per line).
-# #1018: the Pod Security gate's value sets (tests/pss). They are inputs to
-# that test, not deployment profiles, and must not ship in the .tgz
-# (check_chart_package_contents.py DECLARED_SUBTREES lists templates only).
-# helm template/-f reads them from the source tree regardless of this line.
-ci/

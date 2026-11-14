@@ -49,8 +49,11 @@ tenant-api 每筆會改變 conf.d 內容的寫入,commit 前都問產生器服�
 git -C conf.d init -q && git -C conf.d add -A && \
   git -C conf.d -c user.email=dev@local -c user.name=dev commit -qm init
 
-# 產生器服務($REPO 見第 1 步)。PATH 上要有 amtool,
-# 否則每筆寫入都回 503 amtool_missing。
+# 產生器服務($REPO 見第 1 步)。它判定時要跑三支 Go 讀取程式;缺 da-read 或
+# da-guard 時每筆寫入都回 503(da_read_missing／da_guard_missing)。
+make -s -C "$REPO" da-guard-build da-read-build da-crdecode-build
+export DA_GUARD_BINARY="$REPO/.build/da-guard" DA_READ_BINARY="$REPO/.build/da-read" \
+       DA_CRDECODE_BINARY="$REPO/.build/da-crdecode"
 mkdir -p gen state
 python3 "$REPO/scripts/tools/ops/generator_service.py" --socket "$(pwd)/gen/generator.sock" \
   --repo "$(pwd)/conf.d" --config-subdir . --work-dir "$(pwd)/gen/work" &
@@ -78,7 +81,7 @@ docker run --rm -d --name tenant-api -p 127.0.0.1:8083:8080 --user "$(id -u):$(i
 # API 入口:oauth2-proxy(同 uid 才連得上 0660 的 socket)
 docker run --rm -d --name tenant-api-proxy -p 127.0.0.1:8080:8080 --user "$(id -u):$(id -g)" \
   -v "$(pwd)/sock:/run/ta-human" -v "$(pwd)/oauth2-proxy:/etc/oauth2-proxy:ro" \
-  quay.io/oauth2-proxy/oauth2-proxy:v7.15.5 \
+  quay.io/oauth2-proxy/oauth2-proxy:v7.15.6 \
   --alpha-config=/etc/oauth2-proxy/oauth2-proxy.yaml \
   --trusted-ip=0.0.0.0/0 --trusted-ip=::/0 --email-domain='*' \
   --cookie-secret=local-dev-not-a-secret-32-bytes! --cookie-secure=false

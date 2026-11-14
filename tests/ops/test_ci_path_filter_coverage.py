@@ -1323,6 +1323,18 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # requirements/ci-constraints.txt to hold pre-commit hooks' pinned
     # additional_dependencies to the same versions.
     "requirements/**",
+    # GAINED by #3738: tests/ops/test_portal_dist_consumers_build.py reads the
+    # repo-root .dockerignore (the da-portal build context must exclude
+    # tools/portal/node_modules).
+    ".dockerignore",
+    # GAINED by #3738 PR2: tests/lint/test_portal_dist_not_tracked.py reads
+    # build.mjs's DIST_DIR to bind its dist path to where the build writes.
+    "tools/portal/build.mjs",
+    # GAINED by #3669: tests/lint/test_lint_jsx_syntax.py parses with the
+    # transform esbuild-shared.mjs defines and reads the esbuild version
+    # package-lock.json pins.
+    "tools/portal/esbuild-shared.mjs",
+    "tools/portal/package-lock.json",
 }
 
 
@@ -3543,6 +3555,8 @@ PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "helm/**", "components/threshold-exporter/app/pkg/config/types.go",
     "components/threshold-exporter/app/pkg/tenantid/testdata/tenant_id_cases.json",
     "tests/shared/am_duration_matrix.json",
+    "tests/shared/threshold_value_matrix.json",
+    "components/threshold-exporter/app/pkg/config/recipe_contract.json",
     "components/tenant-api/docs/swagger.json",
 }
 GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
@@ -3554,6 +3568,11 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # about what the gated-job half can vouch for, per filter.
     "ci.yml": {
         ("go", "scripts/ops/ci_flake_retry.py"),
+        # ("go", "requirements/ci-constraints.txt") left with #3814's fix
+        # round: the -c install moved into .github/actions/docs-inventory-
+        # python, a local composite action this scanner does not read (its
+        # disclosed blind spot). The go filter still lists the constraints
+        # file AND the action's directory, by hand.
         ("go", "tests/contract/**"),
         ("go", "scripts/ops/go_test_reads.py"),
         # go-tests-oauth2-proxy runs tests/oauth2-proxy/image_config_test.sh.

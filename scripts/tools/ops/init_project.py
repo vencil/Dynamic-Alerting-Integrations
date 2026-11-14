@@ -263,6 +263,12 @@ GITLAB_KUBECTL_IMAGE = 'alpine/kubectl:1.37.2'
 #: `helm upgrade` flags, before that date.
 HELM_VERSION = '3.22.1'
 GITLAB_HELM_IMAGE = f'alpine/helm:{HELM_VERSION}'
+#: The action the generated GitHub apply job installs HELM_VERSION with.
+#: Renovate cannot see this string; its major follows the `azure/setup-helm`
+#: pin in this repo's own workflows, which Renovate does bump —
+#: test_the_delivered_action_pins_track_the_platforms_own
+#: (tests/ops/test_generated_ci_artifacts.py) reds until this line follows.
+SETUP_HELM_ACTION = 'azure/setup-helm@v5'
 
 # ⛔ There is deliberately no ARGOCD_CLI_IMAGE any more. `--deploy argocd` was
 # retired (#1351): it scaffolded no ArgoCD Application while its apply stage
@@ -957,8 +963,7 @@ def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     anywhere else produces no critical row. Seeded with a value rather than
     commented out because that is what the platform's number is FOR, and it is
     the same position `scaffold_tenant` takes (its prompt offers the registry
-    value as the Enter-default, and `generate_profile` writes the `_critical`
-    twins while deliberately dropping the flat declared keys). The customer
+    value as the Enter-default). The customer
     edits or deletes them in review — they are in the customer's own file,
     which is exactly the tier boundary `defaults:` violated.
     """
@@ -1428,7 +1433,7 @@ def _build_github_apply_stage(
           - uses: actions/checkout@v6
           # Pins helm: the runner's own helm follows the runner image, which
           # moves across Helm majors on GitHub's schedule, not ours.
-          - uses: azure/setup-helm@v4
+          - uses: {setup_helm}
             with:
               version: v{helm_version}
           - name: Helm upgrade threshold-exporter
@@ -1440,6 +1445,7 @@ def _build_github_apply_stage(
                 --wait --timeout 5m
     """).format(namespace=namespace,
                 helm_version=HELM_VERSION,
+                setup_helm=SETUP_HELM_ACTION,
                 chart=THRESHOLD_EXPORTER_CHART,
                 chart_version=THRESHOLD_EXPORTER_CHART_VERSION,
                 helm_values=_offset_path(offset, _HELM_VALUES_REL.as_posix()))

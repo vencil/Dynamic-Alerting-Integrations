@@ -4,7 +4,6 @@
 - build_receiver_from_args: CLI 參數 → receiver dict 轉換
 - generate_defaults: 平台預設值產生
 - generate_tenant: Tenant YAML 產生（non-interactive）
-- generate_profile: Profile 框架產生
 - generate_report: Scaffold report 產生
 - generate_relabel_snippet: Prometheus relabel_configs snippet 產生
 - write_outputs: 檔案輸出驗證
@@ -40,7 +39,6 @@ from scaffold_tenant import (
     prompt_value,
     generate_defaults,
     generate_tenant,
-    generate_profile,
     generate_report,
     generate_relabel_snippet,
     print_catalog,
@@ -176,7 +174,8 @@ class TestGenerateDefaultsDeclaredList:
     def test_supply_face_is_untouched(self):
         """可達性 gate 的供給面只讀 `defaults`；新增 sibling key 不得改變它。"""
         db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
-        assert len(generate_defaults(db_packs)["defaults"]) == 42
+        # 42 → 40：#3783 移除 kafka_active_controllers / kafka_request_rate
+        assert len(generate_defaults(db_packs)["defaults"]) == 40
 
     def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
         """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、
@@ -212,66 +211,6 @@ class TestGenerateTenant:
         """未知 DB 類型不影響產生。"""
         result = generate_tenant("db-c", ["nonexistent"], interactive=False)
         assert "tenants" in result
-
-
-# ============================================================
-# generate_profile
-# ============================================================
-class TestGenerateProfile:
-    """generate_profile() 測試。"""
-
-    def test_basic_profile(self):
-        """產生正確的 profiles 結構。"""
-        result = generate_profile("std-pg-prod", ["postgresql"])
-        assert "profiles" in result
-        assert "std-pg-prod" in result["profiles"]
-        profile = result["profiles"]["std-pg-prod"]
-        assert "pg_connections" in profile
-
-    def test_prod_tier(self):
-        """prod tier 使用原始閾值。"""
-        result = generate_profile("std-pg-prod", ["postgresql"], tier="prod")
-        profile = result["profiles"]["std-pg-prod"]
-        # pg_connections 預設 80，prod 不調整
-        assert profile["pg_connections"] == 80
-
-    def test_staging_tier_relaxed(self):
-        """staging tier 放寬 20%。"""
-        result = generate_profile("std-pg-staging", ["postgresql"], tier="staging")
-        profile = result["profiles"]["std-pg-staging"]
-        # pg_connections 預設 80，staging → 80 * 1.2 = 96
-        assert profile["pg_connections"] == 96
-
-    def test_includes_optional_overrides(self):
-        """包含 optional_overrides 的欄位（critical tiers）。"""
-        result = generate_profile("std-pg-prod", ["postgresql"])
-        profile = result["profiles"]["std-pg-prod"]
-        assert "pg_connections_critical" in profile
-
-    def test_optional_tier_split_critical_in_flat_out(self):
-        """⛔ #1189 / TRK-337：optional_overrides 的兩半在 profile 裡待遇相反。
-
-        `<base>_critical` 走 resolveCriticalRows，只要求 base 在 `defaults:`
-        （pg_connections 等都在），所以 profile 供給它會產生真的 critical 層
-        row——保留。**平鍵**則是「宣告但平台不主張值」那一格：profile 是平台
-        授權的檔案，exporter 的 ApplyProfiles 現在會拒絕替它填值並記一行
-        WARN，寫進去只會生出一份 dead-on-arrival 的檔案。
-
-        逐 pack 對照該 pack 自己的 optional_overrides，不用字串後綴猜。
-        """
-        import scaffold_tenant as st
-
-        problems = []
-        for db, pack in st.RULE_PACKS.items():
-            optional = pack.get("optional_overrides", {})
-            if not optional:
-                continue
-            profile = generate_profile("std", [db])["profiles"]["std"]
-            leaked = [k for k in optional if not k.endswith("_critical") and k in profile]
-            missing = [k for k in optional if k.endswith("_critical") and k not in profile]
-            if leaked or missing:
-                problems.append(f"{db}: flat-leaked={leaked} critical-missing={missing}")
-        assert not problems, "\n".join(problems)
 
 
 # ============================================================
@@ -364,35 +303,24 @@ class TestWriteOutputs:
 
     @_skipif_unix_modes
     def test_file_permissions(self):
-        """conf.d 檔由 `da-guard write` 新建：0o600，與本工具一向的權限相同
-        （#3206 10c-3；租戶檔可能含帶 token 的 receiver URL）；既有檔被取代時沿用
-        原檔權限；其他檔仍由本工具以 0o600 寫出。"""
+        """conf.d 檔由 `da-guard write` 寫出，新檔與被取代的檔一律 0o644（#3535：
+        conf.d 屬 repo 生成物，不沿用原檔權限）；報告不是 conf.d 檔，仍由本工具以
+        0o600 寫出。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             defaults = {"defaults": {}}
             tenant = {"tenants": {"db-c": {}}}
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            for fn, want in [("_defaults.yaml", 0o600), ("db-c.yaml", 0o600),
+            for fn, want in [("_defaults.yaml", 0o644), ("db-c.yaml", 0o644),
                              ("scaffold-report.txt", 0o600)]:
                 path = os.path.join(tmpdir, fn)
                 mode = os.stat(path).st_mode & 0o777
                 assert mode == want, f"{fn} permissions {oct(mode)} != {oct(want)}"
-            # A replace keeps the mode the file has.
+            # A replace does not keep the mode the file has (#3535). Another
+            # text: the same text is `unchanged`, and nothing is written.
             os.chmod(os.path.join(tmpdir, "db-c.yaml"), 0o640)
-            write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o640
-
-    @_skipif_unix_modes
-    def test_profiles_file_is_created_0600(self):
-        """`--generate-profile` 的 `_profiles.yaml` 也是 conf.d 檔：da-guard 新建 0o600。"""
-        import scaffold_tenant
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch("sys.argv", ["scaffold_tenant.py", "--generate-profile",
-                                         "p1", "--db", "mariadb", "-o", d]):
-                with pytest.raises(SystemExit) as exc_info:
-                    scaffold_tenant.main()
-            assert exc_info.value.code == 0
-            mode = os.stat(os.path.join(d, "_profiles.yaml")).st_mode & 0o777
-            assert mode == 0o600, oct(mode)
+            write_outputs(tmpdir, "db-c", {"defaults": {"mysql_connections": 80}},
+                          {"tenants": {"db-c": {"mysql_connections": "70"}}}, "report")
+            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o644
 
     def test_creates_relabel_file(self):
         """提供 relabel_snippet 時建立 relabel 檔案。"""
@@ -590,8 +518,8 @@ class TestRunNonInteractive:
 
     def test_with_profile(self):
         with tempfile.TemporaryDirectory() as d:
-            # The profile is defined in the tree first (`--generate-profile`
-            # writes it): a tenant naming no profile is refused (#3591).
+            # The profile is defined in the tree first: a tenant naming no
+            # profile is refused (#3591).
             with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 f.write("profiles:\n  high-load:\n    mysql_connections: 150\n")
             args = argparse.Namespace(
@@ -896,7 +824,7 @@ class TestRunNonInteractive:
     @_skipif_unix_modes
     def test_mapping_file_permissions(self):
         """_instance_mapping.yaml is a conf.d file `da-guard write` creates:
-        0o600, the mode this tool always gave it (#3206 10c-3)."""
+        0o644, a repo artifact's mode (#3535)."""
         with tempfile.TemporaryDirectory() as d:
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
@@ -911,7 +839,7 @@ class TestRunNonInteractive:
             run_non_interactive(args)
             mapping_path = os.path.join(d, "_instance_mapping.yaml")
             mode = os.stat(mapping_path).st_mode & 0o777
-            assert mode == 0o600
+            assert mode == 0o644
 
 
 # ---------------------------------------------------------------------------
@@ -1188,36 +1116,6 @@ class TestSaturationWriteOutputs:
             assert SATURATION_CRITICAL_COMMENT not in content
 
 
-class TestSaturationGenerateProfile:
-    """--generate-profile 的 _profiles.yaml 飽和註解測試。"""
-
-    def test_profiles_yaml_annotates_every_saturation_critical(self):
-        import scaffold_tenant
-        saturation = saturation_default_keys()
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch("sys.argv", [
-                "scaffold_tenant.py",
-                "--generate-profile", "standard-prod",
-                "--db", "mariadb,nginx",
-                "-o", d,
-            ]):
-                with pytest.raises(SystemExit) as exc_info:
-                    scaffold_tenant.main()
-                assert exc_info.value.code == 0
-            with open(os.path.join(d, "_profiles.yaml"), encoding="utf-8") as f:
-                lines = f.read().split("\n")
-            import re
-            found = 0
-            for i, line in enumerate(lines):
-                m = re.match(r"^(\s*)([A-Za-z0-9_]+)_critical:", line)
-                if m and m.group(2) in saturation:
-                    found += 1
-                    assert lines[i - 1] == f"{m.group(1)}{SATURATION_CRITICAL_COMMENT}", \
-                        f"line {i}: {line!r} 缺教育註解"
-            # mariadb 的 mysql_connections/mysql_threads_running + nginx 的
-            # nginx_connections/nginx_waiting critical tiers 至少各一
-            assert found >= 4
-
 
 class TestSaturationGenerateReport:
     """generate_report() 飽和教育段測試。"""
@@ -1297,39 +1195,22 @@ class TestMainCLI:
         out = capsys.readouterr().out
         assert "Supported Exporters" in out
 
-    def test_generate_profile_mode(self):
+    @pytest.mark.parametrize("argv", [
+        ["--generate-profile", "p", "--db", "mariadb"],
+        ["--tier", "staging", "--tenant", "db-x", "--db", "mariadb", "--non-interactive"],
+    ])
+    def test_profile_generator_flags_are_gone(self, argv, capsys, tmp_path):
+        """#3691: a generated profile froze a copy of every value it wrote (a
+        profile is expanded into each bound tenant's overrides), and staging's
+        x1.2 inverted tiers. Both flags are refused as unknown (rc 2)."""
         import scaffold_tenant
-        with tempfile.TemporaryDirectory() as d:
-            with mock.patch("sys.argv", [
-                "scaffold_tenant.py",
-                "--generate-profile", "standard-prod",
-                "--db", "mariadb",
-                "-o", d,
-            ]):
-                with pytest.raises(SystemExit) as exc_info:
-                    scaffold_tenant.main()
-                assert exc_info.value.code == 0
-            assert os.path.exists(os.path.join(d, "_profiles.yaml"))
-
-    def test_generate_profile_no_db_exits(self):
-        import scaffold_tenant
-        with mock.patch("sys.argv", [
-            "scaffold_tenant.py", "--generate-profile", "test",
-        ]):
+        # -o: were the flags back, a run must not write into the cwd.
+        with mock.patch("sys.argv", ["scaffold_tenant.py", *argv, "-o", str(tmp_path)]):
             with pytest.raises(SystemExit) as exc_info:
                 scaffold_tenant.main()
-            assert exc_info.value.code == EXIT_CALLER_ERROR
-
-    def test_generate_profile_invalid_db_exits(self):
-        import scaffold_tenant
-        with mock.patch("sys.argv", [
-            "scaffold_tenant.py",
-            "--generate-profile", "test",
-            "--db", "invalid_db_type",
-        ]):
-            with pytest.raises(SystemExit) as exc_info:
-                scaffold_tenant.main()
-            assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert "unrecognized arguments" in capsys.readouterr().err
+        assert not hasattr(scaffold_tenant, "generate_profile")
 
     def test_non_interactive_mode(self):
         import scaffold_tenant

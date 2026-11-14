@@ -7,11 +7,12 @@
 # NOT self-scanned: this file lives under scripts/tools/lint/ — outside every
 # scan glob (helm/*/values*.yaml, k8s/**/*.yaml) and both fixed targets
 # (components/da-portal/nginx.conf, try-local/docker-compose.yaml), so the
-# governed strings below (tenant-api, recipe-preview, the exemption FQDN) can
+# governed strings below (tenant-api, the exemption FQDN) can
 # never be flagged as the lint's own data. Verified by a unit test.
 governed_services:            # service -> its ONE canonical namespace
   tenant-api: tenant-api
-  recipe-preview: monitoring
+  # recipe-preview was governed (monitoring) until #1040 made it a socket-only
+  # container of the tenant-api pod: no Service, no URL to pin.
 chart_context_ns:             # helm chart dir -> DEPLOY-CONTRACT namespace; null = tenant-scoped/no-fixed-ns
   tenant-api: tenant-api
   chargeback-aggregator: monitoring
@@ -19,7 +20,6 @@ chart_context_ns:             # helm chart dir -> DEPLOY-CONTRACT namespace; nul
   federation-gateway: monitoring
   federation-proxy: monitoring
   federation-reconciler: monitoring
-  recipe-preview: monitoring
   threshold-exporter: monitoring
   vector: vector              # #1018 PSS carve-out: dedicated privileged ns (hostPath log agent)
   victorialogs: monitoring

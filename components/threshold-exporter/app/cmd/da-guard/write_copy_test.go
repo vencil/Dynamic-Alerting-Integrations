@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // copied holds comments, flow style, a non-canonical int and non-ASCII text:
@@ -70,8 +72,8 @@ func TestWrite_ACopyCarriesTheBytesAsTheyAre(t *testing.T) {
 		t.Fatalf("the source changed: %q %v", b, err)
 	}
 	if runtime.GOOS != "windows" {
-		if fi, err := os.Stat(filepath.Join(root, "team", "b.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
-			t.Fatalf("mode %v (%v), want 0600 whatever the source's (0644)", fi.Mode().Perm(), err)
+		if fi, err := os.Stat(filepath.Join(root, "team", "b.yaml")); err != nil || fi.Mode().Perm() != config.ConfDFileMode {
+			t.Fatalf("mode %v (%v), want config.ConfDFileMode (#3535)", fi.Mode().Perm(), err)
 		}
 	}
 }
@@ -104,8 +106,8 @@ func TestWrite_ACopysTargetMustNotExistUnlessReplaced(t *testing.T) {
 			t.Fatalf("tree %q", got)
 		}
 		if runtime.GOOS != "windows" {
-			if fi, err := os.Stat(abs); err != nil || fi.Mode().Perm() != 0o640 {
-				t.Fatalf("mode %v (%v), want the old file's 0640", fi.Mode().Perm(), err)
+			if fi, err := os.Stat(abs); err != nil || fi.Mode().Perm() != config.ConfDFileMode {
+				t.Fatalf("mode %v (%v), want config.ConfDFileMode, not the old file's 0640 (#3535)", fi.Mode().Perm(), err)
 			}
 		}
 	})

@@ -75,10 +75,11 @@ def _armed(*default_keys: str, packs: dict | None = None) -> dict:
             base = key[: -len("_critical")] if key.endswith("_critical") else None
             if base and base in tiers:
                 continue
-            out[key] = ({"arming": "default"} if key in default_keys else
-                        {"arming": "site_specific",
-                         "arming_reason": f"{key} depends on the site",
-                         "arming_reason_zh": f"{key} 依部署而定"})
+            out[key] = ({"arming": "default", "portability": "portable"}
+                        if key in default_keys else
+                        {"arming": "operator", "portability": "site_specific",
+                         "portability_reason": f"{key} depends on the site",
+                         "portability_reason_zh": f"{key} 依部署而定"})
     return out
 
 
@@ -175,10 +176,15 @@ def test_synthetic_doc_is_a_fixed_point():
     assert lib.validate_registry(doc) == []
 
 
+_BLOCKER = {"kind": "unwired", "tracking": 3770, "reason": "no source",
+            "reason_zh": "沒有資料源"}
+
+
 def _make_default(entry: dict) -> None:
-    """Turn *entry* into a reason-free `arming: default`."""
+    """Turn *entry* into a portable, unblocked `arming: default`."""
     entry["arming"] = "default"
-    for f in lib.ARMING_REASON_FIELDS:
+    entry["portability"] = "portable"
+    for f in (*lib.PORTABILITY_REASON_FIELDS, "blocker", "default_exception"):
         entry.pop(f, None)
 
 
@@ -207,31 +213,71 @@ def _fixed_point_doc():
     ("arming authored on a critical tier",
      lambda d: d["keys"]["alpha_conn_critical"].__setitem__("arming", "default"),
      "follows its base"),
-    ("a key with no arming",
-     lambda d: [d["keys"]["beta_lag"].pop(f) for f in lib.ARMING_FIELDS],
-     "has no arming"),
+    ("a key with no arming or portability",
+     lambda d: [d["keys"]["beta_lag"].pop(f) for f in lib.ARMING_FIELDS
+                if f in d["keys"]["beta_lag"]],
+     "has no arming / portability"),
+    ("a key with arming but no portability",
+     lambda d: [d["keys"]["beta_lag"].pop(f) for f in
+                ("portability", *lib.PORTABILITY_REASON_FIELDS)],
+     "has no portability"),
     ("an unknown arming state",
      lambda d: d["keys"]["beta_lag"].__setitem__("arming", "later"),
      "is not one of"),
-    ("a non-default state without its Chinese reason",
-     lambda d: d["keys"]["beta_lag"].pop("arming_reason_zh"),
-     "needs a non-blank arming_reason_zh"),
+    ("YAML 1.1 reading an unquoted off as false",
+     lambda d: d["keys"]["beta_lag"].__setitem__("arming", False),
+     "is not one of"),
+    ("an unknown portability",
+     lambda d: d["keys"]["beta_lag"].__setitem__("portability", "maybe"),
+     "is not one of"),
+    ("a non-portable key without its Chinese reason",
+     lambda d: d["keys"]["beta_lag"].pop("portability_reason_zh"),
+     "needs a non-blank portability_reason_zh"),
     ("a blank reason",
-     lambda d: d["keys"]["beta_lag"].__setitem__("arming_reason", "  "),
-     "needs a non-blank arming_reason"),
+     lambda d: d["keys"]["beta_lag"].__setitem__("portability_reason", "  "),
+     "needs a non-blank portability_reason"),
     ("a reason with a trailing newline",
-     lambda d: d["keys"]["beta_lag"].__setitem__("arming_reason", "x\n"),
+     lambda d: d["keys"]["beta_lag"].__setitem__("portability_reason", "x\n"),
      "one line"),
     ("a reason with an embedded newline",
-     lambda d: d["keys"]["beta_lag"].__setitem__("arming_reason_zh", "a\nb"),
+     lambda d: d["keys"]["beta_lag"].__setitem__("portability_reason_zh", "a\nb"),
      "one line"),
-    ("a reason on a chart default",
-     lambda d: d["keys"]["alpha_conn"].__setitem__("arming_reason", "why"),
-     "remove ['arming_reason']"),
-    ("a reason with no state",
-     lambda d: (d["keys"]["beta_lag"].pop("arming"),
-                d["keys"]["beta_lag"].pop("arming_reason_zh")),
-     "but no arming state"),
+    ("a reason on a portable key",
+     lambda d: d["keys"]["alpha_conn"].__setitem__("portability_reason", "why"),
+     "remove ['portability_reason']"),
+    ("a shipped key that is not portable, with no exception",
+     lambda d: d["keys"]["alpha_conn"].update(
+         portability="ratio_pending", portability_reason="r",
+         portability_reason_zh="r"),
+     "a shipped value must be portable"),
+    ("a default_exception on a portable key",
+     lambda d: d["keys"]["alpha_conn"].__setitem__(
+         "default_exception", {"tracking": 1}),
+     "remove default_exception"),
+    ("a default_exception on an operator key",
+     lambda d: d["keys"]["beta_lag"].__setitem__(
+         "default_exception", {"tracking": 1}),
+     "only applies to a shipped key"),
+    ("a default_exception without an issue number",
+     lambda d: d["keys"]["alpha_conn"].update(
+         portability="site_specific", portability_reason="r",
+         portability_reason_zh="r", default_exception={"tracking": "soon"}),
+     "default_exception.tracking must be an issue number"),
+    ("a blocker on a shipped key",
+     lambda d: d["keys"]["alpha_conn"].__setitem__("blocker", dict(_BLOCKER)),
+     "a blocked key cannot ship"),
+    ("a blocker with an unknown kind",
+     lambda d: d["keys"]["beta_lag"].__setitem__(
+         "blocker", {**_BLOCKER, "kind": "later"}),
+     "blocker.kind"),
+    ("a blocker with a bool issue number",
+     lambda d: d["keys"]["beta_lag"].__setitem__(
+         "blocker", {**_BLOCKER, "tracking": True}),
+     "blocker.tracking must be an issue number"),
+    ("a blocker missing its Chinese reason",
+     lambda d: d["keys"]["beta_lag"].__setitem__(
+         "blocker", {k: v for k, v in _BLOCKER.items() if k != "reason_zh"}),
+     "blocker must be exactly"),
     ("key under a pack the registry does not list",
      lambda d: d["keys"]["beta_lag"].__setitem__("pack", "gamma"),
      "not a valid contract"),
@@ -402,7 +448,7 @@ def test_query_helpers():
     assert "alpha_conn_critical" in lib.keys_in_tier(doc, "optional_overrides")
 
 
-# ── arming (D-A A1) ───────────────────────────────────────────────────────
+# ── arming / portability / blocker (D-A A1, #3773) ─────────────────────────
 
 def test_synthetic_extraction_stays_pure():
     """Injected packs get NO enrichment unless the caller passes a table."""
@@ -413,14 +459,15 @@ def test_synthetic_extraction_stays_pure():
 def test_arming_injected_table():
     doc = lib.build_registry_doc(SYNTH_PACKS, arming=_armed("alpha_conn"))
     assert doc["keys"]["alpha_conn"]["arming"] == "default"
-    assert doc["keys"]["beta_lag"]["arming"] == "site_specific"
+    assert doc["keys"]["beta_lag"]["arming"] == "operator"
     assert "arming" not in doc["keys"]["alpha_conn_critical"]
 
 
 def test_arming_default_on_non_defaults_tier_fails_loud():
     with pytest.raises(ValueError, match="chart-shippable"):
         lib.build_registry_doc(
-            SYNTH_PACKS, arming={"alpha_orphan_critical": {"arming": "default"}})
+            SYNTH_PACKS, arming={"alpha_orphan_critical": {
+                "arming": "default", "portability": "portable"}})
 
 
 def test_arming_unknown_key_fails_loud():
@@ -438,15 +485,88 @@ def test_strict_arming_names_every_unarmed_key():
     with pytest.raises(ValueError) as exc:
         lib.build_registry_doc(SYNTH_PACKS, strict_arming=True)
     for key in ("alpha_conn", "beta_lag", "alpha_orphan_critical"):
-        assert f"{key!r} has no arming" in str(exc.value)
+        assert f"{key!r} has no arming / portability" in str(exc.value)
     # a <base>_critical is never asked for one
-    assert "'alpha_conn_critical' has no arming" not in str(exc.value)
+    assert "'alpha_conn_critical' has no" not in str(exc.value)
+
+
+def test_a_blocked_key_is_not_a_validation_candidate():
+    """Portable + operator is the A2 input only while nothing blocks it."""
+    entry = {"arming": "operator", "portability": "portable"}
+    assert lib.is_validation_candidate(entry)
+    assert not lib.is_validation_candidate({**entry, "blocker": dict(_BLOCKER)})
+    assert not lib.is_validation_candidate({**entry, "arming": "default"})
+    assert not lib.is_validation_candidate({**entry, "portability": "site_specific"})
+    assert not lib.is_validation_candidate({**entry, "critical_of": "x"})
+
+
+def test_notes_say_why_and_render_nothing_for_a_clean_default():
+    blocked = {"arming": "operator", "portability": "portable",
+               "blocker": dict(_BLOCKER)}
+    assert lib.arming_notes_zh(blocked) == ["未啟用（沒有資料源，#3770）：沒有資料源"]
+    cand = {"arming": "operator", "portability": "portable"}
+    assert lib.arming_notes_zh(cand) == [
+        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
+    exc = {"arming": "default", "portability": "ratio_pending",
+           "portability_reason_zh": "絕對值", "default_exception": {"tracking": 1320}}
+    assert lib.arming_notes_zh(exc) == ["出貨例外（待改比值，#1320）：絕對值"]
+    assert lib.arming_notes_zh({"arming": "default", "portability": "portable"}) == []
+
+
+def test_an_optional_tier_candidate_says_it_must_change_tier_first():
+    """`default` is defaults-tier only, so an optional-tier candidate cannot
+    "ship once confirmed" as the defaults-tier note says (#3773 review F3)."""
+    entry = {"arming": "operator", "portability": "portable",
+             "tier": "optional_overrides"}
+    assert lib.arming_notes_zh(entry) == [
+        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_OPTIONAL_ZH}"]
+    assert lib.arming_notes_zh({**entry, "tier": "defaults"}) == [
+        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
+
+
+def test_unarmed_block_names_the_key_on_every_reason():
+    """A key with a blocker AND a non-portable reason renders both, each led
+    by the key (#3773 review F6)."""
+    packs = {"beta": {**SYNTH_PACKS["beta"]}}
+    arming = {"beta_lag": {
+        "arming": "operator", "portability": "site_specific",
+        "portability_reason": "r", "portability_reason_zh": "依部署",
+        "blocker": dict(_BLOCKER)}}
+    doc = lib.build_registry_doc(packs, arming=arming)
+    text = "\n".join(lib.render_unarmed_lines(doc, 4))
+    assert "#   beta_lag 未啟用（沒有資料源，#3770）：沒有資料源" in text
+    assert "#   beta_lag 未啟用（依部署而定）：依部署" in text
+
+
+def test_a_shipped_exception_is_marked_in_the_chart_defaults():
+    """A non-portable shipped value says so beside its value in helm values,
+    not only in the rule-pack header (#3773 review F5)."""
+    arming = _armed()
+    arming["alpha_conn"] = {
+        "arming": "default", "portability": "ratio_pending",
+        "portability_reason": "r", "portability_reason_zh": "絕對值",
+        "default_exception": {"tracking": 3778}}
+    doc = lib.build_registry_doc(SYNTH_PACKS, arming=arming)
+    text = "\n".join(lib.render_chart_defaults_lines(doc, 4))
+    assert "出貨例外（待改比值，#3778）：絕對值" in text
+    assert text.index("出貨例外") < text.index("alpha_conn: 80")
+
+
+def test_notes_are_total_over_malformed_fields():
+    """The renderers run after validation fails; a malformed field renders
+    nothing rather than raising and hiding the violation (CodeRabbit #3741)."""
+    for bad in ({"arming": ["operator"], "portability": "portable"},
+                {"arming": "operator", "portability": {"x": 1}},
+                {"arming": "operator", "portability": "portable", "blocker": "x"},
+                {"arming": "operator", "portability": "site_specific",
+                 "portability_reason_zh": 3}):
+        lib.arming_notes_zh(bad)
 
 
 def test_real_registry_chart_default_set():
     """The chart set is the behavior-preserving 6-key pre-rewire set plus the
     owner-decided pg_connections / pg_replication_lag promotion (#1200 Q3=C /
-    D4 folding, 2026-07-25). A1 changed the field, not the set."""
+    D4 folding, 2026-07-25). A1 / A1.5 changed the fields, not the set."""
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if lib.is_chart_armed(e)}
     # Pin the DECISION, not just the mechanism: the owner-approved pg
@@ -457,22 +577,80 @@ def test_real_registry_chart_default_set():
 
 
 def test_every_real_key_states_its_arming():
-    """Every non-critical key says why the chart ships it or not; no
-    `<base>_critical` says anything (it follows its base)."""
+    """Every non-critical key states arming and portability; no
+    `<base>_critical` states anything (it follows its base)."""
     doc = lib.build_registry_doc()
     for key, entry in doc["keys"].items():
         if entry.get("critical_of"):
-            assert "arming" not in entry, key
+            assert not any(f in entry for f in lib.ARMING_FIELDS), key
         else:
             assert entry.get("arming") in lib.ARMING_STATES, key
+            assert entry.get("portability") in lib.PORTABILITY_STATES, key
     assert lib.arming_problems(doc["keys"], strict=True) == []
+
+
+def test_real_shipped_non_portable_keys_are_the_recorded_exceptions():
+    """The owner kept shipping the two absolute MariaDB values (#3773); the
+    gate admits them only because each records the issue that resolves it."""
+    doc = lib.build_registry_doc()
+    exceptions = {k: e["default_exception"]["tracking"]
+                  for k, e in doc["keys"].items() if "default_exception" in e}
+    assert exceptions == {"mysql_connections": 3778, "mysql_threads_running": 3778}
+
+
+def test_real_validation_candidates_are_derived():
+    """The A2 input set is derived: portable, operator-supplied, unblocked.
+    Pinned so a reclassification shows up as a deliberate test edit."""
+    doc = lib.build_registry_doc()
+    assert lib.validation_candidates(doc) == {
+        "es_heap_usage_percent", "es_disk_usage_percent",
+        "oracle_tablespace_used_percent", "rabbitmq_node_mem_percent",
+        "jvm_memory", "db2_log_usage_percent", "db2_tablespace_used_percent",
+        "redis_replication_lag", "mongodb_replication_lag",
+        # #3770 fixed the URP sum, so its blocker is gone and 0 is portable
+        "kafka_under_replicated_partitions"}
+
+
+# #3783: the declared danielqsj/kafka_exporter exports neither metric (one is a
+# JMX name that varies with the user's jmx_exporter config), so the two alerts
+# and their three keys were removed outright — no alias, no shim.
+_KAFKA_REMOVED_KEYS = {"kafka_active_controllers", "kafka_request_rate",
+                       "kafka_request_rate_critical"}
+_KAFKA_UNEXPORTED_METRICS = ("kafka_controller_active_controller_count",
+                             "kafka_server_brokertopicmetrics_messagesin_total")
+
+
+def test_real_kafka_unwired_keys_are_removed_not_blocked():
+    doc = lib.build_registry_doc()
+    keys = doc["keys"]
+    assert _KAFKA_REMOVED_KEYS.isdisjoint(keys)
+    assert not any(e.get("critical_of") in _KAFKA_REMOVED_KEYS for e in keys.values())
+    assert {k for k, e in keys.items()
+            if "blocker" in e and k.startswith("kafka_")} == set()
+
+
+def test_real_kafka_pack_reads_no_unexported_metric():
+    """Comments may name the metrics; no rule expr may read them (#3783)."""
+    import yaml
+
+    pack = yaml.safe_load(
+        (REPO_ROOT / "rule-packs" / "rule-pack-kafka.yaml").read_text(encoding="utf-8"))
+    rules = [r for g in pack["groups"] for r in g["rules"]]
+    exprs = "\n".join(r["expr"] for r in rules)
+    for metric in _KAFKA_UNEXPORTED_METRICS:
+        assert metric not in exprs, metric
+    names = {r.get("alert") or r.get("record") for r in rules}
+    assert not names & {"KafkaNoActiveController", "KafkaHighRequestRate",
+                        "KafkaHighRequestRateCritical"}
+    for key in _KAFKA_REMOVED_KEYS - {"kafka_request_rate_critical"}:
+        assert f"tenant:alert_threshold:{key}" not in names, key
 
 
 def test_not_chart_armed_is_the_registry_derivation():
     """A defaults-tier key that is not `default`, and the `_critical` of one.
 
-    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals) —
-    pinned so the derivation can
+    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals),
+    less the three kafka keys #3783 removed — pinned so the derivation can
     only change with the registry, never with a rule edit here."""
     doc = lib.build_registry_doc()
     derived = lib.not_chart_armed_keys(doc)
@@ -480,7 +658,7 @@ def test_not_chart_armed_is_the_registry_derivation():
     for key in derived:
         owner = keys[keys[key].get("critical_of") or key]
         assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
-    assert len(derived) == 61
+    assert len(derived) == 58
     # optional_overrides flat keys belong to the unreachable face, not here
     assert not any(keys[k]["tier"] == "optional_overrides"
                    and not keys[k].get("critical_of") for k in derived)
@@ -544,8 +722,9 @@ def test_render_pack_header_defaults_and_optional_sections():
 
 _SHIPPED_MARK = "已出貨在清單裡——平台認得這個 key"
 _BASE_SHIPPED_MARK = "但 base 已出貨——租戶今天就設得動"
+_DEV_ONLY_MARK = "base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨"
 _DORMANT_MARK = "base 也未出貨——documented-but-dormant"
-_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DORMANT_MARK)
+_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK)
 
 
 def test_the_three_warning_marks_cannot_alias_each_other():
@@ -617,7 +796,7 @@ def test_pack_header_says_why_a_key_is_not_armed():
 def test_unarmed_block_lists_exactly_the_unshipped_defaults():
     doc = _synth_doc_with_chart()
     text = "\n".join(lib.render_unarmed_lines(doc, 4))
-    assert "#   beta_lag（依部署而定）：beta_lag 依部署而定" in text
+    assert "#   beta_lag 未啟用（依部署而定）：beta_lag 依部署而定" in text
     # a chart default and an optional_overrides key are not in it
     assert "alpha_conn" not in text and "alpha_orphan" not in text
     assert all(line.startswith("    #") for line in text.split("\n"))
@@ -635,10 +814,10 @@ def test_real_helm_unarmed_block_matches_the_derivation():
     import re
     doc = lib.build_registry_doc()
     text = "\n".join(lib.render_unarmed_lines(doc, 4))
-    named = set(re.findall(r"#   ([a-z0-9_]+)（", text))
+    named = set(re.findall(r"#   ([a-z0-9_]+) 未啟用", text))
     expected = {k for k in lib.not_chart_armed_keys(doc)
                 if not doc["keys"][k].get("critical_of")}
-    assert named == expected and len(named) == 34
+    assert named == expected and len(named) == 32
 
 
 def _synth_optional_doc():
@@ -687,11 +866,13 @@ def test_pack_header_warning_is_per_key_not_per_tier():
     assert _DORMANT_MARK in alpha
     assert _SHIPPED_MARK not in alpha and _BASE_SHIPPED_MARK not in alpha
 
-    # 3. MIXED -> all THREE sub-sections, each key under the right one
+    # 3. MIXED -> three sub-sections (no dev-only base here), each key under
+    #    the right one
     delta = lib.render_pack_header_lines(doc, "delta")
     text = "\n".join(delta)
-    for mark in _ALL_MARKS:
+    for mark in (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DORMANT_MARK):
         assert mark in text, (mark, delta)
+    assert _DEV_ONLY_MARK not in text
 
     def _line(pred):
         return next(i for i, ln in enumerate(delta) if pred(ln))
@@ -710,7 +891,63 @@ def test_pack_header_warning_is_per_key_not_per_tier():
     assert not any(m in beta for m in _ALL_MARKS)
 
 
-def test_warning_bodies_make_the_claims_their_headings_promise():
+def test_dev_only_base_gets_its_own_section(monkeypatch):
+    """#3730: a base the repo's dev conf.d template values (the example
+    tenants' packs) and the chart does not is neither "settable today" nor
+    "dormant" — it is each in one topology, and the header must say which.
+    Before, the split asked the chart alone and called these dormant, while
+    the dev tree serves them."""
+    monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
+    doc = _synth_optional_doc()
+    assert lib.base_topologies(doc, "delta_qsize_critical") == {"dev"}
+    assert lib.base_topologies(doc, "delta_conn_critical") == {"helm", "dev"}
+    assert lib.base_topologies(doc, "alpha_orphan_critical") == frozenset()
+    delta = lib.render_pack_header_lines(doc, "delta")
+
+    def _line(pred):
+        return next(i for i, ln in enumerate(delta) if pred(ln))
+
+    base_ln = _line(lambda ln: _BASE_SHIPPED_MARK in ln)
+    dev_ln = _line(lambda ln: _DEV_ONLY_MARK in ln)
+    live_i = _line(lambda ln: "delta_conn_critical:" in ln)
+    dev_i = _line(lambda ln: "delta_qsize_critical:" in ln)
+    assert base_ln < live_i < dev_ln < dev_i, delta
+    assert not any(_DORMANT_MARK in ln for ln in delta), (
+        "delta has no key whose base neither topology values", delta)
+    # the dormant pack stays dormant
+    alpha = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
+    assert _DORMANT_MARK in alpha and _DEV_ONLY_MARK not in alpha
+
+
+def test_topology_keeps_are_what_the_surfaces_carry():
+    """TOPOLOGY_DEFAULTS_KEEPS is the header's claim about what each topology
+    values; the generated files are what it does value. Held equal, over the
+    registry's keys, so a block added to (or dropped from) either surface
+    without the table — or the reverse — is red here."""
+    import yaml
+
+    doc = lib.build_registry_doc()
+    registry = set(doc["keys"])
+    chart = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    dev = yaml.safe_load(
+        (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
+         / "_defaults.yaml").read_text(encoding="utf-8")) or {}
+    carried = {
+        "helm": set((chart.get("thresholdConfig") or {}).get("defaults") or {}),
+        "dev": set(dev.get("defaults") or {}),
+    }
+    assert set(carried) == set(lib.TOPOLOGY_DEFAULTS_KEEPS)
+    for topo, keeps in lib.TOPOLOGY_DEFAULTS_KEEPS.items():
+        assert carried[topo], f"{topo}: the surface parsed as empty"
+        by_table = {k for k, e in doc["keys"].items()
+                    if any(keep(e.get("pack", "?"), e) for keep in keeps)}
+        on_surface = carried[topo] & registry
+        assert by_table == on_surface, (
+            f"{topo}: table-only={sorted(by_table - on_surface)}, "
+            f"surface-only={sorted(on_surface - by_table)}")
+
+
+def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
     """Content, not section choice. The previous version of this test only
     checked WHICH heading was selected — the same shape that let a false body
     ship under a correct-looking heading. Assert what each body actually says
@@ -720,6 +957,8 @@ def test_warning_bodies_make_the_claims_their_headings_promise():
         _SHIPPED_MARK: "\n".join(lib._OPTIONAL_SHIPPED_WARNING_LINES),
         _BASE_SHIPPED_MARK:
             "\n".join(lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES),
+        _DEV_ONLY_MARK:
+            "\n".join(lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES),
         _DORMANT_MARK: "\n".join(lib._OPTIONAL_UNSHIPPED_WARNING_LINES),
     }
     # only the DORMANT body may claim a tenant-set key produces nothing
@@ -732,14 +971,21 @@ def test_warning_bodies_make_the_claims_their_headings_promise():
     # and the live-critical body must name the mechanism that makes it live
     assert "defaults[base]" in bodies[_BASE_SHIPPED_MARK]
     assert "resolveCriticalRows" in bodies[_BASE_SHIPPED_MARK]
-    # every group the renderer can emit is covered above — no fourth body can
-    # be added without this test noticing
+    # the dev-only body states both topologies: a row in the dev tree, none
+    # under the chart
+    dev_only = bodies[_DEV_ONLY_MARK]
+    assert "產出一條真的 critical row" in dev_only
+    assert "用 chart 部署時，租戶填一個並不會產出任何 row" in dev_only
+    # every group the renderer can emit is covered above — no fifth body can
+    # be added without this test noticing (delta's qsize base is dev-only here)
+    monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
     groups = lib.optional_warning_groups(
         doc, {k: e for k, e in doc["keys"].items()
               if e.get("tier") == "optional_overrides"})
     assert {w for w, _ in groups} == {
         lib._OPTIONAL_SHIPPED_WARNING_LINES,
         lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES,
+        lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES,
         lib._OPTIONAL_UNSHIPPED_WARNING_LINES,
     }
 
@@ -759,14 +1005,14 @@ def test_optional_override_list_is_a_yaml_string_array():
 
 
 def test_real_registry_optional_list_is_the_nine_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 44 the
+    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 43 the
     tier holds (both asserted below). Most of the tier is `_critical` keys;
     listing them would make the shipped list mostly decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 44
+    assert len(tier) == 43
     assert shipped == [
         "oracle_wait_time_rate", "oracle_process_count",
         "oracle_pga_allocated_bytes",
@@ -848,10 +1094,12 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
 
     The claim under test is not "the right heading was picked" but "the heading
     that was picked says something true about THIS key": a `_critical` renders
-    under the settable-today warning IFF the chart actually ships its base, and
-    under the dormant warning otherwise. Reads values.yaml (what an operator
-    gets), while the renderer reads the registry's `arming` — so a
-    divergence between declaration and artifact surfaces here.
+    under the settable-today warning IFF the chart actually ships its base,
+    under the dev-only warning IFF only the repo's dev conf.d template values
+    it (#3730), and under the dormant warning otherwise. Reads values.yaml
+    (what an operator gets) and the dev `_defaults.yaml`, while the renderer
+    reads the registry — so a divergence between declaration and artifact
+    surfaces here.
     """
     import yaml
 
@@ -862,6 +1110,11 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
     shipped_list = set(
         (chart_doc.get("thresholdConfig") or {}).get("optional_overrides") or [])
     assert chart_defaults and shipped_list, "values.yaml faces parsed as empty"
+    dev_doc = yaml.safe_load(
+        (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
+         / "_defaults.yaml").read_text(encoding="utf-8")) or {}
+    dev_defaults = set(dev_doc.get("defaults") or {})
+    assert dev_defaults, "the dev _defaults.yaml parsed as empty"
 
     checked = 0
     for pack in doc["packs"]:
@@ -885,15 +1138,18 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 expected = _SHIPPED_MARK
             elif base and base in chart_defaults:
                 expected = _BASE_SHIPPED_MARK
+            elif base and base in dev_defaults:
+                expected = _DEV_ONLY_MARK
             else:
                 expected = _DORMANT_MARK
             assert sect == expected, (
                 f"{pack}/{key}: header claims {sect!r} but the shipped chart "
                 f"says {expected!r} (base={base!r}, "
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
+                f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 44, (
-        f"expected all 44 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 43, (
+        f"expected all 43 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():

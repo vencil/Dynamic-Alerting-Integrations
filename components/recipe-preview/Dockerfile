@@ -138,6 +138,7 @@ COPY scripts/tools/ops/guard_dispatch.py        ./core/ops/guard_dispatch.py
 COPY scripts/tools/_lib_python.py               ./core/_lib_python.py
 COPY scripts/tools/_lib_validation.py           ./core/_lib_validation.py
 COPY scripts/tools/_lib_prometheus.py           ./core/_lib_prometheus.py
+COPY scripts/tools/_lib_engine.py               ./core/_lib_engine.py
 ENV PREVIEW_CORE_DIR=/opt/recipe-preview/core/dx
 
 COPY components/recipe-preview/app.py           ./app.py

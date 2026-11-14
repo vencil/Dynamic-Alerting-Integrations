@@ -6,7 +6,7 @@ socket 打請求。
   fixture 各一筆，含會擋下的）。
 - 拒收該筆（HTTP 200、``result: rejected``）：期限（判定中到期時子孫程序一併
   結束）、排隊中到期、佇列滿、記憶體上限、沒有完整結果、git 讀兩次都失敗。
-- 容器不可用（503）：找不到 amtool、產生器比 policy 要求的舊、部署端 policy
+- 容器不可用（503）：找不到 da-read、產生器比 policy 要求的舊、部署端 policy
   檔不可用；每次判定都重查。
 - git 讀取失敗重試一次；只實體化一般檔（100644／100755），symlink、gitlink
   等其他 mode 一律判 not_regular_file（#2981）。
@@ -71,7 +71,6 @@ def _credential_scoped(rec: dict, write: str) -> dict:
 def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gsvc")
     bin_dir = tmp / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     repo = h.init_repo(tmp / "repo")
     commits = {}
     for fx in FIXTURES:
@@ -282,59 +281,72 @@ def test_bad_request_body_is_400(world):
 
 # PATH holds only the stub directory: sleep is called by its full path.
 SLEEP = shutil.which("sleep") or "/bin/sleep"
-_SLOW_AMTOOL = f"""#!/bin/sh
-echo $$ > "$GSVC_PID_DIR/amtool.pid"
+# What a held `da-read alertmanager` runs (the gate's one reading, once per
+# judgement); every other da-read call goes straight to the real one. Builtins
+# and full paths only: PATH holds just the stub directory.
+_SLOW_READING = f"""echo $$ > "$GSVC_PID_DIR/da-read.pid"
 {SLEEP} 60 &
 echo $! > "$GSVC_PID_DIR/grandchild.pid"
 wait
 """
 
 
-# One amtool call per judgement (check-config): call n records ``started-n``
-# and blocks until the test creates ``release-n`` (or ``release-all``). A
-# judgement held here ends when the TEST says, not when a sleep runs out.
-# Builtins and full paths only: PATH holds just the stub directory.
-_GATED_AMTOOL = f"""#!/bin/sh
-d="$GSVC_GATE_DIR"
+# Call n records ``started-n`` and blocks until the test creates ``release-n``
+# (or ``release-all``), then reads for real. A judgement held here ends when
+# the TEST says, not when a sleep runs out.
+_GATED_READING = f"""d="$GSVC_GATE_DIR"
 n=0
 while [ -e "$d/started-$n" ]; do n=$((n+1)); done
 : > "$d/started-$n"
 while [ ! -e "$d/release-$n" ] && [ ! -e "$d/release-all" ]; do {SLEEP} 0.05; done
-exit 0
 """
 
 
-def _gate(tmp_path: Path) -> tuple[Path, Path]:
-    """(bin directory with the gated amtool, the gate directory)."""
-    bin_dir, gate = tmp_path / "bin", tmp_path / "gate"
-    h.stub(bin_dir, "amtool", _GATED_AMTOOL)
+def _held_da_read(tmp_path: Path, held: str, env: "dict | None" = None) -> tuple[Path, dict]:
+    """(bin directory, service env) for a judgement held in Alertmanager's
+    loader: ``$DA_READ_BINARY`` is a wrapper that runs *held* for `da-read
+    alertmanager` and then (if *held* returns) the real da-read."""
+    real = os.environ.get("DA_READ_BINARY", "").strip() or shutil.which("da-read")
+    if not real:
+        pytest.fail("no da-read ($DA_READ_BINARY / PATH) to hold the judgement in")
+    bin_dir = tmp_path / "bin"
+    wrapper = h.stub(tmp_path / "held", "da-read",
+                     '#!/bin/sh\nif [ "$1" = alertmanager ]; then\n' + held
+                     + f'fi\nexec \'{real}\' "$@"\n')
+    return bin_dir, {**(env or {}), "DA_READ_BINARY": str(wrapper)}
+
+
+def _gate(tmp_path: Path) -> tuple[Path, Path, dict]:
+    """(bin directory, the gate directory, service env) — judgements held in
+    Alertmanager's loader until released."""
+    gate = tmp_path / "gate"
     gate.mkdir()
-    return bin_dir, gate
+    bin_dir, env = _held_da_read(tmp_path, _GATED_READING, {"GSVC_GATE_DIR": str(gate)})
+    return bin_dir, gate, env
 
 
 def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
-    """The deadline (8 s here) is what ends a judgement stuck in amtool (60 s),
-    with amtool's own child. Asserted only what the deadline guarantees: not
-    answered before it, answered long before amtool would end, nothing left.
-    The 8 s is room to REACH amtool on a slow host (the pid files say so)."""
-    bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", _SLOW_AMTOOL)
+    """The deadline (8 s here) is what ends a judgement stuck in
+    Alertmanager's loader (60 s), with the loader's own child. Asserted only
+    what the deadline guarantees: not answered before it, answered long
+    before the loader would end, nothing left. The 8 s is room to REACH the
+    loader on a slow host (the pid files say so)."""
     pid_dir = tmp_path / "pids"
     pid_dir.mkdir()
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
-                   env={"GSVC_PID_DIR": str(pid_dir)}) as svc:
+    bin_dir, env = _held_da_read(tmp_path, _SLOW_READING, {"GSVC_PID_DIR": str(pid_dir)})
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env) as svc:
         t0 = time.monotonic()
         status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=13000)
         took = time.monotonic() - t0
         assert status == 200
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
         # the clock starts after t0, so it cannot have ended sooner; and the
-        # answer did not wait for amtool's 60 s
+        # answer did not wait for the loader's 60 s
         assert 8.0 <= took < 50, took
         assert (pid_dir / "grandchild.pid").exists(), \
-            "the judgement never reached amtool within its 8 s: nothing was tested"
+            "the judgement never reached the loader within its 8 s: nothing was tested"
         pids = [int((pid_dir / n).read_text().strip())
-                for n in ("amtool.pid", "grandchild.pid")]
+                for n in ("da-read.pid", "grandchild.pid")]
         end = time.monotonic() + 5
         while any(h.alive(p) for p in pids) and time.monotonic() < end:
             time.sleep(0.05)
@@ -348,16 +360,15 @@ def test_deadline_ends_the_judgement_and_its_descendants(tmp_path, world):
 def test_queue_expiry_and_busy(tmp_path, world):
     """A queued request whose deadline passes is answered then, without
     waiting for the running one; a full queue answers busy. The running
-    judgement is held in amtool until the test releases it, so "the first is
-    still running" is a fact, not a sleep's guess."""
-    bin_dir, gate = _gate(tmp_path)
+    judgement is held in Alertmanager's loader until the test releases it, so
+    "the first is still running" is a fact, not a sleep's guess."""
+    bin_dir, gate, env = _gate(tmp_path)
     commit = world["commits"]["clean+extra"]
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
-                   env={"GSVC_GATE_DIR": str(gate)},
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env,
                    args=("--max-queue", "1")) as svc, \
             ThreadPoolExecutor(4) as pool:
         first = pool.submit(svc.validate, commit)
-        _until(lambda: (gate / "started-0").exists(), "the first judgement in amtool")
+        _until(lambda: (gate / "started-0").exists(), "the first judgement in the loader")
         expiring = pool.submit(svc.validate, commit, None, 10000)  # 5 s
         _until(lambda: svc.metrics()["da_generator_queue_depth"] == 1, "one queued")
         status, busy = svc.validate(commit)  # queue (1) is full
@@ -489,7 +500,6 @@ def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
     h.run_git(repo, "commit", "-qm", "x")
     commit = h.run_git(repo, "rev-parse", "HEAD")
     bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     with h.Service(tmp_path / "s", repo, bin_dir=bin_dir,
                    env={"DA_GUARD_BINARY": str(wrapper)}) as svc:
         status, doc = svc.validate(commit)
@@ -691,22 +701,106 @@ def test_sha256_repository(tmp_path, world):
 
 # ── 503: container / policy unavailable ──────────────────────────────────
 
-def test_amtool_missing_is_503(tmp_path, world):
-    empty = tmp_path / "empty-bin"
-    empty.mkdir()
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=empty) as svc:
+@pytest.mark.parametrize("how", ["missing", "not_executable"])
+def test_da_read_missing_is_503(tmp_path, world, how):
+    """ADR-036 §3: whether Alertmanager accepts the rendered config is its
+    loader's answer (da-read). Without the da-read the judgement process
+    would run — $DA_READ_BINARY, then PATH — the container is unavailable,
+    checked before every judgement."""
+    if how == "missing":
+        named = ""  # blank is not set: PATH is asked, and has no da-read
+    else:
+        target = tmp_path / "da-read"
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        target.chmod(0o644)
+        named = str(target)
+    assert shutil.which("da-read", path=str(world["bin"])) is None
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"DA_READ_BINARY": named}) as svc:
         status, doc = svc.validate(world["commits"]["clean"])
-        assert status == 503
-        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "amtool_missing")
+        assert status == 503, doc
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "da_read_missing")
         _s, st = svc.call("GET", "/v1/status")
-        assert st["amtool_available"] is False and st["ready"] is False
+        assert st["da_read_available"] is False and st["ready"] is False
+        m = svc.metrics()
+        assert m['da_generator_unavailable_total{reason="da_read_missing"}'] == 1
+        # No judgement process ran: the ratio keeps the last real reading (none).
+        assert m["da_generator_judgement_deadline_ratio"] == 0
+
+
+_READERS = {"da-guard": "DA_GUARD_BINARY", "da-read": "DA_READ_BINARY",
+            "da-crdecode": "DA_CRDECODE_BINARY"}
+
+
+def _relative_path_service(tmp_path, world, on_relative_path: tuple[str, ...],
+                           unset: tuple[str, ...]):
+    """The service started in a directory whose ``rbin/`` is on $PATH as the
+    relative entry ``rbin``: the readers of *on_relative_path* are there,
+    those of *unset* have no variable, the rest are named by absolute
+    variables. Returns (service, rbin)."""
+    cwd = tmp_path / "cwd"
+    rbin = cwd / "rbin"
+    rbin.mkdir(parents=True)
+    env = {"PATH": "rbin"}
+    for name, var in _READERS.items():
+        if name in on_relative_path:
+            shutil.copy2(os.environ[var], rbin / name)
+        env[var] = "" if name in unset else os.environ[var]
+    # The harness puts its own da-guard copy in bin_dir: one that is not on
+    # this service's $PATH.
+    return h.Service(tmp_path / "s", world["repo"], bin_dir=tmp_path / "unused-bin",
+                     env=env, cwd=cwd), rbin
+
+
+@pytest.mark.parametrize("reader", sorted(_READERS))
+def test_a_reader_on_a_relative_path_entry_is_the_one_the_judgement_runs(
+        tmp_path, world, reader):
+    """#3839 review: readiness looked the reader up from the service's
+    directory, the judgement process from its job directory — a relative
+    $PATH entry named a reader for the first and nothing for the second, so
+    /v1/status said ready while every write came back without a verdict.
+    What a check finds is pinned, absolute, into the reader's variable, so
+    status and judgement run one binary."""
+    svc, _rbin = _relative_path_service(tmp_path, world, (reader,), (reader,))
+    with svc:
+        _s, st = svc.call("GET", "/v1/status")
+        status, doc = svc.validate(world["commits"]["clean"])
+    assert st["ready"] is True, st
+    assert status == 200 and doc["result"] == "pass", doc
+
+
+def test_a_da_read_that_appears_on_path_later_is_found_and_judges(tmp_path, world):
+    """A reader not there at start is looked for again at every check; the
+    check that finds it pins it, so the judgement that follows runs it."""
+    svc, rbin = _relative_path_service(tmp_path, world, (), ("da-read",))
+    with svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 503 and doc["reason"] == "da_read_missing", doc
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_read_available"] is False and st["ready"] is False, st
+        shutil.copy2(os.environ["DA_READ_BINARY"], rbin / "da-read")
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_read_available"] is True and st["ready"] is True, st
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 200 and doc["result"] == "pass", doc
+
+
+def test_ready_without_amtool(world):
+    """amtool is not asked for a verdict, so a container without one judges:
+    nothing on the service's PATH is called amtool, and it is ready."""
+    assert shutil.which("amtool", path=str(world["bin"])) is None
+    _s, st = world["svc"].call("GET", "/v1/status")
+    assert st["da_read_available"] is True and st["ready"] is True, st
+    assert "amtool_available" not in st
+    status, doc = world["svc"].validate(world["commits"]["clean"])
+    assert status == 200 and doc["result"] == "pass", doc
 
 
 @pytest.mark.parametrize("how", ["missing", "not_executable", "does_not_run"])
 def test_da_guard_missing_is_503(tmp_path, world, how):
     """ADR-036 §3 (2026-10-30): without a da-guard the judgement process can
     run, no key verdict (ADR-038 §5) can be given — the container is
-    unavailable, checked before every judgement like amtool."""
+    unavailable, checked before every judgement like da-read."""
     target = tmp_path / "da-guard"
     if how == "not_executable":
         target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -895,7 +989,7 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "amtool_available", "da_guard_available", "ready",
+                       "da_guard_version", "da_read_available", "da_guard_available", "ready",
                        "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
@@ -919,13 +1013,12 @@ def test_help_names_every_default(tmp_path):
 # ── the limits are honoured (each flag changes the answer) ───────────────
 
 def test_judgement_seconds_and_body_limits(tmp_path, world):
-    bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 3\n")
+    bin_dir, env = _held_da_read(tmp_path, f"  {SLEEP} 3\n")
     commit = world["commits"]["clean+extra"]
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env,
                    args=("--max-judgement-seconds", "1",
                          "--max-body-bytes", "300")) as svc:
-        # amtool alone takes 3 s: a deadline answer means the 1 s limit
+        # the loader alone takes 3 s: a deadline answer means the 1 s limit
         # applied (without it, the harness's 600 s would let this pass)
         status, doc = svc.validate(commit)
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
@@ -1141,21 +1234,21 @@ def test_pinning_follows_the_latest_request_base(tmp_path, world):
 def test_a_judgement_does_not_hold_other_clients_connections(tmp_path, world):
     """A forked process must not keep the service's client sockets open: C,
     queued when B is forked, expires while B runs — its answer must end
-    (EOF) then, not when B ends. A and B are held in amtool until released."""
-    bin_dir, gate = _gate(tmp_path)
+    (EOF) then, not when B ends. A and B are held in Alertmanager's loader
+    until released."""
+    bin_dir, gate, env = _gate(tmp_path)
     commit = world["commits"]["clean+extra"]
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
-                   env={"GSVC_GATE_DIR": str(gate)}) as svc, \
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env) as svc, \
             ThreadPoolExecutor(4) as pool:
         a = pool.submit(svc.validate, commit)
-        _until(lambda: (gate / "started-0").exists(), "A in amtool")
+        _until(lambda: (gate / "started-0").exists(), "A in the loader")
         b = pool.submit(svc.validate, commit)
         _until(lambda: svc.metrics()["da_generator_queue_depth"] == 1, "B queued")
         # 10 s: room for A to end and B to be forked while C still waits
         c = pool.submit(svc.validate, commit, None, 15000)
         _until(lambda: svc.metrics()["da_generator_queue_depth"] == 2, "C queued")
         (gate / "release-0").touch()  # A ends; B is forked with C queued
-        _until(lambda: (gate / "started-1").exists(), "B in amtool")
+        _until(lambda: (gate / "started-1").exists(), "B in the loader")
         assert not c.done(), "C ended before B was forked: nothing was tested"
         status, doc = c.result()
         assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
@@ -1293,13 +1386,12 @@ def test_two_content_lengths_are_400_even_if_the_first_fits(world):
 
 def test_no_zombies_are_left_after_a_deadline(tmp_path, world):
     """#2901 R3: the service is a child subreaper, so what a killed judgement
-    leaves (amtool, its sleep) is re-parented to it and collected."""
-    bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", f"#!/bin/sh\n{SLEEP} 60 &\nwait\n")
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir) as svc:
+    leaves (the loader, its sleep) is re-parented to it and collected."""
+    bin_dir, env = _held_da_read(tmp_path, f"  {SLEEP} 60 &\n  wait\n")
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env) as svc:
         for _ in range(3):
-            # 6 s: room to reach amtool on a slow host; the deadline is what
-            # ends it (amtool's sleep is 60 s)
+            # 6 s: room to reach the loader on a slow host; the deadline is
+            # what ends it (the loader's sleep is 60 s)
             status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=11000)
             assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
         end = time.monotonic() + 10
@@ -1321,12 +1413,10 @@ def _outcome_of(pending) -> str:
 
 def test_shutdown_ends_the_running_judgement(tmp_path, world):
     """#2901 R7 (N19): SIGTERM while judging ends the judgement's whole group."""
-    bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", _SLOW_AMTOOL)
     pid_dir = tmp_path / "pids"
     pid_dir.mkdir()
-    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir,
-                    env={"GSVC_PID_DIR": str(pid_dir)})
+    bin_dir, env = _held_da_read(tmp_path, _SLOW_READING, {"GSVC_PID_DIR": str(pid_dir)})
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env)
     with ThreadPoolExecutor(1) as pool:
         pending = pool.submit(svc.validate, world["commits"]["clean"])
         end = time.monotonic() + 30
@@ -1334,14 +1424,14 @@ def test_shutdown_ends_the_running_judgement(tmp_path, world):
                 and time.monotonic() < end:
             time.sleep(0.05)
         if not (pid_dir / "grandchild.pid").exists():
-            # #3174: a judgement that never reached amtool (e.g. rejected
+            # #3174: a judgement that never reached the loader (e.g. rejected
             # before it) says why here, instead of a FileNotFoundError below.
             svc.stop()
-            pytest.fail("amtool's child never started; the judgement: "
+            pytest.fail("the loader's child never started; the judgement: "
                         + _outcome_of(pending) + "; service log: "
                         + svc.log.read_text(encoding="utf-8", errors="replace")[-2000:])
         pids = [int((pid_dir / n).read_text().strip())
-                for n in ("amtool.pid", "grandchild.pid")]
+                for n in ("da-read.pid", "grandchild.pid")]
         svc.stop()
         with pytest.raises(Exception):
             pending.result()
@@ -1515,7 +1605,6 @@ def test_the_service_log_never_carries_the_generators_text(tmp_path):
             "      receiver:\n        type: webhook\n        url: https://hooks.example.com/a\n"
             f"      group_wait: x-{canary}\n")
     bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     with h.Service(tmp_path / "svc", repo, bin_dir=bin_dir) as svc:
         status, doc = svc.validate(commit, [{"path": "t-a.yaml", "content_b64": h.b64(body)}])
         assert status == 200 and doc["result"] == "findings", doc

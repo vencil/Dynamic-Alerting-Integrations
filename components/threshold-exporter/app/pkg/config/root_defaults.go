@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -43,10 +42,10 @@ func refusedDefault(reason string) float64 {
 }
 
 // refusedReason is why thresholdTextNumber refuses text: RefusedNonFinite
-// for a number strconv.ParseFloat reads (NaN, ±Inf), RefusedUnparsed for
-// anything else. A root default is a number only — no `:severity` half.
+// for a text that names NaN or ±Inf (nonFiniteNumberText), RefusedUnparsed
+// for anything else. A root default is a number only — no `:severity` half.
 func refusedReason(text string) string {
-	if _, err := strconv.ParseFloat(strings.TrimSpace(text), 64); err == nil {
+	if nonFiniteNumberText(strings.TrimSpace(text)) {
 		return RefusedNonFinite
 	}
 	return RefusedUnparsed

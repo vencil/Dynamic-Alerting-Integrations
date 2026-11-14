@@ -2,7 +2,7 @@
 """bump_docs.py — 版號一致性管理工具
 
 掃描 repo 中的文件、Chart.yaml、VERSION 檔案，批次更新版號引用。
-六條版號線獨立管理：--platform / --exporter / --tools / --portal / --recipe-preview / --tenant-api。
+各版號線獨立管理：--platform / --exporter / --tools / --portal / --tenant-api（清單見 VERSION_LINE_SOURCES）。
 
 Chart.yaml version 與 appVersion 同步，統一由 --exporter 管理。
 --exporter 同時更新：Chart.yaml version + appVersion + image tag + OCI chart references。
@@ -109,10 +109,9 @@ CHART_YAML = REPO_ROOT / "helm" / "threshold-exporter" / "Chart.yaml"
 DA_TOOLS_VERSION = REPO_ROOT / "components" / "da-tools" / "app" / "VERSION"
 TENANT_API_CHART_YAML = REPO_ROOT / "helm" / "tenant-api" / "Chart.yaml"
 DA_PORTAL_CHART_YAML = REPO_ROOT / "helm" / "da-portal" / "Chart.yaml"
-RECIPE_PREVIEW_CHART_YAML = REPO_ROOT / "helm" / "recipe-preview" / "Chart.yaml"
 
 # ---------------------------------------------------------------------------
-# The six version lines are a FIXED EXPECTATION, not whatever happened to parse
+# The version lines are a FIXED EXPECTATION, not whatever happened to parse
 # ---------------------------------------------------------------------------
 # Every consumer used to iterate `read_current_versions().items()` — i.e. the
 # set of lines was defined by what the SSOT regexes managed to read. So a line
@@ -136,7 +135,6 @@ VERSION_LINE_SOURCES = {
     "exporter": ("helm/threshold-exporter/Chart.yaml", '`appVersion: "X.Y.Z"`'),
     "tools": ("components/da-tools/app/VERSION", "the whole file (bare X.Y.Z)"),
     "portal": ("helm/da-portal/Chart.yaml", '`appVersion: "X.Y.Z"`'),
-    "recipe-preview": ("helm/recipe-preview/Chart.yaml", '`appVersion: "X.Y.Z"`'),
     "tenant-api": ("helm/tenant-api/Chart.yaml", "`version: X.Y.Z`"),
 }
 VERSION_LINES = tuple(VERSION_LINE_SOURCES)
@@ -370,6 +368,21 @@ def _build_tools_rules():
         "require_match": True,
     })
 
+    # helm/threshold-exporter's config-validation CronJob (#3353) runs the
+    # da-tools image's validate-config, pinned the same two-line way under
+    # `configValidation.image`. The pin decides which rows the CronJob judges
+    # (v2.9.0 predates yaml_quoting and unread_keys), so a release that does
+    # not bump it leaves direct mode judged by an older validate-config.
+    rules.append({
+        "file": "helm/threshold-exporter/values.yaml",
+        "desc": "da-tools image tag in helm/threshold-exporter/values.yaml (configValidation.image, two-line repository/tag pin)",
+        "pair_anchor": r"^[ \t]*repository:[ \t]*ghcr\.io/vencil/da-tools[ \t]*$",
+        "pair_key": "tag",
+        "pattern": r'"v?' + _SEMVER + r'"',
+        "replacement": lambda v: f'"v{v}"',
+        "require_match": True,
+    })
+
     # mkdocs.yml tools_version
     rules.append({
         "file": "mkdocs.yml",
@@ -402,8 +415,8 @@ def _build_tenant_api_rules():
     # `:v<appVersion>`. A separate appVersion number could only ever name an
     # OLDER binary than the chart's own templates expect (it sat at 2.7.0 under
     # chart 2.9.24, whose default render passes flags 2.7.0 does not have), so
-    # this line moves both together, like the exporter / portal /
-    # recipe-preview lines. The release job and
+    # this line moves both together, like the exporter / portal lines. The
+    # release job and
     # tests/helm/test_image_tag_derivation.py both fail when the two differ.
     rules.append({
         "file": "helm/tenant-api/Chart.yaml",
@@ -1104,48 +1117,17 @@ def _build_portal_rules():
     return rules
 
 
-def _build_recipe_preview_rules():
-    """Build version replacement rules for recipe-preview (#657).
-
-    recipe-preview bundles a byte-identical snapshot of the platform compiler,
-    so it is "sync-bumped" to the platform version like exporter/portal — NOT an
-    independent cadence (prevents bundled-compiler drift). The ONLY version
-    source is helm/recipe-preview/Chart.yaml (version == appVersion); the
-    release.yaml `recipe-preview/v*` job gates Chart.yaml version == tag, and the
-    image-tag invariant (#682) derives the image from appVersion. The README
-    carries no version string (no H1 version / image tag / OCI --version), so —
-    unlike portal — there is nothing else to rewrite.
-
-    Returns list of rule dicts for the 'recipe-preview' version line.
-    """
-    return [
-        {
-            "file": "helm/recipe-preview/Chart.yaml",
-            "desc": "recipe-preview Chart.yaml version",
-            "pattern": r"^version:\s*" + _SEMVER,
-            "replacement": lambda v: f"version: {v}",
-        },
-        {
-            "file": "helm/recipe-preview/Chart.yaml",
-            "desc": "recipe-preview Chart.yaml appVersion",
-            "pattern": r'^appVersion:\s*"' + _SEMVER + '"',
-            "replacement": lambda v: f'appVersion: "{v}"',
-        },
-    ]
-
-
 def _build_rules():
     """Build all version replacement rules, grouped by version line.
 
     Returns {"platform": [...], "exporter": [...], "tools": [...],
-    "portal": [...], "recipe-preview": [...], "tenant-api": [...]}.
+    "portal": [...], "tenant-api": [...]}.
     """
     return {
         "platform": _build_platform_rules(),
         "exporter": _build_exporter_rules(),
         "tools": _build_tools_rules(),
         "portal": _build_portal_rules(),
-        "recipe-preview": _build_recipe_preview_rules(),
         "tenant-api": _build_tenant_api_rules(),
     }
 
@@ -1684,20 +1666,11 @@ def read_current_versions():
         if m:
             versions["tenant-api"] = m.group(1)
 
-    # recipe-preview version from its Chart.yaml (sync-bump; version == appVersion).
-    if RECIPE_PREVIEW_CHART_YAML.exists():
-        content = RECIPE_PREVIEW_CHART_YAML.read_text(encoding="utf-8")
-        m = re.search(
-            r'^appVersion:\s*"(' + _SEMVER + ')"', content, re.MULTILINE
-        )
-        if m:
-            versions["recipe-preview"] = m.group(1)
-
     return versions
 
 
 def missing_version_lines(versions=None):
-    """Which of the six lines failed to read their source-of-truth?
+    """Which of the declared lines failed to read their source-of-truth?
 
     Returns [(line, source_path, expected_shape), ...] for every line in
     VERSION_LINES that `read_current_versions()` did NOT produce.
@@ -2391,7 +2364,7 @@ def _require_nonempty_scope(all_rules, scope):
     command that checked nothing at all. A typo'd scope in a release script is
     therefore indistinguishable from success.
 
-    ⚠️ This is the REPO-WIDE floor only. It sums the filter over all six
+    ⚠️ This is the REPO-WIDE floor only. It sums the filter over all the
     lines while the bump/check loops filter PER LINE, so a scope that is
     non-empty globally but empty for the line being worked on sails past it
     and then evaluates nothing — exactly the hole this guard's own docstring
@@ -2431,9 +2404,9 @@ def _require_nonempty_line_scope(all_rules, scope, requested_lines):
     repo-wide guard exists to prevent, one level down.
 
     `requested_lines` is what the invocation actually asks for — the lines
-    carrying a version flag. It is deliberately NOT "all six": a bare
+    carrying a version flag. It is deliberately NOT "every line": a bare
     `--check --scope docs` legitimately means "check the docs tree", and
-    recipe-preview owning nothing there is the scope working as asked, not a
+    tenant-api owning nothing there is the scope working as asked, not a
     defect. Those cases are REPORTED instead (SCOPE-EMPTY), so they stop
     being invisible without turning every scoped check into an error.
 
@@ -2698,8 +2671,6 @@ def main():
                         help="New da-tools version (e.g. 0.2.0)")
     parser.add_argument("--portal", metavar="VER",
                         help="New da-portal version (e.g. 2.8.0)")
-    parser.add_argument("--recipe-preview", metavar="VER",
-                        help="New recipe-preview version (sync-bump; e.g. 2.9.0)")
     parser.add_argument("--tenant-api", metavar="VER",
                         help="New tenant-api version (e.g. 2.4.0)")
     parser.add_argument("--check", action="store_true",
@@ -2730,7 +2701,7 @@ def main():
     # --sync-counts: auto-update all hardcoded counts
     if args.sync_counts:
         # Count rules are a hand-written, single-file set with no glob_dir, so
-        # `--scope` has nothing to filter on and was simply ignored; the six
+        # `--scope` has nothing to filter on and was simply ignored; the
         # version flags are not read on this path either. Both were accepted
         # in silence, so `--sync-counts --platform 2.10.0` did the counts and
         # NOT the bump while exiting 0 — a release script could lose a whole
@@ -2739,7 +2710,7 @@ def main():
         # (2) for the same reason as the --scope guards: the repo is fine, the
         # invocation is not.
         # ⛔ The list must be the COMPLEMENT of what this branch honours, not
-        # an enumeration of what someone remembered. It shipped naming the six
+        # an enumeration of what someone remembered. It shipped naming the
         # version flags and `--scope`, and stopped there — so
         # `--sync-counts --init-changelog 2.10.0` printed "✅ Done." and exited
         # 0 having written no CHANGELOG stub at all: the exact silent discard
@@ -2895,8 +2866,8 @@ def main():
         print("Current versions (from source-of-truth files):")
         # Iterate the EXPECTATION, not the parse result. Printing only what
         # parsed is what made the failure look like nothing at all: an
-        # unreadable CLAUDE.md simply produced a five-line list, and five
-        # lines look exactly as healthy as six unless you count them.
+        # unreadable CLAUDE.md simply produced a list one line short, and
+        # it looks exactly as healthy as the full one unless you count them.
         for line in VERSION_LINES:
             ver = versions.get(line)
             print(f"  {line}: {ver}" if ver else f"  {line}: ❌ NOT FOUND")
@@ -3094,13 +3065,12 @@ def main():
                                     or glob_empty or glob_dead) else EXIT_OK)
 
     # --check mode: read current versions and verify all references match
-    # `args.tenant_api` belongs in this guard like the other five: without it
+    # `args.tenant_api` belongs in this guard like the other version flags: without it
     # `--check --tenant-api 9.9.9` fell through to the bare-check branch,
     # which re-reads the CURRENT versions — so the flag was silently ignored
     # and the command exited 0 while claiming to have checked 9.9.9 (#1407).
     if args.check and not (args.platform or args.exporter or args.tools
-                           or args.portal or args.recipe_preview
-                           or args.tenant_api):
+                           or args.portal or args.tenant_api):
         versions = read_current_versions()
         if not versions:
             print("ERROR: Cannot read current versions from source files", file=sys.stderr)
@@ -3110,7 +3080,7 @@ def main():
         _require_nonempty_scope(all_rules, args.scope)
         has_drift = False
 
-        # Iterate the six DECLARED lines, not `versions.items()`. Iterating the
+        # Iterate the DECLARED lines, not `versions.items()`. Iterating the
         # parse result meant a line whose SSOT stopped parsing was not checked
         # and not reported — it ceased to exist, taking its rules with it, and
         # this branch printed "✅ All version references are consistent."
@@ -3177,7 +3147,7 @@ def main():
 
     # Explicit bump mode
     if not (args.platform or args.exporter or args.tools or args.portal
-            or args.recipe_preview or args.tenant_api):
+            or args.tenant_api):
         parser.print_help()
         sys.exit(EXIT_CALLER_ERROR)
 
@@ -3189,7 +3159,6 @@ def main():
                   ("exporter", args.exporter),
                   ("tools", args.tools),
                   ("portal", args.portal),
-                  ("recipe-preview", args.recipe_preview),
                   ("tenant-api", args.tenant_api)]
                  if ver]
     # BEFORE the loop, so a scope that silently selects nothing for one of the

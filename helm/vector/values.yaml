@@ -441,11 +441,11 @@ projectionGate:
     repository: ghcr.io/vencil/vector-projection-gate
     # ⛔ Bump this tag whenever the image's BUILD changes (Dockerfile
     # instructions or a COPY'd script) — 0.1.0 -> 0.1.1 was the #1278 runtime
-    # base move to alpine 3.23.6. With `digest: ""` and `IfNotPresent`, an
-    # unchanged tag renders a byte-identical pod spec: no rollout, and every
+    # base move to alpine 3.23.6, 0.1.1 -> 0.1.2 the #3715 move to 3.24.4.
+    # With `digest: ""` and `IfNotPresent`, an unchanged tag renders a byte-identical pod spec: no rollout, and every
     # node keeps the image it already pulled. Pinned by
     # tests/shared/test_vector_projection_gate_image_tag.py.
-    tag: "0.1.1"
+    tag: "0.1.2"
     digest: ""
     pullPolicy: IfNotPresent
   registry:

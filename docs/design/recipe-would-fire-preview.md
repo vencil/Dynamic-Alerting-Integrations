@@ -16,10 +16,10 @@ parent: architecture-and-design.md
 >
 > **相關**：[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)，追蹤 issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)。recipe 是租戶在 portal 自助定義的告警規則；本文設計的是「填完當場確認它會不會觸發」的預覽。
 >
-> 本文的設計已實作：服務在 `components/recipe-preview/`，已有 `helm/recipe-preview` chart。portal 原本經 da-portal 的反向代理（`portal.recipePreviewUrl`）呼叫它；那條路已隨 [ADR-027 §5](../adr/027-tenant-api-caller-identity.md) 移除，改為移進 tenant-api 的 pod、經 `/api/` 下的路由呼叫（進行中）。目前先上 try-local；正式環境部署延後（映像與 `recipe-preview/v*` tag 尚未發布）。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
+> 本文的設計已實作：服務在 `components/recipe-preview/`。portal 原本經 da-portal 的反向代理（`portal.recipePreviewUrl`）呼叫它；那條路已隨 [ADR-027 §5](../adr/027-tenant-api-caller-identity.md) 移除。現在它是 tenant-api pod 裡的容器（tenant-api chart 的 `recipePreview`，預設開啟），portal 呼叫 `POST /api/v1/tenants/{id}/recipe-preview`，tenant-api 授權後經 pod 內 Unix socket 轉給它；獨立的 `helm/recipe-preview` chart 已刪除。映像隨 `tools/v*` 建置，下一個 tools release 才有第一個映像，在那之前 try-local 是唯一能跑的地方。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
 > - **已定案**：後端形態（獨立 Python 服務、先上 try-local）、API 契約、生產護欄。
 > - **首版範圍**：threshold 類 recipe（`>` `>=` `<` `<=` `==`）+ absence（缺口偵測——合成序列「不發該指標」即缺口）。
-> - **延後**：正式環境部署、其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。
+> - **延後**：其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。正式環境部署原本也在這裡，已隨 #1040 落地。
 
 ## 1. 要解決的問題
 
@@ -47,13 +47,13 @@ parent: architecture-and-design.md
 
 ## 3. 預覽後端：一支獨立的 Python 服務（先上 try-local）
 
-**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。
+**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）。當初正式環境部署延後；後來已隨 #1040 落地，形態是 tenant-api pod 裡的容器（見本文開頭）。
 
 為什麼是獨立服務，而不是塞進現有的 tenant-api：
 
 | 方案 | 好處 | 代價 |
 |---|---|---|
-| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接呼叫編譯器**（見 5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 要自己的 nginx 路由 + 認證；正式環境是一條新部署 → 因此先只上 try-local |
+| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接呼叫編譯器**（見 5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 當初：要自己的 nginx 路由 + 認證、正式環境是一條新部署 → 先只上 try-local。現在：不需要自己的路由與認證——它是 tenant-api pod 裡的容器，tenant-api 授權後經 pod 內 Unix socket 呼叫（#1040） |
 | B. 擴充現有 tenant-api（Go 呼叫外部程式） | 重用 tenant-api 既有的路由 + 認證；正式環境一次到位 | image 變肥；把「評估」耦進「寫入」的關鍵路徑；長駐服務裡反覆開子程序有併發風險 |
 
 選 A 一句話：平台一向把正式環境保持精簡、把故障影響侷限化，而預覽近期的使用者就在本機試用階段——沒必要為此把評估耦進正式環境的寫入路徑。（A／B 完整比較見 [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) 討論串。）
@@ -129,22 +129,30 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 ### 5.2 評估機制：用反證法讓 `promtool` 告訴你會不會觸發
 
-`promtool test rules` 是個**斷言**工具——你給它「預期觸發哪些告警」，它幫你比對；但它不會主動「回報誰觸發」，而預覽正是不知道答案。所以反過來用：餵合成輸入 + **斷言「不會觸發任何告警」**（`exp_alerts: []`），再看 `promtool` 的反應——**它沒意見就代表沒觸發、它抗議就代表有觸發**。
+`promtool test rules` 是個**斷言**工具——你給它「預期觸發哪些告警」，它幫你比對；但它不會主動「回報誰觸發」，而預覽正是不知道答案。所以反過來用：同一份合成輸入寫成**兩組斷言相反的測試**，看哪一組不成立。
 
-| `promtool` 結果 | 判定 |
-|---|---|
-| 成功（returncode 0） | 沒有任何告警觸發 → `inactive` |
-| 失敗，且輸出含 `FAILED:` + 非空的 `got:`（實際觸發的告警） | 有告警觸發 → `firing`；該區塊直接帶出標籤與說明 |
-| 失敗，但**沒有**上述匹配字樣 | 編譯／語法錯、逾時、被系統終止等 → `error`（**絕不可當成觸發**） |
+- `fires` 組：斷言這條告警**有**觸發（`ALERTS{alertname=…, alertstate="firing"}` 存在）。
+- `quiet` 組：斷言它**沒有**觸發，同時斷言服務自己加進規則檔的一條紀錄規則（`da_preview_loaded`）存在——證明規則檔確實有被載入、有被評估。
 
-兩個必守的細節（不照做就會算錯）：
+結果一律從 `promtool test rules --junit` 的報告讀（每組一個 testcase），不讀主控台文字（[#3611](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3611)）：
 
-1. **評估時間點必須大於 recipe 的 `for:` 視窗。** 告警在滿足 `for:` 之前處於「待定」（pending，尚未真正觸發），而「斷言不會觸發」**不會**把待定當成違反 → `promtool` 會回成功 → 預覽誤判成「不會觸發」（明明已越過閾值）。所以合成測試的評估時間要**嚴格大於 `for:`**（例如 `for: 30m` → 評估設 35m），序列也要長到跨過 `for:`。
-2. **returncode 非 0 不等於「觸發」。** 記憶體不足被系統終止（OOM）、找不到 `promtool`、合成測試檔語法錯，都會讓 returncode 非 0。若盲目把「非 0」當成觸發，就會把基礎設施錯誤誤報成 `firing`。所以判定觸發**必須同時**看到失敗簽章（`FAILED:` + `got:`），否則一律當 `error` 並噴出真正的錯誤。
+| `fires` 組 | `quiet` 組 | 判定 |
+|---|---|---|
+| 成立 | 不成立 | `firing` |
+| 不成立 | 成立 | `inactive` |
+| 其他（兩組都不成立、都成立、報告有 `<error>`、組數不對、結束碼與報告不一致、沒有報告） | | `error`（**絕不可當成觸發或沒觸發**） |
 
-為了讓「編譯失敗」永遠不會被誤標成「觸發」，分三層把關：① exporter 拒收的 recipe（沒有送出的門檻列）→ `error`，附 exporter 的原因；② 編出的規則先過 `promtool check rules`（語法）→ 失敗即 `error`；③ 語法過了，才跑上面的反證斷言。
+為什麼要兩組：`promtool` 把組內的**任何**錯誤——輸入序列讀不了、規則載入失敗、規則評估出錯——都記成和「斷言不成立」一模一樣的 `<failure>`。只有一組時，「沒跑成」會被讀成「觸發了」。兩組斷言相反：真的評估過，恰好一組不成立；沒能評估，兩組都不成立。規則檔沒被載入時 `promtool` 不報錯（它只是沒有規則可跑），這由 `quiet` 組的載入證明擋下。
 
-> 本機已實測：值 1500 > 閾值 1000 → 失敗、輸出帶完整告警；值 500 → 成功。整套用既有工具即可，不需要另起一個 Prometheus 實例。
+三個必守的細節（不照做就會算錯）：
+
+1. **評估時間點必須大於 recipe 的 `for:` 視窗。** 告警在滿足 `for:` 之前處於「待定」（pending，尚未真正觸發），兩組都只看 `alertstate="firing"` → 時間點太早會被判成 `inactive`（明明已越過閾值）。所以合成測試的評估時間要**嚴格大於 `for:`**（例如 `for: 30m` → 評估設 35m），序列也要長到跨過 `for:`。
+2. **測試值只收有限的 JSON 數字。** 字串（連 `"1500"` 也是）、布林、`NaN`、`Infinity` 在呼叫 `promtool` 前就判 `error`；寫進序列時用與閾值相同的正規化格式。`promtool` 的序列語法與 Python 的 `float()` 不同：`"1500\n"` 會被讀成只有一個樣本，到評估時已過期，若照收會誤判成 `inactive`。
+3. **兩組的名稱與判定表是同一份定義**（`_recipe_preview._FIRES`／`_QUIET`／`_VERDICT`），規則檔名也只寫一次，寫測試的一方與讀報告的一方不會各說各話。
+
+為了讓「編譯失敗」永遠不會被誤標成「觸發」，分三層把關：① exporter 拒收的 recipe（沒有送出的門檻列）→ `error`，附 exporter 的原因；② 編出的規則先過 `promtool check rules`（看結束碼）→ 失敗即 `error`；③ 語法過了，才跑上面的兩組斷言。
+
+> 本機已實測（promtool 3.15.1）：值 1500 > 閾值 1000 → `fires` 成立、`quiet` 不成立；值 500 → 反過來；輸入讀不了或規則評估出錯 → 兩組都不成立。整套用既有工具即可，不需要另起一個 Prometheus 實例。
 
 ### 5.3 單一 recipe 編譯 + 直接重用編譯器
 
@@ -181,7 +189,6 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 | 延後項 | 觸發條件 |
 |---|---|
-| 正式環境部署預覽服務 | 真正的正式客戶在 portal 寫 recipe 且需要預覽（本機試用不夠時）。屆時重評部署形態 |
 | 其餘 recipe 型別 | 領域專家／租戶實際需要這些型別的預覽 |
 | 歷史回測（「過去 24h 我的真實資料觸發過幾次」） | recipe 的 recording rule 落地、`for:` 語意就緒 |
 | rule-pack 影響矩陣 CI（改 rule-pack 前評估對全租戶的影響） | rule-pack 變更造成預期外的全租戶告警漂移，或需要合併前的影響評估。注意：預覽用合成輸入，**不需要**這條的快照資料 |

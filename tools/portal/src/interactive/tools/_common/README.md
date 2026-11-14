@@ -12,7 +12,7 @@
 
 This directory is plain ESM source under `tools/portal/src/`. esbuild
 (`tools/portal/build.mjs`, `splitting: true`) bundles it into each
-tool's committed `docs/assets/dist/<tool>.js` via the normal `import`
+tool's `docs/assets/dist/<tool>.js` (build output, not in git) via the normal `import`
 graph. **The retired in-browser jsx-loader — `dependencies:` frontmatter
 + `window.__X` self-registration + indirect `eval` — is gone (TD-030z).**
 The canonical write-up of the pattern and the lint gates that enforce it
@@ -26,7 +26,8 @@ to author files *in this directory*.
 ```text
 _common/
 ├── README.md          ← you are here
-├── api/              ← tenant-api answer handling
+├── api/              ← tenant-api requests and answers
+│   ├── api-fetch.js       ← the only place that sends a request: apiFetch (under /api/, 401 → sign in) and fetchPageData (a data file next to the page); ADR-027 §9 item 4
 │   └── classify-error.js  ← error code → remedy + UI message (#3202; reads data/tenant-api-errors.json)
 ├── hooks/             ← reusable React hooks
 │   ├── useCopyToClipboard.js
@@ -137,20 +138,15 @@ runtime meaning.
 
 ## Build + gates
 
-Editing any `_common/` source rebuilds the committed dist:
-
 ```bash
-make portal-build   # = cd tools/portal && npm run build
-                    #   (NOT `node build.mjs` from repo root — that
-                    #    re-hashes every chunk and fails dist-sync CI)
+make portal-build   # = cd tools/portal && npm run build → docs/assets/dist/
 make test-portal    # Vitest unit tests
 ```
 
-Commit the changed `docs/assets/dist/*.js` + `*.js.map` in the **same
-commit** as the source — the `dist-source-consistency-check` hook fails
-on dist commits without a matching source change. The full gate list
-(jsx-loader-compat, window-x-no-fallback, babel line-caps,
-dist-source-consistency) is documented once in
+`docs/assets/dist/` is build output and is NOT committed (#3738) — commit
+only the `_common/` source; every consumer builds the bundles itself.
+The full gate list (jsx-loader-compat, window-x-no-fallback, babel
+line-caps) is documented once in
 `docs/internal/jsx-multi-file-pattern.md` § "Conventions and the gates
 that enforce them"; that doc is the SSOT, so this README does not
 duplicate it.

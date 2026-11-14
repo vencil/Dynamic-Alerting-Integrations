@@ -74,8 +74,8 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import (  # noqa: E402  (#2164, #2509)
-    find_misread_scalars, find_yaml11_bool_words)
+from _lib_io import (  # noqa: E402  (#2164, #2509, #3764)
+    find_misread_scalars, find_nondecimal_numbers, find_yaml11_bool_words)
 from _lib_io import misread_scalar_nodes  # noqa: E402  (#2695)
 from _lib_io import (  # noqa: E402  (#3647: one selection, one set of names)
     CONFD_PLATFORM_SCHEMA, CONFD_ROUTING_PROFILES_SCHEMA, CONFD_TENANT_SCHEMA,
@@ -352,7 +352,7 @@ def _explain(exc, validator) -> str:
             and err.schema.get("patternErrorMessage")):
         # jsonschema's own message would print the whole regex, not the rule
         # it encodes: the closed `_` namespace (#3016 R3) or a threshold's
-        # `:severity` suffix (#3071, thresholdScalar).
+        # number and `:severity` suffix (#3071, #3457, thresholdScalar).
         if "propertyNames" in err.schema_path:
             return f"unknown key '{err.instance}': {err.schema['patternErrorMessage']}"
         return f"{err.instance!r}: {err.schema['patternErrorMessage']}"
@@ -411,6 +411,16 @@ def misread_scalar_violations(rel: str, root: object, schema: dict,
     here. *root*: the file's parse-tree nodes."""
     return [f"ERROR: {rel}: {hit.message()}"
             for hit in find_misread_scalars(root, schema, schemas, schema_name)]
+
+
+def nondecimal_number_violations(rel: str, root: object, schema: dict,
+                                 schemas: dict, schema_name: str) -> list[str]:
+    """#3764: one ERROR per number in a number-typed field written other than
+    in plain decimal (`min_events: 0x10`, `010`, `1e1`) — a spelling the
+    re-serialisation into the exporter's readers rewrites. The judgement is
+    `_lib_io.find_nondecimal_numbers`; nothing is listed here."""
+    return [f"ERROR: {rel}: {hit.message()}"
+            for hit in find_nondecimal_numbers(root, schema, schemas, schema_name)]
 
 
 def yaml11_bool_word_warnings(rel: str, root: object, schema: dict,
@@ -616,6 +626,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
         for q_schema, q_name in quoting:
             if not as_quoted:
                 violations.extend(misread_scalar_violations(
+                    rel, root, q_schema, schemas, q_name))
+                violations.extend(nondecimal_number_violations(
                     rel, root, q_schema, schemas, q_name))
             if warnings is not None:
                 warnings.extend(yaml11_bool_word_warnings(rel, root, q_schema, schemas, q_name))

@@ -7,7 +7,6 @@
   replicaCount MUST stay 1. Horizontal write scaling needs a K8s Lease
   (leader-election) — ADR-023 Deferred option A3, not a replicaCount bump.
 */ -}}
-{{- include "tenant-api.identityPlaneGuard" . }}
 {{- include "tenant-api.writeBackGuard" . }}
 {{- include "tenant-api.generatorGuard" . }}
 {{- if gt (int .Values.replicaCount) 1 }}
@@ -75,7 +74,7 @@ spec:
       initContainers:
       {{- if .Values.gitRepoUrl }}
         - name: git-clone
-          image: alpine/git:v2.54.0@sha256:ac6c828f15d82775d204d3d75112e1d34af8945da80ccf922713c9891ba68e7a
+          image: alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -119,7 +118,7 @@ spec:
         # da-tools image has no git, and a da-tools container running git is
         # an entry point check_image_pin_capability.py cannot verify.
         - name: git-gc-off
-          image: alpine/git:v2.54.0@sha256:ac6c828f15d82775d204d3d75112e1d34af8945da80ccf922713c9891ba68e7a
+          image: alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -202,6 +201,13 @@ spec:
             {{- if .Values.generator.policy.existingConfigMap }}
             {{- include "tenant-api.taEnv" (list "TA_DEPLOY_POLICY" (include "tenant-api.generatorPolicyPath" .) "generator.policy (tenant-api.generatorPolicyPath)") | nindent 12 }}
             {{- end }}
+            {{- if .Values.recipePreview.enabled }}
+            # ADR-027 §5 (#1040): POST /api/v1/tenants/{id}/recipe-preview is
+            # answered by the recipe-preview container on this socket, after
+            # tenant-api authorizes the caller on {id}. Unset, the route
+            # answers 503 PREVIEW_NOT_CONFIGURED.
+            {{- include "tenant-api.taEnv" (list "TA_RECIPE_PREVIEW_SOCKET" (include "tenant-api.recipePreviewSocketPath" .) "tenant-api.recipePreviewSocketPath") | nindent 12 }}
+            {{- end }}
             {{- if .Values.federation.enabled }}
             {{- $keyFile := .Values.federation.signingKey.secretKey }}
             {{- include "tenant-api.taEnv" (list "TA_FEDERATION_KEY" (ternary "" (printf "/etc/federation/%s" (toString $keyFile)) (empty $keyFile)) "federation.signingKey.secretKey") | nindent 12 }}
@@ -226,13 +232,11 @@ spec:
             - name: TA_STATE_STORE
               value: "configmap"
             {{- include "tenant-api.taEnv" (list "TA_STATE_CONFIGMAP" .Values.state.configMapName "state.configMapName") | nindent 12 }}
-            {{- if .Values.oauth2Proxy.enabled }}
             # ADR-027 §2: the oauth2-proxy sidecar's own config file, mounted
             # at the same path here. tenant-api reads its injectRequestHeaders
             # to know which header carries email, groups and each extra claim,
             # and refuses to start on a file whose shape is ambiguous.
             {{- include "tenant-api.taEnv" (list "TA_OAUTH2_PROXY_CONFIG" (include "tenant-api.oauth2ProxyConfigPath" .) "tenant-api.oauth2ProxyConfigPath") | nindent 12 }}
-            {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
             - name: TA_GITHUB_TOKEN
               valueFrom:
@@ -342,11 +346,9 @@ spec:
               mountPath: /etc/federation
               readOnly: true
             {{- end }}
-            {{- if .Values.oauth2Proxy.enabled }}
             - name: oauth2-proxy-config
               mountPath: {{ include "tenant-api.oauth2ProxyConfigDir" . }}
               readOnly: true
-            {{- end }}
             # ADR-027 §2: shared dir for the API's Unix socket. tenant-api
             # binds+owns the socket here; the oauth2-proxy sidecar dials it.
             - name: human-sock
@@ -362,6 +364,13 @@ spec:
             # (--deploy-policy, #2903).
             - name: generator-policy
               mountPath: {{ include "tenant-api.generatorPolicyDir" . }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.recipePreview.enabled }}
+            # ADR-027 §5 (#1040): the recipe-preview socket directory.
+            # tenant-api only dials the socket, so read-only.
+            - name: recipe-preview-sock
+              mountPath: {{ include "tenant-api.recipePreviewSocketDir" . }}
               readOnly: true
             {{- end }}
           resources:
@@ -418,11 +427,11 @@ spec:
               readOnly: true
             - name: generator-work
               mountPath: {{ include "tenant-api.generatorWorkDir" . }}
-            # Python's tempfile (the amtool check writes its config there)
-            # needs a writable /tmp; the root filesystem is read-only. A volume
-            # of its own, not a subPath of generator-work: kubelet creates a
-            # missing subPath directory itself, possibly root-owned and not
-            # writable by the pod's uid.
+            # Python's tempfile (a judgement writes the shipped platform rule
+            # files there for da-read to load) needs a writable /tmp; the root
+            # filesystem is read-only. A volume of its own, not a subPath of
+            # generator-work: kubelet creates a missing subPath directory
+            # itself, possibly root-owned and not writable by the pod's uid.
             - name: generator-tmp
               mountPath: /tmp
             {{- if .Values.generator.policy.existingConfigMap }}
@@ -445,9 +454,9 @@ spec:
           # asks GET /v1/status over the socket and passes on a 200. It runs as
           # the container's uid, which the service's SO_PEERCRED check admits.
           # ⚠️ 200 means the service is up and answering; it does NOT require
-          # status.ready (policy usable, amtool present): an unusable policy
-          # must reject writes with 503 (ADR-036 §5), not take the whole pod —
-          # reads included — out of the Service.
+          # status.ready (policy usable, da-read and da-guard present): an
+          # unusable policy must reject writes with 503 (ADR-036 §5), not take
+          # the whole pod — reads included — out of the Service.
           startupProbe:
             {{- include "tenant-api.generatorProbe" . | nindent 12 }}
             periodSeconds: 2
@@ -464,8 +473,75 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
 
+        {{- if .Values.recipePreview.enabled }}
+        # ── Sidecar: recipe-preview (ADR-027 §5, #1040) ────────────────────────
+        # Answers "would this recipe fire?" for tenant-api over a Unix socket.
+        # No network port, no identity of its own, no Kubernetes API access.
+        # Runs as the pod's uid (no runAsUser here): the service answers only a
+        # peer of its own uid (SO_PEERCRED), and tenant-api is that peer.
+        - name: recipe-preview
+          image: "{{ .Values.recipePreview.image.repository }}:{{ include "tenant-api.recipePreviewTag" . }}{{ with .Values.recipePreview.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.recipePreview.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PREVIEW_SOCKET
+              value: {{ include "tenant-api.recipePreviewSocketPath" . | quote }}
+            - name: PREVIEW_MAX_CONCURRENCY
+              value: {{ include "tenant-api.intEnv" (list "recipePreview.maxConcurrency" .Values.recipePreview.maxConcurrency) }}
+            - name: PREVIEW_RATE_LIMIT_PER_MIN
+              value: {{ include "tenant-api.intEnv" (list "recipePreview.rateLimitPerMin" .Values.recipePreview.rateLimitPerMin) }}
+            - name: PREVIEW_QUEUE_TIMEOUT
+              value: {{ .Values.recipePreview.queueTimeout | toString | quote }}
+            # promtool is Go: before Go 1.25 it sizes GOMAXPROCS from the NODE's
+            # CPU count, not this container's cpu limit. One short rule
+            # evaluation needs no parallelism.
+            - name: GOMAXPROCS
+              value: "1"
+          volumeMounts:
+            - name: recipe-preview-sock
+              mountPath: {{ include "tenant-api.recipePreviewSocketDir" . }}
+            # The evaluation writes promtool's rule and data files under
+            # tempfile.mkdtemp(); the root filesystem is read-only.
+            - name: recipe-preview-tmp
+              mountPath: /tmp
+            # Same as the generator: this container parses content API users
+            # write and needs no Kubernetes API access, so an empty directory
+            # shadows the ServiceAccount token the pod mounts everywhere.
+            - name: recipe-preview-no-sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          resources:
+            {{- toYaml .Values.recipePreview.resources | nindent 12 }}
+          # No HTTP port: the probes ask GET /v1/status over the socket with
+          # the image's python, as the container's uid (which SO_PEERCRED
+          # admits).
+          # ⛔ No readinessProbe, on purpose. A pod is Ready only when every
+          # container is, so a readiness failure here would take tenant-api —
+          # reads and writes — out of the Service over an optional feature;
+          # a running service that stops answering only turns the preview
+          # route into 503 PREVIEW_UNAVAILABLE, and liveness restarts it.
+          # ⚠️ That decoupling ends at the container's lifecycle: while it is
+          # restarting (an OOM kill, a liveness restart) or not yet past its
+          # startupProbe, it is not Ready, and neither is the pod. The startup
+          # window is kept short for that reason (the service binds its socket
+          # within a second); recipePreview.enabled=false removes the coupling.
+          startupProbe:
+            {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
+            periodSeconds: 1
+            timeoutSeconds: 5
+            failureThreshold: 15
+          livenessProbe:
+            {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+        {{- end }}
+
         # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
-        {{- if .Values.oauth2Proxy.enabled }}
         - name: oauth2-proxy
           image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}{{ with .Values.oauth2Proxy.image.digest }}@{{ . }}{{ end }}"
           imagePullPolicy: {{ .Values.oauth2Proxy.image.pullPolicy }}
@@ -568,7 +644,6 @@ spec:
               command: ["wget", "-q", "-O", "/dev/null", "http://{{ include "tenant-api.portalAddress" . }}/healthz"]
             periodSeconds: 20
             timeoutSeconds: 3
-        {{- end }}
 
       volumes:
         - name: conf-dir
@@ -583,7 +658,6 @@ spec:
             medium: Memory
             sizeLimit: 16Mi
 
-        {{- if .Values.oauth2Proxy.enabled }}
         # ADR-027 §2: the oauth2-proxy structured config, mounted into both
         # the oauth2-proxy and the tenant-api containers.
         - name: oauth2-proxy-config
@@ -604,7 +678,6 @@ spec:
             items:
               - key: OAUTH2_PROXY_CLIENT_SECRET
                 path: client-secret
-        {{- end }}
         # ADR-027 §2: pod-internal dir for the API's Unix socket. Memory-
         # backed (tmpfs) — the socket is an ephemeral pod-local rendezvous, never
         # persisted. Tiny: it holds one socket inode. Shared by tenant-api (binds)
@@ -637,6 +710,25 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- if .Values.recipePreview.enabled }}
+        # ADR-027 §5 (#1040): the recipe-preview socket directory. Mounted
+        # ONLY by recipe-preview and tenant-api (the service's trust boundary,
+        # pinned by tests/helm/test_recipe_preview_container.py).
+        - name: recipe-preview-sock
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # promtool's per-preview rule and data files. Memory-backed, so it
+        # counts against the container's memory limit; one preview is small.
+        - name: recipe-preview-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+        - name: recipe-preview-no-sa-token
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
         {{- if .Values.generator.policy.existingConfigMap }}
         # ADR-036 §5: the deployment policy file, from a ConfigMap the operator
         # owns (the chart ships no policy content). Not optional: a missing

@@ -120,7 +120,10 @@ repos:
       # every Dockerfile, applies the epic #448 severity->action mapping
       # (error=BLOCK / warning=baseline-WARN), and adds project rules:
       # HEALTHCHECK-or-rationale, no over-broad COPY, and .dockerignore
-      # baseline at each build-context root. BLOCK findings fail the commit;
+      # baseline at each build-context root. hadolint's levels and trusted
+      # registries are the wrapper's HADOLINT_RULES registry, passed as flags
+      # and proven per run by a canary — there is no .hadolint.yaml (#3643).
+      # BLOCK findings fail the commit;
       # WARN/INFO are recorded in docs/internal/iac-lint-baseline.md.
       # Layers 2-4 (Helm template / values / k8s manifest) land via TRK-312
       # ~ TRK-314. CI wires this in .github/workflows/ci.yml (Lint job).
@@ -129,7 +132,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_iac_vibe_rules.py --ci
         language: python
         pass_filenames: false
-        files: '(^|/)Dockerfile$|(^|/)\.dockerignore$|^\.hadolint\.yaml$|^scripts/tools/lint/check_iac_vibe_rules\.py$'
+        files: '(^|/)Dockerfile(\.[^/]+)?$|(^|/)\.dockerignore$|^scripts/tools/(lint/check_iac_vibe_rules|_lib_engine)\.py$'
         additional_dependencies: ['pathspec']
 
       # --- Container/k8s IaC SAST Layer 2 (#448 / TRK-312) ---
@@ -196,6 +199,14 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_adr_section_refs.py --ci
         language: python
         pass_filenames: false
+
+      - id: adr-checks-drift
+        name: "ADR check lists match the adr-check markers in the code (gen_adr_checks.py)"
+        entry: python3 -X utf8 scripts/tools/dx/gen_adr_checks.py --check
+        language: python
+        pass_filenames: false
+        # No `files:` filter on purpose: a marker can be added, moved or
+        # deleted in any tracked file, and the check takes well under a second.
 
       # --- ADR-034 mechanical enforcement: no hand-rolled env-to-bool parsers ---
       # ADR-034 forbids a legal value from doubling as the fallback for an
@@ -657,11 +668,13 @@ repos:
         pass_filenames: false
         # TRK-242: portal source moved docs/interactive/ → tools/portal/src/;
         # filter follows it (old docs/ jsx branches were dead → .jsx-only
-        # commits silently skipped the hook). dist + flows.json + mkdocs.yml
-        # (site_url) included because the lint reads them. Delete-only
-        # commits never trigger locally (pre-commit excludes D from staged
-        # files); CI --all-files is the backstop for removed dist bundles.
-        files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json|dist/[^/]+\.js)|interactive/index\.html|.*\.md)|tools/portal/src/.*\.jsx|README[^/]*\.md|mkdocs\.yml)$
+        # commits silently skipped the hook). flows.json + mkdocs.yml
+        # (site_url) included because the lint reads them. Which bundles exist
+        # is read from the build's input (tools/portal/manifest.json +
+        # entries/), not from docs/assets/dist/ (#3738). Delete-only commits
+        # never trigger locally (pre-commit excludes D from staged files); CI
+        # --all-files is the backstop for a removed entry.
+        files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json)|interactive/index\.html|.*\.md)|tools/portal/(src/.*\.jsx|manifest\.json|entries/[^/]+\.entry\.jsx)|README[^/]*\.md|mkdocs\.yml)$
 
       - id: portal-audience-enum-check
         name: Portal audience values must be in the closed vocabulary
@@ -758,18 +771,6 @@ repos:
         # scans the full HEAD tree for NUL bytes and truncated YAML/JSON.
         # Lightweight (<1s for the whole repo). Strict-mode EOF newline
         # scan runs only in CI to avoid blocking commits on pre-existing drift.
-        always_run: true
-
-      - id: trk-index-coverage
-        name: TRK index coverage (referenced TRK must be in planning SSOT)
-        entry: python3 -X utf8 scripts/tools/lint/check_trk_index_coverage.py --ci
-        language: python
-        pass_filenames: false
-        # ⛔ 預設只掃 commit 的 subject + trailer（離線、快），而**這一面很弱**：
-        # 實測把 #1627 的六個洞放回去，這一面 0/6、回綠；六個全部只有 issue/PR
-        # 標題面看得到（要 GH_TOKEN，用 --surface all）。⇒ 這道 hook 是弱後備，
-        # 真正的偵測要在有 token 的地方跑 --surface all。
-        # ⚠️ shallow clone 下這一面更窄，報告會標 PARTIAL：「沒找到」不等於「沒有」。
         always_run: true
 
       - id: routing-profiles-check
@@ -979,21 +980,26 @@ repos:
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py|scripts/tools/dx/sync_schema\.py|tools/portal/src/interactive/tools/_common/data/reserved-keys\.json)
         stages: [manual]
 
-      - id: jsx-babel-check
-        name: JSX Babel parse + static + line-count gate
-        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
+      - id: jsx-syntax-check
+        name: Portal JSX/JS parse with the build's esbuild
+        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_syntax.py --ci
         language: python
         pass_filenames: false
-        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
-        # One hook (#3611 B2): it used to be two — this one with `--ci` and
-        # jsx-babel-check-strict-linecount with `--ci --strict-linecount`,
-        # the same files:, a strict superset — so every commit ran Babel
-        # twice. `--strict-linecount` makes soft-cap (>1500 lines) fatal
-        # too: 0 soft-cap warnings since PR-2d (#153), this keeps it there.
-        # Pre-existing `style={{}}` warnings stay non-fatal (granular flag,
-        # NOT `--strict`; PR #160). Needs node: without it, or without an
-        # installable @babel/standalone, the hook exits 2, never a silent
-        # skip (#3611).
+        files: ^(tools/portal/(src|entries)/.*\.jsx?|tools/portal/(esbuild-shared\.mjs|build\.mjs|package\.json|package-lock\.json)|scripts/tools/lint/lint_jsx_syntax\.py)$
+        # #3669: parses every tools/portal/src file with the lockfile's esbuild
+        # and esbuild-shared.mjs's transform — what build.mjs bundles with.
+        # Needs node and tools/portal/node_modules (`make portal-deps`): without
+        # either the hook exits 2, never a silent skip. Replaces jsx-babel-check,
+        # whose @babel/standalone the browser no longer runs.
+
+      - id: jsx-linecount-check
+        name: Portal JSX line-count caps (soft 1500 / hard 2500)
+        entry: python3 -X utf8 scripts/tools/lint/check_jsx_linecount.py --ci --strict
+        language: python
+        pass_filenames: false
+        files: ^(tools/portal/src/(interactive/tools|getting-started)/.*\.jsx|scripts/tools/lint/check_jsx_linecount\.py)$
+        # #152 / #153: 0 soft-cap files since PR-2d; `--strict` keeps it there.
+        # Pure Python (#3669): no node, so no toolchain gap costs it its verdict.
 
       - id: dev-rules-enforcement-check
         name: dev-rules.md ↔ pre-commit-config.yaml drift check
@@ -1087,7 +1093,7 @@ repos:
         pass_filenames: false
         files: ^docs/.*\.md$
 
-      # Fence hygiene: a ```yaml fence in docs/ must be one its reader reads.
+      # Fence hygiene: a yaml code block in docs/ must be one its reader reads.
       # Split out from md-yaml-drift-check (below) on purpose — it covers
       # every fenced block that is not declared `{.illustrative reason="…"}`,
       # rather than only the conf.d examples, and a mislabelled
@@ -1108,8 +1114,12 @@ repos:
         # means `files:` only decides WHEN the hook runs, so a commit that
         # touches only the extractor would otherwise run no gate locally (same
         # rule the sibling confd-schema-check follows).
-        files: ^(docs/.*\.md|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
-        additional_dependencies: ['pyyaml']
+        files: ^(docs/.*\.md|mkdocs\.yml|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
+        # #3814: the inventory finds the code blocks with the site's renderer
+        # (Python-Markdown + mkdocs.yml's extensions), so mkdocs.yml is an
+        # input and the renderer's packages are installed at ci-constraints'
+        # versions (tests/shared/test_toolchain_pin_parity.py holds them).
+        additional_dependencies: ['pyyaml', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
 
       # jsonschema is REQUIRED here. It used to be absent while the script did
       # `except ImportError: jsonschema = None  # Graceful degradation`, so in
@@ -1138,8 +1148,8 @@ repos:
         # check_confd_schema.py is imported for its registry builder (#2232),
         # _grar_parse for the generator's credential judgement (#1560);
         # the readers of the examples are Go's, so their source is an input too.
-        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch|validation)\.py|scripts/tools/ops/(guard_dispatch|_grar_parse)\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
-        additional_dependencies: ['pyyaml', 'jsonschema']
+        files: ^(docs/.*\.(md|yaml)|mkdocs\.yml|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch|validation)\.py|scripts/tools/ops/(guard_dispatch|_grar_parse)\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
+        additional_dependencies: ['pyyaml', 'jsonschema', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
 
       # Third sibling of the two above, and separate for the same reason: it
       # answers a different question (does an embedded k8s object satisfy the
@@ -1157,15 +1167,17 @@ repos:
         entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check crd --ci
         language: python
         pass_filenames: false
-        files: ^(docs/.*\.md|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
-        additional_dependencies: ['pyyaml', 'jsonschema']
+        files: ^(docs/.*\.md|mkdocs\.yml|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
+        additional_dependencies: ['pyyaml', 'jsonschema', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
-        entry: bash -c 'cd tests/e2e && npx playwright test'
+        # docs/assets/dist/ is build output and not in git (#3738): build it
+        # first, or every tool page the local server serves 404s its bundle.
+        entry: bash -c 'make portal-build && cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist/|platform-data|template-data|recommendation-data))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|platform-data|template-data|recommendation-data))
         stages: [manual]
 
       - id: playwright-lint
@@ -1257,7 +1269,7 @@ repos:
         # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
 
       - id: cross-ns-url-check
-        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns, recipe-preview → monitoring)"
+        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns)"
         # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
         # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
         entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_cross_ns_url_consistency.py --ci
@@ -1524,7 +1536,7 @@ repos:
         name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
         entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
         language: pygrep
-        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_test\.go|tests/shared/test_lib_tenant_values\.py|tests/ops/test_policy_opa_bridge\.py|components/threshold-exporter/app/cmd/da-guard/effective_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/pkg/config/effective_view_test\.go|components/threshold-exporter/app/cmd/da-guard/effective_view_gate_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json|tests/shared/test_threshold_ownership_matrix\.py|components/threshold-exporter/app/pkg/config/key_refs_test\.go|components/threshold-exporter/app/cmd/da-guard/key_refs_test\.go|tests/ops/test_deprecate_rule_exporter_precheck\.py|components/threshold-exporter/app/pkg/config/merge_tenant_profile_test\.go|tests/shared/test_key_verdict\.py|tests/ops/test_backtest_threshold\.py|components/threshold-exporter/app/pkg/config/loaddir_undeliverable_test\.go|components/threshold-exporter/app/pkg/config/dimensions_test\.go)$
+        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_differential_test\.go|tests/shared/test_lib_tenant_values\.py|tests/ops/test_policy_opa_bridge\.py|components/threshold-exporter/app/cmd/da-guard/effective_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/pkg/config/effective_view_test\.go|components/threshold-exporter/app/cmd/da-guard/effective_view_gate_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json|tests/shared/test_threshold_ownership_matrix\.py|components/threshold-exporter/app/pkg/config/key_refs_test\.go|components/threshold-exporter/app/cmd/da-guard/key_refs_test\.go|tests/ops/test_deprecate_rule_exporter_precheck\.py|components/threshold-exporter/app/pkg/config/merge_tenant_profile_test\.go|tests/shared/test_key_verdict\.py|tests/ops/test_backtest_threshold\.py|components/threshold-exporter/app/pkg/config/loaddir_undeliverable_test\.go|components/threshold-exporter/app/pkg/config/dimensions_test\.go)$
         # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
         # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
         # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
@@ -1705,17 +1717,18 @@ repos:
         # image ships no repo tree to read the YAML from. Gated: JSON-Schema
         # shape (pre-generation hard gate) + the registry is a fixed point of
         # its own extraction (a wrong critical_of, an arming: default on an
-        # optional key, a missing arming reason, an alias onto no key → red) +
+        # optional key, a missing portability reason, an alias onto no key → red) +
         # freshness of every GENERATED surface (the RULE_PACKS module / pack
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST
         # on all THREE surfaces that ship it — the two runtime ones (#1310)
-        # plus the try-local seed, #1176) + header-prose key membership (F6).
+        # plus the try-local seed, #1176 / the Go retired_keys table, #3829)
+        # + header-prose key membership (F6).
         # Fix: edit the registry, then `check_threshold_registry.py --regen`
         # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
-        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml)$
+        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen\.go)$
 
       - id: threshold-unit-sanity-check
         name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"
@@ -1727,7 +1740,8 @@ repos:
         # Prometheus / Alertmanager file).
         entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_threshold_unit_sanity.py --ci
         language: python
-        additional_dependencies: ['pyyaml']
+        # #3814: the docs' inventory renders docs/ with the site's renderer.
+        additional_dependencies: ['pyyaml', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
         pass_filenames: false
         # #992 accepted keeping the `mysql_cpu` misnomer and named the cheaper
         # mitigation for its residual footgun: "value-range validation ... if it
@@ -1740,7 +1754,7 @@ repos:
         # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
         # mysql_cpu" decision — the key is now mysql_threads_running; this gate
         # predates and outlives that rename.)
-        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|mkdocs\.yml|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"
@@ -1848,6 +1862,19 @@ repos:
         # check. Measured at 0.36s on the full tree, which is cheaper than
         # enumerating carriers and being wrong about one.
         files: .
+
+      - id: chart-version-bump
+        name: "chart version bump — a git-only chart whose packaged content changed must raise `version` (#1269)"
+        # Compares each git-only chart's package with the package at the commit
+        # that first carried its version (helm package on both sides, file by
+        # file): a Chart.yaml comment or a .helmignore'd file needs no bump, a
+        # changed default or a deleted template does. Charts a release line
+        # pushes are listed and skipped — NOT checked anywhere yet (see the
+        # script). Needs history back to each version's first commit.
+        entry: python3 -X utf8 scripts/tools/lint/check_chart_version_bump.py
+        language: python
+        pass_filenames: false
+        files: ^(helm/|scripts/tools/lint/check_chart_(version_bump|package_contents|ship_surface)\.py$)
 
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"
@@ -1996,19 +2023,6 @@ repos:
         # escape via `<!-- window-x-no-fallback: ignore -->` for legitimate
         # exceptions (illustrative comments only).
 
-      - id: dist-source-consistency-check
-        name: "Catch portal dist commits without matching source change (testing-playbook §LL v2.8.0 §2, TRK-239)"
-        entry: python3 -X utf8 scripts/tools/lint/check_dist_source_consistency.py
-        language: python
-        pass_filenames: false
-        always_run: true
-        # Auto-stage, FATAL on findings. Triggers when staged files include
-        # docs/assets/dist/*.js but no matching source-of-rebuild signal
-        # (entries / build.mjs / manifest / shims / tools/portal/src/**).
-        # Codifies the PR-E (#269) regression pattern: dist drift hidden
-        # behind a single visible source change. Escape: BYPASS_DIST_CHECK=1
-        # for legitimate dist-only commits (e.g. CI bot regen).
-
       - id: skip-a11y-justification-check
         name: "Require TD-ticket justification for `skipA11y: true` (testing-playbook §LL v2.8.0 §5, TRK-239)"
         entry: python3 -X utf8 scripts/tools/lint/check_skip_a11y_justification.py --ci
@@ -2055,7 +2069,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_unpinned_deps.py --ci
         language: python
         pass_filenames: false
-        files: ^(\.github/workflows/.*\.ya?ml|Makefile|\.devcontainer/devcontainer\.json|(.*/)?Dockerfile|requirements/ci-constraints\.txt|scripts/tools/lint/check_unpinned_deps\.py)$
+        files: ^(\.github/workflows/.*\.ya?ml|\.github/actions/[^/]+/action\.ya?ml|Makefile|\.devcontainer/devcontainer\.json|(.*/)?Dockerfile|requirements/ci-constraints\.txt|scripts/tools/lint/check_unpinned_deps\.py)$
         # #1158 root-solve: `pip install <pkg>` / `go install <mod>@latest`
         # with no version tracks *latest* on every CI run — the schemathesis
         # `filter_too_much` seed-flake was one instance of ~24. CI Python deps

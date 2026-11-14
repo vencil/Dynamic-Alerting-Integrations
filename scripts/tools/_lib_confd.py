@@ -148,12 +148,17 @@ def config_listing(config_dir: "str | os.PathLike[str]", *, reader: Any = None) 
     listing`, the snapshot it reads the content from) when given, else the
     run's reader of the tree (`_lib_parse_cache.reader_for`; see the section
     comment). Raises `_lib_parse_tree.ParseTreeError`; ends the run on a tree
-    Go names paths on (`ConfdReader.tree`)."""
+    Go names paths on (`ConfdReader.tree`).
+
+    ⛔ A tree a declared input named (`_lib_parse_cache.judged`, #3724) is
+    not looked at again: it was judged a directory once, so its listing is
+    the reader's — a tree gone since is refused there, naming it, never
+    answered as "not a directory" (None: no tenants, rc 0)."""
     root = Path(config_dir)
-    if not root.is_dir():
+    from _lib_parse_cache import judged, reader_for  # lazy: see the section comment
+    if not judged(root) and not root.is_dir():
         return None
     if reader is None:
-        from _lib_parse_cache import reader_for  # lazy: see the section comment
         reader = reader_for(root)
     return reader.listing()
 
@@ -586,9 +591,8 @@ def nested_yaml_warning(
     # tenant_uniqueness recursively in the same run that prints this for its
     # routing reader — so a sentence about the whole output was false there.
     # ⛔ No "run a recursive reader (e.g. validate_config)" advice (#1652):
-    # validate_config's schema / routes / policy / policy_dsl rows go through
-    # flat readers themselves, so that pointer sent the operator from one
-    # flat read to another. Naming which rows ARE recursive here would be a
+    # validate_config has had rows that go through flat readers themselves,
+    # so that pointer sent the operator from one flat read to another. Naming which rows ARE recursive here would be a
     # second copy of a fact that lives in validate_config and drifts.
     # ⛔ Self-contained on purpose (#1714): this sentence used to end with a
     # ticket number that belongs to an unrelated topic, so an operator who

@@ -6,9 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# A PR's newer push cancels its older run; a push to main never cancels one.
+# Main's CI is the only check of the merged result (branch protection does not
+# require a PR to be up to date with main), and a run takes long enough that
+# cancelling on every merge left main with no finished run for hours. With
+# cancel-in-progress false the group keeps the running run and replaces only
+# the PENDING one: the main tip always gets a finished run, and a commit whose
+# pending run was replaced is covered by the next run's full-tree checks and
+# tests (its own status stays "cancelled"). Diff-aware lints are PR checks —
+# their exemptions live in the PR body — and on a push they resolve to an empty
+# diff (merge base of origin/main and HEAD is HEAD, even when origin/main has
+# moved on), so a late-starting job cannot redden an older commit through them.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # CI-ROI wave 6C: path-scope the critical-path test pillars so a
@@ -218,6 +229,15 @@ jobs:
               - "helm/tenant-api/values.schema.json"
               - "scripts/ops/ci_flake_retry.py"
               - "flaky-tests.yaml"
+              #   - requirements/ci-constraints.txt + mkdocs.yml — the threshold-
+              #     exporter leg pip-installs the docs inventory's renderer at
+              #     those pins, and pkg/config's docs tests run the inventory
+              #     (a child process), which renders docs/ with mkdocs.yml's
+              #     markdown_extensions (#3814).
+              - "requirements/ci-constraints.txt"
+              - "mkdocs.yml"
+              #   - the composite action that installs it (the pip line).
+              - ".github/actions/docs-inventory-python/**"
               #   - the #1399 read check the Go legs run after their tests,
               #     and the glob matcher it shares with the static scanners.
               - "scripts/ops/go_testlog_exec.sh"
@@ -356,6 +376,15 @@ jobs:
               # tests/ops/test_ci_path_filter_coverage.py derives the `docs`
               # filter's required coverage from its `hooks:` (#2632).
               - "mkdocs.yml"
+              # tests/ops/test_generated_ci_artifacts.py scans the unreleased
+              # fragments for `uses:` instructions that fell behind the
+              # platform's action majors (a fragment is current text until
+              # it is assembled into CHANGELOG.md). It enumerates them with
+              # repo_files(), not by a literal path — fragments are deleted at
+              # release — so the path-filter scanner cannot see this read and
+              # does NOT pin this entry; deleting it would leave that module
+              # green.
+              - "changelog.d/**"
               # ⛔ ALL of docs/, not a hand-picked few. Python tests read
               # documentation files as CONTRACT inputs (the
               # for-tenants key-group counts, the ADR planning index, the
@@ -374,8 +403,15 @@ jobs:
               - "flaky-tests.yaml"
               - "renovate.json"
               - ".python-version"
+              # tests/ops/test_portal_dist_consumers_build.py requires the
+              # da-portal build context to exclude tools/portal/node_modules
+              # (#3738).
+              - ".dockerignore"
               - ".devcontainer/**"
               - ".github/workflows/**"
+              # Local composite actions: test_renovate_config's SHA-pin
+              # guard scans them with the workflows (#3814 added the first).
+              - ".github/actions/**"
               - "environments/**"
               - "tools/portal/tests/**"
               # ⛔ portal SOURCE, not just its tests. #1176's coverage gate is a
@@ -398,9 +434,17 @@ jobs:
               # `test_scanned_portal_tree_matches_the_vitest_include` pins the
               # two together so the entry cannot rot into decoration.
               - "tools/portal/vitest.config.ts"
-            # Portal Tests: Vitest + esbuild build verification + committed-dist
-            # freshness + the RBAC wizard drift byte-clamp. Runs when portal
-            # source or its committed dist change, AND when the wizard testdata
+              # tests/lint/test_portal_dist_not_tracked.py reads build.mjs's
+              # DIST_DIR to bind its dist path to where the build writes (#3738).
+              - "tools/portal/build.mjs"
+              # tests/lint/test_lint_jsx_syntax.py parses with the transform
+              # esbuild-shared.mjs defines and pins the esbuild version the
+              # lockfile names (#3669).
+              - "tools/portal/esbuild-shared.mjs"
+              - "tools/portal/package-lock.json"
+            # Portal Tests: Vitest + esbuild build verification + bundle-size
+            # budget + the RBAC wizard drift byte-clamp. Runs when portal
+            # source changes (dist is build output, not in git — #3738), AND when the wizard testdata
             # fixtures change: those fixtures live under components/tenant-api/**
             # but the byte-clamp that binds them to the JS generator is a Vitest,
             # so a hand-edited fixture must run THIS leg or the JS end of the
@@ -439,7 +483,6 @@ jobs:
             # it was first broken.
             portal:
               - "tools/portal/**"
-              - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
               # The Config Template Gallery's shipped templates. A Vitest reads
               # them to assert every counter-example key a one-click-copy
@@ -465,6 +508,11 @@ jobs:
               # #2711: parseDuration.test.ts holds the portal's parser to the
               # verdicts Go writes into this table (pytest holds Python to it).
               - "tests/shared/am_duration_matrix.json"
+              # #3457: threshold-value-matrix.test.ts holds the RecipeBuilder's
+              # reader of a threshold value to the verdicts Go writes into
+              # this table, and its pattern to the recipe contract's.
+              - "tests/shared/threshold_value_matrix.json"
+              - "components/threshold-exporter/app/pkg/config/recipe_contract.json"
               # #2833: api-fixture.ts validates every tenant-api response
               # fixture against these definitions, so a swagger regen alone
               # must re-run the Portal leg.
@@ -577,12 +625,17 @@ jobs:
           python-version-file: .python-version
 
       - name: 'Set up Node.js (node-backed lint engines, #3611)'
-        # lint_jsx_babel and check_cli_contract need node and exit 2 without
+        # lint_jsx_syntax and check_cli_contract need node and exit 2 without
         # it (#3611 Q1). Pinned to the devcontainer major, as every other
         # setup-node here, instead of the runner image's floating node.
         uses: actions/setup-node@v6
         with:
           node-version: '24'
+
+      - name: 'Install portal deps (jsx-syntax-check parses with their esbuild, #3669)'
+        # The lockfile's esbuild, the one build.mjs bundles with: without it
+        # jsx-syntax-check exits 2 (no verdict), never a skip.
+        run: npm ci --prefix tools/portal --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -619,7 +672,7 @@ jobs:
       # #3206: `image-pin-capability-check` renders every chart that pins
       # da-tools (`helm template`, the render path); without helm it exits 2.
       - name: Set up Helm (image-pin capability render path)
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default (which silently
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
@@ -630,7 +683,8 @@ jobs:
       # image pull on the runner). Pin matches HADOLINT_VERSION and
       # HADOLINT_SHA256 in scripts/tools/lint/check_iac_vibe_rules.py (the SSOT,
       # which .claude/hooks/session-start.sh reads; bound by
-      # tests/shared/test_toolchain_pin_parity.py) and .hadolint.yaml.
+      # tests/shared/test_toolchain_pin_parity.py). The rule levels live in
+      # the same file (HADOLINT_RULES); there is no .hadolint.yaml (#3643).
       #
       # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
       # install in this workflow): the artifact is stored in a cache dir
@@ -682,6 +736,7 @@ jobs:
           pre-commit run rule-pack-stats-check --all-files
           pre-commit run byo-rulepack-table-check --all-files
           pre-commit run adr-section-refs --all-files
+          pre-commit run adr-checks-drift --all-files
           # #1495: the documented `docker run` examples are a customer's first
           # contact with the tool. Listed here because this job runs the hooks
           # BY NAME — a hook that is only in .pre-commit-config.yaml has no CI
@@ -839,9 +894,10 @@ jobs:
           pre-commit run admin-config-schema-check --all-files
           pre-commit run bilingual-content-check --all-files
           pre-commit run bilingual-annotations-check --all-files
-          # JSX Babel parse + line-count gate (one hook since #3611 B2):
-          # locks in PR-2d (#153) line-count progress — 0 soft-cap warnings.
-          pre-commit run jsx-babel-check --all-files
+          # Portal sources parsed with the build's esbuild (#3669), and the
+          # line-count caps — 0 soft-cap files since PR-2d (#153).
+          pre-commit run jsx-syntax-check --all-files
+          pre-commit run jsx-linecount-check --all-files
           # Container SAST Layer 1 (#448 / TRK-311): hadolint + Vibe wrapper
           # over all Dockerfiles. BLOCK findings fail the Lint job; WARN/INFO
           # are recorded in docs/internal/iac-lint-baseline.md. hadolint binary
@@ -852,7 +908,7 @@ jobs:
           # diff base; PR_BODY env (set on this job) carries the bypass tag.
           pre-commit run helm-values-secrets-check --all-files
           # Cross-ns service-URL consistency (#1004): tenant-api pins its
-          # dedicated `tenant-api` ns, recipe-preview pins `monitoring`, in
+          # dedicated `tenant-api` ns in
           # every Helm values / raw k8s manifest / portal nginx / try-local
           # URL. Wired unfiltered here (like the lints above) so a PR that
           # misses the hook's path filter still can't land namespace drift.
@@ -878,6 +934,11 @@ jobs:
           # is why the gate lives here rather than only in local pre-commit.
           # Fail-closed: an unfetched tag is exit 2, never a silent pass.
           pre-commit run image-pin-capability-check --all-files
+          # #1269: a git-only chart's version must name one package — its
+          # packaged content must equal the commit that first carried that
+          # version. Stateless, so a main run superseded by a later push leaves
+          # nothing unchecked: the next run still compares with that commit.
+          pre-commit run chart-version-bump --all-files
           # The same image carrier, from the source side (#1503): build.sh ↔
           # COMMAND_MAP, the shipped set's transitive imports / data files, and
           # the layout-depth rule (a shipped tool must not locate repo files by
@@ -920,6 +981,27 @@ jobs:
           # before enabling.
           pre-commit run shellcheck --all-files
 
+      # #3643: the wrapper's contract with the PINNED hadolint — the canary
+      # comes back at the registered levels; HADOLINT_* variables, ignore
+      # pragmas and a config file change nothing; every comment hadolint acts
+      # on is one V4 flags — is asked of the real engine by tests that skip
+      # where hadolint is absent. "Python Tests" has no hadolint, so this job
+      # (which installs it above) is the only CI spot where they run: a
+      # hadolint re-pin that accepts a new pragma spelling fails HERE.
+      # VIBE_REQUIRE_HADOLINT=1 turns "hadolint not on PATH" into a failure
+      # (the same guard a remote session trips), and -rs lists any residual
+      # skip. The step, its variable and its place after "Set up hadolint" are
+      # pinned by tests/lint/test_check_iac_vibe_rules.py.
+      - name: 'hadolint contract tests against the pinned engine (#3643)'
+        env:
+          VIBE_REQUIRE_HADOLINT: "1"
+          # No test in this file reads a Go binary (tests/conftest.py would
+          # otherwise build three up front).
+          VIBE_TEST_GO_BINARIES: skip
+        run: |
+          pip install pytest pathspec -c requirements/ci-constraints.txt
+          python -m pytest tests/lint/test_check_iac_vibe_rules.py -q -rs
+
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.
     #
@@ -941,6 +1023,11 @@ jobs:
     # required checks to lock it in.
     name: Lint Rule Packs
     runs-on: ubuntu-24.04
+    env:
+      # The pytest session builds da-guard / da-crdecode / da-read up front
+      # (tests/conftest.py); declared per job, see
+      # tests/lint/test_workflow_pytest_declares_go_binaries.py.
+      VIBE_TEST_GO_BINARIES: build
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1075,13 +1162,15 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Preview would-fire e2e (pinned promtool x verdict-signature contract)
-        # The preview's firing/inactive verdict is version-bound: classify_promtool_result
-        # (scripts/tools/dx/_recipe_preview.py) requires promtool's `FAILED:` + `got:[`
-        # output signature. This is the ONLY CI spot where the PINNED promtool meets that
-        # contract — the "Python Tests" job has no promtool, so the @_needs_promtool e2e
-        # skips there. A promtool re-pin that changes the output format fails HERE, not
-        # in front of a Domain Expert.
+      - name: Preview would-fire e2e (pinned promtool x JUnit report contract)
+        # The preview's firing/inactive verdict is version-bound: it is read from
+        # `promtool test rules --junit` (_lib_engine's ("promtool", "test-rules") proof,
+        # #3611): which of the two opposite test groups (`fires` / `quiet`) failed —
+        # exactly one is firing or inactive, both or neither is error. This is the
+        # ONLY CI spot where the PINNED promtool meets that contract — the "Python
+        # Tests" job has no promtool, so the @_needs_promtool e2e skips there. A
+        # promtool re-pin that changes the report fails HERE, not in front of a
+        # Domain Expert.
         run: |
           pip install pytest -c requirements/ci-constraints.txt
           python -m pytest tests/dx/test_recipe_preview.py tests/preview/ -q
@@ -1358,7 +1447,7 @@ jobs:
           python-version-file: .python-version
 
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # ⚠️ Deliberately NOT the repo-wide Helm pin (v4.x, every other
           # setup-helm): this job must render with the SAME helm as the
@@ -1465,6 +1554,10 @@ jobs:
         shard: [1, 2, 3]
       fail-fast: false
     env:
+      # The pytest session builds da-guard / da-crdecode / da-read up front
+      # (tests/conftest.py); declared per job, see
+      # tests/lint/test_workflow_pytest_declares_go_binaries.py.
+      VIBE_TEST_GO_BINARIES: build
       # Same fail-closed pattern for docker-gated tests (amtool routing
       # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
       # so if docker is missing at pytest time the runner image regressed —
@@ -1541,6 +1634,10 @@ jobs:
       # the model alone; this var turns the skip into a failure.
       VIBE_REQUIRE_PICOMATCH: "1"
       PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
+      # #3669: tests/lint/test_lint_jsx_syntax.py parses with the portal's own
+      # esbuild (tools/portal/node_modules, installed below); without it those
+      # tests skip — this var turns the skip into a failure.
+      VIBE_REQUIRE_PORTAL_ESBUILD: "1"
       # #1950: tests/ops/test_patch_config_exporter.py builds the real
       # threshold-exporter and runs patch-config's post-write verification and
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
@@ -1582,7 +1679,7 @@ jobs:
       # lockdown, VRL demux rules, buffer guards, egress allowlist, etc.)
       # would provide zero CI coverage. setup-helm makes them real gates.
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default (which silently
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
@@ -1716,6 +1813,12 @@ jobs:
           npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000 picomatch@4.0.5
           test -f "$PICOMATCH_DIR/package.json"
 
+      # The portal's lockfile esbuild for the JSX syntax lint's tests (#3669).
+      - name: Install portal deps (JSX syntax lint tests)
+        run: |
+          npm ci --prefix tools/portal --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000
+          test -f tools/portal/node_modules/esbuild/package.json
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:
@@ -1741,6 +1844,11 @@ jobs:
         # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
         # without it tests/dx/test_waveform_compile.py importorskips and the
         # governance-gate negative tests silently drop out of CI.
+        # markdown + pymdown-extensions + mkdocs: the docs' YAML inventory
+        # (scripts/tools/_lib_doc_yaml_inventory.py) finds the code blocks with
+        # the site's renderer, mkdocs.yml's extensions read as mkdocs reads
+        # them (#3814); tests/lint/test_doc_yaml_inventory.py and every test
+        # that builds the inventory need all three.
         # check-jsonschema: ships the vendored GitLab CI schema that
         # tests/ops/test_generated_ci_artifacts.py validates the generated
         # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
@@ -1755,7 +1863,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -1860,6 +1968,10 @@ jobs:
         shard: [1, 2, 3]
       fail-fast: false
     env:
+      # The pytest session builds da-guard / da-crdecode / da-read up front
+      # (tests/conftest.py); declared per job, see
+      # tests/lint/test_workflow_pytest_declares_go_binaries.py.
+      VIBE_TEST_GO_BINARIES: build
       # Same fail-closed pattern for docker-gated tests (amtool routing
       # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
       # so if docker is missing at pytest time the runner image regressed —
@@ -1936,6 +2048,10 @@ jobs:
       # the model alone; this var turns the skip into a failure.
       VIBE_REQUIRE_PICOMATCH: "1"
       PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
+      # #3669: tests/lint/test_lint_jsx_syntax.py parses with the portal's own
+      # esbuild (tools/portal/node_modules, installed below); without it those
+      # tests skip — this var turns the skip into a failure.
+      VIBE_REQUIRE_PORTAL_ESBUILD: "1"
       # #1950: tests/ops/test_patch_config_exporter.py builds the real
       # threshold-exporter and runs patch-config's post-write verification and
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
@@ -1969,7 +2085,7 @@ jobs:
       # lockdown, VRL demux rules, buffer guards, egress allowlist, etc.)
       # would provide zero CI coverage. setup-helm makes them real gates.
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default (which silently
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
@@ -2103,6 +2219,12 @@ jobs:
           npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000 picomatch@4.0.5
           test -f "$PICOMATCH_DIR/package.json"
 
+      # The portal's lockfile esbuild for the JSX syntax lint's tests (#3669).
+      - name: Install portal deps (JSX syntax lint tests)
+        run: |
+          npm ci --prefix tools/portal --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000
+          test -f tools/portal/node_modules/esbuild/package.json
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:
@@ -2128,6 +2250,11 @@ jobs:
         # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
         # without it tests/dx/test_waveform_compile.py importorskips and the
         # governance-gate negative tests silently drop out of CI.
+        # markdown + pymdown-extensions + mkdocs: the docs' YAML inventory
+        # (scripts/tools/_lib_doc_yaml_inventory.py) finds the code blocks with
+        # the site's renderer, mkdocs.yml's extensions read as mkdocs reads
+        # them (#3814); tests/lint/test_doc_yaml_inventory.py and every test
+        # that builds the inventory need all three.
         # check-jsonschema: ships the vendored GitLab CI schema that
         # tests/ops/test_generated_ci_artifacts.py validates the generated
         # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
@@ -2142,7 +2269,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -2386,27 +2513,27 @@ jobs:
 
       - name: Cache Go modules + build cache
         # Module cache (~/go/pkg/mod) is the primary key; build cache rides
-        # along. Key is shared with the tenant-api split job (same go.sum
-        # hash) so both restore the same warm cache.
+        # along. One key per module (#3541): this job and the tenant-api job
+        # build different things, and a shared key kept whichever saved first.
+        # The module name is plan_race_shards.MODULES' — nightly-race restores
+        # `<os>-go-<module>-<hash>` per leg; a guard test pins both sides.
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-threshold-exporter-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-threshold-exporter-
             ${{ runner.os }}-go-
 
-      # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
-      # ubuntu-latest ships python3 but not always pyyaml; install only
-      # if missing (no-op on most runners since python3-yaml is widely
-      # pre-installed). Apt is faster than pip for this single dep.
-      - name: Install pyyaml for flake-retry wrapper
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
+      # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml,
+      # and pkg/config's docs tests run the docs' YAML inventory
+      # (scripts/tools/_lib_doc_yaml_inventory.py), which finds the code
+      # blocks with the site's renderer (#3814). The one list of what that
+      # takes, shared with nightly-race and the Go mutation pilot.
+      - name: Set up Python with the docs inventory's deps
+        uses: ./.github/actions/docs-inventory-python
 
       - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app
@@ -2465,15 +2592,18 @@ jobs:
         # path expanded to include ~/.cache/go-build so `go install swag@latest`
         # below benefits from a warm build cache on cache-hit runs (saves ~5-8s
         # on the swag CLI install step). Module cache (~/go/pkg/mod) is the
-        # primary key; build cache rides along.
+        # primary key; build cache rides along. Own per-module key (#3541) so
+        # what this job's tests build in-test (generator_real_test.go builds
+        # da-guard, da-crdecode and da-read) is what gets saved, and nightly
+        # race's tenant-api legs restore it instead of rebuilding cold.
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-tenant-api-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-tenant-api-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
@@ -2507,6 +2637,7 @@ jobs:
       # operator runs before upgrading, flags and exit code included; a moved
       # tree exits 2 here instead of skipping. try-local/** is in the `go`
       # filter above, so a sample-only change wakes this leg.
+      # adr-check: ADR-027/9.7c
       - name: Scope check on the try-local sample config (ADR-027 §7)
         working-directory: components/tenant-api
         run: go run ./cmd/server config check --kind scope --config-dir ../../try-local/seed/conf.d
@@ -2690,7 +2821,7 @@ jobs:
             ${{ runner.os }}-go-oauth2-proxy-
 
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default.
           # tests/shared/test_toolchain_pin_parity.py.
@@ -2713,6 +2844,7 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
           fi
 
+      # adr-check: ADR-027/9.9a
       - name: Run --config-test in the chart's oauth2-proxy image (by digest)
         run: bash tests/oauth2-proxy/image_config_test.sh "$RUNNER_TEMP/oauth2-proxy-render"
 
@@ -2768,7 +2900,7 @@ jobs:
             ${{ runner.os }}-go-pss-
 
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default.
           # tests/shared/test_toolchain_pin_parity.py.
@@ -3012,7 +3144,7 @@ jobs:
     name: Portal Tests Run
     runs-on: ubuntu-24.04
     # Least-privilege token (CodeQL: workflow-missing-permissions). Checkout +
-    # local npm build/test/dist-diff only — no writes, no PR/API access.
+    # local npm build/test only — no writes, no PR/API access.
     permissions:
       contents: read
     needs: detect-changes
@@ -3023,11 +3155,10 @@ jobs:
 
       - name: Set up Node.js 24
         # Pinned to Node 24 to match the dev container (where `make
-        # portal-build` produces the committed dist). Keeping CI and the
-        # canonical build env on the SAME major removes node/npm version as
-        # a variable in the dist-reproducibility gate below — a fresh
-        # `npm ci` under a different npm major can resolve a transitive dep
-        # differently and re-hash a shared chunk, false-redding the gate.
+        # portal-build` runs locally) and the other consumers that build the
+        # bundles (Pages deploy, da-portal image, smoke run). The bundles are
+        # not committed (#3738); each of those builds them from the same
+        # source and lockfile this leg builds and tests.
         uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -3041,23 +3172,6 @@ jobs:
       - name: Verify portal build (manifest may be empty)
         working-directory: tools/portal
         run: npm run build
-
-      - name: Verify committed dist matches fresh build (no stale dist)
-        # Root-cause guard for repo-wide dist staleness (TRK-239 / #444):
-        # production loads committed docs/assets/dist/ and mkdocs-deploy does
-        # NOT rebuild, so a source change that never re-runs `make portal-build`
-        # silently never reaches prod. build.mjs cleans + re-emits the dir, so
-        # any drift (modified bundle, renamed chunk, orphan) shows as a staged
-        # diff here. Build is byte-reproducible across the dev container and CI
-        # (esbuild 0.28.2 linux-x64, pinned via package-lock) because both run
-        # the SAME Node major (24) — so this gate does not false-red.
-        run: |
-          git add -A docs/assets/dist
-          if ! git diff --cached --quiet -- docs/assets/dist; then
-            echo "::error::docs/assets/dist/ is out of sync with source. Run 'make portal-build' in the dev container and commit the rebuilt bundles."
-            git diff --cached --stat -- docs/assets/dist
-            exit 1
-          fi
 
       - name: Enforce portal bundle size budget (TRK-232a)
         # Per-tool 100 KB / shared chunk 200 KB / total 4 MB.
@@ -3170,6 +3284,18 @@ jobs:
       - name: Install Playwright browsers
         working-directory: tests/e2e
         run: npx playwright install chromium
+
+      # #3738: the portal server below serves docs/assets/dist/, which is
+      # build output and not in git, so build it from source. tools/portal/** is
+      # already in the `e2e` filter that gates this job. Pinned by
+      # tests/ops/test_portal_dist_consumers_build.py (before the server starts).
+      - name: Install portal build dependencies
+        working-directory: tools/portal
+        run: npm ci
+
+      - name: Build portal bundles (docs/assets/dist/)
+        working-directory: tools/portal
+        run: npm run build
 
       - name: Start Portal server
         working-directory: tests/e2e
@@ -3365,6 +3491,10 @@ jobs:
   federation-e2e:
     name: Federation E2E (ADR-020 IV-2j)
     runs-on: ubuntu-24.04
+    env:
+      # pytest is started by a script here (the lint cannot see it); conftest
+      # refuses an undeclared session in CI. Builds as before.
+      VIBE_TEST_GO_BINARIES: build
     # Dedicated job — the docker-compose federation request-path E2E
     # (#516). Runs parallel to the lint/unit jobs; it is NOT part of
     # `make test` / pre-commit and is excluded from the coverage gate.
@@ -3379,7 +3509,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default (which silently
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.

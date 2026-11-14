@@ -142,21 +142,39 @@ jobs:
         with:
           go-version-file: ${{ matrix.workdir }}/go.mod
 
+      # threshold-exporter's pkg/config docs tests run the docs' YAML
+      # inventory, a Python child process that finds the code blocks with the
+      # site's renderer (#3814); without its packages they fail, not skip.
+      # Every leg, not only threshold-exporter's: the shards' package lists
+      # are planned at run time, and the install is seconds.
+      - name: Set up Python with the docs inventory's deps
+        uses: ./.github/actions/docs-inventory-python
+
       # Module cache AND build cache: without the latter every leg recompiles
       # its module's -race dependency graph. One entry per module per run — the
       # build cache is content-addressed, so whichever shard saves it serves
       # every shard of the next night; the other legs of the run only log that
       # the key is taken. Restored by prefix, newest first.
-      - name: Cache Go modules and build cache
-        uses: actions/cache@v5
+      # Restore-only, from the key PR CI's Go jobs save (ci.yml, "Cache Go
+      # modules + build cache"). This leg's own per-run saves never came back:
+      # 11-04..11-11 every leg logged "Cache not found" for the previous
+      # night's key, so they only cost cache storage. PR CI's entry is read on
+      # every PR and restores on every leg (dispatch 43213073031: 8/8 hits;
+      # legs summed 4113 s -> 3906 s). The shared key did NOT warm the
+      # generator tools tenant-api's real-generator tests build in-test
+      # (generator_real_test.go, ~200 s on their first run): it lacked da-read's
+      # build. So each PR CI Go job saves its own `<os>-go-<module>-<hash>` and
+      # each leg restores its module's (#3541); a guard test pins the names.
+      - name: Restore Go modules and build cache (PR CI's key for this module)
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-${{ hashFiles(format('{0}/go.sum', matrix.workdir)) }}-${{ github.run_id }}
+          key: ${{ runner.os }}-go-${{ matrix.module }}-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-${{ hashFiles(format('{0}/go.sum', matrix.workdir)) }}-
-            ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-
+            ${{ runner.os }}-go-${{ matrix.module }}-
+            ${{ runner.os }}-go-
 
       # -json so the failure is machine-readable. `cmd/go` feeds the test
       # binary's stdout AND stderr through test2json, so a `WARNING: DATA RACE`

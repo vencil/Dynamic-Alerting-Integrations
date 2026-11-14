@@ -44,11 +44,11 @@ stdout、delivery → shipper。log-store 掛掉時 federation gateway 不能
 kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
 
 # 1) Store first — Vector 啟動時會嘗試握手 sink。victorialogs 續留
-#    monitoring；chart ≥0.3.0 的 netpol 預設放行 vector ns（ingest）。
+#    monitoring；netpol 放行 vector ns 裡帶 Vector pod label 的 pod（ingest）。
 #    chart 0.5.0 起預設 auth.mode=enforce：先建每個消費端的 Secret 並在
-#    auth.consumers[].existingSecret 指名，否則 render 失敗（§1.2）。
-#    my-consumers.yaml 列出 auth.consumers 全部（含 paths），各帶
-#    existingSecret: victorialogs-<name>；不跑的消費端從清單移除。
+#    auth.existingSecrets 指名（chart 0.7.0 起；<consumer>: <Secret>），
+#    否則 render 失敗（§1.2）。只寫這個 map，不必重寫 auth.consumers；
+#    不跑的消費端才要把 auth.consumers 整份照抄、拿掉它。
 for c in vector grafana chargeback-aggregator federation-gateway federation-reconciler; do
   kubectl -n monitoring create secret generic "victorialogs-$c" \
     --from-literal=password="$(openssl rand -hex 32)"
@@ -56,7 +56,11 @@ done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
   --set retentionPeriod=30d \
-  -f my-consumers.yaml
+  --set auth.existingSecrets.vector=victorialogs-vector \
+  --set auth.existingSecrets.grafana=victorialogs-grafana \
+  --set auth.existingSecrets.chargeback-aggregator=victorialogs-chargeback-aggregator \
+  --set auth.existingSecrets.federation-gateway=victorialogs-federation-gateway \
+  --set auth.existingSecrets.federation-reconciler=victorialogs-federation-reconciler
 
 # 2) Shipper second — 裝進 vector ns；sink host 本來就是 FQDN，跨 ns 不用改。
 #    vector 在自己的 namespace，要把 store 側同一個密碼複製一份過來。
@@ -114,7 +118,7 @@ error 裝不起來。
 # 1) 前置 wiring（都先於搬遷，否則新 Vector 起來就斷線）：
 kubectl apply -f k8s/00-namespaces/namespace-vector.yaml       # ns + PSS labels
 helm upgrade victorialogs ./helm/victorialogs -n monitoring \
-  --reuse-values                                               # chart ≥0.3.0：netpol 放行 vector ns
+  -f my-values.yaml                                            # 含 auth.existingSecrets；netpol 放行 vector ns 的 Vector
 kubectl apply -f k8s/03-monitoring/configmap-prometheus.yaml   # SD 加 vector ns
 kubectl rollout restart -n monitoring deploy/prometheus        # 讓 SD 生效
 # （多租戶）在 vector ns 重建 registry ConfigMap —— ConfigMap 掛載
@@ -173,7 +177,7 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
 render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費端請從
 `auth.consumers` 移除。
 
-⚠️ **render 只檢查 store 這一側**：它看得到 `auth.consumers[].existingSecret`
+⚠️ **render 只檢查 store 這一側**：它看得到 `auth.existingSecrets`
 有沒有填，看不到消費端那一側有沒有帶帳密。store 側都指名了、而某個消費端
 沒接上，render 照樣通過，該消費端從此收到 401。對 Vector 這代表資料**當下
 遺失**：elasticsearch sink 遇到 4xx 不重試，整批丟掉（下面「注意」）。所以
@@ -184,16 +188,21 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
 - **從 0.4.0（預設 observe）升級**：在 values 明寫 `auth.mode: observe` 再
   升級，照步驟 1–2 接上並確認，最後拿掉這個覆寫，回到預設 enforce。
   - 一個 Secret 都沒指名就升級：render 失敗、升級中止。
-  - 已照 0.4.0 的步驟 1 在 store 側指名了 Secret：render 會**通過並直接
-    進 enforce**，沒接上的消費端立刻 401。
-  - 用 `helm upgrade --reuse-values`：Helm 沿用上一版的 values（含當時的
-    預設 `mode: observe`），**不會**變成 enforce；要切換得明寫
-    `--set auth.mode=enforce`。
+  - 已照 0.4.0 的步驟 1 在 store 側指名了 Secret：那是寫在
+    `auth.consumers[].existingSecret`，0.7.0 起 render 會失敗並指出要搬去
+    `auth.existingSecrets.<消費端>`。搬過去之後 render 會**通過並直接進
+    enforce**，沒接上的消費端立刻 401。
+  - 用 `helm upgrade --reuse-values` 升到 0.6.0 以上會 render 失敗：
+    上一版的 values 帶著已移除的 `networkPolicy.allowedPodSelectors`／
+    `allowedNamespaces`，0.7.0 以上還會帶著 `auth.consumers[].existingSecret`。
+    改用 `--reset-then-reuse-values`（Helm ≥3.14）或明寫的 values 檔：
+    Secret 搬到 `auth.existingSecrets`，`auth.consumers` 不重寫就不必補
+    `from`。
 
 **遷移步驟**
 
 1. 每個消費端在 VictoriaLogs 的 namespace 建一個 Secret（key `password`），
-   填進 `auth.consumers[].existingSecret`。chart 不產生密碼：`helm template`
+   填進 `auth.existingSecrets.<consumer>`。chart 不產生密碼：`helm template`
    與 Argo CD 底下產生的值每次渲染都會變。消費端那一側用同一個密碼，建在它
    自己的 namespace。
    ⛔ 密碼只用十六進位、不帶換行：

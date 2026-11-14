@@ -42,6 +42,11 @@ package-lock.json
 # TD-030: Portal ESM build + Vitest also has npm manifests
 !tools/portal/package.json
 !tools/portal/package-lock.json
+# Portal ESM bundles are build output of tools/portal/ (`make portal-build`).
+# Every consumer builds them itself (Pages deploy, da-portal image, smoke /
+# visual-baseline runs, `make serve-docs` / `test-e2e*`), so they stay out of
+# git (#3738). Guard: tests/lint/test_portal_dist_not_tracked.py.
+/docs/assets/dist/
 
 # --- Docker & K8s Local ---
 # 忽略本地測試產生的暫存檔

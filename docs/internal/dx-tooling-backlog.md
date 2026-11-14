@@ -188,12 +188,13 @@ updated_at: 2026-11-03
 ```yaml
 id: TRK-3541
 tracking_kind: tech-debt
-status: in-progress
+status: done
 domain: ci
 supersedes: [TRK-3180]
 target_version: v3.0.0
 created_at: 2026-11-03
-updated_at: 2026-11-05
+updated_at: 2026-11-12
+pr_ref: [3552, 3575, 3582]
 ```
 
 **來源**：[#3541](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3541)。nightly race 原本一個 module 一個 4 核 runner，所有 package 互搶核心，wall-clock 被擠壓灌水：11-02 那晚 tenant-api `internal/handler` 跑到 1718 s（`-timeout` 為 1800 s），threshold-exporter `cmd/da-guard` 1331 s。
@@ -203,6 +204,8 @@ updated_at: 2026-11-05
 **`-short` 定案**（2026-11-05 owner 裁決）：原計畫的 PR-C（量到放得下後拿掉 nightly 的 `-short`）取消。nightly 是重複壓力層、PR CI 是完整覆蓋層，與 Go 官方 race builder 帶 `-short`、完整測試在 `-longtest` builder 的分工相同；da-guard 完整矩陣 ×10 是單一 test binary 的成本，分片分不開。理由寫在 workflow 註解與守衛 `test_nightly_go_test_runs_with_short` 的 docstring。tenant-api `cmd/gen-error-contract`、`internal/handler` 獨佔一片仍約 950 s，由 tenant-api 線在 [#3574](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3574) 降 test 本身成本。
 
 **PR-B**（2026-11-05 owner 裁決 A，取代原本「PR CI 記錄每個 package 的 CPU 秒」的構想）：`parse_go_test_json.py` 在 fragment 加 `slow_packages`，列出 package 層級 `Elapsed` 超過 `-timeout` 一半的 package（比例是 `SLOW_PACKAGE_RATIO`，`-timeout` 是同檔的 `GO_TEST_TIMEOUT_S`，planner 也改從這裡讀）；已經逾時的 package 只算 `timeout`。report 為每個 slow package 開 `<module>|slow-package|<import path>` 追蹤 issue，與其他 kind 一樣原地刷新、「not seen」不關票，但屬警告：module 仍判 GREEN、report 不因它轉紅。
+
+**完成**（2026-11-12）：11-05～11-11 七次排程 nightly 每個 package 都 ≤ 900 s，#3541 已關。同時發現 race 腿自存的 Go cache 每晚都 restore 不到（11-04～11-11 每條腿皆 `Cache not found`），改為唯讀 PR CI 的 Go cache key、不另存（分支實跑 8/8 條腿命中，各腿加總 4113 s → 3906 s）。tenant-api `internal/handler` 第一輪約 200 s 花在測試內冷建 da-read 等工具，這份 cache 不含它，仍是冷的。後續（owner 11-12 選 B）：PR CI 的 exporter／tenant-api Go job 改存各自的 `<os>-go-<module>-<hash>`，nightly 每條腿讀自己 module 那份，讓 tenant-api job 在測試內建的工具進到 nightly 的 cache；守衛 `test_each_race_module_restores_the_go_cache_pr_ci_saves_for_it`。
 
 ### Snapshot test 擴展
 
@@ -344,7 +347,7 @@ Harness Audit R2 發現 33 支 lint 工具中 18 支沒有對應 `test_*.py`。�
 |--------|------|------|------|
 | P0 | `validate_docs_versions.py` | 1,089 | 最大 lint 工具，邏輯複雜 |
 | P0 | `check_head_blob_hygiene.py` | 447 | 安全底線工具 |
-| P1 | `lint_jsx_babel.py` | 302 | auto hook，Babel 相容性 |
+| P1 | `lint_jsx_babel.py`（#3669 起由 `lint_jsx_syntax.py`／`check_jsx_linecount.py` 取代） | 302 | auto hook，Babel 相容性 |
 | P1 | `check_bilingual_structure.py` | 371 | auto hook |
 | P1 | `check_jsx_i18n.py` | 291 | auto hook |
 | P1 | `check_metric_dictionary.py` | 233 | auto hook |
@@ -777,7 +780,7 @@ v2.6.0 Phase .c-R2 發現 WritePR git push 失敗後仍回傳 PRWriteResult。�
 
 ### Release automation
 
-六線版號（platform/exporter/tools/portal/recipe-preview/tenant-api）的 tag + GitHub Release 仍是手動流程。可用 GitHub Actions 監聽 tag push 自動觸發 Release Notes 產生（基於 CHANGELOG section）和 OCI image build/push。v2.3.0 CI matrix 已到位，為自動化提供基礎。
+各版號線（清單見 `release.yaml` 的 `on.push.tags`，另加平台 `v*`）的 tag + GitHub Release 仍是手動流程。可用 GitHub Actions 監聽 tag push 自動觸發 Release Notes 產生（基於 CHANGELOG section）和 OCI image build/push。v2.3.0 CI matrix 已到位，為自動化提供基礎。
 
 ### dependabot / renovate
 

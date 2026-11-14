@@ -787,7 +787,7 @@ class PlatformProbeSetUnverifiable(Exception):
     The default probe set degraded to the built-in fallback, and an
     operator-supplied inhibit rule is tenant-triggered, so whether it silences
     a platform alert outside the fallback is unknown. "Could not verify" is
-    exit 2 (no verdict, like amtool being unusable), not exit 1 (a verdict on
+    exit 2 (no verdict, like no da-read to ask), not exit 1 (a verdict on
     the config) — so this is deliberately NOT a ``ValueError``: every render
     path turns ``ValueError`` from the invariant asserts into rc 1, and a
     subclass would be swallowed there.
@@ -1368,8 +1368,8 @@ def is_receiver_name_collision(line: str) -> bool:
 # `_routing_defaults`, one routing-profile name defined in two files. (One
 # tenant id declared in two files is `DUPLICATE_TENANT_PREFIX` below, #2315 —
 # not a warning-stream line.) The generator exits EXIT_CALLER_ERROR
-# before anything is rendered; validate-config's schema row FAILs on it
-# (``blocking_generation_errors``). Not `POLICY_ERROR_PREFIX` — none of these
+# before anything is rendered, and validate-config's routes row, which is
+# `--validate`, FAILs with it. Not `POLICY_ERROR_PREFIX` — none of these
 # is a domain-policy finding, and none waits for --strict.
 ROUTING_TREE_ERROR_PREFIX = "ERROR (routing tree):"
 
@@ -1388,8 +1388,8 @@ def is_routing_tree_error(line: str) -> bool:
 # and a `group_by` that is not a list (`routing_block_group_by_type_errors`)
 # — a string is never read as a one-label list. The
 # generator exits EXIT_VIOLATION before anything is rendered
-# (`_refuse_field_type_errors`), and validate-config's schema row FAILs on
-# the line (``blocking_generation_errors``), as does its routes row (#3284).
+# (`_refuse_field_type_errors`), and validate-config's routes row, which is
+# `--validate`, FAILs with it (#3284).
 # Not `POLICY_ERROR_PREFIX`: it
 # does not wait for --strict.
 FIELD_TYPE_ERROR_PREFIX = "ERROR (field type):"
@@ -1633,7 +1633,7 @@ ROUTE_ENTRY_KEYS = frozenset({"match", "receiver", "group_by", "group_wait",
 # (tests/ops/test_routing_ignored_keys.py), not the other way round, and
 # tests/shared/routing_ignored_keys_cases.json pins them by example.
 # `http_config` is NOT looked into: it is passed to Alertmanager as written, so
-# a key there is Alertmanager's to refuse (amtool under `--validate`).
+# a key there is Alertmanager's loader's to refuse.
 _TIMING_KEYS = frozenset({"group_wait", "group_interval", "repeat_interval"})
 ROUTING_BLOCK_KEYS = frozenset({"receiver", "group_by", "overrides", "routes"}) | _TIMING_KEYS
 # `routes` is read here only to be refused with its own line (#2245).

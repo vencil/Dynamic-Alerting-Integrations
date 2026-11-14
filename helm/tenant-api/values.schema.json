@@ -20,7 +20,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {},
         "image": {},
         "provider": {},
         "clientID": {
@@ -61,7 +60,7 @@
     "portal": {
       "type": "object",
       "additionalProperties": false,
-      "description": "ADR-027 §5: the portal static-file container in this pod (rendered with oauth2Proxy.enabled).",
+      "description": "ADR-027 §5: the portal static-file container in this pod.",
       "properties": {
         "image": {
           "type": "object",
@@ -205,6 +204,54 @@
     },
     "generator": {
       "type": "object"
+    },
+    "recipePreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "queueTimeout": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "rateLimitPerMin": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
     },
     "service": {
       "type": "object"

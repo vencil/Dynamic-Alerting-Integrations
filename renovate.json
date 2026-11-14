@@ -80,7 +80,7 @@
     },
     {
       "customType": "regex",
-      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/alertmanager at the version of the amtool the da-tools image ships (tests/ops/test_da_tools_amtool_pin_parity.py). The gomod manager is off (go.mod is the Go SSOT), so this one require line is read here, from the Go module proxy, and the packageRule below puts it in the SAME grouped PR as the prom/alertmanager image refs. ⚠️ Renovate does not run `go mod tidy` here: that PR must refresh components/da-read/go.sum by hand, and CI's da-read leg stays red until it does (fail-closed, not a silent skew).",
+      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/alertmanager at the version of the amtool the da-tools image ships (tests/ops/test_da_tools_amtool_pin_parity.py). The gomod manager is off (go.mod is the Go SSOT), so this one require line is read here, from the Go module proxy, and the packageRule below puts it in the SAME grouped PR as the prom/alertmanager image refs. ⚠️ Renovate does not run `go mod tidy` here (fail-closed, not a silent skew): CI's da-read leg stays red until `make renovate-fixup` (#3799) is run on the PR branch, which also writes the other copies this group's PR cannot reach.",
       "managerFilePatterns": ["/^components/da-read/go\\.mod$/"],
       "matchStrings": [
         "\\n[ \\t]*(?<depName>github\\.com/prometheus/alertmanager)[ \\t]+(?<currentValue>v[0-9][^\\s]*)"
@@ -90,7 +90,7 @@
     },
     {
       "customType": "regex",
-      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/prometheus at the Go module of the Prometheus the platform deploys (k8s/03-monitoring/deployment-prometheus.yaml, prom/prometheus; tests/ops/test_da_read_prometheus_pin_parity.py). Image v3.X.Y is module v0.3XX.Y (X two digits), so the versioning regex reads that back as major 3 / minor X / patch Y: a Prometheus major (v0.4XX) is a Renovate major and waits for the Dashboard like the image major, and the proxy's legacy v2.*+incompatible tags and -rc tags do not parse, so they are never proposed (under plain semver v2.55.1+incompatible would outrank v0.315.1). The packageRule below puts it in the SAME grouped PR as the prom/prometheus image refs. ⚠️ Renovate does not run `go mod tidy` here: that PR must refresh components/da-read/go.sum by hand, and CI's da-read leg stays red until it does (fail-closed, not a silent skew).",
+      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/prometheus at the Go module of the Prometheus the platform deploys (k8s/03-monitoring/deployment-prometheus.yaml, prom/prometheus; tests/ops/test_da_read_prometheus_pin_parity.py). Image v3.X.Y is module v0.3XX.Y (X two digits), so the versioning regex reads that back as major 3 / minor X / patch Y: a Prometheus major (v0.4XX) is a Renovate major and waits for the Dashboard like the image major, and the proxy's legacy v2.*+incompatible tags and -rc tags do not parse, so they are never proposed (under plain semver v2.55.1+incompatible would outrank v0.315.1). The packageRule below puts it in the SAME grouped PR as the prom/prometheus image refs. ⚠️ Renovate does not run `go mod tidy` here (fail-closed, not a silent skew): CI's da-read leg stays red until `make renovate-fixup` (#3799) is run on the PR branch, which also writes the other copies this group's PR cannot reach.",
       "managerFilePatterns": ["/^components/da-read/go\\.mod$/"],
       "matchStrings": [
         "\\n[ \\t]*(?<depName>github\\.com/prometheus/prometheus)[ \\t]+(?<currentValue>v[0-9][^\\s]*)"
@@ -146,7 +146,8 @@
       "matchManagers": ["custom.regex"],
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
-      "groupName": "third-party container images"
+      "groupName": "third-party container images",
+      "prBodyNotes": ["⚠️ This PR opens red by design (#3799): on its branch run `make renovate-fixup` (dev container: `make dc-run CMD=\"make renovate-fixup\"`), review the diff and push. It refreshes components/da-read/go.sum, the tests/oauth2-proxy library, the federation-e2e and try-local compose refs, platform-data, the portal IMAGE_MIRROR and dist. A compile error left after that is an upstream API change in a bumped Go module: fix it by hand."]
     },
     {
       "description": "#2442 — the forge-e2e GitLab CE pin gets its own PR: it is test infrastructure (nightly forge-e2e-gitlab.yaml), not a deployed image, so it must not ride the third-party deploy group. Majors still wait for the Dependency Dashboard via the docker major rule below.",
@@ -230,6 +231,13 @@
       "enabled": false
     },
     {
+      "description": "#3738 — da-portal's `portal-build` stage (`FROM node:<major>-alpine…@sha256:…`) is bound to the dev container's node feature major by tests/shared/test_toolchain_pin_parity.py, and the dev container side is not Renovate's (see the devcontainer node-version rule). A major bump here alone is red by construction; move it by hand per docs/internal/toolchain-versions.md. Digest refreshes of the same major stay on (the Dockerfile base images group).",
+      "matchManagers": ["dockerfile"],
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "description": "#1354 — `runs-on:` (depType github-runner) is bound to the dev container base image by test_toolchain_pin_parity.py; neither side may move alone. Disabled on both managers (see the devcontainer image rule).",
       "matchManagers": ["github-actions"],
       "matchDepTypes": ["github-runner"],
@@ -264,6 +272,48 @@
       "matchManagers": ["pyenv", "dockerfile", "devcontainer"],
       "matchDepNames": ["python"],
       "groupName": "Python interpreter"
+    },
+    {
+      "description": "#3849 — chargeback-aggregator is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/chargeback-aggregator/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-chargeback-aggregator", "filePatterns": ["helm/chargeback-aggregator/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — federation-gateway is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/federation-gateway/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-federation-gateway", "filePatterns": ["helm/federation-gateway/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — federation-proxy is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/federation-proxy/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-federation-proxy", "filePatterns": ["helm/federation-proxy/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — federation-reconciler is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/federation-reconciler/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-federation-reconciler", "filePatterns": ["helm/federation-reconciler/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — mariadb-instance is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/mariadb-instance/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-mariadb-instance", "filePatterns": ["helm/mariadb-instance/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — vector is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/vector/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-vector", "filePatterns": ["helm/vector/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — victorialogs is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/victorialogs/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-victorialogs", "filePatterns": ["helm/victorialogs/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
     }
   ]
 }

@@ -584,6 +584,91 @@ def misread_scalar_nodes(root: Any, schema: dict,
     return [node for node, _hit in _walk_misread_scalars(root, schema, schemas, schema_name)]
 
 
+# ── #3764: a number in a NUMBER field written in a spelling yaml.v3 rewrites
+#
+# A structured reserved value (`_custom_alerts`, `_metadata`, …) reaches the
+# exporter's readers re-serialised: yaml.v3 decodes it and writes it back, so
+# `min_events: 0x10` arrives as `16`, `010` as `8`, `1e3` as `1000`. The
+# readers that judge such a field by its text (min_events enters the
+# recipe_id slug as written, and its validator takes plain decimal digits
+# only) then judge the rewritten text. The owner ruling on #3764 keeps the
+# runtime as it reads (no second judgement there) and refuses the spelling
+# at the entry instead — here, beside the string-field rule above, with the
+# same inputs: parse-tree's tag says the scalar is a number, the schema says
+# the field takes only numbers, and the text must then be the plain decimal
+# spelling of that number — `0` or `-?[1-9][0-9]*`, plus `.digits` ending in
+# a non-zero digit where the field takes a non-integer number. No spelling
+# list: a text either is that, or not.
+#
+# Only a value the field can hold is this rule's: a non-integer in an
+# integer field (`1.5`), or a non-finite one (`.inf`, which parse-tree gives
+# no `value`), is a TYPE error the schema's own check (json_schema) reports;
+# so is a number whose value has no plain spelling (an integer beyond
+# yaml.v3's range, read as a float). Reporting those here would name a fix
+# that does not exist and report the value twice.
+#
+# ⚠️ The entry is CI's validate-config: a tree changed in direct mode without
+# it (a commit straight to git) is not judged until #3353's whole-tree
+# verdict runs this row too.
+_PLAIN_INTEGER = re.compile(r"0|-?[1-9][0-9]*")
+_PLAIN_DECIMAL = re.compile(r"(0|-?[1-9][0-9]*)(\.[0-9]*[1-9])?|-0\.[0-9]*[1-9]")
+
+
+class NondecimalNumber:
+    """One number in a number-typed field written other than in plain
+    decimal. ``path`` as for :class:`MisreadScalar`; ``text`` the scalar's
+    source text; ``value`` yaml.v3's reading of it (parse-tree's ``value``);
+    ``integer`` whether the field takes integers only."""
+
+    __slots__ = ("path", "text", "value", "integer")
+
+    def __init__(self, path: str, text: str, value: str, integer: bool) -> None:
+        self.path, self.text, self.value, self.integer = path, text, value, integer
+
+    def message(self) -> str:
+        kind = "an integer" if self.integer else "a number"
+        return (f"{self.path}: {self.text!r} is read by yaml.v3 (every reader of "
+                f"conf.d) as {self.value}, and on the way to the exporter's readers "
+                f"it is rewritten to that — this field takes {kind} written in "
+                f"plain decimal (#3764): {_written(self.path, self.value)}")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"NondecimalNumber({self.path} {self.text!r})"
+
+
+def find_nondecimal_numbers(root: Any, schema: dict,
+                            schemas: Optional[dict[str, Any]] = None,
+                            schema_name: str = "") -> list[NondecimalNumber]:
+    """Every scalar of *root* (a file's `da-guard parse-tree` nodes) that sits
+    in a field of *schema* taking only numbers (``integer`` / ``number``,
+    plus ``null``), that yaml.v3 read as a number the field can hold, and
+    whose text is not that number's plain decimal spelling (#3764). A field
+    that also takes a string is left alone, as :func:`find_misread_scalars`
+    leaves a mixed field; a value the field cannot hold (``1.5`` in an
+    integer field, ``.inf``) is the schema's type check's to report."""
+    found: list[NondecimalNumber] = []
+    for node, cands, path in _tree_scalars_with_schema(root, schema, schemas, schema_name):
+        if node["tag"] not in ("!!int", "!!float"):
+            continue
+        types = schema_scalar_types(cands)
+        if types is None:
+            continue
+        numeric = types - {"null"}
+        if not numeric or not numeric <= {"integer", "number"}:
+            continue
+        integer = numeric == {"integer"}
+        plain = _PLAIN_INTEGER if integer else _PLAIN_DECIMAL
+        if plain.fullmatch(node["text"]):
+            continue
+        # Its value, in the plain spelling the fix names — or, when it has
+        # none the field can hold, the schema's type check's to report.
+        value = node.get("value")
+        if not isinstance(value, str) or not plain.fullmatch(value):
+            continue
+        found.append(NondecimalNumber(path or "/", node["text"], value, integer))
+    return found
+
+
 # ── which schema(s) the #2164 quoting walk applies to one conf.d file ────
 #
 # ⛔ ONE selection, for `check_confd_schema.validate_dir` (json_schema) and

@@ -1,0 +1,14 @@
+[
+  {"labels": {"alertname": "MariaDB_HighConnections", "tenant": "tenant-x",
+              "severity": "critical", "namespace": "ns-data"},
+   "startsAt": "2026-03-15T10:00:00Z", "endsAt": "2026-03-15T10:05:00Z"},
+  {"labels": {"alertname": "MariaDB_SlowQueries", "tenant": "tenant-y",
+              "severity": "critical", "namespace": "ns-data"},
+   "startsAt": "2026-03-15T10:01:00Z", "endsAt": "2026-03-15T10:06:00Z"},
+  {"labels": {"alertname": "Redis_MemoryHigh", "tenant": "tenant-y",
+              "severity": "warning", "namespace": "ns-cache"},
+   "startsAt": "2026-03-15T10:02:00Z", "endsAt": "2026-03-15T10:04:00Z"},
+  {"labels": {"alertname": "KubePodCrashLooping", "tenant": "tenant-x",
+              "severity": "warning", "namespace": "ns-app"},
+   "startsAt": "2026-03-15T14:00:00Z", "endsAt": "2026-03-15T14:10:00Z"}
+]

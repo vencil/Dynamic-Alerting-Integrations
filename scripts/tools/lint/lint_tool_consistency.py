@@ -244,26 +244,67 @@ def check_tool_meta(tools: list, loader_html: str, errors: list, warnings: list)
             )
 
 
+def built_bundles(errors: list) -> set[str] | None:
+    """Names of the bundles a portal build emits, read from the build's input.
+
+    tools/portal/build.mjs bundles exactly the names listed in
+    tools/portal/manifest.json, each from entries/<name>.entry.jsx, into
+    docs/assets/dist/<name>.js. That manifest is the SSOT for "which
+    dist/<name>.js exists after a build"; the dist directory itself is build
+    output, which every consumer now builds for itself (#3738), so checking
+    it here only answered "was it built on this machine, and is the copy in
+    git current?" — two questions this lint does not own.
+
+    Returns None (after recording one error) when the manifest cannot be
+    read: the callers must then report nothing rather than every bundle as
+    missing.
+    """
+    portal = PROJECT_ROOT / "tools" / "portal"
+    manifest = portal / "manifest.json"
+    try:
+        entries = json.loads(manifest.read_text(encoding="utf-8")).get("entries")
+    except (OSError, ValueError, AttributeError) as exc:
+        errors.append(f"[bundle] cannot read tools/portal/manifest.json: {exc}")
+        return None
+    if not isinstance(entries, list) or not all(isinstance(e, str) for e in entries):
+        errors.append(
+            "[bundle] tools/portal/manifest.json must hold "
+            '{"entries": [<name>, ...]}'
+        )
+        return None
+    # An entry without its entries/<name>.entry.jsx fails the whole build;
+    # count it as not built so the finding names the bundle that would 404.
+    return {e for e in entries
+            if (portal / "entries" / f"{e}.entry.jsx").is_file()}
+
+
+def _bundle_base(component: str) -> str:
+    base = component.rsplit("/", 1)[-1]
+    return base[: -len(".jsx")] if base.endswith(".jsx") else base
+
+
 def check_flow_map_dist(loader_html: str, errors: list, warnings: list):
-    """Verify each CUSTOM_FLOW_MAP entry has a built dist bundle.
+    """Verify each CUSTOM_FLOW_MAP entry is a bundle the portal build emits.
 
     Single-component bare-key mode resolves key → component path →
-    docs/assets/dist/<basename>.js; a map entry without its bundle is a
+    docs/assets/dist/<basename>.js; a map entry the build never emits is a
     guaranteed runtime 404. (Flow steps load the same way — that direction
     gets the equivalent gate in check_flow_components.)
     """
     flow_map = parse_flow_map(loader_html)
     if not flow_map:
         return  # absence already reported by check_tool_meta
-    dist_dir = PROJECT_ROOT / "docs" / "assets" / "dist"
+    built = built_bundles(errors)
+    if built is None:
+        return
     for key, component in flow_map.items():
-        base = component.rsplit("/", 1)[-1]
-        if base.endswith(".jsx"):
-            base = base[: -len(".jsx")]
-        if not (dist_dir / f"{base}.js").exists():
+        base = _bundle_base(component)
+        if base not in built:
             errors.append(
                 f"[flow_map] CUSTOM_FLOW_MAP key '{key}' → {component} has no "
-                f"dist bundle docs/assets/dist/{base}.js (bare-key load would 404)"
+                f"dist bundle docs/assets/dist/{base}.js: '{base}' is not a "
+                f"tools/portal/manifest.json entry with entries/{base}.entry.jsx "
+                f"(bare-key load would 404)"
             )
 
 
@@ -363,6 +404,10 @@ def check_flow_components(tools: list, errors: list, warnings: list):
         return
 
     registry_keys = {t["key"] for t in tools}
+    # Read lazily, once: only a step naming an existing component needs it,
+    # and an unreadable manifest is one error, not one per step.
+    built: set[str] | None = None
+    built_read = False
 
     for flow_name, flow in flows.items():
         # Grammar guards: validate the shape, not just the current corpus —
@@ -452,16 +497,16 @@ def check_flow_components(tools: list, errors: list, warnings: list):
                     # Runtime loads the built bundle, not the source:
                     # renderFlowUI → loadDistBundle(basename) →
                     # docs/assets/dist/<basename>.js. Source existing
-                    # alone still 404s when the bundle was never built.
-                    base = clean.rsplit("/", 1)[-1]
-                    if base.endswith(".jsx"):
-                        base = base[: -len(".jsx")]
-                    dist_js = PROJECT_ROOT / "docs" / "assets" / "dist" / f"{base}.js"
-                    if not dist_js.exists():
+                    # alone still 404s when the build never emits it.
+                    if not built_read:
+                        built, built_read = built_bundles(errors), True
+                    base = _bundle_base(clean)
+                    if built is not None and base not in built:
                         errors.append(
                             f"[flow] Flow '{flow_name}' step {i}: "
                             f"component '{component}' has no dist bundle "
-                            f"docs/assets/dist/{base}.js (runtime 404)"
+                            f"docs/assets/dist/{base}.js: '{base}' is not a "
+                            f"tools/portal/manifest.json entry (runtime 404)"
                         )
 
             # Check required fields

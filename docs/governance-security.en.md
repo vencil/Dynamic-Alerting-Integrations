@@ -230,9 +230,13 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 
 | Component | Ingress Source | Egress Destination |
 |------|-------------|------------|
-| Prometheus | monitoring namespace (9090) | tenant ns 9104/8080, Alertmanager 9093, kube-state-metrics, DNS, K8s API 6443 |
+| Prometheus | monitoring namespace (9090) | tenant ns 9104/8080, Alertmanager 9093, kube-state-metrics, VictoriaLogs 9428 (/metrics), DNS, K8s API 6443 |
 | Alertmanager | Prometheus (9093) | DNS, webhook HTTPS 443 (block cloud metadata 169.254.169.254) |
-| Grafana | monitoring namespace (3000) | Prometheus 9090, DNS |
+| Grafana | monitoring namespace (3000) | Prometheus 9090, VictoriaLogs 9428, external HTTPS 443 (grafana.com plugin install; blocks cloud metadata 169.254.169.254), DNS |
+| VictoriaLogs (helm) | 9428, only each `auth.consumers` entry's `from` (Vector: the `vector` namespace and its pod label; Grafana, chargeback-aggregator, federation-gateway/reconciler: pod label in the same namespace) and `networkPolicy.scrapers` (Prometheus) — the same list vmauth authorizes | none |
+| federation-gateway (helm) | listenPort (`networkPolicy.allowedNamespaces`, empty = cluster-wide); the audit-metrics port (Prometheus's namespace) | DNS, `upstream.port` in the upstream's namespace |
+| chargeback-aggregator (helm) | none | DNS, VictoriaLogs 9428 |
+| federation-proxy (helm) | listenPort, only from the federation-gateway pod label (`networkPolicy.gatewaySelector` / `gatewayNamespace`) | DNS, the upstream port in the upstream's namespace (default Prometheus 9090) |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
 | tenant-api | 4180 (oauth2-proxy, cluster-wide); **8080 admits a pod-scoped allow-list only**: Prometheus (`app=prometheus` for the raw deployment, `app.kubernetes.io/name=prometheus` for a Prometheus Operator / kube-prometheus-stack one). Port 8080 serves only `/health`, `/ready` and `/metrics`; the API is on a pod-internal Unix socket ([ADR-027](adr/027-tenant-api-caller-identity.en.md) §2, §3). The helm values key `networkPolicy.internalPortAllow` is the source of this list; every entry is admitted by default and cannot be switched off (an empty selector makes `helm template` fail) | Egress opt-in (`networkPolicy.egress.enabled`, default off); when on: DNS + Prometheus 9090 + `extraEgress` (K8s API / git forge) |

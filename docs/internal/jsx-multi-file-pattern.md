@@ -64,8 +64,9 @@ meaning), but the mechanism itself is legacy
 | Components export via `export default`; shared symbols via a tail `export { A, B };` clause — declarative named exports (`export function` / `export const` / …) are FATAL | `check_jsx_loader_compat.py` (`jsx-loader-compat-check` hook, `.jsx` under `tools/portal/src/`) |
 | Bare import specifiers limited to `react` / `lucide-react` (react is bundled per-tool; lucide-react is virtualized to `window.lucideReact` by `build.mjs`, TD-030f); cross-file reuse = relative ESM import | same lint |
 | No module-scope `const X = window.__X;` no-fallback reads (breaks under esbuild `splitting: true` chunk ordering) | `check_window_x_no_fallback.py` (TRK-237; dev-rules §S6) |
-| Babel parse + line caps: warn 1500 / fail 2500 (issue #152) | `lint_jsx_babel.py` (`jsx-babel-check` hook, `--ci --strict-linecount`) — recursively scans `tools/portal/src/interactive/tools/` + `tools/portal/src/getting-started/` `**/*.jsx`; `.js` dep files are not scanned by it |
-| dist and source stay in sync (only the dist-WITHOUT-source direction is caught mechanically) | `check_dist_source_consistency.py` (TRK-239) |
+| Parse with the build's esbuild (#3669) | `lint_jsx_syntax.py` (`jsx-syntax-check` hook, `--ci`) — every `tools/portal/src/**/*.jsx` and `*.js`, through the lockfile's esbuild and `tools/portal/esbuild-shared.mjs` (the build's own transform); needs `make portal-deps` |
+| Line caps: warn 1500 / fail 2500 (issue #152) | `check_jsx_linecount.py` (`jsx-linecount-check` hook, `--ci --strict`, no node) — recursively scans `tools/portal/src/interactive/tools/` + `tools/portal/src/getting-started/` `**/*.jsx`; `.js` dep files are not scanned by it |
+| `docs/assets/dist/` is build output and stays out of git (every consumer builds it from source, #3738) | `.gitignore` + `tests/lint/test_portal_dist_not_tracked.py` |
 
 Loading order is simply the entry's ESM import graph: each tool has
 `tools/portal/entries/<tool>.entry.jsx` (listed in
@@ -79,9 +80,11 @@ reads/writes for cross-file communication.
 
 After ANY portal source change:
 
-1. `make portal-build` — rebuild the **committed** dist
-   (`docs/assets/dist/`); prod pages load committed dist, and "edited
-   source but forgot to rebuild dist" is NOT caught by any hook.
+1. `make portal-build` — rebuild the local dist (`docs/assets/dist/`)
+   when you want to load the tools in a browser. dist is not in git
+   (#3738): commit only the source. Pages deploy, the da-portal image,
+   the smoke run and `make serve-docs` / `test-e2e*` each build it from
+   source themselves.
 2. `make test-portal` — Vitest unit tests.
 3. Relevant E2E spec(s) under `tests/e2e/` for behavior changes.
 

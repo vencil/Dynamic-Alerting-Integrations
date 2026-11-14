@@ -69,6 +69,10 @@ jobs:
   vm-replay:
     name: vmalert -replay staleness bench (real vmsingle, fail-closed)
     runs-on: ubuntu-24.04
+    env:
+      # The runner image has go, so conftest would build; these tests read
+      # no Go binary (tests/lint/test_workflow_pytest_declares_go_binaries.py).
+      VIBE_TEST_GO_BINARIES: skip
     # Nominal run is a few minutes (the replay windows are SIMULATED time —
     # ≤1800 s at 30 s step is ~60 evals per rule, wall-clock seconds); the cap
     # covers docker pull + cold binary downloads.

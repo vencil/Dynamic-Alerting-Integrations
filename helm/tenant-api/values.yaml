@@ -19,20 +19,21 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
-# oauth2-proxy sidecar configuration
+# oauth2-proxy sidecar configuration. Always rendered: it is the pod's only
+# oauth2-proxy and the only way to the API (ADR-027 §5); the former
+# `oauth2Proxy.enabled` switch was removed (§6) and the schema refuses it.
 oauth2Proxy:
-  enabled: true
   image:
     # renovate: datasource=docker depName=quay.io/oauth2-proxy/oauth2-proxy
     repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.5"
+    tag: "v7.15.6"
     # Pinned by digest (#902 L2); the nightly scan matrix must carry the same
     # ref. This is the deployment's only oauth2-proxy (ADR-027 §5).
     # ⛔ Digest is AUTHORITATIVE: `--set oauth2Proxy.image.tag=…` ALONE does NOT
     #    upgrade — k8s silently keeps running THIS digest. Also set
     #    oauth2Proxy.image.digest to the new tag's digest; do NOT clear it.
     #    Renovate (#902 L3) bumps tag + digest together.
-    digest: "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
+    digest: "sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048"
     pullPolicy: IfNotPresent
   # ADR-027 §2, §10: oauth2-proxy runs with a structured config file
   # (--alpha-config) rendered from the values below (provider, header
@@ -100,7 +101,7 @@ oauth2Proxy:
 # tenant-api application settings
 # ADR-027 §5: the portal's static files, served from a container in this pod
 # behind oauth2-proxy's "/" upstream (the API is /api/ → tenant-api's Unix
-# socket). Rendered with oauth2Proxy.enabled. The container listens on the
+# socket). The container listens on the
 # pod's loopback only and runs the chart's nginx config, which forwards
 # nothing (templates/_helpers.tpl tenant-api.portalNginxConfig).
 portal:
@@ -547,6 +548,50 @@ generator:
     existingConfigMap: ""
     key: policy.yaml
 
+# ── recipe-preview container (ADR-027 §5, #1040) ─────────────────────────────
+# Answers POST /api/v1/tenants/{id}/recipe-preview ("would this recipe fire?")
+# for tenant-api, over a Unix socket in the pod: tenant-api authorizes the
+# caller on {id}, then asks it. No network port, no identity, no Kubernetes API
+# access. Runs as the pod's uid: the service answers only a peer of its own uid
+# (SO_PEERCRED), and tenant-api is that peer. Disabled, tenant-api answers the
+# route with 503 PREVIEW_NOT_CONFIGURED; everything else is unaffected.
+#
+# ⛔ IMAGE: the recipe-preview image ships with the da-tools release (one
+# `tools/v*` tag builds both, from one commit), so it carries the same bundled
+# compiler (da-guard) as the generator above, which judges every write. Its
+# tag is NOT set here: it follows generator.image.tag, the one pin
+# `bump_docs.py --tools` rewrites. Set image.tag only to run a different image
+# on purpose. The pin above (v2.9.0) predates this: no recipe-preview image
+# exists for it, so the container cannot be pulled until the next tools
+# release (check_image_pin_capability.py registers v2.9.0 as an exemption that
+# release turns stale) — until then, run with recipePreview.enabled=false or
+# point image.tag at an image you built.
+recipePreview:
+  enabled: true
+  image:
+    repository: ghcr.io/vencil/recipe-preview
+    # Empty = generator.image.tag (see above).
+    tag: ""
+    # Optional digest pin. ⛔ Not inherited from generator.image.digest: the
+    # two images differ. When set, the digest is what runs.
+    digest: ""
+    pullPolicy: IfNotPresent
+  # The service's own limits. The request body limit is NOT here: tenant-api
+  # checks the body it forwards against the service's default (64 KiB,
+  # recipepreview.MaxRequestBytes), so the two cannot disagree.
+  maxConcurrency: 4      # previews evaluated at once (each runs promtool)
+  queueTimeout: 10       # seconds a request waits for a slot
+  rateLimitPerMin: 30    # per tenant
+  # Previews are rare and short (the compiler plus one promtool process); the
+  # numbers the standalone recipe-preview chart shipped with.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 service:
   type: ClusterIP
   # Port 80 → oauth2-proxy (4180) — external traffic
@@ -610,7 +655,7 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
   runAsGroup: 65534
-  # ⛔ Keep fsGroup when oauth2Proxy.enabled: the client-secret file is
+  # ⛔ Keep fsGroup: the oauth2-proxy client-secret file is
   # mounted 0440 and oauth2-proxy (pod-level uid/gid) reads it through this
   # group; without it oauth2-proxy cannot read clientSecretFile and exits.
   fsGroup: 65534

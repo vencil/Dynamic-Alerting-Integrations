@@ -980,12 +980,12 @@ func TestServedValues_RootNonFiniteAliasIsNamedCanonically(t *testing.T) {
 // tree (root_defaults_refused, with the text written), and one under an
 // unregistered `_` key — no threshold, so no keys[] entry — is that tenant's
 // unserved value as written. The `.nan` there failed the JSON encode (exit 2);
-// `"70"` and `0x1p4` are read as the tenant path reads them; `abc` refuses
+// `"70"` and `1.6e1` are read as the tenant path reads them; `abc` refuses
 // that key alone, not the file.
 func TestServedValues_RootRefusedDefaultsAreNamed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": fixtureDims + "defaults:\n  mysql_connections: \"70\"\n  redis_memory: 0x1p4\n  pg_connections: abc\n" +
+		"_defaults.yaml": fixtureDims + "defaults:\n  mysql_connections: \"70\"\n  redis_memory: 1.6e1\n  pg_connections: abc\n" +
 			"  container_cpu: 0x1F\n  _zz_unknown: .nan\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
 	}, "")

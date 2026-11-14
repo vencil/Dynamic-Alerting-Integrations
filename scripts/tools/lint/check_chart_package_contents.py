@@ -89,7 +89,6 @@ DECLARED_SUBTREES: Dict[str, Set[str]] = {
     # `files/` (relay_token.js) left with the reverse proxy (ADR-027 §5).
     "helm/da-portal": {"templates"},
     "helm/threshold-exporter": {"templates"},
-    "helm/recipe-preview": {"templates"},
     "helm/tenant-api": {"templates"},
 }
 
@@ -121,7 +120,7 @@ def package(chart_dir: Path, dest: Path) -> Path:
             "helm is not on PATH and no --tgz was given, so there is nothing to "
             "inspect. The dev container ships helm "
             "(devcontainer.json: kubectl-helm-minikube), and CI installs it "
-            "(azure/setup-helm@v4). This is 'could not measure', not 'measured "
+            "(azure/setup-helm@v5). This is 'could not measure', not 'measured "
             "and found nothing'."
         )
     try:

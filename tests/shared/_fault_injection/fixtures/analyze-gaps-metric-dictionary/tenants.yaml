@@ -1,0 +1,7 @@
+tenants:
+  orders-api:
+    custom_mysql_global_status_threads_connected: 120
+    custom_pg_stat_activity_count: 150
+    custom_checkout_queue_depth: 250
+  orders-cache:
+    custom_redis_connected_clients: 800

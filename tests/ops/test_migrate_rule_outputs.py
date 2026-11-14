@@ -108,8 +108,8 @@ class TestApplyAutoSuppression:
         n = mr.apply_auto_suppression([warn, crit])
         assert n == 1
         # metric_group label injected on both.
-        assert warn.alert_rules[0]["labels"]["metric_group"] == "connections"
-        assert crit.alert_rules[0]["labels"]["metric_group"] == "connections"
+        assert warn.alert_rules[0]["labels"]["metric_group"] == "mysql_connections"
+        assert crit.alert_rules[0]["labels"]["metric_group"] == "mysql_connections"
         # Warning got an explanatory note.
         assert any("Severity Dedup" in n for n in warn.notes)
 
@@ -139,20 +139,30 @@ class TestApplyAutoSuppression:
         )
         assert mr.apply_auto_suppression([warn, crit]) == 0
 
-    def test_metric_group_uses_last_underscore_segment(self):
-        warn = _make_result(
-            "W", severity="warning",
-            tenant_config={"container_cpu_usage": "0.8"},
-            alert_rules=[{"alert": "W", "labels": {}}],
-        )
-        crit = _make_result(
-            "C", severity="critical",
-            tenant_config={"container_cpu_usage_critical": "0.95"},
-            alert_rules=[{"alert": "C", "labels": {}}],
-            recording_rules=[{}, {}],
-        )
-        mr.apply_auto_suppression([warn, crit])
-        assert warn.alert_rules[0]["labels"]["metric_group"] == "usage"
+    def test_metric_group_is_the_whole_base_key(self):
+        """#3692: the group is the base key itself, as the rule packs' twins
+        name theirs (#3658). Severity dedup pairs by metric_group within a
+        tenant, so a group of the last segment alone made unrelated rules
+        that end alike (mysql_replication_lag, redis_replication_lag → "lag")
+        mute each other's warnings."""
+        def pair(key):
+            warn = _make_result(
+                "W", severity="warning",
+                tenant_config={key: "0.8"},
+                alert_rules=[{"alert": "W", "labels": {}}],
+            )
+            crit = _make_result(
+                "C", severity="critical",
+                tenant_config={key + "_critical": "0.95"},
+                alert_rules=[{"alert": "C", "labels": {}}],
+                recording_rules=[{}, {}],
+            )
+            return [warn, crit]
+
+        mysql, redis = pair("mysql_replication_lag"), pair("redis_replication_lag")
+        assert mr.apply_auto_suppression(mysql + redis) == 2
+        groups = {r.alert_rules[0]["labels"]["metric_group"] for r in mysql + redis}
+        assert groups == {"mysql_replication_lag", "redis_replication_lag"}
 
 
 # ---------------------------------------------------------------------------

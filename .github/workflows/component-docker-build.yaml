@@ -66,9 +66,13 @@ on:
       - "scripts/tools/_lib_python.py"                  # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_validation.py"              # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_prometheus.py"              # recipe-preview COPY source (#3229)
+      - "scripts/tools/_lib_engine.py"                  # recipe-preview COPY source (#3611)
       - "scripts/ops/go_build.sh"                       # the Go build flags (#3425): tenant-api / recipe-preview COPY it, da-tools' build.sh runs it
       - "docs/interactive/**"        # da-portal Dockerfile COPY source
-      - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
+      # da-portal COPY source (post TD-042 restructure) AND, since #3738, the
+      # whole input of its `portal-build` stage (package*.json, build.mjs,
+      # manifest.json, entries/), not only src/.
+      - "tools/portal/**"
       - "docs/assets/**"             # da-portal COPY source
       - "docs/.nojekyll"             # da-portal COPY source (rarely changes, but it IS a COPY input)
       # Chart-shipped self-built images (#1337). Both build from their own
@@ -76,6 +80,12 @@ on:
       - "helm/federation-gateway/audit-sidecar/**"
       - "helm/vector/projection-gate/**"
       - "try-local/generator/**"     # try-local generator runtime (#2903); its da-guard stage reads the exporter paths above (#3530)
+      - "components/da-read/**"      # the try-local generator's da-read stage builds this module
+      # The repo-root build context's ignore file (#3738): it decides what
+      # da-portal, tenant-api, recipe-preview and the other root-context
+      # builds receive — e.g. that tools/portal/node_modules stays out of the
+      # portal-build stage. Pinned by tests/ops/test_portal_dist_consumers_build.py.
+      - ".dockerignore"
       - ".github/workflows/component-docker-build.yaml"
 
 concurrency:

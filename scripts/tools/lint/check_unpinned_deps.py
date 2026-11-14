@@ -30,7 +30,8 @@ What counts as pinned (NOT a violation)
         `@scope/` is a scope, not a version). `npm ci` / `npx` / bare
         `npm install` (package.json + lockfile) are fine.
 
-Scope: .github/workflows/**, Makefile, .devcontainer/devcontainer.json,
+Scope: .github/workflows/**, local composite actions
+(.github/actions/*/action.y[a]ml), Makefile, .devcontainer/devcontainer.json,
 and Dockerfiles. Manual/dev shell scripts under scripts/** are out of
 scope for now (they carry hint/NOTE text that reads like installs, and
 their few real installs are low-risk manual tools) — a documented v1
@@ -119,6 +120,10 @@ def _target_files(root: Path) -> List[Path]:
     wf = root / ".github" / "workflows"
     if wf.is_dir():
         out += sorted(wf.glob("*.yml")) + sorted(wf.glob("*.yaml"))
+    # Local composite actions run their `run:` steps inside those workflows.
+    acts = root / ".github" / "actions"
+    if acts.is_dir():
+        out += sorted(acts.glob("*/action.yml")) + sorted(acts.glob("*/action.yaml"))
     for extra in ("Makefile", ".devcontainer/devcontainer.json"):
         p = root / extra
         if p.is_file():

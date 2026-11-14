@@ -28,18 +28,32 @@
 # state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。
 # 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
 #
-# arming（D-A A1）：chart 為什麼出貨或不出貨這個 key 的值。每個非 _critical 的 key
-# 必填，_critical 不寫（跟隨 base）：
-#   default             chart 出貨即啟用（只能用在 defaults 層）
-#   ratio_pending       絕對值跨部署沒有意義，正解是改成比值（#1320）
-#   site_specific       沒有普世的值，要部署方依自身情況給
-#   pending_validation  有可攜的候選值，但尚未經 shadow 報表驗證（A2 的輸入）
-# 非 default 必須附 arming_reason（英）與 arming_reason_zh（中），各一行。
-# 「規則包會讀、chart 不出貨」的清單（原 NOT_CHART_ARMED）由本欄位推導。
+# arming／portability／blocker（D-A A1，#3773 拆成正交欄位）：每個非 _critical 的
+# key 都要寫前兩個，_critical 都不寫（跟隨 base）。
+#   arming       default（chart 出貨即啟用，限 defaults 層）| operator（要部署方自己給值）
+#   portability  portable（一個值可跨部署沿用）| ratio_pending（絕對值，正解是改比值，
+#                #1320）| site_specific（沒有普世的值）。非 portable 必附
+#                portability_reason 與 portability_reason_zh，各一行。
+#   blocker      選填 {kind, tracking, reason, reason_zh}：kind 為 unwired（沒有資料源）、
+#                aggregation_bug、unmeasured、value_disputed；tracking 是追蹤的 issue 號。
+# 閘門：arming: default 必須 portable 且沒有 blocker；要出貨一個不可攜的值，得寫
+# default_exception: {tracking: <issue>}。
+# 推導、不手寫：「規則包會讀、chart 不出貨」（原 NOT_CHART_ARMED）與「可攜、未出貨、
+# 無阻塞」的 A2 驗證候選集合。
 #
 # deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。
 # 本區段是 alias SSOT——唯一的 runtime 鏡像 Go（pkg/config/aliases.go）由 pin 測試
 # 釘住本區段（鏡像漂移＝CI 紅）；Python 不留副本，經 da-guard key-spellings 問（#3556）。
+#
+# retired_keys（#3829）：已退役、沒有 rule pack 再讀的閾值 key →
+#   {replaced_by: <現役 key>|null, tracking: <issue>, hint: <給 operator 的英文一句>}。
+# 共用 key 判決對它一律判 unread／error／retired（不論哪一層寫、有沒有 reader 讀），
+# hint 點名 replaced_by；tenant-api 的 batch unset 放行它。alias 窗口關閉時，舊拼法從
+# deprecated_aliases 移到這裡。--regen 生成 Go 表
+# components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen.go（stale＝--ci 紅）。
+# 一致性（--ci）：不得是現役 key、不得在 deprecated_aliases 任一側、replaced_by 須為
+# 現役 key 或 null、tracking 必填。<old>_critical 隨 base 一併退役（判成以
+# <replaced_by>_critical 替代，同 alias 的推導），所以 <old>_critical 也不得是現役 key。
 version: 1
 packs:
   kubernetes:
@@ -116,6 +130,7 @@ keys:
     desc: Container CPU % of limit (weakest link)
     metric_class: saturation
     arming: default
+    portability: portable
     dimensions:
     - version
   container_cpu_throttle:
@@ -128,6 +143,7 @@ keys:
       #944)'
     metric_class: saturation
     arming: default
+    portability: portable
   container_memory:
     pack: kubernetes
     tier: defaults
@@ -136,6 +152,7 @@ keys:
     desc: Container memory % of limit (weakest link)
     metric_class: saturation
     arming: default
+    portability: portable
     dimensions:
     - version
   container_cpu_critical:
@@ -170,6 +187,7 @@ keys:
     desc: Connection usage % warning
     metric_class: saturation
     arming: default
+    portability: portable
   pg_replication_lag:
     pack: postgresql
     tier: defaults
@@ -178,6 +196,7 @@ keys:
     desc: Replication lag warning
     metric_class: replication
     arming: default
+    portability: portable
   pg_connections_critical:
     pack: postgresql
     tier: optional_overrides
@@ -202,6 +221,11 @@ keys:
     desc: Max threads_connected warning
     metric_class: saturation
     arming: default
+    portability: ratio_pending
+    portability_reason: "An absolute connection count does not carry across deployments; the portable form is a share of max_connections (#3778)"
+    portability_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）"
+    default_exception:
+      tracking: 3778
   mysql_threads_running:
     pack: mariadb
     tier: defaults
@@ -212,6 +236,11 @@ keys:
       reversal of the #944 keep — 2-release alias window, old spelling still resolves)'
     metric_class: saturation
     arming: default
+    portability: site_specific
+    portability_reason: "A healthy number of running threads scales with the host's CPU count"
+    portability_reason_zh: "健康的 running threads 數隨主機的 CPU 核數而定"
+    default_exception:
+      tracking: 3778
   mysql_replication_lag:
     pack: mariadb
     tier: defaults
@@ -223,6 +252,7 @@ keys:
       default (#1200 WS5-P0-a Q3=C)
     metric_class: replication
     arming: default
+    portability: portable
   mysql_connections_critical:
     pack: mariadb
     tier: optional_overrides
@@ -258,9 +288,10 @@ keys:
     unit: bytes (4GB)
     desc: Memory usage warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "Absolute bytes do not carry across deployments; the portable form is a share of maxmemory (redis_memory_max_bytes), pending #1320"
-    arming_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "Absolute bytes do not carry across deployments; the portable form is a share of maxmemory (redis_memory_max_bytes), pending #1320"
+    portability_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待 #1320"
   redis_connected_clients:
     pack: redis
     tier: defaults
@@ -268,9 +299,10 @@ keys:
     unit: count
     desc: Connected clients warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "An absolute client count does not carry across deployments; the portable form is a share of maxclients (redis_config_maxclients), pending #1320"
-    arming_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients 的比例（redis_config_maxclients），待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "An absolute client count does not carry across deployments; the portable form is a share of maxclients (redis_config_maxclients), pending #1320"
+    portability_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients 的比例（redis_config_maxclients），待 #1320"
   redis_evicted_keys_rate:
     pack: redis
     tier: defaults
@@ -280,9 +312,10 @@ keys:
       (alert demands _rate) + moved optional_overrides→defaults — unwired dead key,
       no alias'
     metric_class: efficiency
-    arming: site_specific
-    arming_reason: "Eviction is normal for an LRU cache; the tolerable rate depends on the workload"
-    arming_reason_zh: "LRU 快取淘汰是常態，可容忍的速率取決於工作負載"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Eviction is normal for an LRU cache; the tolerable rate depends on the workload"
+    portability_reason_zh: "LRU 快取淘汰是常態，可容忍的速率取決於工作負載"
   redis_replication_lag:
     pack: redis
     tier: defaults
@@ -292,9 +325,8 @@ keys:
       replication is normally sub-second, so 30s is unambiguous trouble (noise-averse
       pick, #1231 owner call); #1196 C identity fix, no alias'
     metric_class: replication
-    arming: pending_validation
-    arming_reason: "Same 30s anchor as the shipped mysql/pg replication_lag default, not yet validated for Redis"
-    arming_reason_zh: "與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證"
+    arming: operator
+    portability: portable
   redis_connected_clients_critical:
     pack: redis
     tier: optional_overrides
@@ -326,9 +358,10 @@ keys:
     unit: count
     desc: Current connections warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "An absolute connection count does not carry across deployments; the portable form is a share of current plus available connections, pending #1320"
-    arming_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "An absolute connection count does not carry across deployments; the portable form is a share of current plus available connections, pending #1320"
+    portability_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320"
   mongodb_replication_lag:
     pack: mongodb
     tier: defaults
@@ -337,9 +370,8 @@ keys:
     desc: 'Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds
       (alert demands mongodb_replication_lag) — unwired dead key, no alias'
     metric_class: replication
-    arming: pending_validation
-    arming_reason: "Replica lag in seconds is comparable across deployments, but 10s has not been validated"
-    arming_reason_zh: "副本延遲秒數可跨部署比較，但 10 秒尚未驗證"
+    arming: operator
+    portability: portable
   mongodb_opcounters_rate:
     pack: mongodb
     tier: defaults
@@ -349,9 +381,10 @@ keys:
       (alert demands _rate) + moved optional_overrides→defaults — unwired dead key,
       no alias'
     metric_class: throughput
-    arming: site_specific
-    arming_reason: "Operation volume is workload, not a fault; any number is specific to the deployment"
-    arming_reason_zh: "操作量是工作負載而非故障，任何數字都只適用於特定部署"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Operation volume is workload, not a fault; any number is specific to the deployment"
+    portability_reason_zh: "操作量是工作負載而非故障，任何數字都只適用於特定部署"
   mongodb_connections_current_critical:
     pack: mongodb
     tier: optional_overrides
@@ -376,9 +409,8 @@ keys:
     desc: 'JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
       (alert demands es_heap_usage_percent) — unwired dead key, no alias'
     metric_class: saturation
-    arming: pending_validation
-    arming_reason: "A share of the heap limit carries across deployments, but 85 has not been validated by a shadow report"
-    arming_reason_zh: "佔 heap 上限的百分比可跨部署，但 85 尚未經 shadow 報表驗證"
+    arming: operator
+    portability: portable
   es_disk_usage_percent:
     pack: elasticsearch
     tier: defaults
@@ -389,9 +421,8 @@ keys:
       C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying
       15 into a used-% rule would fire permanently'
     metric_class: capacity
-    arming: pending_validation
-    arming_reason: "A share of disk carries across deployments (85 matches the Elasticsearch low watermark), but it has not been validated by a shadow report"
-    arming_reason_zh: "佔磁碟的百分比可跨部署（85 與 Elasticsearch 的 low watermark 相同），但尚未經 shadow 報表驗證"
+    arming: operator
+    portability: portable
   es_pending_tasks:
     pack: elasticsearch
     tier: defaults
@@ -401,9 +432,10 @@ keys:
       catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent
       from scaffold'
     metric_class: state
-    arming: site_specific
-    arming_reason: "A normal pending-task backlog scales with cluster size and change rate"
-    arming_reason_zh: "正常的 pending task 量隨叢集規模與變更頻率而定"
+    arming: operator
+    portability: site_specific
+    portability_reason: "A normal pending-task backlog scales with cluster size and change rate"
+    portability_reason_zh: "正常的 pending task 量隨叢集規模與變更頻率而定"
   es_search_latency_ms:
     pack: elasticsearch
     tier: defaults
@@ -414,9 +446,10 @@ keys:
       (same formula, 1s/5m warning) — the only community rule semantically identical
       to ours; full derivation + calibration caveat in the pack header (#1196 D)
     metric_class: latency
-    arming: site_specific
-    arming_reason: "Acceptable search latency is a service-level choice of the deployment"
-    arming_reason_zh: "可接受的搜尋延遲是各部署的服務等級選擇"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Acceptable search latency is a service-level choice of the deployment"
+    portability_reason_zh: "可接受的搜尋延遲是各部署的服務等級選擇"
   es_disk_usage_percent_critical:
     pack: elasticsearch
     tier: optional_overrides
@@ -456,9 +489,10 @@ keys:
     unit: count
     desc: Active sessions warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "An absolute session count does not carry across deployments (#1176 measured a benign peak of 240); the portable form is a share of the SESSIONS limit, pending #1320"
-    arming_reason_zh: "絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "An absolute session count does not carry across deployments (#1176 measured a benign peak of 240); the portable form is a share of the SESSIONS limit, pending #1320"
+    portability_reason_zh: "絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待 #1320"
     value_counterexample:
       issue: 1176
       direction: over_fire
@@ -471,9 +505,8 @@ keys:
     unit: '%'
     desc: Tablespace usage warning
     metric_class: capacity
-    arming: pending_validation
-    arming_reason: "A share of the tablespace carries across deployments, but 85 has not been validated by a shadow report"
-    arming_reason_zh: "佔 tablespace 的百分比可跨部署，但 85 尚未經 shadow 報表驗證"
+    arming: operator
+    portability: portable
   oracle_wait_time_rate:
     pack: oracle
     tier: optional_overrides
@@ -481,9 +514,15 @@ keys:
     unit: s/s
     desc: Wait time rate (5m)
     metric_class: latency
-    arming: site_specific
-    arming_reason: "No measurement yet; the normal wait profile differs per workload (#1320 keeps it declared)"
-    arming_reason_zh: "尚無實測；正常的等待輪廓因工作負載而異（#1320 暫維持宣告）"
+    arming: operator
+    portability: site_specific
+    portability_reason: "The normal wait profile differs per workload"
+    portability_reason_zh: "正常的等待輪廓因工作負載而異"
+    blocker:
+      kind: unmeasured
+      tracking: 1320
+      reason: "No measurement yet; #1320 keeps it declared until there is a signal"
+      reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
   oracle_process_count:
     pack: oracle
     tier: optional_overrides
@@ -491,9 +530,10 @@ keys:
     unit: count
     desc: Active processes warning
     metric_class: capacity
-    arming: ratio_pending
-    arming_reason: "#1176 measured a routine backup at 560 processes; the portable form is a share of the PROCESSES limit, pending #1320"
-    arming_reason_zh: "#1176 量到例行備份達 560 個 process；可攜的形式是佔 PROCESSES 上限的比例，待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "#1176 measured a routine backup at 560 processes; the portable form is a share of the PROCESSES limit, pending #1320"
+    portability_reason_zh: "#1176 量到例行備份達 560 個 process；可攜的形式是佔 PROCESSES 上限的比例，待 #1320"
     value_counterexample:
       issue: 1176
       direction: over_fire
@@ -506,9 +546,10 @@ keys:
     unit: bytes (4GB)
     desc: PGA allocation warning
     metric_class: capacity
-    arming: ratio_pending
-    arming_reason: "#1176 measured a planned stats-gather at 22 GB; the portable form is a share of PGA_AGGREGATE_LIMIT, pending #1320"
-    arming_reason_zh: "#1176 量到計畫性 stats-gather 用到 22 GB；可攜的形式是佔 PGA_AGGREGATE_LIMIT 的比例，待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "#1176 measured a planned stats-gather at 22 GB; the portable form is a share of PGA_AGGREGATE_LIMIT, pending #1320"
+    portability_reason_zh: "#1176 量到計畫性 stats-gather 用到 22 GB；可攜的形式是佔 PGA_AGGREGATE_LIMIT 的比例，待 #1320"
     value_counterexample:
       issue: 1176
       direction: over_fire
@@ -537,9 +578,10 @@ keys:
     unit: count
     desc: Active connections warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "An absolute connection count does not carry across deployments (#1176 measured a benign peak of 360); the portable form is a share of MAXAPPLS, pending #1320"
-    arming_reason_zh: "絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "An absolute connection count does not carry across deployments (#1176 measured a benign peak of 360); the portable form is a share of MAXAPPLS, pending #1320"
+    portability_reason_zh: "絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320"
     value_counterexample:
       issue: 1176
       direction: over_fire
@@ -552,9 +594,10 @@ keys:
     unit: ratio
     desc: Bufferpool hit ratio warning
     metric_class: efficiency
-    arming: site_specific
-    arming_reason: "The expected hit ratio differs between transactional and analytic workloads"
-    arming_reason_zh: "交易型與分析型工作負載的合理命中率不同"
+    arming: operator
+    portability: site_specific
+    portability_reason: "The expected hit ratio differs between transactional and analytic workloads"
+    portability_reason_zh: "交易型與分析型工作負載的合理命中率不同"
   db2_lock_wait_time:
     pack: db2
     tier: defaults
@@ -565,9 +608,10 @@ keys:
       below both fault levels (25/60) — full derivation + calibration workflow in
       the pack header (#1196 D)
     metric_class: latency
-    arming: site_specific
-    arming_reason: "Tolerable lock-wait accumulation depends on the workload and its latency budget"
-    arming_reason_zh: "可容忍的鎖等待累積量取決於工作負載與延遲預算"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Tolerable lock-wait accumulation depends on the workload and its latency budget"
+    portability_reason_zh: "可容忍的鎖等待累積量取決於工作負載與延遲預算"
     value_counterexample:
       issue: 1176
       direction: over_fire
@@ -580,9 +624,8 @@ keys:
     unit: '%'
     desc: Transaction log usage warning
     metric_class: capacity
-    arming: pending_validation
-    arming_reason: "A share of the transaction log carries across deployments, but 70 has not been validated"
-    arming_reason_zh: "佔交易日誌的百分比可跨部署，但 70 尚未驗證"
+    arming: operator
+    portability: portable
   db2_deadlock_rate:
     pack: db2
     tier: optional_overrides
@@ -590,9 +633,15 @@ keys:
     unit: count/s
     desc: Deadlock rate (5m)
     metric_class: errors
-    arming: site_specific
-    arming_reason: "#1176 measured a real deadlock storm below 5/s; the value is to be re-derived or dropped in #1320"
-    arming_reason_zh: "#1176 量到真實的 deadlock storm 低於 5/s；值要在 #1320 重新推導或移除"
+    arming: operator
+    portability: site_specific
+    portability_reason: "A tolerable deadlock rate depends on the workload"
+    portability_reason_zh: "可容忍的 deadlock 速率取決於工作負載"
+    blocker:
+      kind: value_disputed
+      tracking: 1320
+      reason: "#1176 measured a real deadlock storm below 5/s; the value is to be re-derived or dropped"
+      reason_zh: "#1176 量到真實的 deadlock storm 低於 5/s；值要重新推導或移除"
     value_counterexample:
       issue: 1176
       direction: under_fire
@@ -605,9 +654,8 @@ keys:
     unit: '%'
     desc: Tablespace usage warning
     metric_class: capacity
-    arming: pending_validation
-    arming_reason: "A share of the tablespace carries across deployments, but 85 has not been validated"
-    arming_reason_zh: "佔 tablespace 的百分比可跨部署，但 85 尚未驗證"
+    arming: operator
+    portability: portable
   db2_connections_active_critical:
     pack: db2
     tier: optional_overrides
@@ -631,9 +679,10 @@ keys:
     unit: qps
     desc: Query rate warning (5m)
     metric_class: throughput
-    arming: site_specific
-    arming_reason: "Query volume is workload, not a fault; any number is specific to the deployment"
-    arming_reason_zh: "查詢量是工作負載而非故障，任何數字都只適用於特定部署"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Query volume is workload, not a fault; any number is specific to the deployment"
+    portability_reason_zh: "查詢量是工作負載而非故障，任何數字都只適用於特定部署"
   clickhouse_active_connections:
     pack: clickhouse
     tier: defaults
@@ -641,9 +690,10 @@ keys:
     unit: count
     desc: Active TCP connections warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "An absolute connection count does not carry across deployments; the limit (max_connections) is not exported today, so #1320 decides the denominator"
-    arming_reason_zh: "絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "An absolute connection count does not carry across deployments; the limit (max_connections) is not exported today, so #1320 decides the denominator"
+    portability_reason_zh: "絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定"
   clickhouse_max_part_count:
     pack: clickhouse
     tier: optional_overrides
@@ -651,9 +701,10 @@ keys:
     unit: count
     desc: Max part count per partition
     metric_class: capacity
-    arming: pending_validation
-    arming_reason: "300 matches the upstream Zabbix ClickHouse template, but it has not been validated here (#1320 candidate)"
-    arming_reason_zh: "300 與上游 Zabbix ClickHouse 模板相同，但尚未在本平台驗證（#1320 候選）"
+    arming: operator
+    portability: site_specific
+    portability_reason: "The safe part count depends on the ClickHouse version: older releases rejected inserts at 300 parts, current ones only at 3000 (parts_to_throw_insert)"
+    portability_reason_zh: "安全的 part 數依 ClickHouse 版本而定：舊版在 300 個 part 就拒絕寫入，現行版本要到 3000（parts_to_throw_insert）"
   clickhouse_replication_queue:
     pack: clickhouse
     tier: optional_overrides
@@ -661,9 +712,15 @@ keys:
     unit: count
     desc: Replication queue size
     metric_class: replication
-    arming: site_specific
-    arming_reason: "No measurement yet; the normal queue depth depends on the replication topology"
-    arming_reason_zh: "尚無實測；正常的佇列深度取決於複寫拓撲"
+    arming: operator
+    portability: site_specific
+    portability_reason: "The normal queue depth depends on the replication topology"
+    portability_reason_zh: "正常的佇列深度取決於複寫拓撲"
+    blocker:
+      kind: unmeasured
+      tracking: 1320
+      reason: "No measurement yet; #1320 keeps it declared until there is a signal"
+      reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
   clickhouse_memory_tracking_bytes:
     pack: clickhouse
     tier: optional_overrides
@@ -671,9 +728,10 @@ keys:
     unit: bytes (8GB)
     desc: Memory tracking warning
     metric_class: capacity
-    arming: ratio_pending
-    arming_reason: "Absolute bytes do not carry across deployments; the portable form is a share of the server memory limit, whose export is still to be confirmed in #1320"
-    arming_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔伺服器記憶體上限的比例，該上限能否取得待 #1320 確認"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "Absolute bytes do not carry across deployments; the portable form is a share of the server memory limit, whose export is still to be confirmed in #1320"
+    portability_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔伺服器記憶體上限的比例，該上限能否取得待 #1320 確認"
   clickhouse_active_connections_critical:
     pack: clickhouse
     tier: optional_overrides
@@ -689,9 +747,10 @@ keys:
     unit: messages
     desc: Consumer lag warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "Tolerable lag in messages scales with each topic's throughput"
-    arming_reason_zh: "可容忍的訊息延遲隨各 topic 的吞吐量而定"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Tolerable lag in messages scales with each topic's throughput"
+    portability_reason_zh: "可容忍的訊息延遲隨各 topic 的吞吐量而定"
   kafka_under_replicated_partitions:
     pack: kafka
     tier: defaults
@@ -699,9 +758,8 @@ keys:
     unit: count
     desc: Under-replicated partitions (should be 0)
     metric_class: replication
-    arming: pending_validation
-    arming_reason: "Zero is a universal invariant, but shipping it has not been validated against rolling restarts"
-    arming_reason_zh: "0 是普世的不變式，但出貨前尚未對滾動重啟驗證"
+    arming: operator
+    portability: portable
   kafka_broker_count:
     pack: kafka
     tier: defaults
@@ -709,29 +767,10 @@ keys:
     unit: count
     desc: Minimum broker count warning
     metric_class: state
-    arming: site_specific
-    arming_reason: "The expected broker count is the deployment's topology"
-    arming_reason_zh: "預期的 broker 數是各部署的拓撲"
-  kafka_active_controllers:
-    pack: kafka
-    tier: defaults
-    value: 1
-    unit: count
-    desc: Minimum active controllers (should be 1)
-    metric_class: state
-    arming: pending_validation
-    arming_reason: "One active controller is a universal invariant, but shipping it has not been validated"
-    arming_reason_zh: "恰有一個 active controller 是普世的不變式，但出貨前尚未驗證"
-  kafka_request_rate:
-    pack: kafka
-    tier: defaults
-    value: 10000
-    unit: msg/s
-    desc: Message rate warning (5m)
-    metric_class: throughput
-    arming: site_specific
-    arming_reason: "Message volume is workload, not a fault; any number is specific to the deployment"
-    arming_reason_zh: "訊息量是工作負載而非故障，任何數字都只適用於特定部署"
+    arming: operator
+    portability: site_specific
+    portability_reason: "The expected broker count is the deployment's topology"
+    portability_reason_zh: "預期的 broker 數是各部署的拓撲"
   kafka_consumer_lag_critical:
     pack: kafka
     tier: optional_overrides
@@ -748,14 +787,6 @@ keys:
     desc: Under-replicated critical
     metric_class: replication
     critical_of: kafka_under_replicated_partitions
-  kafka_request_rate_critical:
-    pack: kafka
-    tier: optional_overrides
-    value: 50000
-    unit: msg/s
-    desc: Message rate critical
-    metric_class: throughput
-    critical_of: kafka_request_rate
   rabbitmq_queue_messages:
     pack: rabbitmq
     tier: defaults
@@ -763,9 +794,10 @@ keys:
     unit: messages
     desc: Queue depth warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "A normal queue depth depends on the producers and consumers of the deployment"
-    arming_reason_zh: "正常的佇列深度取決於各部署的生產者與消費者"
+    arming: operator
+    portability: site_specific
+    portability_reason: "A normal queue depth depends on the producers and consumers of the deployment"
+    portability_reason_zh: "正常的佇列深度取決於各部署的生產者與消費者"
   rabbitmq_node_mem_percent:
     pack: rabbitmq
     tier: defaults
@@ -773,9 +805,8 @@ keys:
     unit: '%'
     desc: Node memory usage warning
     metric_class: saturation
-    arming: pending_validation
-    arming_reason: "A share of node memory carries across deployments, but 80 has not been validated by a shadow report"
-    arming_reason_zh: "佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證"
+    arming: operator
+    portability: portable
   rabbitmq_connections:
     pack: rabbitmq
     tier: defaults
@@ -783,9 +814,10 @@ keys:
     unit: count
     desc: Connection count warning
     metric_class: saturation
-    arming: ratio_pending
-    arming_reason: "An absolute connection count does not carry across deployments; the exporter's sockets_used/sockets_available is a candidate denominator, but it is file-descriptor derived, so #1320 decides"
-    arming_reason_zh: "絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定"
+    arming: operator
+    portability: ratio_pending
+    portability_reason: "An absolute connection count does not carry across deployments; the exporter's sockets_used/sockets_available is a candidate denominator, but it is file-descriptor derived, so #1320 decides"
+    portability_reason_zh: "絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定"
   rabbitmq_consumers:
     pack: rabbitmq
     tier: defaults
@@ -793,9 +825,10 @@ keys:
     unit: count
     desc: Minimum consumer count warning
     metric_class: state
-    arming: site_specific
-    arming_reason: "The expected consumer count is the deployment's topology"
-    arming_reason_zh: "預期的 consumer 數是各部署的拓撲"
+    arming: operator
+    portability: site_specific
+    portability_reason: "The expected consumer count is the deployment's topology"
+    portability_reason_zh: "預期的 consumer 數是各部署的拓撲"
   rabbitmq_unacked_messages:
     pack: rabbitmq
     tier: defaults
@@ -803,9 +836,10 @@ keys:
     unit: messages
     desc: Unacknowledged messages warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "A normal unacked backlog depends on consumer prefetch and processing time"
-    arming_reason_zh: "正常的未 ack 量取決於 consumer 的 prefetch 與處理時間"
+    arming: operator
+    portability: site_specific
+    portability_reason: "A normal unacked backlog depends on consumer prefetch and processing time"
+    portability_reason_zh: "正常的未 ack 量取決於 consumer 的 prefetch 與處理時間"
   rabbitmq_queue_messages_critical:
     pack: rabbitmq
     tier: optional_overrides
@@ -845,9 +879,10 @@ keys:
     unit: seconds/5m
     desc: GC pause duration rate warning
     metric_class: latency
-    arming: site_specific
-    arming_reason: "Tolerable GC pause time is a latency budget of the application"
-    arming_reason_zh: "可容忍的 GC 暫停時間是應用程式的延遲預算"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Tolerable GC pause time is a latency budget of the application"
+    portability_reason_zh: "可容忍的 GC 暫停時間是應用程式的延遲預算"
   jvm_memory:
     pack: jvm
     tier: defaults
@@ -855,9 +890,8 @@ keys:
     unit: '%'
     desc: Heap memory usage warning
     metric_class: saturation
-    arming: pending_validation
-    arming_reason: "A share of the heap limit carries across deployments, but 80 has not been validated by a shadow report"
-    arming_reason_zh: "佔 heap 上限的百分比可跨部署，但 80 尚未經 shadow 報表驗證"
+    arming: operator
+    portability: portable
   jvm_threads:
     pack: jvm
     tier: defaults
@@ -865,9 +899,10 @@ keys:
     unit: count
     desc: Active thread count warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "A normal thread count depends on the application and its thread pools"
-    arming_reason_zh: "正常的執行緒數取決於應用程式與其執行緒池"
+    arming: operator
+    portability: site_specific
+    portability_reason: "A normal thread count depends on the application and its thread pools"
+    portability_reason_zh: "正常的執行緒數取決於應用程式與其執行緒池"
   jvm_gc_pause_critical:
     pack: jvm
     tier: optional_overrides
@@ -899,9 +934,10 @@ keys:
     unit: count
     desc: Active connections warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "An absolute connection count depends on traffic; worker_connections is not exported to divide by"
-    arming_reason_zh: "絕對連線數取決於流量，worker_connections 沒有匯出可當分母"
+    arming: operator
+    portability: site_specific
+    portability_reason: "An absolute connection count depends on traffic; worker_connections is not exported to divide by"
+    portability_reason_zh: "絕對連線數取決於流量，worker_connections 沒有匯出可當分母"
   nginx_request_rate:
     pack: nginx
     tier: defaults
@@ -909,9 +945,10 @@ keys:
     unit: req/s
     desc: Request rate warning
     metric_class: throughput
-    arming: site_specific
-    arming_reason: "Request volume is workload, not a fault; any number is specific to the deployment"
-    arming_reason_zh: "請求量是工作負載而非故障，任何數字都只適用於特定部署"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Request volume is workload, not a fault; any number is specific to the deployment"
+    portability_reason_zh: "請求量是工作負載而非故障，任何數字都只適用於特定部署"
   nginx_waiting:
     pack: nginx
     tier: defaults
@@ -919,9 +956,10 @@ keys:
     unit: count
     desc: Waiting connections (backlog) warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "Idle keep-alive connections count as waiting; a normal number depends on traffic and keepalive settings"
-    arming_reason_zh: "閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定"
+    arming: operator
+    portability: site_specific
+    portability_reason: "Idle keep-alive connections count as waiting; a normal number depends on traffic and keepalive settings"
+    portability_reason_zh: "閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定"
   nginx_connections_critical:
     pack: nginx
     tier: optional_overrides
@@ -948,3 +986,12 @@ keys:
     critical_of: nginx_waiting
 deprecated_aliases:
   mysql_cpu: mysql_threads_running
+retired_keys:
+  kafka_active_controllers:
+    replaced_by: null
+    tracking: 3783
+    hint: "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"
+  kafka_request_rate:
+    replaced_by: null
+    tracking: 3783
+    hint: "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"

@@ -33,6 +33,10 @@ REMOVED_SETS = (
     ("humanSocket.path=/run/x/x.sock", "humanSocket"),
     ("networkPolicy.internalPortAllow.recipePreview.app=recipe-preview", "recipePreview"),
     ("networkPolicy.internalPortAllow.daPortal.app=da-portal", "daPortal"),
+    # §6: the switch for "is oauth2-proxy enabled" is deleted; the pod's only
+    # oauth2-proxy (§5) always renders. Either value is refused.
+    ("oauth2Proxy.enabled=true", "enabled"),
+    ("oauth2Proxy.enabled=false", "enabled"),
 )
 
 #: The tenant-api variables ADR-027 §6 removed.
@@ -58,10 +62,12 @@ def _render(*set_args: str) -> subprocess.CompletedProcess:
                           errors="replace", timeout=60)
 
 
+# adr-check: ADR-027/9.5b
 def test_values_yaml_carries_no_removed_key() -> None:
     values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
     assert "machineIdentity" not in values
     assert "humanSocket" not in values
+    assert "enabled" not in values["oauth2Proxy"], "oauth2Proxy.enabled was removed (ADR-027 §6)"
     allow = values["networkPolicy"]["internalPortAllow"]
     assert sorted(allow) == ["prometheus", "prometheusOperator"], sorted(allow)
 
@@ -77,6 +83,7 @@ def test_the_machine_identity_template_is_gone() -> None:
         assert gone not in templates, gone
 
 
+# adr-check: ADR-027/9.5b
 @pytest.mark.parametrize("set_arg,name", REMOVED_SETS, ids=[s for s, _ in REMOVED_SETS])
 def test_a_removed_key_fails_the_render(set_arg: str, name: str) -> None:
     _helm_or_skip()

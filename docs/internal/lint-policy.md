@@ -67,7 +67,7 @@ def get_added_lines(file_path, base="origin/main"):
     ...
 ```
 
-統一在 `scripts/tools/lint/_lint_helpers.py` 提供 `get_diff_added_lines(filepath, base=None)` helper，所有 (b)/(c) class lint 共用，base 預設讀 `GITHUB_BASE_REF` env，回退 `origin/main`。
+統一在 `scripts/tools/lint/_lint_helpers.py` 提供 `get_diff_added_lines(filepath, base=None)` helper，所有 (b)/(c) class lint 共用。base 依序讀 `LINT_DIFF_BASE`、`origin/$GITHUB_BASE_REF`，最後回退 `origin/main`，再取它與 HEAD 的 merge base（`resolve_diff_base_ref`）。這類 lint 是 PR 範圍的檢查（豁免寫在 PR body）：push 到 main 時 workflow 不設 `LINT_DIFF_BASE`，merge base 就是 HEAD，diff 為空；就算 job 晚開始、`origin/main` 已經往前走，也不會把較舊的 commit 判成紅（`tests/lint/test_diff_scan_failure.py`、`tests/ops/test_main_ci_concurrency.py`）。
 
 ### ⚠️ Implementation gotcha：GitHub Actions 淺拷貝陷阱
 

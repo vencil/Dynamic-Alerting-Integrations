@@ -90,7 +90,7 @@ tenants:
   demo-tenant:
     # --- From: MySQLTooManyConnections (severity: warning) ---
     # 📖 annotation／label 引用了依租戶聚合後不存在的 label（instance），已改讀 $labels.tenant；通知裡看不到原本是哪一個 instance
-    # 📖 Severity Dedup: 已配對 critical (MySQLTooManyConnectionsCritical)，metric_group="connected"。Alertmanager inhibit 預設壓制 warning 通知 (tenant 可設 _severity_dedup: "disable" 取消)
+    # 📖 Severity Dedup: 已配對 critical (MySQLTooManyConnectionsCritical)，metric_group="custom_mysql_global_status_threads_connected"。Alertmanager inhibit 預設壓制 warning 通知 (tenant 可設 _severity_dedup: "disable" 取消)
     custom_mysql_global_status_threads_connected: "150"
     # --- From: MySQLHighSlowQueries (severity: warning) ---
     # 📖 annotation／label 引用了依租戶聚合後不存在的 label（instance），已改讀 $labels.tenant；通知裡看不到原本是哪一個 instance

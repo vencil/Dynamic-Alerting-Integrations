@@ -64,7 +64,7 @@ from _lib_validation import (  # noqa: E402  (#1560 Secret references)
 # * ``severity`` — the SARIF level: ``error`` / ``warning`` / ``note``.
 # * ``blocks`` — when it makes the generator fail: ``always`` (every mode),
 #   ``strict`` (under ``--strict``), ``validate`` (under ``--validate``; the
-#   same lines validate-config's schema / routes rows fail on), ``never``.
+#   same lines validate-config's routes row fails on), ``never``.
 #   It restates the rule the predicates already apply (``_policy_errors``,
 #   ``blocking_generation_errors``, the refusals) — it decides nothing: those
 #   predicates still read the type and the prefix, unchanged.
@@ -150,8 +150,9 @@ FINDING_KINDS: dict[str, str] = {
         "_routing_enforced.enabled is not a boolean (a string such as "
         "\"true\" included); the whole tree is refused in every mode.",
     "severity_dedup_invalid":
-        "A tenant's _severity_dedup is neither a boolean nor one of the "
-        "enable / disable words; the whole tree is refused in every mode.",
+        "A _severity_dedup the exporter does not read, or one written with a "
+        "time window or expires (da-guard severity-dedup, #3621); the whole "
+        "tree is refused in every mode.",
     "unknown_routing_profile":
         "A tenant's _routing_profile names a profile its directory chain "
         "does not define.",
@@ -256,6 +257,10 @@ FINDING_KINDS: dict[str, str] = {
     "conflicting_override_matcher":
         "An override with both alertname and metric_group; it is not "
         "rendered.",
+    "unknown_override_metric_group":
+        "An override's metric_group is the group of no shipped rule pack "
+        "alert (#3692); it routes nothing unless the tenant's own rules carry "
+        "that group. Rendered; advisory.",
     "duplicate_override_matcher":
         "An override with the same matcher as an earlier one; the earlier "
         "one catches those alerts first, so it never takes effect.",
@@ -1208,7 +1213,7 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
         return None, warnings
     # #2295: optional values Alertmanager cannot load (non-boolean
     # send_resolved / require_tls, a malformed http_config) — without this the
-    # receiver is written out and only amtool, when it is on PATH, stops it.
+    # receiver is written out and only Alertmanager's loader stops it.
     problem = receiver_optional_problem(rtype, receiver_obj)
     if problem:
         warnings.append(skipped_entry_warning(
@@ -1243,7 +1248,7 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     # write `to` as a YAML list (one address per line), which is far more readable.
     # Coerce that list into AM's comma-joined string here, at the boundary where we
     # emit AM config: a raw YAML sequence trips Alertmanager's parser with
-    # `cannot unmarshal !!seq into string` at config load (amtool check-config),
+    # `cannot unmarshal !!seq into string` at config load,
     # a failure the dict-only Python validation never surfaces.
     # ⛔ #2906: no boolean is rewritten here. A boolean field that is a string
     # (`"yes"`, `"true"`) was refused above (receiver_optional_problem), and

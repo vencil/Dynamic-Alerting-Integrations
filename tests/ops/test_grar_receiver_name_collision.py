@@ -12,8 +12,8 @@ Separately, ``--output-configmap --base-config`` kept a base receiver and
 DROPPED the generated one of the same name — rc 0, amtool accepting, alerts
 going to the base's stale endpoint.
 
-The contract pinned here (owner decision on #2279), all with amtool NOT on
-PATH so the verdict cannot be amtool's:
+The contract pinned here (owner decision on #2279), all with an empty PATH
+so nothing installed on this machine decides the verdict:
 
 * duplicate generated names → ``--validate`` rc 1 naming BOTH sources;
   ``--output-alertmanager`` / ``--output-configmap`` rc 1 with nothing
@@ -149,7 +149,7 @@ class TestGeneratedNameCollision:
         assert row["status"] == vc.FAIL, row
         assert row["hint"] == vc.RECEIVER_COLLISION_ROUTES_HINT, row
 
-    def test_control_no_collision_is_unaffected(self, tmp_path, amtool_accepts):
+    def test_control_no_collision_is_unaffected(self, tmp_path):
         """Same shape minus the colliding tenant: rc 0, file written, PASS."""
         d = tmp_path / "conf.d"
         d.mkdir()
@@ -170,17 +170,18 @@ class TestGeneratedNameCollision:
 
 
 class TestSharedPredicate:
-    """validate-config and `_validate_mode` must call ONE predicate (#2164)."""
+    """validate-config's routes row and `--validate` are ONE judgement
+    (#2164, #3788): both call `validate_tree`, which reaches the predicate
+    through `evaluate_generated_config`. What the two decide on a tree is
+    pinned by test_validate_config_routes_is_validate.py."""
 
     def test_both_callers_use_the_shared_function(self):
         import inspect
-        # #2311: the routes verdict moved one level up — both callers call the
-        # shared `evaluate_generated_config`, which calls the predicate.
+        assert "validate_tree(" in inspect.getsource(gar._run)
+        assert "gen.validate_tree(" in inspect.getsource(vc.check_routes)
         assert "evaluate_generated_config(" in inspect.getsource(gar._validate_mode)
-        assert "gen.evaluate_generated_config(" in inspect.getsource(vc.check_routes)
         assert "blocking_generation_errors(" in inspect.getsource(
             gar.evaluate_generated_config)
-        assert "gen.blocking_generation_errors(" in inspect.getsource(vc.check_schema)
 
     def test_collision_line_is_not_a_policy_error(self):
         """A duplicate name is blocking WITHOUT --strict; the policy prefix

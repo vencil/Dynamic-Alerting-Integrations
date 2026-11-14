@@ -48,7 +48,6 @@ TYPO = "tenants:\n  t-a:\n    mysql_conections: \"50\"\n"  # misspelt: no reader
 def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gsvc-kv")
     bin_dir = tmp / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     repo = h.init_repo(tmp / "repo")
     base = h.commit_tree(repo, {"_defaults.yaml": DEFAULTS,
                                 "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"50\"\n",
@@ -60,7 +59,7 @@ def world(tmp_path_factory):
 
 def _findings(verdict) -> list[dict]:
     return [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
-             "tenants": list(f.tenants), "reason": f.reason, "blocks": f.blocks}
+             "tenants": list(f.tenants), "reason": f.reason, "hint": f.hint, "blocks": f.blocks}
             for f in verdict.findings]
 
 
@@ -349,6 +348,17 @@ def test_a_waiting_write_does_not_stop_the_verdict(world, tmp_path):
             status2, doc2 = second.result(timeout=120)
             assert status2 == 200 and doc2["result"] == "pass", doc2
             assert doc2["key_verdict"]["status"] == "complete", doc2["key_verdict"]
+
+
+def test_a_retired_keys_hint_reaches_tenant_api(monkeypatch, tmp_path):
+    """#3829: the finding of a retired threshold key carries the hint naming
+    its replacement; the container sends it, so tenant-api's refusal names it."""
+    retired = kv.Finding(kv.ERROR, "unread", "k_old", "t-a.yaml", ("t-a",), "retired", blocks=True,
+                         hint="retired threshold key (#3829): write `k_new` instead; h")
+    got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
+        findings=[retired], undecidable=False, undecidable_blocks=False, keys={}))
+    assert [(f["key"], f["reason"], f["hint"]) for f in got["findings"]] == [
+        ("k_old", "retired", retired.hint)], got
 
 
 def test_what_blocks_is_the_verdicts_own_answer(monkeypatch, tmp_path):

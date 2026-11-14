@@ -1,61 +1,39 @@
-{{- if .Values.networkPolicy.enabled }}
-# T2-2 mitigation (#539 red-team): VictoriaLogs has no built-in auth
-# on its HTTP listener — ingest + query + DELETE all share :9428. The
-# §2 hard rule guards the producer side (gateway → stdout, not direct
-# push) but does not protect the store itself from compromised
-# in-cluster pods. This NetworkPolicy narrows the port to the declared
-# consumers: the Vector DaemonSet (ingest — since #1018 in its
-# dedicated `vector` namespace via `allowedNamespaces`; the same-ns
-# podSelector row remains for debug pods / pre-migration installs), the
-# chargeback CronJob (query), Grafana (query), the federation-gateway in
-# `mode: victorialogs` (tenant-scoped log query, ADR-021 #609), the
-# federation-reconciler (revocation-evidence read, ADR-028 D1 / #1234),
-# and same-pod loopback (probes).
+{{- $np := .Values.networkPolicy | default (dict "enabled" true) }}
+{{- if $np.enabled }}
+{{- /* Values from a chart before 0.6.0 (`helm upgrade --reuse-values` carries
+them) still hold the two hand-written lists. Refuse rather than render a policy
+from half old, half new values: the rows they held are now each consumer's
+`auth.consumers[].from` (#1295 PR2). */}}
+{{- range $legacy := list "allowedPodSelectors" "allowedNamespaces" }}
+{{- if hasKey $np $legacy }}
+{{- fail (printf "networkPolicy.%s was removed in chart 0.6.0: who may reach the store is now each auth.consumers[].from, and the Prometheus scrape is networkPolicy.scrapers. Move any custom rows there and drop the key. With `helm upgrade --reuse-values`, upgrade with your values file instead, or `--reset-then-reuse-values` (Helm >= 3.14); either way, a values file that restates auth.consumers must give every consumer a `from` — copy it from the chart's values.yaml (#1295)" $legacy) }}
+{{- end }}
+{{- end }}
+{{- /* The registry's own checks (names, duplicates, Secrets) first, so an
+invalid list is reported as such and not as a missing `from`. */}}
+{{- $_ := include "victorialogs.authConsumers" . }}
+{{- $scrapers := $np.scrapers }}
+{{- if not (hasKey $np "scrapers") }}
+{{- $scrapers = list (dict "podLabels" (dict "app" "prometheus")) }}
+{{- end }}
+{{- /* An empty `from` is not "nobody": the API reads it as every source. */}}
+{{- if not (or .Values.auth.consumers $scrapers) }}
+{{- fail "networkPolicy: auth.consumers and networkPolicy.scrapers are both empty — the ingress rule would have no `from`, which admits every source. List a consumer, or set networkPolicy.enabled=false explicitly (#1295)" }}
+{{- end }}
+# Who may open a connection to the store's port (#539 T2-2, #1295).
 #
-# ⛔ HOW STRONG THIS ACTUALLY IS — corrected in #1295. This block used to
-# end with "Any other pod in the cluster — including a freshly
-# attacker-deployed one in the same namespace — cannot reach :9428". That
-# is FALSE for the same-namespace half, and the two kinds of row below are
-# NOT equally strong:
-#   * `allowedNamespaces` renders a `namespaceSelector` on
-#     `kubernetes.io/metadata.name`. A pod cannot choose its own namespace,
-#     and that label is maintained by the control plane — this row IS a
-#     boundary.
-#   * `allowedPodSelectors` renders a bare `podSelector`, i.e. a match on
-#     SELF-DECLARED pod labels within this namespace. Any principal able to
-#     create a pod here can wear one of the five labels and be admitted.
-# So what the policy buys is: everything from other namespaces is blocked
-# unless explicitly allowed, and same-namespace workloads that are not
-# deliberately impersonating a consumer are blocked. What it does NOT buy
-# is protection against a principal who can already create pods in THIS
-# namespace — for them, while `auth.mode` is observe, the port is still
-# unauthenticated ingest + query (in enforce, vmauth requires a consumer's
-# credentials; see values.yaml `auth`). Note that such a principal is already highly privileged here
-# (mounting any ConfigMap in a namespace needs no RBAC at all), so read
-# this as "an attacker already inside can also erase the evidence", not as
-# "anyone can walk in".
-# ⚠️ This is also the ceiling on any ingest-time classification done in
-# Vector (#1288): binding producer identity inside the pipeline cannot
-# constrain someone who writes to the store directly. #1295 closes that with
-# the vmauth sidecar (only `vector` may write) once `auth.mode` is enforce.
+# Rendered from the same list vmauth authorizes: one peer per
+# `auth.consumers[].from`, plus `networkPolicy.scrapers` (Prometheus is not a
+# consumer — in enforce an unauthenticated request reaches only /metrics,
+# /health and /ping). Adding a consumer to one and not the other is no longer
+# possible (#1295 PR2).
 #
-# ⚠️ Every `allowedPodSelectors` row is a SAME-NAMESPACE match: a k8s
-# NetworkPolicy `podSelector` with no `namespaceSelector` beside it selects
-# pods in the policy's OWN namespace only. So each row admits its consumer
-# ONLY when that consumer runs in VictoriaLogs' namespace. A consumer
-# deployed elsewhere needs an `allowedNamespaces` entry instead (that is
-# exactly why Vector, since #1018, has one) — its podSelector row alone
-# will NOT let it in. The exact set is pinned by
-# tests/shared/test_helm_chart_log_aggregation.py
-# ::test_networkpolicy_locks_to_the_declared_consumer_set, so this list and
-# the values.yaml enumeration must be edited together with that test.
-#
-# Authentication now sits in the pod itself (#1295): a vmauth sidecar holds
-# each consumer to its paths (values.yaml `auth`). ⚠️ In `auth.mode: observe`
-# (the default until every consumer is wired) requests without credentials
-# still pass, so this NetworkPolicy is still the only perimeter; in `enforce`
-# it becomes the outer layer. Either way it is not a boundary against
-# same-namespace pod creation — do not cite it as one.
+# ⛔ How strong a peer is depends on its shape. A `namespace` peer matches the
+# control-plane-assigned `kubernetes.io/metadata.name` label — a pod cannot
+# choose it. A `podLabels`-only peer matches SELF-DECLARED labels in this
+# namespace: anyone able to create a pod here can wear them. That is why
+# vmauth (`auth.mode: enforce`) is the boundary and this policy is the outer
+# layer that keeps everyone else off the port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -74,15 +52,10 @@ spec:
         - port: {{ .Values.listenPort }}
           protocol: TCP
       from:
-        {{- /* Same-namespace pod selectors — the legitimate consumers (Vector / chargeback / Grafana / federation-gateway). */}}
-        {{- range .Values.networkPolicy.allowedPodSelectors }}
-        - podSelector:
-            {{- toYaml . | nindent 12 }}
+        {{- range .Values.auth.consumers }}
+        {{- include "victorialogs.netpolPeer" (dict "who" (printf "auth.consumers[%s]" (toString .name)) "from" .from "ns" $.Release.Namespace) | nindent 8 }}
         {{- end }}
-        {{- /* Cross-namespace allowance — empty list = no cross-ns ingress. */}}
-        {{- range .Values.networkPolicy.allowedNamespaces }}
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ . }}
+        {{- range $i, $s := $scrapers }}
+        {{- include "victorialogs.netpolPeer" (dict "who" (printf "networkPolicy.scrapers[%d]" $i) "from" $s "ns" $.Release.Namespace) | nindent 8 }}
         {{- end }}
 {{- end }}

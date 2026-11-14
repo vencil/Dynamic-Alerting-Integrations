@@ -125,9 +125,9 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 | TD-036 | TRK-236 | pre-commit hook（Plan C）擋 `^const \w+\s*=\s*window\.__\w+\s*;` |
 | TD-037 | TRK-237 | pre-commit hook S6 — 禁 module-scope `const X = window.__X;` no-fallback reads（hook id `window-x-no-fallback-check`，entry `check_window_x_no_fallback.py`；TRK-236 為前身 draft "Plan C"，已收編於此 hook）|
 | TD-038 | TRK-238 | Visual regression baseline 擴張 — Playwright `toHaveScreenshot` 5 staged baselines（Plan A 跨類別覆蓋）|
-| TD-039 | TRK-239 | `check_dist_source_consistency.py` + `check_skip_a11y_justification.py`（兩支 lint **docstring 仍寫 `TD-039`** — 它們也是 `tool-map.md` 自動生成的來源；tool-map 因此沿用 `TD-039`。重寫 docstring 會牽動 `check_skip_a11y_justification.py` 的 `RE_JUSTIFICATION = r"//\s*skipA11y:\s*TD-\d+\b"` 正則 + 所有 E2E spec 內已存在的 `// skipA11y: TD-040 ...` 註解；留待 chunk 2b 引入新 lint 時一併處理）|
+| TD-039 | TRK-239 | `check_dist_source_consistency.py`（#3738 隨 dist 移出 git 一併刪除）+ `check_skip_a11y_justification.py`（後者的 **docstring 仍寫 `TD-039`** — 它也是 `tool-map.md` 自動生成的來源；tool-map 因此沿用 `TD-039`。重寫 docstring 會牽動 `check_skip_a11y_justification.py` 的 `RE_JUSTIFICATION = r"//\s*skipA11y:\s*TD-\d+\b"` 正則 + 所有 E2E spec 內已存在的 `// skipA11y: TD-040 ...` 註解；留待 chunk 2b 引入新 lint 時一併處理）|
 | TD-040 | TRK-240 | `// skipA11y: TD-040` justification ID（同上，docstring + 正則 + spec 註解整套留待 chunk 2b）|
-| TD-042 ≡ TECH-DEBT-042 | TRK-242 | monorepo restructure — portal source 從 `docs/*` 遷至 `tools/portal/*`；`check_dist_source_consistency.py` + `.pre-commit-config.yaml` file-hygiene exclude 也帶有此標 |
+| TD-042 ≡ TECH-DEBT-042 | TRK-242 | monorepo restructure — portal source 從 `docs/*` 遷至 `tools/portal/*`；`.pre-commit-config.yaml` file-hygiene exclude 也帶有此標（`check_dist_source_consistency.py` 曾帶，已於 #3738 刪除）|
 
 ### TRK-300+ — post-migration 新分配（無 legacy 對映）
 

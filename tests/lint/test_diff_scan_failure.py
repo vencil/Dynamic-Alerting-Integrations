@@ -498,3 +498,32 @@ def test_no_merge_base_is_a_caller_error_not_a_two_way_diff(in_repo, monkeypatch
     rc, out, err = _run(monkeypatch, capsys, adhoc, [])
     assert rc == 2, f"rc={rc}\n{out}{err}"
     assert "OK" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# A main job that starts after newer merges (ci.yml / docs-ci.yaml no longer
+# cancel a push to main)
+# ---------------------------------------------------------------------------
+# origin/main is then AHEAD of the checked-out HEAD. The merge base is HEAD, so
+# a diff-aware lint sees an empty diff: it neither reddens an older commit for
+# what later merges changed nor re-judges the commit's own change, which was
+# judged on its PR (where PR-body exemptions are read). That is the intended
+# behaviour on main, not a gap — see the concurrency comment in ci.yml.
+
+
+def test_a_late_starting_main_job_resolves_to_an_empty_diff(in_repo, monkeypatch, capsys):
+    _stage(in_repo, "_mine.bat", b"@echo off\r\ngit push\r\n")
+    _git(in_repo, "commit", "-q", "-m", "the pushed commit")
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(in_repo), check=True,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
+    _git(in_repo, "checkout", "-q", "-b", "newer")
+    _stage(in_repo, "_later.bat", b"@echo off\r\ngit commit\r\n")
+    _git(in_repo, "commit", "-q", "-m", "a newer merge")
+    _git(in_repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(in_repo, "checkout", "-q", head)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("LINT_DIFF_BASE", raising=False)
+    assert _lint_helpers.resolve_diff_base_ref() == ("origin/main", head)
+    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
+    assert rc == 0, f"rc={rc}\n{out}{err}"
+    assert "_later.bat" not in err and "_mine.bat" not in err, err

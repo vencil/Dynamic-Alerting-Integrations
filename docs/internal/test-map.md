@@ -114,7 +114,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 
 | 檔案 | 職責 |
 |------|------|
-| `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope）+ Hypothesis profile（見下） |
+| `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope）+ Hypothesis profile（見下）；`pytest_configure` 先從本 checkout 建 da-guard、da-crdecode、da-read（冷 cache 要數分鐘），CI 裡每個 pytest session 都要設 `VIBE_TEST_GO_BINARIES=build` 或 `skip`（`GITHUB_ACTIONS=true` 且未設定即 usage error；`test_workflow_pytest_declares_go_binaries.py` 在執行前檢查 workflow 步驟；其他值是 usage error） |
 | `tests/factories.py` | 所有 factory helpers + PipelineBuilder + mock_http_response（含完整 docstring） |
 | `pyproject.toml` | pytest markers + coverage config（`testpaths = ["tests"]` 自動遞迴） |
 | `tests/_tree.py` | 掃「repo 裡有哪些檔」的測試一律用 `repo_files()`（`git ls-files`，fail-closed），不要 `REPO_ROOT.rglob`：後者會走進 `.claude/worktrees` 裡整份 repo 的副本與 `node_modules`，把副本當成本樹比對，而且在平行跑時慢上數個數量級 |
@@ -192,6 +192,17 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
   - 墊片只包 `subprocess.Popen`；`os.posix_spawn`、`os.spawn*e`、`os.exec*e` 帶自建 env 時不會補上變數（目前 `tests/`、`scripts/` 都沒有用到）。
   - 工具自己用寬的 `except Exception` 接住例外、再以 `EXIT_CALLER_ERROR` 結束的（例如 `dx/waveform_score.py` 的 `main` 的 `ERR_UNEXPECTED`），不會經過 crash 出口：這類工具的 rc 2 斷言仍分不出「具名錯誤」與「意外例外」，要另外比對 stderr 的具名錯誤。
 
+### ADR 檢查標記：`adr-check:`
+
+把決策寫成「以測試表達」的 ADR（目前是 ADR-027 §9），每個子句有固定編號；實作某個子句的測試、腳本或 CI 步驟，在它上一行加註解標記：
+
+```go
+// adr-check: ADR-027/9.3b
+func TestOAuth2ProxyAnswers401(t *testing.T) {
+```
+
+標記必須獨佔一行、以註解開頭（`//`、`#`、`/*`、`*`、`<!--`、`--` 或 `{{/*`），`adr-check:` 全小寫；一行可列多個子句（以空白或逗號分隔）。寫錯的變形（全形冒號、大寫、接在程式碼後面）會讓檢查失敗，不會被略過。`.md` 檔裡的標記視為範例，一律不讀。該 ADR 的「實作位置」由 `scripts/tools/dx/gen_adr_checks.py --write` 依標記產生，沒有標記的子句列為尚無檢查；pre-commit 與 CI 的 `adr-checks-drift` 在產生結果與 ADR 不一致、或標記指向不存在的 ADR／子句時失敗。標記只證明「有人宣稱這支測試檢查這個子句」，它檢查得對不對仍要 review。
+
 ## 測試檔案對照
 
 要看某支測試檔實際有幾個測試：`pytest <file> --collect-only -q`。
@@ -212,7 +223,7 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
 | `ops/test_regression.py` | 已知 bug 回歸 | regression marker |
 | `ops/test_validate_config.py` | validate_config.py 配置驗證 | Wave 12 unittest→pytest |
 | `ops/test_config_diff.py` | config_diff.py 差異偵測 | Wave 12 unittest→pytest |
-| `dx/test_bump_docs.py` | bump_docs.py 六條版號線 + 計數同步 + 診斷 × gating mode | Wave 12 unittest→pytest；#1407 大幅擴充 |
+| `dx/test_bump_docs.py` | bump_docs.py 各版號線（`VERSION_LINE_SOURCES`）+ 計數同步 + 診斷 × gating mode | Wave 12 unittest→pytest；#1407 大幅擴充 |
 | `ops/test_init_project.py` | `da-tools init` 產生器：GitLab root 五態分類、子目錄接線、summary 真話、CLI 契約 | #1357 |
 | `ops/test_generated_ci_artifacts.py` | 產出的 CI YAML 本身（可解析 / 可達 / image pin / 不含 `git`） | #1357 / #1358 / #1408 |
 | `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | ⚠️ 判定器本身在 pre-commit `open-encoding-audit`（#1366）；本檔是正反例樣本（對 hook 實作跑，證明偵測器活著）／hook 範圍釘住＋CI Lint job 逐名跑該 hook 的接線斷言（#2539）／行為測試只在 Windows 具鑑別力 |

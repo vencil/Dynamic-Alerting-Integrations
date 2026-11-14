@@ -24,9 +24,11 @@
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 # 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   clickhouse_max_part_count: 300   # count — Max part count per partition
-#       未啟用（待驗證）：300 與上游 Zabbix ClickHouse 模板相同，但尚未在本平台驗證（#1320 候選）
+#       未啟用（依部署而定）：安全的 part 數依 ClickHouse 版本而定：舊版在 300 個 part 就拒絕寫入，現行版本要到
+#       3000（parts_to_throw_insert）
 #   clickhouse_replication_queue: 50   # count — Replication queue size
-#       未啟用（依部署而定）：尚無實測；正常的佇列深度取決於複寫拓撲
+#       未啟用（尚未量測，#1320）：尚無實測；#1320 在有訊號前維持宣告
+#       未啟用（依部署而定）：正常的佇列深度取決於複寫拓撲
 #   clickhouse_memory_tracking_bytes: 8589934592   # bytes (8GB) — Memory tracking warning
 #       未啟用（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔伺服器記憶體上限的比例，該上限能否取得待 #1320 確認
 #
@@ -35,9 +37,8 @@
 # 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
 # 它讀的是 defaults[base]，base 沒有值就整列丟棄
 # （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base 都**未**標 [chart-default]
-# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
-# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
+# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
 # 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
 # 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
 # critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是

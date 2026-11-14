@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-11-01
+updated_at: 2026-11-13
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -43,6 +43,7 @@ updated_at: 2026-11-01
 - **2026-10-30 第五次修訂**：§12 寫明 `da-crdecode` 的兩種讀法（manifest：每份文件是有 `kind` 的物件、list 換成它的 items；`--any-shape`：只轉換）與輸出的 `reading` 欄；Helm values 那列改為 `--any-shape`；決策不變。
 - **2026-10-31 修訂**：§12 寫明 list 的 item 在 `kind` 與 `apiVersion` 都沒寫時，照 kubectl 從 list 繼承兩者，輸出的是繼承後的 item；改寫 manifest 讀法比 kubectl 嚴格的地方（不只一處）；決策不變。
 - **2026-11-01 修訂**：§12 的 manifest 讀法另要求每份文件（list 也算）與每個輸出的 item 的 `apiVersion` 與 `metadata` 能解碼成 kubectl 讀它們用的型別，判準是 Kubernetes 的 apimachinery 函式庫本身，呼叫端不再各自檢查這些欄位的型別；item 這一項 kubectl 讀檔時不檢查，列為比 kubectl 嚴格的地方；範例改為現行輸出。同日再修訂：更正這樣的 item 套用時的結果，不是被拒收就是被改掉（item 寫的 annotations 全被清掉、namespace 換成 kubectl 這次用的、自訂資源以 server-side apply 套用時時間欄位被丟掉），不一定被拒收；決策不變。
+- **2026-11-13 修訂**：產生器容器判定前確認的是 da-read（Alertmanager 的設定載入器），不再是 amtool；容器裡不需要 amtool（§3、§4、§5）。
 
 ## 摘要
 
@@ -88,7 +89,7 @@ YAML 有一種「把另一個 mapping 併進來」的寫法，常見的是 `<<:`
 tenants:
   t1:
     _routing:
-      !!merge q: {receiver: {type: slack, api_url: "https://hooks.slack.com/x"}}
+      !!merge q: {receiver: {type: slack, api_url: {secret: {key: slack-api-url}}}}
 ```
 
 - **產生器**照 merge 處理，t1 的 receiver 是 `slack`。如果 domain policy 禁止 slack，產生器會報錯，exit code 為 1。
@@ -266,7 +267,7 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: "https://hooks.slack.com/x"
+        api_url: {secret: {key: slack-api-url}}
         send_resolved: yes
       group_wait: 30s
 ```
@@ -281,7 +282,7 @@ tenants:
         "_routing": {
           "group_wait": {"text": "30s", "tag": "!!str", "value": "30s"},
           "receiver": {
-            "api_url": {"text": "https://hooks.slack.com/x", "tag": "!!str", "value": "https://hooks.slack.com/x"},
+            "api_url": {"secret": {"key": {"text": "slack-api-url", "tag": "!!str", "value": "slack-api-url"}}},
             "send_resolved": {"text": "yes", "tag": "!!str", "value": "yes"},
             "type": {"text": "slack", "tag": "!!str", "value": "slack"}
           }
@@ -347,8 +348,8 @@ tenant-api pod
 - **快取的去留**：快取存的是 Go（`parse-tree`）的輸出，不是第二個讀者，所以它的去留是效能決定，與「只有一個解析器」無關。兩個方向的量測（2026-10-20 的樣本）互相拉扯：
   - 冷啟動（啟動時或遇到新的 base commit 後第一次填滿快取）：單檔模式每次都要走訪整棵樹來判定選檔，所以沒命中的檔若各跑一次單檔模式，時間隨檔案數的平方成長（O(N²)）。因此沒命中的檔整批交給 `parse-tree` 的批次單檔模式（`--inputs`）：每批只走訪整棵樹一次，每份檔得到的那一行與單獨跑單檔模式逐位元組相同，快取的 key、內容與判定結果都不變。
   - 撤掉快取、每次判定都跑整棵樹模式時，5000 個租戶在子程序 192 MiB 的預算下只剩不到 8% 的餘裕，主因之一是 `parse-tree` 把整份 JSON 輸出先緩衝在記憶體裡。
-  - 決定方式：先讓 `parse-tree` 串流輸出（邊產生邊寫出，不先在記憶體裡組完整份），再在含 amtool、形狀接近真實的 5000 個租戶的樹上，以子程序 `RLIMIT_DATA` 192 MiB、容器 1 CPU 量測一次完整判定。
-  - 「一次完整判定」是產生器容器處理一筆寫入時要跑的全部程式：整棵樹模式的 `parse-tree`、產生器、amtool，以及 [ADR-038](./038-unread-keys-judged-by-readers.md) 推進順序第 3 項把共用判決接上產生器容器之後要跑的 served-values。撤快取前的量測必須包含 served-values；只量其中一部分，餘裕會被高估。
+  - 決定方式：先讓 `parse-tree` 串流輸出（邊產生邊寫出，不先在記憶體裡組完整份），再在形狀接近真實的 5000 個租戶的樹上，以子程序 `RLIMIT_DATA` 192 MiB、容器 1 CPU 量測一次完整判定。
+  - 「一次完整判定」是產生器容器處理一筆寫入時要跑的全部程式：整棵樹模式的 `parse-tree`、產生器、Alertmanager 的設定載入器（`da-read alertmanager`），以及 [ADR-038](./038-unread-keys-judged-by-readers.md) 推進順序第 3 項把共用判決接上產生器容器之後要跑的 served-values。撤快取前的量測必須包含 served-values；只量其中一部分，餘裕會被高估。
   - 在那之前，served-values 要先提供只算受影響租戶的方式（目前它每次算整棵樹的每個租戶），量測以那個方式為準。
   - 量測時，記憶體上限與判定期限取自 Helm chart 與程式本身，不另寫一份數字；上限或期限改了，量測跟著改。
   - 撤快取的條件，兩者都要成立：子程序與它啟動的每一支程式，峰值記憶體各自不超過 144 MiB（192 MiB 的 75%）；判定時間不超過 10 秒（20 秒判定期限的一半，另一半留給排隊與租戶成長）。成立就撤快取：容器與 CLI 走同一條整棵樹模式的路徑，本節的快取、淘汰規則與快取大小的 metric 一併移除。
@@ -358,19 +359,19 @@ tenant-api pod
   - tenant-api 每次呼叫產生器容器都帶上剩餘時間。容器的判定期限取「20 秒」與「剩餘時間減 5 秒」兩者較小的那個；那 5 秒留給 tenant-api 收到結果後核對與 commit。做法類似 gRPC 的 deadline propagation（期限傳遞）：呼叫端把自己剩下的期限傳給下游，下游不會做到呼叫端已經放棄之後。
   - 判定期限從常駐程序收到請求時起算，排隊時間也算在內。到期時不論那筆請求還在排隊或已在判定，都由常駐程序回應「拒收該筆」；已在判定的，子程序一併結束（見下一點）。剩餘時間以「還剩多久」傳遞，不依賴兩個容器的時鐘一致；判定期限比 tenant-api 的剩餘時間早 5 秒到，這 5 秒涵蓋回應的傳遞，以及上一點所說的核對與 commit。所以只要常駐程序本身正常，tenant-api 就會在自己的期限內收到這一筆的結果，不會因為等不到而把容器當成不可用。
   - 剩餘時間不夠再重驗一次（§4「驗的和寫的必須是同一份」）時，tenant-api 直接回可重試的拒收，與「拒收該筆」同類，不回 503。
-  - 子程序以 `setsid` 自成一個 process group（程序群組：它和它啟動的所有程式共用一個群組編號）。判定期限到期時對整組送 `killpg`，amtool、da-guard 等子孫程序一併結束，不留殘餘。
+  - 子程序以 `setsid` 自成一個 process group（程序群組：它和它啟動的所有程式共用一個群組編號）。判定期限到期時對整組送 `killpg`，da-read、da-guard 等子孫程序一併結束，不留殘餘。
 - **資源**：分兩層設限。
   - 容器的 request 與 limit 相同：記憶體 512Mi、CPU 1。
   - 每個判定子程序另設資料段上限（`RLIMIT_DATA`，192Mi）。`RLIMIT_DATA` 是 Linux 對單一程序的記憶體上限之一；Linux 4.7 起，它計算程序私有、可寫的記憶體，也就是實際能寫入資料的記憶體，超過時配置記憶體會失敗。子程序 fork 時繼承的快取也算在內，所以快取的大小算在這 192Mi 之內。
-  - 這個上限會被子程序啟動的程式繼承：amtool、da-guard 各自有同樣 192Mi 的上限。實測在這個上限下，產生器加 amtool 跑完 5000 個租戶的樹仍通過，`da-guard parse-tree`（與映像相同，以 `CGO_ENABLED=0` 建置）讀同一棵樹也通過；Python 一次要 500Mi 會得到 MemoryError；Go 程式持續配置記憶體，到上限時以 out of memory 結束。
-  - 為什麼總和放得進 512Mi：一次只跑一個判定，最壞情況是子程序與它啟動的一支 Go 程式同時用滿上限，再加常駐程序，約 192＋192＋80，約 464Mi，小於 512Mi。實測 5000 個租戶時產生器峰值約 117 MiB，amtool 檢查產生出的 2.3 MB 設定約 104 MiB，都在 192Mi 之內。常駐程序的 80Mi 是估計值：Python 程序加上 5000 份最新樹的解析結果實測約 36 MiB，加上被拒內容的快取上限 32 MiB，其餘是 git 等開銷。
+  - 這個上限會被子程序啟動的程式繼承：da-read、da-guard 各自有同樣 192Mi 的上限。實測在這個上限下，`da-guard parse-tree`（與映像相同，以 `CGO_ENABLED=0` 建置）讀 5000 個租戶的樹通過；Python 一次要 500Mi 會得到 MemoryError；Go 程式持續配置記憶體，到上限時以 out of memory 結束。
+  - 為什麼總和放得進 512Mi：一次只跑一個判定，最壞情況是子程序與它啟動的一支 Go 程式同時用滿上限，再加常駐程序，約 192＋192＋80，約 464Mi，小於 512Mi。實測 5000 個租戶時產生器峰值約 117 MiB，在 192Mi 之內。常駐程序的 80Mi 是估計值：Python 程序加上 5000 份最新樹的解析結果實測約 36 MiB，加上被拒內容的快取上限 32 MiB，其餘是 git 等開銷。
   - **容量上限**：最新樹的快取不設上限，隨租戶數成長；子程序 fork 時繼承它，所以它算在子程序的 192Mi 之內。快取加上一次判定的峰值超過 192Mi 後，每一筆判定都會被拒收，那時要一起調高子程序上限與容器的 limit。為了在那之前看到，常駐程序公開兩個 metric：快取大小、單次判定的峰值記憶體；接近子程序上限時發 warning 告警，門檻由實作決定。
-  - 為什麼不用位址空間上限（`RLIMIT_AS`）：amtool 與 da-guard 都是 Go 程式，Go 執行期一啟動就預留大量虛擬位址（只保留位址、還沒有可寫的記憶體，不算進 `RLIMIT_DATA`）。實測 amtool 在 `RLIMIT_AS` 低於 768Mi（384Mi～700Mi 都試過）時無法啟動，遠超過子程序的記憶體預算。
+  - 為什麼不用位址空間上限（`RLIMIT_AS`）：da-read 與 da-guard 都是 Go 程式，Go 執行期一啟動就預留大量虛擬位址（只保留位址、還沒有可寫的記憶體，不算進 `RLIMIT_DATA`）。實測 `RLIMIT_AS` 設在 700Mi 以下時兩者都無法啟動（192Mi～700Mi 都試過），da-read 到 768Mi 仍無法啟動，遠超過子程序的記憶體預算。
   - `parse-tree` 整棵樹的輸出總量上限，與上方「快取的去留」的量測一併訂定。
-- **拒收該筆與容器不可用的分界**：常駐程序有回應，而且回應指明這一筆的結果（通過、有 finding，或因判定期限到期、超過記憶體上限、輸出不完整而拒收），才算「拒收該筆」。容器不可用只有這五種情況：常駐程序出錯或沒有回應、找不到 amtool（見下方「amtool 必須存在」）、容器裡的產生器比 policy 要求的版本舊（§6）、找不到或無法執行 da-guard、容器沒有回鍵的判決（映像早於 [ADR-038](./038-unread-keys-judged-by-readers.md) 決定 5 的判決）；五者都回 503（§5）。amtool 與 da-guard 在每次判定前先確認；da-guard 在個別寫入上判不完（逾時、超過記憶體上限、失敗）則是拒收該筆。
+- **拒收該筆與容器不可用的分界**：常駐程序有回應，而且回應指明這一筆的結果（通過、有 finding，或因判定期限到期、超過記憶體上限、輸出不完整而拒收），才算「拒收該筆」。容器不可用只有這五種情況：常駐程序出錯或沒有回應、找不到或無法執行 da-read（見下方「da-read 必須存在」）、容器裡的產生器比 policy 要求的版本舊（§6）、找不到或無法執行 da-guard、容器沒有回鍵的判決（映像早於 [ADR-038](./038-unread-keys-judged-by-readers.md) 決定 5 的判決）；五者都回 503（§5）。da-read 與 da-guard 在每次判定前先確認；da-guard 在個別寫入上判不完（逾時、超過記憶體上限、失敗）則是拒收該筆。
   - 拒收該筆：HTTP status 不是 503，錯誤碼也與 `VALIDATOR_UNAVAILABLE` 不同，名稱由實作決定；因期限、記憶體或輸出不完整而拒收的，計入 metric。容器照常可用；如果把這些算成容器不可用，一筆寫入就能讓之後所有寫入都回 503。
   - 容器不可用：`VALIDATOR_UNAVAILABLE`，回 503（§5）。
-- **amtool 必須存在**：amtool 是 Alertmanager 的設定檢查工具。產生器的驗證模式找不到它時只印提醒並通過，產生器容器不接受這種情況：每次判定前先確認 amtool 存在，缺了就算容器不可用。否則產生器會以結束碼 0、零筆 finding 結束，看起來像通過。
+- **da-read 必須存在**：da-read 是呼叫 Alertmanager 自己的設定載入函式的程式（§12）；Alertmanager 收不收產生出的設定，產生器只問它。每次判定前先確認 da-read 找得到，而且是可執行的檔案；找法與產生器執行它時相同（先看環境變數 `DA_READ_BINARY`，沒設再找 PATH），找到後把它的絕對路徑寫回那個環境變數，判定子程序沿用這個值；判定子程序在自己的工作目錄裡跑，PATH 上的相對路徑在那裡指向別處，寫回絕對路徑之後，確認的與判定會跑的才是同一支。da-guard 與 da-crdecode 也照這樣固定。啟動時找不到、之後才出現在 PATH 上的，下一次確認會找到並固定；固定之後到服務重啟前不再換。缺了就算容器不可用：沒有它，產生器對任何一筆寫入都得不到結論（結束碼 2），每一筆都會被拒收，原因卻不在寫入的內容。容器裡不需要 amtool（Alertmanager 的命令列工具），有沒有它都不影響判定。
 
 **取檔方式：產生器容器只從 git 物件取檔，不讀工作目錄。**
 
@@ -399,7 +400,7 @@ tenant-api pod
 **寫入後，產生器檢查整棵樹；全部通過才寫入。**
 
 - **判準**：產生器容器把要寫的檔換成新內容，對寫入後的整棵樹以 `--validate --strict` 執行。結束碼是 0 就寫入，其他一律拒收。
-  - 用的是同一個 base commit、同一份部署端 policy 檔、容器裡的那一版產生器，而且 amtool 必須存在。
+  - 用的是同一個 base commit、同一份部署端 policy 檔、容器裡的那一版產生器，而且 da-read 必須存在。
   - 判準就是產生器自己的結果，所以 tenant-api 不會比它容器裡的產生器寬鬆。
 - **哪些寫入要送驗**：凡是會改變檔案內容的寫入都送驗。是否送驗不由 Go 判斷「有沒有改到路由」。
 - **錯誤回應**：列出產生器回報的 finding（產生器回報的每一筆問題）。與被寫入檔有關的排在前面，並標出哪些在寫入前就存在、來源是平台預設、routing profile 還是租戶自己。這只影響訊息，不影響判定。
@@ -439,7 +440,7 @@ tenant-api pod
   - 它的說明文字把「沿用上一份可用內容」算成可用；tenant-api 改問產生器容器後不再沿用舊內容，說明文字屆時要改。
 - **沒有放行開關**：部署端 policy 檔或產生器容器不可用時，會改變檔案內容的寫入一律拒收（包括只改閾值的），回 503。
   - 503 只用在這兩種情況。repo 裡的 policy 檔（平台預設、routing profile）有錯，是產生器回報的 finding，照 §4 拒收，不回 503。
-  - 部署端 policy 檔不可用時錯誤碼是 `POLICY_UNAVAILABLE`。產生器容器不可用（常駐程序出錯或沒有回應、找不到 amtool、版本比 policy 要求的舊、找不到或無法執行 da-guard、沒有回鍵的判決）時錯誤碼是 `VALIDATOR_UNAVAILABLE`，是哪一種原因寫在 message 裡。判定子程序逾時或超過記憶體上限不算容器不可用（§3）。
+  - 部署端 policy 檔不可用時錯誤碼是 `POLICY_UNAVAILABLE`。產生器容器不可用（常駐程序出錯或沒有回應、找不到或無法執行 da-read、版本比 policy 要求的舊、找不到或無法執行 da-guard、沒有回鍵的判決）時錯誤碼是 `VALIDATOR_UNAVAILABLE`，是哪一種原因寫在 message 裡。判定子程序逾時或超過記憶體上限不算容器不可用（§3）。
   - 現行 tenant-api 的範圍較小：只在直接寫入模式、policy 檔存在卻沒有任何一份可用內容時才回；單筆 PUT 一律回；同步批次只要有一筆碰到路由，整個請求回 503；非同步批次在執行時逐筆再判。新規則不分模式。
   - `--policy-unavailable-open` 與計數器 `tenant_api_policy_unavailable_open_total` 移除。告警 `TenantApiPolicyUnavailable` 保留（看的是可用與否的 metric），但它的說明文字提到放行開關與計數器，要一併改。
 - **不輸出整理好的設定 JSON**：目前沒有程式需要讀它。
@@ -629,7 +630,7 @@ $ da-crdecode --any-shape values.yaml
 | 情況 | 行為 |
 |---|---|
 | 寫入後整棵樹的產生器結束碼不是 0 | 拒收；錯誤回應列出 finding，標出寫入前就存在的與來源 |
-| 產生器容器不可用：常駐程序出錯或沒有回應、找不到 amtool，或找不到或無法執行 da-guard | 所有會改變檔案內容的寫入回 503，錯誤碼 `VALIDATOR_UNAVAILABLE`；`tenant_api_policy_available` 為 0（§5） |
+| 產生器容器不可用：常駐程序出錯或沒有回應，或找不到或無法執行 da-read 或 da-guard | 所有會改變檔案內容的寫入回 503，錯誤碼 `VALIDATOR_UNAVAILABLE`；`tenant_api_policy_available` 為 0（§5） |
 | 判定期限到期（含排隊中）、子程序超過記憶體上限或輸出不完整，或剩餘時間不夠重驗 | 只拒收這一筆，不回 503（分界見 §3） |
 | 部署端 policy 檔不可用 | 所有會改變檔案內容的寫入回 503，錯誤碼 `POLICY_UNAVAILABLE` |
 | repo 裡的 policy 檔有錯 | 產生器回報 finding，照第一列拒收，不回 503 |
@@ -684,7 +685,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674)：自我參照的 YAML 別名。
 - **批次 patch 合併的離線差分測試**（§4）。
 - **da-guard 的「未判定」**：exit code 4 與報告內容有測試，包括沒有只能由產生器判定的內容時不回 4，以及與 3、1 同時成立時的優先順序。
-- **產生器容器的拒收條件**：找不到 amtool、驗過與要寫的內容重驗一次仍不一致、產生器比 policy 要求的版本舊、找不到或無法執行 da-guard、沒有回鍵的判決，五者各有測試，結果都是拒收。判定子程序超過記憶體上限、判定期限在判定中到期、在排隊中到期也各有測試：只拒收那一筆、不回 503，下一筆寫入照常判定；逾時後沒有殘留的子孫程序（amtool、da-guard 等）；剩餘時間不夠重驗時回可重試的拒收；推進到一半中斷後，這批路徑會重設成分支上的內容。
+- **產生器容器的拒收條件**：找不到或無法執行 da-read、驗過與要寫的內容重驗一次仍不一致、產生器比 policy 要求的版本舊、找不到或無法執行 da-guard、沒有回鍵的判決，五者各有測試，結果都是拒收。判定子程序超過記憶體上限、判定期限在判定中到期、在排隊中到期也各有測試：只拒收那一筆、不回 503，下一筆寫入照常判定；逾時後沒有殘留的子孫程序（da-read、da-guard 等）；剩餘時間不夠重驗時回可重試的拒收；推進到一半中斷後，這批路徑會重設成分支上的內容。
 - 在 CI 裡，以 chart 固定的那一組版本執行。
 
 ## 成本
@@ -741,7 +742,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 方案 | 否決理由 |
 |---|---|
 | 限縮 conf.d 到「兩個解析器必然讀出相同結果」的寫法 | 實測不可行：引號字串裡的 `\/`、冒號後接 TAB，兩邊在值都已加引號、沒用進階功能時仍讀出不同結果。這種子集只能抽樣驗證，無法定義 |
-| 寫入時只看屬於這次寫入的 finding（逐筆歸屬） | 產生器回報 finding 的方式不是為了判斷責任而設計：它的驗證依序短路，前面有錯，後面的組裝與 amtool 就不跑；執行失敗的 finding 只在沒有其他 finding 時才補上；平台檔與跨租戶的 finding 沒有一致的主體。兩版歸屬規則都被實跑的反例打穿：鄰居的違規遮掉被寫入檔的 amtool 拒收；`_routing_defaults.yaml` 寫壞，平台強制路由整個被丟，那筆 finding 卻不屬於任何一筆寫入 |
+| 寫入時只看屬於這次寫入的 finding（逐筆歸屬） | 產生器回報 finding 的方式不是為了判斷責任而設計：它的驗證依序短路，前面有錯，後面的組裝與 Alertmanager 載入器的檢查就不跑；執行失敗的 finding 只在沒有其他 finding 時才補上；平台檔與跨租戶的 finding 沒有一致的主體。兩版歸屬規則都被實跑的反例打穿：鄰居的違規遮掉 Alertmanager 載入器對被寫入檔的拒收；`_routing_defaults.yaml` 寫壞，平台強制路由整個被丟，那筆 finding 卻不屬於任何一筆寫入 |
 | 只比對寫入前後「新增了哪些錯誤訊息」 | 已經違規的租戶改寫設定時，會產生和 base 一模一樣的那行訊息，比對差異會把它放行 |
 | 租戶本來就違規時，寫入前後的渲染結果相同就不擋 | 會漏：實測在 `group_by` 加一個空值，產生器多報一筆擋下的 finding，渲染結果卻完全不變。要補就得比對 finding 有沒有新增，也就是上一列。Kubernetes CRD validation ratcheting 從 1.28 alpha 到 1.33 GA 花了五個版本，累積了一張只增不減的不適用清單，也說明這類例外難以收斂 |
 | 批次驗兩次：先剔除違規的那幾筆，再驗剩下的組合 | 依賴逐筆歸屬（上上列）；改為整批全有全無 |
@@ -783,7 +784,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 步驟 8：刪除「非特定 tag」patch；exporter 判斷合併鍵不再認 `!` 標記。
 - 步驟 9：Go 端檔名規則收斂為一份（`pkg/confdname`）；`parse-tree` 加上只列檔模式，每種模式輸出同一份逐路徑索引，每個路徑是不是設定檔由 Go 判定（`role`，`da-guard.parse-tree/v2`）；Python 工具改讀 `role`（已有整棵樹文件的工具直接讀其 `entries`，不另列一次）。Python 的名稱規則已刪除：`_lib_confd` 的名稱述詞（`is_reserved_name`、`is_hidden_name`、`has_yaml_extension`、`is_defaults_name`、`select_defaults_carrier`、`config_stem` 等）連同拿它們和 Go 對照的測試一起刪掉，原本的呼叫點改讀 Go 給的資料——樹裡的路徑讀索引的 `role`、`class`、`tenant_named`、`not_read` 與 `defaults_carriers`，不在樹裡的名稱（ConfigMap 的鍵、還沒寫上磁碟的檔名）問 `parse-tree` 的名稱模式——它也回答名稱是否帶設定檔副檔名（`config_extension`，隱藏的名稱也答）、以及這些名稱放在同一個目錄時選哪一份 defaults 載體（落選的標 `not_read: unselected_defaults_carrier`），Go 測試要求名稱模式與整棵樹模式在名稱對照表的每一列都答得一樣；檔名規則對照表（`tests/shared/confd_name_classification_matrix.json`）只由 Go 的 `pkg/confdname` 測試擁有，逐格驗證並守住列的涵蓋下限。`tests/shared/test_confd_tools_no_python_judgement.py` 改為守住這些述詞不再出現。閘門看不到的，由行為矩陣測試（`tests/shared/test_confd_behaviour_matrix.py`）守住：工具是否以其他方式自己判斷 conf.d 路徑。矩陣用的樹來自一份目錄檔，Go 端測試要求 Go 能寫出的每一種 role 與 problem 都有一棵樹；矩陣跑其中列檔層面的樹，加上兩種內容錯誤（YAML 語法錯、一個檔裡有多份文件），其餘內容錯誤只由 Go 端測試驗。每支工具以 nobody 身分執行，判準是同一棵樹上 da-guard 驗證的結束碼：0 時工具必須結束碼 0；3 或 4 時工具必須以非 0 結束、不得 traceback 或卡住，並點名驗證報告列出的每一條路徑；樹裡有不是 UTF-8 的檔名時，工具同樣必須以非 0 結束（哪一碼依工具文件化的契約）、不得 traceback 或卡住，並以跳脫形式點名那個檔名。讀 conf.d 的工具共用一個失敗即停的出口：取得這次執行的整棵樹索引時，只要有一筆 `verdict` 不是 null，就逐條 `ERROR:` 點名那些路徑、在寫入任何東西之前以結束碼 2 結束；判定本身就是輸出的 `validate-config`、路由產生器、`check_routing_profiles`、`check_confd_schema`、`config_diff` 不經這個出口，自己點名並失敗；只讀 conf.d 一個子樹的工具（`deprecate_rule --plane subtree`）同樣經這個出口：它的索引取自 conf.d root 的整棵樹、再切出子樹那一段，因為 `parse-tree` 對子樹單獨執行時會把它當 root 判。沒有任何格子列為預期失敗。`config_history`、`drift_detect`、`run_chaos_soak` 讀的檔一律取自這份索引，所以都需要 da-guard；`migrate_to_operator` 的 `--source-dir` 是 ConfigMap 匯出檔、不是 conf.d，它的檔取自 `parse-tree` 只列檔模式，不經這個出口。`batch_diagnose` 讀叢集上的 `threshold-config` ConfigMap，把它落成與 exporter 掛載相同的扁平樹，經同一個出口讀取：租戶與每個租戶的繼承鏈都取自 `da-guard effective` 對這棵樹的答案，不再由鍵名推租戶 id。它需要叢集與能回答的 Prometheus，所以不在矩陣裡，拒絕行為由它自己的測試守住。矩陣也守住原本以 stat 或前綴自己判斷 conf.d 路徑的 `describe_tenant` 的 `--replaces` 與 `check_path_metadata_consistency`。`offboard_tenant` 認租戶自己的檔，也改看檔名帶的租戶 id（`tenant_named`），不再看檔名前綴。generator service 把 git 樹寫上磁碟時（`_gsvc_child`）略過隱藏路徑，改由名稱模式判定哪一段是隱藏的；路由產生器與 routing profile 的 lint 判斷平台檔裡的租戶有沒有人宣告時，改讀 `TenantScope` 的兩半，可能藏著租戶檔的項目會寫進訊息，不再把有人宣告的租戶說成 orphan。
 - 步驟 10：編輯原語的共用套件（`pkg/confedit`，含 §4 的不變式）與 da-guard 的 `write`（一次改寫、新建、取代、搬移、複製、刪除一批檔，整棵樹判一次，讀回確認後由它自己寫檔）；tenant-api 的批次 patch 與 custom-alerts 合併改用該套件。所有寫 conf.d 的 Python 工具都只送「要改什麼」：改既有檔的 `patch_config`、`threshold_govern`、`deprecate_rule`；產生新檔的 `generate_tenant_fixture`、`onboard_platform`、`migrate_rule`、`scaffold_tenant`、`init_project`、`da_assembler`（長跑的 controller 遇到拒寫只記在該 CR 的狀態、不結束程序）；搬檔的 `migrate_conf_d`；刪檔的 `offboard_tenant`（每個刪除項目帶「這個檔恰好宣告這個租戶」的前提，以同一次判定讀到的內容比對）；以及把多個來源組裝成一個 config-dir 的 `assemble_config_dir`（逐位元組複製，`--check` 判同一批）；還有把產生的區塊拼進 dev 範本與 try-local seed 兩個 `_defaults.yaml` 的 `check_threshold_registry --regen`（拼好的檔整份取代）。除了 `check_threshold_registry --regen`，每支都是一批交給 `da-guard write`、全部通過才寫，預覽問同一批的 dry run；`--regen` 的兩個檔在不同的 conf.d 根目錄，每個根目錄一批，寫入前兩批都先 dry run，兩批都通過才開始寫，但後面那批寫到一半停下時，前面那批已寫入的不還原（點名列出）。Python 端不再直接寫、搬或刪 conf.d 檔；`run_chaos_soak` 與 bench 的 fixture 腳本直接改檔，是刻意模擬人手改檔的測試工具，不在此列。
-- 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層（把未加引號的純量留成原文的 loader、照原文寫回的 dumper、保留 null 寫法的輔助函式）。最後一個讀它、但不寫 conf.d 的 `da_assembler --render-cr`（讀 CR 原文，比對 id 與 Kubernetes 的讀法、保留鍵順序）改由 `da-crdecode` 回答：它的輸出每份文件另帶 `differs_from_text`，列出 Kubernetes 讀法與原文不同的鍵與字串，物件的鍵照原文順序排；原文以 yaml.v3 的節點讀、`<<` 照 Kubernetes 的順序展開，所以只因 merge 順序不同的 CR 不再被拒收。文件裡的 yaml 範例由單一清冊（`scripts/tools/_lib_doc_yaml_inventory.py`）判定，`check_md_yaml_drift` 與 `check_threshold_unit_sanity` 都只從它取區塊：作者在 fence 上以屬性宣告讀者（`{.confd}`、`{.k8s}`、`{.helm-values}`、`{.prom-rules}`、`{.alertmanager}`、`{.prometheus}`），清冊以那個讀者的讀法讀；沒宣告的以 `parse-tree` 讀，讀不了（多份文件、重複鍵、語法錯；頂層不是 mapping 除外）就報錯，要作者宣告。刻意示範讀不了的 conf.d 輸入寫 `{.confd .expect-refused=<kind>}`，讀得了但故意寫錯的反例寫 `{.confd .expect-invalid}`，不給任何檢查判的區塊寫 `{.illustrative reason="…"}`（理由必填）。屬性詞彙是封閉的，寫錯、沒有大括號、或沿用已退役的註解標記都報錯；寫法見 [文件模板](../internal/doc-template.md)。CI 檢查守住改寫層不再出現；模仿 yaml.v3 的 loader 在步驟 13 刪除。
+- 步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層（把未加引號的純量留成原文的 loader、照原文寫回的 dumper、保留 null 寫法的輔助函式）。最後一個讀它、但不寫 conf.d 的 `da_assembler --render-cr`（讀 CR 原文，比對 id 與 Kubernetes 的讀法、保留鍵順序）改由 `da-crdecode` 回答：它的輸出每份文件另帶 `differs_from_text`，列出 Kubernetes 讀法與原文不同的鍵與字串，物件的鍵照原文順序排；原文以 yaml.v3 的節點讀、`<<` 照 Kubernetes 的順序展開，所以只因 merge 順序不同的 CR 不再被拒收。文件裡的 yaml 範例由單一清冊（`scripts/tools/_lib_doc_yaml_inventory.py`）判定，`check_md_yaml_drift` 與 `check_threshold_unit_sanity` 都只從它取區塊：作者在 fence 上以屬性宣告讀者（`{.confd}`、`{.k8s}`、`{.helm-values}`、`{.prom-rules}`、`{.alertmanager}`、`{.prometheus}`），清冊以那個讀者的讀法讀；沒宣告的以 `parse-tree` 讀，讀不了（多份文件、重複鍵、語法錯；頂層不是 mapping 除外）就報錯，要作者宣告。刻意示範讀不了的 conf.d 輸入寫 `{.confd .expect-refused=<kind>}`，讀得了但故意寫錯的反例寫 `{.confd .expect-invalid}`，不給任何檢查判的區塊寫 `{.illustrative reason="…"}`（理由必填）。哪些是 yaml 區塊、各帶什麼屬性，以網站的 Markdown 渲染器（mkdocs.yml 的擴充設定）的解讀為準：網站渲染成程式碼區塊、語言是 YAML 的才是要判的區塊。屬性詞彙是封閉的，寫錯或沿用已退役的註解標記都報錯；寫法見 [文件模板](../internal/doc-template.md)。CI 檢查守住改寫層不再出現；模仿 yaml.v3 的 loader 在步驟 13 刪除。
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準（§12）。`da-crdecode` 通用化（多份文件、標準輸入），與 `da-read alertmanager`、`da-read prometheus-rules`、`da-read prometheus` 一起放進 da-tools 映像；tenant-api 加上 `state show` 與 `config check`；讀 Prometheus 規則檔、`prometheus.yml`、Alertmanager 設定、Kubernetes manifest 與 Helm values 的工具改用對應的讀法；以 conf.d 格式讀的其餘文字改經 `parse-tree`（文件裡的範例經步驟 11 的清冊）。AST lint（`tests/shared/test_yaml_reader_boundary.py`）列出每個 PyYAML 呼叫點，白名單與棘輪 baseline 在 `tests/shared/_yaml_reader_baseline.py`；baseline 已清空。
 - 步驟 13：刪除遷移稽核指令與模仿 yaml.v3 的 Python loader（`_lib_yaml_keys`、`_lib_io` 的 exporter-key 讀取函式）；漸進遷移 playbook 補上升級前檢查。測試裡要知道「exporter 讀到什麼」的地方改問 `da-guard parse-tree`；兩份固定語料記錄舊產生器讀法的那一欄改為凍結的歷史值，之後新增的列寫 `n/a`。
 - 與上列平行：「快取的去留」的量測（§3），結果是保留快取，冷啟動改走批次單檔模式；vendored yaml.v3 基底升級到上游 v3.0.5，unhashable merge key 的 patch 刪除。

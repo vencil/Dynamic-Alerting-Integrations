@@ -99,3 +99,42 @@ groups:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+      # Rule B — 某個 tenant-exporters target 掛了、同租戶仍有別的 target 為 up（#3737）。
+      # 逐 pod 抓取（#3680／#3723）後每個副本各有一條 up；Rule A 只問「租戶還有沒有
+      # 任何 up==1」，所以多副本租戶掉一個副本時 Rule A 恆不 fire。本規則補這一格：
+      #   (此 target up==0) and on(tenant) (同租戶有任一 target up==1)
+      # 右手邊就是與 Rule A 的互斥：租戶所有 target 都掛時右手邊對該租戶為空 →
+      # 本規則不 fire，只剩 Rule A（critical）。互斥寫在 expr 裡、不靠 Alertmanager
+      # inhibit，自建 Alertmanager 或關掉嚴重度去重的租戶也成立，且 promtool 測得到
+      # （tests/rulepacks/rule-pack-liveness-replica_test.yaml）。
+      # 單副本租戶：唯一的 target 掛了右手邊就空 → 恆不 fire，歸 Rule A。
+      # ⚠️ 「歸 Rule A」只對在 _metadata 宣告 db_type 的租戶成立（檔頭「Opt-in 契約」）：
+      # 沒宣告的租戶沒有 tenant_expected_exporter，全部 target 都掛時兩條規則都不響
+      # （本規則本身不帶 opt-in 條件，對所有租戶都響；promtool R11 釘住現行行為）。
+      # ⚠️ 配對鍵只有 tenant、不含 service：同租戶的 up==1 可能來自【別的 Service】。
+      # 那時本規則照響（warning），但掛掉那個 Service 的監控其實已全斷，而 Rule A
+      # 也被另一個 Service 的 up==1 擋住（多 Service 的缺口在 #3771）。
+      # 嚴重度 warning＋maintenance: mute：副本級（同租戶仍有健康 target）可被維護
+      # 靜音；租戶整體缺席（Rule A）是 page（docs/design/config-driven.md）。
+      # for:10m 吸收滾動重啟（舊 pod 終止期間 up=0）。
+      # Scope: 只看值（up==0）。副本 pod 被刪、series 缺席不在此（Rule A 照舊管全部
+      # 缺席；DB workload 的副本數差額由 TenantHAReplicasDegraded 從 K8s 層看）。
+      - alert: TenantExporterReplicaDown
+        expr: |
+          (up{job="tenant-exporters"} == 0) and on(tenant) (up{job="tenant-exporters"} == 1)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Exporter target {{ $labels.instance }} down for tenant {{ $labels.tenant }} (another tenant-exporters target of the tenant is up)"
+          summary_zh: "租戶 {{ $labels.tenant }} 的 exporter target {{ $labels.instance }} 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+          description: "Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tenant }} has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if {{ with $labels.service }}Service {{ . }}{{ else }}its Service{{ end }} has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+          description_zh: "租戶 {{ $labels.tenant }} 的 target {{ $labels.instance }}{{ with $labels.pod }}（pod {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若{{ with $labels.service }} Service {{ . }} {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

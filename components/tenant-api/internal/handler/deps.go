@@ -148,6 +148,13 @@ type Deps struct {
 	// Tasks runs async batch operations behind a goroutine pool.
 	Tasks *async.Manager
 
+	// RetiredThresholdKeys (#3829) is a TEST SEAM: threshold keys a batch
+	// op's `unset` may remove beside cfg.BatchUnsettable's (the registry's
+	// `retired_keys:`). nil in production;
+	// a handler test sets it for the key its fake generator's verdict
+	// retires, instead of swapping the generated table.
+	RetiredThresholdKeys []string
+
 	// PRClient / PRTracker are populated only in PR/MR write-back
 	// modes. In `direct` mode both are nil; handlers that read them
 	// MUST also check WriteMode.IsPRMode().

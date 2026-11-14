@@ -1,17 +1,19 @@
 # release.yaml — Build & push container images + Helm chart on tag
 #
-# 觸發條件（六線版號策略）：
+# 觸發條件：本檔 `on.push.tags` 就是發布線的清單（單一來源；文件不另行計數）：
 #   - exporter/v*        → threshold-exporter Docker image + Helm chart
-#   - tools/v*           → da-tools Docker image
+#   - tools/v*           → da-tools Docker image，以及 recipe-preview Docker image
+#                          （#1040：同一個 tag、同一個 commit，見 Job 4）
 #   - portal/v*          → da-portal Docker image + Helm chart (Interactive Tools Portal)
-#   - recipe-preview/v*  → recipe-preview Docker image + Helm chart (#657 would-fire
-#                          preview) — ⛔ 這條線從未被切過，見下方「產出」
 #   - tenant-api/v*      → tenant-api Docker image + Helm chart
 #   - v*                 → platform tag，僅用於 GitHub Release 錨點，不觸發 build
+#                          （故不在 on.push.tags 裡）
 #
 # 產出：
 #   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
+#   - ghcr.io/vencil/recipe-preview:v<da-tools-version> (Docker image；tenant-api
+#     chart 的 recipe-preview 容器，tag 跟隨 generator.image.tag)
 #   - ghcr.io/vencil/da-portal:v<version>             (Docker image, v-prefixed)
 #   - ghcr.io/vencil/tenant-api:v<version>             (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
@@ -19,12 +21,10 @@
 #   - oci://ghcr.io/vencil/charts/tenant-api         (Helm chart)
 #
 # ⛔ 宣告 ≠ 已發布（#1352）。上面每一列是「切了對應 tag 之後這支 workflow 會
-#   產出的東西」。recipe-preview 是唯一一條從未被切過的線——
-#   `git ls-remote --tags origin 'refs/tags/recipe-preview/*'` 回空（其餘四
-#   條線都有 tag），所以 ghcr.io/vencil/recipe-preview 與
-#   oci://…/charts/recipe-preview 都不存在，刻意不列在上面。
-#   release-recipe-preview job 本身完整可用；要啟用這條線就切一個
-#   recipe-preview/v* tag，然後把這兩筆產物加回清單。
+#   產出的東西」。recipe-preview image 從下一個 tools/v* 起才會產出：
+#   tools/v2.9.0 以前它只由從未被切過的 recipe-preview/v* 線建置，所以
+#   ghcr.io/vencil/recipe-preview 目前不存在。哪個 tools tag 建了它，由
+#   scripts/tools/lint/check_image_pin_capability.py 解析該 tag 的本檔判定。
 #
 # 前置條件：
 #   - Repository Settings → Actions → Workflow permissions → Read and write
@@ -33,9 +33,9 @@
 # ⛔ 先掃再發布（#1278）。每個 component job 的順序是：
 #   build → push 到「候選 tag」`:candidate-<run_id>-<run_attempt>`
 #   → Trivy 掃 build step 輸出的那個 digest（hard gate，exit-code 1）
-#   → `docker buildx imagetools create` 把正式 tag（`:v<version>` + `:latest`）
-#     指到「同一個 digest」並回讀驗證 → 之後才 cosign 簽章（簽 digest）、SBOM、
-#     helm push、GitHub Release。
+#   →（da-tools / recipe-preview）cosign 簽 digest → `docker buildx imagetools
+#     create` 把正式 tag（`:latest`、`:v<version>`）指到「同一個 digest」並回讀
+#     驗證 → 之後才 SBOM、helm push、GitHub Release。
 #   所以掃到可修的 HIGH/CRITICAL 時，客戶拉得到的東西（正式 tag、chart、簽章、
 #   Release）一件都不會出現。候選 tag 不刻意清理——理由見
 #   docs/internal/github-release-playbook.md §Release-gate 陷阱。
@@ -43,6 +43,20 @@
 #   da-tools 另在 Trivy 之後、簽章與 promote 之前，對同一個 digest 實際執行映像
 #   （scripts/ops/smoke_da_tools_image.sh，#3258）；不過就不發布。位置由
 #   tests/ops/test_release_da_tools_smoke.py 守住。
+#
+# ⛔ 已發布的版號不可變（#3848）。寫 registry 與 GitHub Release 的動作只有一個
+#   入口：scripts/tools/dx/release_publish.py（image / chart / assets）。檢查在
+#   發布動作「裡面」，不是旁邊一個可被繞過的步驟：
+#   - 映像正式 tag 已存在 → 讀它的 org.opencontainers.image.revision label；
+#     等於 github.sha 就什麼都不寫（`latest` 也不動），不同或沒有 label 就失敗；
+#     要發布時 `latest` 先寫、版號 tag 最後寫，中途失敗時版號不存在、re-run 會補上；
+#   - chart 版號已存在 → 與這次打包的 .tgz 逐檔比對（Chart.yaml 以 `helm show chart` 的輸出比），
+#     相同就不 push，不同就失敗並列出檔案；
+#   - Release 資產絕不覆蓋：全在就不傳、全不在就全傳、只有一部分就失敗。
+#   只有 registry 回「沒有這個 manifest」（404）才算第一次發布；其餘（401/403、
+#   5xx、429、斷線、內容對不上 digest）一律 rc 2、job 失敗。本檔其他步驟一律
+#   不得出現發布指令，每個 build 都寫入 revision label，同一個 tag 的 run 不並行
+#   （concurrency）——由 tests/ops/test_release_immutable_wiring.py 解析本檔守住。
 
 name: Release
 
@@ -52,7 +66,6 @@ on:
       - "exporter/v*"
       - "tools/v*"
       - "portal/v*"
-      - "recipe-preview/v*"
       - "tenant-api/v*"
 
 env:
@@ -62,6 +75,13 @@ env:
 permissions:
   contents: read
   packages: write
+
+# #3848: two runs for one tag (a re-run while the first is still going) would
+# both find the version absent and both publish. Queued, never cancelled: a
+# cancelled release stops half way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ----------------------------------------------------------------
@@ -112,6 +132,10 @@ jobs:
           file: components/threshold-exporter/app/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (release_publish.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -121,7 +145,7 @@ jobs:
       # --- Helm chart: package + verify now (fail fast, publishes nothing);
       # `helm push` waits until the image digest has passed the scan ---
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default (which silently
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
@@ -163,23 +187,38 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
-      # Point the formal tags at the SCANNED digest (single-source imagetools
-      # create keeps the index as-is), then read every tag back and fail unless
-      # it resolves to exactly that digest.
-      - name: Promote scanned digest to release tags
+      # #3848 fail-fast: a chart version already published with other content
+      # fails the job here, before the image is published. Not the gate — the
+      # chart publish step below re-checks inside the push.
+      - name: Check the chart version is not already published (#3848)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -X utf8 scripts/tools/dx/check_release_immutable.py chart --tgz ".build/threshold-exporter-${VERSION}.tgz" --registry "$CHARTS"
+
+      # ⛔ #3848: the ONLY step that writes this image's release tags. The check
+      # lives inside the publish (scripts/tools/dx/release_publish.py), so it
+      # cannot be stepped around: `v<version>` absent → (--sign: sign, then) promote the
+      # SCANNED digest, `latest` first and the version last, each read back;
+      # already published from this commit → nothing written, `latest` untouched;
+      # from another commit / without a revision label → fail. Registry 401/403/
+      # 5xx/no answer → rc 2. REGISTRY_* are used only if the anonymous read is
+      # refused. tests/ops/test_release_immutable_wiring.py keeps every other
+      # step free of publishing commands.
+      - name: Publish image (#3848)
+        id: image_publish
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter
           DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
-          for t in "v${VERSION}" latest; do
-            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
-            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
-            echo "✓ ${IMG}:${t} -> ${DIGEST}"
-          done
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 -X utf8 scripts/tools/dx/release_publish.py image --image "$IMG"
+          --digest "$DIGEST" --revision "$REVISION" --tag "v${VERSION}" --tag latest
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # Verifies the image at Chart.yaml `appVersion` tag actually exists
@@ -195,10 +234,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh threshold-exporter helm/threshold-exporter/Chart.yaml
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+      # ⛔ #3848: the ONLY step that pushes the chart. Absent → `helm push`; the
+      # same files already published → nothing pushed; different → fail.
+      - name: Publish Helm chart (#3848)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -X utf8 scripts/tools/dx/release_publish.py chart --tgz ".build/threshold-exporter-${VERSION}.tgz" --registry "$CHARTS"
 
   # ----------------------------------------------------------------
   # Job 2: Build & push da-tools image + da-guard binaries (C-11)
@@ -308,6 +352,10 @@ jobs:
           context: components/da-tools/app
           platforms: linux/amd64,linux/arm64
           push: true
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (release_publish.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -344,38 +392,30 @@ jobs:
           [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
           bash scripts/ops/smoke_da_tools_image.sh "${IMG}@${DIGEST}"
 
-      # C-11 PR-3 Layer 1: sign the Docker image with cosign keyless.
-      # We sign by digest (not tag) — tags can be moved, digests are
-      # immutable. The digest is the build step's output, i.e. the object
-      # Trivy just scanned and the next step re-tags (#1278) — not a fresh
-      # tag lookup. Signed BEFORE promotion so a formal tag never exists
-      # unsigned. `cosign sign --yes` skips the interactive Y/N prompt
-      # which doesn't work in non-tty CI.
-      - name: Sign Docker image (cosign keyless)
-        env:
-          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
-          DIGEST: ${{ steps.build.outputs.digest }}
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          echo "▸ Signing image at digest: $DIGEST"
-          cosign sign --yes "${IMG}@${DIGEST}"
-
-      - name: Promote scanned digest to release tags
+      # ⛔ #3848: the ONLY step that writes this image's release tags. The check
+      # lives inside the publish (scripts/tools/dx/release_publish.py), so it
+      # cannot be stepped around: `v<version>` absent → (--sign: sign, then) promote the
+      # SCANNED digest, `latest` first and the version last, each read back;
+      # already published from this commit → nothing written, `latest` untouched;
+      # from another commit / without a revision label → fail. Registry 401/403/
+      # 5xx/no answer → rc 2. REGISTRY_* are used only if the anonymous read is
+      # refused. tests/ops/test_release_immutable_wiring.py keeps every other
+      # step free of publishing commands.
+      # Signs the scanned digest (cosign keyless, by digest) BEFORE any tag is
+      # written, so a formal tag never exists unsigned (needs id-token: write).
+      - name: Publish image (#3848)
+        id: image_publish
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
           DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
-          for t in "v${VERSION}" latest; do
-            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
-            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
-            echo "✓ ${IMG}:${t} -> ${DIGEST}"
-          done
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: >-
+          python3 -X utf8 scripts/tools/dx/release_publish.py image --image "$IMG"
+          --digest "$DIGEST" --revision "$REVISION" --tag "v${VERSION}" --tag latest --sign
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # da-tools has no Helm chart — components/da-tools/app/VERSION is the
@@ -393,14 +433,17 @@ jobs:
       # Different customer security teams prefer different formats;
       # shipping both costs ~50KB and avoids "we don't accept that
       # format" rejection on first onboarding review. Generated from the
-      # scanned digest, not a tag lookup (#1278).
+      # digest the release tag names, not a tag lookup (#1278): the scanned
+      # candidate just promoted, or — on a re-run that skipped promotion
+      # (#3848) — the digest already published, never this run's rebuild.
       - name: Generate SBOM for Docker image
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image_publish.outputs.digest }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::no release digest ('$DIGEST')"; exit 1; }
           mkdir -p "$RUNNER_TEMP/sbom"
           syft "${IMG}@${DIGEST}" -o spdx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.spdx.json"
           syft "${IMG}@${DIGEST}" -o cyclonedx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.cyclonedx.json"
@@ -511,14 +554,16 @@ jobs:
       - name: Save image as gzipped tar (air-gapped customers)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image_publish.outputs.digest }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::no release digest ('$DIGEST')"; exit 1; }
           REPO="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools"
           IMG="${REPO}:v${VERSION}"
           OUT="$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz"
-          # Pull the scanned digest (#1278), then tag it so `docker load`
-          # on the air-gapped side yields the familiar `da-tools:v<ver>`.
+          # Pull the digest the release tag names (#1278; #3848: the published
+          # one on a re-run), then tag it so `docker load` on the air-gapped
+          # side yields the familiar `da-tools:v<ver>`.
           docker pull "${REPO}@${DIGEST}"
           docker tag "${REPO}@${DIGEST}" "$IMG"
           docker save "$IMG" | gzip > "$OUT"
@@ -544,49 +589,29 @@ jobs:
               "$OUT"
           ls -la "${OUT}.sig" "${OUT}.cert"
 
-      - name: Create or update GitHub Release with assets
+      # ⛔ #3848: Release assets are never replaced (no --clobber): a re-run
+      # rebuilds the archives, whose bytes differ (mtimes), so a replaced asset
+      # would no longer match what customers downloaded and checksummed. All
+      # present → nothing uploaded; none → all uploaded; some → fail (delete
+      # the partial set, then re-run). Release absent → created with
+      # --generate-notes; a Release the maintainer pre-created is kept.
+      # Signatures (cosign keyless) and the SBOM (SPDX + CycloneDX) are part of
+      # the set; customer verification: docs/migration-toolkit-installation.md.
+      - name: Publish GitHub Release assets (#3848)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          # Idempotent: if the maintainer pre-created the Release
-          # (e.g. with hand-curated notes), skip create + just
-          # upload --clobber the assets. If not, create with
-          # --generate-notes for a starter changelog.
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "▸ Release $TAG already exists; uploading assets with --clobber"
-          else
-            echo "▸ Creating Release $TAG with auto-generated notes"
-            gh release create "$TAG" \
-                --title "da-tools v${VERSION} — Migration Toolkit" \
-                --generate-notes
-          fi
-          gh release upload "$TAG" --clobber \
-              "$RUNNER_TEMP/da-guard-bin/"*.tar.gz \
-              "$RUNNER_TEMP/da-guard-bin/"*.zip \
-              "$RUNNER_TEMP/da-guard-bin/SHA256SUMS" \
-              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz" \
-              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sha256"
-          # C-11 PR-3 Layer 1: cosign keyless signatures + SBOM. Glob
-          # the *.sig and *.cert files (one pair per archive + per
-          # SHA256SUMS + per SBOM file + for the air-gapped tar);
-          # absent file = nothing to upload. The SBOM directory holds
-          # both spdx-json and cyclonedx-json formats so customer
-          # security teams can pick whichever they consume.
-          gh release upload "$TAG" --clobber \
-              "$RUNNER_TEMP/da-guard-bin/"*.sig \
-              "$RUNNER_TEMP/da-guard-bin/"*.cert \
-              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sig" \
-              "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.cert" \
-              "$RUNNER_TEMP/sbom/"*.json \
-              "$RUNNER_TEMP/sbom/"*.sig \
-              "$RUNNER_TEMP/sbom/"*.cert
-          echo "✓ Release $TAG ready: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-          echo "✓ Artefacts signed with cosign keyless (sigstore.dev/Rekor)"
-          echo "✓ SBOM (SPDX + CycloneDX) generated by syft"
-          echo "  Customer verification: see docs/migration-toolkit-installation.md §Signature Verification"
+        run: >-
+          python3 -X utf8 scripts/tools/dx/release_publish.py assets
+          --tag "$GITHUB_REF_NAME" --title "da-tools v${VERSION} — Migration Toolkit"
+          "$RUNNER_TEMP/da-guard-bin/"*.tar.gz "$RUNNER_TEMP/da-guard-bin/"*.zip
+          "$RUNNER_TEMP/da-guard-bin/SHA256SUMS"
+          "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz"
+          "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sha256"
+          "$RUNNER_TEMP/da-guard-bin/"*.sig "$RUNNER_TEMP/da-guard-bin/"*.cert
+          "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.sig"
+          "$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz.cert"
+          "$RUNNER_TEMP/sbom/"*.json "$RUNNER_TEMP/sbom/"*.sig "$RUNNER_TEMP/sbom/"*.cert
 
   # ----------------------------------------------------------------
   # Job 3: Build & push da-portal image (Interactive Tools Portal)
@@ -637,6 +662,10 @@ jobs:
           file: components/da-portal/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (release_publish.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -652,7 +681,7 @@ jobs:
       # `helm push` waits until the image digest has passed the scan (#1278),
       # so a scan failure withholds image AND chart together.
       - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           # Explicit, never the action's `latest` default (which silently
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
@@ -688,20 +717,38 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
-      - name: Promote scanned digest to release tags
+      # #3848 fail-fast: a chart version already published with other content
+      # fails the job here, before the image is published. Not the gate — the
+      # chart publish step below re-checks inside the push.
+      - name: Check the chart version is not already published (#3848)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -X utf8 scripts/tools/dx/check_release_immutable.py chart --tgz ".build/da-portal-${VERSION}.tgz" --registry "$CHARTS"
+
+      # ⛔ #3848: the ONLY step that writes this image's release tags. The check
+      # lives inside the publish (scripts/tools/dx/release_publish.py), so it
+      # cannot be stepped around: `v<version>` absent → (--sign: sign, then) promote the
+      # SCANNED digest, `latest` first and the version last, each read back;
+      # already published from this commit → nothing written, `latest` untouched;
+      # from another commit / without a revision label → fail. Registry 401/403/
+      # 5xx/no answer → rc 2. REGISTRY_* are used only if the anonymous read is
+      # refused. tests/ops/test_release_immutable_wiring.py keeps every other
+      # step free of publishing commands.
+      - name: Publish image (#3848)
+        id: image_publish
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal
           DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
-          for t in "v${VERSION}" latest; do
-            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
-            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
-            echo "✓ ${IMG}:${t} -> ${DIGEST}"
-          done
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 -X utf8 scripts/tools/dx/release_publish.py image --image "$IMG"
+          --digest "$DIGEST" --revision "$REVISION" --tag "v${VERSION}" --tag latest
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # After promotion: it probes the formal `:v<version>` tag.
@@ -711,31 +758,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+      # ⛔ #3848: the ONLY step that pushes the chart. Absent → `helm push`; the
+      # same files already published → nothing pushed; different → fail.
+      - name: Publish Helm chart (#3848)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -X utf8 scripts/tools/dx/release_publish.py chart --tgz ".build/da-portal-${VERSION}.tgz" --registry "$CHARTS"
 
   # ----------------------------------------------------------------
-  # Job 4: Build & push recipe-preview image + Helm chart (#657)
+  # Job 4: Build & push recipe-preview image (#657, #1040)
   # ----------------------------------------------------------------
-  # recipe-preview was DESIGNED as a "sync-bumped" line — re-tagged at every
-  # platform release (same commit as the rule-pack ConfigMap), NOT an independent
-  # cadence, so its bundled compiler snapshot cannot silently drift from the
-  # platform compiler.
-  #
-  # ⛔ #1352 case B: that is the DESIGN, not the record. The line has never been
-  # cut — zero `recipe-preview/v*` tags exist on origin — so this job has never
-  # run, and the drift it guards against has never actually been guarded. The
-  # sentence above used to read as a statement of fact about EVERY release; it is
-  # reworded rather than deleted because the job is complete and correct, and
-  # cutting the first tag is all that enabling the line takes.
+  # Runs on the tools/v* tag, beside release-da-tools: one tag, one commit,
+  # two images. The tenant-api chart's recipe-preview container takes its tag
+  # from generator.image.tag (the da-tools pin), so the image that previews a
+  # recipe carries the same bundled compiler (da-guard) as the generator that
+  # judges the write. It has no chart and no release line of its own (#1040
+  # removed both; the recipe-preview/v* line was never cut).
+  # ⛔ check_image_pin_capability.py parses this job's `if:` at a pinned tools
+  # tag to decide whether that tag built this image: keep the job name and the
+  # refs/tags/tools/ condition, or the gate stops recognising releases.
   # The image bundles a SHA-pinned promtool because the firing/inactive verdict
   # format is version-bound; PROM_VERSION + amd64 digest == ci.yml's promtool gate
   # is CI-enforced (tests/preview/test_promtool_pin_parity.py).
   release-recipe-preview:
     runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/recipe-preview/')
+    if: startsWith(github.ref, 'refs/tags/tools/')
     permissions:
       contents: read
       packages: write
@@ -749,14 +799,15 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#recipe-preview/v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${GITHUB_REF_NAME#tools/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Chart.yaml version matches tag
+      # Same check as release-da-tools: the tag is the da-tools version.
+      - name: Verify VERSION file matches tag
         run: |
-          CHART_VER=$(grep '^version:' helm/recipe-preview/Chart.yaml | awk '{print $2}')
-          if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
-            echo "ERROR: helm/recipe-preview/Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
-            echo "Run: make bump-docs RECIPE_PREVIEW=${{ steps.version.outputs.VERSION }}"
+          FILE_VER=$(tr -d '[:space:]' < components/da-tools/app/VERSION)
+          if [ "$FILE_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: components/da-tools/app/VERSION ($FILE_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            echo "Run: make bump-docs TOOLS=${{ steps.version.outputs.VERSION }} && commit before re-tagging"
             exit 1
           fi
 
@@ -806,31 +857,6 @@ jobs:
       - name: Verify multi-arch manifest (#463)
         run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview@${{ steps.build.outputs.digest }}
 
-      # --- Helm chart: package + verify now (fail fast, publishes nothing);
-      # `helm push` waits until the image digest has passed the scan (#1278) ---
-      - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-        with:
-          # Explicit, never the action's `latest` default (which silently
-          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
-          version: v4.3.0
-
-      - name: Package Helm chart
-        run: |
-          mkdir -p .build
-          helm package helm/recipe-preview -d .build/
-
-      # ⛔ #1755: assert what the archive CONTAINS before it is published. The
-      # source-tree gate (check_chart_ship_surface.py) runs on every PR; this one
-      # reads the .tgz itself, which is the only place a package-time surprise —
-      # a stray file written by an earlier step, a newly pulled subchart — is
-      # visible. `check_chart_ship_surface.py` asserts this step still exists.
-      - name: Verify packaged chart contents (#1755)
-        run: |
-          python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
-            --chart helm/recipe-preview \
-            --tgz .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz
-
       # --- Security scan (PRE-publish hard gate on the candidate digest; #1278) ---
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -854,49 +880,38 @@ jobs:
           # register's entries are waived.
           trivyignores: components/recipe-preview/.trivyignore.yaml
 
-      # Sign by IMMUTABLE digest — the build step's output, i.e. the object
-      # Trivy just scanned and the next step re-tags (#1278). Signed BEFORE
-      # promotion, so no formal tag can ever exist unsigned because a later
-      # step aborted.
-      - name: Sign Docker image (cosign keyless)
-        env:
-          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
-          DIGEST: ${{ steps.build.outputs.digest }}
-          COSIGN_EXPERIMENTAL: "1"
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          echo "▸ Signing image at digest: $DIGEST"
-          cosign sign --yes "${IMG}@${DIGEST}"
-
-      - name: Promote scanned digest to release tags
+      # ⛔ #3848: the ONLY step that writes this image's release tags. The check
+      # lives inside the publish (scripts/tools/dx/release_publish.py), so it
+      # cannot be stepped around: `v<version>` absent → (--sign: sign, then) promote the
+      # SCANNED digest, `latest` first and the version last, each read back;
+      # already published from this commit → nothing written, `latest` untouched;
+      # from another commit / without a revision label → fail. Registry 401/403/
+      # 5xx/no answer → rc 2. REGISTRY_* are used only if the anonymous read is
+      # refused. tests/ops/test_release_immutable_wiring.py keeps every other
+      # step free of publishing commands.
+      # Signs the scanned digest (cosign keyless, by digest) BEFORE any tag is
+      # written, so a formal tag never exists unsigned (needs id-token: write).
+      - name: Publish image (#3848)
+        id: image_publish
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
           DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
-          for t in "v${VERSION}" latest; do
-            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
-            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
-            echo "✓ ${IMG}:${t} -> ${DIGEST}"
-          done
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          COSIGN_EXPERIMENTAL: "1"
+        run: >-
+          python3 -X utf8 scripts/tools/dx/release_publish.py image --image "$IMG"
+          --digest "$DIGEST" --revision "$REVISION" --tag "v${VERSION}" --tag latest --sign
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # recipe-preview is sync-bumped: appVersion == version == tag, so this
-      # confirms the image we just promoted is queryable in GHCR.
+      # Confirms the image we just promoted is queryable in GHCR (no chart).
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh recipe-preview helm/recipe-preview/Chart.yaml
-
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+        run: bash scripts/ops/verify_release_digest.sh recipe-preview
 
   # ----------------------------------------------------------------
   # Job 5: Build & push tenant-api image + Helm chart
@@ -934,6 +949,45 @@ jobs:
             exit 1
           fi
 
+      # ⛔ #3228: the chart is not released while its DEFAULT pins name a
+      # da-tools / recipe-preview image that cannot run the container the
+      # chart starts from it. The PR gate (image-pin-capability-check) honours
+      # the registered EXEMPTIONS so PRs stay green until a capable tools/v*
+      # tag exists; a release must not ride on them, so they are refused here.
+      # Until that tools release (and bump_docs.py --tools moving
+      # generator.image.tag to it), this step fails BY DESIGN: tenant-api is
+      # released after tools. It runs before the image build, so a refusal
+      # leaves no candidate image or promoted tag behind (it needs neither).
+      # tests/ops/test_release_tenant_api_pin_capability_gate.py
+      - name: Set up Python (image-pin capability gate)
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML (image-pin capability gate)
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      - name: Set up Helm
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
+
+      - name: Set up Go (da-crdecode, for the image-pin and rendered-chart checks)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      # The gate reads each pinned tools/vX.Y.Z tag's tree (`git show`); the
+      # default checkout has no tags, and without them the gate exits 2.
+      - name: Verify the chart's da-tools pins can run, exemptions refused (#3228)
+        run: |
+          git fetch --quiet --tags origin
+          bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_image_pin_capability.py --chart helm/tenant-api --refuse-exemptions
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -960,6 +1014,10 @@ jobs:
           # (Dockerfile ARG VERSION → -X main.version).
           build-args: |
             VERSION=v${{ steps.version.outputs.VERSION }}
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (release_publish.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -968,13 +1026,6 @@ jobs:
 
       # --- Helm chart: package + verify now (fail fast, publishes nothing);
       # `helm push` waits until the image digest has passed the scan (#1278) ---
-      - name: Set up Helm
-        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
-        with:
-          # Explicit, never the action's `latest` default (which silently
-          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
-          version: v4.3.0
-
       - name: Package Helm chart
         run: |
           mkdir -p .build
@@ -1005,20 +1056,38 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
-      - name: Promote scanned digest to release tags
+      # #3848 fail-fast: a chart version already published with other content
+      # fails the job here, before the image is published. Not the gate — the
+      # chart publish step below re-checks inside the push.
+      - name: Check the chart version is not already published (#3848)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -X utf8 scripts/tools/dx/check_release_immutable.py chart --tgz ".build/tenant-api-${VERSION}.tgz" --registry "$CHARTS"
+
+      # ⛔ #3848: the ONLY step that writes this image's release tags. The check
+      # lives inside the publish (scripts/tools/dx/release_publish.py), so it
+      # cannot be stepped around: `v<version>` absent → (--sign: sign, then) promote the
+      # SCANNED digest, `latest` first and the version last, each read back;
+      # already published from this commit → nothing written, `latest` untouched;
+      # from another commit / without a revision label → fail. Registry 401/403/
+      # 5xx/no answer → rc 2. REGISTRY_* are used only if the anonymous read is
+      # refused. tests/ops/test_release_immutable_wiring.py keeps every other
+      # step free of publishing commands.
+      - name: Publish image (#3848)
+        id: image_publish
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api
           DIGEST: ${{ steps.build.outputs.digest }}
           VERSION: ${{ steps.version.outputs.VERSION }}
-        run: |
-          set -euo pipefail
-          [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
-          docker buildx imagetools create --tag "${IMG}:v${VERSION}" --tag "${IMG}:latest" "${IMG}@${DIGEST}"
-          for t in "v${VERSION}" latest; do
-            got=$(docker buildx imagetools inspect "${IMG}:${t}" --format '{{.Manifest.Digest}}')
-            [ "$got" = "$DIGEST" ] || { echo "::error::${IMG}:${t} -> ${got}, expected scanned ${DIGEST}"; exit 1; }
-            echo "✓ ${IMG}:${t} -> ${DIGEST}"
-          done
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 -X utf8 scripts/tools/dx/release_publish.py image --image "$IMG"
+          --digest "$DIGEST" --revision "$REVISION" --tag "v${VERSION}" --tag latest
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
       # appVersion == version == tag (gated above), so this confirms the
@@ -1029,7 +1098,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
 
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+      # ⛔ #1040: the chart is not published while its DEFAULTS run an image
+      # nobody can pull. The tenant-api pod runs a generator and a
+      # recipe-preview container whose tags follow the da-tools pin, so a
+      # tenant-api release cut before the tools release that builds those
+      # images would publish a chart whose default install never becomes
+      # Ready. The render is the source (a derived tag is invisible in
+      # values.yaml), resolution is anonymous (as a customer pulls), and the
+      # tenant-api image itself was promoted above, so it resolves too.
+      # (helm and Go — da-crdecode — were set up before the capability gate.)
+      - name: Verify the chart's default images resolve (#1040)
+        run: bash scripts/ops/with_da_crdecode.sh python3 scripts/ops/check_image_refs_resolve.py --scope rendered --chart helm/tenant-api
+
+      # ⛔ #3848: the ONLY step that pushes the chart. Absent → `helm push`; the
+      # same files already published → nothing pushed; different → fail.
+      - name: Publish Helm chart (#3848)
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 -X utf8 scripts/tools/dx/release_publish.py chart --tgz ".build/tenant-api-${VERSION}.tgz" --registry "$CHARTS"

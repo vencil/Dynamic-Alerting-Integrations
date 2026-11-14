@@ -27,6 +27,11 @@ what the exporter meant: a file name holding a real "\n" is printed by Go as
 two lines, and nothing here can tell those two from two messages. The prefix
 is what keeps either of them off column 0.
 
+`load_severity_dedup(conf_d, binary=None)` (#3621) returns a
+`SeverityDedupTree`: each tenant's `_severity_dedup` mode as the exporter
+reads it (`da-guard severity-dedup`), the values it does not read and the
+values written with a schedule — for the route generator's inhibit rules.
+
 `load_served_values(conf_d, at=None, binary=None, schedules=False)` returns
 `{tenant_id: TenantValues}`:
 
@@ -314,6 +319,11 @@ __all__ = [
     "load_guard_report",
     "load_custom_alert_pack",
     "load_key_refs",
+    "load_severity_dedup",
+    "SeverityDedupError",
+    "SeverityDedupProblem",
+    "SeverityDedupSchedule",
+    "SeverityDedupTree",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
@@ -333,6 +343,12 @@ KEY_REFS_SCHEMA = "da-guard.key-refs/v1"
 CUSTOM_ALERT_PACK_SUBCOMMAND = "compile-custom-alerts"
 # The `schema` value load_custom_alert_pack reads; any other is refused.
 CUSTOM_ALERT_PACK_SCHEMA = "da-guard.compile-custom-alerts/v1"
+SEVERITY_DEDUP_SUBCOMMAND = "severity-dedup"
+# The `schema` value load_severity_dedup reads; any other is refused.
+SEVERITY_DEDUP_SCHEMA = "da-guard.severity-dedup/v1"
+_SEVERITY_DEDUP_MODES = frozenset({"enable", "disable"})
+_SEVERITY_DEDUP_LAYERS = frozenset({"tenant", "platform_tenants", "profile"})
+_SEVERITY_DEDUP_SECTIONS = frozenset({"tenants", "profiles"})
 _KEY_REF_SECTIONS = frozenset({"defaults", "optional_overrides", "tenants", "profiles"})
 _KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
 # Seconds: generous for a large tree, and a hang still ends.
@@ -705,6 +721,34 @@ class KeyRefsTree(NamedTuple):
     stderr_lines: list[str]            # every non-empty line of da-guard's stderr, as written
 
 
+class SeverityDedupProblem(NamedTuple):
+    """A `_severity_dedup` value the exporter does not read (#3621), in the
+    file and layer that writes it — Go's LayerValueProblem."""
+    file: str     # root-relative slash path
+    layer: str    # "tenant" | "platform_tenants" | "profile"
+    owner: str    # the tenant id, or for "profile" the profile name
+    problem: str  # the exporter's own words (they quote the value as its resolver compares it)
+    value: str    # the value as the file wrote it
+
+
+class SeverityDedupSchedule(NamedTuple):
+    """A `_severity_dedup` written with a time window or expires (#3621):
+    the exporter reads its `default` alone (#3269)."""
+    file: str     # root-relative slash path
+    section: str  # "tenants" | "profiles"
+    owner: str    # the tenant id, or the profile name
+
+
+class SeverityDedupTree(NamedTuple):
+    """`da-guard severity-dedup`'s document (#3621)."""
+    modes: dict[str, str]                   # every tenant the exporter loads -> "enable" | "disable"
+    problems: list[SeverityDedupProblem]    # values the exporter does not read
+    schedules: list[SeverityDedupSchedule]  # values written with a schedule
+    parse_failed: list[str]                 # the files the exporter's load skips (do not decode)
+    unreadable: list[UnreadableFile]        # the paths the load cannot stat, read or list
+    stderr_lines: list[str]                 # every non-empty line of da-guard's stderr, as written
+
+
 class NotCompiledEntry(NamedTuple):
     """An entry the exporter does not serve, so no rule (#3229)."""
     tenant: str
@@ -784,6 +828,10 @@ class KeyRefsError(DaGuardError):
 
 class CustomAlertPackError(DaGuardError):
     """da-guard compile-custom-alerts failed."""
+
+
+class SeverityDedupError(DaGuardError):
+    """da-guard severity-dedup failed."""
 
 
 def _stderr_text(b: bytes | str | None) -> str:
@@ -929,6 +977,11 @@ def _run_da_guard(
                 f"da-guard {subcommand} exited {proc.returncode}, and this da-guard does not accept "
                 f"`{subcommand}` with {' '.join(a for a in cmd[2:] if a.startswith('--'))} — it is "
                 "older than this tool: upgrade or rebuild it", proc.returncode, stderr, stale=True)
+        # #3724: on a tree a declared input named that changed since its
+        # judgement, exit 2 is that change — a refusal naming the flag
+        # (`refuse_changed` tells it from the tree's own refusal).
+        _lib_parse_cache.refuse_changed(
+            conf_d, (_nonempty_lines(stderr) or [f"da-guard {subcommand} exited 2"])[0])
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
     if proc.returncode < 0:
         # Killed by a signal (OOM, a timeout of the CI job, …): not classified,
@@ -991,7 +1044,8 @@ def _run_da_guard(
 # names the binary as older than this tool (#3489, #3016).
 _FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
                        ("undecidable_blocks",), ("switched_off_with",), ("base",),
-                       ("dead_entries",))  # #3502: key-verdict's rows and findings
+                       ("dead_entries",),  # #3502: key-verdict's rows and findings
+                       ("hint",))  # #3829: key-verdict's findings (a retired threshold key)
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
@@ -1685,6 +1739,52 @@ def load_key_refs(
     tree, _returncode, stderr = _run_da_guard(
         KEY_REFS_SUBCOMMAND, extra, conf_d, binary, timeout, KeyRefsError, schema=KEY_REFS_SCHEMA,
         read=read, reads_unreadable=True, dropped_ok=True)
+    return tree._replace(stderr_lines=_nonempty_lines(stderr))
+
+
+def load_severity_dedup(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> SeverityDedupTree:
+    """`da-guard severity-dedup` over the tree at `conf_d` (#3621): each
+    tenant's `_severity_dedup` mode as the exporter's resolver reads it, the
+    values it does not read and the values written with a schedule. Nothing
+    is judged here: every field is Go's.
+
+    A file the exporter's load drops is returned (`parse_failed` /
+    `unreadable`), not raised: the caller compares tenant sets and names
+    them. Raises `DaGuardNotFoundError`, or `SeverityDedupError` — `stale`
+    for a da-guard without the subcommand (older than this tool), `broken`
+    for one that does not answer as da-guard does; neither for a tree the
+    exporter's load rejects (exit 2: a tenant declared twice, no config
+    file)."""
+    def read(doc: dict[str, Any]) -> SeverityDedupTree:
+        modes: dict[str, str] = {}
+        for tenant, entry in doc["tenants"].items():
+            mode = entry["mode"]
+            if mode not in _SEVERITY_DEDUP_MODES:
+                raise ValueError(f"tenant {tenant!r}: mode {mode!r} is neither enable nor disable")
+            modes[tenant] = mode
+        problems = []
+        for p in doc["problems"]:
+            problem = SeverityDedupProblem(p["file"], p["layer"], p["owner"], p["problem"], p["value"])
+            if not all(isinstance(v, str) for v in problem) or problem.layer not in _SEVERITY_DEDUP_LAYERS:
+                raise ValueError(f"problem {p!r} is not of its shape")
+            problems.append(problem)
+        schedules = []
+        for e in doc["schedules"]:
+            sched = SeverityDedupSchedule(e["file"], e["section"], e["owner"])
+            if not all(isinstance(v, str) for v in sched) or sched.section not in _SEVERITY_DEDUP_SECTIONS:
+                raise ValueError(f"schedule {e!r} is not of its shape")
+            schedules.append(sched)
+        return SeverityDedupTree(
+            modes, problems, schedules, [str(f) for f in doc["parse_failed"]],
+            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]], [])
+
+    tree, _returncode, stderr = _run_da_guard(
+        SEVERITY_DEDUP_SUBCOMMAND, [], conf_d, binary, timeout, SeverityDedupError,
+        schema=SEVERITY_DEDUP_SCHEMA, read=read, reads_unreadable=True, dropped_ok=True)
     return tree._replace(stderr_lines=_nonempty_lines(stderr))
 
 

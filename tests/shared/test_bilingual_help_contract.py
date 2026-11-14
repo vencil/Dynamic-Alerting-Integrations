@@ -29,7 +29,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (141) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (142) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -156,6 +156,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "describe_tenant.py": _R_DX,
     "diag_pr_ci.py": _R_DX,
     "doc_coverage.py": _R_DX,
+    "gen_adr_checks.py": _R_DX,
     "gen_agent_adapters.py": _R_DX,
     "gen_recipe_contract.py": _R_DX,
     "gen_tenant_id_json.py": _R_DX,
@@ -175,6 +176,9 @@ ENGLISH_ONLY: dict[str, str] = {
     "pair_bench_ratio.py": _R_DX,
     "paired_trend_watch.py": _R_DX,
     "render_soak_diff.py": _R_DX,
+    # #3799: maintainer runs it on a Renovate PR branch; output is file paths,
+    # image refs and the go/make commands it runs.
+    "renovate_fixup.py": _R_DX,
     "reword_chain.py": _R_DX,
     "run_chaos_soak.py": _R_DX,
     "scaffold_lint.py": _R_DX,
@@ -204,7 +208,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_dev_bypass_manifest.py": _R_LINT,
     "check_dev_rules_enforcement.py": _R_LINT,
     "check_devrules_size.py": _R_LINT,
-    "check_dist_source_consistency.py": _R_LINT,
     "check_doc_datools_cmds.py": _R_LINT,
     "check_doc_k8s_refs.py": _R_LINT,
     "check_doc_links.py": _R_LINT,
@@ -253,13 +256,14 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_undefined_tokens.py": _R_LINT,
     "check_unpinned_deps.py": _R_LINT,
     "check_vmalert_coverage.py": _R_LINT,
+    "check_jsx_linecount.py": _R_LINT,
     "check_window_x_no_fallback.py": _R_LINT,
     "check_workflow_git_push_permissions.py": _R_LINT,
     "check_workload_closure_drift.py": _R_LINT,
     "detect_sed_damage.py": _R_LINT,
     "fix_file_hygiene.py": _R_LINT,
     "lint_html_doc_links.py": _R_LINT,
-    "lint_jsx_babel.py": _R_LINT,
+    "lint_jsx_syntax.py": _R_LINT,
     "lint_tool_consistency.py": _R_LINT,
     "trufflehog_to_sarif.py": _R_LINT,
     "validate_mermaid.py": _R_LINT,
@@ -557,8 +561,15 @@ def test_allowlists_shrink_only_count_pin():
     # section that exists. Same class as the `_R_LINT` siblings: a pre-commit
     # gate, never invoked by a customer; its output is path:line plus the
     # section it could not find.
-    assert len(ENGLISH_ONLY) <= 152, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=152). Adding an "
+    # pin 153: bumped from 152 for gen_adr_checks.py (#1040), the generator
+    # that writes an ADR's list of checks from the marker comments in the
+    # tests (docs/internal/test-map.md, "ADR 檢查標記"). Same class
+    # as gen_agent_adapters.py beside it: a dx regen CLI run by the
+    # `adr-checks-drift` pre-commit hook and CI, never by a customer; its
+    # output is the paths it rewrote or would rewrite. ⚠️ Found the same way
+    # as check_pipestatus_errexit.py: this gate turned the PR red.
+    assert len(ENGLISH_ONLY) <= 153, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=153). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

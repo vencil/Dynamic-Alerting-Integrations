@@ -3,7 +3,7 @@
   {"query": "v2.10.0 可以出了嗎，CHANGELOG 還要整理什麼", "should_trigger": true},
   {"query": "要發 v2.10.0 了，幫我開分支並列出發版前要做的事", "should_trigger": true},
   {"query": "make pre-tag 被 draft-advisory-check 擋下來，怎麼處理", "should_trigger": true},
-  {"query": "六線 tag 要怎麼打，順序有講究嗎", "should_trigger": true},
+  {"query": "各條 release tag 要怎麼打，順序有講究嗎", "should_trigger": true},
   {"query": "GitHub 上要建幾個 release，各自的 notes 從哪來", "should_trigger": true},
   {"query": "這次只有平台 tag 要升，像 v2.8.1 那樣，流程一樣嗎", "should_trigger": true},
   {"query": "打完 tag 才發現 CHANGELOG 漏一條，能補嗎", "should_trigger": true},

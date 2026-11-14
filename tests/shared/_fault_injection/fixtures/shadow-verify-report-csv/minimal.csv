@@ -1,0 +1,2 @@
+Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp
+custom_mysql_connections,tenant-x,max by(tenant) (mysql_global_status_threads_connected),tenant:custom_mysql_connections:max,42.0,42.0,0.0,match,2026-03-07 12:00:00

@@ -751,7 +751,7 @@ onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for
 #   MISSING    規則指向的檔案不存在
 #   GLOB-EMPTY glob 展開到 0 個檔案（整條規則對所有 gate 隱形）
 #   GLOB-DEAD  glob 展開到檔案、但整棵樹一個都沒撈到
-#   NO-SSOT    六條版號線之一讀不到 source-of-truth（該線全部規則未被評估）
+#   NO-SSOT    某條版號線讀不到 source-of-truth（該線全部規則未被評估）
 # `--scope` 過濾後剩 0 條規則會以 exit 2 擋下，不會回報「一致」。
 #
 # 第二行 `--sync-counts --check` 同一個理由（#1407 第三輪）：計數規則自己的三種
@@ -766,11 +766,11 @@ version-check: $(DA_READ_PREREQ) ## 檢查版號一致性 + 計數一致性 (CI 
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check advisory-patched-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  init-chart-pin ✅  playbook-freshness (advisory — read its output above; it never blocks)"
-	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
+	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Advisory patched versions ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
@@ -846,6 +846,19 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 	else \
 		echo "✅ draft-advisory-check: 無未發布 draft advisory"; \
 	fi
+
+# --- #1269: every advisory row's patched_versions must exist in its version space ---
+# GitHub validates neither version field for ecosystem `other`, so a row can
+# name a version that was never published, or stay empty after the fix
+# shipped. Runs WITHOUT regard to ADVISORY_ACK: that acknowledges "drafts are
+# not published now", not "their rows may be wrong". Fail-closed both ways
+# (rc 2 when it cannot ask). ⚠️ It cannot fail the release that CREATES the
+# fixed version (not published yet at pre-tag); a forgotten fill fails the
+# next pre-tag. Needs gh, network to ghcr.io, and a non-shallow clone for
+# git-only chart rows.
+.PHONY: advisory-patched-check
+advisory-patched-check: ## ⛔ 擋住「advisory 的 patched 版號不存在，或修正版已發布卻沒回填」（#1269）
+	@python3 -X utf8 scripts/tools/dx/check_advisory_patched_versions.py
 
 # --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
 # release.yaml builds 5 of these 8 images at tag push; building them locally in
@@ -956,6 +969,10 @@ byo-rulepack-table: $(DA_READ_PREREQ) ## 重新產生 BYO Prometheus 文件內�
 .PHONY: platform-data
 platform-data: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
+
+.PHONY: renovate-fixup
+renovate-fixup: $(DA_CRDECODE_PREREQ) ## 在 Renovate「third-party container images」PR 分支上補齊它寫不到的連動修改（da-read go.sum、oauth2-proxy 測試函式庫、federation-e2e／try-local compose、platform-data＋portal IMAGE_MIRROR＋dist；#3799）。需要 go 與 make；剩下的紅燈是上游 API 變更，要人修
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/renovate_fixup.py
 
 .PHONY: rulepack-configmaps
 rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
@@ -1117,7 +1134,7 @@ lint-e2e: ## Playwright 專用 lint（test.fixme/skip guard，A-13 enforcement�
 	@bash scripts/tools/lint/e2e_spec_lint.sh
 
 .PHONY: lint-portal
-lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / jsx-i18n / babel parse / registry-jsx parity
+lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / jsx-i18n / esbuild parse / line-count / registry-jsx parity
 	@# Bundle of every lint that protects the docs/interactive/ tree.
 	@# Each script exits 0 on success / 1 on findings. Run from repo
 	@# root; designed for CI + local pre-tag verification.
@@ -1127,8 +1144,10 @@ lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / j
 	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/check_undefined_tokens.py
 	@echo "==> jsx i18n cross-check"
 	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/check_jsx_i18n.py
-	@echo "==> jsx babel parse + line-count (strict)"
-	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
+	@echo "==> portal jsx/js parse (the build's esbuild)"
+	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/lint_jsx_syntax.py --ci
+	@echo "==> jsx line-count caps (strict)"
+	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/check_jsx_linecount.py --ci --strict
 	@echo "==> tool-registry.yaml ↔ jsx parity"
 	@python3 scripts/tools/lint/check_tool_registry_jsx_parity.py
 	@echo "==> Hub UI badge drift (no hardcoded counts)"
@@ -1162,17 +1181,16 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo "✓ All convention gates pass for $(SCRIPT)"
 
 .PHONY: version-show
-version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
+version-show: ## 顯示目前各版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
 .PHONY: bump-docs
-bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 TENANT_API=2.9.20)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS)) \
 		$(if $(PORTAL),--portal $(PORTAL)) \
-		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW)) \
 		$(if $(TENANT_API),--tenant-api $(TENANT_API))
 
 # ----------------------------------------------------------
@@ -1204,15 +1222,16 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
 
 .PHONY: test-e2e
-test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
+# #3738：E2E 伺服的 docs/ 含 docs/assets/dist/，那是 build 產物、不在 git 裡，先從 source 建出來。
+test-e2e: portal-build ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
 	@cd tests/e2e && npm test -- $(ARGS)
 
 .PHONY: test-e2e-visual
-test-e2e-visual: ## Visual regression test (TRK-229)，比對 baseline png；CI 不跑，需 baseline 已存在
+test-e2e-visual: portal-build ## Visual regression test (TRK-229)，比對 baseline png；CI 不跑，需 baseline 已存在
 	@cd tests/e2e && npm run test:visual -- $(ARGS)
 
 .PHONY: test-e2e-visual-update
-test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑（Windows host 字體渲染不同會產生 false positives）。建議用 GitHub Actions visual-baseline.yaml workflow_dispatch
+test-e2e-visual-update: portal-build ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑（Windows host 字體渲染不同會產生 false positives）。建議用 GitHub Actions visual-baseline.yaml workflow_dispatch
 	@if [ "$$(uname -s)" != "Linux" ]; then \
 		echo "❌ Refuse to run on non-Linux host: '$$(uname -s)'"; \
 		echo "   Use the 'Visual Regression Baseline Update' GitHub Actions workflow instead"; \
@@ -1222,19 +1241,31 @@ test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑
 	@cd tests/e2e && npm run test:visual:update -- $(ARGS)
 
 .PHONY: portal-build
-portal-build: ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
+portal-build: portal-deps ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
 	@cd tools/portal && npm run build
 
+# #3738：serve-docs／test-e2e 等 target 依賴 portal-build，而全新 checkout 沒有
+# tools/portal/node_modules（build 會死在找不到 esbuild）。node_modules 不存在、
+# 或 package-lock.json 比上次安裝新（npm 安裝時寫 node_modules/.package-lock.json）
+# 時才 `npm ci`；其他情況不重裝。
+.PHONY: portal-deps
+portal-deps: ## Install tools/portal npm deps when missing or older than package-lock.json
+	@if [ ! -f tools/portal/node_modules/.package-lock.json ] || \
+	    [ tools/portal/package-lock.json -nt tools/portal/node_modules/.package-lock.json ]; then \
+		echo "==> tools/portal: npm ci"; \
+		cd tools/portal && npm ci --no-audit --no-fund; \
+	fi
+
 .PHONY: portal-build-watch
-portal-build-watch: ## Watch-mode portal build for dev iteration (TRK-230)
+portal-build-watch: portal-deps ## Watch-mode portal build for dev iteration (TRK-230)
 	@cd tools/portal && npm run build:watch
 
 .PHONY: test-portal
-test-portal: ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
+test-portal: portal-deps ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
 	@cd tools/portal && npm run test
 
 .PHONY: portal-bundle-budget
-portal-bundle-budget: ## Check portal dist bundle size budgets (TRK-232a; per-tool 100KB / shared chunk 200KB / total 4MB)
+portal-bundle-budget: portal-build ## Check portal dist bundle size budgets (TRK-232a; per-tool 100KB / shared chunk 200KB / total 4MB)
 	@python3 scripts/tools/lint/check_portal_bundle_size.py --ci
 
 .PHONY: test-skip-audit
@@ -1297,13 +1328,12 @@ chart-package: ## 打包 Helm chart (.tgz)
 		--tgz .build/threshold-exporter-$(CHART_VER).tgz
 	@echo "✓ .build/threshold-exporter-$(CHART_VER).tgz"
 
-.PHONY: chart-push
-chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker login ghcr.io)
-	@helm push .build/threshold-exporter-$(CHART_VER).tgz oci://$(OCI_REGISTRY)/charts
-	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
+# chart 只由 release.yaml 發布：發布前 check_release_immutable.py 先比對
+# registry 上的同版號（#3848）。本機推送的 `chart-push` 已移除——它沒有那道檢查，
+# 可以讓同一版號對應兩份內容。
 
 # ----------------------------------------------------------
-# Release Tag（六線版號策略）
+# Release Tag（各線版號；清單見 release.yaml 的 on.push.tags）
 # ----------------------------------------------------------
 .PHONY: release-tag-exporter
 release-tag-exporter: version-check ## 從 Chart.yaml 推導 exporter tag（觸發 image + Helm build）
@@ -1341,22 +1371,12 @@ release-tag-portal: version-check ## 建立 portal tag（觸發 da-portal image 
 	echo "✅ Tag portal/v$$ver created locally."; \
 	echo "Run: git push origin portal/v$$ver"
 
-.PHONY: release-tag-recipe-preview
-release-tag-recipe-preview: version-check ## 從 Chart.yaml 推導 recipe-preview tag（觸發 image + Helm build；#657 同步升）
-	@RP_VER=$$(grep '^version:' helm/recipe-preview/Chart.yaml | awk '{print $$2}'); \
-	echo "recipe-preview Chart.yaml version: $$RP_VER"; \
-	if git rev-parse "recipe-preview/v$$RP_VER" >/dev/null 2>&1; then \
-		echo "ERROR: tag recipe-preview/v$$RP_VER already exists"; exit 1; \
-	fi; \
-	git tag "recipe-preview/v$$RP_VER"; \
-	echo "✅ Tag recipe-preview/v$$RP_VER created locally."; \
-	echo "Run: git push origin recipe-preview/v$$RP_VER"
-
 # ----------------------------------------------------------
 # 文件本地伺服
 # ----------------------------------------------------------
 .PHONY: serve-docs
-serve-docs: ## 啟動本地文件伺服器（含互動工具）
+# #3738：互動工具載入 docs/assets/dist/，先從 source 重建再伺服。
+serve-docs: portal-build ## 啟動本地文件伺服器（含互動工具）
 	@echo "Starting local docs server at http://localhost:8080"
 	@echo "Interactive Tools Hub: http://localhost:8080/docs/interactive/"
 	@echo "Press Ctrl+C to stop."

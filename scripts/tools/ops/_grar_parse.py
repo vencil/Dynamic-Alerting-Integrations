@@ -25,7 +25,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
-from _lib_validation import scalar_text  # noqa: E402  (#1560 ⑤-b: values into messages)
+from _lib_validation import scalar_text, shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: values into messages)
 from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
     NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
     credential_shape_problems, plaintext_credential_findings, ref_path_text,
@@ -38,6 +38,9 @@ from _lib_paths import classify_path  # noqa: E402  (#3276)
 # parse-tree`'s, through one reader per run (and, in the generator container,
 # its content-addressed cache).
 import _lib_parse_cache  # noqa: E402
+# #3621: each tenant's severity dedup is the exporter's reading of it
+# (`da-guard severity-dedup`).
+import _lib_tenant_values  # noqa: E402
 from _lib_parse_tree import (  # noqa: E402
     RESERVED_CLASSES, FileUnreadable, ParseTreeError, classify_names)
 from _lib_confd import (  # noqa: E402
@@ -1000,41 +1003,6 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 file=fname, field="domain_policies")
 
 
-# #2906: the `_severity_dedup` words, as the exporter reads them
-# (pkg/config ResolveSeverityDedup: trimmed, case-insensitive). The disabling
-# half is the platform's disable vocabulary (`_DISABLED_VALUES`, Go
-# `isDisabled`). These are the field's VALUES, not YAML 1.1 boolean words:
-# `yes` / `no` are not among them, quoted or not.
-SEVERITY_DEDUP_ENABLE_WORDS = ("enable", "enabled", "on", "true")
-SEVERITY_DEDUP_DISABLE_WORDS = ("disable", "disabled", "off", "false")
-SEVERITY_DEDUP_WORDS = SEVERITY_DEDUP_ENABLE_WORDS + SEVERITY_DEDUP_DISABLE_WORDS
-
-
-def severity_dedup_mode(value: object) -> str | None:
-    """#2906: ``"enable"`` / ``"disable"`` for a tenant's ``_severity_dedup``
-    value, or ``None`` when the value is refused.
-
-    * null (the key absent, or written with no value) is the default,
-      ``enable``;
-    * a boolean: true is ``enable``, false ``disable`` (an unquoted
-      ``false`` / ``off`` / ``no`` is the boolean False to PyYAML);
-    * a string: one of ``SEVERITY_DEDUP_WORDS`` (trimmed, any case);
-    * anything else — another string (``"no"``, ``"yes"``, ``""``), a
-      number, a list, a mapping — is refused.
-    """
-    if value is None:
-        return "enable"
-    if isinstance(value, bool):
-        return "enable" if value else "disable"
-    if isinstance(value, str):
-        word = value.strip().lower()
-        if word in SEVERITY_DEDUP_ENABLE_WORDS:
-            return "enable"
-        if word in SEVERITY_DEDUP_DISABLE_WORDS:
-            return "disable"
-    return None
-
-
 def routing_profile_ref(tenant: str, value: object) -> tuple[str | None, str | None]:
     """#3269: a tenant's ``_routing_profile`` as ``(name, error)``.
 
@@ -1059,8 +1027,10 @@ def routing_profile_ref(tenant: str, value: object) -> tuple[str | None, str | N
 def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
     """Extract per-tenant config from a tenant overrides dict.
 
-    Handles: tenant keys, _routing_profile (ADR-007), _severity_dedup,
-    _routing (explicit or disabled). `_metadata` is not read (#3043).
+    Handles: tenant keys, _routing_profile (ADR-007), _routing (explicit or
+    disabled). `_metadata` is not read (#3043), nor is `_severity_dedup`
+    (#3621: the tenant joins the dedup tenant set here; its mode is Go's,
+    `_resolve_severity_dedup`).
     Mutates *result* in place.
     """
     result["all_tenants"].append(tenant)
@@ -1081,24 +1051,12 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
         _field_type_error(result, "routing_profile_invalid", rp_error,
                           tenant=tenant, field="_routing_profile")
 
-    # Severity dedup: default "enable", explicit "disable" to opt out.
-    # ⛔ #2906: judged by type and value (`severity_dedup_mode`); a value it
-    # does not know refuses the WHOLE tree. Before, `str(value).lower()`
-    # fell through to "enable" for anything not a disabling word, so a
-    # quoted "no" (and, once the generator reads yaml.v3, an unquoted `no`)
-    # turned dedup ON in silence.
-    raw_dedup = overrides.get("_severity_dedup")
-    mode = severity_dedup_mode(raw_dedup)
-    if mode is None:
-        _field_type_error(
-            result, "severity_dedup_invalid",
-            f"tenant '{tenant}': _severity_dedup must be enable or disable "
-            f"(also read: {', '.join(SEVERITY_DEDUP_WORDS[1:4])} / "
-            f"{', '.join(SEVERITY_DEDUP_WORDS[5:])}; or true / false, "
-            f"unquoted), got {value_type_text(raw_dedup)}",
-            tenant=tenant, field="_severity_dedup")
-        mode = "enable"
-    result["dedup_configs"][tenant] = mode
+    # Severity dedup (#3621): the tenant joins the dedup tenant set here;
+    # its mode is the exporter's own reading of `_severity_dedup` — its
+    # merge of every layer and its resolver's words — filled in by
+    # `_resolve_severity_dedup` once the whole tree is read. No word list or
+    # merge of its own: the generator used to keep both (#2906) beside Go's.
+    result["dedup_configs"][tenant] = None
 
     # #3043: `_metadata` is not read here — nothing the generator renders
     # uses it (the exporter serves it as tenant_metadata_info).
@@ -1460,6 +1418,12 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                 # are fine, so this stays out of the file booking — but it
                 # was silent before, and a tenant whose block is a list or a
                 # scalar simply did not exist as far as routing went.
+                # #3621: recorded, so the tenant-set comparison with the
+                # exporter's (`_resolve_severity_dedup`) does not count a
+                # tenant this reader declines to load on purpose — the
+                # exporter loads a null body as a tenant with no keys.
+                if not is_reserved:
+                    result.setdefault("unloaded_tenants", set()).add(tenant)
                 print(f"  WARN: {safe_label(fname)}: tenant "
                       f"'{safe_label(str(tenant))}' must be a mapping, got "
                       f"{type(overrides).__name__} — that tenant is not "
@@ -1479,7 +1443,122 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         parse_tree_failure_exit(e, config_dir)
     _apply_tenant_entries(config_dir, tenant_entries, result, reader,
                           platform=platform_files)
+    _resolve_severity_dedup(config_dir, result, reader)
     return result
+
+
+def _refused_before_dedup(result: dict) -> bool:
+    """Whether the tree is refused for a reason judged before the
+    severity-dedup reading (#3621): a tenant file this reader dropped
+    (#1460), a tenant declared twice (#2315 — the exporter's load rejects
+    such a tree too), a blocking routing-tree error (#2326). The tenant sets
+    cannot be compared then, and the tree renders nothing either way."""
+    return bool(result.get("tenant_file_errors") or result.get("duplicate_tenants")
+                or any(p[0] in BLOCKING_TREE_KINDS
+                       for p in result.get("routing_tree_problems") or ()))
+
+
+def severity_dedup_failure_exit(message: str, config_dir: str) -> "None":
+    """No usable `da-guard severity-dedup` (missing, older than this tool,
+    failing), or a tree whose tenants this reader and the exporter do not
+    agree on: no tenant's severity dedup is known, so exit 2 — as for
+    `parse_tree_failure_exit`."""
+    print(f"ERROR: {safe_label(config_dir)}: cannot read each tenant's _severity_dedup "
+          f"as the exporter reads it (`da-guard severity-dedup`, #3621): "
+          f"{' '.join(message.split())}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def _dedup_value_shown(problem: "_lib_tenant_values.SeverityDedupProblem") -> str:
+    """The value of *problem* as a message shows it (#1560 ⑤-b): through
+    ``shown_value``; and Go's own words, which quote the value, only when
+    the value is shown as itself (name-like) — else Go's words without it."""
+    shown = shown_value(problem.value)
+    if shown_value(problem.value, bare=True) == problem.value:
+        return f"{shown} ({problem.problem})"
+    return f"{shown} (not a value the exporter reads; valid: enable, disable)"
+
+
+def _resolve_severity_dedup(config_dir: str, result: dict,
+                            reader: "_lib_parse_cache.ConfdReader | None" = None) -> None:
+    """#3621: each tenant's severity-dedup mode, by the exporter's own
+    reading — one `da-guard severity-dedup` of *config_dir* per tree load.
+
+    ``dedup_configs[tenant]`` becomes Go's mode ("enable" / "disable"). Every
+    run compares the tenant sets: this reader's (``dedup_configs``) and the
+    exporter's, less the ids this reader refuses (``invalid_tenant_ids``,
+    refused on their own) and the entries it declines to load
+    (``unloaded_tenants``); any other difference — a file the exporter's
+    load drops, a reader bug — is exit 2 naming who is on which side. A
+    value the exporter does not read, and one written with a schedule (of
+    which it reads the `default` alone), refuse the whole tree in every mode
+    (``severity_dedup_invalid``), wherever written. A da-guard that cannot
+    answer is exit 2 (``severity_dedup_failure_exit``). Not asked when the
+    tree is already refused (``_refused_before_dedup``): then Go's mode is
+    taken where it has the tenant (None elsewhere, or when it cannot answer)
+    and nothing is compared or refused.
+    """
+    dedup = result["dedup_configs"]
+    binary = getattr(reader, "binary", None)
+    if _refused_before_dedup(result):
+        # Best effort only: a reader that still lists such a tree's routes
+        # (validate-config's rows) gets Go's mode where Go has the tenant;
+        # nothing is compared or refused here, and a failure is no finding.
+        try:
+            tree = _lib_tenant_values.load_severity_dedup(config_dir, binary=binary)
+        except (_lib_tenant_values.DaGuardNotFoundError, _lib_tenant_values.DaGuardError):
+            return
+        for tenant in dedup:
+            dedup[tenant] = tree.modes.get(tenant)
+        return
+    try:
+        tree = _lib_tenant_values.load_severity_dedup(config_dir, binary=binary)
+    except (_lib_tenant_values.DaGuardNotFoundError, _lib_tenant_values.DaGuardError) as e:
+        if not dedup and isinstance(e, _lib_tenant_values.DaGuardError) and not e.binary_fault:
+            # The exporter's load rejects a tree this reader loaded no tenant
+            # from (no config file at all): no mode to read, nothing to
+            # compare — the tree is judged for that by the other readers.
+            return
+        severity_dedup_failure_exit(str(e), config_dir)
+        return  # unreachable: severity_dedup_failure_exit exits
+    ours = set(dedup)
+    # A null body in the tenant file still loads here when a platform entry
+    # gives the tenant a mapping: excused only when it is not ours.
+    excused = (set(result.get("invalid_tenant_ids", ())) | result.get("unloaded_tenants", set())) - ours
+    theirs = set(tree.modes) - excused
+    if ours != theirs:
+        def names(ids: "set[str]") -> str:
+            return ", ".join(safe_label(shown_key(t)) for t in sorted(ids, key=str)) or "none"
+        dropped = [*tree.parse_failed, *(u.file for u in tree.unreadable)]
+        sides = (f"only the generator: {names(ours - theirs)}; only the exporter: "
+                 f"{names(theirs - ours)}")
+        severity_dedup_failure_exit(
+            (f"the exporter's load drops {', '.join(safe_label(f) for f in dropped)}, so it "
+             f"does not load the tenants the route generator does ({sides}) — fix the file(s)"
+             if dropped else
+             f"internal error: the route generator and the exporter do not load the same "
+             f"tenants ({sides})"), config_dir)
+    for tenant in dedup:
+        dedup[tenant] = tree.modes[tenant]
+    layer_text = {"tenant": "tenant", "platform_tenants": "platform tenants: entry",
+                  "profile": "profile"}
+    for p in tree.problems:
+        _field_type_error(
+            result, "severity_dedup_invalid",
+            f"{p.file}: {layer_text.get(p.layer, p.layer)} '{shown_key(p.owner)}': "
+            f"_severity_dedup {_dedup_value_shown(p)} — the exporter serves enable for it "
+            f"(da-guard severity-dedup); write enable or disable",
+            file=p.file, tenant=p.owner if p.layer != "profile" else None,
+            field="_severity_dedup")
+    for e in tree.schedules:
+        _field_type_error(
+            result, "severity_dedup_invalid",
+            f"{e.file}: {e.section}.{shown_key(e.owner)}._severity_dedup is written with a time "
+            f"window or expires (`overrides:` / `expires:` / `reason:`) — a reserved key takes "
+            f"no schedule: the exporter reads its `default` alone and ignores the rest "
+            f"(#3269; da-guard severity-dedup); write the value alone",
+            file=e.file, tenant=e.owner if e.section == "tenants" else None,
+            field="_severity_dedup")
 
 
 def _declared_ids(config_dir: str, reader: "_lib_parse_cache.ConfdReader | None",
@@ -1775,9 +1854,10 @@ def load_tenant_tree(
     schema_warnings.extend(_validate_profile_refs(parsed))
 
     # #2989: a `_routing_enforced.match` that is not a list. The line carries
-    # "WARN … skipping", so `--validate` (and validate-config's schema row)
-    # fail on it; render mode prints it and renders without NOC. (#2906: a
-    # non-boolean `enabled` is a field-type finding, above — refused whole.)
+    # "WARN … skipping", so `--validate` (and with it validate-config's
+    # routes row) fails on it; render mode prints it and renders without
+    # NOC. (#2906: a non-boolean `enabled` is a field-type finding, above —
+    # refused whole.)
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     # #2904: routing written where nothing reads it (routing_in_unread_location)

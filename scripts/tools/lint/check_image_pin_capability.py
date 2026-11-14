@@ -135,6 +135,22 @@ Extension trigger: a THIRD incident of this class on a non-da-tools image.
 At that point generalise the resolver (image repo -> tag prefix -> capability
 extractor) rather than bolting on a second special case.
 
+One image that IS in scope besides da-tools: recipe-preview (#1040)
+--------------------------------------------------------------------
+`ghcr.io/vencil/recipe-preview` has no release line of its own: the same
+`tools/vX.Y.Z` tag that builds da-tools builds it, so its tag is the da-tools
+tag and the tenant-api chart derives one from the other. The question for it
+is not "does the image contain the program" (it is single-purpose) but "was
+an image built for this tag AT ALL" — a pin to a tools tag cut before the
+image joined that release names an image that was never pushed, and the pod
+sits in ImagePullBackOff. That is a fact about the tag's tree too: the image
+exists for `tools/vX.Y.Z` iff that tag's `.github/workflows/release.yaml` has
+the `release-recipe-preview` job, gated on `refs/tags/tools/` (parsed, not
+grepped). Such a pin is a workload of kind `image`, entry `recipe-preview`,
+read from literal k8s manifests and from rendered charts (the tenant-api
+chart's image expression reads a tag helper the strip path cannot follow, so
+the strip path leaves it to the render path, which sees the literal).
+
 Known non-covered surfaces (accepted, not oversights):
   * `.github/workflows/**` — no workflow runs a pinned da-tools image since
     `config-diff.yaml` was retired (#3258); the release job runs the candidate
@@ -149,9 +165,21 @@ Known non-covered surfaces (accepted, not oversights):
 Usage
 -----
   python3 scripts/tools/lint/check_image_pin_capability.py
+  python3 scripts/tools/lint/check_image_pin_capability.py \
+      --chart helm/tenant-api --refuse-exemptions      # release gate (#3228)
+
+  --chart DIR           only that chart (no k8s manifests, no other chart;
+                        other charts' EXEMPTIONS are out of scope, not
+                        orphaned). A chart that yields no workload is exit 2.
+  --refuse-exemptions   a pin an EXEMPTIONS entry covers is a violation
+                        naming that entry ("REFUSED EXEMPTION"). The PR gate
+                        honours exemptions; release-tenant-api runs this
+                        before `helm push`, so a chart is never PUBLISHED with
+                        a default pin that cannot run.
 
 Exit codes:
-  0 = every da-tools pin can run its workload (registered exemptions aside)
+  0 = every da-tools pin can run its workload and every recipe-preview pin
+      names a tag that built that image (registered exemptions aside)
   1 = at least one incapable pin, or an EXEMPTIONS entry to delete — stale
       (the image now provides the entry point) or orphaned (no workload
       resolves to that key any more)
@@ -198,6 +226,17 @@ DA_TOOLS_REPO = "ghcr.io/vencil/da-tools"
 IMAGE_TOOLS_DIR = "/opt/da-tools/"
 # Image tag vX.Y.Z <-> git tag tools/vX.Y.Z (the da-tools release line).
 TAG_PREFIX = "tools/"
+# Built by the same tools/v* release as da-tools (#1040); see the docstring.
+RECIPE_PREVIEW_REPO = "ghcr.io/vencil/recipe-preview"
+RECIPE_PREVIEW_ENTRY = "recipe-preview"
+RELEASE_WORKFLOW = ".github/workflows/release.yaml"
+RECIPE_PREVIEW_JOB = "release-recipe-preview"
+# The ONE shape of that job's `if:` this gate accepts as "runs on a tools tag",
+# compared whole: a substring test accepted `!startsWith(...)` and
+# `false && startsWith(...)`. Any other shape reads as "not built" and fails
+# the pin — loud, and fixed by restoring this expression.
+RECIPE_PREVIEW_IF = f"startsWith(github.ref, 'refs/tags/{TAG_PREFIX}')"
+RECIPE_PREVIEW_TAG_GLOB = f"{TAG_PREFIX}v*"
 CAPABILITY_SOURCES = {
     "entrypoint": "components/da-tools/app/entrypoint.py",
     "build_sh": "components/da-tools/app/build.sh",
@@ -242,6 +281,16 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "next tools release. EXIT: bump generator.image.tag in the next "
         "tools/v* release (bump_docs.py --tools does it); then delete this "
         "entry (the gate will demand it).",
+    ("helm/tenant-api", "recipe-preview", "v2.9.0"):
+        "#1040 moved the recipe-preview image onto the tools/v* release after "
+        "tools/v2.9.0 was cut (its release.yaml built the image only from a "
+        "recipe-preview/v* tag, and none was ever pushed), so "
+        "ghcr.io/vencil/recipe-preview:v2.9.0 does not exist and the "
+        "container, whose tag follows generator.image.tag, cannot be pulled. "
+        "Same release as the generator entry above, same instruction in "
+        "values.yaml. EXIT: the next tools/v* release builds the image and "
+        "bump_docs.py --tools moves generator.image.tag to it; then delete "
+        "this entry (the gate will demand it).",
 }
 
 # --- YAML loading (the strip path only) -------------------------------------
@@ -554,6 +603,51 @@ def capabilities_for_tag(git_tag: str) -> tuple[dict[str, str], set[str]]:
     return command_map, tool_files
 
 
+_builds_recipe_preview_cache: dict[str, bool] = {}
+
+
+def builds_recipe_preview(git_tag: str) -> bool:
+    """Whether the `tools/v*` release at *git_tag* builds the recipe-preview image.
+
+    True iff that tag's release workflow is triggered by `tools/v*` tags
+    (`on.push.tags`) and has the `release-recipe-preview` job whose `if:` is
+    exactly RECIPE_PREVIEW_IF. Read by parsing the YAML, not by grepping it:
+    the job name and the ref prefix both appear in comments of that file.
+    Unreadable or unparseable is a CapabilityError, never a False
+    (fail-closed)."""
+    if git_tag in _builds_recipe_preview_cache:
+        return _builds_recipe_preview_cache[git_tag]
+    if not tag_exists(git_tag):
+        raise CapabilityError(
+            f"git tag '{git_tag}' does not resolve in this clone, so whether "
+            f"its release built {RECIPE_PREVIEW_REPO} cannot be told.\n"
+            f"    Locally: run `git fetch --tags`.")
+    src = show_blob(git_tag, RELEASE_WORKFLOW)
+    if src is None:
+        raise CapabilityError(f"tag '{git_tag}' has no {RELEASE_WORKFLOW} — cannot "
+                              f"tell whether it built {RECIPE_PREVIEW_REPO}.")
+    try:
+        doc = yaml.safe_load(src)
+    except yaml.YAMLError as exc:
+        raise CapabilityError(f"{RELEASE_WORKFLOW} at '{git_tag}' is not YAML "
+                              f"({exc.__class__.__name__})") from exc
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict) or not jobs:
+        raise CapabilityError(f"{RELEASE_WORKFLOW} at '{git_tag}' has no `jobs:` "
+                              f"mapping — the parser is out of step with it.")
+    job = jobs.get(RECIPE_PREVIEW_JOB)
+    condition = job.get("if") if isinstance(job, dict) else None
+    # PyYAML reads the bare key `on` as the boolean True.
+    trigger = doc.get(True, doc.get("on"))
+    push = trigger.get("push") if isinstance(trigger, dict) else None
+    tags = push.get("tags") if isinstance(push, dict) else None
+    built = (isinstance(condition, str)
+             and " ".join(condition.split()) == RECIPE_PREVIEW_IF
+             and isinstance(tags, list) and RECIPE_PREVIEW_TAG_GLOB in tags)
+    _builds_recipe_preview_cache[git_tag] = built
+    return built
+
+
 # --- manifest walking -------------------------------------------------------
 def parse_image_ref(image: str) -> tuple[str, str | None, str | None]:
     """Split an image reference into (repository, tag, digest)."""
@@ -669,7 +763,7 @@ class Workload:
         self.source = source          # EXEMPTIONS key half: manifest path or chart dir
         self.where = where            # human-readable location for the message
         self.image_tag = image_tag    # "v2.9.0"
-        self.kind = kind              # "subcommand" | "script"
+        self.kind = kind              # "subcommand" | "script" | "image"
         self.entry = entry            # "threshold-govern" | "foo.py"
 
     @property
@@ -695,9 +789,14 @@ def _k8s_files() -> list[Path]:
     return _yaml_files(REPO_ROOT / "k8s", "**/*")
 
 
-def _chart_dirs() -> list[Path]:
-    return sorted({p.parent for ext in ("yaml", "yml")
-                   for p in REPO_ROOT.glob(f"helm/*/Chart.{ext}")})
+def _chart_dirs(only_chart: str | None = None) -> list[Path]:
+    """Every chart directory, or — with *only_chart* (`--chart`) — just that
+    one (empty when it is not a chart dir; `main` refuses that up front)."""
+    charts = sorted({p.parent for ext in ("yaml", "yml")
+                     for p in REPO_ROOT.glob(f"helm/*/Chart.{ext}")})
+    if only_chart is None:
+        return charts
+    return [c for c in charts if c.relative_to(REPO_ROOT).as_posix() == only_chart]
 
 
 def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
@@ -723,7 +822,7 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
                 if not isinstance(image, str):
                     continue
                 repo, tag, digest = parse_image_ref(image)
-                if repo != DA_TOOLS_REPO:
+                if repo not in (DA_TOOLS_REPO, RECIPE_PREVIEW_REPO):
                     continue
                 name = container.get("name", "<unnamed>")
                 if digest:
@@ -736,6 +835,10 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
                                   f"{tag!r} is not a vX.Y.Z release tag; this gate "
                                   f"cannot map it to a {TAG_PREFIX}v* git tag")
                     continue
+                if repo == RECIPE_PREVIEW_REPO:
+                    workloads.append(Workload(rel, f"{rel} (container {name})", tag,
+                                              "image", RECIPE_PREVIEW_ENTRY))
+                    continue
                 resolved = resolve_entry(container)
                 if resolved is None:
                     errors.append(f"{rel} (container {name}): cannot tell what this "
@@ -747,7 +850,8 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
     return workloads
 
 
-def collect_helm_workloads(errors: list[str]) -> list[Workload]:
+def collect_helm_workloads(errors: list[str],
+                           only_chart: str | None = None) -> list[Workload]:
     """da-tools containers in Helm charts (pins from values*.yaml, invocation from templates/).
 
     Association is CHART-level, deliberately. A chart's pin lives in
@@ -772,7 +876,7 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
         this gate exists to remove.
     """
     workloads: list[Workload] = []
-    for chart in _chart_dirs():
+    for chart in _chart_dirs(only_chart):
         chart_rel = chart.relative_to(REPO_ROOT).as_posix()
         values_files = _yaml_files(chart, "values*")
         if not values_files:
@@ -949,20 +1053,22 @@ HELM_TIMEOUT_S = 120
 
 
 def _chart_pins_da_tools(chart: Path) -> bool:
-    """Whether any `values*.yaml` of *chart* pins the da-tools repository
-    (Helm's reading). A values file that cannot be read says nothing here:
+    """Whether any `values*.yaml` of *chart* pins the da-tools or the
+    recipe-preview repository (Helm's reading). A values file that cannot be read says nothing here:
     the strip path reports it."""
     for values in _yaml_files(chart, "values*"):
         try:
             doc = read_values(values)
         except _lib_consumer_read.ConsumerReadError:
             continue
-        if any(pin.get("repository") == DA_TOOLS_REPO for _t, pin in find_image_pins(doc)):
+        if any(pin.get("repository") in (DA_TOOLS_REPO, RECIPE_PREVIEW_REPO)
+               for _t, pin in find_image_pins(doc)):
             return True
     return False
 
 
-def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
+def collect_rendered_workloads(errors: list[str],
+                               only_chart: str | None = None) -> list[Workload]:
     """da-tools containers in what `helm template` renders (THE RENDER PATH).
 
     Every chart that pins da-tools is rendered with its default values and
@@ -974,7 +1080,7 @@ def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
     whose tag or entry point cannot be resolved — each is an error. helm's and
     da-crdecode's exit codes are read separately (two runs, no pipe)."""
     workloads: list[Workload] = []
-    charts = [c for c in _chart_dirs() if _chart_pins_da_tools(c)]
+    charts = [c for c in _chart_dirs(only_chart) if _chart_pins_da_tools(c)]
     if not charts:
         return workloads
     helm = shutil.which("helm")
@@ -1021,7 +1127,7 @@ def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
                     if not isinstance(image, str):
                         continue
                     repo, tag, digest = parse_image_ref(image)
-                    if repo != DA_TOOLS_REPO:
+                    if repo not in (DA_TOOLS_REPO, RECIPE_PREVIEW_REPO):
                         continue
                     name = container.get("name", "<unnamed>")
                     where = f"{chart_rel} rendered with {label} (container {name})"
@@ -1030,8 +1136,12 @@ def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
                                       f"digest cannot be mapped to a {TAG_PREFIX}v* tag")
                         continue
                     if not tag or not _TAG_RE.fullmatch(tag):
-                        errors.append(f"{where}: da-tools image tag {tag!r} is not a "
+                        errors.append(f"{where}: {repo} image tag {tag!r} is not a "
                                       f"vX.Y.Z release tag")
+                        continue
+                    if repo == RECIPE_PREVIEW_REPO:
+                        workloads.append(Workload(chart_rel, f"{where} @ {tag}", tag,
+                                                  "image", RECIPE_PREVIEW_ENTRY))
                         continue
                     resolved = resolve_entry(container)
                     if resolved is None:
@@ -1059,6 +1169,13 @@ def union_workloads(*paths: "list[Workload]") -> list[Workload]:
 
 def evaluate(workload: Workload) -> str | None:
     """Return a defect description if the pinned tag cannot run *workload*, else None."""
+    if workload.kind == "image":
+        if builds_recipe_preview(workload.git_tag):
+            return None
+        return (f"{RECIPE_PREVIEW_REPO}:{workload.image_tag} was never built: "
+                f"{RELEASE_WORKFLOW} at {workload.git_tag} has no "
+                f"`{RECIPE_PREVIEW_JOB}` job run by a `refs/tags/{TAG_PREFIX}` "
+                f"ref (the pod sits in ImagePullBackOff)")
     command_map, tool_files = capabilities_for_tag(workload.git_tag)
     if workload.kind == "subcommand":
         script = command_map.get(workload.entry)
@@ -1079,10 +1196,18 @@ def evaluate(workload: Workload) -> str | None:
     return None
 
 
-def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], str]):
+def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], str],
+              refuse_exemptions: bool = False):
     """Classify *workloads*.
 
     Returns (violations, exempted, stale_exemptions, orphaned_exemptions).
+
+    *refuse_exemptions* (`--refuse-exemptions`, #3228): an incapable workload
+    a registered exemption covers is a VIOLATION that names the entry, not an
+    EXEMPT note. An exemption is a licence to keep a PR green while no capable
+    tag exists; it is not a licence to PUBLISH a chart whose default install
+    cannot run — the release job asks this question, the PR gate does not.
+    Matching (orphaned / stale) is unchanged.
     """
     violations: list[str] = []
     exempted: list[str] = []
@@ -1095,6 +1220,15 @@ def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], 
         if defect is None:
             if workload.key in exemptions:
                 satisfied_keys.add(workload.key)
+            continue
+        if workload.key in exemptions and refuse_exemptions:
+            source, entry, tag = workload.key
+            violations.append(
+                f"REFUSED EXEMPTION {source} / {entry} @ {tag}: {workload.where}: "
+                f"{defect} — the EXEMPTIONS entry is refused under "
+                f"--refuse-exemptions; a release that ships this pin must wait "
+                f"for a tools/v* tag that provides the entry point "
+                f"(registered: {exemptions[workload.key]})")
             continue
         if workload.key in exemptions:
             exempted.append(f"{workload.where}: {defect}\n      registered: "
@@ -1124,7 +1258,7 @@ def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], 
 
 
 def main() -> int:
-    # argparse with no flags — enforces the repo-wide CLI contract
+    # argparse enforces the repo-wide CLI contract
     # (test_help_exits_zero / test_invalid_args_exits_nonzero): `--help`
     # exits 0; unknown flags exit 2 (argparse default).
     # CJK in --help would raise UnicodeEncodeError on a legacy Windows console
@@ -1138,12 +1272,44 @@ def main() -> int:
             "the program the workload pinned to it runs.",
         ),
     )
-    parser.parse_args()
+    parser.add_argument(
+        "--chart", metavar="DIR",
+        help=i18n_text(
+            "只檢查這一個 chart（repo 相對路徑，例如 helm/tenant-api）；"
+            "k8s manifest 與其他 chart 不掃，其他 chart 的豁免也不算 orphaned。"
+            "該 chart 找不到任何 da-tools／recipe-preview workload 時回 2。",
+            "check only this chart (repo-relative, e.g. helm/tenant-api): no "
+            "k8s manifests, no other chart, and other charts' exemptions are "
+            "not orphaned. Exit 2 if the chart yields no da-tools / "
+            "recipe-preview workload.",
+        ),
+    )
+    parser.add_argument(
+        "--refuse-exemptions", action="store_true",
+        help=i18n_text(
+            "已登記豁免的 pin 一律當 violation（release 用：豁免讓 PR 保持綠，"
+            "但不准發布預設安裝跑不起來的 chart）。",
+            "treat every pin a registered exemption covers as a violation "
+            "(for releases: an exemption keeps a PR green, it does not license "
+            "publishing a chart whose default install cannot run).",
+        ),
+    )
+    args = parser.parse_args()
+
+    only_chart = args.chart
+    if only_chart is not None and not _chart_dirs(only_chart):
+        print(f"ERROR: --chart {only_chart!r} is not a chart directory "
+              f"(expected a repo-relative helm/<name> holding Chart.yaml)",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     errors: list[str] = []
+    k8s_workloads = [] if only_chart is not None else collect_k8s_workloads(errors)
     workloads = union_workloads(
-        collect_k8s_workloads(errors) + collect_helm_workloads(errors),
-        collect_rendered_workloads(errors))
+        k8s_workloads + collect_helm_workloads(errors, only_chart),
+        collect_rendered_workloads(errors, only_chart))
+    exemptions = (EXEMPTIONS if only_chart is None else
+                  {k: v for k, v in EXEMPTIONS.items() if k[0] == only_chart})
 
     # Collection errors first: a pin we could not even resolve makes any
     # verdict about the rest incomplete, and reporting it is more actionable
@@ -1155,8 +1321,18 @@ def main() -> int:
             print(f"  - {error}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    # ⛔ The one chart a release asked about yielding NOTHING is not a pass: a
+    # chart that stopped pinning da-tools (or whose containers the gate can no
+    # longer see) would be published unchecked.
+    if only_chart is not None and not workloads:
+        print(f"ERROR: --chart {only_chart}: no da-tools / recipe-preview "
+              f"workload found, so nothing was checked (fail-closed — this is "
+              f"NOT a pass)", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     try:
-        violations, exempted, stale, orphaned = run_check(workloads, EXEMPTIONS)
+        violations, exempted, stale, orphaned = run_check(
+            workloads, exemptions, refuse_exemptions=args.refuse_exemptions)
     except CapabilityError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -1173,7 +1349,23 @@ def main() -> int:
             print(f"  - STALE EXEMPTION {note}")
         for note in orphaned:
             print(f"  - ORPHANED EXEMPTION {note}")
-        if violations:
+        refused = [v for v in violations if v.startswith("REFUSED EXEMPTION ")]
+        if refused:
+            print(
+                "\nRelease blocked (--refuse-exemptions): do NOT delete or "
+                "re-register the exemption to get past this. Publish the "
+                "tools/v* release that ships the entry point first, move the pin "
+                "to it (bump_docs.py --tools), delete the exemption that then "
+                "matches no workload (this gate reports it as orphaned), "
+                "and re-run this release."
+            )
+        if args.refuse_exemptions and len(refused) < len(violations):
+            print(
+                "\nFix (--refuse-exemptions): bump each pin above to a tools/v* "
+                "tag whose tree contains the entry point. An exemption is "
+                "refused here too, so registering one does not help."
+            )
+        elif len(refused) < len(violations):
             print(
                 "\nFix: bump the pin to a tools/v* tag whose tree contains the "
                 "entry point, or — if no released tag does yet — register the "

@@ -150,15 +150,18 @@ def test_host_given_without_paths_serves_root(repo_root: Path, chart: str):
 
 @_needs_helm
 @pytest.mark.parametrize("chart", _CHARTS)
-def test_fails_closed_without_oauth2_proxy(repo_root: Path, chart: str):
-    res = _helm_template(
-        repo_root, chart, *_enable("--set", "oauth2Proxy.enabled=false"),
-    )
-    assert res.returncode != 0
-    # tenant-api refuses oauth2Proxy.enabled=false outright (ADR-027 §2: the
-    # API is reachable only through the sidecar), whichever template fails first.
-    assert ("ingress.enabled=true requires oauth2Proxy.enabled=true" in res.stderr
-            or (chart == "helm/tenant-api" and "oauth2Proxy.enabled=false is no longer supported" in res.stderr)), res.stderr
+def test_the_ingress_always_has_oauth2_proxy_behind_it(repo_root: Path, chart: str):
+    """The Ingress backend is the authenticated `http` port (oauth2-proxy
+    :4180). There is no switch to leave the proxy out (ADR-027 §6; the schema
+    refuses the removed oauth2Proxy.enabled), so with the Ingress on the pod
+    always carries the oauth2-proxy container that answers it."""
+    res = _helm_template(repo_root, chart, *_enable())
+    assert res.returncode == 0, res.stderr
+    docs = _docs(res.stdout)
+    assert _kind(docs, "Ingress"), "the Ingress did not render"
+    [dep] = _kind(docs, "Deployment")
+    names = [c["name"] for c in dep["spec"]["template"]["spec"]["containers"]]
+    assert "oauth2-proxy" in names, names
 
 
 @_needs_helm

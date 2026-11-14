@@ -249,3 +249,77 @@ def test_no_da_crdecode_is_exit_2_not_a_pyyaml_reading(tmp_path: Path) -> None:
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         env={**os.environ, "DA_CRDECODE_BINARY": str(tmp_path / "no-such-da-crdecode")})
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
+
+
+# ── scope `rendered` (#1040): what a chart's defaults run ────────────────────
+_REPO = SCRIPT.parents[2]
+_needs_helm = pytest.mark.skipif(__import__("shutil").which("helm") is None,
+                                 reason="helm CLI not on PATH")
+
+
+def _run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=180)
+
+
+@_needs_helm
+def test_rendered_scope_sees_the_derived_and_first_party_refs() -> None:
+    """`deploy` reads values files and skips ghcr.io/vencil; the tenant-api
+    chart's recipe-preview tag exists only in the render (it follows
+    generator.image.tag). The rendered scope must list it, first-party."""
+    proc = _run("--root", str(_REPO), "--scope", "rendered", "--chart", "helm/tenant-api", "--list")
+    assert proc.returncode == 0, proc.stderr
+    refs = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+    by_repo = {_cir._repo_of(r): r for r in refs}
+    preview = by_repo["ghcr.io/vencil/recipe-preview"]
+    tools = by_repo["ghcr.io/vencil/da-tools"]
+    assert preview.rsplit(":", 1)[1] == tools.rsplit(":", 1)[1], refs
+    assert "ghcr.io/vencil/tenant-api" in by_repo
+    # …and none of it is visible to the deploy scope.
+    assert "ghcr.io/vencil/recipe-preview" not in {_cir._repo_of(r) for r in _list_refs(_REPO)}
+
+
+@pytest.mark.parametrize("args", [
+    ("--scope", "rendered"),                       # no --chart
+    ("--chart", "helm/tenant-api"),                # --chart without the scope
+    ("--scope", "deploy", "--chart", "helm/tenant-api"),
+], ids=["rendered-without-chart", "chart-without-scope", "chart-with-deploy"])
+def test_chart_and_rendered_scope_go_together(args) -> None:
+    proc = _run("--root", str(_REPO), *args, "--list")
+    assert proc.returncode == 2, (proc.stdout, proc.stderr)
+
+
+def test_rendered_scope_without_helm_is_exit_2_not_a_clean_run(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    with pytest.raises(SystemExit) as exc:
+        _cir.rendered_refs(_REPO, "helm/tenant-api")
+    assert exc.value.code == 2
+    assert "helm is not available" in capsys.readouterr().err
+
+
+@_needs_helm
+def test_rendered_scope_refuses_a_render_with_no_image(tmp_path: Path, capsys) -> None:
+    _write(tmp_path / "helm/empty/Chart.yaml", "apiVersion: v2\nname: empty\nversion: 0.1.0\n")
+    _write(tmp_path / "helm/empty/templates/cm.yaml",
+           "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")
+    with pytest.raises(SystemExit) as exc:
+        _cir.rendered_refs(tmp_path, "helm/empty")
+    assert exc.value.code == 2
+    assert "holds no image ref" in capsys.readouterr().err
+
+
+def test_release_checks_the_chart_defaults_before_pushing_it() -> None:
+    """release-tenant-api runs the rendered scope after its own image is
+    promoted (so that ref resolves) and before `helm push` (so a chart whose
+    defaults cannot be pulled is never published)."""
+    import yaml
+    wf = yaml.safe_load((_REPO / ".github/workflows/release.yaml").read_text(encoding="utf-8"))
+    runs = [step.get("run") or "" for step in wf["jobs"]["release-tenant-api"]["steps"]]
+    check = [i for i, r in enumerate(runs)
+             if "check_image_refs_resolve.py --scope rendered --chart helm/tenant-api" in r]
+    # #3848: promotion and `helm push` run inside release_publish.py.
+    push = [i for i, r in enumerate(runs) if "release_publish.py chart" in r]
+    promote = [i for i, r in enumerate(runs) if "release_publish.py image" in r]
+    assert len(check) == 1 and len(push) == 1 and len(promote) == 1, (check, push, promote)
+    assert promote[0] < check[0] < push[0]
+    assert "with_da_crdecode.sh" in runs[check[0]]

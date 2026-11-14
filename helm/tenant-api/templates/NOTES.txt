@@ -36,3 +36,17 @@ GENERATOR CONTAINER (ADR-036 §3, required since #2903) — image {{ .Values.gen
   Deployment policy: none (generator.policy.existingConfigMap is empty, so no
   allowed_domains check applies to webhook hosts).
   {{- end }}
+{{- if .Values.recipePreview.enabled }}
+
+RECIPE-PREVIEW CONTAINER (ADR-027 §5, #1040) — image {{ .Values.recipePreview.image.repository }}:{{ include "tenant-api.recipePreviewTag" . }}{{ with .Values.recipePreview.image.digest }}@{{ . }}{{ end }}.
+  Answers POST /api/v1/tenants/{id}/recipe-preview for tenant-api over a
+  pod-internal Unix socket; while the running service does not answer, that
+  route returns 503 PREVIEW_UNAVAILABLE and nothing else is affected. While
+  the container restarts (an OOM kill, a liveness restart), the whole pod is
+  not Ready: Kubernetes counts every container. The image is built by the
+  tools/v* release, and its tag follows generator.image.tag. tools/v2.9.0
+  built NO recipe-preview image: until the next da-tools release, an image
+  that cannot be pulled keeps this pod from becoming Ready (Kubernetes counts
+  every container), so set recipePreview.enabled=false or point
+  recipePreview.image at an image you built.
+{{- end }}

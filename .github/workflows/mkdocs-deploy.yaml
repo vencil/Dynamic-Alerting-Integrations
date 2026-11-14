@@ -33,6 +33,11 @@ on:
       - 'mkdocs.yml'
       - 'rule-packs/*.md'
       - 'scripts/mkdocs/**'
+      # The portal bundles under docs/assets/dist/ are built from this tree
+      # in the job below (#3738). Without this entry a PR that only edits
+      # portal source never redeploys, and Pages keeps serving the old
+      # bundles. Pinned by tests/ops/test_portal_dist_consumers_build.py.
+      - 'tools/portal/**'
       - '.github/workflows/mkdocs-deploy.yaml'
   workflow_dispatch:  # manual trigger
 
@@ -66,6 +71,26 @@ jobs:
           key: mkdocs-${{ hashFiles('mkdocs.yml') }}
       - name: Install dependencies
         run: pip install mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt
+      # #3738: the site ships docs/assets/dist/ as-is, and that directory is
+      # build output that is not in git, so build the portal bundles from
+      # source here. (Before #3738 the bundles were committed, and that copy
+      # went stale on main even after CI compared it on the PR's merge ref:
+      # branch protection is not strict, so main can move between that check
+      # and the merge.) Node major = the dev container's
+      # (docs/internal/toolchain-versions.md; test_toolchain_pin_parity.py).
+      # Pinned before `mkdocs build` by tests/ops/test_portal_dist_consumers_build.py.
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: tools/portal/package-lock.json
+      - name: Install portal build dependencies
+        working-directory: tools/portal
+        run: npm ci
+      - name: Build portal bundles (docs/assets/dist/)
+        working-directory: tools/portal
+        run: npm run build
       - name: Build site
         # Plain `mkdocs build` (NOT --strict): the docs-ci `MkDocs Build
         # Verification` job gates PR quality via mkdocs_strict_check.sh.

@@ -331,6 +331,52 @@ def tenant_slot_verdicts(tenant: str, routing: dict,
 # Routing Override Processing (Tenant-level alert routing overrides)
 # ============================================================
 
+# #3692: every `metric_group` the shipped rule packs carry — the values an
+# override's `metric_group:` can match among the shipped alerts. Pinned equal
+# to the rule packs as Prometheus reads them by
+# tests/ops/test_grar_override_metric_group.py (it computes the set with
+# check_metric_group_pairs.collect_groups_by_pack): change a pack's group and
+# that test names this constant. A copy, not a read, because the generator
+# runs where the rule packs are not (the da-tools image ships no repo tree).
+SHIPPED_METRIC_GROUPS: frozenset[str] = frozenset({
+    "clickhouse_active_connections", "container_cpu", "container_cpu_throttle",
+    "container_memory", "container_oom_killed", "db2_connections_active",
+    "db2_lock_wait_time", "es_disk_usage_percent", "es_heap_usage_percent",
+    "es_pending_tasks", "es_search_latency_ms", "jvm_gc_pause", "jvm_memory",
+    "jvm_threads", "kafka_consumer_lag",
+    "kafka_under_replicated_partitions", "mariadb_liveness",
+    "mongodb_connections_current", "mongodb_liveness", "mongodb_replication_lag",
+    "mysql_connections", "mysql_replication_lag", "mysql_threads_running",
+    "nginx_connections", "nginx_request_rate", "nginx_waiting",
+    "oracle_sessions_active", "oracle_tablespace_used_percent", "pg_connections",
+    "pg_replication_lag", "rabbitmq_connections", "rabbitmq_node_mem_percent",
+    "rabbitmq_queue_messages", "rabbitmq_unacked_messages",
+    "redis_connected_clients", "redis_memory_used_bytes", "redis_replication_lag",
+})
+
+
+def _unknown_metric_group_warning(override: dict, idx: int, tenant: str) -> list[str]:
+    """#3692: an override matching a metric_group no shipped alert carries.
+
+    Advisory (``blocks="never"``): the tenant's own rules (migrate_rule
+    output, a BYO pack, a custom SLO alert's ``slo_<name>``) may carry it.
+    It is what a renamed group (``liveness`` → ``mariadb_liveness``) leaves
+    behind in an override that would otherwise route nothing, silently."""
+    mg = override.get("metric_group")
+    # `slo_` is the custom-alert compiler's prefix (custom_alert_compile.go,
+    # `slo_{{ $labels.name }}`): a tenant's own SLO alert, by name.
+    if not isinstance(mg, str) or mg in SHIPPED_METRIC_GROUPS or mg.startswith("slo_"):
+        return []
+    return [Finding(
+        f"  WARN: {tenant}: override[{idx}] metric_group {value_text(mg)} is the "
+        "group of no shipped rule pack alert, so it routes nothing unless your "
+        "own rules carry that group (a group renamed in a release — e.g. "
+        "liveness → mariadb_liveness / mongodb_liveness, #3692 — leaves an "
+        "override like this)",
+        kind="unknown_override_metric_group", blocks="never", tenant=tenant,
+        field=f"overrides[{idx}].metric_group")]
+
+
 def _validate_override_matcher(override: dict, idx: int, tenant: str) -> tuple[bool, list[str], bool, bool]:
     """Validate override has exactly one of alertname or metric_group.
 
@@ -504,6 +550,8 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
             _note_skipped(verdicts, tenant, slot, override.get("receiver"), "entry",
                           warnings, start)
             continue
+        if has_metric_group:
+            warnings.extend(_unknown_metric_group_warning(override, idx, tenant))
 
         # Build matcher list
         matchers = _build_override_matchers(override, tenant, has_alertname)
@@ -1286,7 +1334,7 @@ def _build_inhibit_rules(tenant: str) -> dict:
     }
 
 
-def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], list[str]]:
+def generate_inhibit_rules(dedup_configs: "dict[str, str | None]") -> tuple[list[dict], list[str]]:
     """Generate per-tenant severity dedup inhibit rules.
 
     Iterates over all tenants and builds inhibit rules for those with
@@ -1299,7 +1347,9 @@ def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], l
       preserving critical visibility. Implemented via Alertmanager inhibit_rules.
 
     Args:
-        dedup_configs: {tenant_name: "enable"|"disable"} for all tenants.
+        dedup_configs: {tenant_name: "enable"|"disable"} for all tenants;
+            None (#3621) where no mode was read — a refused tree — lists no
+            rule for that tenant.
 
     Returns:
         (inhibit_rules_list, warnings_list) where:
@@ -1311,6 +1361,12 @@ def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], l
 
     for tenant in sorted(dedup_configs.keys()):
         mode = dedup_configs[tenant]
+        if mode is None:
+            # #3621: no mode was read — the tree was refused before
+            # `da-guard severity-dedup` could answer for it, and that refusal
+            # is the run's message. Rendering it as enable would list an
+            # inhibit rule nobody judged.
+            continue
         if mode == "disable":
             all_warnings.append(unclassified(
                 f"  INFO: {tenant}: severity_dedup disabled, skipping inhibit rule",

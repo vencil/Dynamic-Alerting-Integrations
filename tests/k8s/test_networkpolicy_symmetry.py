@@ -83,11 +83,19 @@ def _uses_match_expressions(selector: dict | None) -> bool:
 # (test_helm_resident_destinations_are_symmetric). Exit-locked: an entry whose
 # edge resolves to a raw workload again fails, so the map can only shrink.
 _HELM_RESIDENT_DESTINATIONS: dict = {
-    # Empty since ADR-027 §4 removed the threshold-govern CronJob, the only raw
-    # workload with an egress edge to the helm-only tenant-api (#1594). The
-    # shape of an entry, for the next one:
+    # The shape of an entry:
     #   _edge_key("<policy>", "<dst ns>", {"matchLabels": {...}}):
     #       ("helm/<chart>", [<extra helm template args>], "<why helm-only>"),
+    # Both VictoriaLogs edges are also evaluated end to end, with the charts'
+    # own consumers, in tests/k8s/test_log_store_connectivity.py.
+    _edge_key("allow-grafana-egress", "monitoring",
+              {"matchLabels": {"app.kubernetes.io/name": "victorialogs"}}):
+        ("helm/victorialogs", ["--set", "auth.mode=observe", "--set", "persistence.enabled=false"],
+         "the log store ships only as a chart; Grafana's VictoriaLogs datasource"),
+    _edge_key("allow-prometheus-egress", "monitoring",
+              {"matchLabels": {"app.kubernetes.io/name": "victorialogs"}}):
+        ("helm/victorialogs", ["--set", "auth.mode=observe", "--set", "persistence.enabled=false"],
+         "the log store ships only as a chart; Prometheus scrapes its /metrics"),
 }
 
 

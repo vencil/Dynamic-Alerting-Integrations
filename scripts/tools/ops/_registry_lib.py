@@ -112,32 +112,55 @@ SCHEMA_PATH = _in_repo("docs", "schemas", "threshold-registry.schema.json")
 CRITICAL_SUFFIX = "_critical"
 
 # ---------------------------------------------------------------------------
-# arming (D-A A1): why the chart does or does not ship a key's value.
+# arming (D-A A1, made orthogonal by A1.5 / #3773): three independent facts
+# about every key that is not a `<base>_critical` (those follow their base:
+# `resolveCriticalRows` only emits one when `defaults[base]` has a value).
 #
-# Authored on every key that is not a `<base>_critical` (those follow their
-# base: `resolveCriticalRows` only emits one when `defaults[base]` has a value,
-# so a `_critical` can never be armed on its own). `default` is the chart set
-# (helm values, dev template); every other state names WHY a key the rule
-# packs read stays silent after `helm install`, with a one-line reason in each
-# language. ⛔ The "read by a rule pack but not shipped by the chart" list the
-# reachability gate used to keep by hand (NOT_CHART_ARMED) is DERIVED from this
-# field (`not_chart_armed_keys`) — a second, hand-kept copy is exactly what A1
-# removes.
+#   arming       default | operator — does the chart ship this key's value,
+#                or must the operator supply it (not `off`: YAML 1.1 reads
+#                an unquoted `off` as the boolean false).
+#   portability  portable | ratio_pending | site_specific — does ONE value
+#                carry across deployments. Required on shipped keys too:
+#                that is what lets the gate catch a shipped absolute count.
+#   blocker      optional {kind, tracking, reason, reason_zh} — something
+#                other than validation stops the key from shipping (no data
+#                source, a broken aggregation, never measured, a disputed
+#                value), with the issue that tracks it.
+#
+# ⛔ Nothing here is a hand-kept list. "Read by a rule pack, not shipped by
+# the chart" (`not_chart_armed_keys`) and "portable, unshipped, unblocked —
+# the A2 shadow-report input" (`validation_candidates`) are both DERIVED.
+# The one-dimensional enum A1 shipped had grown a state per blocker and
+# could not say "shipped, but not portable"; that is why it was split.
 # ---------------------------------------------------------------------------
 ARMING_DEFAULT = "default"
-#: Every arming state (membership checks and error messages).
-ARMING_STATES = (ARMING_DEFAULT, "ratio_pending", "site_specific",
-                 "pending_validation")
+ARMING_OFF = "operator"
+ARMING_STATES = (ARMING_DEFAULT, ARMING_OFF)
+PORTABLE = "portable"
+PORTABILITY_STATES = (PORTABLE, "ratio_pending", "site_specific")
+BLOCKER_KINDS = ("unwired", "aggregation_bug", "unmeasured", "value_disputed")
 #: The authored fields that make up one key's arming.
-ARMING_FIELDS = ("arming", "arming_reason", "arming_reason_zh")
-#: The reason fields, required on every non-default state and nowhere else.
-ARMING_REASON_FIELDS = ("arming_reason", "arming_reason_zh")
-#: How each non-default state reads in a generated Chinese surface.
-ARMING_LABEL_ZH = {
+ARMING_FIELDS = ("arming", "portability", "portability_reason",
+                 "portability_reason_zh", "blocker", "default_exception")
+#: Required iff portability is not `portable`: why one value does not carry.
+PORTABILITY_REASON_FIELDS = ("portability_reason", "portability_reason_zh")
+_BLOCKER_FIELDS = ("kind", "tracking", "reason", "reason_zh")
+#: How each state reads in a generated Chinese surface.
+PORTABILITY_LABEL_ZH = {
     "ratio_pending": "待改比值",
     "site_specific": "依部署而定",
-    "pending_validation": "待驗證",
 }
+BLOCKER_LABEL_ZH = {
+    "unwired": "沒有資料源",
+    "aggregation_bug": "聚合錯誤",
+    "unmeasured": "尚未量測",
+    "value_disputed": "值有爭議",
+}
+CANDIDATE_LABEL_ZH = "可攜，待驗證"
+CANDIDATE_NOTE_ZH = "這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨"
+#: The optional tier cannot ship as-is: `default` is defaults-tier only.
+CANDIDATE_NOTE_OPTIONAL_ZH = ("這個值可跨部署沿用，但還沒經 shadow 報表確認；"
+                              "確認後要先升到 defaults 層才能出貨")
 
 # The two threshold tiers carried by the registry. Order matters: it is the
 # extraction order, and a same-name key in both tiers of one pack would be a
@@ -172,7 +195,8 @@ def __getattr__(name: str):
 # Canonical per-key field order for the emitted registry document.
 _FIELD_ORDER = (
     "pack", "tier", "value", "unit", "desc", "metric_class", "arming",
-    "arming_reason", "arming_reason_zh", "critical_of", "value_counterexample", "dimensions",
+    "portability", "portability_reason", "portability_reason_zh", "blocker",
+    "default_exception", "critical_of", "value_counterexample", "dimensions",
 )
 
 def _load_scaffold():
@@ -194,13 +218,15 @@ def build_registry_doc(
     strict_metric_class: Optional[bool] = None,
     strict_arming: Optional[bool] = None,
     deprecated_aliases: Optional[dict[str, str]] = None,
+    retired_keys: Optional[dict[str, dict]] = None,
 ) -> dict:
     """The registry document of *rule_packs* — or, with none, the committed one.
 
     With ``rule_packs`` (packs shaped like scaffold's RULE_PACKS): extract.
     Per pack: {display, exporter, default_on, rule_pack_file}.
     Per key : {pack, tier, value, unit, desc[, metric_class][, arming,
-    arming_reason, arming_reason_zh][, critical_of]}. ``critical_of`` is
+    portability[, portability_reason, portability_reason_zh][, blocker]
+    [, default_exception]][, critical_of]}. ``critical_of`` is
     derived (never authored): key ends with ``_critical`` AND its base key
     exists in the same pack -> the base key name. ``arming`` maps a key to its
     authored arming fields (see `arming_problems` for the rules); with
@@ -224,6 +250,12 @@ def build_registry_doc(
     NOT be an active key (it is retired), the target MUST be an active key
     (an alias onto nothing would silently accept configs that resolve to no
     threshold), and old != new.
+
+    ``retired_keys`` (#3829) rides along the same way: a threshold key no rule
+    pack reads any more -> ``{replaced_by, tracking, hint}``. Fail-loud
+    contract (`retired_key_problems`): the retired key is not an active key and
+    is on neither side of ``deprecated_aliases``, ``replaced_by`` is null or an
+    active key, ``tracking`` is an issue number, ``hint`` one line.
     """
     if rule_packs is None:
         # The real registry: since D-A PR-3 the committed file IS the source,
@@ -233,6 +265,7 @@ def build_registry_doc(
     arming = arming or {}
     strict_metric_class = bool(strict_metric_class)
     deprecated_aliases = deprecated_aliases or {}
+    retired_keys = retired_keys or {}
 
     packs: dict[str, Any] = {}
     keys: dict[str, Any] = {}
@@ -354,6 +387,10 @@ def build_registry_doc(
                 "registry key — the alias would resolve to no threshold"
             )
 
+    problems = retired_key_problems(retired_keys, keys, deprecated_aliases)
+    if problems:
+        raise ValueError("; ".join(problems))
+
     # canonical field order (stable YAML emission).
     keys = {
         k: {f: e[f] for f in _FIELD_ORDER if f in e} for k, e in keys.items()
@@ -361,81 +398,247 @@ def build_registry_doc(
     doc: dict[str, Any] = {"version": 1, "packs": packs, "keys": keys}
     if deprecated_aliases:
         doc["deprecated_aliases"] = dict(sorted(deprecated_aliases.items()))
+    if retired_keys:
+        doc["retired_keys"] = {
+            k: {f: e[f] for f in RETIRED_KEY_FIELDS if f in e}
+            for k, e in sorted(retired_keys.items())}
     return doc
 
 
-def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
-    """What is wrong with the arming of *keys* (registry key entries).
+#: The fields of one `retired_keys:` entry, in emission order.
+RETIRED_KEY_FIELDS = ("replaced_by", "tracking", "hint")
 
-    - a ``<base>_critical`` (``critical_of`` set) carries no arming: it follows
-      its base, and an authored one could say something the runtime cannot do;
-    - ``arming`` is one of `ARMING_STATES`;
-    - ``default`` sits on a ``defaults``-tier key (the chart ships only that
-      tier) and carries no reason;
-    - every other state carries both reasons, each one non-blank line with no
-      surrounding whitespace (they are spliced into ``#`` comments, where a
-      newline would put the tail at column 0);
-    - a reason never appears without a state;
-    - with *strict*, every key that is not a ``<base>_critical`` has a state.
+
+def retired_key_problems(retired: dict, keys: dict, aliases: dict[str, str]) -> list[str]:
+    """What breaks the `retired_keys:` contract (#3829), one message per rule.
+
+    A retired key must have left the contract (not an active key), must not
+    be an alias spelling either way (an alias is a key still honored — the
+    two would say opposite things about one spelling; when an alias window
+    closes, its old spelling moves here and leaves `deprecated_aliases`), its
+    ``replaced_by`` is null or an active key (a hint naming no key would send
+    the operator nowhere), and it names the issue that retired it. Its
+    `_critical` tier is retired with it (the Go lookup derives
+    `<old>_critical` -> `<replaced_by>_critical`, as an alias does), so that
+    tier must not be an active key either."""
+    problems: list[str] = []
+    alias_sides = set(aliases) | set(aliases.values())
+    for old, entry in retired.items():
+        if not isinstance(entry, dict):
+            problems.append(f"retired key {old!r} must be a mapping of {list(RETIRED_KEY_FIELDS)}")
+            continue
+        if old in keys:
+            problems.append(
+                f"retired key {old!r} is still an ACTIVE registry key — retire it "
+                "by removing it from `keys:`, or drop the retired entry")
+        if old in alias_sides:
+            problems.append(
+                f"retired key {old!r} is also in deprecated_aliases — a spelling "
+                "is either still honored (alias) or retired, not both")
+        if old + CRITICAL_SUFFIX in keys:
+            # The lookup (pkg/config/retired_threshold_keys.go) retires
+            # `<old>_critical` with its base, as aliasHead canonicalizes it.
+            problems.append(
+                f"retired key {old!r} still has an ACTIVE critical tier "
+                f"{old + CRITICAL_SUFFIX!r} — the critical tier is retired with "
+                "its base; retire both")
+        repl = entry.get("replaced_by")
+        if repl is not None and repl not in keys:
+            problems.append(
+                f"retired key {old!r} is replaced_by {repl!r}, which is not an "
+                "active registry key — name the live key, or null for none")
+        elif (repl is not None and repl + CRITICAL_SUFFIX not in keys
+              and old + CRITICAL_SUFFIX not in retired):
+            # The lookup derives `<old>_critical` -> `<repl>_critical`; when
+            # repl has no critical tier that hint would name a key that does
+            # not exist, so the critical spelling needs its own entry.
+            problems.append(
+                f"retired key {old!r} is replaced_by {repl!r}, which has no critical "
+                f"tier, so the derived hint for {old + CRITICAL_SUFFIX!r} would name "
+                f"{repl + CRITICAL_SUFFIX!r}, not a registry key — add a retired entry "
+                f"for {old + CRITICAL_SUFFIX!r} (replaced_by: null)")
+        if "tracking" not in entry:
+            problems.append(f"retired key {old!r} needs tracking: <issue>")
+        else:
+            msg = _tracking_problem(old, "retired_keys", entry["tracking"])
+            if msg:
+                problems.append(msg)
+        msg = _one_line_problem(old, "hint", entry.get("hint"))
+        if msg:
+            problems.append(f"retired key {msg}")
+    return problems
+
+
+def _one_line_problem(key: str, field: str, value: Any) -> Optional[str]:
+    """Why *value* is not a non-blank single line, else None. The reasons are
+    spliced into ``#`` comments, where a newline puts the tail at column 0."""
+    if not isinstance(value, str) or not value.strip():
+        return f"{key!r} needs a non-blank {field}"
+    if value != value.strip() or "\n" in value or "\r" in value:
+        return f"{key!r} {field} must be one line with no surrounding whitespace"
+    return None
+
+
+def _tracking_problem(key: str, where: str, value: Any) -> Optional[str]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return f"{key!r} {where}.tracking must be an issue number"
+    return None
+
+
+def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
+    """What is wrong with the arming fields of *keys* (registry key entries).
+
+    - a ``<base>_critical`` (``critical_of`` set) carries none of them;
+    - ``arming`` is ``default`` or ``operator``; ``portability`` is one of
+      `PORTABILITY_STATES`; with *strict* both are present on every other key;
+    - both portability reasons are present iff portability is not
+      ``portable`` (a portable key has nothing to explain);
+    - ``blocker`` is ``{kind, tracking, reason, reason_zh}`` exactly, with a
+      known kind and an issue number;
+    - ``default`` sits on a ``defaults``-tier key, has no blocker, and is
+      portable — unless ``default_exception: {tracking}`` records why a
+      non-portable value ships anyway; that field appears nowhere else;
+    - every reason is one non-blank line.
     """
     out: list[str] = []
     for key, entry in keys.items():
-        state = entry.get("arming")
-        reasons = [f for f in ARMING_REASON_FIELDS if f in entry]
+        present = [f for f in ARMING_FIELDS if f in entry]
         if entry.get("critical_of"):
-            if state is not None or reasons:
+            if present:
                 out.append(
                     f"{key!r} is a critical tier of {entry['critical_of']!r}: it "
-                    "follows its base's arming — remove its arming fields")
+                    f"follows its base — remove {present}")
             continue
-        if state is None:
-            if reasons:
-                out.append(f"{key!r} has {reasons} but no arming state")
-            elif strict:
-                out.append(
-                    f"{key!r} has no arming — every key that is not a "
-                    f"<base>_critical must say one of {list(ARMING_STATES)}")
+        state, port = entry.get("arming"), entry.get("portability")
+        if state is None or port is None:
+            missing = [f for f, v in (("arming", state), ("portability", port))
+                       if v is None]
+            if present or strict:
+                out.append(f"{key!r} has no {' / '.join(missing)} — every key "
+                           "that is not a <base>_critical states both")
             continue
         if state not in ARMING_STATES:
             out.append(f"{key!r} arming {state!r} is not one of "
                        f"{list(ARMING_STATES)}")
             continue
+        if port not in PORTABILITY_STATES:
+            out.append(f"{key!r} portability {port!r} is not one of "
+                       f"{list(PORTABILITY_STATES)}")
+            continue
+        reasons = [f for f in PORTABILITY_REASON_FIELDS if f in entry]
+        if port == PORTABLE:
+            if reasons:
+                out.append(f"{key!r} is portable — remove {reasons} (only a "
+                           "non-portable key has something to explain)")
+        else:
+            for f in PORTABILITY_REASON_FIELDS:
+                p = _one_line_problem(key, f, entry.get(f))
+                if p:
+                    out.append(p)
+        blocker = entry.get("blocker")
+        if blocker is not None:
+            if not isinstance(blocker, dict) or set(blocker) != set(_BLOCKER_FIELDS):
+                out.append(f"{key!r} blocker must be exactly "
+                           f"{list(_BLOCKER_FIELDS)}")
+            else:
+                if blocker["kind"] not in BLOCKER_KINDS:
+                    out.append(f"{key!r} blocker.kind {blocker['kind']!r} is not "
+                               f"one of {list(BLOCKER_KINDS)}")
+                p = _tracking_problem(key, "blocker", blocker["tracking"])
+                if p:
+                    out.append(p)
+                for f in ("reason", "reason_zh"):
+                    p = _one_line_problem(key, f"blocker.{f}", blocker[f])
+                    if p:
+                        out.append(p)
+        exception = entry.get("default_exception")
         if state == ARMING_DEFAULT:
             if entry.get("tier") != "defaults":
                 out.append(
                     f"{key!r} is arming: default but sits in tier "
                     f"{entry.get('tier')!r} — only defaults-tier keys are "
                     "chart-shippable")
-            if reasons:
-                out.append(f"{key!r} is arming: default — remove {reasons} "
-                           "(a reason explains why a key is NOT shipped)")
-            continue
-        for f in ARMING_REASON_FIELDS:
-            v = entry.get(f)
-            if not isinstance(v, str) or not v.strip():
-                out.append(f"{key!r} is arming: {state} and needs a non-blank "
-                           f"{f}")
-            elif v != v.strip() or "\n" in v or "\r" in v:
-                out.append(f"{key!r} {f} must be one line with no surrounding "
-                           "whitespace")
+            if blocker is not None:
+                out.append(f"{key!r} is arming: default but has a blocker — a "
+                           "blocked key cannot ship")
+            if port == PORTABLE and exception is not None:
+                out.append(f"{key!r} is portable — remove default_exception")
+            elif port != PORTABLE:
+                if not isinstance(exception, dict) or set(exception) != {"tracking"}:
+                    out.append(
+                        f"{key!r} ships (arming: default) but is {port}: a "
+                        "shipped value must be portable, or record "
+                        "default_exception: {tracking: <issue>}")
+                else:
+                    p = _tracking_problem(key, "default_exception",
+                                          exception["tracking"])
+                    if p:
+                        out.append(p)
+        elif exception is not None:
+            out.append(f"{key!r} is arming: operator — default_exception only "
+                       "applies to a shipped key")
     return out
-
-
-def arming_label_zh(entry: dict) -> Optional[str]:
-    """The Chinese label of *entry*'s non-default arming, else None.
-
-    Total over malformed input: the renderers run even when the registry
-    fails validation (the gate reports every violation in one pass), so an
-    authored ``arming: [site_specific]`` must render nothing here instead of
-    raising on an unhashable lookup and hiding the violation behind a crash.
-    """
-    state = entry.get("arming")
-    return ARMING_LABEL_ZH.get(state) if isinstance(state, str) else None
 
 
 def is_chart_armed(entry: dict) -> bool:
     """Whether the chart ships this registry key's value (``arming: default``)."""
     return entry.get("arming") == ARMING_DEFAULT
+
+
+def _valid_blocker(entry: dict) -> Optional[dict]:
+    b = entry.get("blocker")
+    if (isinstance(b, dict) and b.get("kind") in BLOCKER_KINDS
+            and isinstance(b.get("reason_zh"), str)):
+        return b
+    return None
+
+
+def is_validation_candidate(entry: dict) -> bool:
+    """Portable, not shipped, not blocked: what A2's shadow report reads."""
+    return (entry.get("arming") == ARMING_OFF
+            and entry.get("portability") == PORTABLE
+            and "blocker" not in entry and not entry.get("critical_of"))
+
+
+def validation_candidates(doc: dict) -> frozenset[str]:
+    """Every key `is_validation_candidate` admits — DERIVED, never authored."""
+    return frozenset(k for k, e in registry_keys(doc).items()
+                     if is_validation_candidate(e))
+
+
+def arming_notes_zh(entry: dict) -> list[str]:
+    """One Chinese sentence per fact a reader of *entry* needs: why it is not
+    shipped (blocker, non-portability, or awaiting validation), or why a
+    non-portable value ships anyway. Empty for a portable shipped key and for
+    a ``<base>_critical``.
+
+    Total over malformed input: the renderers run even when the registry
+    fails validation (the gate reports every violation in one pass), so a
+    malformed field renders nothing instead of raising and hiding the
+    violation behind a crash."""
+    if entry.get("critical_of"):
+        return []
+    state, port = entry.get("arming"), entry.get("portability")
+    port_label = PORTABILITY_LABEL_ZH.get(port) if isinstance(port, str) else None
+    port_reason = entry.get("portability_reason_zh")
+    notes: list[str] = []
+    if state == ARMING_OFF:
+        b = _valid_blocker(entry)
+        if b is not None:
+            notes.append(f"未啟用（{BLOCKER_LABEL_ZH[b['kind']]}，"
+                         f"#{b.get('tracking')}）：{b['reason_zh']}")
+        if port_label and isinstance(port_reason, str):
+            notes.append(f"未啟用（{port_label}）：{port_reason}")
+        elif port == PORTABLE and b is None:
+            note = (CANDIDATE_NOTE_OPTIONAL_ZH
+                    if entry.get("tier") == "optional_overrides"
+                    else CANDIDATE_NOTE_ZH)
+            notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{note}")
+    elif state == ARMING_DEFAULT and port_label and isinstance(port_reason, str):
+        exc = entry.get("default_exception")
+        t = exc.get("tracking") if isinstance(exc, dict) else None
+        notes.append(f"出貨例外（{port_label}，#{t}）：{port_reason}")
+    return notes
 
 
 def not_chart_armed_keys(doc: dict) -> frozenset[str]:
@@ -526,6 +729,7 @@ def fixed_point_problems(doc: dict) -> list[str]:
             strict_metric_class=True,
             strict_arming=True,
             deprecated_aliases=dict(doc.get("deprecated_aliases") or {}),
+            retired_keys=dict(doc.get("retired_keys") or {}),
         )
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         # The file is hand-authored: an entry that is not a mapping (or a
@@ -581,6 +785,62 @@ def check_rule_packs_module(doc: dict, path: Optional[str] = None) -> Optional[s
     return None
 
 
+#: The Go table of `retired_keys:` (#3829), generated whole: the key verdict
+#: (pkg/keyverdict), served-values' hint and tenant-api's batch `unset` read
+#: it through pkg/config/retired_threshold_keys.go.
+RETIRED_KEYS_GO_PATH = _in_repo(
+    "components", "threshold-exporter", "app", "pkg", "config",
+    "retired_threshold_keys_gen.go")
+RETIRED_KEYS_GO_ID = "retired-keys-go"
+
+
+def _go_str(s: str) -> str:
+    import json
+    return json.dumps(s, ensure_ascii=False)
+
+
+def render_retired_keys_go(doc: dict) -> str:
+    """The exact text of the generated Go table for *doc*'s `retired_keys:`.
+
+    Rendered for the freshness check even when the section breaks its
+    contract (reported beside it by the schema and fixed-point checks), so a
+    malformed entry renders as best it can instead of raising."""
+    def field(e: Any, name: str) -> Any:
+        return e.get(name) if isinstance(e, dict) else None
+
+    def tracking(e: Any) -> int:
+        t = field(e, "tracking")
+        return t if isinstance(t, int) and not isinstance(t, bool) else 0
+
+    entries = "".join(
+        f"\t{{{_go_str(str(k))}, {_go_str(str(field(e, 'replaced_by') or ''))}, "
+        f"{tracking(e)}, {_go_str(str(field(e, 'hint') or ''))}}},\n"
+        for k, e in sorted((doc.get("retired_keys") or {}).items(), key=lambda kv: str(kv[0])))
+    return (
+        "// Code generated by scripts/tools/lint/check_threshold_registry.py --regen; DO NOT EDIT.\n"
+        "// Source: rule-packs/threshold-registry.yaml `retired_keys:` (#3829).\n"
+        "\n"
+        "package config\n"
+        "\n"
+        "// retiredThresholdKeys are the threshold keys no rule pack reads any\n"
+        "// more: key, the key that replaces it (\"\" for none), the issue that\n"
+        "// retired it and the hint. Looked up by retired_threshold_keys.go.\n"
+        "var retiredThresholdKeys = []retiredThresholdKey{"
+        + (f"\n{entries}" if entries else "") + "}\n")
+
+
+def check_retired_keys_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
+    """None when the generated Go table is fresh, else what is wrong with it."""
+    p = path or RETIRED_KEYS_GO_PATH
+    if p is None or not os.path.isfile(p):
+        return f"{p} (surface {RETIRED_KEYS_GO_ID!r}) does not exist"
+    with open(p, encoding="utf-8") as fh:
+        if fh.read() != render_retired_keys_go(doc):
+            return (f"{p} (surface {RETIRED_KEYS_GO_ID!r}) is not what the "
+                    "registry generates")
+    return None
+
+
 def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     """``--regen``: every generated surface from the committed registry.
 
@@ -590,7 +850,8 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     write`` dry run of the batches that will write it (`plan_surfaces`) —
     all before anything is written. Only then are the changed surfaces
     written (the conf.d ones first, through ``da-guard write``) and the
-    generated RULE_PACKS module last; a refusal (ConfdWriteRefused,
+    generated RULE_PACKS module and the retired-keys Go table (#3829)
+    last; a refusal (ConfdWriteRefused,
     ValueError, `_lib_parse_tree.ParseTreeError`) leaves every file as it
     was; a write that stops part-way is SurfaceWriteStopped
     (ConfdWriteStopped for a conf.d batch), naming the files already
@@ -604,10 +865,15 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     doc = committed_registry_doc(src)
     planned = plan_surfaces(doc)
     module_text = render_rule_packs_module(doc)
+    go_text = render_retired_keys_go(doc)
+    go_path = _repo_path_or_raise(RETIRED_KEYS_GO_PATH, "the retired-keys Go table")
     touched = write_planned(planned)
     if check_rule_packs_module(doc) is not None:
         _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_text_secure)
         touched.append(RULE_PACKS_MODULE_PATH)
+    if check_retired_keys_go(doc, go_path) is not None:
+        _write_or_stop(go_path, go_text, touched, write_text_secure)
+        touched.append(go_path)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
@@ -741,6 +1007,17 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
                 f"derived={f_alias[old]!r}"
             )
 
+    # retired_keys (#3829): same treatment, a missing section is empty.
+    c_ret = committed.get("retired_keys", {}) or {}
+    f_ret = fresh.get("retired_keys", {}) or {}
+    for old in sorted(set(c_ret) ^ set(f_ret)):
+        diffs.append(f"retired_key {old!r}: in only one of registry / derived")
+    for old in sorted(set(c_ret) & set(f_ret)):
+        if c_ret[old] != f_ret[old]:
+            diffs.append(
+                f"retired_key {old!r}: registry={c_ret[old]!r} vs "
+                f"derived={f_ret[old]!r}")
+
     if committed.get("version") != fresh.get("version"):
         diffs.append(
             f"version: registry={committed.get('version')!r} vs "
@@ -813,16 +1090,9 @@ def _entry_lines(
 
 
 def _arming_note_lines(entry: dict, cont: str) -> list[str]:
-    """Why the chart does not ship this key, as ``#`` comment lines.
-
-    Only for a key with an authored non-default arming; a ``_critical`` has
-    none (it follows its base, whose own lines say why)."""
-    label = arming_label_zh(entry)
-    reason = entry.get("arming_reason_zh")
-    if label is None or not isinstance(reason, str):
-        return []
-    body = f"未啟用（{label}）：{reason}"
-    return [f"{cont}{seg}" for seg in _wrap_comment(body, _COMMENT_WIDTH - len(cont))]
+    """`arming_notes_zh` as ``#`` comment lines under a pack-header key."""
+    return [f"{cont}{seg}" for note in arming_notes_zh(entry)
+            for seg in _wrap_comment(note, _COMMENT_WIDTH - len(cont))]
 
 
 # The two directions are NOT interchangeable, and a single blanket caveat would
@@ -1175,10 +1445,23 @@ def has_shipped_chart_base(doc: dict, key: str) -> bool:
     user_threshold" — false for all five of them, and false in the direction that
     talks a tenant out of protection they already have.
     """
-    base = (doc.get("keys", {}).get(key) or {}).get("critical_of")
+    return "helm" in base_topologies(doc, key)
+
+
+def base_topologies(doc: dict, key: str) -> frozenset[str]:
+    """The topologies (``TOPOLOGY_DEFAULTS_KEEPS``) whose generated defaults
+    value the base of ``key`` — where ``resolveCriticalRows`` has the
+    ``defaults[base]`` it admits a ``<base>_critical`` on. Empty for a key
+    with no base (no ``critical_of``)."""
+    keys = doc.get("keys", {})
+    base = (keys.get(key) or {}).get("critical_of")
     if not base:
-        return False
-    return is_chart_armed(doc.get("keys", {}).get(base) or {})
+        return frozenset()
+    entry = keys.get(base) or {}
+    pack = entry.get("pack", "?")
+    return frozenset(
+        topo for topo, keeps in TOPOLOGY_DEFAULTS_KEEPS.items()
+        if any(keep(pack, entry) for keep in keeps))
 
 
 # Warning A — the keys the platform SHIPS in the optional_overrides: list.
@@ -1218,10 +1501,28 @@ _OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES = (
     "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
 )
 
-# Warning C — off the shipped list AND the base is not shipped either. This is
-# the only population the original "documented-but-dormant" wording is still
-# true for. Worded by the property that actually gates them (`defaults[base]`),
-# not by the `_critical` spelling, so it stays true if the populations shift.
+# Warning B2 — off the shipped list; the base is valued by the repo's dev
+# conf.d template (its `dev-example-defaults` block) but not by the chart. True
+# in one topology and false in the other, so the header says both (#3730).
+_OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES = (
+    "#",
+    "# optional_overrides（不在出貨清單裡；base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨）：",
+    "# 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值",
+    "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
+    "# - repo 的 dev conf.d（components/threshold-exporter/config/conf.d/_defaults.yaml 的",
+    "#   dev-example-defaults 段）供給下列每個 key 的 base：在這棵樹裡租戶填一個，",
+    "#   resolveCriticalRows 就產出一條真的 critical row。",
+    "# - 出貨的 Helm values 不供給這些 base：用 chart 部署時，租戶填一個並不會產出任何 row，",
+    "#   要先由部署面供給 base（scaffold_tenant 針對選到的 pack 產生的 _defaults.yaml",
+    "#   就含 base，operator 也可自行填 Helm values）。",
+    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
+)
+
+# Warning C — off the shipped list AND the base is valued in neither topology.
+# This is the only population the original "documented-but-dormant" wording is
+# still true for. Worded by the property that actually gates them
+# (`defaults[base]`), not by the `_critical` spelling, so it stays true if the
+# populations shift.
 _OPTIONAL_UNSHIPPED_WARNING_LINES = (
     "#",
     "# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：",
@@ -1229,9 +1530,8 @@ _OPTIONAL_UNSHIPPED_WARNING_LINES = (
     "# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，",
     "# 它讀的是 defaults[base]，base 沒有值就整列丟棄",
     "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
-    "# 而下列每個 key 的 base 都**未**標 [chart-default]",
-    "# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：",
-    "# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。",
+    "# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：",
+    "# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。",
     "# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到",
     "# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），",
     "# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是",
@@ -1242,25 +1542,31 @@ _OPTIONAL_UNSHIPPED_WARNING_LINES = (
 def optional_warning_groups(doc: dict, optional: dict) -> list[tuple[tuple, dict]]:
     """[(warning_lines, {key: entry}), …] — the optional tier split by TRUTH.
 
-    Three populations, three different truths, and the split is DERIVED
-    (``is_shipped_optional_key`` for membership, ``has_shipped_chart_base`` for
-    the rest) rather than spelled out per pack — the whole point is that a
-    header can never claim something the resolver contradicts.
+    Four populations, four different truths, and the split is DERIVED
+    (``is_shipped_optional_key`` for membership, ``base_topologies`` for the
+    rest: base valued by the chart — and so by the dev template too —, by the
+    dev template only, or by neither) rather than spelled out per pack — the
+    whole point is that a header can never claim something the resolver
+    contradicts in either topology it speaks for (#3730).
 
     Empty groups are dropped, so a pack with no optional tier gets no warning
     line at all and a single-population pack gets exactly one.
     """
-    shipped, base_shipped, dormant = {}, {}, {}
+    shipped, base_shipped, dev_only, dormant = {}, {}, {}, {}
     for key, entry in optional.items():
+        topologies = base_topologies(doc, key)
         if is_shipped_optional_key(key):
             shipped[key] = entry
-        elif has_shipped_chart_base(doc, key):
+        elif "helm" in topologies:
             base_shipped[key] = entry
+        elif "dev" in topologies:
+            dev_only[key] = entry
         else:
             dormant[key] = entry
     groups = [
         (_OPTIONAL_SHIPPED_WARNING_LINES, shipped),
         (_OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES, base_shipped),
+        (_OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES, dev_only),
         (_OPTIONAL_UNSHIPPED_WARNING_LINES, dormant),
     ]
     return [(w, keys) for w, keys in groups if keys]
@@ -1269,10 +1575,11 @@ def optional_warning_groups(doc: dict, optional: dict) -> list[tuple[tuple, dict
 def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     """The generated threshold section of one rule-pack header (body only).
 
-    The optional tier renders as up to THREE sub-sections, each under its own
+    The optional tier renders as up to FOUR sub-sections, each under its own
     warning (see ``optional_warning_groups``): the keys the platform ships on
     the ``optional_overrides:`` list, the ``_critical`` keys whose base is a
-    shipped chart default (settable today), and the ones whose base is not
+    shipped chart default (settable today), the ones whose base only the
+    repo's dev conf.d template values, and the ones whose base neither does
     (genuinely dormant). A pack gets exactly the sub-sections its keys populate,
     in that order; a pack with no optional-tier key gets no warning whatsoever.
     """
@@ -1326,8 +1633,8 @@ def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
     width = _COMMENT_WIDTH - indent - 2
     groups = _defaults_by_pack(
         doc, lambda _p, e: (e.get("tier") == "defaults"
-                            and arming_label_zh(e) is not None
-                            and isinstance(e.get("arming_reason_zh"), str)))
+                            and e.get("arming") == ARMING_OFF
+                            and bool(arming_notes_zh(e))))
     if not groups:
         return []
     lines = [f"{ind}# {seg}" for seg in _wrap_comment(
@@ -1335,15 +1642,16 @@ def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
         "用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了 "
         "thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值"
         "（其 <key>_critical 也要先有 base 值）。"
-        "原因取自 threshold-registry 的 arming 欄位。", width)]
+        "原因取自 threshold-registry 的 arming、portability 與 blocker 欄位。", width)]
     for pack_name, _meta, pairs in groups:
         lines.append(f"{ind}# ── {pack_name} ──")
         for key, entry in pairs:
-            body = (f"{key}（{arming_label_zh(entry)}）："
-                    f"{entry['arming_reason_zh']}")
-            segs = _wrap_comment(body, width - 2)
-            lines.append(f"{ind}#   {segs[0]}")
-            lines.extend(f"{ind}#     {seg}" for seg in segs[1:])
+            # Every note names its key: a second reason indented like a
+            # wrapped continuation read as part of the first.
+            for note in arming_notes_zh(entry):
+                segs = _wrap_comment(f"{key} {note}", width - 2)
+                lines.append(f"{ind}#   {segs[0]}")
+                lines.extend(f"{ind}#     {seg}" for seg in segs[1:])
             # Same discipline as every other face that hands a value over
             # (test_counterexample_coverage): a key with a measured
             # counter-example carries it here too.
@@ -1385,6 +1693,20 @@ def _dev_example_keep(pack: str, entry: dict) -> bool:
             and not is_chart_armed(entry))
 
 
+# The two topologies a pack header speaks for, and the defaults blocks each
+# one's generated `defaults:` mapping carries — by the very keep predicates
+# `regen_surfaces` renders those blocks with (helm values: the chart-default
+# block; the repo's dev conf.d `_defaults.yaml`: the same block plus the
+# example tenants' `dev-example-defaults` block). A header never asks one
+# topology and speaks for the other (#3730);
+# `test_topology_keeps_are_what_the_surfaces_carry` holds this table to the
+# generated files.
+TOPOLOGY_DEFAULTS_KEEPS: dict[str, tuple] = {
+    "helm": (_chart_default_keep,),
+    "dev": (_chart_default_keep, _dev_example_keep),
+}
+
+
 def _defaults_by_pack(doc: dict, keep) -> list[tuple[str, dict, list]]:
     """[(pack_name, pack_meta, [(key, entry), …]), …] — the keys
     ``keep(pack, entry)`` admits, grouped by pack in registry order; packs
@@ -1423,6 +1745,12 @@ def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
             # nothing — but the alternative is a face that silently ships a
             # bare number the day the registry learns something about it.
             lines.extend(_counterexample_lines(entry, f"{ind}# "))
+            # A shipped value the registry records as non-portable says so
+            # here too, where the operator reads it (#3773 review F5). Only
+            # for chart defaults: the dev template's example block ships keys
+            # the chart does not, and "not shipped" would contradict it.
+            if is_chart_armed(entry):
+                lines.extend(_arming_note_lines(entry, f"{ind}# "))
             lines.append(f"{ind}{key}: {_fmt_value(entry['value'])}")
     return lines
 
@@ -2406,8 +2734,9 @@ STRUCTURAL_PROSE_TOKENS: frozenset[str] = frozenset({
     "rule_pack_file",
     "default_on",
     "metric_class",
-    "arming_reason",
-    "arming_reason_zh",
+    "portability_reason",
+    "portability_reason_zh",
+    "default_exception",
     "critical_of",
     "optional_overrides",
     "runbook_url",

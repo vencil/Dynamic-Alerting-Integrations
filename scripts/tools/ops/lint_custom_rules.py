@@ -276,15 +276,23 @@ def read_rule_files(files):
     return _lib_consumer_read.rule_files_in(files, keep_refusals=True)
 
 
-def lint_file(filepath, policy, rule_files=None):
+def lint_file(filepath, policy, rule_files=None, *, flag=None):
     """Lint a single YAML rule file (or a ConfigMap holding rule files).
     *rule_files* is its reading from ``read_rule_files``; read here when not
-    given. Returns (list of LintResult, rule_count)."""
+    given. Returns (list of LintResult, rule_count).
+
+    *flag*: the declared input the file was selected from
+    (``--rule-pack-dir``): its bytes are read as `_lib_input` reads a
+    selected file — gone or unreadable since the directory was judged is a
+    refusal naming the flag, rc 2 (#3724), not one ERROR among the results."""
     results = []
     rule_count = 0
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
+        if flag is not None:
+            content = _lib_input.read_bytes(filepath, flag=flag, lang="en").decode("utf-8")
+        else:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
     except (OSError, UnicodeDecodeError) as e:
         # ⛔ #1618: `UnicodeDecodeError` is a ValueError, NOT an OSError, so
         # the bare `except OSError` here did not see it and one non-UTF-8
@@ -606,7 +614,9 @@ def main():
         die_caller_error(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}")
 
     for filepath in files:
-        results, count = lint_file(filepath, policy, readings[filepath])
+        results, count = lint_file(
+            filepath, policy, readings[filepath],
+            flag="--rule-pack-dir" if args.rule_pack_dir is not None else None)
         all_results.extend(results)
         files_checked += 1
         rules_checked += count

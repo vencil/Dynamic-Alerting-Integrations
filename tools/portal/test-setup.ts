@@ -11,7 +11,9 @@
  * registration and every component now does `import { styles } from
  * '../styles.js'`.
  */
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
+import { onPathRefused } from './src/interactive/tools/_common/api/api-fetch.js';
+import { resetSignInStateForTests } from './src/interactive/tools/_common/auth/sign-in.js';
 import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import * as ReactDOM from 'react-dom';
@@ -33,4 +35,19 @@ const enOnlyT = (_zh: string, en: string): string => en;
 // this is purely a forward guard.
 afterEach(() => {
   (window as Window & { __t?: (zh: string, en: string) => string }).__t = enOnlyT;
+});
+
+// ADR-027 §9 item 4: a request path apiFetch / fetchPageData refuses fails
+// the test that made it, even when the caller catches the error and falls
+// back to "network error" or offline data (most do). A test that refuses on
+// purpose takes its refusals with takePathRefusals() before it ends.
+const refused: Error[] = [];
+(globalThis as { takePathRefusals?: () => Error[] }).takePathRefusals = () => refused.splice(0);
+onPathRefused((err: Error) => { refused.push(err); });
+beforeEach(() => { refused.length = 0; resetSignInStateForTests(); });
+afterEach(() => {
+  const left = refused.splice(0);
+  if (left.length) {
+    throw new Error(`request path refused (ADR-027 §9 item 4):\n${left.map((e) => e.message).join('\n')}`);
+  }
 });

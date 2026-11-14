@@ -234,6 +234,64 @@ func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 	}
 }
 
+// #3689: a refusal says which line and which types, never the value yaml.v2
+// quoted — the refused field may be a credential. Each canary is written
+// where Alertmanager wants another type; the short one is quoted whole by
+// yaml.v2, the long one by its first 7 bytes, so both prefixes are checked.
+func TestRefusalDoesNotEchoTheValue(t *testing.T) {
+	t.Parallel()
+	const short, long = "CNRY9z", "CANARYVAL12345"
+	cases := []struct {
+		name, in, want string
+	}{
+		{"bool-short", "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
+			"  - url: 'https://example.com/'\n    http_config: {follow_redirects: " + short + "}\n",
+			"cannot unmarshal !!str into bool"},
+		{"bool-long", "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
+			"  - url: 'https://example.com/'\n    http_config: {enable_http2: " + long + "}\n",
+			"cannot unmarshal !!str into bool"},
+		{"map-of-strings", "route: {receiver: r}\nreceivers:\n- name: r\n  email_configs:\n" +
+			"  - {to: a@example.com, smarthost: 'smtp.example.com:587', from: b@example.com, headers: " +
+			long + "}\n",
+			"cannot unmarshal !!str into map[string]string"},
+		// The value holds the decoder's own delimiters: the cut still ends at
+		// the Go type.
+		{"delimiters-in-value", "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
+			"  - url: 'https://example.com/'\n    http_config: {follow_redirects: 'C` into x'}\n",
+			"cannot unmarshal !!str into bool"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rc, out, errOut := runOn(t, tc.in)
+			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.want) {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and %q", rc, out, errOut, tc.want)
+			}
+			for _, leak := range []string{short, long[:7], "C` into x", "`"} {
+				if strings.Contains(errOut, leak) {
+					t.Fatalf("stderr %q carries %q", errOut, leak)
+				}
+			}
+		})
+	}
+}
+
+// Every shape decode.go's terror writes, and text that is not one of them.
+func TestWithoutQuotedValue(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"line 3: cannot unmarshal !!str `abc` into bool":           "line 3: cannot unmarshal !!str into bool",
+		"line 3: cannot unmarshal !!str `CANARYV...` into bool":    "line 3: cannot unmarshal !!str into bool",
+		"line 3: cannot unmarshal !!str `a` into b` into []string": "line 3: cannot unmarshal !!str into []string",
+		"line 3: cannot unmarshal !!seq into string":               "line 3: cannot unmarshal !!seq into string",
+		"line 3: field x not found in type config.plain":           "line 3: field x not found in type config.plain",
+	} {
+		if got := withoutQuotedValue(in); got != want {
+			t.Errorf("withoutQuotedValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // URLs are judged as the deployed Alertmanager judges them (#2295, #3522):
 // v0.34.2 is built without urlstrictcolons=0, so a second colon outside
 // brackets is refused — here too, because go.mod keeps Go's default. A

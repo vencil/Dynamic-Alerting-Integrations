@@ -9,10 +9,12 @@
 # >>> GENERATED:threshold-registry:pack-mariadb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   mysql_connections: 80   [chart-default]   # count — Max threads_connected warning
+#       出貨例外（待改比值，#3778）：絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）
 #   mysql_threads_running: 30   [chart-default]
 #       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30
 #       = PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the
 #       #944 keep — 2-release alias window, old spelling still resolves)
+#       出貨例外（依部署而定，#3778）：健康的 running threads 數隨主機的 CPU 核數而定
 #   mysql_replication_lag: 30   [chart-default]
 #       seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
 #       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
@@ -169,7 +171,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant }})"
@@ -196,7 +198,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB: ALL instances down for tenant {{ $labels.tenant }}"
@@ -234,7 +236,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB: no writable primary for tenant {{ $labels.tenant }}"
@@ -257,7 +259,7 @@ groups:
       # INTENT (semi-sync vs not) — NOT primary-vs-replica. Since #3680 the tenant-exporters
       # scrape is role:endpointslice with the real instance (one series per pod), so the
       # `on(tenant, instance)` pairing below matches each pod's own two gauges.
-      # metric_group:liveness → severity-dedup (NoPrimary/ReplicasGone critical inhibits
+      # metric_group:mariadb_liveness → severity-dedup (NoPrimary/ReplicasGone critical inhibits
       # this warning). Lab can't produce the EVENT (needs 2-node semi-sync) → promtool
       # synthetic only; ⛔ verify metric presence at customer rollout.
       - alert: MariaDBSemiSyncDegraded
@@ -275,7 +277,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant {{ $labels.tenant }}"
@@ -303,7 +305,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB semi-sync has ZERO connected replicas for tenant {{ $labels.tenant }}"

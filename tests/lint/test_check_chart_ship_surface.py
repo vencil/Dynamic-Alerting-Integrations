@@ -85,7 +85,6 @@ class TestLiveRepoIsClean:
         sites = gate.discover_shipping_charts(REPO_ROOT)
         assert set(sites) == {
             "helm/threshold-exporter",
-            "helm/recipe-preview",
             "helm/tenant-api",
             # #1352 case A: release-portal published a Docker image and nothing
             # else while components/da-portal/README.md taught customers to pull
@@ -688,8 +687,8 @@ class TestPackageVerificationWiring:
         assert gate.check_package_verification_wiring(repo) == [], label
 
     def test_a_makefile_call_site_counts_too(self, tmp_path: Path) -> None:
-        """`make chart-package` publishes through `chart-push`; the workflows are
-        not the only road to the registry."""
+        """A Makefile recipe can `helm push` too; the workflows are not the only
+        road to the registry a call site could take."""
         repo = self._repo(
             tmp_path,
             "# no helm package in this workflow\n",

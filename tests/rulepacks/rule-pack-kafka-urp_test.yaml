@@ -1,0 +1,205 @@
+# promtool unit test — #3770 Kafka under-replicated partitions 的聚合語意。
+# danielqsj/kafka_exporter 的 kafka_topic_partition_under_replicated_partition
+# 是逐 partition 的 0/1 旗標。修正前 recording rule 用 max by(tenant)，值只會是
+# 0 或 1，門檻 >= 1 的告警永遠不響。這份 fixture 釘住：
+#   - 值是 under-replicated 的 partition 數（多個 partition 時 warning／critical 依門檻響）
+#   - 單一 partition 只過 warning 門檻 0、不過 critical 門檻 1
+#   - 全部健康不響
+#   - 兩個 exporter 副本（逐 pod scrape，#3723）回報同一 partition 不重複計數
+#   - 兩個副本對同一 partition 一報 1、一報 0 時仍計 1
+# 突變：改回 `max by(tenant)` 會讓 3-partition 的值變 1、critical 不響；拿掉內層
+# `max by(tenant, topic, partition)` 會讓雙副本的值變 2、critical 誤響；內層改成
+# `min` 會讓 1／0 不一致的值變 0、warning 不響。
+# Run: promtool test rules tests/rulepacks/rule-pack-kafka-urp_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-kafka.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # 多個 partition under-replicated：3 個 > critical 門檻 2 > warning 門檻 1。
+  - interval: 15s
+    input_series:
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="1"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="payments", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="payments", partition="1"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="warning"}'
+        values: '1x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="critical"}'
+        values: '2x10'
+    promql_expr_test:
+      - expr: tenant:kafka_under_replicated_partitions:sum
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t1"}'
+            value: 3
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitions
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: kafka_under_replicated_partitions
+              tenant: t1
+            exp_annotations:
+              summary: "Under-replicated partitions detected on t1"
+              summary_zh: "t1 偵測到複製不足的分割區"
+              platform_summary: "[] t1: under-replicated partitions — broker health check"
+              platform_summary_zh: "[] t1: 複製不足分割區 — 請檢查 broker 健康狀態"
+              description: "Under-replicated partitions: 3 (warning threshold exceeded)"
+              description_zh: "複製不足的分割區數: 3 (超過警告閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitionsCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: mute
+              metric_group: kafka_under_replicated_partitions
+              tenant: t1
+            exp_annotations:
+              summary: "Critical under-replicated partitions on t1"
+              summary_zh: "t1 的複製不足分割區情況嚴重"
+              platform_summary: "[] t1: critical under-replication — data durability at risk, escalate"
+              platform_summary_zh: "[] t1: 複製不足情況嚴重 — 資料耐久性有風險，請上報"
+              description: "Under-replicated partitions: 3 (critical threshold exceeded)"
+              description_zh: "複製不足的分割區數: 3 (超過嚴重閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # 單一 partition：1 > warning 門檻 0（出貨預設值），但不 > critical 門檻 1。
+  - interval: 15s
+    input_series:
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="1"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="warning"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="critical"}'
+        values: '1x10'
+    promql_expr_test:
+      - expr: tenant:kafka_under_replicated_partitions:sum
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t1"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitions
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: kafka_under_replicated_partitions
+              tenant: t1
+            exp_annotations:
+              summary: "Under-replicated partitions detected on t1"
+              summary_zh: "t1 偵測到複製不足的分割區"
+              platform_summary: "[] t1: under-replicated partitions — broker health check"
+              platform_summary_zh: "[] t1: 複製不足分割區 — 請檢查 broker 健康狀態"
+              description: "Under-replicated partitions: 1 (warning threshold exceeded)"
+              description_zh: "複製不足的分割區數: 1 (超過警告閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitionsCritical
+        exp_alerts: []
+
+  # 全部健康：值為 0，門檻 0 的 warning 也不響（比較是 >）。
+  - interval: 15s
+    input_series:
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="0"}'
+        values: '0x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="1"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="warning"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="critical"}'
+        values: '1x10'
+    promql_expr_test:
+      - expr: tenant:kafka_under_replicated_partitions:sum
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t1"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitions
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitionsCritical
+        exp_alerts: []
+
+  # 兩個 exporter 副本（逐 pod scrape，instance 不同）都回報同一個 partition：
+  # 計 1 個，不計 2 個 ⇒ critical 門檻 1 不響。另一個租戶的同名 partition 不混入。
+  - interval: 15s
+    input_series:
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.2:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t2", instance="10.0.1.1:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="warning"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="critical"}'
+        values: '1x10'
+    promql_expr_test:
+      - expr: tenant:kafka_under_replicated_partitions:sum
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t1"}'
+            value: 1
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t2"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitionsCritical
+        exp_alerts: []
+
+  # 兩個副本對同一 partition 意見不一（metadata 刷新不同步：一個 1、一個 0）：
+  # 仍計 1 個 ⇒ 門檻 0 的 warning 響。內層若改成 min 會得 0、warning 不響。
+  - interval: 15s
+    input_series:
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.2:9308", topic="orders", partition="0"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="warning"}'
+        values: '0x10'
+    promql_expr_test:
+      - expr: tenant:kafka_under_replicated_partitions:sum
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t1"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitions
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: kafka_under_replicated_partitions
+              tenant: t1
+            exp_annotations:
+              summary: "Under-replicated partitions detected on t1"
+              summary_zh: "t1 偵測到複製不足的分割區"
+              platform_summary: "[] t1: under-replicated partitions — broker health check"
+              platform_summary_zh: "[] t1: 複製不足分割區 — 請檢查 broker 健康狀態"
+              description: "Under-replicated partitions: 1 (warning threshold exceeded)"
+              description_zh: "複製不足的分割區數: 1 (超過警告閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""

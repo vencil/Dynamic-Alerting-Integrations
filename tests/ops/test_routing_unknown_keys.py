@@ -136,14 +136,14 @@ def test_a_tenant_files_top_level_is_not_a_platform_file(tmp_path):
 
 
 @pytest.mark.usefixtures("da_guard_env")
-def test_validate_config_schema_row_fails(tmp_path, capsys, cli_argv):
+def test_validate_config_routes_row_fails(tmp_path, capsys, cli_argv):
     import validate_config as vc
     d = _tree(tmp_path / "d", stray=("T",))
     cli_argv("validate_config", "--config-dir", str(d), "--json")
     with pytest.raises(SystemExit) as exc:
         _as_run(vc.main())
     rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
-    assert rows["schema"]["status"] == "fail", rows["schema"]
+    assert rows["routes"]["status"] == "fail", rows["routes"]
     assert any("'_routing_profle' is not a key the route generator reads" in x
-               for x in rows["schema"]["details"]), rows["schema"]
+               for x in rows["routes"]["details"]), rows["routes"]
     assert exc.value.code == 1

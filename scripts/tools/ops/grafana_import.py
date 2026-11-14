@@ -36,6 +36,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +44,6 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3445: --dashboard is read by the lib)
 
 #: --dashboard: a Grafana dashboard, a JSON object (#3445: a list or a scalar
@@ -77,32 +77,38 @@ def run_cmd(cmd, dry_run=False):
         raise KubectlError(f"`{' '.join(cmd[:3])}`: no answer within 120s") from exc
 
 
-def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboard=None):
+def read_dashboards(dashboards):
+    """``[(path, cm_name, content, raw)]`` for *dashboards* ``[(path, cm_name,
+    content, flag)]``: every file's bytes read by ``_lib_input.read_bytes``
+    BEFORE any is imported (#3724) — a file gone or unreadable since its flag
+    was judged is a refusal naming the flag and the file (rc 2) with no
+    ConfigMap applied yet. ``--dashboard`` was judged and decoded by
+    ``_lib_input.document``; its bytes for kubectl are read here once more."""
+    return [(path, cm_name, content, _lib_input.read_bytes(path, flag=flag, lang="en"))
+            for path, cm_name, content, flag in dashboards]
+
+
+def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboard=None, *,
+                     raw):
     """Import a single Grafana dashboard JSON as a labeled ConfigMap.
 
-    *dashboard*: its parsed content when already read (--dashboard, by
-    ``_lib_input.document``); None for a file of --dashboard-dir, read here."""
+    *raw*: its bytes, read by `read_dashboards` before any dashboard is
+    imported. *dashboard*: its parsed content when already read (--dashboard,
+    by ``_lib_input.document``); None for a file of --dashboard-dir, decoded
+    here from *raw*. ⛔ #3724: kubectl is handed a copy of *raw*, never the
+    caller's path to read again (gone, or other bytes, by then).
+    """
     results = []
 
     dashboard_p = Path(dashboard_path)
-    dashboard_problem = (None if dashboard is not None else
-                         classify_path(dashboard_path, "file", lang="en", flag="--dashboard"))  # #3276
-    if dashboard_problem is not None:
-        results.append({
-            "action": "import",
-            "status": "fail",
-            "caller_error": True,  # #452/#737: input/load precondition = caller-error (exit 2)
-            "detail": dashboard_problem.message,
-        })
-        return results
 
     # Validate JSON
     try:
         if dashboard is None:
-            with open(dashboard_path, encoding="utf-8") as f:
-                dashboard = json.load(f)
+            dashboard = json.loads(raw.decode("utf-8"))
         title = dashboard.get("title", dashboard_p.name)
-    except (json.JSONDecodeError, Exception) as e:
+    # UnicodeDecodeError is a ValueError; a nesting too deep, a RecursionError.
+    except (ValueError, AttributeError, RecursionError) as e:
         results.append({
             "action": "import",
             "status": "fail",
@@ -113,16 +119,15 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
 
     filename = dashboard_p.name
 
-    # Step 1: Create ConfigMap (using --dry-run=client to generate, then apply)
-    create_cmd = [
-        "kubectl", "create", "configmap", cm_name,
-        f"--from-file={filename}={dashboard_path}",
-        "-n", namespace,
-        "--dry-run=client", "-o", "yaml",
-    ]
+    def create_cmd(source):
+        # Step 1: Create ConfigMap (using --dry-run=client to generate, then apply)
+        return ["kubectl", "create", "configmap", cm_name,
+                f"--from-file={filename}={source}",
+                "-n", namespace,
+                "--dry-run=client", "-o", "yaml"]
 
     if dry_run:
-        run_cmd(create_cmd, dry_run=True)
+        run_cmd(create_cmd(dashboard_path), dry_run=True)
         run_cmd(["kubectl", "apply", "-f", "-"], dry_run=True)
         results.append({
             "action": "create_configmap",
@@ -130,7 +135,10 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
             "detail": f"Would create ConfigMap {cm_name} from {filename}",
         })
     else:
-        yaml_output = run_cmd(create_cmd)
+        with tempfile.TemporaryDirectory(prefix="da-grafana-import-") as tmp:
+            copy = Path(tmp) / filename
+            copy.write_bytes(raw)
+            yaml_output = run_cmd(create_cmd(copy))
         if yaml_output is None:
             results.append({
                 "action": "create_configmap",
@@ -311,14 +319,14 @@ def main():
         cm_name = args.name or auto_name(args.dashboard)
         # #3445: read (and refused, named) before anything is imported.
         dashboards.append((args.dashboard, cm_name,
-                           _lib_input.document(args, "dashboard", lang="en")))
+                           _lib_input.document(args, "dashboard", lang="en"), "--dashboard"))
     elif args.dashboard_dir is not None:  # #3693: a given "" is judged, named
         # #3693: `Path.glob` read a directory it could not list as one with
         # no *.json ("No dashboard files found.", no flag, no path) — the
         # declaration judges it, and an empty selection, by name (#452).
         for entry in _lib_input.selected(args, "dashboard_dir", lang="en"):
             fpath = str(entry)
-            dashboards.append((fpath, auto_name(fpath), None))
+            dashboards.append((fpath, auto_name(fpath), None, "--dashboard-dir"))
     else:
         parser.error("Provide --dashboard, --dashboard-dir, or --verify")
 
@@ -326,9 +334,9 @@ def main():
     has_failure = False
     caller_error = False  # #452/#737: file-not-found / invalid-JSON / kubectl env
 
-    for dashboard_path, cm_name, content in dashboards:
+    for dashboard_path, cm_name, content, raw in read_dashboards(dashboards):
         results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run,
-                                   dashboard=content)
+                                   dashboard=content, raw=raw)
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True

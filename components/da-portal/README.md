@@ -1,6 +1,6 @@
 # da-portal (v2.9.0)
 
-<!-- 標題版號 = 最後 released portal tag（目前 v2.8.0）。Release wrap 切六線 tag 時，
+<!-- 標題版號 = 最後 released portal tag（目前 v2.8.0）。Release wrap 切各線 tag 時，
      本標題 + 下方 helm --version 跟著批次同步 bump。 -->
 
 > 💡 **只想把元件跑起來看看？** → **[QUICKSTART.md](QUICKSTART.md)**（`docker run` 一行、≤ 2 分鐘看到一整套互動工具）。本篇 README 是給**部署 / 維運 portal 的人**看的進階配置與 packaging **參考**。
@@ -28,9 +28,9 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 ## 1. What & Why
 
 - **Source（輸入）** — `tools/portal/src/interactive/tools/*.jsx`（`tools/portal/manifest.json` 為 build entry SSOT、`docs/assets/tool-registry.yaml` 為工具 metadata SSOT）+ `tools/portal/src/getting-started/wizard.jsx`
-- **Build** — `make portal-build` 跑 [esbuild](../../tools/portal/build.mjs)，把每個工具 bundle 成 ESM 檔輸出到 `docs/assets/dist/<tool>.js`，**committed 進 repo**（CI 有 drift gate 確保 source 與 dist 同步）。測試走 `make test-portal`（Vitest）
-- **Image（輸出）** — 一顆 nginx-alpine，COPY 進 Hub（`docs/interactive/`）+ 預先 build 的 `docs/assets/dist/` + 共享 assets + vendor；瀏覽器直接載入 ESM bundle，**runtime 不做 build / transpile**
-- **為什麼是「預先 build + 靜態服務」** — 1) 內網 / air-gapped 場景不能在 runtime 跑 npm；2) build 在 CI 一次完成、結果 committed，部署端零依賴；3) image 純靜態 → 不需 secret、不需 runtime config
+- **Build** — `make portal-build` 跑 [esbuild](../../tools/portal/build.mjs)，把每個工具 bundle 成 ESM 檔輸出到 `docs/assets/dist/<tool>.js`。**每個消費端自己 build**：image 的 `portal-build` stage、Pages 部署、Smoke／visual baseline 都從 `tools/portal/` 現場 build；dist 是 build 產物，不在 git 裡（[#3738](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3738)）。測試走 `make test-portal`（Vitest）
+- **Image（輸出）** — 一顆 nginx-alpine，COPY 進 Hub（`docs/interactive/`）+ `portal-build` stage 建出的 bundle（落在 `/assets/dist/`）+ 共享 assets + vendor；瀏覽器直接載入 ESM bundle，**runtime 不做 build / transpile**
+- **為什麼是「預先 build + 靜態服務」** — 1) 內網 / air-gapped 場景不能在 runtime 跑 npm；2) build 在 image build／部署流程裡完成，跑起來的 image 與部署端零 Node 依賴；3) image 純靜態 → 不需 secret、不需 runtime config
 - **vendor probe（離線優先）** — `make vendor-download` 把 React 18.3 / ReactDOM / Tailwind / Lucide 抓進 `docs/assets/vendor/`；瀏覽器啟動先 probe local，找不到才 fallback CDN（每個工具 bundle 透過頁面提供的這些 global 執行）
 - **不做的事** — 不在 runtime build；不持久化（無 state，資料來自 mount 的 JSON）；不轉送任何請求（不 proxy 到 tenant-api、Prometheus 或其他元件，見下方「需要登入的 portal」）
 
@@ -58,19 +58,17 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 # 1. 抓 vendor 進 docs/assets/vendor/（air-gapped 必跑；CI build 自動跑）
 make vendor-download
 
-# 2. Build 工具 bundle（esbuild → docs/assets/dist/）
-make portal-build
-
-# 3. Build image（從 repo root，因為 COPY 來源是 docs/ 與 tools/）
+# 2. Build image（從 repo root，因為 COPY 來源是 docs/ 與 tools/；
+#    工具 bundle 由 Dockerfile 的 portal-build stage 從 tools/portal/ 現場 build）
 make portal-image                                  # 預設 tag: ghcr.io/vencil/da-portal:v2.9.0
 # 或：docker build -t ghcr.io/vencil/da-portal:v2.9.0 -f components/da-portal/Dockerfile .
 
-# 4. Run
+# 3. Run
 docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.9.0
 # 開瀏覽器：http://localhost:8080  →  Hub
 ```
 
-> `make portal-build` 在改過任何工具 source 後必跑（CI 有 drift gate）。只是要跑 published image，直接 `docker run` 即可，無需以上 build 步驟。
+> image 的 `portal-build` stage 自己 build bundle，所以 build image 前不必先 `make portal-build`；本機 `docs/assets/dist/` 不會進 build context（`.dockerignore`）。dist 不進 git，改過工具 source 只 commit source。只是要跑 published image，直接 `docker run` 即可，無需以上 build 步驟。
 
 ### Helm（K8s，純靜態）
 
@@ -99,7 +97,7 @@ da-portal chart 只有純靜態部署：一個 nginx 容器，沒有登入、沒
 | **公開文件站**（mkdocs / GitHub Pages） | serve 整個 `docs/` 樹（Hub + `docs/assets/dist/` + assets） | 線上試玩 / 文件 |
 | **da-portal Docker image**（本元件） | nginx 把 Hub + dist + assets 封進 image | 自架 / air-gapped / Helm 部署 |
 
-兩者都載入同一份**預先 build 的 ESM bundle**（`docs/assets/dist/`），差別只在誰來做靜態服務。
+兩者載入的都是從 `tools/portal/` 現場 build 出來的 ESM bundle（URL 都是 `/assets/dist/`）：Pages 部署在 `mkdocs build` 前先 build，image 由 `portal-build` stage build。差別只在誰來做靜態服務。
 
 ### 瀏覽器端載入流程
 
@@ -126,7 +124,7 @@ da-portal chart 只有純靜態部署：一個 nginx 容器，沒有登入、沒
 
 關鍵點：
 
-- **Image 不含 build step** — `Dockerfile` 只 `COPY` 預先 build 的成品 + `apk del nginx-module-image-filter nginx-module-xslt`（移掉靜態 server 用不到的模組，cascade 拔 28 個 dep；image 從 72 → 44 packages）+ libavif 殘留檢查（CVE-2025-48174 mitigation）
+- **最終 image 不含 build 工具** — bundle 在 `portal-build` stage（node）建好，最終 nginx stage 只 `COPY --from=portal-build` 成品 + `apk del nginx-module-image-filter nginx-module-xslt`（移掉靜態 server 用不到的模組，cascade 拔 28 個 dep；image 從 72 → 44 packages）+ libavif 殘留檢查（CVE-2025-48174 mitigation）
 - **工具是 esbuild ESM bundle** — source 在 `tools/portal/src/`，`make portal-build` 產 `docs/assets/dist/`；瀏覽器直接 import，**不在瀏覽器端 transpile**
 - **vendor probe** — `jsx-loader.html` 啟動跑同源 sync XHR 試 `vendor/react.production.min.js`；HTTP 200 走 local，否則退 CDN（React 18.3.1 / ReactDOM / Tailwind / Lucide 0.436.0）
 - **不轉送** — `nginx.conf` 沒有任何 `proxy_pass`、不讀身分 header（ADR-027 §5；`tests/shared/test_portal_image_nginx_conf.py` 守）
@@ -216,7 +214,7 @@ docker run -p 8080:80 \
 | 7. E2E（Playwright） | spec 在 `tests/e2e/portal-*.spec.ts` |
 
 **JSX 寫作守則：**
-1. **ESM imports** — 工具與其 sibling 模組用標準 `import` / `export`；`make portal-build` 由 esbuild bundle 成 dist。改過 source 後必跑 `portal-build`（CI 有 source↔dist drift gate）
+1. **ESM imports** — 工具與其 sibling 模組用標準 `import` / `export`；`make portal-build` 由 esbuild bundle 成 dist。dist 不進 git，只 commit source；CI 的 Portal Tests 會從 source build 並跑 bundle size budget 與 Vitest
 2. **Design tokens not hardcoded colors** — 用 `var(--da-color-accent)` 而非 `bg-blue-500`；CI lint（`check_undefined_tokens.py`）會抓未定義 token
 3. **重邏輯抽成可測模組** — calculator / validator / parser 等純邏輯抽到 tool-local `<tool>/<engine>.js` + 補 Vitest，別讓單檔長成 monolith
 
@@ -228,7 +226,7 @@ docker run -p 8080:80 \
 
 | 症狀 | 可能原因 | 解法 |
 |------|---------|------|
-| Hub 載入後工具白屏 / 404 | image 沒含 `docs/assets/dist/`（舊 / 自建 image） | 確認 `make portal-build` 跑過且 `docs/assets/dist/` 有進 image；重 build |
+| Hub 載入後工具白屏 / 404 | image 沒含 `/assets/dist/`（舊 / 自建 image，或 `portal-build` stage 被改掉） | 確認 image 的 `/usr/share/nginx/html/assets/dist/` 有 bundle；用 repo 的 Dockerfile 重 build |
 | 404 on `/healthz` | 舊 image（< v2.3.0） | 重 build：`make portal-image` |
 | Tenant Manager 顯示的是示範租戶（`prod-mariadb-01` 等） | `/api/v1/tenants/search` 非 2xx（含 401／403）或連不上，**且** `platform-data.json` 缺或是空的（有內容時改顯示那份靜態資料） | 純靜態部署（本 image 單跑、da-portal chart）沒有後端，demo mode 為 expected；登入後的 portal（tenant-api chart）則確認 tenant-api 跑著且 RBAC 有 read 權限 |
 | 工具顯示舊資料 | 掛載的 `platform-data.json` 過舊 | `make platform-data` 重產 + 重 mount |

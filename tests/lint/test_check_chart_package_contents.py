@@ -252,13 +252,13 @@ class TestAgainstRealHelm:
 
     helm is present in the dev container (devcontainer.json:
     kubectl-helm-minikube) and in CI's `python-tests-run` job
-    (azure/setup-helm@v4), so the green branch is the one that runs where it
+    (azure/setup-helm@v5), so the green branch is the one that runs where it
     matters.
     """
 
     @pytest.mark.parametrize(
         "chart",
-        ["helm/threshold-exporter", "helm/recipe-preview", "helm/tenant-api"],
+        ["helm/threshold-exporter", "helm/tenant-api"],
     )
     def test_live_chart(self, chart: str) -> None:
         if shutil.which("helm") is None:

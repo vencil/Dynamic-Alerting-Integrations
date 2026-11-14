@@ -1,0 +1,5 @@
+Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp
+custom_mysql_connections,tenant-x,max by(tenant) (mysql_global_status_threads_connected),tenant:custom_mysql_connections:max,42.0,42.0,0.0,match,2026-03-07 12:00:00
+custom_mysql_connections,tenant-y,max by(tenant) (mysql_global_status_threads_connected),tenant:custom_mysql_connections:max,17.0,17.0,0.0,match,2026-03-07 12:00:00
+custom_mysql_slow_queries,tenant-x,sum by(tenant) (rate(mysql_global_status_slow_queries[5m])),tenant:custom_mysql_slow_queries:sum,0.5,0.25,-0.25,mismatch,2026-03-07 12:00:00
+custom_mysql_slow_queries,tenant-y,sum by(tenant) (rate(mysql_global_status_slow_queries[5m])),tenant:custom_mysql_slow_queries:sum,0.0,0.0,0.0,match,2026-03-07 12:00:00

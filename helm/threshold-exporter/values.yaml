@@ -114,11 +114,13 @@ thresholdConfig:
     # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
     # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry
     # 建議 120）
+    # 出貨例外（待改比值，#3778）：絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）
     mysql_connections: 80
     # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
     # PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944
     # keep — 2-release alias window, old spelling still resolves)（critical 加嚴
     # opt-in：mysql_threads_running_critical，registry 建議 50）
+    # 出貨例外（依部署而定，#3778）：健康的 running threads 數隨主機的 CPU 核數而定
     mysql_threads_running: 30
     # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
     # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
@@ -129,60 +131,57 @@ thresholdConfig:
     # >>> GENERATED:threshold-registry:helm-unarmed — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
     # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
     # thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值（其 <key>_critical 也要先有 base
-    # 值）。原因取自 threshold-registry 的 arming 欄位。
+    # 值）。原因取自 threshold-registry 的 arming、portability 與 blocker 欄位。
     # ── redis ──
-    #   redis_memory_used_bytes（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待
-    #     #1320
-    #   redis_connected_clients（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients 的比例（redis_config_maxclients），待
-    #     #1320
-    #   redis_evicted_keys_rate（依部署而定）：LRU 快取淘汰是常態，可容忍的速率取決於工作負載
-    #   redis_replication_lag（待驗證）：與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證
+    #   redis_memory_used_bytes 未啟用（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory
+    #     的比例（redis_memory_max_bytes），待 #1320
+    #   redis_connected_clients 未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients
+    #     的比例（redis_config_maxclients），待 #1320
+    #   redis_evicted_keys_rate 未啟用（依部署而定）：LRU 快取淘汰是常態，可容忍的速率取決於工作負載
+    #   redis_replication_lag 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
     # ── mongodb ──
-    #   mongodb_connections_current（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320
-    #   mongodb_replication_lag（待驗證）：副本延遲秒數可跨部署比較，但 10 秒尚未驗證
-    #   mongodb_opcounters_rate（依部署而定）：操作量是工作負載而非故障，任何數字都只適用於特定部署
+    #   mongodb_connections_current 未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320
+    #   mongodb_replication_lag 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+    #   mongodb_opcounters_rate 未啟用（依部署而定）：操作量是工作負載而非故障，任何數字都只適用於特定部署
     # ── elasticsearch ──
-    #   es_heap_usage_percent（待驗證）：佔 heap 上限的百分比可跨部署，但 85 尚未經 shadow 報表驗證
-    #   es_disk_usage_percent（待驗證）：佔磁碟的百分比可跨部署（85 與 Elasticsearch 的 low watermark 相同），但尚未經 shadow
-    #     報表驗證
-    #   es_pending_tasks（依部署而定）：正常的 pending task 量隨叢集規模與變更頻率而定
-    #   es_search_latency_ms（依部署而定）：可接受的搜尋延遲是各部署的服務等級選擇
+    #   es_heap_usage_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+    #   es_disk_usage_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+    #   es_pending_tasks 未啟用（依部署而定）：正常的 pending task 量隨叢集規模與變更頻率而定
+    #   es_search_latency_ms 未啟用（依部署而定）：可接受的搜尋延遲是各部署的服務等級選擇
     # ── oracle ──
-    #   oracle_sessions_active（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待
-    #     #1320
+    #   oracle_sessions_active 未啟用（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS
+    #     上限的比例，待 #1320
     #     ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-    #   oracle_tablespace_used_percent（待驗證）：佔 tablespace 的百分比可跨部署，但 85 尚未經 shadow 報表驗證
+    #   oracle_tablespace_used_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
     # ── db2 ──
-    #   db2_connections_active（待改比值）：絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320
+    #   db2_connections_active 未啟用（待改比值）：絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320
     #     ⚠ 參考庫實測反例（#1176）：尖峰時段的工作負載會到 360 個連線 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-    #   db2_bufferpool_hit_ratio（依部署而定）：交易型與分析型工作負載的合理命中率不同
-    #   db2_lock_wait_time（依部署而定）：可容忍的鎖等待累積量取決於工作負載與延遲預算
+    #   db2_bufferpool_hit_ratio 未啟用（依部署而定）：交易型與分析型工作負載的合理命中率不同
+    #   db2_lock_wait_time 未啟用（依部署而定）：可容忍的鎖等待累積量取決於工作負載與延遲預算
     #     ⚠ 參考庫實測反例（#1176）：良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml） ——
     #     此值會對正常運作誤警；這個數字是起點，不是平台背書的值
     # ── clickhouse ──
-    #   clickhouse_queries_rate（依部署而定）：查詢量是工作負載而非故障，任何數字都只適用於特定部署
-    #   clickhouse_active_connections（待改比值）：絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定
+    #   clickhouse_queries_rate 未啟用（依部署而定）：查詢量是工作負載而非故障，任何數字都只適用於特定部署
+    #   clickhouse_active_connections 未啟用（待改比值）：絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定
     # ── kafka ──
-    #   kafka_consumer_lag（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
-    #   kafka_under_replicated_partitions（待驗證）：0 是普世的不變式，但出貨前尚未對滾動重啟驗證
-    #   kafka_broker_count（依部署而定）：預期的 broker 數是各部署的拓撲
-    #   kafka_active_controllers（待驗證）：恰有一個 active controller 是普世的不變式，但出貨前尚未驗證
-    #   kafka_request_rate（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
+    #   kafka_consumer_lag 未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
+    #   kafka_under_replicated_partitions 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+    #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
     # ── rabbitmq ──
-    #   rabbitmq_queue_messages（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
-    #   rabbitmq_node_mem_percent（待驗證）：佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證
-    #   rabbitmq_connections（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
+    #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
+    #   rabbitmq_node_mem_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+    #   rabbitmq_connections 未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
     #     是候選分母，但它由檔案描述符推得，由 #1320 決定
-    #   rabbitmq_consumers（依部署而定）：預期的 consumer 數是各部署的拓撲
-    #   rabbitmq_unacked_messages（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
+    #   rabbitmq_consumers 未啟用（依部署而定）：預期的 consumer 數是各部署的拓撲
+    #   rabbitmq_unacked_messages 未啟用（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
     # ── jvm ──
-    #   jvm_gc_pause（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
-    #   jvm_memory（待驗證）：佔 heap 上限的百分比可跨部署，但 80 尚未經 shadow 報表驗證
-    #   jvm_threads（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
+    #   jvm_gc_pause 未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
+    #   jvm_memory 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+    #   jvm_threads 未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
     # ── nginx ──
-    #   nginx_connections（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母
-    #   nginx_request_rate（依部署而定）：請求量是工作負載而非故障，任何數字都只適用於特定部署
-    #   nginx_waiting（依部署而定）：閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定
+    #   nginx_connections 未啟用（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母
+    #   nginx_request_rate 未啟用（依部署而定）：請求量是工作負載而非故障，任何數字都只適用於特定部署
+    #   nginx_waiting 未啟用（依部署而定）：閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定
     # <<< GENERATED:threshold-registry:helm-unarmed
 
   # optional_overrides 為生成段（#1310）——這一格的語意是「平台認得這個 key，
@@ -310,6 +309,44 @@ resources:
   limits:
     cpu: 200m
     memory: 128Mi
+
+# Config validation (#3353): a CronJob that runs `da-tools validate-config` —
+# the rows CI runs, with the same severities (the shared key verdict,
+# ADR-038; the yaml_quoting row, #3764) — on the ConfigMap the exporter
+# reads. It judges a tree that reached that ConfigMap WITHOUT CI — a commit
+# straight to git, a ConfigMap sync. (tenant-api's `direct` writes stay in
+# its pod and never reach this ConfigMap; they are not judged here, nor
+# served.) A FAIL row fails the Job, and
+# the platform rule CronJobLastRunFailed (rule-pack-platform) fires —
+# ⚠️ that rule watches the `monitoring` namespace only, so install this
+# release there for the alert to cover it. The findings are in the Job's log
+# (`kubectl logs job/<name>`).
+#
+# Memory is NOT a second number: it is resources.limits.memory above ×
+# memoryFactor (templates/_helpers.tpl), so raising the exporter for more
+# tenants raises this with it; a factor too small fails the Job (OOM), and
+# the same alert fires.
+#
+# ⚠️ The image's validate-config is the one of its tools/v* tag: v2.9.0's
+# predates yaml_quoting, unread_keys (the shared key verdict), guard_errors
+# and json_schema, so with it this judges far less than CI on main does.
+# Bump `image.tag` to the next tools/v* release (bump_docs.py --tools does it).
+configValidation:
+  enabled: false
+  schedule: "*/15 * * * *"
+  # Measured validate-config peak / exporter load RSS: 2.5× at 500 tenants,
+  # 3.2× at 5000 (synthetic-v2). A positive integer.
+  memoryFactor: 4
+  # A run past this is killed and counts as failed (5000 tenants took ~3.5
+  # minutes in the measurement above).
+  activeDeadlineSeconds: 1800
+  cpuRequest: 100m
+  image:
+    repository: ghcr.io/vencil/da-tools
+    tag: "v2.9.0"
+    # Optional digest pin (supply-chain; #566 T5 / #902). Empty = tag only.
+    digest: ""
+    pullPolicy: IfNotPresent
 
 # startupProbe covers the startup config load (#2153). The exporter loads
 # the whole conf.d tree BEFORE its HTTP server starts, so /health refuses

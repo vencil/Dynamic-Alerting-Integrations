@@ -191,9 +191,7 @@ python3 scripts/ops/configmap_assemble.py \
   the ConfigMap (a ConfigMap key plane cannot express a subdirectory). Tenants
   under `examples/` or any hierarchical subdirectory (`region-eu/` and the
   like) do **not** ship. The `WARN` on stderr **names the first 5 and counts
-  the rest as `(+N more)`** — the full list is the `skipped_nested_files` field
-  of the `schema` row in `validate_config --json` (see
-  [cli-reference](../cli-reference.en.md#hierarchical-confd)). The exporter reads the tree recursively in-cluster
+  the rest as `(+N more)`**. The exporter reads the tree recursively in-cluster
   (ADR-016/017), so the two views disagree.
 - **A tree with a path nothing can be read from is refused whole**: every
   path `da-guard` validation names — a **dangling symlink**, a **directory
@@ -250,7 +248,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   -o deploy/alertmanager-configmap.yaml
 ```
 
-When `amtool` is on PATH, the `alertmanager.yml` inside the ConfigMap is validated with it automatically; a rejected config exits 1 and `-o` is not written. Without `amtool` a NOTICE says it was not validated (#2219). The da-tools image bundles `amtool` (from the same image as the deployed Alertmanager; #2294), so inside the image this validation runs by default. ⚠️ The v2.9.0 image does not bundle `amtool` <!-- image-caveat: v2.9.0 -->
+The `alertmanager.yml` inside the ConfigMap always goes to Alertmanager's own config loader (`da-read`) first; its rejection exits 1 and `-o` is not written, whether or not `amtool` is on PATH (#2219, #3689, #3793). The da-tools image bundles `da-read`. ⚠️ The v2.9.0 image has no `da-read` <!-- image-caveat: v2.9.0 -->
 
 The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux. Use together with Method A (threshold-config) to achieve complete GitOps closure for threshold-exporter and Alertmanager configuration.
 

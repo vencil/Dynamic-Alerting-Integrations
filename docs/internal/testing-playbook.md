@@ -170,7 +170,7 @@ TD-030z 之後 portal 工具一律以 esbuild ESM dist-bundle 載入（`docs/ass
 - **測試陷阱**: 修改 `_common/` 或 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低
 - **module-eval throw 偵測**: ESM bundle 評估期 throw 不觸發 `script.onerror`（只 fire window `error` 事件，`onload` 照常）→ jsx-loader 對此顯示 error banner；e2e smoke（`portal-tool-smoke.ts`）斷言無 same-origin pageerror + `#root` 非空。此防線建立前，這類失敗完全靜默：CI 綠、prod 空白頁（self-service-portal 曾因 tab 在 module scope destructure 一個從未被 import 的 `window.__portalShared` 而整包載入即 throw，smoke 三項檢查全過）
 
-修改任何 portal 檔案後 `make portal-build` 重建 dist（canonical env：dev container；Windows host build 與 CI Linux byte-compare 不合），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具——SOT 是 `docs/assets/tool-registry.yaml`（`scripts/tools/dx/sync_tool_registry.py` 同步進 CUSTOM_FLOW_MAP），registry ↔ CUSTOM_FLOW_MAP 的 bare-key 對應自 #828 起由 `lint_tool_consistency.py` 機械驗證；map key 僅 `?flow=custom` 白名單必需，單一 component 模式對未知 bare-key 有 fallback 直接推 dist 名。
+修改任何 portal 檔案後，要在本機看結果就 `make portal-build` 重建 dist（dist 不進 git，只 commit source；各消費端自己 build，#3738），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具——SOT 是 `docs/assets/tool-registry.yaml`（`scripts/tools/dx/sync_tool_registry.py` 同步進 CUSTOM_FLOW_MAP），registry ↔ CUSTOM_FLOW_MAP 的 bare-key 對應自 #828 起由 `lint_tool_consistency.py` 機械驗證；map key 僅 `?flow=custom` 白名單必需，單一 component 模式對未知 bare-key 有 fallback 直接推 dist 名。
 
 ## CI Matrix × Snapshot Testing（Phase .d）
 
@@ -254,7 +254,7 @@ CHANGELOG / CLAUDE.md 的測試計數必須在 `pytest -v` 執行後才寫入。
 ### 版號管理
 
 > **完整版號治理流程見 [GitHub Release Playbook](github-release-playbook.md)**。
-> 六條獨立版號線（`v*` platform / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*`）各有各的生命週期。
+> 各版號線各有各的生命週期；線的清單以 `.github/workflows/release.yaml` 的 `on.push.tags` 為準（另加平台 tag `v*`）。
 
 測試相關的版號重點：
 
@@ -751,7 +751,7 @@ Self-Review-Pass-2:
 
 > **觸發**：S#92 PR #182 第一次 CI E2E run 失敗 — `routing-trace.jsx` 在 `computeTrace` 加了 `export function`（命名 export）。在 jsx-loader 的 Babel-standalone（**script mode**, not module mode）context，Babel 把命名 export 編譯成 `exports.computeTrace = ...`，runtime `ReferenceError: exports is not defined`（`exports` 在 script-mode 不是 global），React tree 不 mount，4 specs 全 fail。
 
-**為何 `jsx-babel-check` 沒擋住**：那個 hook 只 PARSE JSX，`export function` 是合法 AST node。Babel-standalone `runtime` 才會嘗試把它編譯成 `exports.x = ...` 並炸。**CI E2E 是唯一暴露 runtime failure 的關卡**，pre-commit 全綠不代表瀏覽器跑得起來。
+**為何 `jsx-babel-check` 沒擋住**（該 hook 已由 #3669 的 `jsx-syntax-check` 取代，以 build 用的 esbuild 解析）：那個 hook 只 PARSE JSX，`export function` 是合法 AST node。Babel-standalone `runtime` 才會嘗試把它編譯成 `exports.x = ...` 並炸。**CI E2E 是唯一暴露 runtime failure 的關卡**，pre-commit 全綠不代表瀏覽器跑得起來。
 
 **當時的 JSX-loader 約束（legacy Babel-standalone 時代；`transformImports` 已隨 TD-030z 移除，現況見本節末段）**：
 

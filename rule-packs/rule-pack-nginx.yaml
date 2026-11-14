@@ -19,9 +19,8 @@
 # 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
 # 它讀的是 defaults[base]，base 沒有值就整列丟棄
 # （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base 都**未**標 [chart-default]
-# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
-# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
+# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
 # 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
 # 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
 # critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是

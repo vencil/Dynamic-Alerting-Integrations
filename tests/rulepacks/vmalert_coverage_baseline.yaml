@@ -37,12 +37,7 @@ uncovered:
   rule-pack-kafka.yaml:
   - KafkaHighConsumerLag
   - KafkaHighConsumerLagCritical
-  - KafkaHighRequestRate
-  - KafkaHighRequestRateCritical
   - KafkaLowBrokerCount
-  - KafkaNoActiveController
-  - KafkaUnderReplicatedPartitions
-  - KafkaUnderReplicatedPartitionsCritical
   rule-pack-kubernetes.yaml:
   - ContainerCrashLoop
   - ContainerImagePullFailure

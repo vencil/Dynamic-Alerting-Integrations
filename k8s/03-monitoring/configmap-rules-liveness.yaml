@@ -32,4 +32,33 @@ data:
     \ Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type }})\n  \
     \    summary_zh: 租戶 {{ $labels.tenant }} ({{ $labels.db_type }}) 的 exporter 缺席\n\
     \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: TenantExporterReplicaDown\n    expr: '(up{job=\"tenant-exporters\"\
+    } == 0) and on(tenant) (up{job=\"tenant-exporters\"} == 1)\n\n      unless on(tenant)\n\
+    \n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for:\
+    \ 10m\n    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Target {{ $labels.instance\
+    \ }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tenant\
+    \ }} has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"\
+    } target of the same tenant reads up=1. That target may belong to a different\
+    \ Service: if {{ with $labels.service }}Service {{ . }}{{ else }}its Service{{\
+    \ end }} has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent\
+    \ stays silent while another Service of the tenant is up (multi-Service gap: #3771).\
+    \ If every target of the tenant goes down, this alert resolves; TenantExporterAbsent\
+    \ (critical) takes over only for tenants that declare db_type in _metadata, otherwise\
+    \ nothing fires.'\n      description_zh: '租戶 {{ $labels.tenant }} 的 target {{\
+    \ $labels.instance }}{{ with $labels.pod }}（pod {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個\
+    \ up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若{{ with\
+    \ $labels.service }} Service {{ . }} {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個\
+    \ Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在\
+    \ _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。'\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Exporter target {{ $labels.instance }} down for tenant {{\
+    \ $labels.tenant }} (another tenant-exporters target of the tenant is up)\n  \
+    \    summary_zh: 租戶 {{ $labels.tenant }} 的 exporter target {{ $labels.instance\
+    \ }} 停機（同租戶仍有其他 tenant-exporters target 為 up）\n      tier: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

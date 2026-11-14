@@ -343,6 +343,8 @@ sys.path.insert(0, str(_TESTS_DIR / "ops"))
 import init_project as ip  # noqa: E402
 from test_init_project import CI_DEPLOY_COMBINATIONS  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
+sys.path.insert(0, str(_TESTS_DIR))
+from _tree import repo_files  # noqa: E402
 
 
 # ============================================================
@@ -1068,7 +1070,7 @@ def _cli_gh_uses(deploy: str) -> list[str]:
     # helm the runner image carries, and `ubuntu-latest` moved to a Helm 4 image
     # in 2026-10/11 (actions/runner-images#14748) — across the major the GitLab
     # pin holds. kustomize still uses the runner's kubectl/kustomize.
-    extra = ["azure/setup-helm@v4"] if deploy == "helm" else []
+    extra = ["azure/setup-helm@v5"] if deploy == "helm" else []
     return sorted(["actions/checkout@v6"] * 3
                   + ["marocchino/sticky-pull-request-comment@v2"] + extra)
 
@@ -3832,7 +3834,7 @@ def test_portal_preview_actually_varies_with_the_deploy_choice(tmp_path) -> None
         # rename sweep found the other, contiguous mention in this same file and
         # left this one pointing at a file that no longer existed. #1373 verbatim.
         "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/generators.js"
-        " (cicdGenerateGitHubActionsPreview) and rebuild docs/assets/dist/."
+        " (cicdGenerateGitHubActionsPreview)."
     )
 
 
@@ -6116,7 +6118,7 @@ def test_portal_file_tree_matches_what_init_writes(
         f"  promised by the wizard, never written: {sorted(claimed - actual)}\n"
         f"  written by the CLI, not shown: {sorted(actual - claimed)}\n"
         "The wizard is the copy; edit cicdGeneratedPaths in generators.js "
-        "(then rebuild docs/assets/dist/). Do NOT silence this by widening the "
+        "Do NOT silence this by widening the "
         "comparison — the whole point is that the two must be equal."
     )
 
@@ -8090,6 +8092,12 @@ _DOC_USES_RE = re.compile(
     r"^\s*-?\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_.-]+)\s*$",
     re.MULTILINE,
 )
+# The same structure as an inline code span — "add `- uses: azure/setup-helm@v5`
+# after `actions/checkout`" is a copy-me instruction too, just not fenced. Still
+# a `uses:` structure, never a bare `owner/action@vN` mention in a sentence.
+_DOC_INLINE_USES_RE = re.compile(
+    r"`\s*-?\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_.-]+)\s*`"
+)
 
 # ⛔ Generated or historical trees, excluded by path rather than by judgement:
 #   * docs/interactive/** and docs/assets/dist/** are build output — the source
@@ -8097,6 +8105,28 @@ _DOC_USES_RE = re.compile(
 #   * CHANGELOG.md records what a release SHIPPED; rewriting a past entry to
 #     match today's major would make the history a lie.
 _DOC_SNIPPET_SKIP = ("docs/interactive/", "docs/assets/dist/")
+
+
+def test_inline_uses_shape_is_read_and_prose_is_not() -> None:
+    """The inline pattern reads the copy-me span and nothing looser, and the
+    passages that carry one today are actually reached by it."""
+    assert _DOC_INLINE_USES_RE.findall(
+        "add `- uses: azure/setup-helm@v5` with `with: {version: v3.22.1}`"
+    ) == ["azure/setup-helm@v5"]
+    assert _DOC_INLINE_USES_RE.findall("`uses: actions/checkout@v6`") == ["actions/checkout@v6"]
+    for prose in ("actions/checkout@v3 is retired", "`actions/checkout@v3` is retired",
+                  "the `uses:` key takes `owner/action@ref`"):
+        assert _DOC_INLINE_USES_RE.findall(prose) == [], prose
+    # Docs only: a changelog.d/ fragment is deleted when a release assembles
+    # it, so naming one here would break this test at the next release.
+    # Fragments are still SCANNED by the guard below, whichever exist.
+    for rel in ("docs/scenarios/gitops-ci-integration.md",
+                "docs/scenarios/gitops-ci-integration.en.md"):
+        hits = _DOC_INLINE_USES_RE.findall(
+            _REPO_ROOT.joinpath(rel).read_text(encoding="utf-8"))
+        assert any(h.startswith("azure/setup-helm@") for h in hits), (
+            f"{rel}: the inline setup-helm instruction is no longer read — the "
+            f"doc guard would let it fall behind the platform silently")
 
 
 def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
@@ -8111,12 +8141,17 @@ def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
     """
     offenders: dict[str, list[str]] = {}
     scanned = 0
-    for path in sorted(_REPO_ROOT.joinpath("docs").rglob("*.md")):
+    # changelog.d/ holds UNRELEASED entries — what the next release will tell
+    # customers to do — so it is current text, unlike CHANGELOG.md.
+    paths = [p for p in repo_files(".md")
+             if p.relative_to(_REPO_ROOT).as_posix().startswith(("docs/", "changelog.d/"))]
+    for path in sorted(paths):
         rel = path.relative_to(_REPO_ROOT).as_posix()
         if any(rel.startswith(skip) for skip in _DOC_SNIPPET_SKIP):
             continue
         scanned += 1
-        for ref in _DOC_USES_RE.findall(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        for ref in [*_DOC_USES_RE.findall(text), *_DOC_INLINE_USES_RE.findall(text)]:
             parsed = _action_major(ref)
             if parsed is None:
                 continue

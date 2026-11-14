@@ -50,6 +50,7 @@ def repo_root() -> Path:
 
 
 # ── static layer ────────────────────────────────────────────────────────────
+# adr-check: ADR-027/9.3d
 def test_socket_path_is_a_chart_constant(repo_root: Path):
     """The socket path is fixed by the chart, not a value (ADR-027 §6)."""
     helpers = (repo_root / "helm/tenant-api/templates/_helpers.tpl").read_text(encoding="utf-8")
@@ -58,6 +59,7 @@ def test_socket_path_is_a_chart_constant(repo_root: Path):
     )
 
 
+# adr-check: ADR-027/9.3d
 def test_deployment_wires_the_socket(repo_root: Path):
     """tenant-api gets the socket as TA_HUMAN_SOCKET, the guard refuses a render
     without oauth2-proxy, and the oauth2-proxy upstream is the socket."""
@@ -68,8 +70,13 @@ def test_deployment_wires_the_socket(repo_root: Path):
     assert "TA_HUMAN_SOCKET" in directives and "--human-socket" not in directives, (
         "deployment must pass TA_HUMAN_SOCKET (env, ADR-036 §12)"
     )
-    assert 'include "tenant-api.identityPlaneGuard"' in directives, (
-        "deployment must refuse a render with oauth2-proxy turned off"
+    # oauth2-proxy has no off switch (ADR-027 §6): no template branches on
+    # one, so the sidecar, its config and the socket always render together.
+    templates = "\n".join(p.read_text(encoding="utf-8")
+                          for p in sorted((repo_root / _DEPLOYMENT).parent.iterdir())
+                          if p.is_file())
+    assert "oauth2Proxy.enabled" not in templates, (
+        "a template still branches on the removed oauth2Proxy.enabled switch"
     )
     # The upstream itself lives in the oauth2-proxy config file (ADR-027
     # §10, _helpers.tpl tenant-api.oauth2ProxyConfig); the render tests below
@@ -93,6 +100,30 @@ def _upstream_uris(out: str) -> list[str]:
     raise AssertionError("no oauth2-proxy config in the render")
 
 
+def _pod_specs(out: str):
+    """(workload name, pod spec) for every workload kind in a render."""
+    for d in yaml.safe_load_all(out):
+        if not d:
+            continue
+        spec = d.get("spec") or {}
+        if d.get("kind") == "CronJob":
+            spec = ((spec.get("jobTemplate") or {}).get("spec") or {})
+        pod = (spec.get("template") or {}).get("spec")
+        if pod:
+            yield d["metadata"]["name"], pod
+
+
+def _socket_mounters(out: str) -> list[str]:
+    """`workload/container` for every container (init containers included) in
+    every workload that mounts the human-sock volume."""
+    found = []
+    for workload, pod in _pod_specs(out):
+        for c in (pod.get("initContainers") or []) + (pod.get("containers") or []):
+            if any(m.get("name") == "human-sock" for m in c.get("volumeMounts") or []):
+                found.append(f"{workload}/{c['name']}")
+    return sorted(found)
+
+
 def _helm_template(repo_root: Path, *set_args: str, template: str | None = None):
     cmd = ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART)]
     if template:
@@ -102,18 +133,21 @@ def _helm_template(repo_root: Path, *set_args: str, template: str | None = None)
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
+# adr-check: ADR-027/9.3d
 @_needs_helm
 def test_render_without_proxy_fails(repo_root: Path):
-    """tenant-api refuses to start without the oauth2-proxy config (ADR-027
-    §2), so the chart refuses the render instead of shipping that pod."""
+    """The socket and the oauth2-proxy that serves it are always rendered:
+    there is no switch to turn the proxy off (ADR-027 §6), so a values file
+    that still sets one is refused rather than rendering a pod without it."""
     override = "oauth2Proxy.enabled=false"
     res = _helm_template(repo_root, override)
     assert res.returncode != 0, f"{override} must fail the render"
-    assert override in res.stderr and "ADR-027" in res.stderr, (
-        f"the failure must name {override} and ADR-027: {res.stderr}"
+    assert "oauth2Proxy" in res.stderr and "enabled" in res.stderr, (
+        f"the failure must name oauth2Proxy.enabled: {res.stderr}"
     )
 
 
+# adr-check: ADR-027/9.3c ADR-027/9.3d
 @_needs_helm
 def test_render_default_points_upstream_at_socket(repo_root: Path):
     """Default render: unix:// upstream, TA_HUMAN_SOCKET, and the human-sock
@@ -132,11 +166,11 @@ def test_render_default_points_upstream_at_socket(repo_root: Path):
     assert _ta_env(out, "TA_HUMAN_SOCKET") == "/run/ta-human/human.sock", (
         "enabled render must pass TA_HUMAN_SOCKET to tenant-api"
     )
-    # the volume is mounted into both containers (2 mounts) + defined once (1).
-    assert out.count("name: human-sock") == 3, (
-        "human-sock must appear 3× (tenant-api mount + oauth2-proxy mount + volume def); "
-        f"got {out.count('name: human-sock')}"
-    )
+    # Only tenant-api and oauth2-proxy mount the socket: every container of
+    # every workload is read, sidecars and init containers included.
+    mounters = _socket_mounters(out)
+    assert [m.split("/", 1)[1] for m in mounters] == ["oauth2-proxy", "tenant-api"], mounters
+    assert len({m.split("/", 1)[0] for m in mounters}) == 1, mounters
 
 
 @_needs_helm

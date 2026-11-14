@@ -2,29 +2,15 @@
 
 你會讀到這份，是因為 diff 碰到了 `tools/portal/**`。⛔ **判別法是路徑，不是任務標題**——portal 檔常常是「非 portal 任務」的副產物（例如告警數變了，順手改 `rule-packs.js` 的一個數字），那時腦中的框架是「k8s / 規則」，於是整組 portal 規則都不會被想起來。
 
-**不重複既有文件**：build / test 怎麼跑見 [`README.md`](README.md)；`_common/` 的消費方式與 dist gate 全表見 [`src/interactive/tools/_common/README.md`](src/interactive/tools/_common/README.md)；`@visual` baseline 重生 SOP 見 [`tests/e2e/README.md`](../../tests/e2e/README.md)；lint gate 清單見 [`docs/internal/lint-policy.md`](../../docs/internal/lint-policy.md)。以下只列**那些文件沒有寫、而且踩過的**。
+**不重複既有文件**：build / test 怎麼跑見 [`README.md`](README.md)；`_common/` 的消費方式見 [`src/interactive/tools/_common/README.md`](src/interactive/tools/_common/README.md)；`@visual` baseline 重生 SOP 見 [`tests/e2e/README.md`](../../tests/e2e/README.md)；lint gate 清單見 [`docs/internal/lint-policy.md`](../../docs/internal/lint-policy.md)。以下只列**那些文件沒有寫、而且踩過的**。
 
-## commit 階段
+## dist 不進 git（#3738）
 
-⛔ **`git commit --amend` 補 dist 一定失敗，要用 `git reset --soft HEAD~1`。**
-`dist-source-consistency-check` 要求「有 dist 進 index，就必須有對應 source 也在 index」。amend 時 source 已經在 HEAD、不在 index，於是 hook 看到的是一顆 dist-only commit。正解是 soft-reset 後把 source 與 dist 一起重新 stage。（`BYPASS_DIST_CHECK=1` 存在但不要用。）
+`docs/assets/dist/` 是 build 產物，**不 commit**（`.gitignore` 蓋住，`tests/lint/test_portal_dist_not_tracked.py` 守著）。每個消費端（Pages 部署、da-portal image、Smoke／visual baseline、本機 `serve-docs`／`test-e2e`）都在用之前自己 build；清單與守衛見 [`README.md`](README.md)「誰消費」一節。
 
-⛔ **rebase／merge 撞到 dist 衝突時不要手併壓縮後的 bundle。** 先手解**所有**衝突的 source（含 `images.js` 這類 `.js` 資料模組，不只 `.jsx`／`.tsx`；留著衝突標記 esbuild 會直接拒絕 build）與 CHANGELOG，然後刪掉 `docs/assets/dist/chunk-*.js` 與 `chunk-*.js.map`（清掉孤兒 hash）、`make portal-build` 從合併後的 source 重生、整個 `docs/assets/dist` 一起 stage。
+⇒ 改 portal source 的 commit **只含 source**。不要 `git add -f` dist 回來，也不必為了「dist 要跟上」而重 build——那件事已經沒有 gate 在比對。要在本機看結果才跑 `make portal-build`（`make serve-docs`／`test-e2e*` 會自己跑）。
 
-## 重建 dist 前：工作樹要是 LF、cwd 要是 `tools/portal`
-
-- ⛔ **用 Python（`write_text` / `open(..., "w")`）改 portal source，在 Windows 會寫出 CRLF。** `.gitattributes` 讓 blob 在 `git add` 時被正規化，`git diff` 看起來乾淨；但 esbuild 讀的是**工作樹**那份 CRLF，`sourcemap: 'linked'` 把它原樣寫進 `.js.map` 的 `sourcesContent` ⇒ 本機 dist 與 CI（LF checkout）重建對不上。寫檔用 `newline="\n"`，build 前 `git ls-files --eol tools/portal/src` 看 `w/crlf`。
-- ⛔ **只用 `make portal-build`（或在 `tools/portal` 裡 `npm run build`）。** 從 repo 根目錄跑 `node tools/portal/build.mjs` 會重新 hash 每一個 `chunk-*.js`，整包 dist 改名、與提交的 dist 對不上。
-
-## 什麼時候真的要重建 dist
-
-`sourcemap: 'linked'`，所以 **`.js.map` 對行號位移敏感、對內容不敏感**：
-
-| 改動 | 要不要重建 |
-|---|---|
-| 新增/刪除任何一行（含註解行） | **要**——`.js.map` 的 `mappings` 會重映射，即使壓縮後的 `.js` 完全相同 |
-| 同一行內替換 frontmatter 值（行數不變） | **不用**——frontmatter 在進 esbuild 前就被 `stripFrontmatterPlugin` 剝掉，dist 位元相同 |
-| 改 `_common/` 底下任何東西 | **要**，而且會連動：它在 shared chunk 裡，多個 entry 的 `.js` 會一起被重指向、舊 chunk 刪除新 chunk 新增。**那是預期，不是 drift**，全部一起 commit |
+⛔ 舊分支（#3738 之前開、改過 dist）rebase／merge 到之後的 main：撞上 dist 的 modify/delete 衝突時**不要解衝突內容**；而只**新增** chunk 的 commit 不會衝突、會把 dist 悄悄帶回 index。所以不論有無衝突，rebase／merge 完都跑 `git ls-files docs/assets/dist`，有輸出就 `git rm -r --cached docs/assets/dist`。本機重 build 過、還沒 commit 的 dist 會讓 `git pull` 中止：pull 前先 `git restore docs/assets/dist`（本機產物，可丟）。
 
 ⛔ **不要用「CI 全綠」推論 portal 那條 leg 有跑過**：path filter 沒命中時它是 **skipped 不是 failure**，畫面一樣綠。要查那顆 SHA 上具名的 job：
 

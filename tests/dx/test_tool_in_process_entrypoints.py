@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -28,8 +27,6 @@ import check_trk_index_coverage
 import generate_nav
 import waveform_compile
 from _lib_exitcodes import emit_result  # (#3216: in-process main() → exit status)
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -102,31 +99,41 @@ def test_generate_nav_exits_instead_of_returning(argv, tmp_path, capsys):
 # ⚠️ 這一節與本檔主題（回傳契約）不同，放在這裡是因為這兩支在全 repo 沒有別的行為測試
 #    （`grep -rln` 只命中泛用 harness）。⛔ 每一格都明寫它**沒有**驗到什麼——這兩支的
 #    rc 在不帶 `--ci` 時不承載違規資訊，所以「閘門判斷有沒有生效」在這裡測不到。
-def test_check_portal_bundle_size_walks_the_real_dist_tree(argv, capsys):
-    """驗到的：它真的走了 dist 目錄、數字沒有寫死（與獨立走一次的結果逐項相等）。
+def test_check_portal_bundle_size_walks_the_dist_tree_it_is_pointed_at(
+    argv, capsys, tmp_path, monkeypatch
+):
+    """驗到的：它真的走了 dist 目錄、數字沒有寫死（與本格自己放進去的檔案逐項相等）。
+
+    #3738：dist 是建置產物，消費端各自 build，不再以 commit 進 repo 的那份為準——所以本格
+    不讀 repo 的 `docs/assets/dist/`，改把 `DIST_DIR` 指到 tmp 目錄、放進已知大小的檔案。
+    放的檔案刻意含一個 `.js.map` 與一個子目錄裡的 `.js`：生產碼掃的是 `DIST_DIR.glob("*.js")`
+    （不遞迴、只數 `.js`），兩者都不該被算進去；一支改用 rglob 或把 map 也算進去的實作會在
+    這裡對不上數。
 
     ⛔ **沒有**驗到：size budget 是否真的被拿來判斷。生產碼是
     `if args.ci and violations: return EXIT_VIOLATION`，本格不帶 `--ci` ⇒ 無論違不違規
     都回 0，rc 這條路打不到違規分支。一支「照走同一個 glob 但完全不比對門檻」的實作
     會通過本格——這是已知且刻意不在此處關閉的缺口，關它要另外接 `--ci` 的閘門測試。
     """
+    dist = tmp_path / "dist"
+    (dist / "nested").mkdir(parents=True)
+    sizes = {"tool-a.js": 1234, "tool-b.js": 77, "chunk-XYZ.js": 4096}
+    for name, n in sizes.items():
+        (dist / name).write_bytes(b"x" * n)
+    (dist / "tool-a.js.map").write_bytes(b"m" * 999)        # 不是 *.js
+    (dist / "nested" / "deep.js").write_bytes(b"d" * 555)    # glob 不遞迴
+    monkeypatch.setattr(check_portal_bundle_size, "DIST_DIR", dist)
+
     argv("--json")
     rc = emit_result(check_portal_bundle_size.main())  # #3216: run()'s step — the document goes out here
     out = capsys.readouterr().out
     assert isinstance(rc, int) and not isinstance(rc, bool), f"main() 回了 {rc!r}"
 
-    dist = _REPO_ROOT / "docs" / "assets" / "dist"
-    assert dist.is_dir(), f"dist 目錄不在 {dist} ⇒ 本格會變成平凡為真"
-    # ⛔ 用 glob 不是 rglob：生產碼 check_portal_bundle_size.py 掃的是 `DIST_DIR.glob`
-    #    （不遞迴）。用 rglob 做「獨立事實」會在 dist 改成巢狀輸出的那天與生產碼脫鉤，
-    #    產生假紅或假綠。獨立核對要獨立在**資料來源**，不是獨立在掃描規則。
-    js_files = sorted(dist.glob("*.js"))
-    assert js_files, "dist 裡沒有 .js ⇒ 本格會變成平凡為真"
     report = json.loads(out)
-    assert report["stats"]["file_count"] == len(js_files), (
-        f"報告說 {report['stats']['file_count']} 個檔，實際走目錄數到 {len(js_files)} 個"
+    assert report["stats"]["file_count"] == len(sizes), (
+        f"報告說 {report['stats']['file_count']} 個檔，本格放了 {len(sizes)} 個 *.js"
     )
-    assert report["stats"]["total_bytes"] == sum(f.stat().st_size for f in js_files), (
+    assert report["stats"]["total_bytes"] == sum(sizes.values()), (
         f"總位元組數對不上：報告 {report['stats']['total_bytes']}"
     )
 

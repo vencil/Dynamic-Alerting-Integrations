@@ -51,7 +51,7 @@ const PACK_COUNT = (__PD.packOrder || []).length || 16;
 // for every user on every path, so a stale value is wrong in production. It sat
 // at 112 across #1187 (+2 K8s), #1188 (+1 DB2) and #1215 (+4 MariaDB) because
 // nothing gated it; alert-count-drift.test.ts now pins it to the actual row count.
-const ALERT_COUNT = 130;
+const ALERT_COUNT = 128;
 
 // Inline concept glossary — helps newcomers understand platform terminology
 const GLOSSARY = {

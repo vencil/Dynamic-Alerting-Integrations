@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules-memory
+data:
+  memory-rules.yaml: |
+    groups:
+      - name: memory_alerts
+        rules:
+          - alert: HighMemory
+            expr: memory_usage > 85
+            for: 5m
+            labels:
+              severity: warning

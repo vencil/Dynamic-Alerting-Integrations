@@ -88,8 +88,8 @@ extraArgs: []
 #
 # `consumers` is the single list of who may talk to the store and on which
 # paths. The username is the consumer's `name`; its password is key
-# `password` of `existingSecret`, a Secret in THIS namespace that the operator
-# creates (the chart never generates one: `helm template` / Argo CD cannot keep
+# `password` of the Secret `existingSecrets.<name>` names — a Secret in THIS
+# namespace that the operator creates (the chart never generates one: `helm template` / Argo CD cannot keep
 # a generated value stable across renders). Each consumer sends the same
 # password from its own namespace: the consumer charts through
 # `victorialogs.auth.{username,existingSecret}`, Grafana through its
@@ -107,13 +107,14 @@ extraArgs: []
 #   observe  — consumers that present credentials are held to their paths;
 #              requests WITHOUT credentials (or with wrong ones) still reach
 #              every path, so an install whose consumers are not wired yet
-#              keeps working. A consumer with an empty existingSecret is not
-#              rendered. Use this to roll the credentials out.
+#              keeps working. A consumer with no Secret in existingSecrets is
+#              not rendered. Use this to roll the credentials out.
 #   enforce  — (default) only /health, /ping and /metrics pass without
-#              credentials, and every consumer must name its existingSecret:
-#              the render fails, listing every consumer that has none.
+#              credentials, and every consumer must have a Secret in
+#              existingSecrets: the render fails, listing every one that has none.
 # ⛔ The default is enforce, so a plain `helm install` refuses to render until
-#   the Secrets are named here. Remove consumers you do not run from the list.
+#   the Secrets are named in `existingSecrets`. Consumers you do not run must be
+#   removed from `consumers` (restate the list without them).
 # ⚠️ The render checks THIS side only: a consumer whose own chart sends no
 #   credential still renders fine and is refused (401) from then on — and
 #   Vector drops a refused batch without retrying (alert
@@ -147,8 +148,8 @@ auth:
   image:
     # renovate: datasource=docker depName=victoriametrics/vmauth
     repository: victoriametrics/vmauth
-    tag: "v1.155.0"
-    digest: "sha256:dfeb63e5eff4bc32ed0fa2d43d8e85b717e8442c8b5c753e83c216669665a7de"
+    tag: "v1.156.0"
+    digest: "sha256:e4b739ed468de88906550911c03fee2b0da89785679343a006639b8f471df051"
     pullPolicy: IfNotPresent
   resources:
     requests:
@@ -157,29 +158,66 @@ auth:
     limits:
       cpu: 500m
       memory: 128Mi
+  # Each consumer is also its own NetworkPolicy row (#1295 PR2): `from` is the
+  # network identity the store's ingress admits it by, so who may connect and
+  # what it may do are one list.
+  #   from.namespace  — the consumer's namespace (a control-plane label; a pod
+  #                     cannot choose it).
+  #   from.podLabels  — its pod labels. ALONE they match pods in THIS
+  #                     namespace only, and are self-declared: anyone who can
+  #                     create a pod here can wear them. Give both when the
+  #                     consumer runs elsewhere.
+  # The defaults are the documented install: everything in `monitoring`
+  # beside the store, Vector in its own namespace (#1018). A consumer you run
+  # in another namespace needs `namespace` set, or its connections are dropped
+  # (the reconciler fails loud; Vector ingest fails silent — alert
+  # VectorStoreSinkDroppingEvents).
+  # Which Secret holds each consumer's password: <consumer name>: <Secret>.
+  # A map, not a field on each consumer, so naming the Secrets does not mean
+  # restating `consumers` (Helm replaces lists wholesale, merges maps per key):
+  #   auth:
+  #     existingSecrets:
+  #       vector: victorialogs-vector
+  #       grafana: victorialogs-grafana
+  # Give it with `-f` or `--set auth.existingSecrets.<name>=...`: those merge
+  # per key, while `--set-json auth.existingSecrets=...` replaces the whole map.
+  # Every key must be a consumer below; an unknown key fails the render. A key
+  # set to null (`~`) or "" names no Secret, so a later values file can drop one.
+  existingSecrets: {}
   consumers:
     # Ingest. The ONLY writer: ADR-028's evidence rows must not be writable by
     # anything but the shipper.
     - name: vector
       paths: ["/insert/.*"]
-      existingSecret: ""
+      from:
+        namespace: vector
+        podLabels:
+          app.kubernetes.io/name: vector
     # Query only.
     - name: grafana
       paths: ["/select/.*"]
-      existingSecret: ""
+      from:
+        podLabels:
+          app: grafana
     - name: chargeback-aggregator
       paths: ["/select/.*"]
-      existingSecret: ""
+      from:
+        podLabels:
+          app.kubernetes.io/name: chargeback-aggregator
     # The tenant log-query authorization plane (ADR-021): it pins the verified
-    # AccountID header on every request it forwards.
+    # AccountID header on every request it forwards. The only tenant-facing
+    # reader — never list a pod a tenant can reach with an arbitrary AccountID.
     - name: federation-gateway
       paths: ["/select/.*"]
-      existingSecret: ""
+      from:
+        podLabels:
+          app.kubernetes.io/name: federation-gateway
     # Reads the evidence stream (ADR-028).
     - name: federation-reconciler
       paths: ["/select/.*"]
-      existingSecret: ""
-
+      from:
+        podLabels:
+          app.kubernetes.io/name: federation-reconciler
 # Persistent storage. The pod loses history without this — VictoriaLogs
 # stores indexed data on disk. Default size sized for federation audit
 # at ~50 RPS × 1 KB/line × 30d × 1.3 overhead ≈ 130 GB raw → ≈ 13 GB
@@ -238,104 +276,23 @@ service:
 prometheusScrapeAnnotations:
   enabled: true
 
-# NetworkPolicy — locks the :9428 HTTP API (ingest + query + DELETE;
-# unauthenticated unless auth.mode is enforce) to the legitimate consumers. T2-2 mitigation
-# from the #539 red-team: any in-cluster pod that can reach :9428 can
-# wipe history (`wget DELETE`), so the producer-side §2 hard rule is
-# necessary-but-not-sufficient — the store itself needs a perimeter.
-#
-# Defaults (same-namespace consumers, the common install topology):
-#   - Vector DaemonSet (ingest)              app.kubernetes.io/name=vector
-#     ⚠️ since #1018 Vector deploys into its dedicated `vector` namespace
-#     (PSS privileged carve-out) and reaches :9428 via `allowedNamespaces`
-#     below; the same-ns podSelector row is RETAINED for pre-migration
-#     installs.
-#   - chargeback-aggregator CronJob (query)  app.kubernetes.io/name=chargeback-aggregator
-#   - Grafana (query)                        app=grafana  (k8s/03-monitoring label)
-#   - federation-gateway (query, ADR-021)    app.kubernetes.io/name=federation-gateway
-#   - federation-reconciler (evidence read,  app.kubernetes.io/name=federation-reconciler
-#     ADR-028 D1 / #1234)
-#
-# ⚠️ EVERY ROW BELOW IS A SAME-NAMESPACE MATCH. A NetworkPolicy
-# `podSelector` with no sibling `namespaceSelector` selects pods in the
-# POLICY's own namespace, so each entry admits its consumer only while that
-# consumer runs in VictoriaLogs' namespace. Deploy a consumer elsewhere (the
-# reconciler chart takes `-n` like any other, and its default
-# `victorialogs.url` points at `victorialogs.monitoring.svc`) and its
-# podSelector row does NOT admit it — it needs an `allowedNamespaces` entry,
-# which is precisely why Vector has one since #1018. Symptom of getting this
-# wrong is per-consumer: the reconciler fails LOUD (query raises →
-# `reconcile_errors_total` → `FederationRevocationReconcileStale` critical),
-# Vector ingest fails SILENT.
-#
-# ⛔ WHAT THIS ALLOWLIST IS AND IS NOT (corrected in #1295). It decides
-# which SELF-DECLARED pod labels are admitted from THIS namespace. A pod
-# label is not an identity: any principal able to create a pod here can
-# wear one of these values, so this list does not hold against them —
-# and :9428 is unauthenticated ingest + query until `auth.mode: enforce`
-# (see `auth` above). `allowedNamespaces`
-# below is different in kind (namespace labels are control-plane assigned,
-# not self-declared) and IS a boundary. Treat the rows below as "which
-# workloads are supposed to talk to the store", i.e. a routing and
-# blast-radius decision, and read the tenant-isolation argument that
-# follows as conditional on nobody hostile being able to create pods in
-# this namespace. Candidate fixes: #1295.
-#
-# ⚠️ Trust boundary of this allowlist (ADR-021): every entry is EITHER a
-# platform-trusted component (Vector / chargeback / Grafana never carry a
-# tenant identity — they read the platform partition or set their own
-# AccountID) OR the federation-gateway, which is the ONLY tenant-facing
-# reader and pins a verified AccountID header on every request (it is the
-# authorization plane). This list must NEVER contain a pod a tenant can
-# reach directly with an arbitrary AccountID — that would bypass the
-# gateway's per-tenant enforcement. The gateway is allowed unconditionally
-# (it only initiates :9428 traffic in `mode: victorialogs`).
-#
-# Cross-namespace consumers go in `allowedNamespaces`. Setting
-# `enabled: false` reverts to no policy (cluster-wide reachable);
-# only acceptable for chart smoke-tests, never for steady-state.
+# NetworkPolicy on the store's port (#539 T2-2: any pod that can reach it can
+# also `DELETE`). Its rows are rendered from `auth.consumers[].from` above plus
+# `scrapers` below — there is no separate allowlist to keep in step (#1295 PR2;
+# `allowedPodSelectors` / `allowedNamespaces` were removed in chart 0.6.0 and
+# fail the render if still set). In `auth.mode: enforce` vmauth is the
+# boundary and this policy the outer layer; in `observe` it is the only one.
+# `enabled: false` = no policy, the port reachable cluster-wide: chart smoke
+# tests only.
 networkPolicy:
   enabled: true
-  allowedPodSelectors:
-    - matchLabels:
-        app.kubernetes.io/name: vector
-    - matchLabels:
-        app.kubernetes.io/name: chargeback-aggregator
-    - matchLabels:
-        app: grafana
-    # federation-gateway in `mode: victorialogs` (ADR-021 #609): the
-    # tenant log-query authorization plane. Without this entry the gateway
-    # → :9428 forward is dropped and the whole mode is DOA in-cluster.
-    - matchLabels:
-        app.kubernetes.io/name: federation-gateway
-    # federation-reconciler (ADR-028 D1 / #924, #1234): the un-revoke
-    # tamper-evidence reconciler. It READS the evidence stream from :9428 on
-    # every reconcile loop — it never writes, and it carries no tenant
-    # identity (all six of its metrics are platform-global with zero labels;
-    # and the evidence rows carry no DIRECT tenant id — that holds because the
-    # producer does not emit one and `evidenceChannel.keepFields` does not list
-    # one, NOT as an intrinsic property of the channel, so re-check it if either
-    # side changes; `token_id` is still indirectly tenant-attributable via the
-    # token registry — see log-visibility-2tier-catalogue.md), so it belongs in
-    # the "platform-internal reader" class above. Without this
-    # entry its queries are dropped at the network layer and the ENTIRE
-    # ADR-028 detection plane is DOA in-cluster. That failure is LOUD, not
-    # silent: a dropped connection makes `query_victorialogs()` raise, the
-    # reconciler's fail-closed path bumps `reconcile_errors_total` WITHOUT
-    # refreshing `last_reconcile_ts`, and `FederationRevocationReconcileStale`
-    # (critical) fires. The silent variant is the sibling half of #1234 — a
-    # reachable store that the evidence never reaches, which reconciles to a
-    # clean all-clear. Both must be closed for the control to mean anything.
-    - matchLabels:
-        app.kubernetes.io/name: federation-reconciler
-  # `vector`: the log shipper's dedicated namespace (#1018 PSS privileged
-  # carve-out — its 3 hostPath mounts are forbidden even by PSS baseline,
-  # so it cannot share the restricted-tier `monitoring` ns). A
-  # namespaceSelector entry admits ALL pods of that namespace — acceptable
-  # ONLY because k8s/00-namespaces/namespace-vector.yaml pins it as a
-  # single-workload namespace. ⛔ Never add a shared/multi-tenant ns here.
-  allowedNamespaces:
-    - vector
+  # Who scrapes /metrics on the same port. Not a consumer: no credentials, and
+  # in enforce an unauthenticated request reaches only /metrics, /health and
+  # /ping. Same shape as a consumer's `from`. Default: the k8s/03-monitoring
+  # Prometheus beside the store.
+  scrapers:
+    - podLabels:
+        app: prometheus
 
 # Pod placement. Single pod has no affinity rules; if scaled up the
 # chart user is expected to add an anti-affinity block manually since

@@ -27,3 +27,8 @@ README.md
 # (check_chart_package_contents.py DECLARED_SUBTREES lists templates only).
 # helm template/-f reads them from the source tree regardless of this line.
 ci/
+
+# #3353: the Container SAST L2 render variant (check_iac_helm.py lints every
+# root values*.yaml) that turns the config-validation CronJob on. An input to
+# that gate, not a deployment profile; not in the .tgz.
+values-config-validation.yaml

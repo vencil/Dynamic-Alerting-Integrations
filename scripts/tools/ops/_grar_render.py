@@ -18,14 +18,13 @@ Functions:
     _read_existing_configmap(...)         → kubectl get + parse
     _apply_merged_configmap(...)          → kubectl apply via stdin
     _reload_alertmanager(namespace)       → curl POST /-/reload (False on failure, #2219)
-    apply_to_configmap(...)              → orchestrate read → merge → amtool gate
-                                           → apply → reload
+    apply_to_configmap(...)              → orchestrate read → merge →
+                                           alertmanager_check → apply → reload
 
-  Alertmanager's own parser (#2219):
-    amtool_check(am_yml, what=, refusing=) → `amtool check-config` on the exact
-                                           text, returned as an AmtoolCheck
-    amtool_gate(...)                      → amtool_check, printed; None = go on,
-                                           int = exit code
+  Does Alertmanager accept this text (#2219, #3689, #3793) — ONE gate:
+    alertmanager_check(am_yml, what=, refusing=) → Alertmanager's loader
+                                           (da-read); an AlertmanagerCheck
+                                           carrying the loader's reading
 
   Reading Alertmanager configs (ADR-036 §12, #3206) — never PyYAML:
     emitted_alertmanager_yml(cm_yaml)     → the `alertmanager.yml` string of an
@@ -46,10 +45,8 @@ import io
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, NamedTuple
@@ -234,7 +231,8 @@ def root_receiver_without_integration_warning(am: object) -> str | None:
     ``k8s/03-monitoring`` one) drops them silently. Not an error: the
     shipped posture is deliberate, so this never changes the exit code and
     ``--strict`` does not escalate it. A root receiver name that no receiver
-    entry defines counts as no integration too (amtool rejects that anyway).
+    entry defines counts as no integration too (Alertmanager's loader rejects
+    that anyway).
     """
     route = am.get("route") if isinstance(am, dict) else None
     name = route.get("receiver") if isinstance(route, dict) else None
@@ -926,127 +924,103 @@ def _run_binary(argv: list[str], *, timeout: int,
             stderr=enc(f"cannot run {argv[0]!r}: {exc}"))
 
 
-# ── #2219: Alertmanager's own parser as the last gate ───────────────
-# The JSON schema and this generator's Python checks accept values that
-# Alertmanager refuses at load time (measured: a webhook URL `http://[1]/`, and
-# a host carrying U+0085 that the YAML emitter folds into a line break, which
-# Alertmanager then reads back as a space). Only Alertmanager's parser is the
-# authority on that, so when `amtool` is on PATH it gets the final say — on the
-# SAME text that is about to be written or applied, never on a re-render.
-# The da-tools image bundles amtool from the deployed Alertmanager image (#2294;
-# parity with the manifest is tests/ops/test_da_tools_amtool_pin_parity.py).
-# Outside the image, without amtool the run is unchanged EXCEPT that it says,
-# every time, that nothing validated it.
-AMTOOL_NOT_FOUND_NOTICE = (
-    "NOTICE: amtool not found on PATH; generated Alertmanager config was NOT "
-    "validated by Alertmanager")
+# ── #2219 / #3689 / #3793: does Alertmanager accept this text — ONE gate ─
+# The JSON schema and this generator's Python checks accept values Alertmanager
+# refuses at load time (measured: a webhook URL `http://[1]/`, a host carrying
+# U+0085 that the YAML emitter folds into a line break, a string where an
+# `http_config` bool belongs, an `oauth2` block without `client_id`). Only
+# Alertmanager is the authority on that, on the SAME text that is about to be
+# written or applied, never on a re-render.
+#
+# ⛔ Every mode (`--validate`, `--output-*`, `--apply`, validate-config's
+# `routes` row) asks through `alertmanager_check`, so the verdict cannot
+# drift between modes. The one reader is Alertmanager's own loader:
+# `da-read alertmanager`, `config.Load` of the Alertmanager version the
+# da-tools image and the cluster pin (tests/ops/test_da_tools_amtool_pin_parity.py
+# holds da-read's go.mod to that version). Its reading is also what the callers
+# judge (root receiver, firehose, watchdog heartbeat).
+#
+# ⛔ Nothing else is asked. The files a `templates:` glob names are read by
+# the Alertmanager container from ITS filesystem; no tool here can read them
+# from there, so parsing them on this machine would judge other files (or, for
+# a relative glob, none at all).
+#
+# A refusal is printed without the value yaml.v2 quotes (it may be a
+# credential): da-read leaves it out.
 
 
-
-# `AmtoolCheck.status` values. ⛔ Four, not three: amtool present but unable to
-# give a verdict (could not run, timed out, crashed) is neither "rejected" (a
-# finding about the config) nor "not found" (a run that says it was not
-# validated) — it is an environment failure and every caller reports it as one.
-AMTOOL_ACCEPTED = "accepted"
-AMTOOL_REJECTED = "rejected"
-AMTOOL_NOT_FOUND = "not_found"
-AMTOOL_UNUSABLE = "unusable"
+# `AlertmanagerCheck.status` values. ⛔ Three: a reader that could not give a
+# verdict (no da-read, it crashed) is neither "rejected" (a finding about the
+# config) nor accepted — it is an environment failure and every caller
+# reports it as one.
+AM_ACCEPTED = "accepted"
+AM_REJECTED = "rejected"
+AM_UNUSABLE = "unusable"
 
 
 @dataclass(frozen=True)
-class AmtoolCheck:
-    """What ``amtool check-config`` said, as data (#2311).
+class AlertmanagerCheck:
+    """Whether Alertmanager accepts a text, as data (#2311, #3689).
 
     *exit_code* is ``None`` to go on, else the code to stop with; *message* is
-    the exact stderr text :func:`amtool_gate` prints for it.
+    the exact stderr text a caller prints for it; *reading* is the text as
+    Alertmanager loads it (:func:`alertmanager_reading`) whenever the loader
+    accepted it, else ``None`` — callers judge that reading instead of asking
+    da-read a second time.
     """
     status: str
     exit_code: int | None
     message: str
+    reading: dict | None = None
 
 
-def amtool_check(am_yml: str, *, what: str, refusing: str,
-                 not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> AmtoolCheck:
-    """Run ``amtool check-config`` over *am_yml* — the exact text Alertmanager
-    will load — and return the verdict WITHOUT printing it (#2311: validate-
-    config reports it in a row; ``amtool_gate`` prints it).
+def alertmanager_check(am_yml: str, *, what: str, refusing: str
+                       ) -> AlertmanagerCheck:
+    """Does Alertmanager accept *am_yml*? The ONE gate every mode asks
+    (``--validate``, ``--output-*``, ``--apply``; #3689) — returned, never
+    printed (#2311: validate-config reports it in a row).
 
-    * amtool absent → ``not_found``, exit None (the rc is unchanged, but the
-      message says the run was not validated — never silent);
-    * amtool accepts → ``accepted``, exit None;
-    * amtool rejects (rc 1 with its ``FAILED:`` verdict) → ``rejected``,
-      EXIT_VIOLATION (the CONFIG is wrong: the tool ran and found something
-      the user must fix);
-    * anything else non-zero — could not run, timed out, crashed (a Go panic
-      exits 2), a wrapper that fails → ``unusable``, EXIT_CALLER_ERROR: no
-      verdict on the config, so it must not read as one.
+    Alertmanager's loader (da-read) reads the text:
+
+    * it accepts → ``accepted``, exit None, carrying its reading;
+    * it refuses → ``rejected``, EXIT_VIOLATION (the CONFIG is wrong);
+    * no reading could be had (no da-read, it crashed) → ``unusable``,
+      EXIT_CALLER_ERROR: no verdict on the config, so it must not read as one.
 
     *what* names the text for the operator; *refusing* is what the caller will
-    NOT do because of a failure ("write -o …", "apply …"). *not_found_notice*
-    lets a caller whose text is not the one it ships say so when amtool is
-    absent (#2260: ``--validate`` checks an assembly on the built-in base).
-
-    ⛔ The temp file is written with ``newline=""`` so amtool reads the same
-    characters the caller holds; universal-newline translation would hand it
-    a different text than the one that ships.
+    NOT do because of a failure ("write it to …", "apply it …").
     """
-    amtool = shutil.which("amtool")
-    if amtool is None:
-        return AmtoolCheck(AMTOOL_NOT_FOUND, None, not_found_notice)
-    with tempfile.TemporaryDirectory(prefix="grar-amtool-") as tmp:
-        path = Path(tmp) / "alertmanager.yml"
-        with open(path, "w", encoding="utf-8", newline="") as fh:
-            fh.write(am_yml)
-        # receiver URLs / keys live in here; the 0700 temp dir already fences
-        # it, this keeps the file itself owner-only too (SAST write gate).
-        os.chmod(path, 0o600)
-        result = _run_binary([amtool, "check-config", str(path)], timeout=60)
-    output = "\n".join(safe_label(ln) for ln in
-                       (result.stdout + result.stderr).strip().splitlines())
-    if result.returncode == 0:
-        return AmtoolCheck(
-            AMTOOL_ACCEPTED, None,
-            f"amtool check-config: {what} accepted by Alertmanager's parser "
-            f"({safe_label(amtool)})")
-    if not (result.returncode == 1 and "FAILED:" in output):
-        return AmtoolCheck(
-            AMTOOL_UNUSABLE, EXIT_CALLER_ERROR,
-            f"ERROR: amtool check-config could not validate {what} "
-            f"(rc={result.returncode}) — refusing to {refusing}:\n{output}")
-    return AmtoolCheck(
-        AMTOOL_REJECTED, EXIT_VIOLATION,
-        f"FAIL: amtool check-config rejected {what} (rc={result.returncode}) "
-        f"— refusing to {refusing}. Alertmanager would refuse to load it:\n"
-        f"{output}")
-
-
-def amtool_gate(am_yml: str, *, what: str, refusing: str,
-                not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> int | None:
-    """:func:`amtool_check`, printed. Returns ``None`` to go on, or the exit
-    code to stop with. Everything goes to stderr: in some modes stdout IS the
-    generated config."""
-    check = amtool_check(am_yml, what=what, refusing=refusing,
-                         not_found_notice=not_found_notice)
-    print(check.message, file=sys.stderr)
-    return check.exit_code
+    try:
+        reading = alertmanager_reading(am_yml)
+    except ConsumerReadError as exc:
+        reason = safe_label(consumer_read_message(exc))
+        if isinstance(exc, InputRefused):
+            return AlertmanagerCheck(
+                AM_REJECTED, EXIT_VIOLATION,
+                f"FAIL: Alertmanager's config loader refuses {what} — refusing "
+                f"to {refusing}: {reason}")
+        return AlertmanagerCheck(
+            AM_UNUSABLE, EXIT_CALLER_ERROR,
+            f"ERROR: cannot read {what} the way Alertmanager does — refusing "
+            f"to {refusing}: {reason}")
+    return AlertmanagerCheck(
+        AM_ACCEPTED, None,
+        f"Alertmanager's config loader (da-read) accepted {what}", reading)
 
 
 # ── #2311: the ONE verdict on a generation result ───────────────────
-# `generate_alertmanager_routes --validate` and validate-config's `routes` row
-# both call `evaluate_generated_config`. Before it, validate-config ran only
-# the first of these steps, so a tree `--validate` failed (a tripwire, an
-# invariant `assemble_configmap` refuses, an amtool rejection) was a PASS row
-# at rc 0 — #2164's drift, one layer further down.
+# `generate_alertmanager_routes --validate` judges a generation result with
+# `evaluate_generated_config`, and validate-config's `routes` row is that
+# `--validate` (#3788). Before it, validate-config ran only the first of
+# these steps, so a tree `--validate` failed (a tripwire, an
+# invariant `assemble_configmap` refuses, an Alertmanager rejection) was a
+# PASS row at rc 0 — #2164's drift, one layer further down.
 #
-# #2260: what --validate hands to amtool is assembled on the BUILT-IN base
+# #2260: what --validate hands Alertmanager is assembled on the BUILT-IN base
 # (`--validate --base-config` stays a caller error, #1616), so a pass says
-# nothing about the operator's own base — the NOTICE / result lines say so.
-VALIDATE_AMTOOL_WHAT = ("the generated config (assembled on the built-in "
-                        "default base, never on a --base-config)")
-VALIDATE_AMTOOL_NOT_FOUND_NOTICE = (
-    "NOTICE: amtool not found on PATH; --validate did NOT check the generated "
-    "config with Alertmanager's parser (that check assembles it on the "
-    "built-in default base, never on a --base-config)")
+# nothing about the operator's own base — the result line names that base.
+VALIDATE_WHAT = ("the generated config (assembled on the built-in "
+                 "default base, never on a --base-config)")
 
 
 @dataclass
@@ -1060,23 +1034,24 @@ class GeneratedConfigVerdict:
     * ``warnings`` — non-blocking lines the checks' helpers wrote to stderr
       while running (an equal-label not presence-gated, a degraded platform-
       alert probe set), captured so the caller decides where they go;
-    * ``amtool`` — ``None`` when the run stopped before amtool (errors, or the
-      assembly was refused), else its :class:`AmtoolCheck`.
+    * ``alertmanager`` — ``None`` when the run stopped before Alertmanager
+      was asked (errors, or the assembly was refused), else its
+      :class:`AlertmanagerCheck`.
 
-    ⛔ The steps short-circuit exactly as ``--validate`` does: amtool is never
-    asked about a config the Python checks already refused.
+    ⛔ The steps short-circuit exactly as ``--validate`` does: Alertmanager is
+    never asked about a config the Python checks already refused.
     """
     errors: list[str]
     assembly_error: str | None = None
     warnings: list[str] = field(default_factory=list)
-    amtool: AmtoolCheck | None = None
+    alertmanager: AlertmanagerCheck | None = None
 
     @property
     def exit_code(self) -> int | None:
-        """``None`` = the run may say OK (amtool may still be absent)."""
+        """``None`` = the run may say OK."""
         if self.errors or self.assembly_error is not None:
             return EXIT_VIOLATION
-        return self.amtool.exit_code if self.amtool is not None else None
+        return self.alertmanager.exit_code if self.alertmanager is not None else None
 
 
 def evaluate_generated_config(routes: list[dict], receivers: list[dict],
@@ -1092,12 +1067,13 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
        duplicate receiver names (#2279);
     2. *extra_errors* — caller-selected blocking lines (``--validate --strict``
        passes its ADR-007 policy errors here, so they sit where they always
-       printed and still keep amtool from running);
+       printed and still keep Alertmanager from being asked);
     3. the ADR-025 tripwires on the GENERATED inhibit rules: Watchdog
        suppression, a tenant-triggered rule silencing a platform alert;
     4. ``assemble_configmap`` on the built-in base — a ``ValueError`` is a
        verdict on the config (#2260 / #2279);
-    5. ``amtool check-config`` on that assembly (:func:`amtool_check`).
+    5. :func:`alertmanager_check` on that assembly — the same gate, in the
+       same order, as the write paths (#3689).
     """
     errors = blocking_generation_errors(warnings)
     errors.extend(extra_errors)
@@ -1131,25 +1107,25 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
     try:
         am_yml = emitted_alertmanager_yml(cm_yaml)
     except ConsumerReadError as exc:
-        # No text for amtool: an environment failure (no da-crdecode), never
-        # a verdict on the config — the "unusable" status, rc 2.
-        verdict.amtool = AmtoolCheck(
-            AMTOOL_UNUSABLE, EXIT_CALLER_ERROR,
+        # No text for Alertmanager: an environment failure (no da-crdecode),
+        # never a verdict on the config — the "unusable" status, rc 2.
+        verdict.alertmanager = AlertmanagerCheck(
+            AM_UNUSABLE, EXIT_CALLER_ERROR,
             "ERROR: cannot read the assembled ConfigMap the way kubectl does, so "
-            "Alertmanager's parser was not asked — refusing to report the config as "
+            "Alertmanager was not asked — refusing to report the config as "
             f"valid: {safe_label(consumer_read_message(exc))}")
         return verdict
-    verdict.amtool = amtool_check(
-        am_yml, what=VALIDATE_AMTOOL_WHAT,
-        refusing="report the config as valid",
-        not_found_notice=VALIDATE_AMTOOL_NOT_FOUND_NOTICE)
+    verdict.alertmanager = alertmanager_check(
+        am_yml, what=VALIDATE_WHAT,
+        refusing="report the config as valid")
     return verdict
 
 
 class AlertmanagerConfigRejected(Exception):
-    """``amtool_gate`` stopped ``apply_to_configmap`` before anything reached
-    the cluster. Carries the exit code, which is NOT the ``False`` return's 2:
-    a rejected config is the operator's CONFIG being wrong (1)."""
+    """:func:`alertmanager_check` (or ``judge_merged``) stopped
+    ``apply_to_configmap`` before anything reached the cluster. Carries the
+    check's exit code: 1 when the CONFIG is wrong, 2 when no verdict could be
+    had (no da-read, or it could not run)."""
 
     def __init__(self, exit_code: int):
         super().__init__(exit_code)
@@ -1160,8 +1136,8 @@ class AlertmanagerConfigInvariantViolated(ValueError):
     """#2506: merging the generated fragment into the CLUSTER's config broke a
     platform invariant (ADR-025: an inhibit rule that would suppress the
     Watchdog heartbeat or let a tenant silence a platform alert; #1132 under
-    ``strict``). Raised by ``apply_to_configmap`` before amtool or kubectl
-    apply runs, so nothing reached the cluster. A verdict on the config (rc
+    ``strict``). Raised by ``apply_to_configmap`` before Alertmanager's
+    loader or kubectl apply runs, so nothing reached the cluster. A verdict on the config (rc
     1), like ``assemble_configmap``'s ``ValueError`` on the other write paths
     (#2260) — a ``ValueError`` subclass for that reason, and a class of its
     own so the caller catches the merge step only, not every ``ValueError``
@@ -1348,7 +1324,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
          on the first --apply ``alertmanager.yml`` (``_read_existing_configmap``)
       2. ``merge_generated`` on that source (#1211: the same merge as
          --output-configmap / --output-alertmanager)
-      3. amtool check-config on the merged text, when amtool is on PATH (#2219)
+      3. ``alertmanager_check`` on the merged text: Alertmanager's loader
+         (da-read; #2219, #3689)
       4. kubectl apply the ConfigMap: the output under alertmanager.yml, the
          source under alertmanager.base.yml
       5. curl POST /-/reload to trigger Alertmanager configuration reload
@@ -1371,8 +1348,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         True if merge, apply and reload all succeeded, False otherwise.
 
     Raises:
-        AlertmanagerConfigRejected: amtool refused the merged config (or could
-        not run); nothing was sent to the cluster. #2219.
+        AlertmanagerConfigRejected: Alertmanager refused the merged config (or
+        no verdict could be had); nothing was sent to the cluster. #2219.
         AlertmanagerConfigInvariantViolated: the merged config breaks a
         platform invariant; nothing was sent to the cluster. #2506.
         PlatformProbeSetUnverifiable: the probe set degraded and the cluster
@@ -1402,31 +1379,21 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         raise AlertmanagerConfigInvariantViolated(str(exc)) from exc
     merged_yml = dump_output_yml(existing)
 
-    # 3. #2219: Alertmanager's parser gets the final say BEFORE the cluster is
-    # touched. `merged_yml` is the exact string handed to
-    # `--from-literal=alertmanager.yml=` below, i.e. the text Alertmanager loads.
-    rc = amtool_gate(merged_yml,
-                     what=f"the merged alertmanager.yml for {namespace}/{configmap_name}",
-                     refusing="apply it to the cluster (nothing was applied)")
-    if rc is not None:
-        raise AlertmanagerConfigRejected(rc)
+    # 3. #2219 / #3689: Alertmanager gets the final say BEFORE the cluster is
+    # touched, through the one gate every mode asks. `merged_yml` is the exact
+    # string handed to `--from-literal=alertmanager.yml=` below, i.e. the text
+    # Alertmanager loads.
+    check = alertmanager_check(
+        merged_yml,
+        what=f"the merged alertmanager.yml for {namespace}/{configmap_name}",
+        refusing="apply it to the cluster (nothing was applied)")
+    print(check.message, file=sys.stderr)
+    if check.exit_code is not None:
+        raise AlertmanagerConfigRejected(check.exit_code)
     # #2660: the root route + receivers here are the CLUSTER's, kept by the
     # merge — the config about to be applied, so warn on it, as Alertmanager
-    # reads it (ADR-036 §12). Its loader refusing the text amtool did not
-    # check (amtool absent) is the same verdict amtool would give: nothing is
-    # applied. No da-read is no verdict: nothing is applied either.
-    try:
-        merged = alertmanager_reading(merged_yml)
-    except ConsumerReadError as exc:
-        if not isinstance(exc, InputRefused):
-            print(f"ERROR: cannot read the merged alertmanager.yml the way Alertmanager "
-                  f"does — refusing to apply it (nothing was applied): {exc}",
-                  file=sys.stderr)
-            return False
-        print(f"FAIL: Alertmanager's config loader refuses the merged alertmanager.yml for "
-              f"{namespace}/{configmap_name} — refusing to apply it (nothing was applied): "
-              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
-        raise AlertmanagerConfigRejected(EXIT_VIOLATION) from exc
+    # reads it (ADR-036 §12): the gate's own reading.
+    merged = check.reading
     warn_if_root_receiver_without_integration(merged)
     # #1211: on the same reading — the cluster's own firehose and
     # watchdog-heartbeat receivers decide whether those alerts reach anyone.

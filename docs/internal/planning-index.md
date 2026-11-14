@@ -19,16 +19,15 @@ lang: zh
 ## 索引
 
 <!-- PLANNING_INDEX_START -->
-### in-progress (4)
+### in-progress (3)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
-| `TRK-3541` | tech-debt | TRK-3541: nightly race 依上一晚各 package 耗時分片 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (37)
+### accepted (38)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -57,6 +56,7 @@ lang: zh
 | `ADR-023` | adr | ADR-023: tenant-api 寫入平面 — 單一寫者不變式 | tenant-api | — | [docs/adr/023-write-plane-single-writer-invariant.md](../adr/023-write-plane-single-writer-invariant.md) |
 | `ADR-024` | adr | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts | threshold-exporter | — | [docs/adr/024-version-aware-threshold-via-dimensional-label.md](../adr/024-version-aware-threshold-via-dimensional-label.md) |
 | `ADR-025` | adr | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 | observability | — | [docs/adr/025-alerting-plane-self-liveness.md](../adr/025-alerting-plane-self-liveness.md) |
+| `ADR-027` | adr | ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分 | tenant-api | — | [docs/adr/027-tenant-api-caller-identity.md](../adr/027-tenant-api-caller-identity.md) |
 | `ADR-028` | adr | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 | tenant-api | — | [docs/adr/028-federation-revocation-tamper-evidence.md](../adr/028-federation-revocation-tamper-evidence.md) |
 | `ADR-029` | adr | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 | threshold-exporter | — | [docs/adr/029-custom-alert-cross-tenant-query-scoping.md](../adr/029-custom-alert-cross-tenant-query-scoping.md) |
 | `ADR-030` | adr | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 | rule-packs | — | [docs/adr/030-decision-layer-migration-validation.md](../adr/030-decision-layer-migration-validation.md) |
@@ -70,12 +70,11 @@ lang: zh
 | `ADR-038` | adr | ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告 | platform | — | [docs/adr/038-unread-keys-judged-by-readers.md](../adr/038-unread-keys-judged-by-readers.md) |
 | `ADR-039` | adr | ADR-039: 刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測 | dx | — | [docs/adr/039-bench-acceptance-ledger.md](../adr/039-bench-acceptance-ledger.md) |
 
-### proposed (17)
+### proposed (16)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
-| `ADR-027` | adr | ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分 | tenant-api | — | [docs/adr/027-tenant-api-caller-identity.md](../adr/027-tenant-api-caller-identity.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
@@ -92,11 +91,12 @@ lang: zh
 | `TRK-017` | dx | TRK-017: Desktop Commander 長命令 Watchdog Wrapper | ops | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-018` | dx | TRK-018: `engineering:testing-strategy` Skill 驅動的測試設計還債 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### done (1)
+### done (2)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `TRK-011` | dx | TRK-011: Fake-Clock 注入（根因修復 Go 時間相依測試） | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-3541` | tech-debt | TRK-3541: nightly race 依上一晚各 package 耗時分片 | ci | #3552, 3575, 3582 | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
 ### superseded (1)
 

@@ -62,9 +62,11 @@ NOT_ENGINES: dict[str, str] = {
     "go": "toolchain lookup (go env GOROOT) to find gofmt",
     "da-guard": "first-party binary with the same 0/1/2 contract (_lib_godispatch)",
     "da-crdecode": "first-party binary with the same 0/1/2 contract (_lib_consumer_read)",
-    "npm": "installs @babel/standalone for lint_jsx_babel's node pass; its "
-           "failure is that tool's no-verdict, judged with node (#3611 PR 2)",
+    "npm": "package installer, not a verdict engine (lint_jsx_babel installed "
+           "@babel/standalone with it until #3669; no caller left)",
     "openssl": "key generation (federation_keygen), not a lint verdict",
+    "pre-commit": "fuse_plumbing_commit only probes `--version` to know git's hook can "
+                  "start; the hooks' output is never parsed and any failure is 2 (#3634)",
     "notify-send": "desktop notification (validate_all --notify)",
     "osascript": "desktop notification (validate_all --notify)",
     "powershell": "desktop notification (validate_all --notify)",
@@ -114,6 +116,15 @@ MIGRATED: dict[Key, int] = {
     # #3611 PR 4: off the subprocess path altogether — the registry is asked
     # over its v2 API (_lib_registry), so skopeo has no caller left
     ("scripts/ops/check_image_refs_resolve.py", "skopeo"): 2,
+    # #3611 PR 5: recipe-preview's promtool — check rules / test rules --junit
+    ("scripts/tools/dx/_recipe_preview.py", "promtool"): 1,
+    # #3793: off the subprocess path altogether — Alertmanager's gate asks
+    # its loader (da-read) only, so `amtool check-config` has no caller left
+    ("scripts/tools/ops/_grar_render.py", "amtool"): 1,
+    ("scripts/tools/dx/measure_judgement_budget.py", "amtool"): 1,
+    # #3839: the generator service's readiness asks for da-read, the binary
+    # that gate runs — its two `which("amtool")` are gone
+    ("scripts/tools/ops/generator_service.py", "amtool"): 2,
 }
 
 #: Baseline sites the scanner counts that are not engine calls. They stay in

@@ -169,6 +169,34 @@ def test_node_version_is_one_value_and_matches_the_dev_container() -> None:
         f"drifted: {bad}")
 
 
+_NODE_IMAGE_RE = re.compile(
+    r"^\s*FROM\s+(?:--platform=\S+\s+)?(?:docker\.io/)?(?:library/)?node:(\S+)",
+    re.MULTILINE | re.IGNORECASE)
+
+
+def test_every_node_image_is_the_dev_container_major() -> None:
+    """`FROM node:<tag>` builds the shipped portal bundles (da-portal's
+    `portal-build` stage, #3738) — the same esbuild run `make portal-build` does
+    in the dev container and CI's setup-node does. A different Node major there
+    is a different npm resolving the lockfile, which is how a shared chunk got
+    re-hashed before (the reason CI pins setup-node to the dev container's major).
+    The tag must start with `<major>-` or `<major>.` (or be exactly the major);
+    a digest is allowed after it, a floating `lts`/`alpine` is not."""
+    dc = str(_feature("node")["version"])
+    sites, bad = [], []
+    for path in repo_files("Dockerfile"):
+        rel = path.relative_to(_REPO).as_posix()
+        for ref in _NODE_IMAGE_RE.findall(path.read_text(encoding="utf-8")):
+            tag = ref.split("@", 1)[0]
+            sites.append(rel)
+            if not (tag == dc or tag.startswith((dc + "-", dc + "."))):
+                bad.append(f"{rel}: node:{ref}")
+    assert sites, ("no `FROM node:` in any Dockerfile — da-portal's portal-build "
+                   "stage left the walker's reach; re-derive this test's floor")
+    assert not bad, (
+        f"node images must be the dev container's Node {dc}:\n  " + "\n  ".join(bad))
+
+
 # ── Python ──────────────────────────────────────────────────────────────────
 #
 # ⛔ ONE source: `.python-version` (exact patch). Every consumer either READS it

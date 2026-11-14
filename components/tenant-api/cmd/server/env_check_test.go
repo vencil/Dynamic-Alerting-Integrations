@@ -98,11 +98,19 @@ func TestCheckTAEnv(t *testing.T) {
 	}
 }
 
-// ADR-027 §6 / §9 item 5: the machine-identity audit settings are gone, so a
-// deployment still setting them is refused at start instead of running as if
-// an audit were happening.
-func TestCheckTAEnv_RefusesRemovedMachineIdentitySettings(t *testing.T) {
-	for _, name := range []string{"TA_MACHINE_IDENTITY_AUDIT", "TA_MACHINE_IDENTITY_AUDIENCE", "TA_MACHINE_IDENTITY_ISSUER"} {
+// ADR-027 §6 / §9 item 5: every setting the ADR removed is refused at start,
+// so a deployment still setting one stops instead of running as if it still
+// had effect — the machine-identity audit, the switch that read the trusted
+// claim headers from the environment (now from the oauth2-proxy config), and
+// the switches that turned the scope axes or empty-_rbac.yaml denial off.
+// adr-check: ADR-027/9.5d ADR-027/9.6d
+func TestCheckTAEnv_RefusesSettingsADR027Removed(t *testing.T) {
+	for _, name := range []string{
+		"TA_MACHINE_IDENTITY_AUDIT", "TA_MACHINE_IDENTITY_AUDIENCE", "TA_MACHINE_IDENTITY_ISSUER",
+		"TA_IDENTITY_CLAIM_HEADERS",
+		"TA_RBAC_EMPTY_OPEN", "TA_RBAC_METADATA_SCOPE_ENFORCE",
+		"TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE", "TA_RBAC_ORG_SCOPE_ENFORCE",
+	} {
 		if slices.Contains(knownTAEnv, name) {
 			t.Errorf("%s is still in knownTAEnv", name)
 		}

@@ -1,0 +1,31 @@
+{
+  "status": "success",
+  "data": {
+    "groups": [
+      {
+        "name": "mariadb-normalization",
+        "file": "/etc/prometheus/rules/rule-pack-mariadb.yaml",
+        "rules": [
+          {"name": "tenant:mysql_threads_running:avg1m", "type": "recording", "health": "ok", "lastError": "", "query": "avg by (tenant) (rate(mysql_global_status_threads_running[1m]))"},
+          {"name": "tenant:mysql_threads_connected:max", "type": "recording", "health": "ok", "lastError": "", "query": "max by (tenant) (mysql_global_status_threads_connected)"}
+        ]
+      },
+      {
+        "name": "mariadb-alerts",
+        "file": "/etc/prometheus/rules/rule-pack-mariadb.yaml",
+        "rules": [
+          {"name": "MariaDBDown", "type": "alerting", "health": "ok", "lastError": "", "query": "(mysql_up == 0)"},
+          {"name": "MariaDBHighConnections", "type": "alerting", "health": "err", "lastError": "many-to-many matching not allowed: matching labels must be unique on one side", "query": "tenant:mysql_threads_connected:max > on (tenant) group_left tenant:alert_threshold:mysql_connections"},
+          {"name": "MariaDBSlaveLag", "type": "alerting", "health": "ok", "lastError": "", "query": "mysql_slave_lag > 30"}
+        ]
+      },
+      {
+        "name": "node-exporter",
+        "file": "/etc/prometheus/rules/node.yaml",
+        "rules": [
+          {"name": "NodeFilesystemAlmostFull", "type": "alerting", "health": "ok", "lastError": "", "query": "node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.05"}
+        ]
+      }
+    ]
+  }
+}

@@ -226,7 +226,8 @@ from a second copy.
 {{- define "tenant-api.generatorPolicyDir" -}}/etc/da-generator-policy{{- end }}
 {{- define "tenant-api.generatorPolicyPath" -}}{{ include "tenant-api.generatorPolicyDir" . }}/policy.yaml{{- end }}
 {{- /* The generator's /tmp emptyDir. It holds what one judgement hands
-     amtool (the generated Alertmanager config) and nothing else long-lived;
+     da-read as files (the shipped platform rule files) and nothing else
+     long-lived;
      the conf.d tree is in workDir. Exceeding it evicts the pod. */ -}}
 {{- define "tenant-api.generatorTmpSizeLimit" -}}256Mi{{- end }}
 
@@ -318,18 +319,6 @@ Generator guard (#2902). Renders nothing; fails the render on a
 configuration the generator container cannot run in. The container is
 required since #2903, so this always applies.
 */}}
-{{- /*
-ADR-027 §2: tenant-api refuses to start without the oauth2-proxy config file
-(TA_OAUTH2_PROXY_CONFIG), so a render without it would be a pod that never
-starts. Fail here. (The API's Unix socket is always rendered: its path is
-tenant-api.humanSocketPath, not a value.)
-*/ -}}
-{{- define "tenant-api.identityPlaneGuard" -}}
-{{- if not .Values.oauth2Proxy.enabled -}}
-{{- fail "oauth2Proxy.enabled=false is no longer supported: the API is reachable only through the oauth2-proxy sidecar, and tenant-api refuses to start without its config file (ADR-027 §2). Remove the override." -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "tenant-api.generatorGuard" -}}
 {{- $g := .Values.generator -}}
 {{- /* ADR-036 §3: git refuses a repository another uid owns ("dubious
@@ -380,6 +369,52 @@ exec:
       s.connect("{{ include "tenant-api.generatorSocketPath" . }}")
       s.sendall(b"GET /v1/status HTTP/1.1\r\nHost: probe\r\n\r\n")
       sys.exit(0 if s.recv(64).startswith(b"HTTP/1.1 200 ") else 1)
+{{- end }}
+
+{{/*
+recipe-preview container (ADR-027 §5, #1040): fixed in-pod paths and image.
+
+  socketDir   the emptyDir holding preview.sock. Mounted ONLY by the
+              recipe-preview container (which binds the socket) and tenant-api
+              (which dials it, TA_RECIPE_PREVIEW_SOCKET): the service's trust
+              boundary is that mount plus the socket's 0600 mode plus a
+              same-uid peer (SO_PEERCRED).
+  image       the tag follows generator.image.tag unless recipePreview.image.tag
+              is set: one `tools/v*` release builds both images, so the one
+              pin bump_docs.py --tools rewrites moves both. A digest is never
+              inherited (the images differ).
+*/}}
+{{- define "tenant-api.recipePreviewSocketDir" -}}/run/recipe-preview{{- end }}
+{{- define "tenant-api.recipePreviewSocketPath" -}}{{ include "tenant-api.recipePreviewSocketDir" . }}/preview.sock{{- end }}
+{{- /* ⛔ Only the TAG is a helper; deployment.yaml writes the repository
+     and digest as .Values reads, so check_image_pin_capability.py's strip
+     path can attribute the container to the recipePreview.image pin. */ -}}
+{{- define "tenant-api.recipePreviewTag" -}}
+{{- $tag := .Values.recipePreview.image.tag | default .Values.generator.image.tag -}}
+{{- if not $tag -}}
+{{- fail "recipePreview.image.tag is empty and so is generator.image.tag, which it follows: set one (#1040)." -}}
+{{- end -}}
+{{- $tag -}}
+{{- end }}
+
+{{/*
+The recipe-preview container's exec probe: GET /v1/status over the Unix socket
+with the image's python, passing on a 200. The service is Python's
+http.server, which answers HTTP/1.0, so the check reads the status code, not
+the version. Shared by the probes so they cannot drift.
+*/}}
+{{- define "tenant-api.recipePreviewProbe" -}}
+exec:
+  command:
+    - python
+    - -c
+    - |
+      import socket, sys
+      s = socket.socket(socket.AF_UNIX)
+      s.settimeout(4)
+      s.connect("{{ include "tenant-api.recipePreviewSocketPath" . }}")
+      s.sendall(b"GET /v1/status HTTP/1.0\r\n\r\n")
+      sys.exit(0 if s.recv(64).split()[1:2] == [b"200"] else 1)
 {{- end }}
 
 {{/*

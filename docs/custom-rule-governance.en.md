@@ -52,7 +52,7 @@ Tenants configure thresholds via `tenant.yaml` without touching PromQL:
 ```yaml
 # Three-state control example (key names match metric definitions in _defaults.yaml)
 mysql_connections: "800"        # Custom: user-defined threshold
-mysql_threads_running: ""       # Default: use platform default (omit or empty string)
+# mysql_threads_running:        # Default: leave the key out to inherit the level above — a subtree _defaults.yaml's value if one sets the key, else the root platform default (an empty string is not a valid value)
 mysql_replication_lag: "disable" # Disable: turn off this alert
 ```
 

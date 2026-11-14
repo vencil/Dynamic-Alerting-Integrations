@@ -223,7 +223,7 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-僅在 PR 時執行。產出合併後的 Alertmanager 設定並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 amtool」不適用於 v2.9.0 映像：它不內含 `amtool`；v2.9.0 映像也還是舊的產生器（不帶模式旗標時輸出片段、`--output-configmap` 整個取代 `route.routes`） <!-- image-caveat: v2.9.0 -->
+僅在 PR 時執行。產出合併後的 Alertmanager 設定並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 da-read」不適用於 v2.9.0 映像：它沒有 `da-read`；v2.9.0 映像也還是舊的產生器（不帶模式旗標時輸出片段、`--output-configmap` 整個取代 `route.routes`） <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # 把租戶路由合併進你的 Alertmanager base，產出完整 ConfigMap
@@ -236,12 +236,12 @@ da-tools generate-routes --config-dir conf.d/ --output-configmap \
 # 而工具現在會直接拒絕這個組合（結束碼 2；#1650）。要驗證就另外跑一次
 # （--validate 也不讀 --dry-run，同樣結束碼 2）：
 da-tools generate-routes --config-dir conf.d/ --validate
-# ⚠️ --validate 會把設定組進「內建預設 base」交給 amtool（#2260），不是你的 base；
+# ⚠️ --validate 會把設定組進「內建預設 base」交給 Alertmanager 的設定載入器（da-read，#2260、#3689），不是你的 base；
 #    上面的 --output-configmap --base-config 則驗你自己的 base 組出來的那份（#2219）。
 #    alertmanager-base.yaml 是來源（你自己的設定，進 git），.output/ 是產物；
 #    base 裡你自己的路由與 receiver 原樣保留。別拿產物當 base：含 tenant-*
 #    receiver 會被拒收（結束碼 1）。
-#    da-tools 映像內含 amtool（#2294），在映像裡跑這兩道驗證預設就會執行。
+#    da-tools 映像內含 da-read，在映像裡跑這兩道驗證預設就會執行。
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）
 # CI 中先把 base branch 的 conf.d/ 取出到 conf.d.base/
@@ -379,7 +379,7 @@ helm upgrade --install threshold-exporter \
 
 **chart 版本是固定的**：`--deploy helm` 產生的 GitHub workflow 與 GitLab pipeline 裡，`helm upgrade --install` 一律帶 `--version`，值是**執行 `init` 那一版**對應的 threshold-exporter chart 版本（chart 自己的 `exporter/v*` 版號線，以 `helm/threshold-exporter/Chart.yaml` 的 `version` 為準，與 da-tools 映像的版號是兩回事）。少了 `--version`，helm 會在 job 執行當下抓 registry 上最新的 chart，你的部署會在你沒改任何東西的情況下換版。要升 chart，直接改產生物裡那一行的 `--version`（與升 `DA_TOOLS_IMAGE` 同一個做法）。⚠️ v2.9.0 映像的 `init` 產生的 helm 指令仍沒有 `--version`，下一版映像起才固定；用它產生的專案請自行在那一行補上 `--version`。 <!-- image-caveat: v2.9.0 -->
 
-**helm 本身的版本也是固定的**：GitLab pipeline 以 `DA_HELM_IMAGE`（`alpine/helm:3.22.1`）執行；GitHub workflow 的 apply job 在 `helm upgrade` 前用 `azure/setup-helm` 安裝同一版。runner 預裝的 helm 會跟著 runner 映像換版：`ubuntu-latest` 正從 Ubuntu 24.04（Helm 3.22.1）分批換成 26.04（Helm 4.3.1），2026-10-19 開始、GitHub 預定 2026-11-19 完成；被換到的 runner 上，沒有這一步的 workflow 會在你沒改任何東西的情況下跨到 Helm 4。⚠️ v2.9.0 映像的 `init` 產生的 GitHub workflow 沒有這一步；用它產生的專案請在 apply job 的 `actions/checkout` 之後自行加上 `- uses: azure/setup-helm@v4` 與 `with: {version: v3.22.1}`。 <!-- image-caveat: v2.9.0 -->
+**helm 本身的版本也是固定的**：GitLab pipeline 以 `DA_HELM_IMAGE`（`alpine/helm:3.22.1`）執行；GitHub workflow 的 apply job 在 `helm upgrade` 前用 `azure/setup-helm` 安裝同一版。runner 預裝的 helm 會跟著 runner 映像換版：`ubuntu-latest` 正從 Ubuntu 24.04（Helm 3.22.1）分批換成 26.04（Helm 4.3.1），2026-10-19 開始、GitHub 預定 2026-11-19 完成；被換到的 runner 上，沒有這一步的 workflow 會在你沒改任何東西的情況下跨到 Helm 4。⚠️ v2.9.0 映像的 `init` 產生的 GitHub workflow 沒有這一步；用它產生的專案請在 apply job 的 `actions/checkout` 之後自行加上 `- uses: azure/setup-helm@v5` 與 `with: {version: v3.22.1}`。 <!-- image-caveat: v2.9.0 -->
 
 ### 3.3 ArgoCD（你自己的 Application，不是 `--deploy` 的一個值）
 
@@ -544,7 +544,7 @@ python3 scripts/tools/ops/assemble_config_dir.py \
 |------|------|------|
 | `da-tools: command not found`（rc 127） | `da-tools` 不是可安裝的執行檔，只是映像裡的進入點 | 加上 `docker run` 前綴或自建 alias，見本頁開頭的「Docker 使用模式」一節；取得映像見 [Migration Toolkit 安裝指南](../migration-toolkit-installation.md) |
 | CI validate 失敗 | `da-tools validate-config --config-dir conf.d/` | 每個非 PASS 的檢查會附 `-> Suggested action:` 與 `-> See:`；加 `--json` 可得同樣資訊的機器可讀版。⚠️ **你手上這顆映像（v2.9.0）**只要 `conf.d/` 裡有**任何一個它處理不下去的檔案**，就是丟出 Python traceback 而不是報告（兩種模式皆然、stdout 零位元組）。⛔ **不要照著 traceback 找檔名**：只有 YAML 語法錯那一種的末尾會指出檔名與行號，其餘（存成非 UTF-8、頂層不是 mapping、`tenants:` 底下全被註解掉…）指的是 codec、位元組位移或**我們映像裡的路徑**——這裡不列窮舉，因為每次都會有沒列到的第 N 種。可靠的做法是二分法：把 `conf.d/` 的檔案分兩半各跑一次，縮到單一檔案為止。[#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448) 已修，**下一版映像起**會照常印出報告，並在 `yaml_syntax` 那一列指名讀不到的檔案 <!-- image-caveat: v2.9.0 --> |
-| 報告叫我「Remove unknown keys」，但那些 key 我還在用 | `da-tools validate-config --config-dir conf.d/` 的 `schema` 那一列 | ⛔ **先不要刪**。若你的 `_defaults.yaml` **沒有 `defaults:` 區塊**、是 `defaults: {}`，**或這棵樹根本沒有 `_defaults.yaml`**（最後這一種最常見），平台就沒有宣告任何 key，於是**每一個**租戶 override 都會被報成 `unknown key`——問題在平台側，不是你的租戶檔打錯字。⚠️ 上述三種形狀**不包含**寫成 `defaults:` 這個裸 key（值為 null）的那一種：你手上這顆映像對它是丟 `AttributeError`、rc=1、stdout 零位元組，走的是上一列、根本印不出任何建議（同樣到不了這一列的還有存成非 UTF-8 、頂層不是 mapping 的 `_defaults.yaml`）。**上述那三種形狀**才會走到這一列，而**你手上這顆映像（v2.9.0）對這三種印的建議是錯的**（照做會刪掉正在生效的閾值，且該次執行 exit 0）。修法是補上 `defaults:` 區塊——**這棵樹沒有 `_defaults.yaml` 就建一個**，被清空的才是「補回去」。下一版映像起這一列會改印「⛔ Do NOT remove the keys named above」（[#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448)） <!-- image-caveat: v2.9.0 --> |
+| 報告叫我「Remove unknown keys」，但那些 key 我還在用 | `da-tools validate-config --config-dir conf.d/` 的 `unread_keys` 那一列（v2.9.0 映像是 `schema` 列） | ⛔ **先不要刪**。若你的 `_defaults.yaml` **沒有 `defaults:` 區塊**、是 `defaults: {}`，**或這棵樹根本沒有 `_defaults.yaml`**（最後這一種最常見），而且也沒有用 `optional_overrides:` 宣告任何 key，平台就沒有宣告任何 key，於是**每一個**租戶 override 都會被報成 `unknown key`——問題在平台側，不是你的租戶檔打錯字。⚠️ 上述三種形狀**不包含**寫成 `defaults:` 這個裸 key（值為 null）的那一種：你手上這顆映像對它是丟 `AttributeError`、rc=1、stdout 零位元組，走的是上一列、根本印不出任何建議（同樣到不了這一列的還有存成非 UTF-8 、頂層不是 mapping 的 `_defaults.yaml`）。**上述那三種形狀**才會走到這一列，而**你手上這顆映像（v2.9.0）對這三種印的建議是錯的**（照做會刪掉正在生效的閾值，且該次執行 exit 0）。修法是補上 `defaults:` 區塊——**這棵樹沒有 `_defaults.yaml` 就建一個**，被清空的才是「補回去」。下一版映像起這一列會改印「⛔ Do NOT remove the keys named above」（[#1448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1448)） <!-- image-caveat: v2.9.0 --> |
 | 驗證全 PASS，但你改的東西沒生效 | `da-tools validate-config --config-dir conf.d/`（自己跑，不要只看 commit 時的綠勾） | 多數問題只會產生 **WARN**，而 WARN 不影響 exit code、也不會在 `git commit` 時顯示（pre-commit 只印失敗 hook 的輸出）。逐項對照 §2.2 的「違規時會擋下嗎」欄 |
 | ConfigMap 更新後 exporter 沒反應 | 確認 `reloadInterval` 設定、檢查 exporter logs | `kubectl logs -l app=threshold-exporter -n monitoring` |
 | Alertmanager 路由不生效 | `da-tools explain-route --tenant <name> --config-dir conf.d/` | 檢查四層合併順序 |

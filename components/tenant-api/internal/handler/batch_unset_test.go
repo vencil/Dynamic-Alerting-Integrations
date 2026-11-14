@@ -158,15 +158,16 @@ type unsetValidationCase struct {
 	many                      bool
 }
 
-// unsetValidationCases: field is relative to the op ("unset[0]", "patch").
+// unsetValidationCases: field is relative to the op ("unset[0]", "patch"). The
+// allow-list names the registry's retired threshold keys too (#3783's two Kafka keys).
 func unsetValidationCases() []unsetValidationCase {
 	tooMany := make([]string, 1001)
 	for i := range tooMany {
 		tooMany[i] = `"_routing"`
 	}
 	return []unsetValidationCase{
-		{"unknown key", `"unset":["_silent_mode"]`, "unset[0]", `unset can only remove "_routing", "_routing_receiver_type"; got "_silent_mode"`, false},
-		{"null element", `"unset":[null]`, "unset[0]", `unset can only remove "_routing", "_routing_receiver_type"; got ""`, false},
+		{"unknown key", `"unset":["_silent_mode"]`, "unset[0]", `unset can only remove "_routing", "_routing_receiver_type", "kafka_active_controllers", "kafka_request_rate"; got "_silent_mode"`, false},
+		{"null element", `"unset":[null]`, "unset[0]", `unset can only remove "_routing", "_routing_receiver_type", "kafka_active_controllers", "kafka_request_rate"; got ""`, false},
 		{"repeated", `"unset":["_routing","_routing"]`, "unset[1]", `"_routing" is already listed at`, false},
 		{"also in patch", `"patch":{"_routing":"disable"},"unset":["_routing"]`, "unset[0]", "also in patch", false},
 		{"too many", `"unset":[` + strings.Join(tooMany, ",") + `]`, "unset", "must not exceed 1000 items", true},

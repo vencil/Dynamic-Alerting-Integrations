@@ -4,11 +4,12 @@
  * /api/v1/federation/tokens. Every API body below goes through apiFixture
  * (#2833), so it can only carry what the generated spec says the API sends.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { apiFixture } from './helpers/api-fixture';
 import { FederationTokensModal } from '../src/interactive/tools/tenant-manager/components/FederationTokensModal.jsx';
-import { signInHeld } from '../src/interactive/tools/_common/auth/sign-in.js';
+import { signInHeld, SIGN_IN_ATTEMPT_KEY } from '../src/interactive/tools/_common/auth/sign-in.js';
+import { apiFetch } from '../src/interactive/tools/_common/api/api-fetch.js';
 
 type Answer = { ok: boolean; status: number; data: any; retryAfter?: string | null };
 
@@ -40,10 +41,37 @@ function api(over: Partial<Record<'list' | 'issue' | 'revoke', any>> = {}) {
   };
 }
 
-function open(a = api(), signIn = vi.fn(() => true)) {
-  render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={a} signIn={signIn} />);
-  return { a, signIn };
+function open(a = api()) {
+  render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={a} />);
+  return { a };
 }
+
+// The dialog's own requests (no `api` prop): fetch answers per method, in
+// order; the last answer repeats. location.assign records leaving for sign-in.
+type Wire = { status: number; data: any };
+function liveFetch(answers: Partial<Record<'GET' | 'POST' | 'DELETE', Wire[]>>) {
+  const seen: Record<string, number> = {};
+  const f = vi.fn((url: string, init?: RequestInit) => {
+    const method = (init && init.method) || 'GET';
+    const list = answers[method as 'GET'] || [{ status: 500, data: null }];
+    const i = Math.min(seen[method] = (seen[method] ?? -1) + 1, list.length - 1);
+    const { status, data } = list[i];
+    return Promise.resolve({
+      ok: status >= 200 && status < 300, status, headers: new Headers(),
+      json: () => Promise.resolve(data),
+    } as any);
+  });
+  vi.stubGlobal('fetch', f);
+  return f;
+}
+const TOKEN_ANSWER = () => ({ token: 'eyJ.signed.jwt', record: record({ token_id: 'tok-2', description: 'new one' }) });
+let assign: ReturnType<typeof vi.fn>;
+beforeEach(() => {
+  window.sessionStorage.clear();
+  assign = vi.fn();
+  vi.stubGlobal('location', { ...window.location, pathname: '/interactive/', search: '', hash: '', assign });
+});
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('FederationTokensModal — list', () => {
   it('lists the tenant\'s tokens without any signed token', async () => {
@@ -84,8 +112,19 @@ describe('FederationTokensModal — list', () => {
   });
 
   it('401: sends the browser to sign in', async () => {
-    const { signIn } = open(api({ list: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) }));
-    await waitFor(() => expect(signIn).toHaveBeenCalled());
+    const f = liveFetch({ GET: [{ status: 401, data: { error: 'unauthorized' } }] });
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(f).toHaveBeenCalledWith('/api/v1/federation/tokens?tenant_id=tenant-x');
+    expect(screen.queryByTestId('fed-error')).toBeNull();
+  });
+
+  it('401 right after signing in: stays and says it is still refused', async () => {
+    window.sessionStorage.setItem(SIGN_IN_ATTEMPT_KEY, String(Date.now()));
+    liveFetch({ GET: [{ status: 401, data: { error: 'unauthorized' } }] });
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('fed-error').textContent).toContain('Still refused'));
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('a 200 that is not a list is reported, not shown as "no tokens"', async () => {
@@ -211,13 +250,45 @@ describe('FederationTokensModal — revoke', () => {
 });
 
 describe('FederationTokensModal — the one-time token is never dropped silently', () => {
-  async function issueOne(a = api(), signIn = vi.fn(() => true)) {
+  it('a 401 elsewhere on the page while the issue request is in flight does not leave', async () => {
+    let answerIssue: (v: any) => void = () => {};
+    const wire = (status: number, data: any) => ({ ok: status < 300, status, headers: new Headers(), json: () => Promise.resolve(data) });
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      if (init && init.method === 'POST') return new Promise((r) => { answerIssue = r; });
+      if (String(url).startsWith('/api/v1/prs')) return Promise.resolve(wire(401, { error: 'unauthorized' }));
+      return Promise.resolve(wire(200, [record()]));
+    }));
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[1] && c[1].method === 'POST')).toBe(true));
+    // the page's background poll, answered 401 while the token is on its way
+    await apiFetch('/api/v1/prs');
+    expect(assign).not.toHaveBeenCalled();
+    answerIssue(wire(201, TOKEN_ANSWER()));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt'));
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('a 401 on the issue request itself still sends the browser to sign in', async () => {
+    liveFetch({
+      GET: [{ status: 200, data: [record()] }],
+      POST: [{ status: 401, data: { error: 'unauthorized' } }],
+    });
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('fed-error')).toBeNull();
+  });
+
+  async function issueOne(a = api()) {
     const onClose = vi.fn();
-    render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={a} signIn={signIn} />);
+    render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={a} />);
     await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('fed-issue'));
     await waitFor(() => expect(screen.getByTestId('fed-new-token')).toBeInTheDocument());
-    return { onClose, signIn, a };
+    return { onClose, a };
   }
 
   it('Close asks first while the token is shown; "close anyway" closes', async () => {
@@ -246,27 +317,35 @@ describe('FederationTokensModal — the one-time token is never dropped silently
   });
 
   it('a 401 while the token is shown does not leave for sign-in', async () => {
-    const a = api({ revoke: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) });
-    const { signIn } = await issueOne(a);
+    liveFetch({
+      GET: [{ status: 200, data: [record()] }],
+      POST: [{ status: 201, data: TOKEN_ANSWER() }],
+      DELETE: [{ status: 401, data: { error: 'unauthorized' } }],
+    });
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token')).toBeInTheDocument());
     const row = screen.getAllByTestId('fed-row')[0];
     fireEvent.click(within(row).getByTestId('fed-revoke'));
     fireEvent.click(within(row).getByTestId('fed-revoke-confirm'));
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
-    expect(signIn).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
     expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt');
   });
 });
 
 describe('FederationTokensModal — other states', () => {
   it('a list 401 right after signing in shows the refusal, not "Loading…" forever', async () => {
-    open(api({ list: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) }), vi.fn(() => false));
+    window.sessionStorage.setItem(SIGN_IN_ATTEMPT_KEY, String(Date.now()));
+    open(api({ list: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) }));
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
     expect(screen.queryByText('Loading…')).toBeNull();
   });
 
   it('without a tenant id it asks for one (a removed tenant has no card), then lists it', async () => {
     const a = api();
-    render(<FederationTokensModal tenantId="" onClose={() => {}} api={a} signIn={vi.fn(() => true)} />);
+    render(<FederationTokensModal tenantId="" onClose={() => {}} api={a} />);
     expect(a.list).not.toHaveBeenCalled();
     fireEvent.change(screen.getByTestId('fed-tenant-id'), { target: { value: ' gone-tenant ' } });
     fireEvent.click(screen.getByTestId('fed-tenant-open'));
@@ -280,7 +359,7 @@ describe('FederationTokensModal — CodeRabbit review (#3740)', () => {
     let resolve: (v: Answer) => void = () => {};
     const issue = vi.fn(() => new Promise<Answer>((r) => { resolve = r; }));
     const onClose = vi.fn();
-    render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={api({ issue })} signIn={vi.fn(() => true)} />);
+    render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={api({ issue })} />);
     await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('fed-issue'));
     fireEvent.click(screen.getByTestId('fed-close'));
@@ -291,15 +370,16 @@ describe('FederationTokensModal — CodeRabbit review (#3740)', () => {
   });
 
   it('a 401 on the reload right after issuing keeps the token and does not sign in', async () => {
-    let calls = 0;
-    const list = vi.fn(() => Promise.resolve(++calls === 1 ? ok([record()]) : fail(401, { error: 'unauthorized' })));
-    const signIn = vi.fn(() => true);
-    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={api({ list })} signIn={signIn} />);
+    const f = liveFetch({
+      GET: [{ status: 200, data: [record()] }, { status: 401, data: { error: 'unauthorized' } }],
+      POST: [{ status: 201, data: TOKEN_ANSWER() }],
+    });
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('fed-issue'));
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(f.mock.calls.filter((c) => !c[1]).length).toBe(2));
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
-    expect(signIn).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
     expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt');
     // still copyable: the copy button writes the issued token to the clipboard
     const writeText = vi.fn(() => Promise.resolve());
@@ -307,11 +387,11 @@ describe('FederationTokensModal — CodeRabbit review (#3740)', () => {
     fireEvent.click(screen.getByTestId('fed-copy-token'));
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(String(writeText.mock.calls[0][0])).toContain('eyJ.signed.jwt');
-    expect(signIn).not.toHaveBeenCalled();
+    expect(assign).not.toHaveBeenCalled();
   });
 
   it('holds sign-in for the whole page while the token is shown, and lets go after', async () => {
-    const { unmount } = render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={api()} signIn={vi.fn(() => true)} />);
+    const { unmount } = render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={api()} />);
     await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
     expect(signInHeld()).toBe(false);
     fireEvent.click(screen.getByTestId('fed-issue'));

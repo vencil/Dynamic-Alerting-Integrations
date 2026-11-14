@@ -56,6 +56,10 @@ const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0';
 // output byte for byte, so a drift between the two reds there.
 const CICD_HELM_VERSION = '3.22.1';
 
+// SETUP_HELM_ACTION in scripts/tools/ops/init_project.py — the action that
+// installs it. Kept equal to the CLI by the same byte-for-byte comparison.
+const CICD_SETUP_HELM_ACTION = 'azure/setup-helm@v5';
+
 // ⛔ There is deliberately no argocd CLI image pin here any more, and none in
 // the CLI leg either: `--deploy argocd` is retired (#1351). It scaffolded no
 // ArgoCD Application while its apply stage synced one, so what we handed a
@@ -344,7 +348,7 @@ const _CICD_APPLY_BLOCKS = {
 `,
     steps: `      # Pins helm: the runner's own helm follows the runner image, which
       # moves across Helm majors on GitHub's schedule, not ours.
-      - uses: azure/setup-helm@v4
+      - uses: ${CICD_SETUP_HELM_ACTION}
         with:
           version: v${CICD_HELM_VERSION}
       - name: Helm upgrade threshold-exporter

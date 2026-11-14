@@ -45,6 +45,17 @@ After install, the in-cluster URLs are:
 | LogsQL HTTP query | `http://victorialogs.<ns>.svc:9428/select/logsql/query` |
 | `/metrics` (Prometheus scrape) | same port; annotations on the Service |
 
+The NetworkPolicy is rendered from `auth.consumers` itself: each consumer's
+`from` (its `namespace`, its `podLabels`, or both) is one row, so who may
+connect and what it may do are one list. `podLabels` alone match pods in this
+namespace only; a consumer installed elsewhere needs `namespace` (Vector has
+both). Prometheus is not a consumer — it scrapes `/metrics` and is admitted by
+`networkPolicy.scrapers` (default `app: prometheus`). Since chart 0.6.0,
+`networkPolicy.allowedPodSelectors` / `allowedNamespaces` fail the render; with
+`helm upgrade --reuse-values` use `--reset-then-reuse-values`. The connections
+the documented install depends on are evaluated end to end, one per consumer,
+in `tests/k8s/test_log_store_connectivity.py`.
+
 ### Consumer authorization (#1295)
 
 A vmauth sidecar owns the Service port; VictoriaLogs listens on loopback only.
@@ -58,15 +69,17 @@ Secret (hex, no trailing newline: `--from-literal=password="$(openssl rand -hex 
 | `observe` | reach every path — the migration step, **not a boundary** |
 
 In `enforce`, every endpoint above needs the consumer's Basic Auth
-credentials, and the chart refuses to render until every consumer in
-`auth.consumers` names its Secret (the error lists the ones missing). Remove
-consumers you do not run. Each consumer chart sends its credential from
+credentials, and the chart refuses to render until `auth.existingSecrets` names a Secret
+for every consumer in `auth.consumers` (the error lists the ones missing; a
+key that names no consumer is refused too). It is a map, so setting it does
+not mean restating `auth.consumers` — that is needed only to remove consumers
+you do not run. Each consumer chart sends its credential from
 `victorialogs.auth.existingSecret`; Grafana from the Secret
 `victorialogs-grafana`. Upgrading from a chart whose default was `observe`:
 set `auth.mode: observe` explicitly, wire every consumer, check they
 authenticate, then drop it — `docs/internal/platform-log-aggregation-runbook.md` §1.2.
 
-On `helm upgrade` the chart also looks up every Secret `auth.consumers` names
+On `helm upgrade` the chart also looks up every Secret `auth.existingSecrets` names
 and refuses if one is missing or has no non-empty `password` — the strategy is
 Recreate, so the running pod would go first and the new one would never start.
 `helm template` and first installs skip this. The lookup needs `get secrets` in
@@ -84,7 +97,8 @@ done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
   --set retentionPeriod=60d \
-  -f my-consumers.yaml   # auth.consumers[].existingSecret: victorialogs-<name>
+  -f my-secrets.yaml     # auth.existingSecrets: {vector: victorialogs-vector, ...}
+                         # (a map: auth.consumers is not restated)
 ```
 
 For chart smoke-tests / CI you can disable the PVC (and skip the Secrets):

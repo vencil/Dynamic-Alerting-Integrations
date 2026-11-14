@@ -86,12 +86,9 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 |---|---|---|---|---|---|
 | KafkaHighConsumerLag | warning | muted | [tier] {{ $labels.tenant }}: consumer lag elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_consumer_lag:max |
 | KafkaHighConsumerLagCritical | critical | muted | [tier] {{ $labels.tenant }}: critical consumer lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_consumer_lag:max |
-| KafkaUnderReplicatedPartitions | warning | muted | [tier] {{ $labels.tenant }}: under-replicated partitions  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:max |
-| KafkaUnderReplicatedPartitionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical under-replication  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:max |
-| KafkaNoActiveController | critical | muted | [tier] {{ $labels.tenant }}: no active Kafka controller  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_active_controllers:max |
+| KafkaUnderReplicatedPartitions | warning | muted | [tier] {{ $labels.tenant }}: under-replicated partitions  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:sum |
+| KafkaUnderReplicatedPartitionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical under-replication  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:sum |
 | KafkaLowBrokerCount | warning | muted | [tier] {{ $labels.tenant }}: broker count below minimum  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_broker_count:max |
-| KafkaHighRequestRate | warning | muted | [tier] {{ $labels.tenant }}: message rate threshold exceeded  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_request_rate:sum |
-| KafkaHighRequestRateCritical | critical | muted | [tier] {{ $labels.tenant }}: critical message rate  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_request_rate:sum |
 
 ---
 
@@ -121,6 +118,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
 | TenantExporterAbsent | critical | fires | No healthy up{job="tenant-exporters"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels. | Verify component is running and configured correctly; check component logs | tenant_expected_exporter |
+| TenantExporterReplicaDown | warning | muted | Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tena | Immediately check server status and network connectivity; review system logs | up |
 
 ---
 
