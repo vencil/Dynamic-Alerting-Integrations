@@ -390,7 +390,7 @@ class Service:
         self.da_guard_version = da_guard_version(None)
         #: #3862: the latest judgement's tool faults (``_lib_tool_fault``
         #: records, as dicts), or None when it had none. Not ready while set;
-        #: the next judgement that runs without one clears it.
+        #: only the next judgement whose outcome is ``ran`` clears it.
         self.tool_fault: Optional[list] = None
         self._job_seq = 0
         self.connections = 0
@@ -877,8 +877,11 @@ class Service:
             self.tool_fault = tool_faults_of(res)
             return _unavailable("VALIDATOR_UNAVAILABLE", "tool_fault",
                                 tool_fault_message(self.tool_fault))
-        self.tool_fault = None  # a judgement that ran without one
         if outcome == "ran":
+            # #3862: the one outcome that shows every program of the
+            # judgement ran. Any other (a bad request, a git read, memory,
+            # the deadline, …) may never have reached them: it clears nothing.
+            self.tool_fault = None
             rc = res.get("rc")
             doc = {"result": "pass" if rc == 0 else "findings",
                    "rc": rc, "findings": res.get("findings"), **common}

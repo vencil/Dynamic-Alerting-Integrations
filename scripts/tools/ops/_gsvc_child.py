@@ -26,7 +26,12 @@ forked, and never returns. In order:
    not there, could not be executed, timed out, ended by a signal, an exit
    code or output it never gives, older than this tool), the result is
    ``tool_fault`` with those records — whatever the generator concluded
-   without it, rc 0 included (#3862).
+   without it, rc 0 included (#3862). One the Go runtime ended under the
+   memory limit (``_lib_tool_fault.MEMORY_SIGNALS``) while the generator
+   ran is that write's ``memory`` instead — never ``ran``, whatever the
+   generator concluded without it; a fault in the same judgement wins. In
+   the key verdict that end is the verdict's own ``memory`` (ADR-038
+   decision 5: a verdict not completed, with its reason).
 6. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
    base tree's files as soon as the tree is read, each new parse-cache entry the moment its
    parse finishes, and the result last — so a process the deadline kills
@@ -491,7 +496,9 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
                   "stored": len(cache.new), "unreadable": cache.rejected_entries},
         "hit_keys": [list(k) for k in cache.hits],
     }
-    if memory or cache.memory_error:
+    # #3862: a program the Go runtime ended under the memory limit gave the
+    # generator nothing: whatever it concluded without it is no verdict.
+    if memory or cache.memory_error or _lib_tool_fault.memory_ends():
         return {"outcome": "memory", **common}
     try:
         with open(findings_path, encoding="utf-8") as fh:
@@ -729,7 +736,7 @@ def _warm(job: ChildJob, tree_dir: str, stream: "_Stream") -> dict:
         pass  # an unusable tree: whatever was parsed has been sent
     finally:
         _lib_parse_cache.install(None)
-    outcome = "memory" if cache.memory_error else "warmed"
+    outcome = "memory" if cache.memory_error or _lib_tool_fault.memory_ends() else "warmed"
     return {"outcome": outcome,
             "cache": {"parses": cache.parses, "hits": len(cache.hits),
                       "stored": len(cache.new), "unreadable": cache.rejected_entries}}
@@ -769,7 +776,7 @@ def run_child(job: ChildJob, result_fd: int) -> None:
         stream = _Stream(result_fd, job.max_transfer)
         _lib_tool_fault.clear()  # a fork: nothing of the service's own runs
         result = _judge(job, stream)
-        faults = _lib_tool_fault.records()
+        faults = _lib_tool_fault.faults()  # not a memory end: `_judge` answered that
         if faults:
             # #3862: a verdict reached without one of its programs is no
             # verdict — before `ran`, rc 0 included, and before `memory`.

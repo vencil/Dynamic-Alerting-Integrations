@@ -290,7 +290,10 @@ def _invoke(binary: str | None, name: str, env: str, build_hint: str,
         _fault(name, args, _lib_tool_fault.os_error_reason(e, binary))
         raise ConsumerReadError(f"cannot run {name} ({binary}): {e}") from e
     if proc.returncode < 0:
-        _fault(name, args, "signalled")
+        # #3862: as da-guard's (`_lib_tool_fault.signal_reason`): a Go runtime
+        # that ended itself under the judgement's memory limit is that
+        # write's memory, any other signal a fault.
+        _fault(name, args, _lib_tool_fault.signal_reason(proc.returncode))
     return proc, _stderr_lines(proc.stderr)
 
 

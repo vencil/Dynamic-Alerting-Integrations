@@ -213,21 +213,6 @@ def run_under_memory_limit() -> None:
     _MEMORY_LIMITED = True
 
 
-#: The signals the Go runtime ends itself with under ``GOTRACEBACK=crash``
-#: (a fatal error, an out-of-memory, a fault inside the runtime).
-_RUNTIME_CRASH_SIGNALS = frozenset({signal.SIGABRT, signal.SIGSEGV, signal.SIGBUS})
-
-
-def ended_by_memory_limit(returncode: int) -> bool:
-    """Whether a da-guard that exited *returncode* ended itself under this
-    process's memory limit (:func:`run_under_memory_limit`): the Go runtime's
-    own crash signal. That is the judgement's memory, an answer about its
-    size (#2906) — not a da-guard that did not run. Any other signal (a
-    SIGKILL from outside) is (#3862)."""
-    return (_MEMORY_LIMITED and returncode < 0
-            and -returncode in _RUNTIME_CRASH_SIGNALS)
-
-
 def _fault(subcommand: str, reason: str) -> None:
     """#3862: this da-guard run did not run (see `_lib_tool_fault`)."""
     _lib_tool_fault.record("da-guard", subcommand, reason)
@@ -383,8 +368,10 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         _fault(sub, _lib_tool_fault.os_error_reason(e, exe))
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
-    if proc.returncode < 0 and not ended_by_memory_limit(proc.returncode):
-        _fault(sub, "signalled")
+    if proc.returncode < 0:
+        # #3862: the Go runtime's own memory end is recorded as such (the
+        # judgement rejects that write as memory); any other signal is a fault.
+        _fault(sub, _lib_tool_fault.signal_reason(proc.returncode))
     if _MEMORY_LIMITED and proc.returncode < 0:
         # Ended by a signal under the memory limit it inherited (the
         # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):

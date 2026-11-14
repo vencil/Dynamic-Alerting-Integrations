@@ -1060,10 +1060,9 @@ def _run_da_guard(
         # Killed by a signal (OOM, a timeout of the CI job, …): not classified,
         # like the timeout above — neither `broken` nor `stale` (#2725 known
         # limitation; such a row is still advised as the tree's). #3862: but
-        # it did not run, so it is recorded — unless it is the Go runtime's
-        # own end under the judgement's memory limit, that write's memory.
-        if not _lib_parse_tree.ended_by_memory_limit(proc.returncode):
-            _fault(subcommand, "signalled")
+        # it did not run, so it is recorded — the Go runtime's own end under
+        # the judgement's memory limit as that write's memory, not a fault.
+        _fault(subcommand, _lib_tool_fault.signal_reason(proc.returncode))
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
     if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
         _fault(subcommand, "unexpected_exit")

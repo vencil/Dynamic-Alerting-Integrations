@@ -44,7 +44,7 @@ def tool_faults_of(result: dict) -> list:
     out = []
     for f in result.get("faults") or ():
         if not isinstance(f, dict) or f.get("binary") not in _lib_tool_fault.BINARIES \
-                or f.get("reason") not in _lib_tool_fault.REASONS:
+                or f.get("reason") not in _lib_tool_fault.FAULT_REASONS:
             continue
         sub = f.get("subcommand")
         out.append({"binary": f["binary"], "reason": f["reason"],
