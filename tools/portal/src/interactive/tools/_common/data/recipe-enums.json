@@ -1,5 +1,5 @@
 {
-  "_generated": "GENERATED from components/threshold-exporter/app/pkg/config/recipe_contract.json by scripts/tools/dx/gen_recipe_contract.py --update — DO NOT EDIT. severity / severityDefault / thresholdTrim come from tests/shared/threshold_value_matrix.json.",
+  "_generated": "GENERATED from components/threshold-exporter/app/pkg/config/recipe_contract.json by scripts/tools/dx/gen_recipe_contract.py --update — DO NOT EDIT. severity / severityDefault / thresholdTrim / thresholdDisable come from tests/shared/threshold_value_matrix.json.",
   "recipe": [
     "threshold",
     "rate",
@@ -74,6 +74,53 @@
     8287,
     12288
   ],
+  "thresholdDisable": {
+    "words": [
+      "disable",
+      "disabled",
+      "off",
+      "false"
+    ],
+    "letters": {
+      "a": [
+        65,
+        97
+      ],
+      "b": [
+        66,
+        98
+      ],
+      "d": [
+        68,
+        100
+      ],
+      "e": [
+        69,
+        101
+      ],
+      "f": [
+        70,
+        102
+      ],
+      "i": [
+        73,
+        105,
+        304
+      ],
+      "l": [
+        76,
+        108
+      ],
+      "o": [
+        79,
+        111
+      ],
+      "s": [
+        83,
+        115
+      ]
+    }
+  },
   "groupBy": [
     "persistentvolumeclaim"
   ],

@@ -134,6 +134,41 @@ describe('RecipeBuilder', () => {
     });
   });
 
+  // #3826: a stored alert carries its severity inside `threshold`
+  // ('70:critical') and has no `severity` member. The form used to open with
+  // the dropdown on the default and write an untouched critical alert back as
+  // a warning one.
+  const stored = (threshold: string) => ({
+    recipe: 'threshold', name: 'queue_high', metric: 'queue_depth', window: '5m', op: '>', threshold,
+  });
+
+  it.each([
+    ['70:critical', '70', 'critical', '70:critical'],
+    ['70:warning', '70', 'warning', '70:warning'],
+    ['70', '70', 'warning', '70:warning'],
+    [' 70 : CRITICAL ', '70', 'critical', '70:critical'],
+    // split at the LAST ':', as the exporter does
+    ['disable:critical', 'disable', 'critical', 'disable:critical'],
+  ])('#3826: editing %j and saving without touching a field writes the same alert back', (threshold, field, severity, emitted) => {
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch([])} onSubmit={onSubmit} initialValue={stored(threshold)} />);
+    expect((screen.getByTestId('field-threshold') as HTMLInputElement).value).toBe(field);
+    expect((screen.getByTestId('field-severity') as HTMLSelectElement).value).toBe(severity);
+    if (field === 'disable') return; // not a number: the form does not submit it
+    fireEvent.click(screen.getByTestId('submit'));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ ...stored(threshold), threshold: emitted });
+    expect(onSubmit.mock.calls[0][1]).toBe('queue_high');
+  });
+
+  it('#3826: the dropdown still decides after the form has opened on a stored critical alert', () => {
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch([])} onSubmit={onSubmit} initialValue={stored('70:critical')} />);
+    fill('field-severity', 'warning');
+    fireEvent.click(screen.getByTestId('submit'));
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ threshold: '70:warning' });
+  });
+
   it('severity dropdown is honored in the emitted threshold (not a no-op)', () => {
     const onSubmit = vi.fn();
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} onSubmit={onSubmit} />);

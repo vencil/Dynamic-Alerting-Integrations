@@ -28,16 +28,27 @@ purpose: |
   simulateAlerts(config, metricValues)
     Given current metric readings, compute which alerts fire and at what
     severity (strict `>`, via isFiring). The `_critical` companion key
-    escalates the same reading. Returns array of {metric, current,
-    threshold, critical_threshold, firing, critical_firing, severity, ...}.
+    escalates the same reading, and so does a `:critical` suffix on the
+    base key. Returns array of {metric, current, threshold,
+    critical_threshold, firing, critical_firing, severity, ...}.
+    Thresholds are read by ../validation/threshold-value.js, as the
+    exporter reads them (#3865): a value it serves no number for is a row
+    with severity 'unreadable' and its text in `raw` (threshold null), and
+    an unreadable `_critical` companion puts its text in
+    `critical_unreadable`. A scheduled value (a map) has no row.
 
   simulateWithDedup(config, metrics, dedupEnabled, alertDefs)
     Alert-simulator model: each config key is an independent alert whose
     definition comes from alertDefs (the ALERT_DEFS map, injected by the
-    caller — shape adapter). Buckets into {firing, suppressed, ok};
+    caller — shape adapter). Buckets into {firing, suppressed, ok,
+    unreadable}; `unreadable` lists {key, def, raw} for each value the
+    exporter serves no number for (#3865), which is in no other bucket;
     honours inverted defs (via isFiring) and severity-dedup (a firing
     critical suppresses its matching warning). Behaviour relocated verbatim
     from alert-simulator.jsx so it is shared + unit-tested.
+
+  unreadableThresholdMessage(raw)
+    The sentence (window.__t) the pages show for such a value.
 
   resolveRoutingLayers(config)
     Apply the four-layer routing model (ADR-007): L1 platform
@@ -63,6 +74,7 @@ import {
 import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
 import { RECEIVER_TYPES, TIMING_GUARDRAILS } from '../validation/constants.js';
 import { parseDuration } from '../validation/yaml-parser.js';
+import { readThresholdRow } from '../validation/threshold-value.js';
 
 function generateSampleYaml(selectedPacks, withProfile) {
   const t = window.__t || ((zh, en) => en);
@@ -137,6 +149,15 @@ function generateSampleYaml(selectedPacks, withProfile) {
   return lines.join('\n');
 }
 
+// The one sentence for a threshold value the exporter serves no number for
+// (#3865), shared by validateConfig and the pages that render a simulation.
+function unreadableThresholdMessage(raw) {
+  const t = window.__t || ((zh, en) => en);
+  const shown = JSON.stringify(String(raw));
+  return t(`exporter 不會讀這個值：${shown} 不是它接受的閾值寫法（十進位數字，可加 :warning／:critical），不會產生閾值`,
+    `The exporter will not read this value: ${shown} is not a threshold it accepts (a decimal number, optionally with :warning / :critical), so no threshold is served`);
+}
+
 function validateConfig(config, selectedPacks) {
   const t = window.__t || ((zh, en) => en);
 
@@ -147,13 +168,20 @@ function validateConfig(config, selectedPacks) {
 
   for (const [key, val] of Object.entries(config)) {
     if (key.startsWith('_')) continue;
-    if (val === 'disable') {
+    // The value is read as the exporter reads it (#3865), never with
+    // parseFloat: that reads `1_000` as 1 and `0x1F` as 0, and the page then
+    // judges a number the exporter never serves.
+    const row = readThresholdRow(val);
+    if (row.kind === 'disabled') {
       info.push({ level: 'info', field: key,
         msg: t('已禁用此指標', 'Metric disabled') });
       continue;
     }
-    const numVal = parseFloat(val);
-    if (!isNaN(numVal)) {
+    if (row.kind === 'unreadable') {
+      issues.push({ level: 'error', field: key, msg: unreadableThresholdMessage(row.raw) });
+    }
+    if (row.kind === 'number') {
+      const numVal = row.number;
       const LARGE_VALUE_PATTERNS = ['bytes', 'connections', 'lag', 'rate', 'messages',
         'threads', 'count', 'queue', 'consumers', 'controllers', 'broker', 'sessions',
         'partitions', 'queries', 'waiting'];
@@ -290,33 +318,49 @@ function simulateAlerts(config, metricValues) {
     const threshold = config[metric];
     // parseYaml keeps YAML types (#2033): an unquoted `0` is the number 0,
     // which is a real threshold — test for absence, not falsiness.
-    if (threshold === undefined || threshold === null || threshold === '' || threshold === 'disable') {
+    const row = readThresholdRow(threshold);
+    if (row.kind === 'absent' || row.kind === 'disabled') {
       alerts.push({
         metric, current: val.current, threshold: null, critical_threshold: null,
-        firing: false, critical_firing: false, severity: threshold === 'disable' ? 'disabled' : 'no-threshold',
+        firing: false, critical_firing: false, severity: row.kind === 'disabled' ? 'disabled' : 'no-threshold',
+        unit: val.unit, packLabel: val.packLabel,
+      });
+      continue;
+    }
+    // A scheduled value (a map): no schedule is modelled here.
+    if (row.kind === 'structured') continue;
+    // A value the exporter serves no number for (#3865) is a row that says
+    // so — never a number cut out of the text, and never a dropped row.
+    if (row.kind === 'unreadable') {
+      alerts.push({
+        metric, current: val.current, threshold: null, critical_threshold: null,
+        firing: false, critical_firing: false, severity: 'unreadable', raw: row.raw,
         unit: val.unit, packLabel: val.packLabel,
       });
       continue;
     }
 
-    const thresholdNum = parseFloat(threshold);
-    if (isNaN(thresholdNum)) continue;
-
+    const thresholdNum = row.number;
     const currentVal = val.current;
     const firing = isFiring(currentVal, thresholdNum);
 
-    const critKey = `${metric}_critical`;
-    const critRaw = config[critKey];
-    const critParsed = critRaw === undefined || critRaw === null || critRaw === '' ? NaN : parseFloat(critRaw);
-    const critThreshold = isNaN(critParsed) ? null : critParsed;
-    const critFiring = critThreshold !== null && isFiring(currentVal, critThreshold);
+    // The `_critical` companion key. One the exporter cannot read gives no
+    // critical tier; `critical_unreadable` carries its text so the page can
+    // say so.
+    const crit = readThresholdRow(config[`${metric}_critical`]);
+    const critThreshold = crit.kind === 'number' ? crit.number : null;
+    const critTierFiring = critThreshold !== null && isFiring(currentVal, critThreshold);
+    // `80:critical` on the base key is a critical-severity row at 80.
+    const critFiring = critTierFiring || (firing && row.severity === 'critical');
 
-    alerts.push({
+    const alert = {
       metric, current: currentVal, threshold: thresholdNum,
       critical_threshold: critThreshold, firing, critical_firing: critFiring,
       severity: critFiring ? 'critical' : (firing ? 'warning' : 'ok'),
       unit: val.unit, packLabel: val.packLabel,
-    });
+    };
+    if (crit.kind === 'unreadable') alert.critical_unreadable = crit.raw;
+    alerts.push(alert);
   }
 
   return alerts;
@@ -332,12 +376,17 @@ function simulateWithDedup(config, metrics, dedupEnabled, alertDefs) {
   const firing = [];
   const suppressed = [];
   const ok = [];
+  const unreadable = [];
 
   Object.entries(config).forEach(([key, thresholdStr]) => {
     const def = defs[key];
     if (!def) return;
-    const threshold = parseFloat(thresholdStr);
-    if (isNaN(threshold)) return;
+    // Read as the exporter reads it (#3865). A value it serves no number for
+    // is listed as such; absent, disabled and scheduled values have no row.
+    const row = readThresholdRow(thresholdStr);
+    if (row.kind === 'unreadable') { unreadable.push({ key, def, raw: row.raw }); return; }
+    if (row.kind !== 'number') return;
+    const threshold = row.number;
     const current = metrics[key];
     if (current === undefined || current === '') return;
     const val = parseFloat(current);
@@ -363,10 +412,11 @@ function simulateWithDedup(config, metrics, dedupEnabled, alertDefs) {
       firing: firing.filter(f => !suppressedKeys.has(f.key)),
       suppressed,
       ok,
+      unreadable,
     };
   }
 
-  return { firing, suppressed: [], ok };
+  return { firing, suppressed: [], ok, unreadable };
 }
 
 function resolveRoutingLayers(config) {
@@ -428,4 +478,7 @@ function resolveRoutingLayers(config) {
   return { layers, resolved: L3 };
 }
 
-export { generateSampleYaml, validateConfig, isFiring, simulateAlerts, simulateWithDedup, resolveRoutingLayers };
+export {
+  generateSampleYaml, validateConfig, isFiring, simulateAlerts, simulateWithDedup, resolveRoutingLayers,
+  unreadableThresholdMessage,
+};
