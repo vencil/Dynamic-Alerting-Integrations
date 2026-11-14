@@ -396,6 +396,14 @@ export default function RecipeBuilder(props) {
   const summary = useMemo(() => recipeSummary(recipe, f), [recipe, f]);
   const ready = allRequiredValid(recipe, f);
   const recipeObj = useMemo(() => (ready ? buildRecipeObject(recipe, f) : null), [ready, recipe, f]);
+  // #3920: what an edit hands off — the form's fields plus the members of the
+  // stored recipe the form does not own (selectors, selectors_re, group_by).
+  // The caller replaces the stored recipe with it, and the would-fire preview
+  // judges the same object: a preview of the recipe without its selectors is
+  // a preview of a wider rule than the one that gets saved. (The YAML snippet
+  // keeps recipeObj: it prints scalars only.)
+  const handoffObj = useMemo(
+    () => (ready ? buildRecipeObject(recipe, f, initialValue) : null), [ready, recipe, f, initialValue]);
 
   // Recipe lifecycle (ADR-024 §8): the existing instance's recipe (edit-flow) may
   // stay selectable even if eol, so its params remain editable (B2-wide); a NEW
@@ -540,19 +548,14 @@ export default function RecipeBuilder(props) {
           </div>
 
           {/* would-fire preview (#657): "will this fire?" answered in the same form */}
-          <WouldFirePanel recipeObj={recipeObj} tenantId={tenantId}
+          <WouldFirePanel recipeObj={handoffObj} tenantId={tenantId}
             previewFetch={previewFetch} inputClass={inputClass} />
 
           {/* exit: onSubmit (tenant-manager) or YAML snippet (GitOps persona) */}
           {onSubmit ? (
             <button type="button" className="px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
               data-testid="submit" disabled={!ready}
-              onClick={() => recipeObj && onSubmit(
-                // #3920: the caller replaces the stored recipe with this, so
-                // an edit hands back the members the form does not own too.
-                buildRecipeObject(recipe, f, initialValue),
-                initialValue ? initialValue.name : undefined,
-              )}>
+              onClick={() => handoffObj && onSubmit(handoffObj, initialValue ? initialValue.name : undefined)}>
               {initialValue ? t('更新此 recipe', 'Update this recipe') : t('加入此 recipe', 'Add this recipe')}
             </button>
           ) : (
