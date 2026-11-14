@@ -55,7 +55,7 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @<org>/team-db-b
 | Python 測試 | `pytest tests/` | 工具鏈回歸 |
 | Go 測試 | `go test ./...` | Exporter 回歸 |
 | Tenant key 合法性 | `generate_alertmanager_routes.py --validate` | 未知 key / typo 警告 |
-| Webhook URL 合規 | `--policy .github/custom-rule-policy.yaml` | URL 不在 allowed_domains |
+| Webhook URL 合規 | `--policy .github/deployment-policy.yaml` | URL 不在 allowed_domains |
 | Custom rule deny-list | `lint_custom_rules.py --ci` | 禁用函式 / 破壞 tenant 隔離 |
 | 版號一致性 | `bump_docs.py --check` | 跨文件版號不一致 |
 | **配置變更 blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment 顯示受影響 tenant/metric |

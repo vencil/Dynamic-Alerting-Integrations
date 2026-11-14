@@ -328,3 +328,67 @@ func TestDisableGitAutoMaintenance_CopyDropsIncludedDriverKeys(t *testing.T) {
 		}
 	}
 }
+
+// #3889: a developer's commit.gpgsign = true would be copied into the
+// temporary global config and make every test commit call the host's
+// signer (tag.gpgsign = true likewise for every annotated tag). With a
+// signer that always fails, a commit and an annotated tag still succeed
+// after the call, unsigned, and git reports both keys off.
+//
+// The config uses the openpgp format (gpg.program): with gpg.format = ssh
+// and a failing gpg.ssh.program, git 2.43's `git tag -a` prints "error: "
+// but exits 0, so the tag half could never fail. The expected keys are
+// spelled out here rather than read from gitSigningOff, so dropping a key
+// from that list fails this test instead of dropping its assertion.
+func TestDisableGitAutoMaintenance_TestCommitsDoNotCallTheHostSigner(t *testing.T) {
+	home := isolateGit(t)
+	signer := filepath.Join(home, "signer")
+	if err := WriteExecutable(signer, []byte("#!/bin/sh\necho 'host signer called' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	user := filepath.Join(home, "user.gitconfig")
+	writeFile(t, user, "[user]\n\tname = From Global\n\temail = g@example.invalid\n\tsigningkey = ABCDEF0123456789\n"+
+		"[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n"+
+		"[gpg]\n\tprogram = "+signer+"\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", user)
+
+	// Baseline: this config does make both a commit and an annotated tag
+	// call the failing signer, so the test cannot pass on a config git
+	// ignores.
+	base := t.TempDir()
+	git(t, "-C", base, "init", "-q")
+	if out, err := exec.Command("git", "-C", base, "commit", "-q", "--allow-empty", "-m", "c").CombinedOutput(); err == nil {
+		t.Fatalf("baseline: commit succeeded without calling the failing signer: %s", out)
+	}
+	git(t, "-C", base, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "c")
+	if out, err := exec.Command("git", "-C", base, "tag", "-a", "-m", "t", "v0").CombinedOutput(); err == nil {
+		t.Fatalf("baseline: annotated tag succeeded without calling the failing signer: %s", out)
+	}
+
+	disable(t)
+	dir := t.TempDir()
+	git(t, "-C", dir, "init", "-q")
+	for _, args := range [][]string{
+		{"commit", "-q", "--allow-empty", "-m", "c"},
+		{"tag", "-a", "-m", "t", "v0"},
+	} {
+		out := git(t, append([]string{"-C", dir}, args...)...)
+		if strings.Contains(out, "error:") || strings.Contains(out, "host signer called") {
+			t.Errorf("git %v reached the signer: %s", args, out)
+		}
+	}
+	for _, obj := range []string{"commit HEAD", "tag v0"} {
+		typ, rev, _ := strings.Cut(obj, " ")
+		if body := git(t, "-C", dir, "cat-file", typ, rev); strings.Contains(body, "-----BEGIN") {
+			t.Errorf("%s carries a signature:\n%s", obj, body)
+		}
+	}
+	for _, kv := range [][2]string{{"commit.gpgsign", "false"}, {"tag.gpgsign", "false"}} {
+		if got := gitGet(t, dir, kv[0]); got != kv[1] {
+			t.Errorf("git sees %s = %q, want %q", kv[0], got, kv[1])
+		}
+	}
+	if got := gitGet(t, dir, "user.name"); got != "From Global" {
+		t.Errorf("user.name = %q, want the value from the previous GIT_CONFIG_GLOBAL", got)
+	}
+}

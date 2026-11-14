@@ -161,7 +161,7 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate \
-                         --policy .github/custom-rule-policy.yaml
+                         --policy .github/deployment-policy.yaml
 # 非 K8s 的 BYO Alertmanager：合併進你自己的 alertmanager.yml
 da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
                          --base-config alertmanager.yml -o alertmanager.new.yml

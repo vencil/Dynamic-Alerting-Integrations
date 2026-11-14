@@ -318,7 +318,7 @@ def render_portal_enums(c, g):
     slo = c["slo_burn_rate"]
     severities = g["severities"]
     return _dump({
-        "_generated": (_HEADER + " severity / severityDefault / thresholdTrim come from "
+        "_generated": (_HEADER + " severity / severityDefault / thresholdTrim / thresholdDisable come from "
                        + SEVERITY_REL + "."),
         "recipe": [r["name"] for r in c["recipes"]],
         "op": c["op"]["enum"],
@@ -332,6 +332,10 @@ def render_portal_enums(c, g):
         "severity": severities,
         "severityDefault": severities[0],
         "thresholdTrim": g["trim_code_points"],
+        # The words that switch a threshold key off, and for each of their
+        # letters the code points Go's strings.ToLower maps to it (#3865):
+        # JavaScript's toLowerCase is another mapping (`DİSABLE`).
+        "thresholdDisable": {"words": g["disable_words"], "letters": g["disable_letters"]},
         "groupBy": c["group_by"]["enum"],
         "quantileDefault": c["quantile"]["default"],
         "quantileRange": [c["quantile"]["exclusive_minimum"], c["quantile"]["exclusive_maximum"]],

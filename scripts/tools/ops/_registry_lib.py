@@ -129,7 +129,7 @@ CRITICAL_SUFFIX = "_critical"
 #
 # ⛔ Nothing here is a hand-kept list. "Read by a rule pack, not shipped by
 # the chart" (`not_chart_armed_keys`) and "portable, unshipped, unblocked —
-# the A2 shadow-report input" (`validation_candidates`) are both DERIVED.
+# what A2 validates next" (`validation_candidates`) are both DERIVED.
 # The one-dimensional enum A1 shipped had grown a state per blocker and
 # could not say "shipped, but not portable"; that is why it was split.
 # ---------------------------------------------------------------------------
@@ -141,7 +141,16 @@ PORTABILITY_STATES = (PORTABLE, "ratio_pending", "site_specific")
 BLOCKER_KINDS = ("unwired", "aggregation_bug", "unmeasured", "value_disputed")
 #: The authored fields that make up one key's arming.
 ARMING_FIELDS = ("arming", "portability", "portability_reason",
-                 "portability_reason_zh", "blocker", "default_exception")
+                 "portability_reason_zh", "blocker", "default_exception",
+                 "validation")
+#: `validation.basis` (D-A A2, #1200 ruling B): what a shipped value rests on.
+#: vendor = one source that uses this very value; consensus = two or more
+#: sources from different organisations whose values bracket it.
+VALIDATION_BASES = ("vendor", "consensus")
+_VALIDATION_FIELDS = ("basis", "sources")
+_SOURCE_REQUIRED = ("org", "url", "quote", "value")
+_SOURCE_FIELDS = _SOURCE_REQUIRED + ("tier",)
+SOURCE_TIERS = ("info", "warning", "critical")
 #: Required iff portability is not `portable`: why one value does not carry.
 PORTABILITY_REASON_FIELDS = ("portability_reason", "portability_reason_zh")
 _BLOCKER_FIELDS = ("kind", "tracking", "reason", "reason_zh")
@@ -157,10 +166,12 @@ BLOCKER_LABEL_ZH = {
     "value_disputed": "值有爭議",
 }
 CANDIDATE_LABEL_ZH = "可攜，待驗證"
-CANDIDATE_NOTE_ZH = "這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨"
-#: The optional tier cannot ship as-is: `default` is defaults-tier only.
-CANDIDATE_NOTE_OPTIONAL_ZH = ("這個值可跨部署沿用，但還沒經 shadow 報表確認；"
-                              "確認後要先升到 defaults 層才能出貨")
+CANDIDATE_NOTE_ZH = ("這個值可跨部署沿用，但還沒通過出貨驗證"
+                     "（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨")
+#: The optional tier is not a candidate: `default` is defaults-tier only.
+DECLARED_ONLY_LABEL_ZH = "可攜，僅宣告"
+DECLARED_ONLY_NOTE_ZH = ("這個值可跨部署沿用，但鍵在 optional_overrides 層、平台不給值；"
+                         "要出貨得先升到 defaults 層，再通過出貨驗證")
 
 # The two threshold tiers carried by the registry. Order matters: it is the
 # extraction order, and a same-name key in both tiers of one pack would be a
@@ -196,7 +207,8 @@ def __getattr__(name: str):
 _FIELD_ORDER = (
     "pack", "tier", "value", "unit", "desc", "metric_class", "arming",
     "portability", "portability_reason", "portability_reason_zh", "blocker",
-    "default_exception", "critical_of", "value_counterexample", "dimensions",
+    "default_exception", "validation", "critical_of", "value_counterexample",
+    "dimensions",
 )
 
 def _load_scaffold():
@@ -498,7 +510,11 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
     - ``default`` sits on a ``defaults``-tier key, has no blocker, and is
       portable — unless ``default_exception: {tracking}`` records why a
       non-portable value ships anyway; that field appears nowhere else;
-    - every reason is one non-blank line.
+    - every reason is one non-blank line;
+    - ``default`` carries ``validation`` (`validation_problems`) and no
+      ``value_counterexample``: a value the reference library measured
+      wrong does not ship. An operator key may carry ``validation`` ahead
+      of its promotion; whatever carries it is held to the same rules.
     """
     out: list[str] = []
     for key, entry in keys.items():
@@ -561,6 +577,16 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
             if blocker is not None:
                 out.append(f"{key!r} is arming: default but has a blocker — a "
                            "blocked key cannot ship")
+            if "value_counterexample" in entry:
+                out.append(
+                    f"{key!r} is arming: default but carries a "
+                    "value_counterexample — a value the reference library "
+                    "measured wrong cannot ship")
+            if "validation" not in entry:
+                out.append(
+                    f"{key!r} is arming: default but has no validation — a "
+                    "shipped value states what it rests on (basis: vendor | "
+                    "consensus, with its sources)")
             if port == PORTABLE and exception is not None:
                 out.append(f"{key!r} is portable — remove default_exception")
             elif port != PORTABLE:
@@ -577,6 +603,126 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
         elif exception is not None:
             out.append(f"{key!r} is arming: operator — default_exception only "
                        "applies to a shipped key")
+        if "validation" in entry:
+            out += validation_problems(key, entry)
+    return out
+
+
+def _number(v: Any) -> bool:
+    """A finite number: not a bool, not NaN, not an infinity."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and v == v and abs(v) != float("inf"))
+
+
+_URL_RE = re.compile(r"https://\S+")
+#: A whole number as a source writes it: its sign (unless the `-` is a minus
+#: between two operands, `a-30` / `)-30`) and its exponent stay part of it,
+#: so `> -30` is -30 and `3e1` is 30 — neither states a plain 30 by accident.
+_NUMBER_TOKEN_RE = re.compile(r"(?<![\w)\].])[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+
+
+def _quote_states(value: float, quote: str, unit: Any = None) -> bool:
+    """Whether *quote* carries *value*: the number itself, or — for a
+    percentage key only, where a source may write the ratio (`> 0.8`,
+    `> .95`) — a hundredth of it. A seconds key is never read as a ratio:
+    `lag > 0.3` does not state 30."""
+    numbers = {float(t) for t in _NUMBER_TOKEN_RE.findall(quote)}
+    wanted = [value]
+    if isinstance(unit, str) and unit.strip().startswith("%"):
+        wanted.append(value / 100)
+    return any(abs(n - c) < 1e-9 for n in numbers for c in wanted)
+
+
+def _same_page(url: str) -> str:
+    """A url reduced to what tells two pages apart: no fragment, no trailing
+    slash, case-insensitive."""
+    return url.split("#", 1)[0].rstrip("/").lower()
+
+
+def validation_problems(key: str, entry: dict) -> list[str]:
+    """What is wrong with *entry*'s ``validation`` (D-A A2, #1200 ruling B).
+
+    - exactly ``{basis, sources}``; ``basis`` one of `VALIDATION_BASES`;
+    - every source is ``{org, url, quote, value}`` (+ optional ``tier``, the
+      severity the source alerts at): an https url, a one-line quote, a
+      finite number in this key's unit, and the quote carries that number
+      (as written, or — for a `%` key only — as a ratio: `> 0.8` for 80);
+    - ``vendor``: one source, and its value IS the registry value;
+    - ``consensus``: two or more sources, no organisation or url twice, and
+      the registry value lies between the smallest and the largest source
+      value (ends included).
+
+    No relation is authored: whether a source is equal, stricter or looser is
+    its value against the registry's, so it cannot go stale when the value
+    changes — the rule above simply stops holding. Whether two organisations
+    are independent of each other stays a reviewer's call."""
+    v = entry.get("validation")
+    if not isinstance(v, dict) or set(v) != set(_VALIDATION_FIELDS):
+        return [f"{key!r} validation must be exactly {list(_VALIDATION_FIELDS)}"]
+    out: list[str] = []
+    basis, sources = v["basis"], v["sources"]
+    if basis not in VALIDATION_BASES:
+        out.append(f"{key!r} validation.basis {basis!r} is not one of "
+                   f"{list(VALIDATION_BASES)}")
+    if not isinstance(sources, list) or not sources:
+        return out + [f"{key!r} validation.sources must be a non-empty list"]
+    values: list[float] = []
+    for i, s in enumerate(sources):
+        where = f"validation.sources[{i}]"
+        if (not isinstance(s, dict) or not set(_SOURCE_REQUIRED) <= set(s)
+                or not set(s) <= set(_SOURCE_FIELDS)):
+            out.append(f"{key!r} {where} must carry {list(_SOURCE_REQUIRED)} "
+                       "(and optionally 'tier')")
+            continue
+        for f in ("org", "quote"):
+            p = _one_line_problem(key, f"{where}.{f}", s[f])
+            if p:
+                out.append(p)
+        if not (isinstance(s["url"], str) and _URL_RE.fullmatch(s["url"])):
+            out.append(f"{key!r} {where}.url must be an https:// URL")
+        if "tier" in s and s["tier"] not in SOURCE_TIERS:
+            out.append(f"{key!r} {where}.tier {s['tier']!r} is not one of "
+                       f"{list(SOURCE_TIERS)}")
+        if not _number(s["value"]):
+            out.append(f"{key!r} {where}.value must be a finite number in the "
+                       "key's unit")
+        else:
+            values.append(float(s["value"]))
+            if isinstance(s["quote"], str) and not _quote_states(
+                    float(s["value"]), s["quote"], entry.get("unit")):
+                out.append(
+                    f"{key!r} {where}.quote does not carry its value "
+                    f"{s['value']} — quote the line that states the number")
+    if out or len(values) != len(sources):
+        return out
+    value = entry.get("value")
+    if not _number(value):
+        return out + [f"{key!r} has a validation but its value {value!r} is not "
+                      "a number to hold the sources against"]
+    if basis == "vendor":
+        if len(sources) != 1:
+            out.append(f"{key!r} validation.basis vendor takes exactly one "
+                       f"source (found {len(sources)}); several sources are a "
+                       "consensus")
+        elif values[0] != value:
+            out.append(
+                f"{key!r} ships {value} but its vendor source uses "
+                f"{sources[0]['value']} — a vendor basis is the vendor's own value")
+    else:
+        if len(sources) < 2:
+            out.append(f"{key!r} validation.basis consensus needs two or more "
+                       "sources")
+        for f in ("org", "url"):
+            seen = [_same_page(s[f]) if f == "url" else str(s[f]).strip().lower()
+                    for s in sources]
+            dup = sorted({x for x in seen if seen.count(x) > 1})
+            if dup:
+                out.append(f"{key!r} consensus sources repeat {f} {dup} — each "
+                           "source is a different organisation's page")
+        if not min(values) <= value <= max(values):
+            out.append(
+                f"{key!r} ships {value}, outside what its consensus sources "
+                f"use ({min(values):g}–{max(values):g})")
     return out
 
 
@@ -594,9 +740,13 @@ def _valid_blocker(entry: dict) -> Optional[dict]:
 
 
 def is_validation_candidate(entry: dict) -> bool:
-    """Portable, not shipped, not blocked: what A2's shadow report reads."""
+    """Portable, not shipped, not blocked, in the tier that can ship: what
+    A2 validates next. An ``optional_overrides`` key is not one — the
+    shipping gate (`arming_problems`) refuses ``default`` outside the
+    defaults tier, so listing it here promised a promotion the gate blocks."""
     return (entry.get("arming") == ARMING_OFF
             and entry.get("portability") == PORTABLE
+            and entry.get("tier") == "defaults"
             and "blocker" not in entry and not entry.get("critical_of"))
 
 
@@ -630,10 +780,10 @@ def arming_notes_zh(entry: dict) -> list[str]:
         if port_label and isinstance(port_reason, str):
             notes.append(f"未啟用（{port_label}）：{port_reason}")
         elif port == PORTABLE and b is None:
-            note = (CANDIDATE_NOTE_OPTIONAL_ZH
-                    if entry.get("tier") == "optional_overrides"
-                    else CANDIDATE_NOTE_ZH)
-            notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{note}")
+            if is_validation_candidate(entry):
+                notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{CANDIDATE_NOTE_ZH}")
+            else:
+                notes.append(f"未啟用（{DECLARED_ONLY_LABEL_ZH}）：{DECLARED_ONLY_NOTE_ZH}")
     elif state == ARMING_DEFAULT and port_label and isinstance(port_reason, str):
         exc = entry.get("default_exception")
         t = exc.get("tracking") if isinstance(exc, dict) else None
@@ -756,7 +906,62 @@ def render_rule_packs_module(doc: dict) -> str:
 
     body = pprint.pformat(project_rule_packs(doc), indent=1, width=100,
                           sort_dicts=False)
-    return _RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+    armed = pprint.pformat(default_armed_by_pack(doc), indent=1, width=100,
+                           sort_dicts=False)
+    return (_RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+            + _DEFAULT_ARMED_COMMENT + "DEFAULT_ARMED_KEYS = " + armed + "\n"
+            + _RETIRED_PACKS_COMMENT + "RETIRED_KEY_PACKS = "
+            + pprint.pformat(retired_key_packs(doc), indent=1, width=100, sort_dicts=False)
+            + "\n")
+
+
+#: Above the second generated constant (#3830).
+_RETIRED_PACKS_COMMENT = (
+    "\n# Retired threshold key -> the pack of the key that replaces it (a key\n"
+    "# retired with no replacement is absent; `<old>_critical` follows its\n"
+    "# base). A tree still carrying the old key deploys that pack (#3830).\n")
+
+
+def retired_key_packs(doc: dict) -> dict[str, str]:
+    """Each `retired_keys` entry that names a replacement → the pack of that
+    replacement — DERIVED, never authored. `<old>_critical` is not listed:
+    it follows its base, as the retirement itself does."""
+    keys = registry_keys(doc)
+    return {old: keys[entry["replaced_by"]]["pack"]
+            for old, entry in (doc.get("retired_keys") or {}).items()
+            if entry.get("replaced_by") in keys}
+
+
+#: Above the generated constant: RULE_PACKS has no arming field, and the
+#: da-tools image carries this module but not the registry YAML (#3830).
+_DEFAULT_ARMED_COMMENT = (
+    "\n# Per pack, the keys the registry ships armed (`arming: default`), in\n"
+    "# registry order; a pack with none is absent. What validate-config's\n"
+    "# `unsupplied_defaults` row reads where no repo tree is (#3830).\n")
+
+
+def default_armed_by_pack(doc: dict) -> dict[str, list[str]]:
+    """Per pack, the keys *doc* ships armed (`is_chart_armed`), in registry
+    order — DERIVED, never authored. A pack with none is absent."""
+    out: dict[str, list[str]] = {}
+    for key, entry in registry_keys(doc).items():
+        if is_chart_armed(entry):
+            out.setdefault(entry["pack"], []).append(key)
+    return out
+
+
+def packaged_default_armed() -> dict[str, tuple[str, ...]]:
+    """`default_armed_by_pack` as the generated module carries it: for a
+    reader that runs where no repo tree is (the da-tools image)."""
+    import runpy  # noqa: PLC0415  (a data module)
+    armed = runpy.run_path(RULE_PACKS_MODULE_PATH)["DEFAULT_ARMED_KEYS"]
+    return {pack: tuple(keys) for pack, keys in armed.items()}
+
+
+def packaged_retired_key_packs() -> dict[str, str]:
+    """`retired_key_packs` as the generated module carries it."""
+    import runpy  # noqa: PLC0415  (a data module)
+    return dict(runpy.run_path(RULE_PACKS_MODULE_PATH)["RETIRED_KEY_PACKS"])
 
 
 def packaged_registry_doc() -> dict:

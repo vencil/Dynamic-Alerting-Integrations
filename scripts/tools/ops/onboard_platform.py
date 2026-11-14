@@ -179,19 +179,31 @@ def _configmap_inner(documents, path, key=_AM_CONFIGMAP_KEY, error=AlertmanagerC
     return None
 
 
-def _config_text(path, crdecode_binary, key, error, mounter):
-    """The config text of the file at *path*: the ConfigMap's *key* string
-    when Kubernetes' reading of the file (``da-crdecode``) is a ConfigMap,
-    else the whole file. Returns ``(text, inner, k8s_refusal)``: *inner* is
-    True when the text came out of a ConfigMap, *k8s_refusal* the
-    ConsumerReadError Kubernetes' reading refused a plain file with."""
+#: --alertmanager-config / --scrape-config as declared inputs read them
+#: (#3797): the file's text, read once by `_lib_input.document`; both
+#: readers below (da-crdecode, then the consumer's loader) get that text.
+CONFIG_DOCUMENT = _lib_input.Document("text", str)
+
+
+def _config_text(path, raw, crdecode_binary, key, error, mounter):
+    """The config text of *raw*, the content of the file *path*: the
+    ConfigMap's *key* string when Kubernetes' reading of it (``da-crdecode``,
+    on the text — the file is not read again, #3797) is a ConfigMap, else the
+    whole of it. *raw* None: read *path* here (a library caller's; the CLI
+    hands the declared document's text). Returns ``(text, inner,
+    k8s_refusal)``: *inner* is True when the text came out of a ConfigMap,
+    *k8s_refusal* the ConsumerReadError Kubernetes' reading refused a plain
+    file with."""
+    if raw is None:
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except OSError as e:
+            raise error(f"cannot read {path}: {e}") from e
+    elif isinstance(raw, str):
+        raw = raw.encode("utf-8")
     try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-    except OSError as e:
-        raise error(f"cannot read {path}: {e}") from e
-    try:
-        documents = _lib_consumer_read.kubernetes_documents(path, binary=crdecode_binary)
+        documents = _lib_consumer_read.kubernetes_text_documents(raw, binary=crdecode_binary)
     except _lib_consumer_read.ConsumerReadError as e:
         if not isinstance(e, _lib_consumer_read.InputRefused):
             # The binary is missing or broken — not an answer about the file.
@@ -207,7 +219,7 @@ def _config_text(path, crdecode_binary, key, error, mounter):
 
 
 def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
-                              crdecode_binary=None, da_read_binary=None):
+                              crdecode_binary=None, da_read_binary=None, *, text=None):
     """The Alertmanager config at *path* as Alertmanager loads it.
 
     ADR-036 §12 (#3206): the file is first read the way Kubernetes reads a
@@ -223,12 +235,15 @@ def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
     *tenant_label* is not used to read the file (every matcher value is
     Alertmanager's reading, whatever the label); it is kept for callers.
 
+    *text*: the file's content as the CLI read it once (#3797); None reads
+    *path* here.
+
     Raises :class:`AlertmanagerConfigError` when the config cannot be read —
     never returns "nothing" for it.
     """
     del tenant_label  # the reading does not depend on it
     path = str(path)
-    text, inner, k8s_refusal = _config_text(path, crdecode_binary, _AM_CONFIGMAP_KEY,
+    text, inner, k8s_refusal = _config_text(path, text, crdecode_binary, _AM_CONFIGMAP_KEY,
                                             AlertmanagerConfigError, "Alertmanager")
     try:
         return _lib_consumer_read.alertmanager_config(text, binary=da_read_binary)
@@ -1083,7 +1098,7 @@ def write_migration_csv(candidates, output_path):
 # Phase 3: Prometheus Scrape Config Analysis
 # ============================================================
 
-def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None):
+def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None, *, text=None):
     """The ``scrape_configs`` of the Prometheus config at *path*, as
     Prometheus loads it.
 
@@ -1099,10 +1114,11 @@ def parse_scrape_configs(path, crdecode_binary=None, da_read_binary=None):
 
     Returns the list of scrape configs (``[]`` when the config has none, an
     empty file among them). Raises :class:`PrometheusConfigError` when the
-    config cannot be read — never returns "nothing" for it.
+    config cannot be read — never returns "nothing" for it. *text*: the
+    file's content as the CLI read it once (#3797); None reads *path* here.
     """
     path = str(path)
-    text, inner, k8s_refusal = _config_text(path, crdecode_binary, _PROM_CONFIGMAP_KEY,
+    text, inner, k8s_refusal = _config_text(path, text, crdecode_binary, _PROM_CONFIGMAP_KEY,
                                             PrometheusConfigError, "Prometheus")
     try:
         config = _lib_consumer_read.prometheus_config(text, binary=da_read_binary)
@@ -1624,8 +1640,8 @@ def main():
               %(prog)s --alertmanager-config am.yml --tenant-label instance -o output/
         """),
     )
-    parser.add_argument("--alertmanager-config",
-                        help="Phase 1: Alertmanager config file (YAML or ConfigMap)")
+    _lib_input.add_input(parser, "--alertmanager-config", decode=CONFIG_DOCUMENT,  # #3797
+                         help="Phase 1: Alertmanager config file (YAML or ConfigMap)")
     parser.add_argument("--rule-files", nargs="+", action="extend", metavar="PATH",
                         help="Phase 2: Prometheus rule file(s) or directory(ies); a "
                              "directory is walked for *.yaml / *.yml. Paths, not patterns: "
@@ -1638,8 +1654,8 @@ def main():
                              "--rule-files gave, or a file's path as given (fnmatch, "
                              "case-sensitive, '*' crosses '/'). Every other file must be a "
                              "rule file or a Kubernetes manifest, or the run exits 2")
-    parser.add_argument("--scrape-config",
-                        help="Phase 3: Prometheus scrape config file")
+    _lib_input.add_input(parser, "--scrape-config", decode=CONFIG_DOCUMENT,  # #3797
+                         help="Phase 3: Prometheus scrape config file")
     parser.add_argument("--da-crdecode-binary", default=None,
                         help="Phases 1 and 3: da-crdecode, which reads a ConfigMap the way "
                              "kubectl does (default: $DA_CRDECODE_BINARY, else PATH)")
@@ -1658,12 +1674,19 @@ def main():
 
     args = parser.parse_args()
 
-    if not any([args.alertmanager_config, args.rule_files is not None, args.scrape_config]):
+    # ⛔ `is not None`: '' is given (an unset variable), and its declaration
+    # refuses it — it used to skip the phase in silence.
+    if (args.alertmanager_config is None and args.rule_files is None
+            and args.scrape_config is None):
         # --json: stdout is the document's alone (#3115); the help is prose.
         parser.print_help(sys.stderr if args.json else None)
         print("\nERROR: At least one phase input is required.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    # #3392: judged before any phase runs or anything is written.
+    # #3392: judged before any phase runs or anything is written. #3797: the
+    # two config files are declared documents, judged and read once here;
+    # every phase reads the text, never the file again.
+    am_text = _lib_input.document(args, "alertmanager_config", lang="en")
+    scrape_text = _lib_input.document(args, "scrape_config", lang="en")
     rule_files = (judge_rule_files(args.rule_files, args.exclude)
                   if args.rule_files is not None else [])
 
@@ -1674,14 +1697,14 @@ def main():
     # Phase 1: Alertmanager
     # #1112: all phase progress lines go to stderr — stdout is reserved for the
     # one JSON document `--json` promises (and for the text summary otherwise).
-    if args.alertmanager_config:
+    if am_text is not None:
         print(f"Phase 1: Analyzing Alertmanager config: {args.alertmanager_config}",
               file=sys.stderr)
         try:
             am_config = parse_alertmanager_config(
                 args.alertmanager_config, args.tenant_label,
                 crdecode_binary=args.da_crdecode_binary,
-                da_read_binary=args.da_read_binary)
+                da_read_binary=args.da_read_binary, text=am_text)
         except AlertmanagerConfigError as e:
             if e.refused_by_reader:
                 # The file is there and a reader refused it: the same
@@ -1748,12 +1771,12 @@ def main():
             print(f"  ERROR: {e}", file=sys.stderr)
 
     # Phase 3: Scrape config
-    if args.scrape_config:
+    if scrape_text is not None:
         print(f"Phase 3: Analyzing scrape config: {args.scrape_config}", file=sys.stderr)
         try:
             scrape_configs = parse_scrape_configs(
                 args.scrape_config, crdecode_binary=args.da_crdecode_binary,
-                da_read_binary=args.da_read_binary)
+                da_read_binary=args.da_read_binary, text=scrape_text)
         except PrometheusConfigError as e:
             if e.refused_by_reader:
                 # As Phase 1: the file is there and Prometheus' loader (or

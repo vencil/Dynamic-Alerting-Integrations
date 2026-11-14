@@ -348,6 +348,7 @@ nav:
       - ADR-037 config-diff 改為比較渲染結果: adr/037-config-diff-compares-rendered-output.md
       - ADR-038 沒有讀取端讀的鍵以實測判定: adr/038-unread-keys-judged-by-readers.md
       - ADR-039 效能取捨寫進接受帳本: adr/039-bench-acceptance-ledger.md
+      - ADR-040 平台預設值內建在讀取端: adr/040-platform-defaults-builtin-layer.md
   - 整合指南:
     - 整合指南導覽: integration/README.md
     - BYO Prometheus: integration/byo-prometheus-integration.md

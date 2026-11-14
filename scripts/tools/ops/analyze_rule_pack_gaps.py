@@ -36,7 +36,6 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import YamlFileError  # noqa: E402
-from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3445: --metric-dictionary is read by the lib)
 import _lib_parse_cache  # noqa: E402  (#2906: the single file through parse-tree)
 from _lib_parse_tree import FileUnreadable, Timestamp  # noqa: E402
@@ -80,16 +79,23 @@ _PARSE_TREE_KIND = (("sequence", list), ("(!!int)", int), ("(!!float)", float),
                     ("(!!bool)", bool), ("(!!str)", str))
 
 
-def _read_tenant_file(path):
-    """*path* (--tenant-config) as `da-guard parse-tree` reads it alone
-    (#2906): its content (an empty or null document reads as ``{}``). A top
+#: --tenant-config as a declared input reads it (#3797): the file's text,
+#: read once by `_lib_input.document`, then parse-tree's reading of it.
+TENANT_CONFIG_DOCUMENT = _lib_input.Document("text", str)
+
+
+def _read_tenant_file(path, text):
+    """*text*, the content of *path* (--tenant-config, read once by
+    `_lib_input.document`), as `da-guard parse-tree` reads a file alone
+    (#2906) — an empty or null document reads as ``{}``. A top
     level that is not a mapping is refused (#3445: it was read as a tenant
     with no keys, rc 0) — `_lib_input.refuse_top`, the wording every input
     file's wrong top level has, a CallerError (rc 2). Any other file
     parse-tree cannot read raises YamlFileError (``cause`` is the
     `FileUnreadable`), so it exits 2 named, as bad syntax always did."""
     try:
-        return _lib_parse_cache.read_file_alone(path, _lib_parse_cache.VALUES)
+        return _lib_parse_cache.read_text_alone(text, _lib_parse_cache.VALUES,
+                                                label=str(path))
     except FileUnreadable as exc:
         if exc.kind == "top_level_not_mapping":
             got = next((kind for word, kind in _PARSE_TREE_KIND if word in exc.message),
@@ -111,7 +117,7 @@ def _jsonable(value):
     return value
 
 
-def load_tenant_configs(config_dir=None, tenant_config=None):
+def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None):
     """Load tenant configs from directory or single file.
 
     - Directory branch (#2115): the threshold keys the exporter's /metrics
@@ -124,7 +130,8 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
       stderr is passed on line by line, each behind ``DA_GUARD_PREFIX``.
       da-guard missing or failing, or a file the load cannot decode, raises
       (the CLI exits 2).
-    - Single-file branch: the file as written — nothing inherited, since one
+    - Single-file branch (*tenant_config* the path, *tenant_text* its
+      content as `_lib_input.document` read it once, #3797): the file as written — nothing inherited, since one
       file is not a tree /metrics serves (owner, #2115) — read the way the
       exporter reads YAML (#2906): ``da-guard parse-tree`` in file mode
       (`_lib_parse_cache.read_file_alone`, VALUES), so an unquoted ``yes``
@@ -144,7 +151,10 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
     configs = {}
 
     if tenant_config:
-        data = _read_tenant_file(tenant_config)
+        if tenant_text is None:
+            raise TypeError("tenant_config needs tenant_text: the file is read once, by "
+                            "its declaration (#3797)")
+        data = _read_tenant_file(tenant_config, tenant_text)
         if isinstance(data, dict) and isinstance(data.get("tenants"), dict):
             # Multi-tenant wrapper format: one entry per mapping under `tenants:`
             for t_name, t_data in data["tenants"].items():
@@ -387,8 +397,8 @@ def main():
         empty=_lib_input.EMPTY_REFUSED,
         help="Directory with tenant config YAML files",
     )
-    parser.add_argument(
-        "--tenant-config",
+    _lib_input.add_input(
+        parser, "--tenant-config", decode=TENANT_CONFIG_DOCUMENT,
         help="Single tenant config YAML file",
     )
     _lib_input.add_input(
@@ -411,16 +421,17 @@ def main():
 
 
 def _main(args):
-    if not args.config_dir and not args.tenant_config:
+    if args.config_dir is None and args.tenant_config is None:   # '' is given (#1616)
         print("ERROR: Specify --config-dir or --tenant-config", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     # A path that does not exist used to read as "no custom_ metrics found"
     # at rc=0 — indistinguishable from a real, clean scan (issue 1513).
     # #3276: judged by the shared caller-path check — under a parent the
     # caller cannot enter it is named as such, not "no such directory".
-    if args.tenant_config:
-        raise_path_problems([classify_path(args.tenant_config, "file", lang="en",
-                                           flag="--tenant-config")])
+    # #3797: --tenant-config judged and read once (`_lib_input.document`:
+    # the path, strict UTF-8) — a CallerError naming the flag; its text is
+    # what the single-file branch reads, never the file again.
+    tenant_text = _lib_input.document(args, "tenant_config", lang="en")
     # #3751: --config-dir judged once — the path, a root da-guard cannot
     # list, a tree with no config file — each refusal naming the flag.
     config_dir = None
@@ -439,6 +450,7 @@ def _main(args):
     configs = load_tenant_configs(
         config_dir=config_dir,
         tenant_config=args.tenant_config,
+        tenant_text=tenant_text,
     )
     custom_metrics = extract_custom_metrics(configs)
     metric_dict = (metric_lookup(dictionary) if dictionary is not None

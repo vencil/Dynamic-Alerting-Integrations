@@ -30,7 +30,8 @@ Checks:
                     and --strict as given): the row is that command's verdict,
                     the shared key verdict included (`_lib_key_verdict`,
                     ADR-038: keys no reader reads, #3873)
-  5. Custom rules  — Deny-list linting on rule-packs/ (if --rule-packs provided)
+  5. Custom rules  — Deny-list linting on rule-packs/ (if --rule-packs provided),
+                    by the lint policy --lint-policy names (#3797)
   6. Profiles      — Tenant _profile references validation
   7. Versions      — bump_docs.py --check version consistency (if --version-check)
   8. Policy-as-Code — Declarative DSL policy evaluation (if _policies in _defaults.yaml or --policy-dsl)
@@ -59,6 +60,12 @@ Checks:
                     (#3042): a rule that never fires, a served threshold no
                     rule reads. Report only; run only where the compiler is
                     installed (the repo — the da-tools image ships none)
+  16. Unsupplied defaults — a threshold the registry ships armed
+                    (`arming: default`), of a pack this tree deploys (the
+                    root platform file carries one of its keys, or a tenant
+                    declares it in `_metadata.db_type`), that the root
+                    platform file neither sets under `defaults:` nor lists
+                    under `optional_overrides:`. Advisory: WARN at most (#3830)
 
 Hierarchical trees: a row may get its input from a reader that is FLAT — it
 reads only the top level of --config-dir — while threshold-exporter reads the
@@ -90,8 +97,9 @@ Usage:
   # Full suite (CI):
   python3 scripts/tools/ops/validate_config.py \\
     --config-dir components/threshold-exporter/config/conf.d/ \\
-    --policy .github/custom-rule-policy.yaml \\
+    --policy .github/deployment-policy.yaml \\
     --rule-packs rule-packs/ \\
+    --lint-policy .github/custom-rule-policy.yaml \\
     --version-check
 
   # JSON output for CI consumption:
@@ -124,7 +132,6 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import YamlFileError, detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import (  # noqa: E402
     CRASH_LINE_PREFIX, EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report)
 from _lib_confd import (  # noqa: E402
@@ -155,9 +162,10 @@ _HELP = {
         'zh': '租戶配置目錄路徑 (conf.d/)',
         'en': 'Path to tenant config directory (conf.d/)'
     },
-    'policy': {
-        'zh': '策略 YAML 路徑 (allowed_domains 等)',
-        'en': 'Path to policy YAML (allowed_domains etc.)'
+    'lint_policy': {
+        'zh': '自訂規則 lint 的 policy YAML（交給 lint 的 --policy；只與 --rule-packs 一起讀）',
+        'en': "The custom-rule lint policy YAML (handed to lint's --policy; read only "
+              "with --rule-packs)"
     },
     'rule_packs': {
         'zh': '用於自訂規則 lint 的 rule-packs/ 目錄路徑',
@@ -223,7 +231,8 @@ from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
 import _lib_key_verdict as key_verdict  # noqa: E402
 # #3142: the deployment --policy's remedy, shared with the tools that take it.
 from _grar_validate import (  # noqa: E402
-    POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY, POLICY_WARN_PREFIX, is_field_type_error)
+    POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY, POLICY_WARN_PREFIX,
+    PolicyInputError, PolicyVersionError, is_field_type_error)
 
 # ============================================================
 # Check results
@@ -349,7 +358,7 @@ NO_DECLARED_DEFAULTS_HINT = (
 # rule-pack-split --check", about a tree the tool had never opened.
 _RULE_PACKS_INPUT_HINT = (
     "The custom rule lint refused its input (exit 2): the line above is its "
-    "own, and names --rule-packs as lint's `--rule-pack-dir` (--policy as "
+    "own, and names --rule-packs as lint's `--rule-pack-dir` (--lint-policy as "
     "`--policy`). Point --rule-packs at a rule-packs/ directory that holds at "
     "least one tenant rule pack. ⛔ Dropping "
     "the flag does not make this row pass — the row DISAPPEARS (it is only "
@@ -365,13 +374,14 @@ _POLICY_DSL_INPUT_HINT = (
     "evaluates only the `_policies` block in _defaults.yaml, which is what "
     "you already had before you passed the flag.")
 
-# `--policy` is judged by the routes row only (#3303: the `policy` row, which
-# re-read the same generator warnings by substring, is gone). Dropping the flag
-# makes that row PASS again by switching the allowlist off — hence the ⛔.
+# `--policy` is judged before any row runs (#3797) and only the routes row
+# judges under it (#3303). Dropping the flag lets the run pass by switching
+# the allowlist off — hence the ⛔.
 _POLICY_ROUTES_ROW_HINT = (
-    "Point --policy at a policy YAML holding an `allowed_domains:` list "
-    "(see docs/cli-reference.md § validate-config). ⛔ Dropping the "
-    "flag makes this row PASS again by switching the webhook domain "
+    "Point --policy at the deployment policy YAML (an `allowed_domains:` list; "
+    "the file generate-routes --policy takes; see docs/cli-reference.md § "
+    "validate-config) — the custom-rule lint policy goes to --lint-policy. ⛔ "
+    "Dropping the flag lets the run pass by switching the webhook domain "
     "allowlist off — that is the failure this check exists to stop.")
 
 def _argv_error_row(name: str, detail: str, hint: str) -> dict[str, object]:
@@ -846,7 +856,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
 # ============================================================
 # Check 3: Route validation
 # ============================================================
-def check_routes(config_dir: str, policy_file: str | None = None,
+def check_routes(config_dir: str, policy: object = None,
                  strict: bool = False, verdict_out: "list | None" = None) -> dict[str, object]:
     """`generate-routes --validate` on the tree, as a row.
 
@@ -854,6 +864,8 @@ def check_routes(config_dir: str, policy_file: str | None = None,
     the row's status (0 → PASS, or WARN when it reported a warning; 1 → FAIL;
     2 → FAIL as a caller error) and what it printed is the row's details.
     This function decides only which advice line goes with a FAIL or a WARN.
+    *policy*: the deployment policy ``main`` resolved (``resolve_policy``),
+    None when ``--policy`` was not given.
     *verdict_out*, given, receives the shared key verdict the run gave, or the
     exception that kept it from being given (`ValidateOutcome.key_verdict`),
     so the `no_alert` row reads the same one instead of judging the tree again.
@@ -865,20 +877,11 @@ def check_routes(config_dir: str, policy_file: str | None = None,
 
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
-        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy_file)
+        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy)
     details = [ln.rstrip() for ln in printed.getvalue().splitlines() if ln.strip()]
     if verdict_out is not None and outcome.key_verdict is not None:
         verdict_out.append(outcome.key_verdict)
 
-    if outcome.policy_error is not None:
-        # ⛔ hint= is not decoration here. Without it this row inherits the
-        # generic routes advice ("check _routing for invalid receiver
-        # types…"), which sends the operator to look at tenant YAML for a
-        # problem that is entirely in their own argv.
-        return _argv_error_row("routes", str(outcome.policy_error),
-                               POLICY_VERSION_REMEDY
-                               if isinstance(outcome.policy_error, gen.PolicyVersionError)
-                               else _POLICY_ROUTES_ROW_HINT)
     findings = [gen.as_finding(f) for f in outcome.findings]
     key_hint = _key_verdict_hint(gen, config_dir, findings)
     if outcome.exit_code == EXIT_OK:
@@ -979,7 +982,7 @@ def _routes_fail_hint(gen, outcome, findings: list, strict: bool) -> str | None:
 # Check 5: Custom rule linting
 # ============================================================
 def check_custom_rules(
-    rule_packs_dir: str | None, policy_file: str | None = None
+    rule_packs_dir: str | None, lint_policy_file: str | None = None
 ) -> dict[str, object]:
     """Run lint_custom_rules.py on rule packs directory.
 
@@ -1015,8 +1018,10 @@ def check_custom_rules(
     # #1556: pass the value through even when it is not a file. Dropping it
     # here made `validate-config --policy <typo>` lint with the built-in
     # policy while reporting success; lint_custom_rules now exits 2 on it.
-    if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
-        cmd.extend(["--policy", policy_file])
+    # #3797: the lint policy is `--lint-policy`, lint's own input (lint
+    # judges it); the deployment `--policy` is never handed to lint.
+    if lint_policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
+        cmd.extend(["--policy", lint_policy_file])
 
     try:
         # ⛔ `encoding=`, not the locale default. The tool on the other end
@@ -1403,11 +1408,28 @@ _POLICY_DSL_ROUTING_REFUSED_HINT = (
     "them, then re-run. No policy was evaluated.")
 
 
-def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dict[str, object]:
+def pe_policy_file_document() -> object:
+    """``--policy-dsl``'s declaration: evaluate-policy's ``--policy`` one
+    (``policy_engine.POLICY_FILE_DOCUMENT``), the same file read the same way."""
+    import policy_engine as pe  # noqa: PLC0415
+    return pe.POLICY_FILE_DOCUMENT
+
+
+class _Unread(str):
+    """A --policy-dsl a library caller named and this row could not read:
+    the refusal, said where the CLI's declaration would have refused it."""
+
+
+def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None,
+                     policy_dsl_text: str | None = None) -> dict[str, object]:
     """Evaluate declarative policies from _defaults.yaml _policies or standalone file.
 
     Loads policy rules from _defaults.yaml ``_policies`` section and/or
     a standalone policy DSL file, then evaluates against all tenant configs.
+    *policy_dsl_text* is that file's content as ``main`` read it once
+    (``--policy-dsl``, a declared document, #3797); None (a library caller)
+    reads the file here, once — a file that cannot be read is the row's
+    argv error, as the CLI's declaration refuses it.
 
     The row carries ``_policy_scope`` (``root_carrier``: whether --config-dir
     has a root defaults carrier — True, False, or ``"unreadable"`` for a path
@@ -1419,12 +1441,17 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     """
     scope: dict[str, object] = {"root_carrier": None, "evaluated": False,
                                 "policy_dsl": False}
-    row = _policy_dsl_row(config_dir, policy_dsl_file, scope)
+    if policy_dsl_file is not None and policy_dsl_text is None:
+        try:
+            policy_dsl_text = Path(policy_dsl_file).read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            policy_dsl_text = _Unread(f"--policy-dsl: cannot read {policy_dsl_file!r}: {exc}")
+    row = _policy_dsl_row(config_dir, policy_dsl_file, policy_dsl_text, scope)
     row["_policy_scope"] = scope
     return row
 
 
-def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
+def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None, policy_dsl_text: str | None,
                     scope: dict[str, object]) -> dict[str, object]:
     """`check_policy_dsl`'s body; records into `scope` what it did."""
     try:
@@ -1486,10 +1513,13 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # argparse default is None, so nothing else reaches the else side. Same
     # split as #1616's --base-config.
     if policy_dsl_file is not None:
-        policy_dsl_problem = classify_path(policy_dsl_file, "file", lang="en", flag="--policy-dsl")
-        if policy_dsl_problem is not None:
-            return _argv_error_row("policy_dsl", policy_dsl_problem.message,
-                                   _POLICY_DSL_INPUT_HINT)
+        # #3797: the path (and strict UTF-8) was judged, and the file read,
+        # ONCE before any row ran (`_lib_input.document`, rc 2 naming the
+        # flag); what follows reads *policy_dsl_text*, never the file again —
+        # a second read (`load_policies` by path) read a file gone in between
+        # as "no rules", rc 1, or crashed.
+        if isinstance(policy_dsl_text, _Unread):
+            return _argv_error_row("policy_dsl", str(policy_dsl_text), _POLICY_DSL_INPUT_HINT)
         # ⛔ "not a file" is ONE of the five shapes of "supplied but unusable",
         # and the first cut of this split closed only that one — the same 1-of-5
         # that external review had already caught on `--policy` one round
@@ -1502,10 +1532,10 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         # The read below is the operator's argv. The `_defaults.yaml` read
         # above is the customer's tree and stays a tree finding on purpose.
         # ADR-036 step 4 (#2906): yaml.v3, as every other read of this run —
-        # `da-guard parse-tree`'s file mode (`pe.read_policy_file`).
+        # `da-guard parse-tree`'s file mode (`pe.policy_text_data`).
         try:
-            dsl_data = pe.read_policy_file(policy_dsl_file)
-        except (OSError, yaml.YAMLError, ParseTreeError) as exc:
+            dsl_data = pe.policy_text_data(policy_dsl_text, str(policy_dsl_file))
+        except (yaml.YAMLError, ParseTreeError) as exc:
             return _argv_error_row(
                 "policy_dsl",
                 f"--policy-dsl: unusable file: {policy_dsl_file!r}: {exc}",
@@ -1538,7 +1568,7 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
                 f"{policy_dsl_file!r}",
                 _POLICY_DSL_INPUT_HINT)
         try:
-            rules.extend(pe.load_policies(policy_dsl_file))
+            rules.extend(pe.rules_from_policy_data(dsl_data, source=str(policy_dsl_file)))
         except pe.InvalidPolicyRules as exc:
             row = _argv_error_row(
                 "policy_dsl",
@@ -2090,9 +2120,14 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     whose rule pack has no critical tier.
 
     The served keys are the shared verdict's (*verdict*: the `routes`
-    row's, or judged here): every key the exporter reads and serves, with
-    the file its value comes from; the severity each is served at is
-    served-values'. Whether an alert compares a key is the observed-map's
+    row's, or judged here): every key the exporter reads, with the file its
+    value comes from, that /metrics serves a row for in some part of the UTC
+    day; the severities each is served at over the day are served-values'
+    `--schedules-only` (#3883). Nothing here is read at one instant: the
+    time of day the check runs at changes nothing — `expires:` alone is read
+    at the run's clock, as the verdict reads it. A part of the day /metrics
+    cannot be gathered in serves nothing, so no severity is read there.
+    Whether an alert compares a key is the observed-map's
     answer (`_observed_map_lib.lookup`), asked for the key in the exporter's
     canonical spelling (asked of da-guard), the dimension part dropped — and
     for a key served at critical by its value (`"95:critical"`), for its
@@ -2123,11 +2158,26 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         if verdict.undecidable:
             return not_checked("no root platform file was read, so the threshold keys were not judged")
         observed = _observed_map_lib.load_observed_map()
-        served = [v for vs in verdict.keys.values() for v in vs
-                  if v.verdict == key_verdict.READ and "exporter" in v.read_by
-                  and not v.key.startswith("_") and v.served is not None]
-        spell = tv_key_spellings(sorted({v.key.partition("{")[0] for v in served}))
-        severities = {t: tv.severities for t, tv in load_served_tree(config_dir, partial=True).tenants.items()}
+        days = load_served_schedules(config_dir, partial=True).tenants
+        # #3883: (tenant, key) -> every severity /metrics serves the key at,
+        # in any part of the day (the key verdict carries no value read at
+        # one instant since #3835).
+        severities = {(t, k): {seg.severity for seg in sched.segments if seg.value is not None}
+                      for t, keys in days.items() for k, sched in keys.items()}
+        read = [v for vs in verdict.keys.values() for v in vs
+                if v.verdict == key_verdict.READ and "exporter" in v.read_by and not v.key.startswith("_")]
+        spell = tv_key_spellings(sorted({v.key.partition("{")[0] for v in read}))
+
+        def served_as(v: "key_verdict.KeyVerdict") -> str:
+            # The schedules name a key as served-values does: the base in the
+            # exporter's canonical #1231 spelling (asked of da-guard, the
+            # `spell` above), the dimension part as written; a verdict row
+            # names it as the tenant wrote it (`mysql_cpu` vs
+            # `mysql_threads_running`).
+            base, sep, rest = v.key.partition("{")
+            return spell.canonical(base) + sep + rest
+        sevs = {(v.tenant, v.key): severities.get((v.tenant, served_as(v)), set()) for v in read}
+        served = [v for v in read if sevs[(v.tenant, v.key)]]
     except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
             YamlFileError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
@@ -2143,13 +2193,14 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         base = spell.canonical(v.key.partition("{")[0])
         if base in _observed_map_lib.KNOWN_DEFERRED:
             continue
-        key, sev = base, severities.get(v.tenant, {}).get(v.key)
-        if sev == "critical" and not base.endswith("_critical"):
-            key = base + "_critical"
-        if _observed_map_lib.lookup(observed, key)[0] is _observed_map_lib.LookupKind.NO_ALERT:
-            files, tenants = found.setdefault((base, key != base), (set(), set()))
-            files.add(v.file or "?")
-            tenants.add(v.tenant)
+        for sev in sorted(sevs[(v.tenant, v.key)], key=str):
+            key = base
+            if sev == "critical" and not base.endswith("_critical"):
+                key = base + "_critical"
+            if _observed_map_lib.lookup(observed, key)[0] is _observed_map_lib.LookupKind.NO_ALERT:
+                files, tenants = found.setdefault((base, key != base), (set(), set()))
+                files.add(v.file or "?")
+                tenants.add(v.tenant)
     if not found:
         return _make_result("no_alert", PASS, [
             f"{len(served)} served key row(s): every one is compared by a shipped alert "
@@ -2165,6 +2216,142 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         details.append(f"no_alert `{key}`{tier} — served, but no shipped alert compares it "
                        f"— file(s) {capped(files)} — tenant(s) {capped(tenants)}")
     return _make_result("no_alert", WARN, details)
+
+
+_UNSUPPLIED_DEFAULTS_HINT = (
+    "Each line is a threshold the platform ships switched on that the root "
+    "platform file of this tree does not carry, so the alert comparing it "
+    "stays silent for every tenant. Add the key under `defaults:` (the line "
+    "gives the platform's value), or, to leave it off on purpose, list it "
+    "under `optional_overrides:` (a tenant can still set it there). A pack "
+    "counts as deployed when the root platform file carries any of its keys "
+    "or a tenant declares it in `_metadata.db_type`. Judged against the "
+    "registry this tool was built with: a rule pack older than the tool may "
+    "not read the key yet. Never blocks (#3830).")
+
+
+_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT = (
+    "Nothing was judged, so no default is known to be supplied: fix what the "
+    "line above names (a working, current da-guard; a root platform file "
+    "that reads) and run again. Never blocks (#3830).")
+
+
+def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
+    """Thresholds the platform ships armed that this tree does not supply
+    (#3830): a key the registry marks `arming: default`, of a pack this tree
+    deploys, that the root platform file neither sets under `defaults:` nor
+    lists under `optional_overrides:`. `da-tools init` copies the platform
+    defaults into the customer's tree, so a default added or replaced later
+    (#3778's `mysql_connection_usage_percent`) never reaches it, and the
+    alert comparing it is silent with no row saying so.
+
+    Which keys ship armed is the registry's answer, as the generated module
+    carries it (`_registry_lib.packaged_default_armed`): no list is kept
+    here.
+
+    A pack is deployed when either holds — no deployment inventory exists:
+
+    * the root platform file carries one of its keys, under `defaults:` or
+      `optional_overrides:`, in any #1231 spelling (the exporter's rule,
+      asked of da-guard), or a retired key whose replacement is one of its
+      keys (#3829; the old key shows the pack, it does not supply the new
+      one). A tenant's or a profile's key adds nothing: one the root file
+      does not declare is already `unread (no_row)`.
+    * a tenant's `_metadata.db_type`, as /metrics serves it (served-values:
+      a root platform file's `tenants:` entry counts), names it.
+
+    The root platform file is the one parse-tree says the root's chain
+    selects (`_defaults.yaml` / `_defaults.yml`): a key only a subtree
+    carrier declares reaches no tenant (#1976). A tree with no root platform
+    file supplies nothing: a pack a `db_type` shows deployed is named whole.
+
+    Advisory only: WARN or PASS, never FAIL — the registry read is this
+    tool's, and the rule packs a deployment runs are another release line.
+    A root file that does not read, a served reading or spelling answer that
+    cannot be had, and a file the exporter's load drops (a tenant file: its
+    tenants' `db_type` is not served; the root file: nothing in it is
+    supplied) are each a WARN saying nothing was checked.
+    """
+    import _registry_lib  # ops/: the registry as the generated module carries it
+
+    def not_checked(why: str) -> dict[str, object]:
+        return _make_result("unsupplied_defaults", WARN, [
+            f"not checked: whether every default-armed threshold is supplied was not judged ({why})"],
+            hint=_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT)
+    # This tool's own data: a failure here is a defect, not a "not checked".
+    registry = _registry_lib.registry_keys(_registry_lib.packaged_registry_doc())
+    armed = _registry_lib.packaged_default_armed()
+    retired = _registry_lib.packaged_retired_key_packs()
+    try:
+        carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
+        raw = load_confd_file(config_dir, str(carrier), default={}) if carrier is not None else {}
+        block = raw.get("defaults") if isinstance(raw, dict) else None
+        listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
+        written = sorted(
+            {str(k).partition("{")[0] for k in (block if isinstance(block, dict) else {})}
+            | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
+        spell = tv_key_spellings(written)
+        served = load_served_tree(config_dir, partial=True)
+    except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ParseTreeError,
+            *_INPUT_ERRORS) as exc:
+        return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+    dropped = [*served.parse_failed, *(u.file for u in served.unreadable)]
+    if dropped:
+        # A tenant of a dropped file is not served, so its db_type is not
+        # read — a PASS would read as "every tenant checked".
+        return not_checked(f"the exporter's load drops {', '.join(sorted(dropped))}; "
+                           "their tenants are not served")
+    where = carrier.name if carrier is not None else None
+    supplied = {spell.canonical(k): k for k in written}
+
+    def pack_of(canonical: str) -> "str | None":
+        """The pack a root-file key shows deployed: its own, or — for a
+        retired key (and its `_critical`) — the pack of its replacement."""
+        if canonical in registry:
+            return registry[canonical]["pack"]
+        base = canonical[:-len("_critical")] if canonical.endswith("_critical") else canonical
+        return retired.get(base)
+    # pack -> what shows it is deployed: (root keys as written, tenants)
+    seen: dict[str, tuple[set[str], set[str]]] = {}
+    for canonical, as_written in supplied.items():
+        pack = pack_of(canonical)
+        if pack in armed:
+            seen.setdefault(pack, (set(), set()))[0].add(as_written)
+    for tenant, tv in served.tenants.items():
+        meta = tv.values.get("_metadata")
+        kinds = meta.get("db_type") if isinstance(meta, dict) else None
+        for kind in ([kinds] if isinstance(kinds, str) else kinds if isinstance(kinds, list) else []):
+            if isinstance(kind, str) and kind in armed:
+                seen.setdefault(kind, (set(), set()))[1].add(tenant)
+    judged = [(pack, key) for pack in sorted(seen) for key in armed[pack]]
+    missing = [(pack, key) for pack, key in judged if key not in supplied]
+    if not missing:
+        if where is None:
+            return _make_result("unsupplied_defaults", PASS, [
+                "no root _defaults.yaml, and no tenant declares a db_type whose pack ships "
+                "an armed threshold — nothing to check"])
+        return _make_result("unsupplied_defaults", PASS, [
+            f"{len(judged)} default-armed threshold(s) of {len(seen)} deployed pack(s): "
+            f"each is set or listed in {where}"])
+
+    def capped(names: "set[str]") -> str:
+        ordered = sorted(names)
+        return ", ".join(ordered[:WARN_LIMIT]) + (
+            f" (+{len(ordered) - WARN_LIMIT} more)" if len(ordered) > WARN_LIMIT else "")
+    details = []
+    for pack, key in missing:
+        keys, tenants = seen[pack]
+        why = "; ".join(
+            ([f"{where} carries {capped(keys)}"] if keys else [])
+            + ([f"db_type of tenant(s) {capped(tenants)}"] if tenants else []))
+        entry = registry[key]
+        value = f"{entry['value']} {entry.get('unit', '')}".rstrip()
+        lacks = (f"{where} neither sets it under `defaults:` nor lists it under "
+                 "`optional_overrides:`" if where is not None
+                 else "this tree has no root _defaults.yaml to set it in")
+        details.append(f"unsupplied `{key}` — the {pack} pack ships it armed (platform value "
+                       f"{value}), but {lacks} — {pack} is deployed here: {why}")
+    return _make_result("unsupplied_defaults", WARN, details)
 
 
 _TIER_INVERSION_HINT = (
@@ -2622,6 +2809,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "no_alert": (_NO_ALERT_HINT, "docs/cli-reference.md#validate-config"),
+    "unsupplied_defaults": (_UNSUPPLIED_DEFAULTS_HINT, "docs/cli-reference.md#validate-config"),
     "tier_inversion": (_TIER_INVERSION_HINT, "docs/cli-reference.md#validate-config"),
     # #1653: not a check — the one row `main()` emits under --json when
     # --config-dir is not a directory and no check could run at all.
@@ -3124,19 +3312,28 @@ def _main() -> "Report | None":
     _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
                          empty=_lib_input.EMPTY_REFUSED, required=True,
                          help=_h('config_dir'))
-    parser.add_argument("--policy",
-                        help=_h('policy'))
+    # #3797: the deployment policy is the generator's declared document
+    # (`add_policy_argument`), judged and read once below, before any row
+    # runs; the lint policy is lint's own input (`--lint-policy`, handed to it
+    # as `--policy`, never read here).
+    import generate_alertmanager_routes as gen  # noqa: PLC0415
+    gen.add_policy_argument(parser, lang=_LANG)
+    parser.add_argument("--lint-policy", metavar="PATH", help=_h('lint_policy'))
     parser.add_argument("--rule-packs",
                         help=_h('rule_packs'))
     parser.add_argument("--version-check", action="store_true",
                         help=_h('version_check'))
     parser.add_argument("--json", action="store_true",
                         help=_h('json'))
-    parser.add_argument("--policy-dsl",
-                        help=_h('policy_dsl'))
+    # #3797: a declared document, judged and read once below.
+    _lib_input.add_input(parser, "--policy-dsl", decode=pe_policy_file_document(),
+                         remedy=_POLICY_DSL_INPUT_HINT, help=_h('policy_dsl'))
     parser.add_argument("--strict", action="store_true",
                         help=_h('strict'))
     args = parser.parse_args()
+    # #1650's class: a flag accepted and then never read is a caller error.
+    if args.lint_policy is not None and args.rule_packs is None:
+        parser.error("--lint-policy is read only with --rule-packs (the custom rule lint)")
 
     # #3755: --config-dir judged ONCE, before any row runs, by its
     # declaration (`_lib_parse_cache.declared_trees`, in this run's session,
@@ -3167,6 +3364,23 @@ def _main() -> "Report | None":
     if tools_dir not in sys.path:
         sys.path.insert(0, tools_dir)
 
+    # #3797: --policy judged and read ONCE, before any row runs, by the
+    # generator's own resolver — a path that is no readable YAML mapping
+    # (CallerError through `run()`), a mapping that is no usable policy or
+    # asks for a newer generator: rc 2, no document (#3617: no row ran).
+    # The routes row judges under the policy this run holds.
+    # --policy-dsl too: the path and strict UTF-8 judged, the file read
+    # once; its content is the policy_dsl row's to judge (an argv row).
+    policy_dsl_text = _lib_input.document(args, "policy_dsl", lang=_LANG)
+    try:
+        policy = gen.resolve_policy(args, lang=_LANG)
+    except PolicyInputError as exc:
+        print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
+        hint = (POLICY_VERSION_REMEDY if isinstance(exc, PolicyVersionError)
+                else _POLICY_ROUTES_ROW_HINT)
+        print(f"  hint: {safe_label(hint)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     results = []
     # #2740: the rows below share one `da-guard effective` run; closed after
     # them. `_run_check` catches everything a row raises, so nothing skips
@@ -3192,7 +3406,7 @@ def _main() -> "Report | None":
     # that re-reads its findings or judges the keys again.
     verdicts: list = []
     results.append(_run_check("routes", check_routes, args.config_dir,
-                              args.policy, strict=args.strict, verdict_out=verdicts,
+                              policy, strict=args.strict, verdict_out=verdicts,
                               _config_dir=args.config_dir))
 
     # 5. Custom rule lint (if rule-packs dir provided)
@@ -3203,7 +3417,8 @@ def _main() -> "Report | None":
     # whole report reading PASS, verdict and row gone together.
     if args.rule_packs is not None:
         results.append(_run_check("custom_rules", check_custom_rules,
-                                  args.rule_packs, args.policy, _config_dir=args.config_dir))
+                                  args.rule_packs, args.lint_policy,
+                                  _config_dir=args.config_dir))
 
     # 6. Profile references (v1.12.0)
     results.append(_run_check("profiles", check_profiles, args.config_dir, _config_dir=args.config_dir))
@@ -3214,8 +3429,8 @@ def _main() -> "Report | None":
 
     # 8. Policy-as-Code (DSL evaluation)
     results.append(_run_check("policy_dsl", check_policy_dsl,
-                              args.config_dir,
-                              getattr(args, 'policy_dsl', None), _config_dir=args.config_dir))
+                              args.config_dir, args.policy_dsl, policy_dsl_text,
+                              _config_dir=args.config_dir))
 
     # 9. Tenant declaration uniqueness (#1577) — unconditional: the state it
     # finds makes the exporter refuse the whole tree, so there is no flag
@@ -3249,7 +3464,13 @@ def _main() -> "Report | None":
                               verdict=given if isinstance(given, key_verdict.TreeVerdict) else None,
                               judge=given is None, _config_dir=args.config_dir))
 
-    # 16. A tenant's served critical not stricter than its warning, across
+    # 16. Default-armed thresholds of a deployed pack that the root platform
+    # file neither sets nor lists (#3830) — unconditional, advisory: WARN at
+    # most, never a FAIL.
+    results.append(_run_check("unsupplied_defaults", check_unsupplied_defaults,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 17. A tenant's served critical not stricter than its warning, across
     # files (#3691) — unconditional; FAIL on an inverted pair.
     results.append(_run_check("tier_inversion", check_tier_inversion, args.config_dir,
                               _config_dir=args.config_dir))

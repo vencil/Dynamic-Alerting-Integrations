@@ -1349,7 +1349,7 @@ def main() -> None:
         print_catalog()
         sys.exit(EXIT_OK)
 
-    if args.from_onboard:
+    if args.from_onboard is not None:  # '' is given: refused, named (#3797)
         run_from_onboard(args)
     elif args.non_interactive or (args.tenant and args.db):
         if not args.tenant or not args.db:

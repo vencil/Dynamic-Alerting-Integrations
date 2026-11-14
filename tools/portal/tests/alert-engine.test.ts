@@ -136,13 +136,23 @@ describe('simulateAlerts', () => {
     expect(alerts[0].severity).toBe('warning');
   });
 
-  it('skips entries with non-numeric threshold (NaN)', () => {
+  it('a threshold the exporter cannot read is a row that says so, not a dropped one (#3865)', () => {
     const alerts = simulateAlerts(
       { mysql_connection_usage_percent: 'not-a-number' },
       { mysql_connection_usage_percent: { current: 90, unit: '%', packLabel: 'mysql' } },
     );
-    // parseFloat('not-a-number') → NaN → continue, no alert emitted.
-    expect(alerts).toHaveLength(0);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      severity: 'unreadable', raw: 'not-a-number', threshold: null, firing: false, critical_firing: false,
+    });
+  });
+
+  it('a scheduled value (a map) has no row: no schedule is modelled', () => {
+    const alerts = simulateAlerts(
+      { x: { default: '80', overrides: [] } },
+      { x: { current: 90, unit: '%', packLabel: 'p' } },
+    );
+    expect(alerts).toEqual([]);
   });
 
   it('handles multiple metrics independently', () => {
@@ -357,7 +367,7 @@ describe('simulateWithDedup', () => {
 
   it('tolerates a missing alertDefs argument (empty defs → no alerts)', () => {
     const out = simulateWithDedup({ mysql_connection_usage_percent: '80' }, { mysql_connection_usage_percent: 85 }, true);
-    expect(out).toEqual({ firing: [], suppressed: [], ok: [] });
+    expect(out).toEqual({ firing: [], suppressed: [], ok: [], unreadable: [] });
   });
 
   // Equivalence guard: reproduce the pre-refactor alert-simulator.jsx
@@ -365,6 +375,10 @@ describe('simulateWithDedup', () => {
   // of inputs. This is the "same input → same result before/after
   // convergence" property; the ONLY sanctioned behaviour change (engine
   // simulateAlerts >= → >) does not touch this path, which was already >.
+  // #3865 added the `unreadable` bucket and changed how a threshold is READ;
+  // for thresholds both readers read alike (plain decimals) the three legacy
+  // buckets are unchanged. Where the readers differ is
+  // tests/threshold-value-simulator.test.ts.
   it('is behaviourally identical to the pre-refactor simulate() across a matrix', () => {
     const legacySimulate = (config: any, metrics: any, dedupEnabled: boolean) => {
       const firing: any[] = [];
@@ -401,7 +415,7 @@ describe('simulateWithDedup', () => {
       { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '90' },
       { pg_cache_hit_ratio: '90' },
       { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '90', pg_cache_hit_ratio: '90' },
-      { unknown: '5', mysql_connection_usage_percent: 'abc' },
+      { unknown: '5' },
     ];
     const metricSets = [
       { mysql_connection_usage_percent: 85, mysql_connection_usage_percent_critical: 95, pg_cache_hit_ratio: 80 },
@@ -413,7 +427,7 @@ describe('simulateWithDedup', () => {
       for (const metrics of metricSets) {
         for (const dedup of [true, false]) {
           expect(simulateWithDedup(config, metrics, dedup, DEFS)).toEqual(
-            legacySimulate(config, metrics, dedup),
+            { ...legacySimulate(config, metrics, dedup), unreadable: [] },
           );
         }
       }

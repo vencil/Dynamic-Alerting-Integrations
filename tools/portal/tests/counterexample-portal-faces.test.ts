@@ -169,6 +169,26 @@ describe('config template gallery — one-click copy YAML', () => {
     expect(annotateCounterexamples(on)).toContain(CE[key].observed);
   });
 
+  it('reads the line\'s value as the exporter reads it, not with Number() (#3865)', async () => {
+    const { annotateCounterexamples } = await import(RULE_PACKS_MOD);
+    const key = Object.keys(CE).find(k => {
+      const v = platformValueOf(k);
+      return v != null && Number.isInteger(v) && v > 0;
+    })!;
+    const v = platformValueOf(key)!;
+    const line = (text: string) => `${key}: ${text}\n`;
+    // Texts Number() reads as the measured number and the exporter refuses:
+    // the line serves no value, so the sentence about "this value" is not on it.
+    for (const text of [`"0x${v.toString(16)}"`, `"0o${v.toString(8)}"`, `"0b${v.toString(2)}"`]) {
+      expect(Number(text.slice(1, -1)), text).toBe(v);
+      expect(annotateCounterexamples(line(text)), text).toEqual(line(text));
+    }
+    // Texts the exporter reads as the measured number.
+    for (const text of [`"${v}"`, `${v}`, `"${v}:critical"`, `"${v}.0"`, `" ${v} "`]) {
+      expect(annotateCounterexamples(line(text)), text).toContain(CE[key].observed);
+    }
+  });
+
   it('renders nothing when the measurement itself is unusable', async () => {
     const { counterexampleComment } = await import(RULE_PACKS_MOD);
     // A blank clause renders `⚠ #1 measured counter-example: (fires on benign

@@ -52,7 +52,8 @@ PT_SYMLINK_REASON = "a symlink to a directory the walk does not follow (not_regu
 # A key a shipped alert compares (#3591): validate-config's `no_alert` row
 # would make a made-up key's tree WARN, not PASS.
 TENANT = 'tenants:\n  t-sym:\n    mysql_connection_usage_percent: "70"\n'
-DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 50\n"
+# …and every armed key of that pack (#3830): `unsupplied_defaults` would WARN on one alone.
+DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 50\n  mysql_replication_lag: 30\n"
 
 pytestmark = [
     pytest.mark.skipif(

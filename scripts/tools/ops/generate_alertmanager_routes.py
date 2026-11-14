@@ -160,6 +160,7 @@ from _grar_render import (  # noqa: E402, F401
 # #2219: used here, not re-exported — hence no `# noqa: F401` (see the
 # `_lib_io` block above for why that marker must stay off used imports).
 from _grar_render import (  # noqa: E402
+    BASE_CONFIG_DOCUMENT, BASE_CONFIG_REMEDY,  # #3797: --base-config's declaration
     AlertmanagerConfigInvariantViolated, AlertmanagerConfigRejected, BaseIsAnOutputError,
     alertmanager_check,
 )
@@ -204,7 +205,11 @@ from _grar_validate import (  # noqa: E402
 from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 # #2901 (ADR-036 §6): the policy's min_generator_version, read in the same
 # parse as allowed_domains, and the comparison the generator container shares.
-from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    POLICY_DOCUMENT, POLICY_INPUT_REMEDY, PolicyDocument, generator_version_problem,
+    load_policy_document,
+    policy_document,
+)
 import _lib_parse_cache  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402  (#3751: no usable da-guard)
 from _grar_parse import parse_tree_failure_exit  # noqa: E402  (#3751: its own rc-2 line)
@@ -1154,8 +1159,9 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="Output the merged Alertmanager config as a "
                                  "plain alertmanager.yml (BYO Alertmanager, or "
                                  "the Prometheus Operator's configSecret)")
-    parser.add_argument("--base-config", default=None,
-                        help="Your Alertmanager YAML for --output-configmap / "
+    # #3797: a declared document, read once where the mode reads it.
+    _lib_input.add_input(parser, "--base-config", decode=BASE_CONFIG_DOCUMENT,
+                         remedy=BASE_CONFIG_REMEDY, help="Your Alertmanager YAML for --output-configmap / "
                              "--output-alertmanager — the SOURCE the generated "
                              "routing is merged into, never an earlier output "
                              "(default: a built-in placeholder)")
@@ -1288,26 +1294,46 @@ def mount_root_value_problem(value: str) -> str | None:
 
 
 def add_policy_argument(parser: argparse.ArgumentParser, *, lang: str = "en") -> None:
-    """``--policy PATH``, the same flag on every tool that judges receivers."""
-    parser.add_argument("--policy", default=None, metavar="PATH",
-                        help=POLICY_HELP.get(lang, POLICY_HELP["en"]))
+    """``--policy PATH``, the same flag on every tool that judges receivers:
+    a declared document (#3797, `_lib_input`), read once by
+    ``resolve_policy``."""
+    _lib_input.add_input(parser, "--policy", decode=POLICY_DOCUMENT, metavar="PATH",
+                         remedy=POLICY_INPUT_REMEDY,
+                         help=POLICY_HELP.get(lang, POLICY_HELP["en"]))
 
 
-def resolve_policy(policy_path: str | None) -> ResolvedPolicy:
-    """The deployment policy at *policy_path* (None: not given).
+def resolve_policy(args: argparse.Namespace, *, lang: str = "en") -> ResolvedPolicy:
+    """The deployment policy ``--policy`` names (``add_policy_argument``);
+    not given: nothing is applied.
 
-    Raises ``PolicyInputError`` — the caller's exit 2 — when the file is
-    unusable (``load_policy_document``) or names a ``min_generator_version``
-    this generator does not meet (ADR-036 §6): judging under it would use
-    rules its author did not mean.
+    The file is judged and read once (`_lib_input.document`: a path that is
+    no readable file, content that is not UTF-8 / YAML / a mapping —
+    `CallerError`, rc 2 naming the flag). Raises ``PolicyInputError`` — the
+    caller's exit 2 — when the mapping is not a usable policy
+    (``policy_document``) or names a ``min_generator_version`` this generator
+    does not meet (ADR-036 §6): judging under it would use rules its author
+    did not mean. Nothing reads the file again: the run holds the policy.
     """
-    if policy_path is None:   # ⛔ not truthiness: "" is supplied (#1616)
+    data = _lib_input.document(args, "policy", lang=lang)
+    if data is None:   # not given ("" is given, and refused by the declaration)
         return ResolvedPolicy(None, None, None)
-    doc = load_policy_document(policy_path)
+    return _resolved(policy_document(data, args.policy), str(args.policy))
+
+
+def resolve_policy_file(path: str) -> ResolvedPolicy:
+    """``resolve_policy`` of the policy file at *path*, read here — a
+    library caller's (validate-config's routes row in a test); a tool's
+    ``--policy`` is the declared document ``resolve_policy`` reads."""
+    return _resolved(load_policy_document(path), str(path))
+
+
+def _resolved(doc: "PolicyDocument", path: str) -> ResolvedPolicy:
+    """*doc* as the policy a run judges under: refused (``PolicyVersionError``)
+    when it asks for a newer generator than this one."""
     too_old = generator_version_problem(da_tools_version(), doc.min_generator_version)
     if too_old is not None:
         raise PolicyVersionError(f"--policy: {too_old}")
-    return ResolvedPolicy(policy_path, doc.allowed_domains, doc.min_generator_version,
+    return ResolvedPolicy(path, doc.allowed_domains, doc.min_generator_version,
                           doc.shared_secrets)
 
 
@@ -1864,18 +1890,11 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
     return early
 
 
-def _resolve_inputs(policy_path: str | None, mount_root: str) -> ResolvedPolicy:
-    """What every mode settles before the tenant scan: the deployment policy,
-    ``--secret-mount-root`` and the shipped platform probe set. Raises
-    ``PolicyInputError`` (the caller's exit 2); the other two exit 2 here."""
-    # Load policy (webhook domain allowlist).
-    # #1556: a supplied-but-unusable --policy is a caller error, not "no
-    # policy". Exiting 2 rather than proceeding with an empty allowlist
-    # is the whole point — the previous behaviour generated routes with SSRF
-    # domain checking off and said nothing.
-    # #2901 (ADR-036 §6): a policy may name the oldest generator it accepts;
-    # an older one would judge by rules the policy's author did not mean.
-    policy = resolve_policy(policy_path)
+def _resolve_inputs(policy: ResolvedPolicy, mount_root: str) -> ResolvedPolicy:
+    """What every mode settles before the tenant scan, besides the
+    deployment policy (``resolve_policy``, judged by the caller with the
+    run's other inputs): ``--secret-mount-root`` and the shipped platform
+    probe set, each exiting 2 here."""
     # #1560: written into every rendered `<field>_file` path.
     mount_root_problem = mount_root_value_problem(mount_root)
     if mount_root_problem is not None:
@@ -2019,16 +2038,14 @@ class ValidateOutcome(NamedTuple):
     #: ``evaluate_generated_config``'s verdict; None when the run ended
     #: before a generation result was judged.
     generated: "GeneratedConfigVerdict | None" = None
-    #: The unusable ``--policy`` that ended the run (exit 2), if one did.
-    policy_error: "PolicyInputError | None" = None
     #: The shared key verdict the run gave (``_lib_key_verdict.TreeVerdict``),
     #: the exception that kept it from being given, or None when the run
-    #: ended before the keys were judged (a refusal, an unusable --policy).
+    #: ended before the keys were judged (a refusal).
     key_verdict: "object | None" = None
 
 
 def validate_tree(config_dir: str, *, strict: bool = False,
-                  policy: str | None = None,
+                  policy: "ResolvedPolicy | None" = None,
                   mount_root: str = DEFAULT_MOUNT_ROOT,
                   key_verdict: bool = True,
                   credential_scope: "frozenset[str] | None" = None,
@@ -2039,8 +2056,9 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     ``generate-routes --validate`` exits with this function's ``exit_code``
     and validate-config's ``routes`` row is this function's outcome: neither
     decides anything of its own (#3788). It prints what ``--validate``
-    prints (stdout and stderr) and never exits. *strict*, *policy*,
-    *mount_root*, *show_loader_reason*: the flags; *key_verdict*,
+    prints (stdout and stderr) and never exits. *strict*, *mount_root*,
+    *show_loader_reason*: the flags; *policy*: the deployment policy the caller
+    resolved (``resolve_policy``; None: not given); *key_verdict*,
     *credential_scope*: ``main``'s; *findings*: the list to record into
     (``--findings-json``).
 
@@ -2051,13 +2069,8 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     findings = [] if findings is None else findings
     generated: list = []
     key_verdicts: list = []
-    policy_error: PolicyInputError | None = None
     try:
-        try:
-            resolved = _resolve_inputs(policy, mount_root)
-        except PolicyInputError as exc:
-            policy_error = exc
-            die_caller_error(str(exc))
+        resolved = _resolve_inputs(policy or ResolvedPolicy(None, None, None), mount_root)
         key_blocks: list[str] = []
         tree, routes, receivers, inhibit_rules, all_warnings = _scan_and_generate(
             config_dir, findings, policy=resolved, mount_root=mount_root,
@@ -2078,7 +2091,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     except SystemExit as exc:
         code = _exit_code_of(exc)
     return ValidateOutcome(code, findings, generated[0] if generated else None,
-                           policy_error, key_verdicts[0] if key_verdicts else None)
+                           key_verdicts[0] if key_verdicts else None)
 
 
 def _run(args: argparse.Namespace, findings: list[str], *,
@@ -2163,8 +2176,17 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # through `main` gets.
     try:
         _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
+        # #3797: --policy judged and read once, with the run's other inputs;
+        # the run holds the policy and never reads the file again.
+        # #1556: a supplied-but-unusable --policy is a caller error, not "no
+        # policy" — the run never proceeds with the allowlist off.
+        # #2901 (ADR-036 §6): nor under a policy that asks for a newer
+        # generator.
+        policy = resolve_policy(args)
     except CallerError as exc:
         die_caller_error(exc.error_line, exc.reason)
+    except PolicyInputError as exc:
+        die_caller_error(str(exc))
     except ParseTreeError as exc:
         parse_tree_failure_exit(exc, args.config_dir)
 
@@ -2173,15 +2195,12 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # it, and nothing of a --validate run is decided after it.
     if args.validate:
         sys.exit(validate_tree(
-            args.config_dir, strict=args.strict, policy=args.policy,
+            args.config_dir, strict=args.strict, policy=policy,
             mount_root=args.mount_root, key_verdict=key_verdict,
             credential_scope=credential_scope, findings=findings,
             show_loader_reason=args.show_loader_reason).exit_code)
 
-    try:
-        policy = _resolve_inputs(args.policy, args.mount_root)
-    except PolicyInputError as exc:
-        die_caller_error(str(exc))
+    policy = _resolve_inputs(policy, args.mount_root)
 
     # #1616: load the base config HERE, not inside _assembled_output_mode.
     # ⛔ Measured with the load left at its original site (after the tenant
@@ -2202,8 +2221,9 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # runs before this.
     if writes_a_file_mode:
         try:
-            base_config = load_base_config(args.base_config,
-                                           show_loader_reason=args.show_loader_reason)
+            base_config = load_base_config(
+                _lib_input.document(args, "base_config", lang="en"), args.base_config,
+                show_loader_reason=args.show_loader_reason)
         except BaseIsAnOutputError as exc:
             _assembly_failed(exc, "nothing was generated or written")
         except BaseConfigInputError as exc:

@@ -11,13 +11,13 @@
 #   es_heap_usage_percent: 85
 #       % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
 #       (alert demands es_heap_usage_percent) — unwired dead key, no alias
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #   es_disk_usage_percent: 85
 #       % — Disk USAGE % warning (used = 1 - available/size, recording rule
 #       tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
 #       tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE
 #       %) — carrying 15 into a used-% rule would fire permanently
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #   es_pending_tasks: 50
 #       count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
 #       catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold

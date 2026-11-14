@@ -140,7 +140,7 @@ tenants:
 da-tools generate-routes --config-dir conf.d/ --validate --strict
 
 # 驗證 + webhook domain allowlist 檢查
-da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .github/custom-rule-policy.yaml
+da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .github/deployment-policy.yaml
 ```
 
 `--validate` 不寫任何東西。產生器的輸出一律是**合併後的完整 Alertmanager 設定**，沒有「只產片段、自己貼」的模式：不帶模式旗標（只帶 `-o`、只帶 `--dry-run`）是結束碼 2。⚠️ v2.9.0 映像仍會在不帶模式旗標時輸出片段 <!-- image-caveat: v2.9.0 -->
@@ -601,7 +601,7 @@ _routing_enforced:
 da-tools validate-config --config-dir conf.d/
 
 # CI pipeline 使用 JSON 輸出 + policy 檢查
-da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-policy.yaml --json
+da-tools validate-config --config-dir conf.d/ --policy .github/deployment-policy.yaml --json
 ```
 
 建議在 `generate-routes --apply` 前先執行 `validate-config`，確保配置完整正確。

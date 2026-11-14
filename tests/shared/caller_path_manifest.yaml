@@ -20,7 +20,6 @@ commands:
     "--tenant": not_path
   analyze-gaps:
     "--output": output
-    "--tenant-config": file
   backtest:
     "--baseline": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--config-dir": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
@@ -101,18 +100,14 @@ commands:
     "--mode": not_path
     "--namespace": not_path
   evaluate-policy:
-    "--policy": file
   explain-keys:
-    "--assert": {kind: reader, by: "explain_keys (ExplainError)", pinned_by: "tests/ops/test_explain_keys.py::test_caller_errors_exit_2_with_one_json_document"}
     "--at": not_path
     "--da-guard-binary": {kind: reader, by: "the da-guard resolver", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--tenant": not_path
     "--timeout": not_path
   explain-route:
     "--alertname": not_path
-    "--base-config": file
     "--label": not_path
-    "--policy": file
     "--severity": not_path
     "--tenant": not_path
   fed-key:
@@ -126,12 +121,10 @@ commands:
     "--prometheus": url
     target: not_path
   generate-routes:
-    "--base-config": file
     "--configmap": not_path
     "--findings-json": output
     "--namespace": not_path
     "--output": output
-    "--policy": file
     # #1560: a path inside the Alertmanager container, written into the
     # rendered `<field>_file`; never opened here.
     "--secret-mount-root": not_path
@@ -185,7 +178,6 @@ commands:
     input_file: {kind: reader, by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
   migrate-credentials:
     "--manifests-out": output
-    "--policy": file
   migrate-to-operator:
     "--config-dir": {kind: reader, by: "refused whatever the value: no conf.d is read, rc 2 with the routing remedy (#3572)", pinned_by: "tests/ops/test_operator_routing_single_renderer.py::test_each_alertmanagerconfig_flag_is_refused_naming_it"}
     "--namespace": not_path
@@ -195,16 +187,13 @@ commands:
     "--secret-name": not_path
   offboard:
     "--config-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
-    "--state": any
     tenant: not_path
   onboard:
-    "--alertmanager-config": {kind: reader, by: AlertmanagerConfigError, pinned_by: "tests/ops/test_onboard_platform.py::test_nonexistent_file"}
     "--da-crdecode-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--da-read-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--exclude": not_path
     "--output-dir": output
     "--rule-files": any
-    "--scrape-config": {kind: reader, by: PrometheusConfigError, pinned_by: "tests/ops/test_onboard_platform.py::test_main_missing_scrape_config_is_a_caller_error"}
     "--tenant-label": not_path
   opa-evaluate:
     "--config-dir": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
@@ -218,7 +207,6 @@ commands:
     "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--namespace": not_path
     "--prometheus": url
-    "--secret-mounts": file
   operator-generate:
     "--api-version": not_path
     "--components": not_path
@@ -280,7 +268,6 @@ commands:
     "--expect-merged-hash": not_path
     tenant_id: not_path
   test-notification:
-    "--policy": file
     "--rate-limit": not_path
     "--tenant": not_path
     "--timeout": not_path
@@ -306,6 +293,5 @@ commands:
     "--stability-window": not_path
     "--tolerance": not_path
   validate-config:
-    "--policy": file
-    "--policy-dsl": file
+    "--lint-policy": {kind: reader, by: "lint_custom_rules --policy (subprocess, #3797: validate-config never reads it; lint's own declared document judges it, its rc 2 is the custom_rules caller_error row)", pinned_by: "tests/ops/test_validate_config.py::test_lint_policy_is_lint_s_own_input"}
     "--rule-packs": {kind: reader, by: "lint_custom_rules --rule-pack-dir (subprocess; its rc 2 is the custom_rules caller_error row, #3755)", pinned_by: "tests/ops/test_validate_config.py::test_rule_packs_lint_refusal_is_a_caller_error_row"}

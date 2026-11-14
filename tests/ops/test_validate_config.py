@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 import validate_config as vc
+import generate_alertmanager_routes as _gen  # noqa: E402  (#3797: resolve_policy_file)
 from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 from _lib_exitcodes import emit_result, encode_json  # noqa: E402  (#3216: in-process main() → exit status)
 
@@ -161,24 +162,28 @@ class TestPolicyCheck:
             yaml.dump({"tenants": {tenant: {"_routing": routing}}}, f)
         return policy_path
 
-    def test_supplied_but_missing_policy_file_is_caller_error(self):
+    def test_supplied_but_missing_policy_file_is_caller_error(self, tmp_path):
         """A policy path that is not a file is a caller error, not a skip
-        (#1556) — now on the routes row."""
-        with tempfile.TemporaryDirectory() as d:
-            result = vc.check_routes(d, "/nonexistent/policy.yaml")
-            assert result["status"] == vc.FAIL
-            assert result["caller_error"] is True
+        (#1556) — #3797: judged by its declaration before any row runs (rc 2,
+        no document)."""
+        (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 70\n", encoding="utf-8")
+        proc = _run_vc("--config-dir", str(tmp_path), "--json",
+                       "--policy", str(tmp_path / "nope.yaml"))
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert proc.stdout == ""
+        assert f"--policy {tmp_path / 'nope.yaml'}: No such file or directory" in proc.stderr
 
     def test_valid_webhook_passes_policy(self):
         with tempfile.TemporaryDirectory() as d:
-            result = vc.check_routes(d, self._tree(d))
+            result = vc.check_routes(d, _gen.resolve_policy_file(self._tree(d)))
             assert result["status"] in (vc.PASS, vc.WARN), result
 
     def test_a_refused_domain_fails_routes_with_the_allowlist_advice(self):
         """#3303: the allowlist advice, by the generator's kind
         (`is_policy_refusal`), now rides on the routes row."""
         with tempfile.TemporaryDirectory() as d:
-            result = vc.check_routes(d, self._tree(d, host="evil.example.org"))
+            result = vc.check_routes(
+                d, _gen.resolve_policy_file(self._tree(d, host="evil.example.org")))
             assert result["status"] == vc.FAIL, result
             assert result["hint"] == vc.POLICY_REFUSAL_REMEDY, result
 
@@ -614,9 +619,13 @@ class TestPolicyDSL:
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
-            result = vc.check_policy_dsl(d, "/nonexistent/policy.yaml")
-            assert result["status"] == vc.FAIL
-            assert result["caller_error"] is True
+            # #3797: judged by its declaration before any row runs: rc 2, the
+            # flag and the path named, no document.
+            proc = _run_vc("--config-dir", d, "--json", "--policy-dsl", "/nonexistent/policy.yaml")
+            assert proc.returncode == 2, proc.stdout + proc.stderr
+            assert proc.stdout == ""
+            assert ("--policy-dsl /nonexistent/policy.yaml: No such file or directory"
+                    in proc.stderr), proc.stderr
 
     def test_standalone_dsl_file_that_exists_is_loaded(self):
         """The case the old NAME claimed to cover, which nothing covered."""
@@ -773,7 +782,7 @@ class TestRoutesWithPolicy:
                                      "url": "https://hooks.example.com/alert"},
                     }
                 }}}, f)
-            result = vc.check_routes(d, policy_path)
+            result = vc.check_routes(d, _gen.resolve_policy_file(policy_path))
             assert result["status"] in (vc.PASS, vc.WARN)
 
     def test_routes_with_blocked_domain(self):
@@ -791,7 +800,7 @@ class TestRoutesWithPolicy:
                                      "url": "https://evil.com/alert"},
                     }
                 }}}, f)
-            result = vc.check_routes(d, policy_path)
+            result = vc.check_routes(d, _gen.resolve_policy_file(policy_path))
             # Should have warnings about domain
 
 
@@ -1934,6 +1943,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #3691. Reads the tree through da-guard served-values under
             # `--config-dir`.
             "tier_inversion",
+            # #3830. Reads the root platform file and, through da-guard
+            # served-values, every tenant's db_type under `--config-dir`.
+            "unsupplied_defaults",
             # #2164. Reads every file under `--config-dir` and skips the
             # ones it cannot parse — same reason as the rows above.
             "yaml_quoting",
@@ -3014,9 +3026,9 @@ class TestJsonSchemaRow:
 
     def test_an_unusable_policy_is_a_caller_error_beside_a_field_type_finding(
             self, tmp_path, capsys, cli_argv):
-        """#3303: the routes row is the only reader of `--policy`, so its
-        field-type refusal must not return before the policy is resolved —
-        a missing policy file is exit 2, as the removed policy row made it."""
+        """#3303: a missing policy file is exit 2 whatever the routes row finds.
+        #3797: judged by its declaration before any row runs — rc 2, no
+        document (#3617), the flag and the path named."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
             "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"
@@ -3024,11 +3036,9 @@ class TestJsonSchemaRow:
         })
         cli_argv("validate_config", "--config-dir", d, "--policy",
                  str(tmp_path / "missing-policy.yaml"), "--json")
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(CallerError, match="missing-policy.yaml: No such file"):
             _as_run(vc.main())
-        rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
-        assert rows["routes"]["caller_error"] is True, rows["routes"]
-        assert exc.value.code == 2
+        assert capsys.readouterr().out == ""
 
     def test_group_by_string_in_a_root_platform_tenants_block_fails(
             self, tmp_path, capsys, cli_argv):
@@ -3501,3 +3511,68 @@ def test_a_lint_crash_is_not_blamed_on_rule_packs(monkeypatch, tmp_path):
     assert row["status"] == vc.FAIL and row["caller_error"] is True, row
     assert "crashed" in row["details"][0], row["details"]
     assert "--rule-packs" not in row.get("suggested_action", ""), row
+
+
+# ============================================================
+# #3797: --policy is the deployment policy alone; the lint policy is
+# --lint-policy, lint's own input (lint judges it; validate-config never
+# reads it).
+# ============================================================
+
+_LINT_RULE_PACK = ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: predict_linear(up{tenant=\"t\"}[5m], 60) > 0\n"
+                   "    labels: {tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}\n")
+
+
+@pytest.mark.usefixtures("da_read_env")
+def test_lint_policy_is_lint_s_own_input(tmp_path, _flat_conf_d):
+    """The lint policy reaches lint as its `--policy` (a rule its deny-list
+    names is an ERROR there, none without it), validate-config never reads it
+    (a lint policy lint refuses is lint's caller error row, naming lint's
+    flag), and the deployment --policy is never handed to lint."""
+    rp = tmp_path / "rule-packs"
+    rp.mkdir()
+    (rp / "rule-pack-x.yaml").write_text(_LINT_RULE_PACK, encoding="utf-8")
+    allows = tmp_path / "lint-allows.yaml"
+    allows.write_text("denied_functions: []\n", encoding="utf-8")
+    denies = tmp_path / "lint-denies.yaml"
+    denies.write_text("denied_functions: [predict_linear]\n", encoding="utf-8")
+    deploy = tmp_path / "deploy.yaml"
+    deploy.write_text("allowed_domains: []\n", encoding="utf-8")
+
+    def custom_rules(*extra):
+        r = _run_vc("--config-dir", str(_flat_conf_d), "--rule-packs", str(rp), "--json", *extra)
+        [row] = [x for x in json.loads(r.stdout) if x["check"] == "custom_rules"]
+        return r, row
+
+    _r, row = custom_rules("--lint-policy", str(allows), "--policy", str(deploy))
+    assert row["status"] != vc.FAIL, row
+    _r, row = custom_rules("--lint-policy", str(denies), "--policy", str(deploy))
+    assert row["status"] == vc.FAIL and not row["caller_error"], row
+    assert any("predict_linear" in d for d in row["details"]), row["details"]
+    # A deployment policy given as the lint policy: lint refuses it (its key
+    # is not lint's), the row is lint's caller error, rc 2.
+    r, row = custom_rules("--lint-policy", str(deploy))
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout[-2000:] + r.stderr
+    assert row["caller_error"] is True, row
+    assert any("allowed_domains" in d and "deployment policy" in d for d in row["details"]), row
+
+
+def test_lint_policy_without_rule_packs_is_refused(tmp_path, _flat_conf_d):
+    """#1650's class: a flag accepted and never read is a caller error."""
+    lint = tmp_path / "lint.yaml"
+    lint.write_text("denied_functions: []\n", encoding="utf-8")
+    r = _run_vc("--config-dir", str(_flat_conf_d), "--lint-policy", str(lint), "--json")
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+    assert "--lint-policy is read only with --rule-packs" in r.stderr, r.stderr
+
+
+def test_a_lint_policy_given_as_the_deployment_policy_is_refused(tmp_path, _flat_conf_d):
+    """#3797: one file was read by two readers with two schemas — as "no
+    domain constraint" by the routes row, as the lint policy by lint. Now
+    --policy is refused before any row runs, pointing at --lint-policy."""
+    mixed = tmp_path / "mixed.yaml"
+    mixed.write_text("allowed_domains: []\ndenied_functions: [holt_winters]\n", encoding="utf-8")
+    r = _run_vc("--config-dir", str(_flat_conf_d), "--policy", str(mixed), "--json")
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
+    assert r.stdout == ""
+    assert "denied_functions" in r.stderr and "--lint-policy" in r.stderr, r.stderr

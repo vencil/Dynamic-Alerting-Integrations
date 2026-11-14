@@ -221,6 +221,15 @@ OPS_SITES = [
      "file_not_accessible"),
     ("lint-custom-rules --policy", "lint_custom_rules.py", ["--policy", "{F}", "{RP}"],
      "--policy", None),
+    # #3797: file inputs that were `reader` lines and are declared documents now.
+    ("explain-keys --assert", "explain_keys.py",
+     ["--config-dir", "{CONF}", "--assert", "{F}", "--json"], "--assert", None),
+    ("onboard --alertmanager-config", "onboard_platform.py",
+     ["--alertmanager-config", "{F}", "--output-dir", "{BOX}/onboard-am", "--json"],
+     "--alertmanager-config", None),
+    ("onboard --scrape-config", "onboard_platform.py",
+     ["--scrape-config", "{F}", "--output-dir", "{BOX}/onboard-sc", "--json"],
+     "--scrape-config", None),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -1502,6 +1511,24 @@ def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_d
     assert not faults, "\n".join(faults)
 
 
+@pytest.mark.usefixtures("da_guard_env", "da_read_env")
+def test_a_declared_document_given_as_empty_is_refused_not_skipped(tmp_path, declared_documents):
+    """#3797: ``''`` (an unset shell variable) is a value given — the
+    declaration refuses it, naming the flag. A tool that tests its value for
+    truth (`if args.alertmanager_config:`) skipped the input in silence: onboard
+    ran no Phase 1 and said nothing (rc 0 or another phase's answer)."""
+    faults = []
+    for n, (rid, script, flag, _spec, argv, _reason) in enumerate(declared_documents):
+        case_dir = tmp_path / f"e{n}"
+        case_dir.mkdir()
+        subst = {**_document_subst(case_dir), "{F}": ""}
+        proc = _run_ops(script.split("/", 1)[1], [_expand(a, subst) for a in argv],
+                        under=script.split("/", 1)[0])
+        if proc.returncode != 2 or f"{flag} '': " not in proc.stderr:
+            faults.append(f"{rid}: rc {proc.returncode}: {(proc.stdout + proc.stderr)[-400:]}")
+    assert not faults, "\n".join(faults)
+
+
 #: ⛔ What was judged for each declared input file (#3445): (fmt, top,
 #: empty_is). The rows above prove each tool refuses what its declaration
 #: says; this proves the declaration is the judged one — a new file input,
@@ -1516,20 +1543,37 @@ def _report_schema():
 #: report's one definition.
 _REPORT_COLUMNS, _REPORT_FORMATS = _report_schema()
 
+#: #3797: ``text`` — the tool hands the text, read once, to the reader that
+#: parses it (da-guard parse-tree, da-read, da-crdecode, the state reader).
 JUDGED_DOCUMENTS = {
     "alert-correlate --input": ("json", (list, dict), None, (), ()),
     "analyze-gaps --metric-dictionary": ("yaml", dict, None, (), ()),
+    "analyze-gaps --tenant-config": ("text", str, None, (), ()),
     "cutover --readiness-json": ("json", dict, None, (), ()),
+    "evaluate-policy --policy": ("text", str, None, (), ()),
+    "explain-keys --assert": ("json", dict, None, (), ()),
+    "explain-route --base-config": ("text", str, None, (), ()),
+    "explain-route --policy": ("yaml", dict, None, (), ()),
     "fed-key --existing-jwks": ("json", dict, None, (), ()),
+    "generate-routes --base-config": ("text", str, None, (), ()),
+    "generate-routes --policy": ("yaml", dict, None, (), ()),
     "grafana-import --dashboard": ("json", dict, None, (), ()),
     "lint --policy": ("yaml", dict, dict, (), ()),
+    "migrate-credentials --policy": ("yaml", dict, None, (), ()),
+    "offboard --state": ("text", str, None, (), ()),
+    "onboard --alertmanager-config": ("text", str, None, (), ()),
+    "onboard --scrape-config": ("text", str, None, (), ()),
+    "operator-check --secret-mounts": ("json", dict, None, (), ()),
     "runtime-audit --runtime-json": ("json", dict, None, (), ()),
     "scaffold --from-onboard": ("json", dict, None, (), ()),
     "shadow-verify --mapping": ("yaml", dict, None, (), ()),
     "shadow-verify --readiness-json": ("json", dict, None, (), ()),
     "shadow-verify --report-csv": ("csv", list, None, _REPORT_COLUMNS, _REPORT_FORMATS),
     "silencer-drift-check --silences-file": ("json", list, None, (), ()),
+    "test-notification --policy": ("yaml", dict, None, (), ()),
     "validate --mapping": ("yaml", dict, None, (), ()),
+    "validate-config --policy": ("yaml", dict, None, (), ()),
+    "validate-config --policy-dsl": ("text", str, None, (), ()),
 }
 
 
@@ -1539,9 +1583,9 @@ def test_each_declared_document_is_as_judged(declared_documents):
 
 
 # Inputs the walk above does not reach, each pinned here:
-# * analyze-gaps --tenant-config: its content is read by da-guard
-#   (parse-tree, the exporter's reading), not `document`; a top level that is
-#   not a mapping was read as a tenant with no keys, rc 0.
+# * analyze-gaps --tenant-config: a declared text document (#3797) whose
+#   content da-guard reads (parse-tree, the exporter's reading); a top level
+#   that is not a mapping was read as a tenant with no keys, rc 0.
 # * generate-tenant-mapping --metric-dictionary: the tool is not a da-tools
 #   command, so G1's walk never sees its parser; a list or a scalar there was
 #   "no metrics to map".

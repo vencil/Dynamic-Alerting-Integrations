@@ -1,0 +1,47 @@
+# promtool unit test — the shipped default of container_cpu_throttle.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # 20 % of CFS periods throttled for 20m (30 of 150 per 15s), then 30 % (45 of 150).
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-armed", pod="app-1", container="app"}'
+        values: '0+30x80 2445+45x120'
+      - series: 'container_cpu_cfs_periods_total{namespace="db-armed", pod="app-1", container="app"}'
+        values: '0+150x201'
+      # 60 % of the CPU limit throughout: the alert ignores a container below 20 %.
+      - series: 'container_cpu_usage_seconds_total{namespace="db-armed", pod="app-1", container="app"}'
+        values: '0+9x201'
+      - series: 'kube_pod_container_resource_limits{resource="cpu", namespace="db-armed", pod="app-1", container="app"}'
+        values: '1x201'
+      - series: 'kube_pod_labels{namespace="db-armed", pod="app-1"}'
+        values: '1x201'
+      - series: 'user_threshold{tenant="db-armed", component="container", metric="cpu_throttle", severity="warning"}'
+        values: '25x201'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerCPUThrottled"})
+        eval_time: 18m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="PodContainerCPUThrottled"})
+        eval_time: 26m
+        exp_samples:
+          - labels: '{alertname="PodContainerCPUThrottled", tenant="db-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerCPUThrottled"})
+        eval_time: 26m
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerCPUThrottled"})
+        eval_time: 45m
+        exp_samples:
+          - labels: '{alertname="PodContainerCPUThrottled", tenant="db-armed"}'
+            value: 1
