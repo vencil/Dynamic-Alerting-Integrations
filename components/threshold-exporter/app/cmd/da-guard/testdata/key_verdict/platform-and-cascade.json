@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v2",
+  "schema": "da-guard.key-verdict/v3",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -18,8 +18,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 5,
-        "served": null
+        "value": 5
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -35,8 +34,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80,
-        "served": 80
+        "value": 80
       },
       {
         "key": "redis_memory",
@@ -52,8 +50,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable",
-        "served": null
+        "value": "disable"
       },
       {
         "key": "redis_memory_critical",
@@ -69,8 +66,7 @@
         "hint": null,
         "switched_off_with": "redis_memory",
         "dead_entries": [],
-        "value": 95,
-        "served": null
+        "value": 95
       }
     ],
     "tb": [
@@ -86,8 +82,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 5,
-        "served": null
+        "value": 5
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -103,8 +98,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80,
-        "served": 80
+        "value": 80
       },
       {
         "key": "redis_memory",
@@ -120,8 +114,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 70,
-        "served": 70
+        "value": 70
       },
       {
         "key": "redis_memroy",
@@ -135,8 +128,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 3,
-        "served": null
+        "value": 3
       }
     ]
   },

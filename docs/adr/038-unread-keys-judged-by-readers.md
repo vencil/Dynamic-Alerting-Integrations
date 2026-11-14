@@ -66,6 +66,8 @@ updated_at: 2026-11-14
 
 2026-11-14 修訂：保留鍵寫成排程（時窗或 `expires:`）進共用判決（`schedule_unread`），在寫它的檔與層判，等級同 `value_unread`（決定 10）。
 
+2026-11-14 修訂：判決對每個租戶判全天：任一時段有讀取端讀就算被讀，整天都沒人讀才是 `unread`，只有 `expires:` 是否已過依執行的時間點判；/metrics 收集不了的時段以送進 registry 之前已產生的列判。判決不再判閾值的值（讀不懂、非有限數的值交給主閘門）；判決文件拿掉只在那一刻成立的 `served`，格式升為 `da-guard.key-verdict/v3` 與 `da-tools.explain-keys/v2`（決定 1、5、8、9、10）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -151,6 +153,31 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 - **exporter**：served-values 有沒有送出該鍵，或有沒有因為它而改變送出的值。`disable` 讓本來會送出的一列不送出，也算 exporter 讀了它；`disable` 沒有改變任何送出的值，則是 `disable_noop`（見決定 8）。exporter 實測送出的鍵判為有人讀，不論登錄表怎麼寫。
 - **產生器**：登錄表宣告的、產生器在各層讀的保留鍵。產生器在租戶層逐鍵讀的只有固定幾個 `_` 鍵（決定 3 的探針與「考慮過但否決」），所以這一半不在每次判定時重跑產生器，而是由雙向探針保證登錄表與產生器的程式一致；探針不一致時 CI 紅。
 - **自訂告警編譯器**：它讀的 `_custom_alerts`。
+
+**判全天，不判某一刻**。exporter 那半判的是每個租戶的整個 UTC 日：依這個租戶自己的排程切點（時窗開始與結束的分鐘）把一天切成幾段，逐段用 exporter 的程式實測，再合起來。一個鍵在任一段有讀取端讀就算被讀，整天都沒人讀才是 `unread`。整份判決只有 `expires:` 是否已過依執行的時間點判（`--at`，預設是現在），一天中的幾點不改變任何結論；判決文件也不帶只在某一刻成立的欄位，要看某一刻送出的值用 served-values `--at`。只判某一個參考時刻不夠：時段不含那一刻的錯誤會永遠報不出來（見決定 8 對反事實重算的同一個理由）。
+
+- **收集不了的時段**：某一段 exporter 的 `/metrics` 收集不了時（同一租戶兩個鍵送出同一條 series，整份 scrape 失敗、什麼都不送），那一段以 exporter 送進 Prometheus registry（收集 metric 的那一層）之前已產生的列判，撞名的兩個鍵都算被讀。撞名本身由 da-guard 主閘門的 `metrics_not_gatherable` 報；判決不因任何一段收集不了而給不出來。
+- **各段原因不同時**：整天都沒人讀的鍵，原因取「最接近被讀」的那一段，順序固定：`base_disabled`（被 base 的 `disable` 連帶關掉，算有讀）、不隨時段改變的原因（`shadowed`、`undeliverable`、`root_default_refused`、`retired`、`unregistered`、`not_exporter_key`、`state_filter_undeclared`）、`no_row`，最後才是 `disabled`。所以只有每一段沒被讀時都是寫了 `disable`，這個鍵才算「只因 `disable` 而未讀」，那個 `disable` 沒關到東西時判 `disable_noop`（決定 8）；有一段是因為別的原因沒有列（例如平台沒宣告這個鍵），就照那個原因判 error。
+- **不判閾值的值**：exporter 拒收的值（讀不懂的 `abc`、非有限數的 `NaN`）也是 exporter 讀了這個鍵才拒收，判為有讀。值的問題由 da-guard 主閘門的 `value_not_served` 判，它同樣逐段判整天的值。
+
+例：根 `_defaults.yaml` 宣告 `mysql_connection_usage_percent: 80`，租戶檔寫
+
+```yaml
+tenants:
+  db-a:
+    mysql_connection_usage_percent_critical:   # 只在 01:00–01:59 送出 95
+      default: disable
+      overrides:
+        - window: "01:00-01:59"
+          value: "95"
+    mysql_conection_usage_percent:             # 拼錯，時窗內也沒有列
+      default: disable
+      overrides:
+        - window: "01:00-01:59"
+          value: "70"
+```
+
+`da-guard key-verdict --at 2026-11-13T01:15:00Z` 與 `--at 2026-11-13T12:00:00Z` 輸出的文件除了 `at` 以外逐位元組相同：`mysql_connection_usage_percent_critical` 是 `read`（`disable` 為 `noop`，沒有 finding）；`mysql_conection_usage_percent` 是 `unread`、`error`、原因 `no_row`，即使它的 `disable` 也是 `noop`。
 
 不另寫一份「產生器會讀哪些鍵」的程式邏輯給別的讀取端模仿；登錄表只是宣告，由探針兩個方向對照產生器的實際輸出。某個值在產生器的語意下是否有效（例如 `_routing_profile` 指向的 profile 存不存在），仍只由產生器判，與 [ADR-036](./036-single-parser-effective-config.md) 一致。
 
@@ -275,8 +302,8 @@ profiles:
 - exporter 那半走 exporter 自己的載入，與 served-values 同一條路徑。
 - 它併上登錄表宣告的其他讀取端（見決定 1），以及根 `_defaults.yaml` 的 policy 規則點名的鍵。
 - validate-config、產生器 `--validate`、`explain-keys` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）都呼叫它。產生器 `--validate` 把判到的每一筆印成一行（與 validate-config 的行相同），判決會擋的（`blocks`）讓結束碼 1（決定 4 末段）；被拒收的樹不判。容器在產生器放行之後、在同一次判定裡判（下一點），所以它執行產生器時，產生器不再判一次。
-- 產生器容器每次寫入只需要被寫入的租戶的判決，所以 `da-guard key-verdict`（連同它底下的 served-values 與 effective）都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。/metrics 能不能收集不屬於單一租戶，子集裡只就要求的租戶判（別的租戶收集失敗看不到）。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
-- 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
+- 產生器容器每次寫入只需要被寫入的租戶的判決，所以 `da-guard key-verdict`（連同它底下的 served-values 與 effective）都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。判決不看 /metrics 收集得了收集不了（決定 1），所以別的租戶收集失敗不影響要求的租戶得到的判決。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
+- 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。判全天（決定 1）讓判決的工作量隨每個租戶的時窗數成長，帶著時窗的租戶越多，越可能在期限內判不完；判不完時這筆寫入以可重試的錯誤不收，不會被當成 finding 擋下，也不會照收。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
   - 被寫入的檔裡、屬於寫入對象租戶、判決說會擋（`blocks`）的 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
   - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；今天 Go 對這種樹的閾值鍵也會擋。
@@ -309,7 +336,7 @@ tenants:
 ```json
 {"key": "mysql_conection_usage_percent", "layer": "tenant", "file": "db-a.yaml", "read_by": [],
  "verdict": "unread", "severity": "error", "reason": "no_row", "disable": null,
- "value": "70", "served": null}
+ "dead_entries": [], "value": "70"}
 {"severity": "error", "kind": "unread", "key": "mysql_conection_usage_percent", "file": "db-a.yaml",
  "tenants": ["db-a"], "reason": "no_row", "blocks": true}
 ```
@@ -358,7 +385,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 | 報告 | 什麼情況 | 怎麼判 |
 |---|---|---|
-| `disable_noop` | 拿掉這個 `disable`，送出的值完全不變 | 反事實重算：假設這個 `disable` 不存在，再算一次，看結果有沒有變；重算在 Go 內進行 |
+| `disable_noop` | 拿掉這個 `disable`，送出的值完全不變，而且這個鍵整天只因為寫了 `disable` 而沒被讀（決定 1） | 反事實重算：假設這個 `disable` 不存在，再算一次，看結果有沒有變；重算在 Go 內進行 |
 | `disable_cascade` | 租戶自己檔裡寫的 `<key>_critical`／`<key>{…}`，在某個時段被 base 的 `disable` 連帶關掉 | 同一次反事實重算：拿掉 base 的 `disable` 後才有列的同族鍵 |
 
 - 保留鍵（`_routing: disable`、`_silent_mode: disable` …）沒有豁免，照決定 4 判。
@@ -380,7 +407,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 - 有效值；
 - `disable` 的作用：`effective`（有關掉東西）、`noop`（對應 `disable_noop`）。
 
-輸出是一份帶版本號的 JSON（另有給人讀的表格），由現有的 `da-guard effective` 來源資訊、served-values 的原因欄位與反事實結果組成，不另造第三種格式。`--assert <檔案>` 拿輸出與一份預期結果比對，不同就回非 0，可以放進客戶自己的 CI。這和 `amtool config routes test`（給一組 label，回答會送到哪個 receiver）、`promtool test rules` 的用法相同。
+輸出是一份帶版本號的 JSON（另有給人讀的表格），由現有的 `da-guard effective` 來源資訊、served-values 的原因欄位與反事實結果組成，不另造第三種格式。內容與判決一樣判全天（決定 1），不列某一刻送出的值。`--assert <檔案>` 拿輸出與一份預期結果比對，不同就回非 0，可以放進客戶自己的 CI；結果不隨一天中的幾點改變，`--at` 只在要釘住 `expires:` 是否已過時才需要。這和 `amtool config routes test`（給一組 label，回答會送到哪個 receiver）、`promtool test rules` 的用法相同。
 
 文件會說明：工具會盡量把問題報出來，但值是否符合預期，使用者要用 explain 自己檢查與測試。
 
@@ -388,7 +415,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 | 情況 | 處理 | 等級 |
 |---|---|---|
-| 送出了但沒有任何告警比較它（例如根 defaults 的錯字、規則包沒有 critical 層時的 `<key>_critical`） | 讀取端是出貨的告警規則。以 `metric_observed_map.yaml` 判斷：它記每個閾值鍵被哪條告警比較（含經 recording rule 間接比較；規則包有 critical 層的，`<key>_critical` 各自一筆），並由 CI 守住與規則包一致。validate-config 的 `no_alert` 列報出 exporter 有送、但這份對照查不到的鍵，每個鍵（正規拼法、不含維度）一行，列出寫它的檔與租戶；以 `"95:critical"` 寫成 critical 的值，查的是 `<key>_critical`；對照延後判的鍵（version-aware 的 `container_*`）不報。客戶自己的 Prometheus 規則不在判斷範圍 | 永遠只是建議（WARN，不影響 exit code） |
+| 送出了但沒有任何告警比較它（例如根 defaults 的錯字、規則包沒有 critical 層時的 `<key>_critical`） | 讀取端是出貨的告警規則。以 `metric_observed_map.yaml` 判斷：它記每個閾值鍵被哪條告警比較（含經 recording rule 間接比較；規則包有 critical 層的，`<key>_critical` 各自一筆），並由 CI 守住與規則包一致。validate-config 的 `no_alert` 列報出 exporter 在一天中任一時段有送、但這份對照查不到的鍵（送出的等級也取整天的，不看執行的那一刻），每個鍵（正規拼法、不含維度）一行，列出寫它的檔與租戶；以 `"95:critical"` 寫成 critical 的值，查的是 `<key>_critical`；對照延後判的鍵（version-aware 的 `container_*`）不報。客戶自己的 Prometheus 規則不在判斷範圍 | 永遠只是建議（WARN，不影響 exit code） |
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
@@ -512,6 +539,8 @@ db-a
 
 ## 考慮過但否決
 
+- **判決固定在某一個參考時刻**（例如固定 `--at`，讓結果穩定）：只在時窗裡出錯的鍵，時窗不含那一刻就永遠報不出來，與決定 8 否決「只看某一個時間點」的理由相同。判全天同樣讓結果與執行時刻無關，又不漏掉任何時段（決定 1）。
+- **只修收集不了與 `dead_entry` 的時刻依賴，其餘照舊判某一刻**：時窗內外的判決仍會不同（例如 `disable_noop` 只在一邊出現），同一棵樹的 CI 結果仍取決於排程在幾點跑。
 - **在判定工具裡放一份「產生器讀哪些鍵」的表，再用測試追產生器的實作**：表的擁有者（Go 的判定工具）和被描述的程式（Python 產生器）不同，而測試只從表出發、檢查表上寫的鍵，程式多讀了一個表上沒有的鍵時沒有人發現，這份表就是漂移點。業界的對照是 Spring Boot 手寫的 `additional-spring-configuration-metadata.json`，同樣靠人記得同步。採用的登錄表不同在兩點：它是所有讀取端共用的一份宣告，不屬於任何一個判定工具；探針對登錄表上每個鍵、每一層兩個方向都比對（登錄表說讀的必須改變輸出，沒說讀的不能改變輸出，決定 3），程式在某一層多讀或少讀一個登錄表上的鍵都會讓 CI 紅；登錄表沒有的 `_` 鍵依決定 2 本來就不得有讀取端讀。
 - **各讀取端在執行時回報自己讀了哪些鍵，再取聯集**：業界找不到「任一讀取端讀了就合法」的聯集判決先例，主流是按前綴或子樹劃分歸屬（OpenTelemetry Collector 各元件驗自己的子樹、Helm subchart 與 `global`）。實作上，Python 端資料一經複製（`copy.copy`、`json.dumps`）就失去追蹤，平台檔合併後也丟了來源；Go 的 map 讀取無法攔截，要在每個解析階段逐一埋點。實測產生器在租戶層逐鍵讀的只有 `_routing`、`_routing_profile`、`_severity_dedup`、`_metadata` 四個，不隨設定而變，執行時追蹤換不到額外資訊。這個想法改用在決定 3 的黑箱探針。
 - **只在一個點記錄「下層有值」來判 `disable` 有沒有作用**：exporter 在閾值相關的地方讀 `disable` 有五處（base、宣告型閾值、`_critical`、維度鍵、state filter），而且 base 階段是逐一走過 defaults，走得到的 `disable` 本來就有下層值，沒作用的那些反而走不到。所以改用反事實重算。

@@ -11,9 +11,11 @@
 //
 // A key is read when some reader reads it (the exporter, a reader the
 // reserved-key registry declares in the key's layer, a Policy-as-Code rule
-// that names it); unread when none does; undecidable when no root platform
-// file was read (Input.Undecidable) and the key is a threshold key — `_`
-// keys are judged as usual (decision 7). A `_` key the registry does not
+// that names it) in some part of the UTC day; unread when none does all day
+// (#3835: the served reading is the whole day's, ServedKey; only what has
+// expired — `expires:` — depends on the instant it is read at);
+// undecidable when no root platform file was read (Input.Undecidable) and
+// the key is a threshold key — `_` keys are judged as usual (decision 7). A `_` key the registry does not
 // list is read by no reader (#3045).
 //
 // Every unread key is an error, wherever it is written — a tenant file, a
@@ -24,13 +26,22 @@
 // declaration, decision 7). The severity describes the defect, not who is
 // blocked: which gate refuses what is Blocks / NewBlocks (decision 6).
 //
-// A `disable` is read when it switches something off (effective); a noop
-// one is unread at warning — except on a `_` key the registry does not
-// list, which is a misspelt reserved key, unread at the severity of any
-// other unread key. A base's `disable` switches its family off with it
-// (#3046), so a `<base>_critical` / `<base>{…}` key served no row for that
-// reason (ReasonBaseDisabled) is read: the exporter read it to switch it
-// off.
+// A `disable` is read when it switches something off in some part of the
+// day (effective); a key unread only because of a `disable` that switches
+// nothing off (every part of the day it is unread in, it reads `disable`)
+// is unread at warning, disable_noop — except on a `_` key the registry
+// does not list, which is a misspelt reserved key, unread at the severity of
+// any other unread key. A key with no row in some part of the day for any
+// other reason is unread for that reason, whatever its `disable` does
+// elsewhere.
+//
+// A base's `disable` switches its family off with it (#3046), so a
+// `<base>_critical` / `<base>{…}` key served no row for that reason
+// (ReasonBaseDisabled) is read: the exporter read it to switch it off.
+//
+// Values are not judged here (#3835): a key whose value the resolver
+// refuses (non-finite, unparsed) is read — the main gate's value_not_served
+// and config.KeyValidation judge the value, over the whole day.
 //
 // A `_` key written in a profile is judged on its own, from the
 // registry's `profile` layer, whether or not a tenant binds the profile: a
@@ -118,12 +129,13 @@ const (
 // served reading's other reasons (no_row, not_exporter_key, …) pass through
 // as they are.
 const (
-	// ReasonDisabled: served-values' reason for a key switched off at the
-	// instant read; whether that changed what /metrics serves is Disable's.
+	// ReasonDisabled: the served reading's reason for a key switched off in
+	// every part of the day it is not read in (#3835); whether that changed
+	// what /metrics serves is Disable's.
 	ReasonDisabled = "disabled"
-	// ReasonBaseDisabled: served-values' reason for a `<base>_critical` /
-	// `<base>{…}` key served no row at the instant read because the tenant
-	// switches its base off there (#3046) — read, by the phase that
+	// ReasonBaseDisabled: the served reading's reason for a `<base>_critical`
+	// / `<base>{…}` key served no row in some part of the day because the
+	// tenant switches its base off there (#3046) — read, by the phase that
 	// switches it off.
 	ReasonBaseDisabled = "base_disabled"
 	// ReasonRetired: a retired reserved key, or a retired threshold key (the
@@ -159,11 +171,14 @@ const (
 )
 
 // ServedKey is what the served reading says of one key of a tenant's merged
-// config (served-values' keys[]).
+// config over the whole UTC day (#3835: da-guard's servedDay, served-values'
+// keys[] read at every part of the day and folded).
 type ServedKey struct {
-	// Exporter: the exporter reads the key.
+	// Exporter: the exporter reads the key in some part of the day.
 	Exporter bool
-	// Reason: why it does not; "" when it does.
+	// Reason: why it does not; "" when it does. Never a reason about the
+	// key's value (served-values' value_non_finite / value_unparsed): a
+	// value the resolver refuses is a key it reads.
 	Reason string
 	// Registered, for a `_` key: whether the registry lists it; nil for a
 	// threshold key.
@@ -186,8 +201,10 @@ type ServedTenant struct {
 	// Keys: every key of the tenant's merged config (and the unserved keys
 	// it inherits), as the tenant's config spells them.
 	Keys map[string]ServedKey
-	// Values: what /metrics serves (threshold rows, canonical spelling) and
-	// the reserved keys as the exporter's resolvers read them.
+	// Values: the keys /metrics serves a row for in some part of the day
+	// (canonical spelling) and the reserved keys the exporter's resolvers
+	// read. Only which keys it holds is read, never their values (#3835: no
+	// value read at one instant reaches the verdict).
 	Values map[string]any
 	// Rows: every key (canonical spelling) with a /metrics threshold row or
 	// a row /metrics dropped (served-values' severities ∪ dropped) — not
@@ -280,9 +297,9 @@ type KeyVerdict struct {
 	// [] for none.
 	DeadEntries []config.DeadEntry `json:"dead_entries"`
 	// Value: the effective config's value as written; nil when absent.
+	// (v3, #3835: no `served` — what /metrics served at one instant is
+	// served-values'.)
 	Value any `json:"value"`
-	// Served: what /metrics serves for it; nil when nothing.
-	Served any `json:"served"`
 }
 
 // Finding is one thing to report: a tenant's own key, or a platform file /
@@ -398,14 +415,11 @@ func Judge(in Input) Tree {
 		rows := make([]KeyVerdict, 0, len(all))
 		for _, key := range sortedKeys(all) {
 			c := canon(key)
-			var servedValue any
-			hasRows := false
+			held, hasRows := false, false
 			if hasSv {
-				if v, ok := sv.Values[key]; ok {
-					servedValue = v
-				} else {
-					servedValue = sv.Values[c]
-				}
+				_, a := sv.Values[key]
+				_, b := sv.Values[c]
+				held = a || b
 				hasRows = sv.Rows[key] || sv.Rows[c]
 			}
 			sk, hasSk := sv.Keys[key]
@@ -417,7 +431,7 @@ func Judge(in Input) Tree {
 			if hasEf {
 				value = ef.Config[key]
 			}
-			rows = append(rows, judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, servedValue, hasRows,
+			rows = append(rows, judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, held, hasRows,
 				in.Heads, in.Undecidable, policy, retired))
 		}
 		rows = append(rows, profileNotFilled(tenant, ef.NotServed, all)...)
@@ -447,9 +461,10 @@ func Judge(in Input) Tree {
 	return t
 }
 
-// judgeKey is the verdict on one key (the module doc's rules).
+// judgeKey is the verdict on one key (the module doc's rules). held: the
+// served reading's Values holds the key (ServedTenant.Values).
 func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource, hasSrc bool,
-	value, servedValue any, hasRows bool, heads []PolicyHead, undecidable bool,
+	value any, held, hasRows bool, heads []PolicyHead, undecidable bool,
 	policy func(string) string, retired func(string) string) KeyVerdict {
 	layer := ""
 	if hasSrc {
@@ -482,17 +497,20 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		// Not a key of the tenant's merged config: a threshold it inherits,
 		// which /metrics serves for it.
 		readBy["exporter"] = true
-	case !hasSk && reserved && contains(declared["exporter"], regLayer) && servedValue != nil:
+	case !hasSk && reserved && contains(declared["exporter"], regLayer) && held:
 		// A reserved key the tenant inherits from a layer the exporter
 		// reads it in (`_state_<f>`, `_severity_dedup` from a subtree
 		// `_defaults.yaml`), which the exporter's resolver read.
 		readBy["exporter"] = true
-	case !hasSk && strings.HasPrefix(key, "_state_") && servedValue == nil:
+	case !hasSk && strings.HasPrefix(key, "_state_") && !held:
 		// Inherited `_state_<filter>` with no reading: the filter is not
 		// declared where the exporter reads declarations (decision 7).
 		reason = ReasonStateFilterUndeclared
 	}
-	if hasSk && reason == ReasonDisabled && disable == DisableEffective {
+	if hasSk && disable == DisableEffective {
+		// Its `disable` switches something off in some part of the day: the
+		// exporter read it to do so (decision 8) — whatever the key's reason
+		// in the rest of the day (#3835).
 		readBy["exporter"] = true
 		reason = ""
 	}
@@ -543,7 +561,12 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 			if reason != ReasonRetired {
 				reason = ReasonUnregistered
 			}
-		case disable == DisableNoop:
+		case reason == ReasonDisabled && disable == DisableNoop:
+			// Unread only because of its `disable` — every part of the day
+			// the key is unread in, it reads `disable` — and that switches
+			// nothing off. A key with no row in some part of the day for
+			// another reason (no_row: a key the platform does not declare)
+			// keeps that reason and its severity (#3835).
 			severity, reason = SeverityWarning, ReasonDisableNoop
 		case reason == ReasonStateFilterUndeclared:
 			// The root's missing declaration, not a misspelling (decision 7).
@@ -559,7 +582,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
 		Disable: optional(disable), Hint: optional(hint), SwitchedOffWith: optional(sk.SwitchedOffWith),
-		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value, Served: servedValue,
+		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value,
 	}
 }
 
@@ -643,13 +666,11 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 				// switches off — a sibling it inherits is the cascade asked.
 				kinds = append(kinds, KindDisableCascade)
 			}
-			if len(v.DeadEntries) > 0 && (v.Verdict == Read || deref(v.Reason) == ReasonDisableNoop) {
-				// #3502: read, and part of its value never applies. A key
-				// whose `disable` at the instant read switches nothing off
-				// is unread there (disable_noop) but served in the rest of
-				// the day, so its entries are judged too — the verdict on
-				// them must not depend on --at. served-values names no dead
-				// entry on a key /metrics serves nothing of.
+			if len(v.DeadEntries) > 0 && v.Verdict == Read {
+				// #3502: read in some part of the day, and part of its
+				// schedule never applies — the schedule as written, judged
+				// whatever --at is (#3835). A key no reader reads all day has
+				// its own finding; its entries are not judged on top of it.
 				kinds = append(kinds, KindDeadEntry)
 			}
 			for _, kind := range kinds {

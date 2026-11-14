@@ -11,17 +11,24 @@ tenant of a conf.d, every key of its config is listed with
   for a key a `_policies` rule names as `target`;
 * the verdict (read / unread / undecidable) with its severity and reason;
 * what a `disable` does (effective / noop);
-* the value as written (`value`) and what /metrics serves for it (`served`).
+* the value as written (`value`).
 
 All of it is the shared verdict (`da-guard key-verdict`, read through
-`_lib_key_verdict.judge_tree`) at `--at`, not a reading of this tool's own.
+`_lib_key_verdict.judge_tree`), not a reading of this tool's own. It is
+judged over each tenant's whole UTC day: `--at` decides only what has
+expired (`expires:`), so the same tree gives the same result at any time of
+day (#3835). What /metrics serves at one instant is `da-guard served-values
+--at`'s; the v1 document's `served` (that instant's value) is gone.
 
 `--assert FILE` compares the result with an expected document of the same
 shape and fails (exit 1) on any difference, so a CI can pin what a tenant's
 config means — like `amtool config routes test` or `promtool test rules`.
 The expected file lists, per tenant it names, every key that tenant has;
-each key entry is compared on the fields it gives (leave out `value` or
-`served` to pin only the verdict). Tenants it does not name are not compared.
+each key entry is compared on the fields it gives (leave out `value` to pin
+only the verdict). Tenants it does not name are not compared. Nothing
+compared depends on the time of day the check runs at, so `--at` is needed
+only to pin what has expired; an expected file that still names `served`
+(v1) is refused (exit 2), never compared as passing.
 
 The tool reports what it finds; whether a value is what you meant is yours
 to check here.
@@ -34,7 +41,7 @@ Exit codes (dev-rules §13, `_lib_exitcodes`):
      or a verdict that cannot be given (no root platform file was read, so
      the threshold keys are `undecidable`; ADR-038 decision 7)
 
-`--json`: stdout is one JSON document (schema ``da-tools.explain-keys/v1``)
+`--json`: stdout is one JSON document (schema ``da-tools.explain-keys/v2``)
 on every path that has an answer. A caller error leaves stdout empty, the
 cause on stderr (#3617: it was ``status: "caller_error"`` and ``reason``
 with ``tenants`` empty); undecidable threshold keys are a partial answer:
@@ -68,14 +75,19 @@ import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
-SCHEMA = "da-tools.explain-keys/v1"
+SCHEMA = "da-tools.explain-keys/v2"  # v2 (#3835): judged over the whole day, no `served`
 DEFAULT_TIMEOUT = tv.DEFAULT_TIMEOUT
 #: What this tool writes at the top level; an expected file may carry them
 #: (it is often this tool's own output) but only `tenants` is compared.
 TOP_FIELDS = frozenset({"schema", "status", "at", "undecidable", "tenants", "findings",
                         "assert_differences"})
 FIELDS = ("layer", "file", "read_by", "verdict", "severity", "reason", "disable",
-          "switched_off_with", "value", "served")
+          "switched_off_with", "value")
+#: Fields an expected file of an earlier schema may carry that this one does
+#: not write: field → why it is gone. Refused by name, so an old pin is not
+#: read as a misspelling.
+REMOVED_FIELDS = {"served": "removed in schema v2 (#3835): the verdict is judged over the whole "
+                            "day; what /metrics serves at one instant is `da-guard served-values --at`'s"}
 
 
 class ExplainError(Exception):
@@ -86,7 +98,7 @@ def _entry(v: kv.KeyVerdict) -> dict[str, Any]:
     return {"key": v.key, "layer": v.layer, "file": v.file, "read_by": list(v.read_by),
             "verdict": v.verdict, "severity": v.severity, "reason": v.reason,
             "disable": v.disable, "switched_off_with": v.switched_off_with,
-            "value": v.value, "served": v.served}
+            "value": v.value}
 
 
 def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
@@ -162,6 +174,10 @@ def compare(doc: dict[str, Any], expected: Any) -> list[str]:
             raise ExplainError(f"--assert: tenants.{tenant} must be a list of entries with a string `key`")
         wanted: dict[str, dict] = {}
         for e in want:
+            removed = sorted(set(e) & set(REMOVED_FIELDS))
+            if removed:
+                raise ExplainError(f"--assert: tenants.{tenant}: {e['key']}: field `{removed[0]}` "
+                                   f"{REMOVED_FIELDS[removed[0]]}")
             unknown = sorted(set(e) - {"key", *FIELDS})
             if unknown:
                 # A misspelt field would otherwise compare nothing and pass.
@@ -213,29 +229,30 @@ def render_text(doc: dict[str, Any]) -> str:
 _HELP = {
     "en": {
         "description": ("For each tenant of a conf.d, list every key of its config: where it comes "
-                        "from, which readers read it, the verdict, what a `disable` does, the value "
-                        "as written and what /metrics serves (ADR-038 decision 9)."),
+                        "from, which readers read it, the verdict over the whole UTC day, what a "
+                        "`disable` does and the value as written (ADR-038 decision 9)."),
         "epilog": ("Exit codes: 0 done (and --assert matches), 1 --assert differs, 2 caller error "
                    "(no --config-dir, no da-guard, da-guard failed, unreadable --assert file, "
                    "unknown --tenant, or undecidable threshold keys). "
                    f"--json: one document on stdout, schema {SCHEMA}."),
         "config_dir": "Path to the conf.d/ root.",
         "tenant": "Only this tenant (repeatable). Default: every tenant.",
-        "at": "Instant to read schedules and time-boxes at, RFC3339. Default: now.",
+        "at": ("Instant to read time-boxes (`expires:`) at, RFC3339; the time of day changes "
+               "nothing. Default: now."),
         "assert": "Expected document (same shape as --json); exit 1 on any difference.",
         "json": "Print the result as one JSON document.",
         "binary": "Path to da-guard (default: $DA_GUARD_BINARY, then da-guard on $PATH).",
         "timeout": f"Seconds each da-guard run may take (default {DEFAULT_TIMEOUT}).",
     },
     "zh": {
-        "description": ("對 conf.d 的每個租戶，逐鍵列出：來源層與檔案、哪些讀取端讀它、判決、"
-                        "`disable` 的作用、寫下的值與 /metrics 實際送出的值（ADR-038 決定 9）。"),
+        "description": ("對 conf.d 的每個租戶，逐鍵列出：來源層與檔案、哪些讀取端讀它、"
+                        "依整天判的判決、`disable` 的作用與寫下的值（ADR-038 決定 9）。"),
         "epilog": ("結束碼：0 完成（--assert 時結果相符）、1 --assert 不符、2 呼叫錯誤（--config-dir "
                    "不存在、找不到 da-guard 或 da-guard 失敗、--assert 檔讀不了、--tenant 不存在，"
                    f"或閾值鍵無從判斷）。--json：stdout 恰好一份 JSON，schema {SCHEMA}。"),
         "config_dir": "conf.d/ 根目錄。",
         "tenant": "只列這個租戶（可重複）。預設：全部租戶。",
-        "at": "讀排程與時效的時間點，RFC3339。預設：現在。",
+        "at": "判斷時效（`expires:`）是否已過的時間點，RFC3339；一天中的幾點不影響結果。預設：現在。",
         "assert": "預期結果（與 --json 同形狀）；有任何不同即結束碼 1。",
         "json": "以一份 JSON 輸出結果。",
         "binary": "da-guard 路徑（預設依序：$DA_GUARD_BINARY、$PATH 上的 da-guard）。",

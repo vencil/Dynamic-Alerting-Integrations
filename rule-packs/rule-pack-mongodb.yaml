@@ -13,7 +13,7 @@
 #       seconds — Replication lag warning; #1196 C identity fix: renamed from
 #       mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no
 #       alias
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #   mongodb_opcounters_rate: 10000
 #       ops/s — Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total
 #       (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias

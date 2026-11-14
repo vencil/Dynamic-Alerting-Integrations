@@ -59,9 +59,11 @@ type KeyVerdict struct {
 // applies) that reaches Tenants. Kind is unread, disable_noop,
 // disable_cascade, value_unread, dead_entry, schedule_unread or
 // profile_not_judged; Severity the one ADR-038
-// decision 4 gives the gates once they block; Reason served-values' reason
-// for an unread key, the reader's problem for a value_unread one, the first
-// entry's reason for a dead_entry one.
+// decision 4 gives the gates once they block; Reason the verdict's reason
+// for an unread key — judged over the whole UTC day, never about a
+// threshold's value (#3835: no value_non_finite / value_unparsed; the value
+// is the main gate's) — the reader's problem for a value_unread one, the
+// first entry's reason for a dead_entry one.
 type KeyFinding struct {
 	Severity string
 	Kind     string

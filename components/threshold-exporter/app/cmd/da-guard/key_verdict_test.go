@@ -164,7 +164,7 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
 		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "hint": nil, "switched_off_with": nil,
-		"dead_entries": []any{}, "value": "70", "served": nil}
+		"dead_entries": []any{}, "value": "70"}
 	rows := doc["tenants"].(map[string]any)["t1"].([]any)
 	if got := fmt.Sprintf("%d %v", len(rows), rows[0].(map[string]any)["key"]); got != "4 mysql_conections" {
 		t.Fatalf("t1's keys: %s", got)
@@ -409,24 +409,45 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
 		}
 	})
-	t.Run("a before-tree the verdict cannot judge is a note, not a silent pass", func(t *testing.T) {
+	// #3835: a tree whose /metrics cannot be gathered (two keys, one series)
+	// is judged off the rows built before the Gather, before the call and
+	// after it — the collision is the main gate's metrics_not_gatherable.
+	// Before #3835 such a tree was not judged here at all: a note, and a
+	// typo written beside the collision passed.
+	collision := "tenants:\n  tx:\n    mysql_connection_usage_percent: \"70:critical\"\n    mysql_connection_usage_percent_critical: 95\n"
+	typo := `{"op":"set","path":["tenants","tx","mysql_conections"],"value":{"str":"1"}}`
+	unjudgedNote := func(stderr string) bool {
+		return strings.Contains(stderr, "the unread-key check judged no")
+	}
+	t.Run("a before-tree /metrics cannot be gathered for is judged", func(t *testing.T) {
 		t.Parallel()
-		// tx's /metrics cannot be gathered (two keys, one series) before the
-		// call; the batch repairs that and writes a typo beside it.
-		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
-			"a.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent: \"70:critical\"\n    mysql_connection_usage_percent_critical: 95\n"})
+		// The batch repairs the collision and writes a typo beside it.
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": collision})
 		in := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","tx","mysql_connection_usage_percent_critical"]},
-			{"op":"set","path":["tenants","tx","mysql_conections"],"value":{"str":"1"}}]}]}`
+			` + typo + `]}]}`
 		var out, errOut bytes.Buffer
-		runWrite(writeCmd, []string{"--config-dir", root, "--dry-run", "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
-		notes := 0
-		for _, line := range strings.Split(errOut.String(), "\n") {
-			if strings.Contains(line, ": note: the unread-key check judged no before-call tree") {
-				notes++
-			}
+		code := runWrite(writeCmd, []string{"--config-dir", root, "--dry-run", "--json", "--input", "-"},
+			strings.NewReader(in), &out, &errOut)
+		if unjudgedNote(errOut.String()) || code != exitFindings ||
+			!strings.Contains(errOut.String(), `tenant tx: key "mysql_conections" would be unread (no_row)`) {
+			t.Fatalf("exit %d, stderr:\n%s", code, errOut.String())
 		}
-		if notes != 1 {
-			t.Fatalf("stderr carries %d notes, want 1:\n%s", notes, errOut.String())
+	})
+	t.Run("an after-tree /metrics cannot be gathered for is judged", func(t *testing.T) {
+		t.Parallel()
+		// The batch writes the collision and a typo beside it: the typo is
+		// refused as unread, the collision as the main gate's finding.
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent: \"70:critical\"\n"})
+		in := `{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["tenants","tx","mysql_connection_usage_percent_critical"],"value":{"str":"95"}},
+			` + typo + `]}]}`
+		var out, errOut bytes.Buffer
+		code := runWrite(writeCmd, []string{"--config-dir", root, "--dry-run", "--json", "--input", "-"},
+			strings.NewReader(in), &out, &errOut)
+		if unjudgedNote(errOut.String()) || code != exitFindings ||
+			!strings.Contains(errOut.String(), `tenant tx: key "mysql_conections" would be unread (no_row)`) ||
+			!strings.Contains(errOut.String(), "/metrics cannot be gathered for this tree") {
+			t.Fatalf("exit %d, stderr:\n%s", code, errOut.String())
 		}
 	})
 	t.Run("adding the root carrier is not charged with the threshold keys it makes judgeable", func(t *testing.T) {

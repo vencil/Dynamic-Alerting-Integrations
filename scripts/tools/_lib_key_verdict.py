@@ -11,8 +11,10 @@ hands the document to the tools that report it (the route generator's
 generator container's write check) in one shape, and formats the lines they
 print.
 
-A key is `read` when some reader reads it, `unread` when none does, and
-`undecidable` when no root platform file was read (a threshold key's exporter
+A key is `read` when some reader reads it in some part of the UTC day,
+`unread` when none does all day (#3835: the verdict is the whole day's, and
+`--at` decides only what has expired — `expires:` — never the time of day),
+and `undecidable` when no root platform file was read (a threshold key's exporter
 half cannot be judged; `_` keys are judged as usual, decision 7). Severities
 describe the defect (decision 4); whether a whole-tree gate refuses the
 tree is the document's `blocks`, Go's one rule (#3016) — callers read it,
@@ -44,10 +46,11 @@ from _lib_validation import shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: 
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
-SCHEMA = "da-guard.key-verdict/v2"
+SCHEMA = "da-guard.key-verdict/v3"
 #: Earlier versions of the document: a da-guard writing one is older than
-#: this tool (v1: the ERROR layer only).
-OLDER_SCHEMAS = ("da-guard.key-verdict/v1",)
+#: this tool (v1: the ERROR layer only; v2: judged at one instant, each row
+#: with what /metrics served then — #3835).
+OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2")
 
 READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
@@ -65,11 +68,12 @@ class KeyVerdict(NamedTuple):
     read_by: tuple[str, ...]       # sorted reader names; () for none
     verdict: str                   # READ / UNREAD / UNDECIDABLE
     severity: str | None           # ERROR / WARNING / NOTICE; None for READ
-    reason: str | None             # served-values' reason, "disable_noop", or None
+    reason: str | None             # the whole day's reason (never a value's, #3835), "disable_noop", or None
     disable: str | None            # "effective" / "noop" / None
     switched_off_with: str | None  # the base whose `disable` switches it off (#3046), or None
     value: Any                     # the effective config's value (as written); None when absent
-    served: Any                    # what /metrics serves for it; None when nothing
+    # (v3, #3835: no `served` — what /metrics serves at one instant is
+    # served-values'.)
     # #3502: the entries of its schedule /metrics serves at no minute of the day
     dead_entries: "tuple[tv.DeadEntry, ...]" = ()
 
@@ -174,8 +178,6 @@ _VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
 _KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread",
                     "dead_entry", "schedule_unread"})
-#: Finding kinds only a da-guard older than #3046 writes (`tv._OlderOutput`).
-_RETIRED_KINDS = frozenset({"disable_partial"})
 _DISABLES = frozenset({"effective", "noop"})
 
 
@@ -231,21 +233,12 @@ def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
     return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
                       _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
                       severity, _optional(r["reason"], f"{w}.reason"),
-                      _optional(_current_disable(r["disable"], f"{w}.disable"), f"{w}.disable", _DISABLES),
-                      _optional(r["switched_off_with"], f"{w}.switched_off_with"), r["value"], r["served"],
+                      _optional(r["disable"], f"{w}.disable", _DISABLES),
+                      _optional(r["switched_off_with"], f"{w}.switched_off_with"), r["value"],
                       tv.dead_entries(r["dead_entries"], f"{w}.dead_entries"))
 
 
-def _current_disable(v: Any, what: str) -> Any:
-    """v, unless it is an effect only an older da-guard writes (#3046)."""
-    if v in tv.RETIRED_DISABLE_EFFECTS:
-        raise tv._OlderOutput(f"{what}: {v!r}")
-    return v
-
-
 def _finding(f: dict) -> Finding:
-    if f.get("kind") in _RETIRED_KINDS:
-        raise tv._OlderOutput(f"findings.kind: {f['kind']!r}")
     return Finding(_one_of(f["severity"], "findings.severity", _SEVERITIES),
                    _one_of(f["kind"], "findings.kind", _KINDS), _str(f["key"], "findings.key"),
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
@@ -290,8 +283,9 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
                timeout: float = tv.DEFAULT_TIMEOUT, tenants: Iterable[str] | None = None,
                reader: Any = None) -> TreeVerdict:
-    """The verdict on every key of every tenant of the tree at `conf_d`, at
-    `at` (RFC3339; None = now), as `da-guard key-verdict` gives it.
+    """The verdict on every key of every tenant of the tree at `conf_d` over
+    the whole UTC day, `expires:` read at `at` (RFC3339; None = now) — the
+    time of day changes nothing (#3835) — as `da-guard key-verdict` gives it.
 
     With `tenants` (ADR-038 §5: a write's tenants), the verdict is on those
     tenants' keys only (`--tenant`); the platform files are read whole as
@@ -306,9 +300,15 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
     check_tree_rules(conf_d, binary, reader)
     if at is not None:
         extra = ["--at", at, *extra]
+    # #3835: every earlier shape of this document (no `blocks`, no `hint`, a
+    # `partial` disable, …) was written under v1 or v2 and is named older by
+    # its schema (OLDER_SCHEMAS). Every da-guard that writes v3 writes every
+    # field: a v3 document without one is broken output, never an older
+    # binary — so no field-by-field "added since" reading here.
     verdict, _rc, _stderr = tv._run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, KeyVerdictError, schema=SCHEMA,
-        read=lambda doc: _read(doc, requested), reads_unreadable=True, older_schemas=OLDER_SCHEMAS)
+        read=lambda doc: _read(doc, requested), reads_unreadable=True, older_schemas=OLDER_SCHEMAS,
+        fields_added_since=())
     return verdict
 
 
