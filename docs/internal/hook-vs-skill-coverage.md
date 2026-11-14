@@ -80,6 +80,7 @@ lang: zh
 | **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（FATAL；掃描範圍以該 hook 的 `entry` 為準；subprocess 文字模式走只減不增的 `subprocess-encoding-baseline.json` 帳本，#1374；寫文字的呼叫須傳字串字面值 `newline=`，範圍是 `--line-ending-root` 列的 `scripts`／`components`／`helm`、刻意不含 `tests/`，#1366） | S#74、PR-2.5、[dev-rules #11](dev-rules.md) | timeout kwarg、encoding kwarg、newline kwarg |
 | **Shell 正確性** | `shellcheck`（`--norc --include=SC2006,SC1071,SC1072,SC1073,SC1008`） | lint-policy hybrid | 反引號命令替換；額外的 SC10xx 與 `--norc` 是 fail-closed 用（ShellCheck 沉默＝零輸出 exit 0） |
 | **可達性** | `makefile-targets-check` | — | DX tools ↔ Makefile/pre-commit 可達 |
+| **CI 觸發面** | `workflow-path-filter-check` | #3756 | workflow `on.pull_request.paths` 的 `GENERATED path-trace` 區塊與已提交的執行期追蹤（`.github/path-traces/`）、Go 來源、字面 import 一致；所有 workflow 的 path filter 沒有死條目，也沒有比對器讀不懂的 pattern。「job 實際載入的檔都在清單內」不在 hook 裡，由該 workflow 最後一步在 CI 執行期斷言 |
 
 ---
 

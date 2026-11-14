@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -173,17 +172,19 @@ func (r *silentModeReading) canonical() silentModeCanonical {
 
 // problem is non-empty exactly when the reader writes a WARN for r and
 // ignores it; tenant-free, for callers that word their own message. Write
-// gate only; the reader prints logWarn's text instead.
+// gate and key verdict only; the reader prints logWarn's text instead.
+// Constants only (#3703): the sentence never carries the value or a parser's
+// error, which quotes it — the caller names the file, the tenant and the key.
 func (r *silentModeReading) problem() string {
 	switch r.kind {
 	case silentModeParseError:
-		return fmt.Sprintf("structured _silent_mode does not parse: %v", r.err)
+		return "the structured _silent_mode does not parse"
 	case silentModeInvalidExpires:
-		return fmt.Sprintf("expires %q is not RFC3339 (e.g. 2026-07-01T00:00:00Z): %v", r.target, r.err)
+		return expiresNotRFC3339Problem
 	case silentModeUnknownTarget:
-		return fmt.Sprintf("unknown silent mode target %q (valid: %s)", r.target, silentModeValidValues)
+		return "unknown silent mode target (valid: " + silentModeValidValues + ")"
 	case silentModeUnknownScalar:
-		return fmt.Sprintf("unknown silent mode %q (valid: %s)", r.target, silentModeValidValues)
+		return "unknown silent mode (valid: " + silentModeValidValues + ")"
 	}
 	return ""
 }

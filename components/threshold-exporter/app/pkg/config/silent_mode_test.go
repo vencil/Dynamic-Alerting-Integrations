@@ -253,28 +253,17 @@ func silentModeCanonicalOf(sv ScheduledValue) silentModeCanonical {
 // from the parsers themselves; everything around them is written out here.
 func TestSilentModeProblemText(t *testing.T) {
 	t.Parallel()
-	// A mapping whose `target` is no string: the structured form does not
-	// decode (#3638: only a written mapping is read as one). The decoder's
-	// error is taken from the structure the reader decodes.
-	n, structured, err := structureOf(parseSilentMode(t, "_silent_mode:\n  target: [a]"))
-	if !structured || err != nil {
-		t.Fatalf("structureOf: structured=%v err=%v", structured, err)
-	}
-	yamlErr := n.Decode(&silentModeStructured{})
-	if yamlErr == nil {
-		t.Fatal(`yaml decoded "target: [a]" into silentModeStructured`)
-	}
-	_, timeErr := time.Parse(time.RFC3339, "nope")
-	if timeErr == nil {
-		t.Fatal(`time.Parse accepted "nope"`)
-	}
+	// #3703: each sentence is constants only — neither the value nor the
+	// decoder's error, which quotes it.
 	for _, c := range []struct{ doc, want string }{
-		{"_silent_mode:\n  target: [a]", "structured _silent_mode does not parse: " + yamlErr.Error()},
+		// A mapping whose `target` is no string: the structured form does
+		// not decode (#3638: only a written mapping is read as one).
+		{"_silent_mode:\n  target: [a]", "the structured _silent_mode does not parse"},
 		// #3638: a scalar is never parsed as the mapping its text reads like.
-		{`_silent_mode: "target: ["`, `unknown silent mode "target: [" (valid: warning, critical, all, disable)`},
-		{"_silent_mode:\n  target: all\n  expires: nope", `expires "nope" is not RFC3339 (e.g. 2026-07-01T00:00:00Z): ` + timeErr.Error()},
-		{"_silent_mode:\n  target: Purple", `unknown silent mode target "purple" (valid: warning, critical, all, disable)`},
-		{"_silent_mode: Purple", `unknown silent mode "purple" (valid: warning, critical, all, disable)`},
+		{`_silent_mode: "target: ["`, `unknown silent mode (valid: warning, critical, all, disable)`},
+		{"_silent_mode:\n  target: all\n  expires: nope", `expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z)`},
+		{"_silent_mode:\n  target: Purple", `unknown silent mode target (valid: warning, critical, all, disable)`},
+		{"_silent_mode: Purple", `unknown silent mode (valid: warning, critical, all, disable)`},
 	} {
 		if got := silentModeProblem(parseSilentMode(t, c.doc)); got != c.want {
 			t.Errorf("silentModeProblem(%q)\n got  %q\n want %q", c.doc, got, c.want)

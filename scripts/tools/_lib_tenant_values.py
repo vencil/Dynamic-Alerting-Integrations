@@ -727,7 +727,7 @@ class SeverityDedupProblem(NamedTuple):
     file: str     # root-relative slash path
     layer: str    # "tenant" | "platform_tenants" | "profile"
     owner: str    # the tenant id, or for "profile" the profile name
-    problem: str  # the exporter's own words (they quote the value as its resolver compares it)
+    problem: str  # the exporter's own words: a fixed sentence that quotes no value (#3703)
     value: str    # the value as the file wrote it
 
 

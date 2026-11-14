@@ -82,9 +82,6 @@ ALLOWED: dict[tuple[str, str, str, str], str] = {
     ("_grar_validate.py", "load_policy_document", "!r", "minimum"): _POLICY,
     ("_grar_validate.py", "generator_version_problem", "!r", "own"):
         "the tool's own version",
-    ("_grar_validate.py", "invalid_tenant_id_text", "!r", "str(tenant)"):
-        "a declared tenant id: a key of conf.d, not a value (keys are named in "
-        "every finding; the tenant must see which id is refused)",
 }
 
 

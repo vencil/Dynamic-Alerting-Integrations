@@ -99,6 +99,16 @@ case "$output" in
 esac
 
 cd "$module_dir"
+# #3756: a workflow job that traces what it loads (DA_PATH_TRACE_DIR, set by
+# `scripts/ops/workflow_path_filter.py env`) is told which package was built,
+# so the job's last step can require the package's sources in the workflow's
+# path filter. Unset everywhere else, where this does nothing. A log that
+# cannot be written fails the build: the step that reads it would otherwise
+# report "no Go build" for a job that made one.
+if [ -n "${DA_PATH_TRACE_DIR:-}" ]; then
+    mkdir -p "$DA_PATH_TRACE_DIR"
+    printf '%s\t%s\n' "$PWD" "$package" >> "$DA_PATH_TRACE_DIR/go-build.log"
+fi
 CGO_ENABLED=0
 export CGO_ENABLED
 exec go build -buildvcs=false -trimpath -ldflags "$ldflags" -o "$output" "$package"

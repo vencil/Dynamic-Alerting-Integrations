@@ -153,6 +153,10 @@ SHAPES = {
                                          "      db_type: postgres\n",
                        "alpha.yaml": "tenants:\n  alpha:\n    pg_connections: 90\n"},
                       "postgres"),
+    # #3771: a list declares every kind it names, in the order written.
+    "list": ({"_defaults.yaml": _DEFAULTS,
+              "alpha.yaml": "tenants:\n  alpha:\n    _metadata:\n"
+                            "      db_type: [postgres, redis]\n"}, "postgres,redis"),
     "non-string": ({"_defaults.yaml": _DEFAULTS,
                     "alpha.yaml": "tenants:\n  alpha:\n    _metadata:\n      db_type: 5\n"},
                    "5"),
@@ -186,8 +190,11 @@ def _write(root: Path, files: dict[str, str]) -> Path:
 
 
 def _served_db_type(root: Path, tenant: str) -> str:
+    """The served db_type as the lint reports it: #3771 serves it as a list
+    (every declared kind), joined by ","."""
     meta = tv.load_served_tree(root).tenants[tenant].values.get("_metadata")
-    return meta.get("db_type", "") if isinstance(meta, dict) else ""
+    kinds = meta.get("db_type") if isinstance(meta, dict) else None
+    return ",".join(kinds) if isinstance(kinds, list) else (kinds or "")
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))

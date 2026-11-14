@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/groups"
@@ -636,8 +637,8 @@ func TestListTenants_WithMetadata(t *testing.T) {
 	if ts.Domain != "finance" {
 		t.Errorf("Domain = %q, want %q", ts.Domain, "finance")
 	}
-	if ts.DBType != "mariadb" {
-		t.Errorf("DBType = %q, want %q", ts.DBType, "mariadb")
+	if !reflect.DeepEqual(ts.DBType, []string{"mariadb"}) {
+		t.Errorf("DBType = %q, want %q", ts.DBType, []string{"mariadb"})
 	}
 	if ts.Owner != "team-dba" {
 		t.Errorf("Owner = %q, want %q", ts.Owner, "team-dba")

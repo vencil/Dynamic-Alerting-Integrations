@@ -62,6 +62,36 @@ describe('TenantCard', () => {
     expect(screen.getByText('TIER-1')).toBeInTheDocument();
   });
 
+  // #3771: tenant-api sends db_type as a list; a string (platform-data.json,
+  // demo fixtures) is one kind.
+  it('renders every declared db_type, list or string', () => {
+    const { unmount } = render(
+      <TenantCard
+        name="multi"
+        data={{ ...tenantData, db_type: ['mariadb', 'redis'] }}
+        isSelected={false}
+        isHovered={false}
+        pendingPR={null}
+        modeColors={modeColors}
+        {...noopHandlers}
+      />,
+    );
+    expect(screen.getByText('mariadb, redis')).toBeInTheDocument();
+    unmount();
+    render(
+      <TenantCard
+        name="single"
+        data={tenantData}
+        isSelected={false}
+        isHovered={false}
+        pendingPR={null}
+        modeColors={modeColors}
+        {...noopHandlers}
+      />,
+    );
+    expect(screen.getByText('mariadb')).toBeInTheDocument();
+  });
+
   it('renders pending-PR badge when pendingPR provided', () => {
     render(
       <TenantCard

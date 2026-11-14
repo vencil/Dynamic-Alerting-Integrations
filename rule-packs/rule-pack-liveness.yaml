@@ -2,7 +2,8 @@
 # Rule Pack: Tenant Exporter Liveness (#869) — 預設啟用 (always-on)
 #
 # 不需要額外 exporter — 讀取 threshold-exporter 的 tenant_expected_exporter
-# 指標 + Prometheus 注入的 up{job="tenant-exporters"}。
+# 指標、Prometheus 注入的 up{job="tenant-exporters"}，以及各 exporter 自己的
+# 存在指標（mysql_up、redis_up……，見下方「存在判定」段）。
 #
 # === 為什麼存在 (修正的 latent bug) ===
 # 舊的 per-db *ExporterAbsent 規則用 `absent(<db>_up{job="tenant-exporters"})`
@@ -11,29 +12,59 @@
 # (silent false-negative)。而且 absent() 回空向量，舊規則的
 # `tenant: "{{ $labels.tenant }}"` 模板【恆為空字串】(第二個既有缺陷)。
 #
-# === 修法：per-tenant value-aware anti-join ===
-#   tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+# === 修法：per-(tenant, db_type) anti-join (#869 → #3771) ===
+#   tenant_expected_exporter unless on(tenant, db_type) (<存在判定>)
 #
 # 左手邊 tenant_expected_exporter{tenant,db_type}=1 由 threshold-exporter 對
-# 【每個宣告 db_type 的租戶】emit 一條 (collector.go collectTenantExpectedExporter,
-# #869)。右手邊用 `up == 1`【值感知】，不是裸 `unless up`：
-#   - pod 死但 target 還在（endpointslice SD 下 readiness 失敗的 pod 仍留在
-#     slice，#3680）→ up=0【在場】(target present, value 0)，裸 `unless up` 會被這條 up=0
-#     series 騙過、誤判「在場」而漏報；`up == 1` 只承認真正健康的 target →
-#     up=0 不被當作存活 → 正確 fire。
-#   - Service 物件被刪 (退租) → up series 缺席 → 兩種寫法都 fire。
-#   `== 1` 同時覆蓋 up=0 (pod 死、Service 在) 與 series-absent (Service 刪) 兩種失效。
-#   promtool S4 (up==1 vs 裸 unless) 證明此差異。
+# 【租戶宣告的每個 db_type】各 emit 一條 (collector.go
+# collectTenantExpectedExporter, #869；#3771 起 _metadata.db_type 可寫成列表，
+# 單值寫法等同一元素列表)。
+# 右手邊 <存在判定>{tenant,db_type}：「這個租戶有一個【這一種】exporter 正在回應」，
+# 是由對照表生成、【直接寫在告警 expr 裡】的運算式，不是另一條 recording rule。
+# 為什麼內嵌（#3771 審查）：告警讀另一條 recording rule，就多了「那條要和它一起、
+# 在同一個 Prometheus、先於它載入」的依賴——拆檔、只載單一 pack、federation split
+# （record 放 edge、alert 放 central，central 只拉 {tenant!=""}）都會讓告警讀到空
+# 向量。內嵌後每條告警只讀它本來就讀的、帶 tenant 的原始 series。
 #
-# === Label 來源 (與舊規則相反，這次真的會 populate) ===
-# `unless on(tenant)` 只用 tenant 做反向配對，並【保留左手邊全部 label】，
-# 所以 fired alert 帶 tenant + db_type (來自 tenant_expected_exporter)。
-# promtool exp_labels 驗證 tenant + db_type 都出現。
+# 為什麼不再用 `unless on(tenant) (up == 1)`（#3771）：up 上沒有任何 label 看得出
+# target 是哪一種 exporter。租戶有 mariadb 與 redis 兩個 Service、mariadb 唯一
+# 副本掛了時，redis 的 up==1 會把整個租戶擋住 → mariadb 的監控全斷卻沒有
+# critical。改成 `on(tenant, service)` 也不行：tenant_expected_exporter 沒有
+# service，兩條都不響。所以期望集合帶 db_type，存在判定也帶 db_type。
+#
+# === 存在判定 ===
+# 每個 db_type 讀一個「只有這種 exporter 會吐、而且每次回應 scrape 都吐」的
+# 指標，限定 job="tenant-exporters"：
+#   label_replace(<存在指標>{job="tenant-exporters"}, "db_type", "<種類>", "", "")
+#   每種一項，以 or 串起。
+# db_type → 指標的對照表只有一份：scripts/tools/_lib_exporter_presence.py 的
+# EXPORTER_PRESENCE（各指標的上游依據寫在該檔 docstring）。Rule A、Rule C 與平台
+# pack 的 MassExporterOutage 三條的 expr 由它生成（改表後跑
+# `python3 scripts/tools/_lib_exporter_presence.py --write`，不要手改這三條 expr）；
+# tests/rulepacks/test_exporter_presence.py 釘住「表的 key ＝ schema 的 db_type
+# enum」雙向相等，以及三條 expr 與生成結果一致。
+# 值感知是天生的：target 不回應（pod 死、up=0，含 endpointslice SD 下 readiness
+# 失敗的 pod 仍留在 slice 的情形，#3680）時，它所有的 series 都 stale → 存在
+# 指標缺席 → 正確 fire；mysql_up=0（exporter 活著、DB 連不上）仍在場，那是
+# MariaDBDown 的事，不是 exporter 缺席。Service 被刪 (退租) 同樣缺席 → fire。
+# 存在判定放在本 pack（always-on）而不是各 DB pack：多數 DB pack 是
+# default_on: false，pack 沒部署時宣告了該 db_type 的租戶會永久誤報。
+#
+# === Label 來源 ===
+# `unless on(tenant, db_type)` 保留左手邊全部 label，fired alert 帶
+# tenant + db_type (來自 tenant_expected_exporter)。promtool exp_labels 驗證。
+#
+# ⚠️ 殘餘缺口（owner 已知）：同一個 db_type 有兩個 Service、其中一個全掛時，
+# 另一個 Service 的存在指標仍擋住 Absent，只剩 TenantExporterReplicaDown 的 warning。
 #
 # === Opt-in 契約 (營運須知) ===
 # 只有在 _metadata 宣告了 db_type 的租戶才會被納入 liveness 監看
-# (collector 對 db_type="" 不 emit，見 collector.go 註解)。沒宣告 db_type 的
+# (collector 對沒宣告的租戶不 emit，見 collector.go 註解)。沒宣告 db_type 的
 # 租戶【不會】被 TenantExporterAbsent 監看 — 這是刻意的 opt-in，不是 bug。
+# #3771 起 TenantExporterReplicaDown 也只對宣告了 db_type 的租戶生效；有某種
+# DB exporter 在回應、卻沒宣告那一種 db_type 的 (租戶, db_type) 由
+# TenantExporterUndeclared 指名 (warning)，讓「有 exporter 卻沒被 liveness 納管」
+# 不再是靜默狀態。
 # ⚠️ opt-in 的反面風險：db_type 鍵打錯 (dbType / db_typ) 或值打錯 (maraidb)
 # → DBType="" → 該租戶被【靜默】移出 liveness。#880 把這道防線 shift-left 到
 # author/CI：tenant-config.schema.json 的 _metadata 改 additionalProperties:false
@@ -59,7 +90,7 @@
 # 取代分散在 db-pack 的 4 條 per-db *ExporterAbsent (MariaDB/PostgreSQL/Kafka/
 # RabbitMQ) 與 ClickHouseDown，舊規則已移除、不留 shim (#3682：alertname 改名
 # 以 Removed 發布，見 changelog.d/README.md)。同時把 liveness 覆蓋面
-# 【擴張】到所有宣告 db_type 且有 up{job="tenant-exporters"} 的 DB
+# 【擴張】到 schema enum 的每一種 db_type
 # (Redis/MongoDB/Oracle/... 原本完全沒有 ExporterAbsent 規則)。
 #
 # === Scale sentinel / catastrophic fallback ===
@@ -83,9 +114,24 @@ groups:
       # Scope: 只抓「乾淨死透/缺席」; 詐屍 CrashLoop flap 由 ContainerCrashLoop
       # (kubelet waiting-reason) 覆蓋，刻意不在此疊邏輯 — 見檔頭「Scope 邊界」段 (#880)。
       # tenant_expected_exporter 由 threshold-exporter 的每個副本各送一份（逐 pod
-      # 抓取，#3483）：先 max without(instance, pod) 收掉，每個租戶只發一則。
+      # 抓取，#3483）：先 max without(instance, pod) 收掉，每個 (租戶, db_type) 只發一則。
+      # 配對鍵是 (tenant, db_type)（#3771）：同租戶另一種 exporter 健康不會擋住這一種。
+      # expr 由 _lib_exporter_presence.py 生成（見檔頭「存在判定」），不要手改。
       - alert: TenantExporterAbsent
-        expr: max without(instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1)
+        expr: |
+          max without(instance, pod) (tenant_expected_exporter)
+          unless on(tenant, db_type) (
+            label_replace(mysql_up{job="tenant-exporters"}, "db_type", "mariadb", "", "")
+            or label_replace(pg_up{job="tenant-exporters"}, "db_type", "postgresql", "", "")
+            or label_replace(redis_up{job="tenant-exporters"}, "db_type", "redis", "", "")
+            or label_replace(mongodb_up{job="tenant-exporters"}, "db_type", "mongodb", "", "")
+            or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "db_type", "elasticsearch", "", "")
+            or label_replace(oracledb_up{job="tenant-exporters"}, "db_type", "oracle", "", "")
+            or label_replace(db2_up{job="tenant-exporters"}, "db_type", "db2", "", "")
+            or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "db_type", "clickhouse", "", "")
+            or label_replace(kafka_brokers{job="tenant-exporters"}, "db_type", "kafka", "", "")
+            or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "db_type", "rabbitmq", "", "")
+          )
         for: 3m
         labels:
           severity: critical
@@ -94,8 +140,8 @@ groups:
         annotations:
           summary: "Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type }})"
           summary_zh: "租戶 {{ $labels.tenant }} ({{ $labels.db_type }}) 的 exporter 缺席"
-          description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels.db_type }}) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
-          description_zh: "租戶 {{ $labels.tenant }} (db_type={{ $labels.db_type }}) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+          description: "No {{ $labels.db_type }} exporter of tenant {{ $labels.tenant }} has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs {{ $labels.db_type }}, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+          description_zh: "租戶 {{ $labels.tenant }} 的 {{ $labels.db_type }} exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 {{ $labels.db_type }}，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
@@ -109,12 +155,14 @@ groups:
       # inhibit，自建 Alertmanager 或關掉嚴重度去重的租戶也成立，且 promtool 測得到
       # （tests/rulepacks/rule-pack-liveness-replica_test.yaml）。
       # 單副本租戶：唯一的 target 掛了右手邊就空 → 恆不 fire，歸 Rule A。
-      # ⚠️ 「歸 Rule A」只對在 _metadata 宣告 db_type 的租戶成立（檔頭「Opt-in 契約」）：
-      # 沒宣告的租戶沒有 tenant_expected_exporter，全部 target 都掛時兩條規則都不響
-      # （本規則本身不帶 opt-in 條件，對所有租戶都響；promtool R11 釘住現行行為）。
+      # Opt-in（#3771）：`and on(tenant) group by(tenant)(tenant_expected_exporter)`
+      # 讓本規則只對宣告了 db_type 的租戶生效，與 Rule A 的納管範圍一致；沒宣告的
+      # 租戶由 Rule C（TenantExporterUndeclared）指名，不再對它發副本級告警
+      # （promtool R11b 釘住）。
       # ⚠️ 配對鍵只有 tenant、不含 service：同租戶的 up==1 可能來自【別的 Service】。
-      # 那時本規則照響（warning），但掛掉那個 Service 的監控其實已全斷，而 Rule A
-      # 也被另一個 Service 的 up==1 擋住（多 Service 的缺口在 #3771）。
+      # 那時本規則照響（warning）；若掛掉的是某個 db_type 唯一的副本，Rule A 也會對
+      # 那個 db_type 響 critical（#3771 起 Rule A 按 db_type 判斷）。仍漏的只有
+      # 「同一個 db_type 兩個 Service、其中一個全掛」：只剩本規則的 warning。
       # 嚴重度 warning＋maintenance: mute：副本級（同租戶仍有健康 target）可被維護
       # 靜音；租戶整體缺席（Rule A）是 page（docs/design/config-driven.md）。
       # for:10m 吸收滾動重啟（舊 pod 終止期間 up=0）。
@@ -123,6 +171,7 @@ groups:
       - alert: TenantExporterReplicaDown
         expr: |
           (up{job="tenant-exporters"} == 0) and on(tenant) (up{job="tenant-exporters"} == 1)
+          and on(tenant) group by(tenant) (tenant_expected_exporter)
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
         for: 10m
@@ -133,8 +182,64 @@ groups:
         annotations:
           summary: "Exporter target {{ $labels.instance }} down for tenant {{ $labels.tenant }} (another tenant-exporters target of the tenant is up)"
           summary_zh: "租戶 {{ $labels.tenant }} 的 exporter target {{ $labels.instance }} 停機（同租戶仍有其他 tenant-exporters target 為 up）"
-          description: "Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tenant }} has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if {{ with $labels.service }}Service {{ . }}{{ else }}its Service{{ end }} has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
-          description_zh: "租戶 {{ $labels.tenant }} 的 target {{ $labels.instance }}{{ with $labels.pod }}（pod {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若{{ with $labels.service }} Service {{ . }} {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+          description: "Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tenant }} has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if {{ with $labels.service }}Service {{ . }}{{ else }}its Service{{ end }} has no other replica, its metrics are no longer scraped at all. When it was the only exporter of one of the tenant's declared db_types, TenantExporterAbsent (critical) fires for that db_type as well; when another Service of the same db_type is still up, this warning is the only signal. If every target of the tenant goes down, this alert resolves and TenantExporterAbsent takes over. Only tenants that declare db_type in _metadata get this alert; an undeclared tenant gets TenantExporterUndeclared instead."
+          description_zh: "租戶 {{ $labels.tenant }} 的 target {{ $labels.instance }}{{ with $labels.pod }}（pod {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若{{ with $labels.service }} Service {{ . }} {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取。它若是租戶宣告的某個 db_type 唯一的 exporter，TenantExporterAbsent（critical）也會對那個 db_type 響；同一個 db_type 若還有別的 Service 是 up，本告警就是唯一的訊號。若租戶所有 target 都掛，本告警會解除，改由 TenantExporterAbsent 接手。只有在 _metadata 宣告了 db_type 的租戶才會收到本告警；沒宣告的租戶改收 TenantExporterUndeclared。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+      # Rule C — 有某種 DB exporter 在回應、卻沒宣告【那一種】db_type（#3771）。
+      # Rule A／B 只看宣告了的 (tenant, db_type)，所以沒宣告的那一種 exporter 全掛也沒有
+      # 任何告警——整個租戶沒宣告，或宣告了 [mariadb] 卻同時跑著 redis exporter 都是
+      # （後者以整租戶 `unless on(tenant)` 排除時會漏掉，#3771 第三輪審查；promtool U6）。
+      # 左手邊：1 小時內出現過的 schema enum 裡某一種 DB exporter 存在指標，帶 db_type
+      # （同一張對照表，label_replace(max_over_time(<指標>{job="tenant-exporters"}[1h]),
+      # "db_type", ...) 逐項 or），group by(tenant, db_type)。不是任何 tenant-exporters
+      # target——只有 nginx／jvm／應用 /metrics 的租戶沒有可宣告的 db_type，用 up 當左手
+      # 邊會讓它永遠響且無解（promtool U4）。
+      # 回看 1 小時：DB exporter 全掛時不會一掛就因存在指標消失而解除、被讀成已修好
+      # （promtool U5）；1 小時後仍沒回來才解除。1h 是 rule pack CI 政策允許的最長 range
+      # （.github/custom-rule-policy.yaml max_range_duration，只有 GENERATED pack 可放寬）。
+      # unless on(tenant, db_type) tenant_expected_exporter 拿掉宣告過的那一種。
+      # 守門 `and on(tenant) tenant_metadata_info`（leftouterjoin-enrichment 只准它出現在
+      # and／unless 的右側）：threshold-exporter 自己掛了時 tenant_expected_exporter 整個
+      # 消失，若不守門每個租戶都會被當成「沒宣告」齊響（promtool U3）；以 tenant 配對，
+      # 退租租戶（conf.d 與 exporter 一起移除，左手邊的回看還記得它）也被濾掉（promtool
+      # U7）。讀 tenant_metadata_info 而不是 tenant_expected_exporter：前者 threshold-
+      # exporter 對【每個】租戶無條件發（types.go），「還沒有任何租戶宣告 db_type」的導入
+      # 期守門照樣打開。threshold-exporter 本身掛掉由平台 pack 的 ThresholdExporterAbsent 負責。
+      # 嚴重度 warning＋maintenance: mute：沒有任何東西壞掉，但這一種 exporter 停機【不會】
+      # 有 critical，需要有人補 _metadata.db_type——是要處理的組態缺口，不只是資訊。
+      # for:15m 吸收導入期先上 Service、後補 conf.d 的空窗與 threshold-exporter 重啟後
+      # tenant_expected_exporter 回來前的短暫缺席。expr 由 _lib_exporter_presence.py 生成，不要手改。
+      - alert: TenantExporterUndeclared
+        expr: |
+          group by(tenant, db_type) (
+            label_replace(max_over_time(mysql_up{job="tenant-exporters"}[1h]), "db_type", "mariadb", "", "")
+            or label_replace(max_over_time(pg_up{job="tenant-exporters"}[1h]), "db_type", "postgresql", "", "")
+            or label_replace(max_over_time(redis_up{job="tenant-exporters"}[1h]), "db_type", "redis", "", "")
+            or label_replace(max_over_time(mongodb_up{job="tenant-exporters"}[1h]), "db_type", "mongodb", "", "")
+            or label_replace(max_over_time(elasticsearch_exporter_build_info{job="tenant-exporters"}[1h]), "db_type", "elasticsearch", "", "")
+            or label_replace(max_over_time(oracledb_up{job="tenant-exporters"}[1h]), "db_type", "oracle", "", "")
+            or label_replace(max_over_time(db2_up{job="tenant-exporters"}[1h]), "db_type", "db2", "", "")
+            or label_replace(max_over_time(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}[1h]), "db_type", "clickhouse", "", "")
+            or label_replace(max_over_time(kafka_brokers{job="tenant-exporters"}[1h]), "db_type", "kafka", "", "")
+            or label_replace(max_over_time(rabbitmq_up{job="tenant-exporters"}[1h]) or max_over_time(rabbitmq_identity_info{job="tenant-exporters"}[1h]), "db_type", "rabbitmq", "", "")
+          )
+          unless on(tenant, db_type) tenant_expected_exporter
+          and on(tenant) tenant_metadata_info
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 15m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Tenant {{ $labels.tenant }} runs a {{ $labels.db_type }} exporter but does not declare db_type {{ $labels.db_type }}"
+          summary_zh: "租戶 {{ $labels.tenant }} 有 {{ $labels.db_type }} exporter 在回應，但沒有宣告 db_type {{ $labels.db_type }}"
+          description: "A {{ $labels.db_type }} exporter of tenant {{ $labels.tenant }} has answered under job=\"tenant-exporters\" within the last hour, but its _metadata.db_type does not list {{ $labels.db_type }}, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add {{ $labels.db_type }} to _metadata.db_type (a string, or a list such as [mariadb, redis])."
+          description_zh: "租戶 {{ $labels.tenant }} 的 {{ $labels.db_type }} exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _metadata.db_type 沒有列出 {{ $labels.db_type }}，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 {{ $labels.db_type }} 加進 _metadata.db_type（字串，或像 [mariadb, redis] 這樣的列表）。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

@@ -33,13 +33,14 @@ da-guard unavailable or failing is a notice, never a refusal) catches them.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib_confd  # noqa: E402
-from _lib_validation import shown_key  # noqa: E402  (#1560 ⑤-b: keys into messages)
+from _lib_validation import shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: keys and values into messages)
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
@@ -311,10 +312,30 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
     return verdict
 
 
+#: A schedule window in the one spelling that can hold nothing but a time
+#: of day: digits, `:` and `-`.
+_WINDOW_RE = re.compile(r"[0-9]{1,2}:[0-9]{2}-[0-9]{1,2}:[0-9]{2}")
+
+
+def _shown_window(window: str) -> str:
+    """A schedule entry's `window:` as a message names it (#3703): as
+    written when it is `HH:MM-HH:MM` in ASCII digits, otherwise
+    `shown_value`'s reading of it — a window is the author's text, and the
+    exporter reads spellings (`+2:00 - 06:00`) this does not print."""
+    return window if _WINDOW_RE.fullmatch(window) else shown_value(window)
+
+
 def finding_line(f: Finding, limit: int) -> str:
     """The one line a report prints for `f` (validate-config's `unread_keys`
     row, the route generator's `--validate`): the file, the severity, the
-    kind, the key, the tenants it reaches (at most `limit` named)."""
+    kind, the key, the tenants it reaches (at most `limit` named).
+
+    ⛔ #3703: `reason` and `hint` are da-guard's own sentences — built from
+    constants, never from a value or a key of the config (Go:
+    `LayerValueProblem.Problem`) — and are printed as they are; no filter of
+    prose here. What the author wrote (the key, a dead entry's value and
+    window) goes through `shown_key` / `shown_value`. The guard is
+    tests/ops/test_reserved_value_canary_matrix.py."""
     who = ", ".join(f.tenants[:limit]) + (
         f" (+{len(f.tenants) - limit} more)" if len(f.tenants) > limit else "")
     why = f" ({f.reason})" if f.reason else ""
@@ -325,9 +346,12 @@ def finding_line(f: Finding, limit: int) -> str:
         # #3046: name the base whose `disable` switches the key off.
         why = f" (switched off with its base `{shown_key(f.base)}`)"
     if f.dead_entries:
-        # #3502: name each entry that never serves.
+        # #3502: name each entry that never serves. #3703: its value and its
+        # window are the author's text — `entry` (`default`, `overrides[i]`)
+        # and `reason` are da-guard's own words.
         why = " (never served: " + "; ".join(
-            f"{d.entry}" + (f" `{d.window}`" if d.window is not None else "") + f" → {d.value!r}: {d.reason}"
+            f"{d.entry}" + (f" `{_shown_window(d.window)}`" if d.window is not None else "")
+            + f" → {shown_value(d.value)}: {d.reason}"
             for d in f.dead_entries) + ")"
     # A profile key no tenant binds names none (#3042).
     who = f"tenant(s) {who}" if who else "no tenant"

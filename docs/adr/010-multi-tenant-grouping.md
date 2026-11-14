@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-06
-updated_at: 2026-11-02
+updated_at: 2026-11-13
 ---
 # ADR-010: Multi-Tenant Grouping Architecture
 
@@ -62,7 +62,7 @@ _metadata:
   environment: "production"       # production | staging | development
   region: "ap-northeast-1"       # 雲端區域
   domain: "finance"              # 業務領域
-  db_type: "mariadb"             # 資料庫類型
+  db_type: "mariadb"             # 資料庫類型；多種時寫列表，如 [mariadb, redis]
   tags: ["critical-path", "pci"] # 自由標籤
   groups: ["production-dba"]     # 所屬群組
 ```
@@ -71,7 +71,7 @@ _metadata:
 
 - **全部選填**：省略等同空值，向下相容。
 - **不加進 `tenant_metadata_info`**：不成為這個指標的標籤，避免 cardinality 暴增。
-- **`db_type` 另有一個指標**：宣告了 `db_type` 的租戶，exporter 另外輸出 `tenant_expected_exporter{tenant, db_type}`（值為 1），供存活檢查判斷這個租戶的資料庫 exporter 是否缺席；每個宣告的租戶只有一條。
+- **`db_type` 另有一個指標**：宣告了 `db_type` 的租戶，exporter 另外輸出 `tenant_expected_exporter{tenant, db_type}`（值為 1），供存活檢查判斷這個租戶的資料庫 exporter 是否缺席。`db_type` 可以是字串或列表（字串等同一元素列表），每個宣告的種類各一條，存活檢查逐種類判斷。
 - **environment、domain 也可限定權限範圍**：`_rbac.yaml` 的規則可用 `environments`、`domains` 限定適用範圍。
 - **兩端都能解析**：Go 的 `TenantMetadata` struct 與 Python 的 `generate_tenant_metadata.py` 都讀得懂這些欄位。
 

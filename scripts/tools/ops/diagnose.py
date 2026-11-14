@@ -206,15 +206,20 @@ def tenant_db_type(tenant: str, prom_url: str) -> tuple[str | None, str | None]:
     without a config dir. The exporter emits the series only for a tenant that
     declares `_metadata.db_type` (#869), so an empty result means "not
     declared", which is distinct from a failed query.
+
+    #3771: a tenant may declare several kinds (one series each). The checks
+    below are MariaDB's, so a tenant declaring mariadb among others reads as
+    mariadb; otherwise the kinds are returned joined by "," (sorted).
     """
     results, err = query_prometheus(prom_url, f'tenant_expected_exporter{{tenant="{tenant}"}}')
     if err:
         return None, err
-    for item in results or []:
-        db_type = item.get("metric", {}).get("db_type")
-        if db_type:
-            return db_type, None
-    return None, None
+    kinds = sorted({item.get("metric", {}).get("db_type") for item in results or []} - {None, ""})
+    if not kinds:
+        return None, None
+    if MARIADB_DB_TYPE in kinds:
+        return MARIADB_DB_TYPE, None
+    return ",".join(kinds), None
 
 
 def exit_code(result: dict) -> int:

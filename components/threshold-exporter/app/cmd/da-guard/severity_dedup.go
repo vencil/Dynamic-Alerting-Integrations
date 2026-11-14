@@ -85,8 +85,8 @@ type severityDedupProblem struct {
 	Layer string `json:"layer"`
 	// Owner: the tenant id, or for the profile layer the profile name.
 	Owner string `json:"owner"`
-	// Problem: the exporter's own words, which quote the value as its
-	// resolver compares it (trimmed, lower-cased).
+	// Problem: the exporter's own words — a fixed sentence that does not
+	// quote the value (#3703: config.LayerValueProblem.Problem).
 	Problem string `json:"problem"`
 	// Value: the value as the file wrote it (LayerValueProblem.Value), so a
 	// reader can show it its own way — or not at all — apart from Problem.

@@ -14,7 +14,6 @@ on:
       - 'docs/interactive/index.html'
       - 'docs/assets/jsx-loader.html'
       - 'tests/e2e/**'
-      - 'package.json'
       - '.github/workflows/playwright.yml'
       # The A-13 lint runner below. Without this entry, a pull request that
       # ONLY edits the runner does not start this workflow, so the one CI leg
@@ -32,7 +31,6 @@ on:
       - 'docs/interactive/index.html'
       - 'docs/assets/jsx-loader.html'
       - 'tests/e2e/**'
-      - 'package.json'
       - '.github/workflows/playwright.yml'
       # The A-13 lint runner below. Without this entry, a pull request that
       # ONLY edits the runner does not start this workflow, so the one CI leg

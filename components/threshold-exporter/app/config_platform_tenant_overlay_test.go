@@ -203,7 +203,7 @@ func exporterMetadata(m *ConfigManager, tenant string) map[string]string {
 		for k, v := range map[string]string{
 			"runbook_url": md.RunbookURL, "owner": md.Owner, "tier": md.Tier,
 			"environment": md.Environment, "region": md.Region, "domain": md.Domain,
-			"db_type": md.DBType,
+			"db_type": strings.Join(md.DBType, ","), // #3771: a list; the matrix writes one kind
 		} {
 			if v != "" {
 				out[k] = v
