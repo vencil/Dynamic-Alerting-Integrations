@@ -1479,10 +1479,12 @@ _KEY_VERDICT_KINDS = {
     "schedule_unread": "key_schedule_unread",
 }
 
-# The exporter's key checks (`_lib_key_verdict.key_check_lines`) → FINDING_KINDS.
+# The exporter's key checks (`_lib_key_verdict.key_check_lines`; their kinds
+# are Go's, `_lib_tenant_values.KEY_CHECK_KINDS`) → FINDING_KINDS: a retired
+# spelling, or a `version` label.
 _KEY_CHECK_KINDS = {
-    _lib_key_verdict.KEY_CHECK_VERSION_LABEL: "key_version_label",
-    _lib_key_verdict.KEY_CHECK_RENAMED: "key_renamed",
+    kind: ("key_renamed" if kind in _lib_tenant_values.KEY_CHECK_RENAMED_KINDS else "key_version_label")
+    for kind in _lib_tenant_values.KEY_CHECK_KINDS
 }
 
 
@@ -1541,11 +1543,13 @@ def _report_key_verdict(config_dir: str, findings: list[str],
                              kind="key_undecidable",
                              blocks="validate" if stops else "never"))
     # ADR-038 §11: the exporter's own key checks (a `version` label, a
-    # retired spelling), printed as it wrote them — this tool no longer
-    # judges keys itself.
-    for kind, tenant, msg in _lib_key_verdict.key_check_lines(verdict):
-        lines.append(Finding(f"  {msg}", kind=_KEY_CHECK_KINDS[kind],
-                             blocks="never", tenant=tenant))
+    # retired spelling) — this tool no longer judges keys itself. #3703:
+    # worded here from the record's fields (`key_check_line`), never as a
+    # sentence Go built around the key.
+    for tenant, check in _lib_key_verdict.key_check_lines(verdict):
+        lines.append(Finding(f"  {_lib_key_verdict.key_check_line(tenant, check)}",
+                             kind=_KEY_CHECK_KINDS[check.kind], blocks="never", tenant=tenant,
+                             field=key_segment(check.key)))
     for line in lines:
         print(safe_label(line), file=sys.stderr)
     findings.extend(lines)

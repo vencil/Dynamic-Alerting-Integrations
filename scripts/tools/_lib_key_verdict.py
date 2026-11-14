@@ -46,11 +46,12 @@ from _lib_validation import shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: 
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
-SCHEMA = "da-guard.key-verdict/v3"
+SCHEMA = "da-guard.key-verdict/v4"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: the ERROR layer only; v2: judged at one instant, each row
-#: with what /metrics served then — #3835).
-OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2")
+#: with what /metrics served then — #3835; v3: `key_checks` as sentences
+#: that quoted the key — #3703).
+OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2", "da-guard.key-verdict/v3")
 
 READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
@@ -99,11 +100,11 @@ class TreeVerdict(NamedTuple):
     keys: dict[str, list[KeyVerdict]]   # tenant → its keys, sorted by key
     findings: list[Finding]
     undecidable: bool                   # no root platform file was read
-    # ADR-038 §11: per tenant, the exporter's own messages on its keys'
-    # `version` labels and retired spellings (served-values' key_checks),
-    # which a CI reader prints as they are. Not part of the verdict on
-    # whether a key is read.
-    key_checks: "dict[str, tv.KeyChecks]" = {}
+    # ADR-038 §11: per tenant, the exporter's own checks on its keys'
+    # `version` labels and retired spellings (served-values' key_checks,
+    # `tv.KeyCheck` records), which a CI reader prints with
+    # `key_check_line`. Not part of the verdict on whether a key is read.
+    key_checks: "dict[str, tuple[tv.KeyCheck, ...]]" = {}
     # A gate that judges the whole tree refuses it: some finding blocks, or
     # some key is undecidable (Go's keyverdict.Blocks, #3016). The one
     # answer validate-config and the route generator's `--validate` read.
@@ -113,23 +114,27 @@ class TreeVerdict(NamedTuple):
     undecidable_blocks: bool = False
 
 
-# key_check_lines' kinds: a `version` label the exporter refuses (it reads
-# the value as written; ADR-024 OQ-6) and a key in a retired spelling (#1231).
-KEY_CHECK_VERSION_LABEL = "version_label"
-KEY_CHECK_RENAMED = "renamed"
+def key_check_lines(verdict: TreeVerdict) -> "list[tuple[str, tv.KeyCheck]]":
+    """The exporter's key checks of `verdict`, as (tenant, check) sorted by
+    tenant, each tenant's in Go's order (by key, then kind). Every judged
+    tenant has them: key-verdict's document always carries `key_checks` (one
+    without it is refused as another version's)."""
+    return [(tenant, c) for tenant in sorted(verdict.key_checks) for c in verdict.key_checks[tenant]]
 
 
-def key_check_lines(verdict: TreeVerdict) -> "list[tuple[str, str, str]]":
-    """The exporter's key checks of `verdict`, as (kind, tenant, message)
-    sorted by tenant. Every judged tenant has them: key-verdict's document
-    always carries `key_checks` (one without it is refused as another
-    version's)."""
-    lines: list[tuple[str, str, str]] = []
-    for tenant in sorted(verdict.key_checks):
-        kc = verdict.key_checks[tenant]
-        lines += [(KEY_CHECK_VERSION_LABEL, tenant, m) for m in kc.version_labels]
-        lines += [(KEY_CHECK_RENAMED, tenant, m) for m in kc.renames]
-    return lines
+def key_check_line(tenant: str, c: "tv.KeyCheck") -> str:
+    """The one line a report prints for key check *c* of *tenant* (#3703):
+    a constant sentence around the record's fields — the level (WARN for a
+    `version` label the exporter refuses, NOTICE for a retired spelling), the
+    tenant, the kind, the metric name, the key and the replacing metric name
+    each through `shown_key` (a key with labels is never name-like, so it is
+    its stand-in), and Go's constant `reason`. Nothing the author wrote is
+    printed as it is unless `shown_key` lets it."""
+    renamed = c.kind in tv.KEY_CHECK_RENAMED_KINDS
+    replacement = (f", replacement metric {shown_key(c.replacement_head)}"
+                   if c.replacement_head is not None else "")
+    return (f"{'NOTICE' if renamed else 'WARN'}: tenant={shown_key(tenant)}: key check {c.kind}: "
+            f"metric {shown_key(c.head)}, key {shown_key(c.key)}{replacement} — {c.reason}")
 
 
 def _reader_for(conf_d: str | os.PathLike[str], binary: str | None) -> Any:
@@ -273,9 +278,8 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
-    checks = {_str(t, "key_checks"): tv.KeyChecks(
-                  _tuple(_mapping(c, f"key_checks.{t}")["version_labels"], f"key_checks.{t}.version_labels"),
-                  _tuple(c["renames"], f"key_checks.{t}.renames"))
+    # v4 (#3703): records; the sentences of v3 are named by the schema.
+    checks = {_str(t, "key_checks"): tv._key_checks(c, f"key_checks.{t}", older_shape_is_older=False)
               for t, c in _mapping(doc["key_checks"], "key_checks").items()}
     return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks, undecidable_blocks)
 

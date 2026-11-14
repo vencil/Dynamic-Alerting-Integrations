@@ -442,31 +442,74 @@ class TenantValues(NamedTuple):
     # not decode (Go's `guard.CustomAlertBlockFindingKind`); None when it
     # decodes. Go's verdict — a reader lists it.
     custom_alerts_finding: str | None = None
-    # ADR-038 §11: the exporter's own messages about the tenant's keys that a
-    # CI reader prints and no longer judges itself; None from a da-guard
-    # older than the field.
-    key_checks: "KeyChecks | None" = None
+    # ADR-038 §11: the exporter's own checks on the tenant's keys that a CI
+    # reader prints and no longer judges itself (#3703: records, `KeyCheck`);
+    # None from a da-guard older than the field.
+    key_checks: "tuple[KeyCheck, ...] | None" = None
 
 
-class KeyChecks(NamedTuple):
-    """served-values' per-tenant `key_checks`: the exporter's messages
-    (Go's ValidateTenantKeys) about a dimensional key's `version` label
-    (ADR-024 OQ-6) and about a key written in a retired spelling (#1231),
-    each as Go wrote it, sorted. A reader prints them and judges nothing."""
-    version_labels: tuple[str, ...]
-    renames: tuple[str, ...]
+#: The kinds of a key check — Go's `config.KeyCheckKinds`
+#: (pkg/config/key_check.go): a dimensional key's `version` label (ADR-024
+#: OQ-6) and a key in a retired spelling (#1231). A closed set: a kind
+#: outside it is output this reader cannot read.
+#: tests/shared/test_key_check_kinds_parity.py reads the Go constants and
+#: holds both sets to them.
+KEY_CHECK_KINDS = frozenset({
+    "version_label_regex", "version_label_empty", "version_label_default", "version_label_charset",
+    "renamed_shadowed", "renamed_critical_dimensional", "renamed",
+})
+#: The kinds about a retired spelling (Go's `KeyCheckKind.IsRenamed`): an
+#: advisory; the others are about a `version` label the exporter refuses.
+KEY_CHECK_RENAMED_KINDS = frozenset({"renamed_shadowed", "renamed_critical_dimensional", "renamed"})
 
 
-def _key_checks(e: Any) -> KeyChecks:
-    if not isinstance(e, dict):
-        raise TypeError(f"key_checks is a {type(e).__name__}")
+class KeyCheck(NamedTuple):
+    """One entry of served-values' per-tenant `key_checks` (#3703): one of
+    the exporter's checks on a key as written (Go's `config.KeyCheck`).
+    `key` (the key as the tenant's config writes it) and `head` (its metric
+    name) are the author's text — a message names them through
+    `shown_key`; `reason` is Go's constant sentence for the kind, and
+    `replacement_head` the alias table's name of the replacing spelling (a
+    renamed kind only, else None). A reader prints them and judges nothing."""
+    kind: str
+    key: str
+    head: str
+    replacement_head: str | None
+    reason: str
+
+
+#: A tenant's key checks, sorted by key, then kind (as Go writes them).
+KeyChecks = tuple  # tuple[KeyCheck, ...]
+
+_KEY_CHECK_FIELDS = frozenset(KeyCheck._fields)
+
+
+def _key_checks(e: Any, what: str = "key_checks", *, older_shape_is_older: bool = True,
+                ) -> "tuple[KeyCheck, ...]":
+    """A tenant's `key_checks`, checked: a list of records, each with every
+    field of `KeyCheck` and no other, `kind` from `KEY_CHECK_KINDS`, and a
+    `replacement_head` exactly on a renamed kind. The mapping of sentences
+    (`{version_labels, renames}`) a da-guard older than #3703 writes is
+    named so (`_OlderOutput`) when *older_shape_is_older* — served-values'
+    convention; key-verdict names it by its schema instead."""
+    if isinstance(e, dict) and set(e) == {"version_labels", "renames"} and older_shape_is_older:
+        raise _OlderOutput(f"{what} as sentences ({{version_labels, renames}})")
+    if not isinstance(e, list):
+        raise TypeError(f"{what} is a {type(e).__name__}")
     out = []
-    for field in KeyChecks._fields:
-        msgs = e[field]
-        if not isinstance(msgs, list) or not all(isinstance(m, str) for m in msgs):
-            raise TypeError(f"key_checks.{field} is not a list of strings")
-        out.append(tuple(msgs))
-    return KeyChecks(*out)
+    for i, c in enumerate(e):
+        w = f"{what}[{i}]"
+        if not isinstance(c, dict) or set(c) != _KEY_CHECK_FIELDS:
+            raise TypeError(f"{w} is not a record of {sorted(_KEY_CHECK_FIELDS)}: {c!r}")
+        kind, repl = c["kind"], c["replacement_head"]
+        if kind not in KEY_CHECK_KINDS:
+            raise ValueError(f"{w}.kind {kind!r}")
+        if not all(isinstance(c[f], str) for f in ("key", "head", "reason")):
+            raise TypeError(f"{w}: key, head and reason must be strings")
+        if (repl is not None) != (kind in KEY_CHECK_RENAMED_KINDS) or not isinstance(repl, (str, type(None))):
+            raise ValueError(f"{w}: kind {kind!r} with replacement_head {repl!r}")
+        out.append(KeyCheck(kind, c["key"], c["head"], repl, c["reason"]))
+    return tuple(out)
 
 
 class CustomAlertEntry(NamedTuple):

@@ -68,6 +68,8 @@ updated_at: 2026-11-14
 
 2026-11-14 修訂：判決對每個租戶判全天：任一時段有讀取端讀就算被讀，整天都沒人讀才是 `unread`，只有 `expires:` 是否已過依執行的時間點判；/metrics 收集不了的時段以送進 registry 之前已產生的列判。判決不再判閾值的值（讀不懂、非有限數的值交給主閘門）；判決文件拿掉只在那一刻成立的 `served`，格式升為 `da-guard.key-verdict/v3` 與 `da-tools.explain-keys/v2`（決定 1、5、8、9、10）。
 
+2026-11-14 修訂：`key_checks` 改成每項檢查一筆結構化記錄（種類、作者寫的鍵與它的指標名、改名時替代的指標名、每種一句不帶作者文字的說明），產生器與 validate-config 依這些欄位以固定句型印出，不再原樣印 Go 寫好、引用整個鍵與 label 值的句子；判決文件升為 `da-guard.key-verdict/v4`（決定 11）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -449,7 +451,7 @@ _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode (valid:
 
 - 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
-- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
+- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate`。`key_checks` 每項檢查一筆記錄：檢查的種類（封閉集合）、作者寫的整個鍵、它的指標名、改名時替代的指標名，以及每個種類一句固定的說明；只有鍵與指標名帶作者寫的字。讀取端以固定句型組出那一行，鍵與指標名照 Python 唯一的鍵顯示規則出去：名稱形的照印，其餘（帶 label 的鍵一定是）印成 `<key:xxxxxx>` 摘要替身，所以鍵與 label 值的原文不會進產生器的輸出。exporter 的載入 log 與 tenant-api 仍用同一筆記錄產生的完整句子。例：租戶 `ta` 寫 `container_cpu{version="V2!"}: "5"`，產生器 `--validate` 印出 ``WARN: tenant=ta: key check version_label_charset: metric container_cpu, key <key:8c0e11> — the `version` label violates ^[a-z0-9][a-z0-9._-]*$ (ADR-024 OQ-6; pilot-calibratable)``；改名類的那一行是 NOTICE，另帶 `replacement metric <新指標名>`。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
 - 維度鍵（`<base>{…}`）只有在它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時，exporter 才送出；不論它寫在租戶檔、profile、子目錄還是根 `defaults:`。比對的是那一列送出的 label 名稱：regex 選擇器送出 `<label>_re`（`version=~"v3.*"` 送出 `version_re`），要宣告的是 `version_re`，宣告 `version` 不涵蓋它。base 不能是 `<key>_critical`（新舊拼法皆然）：`<key>_critical` 是 `<key>` 的 critical 層的名字，不是 base，所以這種宣告不宣告任何東西（根 `defaults:` 只給 `<key>_critical`、沒給 `<key>` 時它會被當成自己的 base 送出，那本身就是 da-guard 報 `root_defaults_critical_key` 的設定錯誤；它的維度版同樣不送，刻意比那個 warning 嚴），`<key>_critical{…}` 沒有列，da-guard 對根檔報 `root_dimensions_critical_base`（error）；每個維度的 critical 門檻寫成 `<key>{label="v"}: "N:critical"`。其他維度鍵沒有列，判決讀成 `unread`（`no_row`）；兩個例外同樣沒有列：值寫 `disable` 的依決定 8 報 `disable_noop`，Policy-as-Code 規則指名的讀成 `read`（`policy_engine` 讀它）。理由是出貨的規則包以 `max by(…)` 合成門檻，只保留它分組的 label（多數只有 `tenant`）；不在分組裡的 label 無法成為獨立維度，值會併進同一組的門檻，寫了也不會依維度生效。出貨的 `dimensions:` 來自門檻登錄表（`rule-packs/threshold-registry.yaml`）每個 key 的 `dimensions`：`--regen` 由它重生出貨的宣告與 `scaffold_tenant.RULE_PACKS`，`da-tools init` 與 `scaffold_tenant` 讀的是後者；測試兩個方向對照登錄表與規則包的分組，目前是 `container_cpu`、`container_memory` 的 `version`。自訂規則若依某個 label 讀，平台在 `dimensions:` 加上該 base 與 label。例：
 
   ```yaml

@@ -96,7 +96,7 @@ func TestValidateVersionLabel_NonVersionDimensional_Unaffected(t *testing.T) {
 // Direct unit coverage of the helper for the no-version fast path.
 func TestValidateVersionLabel_Helper_NoVersionLabel_Nil(t *testing.T) {
 	t.Parallel()
-	if got := validateVersionLabel("t", `container_cpu{env="prod"}`,
+	if got := validateVersionLabel("t", `container_cpu{env="prod"}`, `container_cpu{env="prod"}`,
 		map[string]string{"env": "prod"}, nil); got != nil {
 		t.Errorf("no version label must return nil, got: %v", got)
 	}

@@ -397,6 +397,10 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     ' "tenants": ["t"], "reason": "no_row", "base": null, "dead_entries": null, "blocks": true}],'
     ' "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": true,'
     ' "undecidable_blocks": false}',
+    # #3703: the last v3 — key_checks as sentences that quoted the key.
+    '{"schema": "da-guard.key-verdict/v3", "at": "x", "undecidable": false, "tenants": {},'
+    ' "findings": [], "key_checks": {"t": {"version_labels": [], "renames": []}}, "parse_failed": [],'
+    ' "unreadable": [], "blocks": false, "undecidable_blocks": false}',
     # #3835: the last v2 — judged at one instant, each row with what /metrics
     # served then — whatever else it carries.
     '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {"t": [{"key": "k",'
@@ -406,7 +410,7 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     ' "unreadable": [], "blocks": false, "undecidable_blocks": false}',
 ], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks",
         "partial-disable", "disable_partial-finding", "v2-without-dead_entries", "v2-without-hint",
-        "v2-at-one-instant"])
+        "v3-key-checks-as-sentences", "v2-at-one-instant"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
@@ -423,6 +427,8 @@ _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict
         "dead_entries": [], "value": 1}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
             "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True}
+_CHECK = {"kind": "version_label_empty", "key": 'm{version=""}', "head": "m", "replacement_head": None,
+          "reason": "r"}
 _DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
 
 
@@ -433,7 +439,7 @@ def _v3(tenant_row: "dict | None" = None, finding: "dict | None" = None, drop: s
     row = dict(_ROW, **(tenant_row or {}))
     fnd = dict(_FINDING, **(finding or {}))
     doc = {"schema": kv.SCHEMA, "at": "x", "undecidable": False, "tenants": {"t": [row]},
-           "findings": [fnd], "key_checks": {"t": {"version_labels": [], "renames": []}},
+           "findings": [fnd], "key_checks": {"t": []},
            "parse_failed": [], "unreadable": [], "blocks": True, "undecidable_blocks": False}
     for where in (doc, row, fnd):
         where.pop(drop, None)
@@ -460,7 +466,7 @@ def test_a_v3_document_missing_what_v3_writes_is_broken_not_older(tmp_path, docu
 
 def _doc(**over):
     doc = {"undecidable": False, "tenants": {"t": [dict(_ROW)]}, "findings": [dict(_FINDING)],
-           "key_checks": {"t": {"version_labels": [], "renames": []}}, "blocks": True,
+           "key_checks": {"t": []}, "blocks": True,
            "undecidable_blocks": False}
     doc.update(over)
     return doc
@@ -469,6 +475,15 @@ def _doc(**over):
 @pytest.mark.parametrize("doc", [
     _doc(tenants=None),
     _doc(key_checks=[]),
+    # #3703: v4's key checks are records; the v3 sentences under v4 are broken
+    # output, and so is a record of another shape or kind.
+    _doc(key_checks={"t": {"version_labels": [], "renames": []}}),
+    _doc(key_checks={"t": [dict(_CHECK, kind="typo")]}),
+    _doc(key_checks={"t": [dict(_CHECK, replacement_head="m")]}),
+    _doc(key_checks={"t": [dict(_CHECK, kind="renamed")]}),
+    _doc(key_checks={"t": [dict(_CHECK, extra=1)]}),
+    _doc(key_checks={"t": [{k: v for k, v in _CHECK.items() if k != "head"}]}),
+    _doc(key_checks={"t": [dict(_CHECK, key=None)]}),
     _doc(findings=None),
     _doc(tenants={"t": [dict(_ROW, verdict=None)]}),
     _doc(tenants={"t": [dict(_ROW, verdict="maybe")]}),

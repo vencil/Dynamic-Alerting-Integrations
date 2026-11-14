@@ -312,10 +312,10 @@ FINDING_KINDS: dict[str, str] = {
         "judged (ADR-038 decision 7); with any such key, --validate fails.",
     "key_version_label":
         "A dimensional key's `version` label the exporter refuses (ADR-024 "
-        "OQ-6), as the exporter words it.",
+        "OQ-6): the exporter's check, named by its kind, metric and key.",
     "key_renamed":
-        "A key written in a retired spelling (#1231), as the exporter words "
-        "it; advisory.",
+        "A key written in a retired spelling (#1231): the exporter's check, "
+        "named by its kind, metric, key and replacement; advisory.",
     "key_verdict_incomplete":
         "The shared key verdict could not be given (da-guard failing, rules "
         "Policy-as-Code refuses); the keys were not judged and --validate "

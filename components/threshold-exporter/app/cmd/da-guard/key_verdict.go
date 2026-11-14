@@ -54,10 +54,12 @@ import (
 const keyVerdictCmd = "key-verdict"
 
 // keyVerdictSchema names the document's shape (see servedValuesSchema).
-// v3 (#3835): judged over the whole day, the per-key `served` (what /metrics
+// v4 (#3703): key_checks, per tenant, a list of structured records
+// {kind, key, head, replacement_head, reason} instead of
+// {version_labels, renames} sentences that quoted the key. v3 (#3835): judged over the whole day, the per-key `served` (what /metrics
 // served at --at) gone. v2 (#3489 step 2): the whole verdict; v1 carried
 // the ERROR layer only.
-const keyVerdictSchema = "da-guard.key-verdict/v3"
+const keyVerdictSchema = "da-guard.key-verdict/v4"
 
 // keyError is one key the verdict reads as unread at severity ERROR — what
 // `da-guard write` compares before and after a batch.
@@ -91,9 +93,10 @@ type keyVerdictDoc struct {
 	Tenants map[string][]keyverdict.KeyVerdict `json:"tenants"`
 	// Findings: what a report prints, error first.
 	Findings []keyverdict.Finding `json:"findings"`
-	// KeyChecks (ADR-038 §11): per tenant, the exporter's own messages on
-	// its keys' `version` labels and retired spellings (served-values'
-	// key_checks). Not part of the verdict on whether a key is read.
+	// KeyChecks (ADR-038 §11): per tenant, the exporter's own checks on
+	// its keys' `version` labels and retired spellings, as records
+	// (served-values' key_checks, servedKeyCheck). Not part of the verdict
+	// on whether a key is read.
 	KeyChecks map[string]servedKeyChecks `json:"key_checks"`
 	// ParseFailed / Unreadable: the files the exporter's load drops, as
 	// served-values names them (exit 3); the verdict is on the rest of the
@@ -599,7 +602,9 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
 			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value}]}, \"findings\":\n"+
 			"[{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks}], \"key_checks\":\n"+
-			"{<tenant>: {version_labels, renames}}, \"parse_failed\": [<file>], \"unreadable\": [{file, reason}]}.\n"+
+			"{<tenant>: [{kind, key, head, replacement_head, reason}]}, \"parse_failed\": [<file>],\n"+
+			"\"unreadable\": [{file, reason}]}. A key check's reason is a constant sentence per kind;\n"+
+			"only key and head carry what the tenant's config writes.\n"+
 			"Only `expires:` is read at --at; nothing depends on the time of day.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+

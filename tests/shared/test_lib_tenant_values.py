@@ -1171,10 +1171,20 @@ def test_a_request_is_sorted_and_deduplicated():
 
 def test_key_checks_of_the_wrong_shape_are_refused_not_read_as_none():
     """served-values' key_checks is the exporter's word: a document of the
-    wrong shape (a field missing, a non-string message) is a broken da-guard,
-    never "no message"."""
-    assert tv._key_checks({"version_labels": ["a"], "renames": []}) == tv.KeyChecks(("a",), ())
-    for bad in ({"version_labels": []}, {"version_labels": [1], "renames": []},
-                {"version_labels": "a", "renames": []}, ["a"]):
-        with pytest.raises((TypeError, KeyError)):
+    wrong shape (a field missing or extra, a kind outside the closed set, a
+    replacement on a `version` label kind) is a broken da-guard, never "no
+    check"; the sentences a da-guard older than #3703 wrote are named older."""
+    rec = {"kind": "renamed", "key": "mysql_cpu", "head": "mysql_cpu",
+           "replacement_head": "mysql_threads_running", "reason": "r"}
+    assert tv._key_checks([rec]) == (tv.KeyCheck("renamed", "mysql_cpu", "mysql_cpu",
+                                                 "mysql_threads_running", "r"),)
+    assert tv._key_checks([]) == ()
+    for bad in ({"version_labels": []}, ["a"], [dict(rec, kind="typo")], [dict(rec, replacement_head=None)],
+                [dict(rec, kind="version_label_empty")], [dict(rec, extra=1)], [dict(rec, key=1)],
+                [{k: v for k, v in rec.items() if k != "reason"}], "a"):
+        with pytest.raises((TypeError, ValueError)):
             tv._key_checks(bad)
+    with pytest.raises(tv._OlderOutput):
+        tv._key_checks({"version_labels": ["a"], "renames": []})
+    with pytest.raises(TypeError):
+        tv._key_checks({"version_labels": ["a"], "renames": []}, older_shape_is_older=False)

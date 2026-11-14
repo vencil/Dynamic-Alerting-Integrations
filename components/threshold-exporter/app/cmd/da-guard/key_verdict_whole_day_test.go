@@ -237,7 +237,7 @@ func TestKeyVerdict_NoFieldOfOneInstant(t *testing.T) {
 	t.Parallel()
 	_, _, doc := keyVerdictAt(t, map[string]string{"_defaults.yaml": wholeDayRoot,
 		"ta.yaml": "tenants:\n  ta:\n    cpu_pct: \"70\"\n"}, kvOutWindow)
-	if doc["schema"] != keyVerdictSchema || keyVerdictSchema != "da-guard.key-verdict/v3" {
+	if doc["schema"] != keyVerdictSchema || keyVerdictSchema != "da-guard.key-verdict/v4" {
 		t.Errorf("schema %v", doc["schema"])
 	}
 	if r := kvRow(t, doc, "cpu_pct"); r["verdict"] != "read" {

@@ -246,8 +246,9 @@ type servedTenantValues struct {
 	Keys map[string]servedKey `json:"keys"`
 	// KeyChecks (ADR-038 §11): the two checks on the tenant's keys as
 	// written that the CI readers print and no longer judge themselves —
-	// ValidateTenantKeys' messages about a `version` label and about a
-	// retired spelling. Always present.
+	// ValidateTenantKeys' records about a `version` label and about a
+	// retired spelling, as structured fields with a constant reason (#3703).
+	// Always present ([] when none).
 	KeyChecks servedKeyChecks `json:"key_checks"`
 	// CustomAlertRows: the custom-alert rows the tenant's `_custom_alerts`
 	// asks /metrics to serve, counted before the per-tenant metric limit
@@ -315,32 +316,56 @@ func kindOrNil(k findingkind.Kind) *string {
 	return &s
 }
 
-// servedKeyChecks is servedTenantValues.KeyChecks: the exporter's own
-// messages (config.KeyValidation.VersionLabels and Renames), sorted.
-type servedKeyChecks struct {
-	// VersionLabels: a dimensional key's `version` label the exporter
-	// refuses (ADR-024 OQ-6). Always present ([] when none).
-	VersionLabels []string `json:"version_labels"`
-	// Renames: a key written in a retired spelling (#1231), with its
-	// replacement. Advisory. Always present ([] when none).
-	Renames []string `json:"renames"`
+// servedKeyChecks is servedTenantValues.KeyChecks: one entry per
+// config.KeyCheck of the tenant, sorted by key, then kind.
+type servedKeyChecks []servedKeyCheck
+
+// servedKeyCheck is one config.KeyCheck (#3703). Key and Head are the only
+// fields that carry what the author wrote; every other field is a closed-set
+// kind, a name from the alias table, or a constant sentence — so a reader
+// that prints them names the key from Key / Head its own way (Python's
+// shown_key), never from a sentence Go built around it.
+type servedKeyCheck struct {
+	// Kind is one of config.KeyCheckKinds.
+	Kind string `json:"kind"`
+	// Key is the key as the tenant's config writes it.
+	Key string `json:"key"`
+	// Head is Key's metric name (Key before its first `{`).
+	Head string `json:"head"`
+	// ReplacementHead is the metric name of the spelling that replaces Key,
+	// for a renamed kind; null for a `version` label kind.
+	ReplacementHead *string `json:"replacement_head"`
+	// Reason is the kind's constant sentence (config.KeyCheck.Reason).
+	Reason string `json:"reason"`
 }
 
 // keyChecksOf fills KeyChecks of every tenant of tenants from cfg.
 func keyChecksOf(cfg *config.ThresholdConfig, tenants map[string]servedTenantValues) {
 	kv := cfg.ValidateTenantKeysByTenant()
 	for tid, tv := range tenants {
-		v := kv.Tenants[tid]
-		tv.KeyChecks = servedKeyChecks{
-			VersionLabels: sortedStrings(v.VersionLabels), Renames: sortedStrings(v.Renames)}
+		tv.KeyChecks = servedKeyChecksOf(kv.Tenants[tid].KeyChecks)
 		tenants[tid] = tv
 	}
 }
 
-// sortedStrings is s sorted, [] for none.
-func sortedStrings(s []string) []string {
-	out := append([]string{}, s...)
-	sort.Strings(out)
+// servedKeyChecksOf is checks as servedKeyChecks, sorted by key, then kind;
+// [] for none.
+func servedKeyChecksOf(checks []config.KeyCheck) servedKeyChecks {
+	out := make(servedKeyChecks, 0, len(checks))
+	for _, c := range checks {
+		e := servedKeyCheck{Kind: string(c.Kind), Key: c.Key, Head: c.Head, Reason: c.Reason()}
+		if c.Kind.IsRenamed() {
+			r := c.ReplacementHead
+			e.ReplacementHead = &r
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Key != out[j].Key {
+			return out[i].Key < out[j].Key
+		}
+		return out[i].Kind < out[j].Kind
+	})
 	return out
 }
 
