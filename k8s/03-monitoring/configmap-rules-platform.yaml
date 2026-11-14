@@ -333,15 +333,16 @@ data:
     \ alerts, tenant and group batches, in\n\n        every write mode) with 503:\
     \ POLICY_UNAVAILABLE when the deployment\n\n        policy file (generator.policy.existingConfigMap)\
     \ cannot be read or\n\n        parsed, VALIDATOR_UNAVAILABLE when the container\
-    \ does not answer,\n\n        has no amtool, or is older than the policy''s\n\n\
-    \        min_generator_version. Reads are unaffected. The 503 body''s\n\n    \
-    \    `reason` and the generator container''s log say which; GET\n\n        /v1/status\
-    \ on its socket (the container''s probe) shows the\n\n        policy error. Repair\
-    \ the policy ConfigMap, or fix the container\n\n        (image with generator-service,\
-    \ amtool), and the alert clears on\n\n        the next scrape. There is no escape\
-    \ hatch (ADR-036 §5): the\n\n        previous --policy-unavailable-open is removed,\
-    \ and this gauge no\n\n        longer reflects a _domain_policy.yaml in conf.d\
-    \ or \"its last good\n\n        version\".\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
+    \ does not answer,\n\n        has no da-read or da-guard, or is older than the\
+    \ policy''s\n\n        min_generator_version. Reads are unaffected. The 503 body''s\n\
+    \n        `reason` and the generator container''s log say which; GET\n\n     \
+    \   /v1/status on its socket (the container''s probe) shows the\n\n        policy\
+    \ error. Repair the policy ConfigMap, or fix the container\n\n        (image with\
+    \ generator-service, da-read, da-guard), and the alert clears on\n\n        the\
+    \ next scrape. There is no escape hatch (ADR-036 §5): the\n\n        previous\
+    \ --policy-unavailable-open is removed, and this gauge no\n\n        longer reflects\
+    \ a _domain_policy.yaml in conf.d or \"its last good\n\n        version\".\n\n\
+    \        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
     \      summary: tenant-api writes cannot be judged — the generator container or\
     \ its deployment policy is unavailable; writes answer 503\n  - alert: GeneratorJudgementMemoryNearLimit\n\
     \    expr: da_generator_judgement_peak_rss_bytes{job=\"tenant-api\"} / da_generator_judgement_memory_limit_bytes{job=\"\

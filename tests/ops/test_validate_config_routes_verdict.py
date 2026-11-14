@@ -1,7 +1,8 @@
-"""#2311: validate-config's `routes` row and `generate-routes --validate`
-share ONE verdict function (`_grar_render.evaluate_generated_config`).
+"""#2311: the verdict on a generation result is ONE function
+(`_grar_render.evaluate_generated_config`), and validate-config's `routes`
+row is `generate-routes --validate` (#3788: both are `validate_tree`).
 
-Before this, the row ran only `blocking_generation_errors`, so a generation
+Before #2311 the row ran only `blocking_generation_errors`, so a generation
 result `--validate` failed — an ADR-025 inhibit tripwire, an invariant
 `assemble_configmap` refuses, an Alertmanager rejection — was a PASS row at
 exit 0. The contract pinned here:
@@ -219,14 +220,13 @@ class TestRoutesRowMatchesValidate:
         assert _validate_rc(tenant_dir, monkeypatch, capsys) == 2
 
     def test_accepted_tree_is_pass(self, tenant_dir, monkeypatch, capsys):
-        """The loader's "accepted" line must not be swept into the row as an
-        issue — the stderr capture in check_routes used to turn anything
-        printed during the row into a WARN. #3793: PASS whatever is on PATH;
-        there is no "accepted, but not fully checked" WARN."""
+        """The loader's "accepted" line is not an issue: the row is PASS
+        when `--validate` exits 0 without a warning. #3793: PASS whatever is
+        on PATH; there is no "accepted, but not fully checked" WARN."""
         _loader(monkeypatch)
         row = vc.check_routes(str(tenant_dir))
         assert row["status"] == vc.PASS, row
-        assert row["details"][0].startswith("1 routes"), row
+        assert any(d.startswith("Validation: 1 route(s)") for d in row["details"]), row
         assert any("Alertmanager's config loader (da-read) accepted" in d
                    for d in row["details"]), row
         assert _validate_rc(tenant_dir, monkeypatch, capsys) == 0
@@ -241,4 +241,7 @@ class TestRoutesRowMatchesValidate:
             encoding="utf-8")
         row = vc.check_routes(str(d))
         assert calls == []
-        assert row["status"] in (vc.PASS, vc.WARN), row
+        # #3788: `--validate` refuses a tree that renders nothing, so the row does.
+        assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+        assert "No valid routes or inhibit rules generated." in row["details"], row
+        assert row["hint"] == vc.NOTHING_GENERATED_ROUTES_HINT, row

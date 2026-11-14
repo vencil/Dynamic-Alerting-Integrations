@@ -2,23 +2,26 @@
 # (`da-tools generator-service`, ADR-036 §3) for the demo stack. tenant-api
 # asks it before every write that changes conf.d and refuses to start without
 # it. The published da-tools image cannot stand in yet: tools/v2.9.0 has no
-# generator-service, git or amtool.
+# generator-service or git.
 #
 # The service's code is NOT copied in — compose bind-mounts the checkout's
 # scripts/tools at /opt/da-tools, so the demo judges with what the checkout
 # holds. This image is only the runtime the da-tools image gives it:
 # Python + PyYAML (same pins as components/da-tools/app/Dockerfile), git,
-# amtool, da-guard, and the nonroot user at uid 10001 — which tenant-api runs
-# as too (docker-compose.yaml `user:`): the service answers only a peer of its
-# own uid.
+# the reader binaries a judgement runs (da-guard, da-crdecode, da-read), and
+# the nonroot user at uid 10001 — which tenant-api runs as too
+# (docker-compose.yaml `user:`): the service answers only a peer of its own
+# uid.
 #
-# Build context = repo ROOT (#3530): da-guard is built from
-# components/threshold-exporter/app, as the recipe-preview image builds it.
+# Build context = repo ROOT (#3530): da-guard and da-crdecode are built from
+# components/threshold-exporter/app, as the recipe-preview image builds
+# da-guard, and da-read from components/da-read.
 #   docker build -f try-local/generator/Dockerfile .
 
-# ── da-guard ─────────────────────────────────────────────────────────────
-# Without it the service answers every write 503 da_guard_missing and
-# GET /v1/status reports `ready: false` (#3530). Same stage as
+# ── da-guard, da-crdecode ────────────────────────────────────────────────
+# Without da-guard the service answers every write 503 da_guard_missing and
+# GET /v1/status reports `ready: false` (#3530). da-crdecode reads the
+# ConfigMap the generator assembles, as kubectl does. Same stage as
 # components/recipe-preview/Dockerfile: pinned to the native BUILDPLATFORM and
 # cross-compiled to TARGETARCH (CGO_ENABLED=0). The builder's Go version MUST
 # equal the module's go.mod `go` directive (tests/ops/test_go_toolchain_parity.py).
@@ -36,7 +39,24 @@ COPY components/threshold-exporter/app/ ./
 # .dockerignore re-includes scripts/ops/ for this COPY.
 COPY scripts/ops/go_build.sh /opt/go_build.sh
 ARG TARGETOS TARGETARCH
-RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-guard /da-guard
+RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-guard /da-guard && \
+    sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-crdecode /da-crdecode
+
+# ── da-read ──────────────────────────────────────────────────────────────
+# Alertmanager's own config loader: the generator asks it whether
+# Alertmanager accepts the config it rendered. Without it the service answers
+# every write 503 da_read_missing and GET /v1/status reports `ready: false`.
+# Its own Go module (components/da-read), same builder and flags as above.
+# This stage is discarded.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23 AS readbuild
+
+WORKDIR /src
+COPY components/da-read/go.mod components/da-read/go.sum ./
+RUN go mod download
+COPY components/da-read/ ./
+COPY scripts/ops/go_build.sh /opt/go_build.sh
+ARG TARGETOS TARGETARCH
+RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . . /da-read
 
 # ── runtime ──────────────────────────────────────────────────────────────
 FROM python:3.14.10-alpine3.23
@@ -54,11 +74,10 @@ RUN apk --no-cache upgrade && \
     adduser -S -D -H -u 10001 -h /nonexistent -s /sbin/nologin -G nonroot nonroot && \
     mkdir -p /run/da-generator && chown nonroot:nonroot /run/da-generator
 
-# amtool: without it the service answers every write 503 amtool_missing
-# (ADR-036 §3). The same ref the da-tools image copies it from.
-COPY --from=prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b /bin/amtool /usr/local/bin/amtool
-# On PATH, where the service resolves it when $DA_GUARD_BINARY is not set.
-COPY --from=gobuild /da-guard /usr/local/bin/da-guard
+# On PATH, where the service resolves each when its variable
+# ($DA_GUARD_BINARY, $DA_CRDECODE_BINARY, $DA_READ_BINARY) is not set.
+COPY --from=gobuild /da-guard /da-crdecode /usr/local/bin/
+COPY --from=readbuild /da-read /usr/local/bin/da-read
 
 USER nonroot:nonroot
 

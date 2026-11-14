@@ -154,8 +154,8 @@ def test_validate_config_routes_row_counts_them(tmp_path):
     # root through the merge, not a route of its own. One dedup inhibit
     # rule each.
     n = len(_EVERY) + 2
-    assert row["details"][0] == (
-        f"{n} routes, {n} receivers, {len(_EVERY)} inhibit_rules"), row
+    assert (f"Validation: {n} route(s), {n} receiver(s), "
+            f"{len(_EVERY)} inhibit rule(s)") in row["details"], row
 
 
 def test_explain_route_trace_tree_and_types_follow(tmp_path):

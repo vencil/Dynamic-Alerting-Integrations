@@ -10,6 +10,7 @@ outputs they print are the shapes the pinned engines were measured to print
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -42,7 +43,7 @@ def _stand_in(tmp_path: Path, name: str, rc: int, stdout: str = "",
 
 #: The argv each proof requires (it reads the output those flags ask for).
 _ARGS = {"kube-linter": ["lint", "--format", "json", "x"],
-         "hadolint": ["--no-fail", "--format", "json", "x"]}
+         "hadolint": ["--disable-ignore-pragma", "--no-fail", "--format", "json", "x", "-"]}
 
 
 def _run(monkeypatch, bin_dir, engine, sub, *, timeout=30):
@@ -126,6 +127,64 @@ def test_a_proof_whose_flag_was_dropped_is_a_programming_error(tmp_path, monkeyp
     monkeypatch.setenv("PATH", str(_stand_in(tmp_path, "hadolint", 0, "[]")))
     with pytest.raises(ValueError, match="--no-fail"):
         E.run(E.locate("hadolint"), "lint", ["--format", "json", "x"], timeout=30)
+
+
+# ── hadolint: ran, and ran with the caller's levels (#3643) ─────────────────
+
+_HL_ARGS = ("hadolint", "--disable-ignore-pragma", "--no-fail", "--format", "json", "x", "-")
+_HL_EXPECT = {"canary": {"DL3007": ["error"], "DL3026": ["error"]}}
+
+
+def _hl(*findings):
+    """hadolint's JSON for (file, code, level) triples (shape measured on v2.12.0)."""
+    return json.dumps([{"file": f, "line": 1, "column": 1, "code": c, "level": lv,
+                        "message": "m"} for f, c, lv in findings])
+
+
+_HL_CANARY = (("-", "DL3007", "error"), ("-", "DL3026", "error"))
+
+
+def test_hadolint_canary_at_the_registered_levels_is_ran_without_it():
+    """The canary's findings prove the run and are not findings of the caller's
+    files; an unregistered code on stdin (DL3059) is not read either way."""
+    proof = E.PROOFS[("hadolint", "lint")]
+    out = _hl(("x", "DL3018", "warning"), *_HL_CANARY, ("-", "DL3059", "info"))
+    assert proof(_cp(0, out, args=_HL_ARGS), _HL_EXPECT) == [
+        {"file": "x", "line": 1, "column": 1, "code": "DL3018", "level": "warning",
+         "message": "m"}]
+    assert proof(_cp(0, _hl(*_HL_CANARY), args=_HL_ARGS), _HL_EXPECT) == []
+
+
+@pytest.mark.parametrize("stdin_findings", [
+    (),                                                        # stdin never arrived / all ignored
+    (("-", "DL3007", "warning"), ("-", "DL3026", "error")),    # default level: flags not applied
+    (("-", "DL3026", "error"),),                               # one rule ignored
+    (("-", "DL3007", "error"),),                               # no trusted registry applied
+    (*_HL_CANARY, ("-", "DL3026", "error")),                   # a trusted registry not applied
+    (("x", "DL3007", "error"), ("x", "DL3026", "error")),      # right findings, wrong file
+], ids=["no-canary", "default-level", "rule-missing", "dl3026-missing", "dl3026-twice",
+        "not-on-stdin"])
+def test_hadolint_canary_that_came_back_otherwise_is_no_proof(stdin_findings):
+    """#3643: a well-formed array at exit 0 is what hadolint prints when it
+    dropped the config, so the array alone proves nothing about the levels."""
+    proof = E.PROOFS[("hadolint", "lint")]
+    out = _hl(("x", "DL3018", "warning"), *stdin_findings)
+    with pytest.raises(E.NoProof, match="canary"):
+        proof(_cp(0, out, args=_HL_ARGS), _HL_EXPECT)
+
+
+@pytest.mark.parametrize("drop", ["--disable-ignore-pragma", "-"])
+def test_hadolint_without_the_canary_s_argv_is_a_programming_error(drop):
+    args = tuple(a for a in _HL_ARGS if a != drop)
+    with pytest.raises(ValueError, match="proof needs"):
+        E.PROOFS[("hadolint", "lint")](_cp(0, _hl(*_HL_CANARY), args=args), _HL_EXPECT)
+
+
+@pytest.mark.parametrize("expect", [{}, {"canary": {}}])
+def test_hadolint_without_a_canary_expectation_is_a_programming_error(expect):
+    """A caller that sends no expectation would get the pre-#3643 proof back."""
+    with pytest.raises(ValueError, match="canary"):
+        E.PROOFS[("hadolint", "lint")](_cp(0, "[]", args=_HL_ARGS), expect)
 
 
 def test_pint_entries_and_rc_are_returned(tmp_path, monkeypatch):

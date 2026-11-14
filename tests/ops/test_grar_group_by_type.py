@@ -12,7 +12,7 @@
   `_routing_enforced`。
 * 拒收＝`field_type_errors`（`ERROR (field type):`，blocks `always`）：
   `--output-alertmanager`（含 `--dry-run`）、`--validate`、`--strict` 都 rc 1、什麼都不寫出；validate-config 的
-  schema 列 FAIL。finding kind 沿用 `routing_group_by_invalid`。
+  routes 列 FAIL。finding kind 沿用 `routing_group_by_invalid`。
 * 不把字串轉成 list；訊息指出正確寫法 `group_by: [alertname]`。
 * null 照舊＝沒寫（不輸出 group_by、繼承上層），`[]` 照舊＝不輸出。
 
@@ -264,18 +264,8 @@ def test_the_findings_document_names_the_field(tmp_path):
 
 
 @pytest.mark.parametrize("loc", sorted(LOCATIONS))
-def test_validate_config_schema_row_fails(tmp_path, loc):
-    d = _write(tmp_path, LOCATIONS[loc][0]("alertname"))
-    row = vc.check_schema(str(d))
-    assert row["status"] == vc.FAIL, row
-    assert any("ERROR (field type):" in m and "group_by" in m for m in row["details"]), row
-    # Not the "a line ends in 'skipping'" / `_routing_enforced.enabled` advice.
-    assert row["hint"] == vc.FIELD_TYPE_HINT, row
-
-
-@pytest.mark.parametrize("loc", sorted(LOCATIONS))
 def test_validate_config_routes_row_fails(tmp_path, loc):
-    """The routes row has --validate semantics; --validate refuses the tree."""
+    """The routes row is --validate; --validate refuses the tree."""
     d = _write(tmp_path, LOCATIONS[loc][0]("alertname"))
     row = vc.check_routes(str(d))
     assert row["status"] == vc.FAIL, row
@@ -296,8 +286,7 @@ def test_validate_config_cli_prints_the_field_type_hint(tmp_path):
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     assert p.returncode == 1, (p.stdout, p.stderr)
     out = p.stdout + p.stderr
-    assert out.count(vc.FIELD_TYPE_HINT) == 2, out  # schema + routes rows
-    assert "A line above ends in 'skipping'" not in out, out
+    assert out.count(vc.FIELD_TYPE_HINT) == 1, out  # the routes row
 
 
 # ── null keeps its meaning ───────────────────────────────────────────────

@@ -1009,9 +1009,10 @@ def alertmanager_check(am_yml: str, *, what: str, refusing: str
 
 
 # ── #2311: the ONE verdict on a generation result ───────────────────
-# `generate_alertmanager_routes --validate` and validate-config's `routes` row
-# both call `evaluate_generated_config`. Before it, validate-config ran only
-# the first of these steps, so a tree `--validate` failed (a tripwire, an
+# `generate_alertmanager_routes --validate` judges a generation result with
+# `evaluate_generated_config`, and validate-config's `routes` row is that
+# `--validate` (#3788). Before it, validate-config ran only the first of
+# these steps, so a tree `--validate` failed (a tripwire, an
 # invariant `assemble_configmap` refuses, an Alertmanager rejection) was a
 # PASS row at rc 0 — #2164's drift, one layer further down.
 #
