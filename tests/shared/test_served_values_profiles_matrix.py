@@ -352,7 +352,11 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     # profiles row's reason. A profiles row that borrowed its reason from
     # served-values again would call it right after effective, so the whole
     # ordered list still catches that.
+    # #3830: the unsupplied_defaults row then asks `key-spellings` for the root
+    # file's keys and reads the served tree for every tenant's db_type, before
+    # tier_inversion's read.
     assert log.read_text(encoding="utf-8").split() == ["parse-tree", "severity-dedup", "key-verdict",
                                                        "served-values", "effective", "--config-dir",
-                                                       "key-verdict", "served-values"]
+                                                       "key-verdict", "key-spellings", "served-values",
+                                                       "served-values"]
     assert rows["unread_keys"]["details"][0].startswith("verdict incomplete: "), rows["unread_keys"]
