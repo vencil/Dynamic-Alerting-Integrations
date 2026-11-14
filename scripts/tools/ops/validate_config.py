@@ -223,6 +223,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_effective_tree,
     load_guard_report,
     load_served_schedules,
+    load_served_tree,
     print_load_error,
 )
 from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
