@@ -76,7 +76,7 @@ from _grar_validate import (  # noqa: E402
     find_tenant_silenceable_platform_inhibits,
     find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
-    overrides_severity_dedup,
+    is_generated_dedup_rule,
 )
 
 
@@ -775,34 +775,39 @@ _REMOVE_FROM_THE_BASE = ("Remove them from the base config — or, if it is an "
 
 def assert_base_has_no_dedup_rule(base: object, where: str = "the base config",
                                   remedy: str = _REMOVE_FROM_THE_BASE) -> None:
-    """Fail-closed guard (#3899): no inhibit rule of the base may suppress a
-    tenant's warning when the same tenant's critical of the same
-    ``metric_group`` fires — raise ValueError (rc 1) naming each one.
+    """Fail-closed guard (#3899): the base must not hold a severity dedup
+    rule the route generator itself writes — raise ValueError (rc 1) naming
+    each one.
 
-    That suppression is what ``_severity_dedup`` decides per tenant, and the
-    generator renders it from conf.d as ONE rule with the ``disable``
-    tenants in its ``tenant!~`` list. ``merge_generated`` keeps every base
-    inhibit rule as written, so a base rule that does it too would override
-    conf.d: a tenant set to ``disable`` would still be deduped — as the two
-    hand-written per-tenant rules of the reference base would have done to
-    their tenants once set to ``disable``. Judged on what a rule matches
-    (``_grar_validate.overrides_severity_dedup``), not on its spelling. It
-    is also how an earlier output with its ``GENERATED_OUTPUT_MARKER`` line
-    deleted and no generated receiver is still recognised as an output.
+    The generator renders that rule from conf.d (ONE rule, the ``disable``
+    tenants in its ``tenant!~`` list), and ``merge_generated`` keeps every
+    base inhibit rule as written, so a generated rule kept in the base would
+    override conf.d: a tenant set to ``disable`` would still be deduped.
+    Such a base is almost always an older output fed back as the source —
+    v2.9.0's ``--apply`` wrote outputs with no ``GENERATED_OUTPUT_MARKER``
+    line — or a hand copy of the generator's rule; this is also what still
+    recognises an output with the marker deleted and no generated receiver.
+
+    Only the generator's own shapes count
+    (``_grar_validate.is_generated_dedup_rule``: today's and the per-tenant
+    one before #3899). An inhibit rule the operator wrote is operator policy:
+    it is not judged and is kept as written, even where it suppresses what
+    ``_severity_dedup`` (``disable`` included) would let through.
     *where* / *remedy* name the source and what to do (``--apply`` names
     the ConfigMap key)."""
     rules = base.get("inhibit_rules") if isinstance(base, dict) else None
     found = [i for i, r in enumerate(rules if isinstance(rules, list) else [])
-             if overrides_severity_dedup(r)]
+             if is_generated_dedup_rule(r)]
     if not found:
         return
     raise ValueError(
-        f"ERROR: {where} has inhibit rule(s) "
-        f"({', '.join(f'inhibit_rules[{i}]' for i in found)}) that suppress a "
-        "tenant's warning alert while the same tenant's critical alert of the "
-        "same metric_group fires. That would override conf.d's "
-        "`_severity_dedup` (`disable` included): severity dedup is generated "
-        f"from conf.d by this tool alone. {remedy}")
+        f"ERROR: {where} holds the route generator's own severity dedup "
+        f"rule(s) ({', '.join(f'inhibit_rules[{i}]' for i in found)}). That rule "
+        "is generated from conf.d (`_severity_dedup`) by this tool alone; kept "
+        "in the source it would override conf.d (`disable` included). This is "
+        "usually an older output passed back as the source (v2.9.0's --apply "
+        "wrote outputs without the GENERATED marker) or a hand copy of the "
+        f"generator's rule. {remedy}")
 
 
 def merge_generated(base: dict, routes: list[dict], receivers: list[dict],

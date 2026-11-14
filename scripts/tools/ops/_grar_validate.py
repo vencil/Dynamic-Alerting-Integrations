@@ -322,102 +322,61 @@ def _side_atoms(rule: dict, side: str) -> "list[tuple[str, str, str]] | None":
     return atoms
 
 
-def _atom_matches(atom: tuple[str, str, str], labels: dict[str, str]) -> bool:
-    """*atom* against *labels*, by the evaluator the Watchdog and platform
-    probes use (``_matcher_matches_labels``: anchored regex, a missing label
-    is "", an unreadable regex "could match")."""
-    name, op, value = atom
-    return _matcher_matches_labels(f'{name}{op}"{value}"', labels)
-
-
-def _literal_candidates(atoms: list[tuple[str, str, str]], label: str) -> set[str]:
-    """Values a rule names for *label*: the value of ``=`` / ``!=`` and each
-    alternative of an ``=~`` / ``!~`` that is a plain literal — so a rule
-    pinned to one tenant is probed with that tenant (the same reason
-    ``find_tenant_silenceable_platform_inhibits`` re-probes pinned tenants)."""
-    out: set[str] = set()
-    for name, op, value in atoms:
-        if name != label:
-            continue
-        if op in ("=", "!="):
-            out.add(value)
-            continue
-        for alt in value.split("|"):
-            plain = re.sub(r"\\(.)", r"\1", alt.strip("()"))
-            try:
-                if re.fullmatch(alt.strip("()"), plain):
-                    out.add(plain)
-            except re.error:
-                continue
-    return out
-
-
-#: The two alerts severity dedup is about: a critical and a warning of ONE
-#: tenant and ONE metric_group (any other label free).
-_DEDUP_PAIR_SEVERITY = {"source": "critical", "target": "warning"}
-_DEDUP_PAIR_SHARED = ("tenant", "metric_group")
-#: Their alert names: two distinct names no rule names. An alert's name is
-#: its identity, not a free label — a rule naming its source alert (a
-#: sentinel, `CustDown`) is about that alert, not about every critical.
-_DEDUP_PAIR_ALERTNAME = {"source": "ProbeTenantCritical", "target": "ProbeTenantWarning"}
-
-
-def overrides_severity_dedup(rule: object) -> bool:
-    """Whether *rule* lets a tenant's critical alert suppress that tenant's
-    warning alert of the same ``metric_group`` (#3899) — what the generated
-    severity dedup rule does, and what ``_severity_dedup`` (``disable``
-    included) decides per tenant. Judged on what the rule MATCHES, not on how
-    it is spelled: ``=`` or ``=~``, one matcher per element or several,
-    ``*_matchers`` or legacy ``*_match`` / ``*_match_re`` are the same.
-
-    The question is existential — is there such a pair it suppresses? — and
-    a rule's matchers are a conjunction per label, so it is decided label by
-    label: ``severity`` is ``critical`` on the source alert and ``warning``
-    on the target; ``alertname`` is a distinct name on each that no rule
-    names (so a rule about named alerts — a sentinel source, one alert pair —
-    is not this rule); ``tenant`` and ``metric_group`` take ONE non-empty
-    value on both; every other label the rule names is free on each alert,
-    but one value on both when it is in ``equal:``. The
-    values tried for a label are a synthetic one, every literal the rule
-    names for it, and (outside the shared two) absent. An element that
-    cannot be read counts as matching — fail closed, like the Watchdog
-    guard. ⚠️ Alertmanager's two-sided-match exclusion (no inhibition when
-    the target also matches the source side and the reverse) is not
-    modelled: a rule it would spare is still reported (fail closed).
-    """
+def _normalised_rule(rule: object) -> "tuple[frozenset, frozenset, frozenset] | None":
+    """*rule* as ``(source atoms, target atoms, equal labels)``, each a set —
+    so spacing, quoting, ``{}``, several matchers in one element, legacy
+    ``*_match`` / ``*_match_re`` maps, order and repeats do not count. None
+    when it is not a mapping or a side cannot be read."""
     if not isinstance(rule, dict):
-        return False
+        return None
     src, tgt = _side_atoms(rule, "source"), _side_atoms(rule, "target")
-    if src is None or tgt is None:
-        return True
-    equal = {e for e in (rule.get("equal") or []) if isinstance(e, str)} \
-        if isinstance(rule.get("equal"), list) else set()
-    names = ({a[0] for a in src + tgt} | equal | set(_DEDUP_PAIR_SHARED)) - {"severity", "alertname"}
+    equal = rule.get("equal", [])
+    if src is None or tgt is None or not isinstance(equal, list):
+        return None
+    return (frozenset(src), frozenset(tgt),
+            frozenset(e for e in equal if isinstance(e, str)))
 
-    def side_ok(atoms: list, label: str, value: str) -> bool:
-        return all(_atom_matches(a, {label: value}) for a in atoms if a[0] == label)
 
-    for side, atoms in (("source", src), ("target", tgt)):
-        if not (side_ok(atoms, "severity", _DEDUP_PAIR_SEVERITY[side])
-                and side_ok(atoms, "alertname", _DEDUP_PAIR_ALERTNAME[side])):
-            return False
-    if "alertname" in equal:
-        return False  # the two names differ
-    for label in sorted(names):
-        cands = _literal_candidates(src + tgt, label) | {f"probe-{label}"}
-        if label in _DEDUP_PAIR_SHARED:
-            cands = {c for c in cands if c}
-            if not any(side_ok(src, label, v) and side_ok(tgt, label, v) for v in cands):
-                return False
-            continue
-        cands |= {""}
-        if label in equal:
-            if not any(side_ok(src, label, v) and side_ok(tgt, label, v) for v in cands):
-                return False
-        elif not (any(side_ok(src, label, v) for v in cands)
-                  and any(side_ok(tgt, label, v) for v in cands)):
-            return False
-    return True
+def _regex_alternatives_as_literals(value: str) -> list[str]:
+    """The alternatives of an ``a|b`` regex with their escapes removed —
+    the tenant ids a generated exclusion list names. Whether they ARE that
+    list is decided by rebuilding the rule from them and comparing."""
+    return [re.sub(r"\\(.)", r"\1", alt) for alt in value.split("|")]
+
+
+def is_generated_dedup_rule(rule: object) -> bool:
+    """Whether *rule* is a severity dedup rule the route generator itself
+    writes (#3899) — the one definition is the generator, so it is rebuilt
+    and compared, not described:
+
+    * ``_grar_routes.build_dedup_inhibit_rule(excluded)`` for some exclusion
+      list (none: no ``tenant!~`` matcher) — the list is read back from the
+      rule's ``tenant!~`` value and the rule rebuilt from it;
+    * ``_grar_routes.pre3899_dedup_inhibit_rule(t)``, the per-tenant shape
+      the generator wrote before #3899 (v2.9.0), for the tenant it pins.
+
+    Both are compared as ``_normalised_rule`` sets, so a copy that went
+    through Alertmanager's reader (``da-read``: one matcher per element,
+    sorted) or was reformatted by hand is still recognised. Any other rule —
+    an operator's own policy, however broad — is not this: it is not judged
+    here and is kept as written.
+    """
+    from _grar_routes import (  # noqa: PLC0415  (_grar_routes imports this module)
+        build_dedup_inhibit_rule, pre3899_dedup_inhibit_rule)
+
+    got = _normalised_rule(rule)
+    if got is None:
+        return False
+    src, tgt, _eq = got
+    exclusions = [a for a in tgt if a[0] == "tenant" and a[1] == "!~"]
+    if len(exclusions) <= 1:
+        excluded = (_regex_alternatives_as_literals(exclusions[0][2])
+                    if exclusions else [])
+        if _normalised_rule(build_dedup_inhibit_rule(excluded)) == got:
+            return True
+    pinned = [a[2] for a in src if a[0] == "tenant" and a[1] == "="]
+    return (len(pinned) == 1
+            and _normalised_rule(pre3899_dedup_inhibit_rule(pinned[0])) == got)
 
 
 def find_ungated_equal_label_inhibits(

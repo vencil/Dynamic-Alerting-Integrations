@@ -157,9 +157,11 @@ data:
       # --config-dir conf.d/ --output-configmap --base-config <this
       # alertmanager.yml>`, #1211), with `_severity_dedup: "disable"` tenants
       # in its `tenant!~` list (#3899). This file is the SOURCE it merges
-      # into, and a dedup rule kept here would be merged as written — deduping
-      # tenants whatever conf.d says — so the merge refuses a source that
-      # holds one (_grar_render.assert_base_has_no_dedup_rule).
+      # into, and the generator's rule kept here would be merged as written —
+      # deduping tenants whatever conf.d says — so the merge refuses a source
+      # that holds the generator's own rule shape
+      # (_grar_render.assert_base_has_no_dedup_rule). Rules you write yourself
+      # are your policy: merged as written, never judged.
 
       # #1132 invariant: every `equal:` label is presence-gated (`=~".+"`) on BOTH
       # sides. Alertmanager treats a label missing from source AND target as

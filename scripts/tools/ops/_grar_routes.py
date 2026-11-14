@@ -28,6 +28,7 @@ Functions:
 
   Severity-dedup inhibit rule (#3899: one rule for every tenant):
     build_dedup_inhibit_rule / generate_inhibit_rules
+    (pre3899_dedup_inhibit_rule: the older per-tenant shape, recognition only)
 """
 from __future__ import annotations
 
@@ -1358,6 +1359,27 @@ def build_dedup_inhibit_rule(excluded: "Iterable[str]") -> dict:
         ],
         "target_matchers": target,
         "equal": ["tenant", "metric_group"],
+    }
+
+
+def pre3899_dedup_inhibit_rule(tenant: str) -> dict:
+    """The per-tenant severity dedup rule the generator wrote BEFORE #3899
+    (v2.9.0's ``_build_inhibit_rules``, unchanged) — ⛔ only for recognising
+    an older output fed back as a source (``_grar_validate.is_generated_dedup_rule``);
+    never rendered. Pinned to v2.9.0's output by
+    tests/ops/test_grar_dedup_rule_shape.py."""
+    return {
+        "source_matchers": [
+            'severity="critical"',
+            'metric_group=~".+"',
+            f'tenant="{tenant}"',
+        ],
+        "target_matchers": [
+            'severity="warning"',
+            'metric_group=~".+"',
+            f'tenant="{tenant}"',
+        ],
+        "equal": ["metric_group"],
     }
 
 

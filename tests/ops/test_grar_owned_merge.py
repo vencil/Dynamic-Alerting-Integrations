@@ -736,7 +736,8 @@ def test_a_routeless_output_without_its_marker_fed_back_is_refused(tmp_path):
     proc = _run("--config-dir", str(conf_d), "--output-alertmanager",
                 "--base-config", str(_base(tmp_path, first, "base2.yml")), "-o", str(out))
     assert proc.returncode == 1, proc.stderr[-3000:]
-    assert "would override conf.d's `_severity_dedup`" in proc.stderr, proc.stderr[-3000:]
+    assert "holds the route generator's own severity dedup rule(s)" in proc.stderr, \
+        proc.stderr[-3000:]
     assert not out.exists()
 
 
@@ -745,26 +746,22 @@ _PER_TENANT_DEDUP = ("  - source_matchers: ['severity=\"critical\"', 'metric_gro
                      "    target_matchers: ['severity=\"warning\"', 'metric_group=~\".+\"',"
                      " 'tenant=\"t-thr\"']\n"
                      "    equal: [metric_group]\n")
+#: The generator's own rule (#3899) in legacy match maps, and with several
+#: matchers in one element and an exclusion list: still its shape.
 _LEGACY_MAP_DEDUP = ("  - source_match: {severity: critical}\n"
-                     "    source_match_re: {metric_group: '.+'}\n"
+                     "    source_match_re: {metric_group: '.+', tenant: '.+'}\n"
                      "    target_match: {severity: warning}\n"
-                     "    target_match_re: {metric_group: '.+'}\n"
+                     "    target_match_re: {metric_group: '.+', tenant: '.+'}\n"
                      "    equal: [tenant, metric_group]\n")
-
-
-#: The same suppression spelled so a string comparison misses it: a regex
-#: severity, and several matchers in one element (Alertmanager accepts both).
-_REGEX_DEDUP = ("  - source_matchers: ['severity=~\"critical\"', 'metric_group=~\".+\"']\n"
-                "    target_matchers: ['severity=~\"warning\"', 'metric_group=~\".+\"']\n"
-                "    equal: [tenant, metric_group]\n")
-_MULTI_DEDUP = ("  - source_matchers: ['severity=\"critical\",metric_group=~\".+\"']\n"
-                "    target_matchers: ['severity=\"warning\",metric_group=~\".+\"']\n"
-                "    equal: [tenant, metric_group]\n")
+_MULTI_DEDUP = ("  - source_matchers: ['severity=\"critical\",metric_group=~\".+\",tenant=~\".+\"']\n"
+                "    target_matchers: ['{tenant!~\"t-off\", severity=\"warning\"}',"
+                " 'metric_group=~\".+\"', 'tenant=~\".+\"']\n"
+                "    equal: [metric_group, tenant]\n")
 
 
 @pytest.mark.parametrize("mode", ["--output-alertmanager", "--output-configmap"])
-@pytest.mark.parametrize("rule", [_PER_TENANT_DEDUP, _LEGACY_MAP_DEDUP, _REGEX_DEDUP, _MULTI_DEDUP],
-                         ids=["per-tenant-matchers", "legacy-match-maps", "regex-severity",
+@pytest.mark.parametrize("rule", [_PER_TENANT_DEDUP, _LEGACY_MAP_DEDUP, _MULTI_DEDUP],
+                         ids=["pre-3899-per-tenant", "legacy-match-maps",
                               "several-matchers-in-one-element"])
 def test_a_dedup_rule_in_the_base_is_refused(tmp_path, mode, rule):
     """#3899：dedup 規則只由產生器從 conf.d 產生。base 裡手寫的一條會被原樣
@@ -775,7 +772,7 @@ def test_a_dedup_rule_in_the_base_is_refused(tmp_path, mode, rule):
     proc = _run("--config-dir", str(_tree(tmp_path)), mode,
                 "--base-config", str(_base(tmp_path, base)), "-o", str(out))
     assert proc.returncode == 1, proc.stderr[-3000:]
-    assert "has inhibit rule(s) (inhibit_rules[1])" in proc.stderr, \
+    assert "own severity dedup rule(s) (inhibit_rules[1])" in proc.stderr, \
         proc.stderr[-3000:]
     assert "Remove them from the base config" in proc.stderr
     assert not out.exists()
@@ -791,11 +788,47 @@ def test_apply_refuses_a_cluster_source_with_a_dedup_rule(tmp_path, monkeypatch,
              else _fake_cluster(monkeypatch, source))
     assert _apply(tmp_path) == 1
     err = capsys.readouterr().err
-    assert "has inhibit rule(s) (inhibit_rules[1])" in err, err[-3000:]
+    assert "own severity dedup rule(s) (inhibit_rules[1])" in err, err[-3000:]
     assert "the source in ConfigMap monitoring/alertmanager-config" in err, err[-3000:]
     assert "delete those rules from the source under the ConfigMap's " \
            "'alertmanager.base.yml' key" in err, err[-3000:]
     assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+def test_an_operators_own_broader_policy_in_the_base_is_kept(tmp_path):
+    """#3899 (owner decision B): only the generator's own shapes are refused.
+    An operator's rule — here a tenant's critical muting all its warnings —
+    is operator policy: not judged, merged as written, even though it mutes
+    what `_severity_dedup: disable` would let through. (`alert_source=""`
+    keeps it off platform alerts, which a different invariant requires.)"""
+    policy = ("  - source_matchers: ['severity=\"critical\"', 'tenant=~\".+\"']\n"
+              "    target_matchers: ['severity=\"warning\"', 'tenant=~\".+\"', 'alert_source=\"\"']\n"
+              "    equal: [tenant]\n")
+    out = _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, _CUSTOMER_BASE + policy))
+    rules = yaml.safe_load(out)["inhibit_rules"]
+    # The output is Alertmanager's reading (matchers sorted): compare as sets.
+    kept = [r for r in rules if r.get("equal") == ["tenant"]
+            and set(r["source_matchers"]) == {'severity="critical"', 'tenant=~".+"'}]
+    assert len(kept) == 1, rules
+    assert set(kept[0]["target_matchers"]) == {
+        'severity="warning"', 'tenant=~".+"', 'alert_source=""'}, kept
+
+
+def test_a_v290_output_fed_back_is_refused(tmp_path):
+    """The v2.9.0 upgrade path: v2.9.0's --apply wrote its output with no
+    GENERATED marker, holding the per-tenant dedup rules of that time. Fed
+    back as the source it is refused (rc 1), nothing written."""
+    old = (Path(__file__).parent / "fixtures" / "pre3899_output_without_marker.yml"
+           ).read_text(encoding="utf-8")
+    assert render.GENERATED_OUTPUT_MARKER not in old
+    out = tmp_path / "o.yml"
+    proc = _run("--config-dir", str(_routeless_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path, old)), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "own severity dedup rule(s) (inhibit_rules[0], inhibit_rules[1])" in proc.stderr, \
+        proc.stderr[-3000:]
+    assert "v2.9.0's --apply" in proc.stderr
+    assert not out.exists()
 
 
 def test_control_the_shipped_k8s_base_holds_no_dedup_rule():

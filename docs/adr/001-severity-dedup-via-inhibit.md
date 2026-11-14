@@ -47,7 +47,7 @@ updated_at: 2026-11-14
 
 抑制規則不用手寫：`generate_alertmanager_routes.py` 讀 conf.d/ 的租戶設定，產生**一條**涵蓋所有租戶的規則——同一個租戶、同一個 `metric_group` 的 critical 正在觸發時，warning 不送通知。規則數不隨租戶數增加。租戶設 `_severity_dedup: "disable"` 就列進規則目標側的排除清單（`tenant!~"<清單>"`），兩個等級的通知都會收到；沒有任何租戶開著去重時不產生規則。
 
-這條規則只由產生器產生。base 設定裡若有規則會在租戶的 critical 觸發時抑制同租戶、同 `metric_group` 的 warning（看規則實際匹配到的告警，不看寫法），產生器拒絕合併（結束碼 1、不寫檔）：base 的規則會原樣進到輸出，蓋過 conf.d 的 `_severity_dedup`，`disable` 也就失效。
+這條規則只由產生器產生。base 設定裡若有產生器自己寫出的這條規則（現在的形狀，或改版前每個租戶一條的舊形狀；比對以產生器重建的結果為準，寫法不影響），產生器拒絕合併（結束碼 1、不寫檔）：它會原樣進到輸出，蓋過 conf.d 的 `_severity_dedup`，`disable` 也就失效。這種 base 通常是舊版產物被當成來源傳回。運維自己在 base 寫的抑制規則屬於運維政策，產生器不判、照原樣保留，即使它會蓋過 `_severity_dedup`（含 `disable`）。
 
 ### 範例
 

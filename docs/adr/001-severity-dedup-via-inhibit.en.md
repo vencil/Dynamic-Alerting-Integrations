@@ -41,7 +41,7 @@ Deduplication can live in one of two places:
 
 The inhibit rule is not hand-written: `generate_alertmanager_routes.py` reads the tenant configuration in conf.d/ and generates **one** rule covering every tenant — while a critical alert of a tenant fires, the warning alert of the same tenant and the same `metric_group` is not notified. The rule count does not grow with the tenant count. A tenant that sets `_severity_dedup: "disable"` is listed in the exclusion list on the rule's target side (`tenant!~"<list>"`) and receives notifications for both severities; with no tenant keeping dedup on, no rule is generated.
 
-Only the generator writes this rule. If the base config holds a rule that would suppress a tenant's warning while the same tenant's critical of the same `metric_group` fires (judged on what the rule matches, not its spelling), the generator refuses to merge (exit 1, nothing written): the base's rule would reach the output as written and override conf.d's `_severity_dedup`, `disable` included.
+Only the generator writes this rule. If the base config holds the rule as the generator itself writes it (today's shape, or the older one-rule-per-tenant shape; compared against what the generator rebuilds, so the spelling does not matter), the generator refuses to merge (exit 1, nothing written): it would reach the output as written and override conf.d's `_severity_dedup`, `disable` included. Such a base is usually an older output passed back as the source. An inhibit rule the operator writes in the base is operator policy: the generator does not judge it and keeps it as written, even where it overrides `_severity_dedup` (`disable` included).
 
 ### Example
 

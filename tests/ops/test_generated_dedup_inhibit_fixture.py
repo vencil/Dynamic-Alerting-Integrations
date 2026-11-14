@@ -31,7 +31,7 @@ for _p in (REPO / "scripts" / "tools", REPO / "scripts" / "tools" / "ops"):
 from _grar_routes import generate_inhibit_rules  # noqa: E402
 from _grar_validate import (  # noqa: E402
     find_ungated_equal_label_inhibits,
-    overrides_severity_dedup,
+    is_generated_dedup_rule,
 )
 
 FIXTURE = REPO / "tests" / "alertmanager-inhibit" / "testdata" / "generated_dedup_inhibit.yaml"
@@ -73,7 +73,7 @@ def test_fixture_holds_one_dedup_rule_excluding_disable_and_none():
     rules = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))["inhibit_rules"]
     assert len(rules) == 1, rules
     [rule] = rules
-    assert overrides_severity_dedup(rule)
+    assert is_generated_dedup_rule(rule)
     assert rule["equal"] == ["tenant", "metric_group"]
     assert rule["source_matchers"] == [
         'severity="critical"', 'metric_group=~".+"', 'tenant=~".+"']

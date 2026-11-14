@@ -223,7 +223,7 @@ def test_merge_exempts_generated_rules_but_not_lookalikes(degraded):
     generated = routes.build_dedup_inhibit_rule(["t2"])
     # an earlier run's dedup rule in the base: a verdict (ValueError, rc 1),
     # never the probe set's "could not verify"
-    with pytest.raises(ValueError, match="override conf.d's `_severity_dedup`"):
+    with pytest.raises(ValueError, match="own severity dedup rule"):
         render.merge_generated(
             {"inhibit_rules": [dict(generated)]}, [], [], [])
     # this run's own generated rule
@@ -305,7 +305,7 @@ def test_degraded_base_copy_of_a_generated_rule_is_a_dedup_refusal(
     err = capsys.readouterr().err
     assert rc == EXIT_VIOLATION, err
     assert not out.exists()
-    assert "override conf.d's `_severity_dedup`" in err
+    assert "own severity dedup rule" in err
     assert "could NOT be verified" not in err
 
 

@@ -1,17 +1,20 @@
-"""#3899: which inhibit rules would override `_severity_dedup`.
+"""#3899: which base inhibit rules are the route generator's own dedup rule.
 
 `_grar_render.assert_base_has_no_dedup_rule` refuses a base holding one.
-The predicate (`_grar_validate.overrides_severity_dedup`) is semantic: does
-the rule let a tenant's critical alert suppress the same tenant's warning
-alert of the same `metric_group`? So it must say yes however the rule is
-spelled (`=` or `=~`, several matchers in one element, braces, legacy
-`*_match` / `*_match_re`) and for any rule that does that suppression even
-when it is not the generator's shape; and no for the base's Silent Mode /
-CustomRecipeSilent rules and other rules that do not reach that pair.
+Owner decision (PR #3910, option B): only the shapes the generator itself
+writes count — today's `build_dedup_inhibit_rule(excluded)` and the
+per-tenant rule it wrote before #3899 (`pre3899_dedup_inhibit_rule`, v2.9.0's
+`_build_inhibit_rules`). The predicate (`_grar_validate.is_generated_dedup_rule`)
+rebuilds the rule from the generator and compares the two as sets, so a copy
+is recognised however it is spelled (spacing, order, `{}`, several matchers
+in one element, unquoted values, legacy `*_match_re`, repeats, Alertmanager's
+own reading). Any other rule is operator policy — kube-prometheus' rules,
+Silent Mode, a broader critical→warning policy — and merges as written.
 Tenant ids are fixture names (CLAUDE.md #9).
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,91 +22,125 @@ import pytest
 import yaml
 
 _REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO / "scripts" / "tools"))
 sys.path.insert(0, str(_REPO / "scripts" / "tools" / "ops"))
 
-from _grar_routes import build_dedup_inhibit_rule  # noqa: E402
-from _grar_validate import _split_matcher_element, overrides_severity_dedup  # noqa: E402
+import _grar_render as render  # noqa: E402
+from _grar_routes import build_dedup_inhibit_rule, pre3899_dedup_inhibit_rule  # noqa: E402
+from _grar_validate import _split_matcher_element, is_generated_dedup_rule  # noqa: E402
 
-PER_TENANT = {
-    "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="ta"'],
-    "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="ta"'],
-    "equal": ["metric_group"],
-}
-LEGACY_MATCH = {
-    "source_match": {"severity": "critical"}, "source_match_re": {"metric_group": ".+"},
-    "target_match": {"severity": "warning"}, "target_match_re": {"metric_group": ".+"},
-    "equal": ["metric_group"],
-}
-REGEX_SEVERITY = {
-    "source_matchers": ['severity=~"critical"', 'metric_group=~".+"'],
-    "target_matchers": ['severity=~"warning|info"', 'metric_group=~".+"'],
-    "equal": ["tenant", "metric_group"],
-}
-MULTI_IN_ONE = {
-    "source_matchers": ['severity="critical",metric_group=~".+"'],
-    "target_matchers": ['{severity="warning", metric_group=~".+"}'],
-    "equal": ["metric_group"],
-}
-#: A pinned tenant on a regex: probed with that tenant, not only a synthetic one.
-REGEX_PINNED_TENANT = {
-    "source_matchers": ['severity="critical"', 'tenant=~"ta|tb"'],
-    "target_matchers": ['severity="warning"', 'tenant=~"ta|tb"'],
-    "equal": ["metric_group"],
-}
+_GAR = _REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
+_PRE3899_OUTPUT = Path(__file__).parent / "fixtures" / "pre3899_output_without_marker.yml"
+
+GENERATED = build_dedup_inhibit_rule(["tb", "tc"])
 
 
-@pytest.mark.parametrize("rule", [
-    build_dedup_inhibit_rule([]), build_dedup_inhibit_rule(["tb"]),
-    PER_TENANT, LEGACY_MATCH, REGEX_SEVERITY, MULTI_IN_ONE, REGEX_PINNED_TENANT,
-], ids=["generated", "generated-excluding", "per-tenant", "legacy-match",
-        "regex-severity", "several-matchers-in-one-element", "regex-pinned-tenant"])
-def test_a_rule_that_dedups_is_refused_however_it_is_spelled(rule):
-    assert overrides_severity_dedup(rule)
+# ── the pre-#3899 shape is v2.9.0's ──────────────────────────────────────
+
+def test_the_pre3899_shape_is_v290s_output():
+    """Copied from `git show tools/v2.9.0:scripts/tools/ops/_grar_routes.py`
+    (`_build_inhibit_rules("ta")`); the recognition helper must not drift."""
+    assert pre3899_dedup_inhibit_rule("ta") == {
+        "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="ta"'],
+        "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="ta"'],
+        "equal": ["metric_group"],
+    }
 
 
-def _without(side: str, matcher: str) -> dict:
-    rule = build_dedup_inhibit_rule(["tb"])
-    key = f"{side}_matchers"
-    assert matcher in rule[key], (matcher, rule[key])
-    rule[key] = [m for m in rule[key] if m != matcher]
+# ── refused: the generator's own shapes, however spelled ─────────────────
+
+def _try_local_rule() -> dict:
+    am = yaml.safe_load((_REPO / "try-local" / "alertmanager.yml").read_text(encoding="utf-8"))
+    [rule] = [r for r in am["inhibit_rules"]
+              if 'severity = "critical"' in r.get("source_matchers", [])]
     return rule
 
 
-@pytest.mark.parametrize("side,matcher", [
-    ("source", 'severity="critical"'),
-    ("source", 'metric_group=~".+"'),
-    ("target", 'severity="warning"'),
-    ("target", 'metric_group=~".+"'),
-], ids=["source-severity", "source-gate", "target-severity", "target-gate"])
-def test_loosening_one_side_still_dedups(side, matcher):
-    """Under the semantic reading the old "missing one condition" controls
-    flip: a rule that drops the severity or the metric_group gate on one
-    side matches MORE alerts, so the critical→warning pair of one tenant and
-    one metric_group is still suppressed (`equal: [tenant, metric_group]`
-    holds) — it still overrides `_severity_dedup`."""
-    assert overrides_severity_dedup(_without(side, matcher))
+@pytest.mark.parametrize("rule", [
+    build_dedup_inhibit_rule([]),
+    GENERATED,
+    build_dedup_inhibit_rule(["a.b", "t-c"]),
+    pre3899_dedup_inhibit_rule("ta"),
+    # spacing, order, both sides
+    {"source_matchers": ['tenant =~ ".+"', 'severity = "critical"', 'metric_group =~ ".+"'],
+     "target_matchers": ['tenant!~"tb|tc"', 'tenant=~".+"', 'metric_group=~".+"',
+                         'severity="warning"'],
+     "equal": ["metric_group", "tenant"]},
+    # {} and several matchers in one element
+    {"source_matchers": ['{severity="critical", metric_group=~".+", tenant=~".+"}'],
+     "target_matchers": ['severity="warning",metric_group=~".+"', 'tenant=~".+",tenant!~"tb|tc"'],
+     "equal": ["tenant", "metric_group"]},
+    # unquoted values
+    {"source_matchers": ["severity=critical", "metric_group=~.+", "tenant=~.+"],
+     "target_matchers": ["severity=warning", "metric_group=~.+", "tenant=~.+"],
+     "equal": ["tenant", "metric_group"]},
+    # legacy match maps
+    {"source_match": {"severity": "critical"},
+     "source_match_re": {"metric_group": ".+", "tenant": ".+"},
+     "target_match": {"severity": "warning"},
+     "target_match_re": {"metric_group": ".+", "tenant": ".+"},
+     "equal": ["tenant", "metric_group"]},
+    {"source_match": {"severity": "critical", "tenant": "ta"},
+     "source_match_re": {"metric_group": ".+"},
+     "target_match": {"severity": "warning", "tenant": "ta"},
+     "target_match_re": {"metric_group": ".+"},
+     "equal": ["metric_group"]},
+    # repeated matchers and equal labels
+    {"source_matchers": ['severity="critical"', 'severity="critical"', 'metric_group=~".+"',
+                         'tenant="ta"'],
+     "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="ta"',
+                         'tenant="ta"'],
+     "equal": ["metric_group", "metric_group"]},
+], ids=["generated-no-exclusion", "generated-excluding", "generated-escaped-ids",
+        "pre3899-per-tenant", "reordered-and-spaced", "braces-several-in-one",
+        "unquoted", "legacy-match-maps", "legacy-match-maps-pre3899", "repeats"])
+def test_the_generators_own_rule_is_recognised(rule):
+    assert is_generated_dedup_rule(rule)
 
 
-@pytest.mark.parametrize("change", [
-    {"target_matchers": ['severity="info"', 'metric_group=~".+"', 'tenant=~".+"']},
-    {"source_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant=~".+"']},
-    {"target_matchers": ['severity="warning"', 'metric_group="mysql_connections"',
-                         'tenant=~".+"', 'metric_group!~"mysql_connections"']},
-    {"equal": ["tenant", "metric_group", "alertname"]},
-    {"target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant!~".*"']},
-], ids=["target-is-info", "source-is-warning", "target-matches-nothing",
-        "equal-names-differ", "every-tenant-excluded"])
-def test_a_rule_that_cannot_reach_the_pair_is_not_refused(change):
-    rule = {**build_dedup_inhibit_rule([]), **change}
-    assert not overrides_severity_dedup(rule)
+def test_try_locals_static_rule_is_the_generators_shape():
+    """try-local's hand-written rule is the generated rule with no exclusion
+    list (try-local does not run the generator) — a copy, so recognised."""
+    assert is_generated_dedup_rule(_try_local_rule())
 
 
-def test_cross_tenant_pins_are_not_the_same_tenant_pair():
-    rule = {"source_matchers": ['severity="critical"', 'tenant="ta"'],
-            "target_matchers": ['severity="warning"', 'tenant="tb"'],
-            "equal": ["metric_group"]}
-    assert not overrides_severity_dedup(rule)
+def test_alertmanagers_reading_of_the_rule_is_recognised(da_read_env):
+    """After da-read (Alertmanager's loader): one matcher per element, sorted."""
+    text = yaml.safe_dump({"route": {"receiver": "r"}, "receivers": [{"name": "r"}],
+                           "inhibit_rules": [GENERATED, pre3899_dedup_inhibit_rule("ta")]})
+    rules = render.alertmanager_reading(text)["inhibit_rules"]
+    assert rules[0]["source_matchers"] != GENERATED["source_matchers"]  # it was reordered
+    assert [is_generated_dedup_rule(r) for r in rules] == [True, True]
 
+
+def test_the_pre3899_output_holds_only_recognised_dedup_rules():
+    """The generator's output before #3899 (fixture, see its header)."""
+    rules = yaml.safe_load(_PRE3899_OUTPUT.read_text(encoding="utf-8"))["inhibit_rules"]
+    assert len(rules) == 2
+    assert [is_generated_dedup_rule(r) for r in rules] == [True, True]
+
+
+def test_todays_output_without_its_marker_holds_a_recognised_rule(tmp_path, da_guard_env,
+                                                                 da_read_env):
+    """The generator's output now, rendered here, header lines dropped."""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "ta.yaml").write_text('tenants:\n  ta:\n    mysql_connections: "70"\n', encoding="utf-8")
+    (d / "tb.yaml").write_text('tenants:\n  tb:\n    mysql_connections: "70"\n'
+                               '    _severity_dedup: "disable"\n', encoding="utf-8")
+    out = tmp_path / "am.yml"
+    proc = subprocess.run([sys.executable, "-s", str(_GAR), "--config-dir", str(d),
+                           "--output-alertmanager", "-o", str(out)],
+                          capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    text = out.read_text(encoding="utf-8")
+    assert text.startswith(render.GENERATED_OUTPUT_HEADER)
+    rules = yaml.safe_load(text[len(render.GENERATED_OUTPUT_HEADER):])["inhibit_rules"]
+    assert [is_generated_dedup_rule(r) for r in rules] == [True]
+    assert 'tenant!~"tb"' in rules[0]["target_matchers"]
+
+
+# ── kept: everything else is operator policy ─────────────────────────────
 
 def _shipped_base_rules() -> list[dict]:
     cm = yaml.safe_load((_REPO / "k8s" / "03-monitoring" / "configmap-alertmanager.yaml")
@@ -111,29 +148,55 @@ def _shipped_base_rules() -> list[dict]:
     return yaml.safe_load(cm["data"]["alertmanager.yml"])["inhibit_rules"]
 
 
-def test_the_shipped_base_rules_are_not_refused():
-    """Silent Mode (warning / critical) and CustomRecipeSilent: their source
-    is a named sentinel alert, not a tenant's critical."""
+def test_the_shipped_base_rules_are_not_the_generators():
+    """Silent Mode (warning / critical) and CustomRecipeSilent."""
     rules = _shipped_base_rules()
     names = {m for r in rules for m in r["source_matchers"] if m.startswith("alertname=")}
     assert {'alertname="TenantSilentWarning"', 'alertname="TenantSilentCritical"',
             'alertname="CustomRecipeSilent"'} <= names, names
-    assert [i for i, r in enumerate(rules) if overrides_severity_dedup(r)] == []
+    assert [i for i, r in enumerate(rules) if is_generated_dedup_rule(r)] == []
 
 
-def test_a_rule_about_named_alerts_is_not_refused():
-    """A rule naming its source alert (here an operator's own pair) is about
-    that alert, not about every tenant critical."""
-    rule = {"source_matchers": ['alertname="CustDown"', 'cluster=~".+"'],
-            "target_matchers": ['alertname="CustDegraded"', 'cluster=~".+"'],
-            "equal": ["cluster"]}
-    assert not overrides_severity_dedup(rule)
+def _variant(**changes) -> dict:
+    return {**GENERATED, **changes}
 
 
-def test_an_unreadable_element_fails_closed():
-    rule = {"source_matchers": ['severity="critical'],
-            "target_matchers": ['severity="warning"'], "equal": ["tenant"]}
-    assert overrides_severity_dedup(rule)
+@pytest.mark.parametrize("rule", [
+    # kube-prometheus-stack's defaults
+    {"source_matchers": ['severity="critical"'], "target_matchers": ['severity=~"warning|info"'],
+     "equal": ["namespace", "alertname"]},
+    {"source_matchers": ['severity="warning"'], "target_matchers": ['severity="info"'],
+     "equal": ["namespace", "alertname"]},
+    {"source_matchers": ['alertname="InfoInhibitor"'], "target_matchers": ['severity="info"'],
+     "equal": ["namespace"]},
+    # broader operator policies
+    {"source_matchers": ['severity="critical"', 'tenant=~".+"'],
+     "target_matchers": ['severity="warning"', 'tenant=~".+"'], "equal": ["tenant"]},
+    {"source_matchers": ['severity="critical"'], "target_matchers": ['severity="warning"']},
+    {"source_matchers": ['severity="critical"', 'scope="cluster"'],
+     "target_matchers": ['severity=~"warning|critical"'], "equal": ["cluster"]},
+    {"source_matchers": ['severity="critical"', 'team="dba"'],
+     "target_matchers": ['severity="warning"', 'team="dba"'], "equal": ["tenant", "metric_group"]},
+    # near the generated rule, but not what it writes
+    _variant(source_matchers=['severity="critical"', 'metric_group=~".+"', 'tenant!=""'],
+             target_matchers=['severity="warning"', 'metric_group=~".+"', 'tenant!=""']),
+    _variant(equal=["tenant", "metric_group", "cluster"]),
+    _variant(target_matchers=GENERATED["target_matchers"] + ['tenant!~"td"']),
+    _variant(target_matchers=GENERATED["target_matchers"][:-1] + ['tenant!~"t.*"']),
+    {**pre3899_dedup_inhibit_rule("ta"),
+     "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="tb"']},
+], ids=["kube-prom-crit-over-warn-info", "kube-prom-warn-over-info", "kube-prom-info-inhibitor",
+        "tenant-wide-policy", "global-no-equal", "scope-cluster", "team-dba",
+        "tenant-not-empty-gate", "extra-equal-label", "two-exclusion-matchers",
+        "non-literal-exclusion", "pre3899-mismatched-tenants"])
+def test_other_rules_are_operator_policy(rule):
+    assert not is_generated_dedup_rule(rule)
+
+
+def test_a_rule_that_is_not_a_mapping_or_unreadable_is_not_the_generators():
+    assert not is_generated_dedup_rule(["severity=critical"])
+    assert not is_generated_dedup_rule({"source_matchers": ['severity="critical'],
+                                        "target_matchers": [], "equal": []})
 
 
 @pytest.mark.parametrize("element,atoms", [
@@ -147,7 +210,3 @@ def test_an_unreadable_element_fails_closed():
 ])
 def test_split_matcher_element(element, atoms):
     assert _split_matcher_element(element) == atoms
-
-
-def test_a_rule_that_is_not_a_mapping_is_not_refused():
-    assert not overrides_severity_dedup(["severity=critical"])
