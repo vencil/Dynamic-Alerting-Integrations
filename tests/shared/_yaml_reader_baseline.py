@@ -54,6 +54,8 @@ ALLOWED = {
         (1, '.pre-commit-config.yaml, read only by pre-commit (Python)'),
     ('scripts/ops/ci_flake_retry.py', 'load_registry'):
         (1, 'the flaky-test registry, a repo data file read only by CI scripts'),
+    ('scripts/ops/main_red_report.py', 'watched_workflows'):
+        (2, 'GitHub workflows (the detector and the ones it watches); read by GitHub Actions, no Go consumer'),
     ('scripts/ops/required_checks_drift.py', 'main'):
         (1, '.github/required-checks.yaml, the required-check list; read by CI scripts and tests only, no Go consumer'),
     ('scripts/ops/workflow_path_filter.py', 'parse_workflow'):

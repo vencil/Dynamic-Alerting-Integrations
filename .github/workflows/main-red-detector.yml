@@ -1,0 +1,143 @@
+name: Main red detector
+
+# Opens (or comments on, or closes) ONE tracking issue when a workflow that
+# reports one of main's required checks fails on a push to main (#3922).
+#
+# Why: branch protection does not require a PR to be up to date with main, so
+# two PRs that are each green can break main together; a time-dependent or
+# flaky test can redden it with no merge at all. Until this workflow the only
+# trace was a red run that nobody was told about, and every PR that synced
+# with main then failed the same check.
+#
+# The decision — what counts as red, what is new enough to comment, when the
+# issue closes, whose issue it is — is scripts/ops/main_red_report.py (the
+# table is in its docstring and nowhere else; tests in
+# tests/ops/test_main_red_report.py). This file only hands it the event and a
+# token. ⛔ That token must stay `github.token`: the script accepts only an
+# issue opened by `github-actions[bot]` as the tracking issue.
+#
+# ⛔ `workflows:` below is the list of workflows that report an entry of
+# .github/required-checks.yaml. GitHub reads it statically, so it cannot be
+# computed at run time; tests/ops/test_main_red_report.py fails when it differs
+# from the set derived from that file, in either direction. The script reads
+# the list from HERE, so there is no second copy. A listed workflow with no
+# `push` trigger for main (Commitlint) simply never fires this.
+#
+# A separate workflow on purpose: a job added to ci.yml / docs-ci.yaml /
+# validate.yaml would have to sit inside the `needs` closure of a registered
+# check and could carry no `if:` (tests/ops/test_ci_aggregate_gate_contract.py),
+# and it would hold `issues: write` next to jobs that run PR code.
+#
+# Security (`workflow_run` runs with a write token, on the default branch's
+# copy of this file, whatever triggered it):
+#   * nothing from the triggering run is checked out or executed. The checkout
+#     pins `github.sha` — for `workflow_run` that is the default branch's
+#     head, never `workflow_run.head_sha`;
+#   * `branches: [main]` filters on the triggering run's HEAD BRANCH NAME, and
+#     a fork's PR branch can be called `main`. The script therefore decides on
+#     `event == push` and `head_branch == main` itself, and for such a run
+#     does nothing;
+#   * no `${{ github.event.* }}` inside `run:`; the payload is read from
+#     `$GITHUB_EVENT_PATH` as data. Commit subjects and job names reach the
+#     issue only inside code spans.
+#
+# First-cycle note: `workflow_run` fires only once this file is on the default
+# branch, so no PR can exercise it. `workflow_dispatch` replays one finished
+# run by id — read-only unless `write` is ticked — which is how to check it
+# after the merge and after any later change.
+
+on:
+  workflow_run:
+    workflows: ["CI", "Commitlint", "Documentation CI", "Validate"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id to judge (a finished run of a watched workflow)"
+        required: true
+        type: string
+      write:
+        description: "Actually open/comment/close the issue (off = print what it would do)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One at a time, so two workflows failing on one merge cannot both find "no
+# issue" and both open one. ⚠️ The cost: GitHub keeps only ONE pending run per
+# group, so a third event arriving within the minute or so that one run takes
+# — while one runs and one waits — replaces the waiting one, and that event is
+# never delivered. That is why the script decides from main's STATE and uses
+# the event only as the moment to look: the next event of ANY watched workflow
+# reads every workflow's newest verdict and opens, updates or closes the issue
+# accordingly. What is lost is time, until that next event.
+concurrency:
+  group: main-red-detector
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report a red main
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # the script and the watched workflow files; the compare API
+      contents: read
+      # runs and jobs of the watched workflows
+      actions: read
+      # the tracking issue
+      issues: write
+    steps:
+      - name: Checkout the default branch (never the triggering run's code)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          WRITE: ${{ inputs.write }}
+        run: |
+          set -uo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            case "$RUN_ID" in
+              ''|*[!0-9]*) echo "::error::run_id must be a number"; exit 2 ;;
+            esac
+            source=(--run-id "$RUN_ID")
+            # The script is read-only unless told to write.
+            [ "$WRITE" != "true" ] || source+=(--write)
+          else
+            source=(--event-file "$GITHUB_EVENT_PATH" --write)
+          fi
+          python3 -X utf8 scripts/ops/main_red_report.py \
+            --repo "$GITHUB_REPOSITORY" "${source[@]}" > "$RUNNER_TEMP/report.txt" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/report.txt"
+          {
+            echo "### Main red detector (rc=${rc})"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/report.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 0 nothing to report · 1 main is red, the issue carries it · 2 no verdict.
+          # Only "no verdict" fails this run: the issue is the signal for a red
+          # main, and a red detector must mean the detector itself is broken.
+          case "$rc" in
+            0) ;;
+            1) echo "::warning::main is red — see the tracking issue" ;;
+            *) echo "::error::main_red_report.py reached no verdict (rc=${rc}) — nothing can be concluded about main from this run"
+               exit 2 ;;
+          esac
