@@ -301,6 +301,55 @@ func TestWrite_AnUnreadValueIsRefusedWhenTheWriteMakesIt(t *testing.T) {
 	}
 }
 
+// #3834: a reserved key of a tenant's own entry written with a schedule its
+// readers ignore is refused as schedule_unread (the window to remove, not a
+// key nobody reads) when the write makes it new — and moving the window is
+// new (compared as written). A schedule the write leaves alone does not
+// block.
+func TestWrite_AReservedKeysScheduleIsRefusedWhenTheWriteMakesIt(t *testing.T) {
+	tree := map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 5\n",
+		"ta.yaml": "tenants:\n  ta:\n    cpu: \"6\"\n    _silent_mode:\n      default: disable\n" +
+			"      overrides:\n        - window: \"01:00-02:00\"\n          value: all\n",
+	}
+	schedule := func(window string) string {
+		return `{"files":[{"path":"ta.yaml","ops":[{"op":"set","path":["tenants","ta","_silent_mode"],"value":{"map":[` +
+			`["default",{"str":"disable"}],["overrides",{"seq":[` +
+			`{"map":[["window",{"str":"` + window + `"}],["value",{"str":"all"}]]}]}]]}}]}]}`
+	}
+	for _, tc := range []struct {
+		name, in string
+		refused  bool
+	}{
+		{"the window moved", schedule("03:00-04:00"), true},
+		{"the same schedule", schedule("01:00-02:00"), false},
+		{"another key, the schedule untouched",
+			`{"files":[{"path":"ta.yaml","ops":[{"op":"set","path":["tenants","ta","cpu"],"value":{"str":"7"}}]}]}`, false},
+		{"a fix: the value alone",
+			`{"files":[{"path":"ta.yaml","ops":[{"op":"set","path":["tenants","ta","_silent_mode"],"value":{"str":"all"}}]}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeTree(t, tree)
+			code, res := runBatch(t, writeCmd, tc.in, "--config-dir", root, "--dry-run")
+			if !tc.refused {
+				if code != exitOK {
+					t.Fatalf("exit %d %v (%v)", code, worsenedOf(res), res.Message)
+				}
+				return
+			}
+			if code != exitFindings || callReason(res) != writeReasonWorsensTree {
+				t.Fatalf("exit %d reason %q %v", code, callReason(res), worsenedOf(res))
+			}
+			if !reflect.DeepEqual(worsenedOf(res), []string{"schedule_unread ta.yaml ta"}) {
+				t.Fatalf("worsened %v", worsenedOf(res))
+			}
+			if m := res.Worsened[0].Message; !strings.Contains(m, "only its `default` is read") || strings.Contains(m, "no reader reads it") {
+				t.Errorf("message %q", m)
+			}
+		})
+	}
+}
+
 // #3502: a schedule entry /metrics never serves is refused as dead_entry
 // (the entry to remove or the windows to reorder, not a key nobody reads)
 // when the write makes it new — and changing the dead entry as written is
