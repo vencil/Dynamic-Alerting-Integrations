@@ -81,6 +81,31 @@ describe('Alert Preview — a threshold the exporter will not read', () => {
     expect(screen.getByText(/^Firing: /).textContent).toBe('Firing: 1');
   });
 
+  it('an UNQUOTED 0b101 / 0x1F is not simulated as 5 / 31 (#3919)', () => {
+    // The exporter reads the text and refuses both. YAML's own reading (a
+    // number) used to reach the simulator: a threshold of 5, FIRING.
+    simulate(`${bad}: 0b101\n${badCritical}: 10\n${badCritical}_critical: 0x1F\n`);
+    const cell = screen.getByTestId(`unreadable-${bad}`);
+    expect(cell.textContent).toBe(unreadableThresholdMessage('0b101'));
+    const row = cell.closest('tr')!;
+    expect(within(row).getByText('UNREADABLE')).toBeInTheDocument();
+    expect(within(row).queryByText('FIRING')).toBeNull();
+    expect(row.querySelector('[title^="threshold:"]')).toBeNull();
+    expect(screen.getByTestId('unreadable-count').textContent).toBe('Exporter will not read: 1');
+    const crit = screen.getByTestId(`critical-unreadable-${badCritical}`);
+    expect(crit.textContent).toBe(`${badCritical}_critical: ${unreadableThresholdMessage('0x1F', 'critical')}`);
+    // Control: the unquoted decimal next to it is a threshold.
+    expect(crit.closest('tr')!.querySelector('[title="threshold: 10"]')).not.toBeNull();
+  });
+
+  it('an unquoted number the exporter serves is simulated as that number (#3908)', () => {
+    simulate(`${bad}: 1e20\n`);
+    expect(screen.queryByTestId(`unreadable-${bad}`)).toBeNull();
+    expect(screen.queryByTestId('unreadable-count')).toBeNull();
+    const row = screen.getByText(bad, { selector: 'td' }).closest('tr')!;
+    expect(row.querySelector('[title="threshold: 100000000000000000000"]')).not.toBeNull();
+  });
+
   it('readable values show neither the sentence nor the count', () => {
     simulate(`${bad}: "70:critical"\n`);
     expect(screen.queryByTestId(`unreadable-${bad}`)).toBeNull();

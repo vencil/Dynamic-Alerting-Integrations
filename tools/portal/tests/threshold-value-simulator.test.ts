@@ -24,7 +24,7 @@
  * (the grammar has no ':'). resolve.go is the authority if this is doubted.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ENUMS from '../src/interactive/tools/_common/data/recipe-enums.json';
@@ -34,7 +34,7 @@ import {
 import {
   simulateAlerts, simulateWithDedup, validateConfig, unreadableThresholdMessage,
 } from '../src/interactive/tools/_common/sim/alert-engine.js';
-import { parseYaml } from '../src/interactive/tools/_common/validation/yaml-parser.js';
+import { parseYaml, parseTenantYaml } from '../src/interactive/tools/_common/validation/yaml-parser.js';
 
 type Row = {
   value: string;
@@ -116,7 +116,7 @@ describe('readThresholdRow ↔ the exporter', () => {
     for (const k of ['mysql_connections', '_routing_x_critical', '_critical', 'critical']) expect(isCriticalKey(k), k).toBe(false);
   });
 
-  it('a parsed YAML scalar is read by its text; a map or a list is not a scalar', () => {
+  it('a number or a boolean from a caller with no text is read as given; a map or a list is not a scalar', () => {
     expect(readThresholdRow(80)).toEqual({ kind: 'number', raw: '80', number: 80, severity: 'warning' });
     expect(readThresholdRow(0)).toMatchObject({ kind: 'number', number: 0 });
     expect(readThresholdRow(false)).toEqual({ kind: 'disabled', raw: 'false' });
@@ -131,7 +131,7 @@ describe('readThresholdRow ↔ the exporter', () => {
   });
 
   it('through the page\'s own YAML parser: the quoted texts the old reader misread', () => {
-    const { config } = parseYaml('a: "1_000"\nb: 1_000\nc: "0x1F"\nd: "70:high"\ne: .inf\nf: off\ng: False\nh: "70:critical"\ni: ""\n');
+    const { config } = parseTenantYaml('a: "1_000"\nb: 1_000\nc: "0x1F"\nd: "70:high"\ne: .inf\nf: off\ng: False\nh: "70:critical"\ni: ""\n');
     const kinds = Object.fromEntries(Object.entries(config).map(([k, v]) => [k, readThresholdRow(v).kind]));
     expect(kinds).toEqual({
       a: 'unreadable', b: 'unreadable', c: 'unreadable', d: 'unreadable', e: 'unreadable',
@@ -139,29 +139,145 @@ describe('readThresholdRow ↔ the exporter', () => {
     });
   });
 
-  it('an unquoted number the exporter serves is not refused for how JavaScript prints it', () => {
-    // The exporter reads the text `1e20`. The parser hands over the number,
-    // and String() of it is 21 digits — more than the grammar takes.
-    const { config } = parseYaml('a: 1e20\nb: 1.5e20\nc: 1e-7\nd: -0\n');
-    expect(String(config.a)).toHaveLength(21);
-    expect(Object.values(config).map((v) => readThresholdRow(v))).toMatchObject([
-      { kind: 'number', number: 1e20 }, { kind: 'number', number: 1.5e20 },
-      { kind: 'number', number: 1e-7 }, { kind: 'number', number: 0 },
-    ]);
+  // ── #3919: the exporter reads the scalar's TEXT (ScheduledValue.UnmarshalYAML
+  // takes the node's value), so quoting changes nothing, and the page reads
+  // the same text through parseTenantYaml. The verdicts below were measured
+  // on the Go readers (parseThresholdValue / parseThresholdNumber /
+  // thresholdRowDisabled over a yaml.v3 decode into ScheduledValue) — the
+  // reading of one scalar, not what the exporter does with the whole file.
+  const kindsOf = (yaml: string, tier: 'base' | 'critical' = 'base') => {
+    const { config, errors } = parseTenantYaml(yaml);
+    expect(errors).toEqual([]);
+    return Object.fromEntries(Object.entries(config).map(([k, v]) => [k, readThresholdRow(v, tier).kind]));
+  };
+
+  it('an UNQUOTED 0x1F / 0o17 / 0b101, or a number of more than 20 digits, is unreadable, as it is quoted', () => {
+    const yaml = 'hex: 0x1F\noct: 0o17\nbin: 0b101\nlong: 12345678901234567890123\n'
+      + 'qhex: "0x1F"\nqoct: \'0o17\'\nqbin: "0b101"\nqlong: "12345678901234567890123"\n';
+    const all = {
+      hex: 'unreadable', oct: 'unreadable', bin: 'unreadable', long: 'unreadable',
+      qhex: 'unreadable', qoct: 'unreadable', qbin: 'unreadable', qlong: 'unreadable',
+    };
+    expect(kindsOf(yaml)).toEqual(all);
+    expect(kindsOf(yaml, 'critical')).toEqual(all);
+    // The text is what the page shows, not the number YAML would make of it.
+    const { config } = parseTenantYaml(yaml);
+    expect(readThresholdRow(config.bin)).toEqual({ kind: 'unreadable', raw: '0b101' });
+    expect(readThresholdRow(config.long)).toEqual({ kind: 'unreadable', raw: '12345678901234567890123' });
+    // Why parseYaml's config must not be handed to the reader: the same
+    // document, typed, is three numbers the exporter never serves.
+    const typed = parseYaml(yaml).config;
+    expect([typed.hex, typed.oct, typed.bin]).toEqual([31, 15, 5]);
   });
 
-  it('known limit: an UNQUOTED 0x1F, or a number of more than 20 digits, is already a number', () => {
-    // The exporter reads the scalar's text and refuses both; js-yaml's core
-    // schema has resolved them. Pinned so a parser change that keeps the text
-    // shows up here, and so nobody reads the docstring's limit as closed.
-    const { config } = parseYaml('k: 0x1F\nlong: 12345678901234567890123\nbin: 0b101\noct: 0o17\n');
-    expect([config.k, config.bin, config.oct]).toEqual([31, 5, 15]);
-    expect(readThresholdRow(config.bin)).toMatchObject({ kind: 'number', number: 5 });
-    expect(readThresholdRow(config.k)).toMatchObject({ kind: 'number', number: 31 });
-    expect(typeof config.long).toBe('number');
-    expect(readThresholdRow(config.long).kind).toBe('number');
-    // Quoted, the text survives and is refused.
-    expect(readThresholdRow('12345678901234567890123').kind).toBe('unreadable');
+  it('controls — what the exporter serves is read as before, quoted or not', () => {
+    const { config } = parseTenantYaml(
+      'a: 1e20\nb: 1.5e20\nc: 1e-7\nd: -0\ne: 80\nf: "80"\ng: +5\nh: 017\ni: 5.\nj: .5\nk: 1E5\nl: 80:critical\nm: 80 # note\n');
+    expect(Object.values(config).map((v) => readThresholdRow(v))).toMatchObject([
+      { kind: 'number', number: 1e20, raw: '1e20' }, { kind: 'number', number: 1.5e20 },
+      // `-0` is the text's own number (the exporter serves -0 too); it fires as 0 does.
+      { kind: 'number', number: 1e-7 }, { kind: 'number', number: -0 },
+      { kind: 'number', number: 80, raw: '80' }, { kind: 'number', number: 80, raw: '80' },
+      { kind: 'number', number: 5 }, { kind: 'number', number: 17 }, { kind: 'number', number: 5 },
+      { kind: 'number', number: 0.5 }, { kind: 'number', number: 1e5 },
+      { kind: 'number', number: 80, severity: 'critical' }, { kind: 'number', number: 80, raw: '80' },
+    ]);
+    // The disable words, in any case and quoted or not; `True` / `yes` / `no` are not among them.
+    expect(kindsOf('a: False\nb: false\nc: "false"\nd: OFF\ne: Disable\nf: True\ng: true\nh: yes\ni: no\n')).toEqual({
+      a: 'disabled', b: 'disabled', c: 'disabled', d: 'disabled', e: 'disabled',
+      f: 'unreadable', g: 'unreadable', h: 'unreadable', i: 'unreadable',
+    });
+  });
+
+  it('the other YAML scalar shapes, each as the exporter has it', () => {
+    // A YAML null writes nothing (#2518); the same letters quoted are a text.
+    expect(kindsOf('a: ~\nb: null\nc: Null\nd:\ne: "~"\nf: "null"\ng: ""\nh: !!str\ni: !!str ~\n')).toEqual({
+      a: 'absent', b: 'absent', c: 'absent', d: 'absent',
+      e: 'unreadable', f: 'unreadable', g: 'unreadable', h: 'unreadable', i: 'unreadable',
+    });
+    // YAML's own floats and separators, a timestamp, a sexagesimal: texts the grammar refuses.
+    expect(kindsOf('a: .inf\nb: -.inf\nc: .nan\nd: .NaN\ne: 1_000\nf: 1e999\ng: 2024-01-01\nh: 1:30\ni: 0x1F:critical\n')).toEqual({
+      a: 'unreadable', b: 'unreadable', c: 'unreadable', d: 'unreadable', e: 'unreadable',
+      f: 'unreadable', g: 'unreadable', h: 'unreadable', i: 'unreadable',
+    });
+    // An explicit tag does not change the text that is read.
+    expect(kindsOf('a: !!str 5\nb: !!int 5\nc: !!float 5\nd: !!int 0x1F\ne: !!bool false\n')).toEqual({
+      a: 'number', b: 'number', c: 'number', d: 'unreadable', e: 'disabled',
+    });
+    // Block scalars (the trailing newline is trimmed), an alias, a merge key.
+    expect(kindsOf('a: |\n  80\nb: >\n  80\nc: |-\n  80:critical\n')).toEqual({ a: 'number', b: 'number', c: 'number' });
+    expect(kindsOf('a: |\n  80\nc: |-\n  80:critical\n', 'critical')).toEqual({ a: 'number', c: 'unreadable' });
+    expect(kindsOf('src: &x 0x1F\nk: *x\nok: &y 80\nk2: *y\n')).toMatchObject({ k: 'unreadable', k2: 'number' });
+    expect(kindsOf('<<: {k: 0x1F, k2: 80}\n')).toEqual({ k: 'unreadable', k2: 'number' });
+    // Only the first document is read. ⚠️ parseYaml's behaviour, kept, and
+    // NOT the exporter's: it refuses a file with a second document.
+    expect(readThresholdRow(parseTenantYaml('k: 80\n---\nk: 0x1F\n').config.k)).toMatchObject({ kind: 'number', number: 80 });
+  });
+
+  it('a scheduled value keeps its texts too, and is still not simulated', () => {
+    const { config } = parseTenantYaml('k: {default: 0x1F, overrides: [{window: "01:00-02:00", value: 0b101}]}\n');
+    expect(config.k).toEqual({ default: '0x1F', overrides: [{ window: '01:00-02:00', value: '0b101' }] });
+    expect(readThresholdRow(config.k)).toEqual({ kind: 'structured' });
+  });
+
+  it('simulateAlerts and validateConfig over the page\'s parse: 0b101 is never a threshold of 5', () => {
+    const { config } = parseTenantYaml('k: 0b101\nk_critical: 0o17\nok: 1e20\n');
+    const reading = { current: 1e300, unit: 'x', packLabel: 'p' };
+    expect(simulateAlerts(config, { k: reading, ok: reading })).toMatchObject([
+      { metric: 'k', threshold: null, critical_threshold: null, firing: false, severity: 'unreadable', raw: '0b101', critical_unreadable: '0o17' },
+      { metric: 'ok', threshold: 1e20, firing: true },
+    ]);
+    const issues = validateConfig(config, []).issues.map((i: any) => [i.field, i.level, i.msg]);
+    expect(issues).toContainEqual(['k', 'error', unreadableThresholdMessage('0b101')]);
+    expect(issues).toContainEqual(['k_critical', 'error', unreadableThresholdMessage('0o17', 'critical')]);
+    // `1e20` is read as the number it is: the range note judges it, nothing refuses it.
+    expect(issues.filter(([f]: string[]) => f === 'ok').map(([, , m]: string[]) => m))
+      .toEqual(['Threshold 100000000000000000000 exceeds 100, verify if correct']);
+  });
+
+  it('a page that reads thresholds through the engine parses with parseTenantYaml, not parseYaml', () => {
+    // parseYaml's numbers are the YAML parser's reading; the reader takes a
+    // JavaScript number as given (a number field has no text). So the wiring
+    // is what keeps `0x1F` out, and this holds it for every page outside
+    // _common/ (a module in there that fed the engine would not be seen).
+    const toolsDir = resolve(here, '../src/interactive/tools');
+    const pages = readdirSync(toolsDir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => /\.[jt]sx?$/.test(f) && !f.includes('_common'))
+      .map((f) => [f, readFileSync(resolve(toolsDir, f), 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '')] as const);
+    // Every import of `mod` in src, in any of its spellings: the names of a
+    // `{ … }` list (before any `as`), or '*' for a namespace, default, bare
+    // or dynamic import — which this check cannot see through, so they count
+    // as importing everything.
+    const importsFrom = (src: string, mod: string) => {
+      const names: string[] = [];
+      for (const m of src.matchAll(/import\s*([^'"();]*?)\s*(?:from\s*)?\(?\s*['"]([^'"]+)['"]/g)) {
+        // with or without the extension: the bundler resolves both
+        if (!m[2].replace(/\.jsx?$/, '').endsWith(mod.replace(/\.jsx?$/, ''))) continue;
+        const list = /^\{([^}]*)\}$/.exec(m[1].trim());
+        if (!list) { names.push('*'); continue; }
+        names.push(...list[1].split(',').map((n) => n.trim().split(/\s+as\s+/)[0]).filter(Boolean));
+      }
+      return names;
+    };
+    // the helper itself, on the spellings a page could use
+    expect(importsFrom("import { a as b, c } from './x/m.js';", 'x/m.js')).toEqual(['a', 'c']);
+    expect(importsFrom('import { a } from "./x/m.js";', 'x/m.js')).toEqual(['a']);
+    expect(importsFrom("import * as M from './x/m.js';", 'x/m.js')).toEqual(['*']);
+    expect(importsFrom("const M = await import('./x/m.js');", 'x/m.js')).toEqual(['*']);
+    expect(importsFrom("import { a } from './x/m';", 'x/m.js')).toEqual(['a']);
+    expect(importsFrom("import { a } from './x/other.js';", 'x/m.js')).toEqual([]);
+
+    const engine = ['simulateAlerts', 'validateConfig', 'simulateWithDedup', '*'];
+    const engineUsers = pages.filter(([, src]) => importsFrom(src, 'sim/alert-engine.js').some((n) => engine.includes(n)));
+    expect(engineUsers.map(([f]) => f).sort()).toEqual(['AlertPreviewTab.jsx', 'YamlValidatorTab.jsx', 'alert-simulator.jsx']);
+    // Only the text-keeping parse (and the duration helper) beside the
+    // engine: parseYaml, loadYamlDocument and a namespace import all hand
+    // over typed values.
+    for (const [f, src] of engineUsers) {
+      for (const n of importsFrom(src, 'validation/yaml-parser.js')) {
+        expect(['parseTenantYaml', 'parseDuration'], f).toContain(n);
+      }
+    }
   });
 });
 
