@@ -59,7 +59,7 @@
         "served": []
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "tenant",
         "file": "ta.yaml",
         "read_by": [
@@ -103,7 +103,7 @@
         "served": []
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "tenant",
         "file": "tb.yaml",
         "read_by": [

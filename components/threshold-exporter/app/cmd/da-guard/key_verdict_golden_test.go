@@ -75,14 +75,14 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 	// finding alone, not a schedule one too; a threshold key's schedule is
 	// read.
 	"schedule-unread": {
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n" +
+		"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\nprofiles:\n  gold:\n" +
 			"    _silent_mode: {default: disable, overrides: [{window: \"01:00-02:00\", value: all}]}\n" +
 			"    _severity_dedup: {default: disable, overrides: [{window: \"01:00-02:00\", value: enable}]}\n",
 		"_platform.yaml": "tenants:\n  tb:\n    _silent_mode: {default: disable, expires: \"2030-01-01T00:00:00Z\"}\n",
 		"ta.yaml": "tenants:\n  ta:\n    _profile: gold\n" +
 			"    _severity_dedup: {default: disable, overrides: [{window: \"00:00-23:59\", value: enable}]}\n" +
-			"    mysql_connections: {default: \"70\", overrides: [{window: \"01:00-02:00\", value: \"90\"}]}\n",
-		"tb.yaml": "tenants:\n  tb:\n    mysql_connections: 60\n",
+			"    mysql_connection_usage_percent: {default: \"70\", overrides: [{window: \"01:00-02:00\", value: \"90\"}]}\n",
+		"tb.yaml": "tenants:\n  tb:\n    mysql_connection_usage_percent: 60\n",
 	},
 	// No root platform file: threshold keys are undecidable, `_` keys are
 	// judged as usual.
