@@ -255,7 +255,7 @@ Since the freeze this is release wrap-up and corrections to existing entries onl
 
 ### After a rebase or a merge from `main`
 
-- **Counts can rebase cleanly into a wrong number**: two PRs that each bumped the same count merge without a conflict. Run `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`.
+- **Counts can rebase cleanly into a wrong number**: two PRs that each bumped the same count merge without a conflict. Run `make version-check` (and `make sync-counts` to write the counts back if it reports drift).
 - **A conflict in a generated file is resolved by regenerating it**, not by merging by hand: take either side, then rerun the generator that owns it.
 
 ## CI Validation
