@@ -38,11 +38,17 @@ left the scan running and the release publishing, with this guard green. So
      literal `components/<repo>/.trivyignore.yaml` of the very image the step
      scans. Any other input (`scanners`, `vuln-type`, `skip-dirs`,
      `trivy-config`, `skip-setup-trivy`, …) narrows or replaces the scan;
-  8. no step after the scan has an `if:` calling `always()` / `failure()` /
-     `cancelled()` — those run after a failed scan;
-  9. the repo tracks no `trivy.yaml` at its root: Trivy loads it from the
-     working directory by default, and it can set anything the action does
-     not export (scanners, pkg types, skip dirs, ignore file).
+  8. no step after the scan has an `if:` calling a status function
+     (`always()` / `failure()` / `cancelled()` / `success()`, any case) —
+     such a step drops the implicit `success() &&` and can run after a failed
+     scan. Publish steps cannot carry `if:` at all
+     (test_release_immutable_wiring.py); this covers every other step;
+  9. the repo tracks neither `trivy.yaml` nor `trivy-secret.yaml` at its
+     root. Trivy v0.74.0 loads both from its working directory by default
+     (`--config`, `--secret-config`): the first can set anything the action
+     does not export (scanners, pkg types, skip dirs, ignore file), the second
+     can disable secret rules — and `image` scans `vuln,secret` by default, so
+     that disarms half the gate.
 
 What a waiver file may contain (id, statement, justification, a real
 `expired_at`; never a plain-text `.trivyignore`) is governed in ONE place for
@@ -204,7 +210,10 @@ def check_release_workflow(doc: dict) -> list[str]:
 
 _TRIVY_STEP_KEYS = frozenset({"name", "uses", "with"})
 _RELEASE_TRIVY_KEYS = NEUTRAL_KEYS | set(SCAN_FILTER) | {"exit-code", "trivyignores"}
-_STATUS_FN = re.compile(r"\b(?:always|failure|cancelled)\s*\(")
+#: Any status function opts the step out of the implicit `success() &&` — including
+#: `success()` itself (`success() || inputs.force` runs after a failed scan).
+#: GitHub matches function names case-insensitively.
+_STATUS_FN = re.compile(r"\b(?:always|failure|cancelled|success)\s*\(", re.IGNORECASE)
 _REGISTER = re.compile(r"components/([a-z0-9][a-z0-9-]*)/\.trivyignore\.yaml")
 _SCANNED_REPO = re.compile(r"/([a-z0-9][a-z0-9._-]*)@\$\{\{")
 
@@ -283,16 +292,22 @@ def check_scan_can_fail(doc: dict) -> list[str]:
     return problems
 
 
+#: Files Trivy v0.74.0 reads from its working directory with no flag (`trivy image
+#: --help`: `--config` default "trivy.yaml", `--secret-config` default
+#: "trivy-secret.yaml"). `.trivyignore` is the waiver test's (see module docstring).
+ROOT_CONFIG_FILES = ("trivy.yaml", "trivy-secret.yaml")
+
+
 def root_trivy_config_problems(root: Path = ROOT) -> list[str]:
-    """A `trivy.yaml` tracked at the repo root, which Trivy loads from its working directory."""
+    """A Trivy config file tracked at the repo root, which Trivy loads from its working directory."""
     out = subprocess.run(
-        ["git", "ls-files", "-z", "--", "trivy.yaml"],
+        ["git", "ls-files", "-z", "--", *ROOT_CONFIG_FILES],
         cwd=root, capture_output=True, encoding="utf-8", timeout=60,
     )
     assert out.returncode == 0, out.stderr
     return [
-        f"{p} is tracked at the repo root — Trivy loads it by default and it can set what the "
-        "action does not export (scanners, pkg types, skip dirs, an ignore file)"
+        f"{p} is tracked at the repo root — Trivy loads it by default and it can narrow the "
+        "release scan (scanners, pkg types, skip dirs, disabled secret rules)"
         for p in out.stdout.split("\0") if p
     ]
 
@@ -342,11 +357,9 @@ def test_the_release_scan_can_fail_the_release() -> None:
 
 
 def test_no_trivy_config_file_at_the_repo_root() -> None:
-    """Trivy reads `trivy.yaml` from its working directory (the checkout root) by default.
+    """Trivy reads `ROOT_CONFIG_FILES` from its working directory (the checkout root) by default.
 
-    It can set what the action does not export — `scan.scanners`, `pkg.types`,
-    `scan.skip-dirs`, an ignore file — and narrow the release gate with no
-    change to release.yaml at all.
+    Either can narrow the release gate with no change to release.yaml at all.
     """
     problems = root_trivy_config_problems()
     assert not problems, "\n".join(problems)
@@ -402,8 +415,12 @@ SCAN_MUTATIONS = {
     "publish-if-always": (lambda d: _after_scan(d).update({"if": "always()"}), "runs even when the scan failed"),
     "publish-if-not-cancelled": (lambda d: _after_scan(d).update({"if": "${{ !cancelled() }}"}),
                                  "runs even when the scan failed"),
-    "publish-if-failure": (lambda d: _after_scan(d).update({"if": "success() || failure()"}),
+    "publish-if-failure": (lambda d: _after_scan(d).update({"if": "failure()"}),
                            "runs even when the scan failed"),
+    "publish-if-success-or": (lambda d: _after_scan(d).update({"if": "success() || inputs.force"}),
+                              "runs even when the scan failed"),
+    "publish-if-always-case": (lambda d: _after_scan(d).update({"if": "Always()"}),
+                               "runs even when the scan failed"),
 }
 
 
@@ -430,11 +447,14 @@ def test_scan_guard_is_not_vacuous() -> None:
     assert check_scan_can_fail(doc) == ["no job runs a Trivy step — guard would be vacuous"]
 
 
-def test_root_trivy_config_probe_sees_a_tracked_file(tmp_path: Path) -> None:
+# Spelled out, not `ROOT_CONFIG_FILES`: a case list derived from the constant
+# under test shrinks with it, so dropping a name would drop its test too.
+@pytest.mark.parametrize("name", ["trivy.yaml", "trivy-secret.yaml"])
+def test_root_trivy_config_probe_sees_a_tracked_file(tmp_path: Path, name: str) -> None:
     """The probe must answer from git's index, so a tracked file is seen and an untracked one is not."""
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
-    (tmp_path / "trivy.yaml").write_text("scan:\n  scanners: [secret]\n", encoding="utf-8")
+    (tmp_path / name).write_text("disable-rules: [github-pat]\n", encoding="utf-8")
     assert root_trivy_config_problems(tmp_path) == []
-    subprocess.run(["git", "-C", str(tmp_path), "add", "trivy.yaml"], check=True, timeout=60)
+    subprocess.run(["git", "-C", str(tmp_path), "add", name], check=True, timeout=60)
     problems = root_trivy_config_problems(tmp_path)
-    assert len(problems) == 1 and problems[0].startswith("trivy.yaml is tracked"), problems
+    assert len(problems) == 1 and problems[0].startswith(f"{name} is tracked"), problems

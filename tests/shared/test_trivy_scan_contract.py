@@ -65,10 +65,12 @@ def test_every_trivy_scan_shares_the_finding_filter() -> None:
 @pytest.mark.parametrize("workflow", [
     "release.yaml", "nightly-image-scan.yaml", "component-docker-build.yaml",
 ])
-@pytest.mark.parametrize("key,value", [("severity", "CRITICAL"), ("ignore-unfixed", False)])
+@pytest.mark.parametrize("key,value", [
+    ("severity", "CRITICAL"), ("ignore-unfixed", False), ("format", "sarif"), ("format", "SARIF"),
+])
 def test_a_drifted_consumer_is_named(workflow: str, key: str, value) -> None:
     wfs = copy.deepcopy(_workflows())
     where, step = next((w, s) for w, s in trivy_steps({workflow: wfs[workflow]}))
     step["with"][key] = value
     problems = check(wfs)
-    assert any(p.startswith(where) and key in p for p in problems), problems
+    assert any(p.startswith(f"{where}: {key}=") for p in problems), problems

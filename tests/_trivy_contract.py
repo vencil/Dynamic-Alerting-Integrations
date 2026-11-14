@@ -36,16 +36,27 @@ SCAN_FILTER: dict[str, object] = {
 
 #: trivy-action inputs that say WHAT to scan and WHERE the answer goes. They
 #: cannot shrink what Trivy looks for. `version` picks the binary and is pinned
-#: by tests/shared/test_toolchain_pin_parity.py.
+#: by tests/shared/test_toolchain_pin_parity.py. One value of `format` is NOT
+#: neutral — see SARIF_FORMAT.
 NEUTRAL_KEYS = frozenset({"image-ref", "format", "output", "version"})
+
+#: trivy-action v0.36.0 entrypoint.sh: `format: sarif` without
+#: `limit-severities-for-sarif: true` runs `unset TRIVY_SEVERITY`, so the
+#: pinned severity silently stops applying to that consumer.
+SARIF_FORMAT = "sarif"
 
 
 def filter_mismatches(with_: dict) -> list[str]:
-    """Each SCAN_FILTER key whose value in a trivy-action `with:` differs."""
-    return [
+    """Each way a trivy-action `with:` stops applying SCAN_FILTER."""
+    problems = [
         f"{key}={with_.get(key)!r} (expected {want!r})"
         for key, want in SCAN_FILTER.items()
         # str(): YAML `true` loads as True; a quoted "true" is a different
         # literal and is refused rather than guessed at.
         if key not in with_ or str(with_[key]) != str(want)
     ]
+    if str(with_.get("format", "")).strip().lower() == SARIF_FORMAT:
+        problems.append(
+            f"format={with_['format']!r} — trivy-action unsets the severity filter for sarif"
+        )
+    return problems
