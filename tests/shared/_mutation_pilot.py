@@ -51,8 +51,11 @@ See PR descriptions / commit messages for findings across batches.
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -844,17 +847,87 @@ MUTATIONS: list[Mutation] = [
 ]
 
 
-def run_tests(test_target: str) -> tuple[int, str]:
-    """Run pytest, return (returncode, output_tail)."""
+class PrebuildError(Exception):
+    """A Go binary the kill suites' sessions need could not be built."""
+
+
+def prebuild_go_binaries(dest: Path) -> dict[str, str]:
+    """Build every reader binary once into *dest*; return the environment that
+    makes each mutant's pytest session reuse them instead of building (#3871).
+
+    tests/conftest.py builds these at the start of every session that declares
+    `VIBE_TEST_GO_BINARIES=build` — 338 s on a cold Go cache, against the 120 s
+    each mutant's session gets. Its reuse branch takes a binary from
+    `VIBE_TEST_<VAR>` when that names an existing file, so the pilot builds
+    once and sets those. The list and the build flags come from the same
+    sources conftest uses (`READER_BUILD_SOURCES`, `go_build_argv`). Nothing is
+    built when the run declares `skip` or there is no `go` (each session then
+    behaves as it would have alone); a failed build raises with go's output.
+    """
+    if os.environ.get("VIBE_TEST_GO_BINARIES") == "skip" or shutil.which("go") is None:
+        return {}
+    for d in (REPO_ROOT / "tests", REPO_ROOT / "scripts" / "tools"):
+        if str(d) not in sys.path:
+            sys.path.insert(0, str(d))
+    from _go_build import go_build_argv
+    from _lib_consumer_read import READER_BUILD_SOURCES
+
+    env: dict[str, str] = {}
+    for var, (module, pkg, name) in READER_BUILD_SOURCES.items():
+        out = str(Path(dest) / name)
+        proc = subprocess.run(
+            go_build_argv(str(REPO_ROOT / module), pkg, out),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            check=False, timeout=900)
+        if proc.returncode != 0 or not os.path.isfile(out):
+            raise PrebuildError(
+                f"building {name} ({module} {pkg}) failed, rc={proc.returncode}:\n"
+                f"{proc.stdout}{proc.stderr}")
+        env[var] = out
+        env["VIBE_TEST_" + var] = out
+    return env
+
+
+#: One mutant's kill suite. Generous for the suites themselves (seconds when
+#: the Go binaries are prebuilt); a session past it is that mutant's
+#: SETUP-FAIL, and the run goes on to the next.
+SESSION_TIMEOUT_S = 120
+
+
+def run_tests(test_target: str, extra_env: dict[str, str]) -> tuple[int | None, str]:
+    """Run pytest, return (returncode, output_tail); returncode is None when
+    the session ran past its timeout."""
     cmd = [sys.executable, "-m", "pytest"] + test_target.split() + [
         "--tb=line", "-q", "--no-header", "--maxfail=1",
     ]
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, cwd=str(REPO_ROOT),
-        timeout=120, encoding="utf-8", errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, cwd=str(REPO_ROOT),
+            timeout=SESSION_TIMEOUT_S, encoding="utf-8", errors="replace",
+            env={**os.environ, **extra_env},
+        )
+    except subprocess.TimeoutExpired as e:
+        out = e.output.decode("utf-8", "replace") if isinstance(e.output, bytes) else (e.output or "")
+        return None, " | ".join(out.splitlines()[-3:])
     tail = (proc.stdout or "").splitlines()[-3:]
     return proc.returncode, " | ".join(tail)
+
+
+def verdict(rc: int | None, tail: str) -> str:
+    if rc is None:
+        return (f"SETUP-FAIL: test runner timed out after {SESSION_TIMEOUT_S}s — "
+                f"kill suite did not finish :: {tail[:160]}")
+    if rc == 0:
+        return f"SURVIVED (rc=0) :: {tail[:160]}"
+    if rc == 1:
+        return f"CAUGHT (rc=1) :: {tail[:160]}"
+    # pytest rc 2/4/5 = interrupted / usage error / no tests collected — the
+    # kill suite never actually ran, so this is NOT a kill. Bin it with
+    # SETUP-FAIL (stale test_file is the same catalog-rot class as a stale
+    # old_string); counting it as CAUGHT produced years-long fake kills for
+    # entries pointing at a deleted test file.
+    return (f"SETUP-FAIL: test runner rc={rc} — kill suite did not run "
+            f"(stale test_file? collection/usage error) :: {tail[:160]}")
 
 
 def main() -> int:
@@ -873,6 +946,19 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    build_dir = tempfile.mkdtemp(prefix="vibe-mutation-pilot-")
+    try:
+        return _run(selected, build_dir)
+    finally:
+        shutil.rmtree(build_dir, ignore_errors=True)
+
+
+def _run(selected: list[Mutation], build_dir: str) -> int:
+    try:
+        go_env = prebuild_go_binaries(Path(build_dir))
+    except PrebuildError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
     print(f"Running {len(selected)} mutations\n")
 
     results: list[tuple[Mutation, str]] = []
@@ -890,23 +976,7 @@ def main() -> int:
             results.append((m, f"SETUP-FAIL: {e}"))
         else:
             try:
-                rc, tail = run_tests(m.test_file)
-                if rc == 0:
-                    results.append((m, f"SURVIVED (rc=0) :: {tail[:160]}"))
-                elif rc == 1:
-                    results.append((m, f"CAUGHT (rc=1) :: {tail[:160]}"))
-                else:
-                    # pytest rc 2/4/5 = interrupted / usage error / no tests
-                    # collected — the kill suite never actually ran, so this
-                    # is NOT a kill. Bin it with SETUP-FAIL (stale test_file
-                    # is the same catalog-rot class as a stale old_string);
-                    # counting it as CAUGHT produced years-long fake kills
-                    # for entries pointing at a deleted test file.
-                    results.append((m, (
-                        f"SETUP-FAIL: test runner rc={rc} — kill suite did "
-                        f"not run (stale test_file? collection/usage error) "
-                        f":: {tail[:160]}"
-                    )))
+                results.append((m, verdict(*run_tests(m.test_file, go_env))))
             finally:
                 m.revert(original)
 
