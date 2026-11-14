@@ -27,9 +27,26 @@ from _lib_exitcodes import CallerError
 #: JSON / not UTF-8 where the caller decodes inside the same ``try``: there
 #: it means "no usable answer", which is what such a caller wants. The one list
 #: (#3477): a caller that treats a failed request as "no answer" catches this,
-#: not its own enumeration (#3519 moves the helpers below onto it).
+#: not its own enumeration — the helpers below do (#3519), and
+#: ``tests/shared/test_transport_errors_guard.py`` fails a ``try`` around a
+#: request whose handlers catch a failed connection but not a non-HTTP reply.
 TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     OSError, http.client.HTTPException, ValueError)
+
+
+def transport_error_text(exc: BaseException, *, with_type: bool = False) -> str:
+    """The error text of a :data:`TRANSPORT_ERRORS` instance, for the line a
+    caller that catches the list prints. ``str(exc)``, except for a reply
+    that is not HTTP: ``BadStatusLine`` and its kin carry only what the peer
+    sent (or a bare count), so the type is named, and the peer's bytes are
+    cut and kept on one line (a non-printable character, its line ending
+    among them, is shown as ``?``) — the text would otherwise read as a
+    message of ours, on as many lines as the peer chose. *with_type* names
+    the type for every exception (``URLError: <urlopen error …>``)."""
+    if isinstance(exc, http.client.HTTPException) and not isinstance(exc, OSError):
+        said = "".join(c if c.isprintable() else "?" for c in str(exc).strip()[:200])
+        return f"{type(exc).__name__}: {said}"
+    return f"{type(exc).__name__}: {exc}" if with_type else str(exc)
 
 
 class QueryError(CallerError):
@@ -129,9 +146,8 @@ def http_get_json(
             body = resp.read().decode("utf-8")
             data = json.loads(body) if body else {}
             return data, None
-    except (urllib.error.URLError, urllib.error.HTTPError,
-            ValueError, OSError) as exc:
-        return None, str(exc)
+    except TRANSPORT_ERRORS as exc:
+        return None, transport_error_text(exc)
 
 
 def http_post_json(
@@ -174,8 +190,8 @@ def http_post_json(
             return (json.loads(body) if body else {}), None
     except urllib.error.HTTPError as exc:
         return None, f"HTTP {exc.code}: {exc.reason}"
-    except (urllib.error.URLError, ValueError, OSError) as exc:
-        return None, str(exc)
+    except TRANSPORT_ERRORS as exc:
+        return None, transport_error_text(exc)
 
 
 def http_request_with_retry(
@@ -193,7 +209,9 @@ def http_request_with_retry(
 
     重試策略：
     - 4xx 錯誤：不重試，立即 raise
-    - 5xx / 連線錯誤：最多重試 *max_retries* 次，間隔 1s → 2s → 4s
+    - 5xx / 連線錯誤 / 對端回的不是 HTTP（:data:`TRANSPORT_ERRORS`）：
+      最多重試 *max_retries* 次，間隔 1s → 2s → 4s
+    - 2xx 但 body 不是 UTF-8 的 JSON：不重試，立即 raise ``ValueError``
 
     Args:
         url: 完整 URL。
@@ -207,7 +225,13 @@ def http_request_with_retry(
 
     Raises:
         urllib.error.HTTPError: 4xx 錯誤或重試耗盡後的 5xx 錯誤。
-        urllib.error.URLError: 連線錯誤且重試耗盡。
+        urllib.error.URLError: 連線錯誤、或對端回的不是 HTTP，且重試耗盡
+            （#3519：``BadStatusLine`` 這類不是 ``OSError`` 的傳輸例外包成
+            ``URLError``，``reason`` 是 :func:`transport_error_text` 的文字，
+            原例外在 ``__cause__``）。
+        OSError: urllib 沒包成 ``URLError`` 的連線錯誤（讀取逾時、連線被重設）
+            且重試耗盡。
+        ValueError: URL 不合法，或 2xx 的 body 不是 UTF-8 的 JSON。
     """
     last_error: Optional[Exception] = None
 
@@ -223,19 +247,25 @@ def http_request_with_retry(
             if payload is not None:
                 data = json.dumps(payload).encode("utf-8")
             with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
-                body = resp.read().decode("utf-8")
-                return json.loads(body) if body else {}
+                raw = resp.read()
         except urllib.error.HTTPError as exc:
             if exc.code < 500:
                 raise  # 4xx: 不重試
             last_error = exc
-        except (urllib.error.URLError, OSError) as exc:
+        except TRANSPORT_ERRORS as exc:
             last_error = exc
+        else:
+            # try 之外：body 讀到了，不是 JSON 是確定性的結果，重試無益。
+            body = raw.decode("utf-8")
+            return json.loads(body) if body else {}
 
         if attempt < max_retries - 1:
             time.sleep(2 ** attempt)  # 1s, 2s, 4s
 
-    raise last_error  # type: ignore[misc]
+    if isinstance(last_error, OSError):  # URLError / HTTPError 都是 OSError
+        raise last_error
+    # 不是 OSError 的傳輸例外（對端回的不是 HTTP）：契約是 URLError。
+    raise urllib.error.URLError(transport_error_text(last_error)) from last_error
 
 
 def probe_health(
@@ -277,8 +307,8 @@ def probe_health(
         req = urllib.request.Request(url)  # nosec B310
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
             return resp.read().decode("utf-8", errors="replace"), None
-    except (urllib.error.URLError, ValueError, OSError) as exc:
-        return None, str(exc)
+    except TRANSPORT_ERRORS as exc:
+        return None, transport_error_text(exc)
 
 
 def query_prometheus_instant(

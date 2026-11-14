@@ -79,7 +79,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -89,6 +88,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MAPPING = Path("docs/internal/planning-id-mapping.md")
@@ -242,9 +242,10 @@ def main(argv: list[str] | None = None) -> "int | Report":
         try:
             hits = title_trks(args.owner, args.gh_repo, token)
         # ValueError：slug 不合法、Link 指向別的 host、JSON 壞掉——都是量不到，不是違規。
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-                TitlesTruncated, ValueError) as exc:
-            print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{exc}）", file=sys.stderr)
+        # 傳輸失敗只列 TRANSPORT_ERRORS（#3519）：回應不是 HTTP 也是量不到。
+        except (*TRANSPORT_ERRORS, TitlesTruncated) as exc:
+            print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{transport_error_text(exc)}）",
+                  file=sys.stderr)
             return 2
         for k, v in hits.items():
             used.setdefault(k, v)

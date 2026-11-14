@@ -39,7 +39,6 @@ import hashlib
 import json
 import os
 import sys
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -50,6 +49,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 try:
     import yaml
@@ -163,8 +163,9 @@ def run(check_only: bool) -> int:
             return EXIT_CALLER_ERROR
         try:
             raw = _fetch(url)
-        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            print(f"ERROR: {sid}: fetch failed ({type(e).__name__}: {e})", file=sys.stderr)
+        except TRANSPORT_ERRORS as e:  # #3519: a reply that is not HTTP too
+            print(f"ERROR: {sid}: fetch failed ({transport_error_text(e, with_type=True)})",
+                  file=sys.stderr)
             return EXIT_CALLER_ERROR
 
         digest = hashlib.sha256(raw).hexdigest()
