@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+from _platform_fs import symlink_or_skip  # noqa: E402
 from factories import make_routing_config, make_tenant_yaml
 
 pytestmark = [
@@ -119,7 +120,7 @@ def toolbox(tmp_path):
     for tool in _SHIM_TOOLS:
         real = shutil.which(tool)
         assert real, f"`{tool}` is not on PATH: the fake kubectl cannot run"
-        (box / tool).symlink_to(real)
+        symlink_or_skip(real, box / tool)
     return box
 
 
@@ -201,7 +202,7 @@ def test_a_kubectl_outside_the_tests_directory_fails_the_cell_before_the_tool_st
     with pytest.raises(AssertionError, match="PATH resolves kubectl to .* outside the test's"):
         _run([str(tmp_path / "no-such-tool.py")], tmp_path / "bin", toolbox)
     stray.unlink()
-    (toolbox / "git").symlink_to("/bin/sh")
+    symlink_or_skip("/bin/sh", toolbox / "git")
     with pytest.raises(AssertionError, match="the toolbox holds something else"):
         _run([str(tmp_path / "no-such-tool.py")], tmp_path / "bin", toolbox)
 
