@@ -215,7 +215,6 @@ from _lib_tenant_values import (  # noqa: E402
     load_effective_tree,
     load_guard_report,
     load_served_schedules,
-    load_served_tree,
     print_load_error,
 )
 from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
@@ -2090,9 +2089,14 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     whose rule pack has no critical tier.
 
     The served keys are the shared verdict's (*verdict*: the `routes`
-    row's, or judged here): every key the exporter reads and serves, with
-    the file its value comes from; the severity each is served at is
-    served-values'. Whether an alert compares a key is the observed-map's
+    row's, or judged here): every key the exporter reads, with the file its
+    value comes from, that /metrics serves a row for in some part of the UTC
+    day; the severities each is served at over the day are served-values'
+    `--schedules-only` (#3883). Nothing here is read at one instant: the
+    time of day the check runs at changes nothing — `expires:` alone is read
+    at the run's clock, as the verdict reads it. A part of the day /metrics
+    cannot be gathered in serves nothing, so no severity is read there.
+    Whether an alert compares a key is the observed-map's
     answer (`_observed_map_lib.lookup`), asked for the key in the exporter's
     canonical spelling (asked of da-guard), the dimension part dropped — and
     for a key served at critical by its value (`"95:critical"`), for its
@@ -2123,11 +2127,26 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         if verdict.undecidable:
             return not_checked("no root platform file was read, so the threshold keys were not judged")
         observed = _observed_map_lib.load_observed_map()
-        served = [v for vs in verdict.keys.values() for v in vs
-                  if v.verdict == key_verdict.READ and "exporter" in v.read_by
-                  and not v.key.startswith("_") and v.served is not None]
-        spell = tv_key_spellings(sorted({v.key.partition("{")[0] for v in served}))
-        severities = {t: tv.severities for t, tv in load_served_tree(config_dir, partial=True).tenants.items()}
+        days = load_served_schedules(config_dir, partial=True).tenants
+        # #3883: (tenant, key) -> every severity /metrics serves the key at,
+        # in any part of the day (the key verdict carries no value read at
+        # one instant since #3835).
+        severities = {(t, k): {seg.severity for seg in sched.segments if seg.value is not None}
+                      for t, keys in days.items() for k, sched in keys.items()}
+        read = [v for vs in verdict.keys.values() for v in vs
+                if v.verdict == key_verdict.READ and "exporter" in v.read_by and not v.key.startswith("_")]
+        spell = tv_key_spellings(sorted({v.key.partition("{")[0] for v in read}))
+
+        def served_as(v: "key_verdict.KeyVerdict") -> str:
+            # The schedules name a key as served-values does: the base in the
+            # exporter's canonical #1231 spelling (asked of da-guard, the
+            # `spell` above), the dimension part as written; a verdict row
+            # names it as the tenant wrote it (`mysql_cpu` vs
+            # `mysql_threads_running`).
+            base, sep, rest = v.key.partition("{")
+            return spell.canonical(base) + sep + rest
+        sevs = {(v.tenant, v.key): severities.get((v.tenant, served_as(v)), set()) for v in read}
+        served = [v for v in read if sevs[(v.tenant, v.key)]]
     except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
             YamlFileError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
@@ -2143,13 +2162,14 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         base = spell.canonical(v.key.partition("{")[0])
         if base in _observed_map_lib.KNOWN_DEFERRED:
             continue
-        key, sev = base, severities.get(v.tenant, {}).get(v.key)
-        if sev == "critical" and not base.endswith("_critical"):
-            key = base + "_critical"
-        if _observed_map_lib.lookup(observed, key)[0] is _observed_map_lib.LookupKind.NO_ALERT:
-            files, tenants = found.setdefault((base, key != base), (set(), set()))
-            files.add(v.file or "?")
-            tenants.add(v.tenant)
+        for sev in sorted(sevs[(v.tenant, v.key)], key=str):
+            key = base
+            if sev == "critical" and not base.endswith("_critical"):
+                key = base + "_critical"
+            if _observed_map_lib.lookup(observed, key)[0] is _observed_map_lib.LookupKind.NO_ALERT:
+                files, tenants = found.setdefault((base, key != base), (set(), set()))
+                files.add(v.file or "?")
+                tenants.add(v.tenant)
     if not found:
         return _make_result("no_alert", PASS, [
             f"{len(served)} served key row(s): every one is compared by a shipped alert "

@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v2",
+  "schema": "da-guard.key-verdict/v3",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -20,8 +20,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "gold",
-        "served": null
+        "value": "gold"
       },
       {
         "key": "_severity_dedup",
@@ -38,8 +37,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable",
-        "served": "disable"
+        "value": "disable"
       },
       {
         "key": "_silent_mode",
@@ -55,8 +53,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable",
-        "served": []
+        "value": "disable"
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -80,8 +77,7 @@
               "window": "01:00-02:00"
             }
           ]
-        },
-        "served": 70
+        }
       }
     ],
     "tb": [
@@ -99,8 +95,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable",
-        "served": []
+        "value": "disable"
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -116,8 +111,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 60,
-        "served": 60
+        "value": 60
       }
     ]
   },

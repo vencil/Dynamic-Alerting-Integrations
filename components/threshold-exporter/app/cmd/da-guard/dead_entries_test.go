@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/keyverdict"
 )
 
 var deadEntriesTree = map[string]string{
@@ -87,10 +89,13 @@ func TestDeadEntries_ThroughEveryDocument(t *testing.T) {
 	}
 }
 
-// A key /metrics serves nothing of has no dead entry in either document
-// (#3502 review): an undeclared key and an undeliverable subtree value say
-// why through their own reason, effective's not_served and served-values'
-// keys[].reason alike.
+// A key /metrics serves nothing of is no dead_entry finding (#3502 review):
+// an undeclared key and an undeliverable subtree value say why through their
+// own reason, effective's not_served and served-values' keys[].reason alike,
+// and the key verdict's unread error is the one finding. served-values'
+// dead_entries is the schedule as written (#3835: the same at every --at),
+// so the undeclared key's — a value the tenant wrote — is named there; the
+// undeliverable one's, a value the build never delivers, is not.
 func TestDeadEntries_NoneOnAKeyServedNothing(t *testing.T) {
 	t.Parallel()
 	sched := "      default: \"70\"\n      overrides:\n" +
@@ -103,13 +108,19 @@ func TestDeadEntries_NoneOnAKeyServedNothing(t *testing.T) {
 	})
 	served := runDoc(t, "served-values", "--config-dir", root, "--at", "2026-07-01T03:00:00Z")
 	keys := served["tenants"].(map[string]any)["t1"].(map[string]any)["keys"].(map[string]any)
-	for _, k := range []string{"mysql_conections", "kafka_lag"} {
+	for k, wantDead := range map[string]bool{"mysql_conections": true, "kafka_lag": false} {
 		e, ok := keys[k].(map[string]any)
 		if !ok {
 			t.Fatalf("served-values has no key %s: %v", k, keys)
 		}
-		if _, has := e["dead_entries"]; has || e["exporter"] != false {
+		if _, has := e["dead_entries"]; has != wantDead || e["exporter"] != false {
 			t.Errorf("served-values keys.%s = %v", k, e)
+		}
+	}
+	kv := runDoc(t, keyVerdictCmd, "--config-dir", root, "--at", "2026-07-01T03:00:00Z")
+	for _, f := range kv["findings"].([]any) {
+		if f.(map[string]any)["kind"] == keyverdict.KindDeadEntry {
+			t.Errorf("key-verdict names a dead entry on a key served nothing: %v", f)
 		}
 	}
 	eff := runDoc(t, "effective", "--config-dir", root)

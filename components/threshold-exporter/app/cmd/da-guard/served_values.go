@@ -397,9 +397,11 @@ type servedKey struct {
 	// DeadEntries (#3502), for a threshold key the tenant's merged config
 	// writes as a schedule: the entries of that schedule /metrics serves at
 	// no minute of the UTC day (config.ScheduledValue.DeadEntries — the
-	// resolver's own reading of which entry serves a minute). Absent when
-	// none, and for a key /metrics serves nothing of at any minute (reason
-	// shadowed, undeliverable or no_row).
+	// resolver's own reading of which entry serves a minute), read off the
+	// schedule as written whatever --at is (deadEntriesOf, #3835). Absent
+	// when none, and for a key shadowed or undeliverable, whose value is
+	// never the one served. A key with no row at --at (no_row) keeps its
+	// entries: whether it is read is judged over the whole day.
 	DeadEntries []config.DeadEntry `json:"dead_entries,omitempty"`
 }
 
@@ -1120,44 +1122,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 			tv.Values[k] = v
 		}
 
-		for k, sv := range overrides {
-			canon, isAlias := config.CanonicalKeyFor(k)
-			// A retired spelling whose canonical key the same tenant also
-			// writes is shadowed: the canonical key's value is the one
-			// served, so the alias's own value is not.
-			_, canonWritten := overrides[canon]
-			shadowed := isAlias && canonWritten
-			if _, served := tv.Values[canon]; served && !shadowed {
-				continue
-			}
-			if canon == "_routing" && tv.Routing != nil {
-				continue
-			}
-			tv.Unserved[k] = rawScheduledValue(sv)
-		}
-		// #2031: a root dimensional default the tenant does not write is the
-		// tenant's labelled series; one with no row is unserved. #3045: so is
-		// a root default under a `_` key the registry does not list, which
-		// serves no row for any tenant.
-		for k, v := range cfg.Defaults {
-			canon, _ := config.CanonicalKeyFor(k)
-			_, own := overrides[canon]
-			perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k)
-			if _, refused := rootRefused[k]; refused {
-				// In Keys instead (below): its value is no number to show.
-				continue
-			}
-			if _, served := tv.Values[canon]; served || own || !perTenant {
-				continue
-			}
-			// #3250: a refused `_` key's value is the text the file wrote,
-			// as for a tenant's (rawScheduledValue): JSON has no NaN.
-			if _, refused := config.RefusedDefault(v); refused {
-				tv.Unserved[k] = refusedTexts[k]
-				continue
-			}
-			tv.Unserved[k] = v
-		}
+		addUnserved(tv, cfg, overrides, rootRefused, refusedTexts)
 		// #1976: the build's own verdict (LoadReport.Undeliverable:
 		// FlatBuild.Undeliverable, undeliverableThresholds' filter — the set
 		// the exporter's ERROR and gauge read, #3379), never re-judged here. Invariant, so no membership check: such
@@ -1187,6 +1152,54 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		}
 	}
 	return out, nil
+}
+
+// addUnserved fills tv.Unserved with the keys of the tenant's merged config
+// (overrides) that tv.Values does not serve, and the root `defaults:`
+// entries the tenant does not write that serve it no row — not the build's
+// undeliverable keys, which the caller adds. tv.Values and tv.Routing are
+// the reading's; rootRefused / refusedTexts are cfg.RefusedRootDefaults()
+// and refusedTextsOf.
+func addUnserved(tv servedTenantValues, cfg *config.ThresholdConfig, overrides map[string]config.ScheduledValue,
+	rootRefused map[string]string, refusedTexts map[string]string) {
+	for k, sv := range overrides {
+		canon, isAlias := config.CanonicalKeyFor(k)
+		// A retired spelling whose canonical key the same tenant also
+		// writes is shadowed: the canonical key's value is the one
+		// served, so the alias's own value is not.
+		_, canonWritten := overrides[canon]
+		shadowed := isAlias && canonWritten
+		if _, served := tv.Values[canon]; served && !shadowed {
+			continue
+		}
+		if canon == "_routing" && tv.Routing != nil {
+			continue
+		}
+		tv.Unserved[k] = rawScheduledValue(sv)
+	}
+	// #2031: a root dimensional default the tenant does not write is the
+	// tenant's labelled series; one with no row is unserved. #3045: so is
+	// a root default under a `_` key the registry does not list, which
+	// serves no row for any tenant.
+	for k, v := range cfg.Defaults {
+		canon, _ := config.CanonicalKeyFor(k)
+		_, own := overrides[canon]
+		perTenant := strings.Contains(k, "{") || config.IsUnregisteredUnderscoreKey(k)
+		if _, refused := rootRefused[k]; refused {
+			// In Keys instead (addRootRefused): its value is no number to show.
+			continue
+		}
+		if _, served := tv.Values[canon]; served || own || !perTenant {
+			continue
+		}
+		// #3250: a refused `_` key's value is the text the file wrote,
+		// as for a tenant's (rawScheduledValue): JSON has no NaN.
+		if _, refused := config.RefusedDefault(v); refused {
+			tv.Unserved[k] = refusedTexts[k]
+			continue
+		}
+		tv.Unserved[k] = v
+	}
 }
 
 // addDisableEffects fills Keys[].Disable (--disable-effects).
@@ -1279,9 +1292,7 @@ func servedKeys(tv servedTenantValues,
 					refused = r
 				}
 			}
-			if written && !inUndeliverable && (!isAlias || !canonWritten) {
-				e.DeadEntries = sv.DeadEntries()
-			}
+			e.DeadEntries = deadEntriesOf(overrides, undeliverable, k)
 			switch {
 			case isAlias && canonWritten:
 				e.Reason = keyReasonShadowed
@@ -1299,14 +1310,6 @@ func servedKeys(tv servedTenantValues,
 				e.Reason = keyReasonBaseDisabled
 			default:
 				e.Reason = keyReasonNoRow
-			}
-			switch e.Reason {
-			case keyReasonShadowed, keyReasonUndeliverable, keyReasonNoRow:
-				// #3502: a key /metrics serves nothing of, at any minute, has
-				// no entry that serves; its own reason says why. A reason of
-				// the instant read (disabled, a refused value) leaves the
-				// rest of the day served, so its entries are judged.
-				e.DeadEntries = nil
 			}
 		}
 		if !strings.HasPrefix(k, "_") {
@@ -1362,6 +1365,26 @@ func servedKeys(tv servedTenantValues,
 		add(k)
 	}
 	return out
+}
+
+// deadEntriesOf is threshold key k's dead entries (#3502): the entries of the
+// schedule the tenant's merged config (overrides) writes for it that /metrics
+// serves at no minute of the UTC day (config.ScheduledValue.DeadEntries) —
+// read off the schedule as written, so the same at every instant (#3835).
+// None for a key the merged config does not write, a key the build cannot
+// deliver (undeliverable), and a retired spelling whose canonical key the
+// tenant also writes (shadowed: its value is never the one served).
+func deadEntriesOf(overrides, undeliverable map[string]config.ScheduledValue, k string) []config.DeadEntry {
+	sv, written := overrides[k]
+	if _, in := undeliverable[k]; !written || in {
+		return nil
+	}
+	if canon, isAlias := config.CanonicalKeyFor(k); isAlias {
+		if _, canonWritten := overrides[canon]; canonWritten {
+			return nil
+		}
+	}
+	return sv.DeadEntries()
 }
 
 // addRootRefused gives tv.Keys an entry, reason root_default_refused
