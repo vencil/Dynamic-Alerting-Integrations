@@ -1,6 +1,6 @@
 """tenant-api 8080 allow-list: the security doc names exactly what the chart admits (#1666).
 
-WHY: the NetworkPolicy allow-list decides who reaches port 8080. Since ADR-027
+WHY: the NetworkPolicy allow-list decides who reaches port 8080. Since ADR-027,
 8080 serves only /health, /ready and /metrics and answers identity headers 400,
 so the list no longer guards identity, but it is still the port's only access
 control and the docs must name it exactly. `docs/governance-security{,.en}.md` described
