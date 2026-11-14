@@ -97,11 +97,16 @@ tenant-api 只採信 oauth2-proxy 送來的身分：API 只在 pod 內的 Unix s
 確認叢集裡跑的是哪一種：經 `kubectl port-forward`（不受 NetworkPolicy 約束）在本機打。chart 固定單一副本、以 `Recreate` 更新（ADR-023），rollout 完成後只有一個 pod，打到的就是它。
 
 ```bash
-kubectl -n <namespace> port-forward svc/<tenant-api service> 18080:8080 & PF=$!; sleep 2
-# port-forward 沒起來（例如本機 18080 已被佔用）時不打，以免讀到別的程式的回應
+# 本機埠交給系統指派（:8080），等 kubectl 印出綁定的埠才打；10 秒內沒綁上就不打、改印 kubectl 的輸出，
+# 以免讀到本機別的程式的回應
+LOG=$(mktemp); PORT=
+kubectl -n <namespace> port-forward --address 127.0.0.1 svc/<tenant-api service> :8080 >"$LOG" 2>&1 & PF=$!
+for i in $(seq 10); do
+  PORT=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$LOG"); [ -n "$PORT" ] && break; sleep 1
+done
 # 帶身分 header 打 /health：400 = 含 ADR-027；200 = 舊版；000 = 沒連上
-kill -0 $PF && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Forwarded-Email: probe@example.com' http://localhost:18080/health
+[ -n "$PORT" ] && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-Email: probe@example.com' "http://127.0.0.1:$PORT/health" || cat "$LOG"
 kill $PF 2>/dev/null
 ```
 

@@ -97,11 +97,16 @@ tenant-api trusts only the identity oauth2-proxy sends: the API is only on a Uni
 To check which one your cluster runs, go through `kubectl port-forward` (not subject to NetworkPolicy) and call it locally. The chart pins a single replica updated with `Recreate` (ADR-023), so once the rollout completes there is one pod, and that is the one you reach.
 
 ```bash
-kubectl -n <namespace> port-forward svc/<tenant-api service> 18080:8080 & PF=$!; sleep 2
-# Skip the probe if port-forward did not start (e.g. local port 18080 is taken), so you never read another program's answer
+# Let the system pick the local port (:8080) and probe only once kubectl prints the port it bound; if nothing
+# is bound within 10 seconds, skip the probe and print kubectl's output, so you never read another program's answer
+LOG=$(mktemp); PORT=
+kubectl -n <namespace> port-forward --address 127.0.0.1 svc/<tenant-api service> :8080 >"$LOG" 2>&1 & PF=$!
+for i in $(seq 10); do
+  PORT=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$LOG"); [ -n "$PORT" ] && break; sleep 1
+done
 # /health with an identity header: 400 = includes ADR-027; 200 = older release; 000 = no connection
-kill -0 $PF && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Forwarded-Email: probe@example.com' http://localhost:18080/health
+[ -n "$PORT" ] && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-Email: probe@example.com' "http://127.0.0.1:$PORT/health" || cat "$LOG"
 kill $PF 2>/dev/null
 ```
 
