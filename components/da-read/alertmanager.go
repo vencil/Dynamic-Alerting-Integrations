@@ -56,11 +56,34 @@ import (
 // errNotInReading wraps a written key or list the reading has no place for.
 var errNotInReading = errors.New("the text writes it, but the loader's reading has no such entry")
 
-// readAlertmanager returns da-read's stdout for the Alertmanager config *data*.
-func readAlertmanager(data []byte) ([]byte, error) {
+// ⛔ da-read's own refusals of an Alertmanager config carry no text of the
+// file (#3703): not the path of map keys it was walking, not a key, not the
+// YAML or JSON library's sentence (which quotes values). They are fixed
+// sentences and the line of the node they refused; the caller (the route
+// generator's gate, onboard, byo-check) prints them on stderr and in its
+// findings. showLoaderReasonFlag opts into the loader's own words only.
+
+// notInReading is errNotInReading at the written node *at* (its line; no
+// line when there is no node).
+func notInReading(at *yaml.Node) error {
+	if at == nil || at.Line < 1 {
+		return errNotInReading
+	}
+	return fmt.Errorf("line %d: %w", at.Line, errNotInReading)
+}
+
+// errNotPrinted is the refusal of a config the loader returned that
+// encoding/json cannot print; the encoder's own error, which can quote a
+// value, is not carried.
+var errNotPrinted = errors.New("the config Alertmanager loads cannot be printed as JSON")
+
+// readAlertmanager returns da-read's stdout for the Alertmanager config
+// *data*. *showReason*: whether a refusal by Alertmanager's loader carries
+// the loader's own reason (loaderRefusal).
+func readAlertmanager(data []byte, showReason bool) ([]byte, error) {
 	extra, err := laterDocumentWithContent(data)
 	if err != nil {
-		return nil, loaderRefusal(err)
+		return nil, loaderRefusal(err, showReason)
 	}
 	if extra > 0 {
 		return nil, fmt.Errorf("YAML document %d of the file has content; Alertmanager reads only "+
@@ -68,15 +91,16 @@ func readAlertmanager(data []byte) ([]byte, error) {
 	}
 	cfg, err := config.Load(string(data))
 	if err != nil {
-		return nil, loaderRefusal(err)
+		return nil, loaderRefusal(err, showReason)
 	}
 	reading, err := marshalWithSecrets(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("the config Alertmanager loads cannot be printed as JSON: %v", err)
+		return nil, errNotPrinted
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("%w: %v", errNotComposed, err)
+		// The YAML library's sentence quotes the text; it is not carried.
+		return nil, errNotComposed
 	}
 	var top *yaml.Node
 	if root.Kind == yaml.DocumentNode && len(root.Content) == 1 {
@@ -91,44 +115,27 @@ func readAlertmanager(data []byte) ([]byte, error) {
 	return w.out.Bytes(), nil
 }
 
-// loaderRefusal is the one spelling of "Alertmanager's loader refused the
-// text" (#3689). yaml.v2 quotes the value it could not decode into each
-// *yamlv2.TypeError entry (line 61: cannot unmarshal !!str `hunter2` into
-// bool) and the refused field may be a credential (an `http_config`
-// password written where a bool belongs), so the entries are reprinted
-// without it (line 61: cannot unmarshal !!str into bool). The line, the
-// tag and the Go type say what is wrong; the value is the operator's own.
-func loaderRefusal(err error) error {
-	var te *yamlv2.TypeError
-	if errors.As(err, &te) {
-		redacted := make([]string, len(te.Errors))
-		for i, e := range te.Errors {
-			redacted[i] = withoutQuotedValue(e)
-		}
-		err = &yamlv2.TypeError{Errors: redacted}
-	}
-	return fmt.Errorf("refused by Alertmanager's config loader: %v", err)
-}
+// showLoaderReasonFlag is `da-read alertmanager`'s opt-in to the loader's
+// own reason for a refusal.
+const showLoaderReasonFlag = "--show-loader-reason"
 
-// withoutQuotedValue drops the backquoted value yaml.v2's decoder writes between
-// the tag and "into" of one TypeError entry (decode.go's terror:
-// "line %d: cannot unmarshal %s%s into %s", the middle verb " `value`", or
-// " `first7...`" past 10 bytes, empty for a sequence or mapping). The value
-// is the operator's text and may hold a backtick or " into "; the Go type
-// after the last "` into " never holds a backtick, so that is where it ends.
-func withoutQuotedValue(entry string) string {
-	const verb = "cannot unmarshal "
-	i := strings.Index(entry, verb)
-	if i < 0 {
-		return entry
+// loaderRefused is the fixed sentence a refusal by Alertmanager's loader
+// prints by default (#3703). It carries no word of the loader's: that text
+// is Alertmanager's prose, and it quotes the file's values and keys (a
+// proxy URL, a label name, a TLS version, a credential written where a bool
+// belongs) in sentences this program does not own, so no part of it can be
+// told safe to print.
+const loaderRefused = "refused by Alertmanager's config loader (its reason is not printed: it can quote " +
+	"the file's values; `da-read alertmanager " + showLoaderReasonFlag + "` prints it)"
+
+// loaderRefusal is the one spelling of "Alertmanager's loader refused the
+// text": the fixed sentence, or with *showReason* the loader's own reason
+// after it.
+func loaderRefusal(err error, showReason bool) error {
+	if showReason {
+		return fmt.Errorf("refused by Alertmanager's config loader: %v", err)
 	}
-	rest := entry[i+len(verb):]
-	open := strings.Index(rest, " `")
-	end := strings.LastIndex(rest, "` into ")
-	if open < 0 || end < open {
-		return entry
-	}
-	return entry[:i+len(verb)] + rest[:open] + rest[end+1:]
+	return errors.New(loaderRefused)
 }
 
 // Secrets are printed as their values: the caller copies them (a receiver's
@@ -414,12 +421,12 @@ func lookup(v interface{}, path []string) (interface{}, bool) {
 }
 
 // valueOf is the reading of the written key *key* in the struct *sv*, read
-// as *read*, and the Go value below it.
-func valueOf(key string, read map[string]interface{}, sv reflect.Value, path []interface{}) (interface{}, reflect.Value, error) {
+// as *read*, and the Go value below it. *at* is the written value (its line
+// names a refusal).
+func valueOf(key string, read map[string]interface{}, sv reflect.Value, at *yaml.Node) (interface{}, reflect.Value, error) {
 	f, ok := findField(sv, key)
 	if !ok || f.jsonPath == nil {
-		return nil, reflect.Value{}, fmt.Errorf("%s: %w (%s has no field %q that is printed)",
-			pathString(path), errNotInReading, sv.Type(), key)
+		return nil, reflect.Value{}, notInReading(at)
 	}
 	if v, ok := lookup(read, f.jsonPath); ok {
 		return v, f.value, nil
@@ -432,7 +439,7 @@ func valueOf(key string, read map[string]interface{}, sv reflect.Value, path []i
 		v, err := decodeJSON(b)
 		return v, f.value, err
 	}
-	return nil, reflect.Value{}, fmt.Errorf("%s: %w", pathString(path), errNotInReading)
+	return nil, reflect.Value{}, notInReading(at)
 }
 
 // isStruct reports whether *t* (or what it points to) is a struct whose JSON
@@ -503,7 +510,7 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 				}
 				continue
 			}
-			val, child, err := valueOf(key, v, sv, p)
+			val, child, err := valueOf(key, v, sv, wm.value[key])
 			if err != nil {
 				return err
 			}
@@ -534,7 +541,7 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 			val, ok := v[key]
 			child := sv.MapIndex(reflect.ValueOf(key).Convert(sv.Type().Key()))
 			if !ok || !child.IsValid() {
-				return fmt.Errorf("%s: %w", pathString(p), errNotInReading)
+				return notInReading(wm.value[key])
 			}
 			if i > 0 {
 				w.out.WriteByte(',')
@@ -557,8 +564,7 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 			return w.plain(read)
 		}
 		if len(n.Content) != len(v) || sv.Len() != len(v) {
-			return fmt.Errorf("%s: %w: %d entries written, %d read", pathString(path), errNotInReading,
-				len(n.Content), len(v))
+			return fmt.Errorf("%w: %d entries written, %d read", notInReading(n), len(n.Content), len(v))
 		}
 		w.out.WriteByte('[')
 		for i, item := range v {

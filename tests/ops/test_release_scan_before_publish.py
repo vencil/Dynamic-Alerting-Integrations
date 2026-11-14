@@ -20,6 +20,49 @@ YAML (not a grep over its text) and, for every job that pushes an image with
      (`release_publish.py assets`) — sits AFTER that Trivy step;
   4. promotion and image signing name the same build-step digest.
 
+Ordering is worth nothing if the scan cannot fail the job (#3870): `if:
+false` on the Trivy step, `continue-on-error: true`, or `exit-code: 0` each
+left the scan running and the release publishing, with this guard green. So
+`check_scan_can_fail` reads the same parsed YAML and asserts, per job
+
+  5. the Trivy step has no key but `name` / `uses` / `with` — no `if:`,
+     `continue-on-error`, `env:`, `id:` (nothing may read its outcome);
+  6. the job has no `continue-on-error`, and no `env:` at job or workflow
+     level sets a `TRIVY_*` variable. Measured in trivy-action v0.36.0: an
+     input equal to the action's default is not exported, so the caller's
+     environment wins for it, and `TRIVY_CMD` replaces the binary outright;
+  7. `with:` holds only vetted keys: `_trivy_contract.NEUTRAL_KEYS`,
+     `exit-code` as the literal `1`, the shared `SCAN_FILTER` exactly
+     (`severity: CRITICAL,HIGH`, `ignore-unfixed: true` — the stance is
+     written in tests/_trivy_contract.py), and `trivyignores` only as the
+     literal `components/<repo>/.trivyignore.yaml` of the very image the step
+     scans. Any other input (`scanners`, `vuln-type`, `skip-dirs`,
+     `trivy-config`, `skip-setup-trivy`, …) narrows or replaces the scan;
+  8. no step after the scan has an `if:` calling a status function
+     (`always()` / `failure()` / `cancelled()` / `success()`, any case) —
+     such a step drops the implicit `success() &&` and can run after a failed
+     scan. Publish steps cannot carry `if:` at all
+     (test_release_immutable_wiring.py); this covers every other step;
+  9. the repo tracks neither `trivy.yaml` nor `trivy-secret.yaml` at its
+     root. Trivy v0.74.0 loads both from its working directory by default
+     (`--config`, `--secret-config`): the first can set anything the action
+     does not export (scanners, pkg types, skip dirs, ignore file), the second
+     can disable secret rules — and `image` scans `vuln,secret` by default, so
+     that disarms half the gate.
+
+What a waiver file may contain (id, statement, justification, a real
+`expired_at`; never a plain-text `.trivyignore`) is governed in ONE place for
+every workflow: test_every_waiver_entry_has_expiry_and_justification in
+tests/ops/test_nightly_scan_matrix_drift.py. Rule 7 only decides which
+register a release scan may read.
+
+⛔ Threat model, as in test_release_immutable_wiring.py: this catches honest
+mistakes and structural drift, not deliberate obfuscation. Out of scope: a
+step that writes `trivy.yaml` / `.trivyignore` at run time, a `TRIVY_*`
+variable injected some other way than a literal `env:` key, an edit to the
+action's pinned sha (test_release_immutable_wiring.py allows the action, the
+pin is Renovate's).
+
 Vacuity: a guard that finds no publishing job passes while covering nothing,
 so the discovered job set and the per-kind publish-step counts are asserted
 non-empty.
@@ -29,8 +72,13 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import copy
+import subprocess
+
 import pytest
 import yaml
+
+from _trivy_contract import NEUTRAL_KEYS, SCAN_FILTER, filter_mismatches
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yaml"
@@ -158,6 +206,112 @@ def check_release_workflow(doc: dict) -> list[str]:
     return problems
 
 
+# ── the scan must be able to fail the job (#3870) ───────────────────────────
+
+_TRIVY_STEP_KEYS = frozenset({"name", "uses", "with"})
+_RELEASE_TRIVY_KEYS = NEUTRAL_KEYS | set(SCAN_FILTER) | {"exit-code", "trivyignores"}
+#: Any status function opts the step out of the implicit `success() &&` — including
+#: `success()` itself (`success() || inputs.force` runs after a failed scan).
+#: GitHub matches function names case-insensitively.
+_STATUS_FN = re.compile(r"\b(?:always|failure|cancelled|success)\s*\(", re.IGNORECASE)
+_REGISTER = re.compile(r"components/([a-z0-9][a-z0-9-]*)/\.trivyignore\.yaml")
+_SCANNED_REPO = re.compile(r"/([a-z0-9][a-z0-9._-]*)@\$\{\{")
+
+
+def _trivy_env(env, where: str) -> list[str]:
+    return [
+        f"{where}: env sets {key} — trivy-action does not export an input equal to its "
+        "default, so this overrides the scan (TRIVY_CMD replaces the binary)"
+        for key in (env or {}) if str(key).upper().startswith("TRIVY_")
+    ]
+
+
+def _is_literal_one(value) -> bool:
+    # `True == 1` in Python, so the type is checked, not just the value.
+    return (type(value) is int and value == 1) or value == "1"
+
+
+def check_scan_can_fail(doc: dict) -> list[str]:
+    """Return every way the Trivy step could run without being able to stop the release."""
+    problems = _trivy_env(doc.get("env"), "release.yaml")
+    scanned_jobs = 0
+    for job_name, job in (doc.get("jobs") or {}).items():
+        steps = (job or {}).get("steps") or []
+        trivy = [(i, s) for i, s in enumerate(steps) if _uses(s).startswith(_TRIVY_ACTION)]
+        if not trivy:
+            continue
+        scanned_jobs += 1
+        where = f"release.yaml::{job_name}"
+        if "continue-on-error" in job:
+            problems.append(f"{where}: job sets continue-on-error — a failed scan would not fail the release")
+        problems += _trivy_env(job.get("env"), where)
+
+        for scan_idx, scan in trivy:
+            extra = sorted(set(scan) - _TRIVY_STEP_KEYS)
+            if extra:
+                problems.append(
+                    f"{where}: Trivy step carries {extra} — only {sorted(_TRIVY_STEP_KEYS)} are allowed "
+                    "(`if:` skips it, `continue-on-error` swallows it, `env:` overrides it, "
+                    "an `id:` lets a later step read its outcome)"
+                )
+            with_ = scan.get("with") or {}
+            unknown = sorted(set(with_) - _RELEASE_TRIVY_KEYS)
+            if unknown:
+                problems.append(
+                    f"{where}: Trivy step passes unvetted input(s) {unknown} — inputs like "
+                    "scanners / vuln-type / skip-dirs / trivy-config narrow or replace the scan"
+                )
+            if not _is_literal_one(with_.get("exit-code")):
+                problems.append(
+                    f"{where}: Trivy exit-code is {with_.get('exit-code')!r}, not the literal 1 — "
+                    "a finding would not fail the job"
+                )
+            problems += [f"{where}: Trivy {m} — see tests/_trivy_contract.py" for m in filter_mismatches(with_)]
+            if "trivyignores" in with_:
+                ignores = with_["trivyignores"]
+                scanned = _SCANNED_REPO.findall(str(with_.get("image-ref") or ""))
+                m = _REGISTER.fullmatch(ignores) if isinstance(ignores, str) else None
+                if not m or not scanned or m.group(1) != scanned[0]:
+                    problems.append(
+                        f"{where}: trivyignores {ignores!r} is not the literal "
+                        f"components/<image>/.trivyignore.yaml of the image this step scans {scanned} — "
+                        "a waiver register is scoped to the image it was written for"
+                    )
+                elif not (ROOT / ignores).is_file():
+                    problems.append(f"{where}: trivyignores names a missing file {ignores!r}")
+
+            for i, s in enumerate(steps[scan_idx + 1:], start=scan_idx + 1):
+                cond = s.get("if")
+                if cond is not None and _STATUS_FN.search(str(cond)):
+                    problems.append(
+                        f"{where}: step {s.get('name')!r} (#{i}) after the Trivy scan has "
+                        f"`if: {cond}` — it runs even when the scan failed"
+                    )
+    if not scanned_jobs:
+        problems.append("no job runs a Trivy step — guard would be vacuous")
+    return problems
+
+
+#: Files Trivy v0.74.0 reads from its working directory with no flag (`trivy image
+#: --help`: `--config` default "trivy.yaml", `--secret-config` default
+#: "trivy-secret.yaml"). `.trivyignore` is the waiver test's (see module docstring).
+ROOT_CONFIG_FILES = ("trivy.yaml", "trivy-secret.yaml")
+
+
+def root_trivy_config_problems(root: Path = ROOT) -> list[str]:
+    """A Trivy config file tracked at the repo root, which Trivy loads from its working directory."""
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--", *ROOT_CONFIG_FILES],
+        cwd=root, capture_output=True, encoding="utf-8", timeout=60,
+    )
+    assert out.returncode == 0, out.stderr
+    return [
+        f"{p} is tracked at the repo root — Trivy loads it by default and it can narrow the "
+        "release scan (scanners, pkg types, skip dirs, disabled secret rules)"
+        for p in out.stdout.split("\0") if p
+    ]
+
+
 def test_release_scans_before_it_publishes() -> None:
     problems = check_release_workflow(_load())
     assert not problems, "\n".join(problems)
@@ -195,3 +349,118 @@ def test_guard_rejects_known_regressions(bad: str) -> None:
     elif bad == "scan-by-tag":
         steps[scan_idx]["with"]["image-ref"] = "ghcr.io/vencil/threshold-exporter:v1.2.3"
     assert check_release_workflow(doc)
+
+
+def test_the_release_scan_can_fail_the_release() -> None:
+    problems = check_scan_can_fail(_load())
+    assert not problems, "\n".join(problems)
+
+
+def test_no_trivy_config_file_at_the_repo_root() -> None:
+    """Trivy reads `ROOT_CONFIG_FILES` from its working directory (the checkout root) by default.
+
+    Either can narrow the release gate with no change to release.yaml at all.
+    """
+    problems = root_trivy_config_problems()
+    assert not problems, "\n".join(problems)
+
+
+def _scan(doc: dict, job: str = "release-exporter") -> dict:
+    return next(s for s in doc["jobs"][job]["steps"] if _uses(s).startswith(_TRIVY_ACTION))
+
+
+def _after_scan(doc: dict, job: str = "release-exporter") -> dict:
+    steps = doc["jobs"][job]["steps"]
+    return next(s for s in steps if "release_publish.py chart" in str(s.get("run") or ""))
+
+
+#: Each regression shape → a fragment of the message the rule that must catch it emits.
+SCAN_MUTATIONS = {
+    "step-if-false": (lambda d: _scan(d).update({"if": "false"}), "Trivy step carries ['if']"),
+    "step-if-expr": (lambda d: _scan(d).update({"if": "${{ github.event_name == 'push' }}"}),
+                     "Trivy step carries ['if']"),
+    "step-continue-on-error": (lambda d: _scan(d).update({"continue-on-error": True}),
+                               "Trivy step carries ['continue-on-error']"),
+    "step-env-trivy-cmd": (lambda d: _scan(d).update(env={"TRIVY_CMD": "true"}),
+                           "Trivy step carries ['env']"),
+    "step-id": (lambda d: _scan(d).update(id="scan"), "Trivy step carries ['id']"),
+    "job-continue-on-error": (lambda d: d["jobs"]["release-exporter"].update({"continue-on-error": True}),
+                              "job sets continue-on-error"),
+    "job-env-trivy": (lambda d: d["jobs"]["release-exporter"].update(env={"TRIVY_SCANNERS": "secret"}),
+                      "env sets TRIVY_SCANNERS"),
+    "workflow-env-trivy": (lambda d: d["env"].update(TRIVY_CMD="true"), "env sets TRIVY_CMD"),
+    "exit-code-0": (lambda d: _scan(d)["with"].update({"exit-code": 0}), "exit-code is 0"),
+    "exit-code-expr": (lambda d: _scan(d)["with"].update({"exit-code": "${{ vars.TRIVY_EXIT }}"}),
+                       "not the literal 1"),
+    "exit-code-true": (lambda d: _scan(d)["with"].update({"exit-code": True}), "not the literal 1"),
+    "exit-code-removed": (lambda d: _scan(d)["with"].pop("exit-code"), "exit-code is None"),
+    "severity-critical-only": (lambda d: _scan(d)["with"].update(severity="CRITICAL"), "severity='CRITICAL'"),
+    "severity-low": (lambda d: _scan(d)["with"].update(severity="LOW"), "severity='LOW'"),
+    "severity-removed": (lambda d: _scan(d)["with"].pop("severity"), "severity=None"),
+    "ignore-unfixed-flipped": (lambda d: _scan(d)["with"].update({"ignore-unfixed": False}),
+                               "ignore-unfixed=False"),
+    "scanners": (lambda d: _scan(d)["with"].update(scanners="secret"), "unvetted input(s) ['scanners']"),
+    "trivy-config": (lambda d: _scan(d)["with"].update({"trivy-config": "trivy.yaml"}),
+                     "unvetted input(s) ['trivy-config']"),
+    "skip-setup": (lambda d: _scan(d)["with"].update({"skip-setup-trivy": True}),
+                   "unvetted input(s) ['skip-setup-trivy']"),
+    "borrowed-register": (lambda d: _scan(d)["with"].update(
+        trivyignores="components/recipe-preview/.trivyignore.yaml"), "of the image this step scans"),
+    "register-expression": (lambda d: _scan(d, "release-recipe-preview")["with"].update(
+        trivyignores="${{ 'components/recipe-preview/.trivyignore.yaml' }}"), "is not the literal"),
+    "register-two-files": (lambda d: _scan(d, "release-recipe-preview")["with"].update(
+        trivyignores="components/recipe-preview/.trivyignore.yaml,.trivyignore"), "is not the literal"),
+    "register-missing": (lambda d: _scan(d, "release-exporter")["with"].update(
+        trivyignores="components/threshold-exporter/.trivyignore.yaml"), "missing file"),
+    "publish-if-always": (lambda d: _after_scan(d).update({"if": "always()"}), "runs even when the scan failed"),
+    "publish-if-not-cancelled": (lambda d: _after_scan(d).update({"if": "${{ !cancelled() }}"}),
+                                 "runs even when the scan failed"),
+    "publish-if-failure": (lambda d: _after_scan(d).update({"if": "failure()"}),
+                           "runs even when the scan failed"),
+    "publish-if-success-or": (lambda d: _after_scan(d).update({"if": "success() || inputs.force"}),
+                              "runs even when the scan failed"),
+    "publish-if-always-case": (lambda d: _after_scan(d).update({"if": "Always()"}),
+                               "runs even when the scan failed"),
+}
+
+
+def test_the_real_da_tools_register_is_accepted() -> None:
+    """The da-tools gate reads its own register (bundled amtool, #3637) and nobody else's."""
+    with_ = _scan(_load(), "release-da-tools")["with"]
+    assert with_.get("trivyignores") == "components/da-tools/.trivyignore.yaml"
+
+
+def test_the_real_recipe_preview_register_is_accepted() -> None:
+    """A real waiver the release reads must pass rule 7 — else the mutations prove a broken rule."""
+    with_ = _scan(_load(), "release-recipe-preview")["with"]
+    assert with_.get("trivyignores") == "components/recipe-preview/.trivyignore.yaml"
+
+
+@pytest.mark.parametrize("bad", sorted(SCAN_MUTATIONS))
+def test_scan_guard_rejects_known_regressions(bad: str) -> None:
+    """Each shape that disarms the scan must be refused BY ITS OWN RULE, not by a neighbour."""
+    mutate, expected = SCAN_MUTATIONS[bad]
+    doc = copy.deepcopy(_load())
+    mutate(doc)
+    problems = check_scan_can_fail(doc)
+    assert any(expected in p for p in problems), f"{bad}: no problem mentions {expected!r}: {problems}"
+
+
+def test_scan_guard_is_not_vacuous() -> None:
+    doc = copy.deepcopy(_load())
+    for job in doc["jobs"].values():
+        job["steps"] = [s for s in job.get("steps") or [] if not _uses(s).startswith(_TRIVY_ACTION)]
+    assert check_scan_can_fail(doc) == ["no job runs a Trivy step — guard would be vacuous"]
+
+
+# Spelled out, not `ROOT_CONFIG_FILES`: a case list derived from the constant
+# under test shrinks with it, so dropping a name would drop its test too.
+@pytest.mark.parametrize("name", ["trivy.yaml", "trivy-secret.yaml"])
+def test_root_trivy_config_probe_sees_a_tracked_file(tmp_path: Path, name: str) -> None:
+    """The probe must answer from git's index, so a tracked file is seen and an untracked one is not."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=60)
+    (tmp_path / name).write_text("disable-rules: [github-pat]\n", encoding="utf-8")
+    assert root_trivy_config_problems(tmp_path) == []
+    subprocess.run(["git", "-C", str(tmp_path), "add", name], check=True, timeout=60)
+    problems = root_trivy_config_problems(tmp_path)
+    assert len(problems) == 1 and problems[0].startswith(f"{name} is tracked"), problems

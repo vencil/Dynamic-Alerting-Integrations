@@ -232,9 +232,9 @@ required_labels:
 max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
 max_evaluation_interval: 60s  # Custom Rule group interval 上限
 
-# 同一個檔也交給 generate-routes / validate-config 的 --policy 時，
-# 這一行必填：[] 表示不限制 webhook 網域；缺這個鍵會 exit 2（#1649）
-allowed_domains: []
+# 這份只給 lint（`lint --policy`、`validate-config --lint-policy`）；webhook 網域
+# 白名單 `allowed_domains` 在部署端 policy（另一份檔，給 generate-routes /
+# validate-config 的 --policy）。兩份各自拒收對方的鍵（#3797）。
 
 # 平台 COMPILED pack 的逐檔豁免（v2.10.0）——deny-list 治理對象是租戶手寫
 # raw PromQL；compiler 產出的 pack（如 Custom Alerts forecast recipe 的

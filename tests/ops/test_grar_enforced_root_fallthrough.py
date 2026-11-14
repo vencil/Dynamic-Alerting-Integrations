@@ -37,6 +37,7 @@ import validate_config as vc  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
 from _grar_render import (  # noqa: E402
     merge_generated, assemble_configmap, load_base_config)
+from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
 from _grar_routes import (  # noqa: E402
     generate_inhibit_rules, generate_routes)
 
@@ -126,7 +127,7 @@ def _labels(tid: str) -> dict[str, str]:
 def _bases(tmp_path: Path) -> dict[str, dict]:
     byo = tmp_path / "byo.yaml"
     byo.write_text(_BYO_BASE, encoding="utf-8")
-    return {"builtin": load_base_config(None), "byo": load_base_config(str(byo))}
+    return {"builtin": load_base_config(None), "byo": load_base_config_file(str(byo))}
 
 
 @pytest.mark.parametrize("base_name", ["builtin", "byo"])

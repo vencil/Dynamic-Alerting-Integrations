@@ -55,10 +55,11 @@ func judgeConfFile(data []byte) error {
 }
 
 // unreadableFileError is the error for parse-tree's refusal bad, as parse-tree
-// gives it: its Message is already bounded at the source
-// (parsetree.MaxMessageBytes), so every interface carries the same text.
+// gives it: its Message is one of parse-tree's fixed sentences (a kind and a
+// line, never the file's text, #3703), so every interface carries the same
+// text.
 func unreadableFileError(bad *parsetree.Unreadable) *UnreadableFileError {
-	return &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+	return &UnreadableFileError{Kind: bad.Kind, Message: bad.Message()}
 }
 
 // verdictCache keeps verdicts by content SHA-256 (a nil value: the file can
@@ -87,8 +88,8 @@ type verdictCache struct {
 
 // verdictCacheMax is the process cache's bound: above the largest tree
 // measured (5,000 files, ScanDirTree_Hierarchical_5000_Cold), so one load
-// keeps every verdict; an entry is a key and a pointer (a message is at most
-// parsetree.MaxMessageBytes).
+// keeps every verdict; an entry is a key and a pointer (a message is one of
+// parse-tree's fixed sentences).
 const verdictCacheMax = 8192
 
 // defaultVerdictCache is judgeConfFile's. Its log goes to log.Default(): the

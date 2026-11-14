@@ -40,6 +40,9 @@ from onboard_platform import (
     DEFAULT_TENANT_LABEL,
 )
 
+#: da-read's fixed sentence for a refusal by Alertmanager's loader (#3703).
+_LOADER_REFUSED = "refused by Alertmanager's config loader (its reason is not printed"
+
 
 # ============================================================
 # Phase 1: Alertmanager Reverse Analysis
@@ -95,14 +98,14 @@ class TestParseAlertmanagerConfig:
         path = write_yaml(config_dir, "empty.yaml", "")
         with pytest.raises(AlertmanagerConfigError) as exc_info:
             parse_alertmanager_config(path)
-        assert any("no route provided in config" in ln for ln in exc_info.value.detail_lines)
+        assert any(_LOADER_REFUSED in ln for ln in exc_info.value.detail_lines)
 
     def test_receivers_without_route_is_refused(self, config_dir):
         """#3206：只有 receivers、沒有 route 的設定 Alertmanager 拒收；以前當成可分析。"""
         path = write_yaml(config_dir, "am.yaml", "receivers:\n  - name: default\n")
         with pytest.raises(AlertmanagerConfigError) as exc_info:
             parse_alertmanager_config(path)
-        assert any("no routes provided" in ln for ln in exc_info.value.detail_lines), (
+        assert any(_LOADER_REFUSED in ln for ln in exc_info.value.detail_lines), (
             exc_info.value.detail_lines)
 
     def test_unknown_key_is_refused(self, config_dir):
@@ -111,7 +114,7 @@ class TestParseAlertmanagerConfig:
                           "route: {receiver: d}\nreceivers: [{name: d}]\ntenants: {}\n")
         with pytest.raises(AlertmanagerConfigError) as exc_info:
             parse_alertmanager_config(path)
-        assert any("field tenants not found" in ln for ln in exc_info.value.detail_lines)
+        assert any(_LOADER_REFUSED in ln for ln in exc_info.value.detail_lines)
 
     def test_match_value_is_alertmanagers_reading(self, config_dir):
         """`match: {tenant: 010}` 在 Alertmanager 是字串 "010"（欄位是字串、yaml.v2 取原文）。"""
@@ -195,7 +198,7 @@ class TestParseAlertmanagerConfig:
             parse_alertmanager_config(path)
 
     def test_main_names_the_refusal(self, config_dir, monkeypatch, capsys):
-        """main：拒收時 rc 2，stderr 帶 Alertmanager 的原因。"""
+        """main：拒收時 rc 2，stderr 帶 da-read 的固定句（#3703：載入器的原因會引出設定值，不印）。"""
         import onboard_platform as op
         path = write_yaml(config_dir, "am.yaml", "receivers:\n  - name: default\n")
         monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--alertmanager-config", path,
@@ -204,7 +207,7 @@ class TestParseAlertmanagerConfig:
             op.main()
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "no routes provided" in err and "Alertmanager's config loader" in err, err
+        assert _LOADER_REFUSED in err and "no routes provided" not in err, err
 
 
 class TestExtractTenantFromMatchers:
@@ -1170,11 +1173,11 @@ class TestParseScrapeConfigs:
         missing = os.path.join(config_dir, "no-such-prometheus.yml")
         monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--scrape-config", missing,
                                          "--dry-run"])
-        with pytest.raises(SystemExit) as exc_info:
+        # #3797: the declaration's refusal (rc 2 through `run()`), before any phase.
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc_info:
             op.main()
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert f"cannot read {missing}" in err, err
+        assert str(exc_info.value) == f"--scrape-config {missing}: No such file or directory"
 
     def test_main_names_the_refusal(self, config_dir, monkeypatch, capsys):
         """main：Phase 3 的設定被拒收時 rc 2，stderr 帶 Prometheus 的原因。"""

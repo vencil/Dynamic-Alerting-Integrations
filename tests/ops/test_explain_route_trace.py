@@ -375,6 +375,8 @@ class TestTraceExtraLabelsReserved:
 # #2293: --trace walks the WHOLE rendered route tree with Alertmanager's rules
 # ---------------------------------------------------------------------------
 _TT = "demo-tree"
+#: da-read's fixed sentence for a refusal by Alertmanager's loader (#3703).
+_LOADER_REFUSED = "refused by Alertmanager's config loader (its reason is not printed"
 _HOOK_MAIN = {"type": "webhook", "url": "https://hooks.example.com/main"}
 _HOOK_NOC = {"type": "webhook", "url": "https://noc.example.com/hook"}
 _HOOK_TEAM = {"type": "webhook", "url": "https://hooks.example.com/team"}
@@ -487,10 +489,12 @@ class TestBaseConfigFlag:
             _main(["--config-dir", str(conf), "--base-config", "x.yml"])
         assert exc.value.code == 2
         capsys.readouterr()
-        rc = _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
-                      "--base-config", str(tmp_path / "missing.yml")])
-        assert rc == 2
-        assert f"--base-config {tmp_path / 'missing.yml'}: " in capsys.readouterr().err
+        # #3797: the declaration's refusal (`_lib_input.document`), rc 2 by `run()`.
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError, match=f"^--base-config {re.escape(str(tmp_path))}"
+                                              r"/missing\.yml: "):
+            _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+                   "--base-config", str(tmp_path / "missing.yml")])
 
     @pytest.mark.parametrize("receivers, reason", [
         ([{"slack_configs": [{"channel": "#x"}]}], "missing name in receiver"),
@@ -499,9 +503,10 @@ class TestBaseConfigFlag:
     def test_malformed_base_receivers_is_refused_by_alertmanagers_loader(
             self, capsys, tmp_path, receivers, reason):
         """#3206: --base-config is read by Alertmanager's loader (da-read),
-        which refuses these before anything is assembled: rc 2, in the
-        loader's words (they used to reach assemble_configmap's KeyError /
-        TypeError and trace as "unknown", rc 0)."""
+        which refuses these before anything is assembled: rc 2 (they used to
+        reach assemble_configmap's KeyError / TypeError and trace as
+        "unknown", rc 0). #3703: da-read's fixed sentence, not the loader's
+        reason, which can quote the file's values."""
         base = tmp_path / "base.yml"
         base.write_text(yaml.safe_dump({"route": {"receiver": "ops"},
                                         "receivers": receivers}),
@@ -510,16 +515,17 @@ class TestBaseConfigFlag:
                       "--trace", "--json", "--base-config", str(base)])
         err = capsys.readouterr().err
         assert rc == 2
-        assert "Alertmanager's config loader refuses" in err and reason in err
+        assert "Alertmanager's config loader refuses" in err and _LOADER_REFUSED in err
+        assert reason not in err
         assert "Traceback" not in err
 
     def test_unassemblable_base_dict_is_unknown_not_a_crash(self, tmp_path):
         """A base dict with a receiver that has no `name` (only a direct
         caller can hand one now) is a refusal, not a crash. #1211 gap 2: the
         merge no longer indexes `r["name"]` on base receivers, so the verdict
-        is Alertmanager's own loader's, in its words."""
+        is Alertmanager's own loader's (#3703: da-read's fixed sentence)."""
         parsed = er._parse_config_files(str(_tree(tmp_path)))
-        with pytest.raises(er.AssemblyRefusedByAlertmanager, match="missing name in receiver"):
+        with pytest.raises(er.AssemblyRefusedByAlertmanager, match=re.escape(_LOADER_REFUSED)):
             er.build_trace_tree(parsed, {"global": {}, "route": {"receiver": "ops"},
                                          "receivers": [{"slack_configs": []}],
                                          "inhibit_rules": []})
@@ -632,7 +638,10 @@ class TestInhibitRulesStep:
         rc = _main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
                       "--trace", "--base-config", str(base)])
         assert rc == 2
-        assert 'invalid label name "2020-01-01"' in capsys.readouterr().err
+        err = capsys.readouterr().err
+        # #3703: the loader's reason (`invalid label name "2020-01-01"`)
+        # quotes the key; da-read prints its fixed sentence instead.
+        assert _LOADER_REFUSED in err and "2020-01-01" not in err, err
 
 
 @needs_amtool

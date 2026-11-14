@@ -80,6 +80,7 @@ from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets l
     KEY_VIEWS,
     StateInputError,
     empty_state_hint,
+    add_state_argument,
     load_state,
     subset_key,
 )
@@ -549,8 +550,8 @@ def main():
                         help="conf.d 目錄路徑")
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只做 Pre-check)")
-    parser.add_argument("--state",
-                        help="`tenant-api state show` 印出的 JSON（- 為標準輸入）："
+    add_state_argument(parser,  # #3797: a declared document (`-`: stdin)
+                       help="`tenant-api state show` 印出的 JSON（- 為標準輸入）："
                              "`kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json`")
     parser.add_argument("--skip-state-check", action="store_true",
                         help="state store 引用無法判定時仍允許 --execute：沒給 --state，"
@@ -565,9 +566,9 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     state = None
-    if args.state:
+    if args.state is not None:   # ⛔ not truthiness: '' is given, and refused
         try:
-            state = load_state(args.state, lang="zh")  # #3512: this tool's language
+            state = load_state(args, lang="zh")  # #3512: this tool's language
         except StateInputError as e:
             hint = empty_state_hint("zh") if e.empty else ""  # #3512: the module's table
             print(f"ERROR: {safe_label(e)}{hint}", file=sys.stderr)

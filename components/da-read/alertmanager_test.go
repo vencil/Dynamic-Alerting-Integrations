@@ -16,12 +16,25 @@ import (
 // runOn writes *content* to a temp file and runs `da-read alertmanager` on it.
 func runOn(t *testing.T, content string) (int, string, string) {
 	t.Helper()
+	return runWith(t, content)
+}
+
+// runWithReason is runOn with --show-loader-reason: a refusal carries the
+// loader's own reason.
+func runWithReason(t *testing.T, content string) (int, string, string) {
+	t.Helper()
+	return runWith(t, content, showLoaderReasonFlag)
+}
+
+func runWith(t *testing.T, content string, flags ...string) (int, string, string) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "alertmanager.yml")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	rc := run([]string{"alertmanager", path}, strings.NewReader(""), &stdout, &stderr)
+	args := append(append([]string{"alertmanager"}, flags...), path)
+	rc := run(args, strings.NewReader(""), &stdout, &stderr)
 	return rc, stdout.String(), stderr.String()
 }
 
@@ -187,7 +200,7 @@ func TestMergedKeysAreWritten(t *testing.T) {
 		"  - {api_url: 'https://h/2', <<: [*base, *other]}\n"
 	// x-base / x-other are not Alertmanager fields: strict loading refuses
 	// them, so the anchors go where Alertmanager reads them.
-	if rc, _, errOut := runOn(t, in); rc != exitCallerErr || !strings.Contains(errOut, "x-base") {
+	if rc, _, errOut := runWithReason(t, in); rc != exitCallerErr || !strings.Contains(errOut, "x-base") {
 		t.Fatalf("rc=%d stderr=%q; want the unknown top-level key refused by Alertmanager", rc, errOut)
 	}
 	in = "route: {receiver: r}\n" +
@@ -204,8 +217,9 @@ func TestMergedKeysAreWritten(t *testing.T) {
 	}
 }
 
-// What Alertmanager's loader refuses is refused, with its reason; so is a
-// file of several documents, of which Alertmanager reads only the first.
+// What Alertmanager's loader refuses is refused, with its reason under
+// --show-loader-reason; so is a file of several documents, of which
+// Alertmanager reads only the first.
 func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -225,7 +239,7 @@ func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rc, out, errOut := runOn(t, tc.in)
+			rc, out, errOut := runWithReason(t, tc.in)
 			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) ||
 				!strings.HasPrefix(errOut, programName+": ") {
 				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, no stdout, stderr with %q", rc, out, errOut, tc.wantErr)
@@ -234,61 +248,73 @@ func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 	}
 }
 
-// #3689: a refusal says which line and which types, never the value yaml.v2
-// quoted — the refused field may be a credential. Each canary is written
-// where Alertmanager wants another type; the short one is quoted whole by
-// yaml.v2, the long one by its first 7 bytes, so both prefixes are checked.
-func TestRefusalDoesNotEchoTheValue(t *testing.T) {
+// #3703: by default a refusal by Alertmanager's loader is one fixed
+// sentence — none of the loader's words, which quote the file's values in
+// sentences of every shape (a URL, a label name, a TLS version, a value
+// yaml.v2 could not decode). With --show-loader-reason the reason follows,
+// value and all: the flag is real.
+func TestALoaderRefusalIsAFixedSentenceUnlessAskedForTheReason(t *testing.T) {
 	t.Parallel()
-	const short, long = "CNRY9z", "CANARYVAL12345"
+	const canary = "CANARY"
+	webhook := func(httpConfig string) string {
+		return "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
+			"  - url: 'https://example.com/'\n    http_config: " + httpConfig + "\n"
+	}
 	cases := []struct {
-		name, in, want string
+		name, in, reason string
 	}{
-		{"bool-short", "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
-			"  - url: 'https://example.com/'\n    http_config: {follow_redirects: " + short + "}\n",
-			"cannot unmarshal !!str into bool"},
-		{"bool-long", "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
-			"  - url: 'https://example.com/'\n    http_config: {enable_http2: " + long + "}\n",
-			"cannot unmarshal !!str into bool"},
-		{"map-of-strings", "route: {receiver: r}\nreceivers:\n- name: r\n  email_configs:\n" +
-			"  - {to: a@example.com, smarthost: 'smtp.example.com:587', from: b@example.com, headers: " +
-			long + "}\n",
-			"cannot unmarshal !!str into map[string]string"},
-		// The value holds the decoder's own delimiters: the cut still ends at
-		// the Go type.
-		{"delimiters-in-value", "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
-			"  - url: 'https://example.com/'\n    http_config: {follow_redirects: 'C` into x'}\n",
-			"cannot unmarshal !!str into bool"},
+		{"proxy-url", webhook("{proxy_url: 'http://[" + canary + "]/'}"), `parse "http://[` + canary},
+		{"group-by", "route: {receiver: r, group_by: ['" + canary + " label']}\nreceivers: [{name: r}]\n",
+			`invalid label name "` + canary + ` label"`},
+		{"tls-version", webhook("{tls_config: {min_version: " + canary + "}}"), "unknown TLS version: " + canary},
+		{"undefined-receiver", "route: {receiver: " + canary + "}\nreceivers: [{name: r}]\n",
+			`undefined receiver "` + canary + `"`},
+		{"unknown-key", minimal + canary + ": {}\n", "field " + canary + " not found"},
+		// yaml.v2 quotes a value it cannot decode, whole up to 10 bytes and by
+		// its first 7 past that.
+		{"type-error-short", webhook("{follow_redirects: " + canary + "}"), "`" + canary + "` into bool"},
+		{"type-error-long", webhook("{enable_http2: " + canary + "LONGER}"), "`" + canary[:6]},
+		{"not-yaml", "route: [\n" + canary + "\n", "refused by Alertmanager's config loader: "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runOn(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.want) {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and %q", rc, out, errOut, tc.want)
+			if rc != exitCallerErr || out != "" || !strings.HasSuffix(errOut, ": "+loaderRefused+"\n") ||
+				strings.Count(errOut, "\n") != 1 || strings.Contains(strings.ToUpper(errOut), canary) {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and only the fixed sentence %q", rc, out, errOut, loaderRefused)
 			}
-			for _, leak := range []string{short, long[:7], "C` into x", "`"} {
-				if strings.Contains(errOut, leak) {
-					t.Fatalf("stderr %q carries %q", errOut, leak)
-				}
+			rc, out, errOut = runWithReason(t, tc.in)
+			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.reason) {
+				t.Fatalf("%s: rc=%d stdout=%q stderr=%q; want rc 2 and the loader's reason %q",
+					showLoaderReasonFlag, rc, out, errOut, tc.reason)
 			}
 		})
 	}
 }
 
-// Every shape decode.go's terror writes, and text that is not one of them.
-func TestWithoutQuotedValue(t *testing.T) {
+// --show-loader-reason belongs to `alertmanager`, before its file.
+func TestShowLoaderReasonIsAlertmanagersFlag(t *testing.T) {
 	t.Parallel()
-	for in, want := range map[string]string{
-		"line 3: cannot unmarshal !!str `abc` into bool":           "line 3: cannot unmarshal !!str into bool",
-		"line 3: cannot unmarshal !!str `CANARYV...` into bool":    "line 3: cannot unmarshal !!str into bool",
-		"line 3: cannot unmarshal !!str `a` into b` into []string": "line 3: cannot unmarshal !!str into []string",
-		"line 3: cannot unmarshal !!seq into string":               "line 3: cannot unmarshal !!seq into string",
-		"line 3: field x not found in type config.plain":           "line 3: field x not found in type config.plain",
+	for name, args := range map[string][]string{
+		"flag-without-file": {"alertmanager", showLoaderReasonFlag},
+		"flag-after-file":   {"alertmanager", "-", showLoaderReasonFlag},
+		"flag-twice":        {"alertmanager", showLoaderReasonFlag, showLoaderReasonFlag, "-"},
 	} {
-		if got := withoutQuotedValue(in); got != want {
-			t.Errorf("withoutQuotedValue(%q) = %q, want %q", in, got, want)
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			if rc := run(args, strings.NewReader(minimal), &stdout, &stderr); rc != exitCallerErr ||
+				stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), "usage: ") {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and the usage", rc, stdout.String(), stderr.String())
+			}
+		})
+	}
+	var stdout, stderr bytes.Buffer
+	rc := run([]string{"alertmanager", showLoaderReasonFlag, "-"}, strings.NewReader(minimal), &stdout, &stderr)
+	want := `{"documents":[{"route":{"receiver":"r"},"receivers":[{"name":"r"}]}]}` + "\n"
+	if rc != exitOK || stdout.String() != want || stderr.Len() != 0 {
+		t.Fatalf("rc=%d stdout=%q stderr=%q; want the reading, as without the flag", rc, stdout.String(), stderr.String())
 	}
 }
 
@@ -301,7 +327,7 @@ func TestURLsAreJudgedAsTheReleasedAlertmanager(t *testing.T) {
 	for _, proxy := range []string{"http://h:80:3128/", "http://::1/"} {
 		in := "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
 			"  - url: 'https://example.com/'\n    http_config: {proxy_url: '" + proxy + "'}\n"
-		rc, out, errOut := runOn(t, in)
+		rc, out, errOut := runWithReason(t, in)
 		if rc != exitCallerErr || out != "" ||
 			!strings.Contains(errOut, "refused by Alertmanager's config loader") ||
 			!strings.Contains(errOut, proxy) {
@@ -377,13 +403,13 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 		wantErr  string
 	}{
 		{"field-not-printed", "shown: a\nhidden: b\n", map[string]interface{}{"shown": "a"},
-			reflect.ValueOf(hidden{Shown: "a", Hidden: "b"}), `hidden: the text writes it`},
+			reflect.ValueOf(hidden{Shown: "a", Hidden: "b"}), `line 2: the text writes it`},
 		{"field-missing-from-reading", "kept: a\n", map[string]interface{}{},
-			reflect.ValueOf(hidden{Kept: "a"}), `kept: the text writes it`},
+			reflect.ValueOf(hidden{Kept: "a"}), `line 1: the text writes it`},
 		{"struct-list-length", "items: [{kept: a}, {kept: b}]\n",
 			map[string]interface{}{"items": []interface{}{map[string]interface{}{"kept": "a"}}},
 			reflect.ValueOf(withList{Items: []hidden{{Kept: "a"}}}),
-			`items: the text writes it, but the loader's reading has no such entry: 2 entries written, 1 read`},
+			`line 1: the text writes it, but the loader's reading has no such entry: 2 entries written, 1 read`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -394,8 +420,8 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 			}
 			w := &walker{c: newComposed()}
 			err := w.walk(root.Content[0], tc.read, tc.rv, nil)
-			if !errors.Is(err, errNotInReading) || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v; want errNotInReading with %q", err, tc.wantErr)
+			if !errors.Is(err, errNotInReading) || !strings.HasPrefix(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v; want errNotInReading starting %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -526,7 +552,43 @@ func TestAMapOfStructPointersIsPairedByKey(t *testing.T) {
 		t.Fatalf("got %s, %v", got, err)
 	}
 	_, err = walkOn("by_pointer: {a: {name: x}, z: {name: y}}\n", read, v)
-	if !errors.Is(err, errNotInReading) || !strings.Contains(err.Error(), "by_pointer.z:") {
-		t.Fatalf("err = %v; want errNotInReading naming by_pointer.z", err)
+	if want := "line 1: " + errNotInReading.Error(); !errors.Is(err, errNotInReading) || err.Error() != want {
+		t.Fatalf("err = %v; want %q (the line, not the key)", err, want)
+	}
+}
+
+// da-read's own refusals carry no text of the file (#3703): a key the walk
+// refuses is named by its line, never by the path of keys above it or by
+// itself. The canary sits in every key, anchor and value the file's author
+// writes; the refusal must be the walk's (errNotInReading), and stderr must
+// not hold the canary.
+func TestOwnRefusalsCarryNoTextOfTheFile(t *testing.T) {
+	t.Parallel()
+	const c = "ZQXCANARY"
+	// An http_headers map with a header beside a `<<` merge: the text writes
+	// the header on line 8, and Alertmanager's reading has no entry for it.
+	in := "route: {receiver: " + c + "r}\n" +
+		"receivers:\n- name: " + c + "r\n  webhook_configs:\n  - url: http://h.invalid/\n" +
+		"    http_config:\n      http_headers:\n" +
+		"        " + c + "h: {values: [" + c + "v]}\n" +
+		"        <<: &" + c + "a {" + c + "h2: {values: [" + c + "v2]}}\n"
+	var stdout, stderr bytes.Buffer
+	rc := run([]string{"alertmanager", "-"}, strings.NewReader(in), &stdout, &stderr)
+	want := programName + ": " + stdinName + ": line 8: " + errNotInReading.Error() + "\n"
+	if rc != exitCallerErr || stdout.Len() != 0 || stderr.String() != want {
+		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and %q", rc, stdout.String(), stderr.String(), want)
+	}
+
+	// A written key the reading has no field for (Alertmanager's strict
+	// loading refuses an unknown key first, so the walk is driven directly):
+	// the key is the canary.
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte("shown: a\n"+c+": b\n"), &root); err != nil {
+		t.Fatal(err)
+	}
+	w := &walker{c: newComposed()}
+	err := w.walk(root.Content[0], map[string]interface{}{"shown": "a"}, reflect.ValueOf(hidden{Shown: "a"}), nil)
+	if !errors.Is(err, errNotInReading) || strings.Contains(err.Error(), c) {
+		t.Fatalf("err = %v; want errNotInReading without the key", err)
 	}
 }

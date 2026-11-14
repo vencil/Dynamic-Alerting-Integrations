@@ -54,6 +54,7 @@ from generate_alertmanager_routes import (
     _parse_config_files,
     write_text_secure,
 )
+from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
 from _grar_render import merge_generated, _enforce_equal_labels_gated
 from generate_alertmanager_routes import (
     assert_equal_labels_gated,
@@ -94,7 +95,7 @@ _MIN_AM = {"route": {"receiver": "r"}, "receivers": [{"name": "r"}]}
 
 
 class TestLoadBaseConfig:
-    """load_base_config() tests."""
+    """load_base_config_file() tests."""
 
     def test_no_path_returns_defaults(self):
         base = load_base_config(None)
@@ -129,7 +130,7 @@ class TestLoadBaseConfig:
             target = tmp_path / "base.yaml"
             target.mkdir()
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config(str(target))
+            load_base_config_file(str(target))
         assert "--base-config" in str(exc.value), (
             "the message must name the flag, or the operator has to guess "
             "which argument was wrong")
@@ -147,10 +148,14 @@ class TestLoadBaseConfig:
             self, tmp_path, shape, payload, cause):
         p = tmp_path / "base.yaml"
         p.write_bytes(payload)
+        # #3703: the loader's reason is printed only on request; asked for
+        # here, so each branch's own cause can be checked.
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config(str(p))
+            load_base_config_file(str(p), show_loader_reason=True)
         msg = str(exc.value)
-        assert msg.startswith("--base-config:"), (
+        # #3797: the file's own bytes are the declaration's (`--base-config
+        # <path>: …`), what they hold the loader's (`--base-config: …`).
+        assert msg.startswith(("--base-config:", f"--base-config {p}:")), (
             f"the line identifying the error must name the flag; got:\n{msg}")
         # ⛔ `"--base-config" in msg` was satisfiable by the remediation
         # paragraph further down, so removing the flag name from the
@@ -176,7 +181,7 @@ class TestLoadBaseConfig:
         p = tmp_path / "base.yaml"
         p.write_bytes(b"- a\n- b\n")
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config(str(p))
+            load_base_config_file(str(p))
         msg = str(exc.value)
         assert "omit --base-config" not in msg.lower(), (
             f"a remedy that is wrong for a list/scalar file:\n{msg}")
@@ -227,8 +232,8 @@ class TestLoadBaseConfig:
 
         monkeypatch.setattr(builtins, "open", boom)
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config(str(p))
-        assert "cannot read" in str(exc.value)
+            load_base_config_file(str(p))
+        assert str(exc.value).startswith(f"--base-config {p}: Input/output error"), str(exc.value)
 
     def test_the_result_does_not_alias_the_module_default(self, tmp_path):
         """⛔ `dict(...)` is shallow and the missing-key fill assigned the SAME
@@ -242,7 +247,7 @@ class TestLoadBaseConfig:
         # and via the partial-file fill branch, which is a second copy site
         p = tmp_path / "partial.yaml"
         p.write_text(yaml.dump(_MIN_AM), encoding="utf-8")
-        b = load_base_config(str(p))
+        b = load_base_config_file(str(p))
         b["global"]["POISON2"] = True
         b["inhibit_rules"].append({"POISON2": True})
         assert render._DEFAULT_BASE_CONFIG == before, (
@@ -259,7 +264,7 @@ class TestLoadBaseConfig:
         p.write_text(
             yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}, **_MIN_AM}),
             encoding="utf-8")
-        base = load_base_config(str(p))
+        base = load_base_config_file(str(p))
         assert base["global"]["smtp_smarthost"] == "mail.example:587"
         assert "route" in base and "receivers" in base
 
@@ -278,7 +283,7 @@ class TestLoadBaseConfig:
         defect until this test existed.
         """
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config("")
+            load_base_config_file("")
         # #3276: the shared caller-path judgement names '' as supplied.
         assert str(exc.value).startswith("--base-config '': ")
 
@@ -301,7 +306,7 @@ class TestLoadBaseConfig:
         }
         p = tmp_path / "base.yaml"
         p.write_text(yaml.dump(config), encoding="utf-8")
-        base = load_base_config(str(p))
+        base = load_base_config_file(str(p))
         assert base["global"]["resolve_timeout"] == "10m"
         assert base["route"]["receiver"] == "custom-default"
 
@@ -309,7 +314,7 @@ class TestLoadBaseConfig:
         """A config without `global` / `inhibit_rules` gets them filled in."""
         p = tmp_path / "partial.yaml"
         p.write_text(yaml.dump(_MIN_AM), encoding="utf-8")
-        base = load_base_config(str(p))
+        base = load_base_config_file(str(p))
         assert base["route"] == {"receiver": "r"}
         import _grar_render as render
         assert base["global"] == render._DEFAULT_BASE_CONFIG["global"]
@@ -318,12 +323,17 @@ class TestLoadBaseConfig:
     def test_a_file_without_route_is_refused_by_alertmanagers_loader(self, tmp_path):
         """#3206 (breaking): a base without `route` used to be filled with the
         built-in route; Alertmanager's loader refuses such a config, and so
-        does --base-config now — in the loader's words, rc 2."""
+        does --base-config now, rc 2 — in the loader's words only with
+        --show-loader-reason (#3703); without it the message names the flag."""
         p = tmp_path / "partial.yaml"
         p.write_text(yaml.dump({"global": {"resolve_timeout": "3m"}}), encoding="utf-8")
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config(str(p))
+            load_base_config_file(str(p))
         assert "Alertmanager's config loader refuses" in str(exc.value)
+        assert "no route" not in str(exc.value)
+        assert "--show-loader-reason prints the loader's reason" in str(exc.value)
+        with pytest.raises(gar.BaseConfigInputError) as exc:
+            load_base_config_file(str(p), show_loader_reason=True)
         assert "no route" in str(exc.value)
 
     def test_values_are_alertmanagers_reading(self, tmp_path):
@@ -335,7 +345,7 @@ class TestLoadBaseConfig:
                      "route: {receiver: r, group_wait: 90s}\nreceivers: [{name: r}]\n"
                      "inhibit_rules:\n- source_match: {v: .nan}\n  target_match: {s: x}\n",
                      encoding="utf-8")
-        base = load_base_config(str(p))
+        base = load_base_config_file(str(p))
         assert base["global"]["resolve_timeout"] == "5m"
         assert base["route"]["group_wait"] == "1m30s"
         assert base["inhibit_rules"][0]["source_match"] == {"v": ".nan"}
@@ -347,7 +357,7 @@ class TestLoadBaseConfig:
         p = tmp_path / "base.yaml"
         p.write_text(yaml.dump(_MIN_AM), encoding="utf-8")
         with pytest.raises(gar.BaseConfigInputError) as exc:
-            load_base_config(str(p))
+            load_base_config_file(str(p))
         assert "the way Alertmanager does" in str(exc.value)
 
 
@@ -630,7 +640,9 @@ class TestOutputAndClusterExitCodes:
 
         monkeypatch.setattr(render, "_run_binary", fake)
         monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
-        assert render.apply_to_configmap([], [], [], "monitoring", "cm") is False
+        # #3703: asked for, so a loader refusal carries the loader's reason.
+        assert render.apply_to_configmap([], [], [], "monitoring", "cm",
+                                         show_loader_reason=True) is False
         err = capsys.readouterr().err
         assert expected in err, (
             f"[{case}] apply_to_configmap failed while kubectl returned 0, and "

@@ -62,6 +62,7 @@ import pytest
 import yaml
 
 from _pysource import parse_py
+from _trivy_contract import NEUTRAL_KEYS, SCAN_FILTER
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
@@ -1427,11 +1428,9 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
         # tests passing. `exit-code: 0` is equally load-bearing in the other
         # direction — the design is capture-don't-gate, and a non-zero code
         # would turn every finding into a red nightly run.
-        contract = {
-            "severity": "CRITICAL,HIGH",
-            "ignore-unfixed": True,
-            "exit-code": "0",
-        }
+        # The filter half is shared with release.yaml and the PR-time scan
+        # (tests/_trivy_contract.py, #3870); only exit-code is this bucket's.
+        contract = {**SCAN_FILTER, "exit-code": "0"}
         for key, want in contract.items():
             assert str(with_.get(key)) == str(want), (
                 f"{job_name}'s Trivy step sets {key}={with_.get(key)!r}, "
@@ -1516,6 +1515,75 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
                 "in the condition that owns no waiver file silently borrows "
                 "someone else's suppressions."
             )
+            _assert_waiver_arms_pair_image_with_own_register(job_name, expr)
+
+
+def _assert_waiver_arms_pair_image_with_own_register(where: str, expr: str) -> None:
+    """Each `matrix.name == '<image>' && '<register>'` arm must name that image's own file.
+
+    ⛔ Set equality between the guard names and the file owners stops being
+    enough at the SECOND register (#3637): with two names and two files,
+    swapping the files between the two arms keeps both sets equal while each
+    image reads the other's waivers. So each arm is checked as a pair, and the
+    arms must account for every name and every path in the expression.
+    """
+    guarded = set(re.findall(r"matrix\.name\s*==\s*'([^']+)'", expr))
+    paths = set(re.findall(r"'([^']*\.trivyignore\.ya?ml)'", expr))
+    arms = re.findall(
+        r"matrix\.name\s*==\s*'([^']+)'\s*&&\s*'([^']*\.trivyignore\.ya?ml)'", expr)
+    crossed = [(name, path) for name, path in arms if Path(path).parent.name != name]
+    assert not crossed, f"{where} hands an image another image's waiver file: {crossed}"
+    # ⛔ Matching the arms says nothing about what sits BETWEEN and AFTER them.
+    # Measured: replacing the trailing `|| ''` with `|| '<a register>'` hands
+    # that register to every other image in the matrix, and a `!=` arm does the
+    # same — both left the arm check passing. The whole expression must be the
+    # chain and nothing else.
+    arm = r"matrix\.name\s*==\s*'[^']+'\s*&&\s*'[^']*\.trivyignore\.ya?ml'"
+    chain = rf"\$\{{\{{\s*{arm}(?:\s*\|\|\s*{arm})*\s*\|\|\s*''\s*\}}\}}"
+    assert arms and re.fullmatch(chain, expr.strip()), (
+        f"{where}: trivyignores {expr!r} is not exactly a chain of "
+        "`matrix.name == '<image>' && '<its register>'` arms ending in `|| ''`, "
+        "so some image can receive a register by default."
+    )
+    assert {n for n, _ in arms} == guarded and {p for _, p in arms} == paths
+
+
+def test_every_matrix_waiver_expression_pairs_image_with_its_own_register() -> None:
+    """The pairing holds in EVERY workflow, not only the nightly one.
+
+    component-docker-build.yaml carries the same expression for PR-time output;
+    measured before this test existed: crossing its two arms left every scan
+    guard passing (#3637).
+    """
+    seen = []
+    for path in sorted(WORKFLOWS_DIR.glob("*.y*ml")):
+        wf = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_name, job in (wf.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                expr = str((step.get("with") or {}).get("trivyignores") or "")
+                if "${{" not in expr:
+                    continue
+                where = f"{path.name}::{job_name}"
+                _assert_waiver_arms_pair_image_with_own_register(where, expr)
+                seen.append(where)
+    assert len(seen) >= 2, (
+        f"expected the nightly and the PR-time build to carry a waiver expression, saw {seen} — "
+        "if one was removed on purpose, lower this floor; otherwise the loop went blind"
+    )
+
+
+# The ONE path each register may waive: the bundled upstream release binary it
+# was written for, as Trivy reports it for an image scan (no leading slash).
+# Keyed by register so a new register has to be argued here.
+_WAIVER_BINARY = {
+    "components/recipe-preview/.trivyignore.yaml": "usr/local/bin/promtool",
+    "components/da-tools/.trivyignore.yaml": "usr/local/bin/amtool",
+}
+
+# Longest a waiver may run before someone has to re-run the evidence.
+_WAIVER_MAX_DAYS = 183
 
 
 # OpenVEX status justifications (OPENVEX-SPEC.md), plus `risk_accepted` for the
@@ -1599,6 +1667,48 @@ def test_every_waiver_entry_has_expiry_and_justification() -> None:
                         f"{where} ({entry.get('id')!r}) justification "
                         f"{entry.get('justification')!r} is not one of "
                         f"{sorted(_WAIVER_JUSTIFICATIONS)}"
+                    )
+                # ⛔ An entry without `paths:` waives the id in EVERY binary of
+                # the image. Both registers exist for one bundled upstream
+                # binary each; unscoped, the same id arriving in first-party Go
+                # (it did: da-crdecode and da-read carried CVE-2026-78661 next
+                # to amtool, #3637) would pass the release gate unseen.
+                #
+                # ⛔ "Has a non-empty paths list" is not the property. Trivy
+                # matches these as globs: `['*']` and `['usr/local/bin/*']`
+                # both passed an earlier form of this check and both waive
+                # every first-party binary. So the value is compared, exactly,
+                # against the one binary the register was written for.
+                scoped = entry.get("paths")
+                allowed = _WAIVER_BINARY.get(rel)
+                if allowed is None:
+                    bad.append(
+                        f"{rel} is a waiver register this guard has no binary for — "
+                        "add it to _WAIVER_BINARY with the bundled upstream binary it covers"
+                    )
+                elif scoped != [allowed]:
+                    bad.append(
+                        f"{where} ({entry.get('id')!r}) paths is {scoped!r}, not exactly "
+                        f"[{allowed!r}] — anything else (missing, a glob, a second path) "
+                        "waives the id in binaries this register does not cover"
+                    )
+                # ⛔ "Parses as a date" let `2999-01-01` through: time-boxed in
+                # form, permanent in effect. The cap is relative to today on
+                # purpose — it only ever loosens as the date approaches, so it
+                # cannot turn a green tree red by the calendar alone.
+                when = entry.get("expired_at")
+                if isinstance(when, str):
+                    try:
+                        when = datetime.date.fromisoformat(when)
+                    except ValueError:
+                        when = None
+                if isinstance(when, datetime.datetime):
+                    when = when.date()
+                if isinstance(when, datetime.date) and \
+                        (when - datetime.date.today()).days > _WAIVER_MAX_DAYS:
+                    bad.append(
+                        f"{where} ({entry.get('id')!r}) expired_at {when} is more than "
+                        f"{_WAIVER_MAX_DAYS} days out — re-validate and extend instead"
                     )
                 if not expires(entry.get("expired_at")):
                     bad.append(
@@ -2204,17 +2314,15 @@ def test_the_report_job_waits_for_every_bucket() -> None:
 # to merely relaxing something), because that is the property `report` needs.
 _RUNS_DESPITE_UPSTREAM_FAILURE = frozenset({"always()", "!cancelled()"})
 
-# Inputs that say WHAT to scan and WHERE to put the answer. They cannot shrink
-# what Trivy looks for, so they need no per-value pin here. `version` picks the
-# Trivy BINARY (#1337: the action's default moved with every action bump); it
-# filters nothing, and its value is pinned — identical across every CI step,
-# the Makefile and the dev container — by tests/shared/test_toolchain_pin_parity.py.
-_TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output", "version"})
+# Inputs that say WHAT to scan and WHERE to put the answer; why each is
+# neutral is written once, next to the definition.
+_TRIVY_NEUTRAL_KEYS = NEUTRAL_KEYS  # SSOT: tests/_trivy_contract.py (#3870)
 
 # Vetted exceptions, per bucket, with the reason. `scan` legitimately carries a
-# waiver file, but ONLY conditionally and ONLY for recipe-preview's bundled
-# promtool: the expression evaluates to '' for every other image in that
-# matrix, so it is a no-op there. The other two buckets scan images we do not build and have no
+# waiver file, but ONLY conditionally and ONLY for an image that bundles an
+# upstream release binary and owns a register on disk (recipe-preview's
+# promtool, da-tools' amtool): the expression evaluates to '' for every other
+# image in that matrix, so it is a no-op there. The other two buckets scan images we do not build and have no
 # waiver story at all — an entry appearing in either is a finding, not config.
 _TRIVY_EXTRA_ALLOWED: dict[str, frozenset[str]] = {
     "scan": frozenset({"trivyignores"}),

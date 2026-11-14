@@ -12,10 +12,10 @@
 #      → 404, any path with an identity header → 400, /health → 200.
 #   3. The API through oauth2-proxy: /api/v1/tenants — RBAC-filtered list == 2 tenants
 #      (db-demo + cache-demo). NOTE: the literal C7 AC said /me
-#      accessible_tenants==2, but that is impossible with the published
-#      tenant-api — the /me gate needs tenants:["*"], which makes
-#      accessible_tenants==["*"]. The "2 tenants" the portal shows come from
-#      /api/v1/tenants, so that is what we assert. See README.
+#      accessible_tenants==2, but the demo group's rule is tenants:["*"] (it
+#      must be a platform admin — tests/ops/test_trylocal_rbac_bypass_groups.py),
+#      so /me reports accessible_tenants==["*"]. The "2 tenants" the portal
+#      shows come from /api/v1/tenants, so that is what we assert. See README.
 #   3b. tenant-api :8083/metrics — tenant_api_policy_available 1: the
 #      generator container answers tenant-api's status read (#2903), so the
 #      two run as one uid and share the socket; without it every write the

@@ -46,13 +46,3 @@ file_overrides:
         - quantile_over_time
       # 下一行的值由 scripts/tools/dx/gen_recipe_contract.py 依 recipe 契約寫入，勿手改。
       max_range_duration: 96h   # forecast lookback 上限 = max(lookback_factor·最大 horizon, lookback_floor)
-
-# Webhook Domain Allowlist (v1.5.0)
-# generate_alertmanager_routes.py --validate --policy 時檢查 receiver URL
-# 支援 fnmatch 萬用字元 (e.g., *.example.com)
-# 空清單 = 不限制（向後相容）
-allowed_domains:
-  - "*.example.com"          # 預設企業域名
-  - "hooks.slack.com"        # Slack incoming webhooks
-  - "outlook.office.com"     # Microsoft Teams
-  - "events.pagerduty.com"   # PagerDuty

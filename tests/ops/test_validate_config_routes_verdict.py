@@ -73,13 +73,13 @@ def _loader(monkeypatch, outcome: str = "real") -> list:
     calls: list = []
     real = render.alertmanager_reading
 
-    def reading(text):
+    def reading(text, **kw):
         calls.append(text)
         if outcome == "refuse":
             raise render.InputRefused("da-read refused the input", ["fake-2311"])
         if outcome == "unusable":
             raise render.ConsumerReadError("da-read was not found")
-        return real(text)
+        return real(text, **kw)
 
     monkeypatch.setattr(render, "alertmanager_reading", reading)
     return calls

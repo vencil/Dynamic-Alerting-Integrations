@@ -1051,3 +1051,41 @@ def test_a_file_with_no_object_is_an_error(tmp_path, monkeypatch, capsys):
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
     assert len(errors) == 1 and "empty.yml" in errors[0] and "no objects" in errors[0], errors
+
+
+# ── #3797: the lint policy has its own keys and no other ──────────────────
+
+def test_a_key_the_lint_policy_does_not_have_is_refused():
+    """A deployment policy key here (or a misspelt one) was silently unused:
+    `validate-config --policy` handed the deployment policy to lint, and a
+    typo linted by the default. Refused, naming the key and, for a
+    deployment key, where it goes."""
+    from _lib_exitcodes import CallerError
+    with pytest.raises(CallerError) as exc:
+        lint_custom_rules.load_policy({"allowed_domains": [], "denied_functions": []}, "p.yaml")
+    assert exc.value.reason == "policy_unknown_key"
+    assert str(exc.value).startswith("--policy p.yaml: the custom-rule lint policy has no "
+                                     "key(s) allowed_domains"), str(exc.value)
+    assert "validate-config --lint-policy" in str(exc.value)
+    with pytest.raises(CallerError) as exc:
+        lint_custom_rules.load_policy({"denied_function": []}, "p.yaml")
+    assert "denied_function" in str(exc.value) and "deployment policy" not in str(exc.value)
+
+
+def test_the_lint_policy_keys_are_the_built_in_ones():
+    """The keys are read off the built-in policy a --policy is merged over —
+    one list, not a second one beside it."""
+    assert lint_custom_rules.POLICY_KEYS == frozenset(lint_custom_rules.DEFAULT_POLICY)
+    assert lint_custom_rules.load_policy(dict(lint_custom_rules.DEFAULT_POLICY), "p") \
+        == lint_custom_rules.DEFAULT_POLICY
+
+
+def test_the_repository_lint_policy_holds_lint_keys_only():
+    """#3797: the repository's own lint policy and deployment policy are two
+    files (CI lints with one and judges receivers with the other)."""
+    root = os.path.join(os.path.dirname(__file__), "..", "..", ".github")
+    lint = _read_policy(os.path.join(root, "custom-rule-policy.yaml"))
+    assert set(lint) <= lint_custom_rules.POLICY_KEYS, sorted(set(lint) - lint_custom_rules.POLICY_KEYS)
+    with open(os.path.join(root, "deployment-policy.yaml"), encoding="utf-8") as f:
+        deploy = yaml.safe_load(f)
+    assert set(deploy) == {"allowed_domains"}, deploy

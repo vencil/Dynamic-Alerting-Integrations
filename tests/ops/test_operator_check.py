@@ -407,9 +407,14 @@ class TestMountListFlag:
         p.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
         return str(p)
 
+    @staticmethod
+    def _args(path):
+        """``--secret-mounts <path>`` through the tool's own parser (#3797)."""
+        return oc.build_parser("en").parse_args(["--secret-mounts", path])
+
     def test_a_valid_list_loads(self, tmp_path):
         doc = _mount_list("da-t-a")
-        assert oc.load_mount_list(self._write(tmp_path, doc)) == doc
+        assert oc.load_mount_list(self._args(self._write(tmp_path, doc))) == doc
 
     @pytest.mark.parametrize("doc", [
         "{not json",
@@ -423,7 +428,7 @@ class TestMountListFlag:
     ])
     def test_an_unusable_list_is_a_caller_error(self, tmp_path, doc):
         with pytest.raises(oc.CallerError, match="--secret-mounts"):
-            oc.load_mount_list(self._write(tmp_path, doc))
+            oc.load_mount_list(self._args(self._write(tmp_path, doc)))
 
     def test_unusable_list_through_the_cli_is_rc_2_before_any_check(self, tmp_path):
         proc = subprocess.run(

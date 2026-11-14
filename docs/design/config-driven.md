@@ -452,7 +452,7 @@ tenants:
 - **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；時段是左閉右開 `[start, end)`，結束那一分鐘不算（`01:00-09:00` 涵蓋 01:00–08:59），與 Alertmanager `time_intervals` 的 `end_time` 相同，所以寫不出涵蓋整天的時段——`00:00-23:59` 在 23:59 那一分鐘不生效，整天都要的值寫在 `default:`（[#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）；tenant-api 寫入關卡拒收新寫或改過的不合法 window（`PUT` 400；batch 的 patch 只寫字串值，寫不出 window），檔裡原封不動的（條目位置、window、值都沒變）只回 NOTICE，與死條目同一種 ratchet（[#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)）。⚠️ 破壞性變更：值合法、只有 window 不合法的寫入以前回 200
 - **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
 - **永遠不生效的條目**（[#3502](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3502)）：同一分鐘由**第一個**涵蓋它的 window 決定，所以被寫在前面的 window 完全遮住的 window（例如 `22:00-06:00` 之後的 `01:00-03:00`），以及被 window 合起來蓋滿整天的 `default`，一天中沒有任何一分鐘會送出。exporter 以條目為單位回報：`da-guard effective`／`served-values`／`key-verdict` 都帶 `dead_entries`，共用判決報 `dead_entry`（error），掛在寫下它的檔（含 profile）；tenant-api 與 `da-guard write` 拒收新寫或改過的死條目，原封不動留在檔裡的只回 NOTICE。部分重疊（例如 `22:00-06:00` 之後的 `05:00-08:00`，06:00 起生效）合法。死條目與不合法 window 裡的值不另判「exporter 讀不了的閾值」：每個條目只報一次，報的是讓它送不出的那個缺陷（[#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)；非有限數例外，照 #3140 一律擋）。判定與送值共用同一個「哪個條目送出這一分鐘」的函式，不會分歧
-- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——它們的讀取端只讀 `default`。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。子目錄 `_defaults.yaml` 寫保留鍵，不論是不是這種形式，exporter 都不往下傳給租戶（[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)；da-guard 何時報 `subtree_default_reserved_key`、`/effective` 與 `not_served` 怎麼呈現，見 [ADR-017 決策 4 的表](../adr/017-defaults-yaml-inheritance-dual-hash.md)）。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
+- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——exporter 與 annotation 這些讀取端只讀 `default`，`_routing_profile` 寫成 mapping 則由產生器整棵樹拒收（見下）。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；共用鍵判決（`da-guard key-verdict`）報 `schedule_unread`，掛在寫下它的檔：租戶檔是 error（`da-guard write` 擋新出現的、`generate-routes --validate` 整棵樹擋），根平台檔的 `tenants:` 與 profile 是 notice（[#3834](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3834)）；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。子目錄 `_defaults.yaml` 寫保留鍵，不論是不是這種形式，exporter 都不往下傳給租戶（[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)；da-guard 何時報 `subtree_default_reserved_key`、`/effective` 與 `not_served` 怎麼呈現，見 [ADR-017 決策 4 的表](../adr/017-defaults-yaml-inheritance-dual-hash.md)）。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
 
 ### 2.7 三態運營模式 (Operational Modes)
 
@@ -711,12 +711,12 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
 # CI 驗證（--validate 不寫檔；配 -o 會被拒絕，結束碼 2）
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --validate \
-  --policy .github/custom-rule-policy.yaml
+  --policy .github/deployment-policy.yaml
 
 # 產出合併後的 alertmanager.yml（K8s GitOps 改用 --output-configmap）
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --output-alertmanager --base-config alertmanager.yml \
-  -o alertmanager.new.yml --policy .github/custom-rule-policy.yaml
+  -o alertmanager.new.yml --policy .github/deployment-policy.yaml
 
 # 一站式合併至 Alertmanager ConfigMap + reload
 python3 scripts/tools/ops/generate_alertmanager_routes.py \

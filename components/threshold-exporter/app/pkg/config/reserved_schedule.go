@@ -75,6 +75,10 @@ type ScheduledReservedEntry struct {
 	Owner string
 	// Key: the reserved key, as the file spells it.
 	Key string
+	// written: the value as the file wrote it, schedule included (the
+	// decode keeps only its `default`) — LayerScheduleProblems' reading
+	// of it (ScheduleReading).
+	written ScheduledValue
 }
 
 // Entry is e as "<section>.<owner>.<key>" (the exporter's WARN names it so).
@@ -91,7 +95,7 @@ func stripScheduledReserved(section string, bodies map[string]map[string]Schedul
 		for k, sv := range body {
 			if scheduledReserved(k, sv) {
 				body[k] = ScheduledValue{Default: sv.Default, structured: sv.structured}
-				out = append(out, ScheduledReservedEntry{Section: section, Owner: name, Key: k})
+				out = append(out, ScheduledReservedEntry{Section: section, Owner: name, Key: k, written: sv})
 			}
 		}
 	}

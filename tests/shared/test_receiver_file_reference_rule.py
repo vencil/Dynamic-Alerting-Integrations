@@ -50,6 +50,7 @@ from _grar_render import (  # noqa: E402
     base_global_inherited_credentials,
     load_base_config,
 )
+from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
 
 _SCHEMA_PATH = REPO / "docs" / "schemas" / "tenant-config.schema.json"
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
@@ -426,7 +427,7 @@ def test_platform_base_keeps_its_watchdog_url_file(tmp_path):
         am_yml = yaml.safe_load(fh)["data"]["alertmanager.yml"]
     base_file = tmp_path / "base.yaml"
     base_file.write_text(am_yml, encoding="utf-8")
-    base = load_base_config(str(base_file))
+    base = load_base_config_file(str(base_file))
     assert base_global_inherited_credentials(base) == []
     d = _write(tmp_path, _tree("tenant", "http_config:\n  bearer_token: t\n"))
     out = tmp_path / "cm.yaml"
@@ -471,7 +472,7 @@ def test_base_global_credential_is_refused(tmp_path, name):
     base_file = tmp_path / "base.yaml"
     base_file.write_text(_GLOBAL_CREDENTIALS[name] + _BASE_ROUTE, encoding="utf-8")
     key = _READ_AS.get(name, name)
-    assert base_global_inherited_credentials(load_base_config(str(base_file))) == [f"global.{key}"]
+    assert base_global_inherited_credentials(load_base_config_file(str(base_file))) == [f"global.{key}"]
     d = _write(tmp_path, _tree("tenant", ""))
     out = tmp_path / "cm.yaml"
     p = _gar("--config-dir", str(d), "--output-configmap", "--base-config", str(base_file),
@@ -482,7 +483,7 @@ def test_base_global_credential_is_refused(tmp_path, name):
     assert (note in p.stderr) == key.endswith(".authorization"), p.stderr
     assert not out.exists()
     with pytest.raises(ValueError, match="global section sets"):
-        assemble_configmap(load_base_config(str(base_file)), [], [], [])
+        assemble_configmap(load_base_config_file(str(base_file)), [], [], [])
 
 
 def test_base_global_without_credentials_passes(tmp_path):
@@ -492,7 +493,7 @@ def test_base_global_without_credentials_passes(tmp_path):
         "  smtp_from: am@example.com\n  smtp_auth_username: ''\n  smtp_auth_password: ~\n"
         "  http_config:\n    follow_redirects: true\n    tls_config:\n      server_name: s\n"
         + _BASE_ROUTE, encoding="utf-8")
-    assert base_global_inherited_credentials(load_base_config(str(base_file))) == []
+    assert base_global_inherited_credentials(load_base_config_file(str(base_file))) == []
     d = _write(tmp_path, _tree("tenant", ""))
     p = _gar("--config-dir", str(d), "--output-configmap", "--base-config", str(base_file),
              "--dry-run")

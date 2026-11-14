@@ -87,8 +87,6 @@ from _lib_validation import (  # noqa: F401
 # tests/shared/test_query_error.py names who may.
 from _lib_prometheus import (  # noqa: F401
     _validate_url_scheme,
-    http_post_json,
-    http_request_with_retry,
     probe_health,
     QueryError,
     prometheus_range,

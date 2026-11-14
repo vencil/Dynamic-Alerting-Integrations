@@ -29,6 +29,7 @@ var findingKinds = map[string]bool{
 	"key_disable_noop":                    true,
 	"key_profile_not_judged":              true,
 	"key_renamed":                         true,
+	"key_schedule_unread":                 true,
 	"key_undecidable":                     true,
 	"key_unread":                          true,
 	"key_value_unread":                    true,

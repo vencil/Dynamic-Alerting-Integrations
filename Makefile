@@ -773,6 +773,13 @@ version-check: $(DA_READ_PREREQ) ## 檢查版號一致性 + 計數一致性 (CI 
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --check
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
+# #3857：計數的寫回入口。直接跑 `bump_docs.py --sync-counts` 在沒有 .build/、
+# 也沒設 DA_READ_BINARY 的乾淨樹上會以 exit 2 失敗（da-read was not found）；
+# 跟 version-check 一樣掛 $(DA_READ_PREREQ)，缺 da-read／da-crdecode 就先建。
+.PHONY: sync-counts
+sync-counts: $(DA_READ_PREREQ) ## 把 README／CLAUDE.md 等處的計數寫回與來源一致（只檢查用 make version-check；需要 da-read：DA_READ_BINARY，未設就建 .build/da-read）
+	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts
+
 .PHONY: pre-tag
 pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check advisory-patched-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""

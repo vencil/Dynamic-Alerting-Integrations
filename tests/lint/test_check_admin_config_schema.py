@@ -376,7 +376,10 @@ class TestEmbeddedRbac:
                        "    permissions: [read]\n    permissions: [admin]\n", 4)
         p = _write(tmp, "configmap-rbac.yaml", _CONFIGMAP_TMPL.format(body=body))
         viol = validate_embedded_file(p, ("data", "_rbac.yaml"), rbac_schema, jsonschema, _readers())
-        assert any("(unreadable)" in v and "permissions" in v for v in viol), viol
+        # #3703: the message names the kind and the line, never the key.
+        assert any("(unreadable)" in v and "kind duplicate_key" in v and "line 5" in v
+                   for v in viol), viol
+        assert not any("permissions" in v for v in viol), viol
 
     def test_embedded_rbac_is_checked_against_the_declared_claims(self, tmp, rbac_schema):
         body = _indent("groups:\n  - name: x\n    match:\n      claims:\n        org: [a]\n"

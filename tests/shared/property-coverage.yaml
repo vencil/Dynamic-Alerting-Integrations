@@ -210,9 +210,8 @@ modules:
     covered:
       - _validate_url_scheme
     excluded:
+      transport_error_text: "Formats one exception's text (#3519); each branch (non-HTTP reply cut to one line, connection error kept, with_type) pinned by example, and against a real non-HTTP peer, in tests/shared/test_transport_errors_guard.py"
       http_get_json: "I/O-bound; covered by integration via tools that consume it"
-      http_post_json: "I/O-bound; same as http_get_json"
-      http_request_with_retry: "I/O + retry policy; covered by retry-specific integration tests"
       query_prometheus_instant: "I/O-bound; thin wrapper over http_get_json"
       query_prometheus_range: "I/O-bound; thin wrapper over http_get_json (r3 W1 fetch-core consolidation)"
       probe_health: "I/O-bound; thin urlopen probe over _validate_url_scheme (r3 W2 health-probe consolidation)"
@@ -379,7 +378,10 @@ modules:
       - validate_receiver_domains
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
-      load_policy_document: "#2901 I/O-bound policy reader (load_policy is its wrapper); every accepted and refused min_generator_version shape example-pinned by test_grar_min_generator_version.py"
+      load_policy_document: "#2901 I/O-bound policy reader (load_policy is its wrapper); every accepted and refused min_generator_version shape example-pinned by test_grar_min_generator_version.py; #3797 reads through _lib_input.document then policy_document"
+      policy_document: "#3797 the deployment policy's checks on a parsed mapping (key presence, list shape, string entries, min_generator_version, shared_secrets, unknown keys); every refused shape example-pinned by test_domain_policy.py and test_grar_min_generator_version.py"
+      _refuse_unknown_keys: "#3797 set difference against POLICY_KEYS plus the lint-key hint; example-pinned by test_domain_policy.py (a lint key, any other key)"
+      _lint_policy_keys: "#3797 one import of lint_custom_rules.POLICY_KEYS (frozenset(DEFAULT_POLICY)); no logic"
       generator_version_problem: "#2901 three-number comparison plus the pre-release rule; table-pinned (numeric not string order, pre-release, unreadable own version) by test_grar_min_generator_version.py::test_version_comparison"
       ignored_routing_keys: "#2960 closed walk (block / receiver / overrides[i] / routes[i] receiver) against fixed key sets; every block and position example-pinned by the shared table routing_ignored_keys_cases.json"
       receiver_keys: "#2960 set union over RECEIVER_TYPES (pinned to the schema by test_receiver_spec_parity.py); example-pinned per type by test_routing_ignored_keys.py"

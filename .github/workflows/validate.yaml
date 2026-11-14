@@ -163,6 +163,7 @@ jobs:
               - "requirements/**"
               - "tests/**"
               - ".github/custom-rule-policy.yaml"
+              - ".github/deployment-policy.yaml"
               - ".github/workflows/validate.yaml"
               # .pre-commit-config.yaml is the source-of-truth for the pre-commit
               # hook count that the "Count consistency" step (bump_docs
@@ -569,7 +570,7 @@ jobs:
               --config-dir "$confd" \
               --validate \
               --strict \
-              --policy .github/custom-rule-policy.yaml
+              --policy .github/deployment-policy.yaml
             echo "::endgroup::"
           done
 

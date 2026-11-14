@@ -324,7 +324,7 @@ def main():
 
     # Collect dashboard files to import
     dashboards = []
-    if args.dashboard:
+    if args.dashboard is not None:  # '' is given: refused, named (#3797)
         cm_name = args.name or auto_name(args.dashboard)
         # #3445: read (and refused, named) before anything is imported.
         dashboards.append((args.dashboard, cm_name,
