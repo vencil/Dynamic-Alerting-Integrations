@@ -55,7 +55,7 @@ Tenant 透過 `tenant.yaml` 自助管理以下設定，不接觸 PromQL：
 tenants:
   db-a:
     mysql_connection_usage_percent: "85"           # Custom: 自訂閾值（連線使用率，佔 max_connections 的 %）
-    container_cpu: ""                              # Default: 採用平台預設值
+    # container_cpu:                               # Default: 不寫這個 key，沿用上層的值——子目錄 _defaults.yaml 有設就用它，否則是根目錄的平台預設值（空字串不是合法的值）
     mysql_replication_lag: "disable"               # Disable: 關閉此告警
     mysql_connection_usage_percent_critical: "95"  # 多層嚴重度（_critical suffix）
     "mysql_connection_usage_percent{instance='db-primary:3306'}": "75"  # 維度標籤篩選（label 須在根 _defaults.yaml 的 dimensions: 為該 base 宣告；出貨的 Rule Pack 以 max by(tenant) 合成單一租戶門檻，#3475）

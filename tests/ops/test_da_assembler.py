@@ -1044,6 +1044,11 @@ def _tagged_int(n):
 _REFUSED = [
     ("defaults-list", "  defaults: {cpu: [1]}\n"),
     ("defaults-map", "  defaults: {cpu: {a: 1}}\n"),
+    # #3457: a threshold number has at most 20 digits. 2^64-1 is past the edit
+    # contract's 18-character int, so it is written as the float it rounds
+    # to, `18446744073709551616.0` — 21 digits, which the exporter does not
+    # read. (`defaults-min-int64` below, 19 digits and `.0`, is still read.)
+    ("defaults-max-uint64", "  defaults: {cpu: 0xFFFFFFFFFFFFFFFF}\n"),
 ]
 
 #: (id, spec body below `_T1`) a scalar `defaults` value the exporter does
@@ -1106,7 +1111,6 @@ _READ_NUMBERS = [
     ("defaults-null", "  defaults: {cpu: null}\n"),
     ("defaults-float-tag", "  defaults: {cpu: !!float 80}\n"),
     ("defaults-underflow", "  defaults: {cpu: 1e-400}\n"),
-    ("defaults-max-uint64", "  defaults: {cpu: 0xFFFFFFFFFFFFFFFF}\n"),
     ("defaults-min-int64", "  defaults: {cpu: -0x8000000000000000}\n"),
     ("defaults-trailing-underscore", "  defaults: {cpu: 1_}\n"),
     ("defaults-dot-exponent-underscore", "  defaults: {cpu: .5e1_0}\n"),

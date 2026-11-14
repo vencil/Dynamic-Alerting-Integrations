@@ -1365,6 +1365,22 @@ def render_alert_rules(results, prefix="custom_"):
     return buf.getvalue()
 
 
+def _buckets(results):
+    """把規則分成互斥的四桶：(perfect, complex, unparseable, golden)。
+
+    改用黃金標準（`triage_action == "use_golden"`）的規則不轉換、不輸出，所以
+    只進 golden 桶，不再同時算在它的解析狀態裡；四桶加總等於規則總數。摘要、
+    報告與 dry-run 都讀這一份，數字才會彼此對得上（issue 3772：先前「成功轉換
+    0 條規則 (✅ 2 完美, ⚠️ 1 已猜測)」——總數扣了黃金標準、分項沒扣）。
+    """
+    golden = [r for r in results if r.triage_action == "use_golden"]
+    rest = [r for r in results if r.triage_action != "use_golden"]
+    return ([r for r in rest if r.status == "perfect"],
+            [r for r in rest if r.status == "complex"],
+            [r for r in rest if r.status == "unparseable"],
+            golden)
+
+
 def render_report(results):
     """組出 migration-report.txt 內容字串 (純函式，無 IO)。
 
@@ -1372,10 +1388,7 @@ def render_report(results):
     _dedup_recording_rules 純函式計算，確保兩份輸出的數字一致。
     """
     # --- migration-report.txt ---
-    perfect = [r for r in results if r.status == "perfect"]
-    complex_rules = [r for r in results if r.status == "complex"]
-    unparseable = [r for r in results if r.status == "unparseable"]
-    golden_matches = [r for r in results if r.triage_action == "use_golden"]
+    perfect, complex_rules, unparseable, golden_matches = _buckets(results)
 
     total_input = len([r for r in results if r.status != "unparseable"])
     total_output = len(_dedup_recording_rules(results))
@@ -1398,11 +1411,8 @@ def render_report(results):
             buf.write(f"  - {k}: {listed} → 採用 {entries[0][1]}\n")
         buf.write("  讀這個 key 的告警都會用採用的值；原本各自不同門檻的告警請改寫成不同的 key。\n\n")
 
-    # 收斂率統計 — 排除 unparseable 的 golden matches 避免多扣
-    golden_parseable = len([r for r in results
-                            if r.triage_action == "use_golden"
-                            and r.status != "unparseable"])
-    convertible = len(perfect) + len(complex_rules) - golden_parseable
+    # 收斂率統計 — 桶互斥，golden 已不在 perfect／complex 裡
+    convertible = len(perfect) + len(complex_rules)
     if convertible > 0:
         buf.write("📊 收斂率統計:\n")
         buf.write(f"  輸入: {len(results)} 條傳統規則\n")
@@ -1433,8 +1443,6 @@ def render_report(results):
         buf.write("✅ 完美解析的規則\n")
         buf.write("-" * 40 + "\n")
         for r in perfect:
-            if r.triage_action == "use_golden":
-                continue
             buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
         buf.write("\n")
 
@@ -1443,8 +1451,6 @@ def render_report(results):
         buf.write("⚠️  複雜表達式 — 已自動猜測聚合模式，建議人工確認\n")
         buf.write("-" * 40 + "\n")
         for r in complex_rules:
-            if r.triage_action == "use_golden":
-                continue
             buf.write(f"  • {r.alert_name}: {r.agg_mode} ({r.agg_reason})\n")
             if r.dim_hints:
                 buf.write(f"    📐 維度標籤偵測: {r.dim_hints}\n")
@@ -1455,8 +1461,6 @@ def render_report(results):
         buf.write("🚨 無法自動解析 — 請將以下 LLM Prompt 交給 Claude 處理\n")
         buf.write("-" * 40 + "\n")
         for r in unparseable:
-            if r.triage_action == "use_golden":
-                continue
             buf.write(f"\n### {r.alert_name} ###\n")
             buf.write(r.llm_prompt)
             buf.write("\n")
@@ -1548,22 +1552,13 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     # --- v3: Prefix Mapping ---
     mapping_path = write_prefix_mapping(results, output_dir, prefix)
 
-    # 桶計數 (回傳值) — 自 results 獨立純計算，與 render_report 內部一致。
-    perfect = [r for r in results if r.status == "perfect"]
-    complex_rules = [r for r in results if r.status == "complex"]
-    unparseable = [r for r in results if r.status == "unparseable"]
-    golden_parseable = len([r for r in results
-                            if r.triage_action == "use_golden"
-                            and r.status != "unparseable"])
-    return len(perfect), len(complex_rules), len(unparseable), golden_parseable
+    # 桶計數 (回傳值) — 與 render_report 讀同一份 _buckets，四桶互斥。
+    return tuple(len(b) for b in _buckets(results))
 
 
 def print_dry_run(results):
     """Dry-run 模式: 僅在 STDOUT 輸出報告摘要。"""
-    perfect = [r for r in results if r.status == "perfect"]
-    complex_rules = [r for r in results if r.status == "complex"]
-    unparseable = [r for r in results if r.status == "unparseable"]
-    golden_matches = [r for r in results if r.triage_action == "use_golden"]
+    perfect, complex_rules, unparseable, golden_matches = _buckets(results)
 
     print(f"\n{'='*60}")
     print("🔍 Dry-Run 預覽 (不產生檔案)")
@@ -1739,7 +1734,7 @@ def main():
         n_perfect, n_complex, n_unparseable, n_golden = write_outputs(
             results, args.output_dir, prefix, dictionary, tenant=args.tenant
         )
-        convertible = n_perfect + n_complex - n_golden
+        convertible = n_perfect + n_complex
         print(f"[✓] 成功轉換 {convertible} 條規則 "
               f"(✅ {n_perfect} 完美, ⚠️ {n_complex} 已猜測)")
         if n_golden:

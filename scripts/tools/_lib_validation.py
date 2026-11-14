@@ -27,6 +27,8 @@ from _lib_constants import (
     HTTP_CONFIG_AUTH_MAPPINGS,
     PLATFORM_DEFAULTS,
     RECEIVER_TYPES,
+    THRESHOLD_NUMBER_PATTERN,
+    THRESHOLD_TRIM_CODE_POINTS,
 )
 
 
@@ -298,9 +300,93 @@ def routing_disabled(value: Any) -> bool:
 # The severities a threshold value's `:severity` suffix may name: Go's
 # config.ThresholdSeverities (#3071), the ones the rule packs' threshold
 # recording rules select. tests/shared/threshold_value_matrix.json pins it.
-# ⛔ Python has no reader of a threshold value (#3267): a tool that needs one
-# asks the exporter (`_lib_parse_tree.threshold_values`, served-values).
+# ⛔ Python has no reader of a threshold VALUE (#3267) — its `:severity`
+# half, its trim, what a disable is: a tool that needs one asks the exporter
+# (`_lib_parse_tree.threshold_values`, served-values).
 THRESHOLD_SEVERITIES = ("warning", "critical")
+
+# The grammar of a threshold NUMBER is the recipe contract's
+# patterns.thresholdNumber (#3457), generated into _lib_constants: decimal
+# only, at most 20 mantissa digits. `float()` reads more than it — `1_000`,
+# ` 5`, `infinity`, Unicode digits — so nothing here calls it on a text the
+# pattern has not matched. re.ASCII and fullmatch: `$` alone also matches
+# before a trailing newline.
+_THRESHOLD_NUMBER = re.compile(THRESHOLD_NUMBER_PATTERN, re.ASCII)
+
+
+def threshold_trim(text: str) -> str:
+    """*text* without the characters the exporter trims around a threshold
+    value (Go's strings.TrimSpace, generated into THRESHOLD_TRIM_CODE_POINTS
+    from the threshold value matrix's header).
+
+    ⛔ Not `str.strip()`: that one also takes U+001C to U+001F, which the
+    exporter keeps — `"70\\x1f"` is not a number to it."""
+    start, end = 0, len(text)
+    while start < end and ord(text[start]) in THRESHOLD_TRIM_CODE_POINTS:
+        start += 1
+    while end > start and ord(text[end - 1]) in THRESHOLD_TRIM_CODE_POINTS:
+        end -= 1
+    return text[start:end]
+
+
+def written_threshold_number(value: Any) -> Optional[float]:
+    """The number of a threshold a tool holds — as a file wrote it, or as a
+    reader already decoded it — or None when it is not one.
+
+    * a `str` is the text a file wrote: trimmed as the exporter trims
+      (`threshold_trim`), it must be a number the exporter reads
+      (`threshold_number`). `1_000`, `0x1F`, a value with a `:severity`,
+      `disable`, `inf` are None — never what `float()` would make of them;
+    * an `int` / `float` is a number a reader already decoded (a served
+      value, a YAML number the exporter's decode kept): itself as a float,
+      NaN and ±Inf included (the caller decides what those mean); an int past
+      float64 is None;
+    * a `bool` and anything else is None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except OverflowError:
+            return None
+    if isinstance(value, str):
+        return threshold_number(threshold_trim(value))
+    return None
+
+
+def is_threshold_number_text(text: Any) -> bool:
+    """Whether *text* is in the grammar of a threshold number, as written:
+    no surrounding space, no `:severity`. `1e999` is in it and is not a
+    number the exporter serves — `threshold_number` says that."""
+    return isinstance(text, str) and _THRESHOLD_NUMBER.fullmatch(text) is not None
+
+
+def threshold_number(text: Any) -> Optional[float]:
+    """The number the exporter reads *text* as (its parseThresholdNumber):
+    in the grammar and finite, else None.
+
+    For a tool that judges a number it is given or about to write (a CLI
+    argument, a generated `defaults:` value). A tenant's value — with its
+    severity, its spaces, its disable words — is read by the exporter."""
+    if not is_threshold_number_text(text):
+        return None
+    value = float(text)
+    return value if math.isfinite(value) else None
+
+
+def threshold_number_text(value: float) -> str:
+    """*value* as a text `threshold_number` reads back as the same number,
+    or as `repr` writes it when *value* is NaN or ±Inf (no text of one is in
+    the grammar).
+
+    `repr` where that is in the grammar; it is not for every number —
+    `repr(1.2345678901234567e-4)` is `0.00012345678901234567`, 21 digits —
+    and then the exponent form, whose mantissa is 17 digits."""
+    value = float(value)
+    text = str(value)  # a float's str is its repr: the shortest text that reads back
+    if not math.isfinite(value) or is_threshold_number_text(text):
+        return text
+    return format(value, ".16e")
 
 
 def is_valid_tenant_id(tenant: Any) -> bool:

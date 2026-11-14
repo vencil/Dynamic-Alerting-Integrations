@@ -1,0 +1,92 @@
+# promtool unit test — 只載平台 pack、沒載 liveness pack（#3771 審查）。
+# Run: promtool test rules tests/rulepacks/platform-only-liveness-dependency_test.yaml
+#
+# MassExporterOutage 的存在判定寫在自己的 expr 裡（_lib_exporter_presence.py 生成），
+# 不讀 liveness pack 錄的任何 record，所以只載平台 pack 也照常運作：
+#   L1  6 個宣告 mariadb 的租戶 exporter 全健康 → 不響（讀另一個 pack 的 record 時，
+#       record 缺席會把每一組都讀成缺席而常駐 critical）
+#   L2  同 6 個租戶 mariadb exporter 全掛（target 還在、up=0）→ 響，$value＝6
+# tenant id 用 t-* placeholder（dev-rule：fixture 不寫死真實租戶名）。
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: L1-platform-only-healthy-mass-silent
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-0", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-0", instance="10.5.0.0:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-0", instance="10.5.0.0:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.5.0.1:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.5.0.1:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-2", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-2", instance="10.5.0.2:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-2", instance="10.5.0.2:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-3", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-3", instance="10.5.0.3:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-3", instance="10.5.0.3:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-4", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-4", instance="10.5.0.4:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-4", instance="10.5.0.4:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-5", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-5", instance="10.5.0.5:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-5", instance="10.5.0.5:9104"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MassExporterOutage
+        exp_alerts: []
+
+  - interval: 1m
+    name: L2-platform-only-outage-mass-fires
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-0", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-0", instance="10.5.0.0:9104"}'
+        values: '0x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.5.0.1:9104"}'
+        values: '0x20'
+      - series: 'tenant_expected_exporter{tenant="t-2", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-2", instance="10.5.0.2:9104"}'
+        values: '0x20'
+      - series: 'tenant_expected_exporter{tenant="t-3", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-3", instance="10.5.0.3:9104"}'
+        values: '0x20'
+      - series: 'tenant_expected_exporter{tenant="t-4", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-4", instance="10.5.0.4:9104"}'
+        values: '0x20'
+      - series: 'tenant_expected_exporter{tenant="t-5", db_type="mariadb", instance="te:8080", pod="p"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-5", instance="10.5.0.5:9104"}'
+        values: '0x20'
+    promql_expr_test:
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname="MassExporterOutage"})
+        eval_time: 15m
+        exp_samples:
+          - labels: '{alertname="MassExporterOutage"}'
+            value: 1

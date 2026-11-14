@@ -40,6 +40,7 @@ import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenant
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
 import { useTenantData } from './tenant-manager/hooks/useTenantData.js';
+import { dbTypesOf } from './tenant-manager/utils/db-types.js';
 import { apiFetch, ApiPathError } from './_common/api/api-fetch.js';
 import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
 import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
@@ -331,7 +332,7 @@ export default function TenantManager() {
       const matchTier = !filterTier || data.tier === filterTier;
       const matchMode = !filterMode || (!data.config_error && data.operational_mode === filterMode);
       const matchDomain = !filterDomain || data.domain === filterDomain;
-      const matchDBType = !filterDBType || data.db_type === filterDBType;
+      const matchDBType = !filterDBType || dbTypesOf(data.db_type).includes(filterDBType);
       return matchSearch && matchEnv && matchTier && matchMode && matchDomain && matchDBType;
     });
   }, [tenants, groups, activeGroupId, dataSource, searchText, filterEnv, filterTier, filterMode, filterDomain, filterDBType]);
@@ -359,7 +360,7 @@ export default function TenantManager() {
     const dbTypes = new Set();
     Object.values(tenants).forEach(t => {
       if (t.domain) domains.add(t.domain);
-      if (t.db_type) dbTypes.add(t.db_type);
+      dbTypesOf(t.db_type).forEach(d => dbTypes.add(d));
     });
     return {
       domains: [...domains].sort(),

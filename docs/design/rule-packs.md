@@ -38,10 +38,10 @@ parent: architecture-and-design.md
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
-| Exporter Liveness | `prometheus-rules-liveness` | 0 | 2 |
+| Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **總計** | | **165** | **182** (= **347** rules) |
+| **總計** | | **165** | **183** (= **348** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）
@@ -65,12 +65,8 @@ groups:
   - name: mariadb-normalization
     rules:
       # 正規化命名：tenant:<component>_<metric>:<function>
-      - record: tenant:mysql_connection_usage:percent
-        expr: |
-          max by(tenant) (
-            100 * mysql_global_status_threads_connected
-            / (mysql_global_variables_max_connections > 0)
-          )
+      - record: tenant:mysql_threads_connected:max
+        expr: max by(tenant) (mysql_global_status_threads_connected)
 
       - record: tenant:mysql_slow_queries:rate5m
         expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
@@ -83,11 +79,11 @@ groups:
 groups:
   - name: mariadb-threshold-normalization
     rules:
-      - record: tenant:alert_threshold:mysql_connection_usage_percent
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
+      - record: tenant:alert_threshold:mysql_connections
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
 
-      - record: tenant:alert_threshold:mysql_connection_usage_percent_critical
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
+      - record: tenant:alert_threshold:mysql_connections_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
 ```
 
 **關鍵：** 使用 `max by(tenant)` 而非 `sum`，防止 HA 雙倍計算（詳見第 4.3 節）
@@ -100,9 +96,9 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            tenant:mysql_connection_usage:percent
+            tenant:mysql_threads_connected:max
             > on(tenant) group_left
-            tenant:alert_threshold:mysql_connection_usage_percent
+            tenant:alert_threshold:mysql_connections
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -111,10 +107,10 @@ groups:
           severity: warning
           maintenance: mute   # 必填 mute｜page；上面兩行維護條件由 generate_rulepack_derived.py 依它寫入
         annotations:
-          summary: "MariaDB connection usage {{ $value }}% of max_connections exceeds threshold ({{ $labels.tenant }})"
-          summary_zh: "MariaDB 連線使用率 {{ $value }}%（佔 max_connections）超過閾值（{{ $labels.tenant }}）"
-          description: "Connection usage (% of max_connections) has exceeded the threshold"
-          description_zh: "連線使用率（佔 max_connections 的 %）已超過設定的閾值"
+          summary: "MariaDB connections {{ $value }} exceeds threshold ({{ $labels.tenant }})"
+          summary_zh: "MariaDB 連線數 {{ $value }} 超過閾值（{{ $labels.tenant }}）"
+          description: "Connection count has exceeded the threshold"
+          description_zh: "連線數已超過設定的閾值"
           platform_summary: "[Tier: {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Connection pool exhaustion — escalate to DBA"
           platform_summary_zh: "[Tier: {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
 ```

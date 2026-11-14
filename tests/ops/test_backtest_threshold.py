@@ -1312,23 +1312,22 @@ class TestWrittenValues:
             bt._served_written(key, (raw,))
 
     @pytest.mark.parametrize("raw,served", [
-        ("1_000", 1000.0), ("0x1p4", 16.0), ("0x1p6", 64.0), ("0x_1p4", 16.0), ("-1_0", -10.0)])
+        ("1e3", 1000.0), ("+16", 16.0), ("6.4e1", 64.0), ("16.", 16.0), ("-1e1", -10.0), (".5", 0.5)])
     def test_a_spelling_the_exporter_reads_is_backtested_at_its_number(self, raw, served):
-        """#3267：`1_000`、`0x1p4` 這類寫法的數字由 exporter 讀（Go 的
-        `parseThresholdNumber`，經 served-values），讀得懂就照它送的數字回測，
-        Python 不另留一份拼法表。"""
+        """#3267：數字由 exporter 讀（Go 的 `parseThresholdNumber`，經
+        served-values），讀得懂的十進位寫法（指數、正號、小數點結尾）就照它送的
+        數字回測，Python 不另留一份拼法表。"""
         assert bt._served_written("mysql_connection_usage_percent", (raw,)) == [(served, "warning")]
 
     @pytest.mark.parametrize("raw,served,risk,rc,new_breaches", [
-        ("1_000", "1000", "HIGH", 1, 0),  # 3 點 → 0 點（-100%）
-        ("0x1p4", "16", "MEDIUM", 0, 4),  # 3 點 → 4 點（+33.3%）
-        ("0x1p6", "64", "LOW", 0, 3),     # 3 點 → 3 點
+        ("1e3", "1000", "HIGH", 1, 0),     # 3 點 → 0 點（-100%）
+        ("1.6e1", "16", "MEDIUM", 0, 4),   # 3 點 → 4 點（+33.3%）
+        ("6.4E1", "64", "LOW", 0, 3),      # 3 點 → 3 點
     ])
     def test_a_spelling_the_exporter_reads_changes_the_exit_code(
             self, monkeypatch, capsys, cli_argv, raw, served, risk, rc, new_breaches):
-        """#3267（owner 裁決）：以前 `_SPELLINGS_NOT_BACKTESTED` 讓這些值不回測
-        （UNKNOWN、rc 0）；現在照 exporter 送的數字回測（`new_value` 是送出的數字），
-        rc 依回測結果。"""
+        """#3267：exporter 讀得懂的寫法照它送的數字回測（`new_value` 是送出的
+        數字），rc 依回測結果。"""
         got_rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                            "mysql_connection_usage_percent", "70", raw)
         assert asked == ['tenant:mysql_connection_usage:percent{tenant="t-x"}']
@@ -1337,11 +1336,14 @@ class TestWrittenValues:
             ("analyzed", risk, served, 3, new_breaches)]
         assert got_rc == rc
 
-    @pytest.mark.parametrize("raw", ["1__0", "0x10", "_1", "1_", "0x1p_4"])
+    @pytest.mark.parametrize("raw", ["1__0", "0x10", "_1", "1_", "0x1p_4",
+                                     "1_000", "0x1p4", "0x1p6", "0x_1p4", "0X1P-2",
+                                     "123456789012345678901"])
     def test_a_spelling_the_exporter_refuses_stays_not_backtested(
             self, monkeypatch, capsys, cli_argv, raw):
-        """對照組：exporter 也拒收的拼法（served-values `refused: unparsed`）維持原本
-        的不回測、UNKNOWN、rc 0，不因拿掉拼法表而改送平台預設值回測。"""
+        """對照組：exporter 拒收的拼法（served-values `refused: unparsed`）維持
+        不回測、UNKNOWN、rc 0，不改送平台預設值回測。#3457：底線、十六進位浮點數
+        與超過 20 位的數字不在閾值數字的文法內，一樣不回測。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
                                        "mysql_connection_usage_percent", "70", raw)
         assert (rc, asked) == (0, [])
@@ -1428,10 +1430,11 @@ class TestWrittenValues:
 
 class TestSpellingIsTheNumber:
     """#3267：數字只有 exporter 一種讀法（Go 的 `parseThresholdNumber`，經
-    served-values），所以 exporter 讀得懂的非十進位寫法（`_`、`0x`／`0X`、
-    hex float 的 `p` 指數，可帶 `:critical`，舊值側或新值側）回測出來的整份
-    報告與結束碼，必須和改寫成十進位的同一個值完全相同。期望值不寫死：
-    每組跑兩次比對。"""
+    served-values），所以 exporter 讀得懂的各種十進位寫法（指數、正號、前導零、
+    小數點開頭或結尾，可帶 `:critical`，舊值側或新值側）回測出來的整份報告與
+    結束碼，必須和寫成最簡十進位的同一個值完全相同。期望值不寫死：每組跑兩次
+    比對。（#3457：底線與十六進位浮點數不在文法內，見
+    `test_a_spelling_the_exporter_refuses_stays_not_backtested`。）"""
 
     _VALS = [60, 80, 90, 100]
 
@@ -1457,31 +1460,31 @@ class TestSpellingIsTheNumber:
     # (key, old 拼法, new 拼法, old 十進位, new 十進位)
     _PAIRS = [
         # 新值側
-        ("mysql_connection_usage_percent", "70", "1_000", "70", "1000"),
-        ("mysql_connection_usage_percent", "70", "0x1p4", "70", "16"),
-        ("mysql_connection_usage_percent", "70", "0X1P4", "70", "16"),
-        ("mysql_connection_usage_percent", "70", "0x1p6", "70", "64"),
-        ("mysql_connection_usage_percent", "70", "0x_1p4", "70", "16"),
-        ("mysql_connection_usage_percent", "70", "0x1.8p5", "70", "48"),
-        ("mysql_connection_usage_percent", "70", "0x2_Bp0", "70", "43"),
-        ("mysql_connection_usage_percent", "70", "1_0e1", "70", "100"),
-        ("mysql_connection_usage_percent", "70", "8_5.5", "70", "85.5"),
-        ("mysql_connection_usage_percent", "70", "0x1p4:critical", "70", "16:critical"),
-        ("mysql_connection_usage_percent", "70", "1_000:critical", "70", "1000:critical"),
-        ("mysql_connection_usage_percent", "70:critical", "0X1P6:critical", "70:critical", "64:critical"),
-        ("mysql_connection_usage_percent_critical", "95", "0x1p6", "95", "64"),
+        ("mysql_connection_usage_percent", "70", "1e3", "70", "1000"),
+        ("mysql_connection_usage_percent", "70", "1.6e1", "70", "16"),
+        ("mysql_connection_usage_percent", "70", "1.6E+1", "70", "16"),
+        ("mysql_connection_usage_percent", "70", "+64", "70", "64"),
+        ("mysql_connection_usage_percent", "70", "016", "70", "16"),
+        ("mysql_connection_usage_percent", "70", "48.", "70", "48"),
+        ("mysql_connection_usage_percent", "70", ".43e2", "70", "43"),
+        ("mysql_connection_usage_percent", "70", "1e2", "70", "100"),
+        ("mysql_connection_usage_percent", "70", "85.50", "70", "85.5"),
+        ("mysql_connection_usage_percent", "70", "1.6e1:critical", "70", "16:critical"),
+        ("mysql_connection_usage_percent", "70", "1e3:critical", "70", "1000:critical"),
+        ("mysql_connection_usage_percent", "70:critical", "6.4E1:critical", "70:critical", "64:critical"),
+        ("mysql_connection_usage_percent_critical", "95", "+64.0", "95", "64"),
         # 舊值側
-        ("mysql_connection_usage_percent", "1_000", "70", "1000", "70"),
-        ("mysql_connection_usage_percent", "0x1p4", "70", "16", "70"),
-        ("mysql_connection_usage_percent", "0X1P-2", "70", "0.25", "70"),
-        ("mysql_connection_usage_percent", "0x5_5p0", "70", "85", "70"),
-        ("mysql_connection_usage_percent", "0x1p4:critical", "70", "16:critical", "70"),
-        ("mysql_connection_usage_percent", "9_5:critical", "70:critical", "95:critical", "70:critical"),
-        ("mysql_connection_usage_percent_critical", "0x1.7cp6", "95", "95", "95"),
+        ("mysql_connection_usage_percent", "1e3", "70", "1000", "70"),
+        ("mysql_connection_usage_percent", "1.6e1", "70", "16", "70"),
+        ("mysql_connection_usage_percent", "25e-2", "70", "0.25", "70"),
+        ("mysql_connection_usage_percent", "085", "70", "85", "70"),
+        ("mysql_connection_usage_percent", "1.6e1:critical", "70", "16:critical", "70"),
+        ("mysql_connection_usage_percent", "+95:critical", "70:critical", "95:critical", "70:critical"),
+        ("mysql_connection_usage_percent_critical", "9.5e1", "95", "95", "95"),
         # 兩側都是
-        ("mysql_connection_usage_percent", "1_000", "0x1p6", "1000", "64"),
-        ("mysql_connection_usage_percent", "70", "7_0", "70", "70"),  # 同一個數字：沒有變更
-        ("mysql_connection_usage_percent", "0x1p4:critical", "1_000:critical", "16:critical", "1000:critical"),
+        ("mysql_connection_usage_percent", "1e3", "6.4e1", "1000", "64"),
+        ("mysql_connection_usage_percent", "70", "7e1", "70", "70"),  # 同一個數字：沒有變更
+        ("mysql_connection_usage_percent", "1.6e1:critical", "1e3:critical", "16:critical", "1000:critical"),
     ]
 
     @pytest.mark.parametrize("as_json", [True, False], ids=["json", "text"])
@@ -1506,24 +1509,24 @@ class TestSpellingIsTheNumber:
 
 
 class TestSpellingRiskBoundaries:
-    """#3267：寫成 `_`／hex float 的值照 exporter 讀出的數字落在風險級距上：
+    """#3267：寫成指數、正號、前導零的值照 exporter 讀出的數字落在風險級距上：
     資料是 1..100（`>` 比較），舊值 50 有 50 個越界點，`RISK_THRESHOLDS` 的
     界線（變化幅度 >50% HIGH、>20% MEDIUM、其餘 LOW）兩側各一例。"""
 
     _VALS = list(range(1, 101))
 
     @pytest.mark.parametrize("new,served,breaches,risk,rc", [
-        ("0x1.94p5", "50.5", 50, "LOW", 0),  # 0%（門檻變了、越界點數不變）
-        ("0x2Dp0", "45", 55, "LOW", 0),      # +10%（0–20% 之間）
-        ("5_5", "55", 45, "LOW", 0),         # -10%
-        ("0x28p0", "40", 60, "LOW", 0),      # +20%：LOW 上界（不大於 20）
-        ("6_0", "60", 40, "LOW", 0),         # -20%：LOW 上界
-        ("0x27p0", "39", 61, "MEDIUM", 0),   # +22%：MEDIUM 下界
-        ("0X3Dp0", "61", 39, "MEDIUM", 0),   # -22%：MEDIUM 下界
-        ("2_5", "25", 75, "MEDIUM", 0),      # +50%：MEDIUM 上界（不大於 50）
-        ("0x4Bp0", "75", 25, "MEDIUM", 0),   # -50%：MEDIUM 上界
-        ("0x18p0", "24", 76, "HIGH", 1),     # +52%：HIGH 下界
-        ("7_6", "76", 24, "HIGH", 1),        # -52%：HIGH 下界
+        ("5.05e1", "50.5", 50, "LOW", 0),    # 0%（門檻變了、越界點數不變）
+        ("4.5E1", "45", 55, "LOW", 0),       # +10%（0–20% 之間）
+        ("+55", "55", 45, "LOW", 0),         # -10%
+        ("40.", "40", 60, "LOW", 0),         # +20%：LOW 上界（不大於 20）
+        ("060", "60", 40, "LOW", 0),         # -20%：LOW 上界
+        ("3.9e1", "39", 61, "MEDIUM", 0),    # +22%：MEDIUM 下界
+        ("6.1E+1", "61", 39, "MEDIUM", 0),   # -22%：MEDIUM 下界
+        ("25.0", "25", 75, "MEDIUM", 0),     # +50%：MEDIUM 上界（不大於 50）
+        (".75e2", "75", 25, "MEDIUM", 0),    # -50%：MEDIUM 上界
+        ("2.4e1", "24", 76, "HIGH", 1),      # +52%：HIGH 下界
+        ("+76.", "76", 24, "HIGH", 1),       # -52%：HIGH 下界
     ])
     def test_boundaries(self, monkeypatch, capsys, cli_argv, new, served, breaches, risk, rc):
         vals = self._VALS

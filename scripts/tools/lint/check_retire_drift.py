@@ -129,6 +129,10 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
                                      binary: str | None = None) -> Dict[str, str]:
     """tenant → db_type for every judged tenant whose served db_type is non-empty.
 
+    The value is the declared kinds joined by "," (#3771: `db_type` is a
+    list, served as one; a tenant declaring [mariadb, redis] reads
+    "mariadb,redis").
+
     WHICH TENANTS: the keys of the `tenants:` mapping of every tenant file
     `da-guard parse-tree` selects (ADR-036 step 4, #2906: the exporter's own
     walk — `.yaml` / `.yml` in any case, `.`-prefixed entries skipped, a
@@ -168,8 +172,12 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
         served = tree.tenants.get(tenant)
         meta = served.values.get("_metadata") if served is not None else None
         db_type = meta.get("db_type") if isinstance(meta, dict) else None
-        if isinstance(db_type, str) and db_type:
-            out[tenant] = db_type
+        # #3771: served as a list (every declared kind); a string is one kind.
+        if isinstance(db_type, str):
+            db_type = [db_type]
+        kinds = [k for k in db_type if isinstance(k, str) and k] if isinstance(db_type, list) else []
+        if kinds:
+            out[tenant] = ",".join(kinds)
     return out
 
 

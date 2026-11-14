@@ -34,10 +34,10 @@ parent: architecture-and-design.en.md
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
-| Exporter Liveness | `prometheus-rules-liveness` | 0 | 2 |
+| Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **165** | **182** (= **347** rules) |
+| **Total** | | **165** | **183** (= **348** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)
@@ -61,12 +61,8 @@ groups:
   - name: mariadb-normalization
     rules:
       # Normalization naming: tenant:<component>_<metric>:<function>
-      - record: tenant:mysql_connection_usage:percent
-        expr: |
-          max by(tenant) (
-            100 * mysql_global_status_threads_connected
-            / (mysql_global_variables_max_connections > 0)
-          )
+      - record: tenant:mysql_threads_connected:max
+        expr: max by(tenant) (mysql_global_status_threads_connected)
 
       - record: tenant:mysql_slow_queries:rate5m
         expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
@@ -79,11 +75,11 @@ groups:
 groups:
   - name: mariadb-threshold-normalization
     rules:
-      - record: tenant:alert_threshold:mysql_connection_usage_percent
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
+      - record: tenant:alert_threshold:mysql_connections
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
 
-      - record: tenant:alert_threshold:mysql_connection_usage_percent_critical
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
+      - record: tenant:alert_threshold:mysql_connections_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
 ```
 
 **Key:** Use `max by(tenant)` rather than `sum` to prevent HA double-counting (see section 4.3)
@@ -96,9 +92,9 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            tenant:mysql_connection_usage:percent
+            tenant:mysql_threads_connected:max
             > on(tenant) group_left
-            tenant:alert_threshold:mysql_connection_usage_percent
+            tenant:alert_threshold:mysql_connections
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -107,7 +103,7 @@ groups:
           severity: warning
           maintenance: mute   # required: mute | page; generate_rulepack_derived.py writes the two maintenance lines above from it
         annotations:
-          summary: "MariaDB connection usage {{ $value }}% of max_connections exceeds threshold ({{ $labels.tenant }})"
+          summary: "MariaDB connections {{ $value }} exceeds threshold ({{ $labels.tenant }})"
 ```
 
 #### v2.0.0 Bilingual Annotations (i18n) for Alerts

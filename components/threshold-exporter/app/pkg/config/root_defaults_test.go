@@ -64,9 +64,11 @@ func TestRootDefaults_ReadLikeATenantValue(t *testing.T) {
 }
 
 // The YAML spellings yaml.v3's float64 decode read its own way are the text
-// now: `0x1F` was 31 and is refused (the tenant path refuses it), `.nan` was
-// NaN and is refused as text ParseFloat does not read, and a value yaml.v3
-// could not put in a float64 no longer drops the file.
+// now: `0x1F` was 31 and is refused (the tenant path refuses it), `1_000`
+// was 1000 and `0x1p4` dropped the file, and both are refused as text outside
+// the grammar of a threshold number (#3457), `.nan` was NaN and is refused
+// as text that names no number, and a value yaml.v3 could not put in a
+// float64 no longer drops the file.
 func TestRootDefaults_YAMLSpellings(t *testing.T) {
 	t.Parallel()
 	spellings := []byte("defaults:\n  hex: 0x1F\n  hexfloat: 0x1p4\n  under: 1_000\n  sci: 7e1\n" +
@@ -75,7 +77,7 @@ func TestRootDefaults_YAMLSpellings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	served := map[string]float64{"hexfloat": 16, "under": 1000, "sci": 70, "quoted": 70}
+	served := map[string]float64{"sci": 70, "quoted": 70}
 	for k, want := range served {
 		if got := cfg.Defaults[k]; got != want {
 			t.Errorf("%s = %v, want %v", k, got, want)
@@ -83,6 +85,7 @@ func TestRootDefaults_YAMLSpellings(t *testing.T) {
 	}
 	refusedWant := map[string][2]string{
 		"hex": {"0x1F", RefusedUnparsed}, "ynan": {".nan", RefusedUnparsed}, "pinf": {".inf", RefusedUnparsed},
+		"hexfloat": {"0x1p4", RefusedUnparsed}, "under": {"1_000", RefusedUnparsed},
 		"word": {"abc", RefusedUnparsed}, "big": {"1e999", RefusedUnparsed}, "yes": {"true", RefusedUnparsed},
 	}
 	for k, want := range refusedWant {

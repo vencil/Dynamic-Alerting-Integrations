@@ -132,6 +132,47 @@ func tenantMetadataTrees() []struct {
 			want: ResolvedMetadata{Owner: "team-b"},
 		},
 		{
+			// #3771: db_type written as a scalar is a one-element list.
+			name: "db_type scalar is one kind",
+			files: map[string]string{
+				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+			},
+			want: ResolvedMetadata{DBType: DBTypes{"mariadb"}},
+		},
+		{
+			// #3771: the list form, a repeat and an empty entry dropped.
+			name: "db_type list is every kind, deduplicated in written order",
+			files: map[string]string{
+				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: [redis, mariadb, redis, \"\"]\n",
+			},
+			want: ResolvedMetadata{DBType: DBTypes{"redis", "mariadb"}},
+		},
+		{
+			// #3771 precedence: the tenant file's db_type replaces the
+			// platform's whole — the lists are not unioned.
+			name: "db_type: tenant list replaces the platform list, no union",
+			files: map[string]string{
+				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n      db_type: [mariadb, redis]\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: postgresql\n",
+			},
+			want: ResolvedMetadata{Owner: "plat-team", DBType: DBTypes{"postgresql"}},
+		},
+		{
+			name: "db_type: a tenant file not writing it keeps the platform list",
+			files: map[string]string{
+				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: [mariadb, redis]\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      owner: team-t\n",
+			},
+			want: ResolvedMetadata{Owner: "team-t", DBType: DBTypes{"mariadb", "redis"}},
+		},
+		{
+			name: "db_type written as a mapping does not decode",
+			files: map[string]string{
+				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: {a: b}\n      owner: team-m\n",
+			},
+			want: ResolvedMetadata{},
+		},
+		{
 			name: "tenant file's empty _profile over a platform entry's: no profile",
 			files: map[string]string{
 				"_profiles.yaml": metadataProfiles,

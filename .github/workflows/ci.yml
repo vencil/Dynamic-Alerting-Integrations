@@ -508,6 +508,11 @@ jobs:
               # #2711: parseDuration.test.ts holds the portal's parser to the
               # verdicts Go writes into this table (pytest holds Python to it).
               - "tests/shared/am_duration_matrix.json"
+              # #3457: threshold-value-matrix.test.ts holds the RecipeBuilder's
+              # reader of a threshold value to the verdicts Go writes into
+              # this table, and its pattern to the recipe contract's.
+              - "tests/shared/threshold_value_matrix.json"
+              - "components/threshold-exporter/app/pkg/config/recipe_contract.json"
               # #2833: api-fixture.ts validates every tenant-api response
               # fixture against these definitions, so a swagger regen alone
               # must re-run the Portal leg.
@@ -519,6 +524,11 @@ jobs:
               - "helm/**"
               # Same test checks each Rule Pack note names a shipped ConfigMap.
               - "k8s/03-monitoring/configmap-rules-*.yaml"
+              # No `.yml` file is tracked today, so this line matches nothing
+              # and would be refused as a dead entry (#3756). It stays because
+              # the family declares both names: it is a reserved entry, listed
+              # with that reason in RESERVED_PATTERNS
+              # (scripts/ops/workflow_path_filter.py), which is checked both ways.
               - "k8s/03-monitoring/configmap-rules-*.yml"
               # ⛔ Same class as `requirements/**` in `python` above, found by
               # the same mechanical guard: this leg RUNS this script as its
@@ -541,7 +551,6 @@ jobs:
               - "docs/interactive/**"
               - "docs/assets/**"
               - "tests/e2e/**"
-              - "package.json"
               - ".github/workflows/ci.yml"
             # docs: threshold-exporter's
             # pkg/config/docs_defaults_sample_test.go (#1327) walks

@@ -25,8 +25,14 @@ affinity:
           matchExpressions:
             - key: pss-gate
               operator: Exists
-# The default auth.mode=enforce refuses to render until every consumer names a
-# Secret (#1295); observe renders the same pod (the Secrets only add env vars,
-# which Pod Security does not judge) without restating the consumer registry.
+# The default auth.mode=enforce refuses to render until every consumer has a
+# Secret (#1295). auth.existingSecrets is a map (#3847), so naming them does not
+# restate the consumer registry; this renders the pod an operator deploys,
+# Secret-backed env vars included.
 auth:
-  mode: observe
+  existingSecrets:
+    vector: pss-gate
+    grafana: pss-gate
+    chargeback-aggregator: pss-gate
+    federation-gateway: pss-gate
+    federation-reconciler: pss-gate

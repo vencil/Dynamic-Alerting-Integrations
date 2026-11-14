@@ -101,7 +101,7 @@ func TestLoadAllTenants_HealthyRowUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAllTenants: %v", err)
 	}
-	want := []TenantSummary{{ID: "acme", Environment: "production", Tier: "tier1", Domain: "db", DBType: "mariadb", Owner: "alice", ManagedBy: managedByAPI}}
+	want := []TenantSummary{{ID: "acme", Environment: "production", Tier: "tier1", Domain: "db", DBType: []string{"mariadb"}, Owner: "alice", ManagedBy: managedByAPI}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}

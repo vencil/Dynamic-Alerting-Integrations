@@ -52,7 +52,7 @@ Tenants configure thresholds via `tenant.yaml` without touching PromQL:
 ```yaml
 # Three-state control example (key names match metric definitions in _defaults.yaml)
 mysql_connection_usage_percent: "85"   # Custom: user-defined threshold (connection usage, % of max_connections)
-container_cpu: ""                      # Default: use platform default (omit or empty string)
+# container_cpu:                       # Default: leave the key out to inherit the level above — a subtree _defaults.yaml's value if one sets the key, else the root platform default (an empty string is not a valid value)
 mysql_replication_lag: "disable"       # Disable: turn off this alert
 ```
 

@@ -49,8 +49,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant t-ch (clickhouse)"
               summary_zh: "租戶 t-ch (clickhouse) 的 exporter 缺席"
-              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t-ch (db_type=clickhouse) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 t-ch (db_type=clickhouse) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No clickhouse exporter of tenant t-ch has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs clickhouse, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-ch 的 clickhouse exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 clickhouse，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -62,8 +62,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant t-pg (postgresql)"
               summary_zh: "租戶 t-pg (postgresql) 的 exporter 缺席"
-              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t-pg (db_type=postgresql) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 t-pg (db_type=postgresql) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No postgresql exporter of tenant t-pg has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs postgresql, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-pg 的 postgresql exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 postgresql，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""

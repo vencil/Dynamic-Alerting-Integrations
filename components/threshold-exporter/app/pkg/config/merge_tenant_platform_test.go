@@ -147,8 +147,8 @@ func platformMergeTrees() []struct {
 				"    mysql_connections{db=\"orders\"}: \"33\"\n" +
 				"    oracle_wait: \"7\"\n",
 			"tx.yaml": tenant}), true},
-		{"a number's source text is kept (0x1F, 1_000)", withDefaults(map[string]string{
-			"_platform.yaml": "tenants:\n  tx:\n    redis_memory: 0x1F\n    pg_connections: 1_000\n",
+		{"a number's source text is kept (0x1F, 1e3)", withDefaults(map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    redis_memory: 0x1F\n    pg_connections: 1e3\n",
 			"tx.yaml":        tenant}), true},
 		{"disable from the platform layer", withDefaults(map[string]string{
 			"_platform.yaml": "tenants:\n  tx:\n    redis_memory: disable\n",

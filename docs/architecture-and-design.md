@@ -251,7 +251,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 8 | 5 |
 | kubernetes | cAdvisor + kube-state-metrics | 30 | 14 |
-| liveness | threshold-exporter 心跳 | 0 | 2 |
+| liveness | threshold-exporter 心跳 | 0 | 3 |
 | mariadb | mysqld_exporter (Percona) | 11 | 17 |
 | mongodb | mongodb_exporter | 10 | 10 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
@@ -261,7 +261,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 14 | 9 |
 | redis | redis_exporter | 12 | 9 |
-| **合計** | | **165** | **182** |
+| **合計** | | **165** | **183** |
 <!-- RULE_PACK_STATS_END -->
 
 

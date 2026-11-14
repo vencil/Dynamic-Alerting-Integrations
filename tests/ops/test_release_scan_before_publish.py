@@ -14,9 +14,10 @@ YAML (not a grep over its text) and, for every job that pushes an image with
      step's own digest (`<image>@${{ steps.<build>.outputs.digest }}`), so the
      scanned object IS the object that gets promoted — not a tag that could be
      re-pointed between scan and publish;
-  3. every publishing step — promotion to formal tags (`imagetools create`),
-     `helm push`, `cosign sign` / `sign-blob`, `syft` SBOM generation and
-     `gh release` — sits AFTER that Trivy step;
+  3. every publishing step — promotion to formal tags, `helm push`, image
+     signing (all three inside `release_publish.py image|chart` since #3848),
+     `cosign sign-blob`, `syft` SBOM generation and the Release upload
+     (`release_publish.py assets`) — sits AFTER that Trivy step;
   4. promotion and image signing name the same build-step digest.
 
 Vacuity: a guard that finds no publishing job passes while covering nothing,
@@ -39,13 +40,19 @@ _TRIVY_ACTION = "aquasecurity/trivy-action"
 
 # Kinds of publishing step, keyed by how the step does it. Matched against the
 # `run:` script of a step (shell commands), never against its name or comments.
+# Since #3848 promotion, image signing, `helm push` and the Release upload run
+# inside scripts/tools/dx/release_publish.py (the only publisher
+# test_release_immutable_wiring.py allows), so its subcommands are what is
+# matched here; the raw commands are kept so a step that bypassed the wrapper
+# would still be ordered.
 _PUBLISH_RUN_PATTERNS = {
-    "promote": re.compile(r"\bimagetools\s+create\b"),
-    "helm-push": re.compile(r"\bhelm\s+push\b"),
-    "cosign": re.compile(r"\bcosign\s+sign(-blob)?\b"),
+    "promote": re.compile(r"\bimagetools\s+create\b|release_publish\.py\s+image\b"),
+    "helm-push": re.compile(r"\bhelm\s+push\b|release_publish\.py\s+chart\b"),
+    "cosign": re.compile(r"\bcosign\s+sign(-blob)?\b|release_publish\.py\s+image\b.*--sign\b"),
     "sbom": re.compile(r"\bsyft\s"),
-    "gh-release": re.compile(r"\bgh\s+release\s+(create|upload)\b"),
+    "gh-release": re.compile(r"\bgh\s+release\s+(create|upload)\b|release_publish\.py\s+assets\b"),
 }
+_IMAGE_SIGN = re.compile(r"\bcosign\s+sign\s|release_publish\.py\s+image\b.*--sign\b")
 
 
 def _strip_comments(script: str) -> str:
@@ -136,7 +143,7 @@ def check_release_workflow(doc: dict) -> list[str]:
                     )
             # Image signing (`cosign sign`, not `sign-blob`) and promotion must
             # both name the build-step digest — the object Trivy scanned.
-            if "promote" in kinds or re.search(r"\bcosign\s+sign\s", script):
+            if "promote" in kinds or _IMAGE_SIGN.search(script):
                 blob = yaml.safe_dump({"env": s.get("env"), "run": s.get("run")})
                 named = set(re.findall(r"steps\.([\w-]+)\.outputs\.digest", blob))
                 if not named or not named <= build_ids:
@@ -182,7 +189,7 @@ def test_guard_rejects_known_regressions(bad: str) -> None:
     if bad == "formal-tag-at-build":
         build["with"]["tags"] += "\nghcr.io/vencil/threshold-exporter:latest\n"
     elif bad == "chart-before-scan":
-        push = next(s for s in steps if "helm push" in str(s.get("run") or ""))
+        push = next(s for s in steps if "release_publish.py chart" in str(s.get("run") or ""))
         steps.remove(push)
         steps.insert(scan_idx, push)
     elif bad == "scan-by-tag":

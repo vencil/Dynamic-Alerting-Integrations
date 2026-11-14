@@ -248,6 +248,44 @@ class TestEvaluateOperator:
         """非數值比較回傳 False。"""
         assert pe._evaluate_operator("gte", "abc", "def") is False
 
+    @pytest.mark.parametrize("op,expected_val,want_one,want_two", [
+        ("equals", "mariadb", True, False),
+        ("equals", "redis", False, False),
+        ("not_equals", "mariadb", False, False),
+        ("not_equals", "redis", True, False),
+        ("not_equals", "kafka", True, True),
+        ("matches", "^red", False, False),
+        ("matches", "^(maria|red)", True, True),
+        ("one_of", ["redis", "kafka"], False, False),
+        ("one_of", ["mariadb", "redis"], True, True),
+        ("one_of", ["mariadb", "postgresql"], True, False),
+        ("contains", "maria", True, False),
+        ("contains", "d", True, True),
+        ("contains", "red", False, False),
+    ])
+    def test_list_value_is_read_element_by_element(self, op, expected_val, want_one, want_two):
+        """#3771：db_type 以 list 送出；一元素 list 等同原本的純量。主規則的約束要每個
+        元素都成立（五個值運算子都是）。"""
+        assert pe._evaluate_operator(op, ["mariadb"], expected_val) is want_one
+        assert pe._evaluate_operator(op, ["mariadb", "redis"], expected_val) is want_two
+        # 一元素 list 與原本的純量同讀
+        assert pe._evaluate_operator(op, "mariadb", expected_val) is want_one
+
+    def test_list_cannot_slip_past_an_allowlist(self):
+        """#3771 審查：one_of 是 allowlist，列表裡有一個不在清單內就是違規。"""
+        assert pe._evaluate_operator("one_of", ["mariadb", "oracle"],
+                                     ["mariadb", "postgresql"]) is False
+        assert pe._evaluate_operator("matches", ["prod-a", "dev-b"], "^prod-") is False
+        # 第三輪審查：equals／contains 也不能拿來夾帶。
+        assert pe._evaluate_operator("equals", ["mariadb", "oracle"], "mariadb") is False
+        assert pe._evaluate_operator("contains", ["mariadb", "oracle"], "maria") is False
+
+    def test_empty_list_value(self):
+        """空 list：只滿足 not_equals。"""
+        for op, val in [("equals", "x"), ("matches", "x"), ("one_of", ["x"]), ("contains", "x")]:
+            assert pe._evaluate_operator(op, [], val) is False, op
+        assert pe._evaluate_operator("not_equals", [], "x") is True
+
 
 # ═══════════════════════════════════════════════════════════════════
 # TestEvaluateWhen
@@ -255,6 +293,56 @@ class TestEvaluateOperator:
 
 class TestEvaluateWhen:
     """when 條件子句測試。"""
+
+    @pytest.mark.parametrize("when,want", [
+        ({"target": "_metadata.db_type", "operator": "one_of", "value": ["mariadb", "postgresql"]}, True),
+        ({"target": "_metadata.db_type", "operator": "one_of", "value": ["kafka"]}, False),
+        ({"target": "_metadata.db_type", "operator": "matches", "value": "^red"}, True),
+        ({"target": "_metadata.db_type", "operator": "not_equals", "value": "mariadb"}, False),
+        ({"target": "_metadata.db_type", "operator": "equals", "value": "redis"}, True),
+        ({"target": "_metadata.db_type", "operator": "contains", "value": "red"}, True),
+    ])
+    def test_when_on_a_list_holds_for_some_element(self, when, want):
+        """#3771 審查：when 問的是「規則適不適用」，多 DB 租戶不能因全稱語意逃過約束；
+        主規則的 one_of／matches 仍要每個元素都成立。"""
+        config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
+        assert pe._evaluate_when(config, when) is want
+        if when["operator"] in ("one_of", "matches", "equals", "contains") and want:
+            assert pe._evaluate_operator(when["operator"], ["mariadb", "redis"], when["value"]) is False
+
+    def test_rule_guarded_by_when_one_of_still_applies_to_a_multi_db_tenant(self):
+        rule = pe.PolicyRule(name="r", description="", target="_metadata.owner",
+                             operator="required",
+                             when={"target": "_metadata.db_type", "operator": "one_of",
+                                   "value": ["mariadb", "postgresql"]})
+        config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
+        assert len(pe.evaluate_rule(rule, "t-a", config)) == 1
+
+    @pytest.mark.parametrize("tags,violations", [
+        (["prod"], 0),
+        (["prod", "other"], 0),
+        (["other"], 1),
+        (["a", "b"], 1),
+        ([], 0),    # 空列表與沒寫同讀（written_config 濾掉 exporter 補的空值）
+        (None, 0),  # 沒寫 tags：when 不成立，與舊的 contains（找不到就跳過）一致
+    ])
+    def test_documented_tag_presence_recipe(self, tags, violations):
+        """#3771 CodeRabbit：cli-reference 與 changelog 寫的「要求列表含某個 tag」配方——
+        `when: not_equals prod` 加主規則 `equals prod`。單寫 `when` 或改用 `one_of` 都不等價
+        （`one_of: [prod]` 拒收 [prod, other]）；文件改寫法時這裡要一起改。
+        值經 `written_config` 讀出，與 evaluate-policy 同一條路（審查：空列表在那裡
+        等同沒寫，直接餵 dict 會得到文件沒在講的那一層的答案）。"""
+        from types import SimpleNamespace
+        import _lib_tenant_values as tv
+        rules = pe.rules_from_policy_data({"policies": [{
+            "name": "need-prod", "target": "_metadata.tags", "operator": "equals",
+            "value": "prod",
+            "when": {"target": "_metadata.tags", "operator": "not_equals", "value": "prod"},
+        }]})
+        served = SimpleNamespace(values={"_metadata": {
+            "tags": [] if tags is None else tags, "owner": "o"}})
+        config = tv.written_config(SimpleNamespace(effective_config={}), served)
+        assert len(pe.evaluate_rule(rules[0], "t-a", config)) == violations
 
     def test_when_required_true(self, sample_config):
         """when required 條件成立。"""

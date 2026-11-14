@@ -47,6 +47,7 @@ from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pai
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
+from _lib_validation import written_threshold_number  # noqa: E402  (#3457)
 import _lib_input  # noqa: E402  (#3693: --old-dir / --new-dir are declared inputs)
 import _lib_parse_cache  # noqa: E402  (#3724: record_judgement)
 import _lib_parse_tree  # noqa: E402
@@ -417,13 +418,12 @@ def classify_change(old_val, new_val, old_disabled=False, new_disabled=False):
     if not old_disabled and new_disabled:
         return "toggled"  # disabled
 
-    # Both are numeric — compare thresholds
-    try:
-        old_num = float(old_val) if not isinstance(old_val, dict) else None
-        new_num = float(new_val) if not isinstance(new_val, dict) else None
-    except (TypeError, ValueError):
-        old_num = None
-        new_num = None
+    # Both are numbers — compare thresholds. A served reading is a number
+    # already; a value /metrics does not serve is its text as written, read
+    # here by the exporter's grammar (#3457): `float()` also reads `1_000`,
+    # which the exporter refuses, and would call it tighter or looser.
+    old_num = written_threshold_number(old_val)
+    new_num = written_threshold_number(new_val)
 
     if old_num is not None and new_num is not None:
         if new_num < old_num:

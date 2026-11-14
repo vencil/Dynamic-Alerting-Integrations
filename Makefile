@@ -268,6 +268,14 @@ agent-progress: ## 長時 agent progress ledger 快照 + liveness 探針（協�
 agent-adapters: ## 由 .agents/ 中性 SSOT 重生跨 AI 轉接檔（.claude/** + .cursor/skills/vibe-paths-* + .github/instructions/vibe-paths-* + AGENTS.md；改完 SSOT 必跑）
 	@python3 scripts/tools/dx/gen_agent_adapters.py --generate
 
+.PHONY: workflow-path-filters
+workflow-path-filters: ## 重生各 workflow `on.pull_request.paths` 的 GENERATED path-trace 區塊（來源：.github/path-traces/ 的執行期追蹤＋Go 來源＋字面 import；#3756）
+	@python3 scripts/ops/workflow_path_filter.py generate
+
+.PHONY: workflow-path-filters-check
+workflow-path-filters-check: ## 檢查 path-trace 區塊沒有 drift，且所有 workflow 的 path filter 沒有死條目／認不得的 pattern（pre-commit 的 workflow-path-filter-check 同一支）
+	@python3 scripts/ops/workflow_path_filter.py generate --check
+
 .PHONY: converge-status
 converge-status: ## 多輪修正鏈的收斂判定（協議見 vibe-converge skill；用：make converge-status SCOPE=dev/1443）
 	@if [ -z "$(SCOPE)" ]; then echo "❌ SCOPE is required. e.g. make converge-status SCOPE=dev/1443"; exit 1; fi
@@ -1328,10 +1336,9 @@ chart-package: ## 打包 Helm chart (.tgz)
 		--tgz .build/threshold-exporter-$(CHART_VER).tgz
 	@echo "✓ .build/threshold-exporter-$(CHART_VER).tgz"
 
-.PHONY: chart-push
-chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker login ghcr.io)
-	@helm push .build/threshold-exporter-$(CHART_VER).tgz oci://$(OCI_REGISTRY)/charts
-	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
+# chart 只由 release.yaml 發布：發布前 check_release_immutable.py 先比對
+# registry 上的同版號（#3848）。本機推送的 `chart-push` 已移除——它沒有那道檢查，
+# 可以讓同一版號對應兩份內容。
 
 # ----------------------------------------------------------
 # Release Tag（各線版號；清單見 release.yaml 的 on.push.tags）

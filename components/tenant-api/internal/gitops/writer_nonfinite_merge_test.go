@@ -36,7 +36,10 @@ func TestMergePaths_RefuseANonFiniteThresholdTheyWrite(t *testing.T) {
 		"+Inf:critical": "is not a finite number", "infinity": "is not a finite number",
 		"abc": "is not a threshold the exporter reads", "70:high": "is not a threshold the exporter reads",
 		"1e999": "is not a threshold the exporter reads", "0x1p1024": "is not a threshold the exporter reads",
-		"": "is not a threshold the exporter reads"}
+		// #3457: outside the grammar of a threshold number.
+		"1_000": "is not a threshold the exporter reads", "0x1p4": "is not a threshold the exporter reads",
+		"123456789012345678901": "is not a threshold the exporter reads",
+		"":                      "is not a threshold the exporter reads"}
 	for value, want := range refusals {
 		t.Run(value, func(t *testing.T) {
 			dir := seedTenantRepo(t)
@@ -63,7 +66,7 @@ func TestMergePaths_RefuseANonFiniteThresholdTheyWrite(t *testing.T) {
 
 // The values the exporter reads go through the merge paths.
 func TestMergePaths_TakeAThresholdTheExporterReads(t *testing.T) {
-	for _, value := range []string{"70", "1_000", "0x1p4", "70:critical", "disable"} {
+	for _, value := range []string{"70", "1e3", "+.5", "12345678901234567890", "70:critical", "disable"} {
 		t.Run(value, func(t *testing.T) {
 			dir := seedTenantRepo(t)
 			w := newTestWriter(dir, dir)

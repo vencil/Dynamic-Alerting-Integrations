@@ -140,6 +140,20 @@ class TestClassifyChange:
     def test_classify_change(self, old, new, off, expected):
         assert cd.classify_change(old, new, *off) == expected
 
+    @pytest.mark.parametrize("old, new, expected", [
+        # A served reading is a number; an unserved value is its text, read by
+        # the exporter's grammar (#3457). `float()` reads `1_000` as 1000 and
+        # would call these tighter / looser.
+        (70, "1_000", "modified"), ("1_000", 70, "modified"), (70, "0x1p4", "modified"),
+        (70, "١٠", "modified"), (70, "\x1c80", "modified"), (70, "80:critical", "modified"),
+        (70, "inf", "modified"), (True, 70, "modified"),
+        # What the exporter reads as a number still compares as one.
+        (70, "85", "looser"), (70, " 85 ", "looser"), (70, "8.5e1", "looser"), ("85", 70, "tighter"),
+        (70, "70.0", "unchanged"), (70, float("inf"), "looser"),
+    ])
+    def test_a_written_value_is_a_number_only_as_the_exporter_reads_it(self, old, new, expected):
+        assert cd.classify_change(old, new) == expected
+
     def test_switched_off_is_the_callers_answer_not_the_values(self):
         """#3140 PR2：停用與否是 served-values 的 `keys[].reason` "disabled"（由呼叫端
         傳入），不是這裡讀值：同樣寫 `disable`、沒說停用就不是 toggled。"""
