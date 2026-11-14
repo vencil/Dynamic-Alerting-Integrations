@@ -54,11 +54,11 @@ Tenant 透過 `tenant.yaml` 自助管理以下設定，不接觸 PromQL：
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "800"           # Custom: 自訂閾值
-    # mysql_threads_running:           # Default: 不寫這個 key，沿用上層的值——子目錄 _defaults.yaml 有設就用它，否則是根目錄的平台預設值（空字串不是合法的值）
-    mysql_replication_lag: "disable"   # Disable: 關閉此告警
-    mysql_connections_critical: "1000"  # 多層嚴重度（_critical suffix）
-    "mysql_connections{instance='db-primary:3306'}": "500"  # 維度標籤篩選（label 須在根 _defaults.yaml 的 dimensions: 為該 base 宣告；出貨的 Rule Pack 以 max by(tenant) 合成單一租戶門檻，#3475）
+    mysql_connection_usage_percent: "85"           # Custom: 自訂閾值（連線使用率，佔 max_connections 的 %）
+    # container_cpu:                               # Default: 不寫這個 key，沿用上層的值——子目錄 _defaults.yaml 有設就用它，否則是根目錄的平台預設值（空字串不是合法的值）
+    mysql_replication_lag: "disable"               # Disable: 關閉此告警
+    mysql_connection_usage_percent_critical: "95"  # 多層嚴重度（_critical suffix）
+    "mysql_connection_usage_percent{instance='db-primary:3306'}": "75"  # 維度標籤篩選（label 須在根 _defaults.yaml 的 dimensions: 為該 base 宣告；出貨的 Rule Pack 以 max by(tenant) 合成單一租戶門檻，#3475）
 ```
 
 **運營模式控制**：
@@ -108,15 +108,15 @@ tenants:
 
 由 Domain Expert 預先定義具備明確業務語義的複合告警場景。Tenant 不需要撰寫 PromQL，僅決定是否啟用並調整參數。
 
-**範例 — `MariaDBSystemBottleneck`**（連線數與 CPU 同時超標 = 真實負載瓶頸）：
+**範例 — `MariaDBSystemBottleneck`**（連線使用率與執行緒飽和同時超標 = 真實負載瓶頸）：
 
 ```yaml
 - alert: MariaDBSystemBottleneck
   expr: |
     (
-      tenant:mysql_threads_connected:max
+      tenant:mysql_connection_usage:percent
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_connections
+      tenant:alert_threshold:mysql_connection_usage_percent
     )
     and on(tenant)
     (
@@ -133,7 +133,7 @@ tenants:
 
 **啟停機制**：Tier 2 場景的啟停透過既有三態控制間接實現，不需要額外的開關 key：
 
-- **啟用**：只要場景依賴的各指標閾值均為有效值（Custom 或 Default），場景自動生效。
+- **啟用**：只要場景依賴的各指標閾值均為有效值（Custom 或 Default），場景自動生效。⚠️ `mysql_threads_running` 平台不給預設（健康值隨主機 CPU 核數而定，要依主機給值；#3778）；租戶檔或部署方的 defaults 皆可設定，所以 `MariaDBSystemBottleneck` 在租戶或部署方設了這個 key 之前不會觸發。
 - **停用某一指標**：將該指標設為 `"disable"`，recording rule 不產出值，條件不成立，場景不觸發。
 - **全域維護模式**：透過 `_state_maintenance` 設為 `"enable"`，場景中的 `unless` 子句生效。`recurring:` 週期窗在窗內以同一個子句生效（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)）。告警要帶 `maintenance: mute` label，標明它帶有這個子句（[#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)）。
 

@@ -23,7 +23,7 @@ v2.3.0: edge evaluation added — the normalisation part of the Rule Packs can b
 - **Federation**: bringing data from several Prometheus servers together in one place. Here it means the platform's own cross-cluster deployment: edge clusters collect metrics, and the central cluster manages thresholds and alerting for all of them.
 - **Central cluster / edge cluster**: the central cluster handles unified monitoring and alerting; edge clusters are the Kubernetes clusters that each run their own workloads and databases.
 - **Rule Pack**: a set of Prometheus rule files (recording rules and alert rules) shipped with the platform, one file per database or purpose, such as `rule-pack-mariadb.yaml`.
-- **Edge normalisation**: the recording rules in a Rule Pack that first turn each database exporter's raw metrics into a uniform shape (for example `tenant:mysql_threads_connected:max`). Evaluating them in the edge cluster is called edge normalisation.
+- **Edge normalisation**: the recording rules in a Rule Pack that first turn each database exporter's raw metrics into a uniform shape (for example `tenant:mysql_connection_usage:percent`). Evaluating them in the edge cluster is called edge normalisation.
 
 ## Background
 

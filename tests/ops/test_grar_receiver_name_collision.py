@@ -52,7 +52,7 @@ _BASE_T = "t1"
 
 def _write_tenant(d: Path, tenant: str, routing: dict) -> None:
     (d / f"{tenant}.yaml").write_text(
-        make_tenant_yaml(tenant, keys={"mysql_connections": "70"},
+        make_tenant_yaml(tenant, keys={"mysql_connection_usage_percent": "70"},
                          routing=routing),
         encoding="utf-8")
 
@@ -154,7 +154,7 @@ class TestGeneratedNameCollision:
         d = tmp_path / "conf.d"
         d.mkdir()
         # declared: a tree with no root platform file fails --validate (#3016)
-        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                           encoding="utf-8")
         _write_tenant(d, _BASE_T, _routing_with("routes"))
         _write_tenant(d, "t2", make_routing_config("t2"))

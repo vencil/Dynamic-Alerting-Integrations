@@ -187,19 +187,15 @@ class TestSuggestThreshold:
         assert result["critical"] is None
         assert "樣本不足" in result["note"]
 
-    def test_connections_rounds_up(self):
-        """Connections metric rounds thresholds to int (ceil)。"""
+    def test_no_metric_is_rounded_specially(self):
+        """#3778：connections 改成佔 max_connections 的 %，不再是要取整的連線數；
+        建議值公式對每個指標都一樣（有上界的指標根本不走這條，見 bounded）。"""
         stats = {
             "count": 100, "min": 10, "max": 100, "avg": 50,
             "p50": 50, "p90": 80, "p95": 83.3, "p99": 91.7,
         }
-        result = baseline_discovery.suggest_threshold(stats, "connections")
-        # 83.3 * 1.2 = 99.96 -> ceil -> 100
-        assert isinstance(result["warning"], int)
-        assert result["warning"] == math.ceil(83.3 * 1.2)
-        # 91.7 * 1.5 = 137.55 -> ceil -> 138
-        assert isinstance(result["critical"], int)
-        assert result["critical"] == math.ceil(91.7 * 1.5)
+        assert (baseline_discovery.suggest_threshold(stats, "connections")
+                == baseline_discovery.suggest_threshold(stats, "slow_queries"))
 
     def test_zero_p95_returns_none(self):
         """p95 == 0 means metric not active, warning should be None。"""
@@ -362,8 +358,8 @@ class TestMainObservationLoop:
         assert "connection refused" in err
         assert (out_dir / "baseline-db-a-timeseries.csv").exists()
 
-    @pytest.mark.parametrize("metric", ["connections", "cpu"],
-                             ids=["unbounded", "bounded"])
+    @pytest.mark.parametrize("metric", ["slow_queries", "cpu", "connections"],
+                             ids=["unbounded", "bounded", "bounded-connections"])
     def test_a_point_not_measured_is_named_not_too_few_samples(
             self, capsys, monkeypatch, tmp_path, cli_argv, metric):
         """#3133：沒量成的指標在 stdout 與摘要 CSV 都寫成查詢失敗，
@@ -383,7 +379,8 @@ class TestMainObservationLoop:
             note = list(csv.DictReader(fh))[0]["note"]
         assert note == "查詢失敗 3/3 次，本列不完整", note
         assert "查詢失敗 3/3 次" in out
-        for wrong in ("樣本不足", "無有效資料", baseline_discovery.NO_LIMIT_NOTE):
+        for wrong in ("樣本不足", "無有效資料", baseline_discovery.NO_LIMIT_NOTE,
+                      baseline_discovery.DEFAULT_METRICS["connections"]["no_data_note"]):
             assert wrong not in out
 
     def test_observation_sleep_called(self, monkeypatch, tmp_path, cli_argv):
@@ -586,10 +583,14 @@ class TestReportOutput:
     def test_report_patch_suggestions(self, capsys, monkeypatch, tmp_path, cli_argv):
         """報告包含 patch 建議指令。
 
-        用 connections：cpu／memory 是佔 limit 的 %，改為對照平台預設、不印
-        patch-config（issue 1196）。
+        目前帶租戶 key 的三項（connections、cpu、memory）都是有上界的百分比，
+        只對照平台預設、不印 patch-config（issue 1196、#3778）。印 patch-config
+        的那條路仍在，這裡塞一個沒有上界、有 key 的指標來走它。
         """
-        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "24", "--interval", "2", "--metrics", "connections", "-o", str(tmp_path / "out"))
+        monkeypatch.setitem(baseline_discovery.DEFAULT_METRICS, "unbounded_probe", {
+            "query": 'probe{{tenant="{tenant}"}}', "unit": "count",
+            "description": "unbounded probe", "config_key": "mysql_replication_lag"})
+        cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090", "--duration", "24", "--interval", "2", "--metrics", "unbounded_probe", "-o", str(tmp_path / "out"))
 
         def mock_query(prometheus_url, expr):
             return [{"metric": {}, "value": [0, "70.0"]}], None
@@ -627,7 +628,7 @@ _REPO = _Path(__file__).resolve().parents[2]
 def test_every_suggested_key_has_a_rule_pack_reader():
     keyed = {k: v["config_key"] for k, v in baseline_discovery.DEFAULT_METRICS.items()
              if v.get("config_key")}
-    assert keyed == {"connections": "mysql_connections", "cpu": "container_cpu",
+    assert keyed == {"connections": "mysql_connection_usage_percent", "cpu": "container_cpu",
                      "memory": "container_memory"}
     for metric, key in keyed.items():
         assert _threshold_alerts.alerts_for_key(key), (metric, key)
@@ -662,6 +663,20 @@ def test_percent_query_is_the_rule_packs_own_ratio(metric, record):
     assert baseline_discovery.DEFAULT_METRICS[metric]["unit"] == "% of limit"
 
 
+def test_connections_query_is_the_rule_packs_own_ratio():
+    """#3778：connections 查的是 tenant:mysql_connection_usage:percent 的逐 instance
+    比值原文，只在兩個指標上加租戶篩選；外層同樣取最滿的 instance。"""
+    text = (_REPO / "rule-packs" / "rule-pack-mariadb.yaml").read_text(encoding="utf-8")
+    body = text.split("- record: tenant:mysql_connection_usage:percent", 1)[1]
+    m = _re.search(r"max by\(tenant\) \((.*?)\)\s*\n\s*(?:#|- )", body, _re.S)
+    assert m, body[:300]
+    rule = "".join(m.group(1).split())
+    query = "".join(baseline_discovery.DEFAULT_METRICS["connections"]["query"].split())
+    query = query.replace("{{", "{").replace("}}", "}").replace('{tenant="{tenant}"}', "")
+    assert query == f"max({rule})", (query, rule)
+    assert baseline_discovery.DEFAULT_METRICS["connections"]["unit"] == "% of max_connections"
+
+
 def _run_report(monkeypatch, tmp_path, cli_argv, capsys, values):
     """values: metric -> 固定的觀測值（查詢依 DEFAULT_METRICS 的 query 對回 metric）。"""
     cli_argv("baseline_discovery", "--tenant", "db-a", "--prometheus", "http://mock:9090",
@@ -683,7 +698,9 @@ def test_report_prints_only_keys_a_rule_pack_reads(capsys, monkeypatch, tmp_path
                       {"connections": 50, "cpu": 50, "memory": 50,
                        "slow_queries": 1, "disk_io": 100})
     keys = set(_re.findall(r"da-tools patch-config db-a (\S+) ", out))
-    assert keys == {"mysql_connections", "mysql_connections_critical"}
+    # 唯一有租戶 key 的三項都是有上界的百分比（#1196、#3778）：只對照平台預設，不給門檻
+    assert keys == set(), keys
+    assert "mysql_connection_usage_percent 平台預設" in out
     for gone in ("mysql_cpu", "mysql_memory", "mysql_disk_io", "mysql_slow_queries"):
         assert gone not in out
     assert "# slow_queries:" in out and "# disk_io:" in out
@@ -726,6 +743,26 @@ def test_at_default_says_raise_the_limit(capsys, monkeypatch, tmp_path, cli_argv
     assert "調高 limit" in out
     factor = (default + 5) / (default * 0.9)
     assert f"{factor:.2f}" in out
+
+
+def test_connections_compare_against_the_default_not_a_multiplier(capsys, monkeypatch,
+                                                                   tmp_path, cli_argv):
+    """#3778：連線使用率是佔 max_connections 的 %，與 cpu／memory 同一類——
+    頂到預設時建議放大 max_connections，不印 patch-config 門檻。"""
+    default = baseline_discovery.platform_default("mysql_connection_usage_percent")
+    assert default == 80
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys, {"connections": default + 5})
+    assert "patch-config db-a mysql_connection_usage_percent" not in out
+    assert "調高 max_connections" in out
+    assert "調高 limit" not in out
+    factor = (default + 5) / (default * 0.9)
+    assert f"{factor:.2f}" in out
+
+
+def test_no_connection_data_explains_the_two_collectors(capsys, monkeypatch, tmp_path, cli_argv):
+    out = _run_report(monkeypatch, tmp_path, cli_argv, capsys, {"cpu": 10})
+    assert out.count("global_status 與 global_variables") == 1
+    assert "沒有設 limit" in out
 
 
 def test_no_percent_data_explains_limits(capsys, monkeypatch, tmp_path, cli_argv):

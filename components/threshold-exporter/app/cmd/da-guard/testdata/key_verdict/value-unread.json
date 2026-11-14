@@ -86,7 +86,7 @@
         "served": []
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "defaults",
         "file": "_defaults.yaml",
         "read_by": [
@@ -122,7 +122,7 @@
         "served": null
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "defaults",
         "file": "_defaults.yaml",
         "read_by": [

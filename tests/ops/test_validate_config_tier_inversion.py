@@ -34,28 +34,28 @@ def test_a_profile_critical_under_a_platform_warning_fails(tmp_path):
     """The case no single file shows: the profile's critical (70) and the
     root default's warning (80) live in two files."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
-                          "profiles:\n  gold:\n    mysql_connections_critical: \"70\"\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"
+                          "profiles:\n  gold:\n    mysql_connection_usage_percent_critical: \"70\"\n",
         "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n"}))
     assert r["status"] == vc.FAIL, r
     assert len(r["details"]) == 1, r
     line = r["details"][0]
-    assert "'tx'" in line and "`mysql_connections`" in line and "00:00-24:00" in line, line
+    assert "'tx'" in line and "`mysql_connection_usage_percent`" in line and "00:00-24:00" in line, line
     assert "critical 70 is not above warning 80" in line, line
 
 
 def test_a_stricter_critical_passes(tmp_path):
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"95\"\n"}))
     assert r["status"] == vc.PASS, r
 
 
 def test_only_the_window_that_inverts_is_named(tmp_path):
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"
-                   "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"95\"\n"
+                   "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
                    "        - window: \"01:00-03:00\"\n          value: \"99\"\n"}))
     assert r["status"] == vc.FAIL, r
     assert len(r["details"]) == 1 and "01:00-03:00" in r["details"][0], r
@@ -66,9 +66,9 @@ def test_a_dimensional_warning_counts_in_the_tenants_largest_warning(tmp_path):
     dimensional ones included: a dimensional warning (97) above the plain
     critical (95) makes the alert's warning 97."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ndimensions:\n  mysql_connections: [db]\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"
-                   "    'mysql_connections{db=\"a\"}': \"97\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\ndimensions:\n  mysql_connection_usage_percent: [db]\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"95\"\n"
+                   "    'mysql_connection_usage_percent{db=\"a\"}': \"97\"\n"}))
     assert r["status"] == vc.FAIL, r
     assert "critical 95 is not above warning 97" in r["details"][0], r
 
@@ -77,8 +77,8 @@ def test_a_dimensional_critical_under_the_plain_warning_fails(tmp_path):
     """Review F1: the critical is dimensional (60), the warning the root's
     default (80): the alert's critical fires at 60, before its warning."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ndimensions:\n  mysql_connections: [db]\n",
-        "tx.yaml": "tenants:\n  tx:\n    'mysql_connections{db=\"a\"}': \"60:critical\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\ndimensions:\n  mysql_connection_usage_percent: [db]\n",
+        "tx.yaml": "tenants:\n  tx:\n    'mysql_connection_usage_percent{db=\"a\"}': \"60:critical\"\n"}))
     assert r["status"] == vc.FAIL, r
     assert "critical 60 is not above warning 80" in r["details"][0], r
 
@@ -87,9 +87,9 @@ def test_a_larger_dimensional_critical_lifts_the_tenants_critical(tmp_path):
     """Review F2: the alert's critical is max(70, 99) = 99, above the warning
     (80): no inversion, though the plain critical alone is below it."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ndimensions:\n  mysql_connections: [db]\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"70\"\n"
-                   "    'mysql_connections{db=\"a\"}': \"99:critical\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\ndimensions:\n  mysql_connection_usage_percent: [db]\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"70\"\n"
+                   "    'mysql_connection_usage_percent{db=\"a\"}': \"99:critical\"\n"}))
     assert r["status"] == vc.PASS, r
 
 
@@ -100,15 +100,15 @@ def test_stricter_is_the_shipped_alerts_direction(tmp_path, monkeypatch):
 
     def flipped(*a, **kw):
         m = dict(real(*a, **kw))
-        for k in ("mysql_connections", "mysql_connections_critical"):
+        for k in ("mysql_connection_usage_percent", "mysql_connection_usage_percent_critical"):
             m[k] = {**m[k], "direction": "<"}
         return m
     monkeypatch.setattr(_observed_map_lib, "load_observed_map", flipped)
-    files = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n"}
+    files = {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"}
     below = vc.check_tier_inversion(_tree(tmp_path / "below", {
-        **files, "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"70\"\n"}))
+        **files, "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"70\"\n"}))
     above = vc.check_tier_inversion(_tree(tmp_path / "above", {
-        **files, "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"}))
+        **files, "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"95\"\n"}))
     assert below["status"] == vc.PASS, below
     assert above["status"] == vc.FAIL and "is not below warning 80" in above["details"][0], above
 
@@ -139,8 +139,8 @@ def test_the_shipped_example_tree_passes():
 
 def test_the_row_fails_validate_config(tmp_path):
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"60\"\n"})
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"60\"\n"})
     p = subprocess.run([sys.executable, str(_REPO / "scripts/tools/ops/validate_config.py"),
                         "--config-dir", conf_d, "--json"],
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
@@ -152,8 +152,8 @@ def test_the_row_fails_validate_config(tmp_path):
 def test_an_equal_critical_is_inverted(tmp_path):
     """Equal fires both at once, and dedup then mutes the warning: no stricter."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"80\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"80\"\n"}))
     assert r["status"] == vc.FAIL and "critical 80 is not above warning 80" in r["details"][0], r
 
 
@@ -162,19 +162,19 @@ def test_windows_that_do_not_meet_are_not_compared(tmp_path):
     below the warning, though the window's warning (99) is above the
     default's critical (95)."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "tx.yaml": "tenants:\n  tx:\n"
-                   "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+                   "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
                    "        - window: \"01:00-03:00\"\n          value: \"99\"\n"
-                   "    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n"
+                   "    mysql_connection_usage_percent_critical:\n      default: \"95\"\n      overrides:\n"
                    "        - window: \"01:00-03:00\"\n          value: \"120\"\n"}))
     assert r["status"] == vc.PASS, r
 
 
 def test_nothing_to_compare_says_so(tmp_path):
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent: \"70\"\n"}))
     assert r["status"] == vc.PASS and "nothing to compare" in r["details"][0], r
 
 
@@ -200,12 +200,12 @@ def test_tiers_whose_directions_disagree_are_not_judged(tmp_path, monkeypatch):
 
     def split(*a, **kw):
         m = dict(real(*a, **kw))
-        m["mysql_connections"] = {**m["mysql_connections"], "direction": "<"}
+        m["mysql_connection_usage_percent"] = {**m["mysql_connection_usage_percent"], "direction": "<"}
         return m
     monkeypatch.setattr(_observed_map_lib, "load_observed_map", split)
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"70\"\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"70\"\n"}))
     assert r["status"] == vc.PASS and "nothing to compare" in r["details"][0], r
 
 
@@ -216,9 +216,9 @@ def test_a_file_the_exporter_drops_is_not_checked(tmp_path):
     # other rows still run on the rest of the tree (the CLI: called alone, the
     # served reading refuses such a tree outright).
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"60\"\n   bad: [\n",
-        "ty.yaml": "tenants:\n  ty:\n    mysql_connections_critical: \"95\"\n"})
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"60\"\n   bad: [\n",
+        "ty.yaml": "tenants:\n  ty:\n    mysql_connection_usage_percent_critical: \"95\"\n"})
     p = subprocess.run([sys.executable, str(_REPO / "scripts/tools/ops/validate_config.py"),
                         "--config-dir", conf_d, "--json"],
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
@@ -239,9 +239,9 @@ def test_a_part_of_the_day_metrics_cannot_be_gathered_in_is_named(tmp_path, at):
     run's instant on both sides of the window, so the verdict no longer reads
     the wall clock."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"
-                   "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"95\"\n"
+                   "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
                    "        - window: \"01:00-03:00\"\n          value: \"50:critical\"\n"}), at=at)
     assert r["status"] == vc.PASS, r
     assert any(d.startswith("not judged where /metrics cannot be gathered")

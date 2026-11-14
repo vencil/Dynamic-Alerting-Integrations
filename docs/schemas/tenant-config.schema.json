@@ -133,7 +133,7 @@
             { "$ref": "#/definitions/scheduledValue" }
           ],
           "title": "Dimensional Threshold",
-          "description": "Metric with dimensional labels: metric{label=\"value\"} or metric{label=~\"regex\"}. Labels can be literal (=) or regex (=~). Every label the row serves must be declared for its base (before {) under the root _defaults.yaml dimensions: (ADR-038 §11); otherwise the key serves no row. A `<key>_critical{...}` key never serves one (#3556: `<key>_critical` is the critical tier of `<key>`, not a base); write a per-dimension critical threshold as `<key>{label=\"v\"}: \"N:critical\"`. An exact label (=) is declared under its own name; a regex selector serves <label>_re, so mysql_connections{schema=~\"temp.*\"} needs schema_re declared, not schema. Examples: redis_connected_clients{instance=\"redis-orders:6379\"}, mysql_connections{schema=~\"temp.*\"}"
+          "description": "Metric with dimensional labels: metric{label=\"value\"} or metric{label=~\"regex\"}. Labels can be literal (=) or regex (=~). Every label the row serves must be declared for its base (before {) under the root _defaults.yaml dimensions: (ADR-038 §11); otherwise the key serves no row. A `<key>_critical{...}` key never serves one (#3556: `<key>_critical` is the critical tier of `<key>`, not a base); write a per-dimension critical threshold as `<key>{label=\"v\"}: \"N:critical\"`. An exact label (=) is declared under its own name; a regex selector serves <label>_re, so mysql_connection_usage_percent{schema=~\"temp.*\"} needs schema_re declared, not schema. Examples: redis_connected_clients{instance=\"redis-orders:6379\"}, mysql_connection_usage_percent{schema=~\"temp.*\"}"
         }
       }
     },
@@ -1185,7 +1185,7 @@
         "metric_group": {
           "type": "string",
           "title": "Metric Group",
-          "description": "Metric group to match (e.g., 'mysql_connections'). Mutually exclusive with alertname."
+          "description": "Metric group to match (e.g., 'mysql_connection_usage_percent'). Mutually exclusive with alertname."
         },
         "receiver": {
           "$ref": "#/definitions/receiver",

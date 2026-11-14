@@ -158,7 +158,7 @@ def _argv(tool, url, out=None):
     if tool == "alert_quality":
         return ["--prometheus", url, "--json", "--ci"]
     if tool == "backtest_threshold":
-        return ["--tenant", "t", "--metric", "mysql_connections", "--old-value", "70",
+        return ["--tenant", "t", "--metric", "mysql_connection_usage_percent", "--old-value", "70",
                 "--new-value", "50", "--prometheus", url, "--json", "-o", str(out)]
     return ["--prometheus", url, "--json", "--ci"]
 

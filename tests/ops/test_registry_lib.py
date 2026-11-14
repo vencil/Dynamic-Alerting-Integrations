@@ -566,14 +566,19 @@ def test_notes_are_total_over_malformed_fields():
 def test_real_registry_chart_default_set():
     """The chart set is the behavior-preserving 6-key pre-rewire set plus the
     owner-decided pg_connections / pg_replication_lag promotion (#1200 Q3=C /
-    D4 folding, 2026-07-25). A1 / A1.5 changed the fields, not the set."""
+    D4 folding, 2026-07-25). A1 / A1.5 changed the fields, not the set.
+    #3778 then took mysql_threads_running out (arming: operator — a healthy
+    value scales with the host's CPU count) and swapped the absolute
+    mysql_connections for mysql_connection_usage_percent: 8 -> 7."""
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if lib.is_chart_armed(e)}
     # Pin the DECISION, not just the mechanism: the owner-approved pg
     # promotion (#1232) must not silently vanish via an edit that keeps the
     # count intact (CodeRabbit review of #1232).
     assert {"pg_connections", "pg_replication_lag"} <= tagged
-    assert len(tagged) == 8
+    assert "mysql_connection_usage_percent" in tagged
+    assert "mysql_threads_running" not in tagged
+    assert len(tagged) == 7
 
 
 def test_every_real_key_states_its_arming():
@@ -590,12 +595,14 @@ def test_every_real_key_states_its_arming():
 
 
 def test_real_shipped_non_portable_keys_are_the_recorded_exceptions():
-    """The owner kept shipping the two absolute MariaDB values (#3773); the
-    gate admits them only because each records the issue that resolves it."""
+    """The owner kept shipping the two absolute MariaDB values (#3773) under
+    a recorded exception; #3778 resolved both (the count became a share of
+    max_connections, threads_running stopped shipping a value), so no shipped
+    key needs an exception any more."""
     doc = lib.build_registry_doc()
     exceptions = {k: e["default_exception"]["tracking"]
                   for k, e in doc["keys"].items() if "default_exception" in e}
-    assert exceptions == {"mysql_connections": 3778, "mysql_threads_running": 3778}
+    assert exceptions == {}
 
 
 def test_real_validation_candidates_are_derived():
@@ -651,13 +658,18 @@ def test_not_chart_armed_is_the_registry_derivation():
 
     The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals),
     less the three kafka keys #3783 removed — pinned so the derivation can
-    only change with the registry, never with a rule edit here."""
+    only change with the registry, never with a rule edit here. #3778's
+    mysql_threads_running is NOT here: it sits in the optional_overrides tier
+    (declared, no value), so a tenant writing it alone is served — the
+    defaults tier with `arming: operator` rendered it on no runtime face and
+    served nothing."""
     doc = lib.build_registry_doc()
     derived = lib.not_chart_armed_keys(doc)
     keys = doc["keys"]
     for key in derived:
         owner = keys[keys[key].get("critical_of") or key]
         assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
+    assert not {"mysql_threads_running", "mysql_threads_running_critical"} & derived
     assert len(derived) == 58
     # optional_overrides flat keys belong to the unreachable face, not here
     assert not any(keys[k]["tier"] == "optional_overrides"
@@ -724,7 +736,9 @@ _SHIPPED_MARK = "已出貨在清單裡——平台認得這個 key"
 _BASE_SHIPPED_MARK = "但 base 已出貨——租戶今天就設得動"
 _DEV_ONLY_MARK = "base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨"
 _DORMANT_MARK = "base 也未出貨——documented-but-dormant"
-_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK)
+_BASE_OPTIONAL_MARK = "base 本身也是 optional_overrides 層"
+_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK,
+              _BASE_OPTIONAL_MARK)
 
 
 def test_the_three_warning_marks_cannot_alias_each_other():
@@ -751,6 +765,10 @@ def _synth_optional_packs():
         "optional_overrides": {
             "gamma_queue": {"value": 50, "unit": "count", "desc": "queue size",
                             "metric_class": "saturation"},
+            # base is itself optional-tier (#3778's mysql_threads_running
+            # shape) -> no generator writes it under defaults:
+            "gamma_queue_critical": {"value": 80, "unit": "count",
+                                     "desc": "queue size critical"},
         },
     }
     # MIXED: flat AND _critical in the same pack — no such pack exists in the
@@ -960,6 +978,8 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
         _DEV_ONLY_MARK:
             "\n".join(lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES),
         _DORMANT_MARK: "\n".join(lib._OPTIONAL_UNSHIPPED_WARNING_LINES),
+        _BASE_OPTIONAL_MARK:
+            "\n".join(lib._OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES),
     }
     # only the DORMANT body may claim a tenant-set key produces nothing
     for mark, body in bodies.items():
@@ -976,6 +996,14 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
     dev_only = bodies[_DEV_ONLY_MARK]
     assert "產出一條真的 critical row" in dev_only
     assert "用 chart 部署時，租戶填一個並不會產出任何 row" in dev_only
+    # #3778: an optional-tier base. The dormant body's remedy ("scaffold_tenant's
+    # _defaults.yaml carries the base") is false for it; this body must name
+    # the only remedy and must not repeat that one.
+    base_optional = bodies[_BASE_OPTIONAL_MARK]
+    assert "部署面必須自己在根層 `defaults:`" in base_optional
+    # review: a subtree _defaults.yaml is not defaults[base] — say so
+    assert "子樹 _defaults.yaml" in base_optional
+    assert "_defaults.yaml 就含 base" not in base_optional
     # every group the renderer can emit is covered above — no fifth body can
     # be added without this test noticing (delta's qsize base is dev-only here)
     monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
@@ -987,7 +1015,23 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
         lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES,
         lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES,
         lib._OPTIONAL_UNSHIPPED_WARNING_LINES,
+        lib._OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES,
     }
+
+
+def test_critical_of_an_optional_tier_base_gets_its_own_warning():
+    """#3778: `gamma_queue_critical`'s base is optional-tier, so the dormant
+    warning's remedy does not apply; it renders under the base-optional
+    warning, and nothing else does."""
+    doc = _synth_optional_doc()
+    gamma = lib.render_pack_header_lines(doc, "gamma")
+    text = "\n".join(gamma)
+    assert _BASE_OPTIONAL_MARK in text and _DORMANT_MARK not in text
+    head = next(i for i, l in enumerate(gamma) if _BASE_OPTIONAL_MARK in l)
+    assert any("gamma_queue_critical" in l for l in gamma[head:])
+    for pack in ("alpha", "delta"):
+        assert _BASE_OPTIONAL_MARK not in "\n".join(
+            lib.render_pack_header_lines(doc, pack)), pack
 
 
 def test_optional_override_list_is_a_yaml_string_array():
@@ -1004,16 +1048,18 @@ def test_optional_override_list_is_a_yaml_string_array():
     assert "delta_conn_critical" not in parsed["optional_overrides"]
 
 
-def test_real_registry_optional_list_is_the_nine_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 43 the
-    tier holds (both asserted below). Most of the tier is `_critical` keys;
+def test_real_registry_optional_list_is_the_flat_keys():
+    """#1310/#1311 pin: the shipped list is the 10 FLAT keys, never the 44 the
+    tier holds (both asserted below; #3778 added mysql_threads_running). Most
+    of the tier is `_critical` keys;
     listing them would make the shipped list mostly decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 43
+    assert len(tier) == 44
     assert shipped == [
+        "mysql_threads_running",
         "oracle_wait_time_rate", "oracle_process_count",
         "oracle_pga_allocated_bytes",
         "db2_log_usage_percent", "db2_deadlock_rate",
@@ -1140,6 +1186,10 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 expected = _BASE_SHIPPED_MARK
             elif base and base in dev_defaults:
                 expected = _DEV_ONLY_MARK
+            elif base and base in shipped_list:
+                # #3778: the base ships only as an optional_overrides list
+                # entry, never under defaults:
+                expected = _BASE_OPTIONAL_MARK
             else:
                 expected = _DORMANT_MARK
             assert sect == expected, (
@@ -1148,8 +1198,8 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
                 f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 43, (
-        f"expected all 43 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 44, (
+        f"expected all 44 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():
@@ -1288,8 +1338,8 @@ _TENANT_DOC_RELS = (
 )
 _TENANT_DOCS = tuple(REPO_ROOT / rel for rel in _TENANT_DOC_RELS)
 
-# ⛔ EXACT tokens, never substring/`in`: `mysql_connections_critical` contains
-# `mysql_connections`, so a substring test reports "found" for precisely the
+# ⛔ EXACT tokens, never substring/`in`: `mysql_connection_usage_percent_critical` contains
+# `mysql_connection_usage_percent`, so a substring test reports "found" for precisely the
 # stale spellings that most resemble a live key (feedback: 子字串比對會藏住漂移).
 _DOC_CRITICAL_NAME_RE = re.compile(r"`([a-z][a-z0-9_]*_critical)`")
 # glob-shaped family examples in the dormant bullet: `kafka_*_critical`

@@ -14,15 +14,15 @@ import (
 var deadWindow = []config.DeadEntry{{Entry: "overrides[1]", Window: "01:00-03:00", Value: "5",
 	Reason: config.DeadEntryWindowCovered}}
 
-// deadInput: each tenant reads key `mysql_connections` (served), with des
+// deadInput: each tenant reads key `mysql_connection_usage_percent` (served), with des
 // as its dead entries, from layer/file.
 func deadInput(layer, file string, des map[string][]config.DeadEntry) Input {
 	in := Input{Served: map[string]ServedTenant{}, Effective: map[string]EffectiveTenant{}}
 	for tenant, d := range des {
-		in.Served[tenant] = ServedTenant{Keys: map[string]ServedKey{"mysql_connections": {Exporter: true, DeadEntries: d}},
-			Values: map[string]any{"mysql_connections": 70.0}, Rows: map[string]bool{"mysql_connections": true}}
-		in.Effective[tenant] = EffectiveTenant{Config: map[string]any{"mysql_connections": map[string]any{}},
-			Sources: map[string]config.KeySource{"mysql_connections": {Layer: layer, File: file}}}
+		in.Served[tenant] = ServedTenant{Keys: map[string]ServedKey{"mysql_connection_usage_percent": {Exporter: true, DeadEntries: d}},
+			Values: map[string]any{"mysql_connection_usage_percent": 70.0}, Rows: map[string]bool{"mysql_connection_usage_percent": true}}
+		in.Effective[tenant] = EffectiveTenant{Config: map[string]any{"mysql_connection_usage_percent": map[string]any{}},
+			Sources: map[string]config.KeySource{"mysql_connection_usage_percent": {Layer: layer, File: file}}}
 	}
 	return in
 }
@@ -40,7 +40,7 @@ func deadFindings(tree Tree) []Finding {
 func TestJudge_DeadEntryIsAnErrorOnTheTenantsFile(t *testing.T) {
 	t.Parallel()
 	tree := Judge(deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow}))
-	v := one(t, tree, "t1", "mysql_connections")
+	v := one(t, tree, "t1", "mysql_connection_usage_percent")
 	if v.Verdict != Read || !reflect.DeepEqual(v.DeadEntries, deadWindow) {
 		t.Fatalf("verdict %+v", v)
 	}
@@ -62,7 +62,7 @@ func TestJudge_DeadEntryIsAnErrorOnTheTenantsFile(t *testing.T) {
 	if fs := deadFindings(clean); len(fs) != 0 {
 		t.Fatalf("no dead entry, findings %+v", fs)
 	}
-	if v := one(t, clean, "t1", "mysql_connections"); v.DeadEntries == nil || len(v.DeadEntries) != 0 {
+	if v := one(t, clean, "t1", "mysql_connection_usage_percent"); v.DeadEntries == nil || len(v.DeadEntries) != 0 {
 		t.Fatalf("no dead entry: dead_entries %#v, want []", v.DeadEntries)
 	}
 }
@@ -108,7 +108,7 @@ func TestJudge_DeadEntriesOfTwoPlatformEntriesAreTwoFindings(t *testing.T) {
 func TestJudge_AnUnreadKeyGetsNoDeadEntryFinding(t *testing.T) {
 	t.Parallel()
 	in := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
-	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connections": {Reason: "no_row", DeadEntries: deadWindow}}}
+	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connection_usage_percent": {Reason: "no_row", DeadEntries: deadWindow}}}
 	if fs := deadFindings(Judge(in)); len(fs) != 0 {
 		t.Fatalf("findings %+v", fs)
 	}
@@ -161,7 +161,7 @@ func TestJudge_EveryRowCarriesDeadEntriesAsAList(t *testing.T) {
 func TestJudge_DeadEntryOnADisableNoopKey(t *testing.T) {
 	t.Parallel()
 	in := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
-	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connections": {Reason: ReasonDisabled,
+	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connection_usage_percent": {Reason: ReasonDisabled,
 		Disable: DisableNoop, DeadEntries: deadWindow}}}
 	if fs := deadFindings(Judge(in)); len(fs) != 1 {
 		t.Fatalf("findings %+v", fs)

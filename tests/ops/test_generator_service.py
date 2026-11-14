@@ -1599,9 +1599,9 @@ def test_the_service_log_never_carries_the_generators_text(tmp_path):
     canary = "CANARY-gsvc-log-5b"
     repo = h.init_repo(tmp_path / "repo")
     commit = h.commit_tree(repo, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: 70\n"})
-    body = ("tenants:\n  t-a:\n    mysql_connections: 70\n    _routing:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: 70\n"})
+    body = ("tenants:\n  t-a:\n    mysql_connection_usage_percent: 70\n    _routing:\n"
             "      receiver:\n        type: webhook\n        url: https://hooks.example.com/a\n"
             f"      group_wait: x-{canary}\n")
     bin_dir = tmp_path / "bin"

@@ -30,7 +30,7 @@ v2.3.0：新增邊緣評估——Rule Pack 的正規化部分可在邊緣 Promet
 - **Federation（聯邦）**：把多個 Prometheus 的資料彙整到一處。本文指平台內部的跨叢集部署：邊緣叢集收集指標，中央叢集統一管理閾值與告警。
 - **中央叢集／邊緣叢集**：中央叢集負責統一的監控與告警；邊緣叢集是各自跑業務與資料庫的 Kubernetes 叢集。
 - **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。
-- **邊緣正規化**：Rule Pack 裡先把各資料庫 exporter 的原始指標整理成統一格式的 recording rule（例如 `tenant:mysql_threads_connected:max`）。放在邊緣叢集評估時，就叫邊緣正規化。
+- **邊緣正規化**：Rule Pack 裡先把各資料庫 exporter 的原始指標整理成統一格式的 recording rule（例如 `tenant:mysql_connection_usage:percent`）。放在邊緣叢集評估時，就叫邊緣正規化。
 
 ## 背景
 

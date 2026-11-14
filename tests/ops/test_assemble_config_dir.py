@@ -544,7 +544,7 @@ class TestMainCLI:
 # #1794 — the question the filename key cannot ask
 # ============================================================
 
-_TENANT_DOC = "tenants:\n  {t}:\n    mysql_connections: {v}\n"
+_TENANT_DOC = "tenants:\n  {t}:\n    mysql_connection_usage_percent: {v}\n"
 
 
 def _shard(root, name, *files):
@@ -772,8 +772,8 @@ class TestPlatformFileSpelling:
         b = Path(config_dir) / "team-b"
         a.mkdir()
         b.mkdir()
-        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
-        _write_file(b / "_defaults.yml", "defaults:\n  mysql_connections: 20\n")
+        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connection_usage_percent: 10\n")
+        _write_file(b / "_defaults.yml", "defaults:\n  mysql_connection_usage_percent: 20\n")
         out = Path(config_dir) / "output"
         cli_argv("assemble", "--sources", f"{a},{b}", "--output", str(out))
         assert main() == 0
@@ -781,7 +781,7 @@ class TestPlatformFileSpelling:
         assert "Platform file duplicates" in printed
         assert "tenant conflict" not in printed
         assert (out / "_defaults.yml").read_text(
-            encoding="utf-8") == "defaults:\n  mysql_connections: 10\n"
+            encoding="utf-8") == "defaults:\n  mysql_connection_usage_percent: 10\n"
 
     def test_two_carrier_spellings_are_one_platform_duplicate(
             self, config_dir, cli_argv, capsys):
@@ -794,11 +794,11 @@ class TestPlatformFileSpelling:
         b = Path(config_dir) / "team-b"
         a.mkdir()
         b.mkdir()
-        _write_file(a / "_defaults.yaml", "defaults:\n  mysql_connections: 10\n")
-        _write_file(b / "_defaults.yml", "defaults:\n  mysql_connections: 20\n")
+        _write_file(a / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 10\n")
+        _write_file(b / "_defaults.yml", "defaults:\n  mysql_connection_usage_percent: 20\n")
         # A key the carrier declares: one it does not is read by nothing,
         # and `da-guard write` refuses to write it (#3489).
-        _write_file(b / "tenant-b.yaml", "tenants:\n  t-b:\n    mysql_connections: '1'\n")
+        _write_file(b / "tenant-b.yaml", "tenants:\n  t-b:\n    mysql_connection_usage_percent: '1'\n")
         out = Path(config_dir) / "output"
         cli_argv("assemble", "--sources", f"{a},{b}", "--output", str(out))
         assert main() == 0
@@ -817,11 +817,11 @@ class TestPlatformFileSpelling:
         `.yaml` only. Refused, naming the leftover and the remedy."""
         a = Path(config_dir) / "team-a"
         a.mkdir()
-        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
+        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connection_usage_percent: 10\n")
         _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    x: '1'\n")
         out = Path(config_dir) / "output"
         out.mkdir()
-        _write_file(out / "_defaults.yaml", "defaults:\n  mysql_connections: 99\n")
+        _write_file(out / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 99\n")
         cli_argv("assemble", "--sources", str(a), "--output", str(out))
         assert main() == 1
         err = capsys.readouterr().err
@@ -835,13 +835,13 @@ class TestPlatformFileSpelling:
         the produced one — one carrier, no refusal."""
         a = Path(config_dir) / "team-a"
         a.mkdir()
-        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
+        _write_file(a / "_defaults.yml", "defaults:\n  mysql_connection_usage_percent: 10\n")
         # A key the carrier declares: one it does not is read by nothing,
         # and `da-guard write` refuses to write it (#3489).
-        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: '1'\n")
+        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connection_usage_percent: '1'\n")
         out = Path(config_dir) / "output"
         out.mkdir()
-        _write_file(out / "_defaults.yml", "defaults:\n  mysql_connections: 99\n")
+        _write_file(out / "_defaults.yml", "defaults:\n  mysql_connection_usage_percent: 99\n")
         cli_argv("assemble", "--sources", str(a), "--output", str(out))
         assert main() == 0
 
@@ -878,7 +878,7 @@ class TestTheRefusalCanActuallyFailTheTarget:
         s.mkdir()
         for fn, val in (("db-a.yaml", 50), ("db-a.yml", 90)):
             (s / fn).write_text(
-                f"tenants:\n  db-a:\n    mysql_connections: {val}\n",
+                f"tenants:\n  db-a:\n    mysql_connection_usage_percent: {val}\n",
                 encoding="utf-8")
 
         artifact = REPO / ".build" / "config-dir"
@@ -914,7 +914,7 @@ class TestTheExporterReadsTheOutputDirNotJustOurCarriers:
         s.mkdir(parents=True, exist_ok=True)
         # Declares the key the tenant files write: one it does not declare
         # is read by nothing, and `da-guard write` refuses to write it (#3489).
-        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connections: 1\n")
+        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 1\n")
         for fn, tenant in files:
             _write_file(s / fn, _TENANT_DOC.format(t=tenant, v=1))
         return s
@@ -1492,7 +1492,7 @@ class TestHiddenCarriersAreNotAssembled:
     def _sources(self, config_dir, carrier_name):
         s = Path(config_dir) / "src"
         s.mkdir(parents=True, exist_ok=True)
-        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connections: 5\n")
+        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 5\n")
         _write_file(s / carrier_name, _TENANT_DOC.format(t="db-c", v=1))
         return s
 
@@ -1633,7 +1633,7 @@ class TestTheOutputIsReadAsTheExporterReadsIt:
         out = Path(config_dir) / "out"
         s.mkdir()
         out.mkdir()
-        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connections: 5\n")
+        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 5\n")
         _write_file(out / stale_name, self._BROKEN)
         cli_argv("assemble", "--sources", str(s), "--output", str(out))
         return main()

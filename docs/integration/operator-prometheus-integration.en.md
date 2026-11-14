@@ -183,13 +183,13 @@ spec:
       rules:
         - alert: MariaDBHighConnections
           expr: |
-            tenant:mysql_threads_connected:max
+            tenant:mysql_connection_usage:percent
               > on(tenant) group_left()
-            tenant:alert_threshold:mysql_connections
+            tenant:alert_threshold:mysql_connection_usage_percent
           for: 5m
           labels:
             severity: warning
-            metric_group: mysql_connections
+            metric_group: mysql_connection_usage_percent
 ```
 
 ### Verify PrometheusRule

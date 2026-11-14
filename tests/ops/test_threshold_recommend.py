@@ -174,7 +174,7 @@ class TestReservedKeys:
         ("_severity_dedup", True),
         ("_routing", True),
         ("_state_maintenance", True),
-        ("mysql_connections", False),
+        ("mysql_connection_usage_percent", False),
         ("cpu_threshold", False),
     ], ids=["silent", "dedup", "routing", "state", "mysql", "cpu"])
     def test_reserved_detection(self, key, expected):
@@ -416,7 +416,7 @@ class TestRunAnalysis:
 
     def test_no_tenant_config_dir(self, tmp_path):
         """只有 `_defaults.yaml`、沒有租戶的樹應返回空結果。"""
-        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
         assert tr.run_analysis(str(tmp_path), dry_run=True) == []
 
     def test_tenant_filter(self, tmp_path):
@@ -506,7 +506,7 @@ class TestExportPatch:
                 tr.KeyRecommendation("mysql_threads_running", "80", p95=85.0, recommended=85,
                                      delta_pct=6.3, confidence="MEDIUM",
                                      reason="recommended at P95 (increase 6.3%)"),
-                tr.KeyRecommendation("mysql_connections", "90", p95=88.0, recommended=88,
+                tr.KeyRecommendation("mysql_connection_usage_percent", "90", p95=88.0, recommended=88,
                                      delta_pct=-2.2, confidence="HIGH",
                                      reason="within 5% margin, no change needed"),
                 tr.KeyRecommendation("kafka_broker_count", "3", recommended=None,
@@ -531,11 +531,11 @@ class TestExportPatch:
         yaml = pytest.importorskip("yaml")
         doc = yaml.safe_load(out) or {}
         emitted = doc.get("tenants", {}).get("db-a", {})
-        assert "mysql_connections" not in emitted   # within-margin
+        assert "mysql_connection_usage_percent" not in emitted   # within-margin
         assert "kafka_broker_count" not in emitted   # skipped (no rec)
         # but they ARE surfaced as transparency comments
         assert "(skipped)" in out
-        assert "mysql_connections" in out  # appears in a comment line
+        assert "mysql_connection_usage_percent" in out  # appears in a comment line
 
     def test_value_is_quoted_string_integer(self):
         """整數建議值渲染為不帶小數點的 quoted string（對齊 conf.d 慣例）。"""
@@ -669,14 +669,14 @@ class TestCLI:
         a CallerError naming the keys (run() makes it rc 2, stdout empty)."""
         from _lib_exitcodes import CallerError
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
-            "db-a", keys={"mysql_connections": 80, "mysql_threads_running": 50}))
+            "db-a", keys={"mysql_connection_usage_percent": 80, "mysql_threads_running": 50}))
         with patch("threshold_recommend.prometheus_instant",
                    side_effect=tr.QueryError("connection refused")), \
                 patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                    "--prometheus", "http://p:9090", "--json"]):
             with pytest.raises(CallerError) as exc:
                 tr.main()
-        assert "db-a/mysql_connections" in str(exc.value), exc.value
+        assert "db-a/mysql_connection_usage_percent" in str(exc.value), exc.value
         assert "db-a/mysql_threads_running" in str(exc.value), exc.value
         assert capsys.readouterr().out == ""
 
@@ -685,14 +685,14 @@ class TestCLI:
         observed-map entry (never sent to Prometheus) — still no answer."""
         from _lib_exitcodes import CallerError
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
-            "db-a", keys={"mysql_connections": 80, "no_such_observed_key": 5}))
+            "db-a", keys={"mysql_connection_usage_percent": 80, "no_such_observed_key": 5}))
         with patch("threshold_recommend.prometheus_instant",
                    side_effect=tr.QueryError("connection refused")), \
                 patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                    "--prometheus", "http://p:9090", "--json"]):
             with pytest.raises(CallerError) as exc:
                 tr.main()
-        assert "db-a/mysql_connections" in str(exc.value), exc.value
+        assert "db-a/mysql_connection_usage_percent" in str(exc.value), exc.value
         assert "no_such_observed_key" not in str(exc.value), exc.value
         assert capsys.readouterr().out == ""
 
@@ -702,11 +702,11 @@ class TestCLI:
         """#3133：某個 key 的查詢沒得到回答 → 那個 key 沒有量測、報告是 partial、
         rc 2（以前寫成 reason "query error"、rc 0）；量到的 key 照樣報。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
-            "db-a", keys={"mysql_connections": 80, "mysql_threads_running": 50}))
+            "db-a", keys={"mysql_connection_usage_percent": 80, "mysql_threads_running": 50}))
         rows = _range_result([40 + (i % 7) for i in range(1000)])
 
         failing = tr.build_metric_query(  # the one key whose query is not answered
-            tr.observed_map_lib.load_observed_map()["mysql_connections"]["observed_series"],
+            tr.observed_map_lib.load_observed_map()["mysql_connection_usage_percent"]["observed_series"],
             "db-a", "7d")
 
         def answer(url, promql, **kw):
@@ -726,7 +726,7 @@ class TestCLI:
             assert (doc["status"], doc["reason"]) == ("partial", "prometheus_query_error")
             assert doc["summary"]["query_errors"] == 1
             keys = {k["key"]: k for t in doc["tenants"] for k in t["keys"] + t["inherited"]}
-            assert keys["mysql_connections"]["query_error"] == "connection refused"
+            assert keys["mysql_connection_usage_percent"]["query_error"] == "connection refused"
             assert keys["mysql_threads_running"]["query_error"] == ""
             assert keys["mysql_threads_running"]["sample_count"] > 0
 
@@ -2017,7 +2017,7 @@ class TestUpperBoundFloor2964:
         monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [
             {"values": [[i, str(v)] for i, v in enumerate(values)]}])
         # #3017: a key a shipped alert compares (`>`); a made-up key is not backtested.
-        change = {"tenant": "db-x", "metric": "mysql_connections", "old_value": "200",
+        change = {"tenant": "db-x", "metric": "mysql_connection_usage_percent", "old_value": "200",
                   "new_value": tr._format_threshold_value(rec.recommended)}
         result = bt.backtest_change("http://prom", change, 7 * 86400)
         assert result["status"] == "analyzed"

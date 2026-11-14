@@ -9,4 +9,5 @@ package config
 var retiredThresholdKeys = []retiredThresholdKey{
 	{"kafka_active_controllers", "", 3783, "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"},
 	{"kafka_request_rate", "", 3783, "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"},
+	{"mysql_connections", "mysql_connection_usage_percent", 3778, "The unit changed from an absolute connection count to a percentage of max_connections; convert the value, do not copy it."},
 }

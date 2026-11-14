@@ -85,9 +85,7 @@ mkdir -p "$CONF_DIR"
 info "Creating _defaults.yaml (platform baseline)"
 cat > "$CONF_DIR/_defaults.yaml" << 'DEFAULTS'
 # Platform global defaults — all tenants inherit these
-mysql_connections: "80"
-# threads_running 1m-avg saturation (concurrent running threads, NOT host CPU%) — #944; renamed from mysql_cpu (#1231)
-mysql_threads_running: "30"
+mysql_connection_usage_percent: "80"
 pg_connections: "80"
 pg_replication_lag: "30"
 redis_memory_used_bytes: "4294967296"
@@ -99,8 +97,9 @@ DEFAULTS
 info "Creating prod-mariadb.yaml (E-Commerce DB)"
 cat > "$CONF_DIR/prod-mariadb.yaml" << 'TENANT1'
 # E-Commerce — MariaDB primary DB
-mysql_connections: "150"
-mysql_connections_critical: "200"
+mysql_connection_usage_percent: "85"
+mysql_connection_usage_percent_critical: "95"
+# threads_running 1m-avg saturation (NOT host CPU%): no platform default — sized per host (#3778)
 mysql_threads_running: "40"
 container_cpu: "75"
 container_memory: "80"
@@ -285,12 +284,12 @@ pause
 step "Config diff: blast radius analysis"
 # ─────────────────────────────────────────────
 
-# Simulate a change: lower mysql_connections threshold
+# Simulate a change: lower the connection-usage threshold
 CHANGED_DIR="$SHOWCASE_DIR/conf.d.changed"
 cp -r "$CONF_DIR" "$CHANGED_DIR"
-sed -i 's/mysql_connections: "150"/mysql_connections: "120"/' "$CHANGED_DIR/prod-mariadb.yaml"
+sed -i 's/mysql_connection_usage_percent: "85"/mysql_connection_usage_percent: "75"/' "$CHANGED_DIR/prod-mariadb.yaml"
 
-info "Simulating change: prod-mariadb mysql_connections 150 → 120"
+info "Simulating change: prod-mariadb mysql_connection_usage_percent 85 → 75"
 info "Running: da-tools config-diff"
 python3 "$TOOLS_DIR/ops/config_diff.py" \
   --old-dir "$CONF_DIR" --new-dir "$CHANGED_DIR" 2>&1 || true

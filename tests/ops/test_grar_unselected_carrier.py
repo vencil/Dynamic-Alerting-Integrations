@@ -30,7 +30,7 @@ _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 EXIT_OK, EXIT_VIOLATION = 0, 1
 KIND = "unselected_defaults_carrier"
 
-_ROOT_RD = ("defaults:\n  mysql_connections: 80\n"
+_ROOT_RD = ("defaults:\n  mysql_connection_usage_percent: 80\n"
             "_routing_defaults:\n  receiver:\n    type: webhook\n"
             "    url: https://hooks.example.com/root\n")
 _SUB_RD = ("_routing_defaults:\n  receiver:\n    type: slack\n"
@@ -38,14 +38,14 @@ _SUB_RD = ("_routing_defaults:\n  receiver:\n    type: slack\n"
 
 # What the unselected spelling carries. None of it may change the result.
 _BODIES = {
-    "plain": "defaults:\n  mysql_connections: 10\n",
+    "plain": "defaults:\n  mysql_connection_usage_percent: 10\n",
     "enforced": "_routing_enforced:\n  enabled: true\n_routing_defaults:\n  receiver: null\n",
     "broken_yaml": "a: [1, 2\n",
 }
 
 
 def _tenant(tid: str) -> str:
-    return f"tenants:\n  {tid}:\n    mysql_connections: \"70\"\n"
+    return f"tenants:\n  {tid}:\n    mysql_connection_usage_percent: \"70\"\n"
 
 
 def _tree(root: Path, where: str, body: str) -> tuple[Path, str, str]:

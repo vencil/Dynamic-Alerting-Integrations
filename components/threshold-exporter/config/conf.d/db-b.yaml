@@ -2,8 +2,10 @@
 # ⚠️  此檔為開發參考範本，不會被包含在發布的 Helm chart 或 Docker image 中。
 tenants:
   db-b:
-    mysql_connections: "100"
-    mysql_threads_running: "45"      # 放寬（平台預設 30）；刻意不超過 critical tier 建議值 50
+    mysql_connection_usage_percent: "85"
+    # 平台不給預設（#3778，只在 optional_overrides 宣告），依這台主機的核數給值；租戶單獨寫就會送出。
+    # 不超過 critical tier 建議值 50（_critical 要等 defaults 層有 base 底值才送）。
+    mysql_threads_running: "45"
     container_memory: "90"
     _state_container_crashloop: "disable"
     # v2.10.0 (#869): db_type opts this tenant into per-tenant exporter liveness

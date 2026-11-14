@@ -60,10 +60,10 @@ graph LR
 本平台的核心機制是透過 `group_left` 向量匹配，將**租戶的即時指標**與 `threshold-exporter` 吐出的**動態閾值**進行比對：
 
 ```promql
-# 簡化範例：當實際連線數超過該租戶的自訂閾值時觸發
-tenant:mysql_threads_connected:max
+# 簡化範例：當連線使用率（佔 max_connections 的 %）超過該租戶的自訂閾值時觸發
+tenant:mysql_connection_usage:percent
   > on(tenant) group_left()
-tenant:alert_threshold:mysql_connections
+tenant:alert_threshold:mysql_connection_usage_percent
 ```
 
 這要求兩邊的指標**都必須帶有相同的 `tenant` 標籤**。`threshold-exporter` 吐出的 `user_threshold` 指標天生自帶 `tenant`，Recording Rule 也會將其歸一化為 `tenant:alert_threshold:*` 系列。但你的資料庫 exporter（如 mysqld_exporter、redis_exporter）吐出的指標**預設沒有 `tenant`**。如果 `tenant` 標籤不匹配，`group_left` 會靜默返回空向量——沒有錯誤訊息、沒有警告，所有警報都不會觸發。這是最難診斷的故障模式：一切看似正常，直到真正需要告警時才發現。
@@ -205,7 +205,7 @@ scrape_configs:
 curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresholds"}' \
   | jq '.data.result[] | {instance: .metric.instance, up: .value[1]}'
 
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{component="mysql", metric="connections"}' \
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{component="mysql", metric="connection_usage_percent"}' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
 ```
 
@@ -224,7 +224,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 <!-- BYO_RULEPACK_TABLE_START -->
 | ConfigMap 名稱 | 內容 | 規則數 |
 |----------------|------|--------|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 12R + 17A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 17A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 9A |
 | `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 10A |
@@ -333,11 +333,13 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 ```
 
-工具自動檢查：tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配。所有項目均通過後顯示 `PASS`。
+工具自動檢查：tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配 → MariaDB 的 `max_connections`。所有項目均通過後顯示 `PASS`。
+
+最後一項只在有 `mysql_global_status_threads_connected` 時檢查（沒有就 skip）：MariaDB 連線使用率是 `threads_connected ÷ max_connections`，分母 `mysql_global_variables_max_connections` 來自 mysqld_exporter 的 `global_variables` collector（預設開啟，`--collect.global_variables`）。缺這個指標或讀到 0 的 instance 會從比值裡消失，它的 `MariaDBHighConnections`／`Critical` 永遠不會響，所以這項列為 warn 並點名 collector。
 
 > **手動驗證**：若需逐步手動確認，核心驗證為向量匹配測試：
 > ```bash
-> curl -s 'http://<prometheus>:9090/api/v1/query?query=tenant%3Amysql_threads_connected%3Amax%20-%20on(tenant)%20tenant%3Aalert_threshold%3Aconnections' \
+> curl -s 'http://<prometheus>:9090/api/v1/query?query=tenant%3Amysql_connection_usage%3Apercent%20-%20on(tenant)%20tenant%3Aalert_threshold%3Amysql_connection_usage_percent' \
 >   | jq '.data.result[] | {tenant: .metric.tenant, diff: .value[1]}'
 > # 結果為空 → tenant 標籤不匹配，回頭檢查步驟 1
 > ```

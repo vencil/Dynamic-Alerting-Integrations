@@ -117,18 +117,19 @@ func TestBatchTenants_PatchKeysRefusedUpFront(t *testing.T) {
 	}
 }
 
-// The unset allow-list is the registry's: the reserved keys as before plus its
-// retired threshold keys (#3783), a derived `_critical` twin included.
+// The unset allow-list is the registry's: `batch.unset` plus every retired
+// threshold key, a derived `_critical` twin included.
 func TestValidateBatchEdit_UnsetAllowList(t *testing.T) {
 	t.Parallel()
 	for _, k := range []string{"_routing", "_routing_receiver_type", "kafka_active_controllers",
-		"kafka_request_rate", "kafka_request_rate_critical"} {
+		"kafka_request_rate", "kafka_request_rate_critical", "mysql_connections",
+		"mysql_connections_critical"} {
 		if v := validateBatchEdit(nil, []string{k}, "operations[0]", nil); len(v) != 0 {
 			t.Errorf("unset %s: %+v", k, v)
 		}
 	}
 	v := validateBatchEdit(nil, []string{"_silent_mode"}, "operations[0]", nil)
-	if len(v) != 1 || v[0].Reason != `unset can only remove "_routing", "_routing_receiver_type", "kafka_active_controllers", "kafka_request_rate"; got "_silent_mode"` {
+	if len(v) != 1 || v[0].Reason != "unset can only remove "+unsetAllowedList(nil)+`; got "_silent_mode"` {
 		t.Errorf("unset _silent_mode: %+v", v)
 	}
 }

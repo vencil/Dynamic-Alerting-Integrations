@@ -36,41 +36,41 @@ TOOLS = REPO / "scripts" / "tools"
 # `$DA_GUARD_BINARY`.
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
 # policy_engine only reads tenant files when a policy exists to evaluate.
-_POLICY = ("_policies:\n  - name: mc\n    target: mysql_connections\n"
+_POLICY = ("_policies:\n  - name: mc\n    target: mysql_connection_usage_percent\n"
            "    operator: required\n    severity: error\n")
-_TENANT = 'tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
+_TENANT = 'tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "70"\n'
 
 _TENANT_VARIANTS = {
     "clean": _TENANT,
     "syntax": "tenants:\n  tenant-a: [unclosed\n",
-    "dup_key": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
-                '    mysql_connections: "90"\n'),
-    "dup_tenant_id": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
-                      '  tenant-a:\n    mysql_connections: "90"\n'),
-    "dup_tenants_block": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
-                          'tenants:\n  tenant-a:\n    mysql_connections: "90"\n'),
+    "dup_key": ('tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "70"\n'
+                '    mysql_connection_usage_percent: "90"\n'),
+    "dup_tenant_id": ('tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "70"\n'
+                      '  tenant-a:\n    mysql_connection_usage_percent: "90"\n'),
+    "dup_tenants_block": ('tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "70"\n'
+                          'tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "90"\n'),
     # #2114: two spellings of ONE tenant id — the exporter keys tenants by
     # the raw text, so `123` and `"123"` are the same key (yaml.v3:
     # `mapping key "123" already defined`). Every tool, including the ones
     # that read tenant ids as raw text, must refuse it like bad syntax.
-    "dup_tenant_id_by_spelling": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
-                                  '  123:\n    mysql_connections: "1"\n'
-                                  '  "123":\n    mysql_connections: "2"\n'),
+    "dup_tenant_id_by_spelling": ('tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "70"\n'
+                                  '  123:\n    mysql_connection_usage_percent: "1"\n'
+                                  '  "123":\n    mysql_connection_usage_percent: "2"\n'),
 }
 _DEFAULTS_VARIANTS = {
     "clean": "",
-    "syntax": "defaults:\n  mysql_connections: [80\n",
-    "dup_key": "defaults:\n  mysql_connections: 80\n  mysql_connections: 90\n",
+    "syntax": "defaults:\n  mysql_connection_usage_percent: [80\n",
+    "dup_key": "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_connection_usage_percent: 90\n",
 }
 # #2231: written (and the tenant given `_profile: p1`) only for a tool whose
 # targets include "profiles", so no other tool's fixture changes.
-_PROFILES = "profiles:\n  p1:\n    mysql_connections: 60\n"
+_PROFILES = "profiles:\n  p1:\n    mysql_connection_usage_percent: 60\n"
 _PROFILES_VARIANTS = {
     "clean": _PROFILES,
     "syntax": "profiles:\n  p1: [unclosed\n",
-    "dup_key": "profiles:\n  p1:\n    mysql_connections: 60\n    mysql_connections: 65\n",
+    "dup_key": "profiles:\n  p1:\n    mysql_connection_usage_percent: 60\n    mysql_connection_usage_percent: 65\n",
 }
 # Read by generate_tenant_mapping_rules, whose `--validate` checks the ids
 # it names against the tenant files.

@@ -60,10 +60,10 @@ graph LR
 The platform's core mechanism relies on `group_left` vector matching to compare **real-time tenant metrics** with **dynamic thresholds** emitted by `threshold-exporter`:
 
 ```promql
-# Simplified example: trigger alert when actual connections exceed the tenant's custom threshold
-tenant:mysql_threads_connected:max
+# Simplified example: trigger alert when connection usage (% of max_connections) exceeds the tenant's custom threshold
+tenant:mysql_connection_usage:percent
   > on(tenant) group_left()
-tenant:alert_threshold:mysql_connections
+tenant:alert_threshold:mysql_connection_usage_percent
 ```
 
 This requires both sides of the metrics to carry the **same `tenant` label**. The `user_threshold` metrics emitted by `threshold-exporter` inherently carry the `tenant` label, and Recording Rules normalize it into the `tenant:alert_threshold:*` series. However, metrics from your database exporters (such as mysqld_exporter, redis_exporter) **do not carry the `tenant` label by default**. If the `tenant` labels don't match, `group_left` silently returns an empty vector—no error message, no warning, and all alerts fail to fire. This is the hardest-to-diagnose failure mode: everything appears normal until alerting is actually needed.
@@ -205,7 +205,7 @@ scrape_configs:
 curl -s 'http://<your-prometheus>:9090/api/v1/query?query=up{job="dynamic-thresholds"}' \
   | jq '.data.result[] | {instance: .metric.instance, up: .value[1]}'
 
-curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{component="mysql", metric="connections"}' \
+curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{component="mysql", metric="connection_usage_percent"}' \
   | jq '.data.result[] | {tenant: .metric.tenant, value: .value[1]}'
 ```
 
@@ -224,7 +224,7 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 <!-- BYO_RULEPACK_TABLE_START -->
 | ConfigMap Name | Contents | Rules |
 |---|---|---|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 12R + 17A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 17A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 9A |
 | `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 10A |
@@ -333,11 +333,13 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 ```
 
-The tool automatically checks: tenant label injection → threshold-exporter scrape → user_threshold metrics → Rule Pack loading → recording rules output → vector matching. Displays `PASS` when all items pass.
+The tool automatically checks: tenant label injection → threshold-exporter scrape → user_threshold metrics → Rule Pack loading → recording rules output → vector matching → MariaDB `max_connections`. Displays `PASS` when all items pass.
+
+The last item runs only when `mysql_global_status_threads_connected` exists (otherwise it is a skip): MariaDB connection usage is `threads_connected ÷ max_connections`, and the denominator `mysql_global_variables_max_connections` comes from mysqld_exporter's `global_variables` collector (on by default, `--collect.global_variables`). An instance that lacks it, or reads 0, drops out of the ratio and its `MariaDBHighConnections` / `Critical` never fire, so the item is a warn that names the collector.
 
 > **Manual verification**: If you need step-by-step manual confirmation, the core verification is the vector matching test:
 > ```bash
-> curl -s 'http://<prometheus>:9090/api/v1/query?query=tenant%3Amysql_threads_connected%3Amax%20-%20on(tenant)%20tenant%3Aalert_threshold%3Aconnections' \
+> curl -s 'http://<prometheus>:9090/api/v1/query?query=tenant%3Amysql_connection_usage%3Apercent%20-%20on(tenant)%20tenant%3Aalert_threshold%3Amysql_connection_usage_percent' \
 >   | jq '.data.result[] | {tenant: .metric.tenant, diff: .value[1]}'
 > # Empty result → tenant label mismatch, go back and check Step 1
 > ```

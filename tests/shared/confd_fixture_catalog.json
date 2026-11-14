@@ -8,8 +8,8 @@
   "root": "conf.d",
   "base": [
     {"op": "mkdir", "path": "conf.d"},
-    {"op": "write", "path": "conf.d/_defaults.yaml", "text": "defaults:\n  mysql_connections: 70\n"},
-    {"op": "write", "path": "conf.d/a.yaml", "text": "tenants:\n  a:\n    mysql_connections: \"80\"\n    _metadata:\n      db_type: mariadb\n"}
+    {"op": "write", "path": "conf.d/_defaults.yaml", "text": "defaults:\n  mysql_connection_usage_percent: 70\n"},
+    {"op": "write", "path": "conf.d/a.yaml", "text": "tenants:\n  a:\n    mysql_connection_usage_percent: \"80\"\n    _metadata:\n      db_type: mariadb\n"}
   ],
   "base_entries": [
     {"path": "_defaults.yaml", "role": "config", "kind": null},
@@ -23,7 +23,7 @@
       "base": true,
       "ops": [
         {"op": "mkdir", "path": "conf.d/team"},
-        {"op": "write", "path": "conf.d/team/b.yaml", "text": "tenants:\n  b:\n    mysql_connections: \"60\"\n    _metadata:\n      db_type: mariadb\n"}
+        {"op": "write", "path": "conf.d/team/b.yaml", "text": "tenants:\n  b:\n    mysql_connection_usage_percent: \"60\"\n    _metadata:\n      db_type: mariadb\n"}
       ],
       "expect": {"entries": [
         {"path": "team", "role": "dir", "kind": null},
@@ -158,7 +158,7 @@
       "base": true,
       "ops": [
         {"op": "mkdir", "path": "conf.d/x.yaml"},
-        {"op": "write", "path": "conf.d/x.yaml/i.yaml", "text": "tenants:\n  eye:\n    mysql_connections: \"50\"\n    _metadata:\n      db_type: mariadb\n"}
+        {"op": "write", "path": "conf.d/x.yaml/i.yaml", "text": "tenants:\n  eye:\n    mysql_connection_usage_percent: \"50\"\n    _metadata:\n      db_type: mariadb\n"}
       ],
       "expect": {"entries": [
         {"path": "x.yaml", "role": "dir", "kind": "not_regular_file"},

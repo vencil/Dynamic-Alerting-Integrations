@@ -13,7 +13,7 @@ import explain_keys as ek
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 _TENANT = ("tenants:\n  db-a:\n    mysql_conections: \"70\"\n    mysql_slave_lagg: disable\n"
            "    redis_memory: disable\n    redis_memory_critical: \"90\"\n    _namespaces: [prod-ns]\n")
 
@@ -29,7 +29,7 @@ def conf_d(tmp_path):
     d.mkdir()
     (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
     (d / "db-a.yaml").write_text(_TENANT, encoding="utf-8")
-    (d / "db-b.yaml").write_text("tenants:\n  db-b:\n    mysql_connections: 60\n", encoding="utf-8")
+    (d / "db-b.yaml").write_text("tenants:\n  db-b:\n    mysql_connection_usage_percent: 60\n", encoding="utf-8")
     return d
 
 
@@ -105,7 +105,7 @@ def test_an_inherited_sibling_switched_off_with_its_base(tmp_path):
 def test_json_carries_value_and_served(conf_d):
     doc = _json(_run("--config-dir", conf_d, "--json"))
     assert doc["status"] == "ok" and set(doc["tenants"]) == {"db-a", "db-b"}
-    e = {x["key"]: x for x in doc["tenants"]["db-b"]}["mysql_connections"]
+    e = {x["key"]: x for x in doc["tenants"]["db-b"]}["mysql_connection_usage_percent"]
     assert (e["value"], e["served"], e["layer"], e["file"]) == (60, 60.0, "tenant", "db-b.yaml")
     assert doc["assert_differences"] == []
 
@@ -141,8 +141,8 @@ def test_assert_compares_only_the_fields_given_but_every_key(conf_d, tmp_path):
 
 
 @pytest.mark.parametrize("entries, reason", [
-    ([{"key": "mysql_connections", "verdcit": "read"}], "unknown field"),
-    ([{"key": "mysql_connections", "verdict": "unread"}, {"key": "mysql_connections", "verdict": "read"}],
+    ([{"key": "mysql_connection_usage_percent", "verdcit": "read"}], "unknown field"),
+    ([{"key": "mysql_connection_usage_percent", "verdict": "unread"}, {"key": "mysql_connection_usage_percent", "verdict": "read"}],
      "listed twice"),
     ("top-level", "unknown top-level"),
 ])
@@ -150,7 +150,7 @@ def test_an_assert_file_that_would_pass_vacuously_is_refused(conf_d, tmp_path, e
     golden = tmp_path / "bad.json"
     doc = {"tenants": {"db-b": entries}}
     if entries == "top-level":
-        doc = {"tenat": {"db-b": [{"key": "mysql_connections", "verdict": "unread"}]}, "tenants": {}}
+        doc = {"tenat": {"db-b": [{"key": "mysql_connection_usage_percent", "verdict": "unread"}]}, "tenants": {}}
     golden.write_text(json.dumps(doc), encoding="utf-8")
     p = _run("--config-dir", conf_d, "--assert", golden, "--json")
     # #3617: a caller error prints no document; the reason is on stderr.
@@ -194,7 +194,7 @@ def test_subdirectory_policies_it_does_not_count_are_named(tmp_path):
     要說出來，否則使用者看不出某個 key 為何判成沒人讀。"""
     d = tmp_path / "conf.d"
     (d / "sub").mkdir(parents=True)
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
     (d / "sub" / "_defaults.yaml").write_text(
         "_policies:\n  - {name: p1, target: custom_metric, operator: required, severity: error}\n",
         encoding="utf-8")
@@ -212,7 +212,7 @@ def test_a_profile_key_no_tenant_binds_is_a_finding_with_no_tenant(tmp_path):
     d.mkdir()
     (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
     (d / "_profiles.yaml").write_text("profiles:\n  p1:\n    _unknown_thing: bad\n", encoding="utf-8")
-    (d / "db-b.yaml").write_text("tenants:\n  db-b:\n    mysql_connections: 60\n", encoding="utf-8")
+    (d / "db-b.yaml").write_text("tenants:\n  db-b:\n    mysql_connection_usage_percent: 60\n", encoding="utf-8")
     p = _run("--config-dir", d, "--json")
     assert p.returncode == 0, p.stderr
     got = [(f["file"], f["key"], f["reason"], f["tenants"]) for f in _json(p)["findings"]]

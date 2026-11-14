@@ -136,7 +136,7 @@ lang: zh
 ## R
 
 **Recording Rule**
-:   Prometheus 預計算規則，將複雜查詢結果存為新的時間序列。本平台的 Rule Pack 中大量使用，如 `tenant:mysql_threads_connected:max`。
+:   Prometheus 預計算規則，將複雜查詢結果存為新的時間序列。本平台的 Rule Pack 中大量使用，如 `tenant:mysql_connection_usage:percent`。
 
 **Rule Pack**
 :   預定義的 Prometheus recording rule + alert rule 套件。目前共 16 個（MariaDB/MySQL、PostgreSQL、Redis、MongoDB、Elasticsearch、Oracle、DB2、ClickHouse、Kafka、RabbitMQ、JVM、Nginx、Kubernetes、Exporter Liveness、Operational、Platform）。

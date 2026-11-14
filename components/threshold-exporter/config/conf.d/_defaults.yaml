@@ -29,16 +29,12 @@ defaults:
   # seconds — Replication lag warning（critical 加嚴 opt-in：pg_replication_lag_critical，registry 建議 60）
   pg_replication_lag: 30
   # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
-  # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry 建議
-  # 120）
-  # 出貨例外（待改比值，#3778）：絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）
-  mysql_connections: 80
-  # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
-  # PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944
-  # keep — 2-release alias window, old spelling still resolves)（critical 加嚴
-  # opt-in：mysql_threads_running_critical，registry 建議 50）
-  # 出貨例外（依部署而定，#3778）：健康的 running threads 數隨主機的 CPU 核數而定
-  mysql_threads_running: 30
+  # % of max_connections — Connection usage warning: threads_connected as a share of
+  # max_connections, per instance, busiest instance per tenant; 80 = PMM "MySQL connections in use"
+  # template / awesome-prometheus-alerts. Replaces the absolute-count key mysql_connections (#3778:
+  # a unit change is a removal plus an addition, no alias)（critical 加嚴
+  # opt-in：mysql_connection_usage_percent_critical，registry 建議 90）
+  mysql_connection_usage_percent: 80
   # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
   # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
   # lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical
@@ -104,6 +100,11 @@ defaults:
 # 改內容走 scaffold_tenant.RULE_PACKS ＋ check_threshold_registry.py --regen。
 optional_overrides:
   # >>> GENERATED:threshold-registry:dev-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+  # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
+  - mysql_threads_running
+    # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
+    # PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with
+    # CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)
   # ── oracle：Oracle Database (oracledb_exporter) ──
   - oracle_wait_time_rate   # s/s — Wait time rate (5m)
   - oracle_process_count   # count — Active processes warning

@@ -85,7 +85,7 @@ describe('rule-packs accessor — platform-data resolution', () => {
 // ---------------------------------------------------------------------------
 
 // Expected saturation keys present in the INLINE FALLBACK catalog — the full
-// authoritative 22-key set (see tests/ops/test_scaffold_tenant.py
+// authoritative 21-key set (see tests/ops/test_scaffold_tenant.py
 // EXPECTED_SATURATION_KEYS). The fallback caught up with the source set when
 // #1099 backfilled kubernetes container_cpu_throttle into the offline catalog.
 const EXPECTED_FALLBACK_SATURATION_KEYS = [
@@ -99,8 +99,8 @@ const EXPECTED_FALLBACK_SATURATION_KEYS = [
   'jvm_threads',
   'kafka_consumer_lag',
   'mongodb_connections_current',
-  'mysql_connections',
-  'mysql_threads_running',
+  'mysql_connection_usage_percent',
+  // mysql_threads_running left the defaults tier (#3778): declared, no value.
   'nginx_connections',
   'nginx_waiting',
   'oracle_sessions_active',

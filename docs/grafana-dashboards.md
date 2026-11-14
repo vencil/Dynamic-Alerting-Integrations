@@ -297,7 +297,7 @@ Tukey fences 需要分布**有離散度**才準。有兩種常見情形會讓它
 
 ### ⚠️ 已知盲點：disabled 閾值不可見
 
-三態中的 **disable** 態（`mysql_connections: "disable"`）在 resolve 時直接 `continue`、**不發任何 `user_threshold` series**（"absent = disabled" 慣例，見 `components/threshold-exporter/app/pkg/config/resolve.go`）。因此**最裸奔的租戶——把告警關掉的那些——在本 Dashboard 上完全不可見**。本圖回答的是「有設閾值的租戶設得合不合理」，不是「誰沒在監控」。後者需另一個訊號（如比對 `count by(tenant)(user_threshold)` 與租戶清單的缺口）。
+三態中的 **disable** 態（`mysql_connection_usage_percent: "disable"`）在 resolve 時直接 `continue`、**不發任何 `user_threshold` series**（"absent = disabled" 慣例，見 `components/threshold-exporter/app/pkg/config/resolve.go`）。因此**最裸奔的租戶——把告警關掉的那些——在本 Dashboard 上完全不可見**。本圖回答的是「有設閾值的租戶設得合不合理」，不是「誰沒在監控」。後者需另一個訊號（如比對 `count by(tenant)(user_threshold)` 與租戶清單的缺口）。
 
 ### 與 Recommender（#656）的銜接
 
