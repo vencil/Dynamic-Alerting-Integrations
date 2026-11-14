@@ -432,6 +432,173 @@ LIVE.update({
     },
 })
 
+# ── group D: documents a tool hands to its own reader (#3797) ──
+# These were G1 `file` / `reader` lines; each is a declared document now. A
+# row whose tool reads a conf.d beside the input builds it in {BOX}
+# ("box": name -> builder; a `_defaults*` tree is written here, not kept).
+_ROUTE_CONFD = {
+    "tenants.yaml": (
+        "tenants:\n"
+        "  tenant-a:\n"
+        "    _routing:\n"
+        "      receiver:\n"
+        "        type: webhook\n"
+        "        url: https://hooks.example.com/main\n"
+        "  tenant-b:\n"
+        "    _routing:\n"
+        "      receiver:\n"
+        "        type: webhook\n"
+        "        url: https://evil.example.org/hook\n"),
+}
+_ALLOW = "allowed_domains:\n  - hooks.example.com\n"
+_ALLOW_NONE = "allowed_domains: []\n"
+_BASE = ("route:\n  receiver: base-default\n  group_wait: 45s\n"
+         "  routes:\n    - matchers: ['alertname=\"X\"']\n      receiver: stale\n"
+         "receivers:\n  - name: base-default\n  - name: stale\n")
+_BASE_MIN = "route:\n  receiver: base-default\n  group_wait: 7s\nreceivers:\n  - name: base-default\n"
+_POLICY_CONFD = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    "db-x.yaml": ("tenants:\n  db-x:\n    mysql_connections: '70'\n"
+                  "    _metadata:\n      tier: production\n"),
+    "db-y.yaml": "tenants:\n  db-y:\n    mysql_connections: '90'\n",
+}
+_POLICY_DSL = ("policies:\n  - name: metadata-required\n    target: _metadata\n"
+               "    operator: required\n    severity: error\n")
+_STATE_CONFD = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+    "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"80\"\n",
+    "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: \"90\"\n",
+}
+
+
+def _state(members: "list[str]") -> str:
+    return json.dumps({"schema": "tenant-api.state-show/v1", "tenant_api_version": "x",
+                       "records": [{"key": "_groups.yaml", "record": {"groups": {
+                           "g-fin": {"label": "Finance", "members": members}}}}]}) + "\n"
+
+
+_EK_CONFD = {
+    "_defaults.yaml": ("defaults:\n  mysql_connection_usage_percent: 80\n"
+                       "  mysql_slave_lag: 30\n  redis_memory: 70\n"),
+    "tenant-a.yaml": ("tenants:\n  tenant-a:\n    mysql_conections: \"70\"\n"
+                      "    mysql_slave_lagg: disable\n    redis_memory: disable\n"),
+}
+_AM = ("route:\n  receiver: default\n  routes:\n"
+       "  - receiver: team-a\n    matchers: ['tenant=\"tenant-a\"']\n"
+       "  - receiver: team-b\n    matchers: ['tenant=\"tenant-b\"']\n"
+       "receivers:\n- name: default\n"
+       "- name: team-a\n  webhook_configs: [{url: 'https://a.example.com/hook'}]\n"
+       "- name: team-b\n  webhook_configs: [{url: 'https://b.example.com/hook'}]\n")
+_AM_MIN = "route: {receiver: default}\nreceivers: [{name: default}]\n"
+_SCRAPE = ("scrape_configs:\n- job_name: mysql\n  static_configs:\n"
+           "  - targets: ['mysql-0:9104']\n    labels: {tenant: tenant-a}\n"
+           "- job_name: redis\n  kubernetes_sd_configs: [{role: pod}]\n"
+           "  relabel_configs:\n  - source_labels: [__meta_kubernetes_namespace]\n"
+           "    target_label: tenant\n")
+_SCRAPE_MIN = "scrape_configs:\n- job_name: other\n  static_configs: [{targets: ['h:1']}]\n"
+_MOUNTS = {"schema": "da-tools.secret-mounts/v1", "mount_root": "/etc/alertmanager/secrets",
+           "mounts": [{"name": "da-team-c", "keys": ["auth_password"]}], "other_files": []}
+
+LIVE.update({
+    # custom_ keys of one tenant file: one with a Rule Pack match, one without.
+    "analyze-gaps --tenant-config": {
+        "argv": ["--tenant-config", "{F}", "--json"],
+        "live": _file("tenants:\n  tenant-a:\n    custom_mysql_uptime: 1\n"
+                      "    custom_unknown_thing: 3\n"),
+        "minimal": _file("tenants: {}\n"),
+    },
+    # A rule one tenant breaks (no _metadata), against no rule.
+    "evaluate-policy --policy": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--policy", "{F}", "--json", "--ci"],
+        "box": {"conf.d": _files(_POLICY_CONFD)},
+        "live": _file(_POLICY_DSL), "minimal": _file("policies: []\n"),
+    },
+    "validate-config --policy-dsl": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--json", "--policy-dsl", "{F}"],
+        "box": {"conf.d": _files(_POLICY_CONFD)},
+        "live": _file(_POLICY_DSL), "minimal": _file("policies: []\n"),
+    },
+    # Expected verdicts, one of them wrong: the assertion fails on it.
+    "explain-keys --assert": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--assert", "{F}", "--json"],
+        "box": {"conf.d": _files(_EK_CONFD)},
+        "live": _file(json.dumps({"tenants": {"tenant-a": [
+            {"key": "mysql_conections", "verdict": "read"},
+            {"key": "redis_memory", "verdict": "read"}]}}) + "\n"),
+        "minimal": _file('{"tenants": {}}\n'),
+    },
+    # The deployment policy: an allowlist that refuses tenant-b's receiver,
+    # against none.
+    "explain-route --policy": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--json", "--policy", "{F}"],
+        "box": {"conf.d": _files(_ROUTE_CONFD)},
+        "live": _file(_ALLOW), "minimal": _file(_ALLOW_NONE),
+    },
+    "generate-routes --policy": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--output-alertmanager",
+                 "-o", "{BOX}/alertmanager.yml", "--policy", "{F}"],
+        "box": {"conf.d": _files(_ROUTE_CONFD)},
+        "live": _file(_ALLOW), "minimal": _file(_ALLOW_NONE),
+    },
+    "test-notification --policy": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--dry-run", "--json", "--rate-limit", "0",
+                 "--policy", "{F}"],
+        "box": {"conf.d": _files(_ROUTE_CONFD)},
+        "live": _file(_ALLOW), "minimal": _file(_ALLOW_NONE),
+    },
+    "validate-config --policy": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--json", "--policy", "{F}"],
+        "box": {"conf.d": _files(_ROUTE_CONFD)},
+        "live": _file(_ALLOW), "minimal": _file(_ALLOW_NONE),
+    },
+    # A credential in clear on an email receiver: the plan's allowlist check
+    # admits its host, or refuses it.
+    "migrate-credentials --policy": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--json", "--policy", "{F}"],
+        "box": {"conf.d": _files({"team-c.yaml": (
+            "tenants:\n  team-c:\n    _routing:\n      receiver:\n        type: email\n"
+            "        to: [ops@example.com]\n        from: am@example.com\n"
+            "        smarthost: smtp.example.com:587\n"
+            "        auth_password: \"fixture-not-a-secret\"\n")})},
+        "live": _file("allowed_domains: ['*.example.com']\n"),
+        "minimal": _file("allowed_domains: ['other.example.org']\n"),
+    },
+    # The base the generated routing is merged into: its own route and timing.
+    "explain-route --base-config": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--tenant", "tenant-a", "--trace",
+                 "--alertname", "X", "--json", "--base-config", "{F}"],
+        "box": {"conf.d": _files(_ROUTE_CONFD)},
+        "live": _file(_BASE), "minimal": _file(_BASE_MIN),
+    },
+    "generate-routes --base-config": {
+        "argv": ["--config-dir", "{BOX}/conf.d", "--output-alertmanager",
+                 "-o", "{BOX}/alertmanager.yml", "--base-config", "{F}"],
+        "box": {"conf.d": _files(_ROUTE_CONFD)},
+        "live": _file(_BASE), "minimal": _file(_BASE_MIN),
+    },
+    # A group with the tenant offboarded as a member: the pre-check names it.
+    "offboard --state": {
+        "argv": ["tenant-a", "--config-dir", "{BOX}/conf.d", "--state", "{F}"],
+        "box": {"conf.d": _files(_STATE_CONFD)},
+        "live": _file(_state(["tenant-a", "tenant-b"])), "minimal": _file(_state(["tenant-b"])),
+    },
+    # Two tenant routes, against none.
+    "onboard --alertmanager-config": {
+        "argv": ["--alertmanager-config", "{F}", "-o", "{BOX}/out", "--json", "--dry-run"],
+        "live": _file(_AM), "minimal": _file(_AM_MIN),
+    },
+    "onboard --scrape-config": {
+        "argv": ["--scrape-config", "{F}", "-o", "{BOX}/out", "--json", "--dry-run"],
+        "live": _file(_SCRAPE), "minimal": _file(_SCRAPE_MIN),
+    },
+    # One Secret mounted, against none: the list's row compares them.
+    "operator-check --secret-mounts": {
+        "argv": ["--rule-packs-dir", "{RP}", "--json", "--secret-mounts", "{F}"],
+        "live": _file(json.dumps(_MOUNTS)), "minimal": _file(json.dumps({**_MOUNTS, "mounts": []})),
+    },
+})
+
+
 def _empty_vector(_path: str, _params: dict) -> dict:
     return {"status": "success", "data": {"resultType": "vector", "result": []}}
 
@@ -536,6 +703,8 @@ def _run(row_dir: pathlib.Path, n: int, kind: str, plan: dict, script: str, cont
         d.mkdir(parents=True)
     input_path = case / "in"
     plan[content](input_path)
+    for name, build in plan.get("box", {}).items():  # #3797: trees beside the input
+        build(case / "box" / name)
     (case / "box" / "silences.json").write_text("[]\n", encoding="utf-8")
     subst = {"{D}": str(input_path), "{F}": str(input_path), "{BOX}": str(case / "box"),
              "{PROM}": plan.get("prom_url", "http://127.0.0.1:9"),

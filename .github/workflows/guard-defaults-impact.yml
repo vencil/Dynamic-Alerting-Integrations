@@ -165,6 +165,10 @@ on:
       # The build flags of the da-guard this workflow builds (#3601 follow-up):
       # a change to them changes the binary under test.
       - "scripts/ops/go_build.sh"
+      # #3797: the deployment policy the route generator step judges under.
+      # Not a config file of a tree, so the scope step's pathspec (the
+      # `**/_*` pair above) does not list it.
+      - ".github/deployment-policy.yaml"
       - "requirements/ci-constraints.txt"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:
@@ -584,8 +588,8 @@ jobs:
             if [ -z "${GEN_DONE[$config_dir]:-}" ]; then
               GEN_DONE[$config_dir]=1
               local policy=() gen_out gen_rc
-              if [ -f .github/custom-rule-policy.yaml ]; then
-                policy=(--policy .github/custom-rule-policy.yaml)
+              if [ -f .github/deployment-policy.yaml ]; then
+                policy=(--policy .github/deployment-policy.yaml)
               fi
               gen_out="$RUNNER_TEMP/generator.log"
               set +e

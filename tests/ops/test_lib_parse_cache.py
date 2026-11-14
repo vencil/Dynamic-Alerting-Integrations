@@ -59,15 +59,12 @@ _PARSER_NAMES = {"safe_load", "safe_load_all", "load", "load_all", "compose", "c
 _YAML_ONLY = {"safe_load", "safe_load_all", "load", "load_all", "compose", "compose_all"}
 # (file, enclosing function) of the PyYAML calls that read something other
 # than a conf.d file — each one named with what it reads.
-NOT_CONFD = {
-    # (#3206: the generated ConfigMap, the cluster's, and --base-config are
-    # read by da-crdecode / da-read now — no PyYAML call left for them.)
-    # --policy: an operator file outside conf.d (ADR-036 §3: the deployment
-    # policy is read fresh for every judgement)
-    ("_grar_validate.py", "load_policy_document"),
-    # (the platform rules pack shipped beside the tool is read by da-crdecode
-    # and `da-read prometheus-rules` since #3206 — no PyYAML call left)
-}
+# None is left: the generated ConfigMap, the cluster's and --base-config are
+# read by da-crdecode / da-read (#3206); the platform rules pack shipped beside
+# the tool by da-crdecode and `da-read prometheus-rules` (#3206); --policy, an
+# operator file outside conf.d, is a declared document `_lib_input.document`
+# reads (#3797).
+NOT_CONFD: "set[tuple[str, str]]" = set()
 
 
 def _parser_calls(path: Path) -> set[tuple[str, str]]:

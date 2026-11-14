@@ -252,7 +252,7 @@ func TestContentByteBound(t *testing.T) {
 	fanOut := "l0: &l0 [" + join(strings.Repeat("b", 60), 100) + "]\nl1: [" + join("*l0", 1000) + "]\n"
 	for name, in := range map[string]string{"long string": longString, "fan-out": fanOut} {
 		_, bad := Parse([]byte(in))
-		if bad == nil || bad.Kind != KindDecodeError || !strings.Contains(bad.Message, "more than 8388608 bytes") {
+		if bad == nil || bad.Kind != KindDecodeError || !strings.Contains(bad.Message(), "more than 8388608 bytes") {
 			t.Errorf("%s (%d bytes): got %v", name, len(in), bad)
 		}
 	}

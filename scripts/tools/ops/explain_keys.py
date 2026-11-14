@@ -152,6 +152,10 @@ def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Option
     }
 
 
+#: --assert as a declared input reads it (#3797): a JSON object.
+ASSERT_DOCUMENT = _lib_input.Document("json", dict)
+
+
 def compare(doc: dict[str, Any], expected: Any) -> list[str]:
     """Every difference between `doc` and the expected document, one line each."""
     if not isinstance(expected, dict) or not isinstance(expected.get("tenants"), dict):
@@ -267,7 +271,9 @@ def build_parser() -> argparse.ArgumentParser:
                          empty=_lib_input.EMPTY_REFUSED, required=True, help=h["config_dir"])
     p.add_argument("--tenant", action="append", default=[], help=h["tenant"])
     p.add_argument("--at", default=None, help=h["at"])
-    p.add_argument("--assert", dest="assert_file", default=None, metavar="FILE", help=h["assert"])
+    # #3797: a declared document (dest `assert`: read with getattr), read once.
+    _lib_input.add_input(p, "--assert", decode=ASSERT_DOCUMENT, metavar="FILE",
+                         help=h["assert"])
     p.add_argument("--json", action="store_true", help=h["json"])
     p.add_argument("--da-guard-binary", default=None, help=h["binary"])
     p.add_argument("--timeout", type=positive_seconds, default=DEFAULT_TIMEOUT, help=h["timeout"])
@@ -292,12 +298,10 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
 def _main(args: argparse.Namespace) -> "int | Report":
     try:
         expected = None
-        if args.assert_file is not None:
-            try:
-                with open(args.assert_file, encoding="utf-8") as f:
-                    expected = json.load(f)
-            except (OSError, UnicodeDecodeError, ValueError) as e:
-                raise ExplainError(f"--assert: cannot read {args.assert_file}: {e}") from e
+        # #3797: judged and read once by its declaration (`_lib_input.document`:
+        # the path, strict UTF-8, JSON, an object — a CallerError naming the
+        # flag); `compare` judges what the object holds.
+        expected = _lib_input.document(args, "assert", lang="en")
         # #3751: judged once — the path, a root da-guard cannot list, an
         # empty tree — each refusal naming --config-dir.
         [conf_d] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en",

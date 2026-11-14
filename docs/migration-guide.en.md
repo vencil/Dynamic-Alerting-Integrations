@@ -161,7 +161,7 @@ Migrating from "instance-based dispatch" to "tenant-based dispatch": use `tenant
 
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate \
-                         --policy .github/custom-rule-policy.yaml
+                         --policy .github/deployment-policy.yaml
 # BYO Alertmanager outside K8s: merge into your own alertmanager.yml
 da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
                          --base-config alertmanager.yml -o alertmanager.new.yml

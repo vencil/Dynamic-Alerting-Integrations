@@ -178,8 +178,14 @@ class TestInputsAreJudged:
                                ["preflight"]) == {}
 
     def test_a_flag_not_given_stays_a_skip(self):
-        assert sv.judge_inputs(_parsed(mapping="", report_csv=None),
+        assert sv.judge_inputs(_parsed(mapping=None, report_csv=None),
                                ["preflight", "runtime"]) == {}
+
+    def test_an_empty_value_is_given_and_refused(self):
+        """#3797: '' (an unset shell variable) was read as not given — the
+        check's skip under an Overall PASS. It is given: refused, named."""
+        with pytest.raises(CallerError, match="^--mapping '': "):
+            sv.judge_inputs(_parsed(mapping="", report_csv=None), ["preflight"])
 
     def test_usable_inputs_are_read(self, tmp_path):
         row = {"Tenant": "db-a", "Status": "match", "Timestamp": "2026-03-15 10:00:00"}

@@ -734,12 +734,12 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
 # CI validation (--validate writes nothing; with -o it is refused, exit 2)
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --validate \
-  --policy .github/custom-rule-policy.yaml
+  --policy .github/deployment-policy.yaml
 
 # Write the merged alertmanager.yml (K8s GitOps: --output-configmap instead)
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --output-alertmanager --base-config alertmanager.yml \
-  -o alertmanager.new.yml --policy .github/custom-rule-policy.yaml
+  -o alertmanager.new.yml --policy .github/deployment-policy.yaml
 
 # All-in-one merge into Alertmanager ConfigMap + reload
 python3 scripts/tools/ops/generate_alertmanager_routes.py \

@@ -174,7 +174,7 @@ func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 	// ADR-036 step 6 (#3206): parse-tree's verdict comes first — the
 	// package that defines it, called directly, not ParseConfigFile.
 	if _, bad := parsetree.Parse(data); bad != nil {
-		return ThresholdConfig{}, &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+		return ThresholdConfig{}, &UnreadableFileError{Kind: bad.Kind, Message: bad.Message()}
 	}
 	var shape oracleShape
 	err := yaml.Unmarshal(data, &shape)

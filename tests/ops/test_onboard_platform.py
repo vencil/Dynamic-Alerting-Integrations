@@ -1173,11 +1173,11 @@ class TestParseScrapeConfigs:
         missing = os.path.join(config_dir, "no-such-prometheus.yml")
         monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--scrape-config", missing,
                                          "--dry-run"])
-        with pytest.raises(SystemExit) as exc_info:
+        # #3797: the declaration's refusal (rc 2 through `run()`), before any phase.
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc_info:
             op.main()
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert f"cannot read {missing}" in err, err
+        assert str(exc_info.value) == f"--scrape-config {missing}: No such file or directory"
 
     def test_main_names_the_refusal(self, config_dir, monkeypatch, capsys):
         """main：Phase 3 的設定被拒收時 rc 2，stderr 帶 Prometheus 的原因。"""
