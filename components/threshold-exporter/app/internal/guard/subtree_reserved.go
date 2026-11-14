@@ -14,7 +14,8 @@ package guard
 // ⛔ NO VERDICT OF ITS OWN, as checkSubtreeUndeliverable: which keys count is
 // pkg/config's subtreeReservedUnsupported — the predicate the overlay skips
 // them by — over the defaults chain the exporter's build reads
-// (subtreeReservedKeys), handed in as CheckInput.SubtreeReservedKeys.
+// (subtreeReservedKeys), handed in as CheckInput.SubtreeReservedKeys, less
+// the writes config.SubtreeReservedReported leaves out.
 
 import (
 	"fmt"
@@ -28,106 +29,40 @@ import (
 // checkSubtreeReservedKeys reports one findingkind.FindingSubtreeDefaultReservedKey
 // error per (tenant, key) of input.SubtreeReservedKeys, for the tenants in
 // input.EffectiveConfigs only (the caller's scope).
+//
+// ⛔ WHICH WRITES COUNT is config.SubtreeReservedReported (#3881) — a file the
+// exporter drops writes nothing, and a TopLevelReadElsewhere key at the top
+// level of an unwrapped file is where its reader takes it. The shared key
+// verdict (`da-guard key-verdict`) reads the same function, so the two gates
+// report the same (tenant, key) set; do not filter here.
 func checkSubtreeReservedKeys(input CheckInput) []Finding {
-	if len(input.SubtreeReservedKeys) == 0 {
+	reported := config.SubtreeReservedReported(input.SubtreeReservedKeys, input.DefaultsFiles, input.ParseFailed)
+	if len(reported) == 0 {
 		return nil
 	}
-	tenants := make([]string, 0, len(input.SubtreeReservedKeys))
-	for id := range input.SubtreeReservedKeys {
+	tenants := make([]string, 0, len(reported))
+	for id := range reported {
 		if _, inScope := input.EffectiveConfigs[id]; inScope {
 			tenants = append(tenants, id)
 		}
 	}
 	sort.Strings(tenants)
-	failed := make(map[string]bool, len(input.ParseFailed))
-	for _, pf := range input.ParseFailed {
-		failed[pf] = true
-	}
-	unwrapped := unwrappedDefaultsFiles(input, failed)
 	var out []Finding
 	for _, id := range tenants {
-		byKey := input.SubtreeReservedKeys[id]
+		byKey := reported[id]
 		keys := make([]string, 0, len(byKey))
 		for k := range byKey {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			// A file the exporter drops (ParseFailed — since ADR-036 step 6,
-			// #3206, every file parse-tree refuses) applies nothing, so it
-			// writes no reserved key: skipped, as checkDefaultsWrapper does.
-			writes := withoutFailed(byKey[k], failed)
-			if len(writes) == 0 {
-				continue
-			}
-			if readElsewhere[k] {
-				writes = writtenInsideDefaults(writes, unwrapped)
-				if len(writes) == 0 {
-					continue
-				}
-			}
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     findingkind.FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
-				Message:  subtreeReservedMessage(input.DeclaredStateFilters, k, writes),
+				Message:  subtreeReservedMessage(input.DeclaredStateFilters, k, byKey[k]),
 			})
-		}
-	}
-	return out
-}
-
-// unwrappedDefaultsFiles is the set of input.DefaultsFiles (root-relative
-// names) with no `defaults:` mapping: the defaults merge reads the whole
-// document, so a key in pkg/config's chain view of such a file sits at its
-// TOP level. A file in failed (ParseFailed) is skipped, as checkDefaultsWrapper
-// skips it: the exporter reads none of it.
-func unwrappedDefaultsFiles(input CheckInput, failed map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	for _, f := range input.DefaultsFiles {
-		if failed[f.Name] {
-			continue
-		}
-		if doc := decodeDefaultsDoc(f.Data); doc != nil && !wrappedInMapping(doc) {
-			out[f.Name] = true
-		}
-	}
-	return out
-}
-
-// withoutFailed is writes minus the ones whose file is in failed; writes
-// itself when none is.
-func withoutFailed(writes []config.SubtreeReservedWrite, failed map[string]bool) []config.SubtreeReservedWrite {
-	if len(failed) == 0 {
-		return writes
-	}
-	var out []config.SubtreeReservedWrite
-	for _, w := range writes {
-		if !failed[w.File] {
-			out = append(out, w)
-		}
-	}
-	return out
-}
-
-// writtenInsideDefaults drops from writes the ones of an unwrapped file.
-//
-// ⛔ ONLY FOR TopLevelReadElsewhere KEYS (#2388 r1b): another reader takes
-// such a key from the TOP level of a defaults file, so only a copy under a
-// `defaults:` mapping is reported — nothing reads it there. pkg/config's
-// chain view (subtreeReservedKeys) cannot tell the top level from
-// `defaults:` in an unwrapped file, so this check, which holds the files'
-// bytes, does. (`_custom_alerts` was such a key until #3042, when the then
-// Python custom-alert compiler read it from a `_defaults.yaml` top level;
-// the compiler, now pkg/config's (#3229), compiles what the exporter serves,
-// so both places are reported.)
-// A file not in DefaultsFiles is kept (reported), not guessed.
-func writtenInsideDefaults(writes []config.SubtreeReservedWrite, unwrapped map[string]bool) []config.SubtreeReservedWrite {
-	var out []config.SubtreeReservedWrite
-	for _, w := range writes {
-		if !unwrapped[w.File] {
-			out = append(out, w)
 		}
 	}
 	return out

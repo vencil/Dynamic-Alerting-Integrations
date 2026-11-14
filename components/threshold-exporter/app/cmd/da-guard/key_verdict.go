@@ -259,6 +259,9 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	in.Values = rep.ValueProblems
 	in.Schedules = rep.ScheduleProblems
 	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants, setAsideFiles)
+	// #3881: the reserved keys subtree defaults write, as the main check
+	// reports them (subtree_default_reserved_key) — the one filter.
+	in.SubtreeReserved = config.SubtreeReservedReported(tree.SubtreeReserved, tree.DefaultsFiles, tree.ParseFailed)
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a
 	// tenant set aside, may be the one binding it.

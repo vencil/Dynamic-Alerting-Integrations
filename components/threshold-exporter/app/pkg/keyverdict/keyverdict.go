@@ -58,6 +58,15 @@
 // (config.TenantFileTopLevelKey) is no tenant's key and no reader reads it:
 // ONE error on that file, naming no tenant (#3671).
 //
+// A reserved key a SUBTREE `_defaults.yaml` writes is applied to no tenant
+// from there (#3341), so no reader reads it: ONE error on that file, reason
+// subtree_not_applied, with the tenants that inherit the file — whether or
+// not a tenant sets the key itself, and however it is written there (a
+// schedule included). Which writes count is config.SubtreeReservedReported,
+// the function da-guard's main check reports subtree_default_reserved_key
+// from, so the two name the same (tenant, key) set (#3881). It is in no
+// tenant's config, so no tenant's verdict row carries it.
+//
 // Input.Tenants, given, is the subset the readings were computed for (a
 // write's tenants, ADR-038 §5): only those tenants are judged; a profile's
 // finding is judged over them only.
@@ -162,6 +171,10 @@ const (
 	// tenant's keys from `tenants.<id>` alone, and no other reader reads a
 	// tenant file.
 	ReasonTenantFileTopLevel = "tenant_file_top_level"
+	// ReasonSubtreeNotApplied (#3881): a reserved key written in a subtree
+	// `_defaults.yaml` — the exporter's subtree overlay applies none of them
+	// (#3341), and no other reader takes one from there.
+	ReasonSubtreeNotApplied = "subtree_not_applied"
 )
 
 // Disable effects (served-values' keys[].disable).
@@ -259,6 +272,12 @@ type Input struct {
 	// the file spells them (parse-tree's content), for the tenant files the
 	// caller judges. nil: none judged.
 	TenantFiles map[string][]string
+	// SubtreeReserved (#3881): tenant → reserved key → the subtree defaults
+	// files of its chain that write it, root-first — what
+	// config.SubtreeReservedReported leaves of ScopedTenants.SubtreeReserved
+	// (the caller filters; nothing is filtered here). Only the tenants
+	// Served or Effective hold are judged. nil: none.
+	SubtreeReserved map[string]map[string][]config.SubtreeReservedWrite
 	// Retired (#3829): the hint for a retired threshold key, "" for any other
 	// key. nil: config.RetiredThresholdHint (the registry's `retired_keys:`).
 	Retired func(key string) string
@@ -442,6 +461,7 @@ func Judge(in Input) Tree {
 	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
 	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective, in.Undecidable)...)
 	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
+	findings = append(findings, subtreeReservedFindings(in.SubtreeReserved, tenants)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 		if in.Whole {
@@ -791,6 +811,37 @@ func tenantFileFindings(files map[string][]string) []Finding {
 				Tenants: []string{}, Reason: optional(ReasonTenantFileTopLevel)})
 		}
 	}
+	return out
+}
+
+// subtreeReservedFindings is one unread error per (subtree defaults file,
+// reserved key) of reserved, reason subtree_not_applied, naming the judged
+// tenants (tenants) whose chain holds that file (#3881). A file every
+// inheriting tenant of which is outside tenants gives none.
+func subtreeReservedFindings(reserved map[string]map[string][]config.SubtreeReservedWrite,
+	tenants map[string]bool) []Finding {
+	type at struct{ file, key string }
+	reach := map[at]map[string]bool{}
+	for tenant, byKey := range reserved {
+		if !tenants[tenant] {
+			continue
+		}
+		for key, writes := range byKey {
+			for _, w := range writes {
+				a := at{w.File, key}
+				if reach[a] == nil {
+					reach[a] = map[string]bool{}
+				}
+				reach[a][tenant] = true
+			}
+		}
+	}
+	out := make([]Finding, 0, len(reach))
+	for a, ts := range reach {
+		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: a.key, File: optional(a.file),
+			Tenants: sortedKeys(ts), Reason: optional(ReasonSubtreeNotApplied)})
+	}
+	sortFindings(out)
 	return out
 }
 
