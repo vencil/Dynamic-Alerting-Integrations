@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterator, NamedTuple, Optional, Union
 
 from _lib_compat import find_project_root
+import _lib_confd  # #3703: shown_file judges a segment by the file-name rule
 from _lib_constants import (
     _ALLOWED_SCHEMES,
     _DISABLED_VALUES,
@@ -1433,7 +1434,14 @@ def shown_key(key: Any) -> str:
     stay two findings (tenant-api's ``findingKey``)."""
     if isinstance(key, str) and _NAME_LIKE_RE.fullmatch(key):
         return key
-    text = key if isinstance(key, str) else str(key)
+    return _stand_in(key)
+
+
+def _stand_in(name: Any) -> str:
+    """``<key:xxxxxx>``: the first 6 hex chars of SHA-256 of *name*'s UTF-8
+    text (``str()`` of a non-string) — the one stand-in ``shown_key`` and
+    ``shown_file`` both print."""
+    text = name if isinstance(name, str) else str(name)
     digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
     return f"<key:{digest[:6]}>"
 
@@ -1450,15 +1458,24 @@ def shown_file(path: Any) -> "str | None":
     of the tree, so a name is content too (#3703, owner decision).
 
     The path is relative to the conf.d root (``team-a/db-x.yaml``); each
-    ``/``-separated segment is ``shown_key`` — the same name rule, the same
-    ``<key:xxxxxx>`` stand-in — and the segments are joined again with
-    ``/``. A segment that is already a stand-in stays as it is, so the exit
-    is idempotent. ``None`` is ``None``. ``--config-dir`` is the operator's
-    argument, not the author's text: it does not come here."""
+    ``/``-separated segment is itself when it is a legal file name
+    (``_lib_confd.configmap_key_problem``: Kubernetes ``IsConfigMapKey``),
+    else the ``<key:xxxxxx>`` stand-in ``shown_key`` prints. File names have
+    their own rule, not ``shown_key``'s 64-char name rule: a tenant id is up
+    to 63 chars, so tenant-api writes ``<id>.yaml`` of up to 68, and it finds
+    its finding by comparing ``file`` with the path it wrote (``gate.go``
+    ``Related``) — that path must come back as written.
+
+    A segment that is already a stand-in stays as it is, so the exit is
+    idempotent (``Finding.with_text`` and a pickled ``Finding`` rebuild from
+    a shown ``file``). ``None`` is ``None``. ``--config-dir`` is the
+    operator's argument, not the author's text: it does not come here."""
     if path is None:
         return None
-    return "/".join(seg if _STAND_IN_RE.fullmatch(seg) else shown_key(seg)
-                    for seg in str(path).split("/"))
+    return "/".join(
+        seg if _STAND_IN_RE.fullmatch(seg) or _lib_confd.configmap_key_problem(seg) is None
+        else _stand_in(seg)
+        for seg in str(path).split("/"))
 
 
 def key_segment(key: Any) -> str:
