@@ -1,0 +1,100 @@
+# promtool unit test — MariaDB connection usage, % of max_connections (#3778).
+# Run: promtool test rules tests/rulepacks/rule-pack-mariadb-connections_test.yaml
+#
+# The key is mysql_connection_usage_percent (+ _critical); it replaced the
+# absolute-count key mysql_connections. The observed series is
+# tenant:mysql_connection_usage:percent = the per-INSTANCE ratio
+# 100 * threads_connected / max_connections, busiest instance per tenant.
+#   - t-skew: one instance at 95 %, one idle instance with a large
+#     max_connections. Per instance the busiest is 95 % → warning AND critical
+#     fire. A sum/sum across instances reads (190+5)/(200+1000) = 16.25 % and
+#     fires nothing — this tenant is what turns the test red if the ratio goes
+#     back to sum/sum.
+#   - t-below: 79 % against a warning of 80 → no alert (the must-not-fire side
+#     of the threshold).
+#   - t-warn: 81 % → warning only (critical 90 not reached).
+#   - t-maint: 95 % but in maintenance → suppressed.
+#   - t-zero: 5 connections against a max_connections that reads 0 → the
+#     `> 0` filter drops the instance: no ratio sample, no alert. Clamping the
+#     denominator to 1 instead would read 500 % and page critical — this tenant
+#     is what turns the test red if the denominator goes back to clamp_min.
+#     (An exporter that cannot read the variable sends no max_connections
+#     series at all; the instance drops out of the ratio the same way.)
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_threads_connected{tenant="t-skew", instance="db-0"}'
+        values: '190x20'
+      - series: 'mysql_global_variables_max_connections{tenant="t-skew", instance="db-0"}'
+        values: '200x20'
+      - series: 'mysql_global_status_threads_connected{tenant="t-skew", instance="db-1"}'
+        values: '5x20'
+      - series: 'mysql_global_variables_max_connections{tenant="t-skew", instance="db-1"}'
+        values: '1000x20'
+      - series: 'user_threshold{tenant="t-skew", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '80x20'
+      - series: 'user_threshold{tenant="t-skew", component="mysql", metric="connection_usage_percent", severity="critical"}'
+        values: '90x20'
+
+      - series: 'mysql_global_status_threads_connected{tenant="t-below", instance="db-0"}'
+        values: '79x20'
+      - series: 'mysql_global_variables_max_connections{tenant="t-below", instance="db-0"}'
+        values: '100x20'
+      - series: 'user_threshold{tenant="t-below", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '80x20'
+
+      - series: 'mysql_global_status_threads_connected{tenant="t-warn", instance="db-0"}'
+        values: '81x20'
+      - series: 'mysql_global_variables_max_connections{tenant="t-warn", instance="db-0"}'
+        values: '100x20'
+      - series: 'user_threshold{tenant="t-warn", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '80x20'
+      - series: 'user_threshold{tenant="t-warn", component="mysql", metric="connection_usage_percent", severity="critical"}'
+        values: '90x20'
+
+      - series: 'mysql_global_status_threads_connected{tenant="t-maint", instance="db-0"}'
+        values: '95x20'
+      - series: 'mysql_global_variables_max_connections{tenant="t-maint", instance="db-0"}'
+        values: '100x20'
+      - series: 'user_threshold{tenant="t-maint", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '80x20'
+      - series: 'user_state_filter{tenant="t-maint", filter="maintenance"}'
+        values: '1x20'
+
+      - series: 'mysql_global_status_threads_connected{tenant="t-zero", instance="db-0"}'
+        values: '5x20'
+      - series: 'mysql_global_variables_max_connections{tenant="t-zero", instance="db-0"}'
+        values: '0x20'
+      - series: 'user_threshold{tenant="t-zero", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '80x20'
+      - series: 'user_threshold{tenant="t-zero", component="mysql", metric="connection_usage_percent", severity="critical"}'
+        values: '90x20'
+
+    promql_expr_test:
+      - expr: tenant:mysql_connection_usage:percent
+        eval_time: 2m
+        exp_samples:
+          - labels: 'tenant:mysql_connection_usage:percent{tenant="t-skew"}'
+            value: 95
+          - labels: 'tenant:mysql_connection_usage:percent{tenant="t-below"}'
+            value: 79
+          - labels: 'tenant:mysql_connection_usage:percent{tenant="t-warn"}'
+            value: 81
+          - labels: 'tenant:mysql_connection_usage:percent{tenant="t-maint"}'
+            value: 95
+
+      # for: 30s → firing by 2m. Only the tenants above their tier fire.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname=~"MariaDBHighConnections|MariaDBHighConnectionsCritical"})
+        eval_time: 2m
+        exp_samples:
+          - labels: '{alertname="MariaDBHighConnections", tenant="t-skew"}'
+            value: 1
+          - labels: '{alertname="MariaDBHighConnectionsCritical", tenant="t-skew"}'
+            value: 1
+          - labels: '{alertname="MariaDBHighConnections", tenant="t-warn"}'
+            value: 1

@@ -14,7 +14,7 @@ lang: en
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)
 
-> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows four differences: Exercise 3 has only 5 checks (no `tenant_uniqueness`); `schema` shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears); and v2.9.0 has no `--output-alertmanager`, so the Exercise 4 command fails there. <!-- image-caveat: v2.9.0 -->
+> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows five differences: Exercise 3 has only 5 checks (no `tenant_uniqueness`); `schema` shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); `mysql_connection_usage_percent` on this page does not exist yet in v2.9.0 (that release has the absolute-count `mysql_connections`, #3778), so it and its `_critical` are listed as unknown keys too; `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears); and v2.9.0 has no `--output-alertmanager`, so the Exercise 4 command fails there. <!-- image-caveat: v2.9.0 -->
 
 > 💡 **Want to see the product running in ~1 minute instead of typing CLI commands?** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) (recommended first stop: da-portal UI in the browser + a real firing alert, no K8s; `⏱️ <1 min · 🟢 Docker only`). **This lab** focuses on the hands-on **da-tools CLI workflow** (config / routing / blast radius; `⏱️ 30–45 min · 🟡 Medium (CLI)`) — complementary, different depth, not either/or.
 
@@ -94,9 +94,9 @@ Replace the content of each tenant file with the following (keep or drop the hea
 # E-Commerce MariaDB — tighter connection threshold for high-traffic
 tenants:
   prod-mariadb:
-    mysql_connections: "150"
-    mysql_connections_critical: "200"
-    mysql_threads_running: "40"    # threads_running saturation (concurrent threads, NOT host CPU%); platform default 30
+    mysql_connection_usage_percent: "85"           # connection usage (% of max_connections)
+    mysql_connection_usage_percent_critical: "95"
+    mysql_threads_running: "40"    # threads_running saturation (concurrent threads, NOT host CPU%); no platform default, set it per host (#3778)
     container_cpu: "75"
     container_memory: "80"
 
@@ -371,8 +371,8 @@ Simulate lowering the ecommerce MySQL threshold:
 ```bash
 # Create a modified copy
 cp -r conf.d conf.d.new
-# In conf.d.new/prod-mariadb.yaml, change mysql_connections: "150" to "120"
-sed -i 's/mysql_connections: "150"/mysql_connections: "120"/' conf.d.new/prod-mariadb.yaml
+# In conf.d.new/prod-mariadb.yaml, change mysql_connection_usage_percent: "85" to "75"
+sed -i 's/mysql_connection_usage_percent: "85"/mysql_connection_usage_percent: "75"/' conf.d.new/prod-mariadb.yaml
 
 docker run --rm \
   --user $(id -u):$(id -g) \

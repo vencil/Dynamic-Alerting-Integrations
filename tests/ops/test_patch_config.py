@@ -37,10 +37,10 @@ class TestDiffPreview:
         cm_data = {
             "data": {
                 "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 70",
             }
         }
-        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "50")
+        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connection_usage_percent", "50")
         assert diff["changed"] is True
         assert diff["before"] is None
         assert diff["after"] == {"value": "50", "state": "custom: 50"}
@@ -50,10 +50,10 @@ class TestDiffPreview:
         cm_data = {
             "data": {
                 "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 70",
             }
         }
-        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "default")
+        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connection_usage_percent", "default")
         assert diff["changed"] is True
         assert diff["before"] is None
         # 只說寫了什麼；刪掉後生效的是什麼由 exporter 決定，不在這裡推斷。
@@ -64,10 +64,10 @@ class TestDiffPreview:
         cm_data = {
             "data": {
                 "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 70",
             }
         }
-        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "disable")
+        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connection_usage_percent", "disable")
         assert diff["changed"] is True
         assert diff["before"] is None
         assert diff["after"] == {"value": "disable", "state": "disabled"}
@@ -76,10 +76,10 @@ class TestDiffPreview:
         cm_data = {
             "data": {
                 "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: '50'\n",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: '50'\n",
             }
         }
-        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connections", "50")
+        diff = pc.diff_preview(cm_data, "multi-file", "db-a", "mysql_connection_usage_percent", "50")
         assert diff["changed"] is False
         assert diff["before"] is None
 
@@ -89,7 +89,7 @@ class TestFindAffectedAlerts:
 
     def test_normal_metric(self):
         """告警名取自 rule pack（舊版回 key 拼法猜的 *MysqlConnections*）。"""
-        assert pc.find_affected_alerts("mysql_connections") == [
+        assert pc.find_affected_alerts("mysql_connection_usage_percent") == [
             "MariaDBHighConnections", "MariaDBSystemBottleneck"]
 
     def test_dimensional_metric(self):
@@ -100,7 +100,7 @@ class TestFindAffectedAlerts:
     def test_unknown_is_none_not_empty(self, monkeypatch):
         """找不到 rule pack 是「不知道」，與「沒有告警讀它」（[]）分開。"""
         monkeypatch.setattr(pc, "alerts_for_key", lambda key: None)
-        assert pc.find_affected_alerts("mysql_connections") is None
+        assert pc.find_affected_alerts("mysql_connection_usage_percent") is None
 
 
 class TestDetectMode:
@@ -123,7 +123,7 @@ class TestPrintDiff:
     @staticmethod
     def _diff(changed):
         return {
-            "tenant": "db-a", "metric_key": "mysql_connections",
+            "tenant": "db-a", "metric_key": "mysql_connection_usage_percent",
             "configmap_mode": "multi-file", "changed": changed,
             "before": None, "after": {"value": "50", "state": "custom: 50"},
             "affected_alerts": ["MariaDBHighConnections"],
@@ -196,36 +196,36 @@ class TestPatchLegacy:
         cm_data = {
             "data": {
                 "config.yaml": yaml.dump({
-                    "tenants": {"db-a": {"mysql_connections": "70"}},
+                    "tenants": {"db-a": {"mysql_connection_usage_percent": "70"}},
                 }),
             }
         }
-        result = pc.patch_legacy(cm_data, "db-a", "mysql_connections", "50")
+        result = pc.patch_legacy(cm_data, "db-a", "mysql_connection_usage_percent", "50")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert patched["tenants"]["db-a"]["mysql_connections"] == 50
+        assert patched["tenants"]["db-a"]["mysql_connection_usage_percent"] == 50
 
     def test_set_default_removes_key(self):
         cm_data = {
             "data": {
                 "config.yaml": yaml.dump({
-                    "tenants": {"db-a": {"mysql_connections": "70", "cpu": "80"}},
+                    "tenants": {"db-a": {"mysql_connection_usage_percent": "70", "cpu": "80"}},
                 }),
             }
         }
-        result = pc.patch_legacy(cm_data, "db-a", "mysql_connections", "default")
+        result = pc.patch_legacy(cm_data, "db-a", "mysql_connection_usage_percent", "default")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert "mysql_connections" not in patched["tenants"]["db-a"]
+        assert "mysql_connection_usage_percent" not in patched["tenants"]["db-a"]
         assert patched["tenants"]["db-a"]["cpu"] == "80"
 
     def test_set_default_removes_empty_tenant(self):
         cm_data = {
             "data": {
                 "config.yaml": yaml.dump({
-                    "tenants": {"db-a": {"mysql_connections": "70"}},
+                    "tenants": {"db-a": {"mysql_connection_usage_percent": "70"}},
                 }),
             }
         }
-        result = pc.patch_legacy(cm_data, "db-a", "mysql_connections", "default")
+        result = pc.patch_legacy(cm_data, "db-a", "mysql_connection_usage_percent", "default")
         patched = yaml.safe_load(result["data"]["config.yaml"])
         # 空區塊保留：刪掉會把租戶除名
         assert patched["tenants"]["db-a"] == {}
@@ -258,22 +258,22 @@ class TestPatchMultifile:
         cm_data = {
             "data": {
                 "_defaults.yaml": "defaults: {}",
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: '70'",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: '70'",
             }
         }
-        result = pc.patch_multifile(cm_data, "db-a", "mysql_connections", "50")
+        result = pc.patch_multifile(cm_data, "db-a", "mysql_connection_usage_percent", "50")
         patched = yaml.safe_load(result["data"]["db-a.yaml"])
-        assert patched["tenants"]["db-a"]["mysql_connections"] == 50
+        assert patched["tenants"]["db-a"]["mysql_connection_usage_percent"] == 50
 
     def test_set_default_keeps_empty_tenant(self):
         cm_data = {
             "data": {
-                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: '70'",
+                "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: '70'",
             }
         }
-        result = pc.patch_multifile(cm_data, "db-a", "mysql_connections", "default")
+        result = pc.patch_multifile(cm_data, "db-a", "mysql_connection_usage_percent", "default")
         patched = yaml.safe_load(result["data"]["db-a.yaml"])
-        assert "mysql_connections" not in patched["tenants"]["db-a"]
+        assert "mysql_connection_usage_percent" not in patched["tenants"]["db-a"]
         assert "db-a" in patched["tenants"]
 
     def test_new_tenant_file(self):
@@ -294,8 +294,8 @@ class TestPatchRefusesAKeyNoReaderReads:
     （拼錯）會讓樹變壞（worsens_tree，kind `unread`），拒絕、什麼都不寫；拼對的照寫。
     Tenant ids are fixture names (CLAUDE.md #9)."""
 
-    _DATA = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-             "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: '70'\n"}
+    _DATA = {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+             "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: '70'\n"}
 
     def test_a_misspelt_key_is_refused(self):
         with pytest.raises(pc.ConfigMapShapeError, match="unread") as exc:
@@ -303,8 +303,8 @@ class TestPatchRefusesAKeyNoReaderReads:
         assert "mysql_conections" in str(exc.value)
 
     def test_the_key_spelled_right_is_written(self):
-        result = pc.patch_multifile({"data": dict(self._DATA)}, "t-a", "mysql_connections", "50")
-        assert yaml.safe_load(result["data"]["t-a.yaml"])["tenants"]["t-a"]["mysql_connections"] == 50
+        result = pc.patch_multifile({"data": dict(self._DATA)}, "t-a", "mysql_connection_usage_percent", "50")
+        assert yaml.safe_load(result["data"]["t-a.yaml"])["tenants"]["t-a"]["mysql_connection_usage_percent"] == 50
 
 
 # ---------------------------------------------------------------------------

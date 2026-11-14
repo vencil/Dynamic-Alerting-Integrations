@@ -166,8 +166,8 @@ func unsetValidationCases() []unsetValidationCase {
 		tooMany[i] = `"_routing"`
 	}
 	return []unsetValidationCase{
-		{"unknown key", `"unset":["_silent_mode"]`, "unset[0]", `unset can only remove "_routing", "_routing_receiver_type", "kafka_active_controllers", "kafka_request_rate"; got "_silent_mode"`, false},
-		{"null element", `"unset":[null]`, "unset[0]", `unset can only remove "_routing", "_routing_receiver_type", "kafka_active_controllers", "kafka_request_rate"; got ""`, false},
+		{"unknown key", `"unset":["_silent_mode"]`, "unset[0]", "unset can only remove " + unsetAllowedList(nil) + `; got "_silent_mode"`, false},
+		{"null element", `"unset":[null]`, "unset[0]", "unset can only remove " + unsetAllowedList(nil) + `; got ""`, false},
 		{"repeated", `"unset":["_routing","_routing"]`, "unset[1]", `"_routing" is already listed at`, false},
 		{"also in patch", `"patch":{"_routing":"disable"},"unset":["_routing"]`, "unset[0]", "also in patch", false},
 		{"too many", `"unset":[` + strings.Join(tooMany, ",") + `]`, "unset", "must not exceed 1000 items", true},

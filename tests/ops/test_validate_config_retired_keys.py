@@ -1,10 +1,15 @@
 """validate-config 對退役閾值鍵（registry `retired_keys:`，#3829）的判決。
 
 判決是 Go 的（`pkg/keyverdict`，經 `da-guard key-verdict`），Python 不留退役表。
-「有替代鍵」這個形狀提交的 registry 沒有條目，所以這裡建一支以 `-ldflags -X` 加入測試
-條目的 da-guard（`config.retiredThresholdKeysFixture`，只有測試建置會設），量的是工具
-真正跑的那條路；「沒有替代鍵」則直接量提交的 registry 條目（#3783 的 Kafka 鍵）。
-租戶 id 都是 fixture 名（CLAUDE.md #9）。
+三組量測：
+
+* 前半建一支以 `-ldflags -X` 加入測試條目的 da-guard（`config.retiredThresholdKeysFixture`，
+  只有測試建置會設），量的是機制本身，與提交的 registry 登記了什麼無關。
+* 「有替代鍵」的真實登記（#3778）：用提交的 registry 建出的 da-guard，量 `mysql_connections`；
+  拿掉 registry 的條目（`--regen` 後重建）這組就轉紅。
+* 「沒有替代鍵」的真實登記（#3783 的 Kafka 鍵）：同樣直接量提交的 registry 條目。
+
+租戶 id 與 fixture 退役鍵名都是 fixture 名（CLAUDE.md #9）。
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ from _go_build import go_build_argv
 
 _REPO = Path(__file__).resolve().parents[2]
 _APP = _REPO / "components" / "threshold-exporter" / "app"
-_OLD, _NEW = "fixture_old_conns", "mysql_connections"
+_OLD, _NEW = "fixture_old_conns", "mysql_connection_usage_percent"
 _FIXTURE_X = (f"github.com/vencil/threshold-exporter/pkg/config.retiredThresholdKeysFixture="
               f"{_OLD}:{_NEW}:3829")
 
@@ -78,7 +83,7 @@ def test_a_retired_key_in_the_deployments_root_defaults_fails_and_names_its_repl
                and d.endswith("tenant(s) tb") for d in lines), lines
     assert any(d.startswith("  ERROR: key verdict: ta.yaml: error: unread") for d in lines), lines
     for d in lines:
-        assert "(retired: retired threshold key (#3829): write `mysql_connections` instead" in d, d
+        assert "(retired: retired threshold key (#3829): write `mysql_connection_usage_percent` instead" in d, d
     assert not [d for d in row["details"] if f"unread `{_NEW}`" in d], row["details"]
 
 
@@ -100,7 +105,7 @@ def test_served_values_carries_the_hint_and_keeps_the_measurement(tmp_path, reti
     assert p.returncode == 0, p.stderr
     key = json.loads(p.stdout)["tenants"]["ta"]["keys"][_OLD]
     assert key["exporter"] is True, key
-    assert "`mysql_connections`" in key["hint"], key
+    assert "`mysql_connection_usage_percent`" in key["hint"], key
 
 
 def _write(da_guard: str, conf_d: str, key: str) -> subprocess.CompletedProcess:
@@ -121,13 +126,52 @@ def test_da_guard_write_refuses_a_newly_written_retired_key_naming_its_replaceme
     p = _write(retired_da_guard, conf_d, _OLD)
     assert p.returncode == 1, (p.returncode, p.stdout, p.stderr)
     out = p.stdout + p.stderr
-    assert "write `mysql_connections` instead" in out and _OLD in out, out
+    assert "write `mysql_connection_usage_percent` instead" in out and _OLD in out, out
     assert "no reader reads it" not in out, out
     assert (tmp_path / "tb.yaml").read_text(encoding="utf-8") == before
     p = _write(retired_da_guard, conf_d, _NEW)
     assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
 
 
+# ── 提交的 registry：`mysql_connections` 退役（#3778）─────────────────────────────
+
+_REAL_OLD, _REAL_NEW = "mysql_connections", "mysql_connection_usage_percent"
+
+
+def _real_tree(root: Path, key: str) -> str:
+    """#3778 之前的部署形狀：root `_defaults.yaml` 寫舊鍵（沿用舊版出貨 defaults 的
+    `mysql_connections: 80`），一個租戶覆寫它，一個租戶什麼都不寫。*key* 是舊鍵或其
+    `_critical`。"""
+    files = {
+        "_defaults.yaml": f"defaults:\n  {_REAL_NEW}: 80\n  {key}: 80\n",
+        "ta.yaml": f"tenants:\n  ta:\n    {key}: \"70\"\n",
+        "tb.yaml": "tenants:\n  tb:\n    _silent_mode: warning\n",
+    }
+    for rel, text in files.items():
+        (root / rel).write_text(text, encoding="utf-8")
+    return str(root)
+
+
+@pytest.mark.parametrize("key,replacement", [
+    (_REAL_OLD, _REAL_NEW),
+    (f"{_REAL_OLD}_critical", f"{_REAL_NEW}_critical"),
+], ids=["base", "critical"])
+def test_the_registered_mysql_connections_fails_in_defaults_and_tenant_naming_the_percent_key(
+        tmp_path, da_guard_binary, key, replacement):
+    """提交的 registry 登記了 `mysql_connections`：root defaults 與租戶檔各寫一筆，
+    validate-config rc 1，routes 列兩處都是 ERROR 並點名 `%` 新鍵；`_critical`
+    隨 base 推導，點名 `mysql_connection_usage_percent_critical`。"""
+    rc, rows = _validate(_real_tree(tmp_path, key), da_guard_binary)
+    assert rc == 1, rows
+    row = rows["routes"]
+    assert row["status"] == vc.FAIL, row
+    lines = [d for d in row["details"] if f"unread `{key}`" in d]
+    assert any(d.startswith("  ERROR: key verdict: _defaults.yaml: error: unread")
+               for d in lines), row["details"]
+    assert any(d.startswith("  ERROR: key verdict: ta.yaml: error: unread") for d in lines), row["details"]
+    for d in lines:
+        assert f"(retired: retired threshold key (#3778): write `{replacement}` instead" in d, d
+        assert "max_connections" in d, d  # the registry's hint rides along
 # #3783: the committed registry retires these with `replaced_by: null`; the
 # `_critical` twin is retired by derivation, not by an entry of its own.
 _KAFKA_RETIRED = ("kafka_request_rate", "kafka_active_controllers", "kafka_request_rate_critical")

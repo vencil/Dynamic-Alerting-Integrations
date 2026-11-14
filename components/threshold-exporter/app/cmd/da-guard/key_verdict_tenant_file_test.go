@@ -1,7 +1,7 @@
 package main
 
 // #3671: a tenant file's top-level key other than `tenants` — a flat
-// `mysql_connections:`, a `defaults:` or `optional_overrides:` written in a
+// `mysql_connection_usage_percent:`, a `defaults:` or `optional_overrides:` written in a
 // tenant file — is read by no reader. Before, only the tenant-config schema
 // gate (check_confd_schema, CI) refused it: the shared verdict gave no
 // finding, so a tree changed straight in git (direct mode) had nothing that
@@ -62,12 +62,12 @@ func TestKeyVerdict_ATenantFilesStrayTopLevelKeyIsUnread(t *testing.T) {
 	// The issue's measurement: a flat file, and a tenant file with a
 	// `defaults:` the exporter ignores (t1 is served the root's 80).
 	root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
-		"mine.yaml": "mysql_connections: \"70\"\n",
-		"t1.yaml":   "defaults: {mysql_connections: 5}\noptional_overrides: [pg_conn]\ntenants: {t1: {}}\n",
-		"t2.yaml":   "tenants:\n  t2:\n    mysql_connections: \"60\"\n"})
+		"mine.yaml": "mysql_connection_usage_percent: \"70\"\n",
+		"t1.yaml":   "defaults: {mysql_connection_usage_percent: 5}\noptional_overrides: [pg_conn]\ntenants: {t1: {}}\n",
+		"t2.yaml":   "tenants:\n  t2:\n    mysql_connection_usage_percent: \"60\"\n"})
 	got, blocks := strayFindings(t, root)
 	want := []string{
-		"error unread mysql_connections mine.yaml [] blocks",
+		"error unread mysql_connection_usage_percent mine.yaml [] blocks",
 		"error unread defaults t1.yaml [] blocks",
 		"error unread optional_overrides t1.yaml [] blocks",
 	}
@@ -92,7 +92,7 @@ func TestKeyVerdict_ATenantFilesStrayTopLevelKeyIsUnread(t *testing.T) {
 // file is refused; one that edits beside a stray key already there is not.
 func TestWrite_AStrayTopLevelKeyInATenantFileWorsensTheTree(t *testing.T) {
 	t.Parallel()
-	setTop := `{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["mysql_connections"],"value":{"str":"60"}}]}]}`
+	setTop := `{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["mysql_connection_usage_percent"],"value":{"str":"60"}}]}]}`
 	root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1: {}\n"})
 	before := snapshot(t, root)
 	code, res := runBatch(t, writeCmd, setTop, "--config-dir", root)
@@ -106,8 +106,8 @@ func TestWrite_AStrayTopLevelKeyInATenantFileWorsensTheTree(t *testing.T) {
 	sameTree(t, before, snapshot(t, root))
 
 	had := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
-		"a.yaml": "mysql_connections: \"70\"\ntenants:\n  t1: {}\n"})
-	edit := `{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_connections"],` +
+		"a.yaml": "mysql_connection_usage_percent: \"70\"\ntenants:\n  t1: {}\n"})
+	edit := `{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_connection_usage_percent"],` +
 		`"value":{"str":"60"}}]}]}`
 	if code, res := runBatch(t, writeCmd, edit, "--config-dir", had); code != exitOK {
 		t.Fatalf("an existing stray key blocked an edit beside it: exit %d worsened %v (%v)", code,
@@ -123,7 +123,7 @@ func TestWrite_RemovingADuplicateCopyBesideAStrayKeyPasses(t *testing.T) {
 	root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
 		"a.yaml": "defaults: {x: 1}\ntenants: {tz: {}}\n", "b.yaml": "tenants: {tz: {}}\n"})
 	in := `{"files":[{"path":"b.yaml","delete":true},{"path":"a.yaml","ops":[{"op":"set",` +
-		`"path":["tenants","tz","mysql_connections"],"value":{"str":"5"}}]}]}`
+		`"path":["tenants","tz","mysql_connection_usage_percent"],"value":{"str":"5"}}]}]}`
 	if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
 		t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
 	}

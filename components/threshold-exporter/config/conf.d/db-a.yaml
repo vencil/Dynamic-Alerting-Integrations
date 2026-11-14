@@ -3,7 +3,7 @@
 # Only 'tenants' block is allowed here.
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
     container_cpu: "70"
     # v2.10.0 (#869): db_type opts this tenant into per-tenant exporter liveness.
     # The exporter emits tenant_expected_exporter{tenant="db-a",db_type="mariadb"}=1,

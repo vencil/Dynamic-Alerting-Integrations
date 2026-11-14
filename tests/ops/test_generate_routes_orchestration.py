@@ -399,7 +399,7 @@ def _tenant_dir(tmp_path_factory):
     """
     d = tmp_path_factory.mktemp("conf.d")
     (d / "db-a.yaml").write_text(
-        make_tenant_yaml("db-a", keys={"mysql_connections": "70"},
+        make_tenant_yaml("db-a", keys={"mysql_connection_usage_percent": "70"},
                          routing=make_routing_config("db-a")),
         encoding="utf-8")
     return d
@@ -898,7 +898,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
         conf_d.mkdir()
         # Parses fine, declares thresholds, produces no routing whatsoever.
         (conf_d / "db-a.yaml").write_text(
-            "thresholds:\n  mysql_connections:\n    warning: 100\n",
+            "thresholds:\n  mysql_connection_usage_percent:\n    warning: 100\n",
             encoding="utf-8")
         r = _gar(["--config-dir", str(conf_d), "--output-configmap",
                   "--base-config", str(tmp_path / "definitely-not-here.yaml")])
@@ -914,7 +914,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
         (conf_d / "db-a.yaml").write_text(
-            "thresholds:\n  mysql_connections:\n    warning: 100\n",
+            "thresholds:\n  mysql_connection_usage_percent:\n    warning: 100\n",
             encoding="utf-8")
         good = tmp_path / "base.yaml"
         good.write_text(yaml.dump({"global": {"resolve_timeout": "9m"}, **_MIN_AM}),
@@ -937,7 +937,7 @@ class TestBaseConfigIsOnlyReadByOneMode:
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
         (conf_d / "db-a.yaml").write_text(
-            "thresholds:\n  mysql_connections:\n    warning: 100\n",
+            "thresholds:\n  mysql_connection_usage_percent:\n    warning: 100\n",
             encoding="utf-8")
         p = tmp_path / "base.yaml"
         p.write_text(yaml.dump({"global": {}}), encoding="utf-8")
@@ -1370,7 +1370,7 @@ class TestCustomSubtreeTenantDelivery:
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "_defaults.yaml").write_text(
-            yaml.dump({"defaults": {"mysql_connections": 80}}), encoding="utf-8")
+            yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}), encoding="utf-8")
         (d / "db-a.yaml").write_text(
             make_tenant_yaml("db-a", routing=make_routing_config()), encoding="utf-8")
         (d / "db-b.yaml").write_text(
@@ -1875,10 +1875,10 @@ class TestPlatformAlertsNotTenantSilenceable:
                   if any("TenantSilent" in m for m in r.get("source_matchers", []))]
         assert len(silent) == 2, silent
         tenant_warning = {"alertname": "MySQLHighConnections", "severity": "warning",
-                          "tenant": "any-tenant", "metric_group": "mysql_connections"}
+                          "tenant": "any-tenant", "metric_group": "mysql_connection_usage_percent"}
         tenant_critical = {"alertname": "MySQLHighConnectionsCritical",
                            "severity": "critical", "tenant": "any-tenant",
-                           "metric_group": "mysql_connections"}
+                           "metric_group": "mysql_connection_usage_percent"}
         hits = []
         for rule in silent:
             targets = _inhibit_target_matchers(rule)
@@ -3381,10 +3381,10 @@ class TestMainCLI:
         """Create a minimal config dir for testing main()."""
         d = tmp_path / "conf.d"
         d.mkdir()
-        defaults = {"defaults": {"mysql_connections": 80}}
+        defaults = {"defaults": {"mysql_connection_usage_percent": 80}}
         (d / "_defaults.yaml").write_text(yaml.dump(defaults), encoding="utf-8")
         tenant = {"tenants": {"db-a": {
-            "mysql_connections": "70",
+            "mysql_connection_usage_percent": "70",
             "_routing": {
                 "receiver": {"type": "webhook", "url": "https://hooks.example.com/alert"},
             },
@@ -3479,7 +3479,7 @@ class TestMainCLI:
         """Validate mode with bad config should exit 1."""
         d = tmp_path / "conf.d"
         d.mkdir()
-        defaults = {"defaults": {"mysql_connections": 80}}
+        defaults = {"defaults": {"mysql_connection_usage_percent": 80}}
         (d / "_defaults.yaml").write_text(yaml.dump(defaults), encoding="utf-8")
         # Tenant with missing receiver url
         tenant = {"tenants": {"db-a": {

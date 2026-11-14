@@ -15,7 +15,7 @@ const t = window.__t || ((zh, en) => en);
 
 const EXAMPLE_OLD = `tenants:
   db-a:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
     mysql_threads_running: "45"
     _routing:
       receiver_type: "slack"
@@ -27,8 +27,8 @@ const EXAMPLE_OLD = `tenants:
 
 const EXAMPLE_NEW = `tenants:
   db-a:
-    mysql_connections: "120"
-    mysql_connections_critical: "200"
+    mysql_connection_usage_percent: "85"
+    mysql_connection_usage_percent_critical: "95"
     mysql_threads_running: "45"
     _routing:
       receiver_type: "webhook"

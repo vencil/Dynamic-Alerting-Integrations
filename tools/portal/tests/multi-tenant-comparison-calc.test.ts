@@ -76,8 +76,8 @@ describe('computeStats — population variance & upper-middle median', () => {
   });
 
   it('defaultVal reads DEFAULTS[metric]; single value → stddev 0', () => {
-    // DEFAULTS.mysql_connections = 80. Single [100] → mean 100, stddev 0, median 100.
-    expect(computeStats([{ name: 'x', thresholds: { mysql_connections: 100 } }], 'mysql_connections'))
+    // DEFAULTS.mysql_connection_usage_percent = 80. Single [100] → mean 100, stddev 0, median 100.
+    expect(computeStats([{ name: 'x', thresholds: { mysql_connection_usage_percent: 100 } }], 'mysql_connection_usage_percent'))
       .toEqual({ min: 100, max: 100, mean: 100, median: 100, stddev: 0, count: 1, defaultVal: 80 });
   });
 });
@@ -135,7 +135,7 @@ describe('detectOutliers — z-score fence on ROUNDED mean/stddev', () => {
 
 describe('findCommonSettings — value shared across all tenants', () => {
   const base = {
-    mysql_connections: 80, container_cpu: 80, container_memory: 85,
+    mysql_connection_usage_percent: 80, container_cpu: 80, container_memory: 85,
     oracle_sessions_active: 200, oracle_tablespace_used_pct: 85, db2_connections_active: 200,
   };
 
@@ -144,20 +144,20 @@ describe('findCommonSettings — value shared across all tenants', () => {
     const t1 = { name: 'a', thresholds: { ...base, mysql_threads_running: 75 } };
     const t2 = { name: 'b', thresholds: { ...base, mysql_threads_running: 90 } };
     expect(findCommonSettings([t1, t2])).toEqual([
-      'mysql_connections', 'container_cpu', 'container_memory',
+      'mysql_connection_usage_percent', 'container_cpu', 'container_memory',
       'oracle_sessions_active', 'oracle_tablespace_used_pct', 'db2_connections_active',
     ]);
   });
 
   it('FLAG: a metric MISSING from all tenants is reported "common" (undefined===undefined), but PARTIAL-missing is not', () => {
-    // t1 has mysql_connections+mysql_threads_running; t2 has only mysql_connections.
-    //   mysql_connections: [80,80]        → common
+    // t1 has mysql_connection_usage_percent+mysql_threads_running; t2 has only mysql_connection_usage_percent.
+    //   mysql_connection_usage_percent: [80,80]        → common
     //   mysql_threads_running:         [75, undefined] → every(v===75)? undefined≠75 → NOT common
     //   container_cpu … db2 (5 metrics):  [undefined, undefined] → all undefined → COMMON (surprising)
-    const t1 = { name: 'a', thresholds: { mysql_connections: 80, mysql_threads_running: 75 } };
-    const t2 = { name: 'b', thresholds: { mysql_connections: 80 } };
+    const t1 = { name: 'a', thresholds: { mysql_connection_usage_percent: 80, mysql_threads_running: 75 } };
+    const t2 = { name: 'b', thresholds: { mysql_connection_usage_percent: 80 } };
     expect(findCommonSettings([t1, t2])).toEqual([
-      'mysql_connections', 'container_cpu', 'container_memory',
+      'mysql_connection_usage_percent', 'container_cpu', 'container_memory',
       'oracle_sessions_active', 'oracle_tablespace_used_pct', 'db2_connections_active',
     ]);
   });
@@ -173,35 +173,35 @@ describe('findCommonSettings — value shared across all tenants', () => {
 });
 
 describe('findDivergent — filter stddev>0, sort by stddev DESC', () => {
-  // Three tenants. mysql_connections [10,20,100] spread widest; container_cpu [80,70,90] next;
+  // Three tenants. mysql_connection_usage_percent [10,20,100] spread widest; container_cpu [80,70,90] next;
   // all other 5 DEFAULTS metrics identical across tenants → stddev 0 → filtered out.
   const rest = {
     mysql_threads_running: 80, container_memory: 85, oracle_sessions_active: 200,
     oracle_tablespace_used_pct: 85, db2_connections_active: 200,
   };
-  const t1 = { name: 'a', thresholds: { mysql_connections: 10, container_cpu: 80, ...rest } };
-  const t2 = { name: 'b', thresholds: { mysql_connections: 20, container_cpu: 70, ...rest } };
-  const t3 = { name: 'c', thresholds: { mysql_connections: 100, container_cpu: 90, ...rest } };
+  const t1 = { name: 'a', thresholds: { mysql_connection_usage_percent: 10, container_cpu: 80, ...rest } };
+  const t2 = { name: 'b', thresholds: { mysql_connection_usage_percent: 20, container_cpu: 70, ...rest } };
+  const t3 = { name: 'c', thresholds: { mysql_connection_usage_percent: 100, container_cpu: 90, ...rest } };
 
   it('drops the 5 zero-stddev metrics and orders the survivors by stddev descending', () => {
-    // mysql_connections: mean 43.333 → stddev sqrt(1622.22)=40.2769… → 40.3 (rank 1)
+    // mysql_connection_usage_percent: mean 43.333 → stddev sqrt(1622.22)=40.2769… → 40.3 (rank 1)
     // container_cpu:      mean 80     → stddev sqrt(66.667)=8.16496… → 8.2  (rank 2)
     const d = findDivergent([t1, t2, t3]);
-    expect(d.map(i => i.metric)).toEqual(['mysql_connections', 'container_cpu']);
+    expect(d.map(i => i.metric)).toEqual(['mysql_connection_usage_percent', 'container_cpu']);
     expect(d.map(i => i.stats.stddev)).toEqual([40.3, 8.2]);
   });
 
   it('the top entry carries the full (unrounded min/max/median) stats object', () => {
     const top = findDivergent([t1, t2, t3])[0];
     // sorted [10,20,100] → min 10, max 100, median sorted[1]=20, mean round(43.333×10)/10=43.3,
-    // defaultVal DEFAULTS.mysql_connections = 80.
+    // defaultVal DEFAULTS.mysql_connection_usage_percent = 80.
     expect(top.stats).toEqual({
       min: 10, max: 100, mean: 43.3, median: 20, stddev: 40.3, count: 3, defaultVal: 80,
     });
   });
 
   it('all-identical tenants → no divergence (every metric stddev 0 → [])', () => {
-    const same = { name: 'x', thresholds: { mysql_connections: 80, container_cpu: 80, ...rest } };
+    const same = { name: 'x', thresholds: { mysql_connection_usage_percent: 80, container_cpu: 80, ...rest } };
     expect(findDivergent([same, { ...same, name: 'y' }])).toEqual([]);
   });
 });
@@ -210,8 +210,10 @@ describe('DEFAULTS — the extracted default-threshold table', () => {
   it('exposes the 7 canonical metrics with their default values', () => {
     expect(DEFAULTS).toEqual({
       // mysql_threads_running = 30 running-threads saturation (threads_running,
-      // NOT host CPU%; #944); renamed from mysql_cpu (#1231).
-      mysql_connections: 80, mysql_threads_running: 30, container_cpu: 80,
+      // NOT host CPU%; #944); renamed from mysql_cpu (#1231). A demo baseline,
+      // not a platform default — the platform ships none (#3778).
+      // mysql_connection_usage_percent = 80 % of max_connections (#3778).
+      mysql_connection_usage_percent: 80, mysql_threads_running: 30, container_cpu: 80,
       container_memory: 85, oracle_sessions_active: 200,
       oracle_tablespace_used_pct: 85, db2_connections_active: 200,
     });

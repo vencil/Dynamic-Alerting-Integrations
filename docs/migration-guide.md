@@ -197,7 +197,7 @@ da-tools diagnose db-a                                     # 租戶健康總檢
 
 以 Percona MariaDB Alert Rules 為範本展示 5 種常見遷移模式。每種場景套用同一個三件套模板，只改指標名稱與 Tenant Config 的 key；平台側 Alert Rule 結構始終為 `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`。
 
-**場景 1：基本數值比較（連線數）**
+**場景 1：基本數值比較（連線數 → 連線使用率）**
 
 傳統寫法：
 
@@ -212,16 +212,20 @@ da-tools diagnose db-a                                     # 租戶健康總檢
 
 ```yaml
 # 1. Recording Rule (平台)
-- record: tenant:mysql_threads_connected:max
-  expr: max by(tenant) (mysql_global_status_threads_connected)
+- record: tenant:mysql_connection_usage:percent
+  expr: |
+    max by(tenant) (
+      100 * mysql_global_status_threads_connected
+      / (mysql_global_variables_max_connections > 0)
+    )
 
 # 2. Alert Rule (平台) — group_left + unless maintenance
 - alert: MariaDBHighConnections
   expr: |
     (
-      tenant:mysql_threads_connected:max
+      tenant:mysql_connection_usage:percent
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_connections
+      tenant:alert_threshold:mysql_connection_usage_percent
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
@@ -233,19 +237,19 @@ da-tools diagnose db-a                                     # 租戶健康總檢
 # 3. Tenant Config (租戶)
 tenants:
   db-a:
-    mysql_connections: "100"
+    mysql_connection_usage_percent: "80"   # 舊規則是「> 100 條連線」；門檻改成佔 max_connections 的 %（#3778），max_connections=125 時 100 條 = 80%
 ```
 
 **場景 2–5：其他常見模式（快速參考表）**
 
 | 場景 | 原始指標 | Recording Rule | Tenant Config 範例 | 特殊說明 |
 |------|---------|----------------|-------------------|---------|
-| **多層嚴重度** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule 自動處理 `_critical` 降級邏輯 |
+| **多層嚴重度** | `mysql_global_status_threads_connected` ÷ `mysql_global_variables_max_connections` | `tenant:mysql_connection_usage:percent` | `mysql_connection_usage_percent: "85"` + `mysql_connection_usage_percent_critical: "95"` | Alert Rule 自動處理 `_critical` 降級邏輯 |
 | **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
 | **Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`：`sum by(tenant) (rate(...))` | 無租戶 key（見下方 ⚠️） | Sum 用於「叢集總量」 |
-| **比值計算** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:ratio`：`sum by(tenant) (...) / sum by(tenant) (...)` | 無租戶 key（見下方 ⚠️） | 比值在 Recording Rule 算好（0–1，不乘 100） |
+| **比值計算** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`：逐 instance 相除再 `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"`（佔 max_connections 的 %） | 比值在 Recording Rule 算好（乘 100，單位是 %）；逐 instance 相除再取最滿的一台，先 `sum` 再除會被閒置 replica 的餘裕稀釋（#3778） |
 
-> ⚠️ Rate 與比值這兩列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率，`tenant:mysql_connection_usage:ratio` 則還沒有告警讀它（[#1320](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1320) 會接上）。要讓租戶調這兩類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `routes` 那列會報 `unread … (no_row)`。
+> ⚠️ Rate 這一列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率。要讓租戶調這類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `routes` 那列會報 `unread … (no_row)`。
 
 > 場景 2–5 套用場景 1 的三件套模板，改指標名與 Tenant Config 的 key；平台側 Alert Rule 結構始終如一。前提是那個 key 已經在平台宣告（見上方 ⚠️）。Rule Pack 設計與三件套契約：[design/rule-packs.md](design/rule-packs.md)。實際黃金規則告警列表：[Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md)。
 

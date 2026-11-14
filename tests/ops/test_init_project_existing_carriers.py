@@ -317,7 +317,11 @@ def test_the_tenants_an_own_path_declares_are_yaml_v3_s_reading(tmp_path):
     own = _place(out, "db-a.yaml", "tenants:\n  db-a: {}\nnote:\t1\n")
     run = _run(out, "db-a", "--force")   # 沒有 marker：覆寫要 --force（issue 1465）
     assert run.returncode == 0, run.stderr[-800:]
-    assert "note" not in own.read_text(encoding="utf-8")
+    # The hand-written top-level `note:` key is gone. Asserted on the key, not
+    # the word: the rewritten stub's own comments may say "note" (#3778's
+    # declared-key block for mariadb does).
+    assert not [ln for ln in own.read_text(encoding="utf-8").splitlines()
+                if ln.startswith("note:")]
     out2 = tmp_path / "repo2"
     _place(out2, "db-a.yaml", "tenants:\n  db-a: {}\n  db-z:\t{}\n")
     before = _snapshot(out2)

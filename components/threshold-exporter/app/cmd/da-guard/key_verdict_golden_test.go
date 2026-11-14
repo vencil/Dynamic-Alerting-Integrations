@@ -23,7 +23,7 @@ import (
 
 const keyVerdictGoldenAt = "2026-07-01T03:00:00Z"
 
-const kvgADRDefaults = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+const kvgADRDefaults = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 
 const kvgADRTenant = "tenants:\n  db-a:\n" +
 	"    mysql_conections: \"70\"\n" +
@@ -42,7 +42,7 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 	// own typo is one error per tenant; a disable switches off the critical
 	// tier it inherits too, with no finding (#3046).
 	"platform-and-cascade": {
-		"_defaults.yaml":      "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
+		"_defaults.yaml":      "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: 70\n",
 		"_platform.yaml":      "tenants:\n  ta:\n    mysql_conections: 5\n  tb:\n    mysql_conections: 5\n",
 		"team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
 		"team/ta.yaml":        "tenants:\n  ta:\n    redis_memory: disable\n",
@@ -52,7 +52,7 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 	// on the root file, naming the tenants that bind it; a rule names a key
 	// for the tenants it does not exclude.
 	"profile-and-policy": {
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n    _routng: x\n" +
+		"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n    _routng: x\n" +
 			"_policies:\n  - {name: p, target: owner_tag, operator: required, severity: error, exclude_tenants: [db-b]}\n",
 		"db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n    owner_tag: x\n",
 		"db-b.yaml": "tenants:\n  db-b:\n    _profile: gold\n    owner_tag: x\n",
@@ -62,7 +62,7 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 	// in a profile (naming the tenants that bind it) or a root platform
 	// file's `tenants:` entry; a `_profile` naming no profile is one too.
 	"value-unread": {
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _silent_mode: purple\n",
+		"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\nprofiles:\n  gold:\n    _silent_mode: purple\n",
 		"_platform.yaml": "tenants:\n  ta:\n    _metadata: {owner: a, bogus_field: x}\n",
 		"ta.yaml":        "tenants:\n  ta:\n    _profile: gold\n    _severity_dedup: maybe\n",
 		"tb.yaml":        "tenants:\n  tb:\n    _profile: silver\n",

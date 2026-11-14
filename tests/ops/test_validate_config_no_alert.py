@@ -20,7 +20,7 @@ from _registry_lib import DEPRECATED_KEY_ALIASES
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _REPO = Path(__file__).resolve().parents[2]
-_DEFAULTS = ("defaults:\n  mysql_connections: 80\n  mysql_connectoins: 5\n  redis_evicted_keys_rate: 70\n"
+_DEFAULTS = ("defaults:\n  mysql_connection_usage_percent: 80\n  mysql_connectoins: 5\n  redis_evicted_keys_rate: 70\n"
              "  container_cpu: 50\ndimensions:\n  container_cpu: [version]\n")
 
 
@@ -37,7 +37,7 @@ def test_a_served_key_no_alert_compares_is_one_line_on_its_file(tmp_path):
     observed-map 延後判的（KNOWN_DEFERRED 的 `container_cpu`，含維度鍵）不列。"""
     r = vc.check_no_alert(_tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n    mysql_connections_critical: 90\n",
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n    mysql_connection_usage_percent_critical: 90\n",
         "team/tb.yaml": "tenants:\n  tb:\n    redis_evicted_keys_rate_critical: 90\n"
                         "    container_cpu{version=\"v2\"}: \"60\"\n"}))
     assert r["status"] == vc.WARN, r
@@ -70,8 +70,8 @@ def test_one_line_per_key_whatever_the_files_and_dimensions(tmp_path):
 
 def test_every_key_compared_passes(tmp_path):
     r = vc.check_no_alert(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}))
     assert r["status"] == vc.PASS, r
 
 
@@ -87,11 +87,11 @@ def test_a_retired_spelling_is_looked_up_in_the_canonical_one(tmp_path):
 
 def test_a_value_served_at_critical_is_looked_up_as_its_critical_tier(tmp_path):
     """`"95:critical"` 送出的是 critical 列：查 `<key>_critical`。`clickhouse_queries_rate`
-    刻意沒有 critical 層（#3658 不補吞吐量鍵），所以列出並標註；mariadb 有，`mysql_connections: "90:critical"` 不列。"""
+    刻意沒有 critical 層（#3658 不補吞吐量鍵），所以列出並標註；mariadb 有，`mysql_connection_usage_percent: "90:critical"` 不列。"""
     r = vc.check_no_alert(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  clickhouse_queries_rate: 80\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  clickhouse_queries_rate: 80\n  mysql_connection_usage_percent: 80\n",
         "ta.yaml": "tenants:\n  ta:\n    clickhouse_queries_rate: \"95:critical\"\n"
-                   "    mysql_connections: \"90:critical\"\n"}))
+                   "    mysql_connection_usage_percent: \"90:critical\"\n"}))
     assert r["details"] == [
         "no_alert `clickhouse_queries_rate` (served as critical) — served, but no shipped "
         "alert compares it — file(s) ta.yaml — tenant(s) ta"], r
@@ -135,8 +135,8 @@ def test_a_defect_of_this_tool_is_not_swallowed(tmp_path, monkeypatch):
     monkeypatch.setattr(_observed_map_lib, "load_observed_map", bug)
     with pytest.raises(AttributeError):
         vc.check_no_alert(_tree(tmp_path, {
-            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"}))
+            "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"}))
 
 
 def test_a_map_that_cannot_be_read_is_not_checked_never_a_fail(tmp_path, monkeypatch):
@@ -146,16 +146,16 @@ def test_a_map_that_cannot_be_read_is_not_checked_never_a_fail(tmp_path, monkeyp
         raise _observed_map_lib.ObservedMapError("no map", "missing")
     monkeypatch.setattr(_observed_map_lib, "load_observed_map", broken)
     r = vc.check_no_alert(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}))
     assert r["status"] == vc.WARN and r["details"][0].startswith("not checked:"), r
 
 
 def test_it_never_changes_the_exit_code(tmp_path):
     """只有 no_alert 有發現的樹：exit 0（WARN），不是 1。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_connectoins: 5\n",
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"})
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_connectoins: 5\n",
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"})
     p = subprocess.run([sys.executable, str(_REPO / "scripts/tools/ops/validate_config.py"),
                         "--config-dir", conf_d, "--json"],
                        capture_output=True, text=True, encoding="utf-8", timeout=300)

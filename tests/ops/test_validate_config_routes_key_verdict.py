@@ -23,7 +23,7 @@ from _platform_fs import require_shebang_scripts
 
 pytestmark = pytest.mark.usefixtures("da_guard_env", "da_crdecode_env", "da_read_env")
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 _CLI_DOCS = "docs/cli-reference.md#validate-config"
 
 
@@ -100,11 +100,11 @@ def test_a_profile_key_no_reader_reads_is_an_error_on_the_profile(tmp_path):
 
 _PROFILE_KEYS = ("profiles:\n  p1:\n    _unknown_thing: bad\n    _namespaces: [x]\n"
                  "    _profile: p2\n    _metadata: {owner: t}\n    _silent_mode: warning\n"
-                 "  p2:\n    mysql_connections: 70\n")
+                 "  p2:\n    mysql_connection_usage_percent: 70\n")
 
 
 @pytest.mark.parametrize("text", [
-    pytest.param("tenants:\n  ta:\n    mysql_connections: 70\n", id="unbound"),
+    pytest.param("tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n", id="unbound"),
     pytest.param("tenants:\n  ta:\n    _profile: p1\n", id="bound"),
     pytest.param("tenants:\n  ta:\n    _profile: p1\n    _namespaces: [own]\n", id="shadowed"),
 ])
@@ -124,7 +124,7 @@ def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, t
         f"_profiles.yaml: error: unread `_profile` (not_read_in_profile) — {who}",
         f"_profiles.yaml: error: unread `_unknown_thing` (unregistered) — {who}",
         # p2 is bound by no tenant: its threshold key is not judged (#3395).
-        "_profiles.yaml: notice: profile_not_judged `mysql_connections` (profile_unbound) — no tenant",
+        "_profiles.yaml: notice: profile_not_judged `mysql_connection_usage_percent` (profile_unbound) — no tenant",
     ], r["details"]
 
 
@@ -217,8 +217,8 @@ def test_a_clean_nested_tree_passes_without_a_flat_read_caveat(tmp_path):
     not something the row skipped, so it is no WARN and no
     `skipped_nested_files`."""
     p, rows = _cli(_tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
-                                    "sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n",
-                                    "sub/ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"}))
+                                    "sub/_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 75\n",
+                                    "sub/ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"}))
     row = rows["routes"]
     assert row["status"] == vc.PASS, row
     assert not row.get("skipped_nested_files"), row
@@ -234,7 +234,7 @@ def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
     r = vc.check_routes(_tree(tmp_path, {
         "_defaults.yaml": defaults,
         "_profiles.yaml": "profiles:\n  p1:\n    _namespaces: [x]\n",
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}))
     assert "_profiles.yaml: error: unread `_namespaces` (not_read_in_profile) — no tenant" in _key_lines(r), r
 
 
@@ -336,8 +336,8 @@ def test_a_tree_refused_before_the_keys_are_judged_is_judged_for_no_alert(tmp_pa
     asks for one itself (here da-guard refuses the tree too, and says so)."""
     _p, rows = _cli(_tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
-        "other.yaml": "tenants:\n  ta:\n    mysql_connections: \"60\"\n"}))
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n",
+        "other.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"60\"\n"}))
     assert rows["routes"]["status"] == vc.FAIL, rows["routes"]
     assert not any("key verdict" in d for d in rows["routes"]["details"]), rows["routes"]
     (line,) = rows["no_alert"]["details"]
@@ -345,7 +345,7 @@ def test_a_tree_refused_before_the_keys_are_judged_is_judged_for_no_alert(tmp_pa
 
 
 @pytest.mark.parametrize("tenant", [
-    pytest.param("tenants:\n  db-a:\n    mysql_connections: \"70\"\n", id="clean"),
+    pytest.param("tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n", id="clean"),
     pytest.param("tenants:\n  db-a:\n    mysql_conections: \"70\"\n", id="unread-key"),
 ])
 def test_one_report_judges_the_keys_once(tmp_path, monkeypatch, tenant):
@@ -366,3 +366,54 @@ def test_one_report_judges_the_keys_once(tmp_path, monkeypatch, tenant):
     assert not rows["no_alert"]["details"][0].startswith("not checked"), rows["no_alert"]
     calls = log.read_text(encoding="utf-8").split()
     assert calls.count("key-verdict") == 1, calls
+
+
+# ── #3778: a declared-only key a tenant writes alone is served ─────────────
+#
+# mysql_threads_running carries no platform value (a healthy running-thread
+# count scales with the host's CPU count). It used to sit in the registry's
+# defaults tier with `arming: operator`, which renders it in NO runtime face:
+# a tenant writing it alone got no /metrics row (served-values `no_row`,
+# validate-config rc 1) and the alert went silent on upgrade. The
+# optional_overrides tier puts it on the shipped declared list instead. These
+# run against the REAL dev `_defaults.yaml` (generated from the registry), so
+# moving the key back to the defaults tier and regenerating turns them red.
+_DEV_DEFAULTS = (Path(__file__).resolve().parents[2] / "components" / "threshold-exporter"
+                 / "config" / "conf.d" / "_defaults.yaml")
+
+
+def _served(confd: str, tenant: str) -> dict:
+    p = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir", confd,
+                        "--tenant", tenant], capture_output=True, encoding="utf-8", timeout=600)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)["tenants"][tenant]
+
+
+def test_a_tenant_writing_mysql_threads_running_alone_is_served(tmp_path):
+    d = _tree(tmp_path, {
+        "_defaults.yaml": _DEV_DEFAULTS.read_text(encoding="utf-8"),
+        "db-x.yaml": "tenants:\n  db-x:\n    mysql_threads_running: \"40\"\n"})
+    t = _served(d, "db-x")
+    assert t["keys"]["mysql_threads_running"] == {"exporter": True}, t["keys"]
+    assert t["values"]["mysql_threads_running"] == 40
+    assert {"component": "mysql", "metric": "threads_running", "severity": "warning",
+            "tenant": "db-x"} in [s["labels"] for s in t["series"]["mysql_threads_running"]]
+    r = vc.check_routes(d)
+    assert r["status"] == vc.PASS, r["details"]
+
+
+def test_its_critical_tier_needs_a_base_in_the_defaults(tmp_path):
+    """The critical row is admitted on `defaults[<base>]` only: a tenant base
+    alone serves the warning row, not the critical one, until a defaults
+    carrier holds a base value (what the docs and changelog say)."""
+    defaults = _DEV_DEFAULTS.read_text(encoding="utf-8")
+    tenant = ("tenants:\n  db-x:\n    mysql_threads_running: \"40\"\n"
+              "    mysql_threads_running_critical: \"50\"\n")
+    alone = _served(_tree(tmp_path / "alone", {"_defaults.yaml": defaults, "db-x.yaml": tenant}),
+                    "db-x")
+    assert alone["keys"]["mysql_threads_running_critical"] == {
+        "exporter": False, "reason": "no_row"}, alone["keys"]
+    based = _served(_tree(tmp_path / "based", {
+        "_defaults.yaml": defaults.replace("\ndefaults:\n", "\ndefaults:\n  mysql_threads_running: 30\n", 1),
+        "db-x.yaml": tenant}), "db-x")
+    assert based["keys"]["mysql_threads_running_critical"] == {"exporter": True}, based["keys"]

@@ -181,11 +181,11 @@ def test_validate_and_output_agree_and_never_echo_the_value(
     gar = importlib.import_module("generate_alertmanager_routes")
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
-    (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+    (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                            encoding="utf-8")
     (conf_d / "t1.yaml").write_text(yaml.safe_dump(
         {"tenants": {"t1": {"_routing": {"receiver": receiver},
-                            "mysql_connections": "70"}}}), encoding="utf-8")
+                            "mysql_connection_usage_percent": "70"}}}), encoding="utf-8")
 
     v_rc, v_text, v_doc = _run(gar, monkeypatch, capsys, conf_d, ["--validate"],
                                tmp_path / "v.json")

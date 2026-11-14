@@ -87,9 +87,9 @@ Saved View 與群組不在 conf.d：它們是 tenant-api 自己的紀錄，存�
 ## 看點
 
 - **紅燈在哪**：告警狀態看 Prometheus `:9090/alerts` 和 Alertmanager `:9093` —— **portal 不顯示 live 告警**（它管設定，不管告警路由）。
-- **為什麼會 fire**：seed 往 pushgateway 推了一筆 `mysql_global_status_threads_connected{tenant="db-demo"}=200`，超過 `db-demo` 設定的 critical 閾值 120 → DB rule pack 的 critical 規則 `for:30s` 後觸發。
+- **為什麼會 fire**：seed 往 pushgateway 推了 `mysql_global_status_threads_connected{tenant="db-demo"}=190` 與 `mysql_global_variables_max_connections=200`，連線使用率 95% 超過 `db-demo` 設定的 critical 閾值 90% → DB rule pack 的 critical 規則 `for:30s` 後觸發。
 - **設計概念展示**：第二個租戶 `cache-demo` 開了 silent_mode + severity dedup，會產生 v2.8.0 的 **Sentinel Alert**（`severity:none`）。兩支 sentinel 角色不同：`TenantSilentWarning` 是 Silent Mode 的 notification inhibit 來源；`TenantSeverityDedupEnabled` 只是**狀態面**（AM UI / Grafana 顯示該租戶已啟用 dedup），不參與抑制。
-- **Severity Dedup 在哪看**：在 `db-demo` 上——它的 warning（閾值 50）與 critical（120）被同一筆 `=200` 同時點著、且同屬 `metric_group: mysql_connections`，故 `:9093` 可見 warning 被 critical 抑制（`Inhibited`）、critical 照常紅燈。這正是「TSDB 兩筆都留、只抑制通知」的設計（見 [`docs/design/config-driven.md` §2.8](../docs/design/config-driven.md)）。
+- **Severity Dedup 在哪看**：在 `db-demo` 上——它的 warning（閾值 50%）與 critical（90%）被同一個 95% 同時點著、且同屬 `metric_group: mysql_connection_usage_percent`，故 `:9093` 可見 warning 被 critical 抑制（`Inhibited`）、critical 照常紅燈。這正是「TSDB 兩筆都留、只抑制通知」的設計（見 [`docs/design/config-driven.md` §2.8](../docs/design/config-driven.md)）。
 
 ## Act 2：企業安全縱深（聯邦撤銷儀表板）
 

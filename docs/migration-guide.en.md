@@ -197,7 +197,7 @@ Full verification checklist (YAML validation, alert state, three-state testing, 
 
 Using Percona MariaDB Alert Rules as the template, 5 common migration patterns are showcased. Each scenario applies the same three-piece template — only the metric name and Tenant Config key change. The platform-side Alert Rule structure is always `(metric_recording) > on(tenant) group_left (threshold) unless on(tenant) (maintenance == 1)`.
 
-**Scenario 1: Basic Numeric Comparison (Connections)**
+**Scenario 1: Basic Numeric Comparison (Connections → Connection Usage)**
 
 Legacy:
 
@@ -212,16 +212,20 @@ Migrated three-piece set:
 
 ```yaml
 # 1. Recording Rule (platform)
-- record: tenant:mysql_threads_connected:max
-  expr: max by(tenant) (mysql_global_status_threads_connected)
+- record: tenant:mysql_connection_usage:percent
+  expr: |
+    max by(tenant) (
+      100 * mysql_global_status_threads_connected
+      / (mysql_global_variables_max_connections > 0)
+    )
 
 # 2. Alert Rule (platform) — group_left + unless maintenance
 - alert: MariaDBHighConnections
   expr: |
     (
-      tenant:mysql_threads_connected:max
+      tenant:mysql_connection_usage:percent
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_connections
+      tenant:alert_threshold:mysql_connection_usage_percent
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
@@ -233,19 +237,19 @@ Migrated three-piece set:
 # 3. Tenant Config (tenant)
 tenants:
   db-a:
-    mysql_connections: "100"
+    mysql_connection_usage_percent: "80"   # the legacy rule was "> 100 connections"; the threshold is now % of max_connections (#3778): with max_connections=125, 100 connections = 80%
 ```
 
 **Scenarios 2–5: Other Common Patterns (quick reference)**
 
 | Scenario | Source Metric | Recording Rule | Tenant Config Example | Notes |
 |----------|---------------|----------------|----------------------|-------|
-| **Multi-tier severity** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule handles `_critical` downgrade logic automatically |
+| **Multi-tier severity** | `mysql_global_status_threads_connected` ÷ `mysql_global_variables_max_connections` | `tenant:mysql_connection_usage:percent` | `mysql_connection_usage_percent: "85"` + `mysql_connection_usage_percent_critical: "95"` | Alert Rule handles `_critical` downgrade logic automatically |
 | **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` or `"disable"` | Max captures the "weakest link" (slowest slave) |
 | **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
-| **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:ratio`: `sum by(tenant) (...) / sum by(tenant) (...)` | No tenant key (see ⚠️ below) | Ratio computed in the Recording Rule (0–1, not multiplied by 100) |
+| **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`: divided per instance, then `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"` (% of max_connections) | Ratio computed in the Recording Rule (multiplied by 100, unit is %); dividing per instance and taking the fullest one, because a `sum` before dividing is diluted by idle replicas' headroom (#3778) |
 
-> ⚠️ For the rate and ratio rows, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`, and nothing alerts on `tenant:mysql_connection_usage:ratio` yet ([#1320](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1320) wires it). To let tenants tune these thresholds, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validate-config's `routes` row reports `unread … (no_row)`.
+> ⚠️ For the rate row, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`. To let tenants tune this kind of threshold, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validate-config's `routes` row reports `unread … (no_row)`.
 
 > Scenarios 2–5 reuse the Scenario 1 three-piece template — only the metric name and Tenant Config key change; the platform-side Alert Rule structure is always identical. This assumes the key is already declared by the platform (see ⚠️ above). Rule Pack design + three-piece contract: [design/rule-packs.en.md](design/rule-packs.en.md). Actual golden alert listings: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
 

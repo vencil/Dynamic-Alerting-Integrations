@@ -44,17 +44,17 @@ Profile Builder 同時 ship translator（從 PromRule expr 取 threshold scalar�
 - 每個 member 的 threshold 等於 default → **不寫 tenant 檔**（依賴 ADR-017 inheritance）
 - 每個 member 的 threshold 不等於 default → 寫 `<id>.yaml`，內容**只含**這個 metric_key 的 override 字串值
 
-範例輸入（3 個 PromRule，閾值 80 / 80 / 1500）：
+範例輸入（3 個 PromRule，閾值 80 / 80 / 95）：
 
 ```yaml
 # _defaults.yaml （cluster median = 80）
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 
 # tenant-c.yaml （只有 c 偏離 default）
 tenants:
   tenant-c:
-    mysql_connections: "1500"
+    mysql_connection_usage_percent: "95"
 ```
 
 tenant-a 和 tenant-b 沒有檔案（runtime deepMerge 從 `_defaults` 拿 80）。
@@ -84,7 +84,7 @@ Translator 內部演算法（metric_key 5-step ladder、majority vote、median �
 
 - **null-as-delete**：tenant 想 explicit override 為 0 仍可（emission 用顯式數值，不踩 null）。⚠️ **#1339 更正**：閾值 key 的 `null` 已**不再**是退出繼承的手段（與漏打不可分辨，schema 會擋），請改用 `"disable"`；`null` 的退出語意只保留給 `_routing` 的四個欄位
 - **map deep-merge**：每個 tenant 檔只列**該 tenant 與 default 不同**的 key，runtime ResolveAt 自動 fallback 到 `_defaults`
-- **scalar override**：tenant 字串值（如 `"1500"`）覆蓋 default 數值，runtime 用 strconv 在 ResolveAt 時轉回 float
+- **scalar override**：tenant 字串值（如 `"95"`）覆蓋 default 數值，runtime 用 strconv 在 ResolveAt 時轉回 float
 
 ### 與 ADR-016（目錄分層）
 

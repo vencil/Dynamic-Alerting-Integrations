@@ -421,7 +421,7 @@ cd try-local && cp .env.example .env && docker compose up -d
 bash smoke.sh   # 需 curl + jq
 ```
 
-- **critical 沒 fire** → 給 ~1–2 分鐘（recording rule `interval:15s` + 規則 `for:30s`）；查 `docker compose logs seed-metrics prometheus`；確認 seed 推的 `mysql_global_status_threads_connected{tenant="db-demo"}=200` > db-demo 的 critical 閾值 120。
+- **critical 沒 fire** → 給 ~1–2 分鐘（recording rule `interval:15s` + 規則 `for:30s`）；查 `docker compose logs seed-metrics prometheus`；確認 seed 推的 `mysql_global_status_threads_connected{tenant="db-demo"}=190` ÷ `mysql_global_variables_max_connections=200` = 95% > db-demo 的 critical 閾值 90%（閾值是佔 max_connections 的 %，#3778）。
 - **browser path（portal proxy 免 header）`/me` 401** → tenant-api image 缺 `--dev-bypass-auth`（見 §1 例外）；確認 tenant-api 啟動 log 有「DEV AUTH BYPASS ACTIVE」WARN。
 - **image 拉不到 / arm64 emulation** → 新版可能尚未 publish multi-arch（見 §2）或 ghcr 權限問題。
 - **紅燈本來有後來消失** → pushgateway 記憶體型；單獨重啟它會掉指標 → `docker compose up -d seed-metrics` 重推。

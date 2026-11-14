@@ -26,11 +26,11 @@ purpose: |
 ---
 
 const METRIC_PROFILES = {
-  mysql_connections: {
-    label: 'MySQL Connections',
-    unit: 'connections',
-    desc: 'Current number of active database connections',
-    typical: { min: 10, max: 500, p50: 50, p90: 120, p95: 180, p99: 250 },
+  mysql_connection_usage_percent: {
+    label: 'MySQL Connection Usage',
+    unit: '% of max_connections',
+    desc: 'threads_connected as a share of max_connections, busiest instance (#3778)',
+    typical: { min: 5, max: 100, p50: 30, p90: 50, p95: 60, p99: 70 },
   },
   mysql_threads_running: {
     label: 'MySQL Threads Running',
