@@ -161,7 +161,9 @@ data:
       # deduping tenants whatever conf.d says — so the merge refuses a source
       # that holds the generator's own rule shape
       # (_grar_render.assert_base_has_no_dedup_rule). Rules you write yourself
-      # are your policy: merged as written, never judged.
+      # are your policy: the dedup guard does not judge them, while the other
+      # invariants (Watchdog, platform-alert silencing, gated equal labels)
+      # still apply.
 
       # #1132 invariant: every `equal:` label is presence-gated (`=~".+"`) on BOTH
       # sides. Alertmanager treats a label missing from source AND target as

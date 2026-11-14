@@ -784,15 +784,17 @@ def assert_base_has_no_dedup_rule(base: object, where: str = "the base config",
     base inhibit rule as written, so a generated rule kept in the base would
     override conf.d: a tenant set to ``disable`` would still be deduped.
     Such a base is almost always an older output fed back as the source —
-    v2.9.0's ``--apply`` wrote outputs with no ``GENERATED_OUTPUT_MARKER``
-    line — or a hand copy of the generator's rule; this is also what still
+    no output v2.9.0 wrote, in any mode (``--apply`` included), has the
+    ``GENERATED_OUTPUT_MARKER`` line — or a hand copy of the generator's rule; this is also what still
     recognises an output with the marker deleted and no generated receiver.
 
     Only the generator's own shapes count
     (``_grar_validate.is_generated_dedup_rule``: today's and the per-tenant
     one before #3899). An inhibit rule the operator wrote is operator policy:
-    it is not judged and is kept as written, even where it suppresses what
-    ``_severity_dedup`` (``disable`` included) would let through.
+    this guard does not judge it, even where it suppresses what
+    ``_severity_dedup`` (``disable`` included) would let through — the other
+    invariants (Watchdog, platform-alert silencing, gated ``equal`` labels)
+    still apply to it.
     *where* / *remedy* name the source and what to do (``--apply`` names
     the ConfigMap key)."""
     rules = base.get("inhibit_rules") if isinstance(base, dict) else None
@@ -805,8 +807,8 @@ def assert_base_has_no_dedup_rule(base: object, where: str = "the base config",
         f"rule(s) ({', '.join(f'inhibit_rules[{i}]' for i in found)}). That rule "
         "is generated from conf.d (`_severity_dedup`) by this tool alone; kept "
         "in the source it would override conf.d (`disable` included). This is "
-        "usually an older output passed back as the source (v2.9.0's --apply "
-        "wrote outputs without the GENERATED marker) or a hand copy of the "
+        "usually an older output passed back as the source (no output v2.9.0 "
+        "wrote has the GENERATED marker, --apply's included) or a hand copy of the "
         f"generator's rule. {remedy}")
 
 

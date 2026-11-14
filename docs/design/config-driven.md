@@ -636,7 +636,7 @@ flowchart TD
 2. 產出一條規則：source `severity="critical"`、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，`equal: ["tenant", "metric_group"]`——同租戶、同 `metric_group` 才抑制
 3. `_severity_dedup: "disable"` 的 tenant 列進 target 的 `tenant!~"<清單>"`（排序、逐一轉成 regex 字面值、以 `|` 串接；Alertmanager 的 regex matcher 錨定整串，`tb` 不會排除 `tbb`）→ 兩種通知都收到。清單為空時不寫這個 matcher；沒有任何 tenant 是 enable 時不產出規則。產生器為每個 disable 的 tenant 印一行 `INFO: <tenant>: severity_dedup disabled, excluded from the severity dedup inhibit rule`（finding kind `severity_dedup_excluded`，不擋）
 4. ⚠️ 規則寫的是「誰**不**參與」：告警帶 `tenant`、但該租戶不在 conf.d 裡（例如還沒納管的租戶），也會被 dedup
-5. dedup 只能由產生器產出：`--base-config`（或 `--apply` 的叢集來源）裡若有路由產生器自己寫出的 severity dedup 規則（現在的全域形狀，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準，寫法不影響），會被拒收（結束碼 1、不寫檔）——它會被原樣併進輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`），通常是舊版產物被當成來源傳回。運維在 base 自己寫的 inhibit 規則屬於運維政策：產生器不判、照原樣保留，即使它會蓋過 `_severity_dedup`（含 `disable`）
+5. dedup 只能由產生器產出：`--base-config`（或 `--apply` 的叢集來源）裡若有路由產生器自己寫出的 severity dedup 規則（現在的全域形狀，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的寫法不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重）），會被拒收（結束碼 1、不寫檔）——它會被原樣併進輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`），通常是舊版產物被當成來源傳回。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用
 6. Exporter 仍輸出 `user_severity_dedup{tenant, mode}` metric（只有 enable 的 tenant 有序列；disable 的 tenant 不送）→ Prometheus sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示各 tenant dedup 狀態
 
 **行為矩陣**

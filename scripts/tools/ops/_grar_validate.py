@@ -258,7 +258,10 @@ def _split_matcher_element(element: str) -> "list[tuple[str, str, str]] | None":
     """One ``*_matchers`` list element as Alertmanager reads it: one or more
     ``name op value`` matchers, comma-separated, optionally inside ``{}``,
     each value quoted (``\\\\`` / ``\\"`` / ``\\n`` escapes) or bare. None
-    when it cannot be read — the caller treats that as "could match"."""
+    when it cannot be read — ``_side_atoms`` passes that on, and
+    ``is_generated_dedup_rule`` then reads the rule as not the generator's
+    (it is kept; Alertmanager's own reading of a base refuses what it cannot
+    parse before this is asked)."""
     text = element.strip()
     if text.startswith("{") and text.endswith("}"):
         text = text[1:-1]
@@ -372,7 +375,10 @@ def is_generated_dedup_rule(rule: object) -> bool:
     if len(exclusions) <= 1:
         excluded = (_regex_alternatives_as_literals(exclusions[0][2])
                     if exclusions else [])
-        if _normalised_rule(build_dedup_inhibit_rule(excluded)) == got:
+        # An empty member (`tenant!~""`, `tenant!~"ta|"`) is no tenant id:
+        # the generator never lists one, though rebuilding would echo it.
+        if ("" not in excluded
+                and _normalised_rule(build_dedup_inhibit_rule(excluded)) == got):
             return True
     pinned = [a[2] for a in src if a[0] == "tenant" and a[1] == "="]
     return (len(pinned) == 1

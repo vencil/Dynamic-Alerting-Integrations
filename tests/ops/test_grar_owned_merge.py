@@ -815,9 +815,9 @@ def test_an_operators_own_broader_policy_in_the_base_is_kept(tmp_path):
 
 
 def test_a_v290_output_fed_back_is_refused(tmp_path):
-    """The v2.9.0 upgrade path: v2.9.0's --apply wrote its output with no
-    GENERATED marker, holding the per-tenant dedup rules of that time. Fed
-    back as the source it is refused (rc 1), nothing written."""
+    """The v2.9.0 upgrade path: no output v2.9.0 wrote (--apply's included)
+    has the GENERATED marker, and it holds the per-tenant dedup rules of that
+    time. Fed back as the source it is refused (rc 1), nothing written."""
     old = (Path(__file__).parent / "fixtures" / "pre3899_output_without_marker.yml"
            ).read_text(encoding="utf-8")
     assert render.GENERATED_OUTPUT_MARKER not in old
@@ -827,7 +827,7 @@ def test_a_v290_output_fed_back_is_refused(tmp_path):
     assert proc.returncode == 1, proc.stderr[-3000:]
     assert "own severity dedup rule(s) (inhibit_rules[0], inhibit_rules[1])" in proc.stderr, \
         proc.stderr[-3000:]
-    assert "v2.9.0's --apply" in proc.stderr
+    assert "no output v2.9.0 wrote has the GENERATED marker" in proc.stderr
     assert not out.exists()
 
 

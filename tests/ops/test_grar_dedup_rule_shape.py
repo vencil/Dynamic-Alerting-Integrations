@@ -91,9 +91,15 @@ def _try_local_rule() -> dict:
      "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="ta"',
                          'tenant="ta"'],
      "equal": ["metric_group", "metric_group"]},
+    # escaped ids again, the exclusion value bare (unquoted): read back
+    # unescaped (`a.b`), it rebuilds to this very rule
+    {**build_dedup_inhibit_rule([]),
+     "target_matchers": ["severity=warning", "metric_group=~.+", "tenant=~.+",
+                         "tenant!~a\\.b|t-c"]},
 ], ids=["generated-no-exclusion", "generated-excluding", "generated-escaped-ids",
         "pre3899-per-tenant", "reordered-and-spaced", "braces-several-in-one",
-        "unquoted", "legacy-match-maps", "legacy-match-maps-pre3899", "repeats"])
+        "unquoted", "legacy-match-maps", "legacy-match-maps-pre3899", "repeats",
+        "escaped-ids-bare-value"])
 def test_the_generators_own_rule_is_recognised(rule):
     assert is_generated_dedup_rule(rule)
 
@@ -185,10 +191,25 @@ def _variant(**changes) -> dict:
     _variant(target_matchers=GENERATED["target_matchers"][:-1] + ['tenant!~"t.*"']),
     {**pre3899_dedup_inhibit_rule("ta"),
      "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="tb"']},
+    # an empty exclusion member is no tenant id: the generator never writes it
+    _variant(target_matchers=GENERATED["target_matchers"][:-1] + ['tenant!~""']),
+    _variant(target_matchers=GENERATED["target_matchers"][:-1] + ['tenant!~"tb|"']),
+    # equal, a different angle: the pre-#3899 shape with today's equal
+    {**pre3899_dedup_inhibit_rule("ta"), "equal": ["tenant", "metric_group"]},
+    _variant(equal=["metric_group"]),
+    # the exclusion list as written, a different angle: not sorted / repeated /
+    # with the escaped hyphen the generator does not write
+    _variant(target_matchers=GENERATED["target_matchers"][:-1] + ['tenant!~"tc|tb"']),
+    _variant(target_matchers=GENERATED["target_matchers"][:-1] + ['tenant!~"tb|tb|tc"']),
+    _variant(target_matchers=build_dedup_inhibit_rule(["t-b"])["target_matchers"][:-1]
+             + ['tenant!~"t\\\\-b"']),
 ], ids=["kube-prom-crit-over-warn-info", "kube-prom-warn-over-info", "kube-prom-info-inhibitor",
         "tenant-wide-policy", "global-no-equal", "scope-cluster", "team-dba",
         "tenant-not-empty-gate", "extra-equal-label", "two-exclusion-matchers",
-        "non-literal-exclusion", "pre3899-mismatched-tenants"])
+        "non-literal-exclusion", "pre3899-mismatched-tenants",
+        "empty-exclusion", "empty-exclusion-member",
+        "pre3899-with-todays-equal", "generated-missing-tenant-in-equal",
+        "exclusion-unsorted", "exclusion-repeated", "exclusion-escaped-hyphen"])
 def test_other_rules_are_operator_policy(rule):
     assert not is_generated_dedup_rule(rule)
 
