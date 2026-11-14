@@ -221,7 +221,7 @@ func TestMergeTenantDefinedProfileIsNotUnknown(t *testing.T) {
 		if name == "another name" {
 			wantName = "nosuch"
 		}
-		want := `WARN: tenant=tx: _profile references unknown profile "` + wantName + `"`
+		want := `WARN: tenant=tx: _profile "` + wantName + `" references a profile that is not defined under the root profiles:`
 		if len(kv.Errors) != 1 || kv.Errors[0] != want {
 			t.Errorf("%s: errors %q, want [%q]", name, kv.Errors, want)
 		}

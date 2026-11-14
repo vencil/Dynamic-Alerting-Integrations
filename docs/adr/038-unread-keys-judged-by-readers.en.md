@@ -388,8 +388,10 @@ The documentation will say: the tools try to report problems, but whether values
 A value is judged in the file and layer that writes it, never on the merged value. A tenant's merged config already holds what its profile and the root platform files' `tenants:` fill in; judged there, one typo in a profile would be charged to every tenant that elects it and block their writes that have nothing to do with the value, a value none of them can fix in its own file. For example, profile `gold` writes `_silent_mode: purple`; `ta` and `tb`, which elect it, get one notice on the profile's file that names them:
 
 ```
-_defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple" (valid: warning, critical, all, disable)) — tenant(s) ta, tb
+_defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode (valid: warning, critical, all, disable)) — tenant(s) ta, tb
 ```
+
+The reason in parentheses is built from fixed words only. It never carries the value the author wrote, a field name the author wrote, or a parser's error message (which quotes them); at most it carries an index or a count, such as `recurring[2]` or `1 unknown field(s)`. To find the line, read the finding's file, key and tenants.
 
 Measured on the repo's example conf.d, `no_alert` lists 3 keys: `mongodb_connections_current_critical`, `mongodb_replication_lag_critical` and `redis_memory_used_bytes_critical`. The mongodb and redis rule packs compare only the `severity="warning"` threshold and have no critical tier, so these critical thresholds are served and no alert uses them ([#3658](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3658)). A test keeps them in a known list with that issue, and the list may only shrink: a new one in the example tree fails it, and so does one that is fixed but not removed from the list. The dimension keys of the Background section are no longer served (decision 11); the verdict reports them as unread, not this row. This check asks "is every served value compared by some alert"; the existing check "can the thresholds that alerts need be served" asks "is every value an alert needs served". The two run in opposite directions and complement each other.
 

@@ -51,7 +51,7 @@ func TestValueCheck_ErrorsAndValuesAreWrittenTogether(t *testing.T) {
 		t.Fatalf("want one error mirrored in Values, got errors=%q values=%+v", v.Errors, v.Values)
 	}
 	want := `WARN: tenant=t1: _silent_mode "purple" is not a value the exporter reads ` +
-		`(unknown silent mode "purple" (valid: warning, critical, all, disable)) — nothing is silenced while it is set`
+		`(unknown silent mode (valid: warning, critical, all, disable)) — nothing is silenced while it is set`
 	if v.Errors[0] != want {
 		t.Errorf("error = %q\nwant    %q", v.Errors[0], want)
 	}
@@ -145,7 +145,7 @@ func TestRatchet_LeavesOtherErrors(t *testing.T) {
 	t.Parallel()
 	doc := "tenants:\n  t1:\n    _profile: nosuch\n    _silent_mode: purple\n"
 	v := judge(t, doc, doc).Tenants["t1"]
-	if countWith(v.Errors, `unknown profile "nosuch"`) != 1 || countWith(v.Errors, "_silent_mode") != 0 {
+	if countWith(v.Errors, `_profile "nosuch" references a profile`) != 1 || countWith(v.Errors, "_silent_mode") != 0 {
 		t.Errorf("errors = %q", v.Errors)
 	}
 	if countWith(v.Notices, "_silent_mode") != 1 {
@@ -186,7 +186,7 @@ func TestSelfRatchet(t *testing.T) {
 	c := ThresholdConfig{Tenants: valueTenantsOf(t, "tenants:\n  t1:\n    _silent_mode: purple\n    _profile: nosuch\n")}
 	v := c.ValidateTenantKeysByTenant().SelfRatchet().Tenants["t1"]
 	if countWith(v.Errors, "_silent_mode ") != 0 || countWith(v.Notices, "_silent_mode ") != 1 ||
-		countWith(v.Errors, `unknown profile "nosuch"`) != 1 {
+		countWith(v.Errors, `_profile "nosuch" references a profile`) != 1 {
 		t.Errorf("errors=%q notices=%q", v.Errors, v.Notices)
 	}
 	if !strings.HasPrefix(v.Notices[len(v.Notices)-1], "NOTICE: tenant=t1: _silent_mode \"purple\"") {

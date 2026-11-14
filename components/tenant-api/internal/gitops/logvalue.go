@@ -9,9 +9,10 @@ import (
 
 // #1560 ⑤-b (owner decision: tenant-api's log keeps structured fields
 // only). The key verdict and the errors that carry its lines hold what the
-// generator and da-guard said about the tenants' files — a key, a reason
-// that quotes a value (`references unknown profile "https://u:…@…"`), a
-// file, tenant ids. Each logs itself by closed-vocabulary fields and counts.
+// generator and da-guard said about the tenants' files — a key, a file,
+// tenant ids, and a reason (da-guard's own sentence since #3703, which
+// quotes no value; this log still keeps none of it). Each logs itself by
+// closed-vocabulary fields and counts.
 // ⚠️ slog resolves a LogValuer only on the value it is handed, never on the
 // elements of a slice or the fields of a struct it marshals: log the
 // verdict, never kv.Findings. What keeps this text out of the log is the

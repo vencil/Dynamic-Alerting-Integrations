@@ -101,22 +101,22 @@
  },
  "invalid_id/output-alertmanager": {
   "rc": 1,
-  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
+  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  Bad_Id.yaml: tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "invalid_id/strict": {
   "rc": 1,
-  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
+  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  Bad_Id.yaml: tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "invalid_id/validate": {
   "rc": 1,
-  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
+  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  Bad_Id.yaml: tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "invalid_id/validate_strict": {
   "rc": 1,
-  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
+  "stderr": "FAIL: 1 invalid tenant id(s) — nothing was generated, written or applied; rename the tenant(s):\n  Bad_Id.yaml: tenant id 'Bad_Id' is not a valid tenant id (Tenant id (ADR-035): a DNS-1123 label — 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit.) — no route, receiver or inhibit rule is rendered for it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "policy/output-alertmanager": {

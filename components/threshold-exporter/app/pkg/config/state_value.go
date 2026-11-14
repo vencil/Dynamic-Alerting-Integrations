@@ -36,7 +36,6 @@ package config
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -81,9 +80,15 @@ type stateValueReading struct {
 	// filter on while now is inside one; nil unless the value is on or
 	// recurring-only. Not time-boxed by expires.
 	windows []maintenanceWindow
-	// problem: why the value is not read (kind stateValueProblem), or the
-	// parse error of an invalid expires — tenant-free.
+	// problem: why the value is not read (kind stateValueProblem) —
+	// tenant-free and built from constants only, never from the value
+	// (#3703: it is the key verdict's sentence; an index or a count is the
+	// most it carries).
 	problem string
+	// expiresErr: the parse error of an invalid expires (kind
+	// stateValueInvalidExpires), for the reader's own WARN line only — it
+	// quotes the value.
+	expiresErr string
 }
 
 // stateValueOf classifies sv, the value of `_state_<filterName>`.
@@ -106,7 +111,7 @@ func stateValueOf(filterName string, sv ScheduledValue) stateValueReading {
 		// mapping — structured, so the expiry reader names it too when the
 		// state-filter reader does not reach it (#2426).
 		return stateValueReading{kind: stateValueProblem, structured: true,
-			problem: fmt.Sprintf("it does not parse as YAML: %v", err)}
+			problem: "it does not parse as YAML"}
 	}
 	switch m := doc.(type) {
 	case map[string]any:
@@ -128,7 +133,7 @@ func scalarStateValueOf(raw string) stateValueReading {
 		return stateValueReading{kind: stateValueOff}
 	}
 	return stateValueReading{kind: stateValueProblem,
-		problem: fmt.Sprintf("%q is neither %q nor a word that switches it off (%s)", raw, "enable", disabledWordList())}
+		problem: fmt.Sprintf("it is neither %q nor a word that switches it off (%s)", "enable", disabledWordList())}
 }
 
 // structuredStateValueOf reads a mapping: node, as m its generic decode.
@@ -140,15 +145,14 @@ func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any
 		return bad("only _state_%s takes the structured form; this filter takes %q or a word that switches it off (%s)",
 			maintenanceFilterName, "enable", disabledWordList())
 	}
-	var unknown []string
+	unknown := 0
 	for k := range m {
 		if !containsString(stateValueFields, k) {
-			unknown = append(unknown, k)
+			unknown++
 		}
 	}
-	if len(unknown) > 0 {
-		sort.Strings(unknown)
-		return bad("unknown field(s) %s (valid: %s)", strings.Join(unknown, ", "), strings.Join(stateValueFields, ", "))
+	if unknown > 0 {
+		return bad("%d unknown field(s) (valid: %s)", unknown, strings.Join(stateValueFields, ", "))
 	}
 	// Shapes first, from the generic decode, so a wrong shape is named as
 	// such rather than as the typed decode's error.
@@ -160,7 +164,7 @@ func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any
 		// `off` / `no` / `yes` as booleans, while everywhere else in a
 		// conf.d they are strings.
 		if _, isBool := v.(bool); !isBool {
-			return bad("enabled must be true or false (a YAML boolean), not %v", v)
+			return bad("enabled must be true or false (a YAML boolean)")
 		}
 	}
 	if v, ok := m["expires"]; ok && v != nil && !isYAMLScalar(v) {
@@ -170,7 +174,7 @@ func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any
 	// maintenance window must not lose its end to a blank field.
 	if v, ok := m["expires"]; ok && (v == nil || strings.TrimSpace(fmt.Sprint(v)) == "") {
 		return stateValueReading{kind: stateValueInvalidExpires, structured: true,
-			problem: "expires is written but empty"}
+			expiresErr: "expires is written but empty"}
 	}
 	windows, problem := recurringWindowsOf(m["recurring"])
 	if problem != "" {
@@ -178,7 +182,7 @@ func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any
 	}
 	var parsed maintenanceModeStructured
 	if err := node.Decode(&parsed); err != nil {
-		return bad("the structured form does not parse: %v", err)
+		return bad("the structured form does not parse")
 	}
 
 	// The switch: target and/or enabled.
@@ -191,14 +195,14 @@ func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any
 		case isDisabled(t):
 			switchOn = false
 		default:
-			return bad("target %q is neither %q nor a word that switches it off (%s)", parsed.Target, "enable", disabledWordList())
+			return bad("target is neither %q nor a word that switches it off (%s)", "enable", disabledWordList())
 		}
 		hasSwitch = true
 	}
 	if v, ok := m["enabled"]; ok {
 		b := v.(bool) // checked above
 		if hasSwitch && b != switchOn {
-			return bad("target %q and enabled %v disagree", parsed.Target, b)
+			return bad("target and enabled disagree")
 		}
 		switchOn, hasSwitch = b, true
 	}
@@ -211,7 +215,7 @@ func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any
 		t, err := time.Parse(time.RFC3339, parsed.Expires)
 		if err != nil {
 			return stateValueReading{kind: stateValueInvalidExpires, structured: true,
-				expiresText: parsed.Expires, problem: err.Error()}
+				expiresText: parsed.Expires, expiresErr: err.Error()}
 		}
 		r.hasExpires, r.expires, r.expiresText = true, t, parsed.Expires
 	}
@@ -247,7 +251,7 @@ func (r stateValueReading) onAt(now time.Time) bool {
 func (r stateValueReading) warn(tenant, filterName, value string) string {
 	switch r.kind {
 	case stateValueInvalidExpires:
-		return maintenanceExpiresIgnoredWarn(tenant, r.expiresText, fmt.Errorf("%s", r.problem))
+		return maintenanceExpiresIgnoredWarn(tenant, r.expiresText, fmt.Errorf("%s", r.expiresErr))
 	case stateValueProblem:
 		return fmt.Sprintf("WARN: _state_%s for tenant=%s: value %q is not read: %s — the state filter is NOT switched on while it is set (fail-closed, #3620)",
 			filterName, tenant, value, r.problem)
@@ -255,17 +259,23 @@ func (r stateValueReading) warn(tenant, filterName, value string) string {
 	return ""
 }
 
-// writeProblem is r's problem for the write gate ("" when the reader reads
-// r): a problem, or #2000's invalid expires.
+// writeProblem is r's problem for the write gate and the key verdict (""
+// when the reader reads r): a problem, or #2000's invalid expires. Constants
+// only (#3703) — the parse error of an expires quotes the value, so it stays
+// in the reader's WARN (warn).
 func (r stateValueReading) writeProblem() string {
 	switch r.kind {
 	case stateValueProblem:
 		return r.problem
 	case stateValueInvalidExpires:
-		return fmt.Sprintf("expires %q is not RFC3339 (e.g. 2026-07-01T00:00:00Z): %s", r.expiresText, r.problem)
+		return expiresNotRFC3339Problem
 	}
 	return ""
 }
+
+// expiresNotRFC3339Problem is the one sentence for an `expires` the reader
+// does not read as RFC3339, `_state_maintenance`'s and `_silent_mode`'s.
+const expiresNotRFC3339Problem = "expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z)"
 
 // canonical is r's comparable form for KeyValidation.Ratchet: two values
 // with the same canonical form are read the same way. A string, never a
@@ -275,7 +285,7 @@ func (r stateValueReading) canonical() string {
 	fmt.Fprintf(&b, "kind=%d", r.kind)
 	switch r.kind {
 	case stateValueProblem, stateValueInvalidExpires:
-		fmt.Fprintf(&b, "|problem=%q|expires=%q", r.problem, r.expiresText)
+		fmt.Fprintf(&b, "|problem=%q|expires=%q", r.problem+r.expiresErr, r.expiresText)
 	case stateValueOn, stateValueRecurringOnly:
 		if r.hasExpires {
 			fmt.Fprintf(&b, "|expires=%s", r.expires.UTC().Format(time.RFC3339Nano))

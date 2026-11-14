@@ -451,6 +451,13 @@ def test_the_unmeasurable_set_is_named(variant: str, hostile_dirs, tmp_path):
 # #3572: the two `operator_generate.py` pairs left with the code path itself —
 # it reads no conf.d (no AlertmanagerConfig, so no tenant name reaches its
 # output) and refuses --config-dir, so there is no output left to escape.
+# #3703: ("valid", "explain_route.py") and ("valid",
+# "generate_alertmanager_routes.py") left the same way. What reached their
+# output from the valid tree was the hostile tenant id inside the
+# invalid-tenant-id line; that line now names an id through `shown_value`
+# (a name-like id as it is, any other by its length), so the hostile name
+# is not printed at all. tests/ops/test_reserved_value_canary_matrix.py
+# measures that. Their ("malformed", …) pairs still exercise the escaping.
 MEASURED: set[tuple[str, str]] = {
     ("malformed", "check_confd_schema.py"),
     ("malformed", "compile_custom_alerts.py"),
@@ -465,8 +472,6 @@ MEASURED: set[tuple[str, str]] = {
     ("valid", "blind_spot_discovery.py"),
     ("valid", "check_confd_schema.py"),
     ("valid", "deprecate_rule.py"),
-    ("valid", "explain_route.py"),
-    ("valid", "generate_alertmanager_routes.py"),
     ("valid", "offboard_tenant.py"),
     ("valid", "threshold_recommend.py"),
 }

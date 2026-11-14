@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_validation import scalar_text, shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: values into messages)
+from _lib_validation import key_segment  # noqa: E402  (#3703: ids no rule vouched for)
 from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
     NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
     credential_shape_problems, plaintext_credential_findings, ref_path_text,
@@ -78,6 +79,7 @@ from _grar_validate import (  # noqa: E402
     check_policy_scope,
     group_by_problem_text,
     ignored_routing_keys,
+    tenant_id_field,
     invalid_tenant_id_text,
     unknown_routing_keys,
     override_redundancies,
@@ -629,8 +631,8 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         if first is not None:
             _tree_problem(
                 result, "routing_profile_duplicate", fname,
-                f"routing_profiles.{name}",
-                f"routing profile '{name}' is defined in both {first} and "
+                f"routing_profiles.{key_segment(name)}",
+                f"routing profile '{shown_key(name)}' is defined in both {first} and "
                 f"{fname} — a profile name must be unique across the whole "
                 f"conf.d tree (ADR-007 amendment 2026-09-28); rename or "
                 f"remove one of them")
@@ -639,8 +641,8 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         by_dir.setdefault(level, {})[name] = cfg
         flat[name] = cfg
         _record_ignored_keys(result, cfg, block="routing",
-                             where=f"routing profile '{name}'",
-                             field_prefix=f"routing_profiles.{name}.", file=fname)
+                             where=f"routing profile '{shown_key(name)}'",
+                             field_prefix=f"routing_profiles.{key_segment(name)}.", file=fname)
 
 
 def _refuse_nested_enforced(fname: str, result: dict) -> None:
@@ -732,7 +734,9 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
 
     Each is a ``WARN … skipping`` line (blocking under ``--validate``, as the
     #2326 F3 shape of this kind is) and a routing-tree record for the parity
-    matrix. Keys in name order, profiles in name order.
+    matrix. Keys in name order, profiles in name order. A profile name and a
+    key are the author's text (#3703): ``key_segment`` in the field,
+    ``shown_key`` in the message.
     """
     # A `_routing*` key at the TOP level of a `_` file — a carrier with no
     # `defaults:` mapping included — is routing_key_ignored instead (#2983,
@@ -742,7 +746,7 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
         block = data.get("defaults")
         if isinstance(block, dict):
             found.extend(
-                (f"defaults.{k}", k,
+                (f"defaults.{key_segment(k)}", k,
                  "a defaults block is merged into every tenant's effective "
                  "config, but the route generator never reads routing from it")
                 for k in sorted(k for k in block if _is_routing_key(k)))
@@ -753,9 +757,9 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
             if not isinstance(body, dict):
                 continue
             found.extend(
-                (f"profiles.{name}.{k}", k,
+                (f"profiles.{key_segment(name)}.{key_segment(k)}", k,
                  f"a threshold profile fills its keys into the tenants on "
-                 f"`_profile: {name}`, but the route generator never reads "
+                 f"`_profile: {shown_key(name)}`, but the route generator never reads "
                  f"routing or severity dedup from it, and the exporter does "
                  f"not apply it either (#2914)")
                 for k in sorted(k for k in body if _is_routing_layer_key(k)))
@@ -765,13 +769,13 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
     if is_carrier and isinstance(data.get("defaults"), dict):
         unread.append(("defaults.", data["defaults"], _is_routing_key))
     if isinstance(profiles, dict):
-        unread.extend((f"profiles.{n}.", profiles[n], _is_routing_layer_key)
+        unread.extend((f"profiles.{key_segment(n)}.", profiles[n], _is_routing_layer_key)
                       for n in sorted(n for n in profiles if isinstance(n, str))
                       if isinstance(profiles[n], dict))
     for prefix, holder, is_key in unread:
         for k in sorted(k for k in holder if is_key(k)):
-            _record_file_reference_errors(result, holder[k], where=f"{prefix}{k}",
-                                          field_prefix=f"{prefix}{k}.", file=fname)
+            _record_file_reference_errors(result, holder[k], where=f"{prefix}{key_segment(k)}",
+                                          field_prefix=f"{prefix}{key_segment(k)}.", file=fname)
     for fld, key, why in found:
         text = f"{fname}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
         result.setdefault("routing_defaults_errors", []).append(
@@ -897,8 +901,8 @@ def _record_policy_problems(fname: str, policies: dict, result: dict) -> None:
         for fld, message in domain_policy_problems(policy):
             _field_type_error(
                 result, "domain_policy_unusable",
-                f"{fname}: domain_policy '{name}': {message}",
-                file=fname, policy=str(name), field=fld)
+                f"{fname}: domain_policy '{shown_key(name)}': {message}",
+                file=fname, policy=key_segment(name), field=fld)
 
 
 def _parse_profiles_and_policies(data: dict, fname: str, level: str,
@@ -1424,8 +1428,10 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                 # exporter loads a null body as a tenant with no keys.
                 if not is_reserved:
                     result.setdefault("unloaded_tenants", set()).add(tenant)
+                # #3703: the id of a body that is not loaded is whatever
+                # the author wrote — shown_key, not the text.
                 print(f"  WARN: {safe_label(fname)}: tenant "
-                      f"'{safe_label(str(tenant))}' must be a mapping, got "
+                      f"'{shown_key(str(tenant))}' must be a mapping, got "
                       f"{type(overrides).__name__} — that tenant is not "
                       f"loaded", file=sys.stderr)
                 continue
@@ -1471,12 +1477,9 @@ def severity_dedup_failure_exit(message: str, config_dir: str) -> "None":
 
 def _dedup_value_shown(problem: "_lib_tenant_values.SeverityDedupProblem") -> str:
     """The value of *problem* as a message shows it (#1560 ⑤-b): through
-    ``shown_value``; and Go's own words, which quote the value, only when
-    the value is shown as itself (name-like) — else Go's words without it."""
-    shown = shown_value(problem.value)
-    if shown_value(problem.value, bare=True) == problem.value:
-        return f"{shown} ({problem.problem})"
-    return f"{shown} (not a value the exporter reads; valid: enable, disable)"
+    ``shown_value``, then Go's own words — a fixed sentence that quotes no
+    value (#3703: ``LayerValueProblem.Problem``), printed as it is."""
+    return f"{shown_value(problem.value)} ({problem.problem})"
 
 
 def _resolve_severity_dedup(config_dir: str, result: dict,
@@ -1548,7 +1551,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
             f"{p.file}: {layer_text.get(p.layer, p.layer)} '{shown_key(p.owner)}': "
             f"_severity_dedup {_dedup_value_shown(p)} — the exporter serves enable for it "
             f"(da-guard severity-dedup); write enable or disable",
-            file=p.file, tenant=p.owner if p.layer != "profile" else None,
+            file=p.file, tenant=tenant_id_field(p.owner) if p.layer != "profile" else None,
             field="_severity_dedup")
     for e in tree.schedules:
         _field_type_error(
@@ -1557,7 +1560,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
             f"window or expires (`overrides:` / `expires:` / `reason:`) — a reserved key takes "
             f"no schedule: the exporter reads its `default` alone and ignores the rest "
             f"(#3269; da-guard severity-dedup); write the value alone",
-            file=e.file, tenant=e.owner if e.section == "tenants" else None,
+            file=e.file, tenant=tenant_id_field(e.owner) if e.section == "tenants" else None,
             field="_severity_dedup")
 
 
@@ -1604,9 +1607,11 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     merged, orphans = overlay_platform_tenants(
         entries, lambda: _declared_ids(config_dir, reader, unknown), platform=platform)
     for fname, tenant in orphans:
-        print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(tenant))} "
+        # #3703: an id no tenant file declares is whatever the platform
+        # file's author wrote — shown_key / key_segment, not the text.
+        print(f"  WARN: {safe_label(fname)}: tenants.{key_segment(str(tenant))} "
               f"ignored — no tenant file declares tenant "
-              f"'{safe_label(str(tenant))}'{tenant_set_unknown_note(unknown)}; a platform "
+              f"'{shown_key(str(tenant))}'{tenant_set_unknown_note(unknown)}; a platform "
               f"file can only provide defaults for a tenant that already exists",
               file=sys.stderr)
     # #2326: where each tenant lives (its tenant file's directory, relative to
@@ -1632,8 +1637,8 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
                                 key=lambda kv: str(kv[0])):
         first, second = declared[tenant][0], declared[tenant][1]
         _tree_problem(
-            result, "duplicate_tenant", second, f"tenants.{tenant}",
-            f"duplicate tenant id '{tenant}': declared in both {first} and "
+            result, "duplicate_tenant", second, f"tenants.{key_segment(str(tenant))}",
+            f"duplicate tenant id '{shown_key(str(tenant))}': declared in both {first} and "
             f"{second} — threshold-exporter rejects a tree that declares one "
             f"tenant in two files (DuplicateTenantError), and routes built "
             f"from a blend of both would match neither; keep the tenant in "
@@ -1647,6 +1652,8 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     for tenant in declared:
         if not is_valid_tenant_id(tenant):
             result.setdefault("invalid_tenant_ids", []).append(tenant)
+            # #3703: where it is declared — the finding's `file`.
+            result.setdefault("invalid_tenant_id_files", {})[tenant] = list(declared[tenant])
     # First-appearance order, as the per-file loop produced it.
     for tenant in dict.fromkeys(t for _f, t, _o in entries):
         if tenant not in merged:
@@ -1769,6 +1776,8 @@ class TenantTree:
     # Nothing is rendered for them here; the generator refuses the whole
     # tree on them in every mode (`_refuse_invalid_tenant_ids`).
     invalid_tenant_ids: list[str] = field(default_factory=list)
+    # #3703: {id: [file, ...]} — the tenant files declaring each of them.
+    invalid_tenant_id_files: dict[str, list[str]] = field(default_factory=dict)
     # #2906: boolean / enum fields of the wrong type or with an unknown
     # value (`_field_type_error` dicts). The generator refuses the whole
     # tree on them in every mode (`_refuse_field_type_errors`).
@@ -1888,9 +1897,13 @@ def load_tenant_tree(
         schema_warnings.append(routing_not_mapping_warning(tenant, refused[tenant]))
     # #2341 R8: a tenant id the routing plane refuses — nothing rendered.
     invalid_ids = sorted(set(parsed.get("invalid_tenant_ids", [])), key=str)
+    id_files = parsed.get("invalid_tenant_id_files", {})
     for tenant in invalid_ids:
-        schema_warnings.append(skipped_entry_warning(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping",
-                                                     kind="invalid_tenant_id", tenant=tenant))
+        files = id_files.get(tenant, ())
+        schema_warnings.append(skipped_entry_warning(
+            f"  WARN: {invalid_tenant_id_text(tenant, files)}, skipping",
+            kind="invalid_tenant_id", tenant=tenant_id_field(tenant),
+            file=files[0] if files else None))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
@@ -1920,8 +1933,8 @@ def load_tenant_tree(
         for domain, tenant in rows:
             tree_problems.append((
                 "domain_policy_out_of_scope", origin.get((level, domain), source),
-                f"domain_policies.{domain}.tenants",
-                f"domain policy '{domain}' names tenant '{tenant}' outside "
+                f"domain_policies.{key_segment(domain)}.tenants",
+                f"domain policy '{shown_key(domain)}' names tenant '{tenant}' outside "
                 f"{level}/"))
         schema_warnings.extend(
             check_domain_policies(reachable, policies, strict=strict_policies))
@@ -1943,9 +1956,11 @@ def load_tenant_tree(
         # #2766: the strict twins of classified lines carry the same kind,
         # so a finding's kind never depends on --strict.
         for tenant in invalid_ids:  # #2341 R8
+            files = id_files.get(tenant, ())
             schema_warnings.append(Finding(
-                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}",
-                kind="invalid_tenant_id", blocks="strict", tenant=tenant))
+                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant, files)}",
+                kind="invalid_tenant_id", blocks="strict",
+                tenant=tenant_id_field(tenant), file=files[0] if files else None))
         # #2341 R5: the same two shapes as a blocking ERROR under --strict.
         for tenant in sorted(refused, key=str):
             schema_warnings.append(Finding(
@@ -1994,6 +2009,7 @@ def load_tenant_tree(
         routing_tree_problems=tree_problems,
         duplicate_tenants=dict(parsed.get("duplicate_tenants", {})),
         invalid_tenant_ids=invalid_ids,
+        invalid_tenant_id_files=dict(id_files),
         field_type_errors=field_type_errors,
         unselected_carriers=list(parsed.get("unselected_carriers", [])),
         routing_disabled=frozenset(parsed.get("disabled_tenants", ())),

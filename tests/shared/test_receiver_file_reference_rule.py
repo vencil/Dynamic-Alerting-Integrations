@@ -41,6 +41,7 @@ from _lib_validation import (  # noqa: E402
     is_file_reference_key,
     receiver_file_reference_problem,
     receiver_optional_problem,
+    shown_key,
 )
 from _grar_merge import build_receiver_config  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
@@ -269,9 +270,10 @@ def test_a_key_that_is_not_a_string_is_refused():
     # key rather than rely on the file reader rejecting the tag first.
     receiver = _hook({"basic_auth": {b"password_file": "/p"}, "tls_config": {1: "x"}})
     # #1560 ⑤-b (round 5): a path segment the author wrote is named only when
-    # it is name-like; any other key is `<key>` (a key can be a URL).
+    # it is name-like; any other key is its stand-in (a key can be a URL; #3703).
     assert file_reference_paths(receiver) == [
-        "http_config.basic_auth.<key>", "http_config.tls_config.<key>"]
+        f"http_config.basic_auth.{shown_key(b'password_file')}",
+        f"http_config.tls_config.{shown_key(1)}"]
 
 
 # ── 3. the generator refuses the whole tree, wherever the receiver sits ──

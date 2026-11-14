@@ -564,3 +564,66 @@ func TestValidateWrites_KeyVerdictNotCompletedOrNotReportedRefuses(t *testing.T)
 		}
 	})
 }
+
+// #3703: the generator does not print an invalid tenant id that is not
+// name-like — its finding has no tenant and a message that says only the
+// id's length. Two such ids of one length, in two files, are still two
+// findings: the file is in the key (and in the message), so the one already
+// on the base is not mistaken for the one this write adds.
+func TestFindingKey_SameLengthInvalidIDsInTwoFiles(t *testing.T) {
+	t.Parallel()
+	const dir = "/scratch/conf.d"
+	at := func(file string) Finding {
+		return Finding{Kind: "invalid_tenant_id", File: &file,
+			Message: file + ": tenant id '<key:3f9a1c>' is not a valid tenant id"}
+	}
+	a, b := at("a.yaml"), at("b.yaml")
+	if findingKey(a, dir) == findingKey(b, dir) {
+		t.Fatalf("two files' findings share a key: %q", findingKey(a, dir))
+	}
+	// The key is the file's, not only the message's.
+	b.Message = a.Message
+	if findingKey(a, dir) == findingKey(b, dir) {
+		t.Errorf("the file is not in the key: %q", findingKey(a, dir))
+	}
+	findings := []Finding{a, at("b.yaml")}
+	mark(findings, dir, []Finding{at("a.yaml")}, dir)
+	if findings[0].PreExisting == nil || !*findings[0].PreExisting {
+		t.Errorf("a.yaml's finding, on the base too, is not marked pre-existing")
+	}
+	if findings[1].PreExisting == nil || *findings[1].PreExisting {
+		t.Errorf("b.yaml's finding, new in this write, is marked pre-existing")
+	}
+}
+
+// TestFindingKey_StandInsOfTwoNamesInOneFile: the generator prints a name it
+// does not disclose as a stand-in carrying a digest (`<key:3f9a1c>`, #3703),
+// so two such names in one file — same kind, tenant, policy and file — differ
+// in the message or the field alone; that is enough for two keys, and the
+// name the base already had keeps its finding pre-existing.
+func TestFindingKey_StandInsOfTwoNamesInOneFile(t *testing.T) {
+	t.Parallel()
+	const dir = "/scratch/conf.d"
+	file := "x.yaml"
+	byMessage := func(standIn string) Finding {
+		return Finding{Kind: "invalid_tenant_id", File: &file,
+			Message: file + ": tenant id '" + standIn + "' is not a valid tenant id"}
+	}
+	byField := func(standIn string) Finding {
+		field := "profiles." + standIn + "._severity_dedup"
+		return Finding{Kind: "routing_in_unread_location", File: &file, Field: &field,
+			Message: "a threshold profile's routing key is not rendered"}
+	}
+	for name, at := range map[string]func(string) Finding{"message": byMessage, "field": byField} {
+		old, added := at("<key:3f9a1c>"), at("<key:b70e42>")
+		if findingKey(old, dir) == findingKey(added, dir) {
+			t.Fatalf("%s: two stand-ins share a key: %q", name, findingKey(old, dir))
+		}
+		findings := []Finding{old, added}
+		mark(findings, dir, []Finding{at("<key:3f9a1c>")}, dir)
+		if !*findings[0].PreExisting || *findings[1].PreExisting {
+			t.Errorf("%s: pre-existing = %v, %v; want true, false", name,
+				*findings[0].PreExisting, *findings[1].PreExisting)
+		}
+	}
+}
