@@ -244,7 +244,7 @@ _GUARDED_FILES_CEILING = 22  # write_baseline_marker.py removed with the retired
 # entry that no longer names an unguarded sink must be REMOVED, so the list
 # only shrinks.
 NOT_GUARDED: dict[str, str] = {
-    "scripts/tools/dx/run_chaos_soak.py:219":
+    "scripts/tools/dx/run_chaos_soak.py:229":
         "`trigger_reload`'s carrier perturbation. It writes into the "
         "`--config-dir` INPUT tree — that toggle IS the chaos the soak "
         "applies — and its `except OSError: continue` is the intended "
