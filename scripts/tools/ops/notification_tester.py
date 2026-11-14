@@ -1109,7 +1109,7 @@ def _main(args: argparse.Namespace, gar: Any) -> "Report | None":
     # #3142: decided before any receiver is sent — an unusable --policy (or
     # an unmet min_generator_version) is the caller's input, rc 2.
     try:
-        policy = gar.resolve_policy(args.policy)
+        policy = gar.resolve_policy(args, lang=_LANG)
     except gar.PolicyInputError as exc:
         raise CallerError(str(exc), reason="policy_unusable") from None
     if not policy.applied:

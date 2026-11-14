@@ -49,6 +49,7 @@ _common/
 │   └── alert-engine.js
 └── validation/        ← YAML parsing + shared constants
     ├── constants.js
+    ├── threshold-value.js  ← the one reader of a threshold value (#3865); never parseFloat / Number()
     └── yaml-parser.js
 ```
 

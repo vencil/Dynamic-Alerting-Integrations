@@ -1525,7 +1525,9 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
                         else pathlib.Path(os.path.relpath(f, t)).as_posix())
             if kept(f, relative):
                 problems.append((f, why))
-    read_real = {os.path.realpath(f) for f in chosen}
+    # In a fixed order (#3797): each realpath is a look at the files, and
+    # the fault-injection gate replays a run by the order of its looks.
+    read_real = {os.path.realpath(f) for f in sorted(chosen)}
     for f, relative in dict.fromkeys(hidden):  # overlapping targets find one twice
         if os.path.realpath(f) in read_real:
             continue

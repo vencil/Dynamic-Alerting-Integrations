@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "govulncheck/vex:4a8d11c846175ebe182c5bf82443d32551265cccd432604fb2e45e56a0c85b37",
+  "@id": "govulncheck/vex:49a081a0243b3874fb96959ecc2dcf4a66afaee0e2c4538f208770a004b9378a",
   "author": "Unknown Author",
-  "timestamp": "2026-11-01T15:41:43.481812253Z",
+  "timestamp": "2026-11-14T12:48:19.046714975Z",
   "version": 1,
   "tooling": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck",
   "statements": [
@@ -142,6 +142,27 @@
     },
     {
       "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6859",
+        "name": "GO-2026-6859",
+        "description": "HTTP/1 server crash due to MaxBytesReader header race in net/http",
+        "aliases": [
+          "CVE-2026-97054"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/stdlib@v1.27.3"
+            }
+          ]
+        }
+      ],
+      "status": "affected"
+    },
+    {
+      "vulnerability": {
         "@id": "https://pkg.go.dev/vuln/GO-2026-6860",
         "name": "GO-2026-6860",
         "description": "Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net",
@@ -162,6 +183,28 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_present",
       "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
+    },
+    {
+      "vulnerability": {
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6865",
+        "name": "GO-2026-6865",
+        "description": "Panic on two-block frames in github.com/klauspost/compress",
+        "aliases": [
+          "CVE-2026-116591",
+          "GHSA-fpmh-frq8-7rj8"
+        ]
+      },
+      "products": [
+        {
+          "@id": "Unknown Product",
+          "subcomponents": [
+            {
+              "@id": "pkg:golang/github.com%2Fklauspost%2Fcompress@v1.20.0"
+            }
+          ]
+        }
+      ],
+      "status": "affected"
     },
     {
       "vulnerability": {

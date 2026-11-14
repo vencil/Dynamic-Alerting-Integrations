@@ -695,3 +695,34 @@ def test_reconcile_report_includes_state_dir_missing_flag(tmp_path):
     empty.mkdir()
     r = sr.reconcile(empty, manifest, _files(empty), state_dir_missing=False)
     assert r["state_dir_missing"] is False
+
+
+# ── #3797: the old manifest is read once ─────────────────────────────────
+
+def test_a_manifest_gone_after_its_judgement_is_refused_not_a_traceback(tmp_path, monkeypatch):
+    """The judgement (`classify_path`) says the manifest is there; it is gone
+    when it is read. That was a second look (`stat()` for the size) and a
+    FileNotFoundError traceback (#3797's measurement, K3); now the one read
+    fails closed: a caller error naming the flag, nothing written."""
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"states": []}\n', encoding="utf-8")
+    real = sr.classify_path
+
+    def judged_then_gone(path, *a, **kw):
+        problem = real(path, *a, **kw)
+        Path(path).unlink()
+        return problem
+    monkeypatch.setattr(sr, "classify_path", judged_then_gone)
+    with pytest.raises(sr.CallerError) as exc:
+        sr.read_old_manifest(manifest)
+    assert exc.value.reason == "manifest_unreadable"
+    assert str(exc.value).startswith(f"--manifest-path {manifest}: cannot read: "), str(exc.value)
+    assert not manifest.exists()
+
+
+def test_an_empty_manifest_is_still_rebuilt(tmp_path, capsys):
+    """#3392 (owner ruling), unchanged by the one read: 0 bytes is no manifest."""
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(b"")
+    assert sr.read_old_manifest(manifest) is None
+    assert "is empty; taken for no manifest" in capsys.readouterr().err

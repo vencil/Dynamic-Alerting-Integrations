@@ -12,7 +12,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
 import { parseYaml } from './_common/validation/yaml-parser.js';
 import { fetchPageData } from './_common/api/api-fetch.js';
-import { generateSampleYaml, simulateAlerts } from './_common/sim/alert-engine.js';
+import { generateSampleYaml, simulateAlerts, unreadableThresholdMessage } from './_common/sim/alert-engine.js';
 import { RulePackSelector } from './portal-shared.jsx';
 
 const t = window.__t || ((zh, en) => en);
@@ -213,14 +213,19 @@ function AlertPreviewTab() {
           {/* Summary bar */}
           <div className="flex gap-3 mb-3 text-sm">
             <span className="px-2 py-1 bg-red-100 text-red-800 rounded">
-              {t('觸發中', 'Firing')}: {alerts.filter(a => a.firing).length}
+              {t('觸發中', 'Firing')}: {alerts.filter(a => a.firing || a.critical_firing).length}
             </span>
             <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
               OK: {alerts.filter(a => a.severity === 'ok').length}
             </span>
             <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded">
-              {t('無閾值/已禁用', 'No threshold/Disabled')}: {alerts.filter(a => !a.threshold).length}
+              {t('無閾值/已禁用', 'No threshold/Disabled')}: {alerts.filter(a => a.severity === 'no-threshold' || a.severity === 'disabled').length}
             </span>
+            {alerts.some(a => a.raw !== undefined) && (
+              <span className="px-2 py-1 bg-red-100 text-red-800 rounded" data-testid="unreadable-count">
+                {t('exporter 不會讀', 'Exporter will not read')}: {alerts.filter(a => a.raw !== undefined).length}
+              </span>
+            )}
           </div>
 
           {/* Grouped alert results */}
@@ -260,9 +265,19 @@ function AlertPreviewTab() {
                           {a.threshold != null ? (
                             <span>
                               {a.threshold}
-                              {a.critical_threshold ? ` / ${a.critical_threshold}` : ''}
+                              {a.critical_threshold != null ? ` / ${a.critical_threshold}` : ''}
+                            </span>
+                          ) : a.raw !== undefined ? (
+                            <span className="text-red-700" data-testid={`unreadable-${a.metric}`}>
+                              {unreadableThresholdMessage(a.raw)}
+                              {a.critical_threshold != null ? ` (critical: ${a.critical_threshold})` : ''}
                             </span>
                           ) : '-'}
+                          {a.critical_unreadable !== undefined && (
+                            <span className="block text-red-700" data-testid={`critical-unreadable-${a.metric}`}>
+                              {`${a.metric}_critical: ${unreadableThresholdMessage(a.critical_unreadable, 'critical')}`}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-1.5 text-center text-xs">
                           {recData?.recommendations?.[a.metric] ? (
@@ -301,7 +316,7 @@ function AlertPreviewTab() {
                                 style={thresholdMarkerStyle}
                                 title={`threshold: ${a.threshold}`}
                               />
-                              {a.critical_threshold && (
+                              {a.critical_threshold != null && (
                                 <div
                                   className="absolute top-0 h-full w-0.5 bg-red-700"
                                   style={criticalMarkerStyle}
@@ -325,6 +340,8 @@ function AlertPreviewTab() {
                             <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">FIRING</span>
                           ) : a.severity === 'disabled' ? (
                             <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs font-medium">DISABLED</span>
+                          ) : a.severity === 'unreadable' ? (
+                            <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded-full text-xs font-medium">{t('讀不懂', 'UNREADABLE')}</span>
                           ) : a.severity === 'no-threshold' ? (
                             <span className="px-2 py-0.5 bg-gray-100 text-gray-400 rounded-full text-xs font-medium">—</span>
                           ) : (

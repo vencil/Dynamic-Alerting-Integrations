@@ -253,6 +253,12 @@ class TestAnalyzeGaps:
 # load_tenant_configs
 # ============================================================
 
+def _text(path):
+    """The file's text, as the CLI's declared --tenant-config reads it (#3797)."""
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 class TestLoadTenantConfigs:
     """load_tenant_configs() 配置載入。"""
 
@@ -260,7 +266,7 @@ class TestLoadTenantConfigs:
         """單檔載入正確解析。"""
         write_yaml(config_dir, "test.yaml", "mysql_connections: 50\n")
         path = os.path.join(config_dir, "test.yaml")
-        configs = ag.load_tenant_configs(tenant_config=path)
+        configs = ag.load_tenant_configs(tenant_config=path, tenant_text=_text(path))
         assert len(configs) == 1
         assert "test" in configs
 
@@ -326,7 +332,7 @@ class TestLoadTenantConfigs:
                           "tenants:\n"
                           "  db-a:\n"
                           "    custom_pg_conn: 100\n")
-        configs = ag.load_tenant_configs(tenant_config=path)
+        configs = ag.load_tenant_configs(tenant_config=path, tenant_text=_text(path))
         assert set(configs) == {"db-a"}
         assert configs["db-a"]["custom_pg_conn"] == 100
 
@@ -347,7 +353,7 @@ class TestLoadTenantConfigs:
         from _lib_exitcodes import CallerError
         path = write_yaml(config_dir, f"{name}.yaml", text)
         with pytest.raises(CallerError) as exc:
-            ag.load_tenant_configs(tenant_config=path)
+            ag.load_tenant_configs(tenant_config=path, tenant_text=_text(path))
         assert exc.value.reason == "file_unreadable"
         assert str(exc.value) == (f"--tenant-config {path}: the top level is not a mapping "
                                   f"(got {got})")
@@ -356,7 +362,7 @@ class TestLoadTenantConfigs:
         """An empty (or null) document is an empty mapping to parse-tree — the
         exporter's reading — so it stays a tenant with no keys."""
         path = write_yaml(config_dir, "blank.yaml", "")
-        assert ag.load_tenant_configs(tenant_config=path) == {"blank": {}}
+        assert ag.load_tenant_configs(tenant_config=path, tenant_text=_text(path)) == {"blank": {}}
 
     def test_wrapper_tenants_reach_gap_analysis(self, config_dir, da_guard_env):
         """端到端：wrapper 租戶的 custom_ 指標真的進到 gap 分析。"""
@@ -390,7 +396,7 @@ class TestSingleFileReadsParseTree:
     def test_unquoted_yes_is_the_string_yes(self, config_dir, da_guard_env):
         """`yes` 是字串 "yes"（yaml.v3），不是 PyYAML 的 True。"""
         path = write_yaml(config_dir, "t.yaml", "tenants:\n  t1:\n    custom_x: yes\n")
-        configs = ag.load_tenant_configs(tenant_config=path)
+        configs = ag.load_tenant_configs(tenant_config=path, tenant_text=_text(path))
         assert configs == {"t1": {"custom_x": "yes"}}
         p = _run_tool("--tenant-config", path, "--json")
         assert p.returncode == 0, p.stderr
@@ -399,7 +405,7 @@ class TestSingleFileReadsParseTree:
     def test_tenant_id_is_source_text(self, config_dir, da_guard_env):
         """租戶 id `010:` 讀成 "010"，不是整數 10 / 8。"""
         path = write_yaml(config_dir, "t.yaml", "tenants:\n  010:\n    custom_x: 1\n")
-        assert ag.load_tenant_configs(tenant_config=path) == {"010": {"custom_x": 1}}
+        assert ag.load_tenant_configs(tenant_config=path, tenant_text=_text(path)) == {"010": {"custom_x": 1}}
 
     def test_date_value_json_is_its_source_text(self, config_dir, da_guard_env):
         """日期值：`--json` rc 0、輸出原文（修前 PyYAML 的 date → TypeError、rc 2）；

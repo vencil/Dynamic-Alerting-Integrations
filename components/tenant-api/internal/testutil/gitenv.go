@@ -10,11 +10,19 @@ import (
 	"strings"
 )
 
-// gitAutoMaintenanceOff is the config DisableGitAutoMaintenance writes.
+// gitAutoMaintenanceOff is the config DisableGitAutoMaintenance writes to
+// stop git's automatic maintenance.
 var gitAutoMaintenanceOff = [][2]string{
 	{"maintenance.auto", "false"},
 	{"gc.auto", "0"},
 	{"receive.autogc", "false"},
+}
+
+// gitSigningOff is the config DisableGitAutoMaintenance writes so that no
+// commit or tag a test makes asks the host to sign it (#3889).
+var gitSigningOff = [][2]string{
+	{"commit.gpgsign", "false"},
+	{"tag.gpgsign", "false"},
 }
 
 // gitDriverKey matches the git config keys tenant-api refuses to run with
@@ -22,9 +30,10 @@ var gitAutoMaintenanceOff = [][2]string{
 // this package). git reports them with section and variable lower-cased.
 var gitDriverKey = regexp.MustCompile(`^(filter\..+\.(clean|smudge|process)|diff\..+\.(textconv|command)|merge\..+\.driver)$`)
 
-// DisableGitAutoMaintenance turns off git's automatic maintenance for every
-// git process this test binary starts, directly or through the code under
-// test, including the git processes those start in other repositories. Call
+// DisableGitAutoMaintenance turns off git's automatic maintenance, and commit
+// and tag signing, for every git process this test binary starts, directly or
+// through the code under test, including the git processes those start in
+// other repositories. Call
 // it from TestMain before m.Run() in any package whose tests run git, and call
 // the returned cleanup after m.Run() (before os.Exit).
 //
@@ -37,6 +46,14 @@ var gitDriverKey = regexp.MustCompile(`^(filter\..+\.(clean|smudge|process)|diff
 // gate (PR #1966) and this module's handler tests (PR #1979, and again on the
 // bare remote of a local-transport push).
 //
+// Why signing is off too (#3889): a developer's commit.gpgsign = true (with
+// gpg.format, gpg.ssh.program, ...) would otherwise be copied below and make
+// every commit a test makes call the host's signer. Test commits never need
+// a signature and CI has no signer, so the tests must not depend on one: a
+// signer that waits on an agent or a prompt stalls them, and a broken one
+// fails every commit with "failed to write commit object", which reads as a
+// regression in tenant-api's write path.
+//
 // The settings go into a temporary global config file named by
 // GIT_CONFIG_GLOBAL. GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n would not do: git
 // strips those from the environment when it spawns receive-pack or
@@ -45,8 +62,8 @@ var gitDriverKey = regexp.MustCompile(`^(filter\..+\.(clean|smudge|process)|diff
 //
 // The file first holds a copy of the system and global config git read
 // before (includes resolved), so a developer's or CI's own settings
-// (user.*, safe.directory, ...) keep working; the settings above come after
-// the copy and win. GIT_CONFIG_NOSYSTEM is set, so the system file is read
+// (user.*, safe.directory, ...) keep working; both groups of settings above
+// come after the copy and win. GIT_CONFIG_NOSYSTEM is set, so the system file is read
 // only through the copy.
 //
 // The copy leaves out the filter / diff / merge driver keys tenant-api
@@ -68,7 +85,7 @@ func DisableGitAutoMaintenance() (cleanup func(), err error) {
 	}
 	var b strings.Builder
 	b.WriteString(copied)
-	for _, kv := range gitAutoMaintenanceOff {
+	for _, kv := range append(append([][2]string{}, gitAutoMaintenanceOff...), gitSigningOff...) {
 		section, key, _ := strings.Cut(kv[0], ".")
 		fmt.Fprintf(&b, "[%s]\n\t%s = %s\n", section, key, kv[1])
 	}

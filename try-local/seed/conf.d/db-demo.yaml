@@ -30,7 +30,7 @@ tenants:
       db_type: "mariadb"
     # Minimal tenant routing (#2315), so this seed is also a routing fixture:
     # validate.yaml runs `generate_alertmanager_routes.py --validate --strict
-    # --policy .github/custom-rule-policy.yaml` over this tree, and without a
+    # --policy .github/deployment-policy.yaml` over this tree, and without a
     # `_routing` block that gate would check zero routes here.
     # ⚠️ The try-local Alertmanager does NOT load generated routes — it runs
     # the static try-local/alertmanager.yml (receiver 'null', nothing sent),

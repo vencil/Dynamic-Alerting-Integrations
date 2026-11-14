@@ -486,7 +486,7 @@ def main():
 
     # 構造比對組
     pairs = []
-    if args.mapping:
+    if args.mapping is not None:  # '' is given: refused, named (#3797)
         pairs = load_mapping_pairs(args)
         print(f"📂 載入 {len(pairs)} 組比對自 {args.mapping}")
     elif args.old and args.new:

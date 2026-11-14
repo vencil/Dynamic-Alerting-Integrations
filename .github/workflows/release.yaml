@@ -381,6 +381,13 @@ jobs:
           exit-code: 1
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # Bundled-amtool (Alertmanager) binary CVEs only: every entry is
+          # scoped with `paths:` to usr/local/bin/amtool, so the same id in a
+          # first-party binary still fails this step. ⛔ WHICH ids, on what
+          # evidence and until when is NOT restated here — read the register
+          # (components/da-tools/.trivyignore.yaml + amtool.openvex.json).
+          # Gate stays HARD (exit-code 1).
+          trivyignores: components/da-tools/.trivyignore.yaml
 
       # #3258: EXECUTE the candidate before it is signed or promoted. Trivy
       # reads the image's packages; nothing else in this release runs it, and
