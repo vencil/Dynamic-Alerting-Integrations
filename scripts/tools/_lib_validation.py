@@ -1519,8 +1519,10 @@ def configmap_key_problem(name: str) -> str | None:
         bad = sorted({c for c in name if not _CONFIGMAP_KEY_RE.match(c)})
         shown = " ".join(repr(c) for c in bad) or "(empty name)"
         return f"contains characters a key may not hold: {shown}"
-    if name in (".", ".."):
-        return f"must not be {name!r}"
+    if name == ".":
+        return "must not be '.'"
+    if name == "..":
+        return "must not be '..'"
     if name.startswith(".."):
         return "must not start with '..'"
     return None
