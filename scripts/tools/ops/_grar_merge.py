@@ -46,6 +46,7 @@ from _lib_validation import (  # noqa: E402  (#1560 Secret references)
     is_secret_ref, receiver_value_repr, ref_path_text, ref_value_at, shown_value,
     site_path_text,
 )
+from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into findings)
 
 
 # ── #2766 (ADR-036 §4): every warning-stream line is a structured finding ──
@@ -379,7 +380,9 @@ class Finding(str):
         obj.blocks = blocks
         obj.tenant = tenant
         obj.policy = policy
-        obj.file = file
+        # #3703: a conf.d path the author named, through its one exit here,
+        # so every `file=` of every producer is covered.
+        obj.file = shown_file(file)
         obj.field = field
         return obj
 

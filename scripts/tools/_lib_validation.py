@@ -1438,6 +1438,29 @@ def shown_key(key: Any) -> str:
     return f"<key:{digest[:6]}>"
 
 
+#: A segment ``shown_key`` already replaced: ``shown_file`` keeps it, so
+#: showing a shown path again is the same path (a ``Finding`` rebuilt from
+#: another one's fields), not a stand-in of a stand-in.
+_STAND_IN_RE = re.compile(r"<key:[0-9a-f]{6}>")
+
+
+def shown_file(path: Any) -> "str | None":
+    """⛔ THE one exit of a conf.d path into a message or a structured field
+    (``Finding.file``) — the config author names the files and directories
+    of the tree, so a name is content too (#3703, owner decision).
+
+    The path is relative to the conf.d root (``team-a/db-x.yaml``); each
+    ``/``-separated segment is ``shown_key`` — the same name rule, the same
+    ``<key:xxxxxx>`` stand-in — and the segments are joined again with
+    ``/``. A segment that is already a stand-in stays as it is, so the exit
+    is idempotent. ``None`` is ``None``. ``--config-dir`` is the operator's
+    argument, not the author's text: it does not come here."""
+    if path is None:
+        return None
+    return "/".join(seg if _STAND_IN_RE.fullmatch(seg) else shown_key(seg)
+                    for seg in str(path).split("/"))
+
+
 def key_segment(key: Any) -> str:
     """One segment of a structured path (``Finding.field``, ``policy``) that
     the config author wrote: ``shown_key`` — a path never carries a URL a
