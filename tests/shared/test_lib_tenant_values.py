@@ -591,6 +591,42 @@ def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
+_WHOLE_SV_HEAD = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
+            '"unreadable": [], "aliases": {}, "root_defaults_refused": [], ')
+_WHOLE_SV_TENANT = ('"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, '
+              '"state_filters": {}, "time_boxes": {}, "keys": {}')
+
+
+@pytest.mark.parametrize("load,tenants", [
+    (tv.load_served_tree, '[]'),
+    (tv.load_served_tree, '{"t": []}'),
+    (tv.load_served_tree, '{"t": {' + _WHOLE_SV_TENANT.replace('"severities": {}, ', '') + '}}'),
+    (tv.load_served_tree, '{"t": {' + _WHOLE_SV_TENANT.replace('"unserved": {}', '"unserved": 1') + '}}'),
+    (tv.load_served_tree, '{"t": {' + _WHOLE_SV_TENANT.replace('"dropped": {}', '"dropped": []') + '}}'),
+    (tv.load_served_tree, '{"t": {' + _WHOLE_SV_TENANT + ', "custom_alerts": 1}}'),
+    (tv.load_served_schedules, '[]'),
+    (tv.load_served_schedules, '{"t": "x"}'),
+], ids=["tree-list", "tree-tenant-list", "no-severities", "unserved", "dropped",
+        "custom-alerts", "schedules-list", "schedules-tenant-str"])
+def test_a_document_wrong_inside_is_broken_output_and_recorded(tmp_path, load, tenants):
+    """#3862: served-values' document right outside (schema, fields) but
+    wrong inside — `tenants` not an object of objects, a field of a tenant
+    missing or of another shape — is da-guard's broken output, recorded as
+    `bad_output`: never an AttributeError / TypeError / KeyError a caller
+    may take for a reading it can skip."""
+    import _lib_tool_fault
+    fake = _old_da_guard(tmp_path, _WHOLE_SV_HEAD + '"tenants": ' + tenants + '}')
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(tv.ServedValuesError) as ei:
+            load(tmp_path, binary=fake)
+        assert ei.value.broken and not ei.value.stale, ei.value
+        assert _lib_tool_fault.records() == [
+            _lib_tool_fault.ToolFault("da-guard", "served-values", "bad_output")]
+    finally:
+        _lib_tool_fault.clear()
+
+
 _ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
              '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')

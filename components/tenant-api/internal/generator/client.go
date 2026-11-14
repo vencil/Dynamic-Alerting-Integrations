@@ -235,19 +235,25 @@ type Status struct {
 	GeneratorVersion *string `json:"generator_version"`
 	GeneratorTooOld  *string `json:"generator_too_old"`
 	DAGuardVersion   *string `json:"da_guard_version"`
-	DAReadAvailable  bool    `json:"da_read_available"`
-	// DAGuardAvailable is nil from an image older than the shared key
-	// verdict tenant-api refuses on (ADR-038 decision 5): such an image
-	// passes writes without one, so it cannot judge them (ReadyForVerdicts).
+	// ToolFault is the latest judgement's tool faults (#3862): JSON null
+	// when it had none, absent from an image older than #3862. Its presence
+	// marks an image that gives the key verdict (ReadyForVerdicts).
+	ToolFault json.RawMessage `json:"tool_fault"`
+	// DAGuardAvailable is what an image from the shared key verdict
+	// (ADR-038 decision 5) up to #3862 sends instead of ToolFault; nil from
+	// an image older than the key verdict, or from one that sends ToolFault.
 	DAGuardAvailable *bool `json:"da_guard_available"`
 	Ready            bool  `json:"ready"`
 }
 
 // ReadyForVerdicts is whether the container can judge writes as tenant-api
-// takes them: ready, and an image that gives the key verdict
-// (DAGuardAvailable present). An older image answers ready, yet every write
-// it passes is refused 503 generator_too_old (Gate.refuseUnjudged).
-func (s *Status) ReadyForVerdicts() bool { return s.Ready && s.DAGuardAvailable != nil }
+// takes them: ready, and an image that gives the key verdict (ToolFault or,
+// before #3862, DAGuardAvailable present). An older image answers ready,
+// yet every write it passes is refused 503 generator_too_old
+// (Gate.refuseUnjudged).
+func (s *Status) ReadyForVerdicts() bool {
+	return s.Ready && (s.ToolFault != nil || s.DAGuardAvailable != nil)
+}
 
 // Status reads GET /v1/status.
 func (c *Client) Status(ctx context.Context) (*Status, error) {

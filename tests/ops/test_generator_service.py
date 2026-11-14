@@ -6,8 +6,9 @@ socket 打請求。
   fixture 各一筆，含會擋下的）。
 - 拒收該筆（HTTP 200、``result: rejected``）：期限（判定中到期時子孫程序一併
   結束）、排隊中到期、佇列滿、記憶體上限、沒有完整結果、git 讀兩次都失敗。
-- 容器不可用（503）：找不到 da-read、產生器比 policy 要求的舊、部署端 policy
-  檔不可用；每次判定都重查。
+- 容器不可用（503）：判定要跑的外部程式沒跑成（``tool_fault``，#3862；故障
+  注入矩陣在 ``test_gsvc_tool_fault_matrix.py``）、產生器比 policy 要求的舊、
+  部署端 policy 檔不可用；每次判定都重查。
 - git 讀取失敗重試一次；只實體化一般檔（100644／100755），symlink、gitlink
   等其他 mode 一律判 not_regular_file（#2981）。
 - 快取：同一棵樹只改一個檔時，只解析那個檔。
@@ -498,9 +499,10 @@ def test_git_read_is_retried_once(tmp_path, world, mode, want):
 
 def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
     """#3206: which component of a not-regular git entry is hidden is asked
-    of da-guard's names mode. When that run fails, the reply says so — an
-    incomplete judgement naming da-guard — not "reading the base commit from
-    git failed" (the git read succeeded)."""
+    of da-guard's names mode. When that run fails, the reply says so —
+    naming da-guard — not "reading the base commit from git failed" (the git
+    read succeeded). Exit 1 is a code parse-tree never uses: the program did
+    not run as da-guard does, 503 tool_fault (#3862)."""
     import stat
     real = provide_da_guard_path()
     wrapper = tmp_path / "da-guard-no-names"
@@ -521,12 +523,11 @@ def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
     with h.Service(tmp_path / "s", repo, bin_dir=bin_dir,
                    env={"DA_GUARD_BINARY": str(wrapper)}) as svc:
         status, doc = svc.validate(commit)
-    assert status == 200 and doc["result"] == "rejected", doc
-    assert doc["reason"] == "incomplete", doc
-    assert "da-guard parse-tree could not classify" in doc["message"], doc
-    assert "git" not in doc["message"].split("da-guard")[0], doc
-    # da-guard's own words reach the reply, not only the prefix.
-    assert "boom" in doc["message"], doc
+    assert status == 503 and doc["reason"] == "tool_fault", doc
+    assert "da-guard parse-tree (unexpected_exit)" in doc["message"], doc
+    assert "git" not in doc["message"], doc
+    # A program's prose never reaches the reply (it may carry paths).
+    assert "boom" not in doc["message"], doc
 
 
 def provide_da_guard_path() -> str:
@@ -720,11 +721,11 @@ def test_sha256_repository(tmp_path, world):
 # ── 503: container / policy unavailable ──────────────────────────────────
 
 @pytest.mark.parametrize("how", ["missing", "not_executable"])
-def test_da_read_missing_is_503(tmp_path, world, how):
+def test_a_da_read_that_does_not_run_is_503(tmp_path, world, how):
     """ADR-036 §3: whether Alertmanager accepts the rendered config is its
-    loader's answer (da-read). Without the da-read the judgement process
-    would run — $DA_READ_BINARY, then PATH — the container is unavailable,
-    checked before every judgement."""
+    loader's answer (da-read). A judgement whose da-read — $DA_READ_BINARY,
+    then PATH — did not run reached no verdict: 503 tool_fault naming it
+    (#3862), and not ready until a judgement runs without one."""
     if how == "missing":
         named = ""  # blank is not set: PATH is asked, and has no da-read
     else:
@@ -737,13 +738,17 @@ def test_da_read_missing_is_503(tmp_path, world, how):
                    env={"DA_READ_BINARY": named}) as svc:
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 503, doc
-        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "da_read_missing")
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "tool_fault")
+        reason = "not_found" if how == "missing" else "not_executable"
+        # its first run: the rule files' reading (prometheus-rules)
+        assert f"da-read prometheus-rules ({reason})" in doc["message"], doc
+        assert str(tmp_path) not in doc["message"], doc  # a program's name, never its path
         _s, st = svc.call("GET", "/v1/status")
-        assert st["da_read_available"] is False and st["ready"] is False
+        assert st["tool_fault"] == [{"binary": "da-read", "subcommand": "prometheus-rules",
+                                     "reason": reason}], st
+        assert st["ready"] is False
         m = svc.metrics()
-        assert m['da_generator_unavailable_total{reason="da_read_missing"}'] == 1
-        # No judgement process ran: the ratio keeps the last real reading (none).
-        assert m["da_generator_judgement_deadline_ratio"] == 0
+        assert m['da_generator_unavailable_total{reason="tool_fault"}'] == 1
 
 
 _READERS = {"da-guard": "DA_GUARD_BINARY", "da-read": "DA_READ_BINARY",
@@ -793,14 +798,14 @@ def test_a_da_read_that_appears_on_path_later_is_found_and_judges(tmp_path, worl
     svc, rbin = _relative_path_service(tmp_path, world, (), ("da-read",))
     with svc:
         status, doc = svc.validate(world["commits"]["clean"])
-        assert status == 503 and doc["reason"] == "da_read_missing", doc
+        assert status == 503 and doc["reason"] == "tool_fault", doc
         _s, st = svc.call("GET", "/v1/status")
-        assert st["da_read_available"] is False and st["ready"] is False, st
+        assert st["tool_fault"] and st["ready"] is False, st
         shutil.copy2(os.environ["DA_READ_BINARY"], rbin / "da-read")
-        _s, st = svc.call("GET", "/v1/status")
-        assert st["da_read_available"] is True and st["ready"] is True, st
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 200 and doc["result"] == "pass", doc
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["tool_fault"] is None and st["ready"] is True, st
 
 
 def test_ready_without_amtool(world):
@@ -808,17 +813,19 @@ def test_ready_without_amtool(world):
     nothing on the service's PATH is called amtool, and it is ready."""
     assert shutil.which("amtool", path=str(world["bin"])) is None
     _s, st = world["svc"].call("GET", "/v1/status")
-    assert st["da_read_available"] is True and st["ready"] is True, st
+    assert st["tool_fault"] is None and st["ready"] is True, st
     assert "amtool_available" not in st
     status, doc = world["svc"].validate(world["commits"]["clean"])
     assert status == 200 and doc["result"] == "pass", doc
 
 
-@pytest.mark.parametrize("how", ["missing", "not_executable", "does_not_run"])
-def test_da_guard_missing_is_503(tmp_path, world, how):
-    """ADR-036 §3 (2026-10-30): without a da-guard the judgement process can
-    run, no key verdict (ADR-038 §5) can be given — the container is
-    unavailable, checked before every judgement like da-read."""
+@pytest.mark.parametrize("how,reason", [("missing", "not_found"),
+                                        ("not_executable", "not_executable"),
+                                        ("does_not_run", "exec_failed")])
+def test_a_da_guard_that_does_not_run_is_503(tmp_path, world, how, reason):
+    """ADR-036 §3: the judgement reads conf.d through da-guard parse-tree, and
+    gives the key verdict (ADR-038 §5) with da-guard. A da-guard that did
+    not run is 503 tool_fault naming it (#3862) — the first of its runs."""
     target = tmp_path / "da-guard"
     if how == "not_executable":
         target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -830,13 +837,14 @@ def test_da_guard_missing_is_503(tmp_path, world, how):
                    env={"DA_GUARD_BINARY": str(target)}) as svc:
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 503, doc
-        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "da_guard_missing")
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "tool_fault")
+        assert f"da-guard parse-tree ({reason})" in doc["message"], doc
         _s, st = svc.call("GET", "/v1/status")
-        assert st["da_guard_available"] is False and st["ready"] is False
+        assert st["tool_fault"][0] == {"binary": "da-guard", "subcommand": "parse-tree",
+                                       "reason": reason}, st
+        assert st["ready"] is False
         m = svc.metrics()
-        assert m['da_generator_unavailable_total{reason="da_guard_missing"}'] == 1
-        # No judgement process ran: the ratio keeps the last real reading (none).
-        assert m["da_generator_judgement_deadline_ratio"] == 0
+        assert m['da_generator_unavailable_total{reason="tool_fault"}'] == 1
 
 
 @pytest.mark.parametrize("flag_is", ["missing", "not_executable", "blank", "the_real_one"])
@@ -863,39 +871,16 @@ def test_the_da_guard_flag_is_the_one_that_judges_and_is_reported(tmp_path, worl
         status, doc = svc.validate(world["commits"]["clean"])
         _s, st = svc.call("GET", "/v1/status")
         if flag_is == "blank":
-            assert status == 503 and doc["reason"] == "da_guard_missing", doc
-            assert "--da-guard-binary" not in doc["message"], doc
+            assert status == 503 and doc["reason"] == "tool_fault", doc
+            assert "da-guard parse-tree (not_found)" in doc["message"], doc
         elif flag_is != "the_real_one":
             assert status == 503, doc
-            assert doc["reason"] == "da_guard_missing", doc
-            assert f"--da-guard-binary {flag!r}" in doc["message"], doc
-            assert st["da_guard_available"] is False and st["da_guard_version"] is None
+            assert doc["reason"] == "tool_fault", doc
+            assert "da-guard parse-tree" in doc["message"], doc
+            assert st["tool_fault"] and st["da_guard_version"] is None, st
         else:
             assert status == 200 and doc["result"] == "pass", doc
-            assert st["da_guard_available"] is True and st["da_guard_version"], st
-
-
-def test_a_hanging_da_guard_is_probed_once(tmp_path, world):
-    """The --version probe runs on the event loop: a da-guard that hangs is
-    probed once per file (at start, before listening), its failure kept —
-    later judgements and status requests answer 503 at once."""
-    calls = tmp_path / "calls"
-    target = tmp_path / "da-guard"
-    target.write_text(f"#!/bin/sh\necho x >> '{calls}'\nsleep 30\n", encoding="utf-8")
-    target.chmod(0o755)
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
-                   env={"DA_GUARD_BINARY": str(target)}) as svc:
-        at_start = calls.read_text(encoding="utf-8").count("x")
-        assert at_start >= 1, "no probe before listening"
-        for _ in range(2):
-            start = time.monotonic()
-            status, doc = svc.validate(world["commits"]["clean"])
-            assert status == 503 and doc["reason"] == "da_guard_missing", doc
-            assert time.monotonic() - start < 2, "the probe ran again on the event loop"
-        _s, st = svc.call("GET", "/v1/status")
-        assert st["da_guard_available"] is False
-        # Startup also reads the reported version; requests ran it no more.
-        assert calls.read_text(encoding="utf-8").count("x") == at_start
+            assert st["tool_fault"] is None and st["da_guard_version"], st
 
 
 def test_tenant_api_knows_every_reason_the_service_sends():
@@ -1007,11 +992,11 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "da_read_available", "da_guard_available", "ready",
+                       "da_guard_version", "tool_fault", "ready",
                        "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
-    assert st["ready"] is True and st["da_guard_available"] is True
+    assert st["ready"] is True and st["tool_fault"] is None
     m = world["svc"].metrics()
     info = [k for k in m if k.startswith("da_generator_build_info")]
     assert info and f'generator_version="{st["generator_version"]}"' in info[0]

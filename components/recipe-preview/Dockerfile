@@ -134,6 +134,8 @@ COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py
 COPY scripts/tools/_lib_parse_tree.py           ./core/_lib_parse_tree.py
 COPY scripts/tools/_lib_godispatch.py           ./core/_lib_godispatch.py
 COPY scripts/tools/_lib_consumer_read.py        ./core/_lib_consumer_read.py
+# #3862: the three readers above record "this program did not run" there.
+COPY scripts/tools/_lib_tool_fault.py           ./core/_lib_tool_fault.py
 COPY scripts/tools/ops/guard_dispatch.py        ./core/ops/guard_dispatch.py
 COPY scripts/tools/_lib_python.py               ./core/_lib_python.py
 COPY scripts/tools/_lib_validation.py           ./core/_lib_validation.py

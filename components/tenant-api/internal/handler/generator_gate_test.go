@@ -288,8 +288,8 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 			return 200, v
 		}, 429, string(errcode.GeneratorBusy), "mismatch", true, ""},
 		{"validator unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
-			return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "da_read_missing", "message": "da-read is not found"}
-		}, 503, string(errcode.ValidatorUnavailable), "da_read_missing", true, "cannot judge writes"},
+			return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "tool_fault", "message": "da-read alertmanager (not_found)"}
+		}, 503, string(errcode.ValidatorUnavailable), "tool_fault", true, "cannot judge writes"},
 		{"policy unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "--policy: bad"}
 		}, 503, generator.CodePolicyUnavailable, "policy_unusable", true, "is unusable"},
@@ -320,8 +320,8 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 				return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "internal_error",
 					"message": "generator service error: OSError(2, '" + secret + "')"}
 			},
-			"da_read_missing": func(int, testutil.FakeValidateRequest) (int, any) {
-				return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "da_read_missing", "message": secret}
+			"tool_fault": func(int, testutil.FakeValidateRequest) (int, any) {
+				return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "tool_fault", "message": secret}
 			},
 			"policy_unusable": func(int, testutil.FakeValidateRequest) (int, any) {
 				return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": secret}

@@ -10,11 +10,13 @@ HTTP/1.1 on a Unix socket (no network port) and serves:
 * ``POST /v1/validate`` — judge a base commit plus writes; answers 200 with
   ``result`` ``pass`` / ``findings`` / ``rejected`` whenever this process
   reaches a verdict for that request, 400 for a malformed request, 503 when
-  the container cannot judge at all (``VALIDATOR_UNAVAILABLE``: no da-read,
-  no da-guard, a generator older than the policy's ``min_generator_version``;
-  ``POLICY_UNAVAILABLE``: the deployment ``--policy`` file is unusable);
+  the container cannot judge (``VALIDATOR_UNAVAILABLE``: an external program
+  the judgement runs — da-guard, da-read, da-crdecode — did not run
+  (``tool_fault``, #3862), a generator older than the policy's
+  ``min_generator_version``; ``POLICY_UNAVAILABLE``: the deployment
+  ``--policy`` file is unusable);
 * ``GET /v1/status`` — policy availability, generator and da-guard versions,
-  da-read and da-guard availability, readiness;
+  the latest judgement's tool fault, readiness;
 * ``GET /metrics`` — Prometheus text format.
 
 Defaults of every limit are in ``--help``; this docstring does not repeat
@@ -92,7 +94,7 @@ import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_chi
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
     UNAVAILABLE_REASONS, CacheStore, FrameReader, RequestError, ValidateRequest,
-    judgement_seconds, parse_validate_request,
+    judgement_seconds, parse_validate_request, tool_fault_message, tool_faults_of,
 )
 from _lib_parse_cache import restricted_loads  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (absolute_reader_binaries, #3424)
@@ -322,95 +324,23 @@ def da_guard_version(binary: Optional[str], timeout: float = 10) -> Optional[str
     return words[-1] if proc.returncode == 0 and words else None
 
 
-#: The last da-guard probed with ``--version``: ((path, mtime_ns, size),
-#: whether it answered). Failures are kept too, so a da-guard that hangs
-#: costs one probe per file, not one per judgement or status request.
-_DA_GUARD_RAN: list = [None]
-#: The probe's time limit. It runs on the event loop (a subprocess there is
-#: synchronous: no thread, and an asyncio child would race the SIGCHLD
-#: reaper), so it is short, and serve() runs it once before listening.
-DA_GUARD_PROBE_SECONDS = 3.0
-
-
 def _given(flag: Optional[str]) -> bool:
     """Whether --da-guard-binary names a da-guard. Blank is not given, as a
     blank $DA_GUARD_BINARY is not set (the dispatcher strips it)."""
     return bool(flag and flag.strip())
 
 
-def _da_guard_named(flag: Optional[str]) -> str:
-    """Where the one da-guard came from, for a line that says it is missing."""
-    return f"--da-guard-binary {flag!r}" if _given(flag) else "$DA_GUARD_BINARY, then PATH"
-
-
-def _via_flag(flag: Optional[str]) -> str:
-    """`` (--da-guard-binary '<value>')`` when the flag named it, else ``""``."""
-    return f" (--da-guard-binary {flag!r})" if _given(flag) else ""
-
-
 def _pin_readers() -> None:
     """Each reader binary found now, written absolute to its variable
     (``_lib_consumer_read.absolute_reader_binaries``, a ``$PATH`` hit
-    included). ⛔ Before every check
-    of one, not only at start: the judgement process inherits the variables
-    and resolves the readers from its own job directory, where a relative
-    ``$PATH`` entry names another place — so what a check finds must be what
-    the judgement runs. A reader that appears on ``$PATH`` after start is
-    found, and pinned, by the next check; once pinned, that path is the
-    reader until the service restarts."""
+    included). ⛔ Before every judgement, not only at start: the judgement
+    process inherits the variables and resolves the readers from its own job
+    directory, where a relative ``$PATH`` entry names another place — so the
+    reader found here is the one the judgement runs. A reader that appears
+    on ``$PATH`` after start is found, and pinned, before the next
+    judgement; once pinned, that path is the reader until the service
+    restarts."""
     _lib_consumer_read.absolute_reader_binaries(pin_path_hits=True)
-
-
-def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
-    """Why the judgement process cannot run da-guard — the one it resolves
-    ($DA_GUARD_BINARY, then PATH) is missing, not executable, or does not
-    answer ``--version`` (a wrong architecture, a broken interpreter line)
-    — or None. Checked before every judgement, like da-read (ADR-036 §3):
-    without it the key verdict (ADR-038 §5) cannot be given. The run is
-    repeated only when the file changes; its result, good or bad, is kept."""
-    import guard_dispatch
-    _pin_readers()
-    exe = guard_dispatch.DISPATCHER.resolve_binary(None)
-    if exe is None:
-        return (f"da-guard is not found ({_da_guard_named(flag)}): without it "
-                "the key verdict cannot be given")
-    try:
-        st = os.stat(exe)
-    except OSError as exc:
-        return (f"da-guard at {exe}{_via_flag(flag)} cannot be read ({exc}): "
-                "the key verdict cannot be given")
-    if not (stat.S_ISREG(st.st_mode) and os.access(exe, os.X_OK)):
-        return (f"da-guard at {exe}{_via_flag(flag)} is not an executable file: "
-                "the key verdict cannot be given")
-    seen = (exe, st.st_mtime_ns, st.st_size)
-    if _DA_GUARD_RAN[0] is None or _DA_GUARD_RAN[0][0] != seen:
-        _DA_GUARD_RAN[0] = (seen, da_guard_version(exe, DA_GUARD_PROBE_SECONDS) is not None)
-    if not _DA_GUARD_RAN[0][1]:
-        return (f"da-guard at {exe}{_via_flag(flag)} does not run (`--version` failed): "
-                "the key verdict cannot be given")
-    return None
-
-
-def da_read_problem() -> Optional[str]:
-    """Why the judgement process cannot run da-read — the one the route
-    generator's Alertmanager check resolves ($DA_READ_BINARY, then PATH:
-    ``_lib_consumer_read.da_read_binary``) is missing or is not an executable
-    file — or None. Checked before every judgement (ADR-036 §3): without it
-    Alertmanager's loader cannot be asked whether it accepts the rendered
-    config, so no verdict is given."""
-    _pin_readers()
-    exe = _lib_consumer_read.da_read_binary()
-    if exe is None:
-        return ("da-read is not found ($DA_READ_BINARY, then PATH): without it "
-                "Alertmanager's reading of the rendered config cannot be asked "
-                "for, so no verdict is given")
-    try:
-        st = os.stat(exe)
-    except OSError as exc:
-        return f"da-read at {exe} cannot be read ({exc}): no verdict is given"
-    if not (stat.S_ISREG(st.st_mode) and os.access(exe, os.X_OK)):
-        return f"da-read at {exe} is not an executable file: no verdict is given"
-    return None
 
 
 def snapshot_policy(path: Optional[str], into: str) -> PolicySnapshot:
@@ -458,6 +388,10 @@ class Service:
         # #3415: the one resolution ($DA_GUARD_BINARY, which main() set from
         # --da-guard-binary): the version reported is the da-guard that judges.
         self.da_guard_version = da_guard_version(None)
+        #: #3862: the latest judgement's tool faults (``_lib_tool_fault``
+        #: records, as dicts), or None when it had none. Not ready while set;
+        #: only the next judgement whose outcome is ``ran`` clears it.
+        self.tool_fault: Optional[list] = None
         self._job_seq = 0
         self.connections = 0
         self.inflight_body_bytes = 0
@@ -729,12 +663,9 @@ class Service:
         remaining = ticket.deadline_at - self.loop.time()
         if remaining <= 0:
             return _rejected("deadline", "the deadline passed while queued")
-        missing = da_read_problem()
-        if missing is not None:
-            return _unavailable("VALIDATOR_UNAVAILABLE", "da_read_missing", missing)
-        missing = da_guard_problem(self.s.da_guard_binary)
-        if missing is not None:
-            return _unavailable("VALIDATOR_UNAVAILABLE", "da_guard_missing", missing)
+        # Whether its programs run is the judgement's own answer (#3862):
+        # no probe here. Only the readers' paths are pinned before it.
+        _pin_readers()
         job_dir = self._new_job_dir()
         try:
             policy = snapshot_policy(self.s.policy, job_dir)
@@ -787,9 +718,14 @@ class Service:
             run = await self._spawn(
                 self._job(ValidateRequest(commit, (), 0), job_dir, None, warm=True),
                 self.loop.time() + self.s.warm_seconds, request=False)
-            complete = (os.WIFEXITED(run.status) and os.WEXITSTATUS(run.status) == 0
-                        and run.reader.ended and run.reader.result is not None
-                        and run.reader.result.get("outcome") == "warmed")
+            ended = (os.WIFEXITED(run.status) and os.WEXITSTATUS(run.status) == 0
+                     and run.reader.ended and run.reader.result is not None)
+            if ended and run.reader.result.get("outcome") == "tool_fault":
+                # #3862: a program the warming run reads with did not run —
+                # not ready. A warming run that ran clears nothing: it runs
+                # parse-tree only, not every program a judgement does.
+                self.tool_fault = tool_faults_of(run.reader.result)
+            complete = ended and run.reader.result.get("outcome") == "warmed"
             if complete:
                 outcome = "completed"
             elif self._preempting:
@@ -935,7 +871,17 @@ class Service:
         cache = {**cache, **received} if isinstance(cache, dict) else received
         common = {"stderr_tail": res.get("stderr_tail", ""),
                   "validated": res.get("validated"), "cache": cache}
+        if outcome == "tool_fault":
+            # #3862: an external program of this judgement did not run, so no
+            # verdict was reached — whatever the generator concluded without it.
+            self.tool_fault = tool_faults_of(res)
+            return _unavailable("VALIDATOR_UNAVAILABLE", "tool_fault",
+                                tool_fault_message(self.tool_fault))
         if outcome == "ran":
+            # #3862: the one outcome that shows every program of the
+            # judgement ran. Any other (a bad request, a git read, memory,
+            # the deadline, …) may never have reached them: it clears nothing.
+            self.tool_fault = None
             rc = res.get("rc")
             doc = {"result": "pass" if rc == 0 else "findings",
                    "rc": rc, "findings": res.get("findings"), **common}
@@ -977,8 +923,6 @@ class Service:
 
     def _status(self) -> Response:
         policy = self._policy_now()
-        da_read = da_read_problem() is None
-        da_guard = da_guard_problem(self.s.da_guard_binary) is None
         too_old = (generator_version_problem(self.generator_version,
                                              policy.min_generator_version)
                    if policy.available else None)
@@ -990,9 +934,8 @@ class Service:
             "generator_version": self.generator_version,
             "generator_too_old": too_old,
             "da_guard_version": self.da_guard_version,
-            "da_read_available": da_read,
-            "da_guard_available": da_guard,
-            "ready": policy.available and da_read and da_guard and too_old is None,
+            "tool_fault": self.tool_fault,
+            "ready": policy.available and too_old is None and self.tool_fault is None,
             "cache_base_coverage_ratio": self.store.coverage(),
             "warm": {"ref": self.s.warm_ref or None, "commit": self.warm_commit,
                      "error": self.warm_error, "running": self.warming,
@@ -1417,7 +1360,6 @@ def _prepare_work_dir(path: str) -> None:
 async def serve(settings: Settings, object_format: str) -> None:
     service = Service(settings, object_format)
     service.loop = asyncio.get_running_loop()
-    da_guard_problem(settings.da_guard_binary)  # the probe, before any request can wait on it
     old = os.umask(0o177)  # the socket is created 0600
     try:
         server = await asyncio.start_unix_server(
