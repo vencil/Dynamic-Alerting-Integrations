@@ -371,7 +371,7 @@ def _build_tools_rules():
     # helm/threshold-exporter's config-validation CronJob (#3353) runs the
     # da-tools image's validate-config, pinned the same two-line way under
     # `configValidation.image`. The pin decides which rows the CronJob judges
-    # (v2.9.0 predates yaml_quoting and unread_keys), so a release that does
+    # (v2.9.0 predates yaml_quoting and the shared key verdict), so a release that does
     # not bump it leaves direct mode judged by an older validate-config.
     rules.append({
         "file": "helm/threshold-exporter/values.yaml",

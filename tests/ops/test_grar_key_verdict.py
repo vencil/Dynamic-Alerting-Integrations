@@ -1,6 +1,6 @@
 """ADR-038 §5：路由產生器 `--validate` 報出共用判決（`_lib_key_verdict`）。
 
-- 判到的鍵印在 stderr，行文與 validate-config `unread_keys` 列相同，各是一筆
+- 判到的鍵印在 stderr（validate-config 的 `routes` 列就是這次執行），各是一筆
   `blocks: never` 的 finding；結束碼不變（#3016 之前只報不擋）。
 - 產生器在 `_validate_mode` 之前就結束的樹（沒有可產生的路由或抑制規則，
   rc 1）也判。
@@ -90,6 +90,28 @@ def test_validate_fails_on_the_shared_verdicts_errors(tmp_path, files):
     assert doc["exit_code"] == 1
 
 
+def test_a_reserved_keys_schedule_fails_validate(tmp_path):
+    """#3834: a reserved key written with a time window in the tenant's own
+    file is read as its `default` alone (#3269) — before this, `--validate`
+    passed it (`OK: all configs valid`). Now the verdict's schedule_unread
+    error fails the run; the same window on a threshold key is read and
+    passes."""
+    window = "      default: disable\n      overrides:\n        - {window: \"01:00-02:00\", value: all}\n"
+    res, doc = _cli(tmp_path, {"_defaults.yaml": DEFAULTS,
+                               "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode:\n" + window},
+                    "--validate")
+    assert res.returncode == 1, res.stderr
+    assert [(r["kind"], r["blocks"], r["severity"], r["field"]) for r in _key_records(doc)] == [
+        ("key_schedule_unread", "validate", "error", "_silent_mode")], doc
+    res, doc = _cli(tmp_path / "threshold", {
+        "_defaults.yaml": DEFAULTS,
+        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent:\n      default: \"70\"\n"
+                    "      overrides:\n        - {window: \"01:00-02:00\", value: \"90\"}\n"},
+        "--validate")
+    assert res.returncode == 0, res.stderr
+    assert _key_records(doc) == [], doc
+
+
 def test_a_warning_alone_does_not_fail_validate(tmp_path):
     """A `disable` that switches nothing off is a warning (decision 8): it is
     reported, `blocks: never`, and the run passes."""
@@ -99,17 +121,6 @@ def test_a_warning_alone_does_not_fail_validate(tmp_path):
     assert res.returncode == 0, res.stderr
     assert [(r["kind"], r["blocks"], r["severity"]) for r in _key_records(doc)] == [
         ("key_disable_noop", "never", "warning")], doc
-
-
-def test_the_verdict_lines_are_validate_configs(tmp_path):
-    """One formatter: validate-config's `unread_keys` row prints the same lines."""
-    sys.path.insert(0, str(cases.REPO / "scripts" / "tools" / "ops"))
-    import validate_config as vc
-    res, _doc = _cli(tmp_path, THRESHOLDS_ONLY, "--validate")
-    row = vc.check_unread_keys(str(tmp_path / "conf.d"))
-    assert row["details"], row
-    for line in row["details"]:
-        assert f"key verdict: {line}" in res.stderr, (line, res.stderr)
 
 
 def test_without_validate_nothing_is_judged(tmp_path):
@@ -201,8 +212,7 @@ def _main(tmp_path, monkeypatch, judge, files=THRESHOLDS_ONLY, **kw):
 
 @pytest.mark.parametrize("exc, rc", [
     (tv.ServedValuesError("da-guard served-values exited -6", -6, ""), 1),
-    # The binary's own fault is no verdict on the config: rc 2, as
-    # validate-config's unread_keys (#3016 review).
+    # The binary's own fault is no verdict on the config: rc 2 (#3016 review).
     (tv.DaGuardNotFoundError("no da-guard"), 2),
     (tv.DaGuardError("da-guard key-verdict exited 139", 139, "", broken=True), 2),
     (tv.DaGuardError("da-guard key-verdict: no field blocks", 0, "", stale=True), 2),

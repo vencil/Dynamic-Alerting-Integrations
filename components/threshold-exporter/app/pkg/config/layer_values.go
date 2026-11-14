@@ -66,6 +66,11 @@ type LayerValueProblem struct {
 	// RefersToRoot: the problem is a name the root platform files do not
 	// define (`_profile`) — judged only when a root platform file was read.
 	RefersToRoot bool
+	// Schedule (#3834): the problem is not the value but the schedule it is
+	// written with (scheduledReserved, #3269) — LayerScheduleProblems'.
+	// Reading is then the schedule as written (ScheduleReading), not a
+	// reader's reading of the `default`.
+	Schedule bool
 }
 
 // LayerValueProblems is every reserved value of built's files the exporter
@@ -80,13 +85,12 @@ type LayerValueProblem struct {
 // is judged whether or not the tenant exists; the verdict keeps the tenants
 // it judges.
 func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
-	if scan == nil || built == nil {
+	if built == nil {
 		return nil
 	}
-	carrier := selectedRootCarrierKey(scan)
 	profiles := built.Config.Profiles
 	var out []LayerValueProblem
-	add := func(file, layer, owner string, values map[string]ScheduledValue) {
+	eachLayerValues(scan, built, func(file, layer, owner string, values map[string]ScheduledValue, _ ThresholdConfig) {
 		for key, sv := range values {
 			if p := layerValueProblem(layer, key, sv, values, profiles); p != "" {
 				canon, _ := canonicalKeyFor(key)
@@ -95,22 +99,85 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 					Reading: ValueReading(canon, sv), RefersToRoot: canon == "_profile"})
 			}
 		}
+	})
+	sortLayerValueProblems(out)
+	return out
+}
+
+// LayerScheduleProblems (#3834) is every reserved value of built's files
+// written with a schedule its readers ignore (scheduledReserved, #3269:
+// they read the `default` alone), in the file and layer that writes it —
+// LayerValueProblems' files and layers, sorted alike. A key judged is one
+// some reader reads in that layer (someReaderReadsIn) — not the exporter
+// alone: `_routing_profile` (the generator's) and `_namespaces` (the
+// annotation's) read the `default` alone too. A key no reader reads there
+// is the verdict's unread finding, not this one. Problem is
+// scheduleProblem, the write gate's (newScheduleFinding); Reading the
+// schedule as written (ScheduleReading).
+//
+// The decode keeps only each such value's `default` (stripScheduledReserved),
+// so the schedule is the one recorded beside the file's partial
+// (ScheduledReservedEntry), not the partial's value.
+func LayerScheduleProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
+	if built == nil {
+		return nil
 	}
+	var out []LayerValueProblem
+	eachLayerValues(scan, built, func(file, layer, owner string, values map[string]ScheduledValue, fc ThresholdConfig) {
+		if fc.notes == nil {
+			return
+		}
+		section := "tenants"
+		if layer == ValueLayerProfile {
+			section = "profiles"
+		}
+		for _, e := range fc.notes.scheduledReserved {
+			if e.Section != section || e.Owner != owner {
+				continue
+			}
+			if !someReaderReadsIn(layer, e.Key, values) {
+				continue
+			}
+			out = append(out, LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: e.Key,
+				Problem: scheduleProblem, Value: e.written.Default, Reading: ScheduleReading(e.written),
+				Schedule: true})
+		}
+	})
+	sortLayerValueProblems(out)
+	return out
+}
+
+// eachLayerValues calls fn for every `tenants:` / `profiles:` entry of the
+// files the flat merge reads, with the layer it is written in: a root
+// platform file's `tenants.<id>` (ValueLayerPlatform) and `profiles.<name>`
+// (ValueLayerProfile), a tenant file's `tenants.<id>` (ValueLayerTenant).
+// An unselected root carrier is not among them; a nested `_` file
+// contributes nothing. fc is the file's partial.
+func eachLayerValues(scan *TreeScan, built *FlatBuild,
+	fn func(file, layer, owner string, values map[string]ScheduledValue, fc ThresholdConfig)) {
+	if scan == nil || built == nil {
+		return
+	}
+	carrier := selectedRootCarrierKey(scan)
 	for file, fc := range built.FileConfigs {
 		switch {
 		case isRootPlatformKey(file, carrier):
 			for tid, values := range fc.Tenants {
-				add(file, ValueLayerPlatform, tid, values)
+				fn(file, ValueLayerPlatform, tid, values, fc)
 			}
 			for name, values := range fc.Profiles {
-				add(file, ValueLayerProfile, name, values)
+				fn(file, ValueLayerProfile, name, values, fc)
 			}
 		case !isPlatformKey(file):
 			for tid, values := range fc.Tenants {
-				add(file, ValueLayerTenant, tid, values)
+				fn(file, ValueLayerTenant, tid, values, fc)
 			}
 		}
 	}
+}
+
+// sortLayerValueProblems sorts out by file, layer, owner and key.
+func sortLayerValueProblems(out []LayerValueProblem) {
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if a.File != b.File {
@@ -124,7 +191,21 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 		}
 		return a.Key < b.Key
 	})
-	return out
+}
+
+// ScheduleReading is sv as written, schedule included, as text: two
+// schedules whose readings are equal are the same value (sameSchedule), so
+// a write that moves or adds a window makes a new one.
+func ScheduleReading(sv ScheduledValue) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "default=%q structured=%t", sv.Default, sv.structured)
+	for _, o := range sv.Overrides {
+		fmt.Fprintf(&b, " window=%q value=%q", o.Window, o.Value)
+	}
+	if sv.Expiry != nil {
+		fmt.Fprintf(&b, " expires=%q reason=%q", sv.Expiry.Expires, sv.Expiry.Reason)
+	}
+	return b.String()
 }
 
 // ValueReading is sv, the value of reserved key k, as its reader reads it,
@@ -140,23 +221,55 @@ func ValueReading(k string, sv ScheduledValue) string {
 	return sv.Default
 }
 
+// exporterReadsIn reports whether the exporter reads reserved key key,
+// written in layer beside the other keys of its map (values), and its
+// canonical spelling: not for a threshold key, a key the registry declares
+// no exporter reader for in layer, or a deprecated spelling its canonical
+// sibling overrides (resolve ignores it).
+func exporterReadsIn(layer, key string, values map[string]ScheduledValue) (string, bool) {
+	if !strings.HasPrefix(key, "_") {
+		return "", false
+	}
+	canon, wasAlias := canonicalKeyFor(key)
+	if wasAlias {
+		if _, both := values[canon]; both {
+			return "", false
+		}
+	}
+	readers, _ := RegisteredReaders(canon)
+	return canon, containsString(readers["exporter"], layer)
+}
+
+// someReaderReadsIn reports whether some reader the registry declares reads
+// reserved key key in layer, written beside the other keys of its map
+// (values) — exporterReadsIn for any reader.
+func someReaderReadsIn(layer, key string, values map[string]ScheduledValue) bool {
+	if !strings.HasPrefix(key, "_") {
+		return false
+	}
+	canon, wasAlias := canonicalKeyFor(key)
+	if wasAlias {
+		if _, both := values[canon]; both {
+			return false
+		}
+	}
+	readers, _ := RegisteredReaders(canon)
+	for _, layers := range readers {
+		if containsString(layers, layer) {
+			return true
+		}
+	}
+	return false
+}
+
 // layerValueProblem is the problem of key's value sv, written in layer
 // beside the other keys of its map (values): "" for a threshold key, a key
 // the exporter does not read in layer, a deprecated spelling its canonical
 // sibling overrides (resolve ignores it), or a value the exporter reads.
 func layerValueProblem(layer, key string, sv ScheduledValue, values map[string]ScheduledValue,
 	profiles map[string]map[string]ScheduledValue) string {
-	if !strings.HasPrefix(key, "_") {
-		return ""
-	}
-	canon, wasAlias := canonicalKeyFor(key)
-	if wasAlias {
-		if _, both := values[canon]; both {
-			return ""
-		}
-	}
-	readers, _ := RegisteredReaders(canon)
-	if !containsString(readers["exporter"], layer) {
+	canon, ok := exporterReadsIn(layer, key, values)
+	if !ok {
 		return ""
 	}
 	if canon == "_profile" {

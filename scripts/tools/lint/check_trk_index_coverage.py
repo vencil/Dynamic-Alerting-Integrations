@@ -79,7 +79,6 @@ import json
 import os
 import re
 import sys
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -89,6 +88,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _MAPPING = Path("docs/internal/planning-id-mapping.md")
@@ -166,9 +166,15 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
             batch = json.load(resp)
             m = _NEXT_RE.search(resp.headers.get("Link") or "")
         pages += 1
+        # 200 但不是 issue 物件的陣列（dict、null、數字陣列…）：量不到，不是「沒有 TRK」。
+        if not isinstance(batch, list) or not all(isinstance(it, dict) for it in batch):
+            raise ValueError("issues API 回的不是物件陣列")
         for it in batch:
-            for hit in _TRK_RE.finditer(it.get("title") or ""):
-                hits.setdefault(hit.group(1), f"#{it['number']}")
+            title = it.get("title") or ""
+            if not isinstance(title, str):
+                raise ValueError("issues API 回的 title 不是字串")
+            for hit in _TRK_RE.finditer(title):
+                hits.setdefault(hit.group(1), f"#{it.get('number', '?')}")
         url = m.group(1) if m else ""
     return hits
 
@@ -242,9 +248,10 @@ def main(argv: list[str] | None = None) -> "int | Report":
         try:
             hits = title_trks(args.owner, args.gh_repo, token)
         # ValueError：slug 不合法、Link 指向別的 host、JSON 壞掉——都是量不到，不是違規。
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
-                TitlesTruncated, ValueError) as exc:
-            print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{exc}）", file=sys.stderr)
+        # 傳輸失敗只列 TRANSPORT_ERRORS（#3519）：回應不是 HTTP 也是量不到。
+        except (*TRANSPORT_ERRORS, TitlesTruncated) as exc:
+            print(f"[trk-index] ⛔ 量不到：issue 標題抓不到（{transport_error_text(exc)}）",
+                  file=sys.stderr)
             return 2
         for k, v in hits.items():
             used.setdefault(k, v)

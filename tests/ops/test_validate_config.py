@@ -519,7 +519,7 @@ class TestProfilesCheck:
     def test_other_reserved_key_in_profile_passes(self):
         """#3042: `_silent_mode` in a profile is read by the exporter (the
         registry's `profile` layer), and whether a `_` key is read is the
-        `unread_keys` row's verdict, not this row's — no WARN here."""
+        shared key verdict's (the `routes` row), not this row's — no WARN here."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
                 "_profiles.yaml": "profiles:\n  p:\n    mysql_connection_usage_percent: 80\n"
@@ -710,7 +710,7 @@ class TestProfilesExtended:
 
     def test_profile_row_judges_no_key_names(self):
         """A `_` key in a profile is not this row's to judge (#3042): the
-        `unread_keys` row's shared verdict is (ADR-038 decision 3). Neither
+        shared key verdict is (ADR-038 decision 3; the `routes` row). Neither
         `_custom_alerts` — read in a profile (ADR-024 §3) — nor a key the
         registry does not list makes the row WARN."""
         with tempfile.TemporaryDirectory() as d:
@@ -1916,7 +1916,7 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # not parse stops it, and its row says no file was checked.
             "json_schema",
             # #3591. Reads the tree through da-guard's key verdict (the
-            # `unread_keys` row's) under `--config-dir`.
+            # `routes` row's) under `--config-dir`.
             "no_alert",
             "policy_dsl",
             "profiles",
@@ -1934,9 +1934,6 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #3691. Reads the tree through da-guard served-values under
             # `--config-dir`.
             "tier_inversion",
-            # ADR-038. Reads the tree through da-guard (served-values and
-            # effective) under `--config-dir`, like `profiles`.
-            "unread_keys",
             # #2164. Reads every file under `--config-dir` and skips the
             # ones it cannot parse — same reason as the rows above.
             "yaml_quoting",
@@ -2111,7 +2108,8 @@ class TestTheRoutesRowAdvisesOnWhatBlockedIt:
         """ADR-038 §11 (#3016): a misspelt key is the shared key verdict's.
         The retired `unknown key … not in defaults` wording does not come
         back; the routes row, which is `generate-routes --validate`, FAILs
-        with the verdict's `unread … (no_row)` line, as unread_keys does."""
+        with the verdict's `unread … (no_row)` line (#3873: no other row
+        repeats it)."""
         d = self._tree(
             tmp_path,
             "domain_policies:\n  fin:\n    tenants: [db-a]\n")
@@ -2127,7 +2125,7 @@ class TestTheRoutesRowAdvisesOnWhatBlockedIt:
         row = _report_row(out, "routes")
         assert row.startswith("[FAIL] routes"), row
         assert "key verdict: db-b.yaml: error: unread `mysql_thredas_running` (no_row)" in row, row
-        assert "[FAIL] unread_keys" in out, out
+        assert "unread_keys" not in out, out
 
 
 class TestTenantUniqueness:

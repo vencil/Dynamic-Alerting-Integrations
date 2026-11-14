@@ -229,7 +229,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_domain_policy.yaml` 時這個區塊才會被讀；在租戶檔裡寫 `_domain_policy: finance` 不會套用任何政策，驗證會在 `unread_keys` 那列報 `unread … (unregistered)`（點名 `_domain_policy`）；裝了 Python `jsonschema` 時，`json_schema` 那列也會因為 `_` 命名空間是封閉的而 FAIL。
+domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_domain_policy.yaml` 時這個區塊才會被讀；在租戶檔裡寫 `_domain_policy: finance` 不會套用任何政策，驗證會在 `routes` 那列報 `unread … (unregistered)`（點名 `_domain_policy`；⚠️ v2.9.0 映像沒有共用鍵判決，用 `:latest` 不會印出這一行 <!-- image-caveat: v2.9.0 -->）；裝了 Python `jsonschema` 時，`json_schema` 那列也會因為 `_` 命名空間是封閉的而 FAIL。
 
 ## 練習 3：驗證所有配置
 
@@ -279,7 +279,7 @@ docker run --rm \
 - `routes` 這一列就是 `generate-routes --validate`，所以也檢查 `_routing_profile` 的引用與 domain policy：少了 `_routing_profiles.yaml`，這裡會出現 `_routing_profile references unknown profile`；少了 `_domain_policy.yaml`，finance 的約束就不存在，不會有任何提示。
 - `profiles` 這一列管的是閾值 profile（`_profiles.yaml` 與租戶檔的 `_profile`），不是 routing profile，所以練習 2 做完它仍是 `0 profiles defined in _profiles.yaml`。
 
-⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時報告是 FAIL：`routes` 與 `unread_keys` 兩列點名那些鍵 `unread … (tenant_file_top_level)`。
+⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時報告是 FAIL：`routes` 列點名那些鍵 `unread … (tenant_file_top_level)`。
 
 **檢查點**：你能解釋為什麼 `group_wait: "2s"` 會在 `routes` 出現 WARN，而且實際生效的是 5s 嗎？（提示：guardrail 範圍是 5s–5m，低於下限的值會被夾到 5s，只警告、不失敗）
 

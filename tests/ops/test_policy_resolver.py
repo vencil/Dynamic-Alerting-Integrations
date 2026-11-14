@@ -26,6 +26,7 @@ for _p in [_TOOLS_DIR, os.path.join(_TOOLS_DIR, "ops")]:
 import generate_alertmanager_routes as gar  # noqa: E402
 import notification_tester as nt  # noqa: E402
 import explain_route as er  # noqa: E402
+import validate_config as vc  # noqa: E402
 from factories import make_tenant_yaml, write_yaml  # noqa: E402
 from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
@@ -46,7 +47,7 @@ def _tree(tmp_path, routing):
     conf = tmp_path / "conf.d"
     conf.mkdir()
     write_yaml(str(conf), "t1.yaml", make_tenant_yaml(
-        "t1", keys={"mysql_connections": 5}, routing=routing))
+        "t1", keys={"mysql_connection_usage_percent": 5}, routing=routing))
     return conf
 
 
@@ -209,7 +210,9 @@ def test_validate_config_policy_fail_points_at_the_policy_file(tmp_path):
     (row,) = [r for r in json.loads(res.stdout) if r["check"] == "routes"]
     assert "policy" not in {r["check"] for r in json.loads(res.stdout)}
     assert row["status"] == "fail"
-    assert row["suggested_action"] == gar.POLICY_REFUSAL_REMEDY
+    # The tree has no root platform file: the key verdict's advice follows
+    # the allowlist's on the same row (#3873).
+    assert row["suggested_action"] == f"{gar.POLICY_REFUSAL_REMEDY} {vc.KEY_VERDICT_UNDECIDABLE_HINT}"
     assert "_domain_policy.yaml" not in row["suggested_action"]
     assert row["docs_link"].endswith("/cli-reference/#validate-config"), row["docs_link"]
 

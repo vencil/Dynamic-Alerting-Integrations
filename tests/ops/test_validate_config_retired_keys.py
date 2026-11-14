@@ -69,20 +69,19 @@ def _validate(conf_d: str, da_guard: str) -> tuple[int, dict]:
 
 def test_a_retired_key_in_the_deployments_root_defaults_fails_and_names_its_replacement(
         tmp_path, retired_da_guard):
-    """部署方 root `defaults:` 寫了退役鍵（exporter 照樣送出一列）：rc 1，unread_keys FAIL，
+    """部署方 root `defaults:` 寫了退役鍵（exporter 照樣送出一列）：rc 1，routes 列 FAIL，
     掛在 `_defaults.yaml` 那一行列出繼承它的租戶並點名替代鍵；租戶自己寫的那一筆也是 ERROR。"""
     conf_d = _tree(tmp_path, f"defaults:\n  {_OLD}: 80\n  {_NEW}: 80\n")
     rc, rows = _validate(conf_d, retired_da_guard)
     assert rc == 1, rows
-    # The key verdict fails its own row and the routes row, which is
-    # `generate-routes --validate` and reports the same verdict (#3788).
-    assert [c for c, r in rows.items() if r["status"] == vc.FAIL] == ["routes", "unread_keys"], rows
-    row = rows["unread_keys"]
-    assert row["status"] == vc.FAIL, row
+    # The key verdict fails the routes row, which is `generate-routes
+    # --validate` and reports it (#3788; no row of its own since #3873).
+    assert [c for c, r in rows.items() if r["status"] == vc.FAIL] == ["routes"], rows
+    row = rows["routes"]
     lines = [d for d in row["details"] if f"`{_OLD}`" in d]
-    assert any(d.startswith("_defaults.yaml: error: unread") and d.endswith("tenant(s) tb")
-               for d in lines), lines
-    assert any(d.startswith("ta.yaml: error: unread") for d in lines), lines
+    assert any(d.startswith("  ERROR: key verdict: _defaults.yaml: error: unread")
+               and d.endswith("tenant(s) tb") for d in lines), lines
+    assert any(d.startswith("  ERROR: key verdict: ta.yaml: error: unread") for d in lines), lines
     for d in lines:
         assert "(retired: retired threshold key (#3829): write `mysql_connection_usage_percent` instead" in d, d
     assert not [d for d in row["details"] if f"unread `{_NEW}`" in d], row["details"]
@@ -90,10 +89,10 @@ def test_a_retired_key_in_the_deployments_root_defaults_fails_and_names_its_repl
 
 def test_the_same_tree_without_the_retired_entry_is_only_advisory(tmp_path, da_guard_binary):
     """對照：同一棵樹、退役表沒有這個鍵的 da-guard（提交的 registry）——exporter 讀它，
-    unread_keys 不列它，只剩 no_alert 的建議（#3829 之前的行為），rc 0。"""
+    共用鍵判決不列它，只剩 no_alert 的建議（#3829 之前的行為），rc 0。"""
     conf_d = _tree(tmp_path, f"defaults:\n  {_OLD}: 80\n  {_NEW}: 80\n")
     rc, rows = _validate(conf_d, da_guard_binary)
-    assert not [d for d in rows["unread_keys"]["details"] if f"`{_OLD}`" in d], rows["unread_keys"]
+    assert not [d for d in rows["routes"]["details"] if f"`{_OLD}`" in d], rows["routes"]
     assert rows["no_alert"]["status"] == vc.WARN, rows["no_alert"]
     assert rc == 0, [r for r in rows.values() if r["status"] == vc.FAIL]
 
@@ -160,15 +159,16 @@ def _real_tree(root: Path, key: str) -> str:
 def test_the_registered_mysql_connections_fails_in_defaults_and_tenant_naming_the_percent_key(
         tmp_path, da_guard_binary, key, replacement):
     """提交的 registry 登記了 `mysql_connections`：root defaults 與租戶檔各寫一筆，
-    validate-config rc 1，unread_keys 兩處都是 ERROR 並點名 `%` 新鍵；`_critical`
+    validate-config rc 1，routes 列兩處都是 ERROR 並點名 `%` 新鍵；`_critical`
     隨 base 推導，點名 `mysql_connection_usage_percent_critical`。"""
     rc, rows = _validate(_real_tree(tmp_path, key), da_guard_binary)
     assert rc == 1, rows
-    row = rows["unread_keys"]
+    row = rows["routes"]
     assert row["status"] == vc.FAIL, row
-    lines = [d for d in row["details"] if f"`{key}`" in d]
-    assert any(d.startswith("_defaults.yaml: error: unread") for d in lines), row["details"]
-    assert any(d.startswith("ta.yaml: error: unread") for d in lines), row["details"]
+    lines = [d for d in row["details"] if f"unread `{key}`" in d]
+    assert any(d.startswith("  ERROR: key verdict: _defaults.yaml: error: unread")
+               for d in lines), row["details"]
+    assert any(d.startswith("  ERROR: key verdict: ta.yaml: error: unread") for d in lines), row["details"]
     for d in lines:
         assert f"(retired: retired threshold key (#3778): write `{replacement}` instead" in d, d
         assert "max_connections" in d, d  # the registry's hint rides along
@@ -180,8 +180,8 @@ _KAFKA_RETIRED = ("kafka_request_rate", "kafka_active_controllers", "kafka_reque
 def test_the_committed_kafka_retirements_fail_wherever_written_and_name_no_replacement(
         tmp_path, da_guard_binary):
     """提交的 registry（#3783）：部署方 root `_defaults.yaml` 寫 `kafka_request_rate`、租戶各寫
-    `kafka_active_controllers`／`kafka_request_rate_critical`——rc 1，三筆都是 unread／error／
-    retired，說明沒有替代鍵、要刪掉；`_critical` 沒有自己的條目，靠 base 推導。"""
+    `kafka_active_controllers`／`kafka_request_rate_critical`——rc 1，routes 列三筆都是
+    unread／error／retired，說明沒有替代鍵、要刪掉；`_critical` 沒有自己的條目，靠 base 推導。"""
     files = {
         "_defaults.yaml": "defaults:\n  kafka_request_rate: 10000\n",
         "ta.yaml": "tenants:\n  ta:\n    kafka_active_controllers: \"1\"\n",
@@ -191,14 +191,15 @@ def test_the_committed_kafka_retirements_fail_wherever_written_and_name_no_repla
         (tmp_path / rel).write_text(text, encoding="utf-8")
     rc, rows = _validate(str(tmp_path), da_guard_binary)
     assert rc == 1, rows
-    row = rows["unread_keys"]
+    row = rows["routes"]
     assert row["status"] == vc.FAIL, row
     where = {"kafka_request_rate": "_defaults.yaml", "kafka_active_controllers": "ta.yaml",
              "kafka_request_rate_critical": "tb.yaml"}
     for key in _KAFKA_RETIRED:
-        lines = [d for d in row["details"] if f"unread `{key}`" in d]
+        # Once each: `--validate` repeats a blocking line under `FAIL:`.
+        lines = sorted({d for d in row["details"] if f"unread `{key}`" in d})
         assert len(lines) == 1, (key, row["details"])
         d = lines[0]
-        assert d.startswith(f"{where[key]}: error: unread"), d
+        assert d.startswith(f"  ERROR: key verdict: {where[key]}: error: unread"), d
         assert "(retired: retired threshold key (#3783) with no replacement: remove it;" in d, d
         assert "instead" not in d, d

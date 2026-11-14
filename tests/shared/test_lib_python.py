@@ -8,7 +8,7 @@ pytest style：使用 plain assert + conftest fixtures。
   2. format_duration() — seconds → duration 格式化
   3. load_yaml_file() — YAML 載入 + 錯誤處理
   4. validate_and_clamp() — timing guardrails
-  5. http_get_json / http_post_json / http_request_with_retry — HTTP helpers
+  5. http_get_json — HTTP helper
   6. write_text_secure / write_json_secure — SAST-compliant file writes
 """
 
@@ -498,133 +498,6 @@ class TestHttpGetJson:
         data, err = _lib_prometheus.http_get_json("file:///etc/passwd")
         assert data is None
         assert "Unsupported URL scheme" in err
-
-
-class TestHttpPostJson:
-    """http_post_json() 測試。"""
-
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_success_with_payload(self, mock_urlopen):
-        """成功 POST JSON payload。"""
-        mock_urlopen.return_value = mock_http_response({"id": "123"})
-        data, err = lib.http_post_json(
-            "http://localhost:9093/api/v2/silences",
-            payload={"matchers": [], "comment": "test"})
-        assert data == {"id": "123"}
-        assert err is None
-        call_args = mock_urlopen.call_args
-        sent_data = call_args[1].get("data") or call_args[0][1]
-        parsed = json.loads(sent_data.decode("utf-8"))
-        assert parsed["comment"] == "test"
-
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_none_payload(self, mock_urlopen):
-        """payload=None 時不送 body。"""
-        mock_urlopen.return_value = mock_http_response({})
-        lib.http_post_json("http://test/", payload=None)
-        call_args = mock_urlopen.call_args
-        sent_data = call_args[1].get("data") or call_args[0][1] if len(call_args[0]) > 1 else None
-        assert sent_data is None
-
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_http_error_formatted(self, mock_urlopen):
-        """HTTP 錯誤格式化為 'HTTP {code}: {reason}'。"""
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            "http://test/", 400, "Bad Request", {}, None)
-        data, err = lib.http_post_json("http://test/", payload={})
-        assert data is None
-        assert "400" in err
-        assert "Bad Request" in err
-
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_custom_method(self, mock_urlopen):
-        """支援自訂 HTTP method。"""
-        mock_urlopen.return_value = mock_http_response({})
-        lib.http_post_json("http://test/", method="DELETE")
-        call_args = mock_urlopen.call_args
-        req = call_args[0][0]
-        assert req.get_method() == "DELETE"
-
-    def test_ssrf_blocked(self):
-        """非 http/https scheme 被 SSRF 防護攔截。"""
-        data, err = lib.http_post_json("ftp://evil.com/upload", payload={"x": 1})
-        assert data is None
-        assert "Unsupported URL scheme" in err
-
-
-class TestHttpRequestWithRetry:
-    """http_request_with_retry() 重試邏輯測試。"""
-
-    @patch("_lib_prometheus.time.sleep")
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_success_first_attempt(self, mock_urlopen, mock_sleep):
-        """第一次就成功，不重試。"""
-        mock_urlopen.return_value = mock_http_response({"status": "ok"})
-        result = lib.http_request_with_retry("http://test/")
-        assert result == {"status": "ok"}
-        mock_sleep.assert_not_called()
-
-    @patch("_lib_prometheus.time.sleep")
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_retry_on_5xx(self, mock_urlopen, mock_sleep):
-        """5xx 錯誤觸發重試，第二次成功。"""
-        mock_urlopen.side_effect = [
-            urllib.error.HTTPError("http://test/", 503, "Unavailable", {}, None),
-            mock_http_response({"status": "recovered"}),
-        ]
-        result = lib.http_request_with_retry("http://test/", max_retries=3)
-        assert result == {"status": "recovered"}
-        mock_sleep.assert_called_once_with(1)
-
-    @patch("_lib_prometheus.time.sleep")
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_no_retry_on_4xx(self, mock_urlopen, mock_sleep):
-        """4xx 錯誤不重試，立即 raise。"""
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            "http://test/", 404, "Not Found", {}, None)
-        with pytest.raises(urllib.error.HTTPError) as exc_info:
-            lib.http_request_with_retry("http://test/")
-        assert exc_info.value.code == 404
-        mock_sleep.assert_not_called()
-
-    @patch("_lib_prometheus.time.sleep")
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_retry_exhausted_raises(self, mock_urlopen, mock_sleep):
-        """重試耗盡後 raise 最後一個錯誤。"""
-        mock_urlopen.side_effect = urllib.error.HTTPError(
-            "http://test/", 500, "Server Error", {}, None)
-        with pytest.raises(urllib.error.HTTPError) as exc_info:
-            lib.http_request_with_retry("http://test/", max_retries=2)
-        assert exc_info.value.code == 500
-        assert mock_sleep.call_count == 1
-
-    @patch("_lib_prometheus.time.sleep")
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_retry_on_connection_error(self, mock_urlopen, mock_sleep):
-        """連線錯誤觸發重試。"""
-        mock_urlopen.side_effect = [
-            urllib.error.URLError("Connection refused"),
-            mock_http_response({"ok": True}),
-        ]
-        result = lib.http_request_with_retry("http://test/", max_retries=3)
-        assert result == {"ok": True}
-
-    @patch("_lib_prometheus.time.sleep")
-    @patch("_lib_prometheus.urllib.request.urlopen")
-    def test_exponential_backoff(self, mock_urlopen, mock_sleep):
-        """重試間隔遵循指數退避 (2^0, 2^1)。"""
-        mock_urlopen.side_effect = [
-            urllib.error.HTTPError("http://test/", 502, "Bad Gateway", {}, None),
-            urllib.error.HTTPError("http://test/", 502, "Bad Gateway", {}, None),
-            mock_http_response({"ok": True}),
-        ]
-        lib.http_request_with_retry("http://test/", max_retries=3)
-        assert mock_sleep.call_count == 2
-
-    def test_ssrf_blocked(self):
-        """非 http/https scheme 在重試前就被 SSRF 防護攔截（raise ValueError）。"""
-        with pytest.raises(ValueError, match="Unsupported URL scheme"):
-            lib.http_request_with_retry("data:text/html,<h1>evil</h1>")
 
 
 # ============================================================

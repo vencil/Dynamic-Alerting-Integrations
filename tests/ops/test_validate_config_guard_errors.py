@@ -82,15 +82,17 @@ def test_an_undeclared_subtree_key_fails_one_line_for_every_tenant(tmp_path):
 
 
 def test_an_undeclared_subtree_key_exits_1_end_to_end(tmp_path, cli_argv, capsys):
-    """量測（main e2a24667）：同一棵樹 rc 0、只有 unread_keys 列的 notice。現在 rc 1。"""
+    """量測（main e2a24667）：同一棵樹 rc 0、只有共用鍵判決的 notice。現在 rc 1。"""
     rc, rows = _run_main(cli_argv, capsys, _tree(tmp_path, _FINANCE))
     assert rc == 1, rows
     assert rows["guard_errors"]["status"] == vc.FAIL, rows["guard_errors"]
-    # ADR-038 的共用判決列也 FAIL：子目錄 _defaults.yaml 沒人讀的鍵是 error，
+    # ADR-038 的共用判決也擋：子目錄 _defaults.yaml 沒人讀的鍵是 error，
     # 各閘門判到就擋（#3394、#3016）；routes 列就是 `generate-routes --validate`，
-    # 它同樣報這份判決（#3788）。
+    # 報的就是這份判決（#3788、#3873）。
     assert [r for r, v in rows.items() if v["status"] == vc.FAIL] == [
-        "routes", "guard_errors", "unread_keys"], rows
+        "routes", "guard_errors"], rows
+    assert any("key verdict: " in d and "redis_evicted_keys" in d
+               for d in rows["routes"]["details"]), rows["routes"]
 
 
 def test_an_undeclared_subtree_key_switched_off_is_not_a_finding(tmp_path):
