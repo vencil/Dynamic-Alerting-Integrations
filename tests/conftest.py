@@ -164,6 +164,51 @@ def _force_utf8_subprocess_io():
             os.environ["PYTHONIOENCODING"] = old
 
 
+# ── Session-scoped git config: the host's, signing off (#3896) ───────
+#
+# Every git process the tests start (directly, through a tool, in a temp
+# repo) reads a copy of the host's system + global config with
+# commit.gpgsign / tag.gpgsign forced false, so no test commit calls the
+# host's signer. Why, and why GIT_CONFIG_GLOBAL: tests/_git_isolation.py.
+#
+# Ordering: pytest sets fixtures of a wider scope up before narrower ones,
+# whatever their names, and this one takes no function-scoped fixture (it
+# cannot take `monkeypatch`), so the name-order reasoning of
+# `_no_cwd_change_outlives_its_test` below is untouched. Under xdist it runs
+# once per worker, each with its own mkdtemp directory. A copy that cannot
+# be made fails the session's tests rather than running them against the
+# host's signing settings; no git on PATH means no test can commit, so
+# there is nothing to isolate.
+@pytest.fixture(scope="session", autouse=True)
+def _git_config_without_host_signing():
+    """GIT_CONFIG_GLOBAL → the host's git config with signing off, and
+    GIT_CONFIG_NOSYSTEM=1, for the whole session (#3896)."""
+    if shutil.which("git") is None:
+        yield None
+        return
+    import _git_isolation
+    d = tempfile.mkdtemp(prefix="vibe-test-gitconfig-")
+    try:
+        path = _git_isolation.write_config_copy(d)
+    except _git_isolation.GitConfigCopyError as exc:
+        shutil.rmtree(d, ignore_errors=True)
+        pytest.fail(f"cannot isolate the tests from the host's git signing (#3896): {exc}",
+                    pytrace=False)
+    names = ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM")
+    old = {n: os.environ.get(n) for n in names}
+    os.environ["GIT_CONFIG_GLOBAL"] = path
+    os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
+    try:
+        yield path
+    finally:
+        for n, v in old.items():
+            if v is None:
+                os.environ.pop(n, None)
+            else:
+                os.environ[n] = v
+        shutil.rmtree(d, ignore_errors=True)
+
+
 @pytest.fixture(autouse=True)
 def _no_ignored_signal_outlives_its_test():
     """A test that leaves SIGINT / SIGTERM at SIG_IGN fails (#3249): the
