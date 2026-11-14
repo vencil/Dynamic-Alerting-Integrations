@@ -87,13 +87,13 @@ curl -s -H "Authorization: Bearer <access_token>" \
 Groups are resolved **at login** and cached in the session cookie. The following describes oauth2-proxy v7.15.6, which the chart pins:
 
 - **Without `cookieRefresh`** (the chart default): there is no refresh. The groups are frozen as of login, and the cookie expires at `cookieExpire`, after which the user signs in again.
-- **With `cookieRefresh`**: every interval, the session redeems its refresh token with GitLab. A successful refresh resets the session's creation time and re-issues the cookie, so the cookie's lifetime moves forward with every successful refresh. When the response carries a new ID token, the groups are replaced from its `groups` claim; **when it does not, the groups stay as they were** (the gitlab provider's `RefreshSession` uses the OIDC refresh and does not re-read userinfo). When the refresh token is revoked (GitLab answers `invalid_grant`), the session is cleared.
+- **With `cookieRefresh`**: every interval, the session redeems its refresh token with GitLab. A successful refresh resets the session's creation time and re-issues the cookie, so the cookie's lifetime moves forward with every successful refresh. When the response carries a new ID token, the groups are replaced from its `groups` claim; **when it does not, the groups stay as they were** (the gitlab provider's `RefreshSession` uses the OIDC refresh and does not re-read userinfo). Only a fatal error such as a revoked refresh token (GitLab answers `invalid_grant`) clears the session; transient failures such as network errors or timeouts do not.
 
 This is inherent to oauth2-proxy sessions, and the platform lists it as an **accepted limitation** ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §8); it is not instant revocation:
 
 - Without `cookieRefresh`: access from a removed group lasts at most until `cookieExpire`.
 - With `cookieRefresh`, and GitLab's refresh responses carry a new ID token: at most one `cookieRefresh`.
-- With `cookieRefresh`, but the responses carry no new ID token: **there is no time bound**. The old groups carry over on every successful refresh until a refresh fails.
+- With `cookieRefresh`, but the responses carry no new ID token: **there is no time bound**. The old groups carry over on every successful refresh until the refresh token is revoked.
 
 So before setting `cookieRefresh`, remove a test account from a group in staging and confirm the access is gone one `cookieRefresh` later. If it is not, leave `cookieRefresh` unset so that `cookieExpire` is a hard bound.
 
