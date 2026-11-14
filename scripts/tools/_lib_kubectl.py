@@ -13,6 +13,11 @@ raises ``KubectlError`` when there is none to read:
   For a write (``apply``, ``patch``, ``label``, ``delete``) that says nothing
   about the cluster: the request may have been sent and applied.
 
+kubectl's stdin is the caller's manifest when one is given; otherwise the
+tool's own stdin (an exec credential plugin that prompts on the terminal
+can), except for the readers below, which give it ``/dev/null`` unless
+asked (``inherit_stdin``).
+
 What a non-zero exit status means is the caller's to say (a write the
 cluster refused, ``create --dry-run=client`` refusing a key name); the
 readers below say it for reads.
@@ -61,9 +66,11 @@ from _lib_exitcodes import CallerError
 
 class KubectlError(CallerError):
     """kubectl gave no exit status of its own, or no usable answer to a read
-    (see the module docstring)."""
+    (see the module docstring). ``stderr`` is kubectl's whole stderr when it
+    exited non-zero on a read (the message names its last line only)."""
 
     reason = "kubectl_error"
+    stderr: str = ""
 
 
 def _last_line(text: str) -> str:
@@ -76,22 +83,38 @@ def _last_line(text: str) -> str:
     return ""
 
 
+#: kubectl's stderr is a cluster's and a plugin's words: every control
+#: character but the line break and the tab is replaced before it is printed.
+_UNPRINTABLE = {c: "?" for c in [*range(0x20), *range(0x7f, 0xa0)] if c not in (0x0a, 0x09)}
+
+
+def printable_stderr(text: str, limit: int = 4000) -> str:
+    """kubectl's stderr for an operator's terminal: whole (its last *limit*
+    characters when longer, marked), control characters replaced by ``?``,
+    line breaks kept."""
+    text = (text or "").replace("\r\n", "\n").strip("\n").translate(_UNPRINTABLE)
+    if len(text) > limit:
+        text = f"… ({len(text) - limit} earlier characters not shown)\n{text[-limit:]}"
+    return text
+
+
 def kubectl_run(verb: str, args: Sequence[str], *, timeout: float,
                 stdin_text: Optional[str] = None,
                 kubeconfig: Optional[str] = None, context: Optional[str] = None,
-                what: Optional[str] = None) -> subprocess.CompletedProcess:
+                what: Optional[str] = None,
+                inherit_stdin: bool = True) -> subprocess.CompletedProcess:
     """``kubectl <verb> <args>`` once it has exited by itself — whatever its
     exit status, which the caller reads — else ``KubectlError``: not on
     PATH, not startable, no exit within *timeout*, killed by a signal. The
     one place that starts kubectl, reads and writes alike (#3539); *verb*
     is one ``_lib_engine.PROOFS`` registers for kubectl.
 
-    Both streams go to files, not pipes, and stdin is *stdin_text* or
-    ``/dev/null`` (``_lib_engine.run`` with ``capture="file"``): the answer
-    is read once kubectl itself has exited, not when a process it leaves
-    behind (an exec credential plugin's helper) lets go of a pipe (#3349
-    review). *what* names the call in the error (default ``kubectl <verb>``
-    in backticks)."""
+    Both streams go to files, not pipes (``_lib_engine.run`` with
+    ``capture="file"``): the answer is read once kubectl itself has exited,
+    not when a process it leaves behind (an exec credential plugin's helper)
+    lets go of a pipe (#3349 review). stdin is *stdin_text* when given, else
+    the tool's own stdin — ``/dev/null`` with *inherit_stdin* False. *what*
+    names the call in the error (default ``kubectl <verb>`` in backticks)."""
     what = what or f"`kubectl {verb}`"
     located = _lib_engine.locate("kubectl")
     if isinstance(located, _lib_engine.NoVerdict):
@@ -99,22 +122,26 @@ def kubectl_run(verb: str, args: Sequence[str], *, timeout: float,
     flags = (["--kubeconfig", kubeconfig] if kubeconfig else []) + (
         ["--context", context] if context else [])
     result = _lib_engine.run(located, verb, [*flags, verb, *args], timeout=timeout,
-                             stdin_text=stdin_text, capture="file")
+                             stdin_text=stdin_text, capture="file",
+                             no_stdin=not inherit_stdin)
     if isinstance(result, _lib_engine.NoVerdict):
         raise KubectlError(f"{what}: {result.reason}")
     return result.proc
 
 
 def _answer(verb: str, args: Sequence[str], what: str, timeout: float, *,
-            kubeconfig: Optional[str], context: Optional[str] = None) -> str:
+            kubeconfig: Optional[str], context: Optional[str] = None,
+            inherit_stdin: bool = False) -> str:
     """kubectl's stdout when it answered a read (rc 0), else ``KubectlError``:
     no exit status of its own (``kubectl_run``), or a non-zero one (named by
-    kubectl's own last stderr line)."""
+    kubectl's own last stderr line; the whole stderr is on the error)."""
     proc = kubectl_run(verb, args, timeout=timeout, kubeconfig=kubeconfig,
-                       context=context, what=what)
+                       context=context, what=what, inherit_stdin=inherit_stdin)
     if proc.returncode != 0:
         why = _last_line(proc.stderr) or "no message on stderr"
-        raise KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
+        error = KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
+        error.stderr = proc.stderr
+        raise error
     return proc.stdout
 
 
@@ -123,12 +150,14 @@ def kubectl_list(kind: str, *, namespace: Optional[str] = None,
                  field_selector: Optional[str] = None,
                  kubeconfig: Optional[str] = None,
                  context: Optional[str] = None,
-                 timeout: float = 10) -> list[dict[str, Any]]:
+                 timeout: float = 10,
+                 inherit_stdin: bool = False) -> list[dict[str, Any]]:
     """The objects of *kind* kubectl lists, or ``KubectlError``.
 
     *selector* is a label selector (``-l``), *field_selector* a field
     selector; *namespace* None lists in kubectl's current namespace;
-    *context* is kubectl's ``--context``.
+    *context* is kubectl's ``--context``; *inherit_stdin* gives kubectl the
+    tool's own stdin instead of ``/dev/null``.
     """
     args = [kind]
     if namespace is not None:
@@ -139,7 +168,8 @@ def kubectl_list(kind: str, *, namespace: Optional[str] = None,
         args += ["--field-selector", field_selector]
     args += ["-o", "json"]
     what = f"`kubectl get {kind}`" + (f" in namespace {namespace!r}" if namespace is not None else "")
-    out = _answer("get", args, what, timeout, kubeconfig=kubeconfig, context=context)
+    out = _answer("get", args, what, timeout, kubeconfig=kubeconfig, context=context,
+                  inherit_stdin=inherit_stdin)
     try:
         doc = json.loads(out)
     except ValueError as exc:

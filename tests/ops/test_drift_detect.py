@@ -753,11 +753,37 @@ class TestComputeCrdManifest:
 
         def fake(cmd, **kw):
             calls.append(cmd)
+            TestComputeCrdManifest.kwargs = kw
             if isinstance(answer, BaseException):
                 raise answer
             return subprocess.CompletedProcess(cmd, *answer)
         install(monkeypatch, fake)
         return calls
+
+    def test_kubectl_gets_30_seconds_and_this_tools_stdin(self, monkeypatch):
+        """As before #3539, when this tool started kubectl itself: 30 s, and
+        stdin inherited (None — not /dev/null), so an exec credential plugin
+        can prompt."""
+        self._kubectl(monkeypatch, (0, '{"items": []}', ""))
+        dd.compute_crd_manifest("ns")
+        assert self.kwargs["timeout"] == 30
+        assert self.kwargs.get("stdin") is None and "input" not in self.kwargs
+
+    def test_a_non_zero_exit_prints_kubectls_whole_stderr(self, monkeypatch):
+        """Review of #3539: the reason an apiserver is unreachable is in the
+        lines client-go logs BEFORE kubectl's own last line; this tool
+        printed all of stderr before and must not keep the last line only.
+        Control characters are replaced."""
+        from _lib_kubectl import KubectlError
+        stderr = ("E1114 memcache.go:265] dial tcp 10.0.0.1:6443: i/o timeout\x1b[2J\n"
+                  "Unable to connect to the server: net/http: TLS handshake timeout\n")
+        self._kubectl(monkeypatch, (1, "", stderr))
+        with pytest.raises(KubectlError) as exc:
+            dd.compute_crd_manifest("ns")
+        said = str(exc.value)
+        assert "failed (exit 1): Unable to connect to the server" in said
+        assert "dial tcp 10.0.0.1:6443: i/o timeout?[2J\n" in said
+        assert "\x1b" not in said
 
     def test_each_rule_is_hashed_by_its_groups(self, monkeypatch):
         import hashlib

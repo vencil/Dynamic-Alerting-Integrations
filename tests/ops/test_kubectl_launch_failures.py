@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -57,6 +58,9 @@ def inputs(tmp_path):
     (d / "rules").mkdir()
     (d / "rules" / "a.yaml").write_text("groups: []\n", encoding="utf-8")
     (d / "dash.json").write_text(json.dumps({"title": "t", "panels": []}), encoding="utf-8")
+    (d / "dashdir").mkdir()
+    for name in ("a.json", "b.json", "c.json"):
+        (d / "dashdir" / name).write_text(json.dumps({"title": name}), encoding="utf-8")
     (d / "ready.json").write_text(json.dumps({
         "ready": True, "timestamp": "2026-01-01T00:00:00Z",
         "convergence_percentage": 100, "converged_count": 1, "total_pairs": 1,
@@ -76,6 +80,10 @@ def _entries(inputs: Path, work: Path) -> dict[str, list[str]]:
         "grafana-import": grafana,
         "grafana-import --json": [*grafana, "--json"],
         "grafana-import --verify": [str(OPS / "grafana_import.py"), "--verify"],
+        "grafana-import --dashboard-dir": [str(OPS / "grafana_import.py"), "--dashboard-dir",
+                                           str(inputs / "dashdir")],
+        "grafana-import --dashboard-dir --json": [
+            str(OPS / "grafana_import.py"), "--dashboard-dir", str(inputs / "dashdir"), "--json"],
         "cutover-tenant": cutover,
         "cutover-tenant --json-output": [*cutover, "--json-output"],
         "drift-detect --mode operator": [str(OPS / "drift_detect.py"), "--mode", "operator",
@@ -96,15 +104,46 @@ def _entries(inputs: Path, work: Path) -> dict[str, list[str]]:
 ENTRIES = list(_entries(Path("in"), Path("work")))
 
 
-def _run(argv: list[str], bindir: Path) -> subprocess.CompletedProcess:
+#: What the fake kubectls below run (`#!/bin/sh` is an absolute path; these
+#: are looked up on PATH). Nothing else: the tools are started with
+#: `sys.executable`, the Go readers by `$DA_*_BINARY`.
+_SHIM_TOOLS = ("cat", "chmod")
+
+
+@pytest.fixture
+def toolbox(tmp_path):
+    """A directory holding symlinks to `_SHIM_TOOLS` and nothing else — the
+    only directory on PATH besides the test's own kubectl directory."""
+    box = tmp_path / "toolbox"
+    box.mkdir()
+    for tool in _SHIM_TOOLS:
+        real = shutil.which(tool)
+        assert real, f"`{tool}` is not on PATH: the fake kubectl cannot run"
+        (box / tool).symlink_to(real)
+    return box
+
+
+def _run(argv: list[str], bindir: Path, toolbox: Path) -> subprocess.CompletedProcess:
+    """Run a tool with a PATH that can resolve `kubectl` to *bindir*'s file
+    or to nothing.
+
+    ⛔ These entries WRITE (`kubectl apply`, `patch`, `delete`). A PATH that
+    also held the interpreter's directory or `/usr/bin` would, on a machine
+    with a real kubectl there, send those writes to whatever cluster the
+    current kube-context names in the columns where *bindir*'s kubectl is
+    absent or not executable. So PATH is *bindir* plus a directory of
+    symlinks to the two tools the fakes need — and that is measured before
+    the tool is started, not assumed: any other `kubectl` fails the cell."""
     env = dict(os.environ)
     env.pop("PYTHONUNBUFFERED", None)
     env.pop("ALLOW_SAMPLE_CONFDIR", None)
-    # kubectl comes from *bindir* or from nowhere: the interpreter's own
-    # directory and the system ones hold none in CI's test image — and if one
-    # day they do, the `absent` control below says so instead of passing.
-    env["PATH"] = os.pathsep.join([str(bindir), str(Path(sys.executable).parent),
-                                   "/usr/bin", "/bin"])
+    env["PATH"] = os.pathsep.join([str(bindir), str(toolbox)])
+    found = shutil.which("kubectl", path=env["PATH"])
+    assert found is None or Path(found).parent == bindir, (
+        f"PATH resolves kubectl to {found}, outside the test's own directory — "
+        "the tool was NOT started")
+    assert sorted(p.name for p in toolbox.iterdir()) == sorted(_SHIM_TOOLS), (
+        "the toolbox holds something else — the tool was NOT started")
     return subprocess.run([sys.executable, "-X", "utf8", *argv], capture_output=True,
                           text=True, encoding="utf-8", errors="replace", env=env,
                           stdin=subprocess.DEVNULL, timeout=300)
@@ -132,11 +171,12 @@ def _stage(bindir: Path, scenario: str) -> str:
 
 @pytest.mark.parametrize("scenario", list(_SCENARIOS))
 @pytest.mark.parametrize("entry", ENTRIES)
-def test_a_kubectl_that_cannot_be_started_is_a_named_exit_2(tmp_path, inputs, entry, scenario):
+def test_a_kubectl_that_cannot_be_started_is_a_named_exit_2(tmp_path, inputs, toolbox,
+                                                            entry, scenario):
     why = _stage(tmp_path / "bin", scenario)
     work = tmp_path / "work"
     work.mkdir()
-    r = _run(_entries(inputs, work)[entry], tmp_path / "bin")
+    r = _run(_entries(inputs, work)[entry], tmp_path / "bin", toolbox)
     said = r.stdout + r.stderr
     assert r.returncode == 2, f"rc={r.returncode}\n{said[-1500:]}"
     assert "Traceback" not in said, said[-1500:]
@@ -148,13 +188,22 @@ def test_a_kubectl_that_cannot_be_started_is_a_named_exit_2(tmp_path, inputs, en
         "nothing may be written when kubectl never ran", list(work.iterdir()))
 
 
-def test_the_absent_scenario_really_has_no_kubectl(tmp_path):
-    """The control for the PATH `_run` builds: were a real kubectl on it, the
-    `absent` column above would be measuring that kubectl."""
-    env_path = os.pathsep.join([str(tmp_path), str(Path(sys.executable).parent),
-                                "/usr/bin", "/bin"])
-    import shutil
-    assert shutil.which("kubectl", path=env_path) is None
+def test_a_kubectl_outside_the_tests_directory_fails_the_cell_before_the_tool_starts(
+        tmp_path, toolbox):
+    """The guard in `_run`, shown to fire: a `kubectl` reachable from
+    anywhere but the test's own directory stops the cell, and the tool is not
+    started (its argv here would fail differently — no such file)."""
+    stray = toolbox / "kubectl"
+    stray.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stray.chmod(0o755)
+    (tmp_path / "bin").mkdir()
+    # each guard by its own words: the other one firing must not stand in
+    with pytest.raises(AssertionError, match="PATH resolves kubectl to .* outside the test's"):
+        _run([str(tmp_path / "no-such-tool.py")], tmp_path / "bin", toolbox)
+    stray.unlink()
+    (toolbox / "git").symlink_to("/bin/sh")
+    with pytest.raises(AssertionError, match="the toolbox holds something else"):
+        _run([str(tmp_path / "no-such-tool.py")], tmp_path / "bin", toolbox)
 
 
 # ── part-way: kubectl works for its first n calls, then cannot be started ───
@@ -184,6 +233,12 @@ _PART_WAY = [
      ["Overall: PASS"]),
     ("grafana-import --json", 2, {"data": {}}, ["create configmap", "apply -f"],
      ['"status": "pass",\n  "actions"']),
+    # the first dashboard of the directory is applied and labelled; the
+    # second one's `create` is the call that cannot be started
+    ("grafana-import --dashboard-dir", 3, {"data": {}},
+     ["create configmap", "apply -f", "label configmap"], ["Overall: PASS"]),
+    ("grafana-import --dashboard-dir --json", 3, {"data": {}},
+     ["create configmap", "apply -f", "label configmap"], ['"status": "pass",\n  "actions"']),
     ("cutover-tenant", 1, {"data": {}}, ["delete job"],
      ["Cutover completed successfully"]),
     ("cutover-tenant --json-output", 3, {"data": {}},
@@ -202,7 +257,7 @@ _PART_WAY = [
 @pytest.mark.parametrize("entry, alive, get, calls, success", _PART_WAY,
                          ids=[f"{e}-after-{n}" for e, n, *_ in _PART_WAY])
 def test_a_write_entry_never_reports_success_once_kubectl_stops_starting(
-        tmp_path, inputs, entry, alive, get, calls, success, how):
+        tmp_path, inputs, toolbox, entry, alive, get, calls, success, how):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     (tmp_path / "count").write_text("0\n", encoding="utf-8")
@@ -215,7 +270,7 @@ def test_a_write_entry_never_reports_success_once_kubectl_stops_starting(
     work = tmp_path / "work"
     work.mkdir()
 
-    r = _run(_entries(inputs, work)[entry], bindir)
+    r = _run(_entries(inputs, work)[entry], bindir, toolbox)
     said = r.stdout + r.stderr
     made = (tmp_path / "calls").read_text(encoding="utf-8").splitlines()
     # the fixture did what it says: exactly the first calls ran, no later one
@@ -227,7 +282,53 @@ def test_a_write_entry_never_reports_success_once_kubectl_stops_starting(
         assert words not in said, (words, said[-1500:])
 
 
-def test_grafana_import_says_the_configmap_is_applied_but_not_labelled(tmp_path, inputs):
+def _dying_kubectl(tmp_path, alive, how="eacces"):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (tmp_path / "count").write_text("0\n", encoding="utf-8")
+    (tmp_path / "calls").write_text("", encoding="utf-8")
+    (tmp_path / "get.json").write_text("{}", encoding="utf-8")
+    exe = bindir / "kubectl"
+    exe.write_text(_DYING_KUBECTL.format(d=tmp_path, n=alive, die=_DIE[how]),
+                   encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    return bindir
+
+
+@pytest.mark.parametrize("how", list(_DIE))
+def test_a_dashboard_dir_keeps_the_rows_of_what_it_applied(tmp_path, inputs, toolbox, how):
+    """Review of #3539: over a --dashboard-dir, the first dashboard applied
+    and labelled and the second one's `kubectl create` not startable ended in
+    one ERROR line with stdout EMPTY — the rows of what is in the cluster
+    dropped. They stay (text and --json), the dashboard that failed gets its
+    row, the ones after it are named as not attempted, rc 2."""
+    bindir = _dying_kubectl(tmp_path, 3, how)
+    entries = _entries(inputs, tmp_path)
+    r = _run(entries["grafana-import --dashboard-dir"], bindir, toolbox)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "ConfigMap grafana-a applied" in r.stdout, r.stdout
+    assert "Label grafana_dashboard=1 applied to grafana-a" in r.stdout, r.stdout
+    assert "`kubectl create configmap grafana-b`: cannot run kubectl" in r.stdout, r.stdout
+    assert "1 dashboard(s) after grafana-b were not attempted" in r.stdout, r.stdout
+    assert "Overall: FAIL" in r.stdout
+
+    (tmp_path / "bin" / "kubectl").unlink()
+    (tmp_path / "bin").rmdir()
+    bindir = _dying_kubectl(tmp_path, 3, how)
+    r = _run(entries["grafana-import --dashboard-dir --json"], bindir, toolbox)
+    assert r.returncode == 2, r.stdout + r.stderr
+    doc = json.loads(r.stdout)
+    assert doc["status"] == "fail"
+    assert [(a["action"], a["status"]) for a in doc["actions"]] == [
+        ("create_configmap", "pass"), ("label_configmap", "pass"), ("create_configmap", "fail")]
+    assert "were not attempted" in doc["actions"][2]["detail"]
+    # c.json was not attempted: kubectl was started three times, for a.json
+    assert (tmp_path / "calls").read_text(encoding="utf-8").splitlines() == [
+        "create configmap", "apply -f", "label configmap"]
+
+
+def test_grafana_import_says_the_configmap_is_applied_but_not_labelled(tmp_path, inputs,
+                                                                      toolbox):
     """The one part-way case with something left in the cluster that the
     operator has to finish: the row that passed stays in the report."""
     bindir = tmp_path / "bin"
@@ -239,7 +340,7 @@ def test_grafana_import_says_the_configmap_is_applied_but_not_labelled(tmp_path,
     exe.write_text(_DYING_KUBECTL.format(d=tmp_path, n=2, die=_DIE["eacces"]),
                    encoding="utf-8", newline="\n")
     exe.chmod(0o755)
-    r = _run(_entries(inputs, tmp_path)["grafana-import --json"], bindir)
+    r = _run(_entries(inputs, tmp_path)["grafana-import --json"], bindir, toolbox)
     assert r.returncode == 2, r.stdout + r.stderr
     doc = json.loads(r.stdout)
     assert doc["status"] == "fail"

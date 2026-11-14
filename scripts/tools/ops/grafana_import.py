@@ -135,8 +135,10 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
         with tempfile.TemporaryDirectory(prefix="da-grafana-import-") as tmp:
             copy = Path(tmp) / filename
             copy.write_bytes(raw)
-            # Nothing is in the cluster yet: a kubectl that cannot be started
-            # here ends the run (KubectlError, rc 2).
+            # Nothing of THIS dashboard is in the cluster yet. A kubectl that
+            # gives no exit status here raises KubectlError; `main` turns it
+            # into this dashboard's row and stops — the dashboards before it
+            # are applied, and their rows stay in the report.
             created = run_kubectl("create", create_args(copy))
         if created.returncode != 0:
             results.append({
@@ -341,14 +343,35 @@ def main():
     has_failure = False
     caller_error = False  # #452/#737: file-not-found / invalid-JSON / kubectl env
 
-    for dashboard_path, cm_name, content, raw in read_dashboards(dashboards):
-        results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run,
-                                   dashboard=content, raw=raw)
+    pending = read_dashboards(dashboards)
+    stopped = False
+    for done, (dashboard_path, cm_name, content, raw) in enumerate(pending):
+        try:
+            results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run,
+                                       dashboard=content, raw=raw)
+        except KubectlError as exc:
+            # ⛔ Part-way over a --dashboard-dir (review of #3539): the
+            # dashboards before this one ARE in the cluster. One ERROR line
+            # here dropped their rows — stdout empty for a run that wrote.
+            # kubectl gave no exit status (not startable, out of time, killed),
+            # so the ones after it are not attempted: each would wait again.
+            stopped = True
+            left = len(pending) - done - 1
+            results = [{
+                "action": "create_configmap",
+                "status": "fail",
+                "caller_error": True,  # kubectl not run / no exit in time = caller-error
+                "detail": f"{exc}" + (
+                    f" — {left} dashboard(s) after {cm_name} were not attempted"
+                    if left else ""),
+            }]
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True
         if any(r["status"] == "fail" and r.get("caller_error") for r in results):
             caller_error = True
+        if stopped:
+            break
 
     # #452/#737: file-not-found / invalid-JSON / kubectl env failures are
     # caller-errors (exit 2); a clean run that merely couldn't apply is still 1.

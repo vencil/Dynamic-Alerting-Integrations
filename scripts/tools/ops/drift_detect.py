@@ -39,7 +39,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  #
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 import _lib_input  # noqa: E402
-from _lib_kubectl import kubectl_list  # noqa: E402  (#3539)
+from _lib_kubectl import KubectlError, kubectl_list, printable_stderr  # noqa: E402  (#3539)
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -305,6 +305,10 @@ def _operator_suggest_reconcile(item: DriftItem) -> str:
 # Operator mode: CRD manifest & comparison
 # ---------------------------------------------------------------------------
 
+#: Seconds the one `kubectl get prometheusrules` of operator mode may take.
+_KUBECTL_TIMEOUT_S = 30
+
+
 def compute_crd_manifest(
     namespace: str,
     kubeconfig: Optional[str] = None,
@@ -318,10 +322,22 @@ def compute_crd_manifest(
     Returns FileManifest with label="cluster-crd" and files={name: sha256}.
     A read kubectl did not answer — not on PATH, not startable, out of time,
     a non-zero exit, output that is not a list of objects — is
-    ``KubectlError`` (``_lib_kubectl``, #3539): rc 2, one ``ERROR:`` line.
+    ``KubectlError`` (``_lib_kubectl``, #3539): rc 2, an ``ERROR:`` line.
+    When kubectl exited non-zero its whole stderr follows that line (client-go
+    logs the reason for an unreachable cluster before kubectl's own last
+    line), control characters replaced.
     """
-    items = kubectl_list("prometheusrules", namespace=namespace,
-                         kubeconfig=kubeconfig, context=context, timeout=30)
+    try:
+        # kubectl keeps this tool's stdin, as before #3539: an exec
+        # credential plugin may prompt on the terminal.
+        items = kubectl_list("prometheusrules", namespace=namespace,
+                             kubeconfig=kubeconfig, context=context,
+                             timeout=_KUBECTL_TIMEOUT_S, inherit_stdin=True)
+    except KubectlError as exc:
+        said = printable_stderr(exc.stderr)
+        if "\n" not in said:      # one line: the message already holds it
+            raise
+        raise KubectlError(f"{exc}\nkubectl's stderr:\n{said}") from exc
     manifest = FileManifest(label="cluster-crd", path=f"kubernetes:{namespace}")
     for item in items:
         name = item.get("metadata", {}).get("name", "unknown")

@@ -168,6 +168,19 @@ def test_no_answer_within_the_timeout(monkeypatch):
         lk.kubectl_list("secret", timeout=3)
 
 
+def test_a_write_out_of_time_says_only_that_it_did_not_finish(monkeypatch):
+    """⛔ The whole message, pinned: a write that ran out of time may have
+    reached the cluster, so the words may say it did not finish and nothing
+    about what was or was not sent, applied or run."""
+    def boom(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="kubectl", timeout=3)
+    _kubectl_fake.install(monkeypatch, boom)
+    for verb in ("apply", "patch", "label", "delete"):
+        with pytest.raises(lk.KubectlError) as ei:
+            lk.kubectl_run(verb, ["x"], timeout=3, stdin_text="m")
+        assert str(ei.value) == f"`kubectl {verb}`: kubectl did not finish within 3s (rc 124)"
+
+
 # ── kubectl_run: the one launcher, reads and writes (#3539) ─────────────────
 
 def test_run_returns_kubectls_own_exit_status_for_the_caller_to_judge(tmp_path, monkeypatch):
@@ -181,21 +194,84 @@ def test_run_returns_kubectls_own_exit_status_for_the_caller_to_judge(tmp_path, 
     assert argv() == ["--kubeconfig", "/kc", "--context", "ctx", "label", "configmap", "c", "a=b"]
 
 
+#: Run in a child whose stdin is a real pipe: under pytest this process's
+#: own fd 0 is the capture's, and "kubectl got nothing on stdin" would hold
+#: whichever stdin kubectl was given.
+_STDIN_PROBE = """
+import json, sys
+sys.path.insert(0, {tools!r})
+import _lib_kubectl as lk
+call = sys.argv[1]
+if call == "run":
+    out = lk.kubectl_run("apply", ["-f", "-"], timeout=20).stdout
+elif call == "run-text":
+    out = lk.kubectl_run("apply", ["-f", "-"], timeout=20, stdin_text="the manifest").stdout
+elif call == "run-closed":
+    out = lk.kubectl_run("apply", ["-f", "-"], timeout=20, inherit_stdin=False).stdout
+elif call == "list":
+    lk.kubectl_list("pods", timeout=20); out = open({seen!r}).read()
+elif call == "list-inherit":
+    lk.kubectl_list("pods", timeout=20, inherit_stdin=True); out = open({seen!r}).read()
+elif call == "get":
+    lk.kubectl_get("pod", "p", timeout=20); out = open({seen!r}).read()
+elif call == "logs":
+    out = lk.kubectl_logs("ns", "pod/p", timeout=20)
+print(json.dumps(out))
+"""
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell")
-def test_run_hands_kubectl_its_stdin_and_none_otherwise(tmp_path, monkeypatch):
-    """`apply -f -` reads the manifest from stdin; without one kubectl gets
-    end-of-file (/dev/null), never the caller's terminal to prompt on."""
+@pytest.mark.parametrize("call, kubectl_read", [
+    # a write with no manifest keeps the tool's stdin: an exec credential
+    # plugin that prompts on the terminal can be answered (as before #3539)
+    ("run", "typed at the terminal"),
+    ("run-text", "the manifest"),
+    ("run-closed", ""),
+    # the readers gave kubectl /dev/null before #3539 and still do …
+    ("list", ""),
+    ("get", ""),
+    ("logs", ""),
+    # … unless asked (drift-detect, which started kubectl itself before)
+    ("list-inherit", "typed at the terminal"),
+])
+def test_which_stdin_kubectl_is_given(tmp_path, call, kubectl_read):
     bindir = tmp_path / "bin"
     bindir.mkdir()
+    seen = tmp_path / "seen"
     exe = bindir / "kubectl"
-    exe.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+    # `apply` echoes its stdin; `get` records it and answers an empty list
+    exe.write_text("#!/bin/sh\n"
+                   f"if [ \"$1\" = get ]; then cat > {seen}; echo '{{\"items\": []}}'; "
+                   "else cat; fi\n", encoding="utf-8")
     exe.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    assert lk.kubectl_run("apply", ["-f", "-"], timeout=10, stdin_text="kind: X\n").stdout == "kind: X\n"
-    assert lk.kubectl_run("apply", ["-f", "-"], timeout=10).stdout == ""
+    tools = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools")
+    probe = _STDIN_PROBE.format(tools=os.path.abspath(tools), seen=str(seen))
+    env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    r = subprocess.run([sys.executable, "-c", probe, call], input="typed at the terminal",
+                       capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == kubectl_read
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_a_failed_read_carries_kubectls_whole_stderr(tmp_path, monkeypatch):
+    """The message names kubectl's last stderr line; the lines before it
+    (client-go's reason for an unreachable cluster) are on the error for a
+    caller that prints them (drift-detect)."""
+    stderr = "E1114 memcache.go:265] couldn't get current server API group list\nerror: refused\n"
+    _fake_kubectl(tmp_path, monkeypatch, 1, "", stderr)
+    with pytest.raises(lk.KubectlError) as ei:
+        lk.kubectl_list("pods")
+    assert ei.value.stderr == stderr and "memcache" not in str(ei.value)
+
+
+def test_printable_stderr_keeps_the_lines_and_drops_the_controls():
+    assert lk.printable_stderr("a\x1b[2Jb\r\nc\td\x00\n") == "a?[2Jb\nc\td?"
+    long = "x" * 5000
+    shown = lk.printable_stderr(long, limit=100)
+    assert shown.endswith("x" * 100) and "4900 earlier characters not shown" in shown
+
+
 def test_a_kubectl_killed_by_a_signal_gave_no_exit_status(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -203,8 +279,10 @@ def test_a_kubectl_killed_by_a_signal_gave_no_exit_status(tmp_path, monkeypatch)
     exe.write_text("#!/bin/sh\nkill -KILL $$\n", encoding="utf-8")
     exe.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    with pytest.raises(lk.KubectlError, match="killed by signal 9"):
+    with pytest.raises(lk.KubectlError) as ei:
         lk.kubectl_run("apply", ["-f", "-"], timeout=10, stdin_text="x")
+    # ⛔ not "did not run": the apply may have been sent before the signal
+    assert str(ei.value) == "`kubectl apply`: kubectl apply was killed by signal 9"
 
 
 def test_a_verb_without_a_registered_proof_is_a_programming_error(tmp_path, monkeypatch):

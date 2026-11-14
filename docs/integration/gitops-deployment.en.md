@@ -182,7 +182,8 @@ python3 scripts/ops/configmap_assemble.py \
 # rc 1 = config violation (duplicate tenant / file name / artifact does
 #        not match the tree / over 1 MiB / no carrier)
 # rc 2 = caller or tooling error (--config-dir missing, kubectl absent, not
-#        startable or timed out, a path on the tree da-guard validation names)
+#        startable, timed out or killed by a signal, a path on the tree da-guard
+#        validation names)
 ```
 
 ⚠️ More things this page did not previously state:

@@ -3357,6 +3357,24 @@ class TestApplyToConfigmap:
         monkeypatch.setattr(render, "kubectl_run", kubectl_run)
         return verbs
 
+    def test_the_apply_is_handed_the_manifest_the_create_printed(self, monkeypatch, capsys):
+        """`kubectl apply -f -` reads the manifest from stdin: the one
+        `create --dry-run=client -o yaml` printed, whole. Without it the
+        apply would read this tool's own stdin."""
+        import _grar_render as render
+        seen = {}
+        manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: am-config\n"
+
+        def kubectl_run(verb, args, **kw):
+            seen[verb] = (list(args), kw.get("stdin_text"))
+            return subprocess.CompletedProcess([verb, *args], 0,
+                                               manifest if verb == "create" else "", "")
+        monkeypatch.setattr(render, "kubectl_run", kubectl_run)
+        assert render._apply_merged_configmap("route: {}\n", "monitoring", "am-config") is True
+        assert seen["apply"] == (["-f", "-"], manifest)
+        assert seen["create"][1] is None
+        assert "ConfigMap monitoring/am-config updated" in capsys.readouterr().out
+
     def test_a_read_kubectl_could_not_start_is_explained_not_empty(self, monkeypatch):
         import _grar_render as render
         self._kubectl_dies_at(monkeypatch, "get")

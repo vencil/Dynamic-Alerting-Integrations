@@ -176,7 +176,8 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
         timeout: float, cwd: Optional[str] = None,
         docker_run: Sequence[str] = (), entrypoint: Optional[str] = None,
         stdin_text: Optional[str] = None, env: Optional[dict] = None,
-        expect: Optional[dict] = None, capture: str = "pipe") -> Result:
+        expect: Optional[dict] = None, capture: str = "pipe",
+        no_stdin: bool = False) -> Result:
     """Run *located* and judge the result with the proof registered for
     ``(engine, subcommand)``. Never raises for an engine failure: a binary
     that cannot start, a timeout, and output without proof are all
@@ -187,17 +188,39 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
     (``output``).
 
     *capture* ``"file"`` hands the engine files for stdout and stderr, read
-    once the engine itself has exited, and no stdin unless *stdin_text* is
-    given (:func:`_run_to_files`); the default reads them through pipes."""
+    once the engine itself has exited (:func:`_run_to_files`); the default
+    reads them through pipes. It needs a writable temporary directory; none
+    is a NoVerdict of its own.
+
+    The engine's stdin is *stdin_text* when given; otherwise the caller's
+    own stdin (an engine that prompts — an exec credential plugin under
+    kubectl — can), or ``/dev/null`` with *no_stdin*.
+
+    An engine killed by a signal is a NoVerdict that says so: it ran, and
+    how far it got is unknown (for a write: the request may have been sent)."""
     proof = PROOFS[(located.engine, subcommand)]
     cmd = argv(located, args, docker_run=docker_run, entrypoint=entrypoint)
     via = "" if located.mode == "binary" else " (docker)"
     if capture not in ("pipe", "file"):
         raise ValueError(f"capture is 'pipe' or 'file', not {capture!r}")
+    stdin = subprocess.DEVNULL if no_stdin and stdin_text is None else None
+    sinks = None
+    if capture == "file":
+        # Outside the try below: an OSError here is about the temporary
+        # directory, not about starting the engine (review of #3539).
+        try:
+            sinks = (tempfile.TemporaryFile(), tempfile.TemporaryFile())
+        except OSError as exc:
+            return NoVerdict(f"cannot capture the output of {located.engine}{via}: "
+                             f"no temporary file could be created ({exc})")
     try:
-        if capture == "file":
-            proc = _run_to_files(cmd, cwd=cwd, stdin_text=stdin_text,
+        if sinks is not None:
+            proc = _run_to_files(cmd, sinks, cwd=cwd, stdin_text=stdin_text, stdin=stdin,
                                  timeout=timeout, env=env)
+        elif stdin_text is None:
+            proc = subprocess.run(cmd, cwd=cwd, stdin=stdin, capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace",
+                                  timeout=timeout, env=env)
         else:
             proc = subprocess.run(cmd, cwd=cwd, input=stdin_text, capture_output=True,
                                   text=True, encoding="utf-8", errors="replace",
@@ -210,11 +233,23 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
     except OSError as exc:
         # ENOENT for a file `locate` just found: the kernel names the file
         # when what is missing is the interpreter on its `#!` line (#3534).
+        # ⛔ Only when the working directory is there: a *cwd* that does not
+        # exist is ENOENT too, and is not about the interpreter.
         hint = (" — the file is there; its `#!` interpreter is not?"
                 if isinstance(exc, FileNotFoundError) and located.mode == "binary"
-                and os.path.isfile(located.path) else "")
+                and os.path.isfile(located.path)
+                and (cwd is None or os.path.isdir(cwd)) else "")
         return NoVerdict(f"cannot run {located.engine}{via}: {exc}{hint} "
                          f"(rc {_NOT_RUNNABLE_RC})")
+    finally:
+        for sink in sinks or ():
+            sink.close()
+    if proc.returncode < 0:
+        # ⛔ Not "did not run": it ran until the signal, and what it had done
+        # by then is unknown (a kubectl write may have reached the cluster).
+        return NoVerdict(
+            f"{located.engine} {subcommand}{via} was killed by signal "
+            f"{-proc.returncode}", (proc.stderr or "").strip()[-_STDERR_TAIL:])
     try:
         data = proof(proc, expect or {})
     except NoProof as exc:
@@ -225,29 +260,31 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
     return Ran(data, proc)
 
 
-def _run_to_files(cmd: Sequence[str], *, cwd: Optional[str], stdin_text: Optional[str],
+def _run_to_files(cmd: Sequence[str], sinks: tuple, *, cwd: Optional[str],
+                  stdin_text: Optional[str], stdin: Optional[int],
                   timeout: float, env: Optional[dict]) -> subprocess.CompletedProcess:
-    """``subprocess.run`` with stdout and stderr in files, not pipes: the
-    output is read once the engine itself has exited. A process the engine
-    leaves behind still holding a pipe (an exec credential plugin's helper
-    under kubectl) would otherwise hold the read open until it exits too —
-    an answer reported as a timeout (#3349 review). stdin is *stdin_text*,
-    else ``/dev/null``: an engine that would prompt gets end-of-file. The
-    text is decoded as UTF-8, newlines as written."""
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        if stdin_text is None:
-            proc = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=out,
-                                  stderr=err, timeout=timeout, env=env, check=False)
-        else:
-            proc = subprocess.run(cmd, cwd=cwd, input=stdin_text.encode("utf-8"),
-                                  stdout=out, stderr=err, timeout=timeout, env=env,
-                                  check=False)
-        out.seek(0)
-        err.seek(0)
-        return subprocess.CompletedProcess(
-            cmd, proc.returncode,
-            out.read().decode("utf-8", "replace"),
-            err.read().decode("utf-8", "replace"))
+    """``subprocess.run`` with stdout and stderr in the two files *sinks*,
+    not pipes: the output is read once the engine itself has exited. A
+    process the engine leaves behind still holding a pipe (an exec
+    credential plugin's helper under kubectl) would otherwise hold the read
+    open until it exits too — an answer reported as a timeout (#3349
+    review). stdin is *stdin_text* (a character that is not UTF-8-encodable
+    is sent as ``?``), else *stdin* (None: the caller's own). The text is
+    decoded as UTF-8, newlines as written."""
+    out, err = sinks
+    if stdin_text is None:
+        proc = subprocess.run(cmd, cwd=cwd, stdin=stdin, stdout=out,
+                              stderr=err, timeout=timeout, env=env, check=False)
+    else:
+        proc = subprocess.run(cmd, cwd=cwd, input=stdin_text.encode("utf-8", "replace"),
+                              stdout=out, stderr=err, timeout=timeout, env=env,
+                              check=False)
+    out.seek(0)
+    err.seek(0)
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode,
+        out.read().decode("utf-8", "replace"),
+        err.read().decode("utf-8", "replace"))
 
 
 # ── proofs: what a real run of each (engine, subcommand) prints ─────────────
@@ -533,11 +570,9 @@ def _kubectl_exited(proc: subprocess.CompletedProcess, expect: dict) -> subproce
     verb and caller (a read that got no answer; ``create --dry-run=client``
     refusing a key name, which is a finding on the caller's files; a write
     the cluster refused), so the status is the caller's to judge —
-    ``_lib_kubectl`` does it for reads. What is no run at all is a kubectl
-    killed by a signal, and the ones :func:`run` names itself: not
-    startable, not finished in time (#3539)."""
-    if proc.returncode < 0:
-        raise NoProof(f"killed by signal {-proc.returncode}")
+    ``_lib_kubectl`` does it for reads. The runs without one are the ones
+    :func:`run` names itself, before any proof: not startable, not finished
+    in time, killed by a signal (#3539)."""
     return proc
 
 

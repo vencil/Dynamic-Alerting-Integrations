@@ -185,6 +185,15 @@ class TestRunKubectl:
         assert msg.startswith(ct.CALLER_ERROR_PREFIX)
         assert why in msg and "kubectl delete job shadow-monitor" in msg
 
+    def test_a_kubectl_killed_by_a_signal_is_a_caller_error(self, monkeypatch):
+        """Review of #3539: it gave no exit status of its own — exit 2, not a
+        cutover finding (it was exit 1, "exit code -9") — and the words do
+        not say it did not run: the step may have been sent."""
+        _kubectl(monkeypatch, lambda cmd, **kw: (-9, "", ""))
+        ok, msg = ct._run_kubectl(["delete", "job", "shadow-monitor"])
+        assert not ok and msg.startswith(ct.CALLER_ERROR_PREFIX)
+        assert msg.endswith("kubectl delete was killed by signal 9") and "did not run" not in msg
+
     def test_kubectl_not_on_path_is_a_caller_error(self, monkeypatch, tmp_path):
         monkeypatch.setenv("PATH", str(tmp_path))
         ok, msg = ct._run_kubectl(["get", "pods"])
