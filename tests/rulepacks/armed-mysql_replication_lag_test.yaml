@@ -1,0 +1,40 @@
+# promtool unit test — the shipped default of mysql_replication_lag.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # 20 s behind the primary for 5m, then 40 s; no configured sql_delay.
+      - series: 'mysql_slave_status_seconds_behind_master{job="tenant-exporters", tenant="t-armed", instance="db-0"}'
+        values: '20x20 40x20'
+      - series: 'mysql_slave_status_sql_delay{job="tenant-exporters", tenant="t-armed", instance="db-0"}'
+        values: '0x41'
+      - series: 'user_threshold{tenant="t-armed", component="mysql", metric="replication_lag", severity="warning"}'
+        values: '30x41'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="MariaDBReplicationLag"})
+        eval_time: 4m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="MariaDBReplicationLag"})
+        eval_time: 5m30s
+        exp_samples:
+          - labels: '{alertname="MariaDBReplicationLag", tenant="t-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="MariaDBReplicationLag"})
+        eval_time: 5m30s
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="MariaDBReplicationLag"})
+        eval_time: 7m
+        exp_samples:
+          - labels: '{alertname="MariaDBReplicationLag", tenant="t-armed"}'
+            value: 1

@@ -39,7 +39,22 @@
 # 閘門：arming: default 必須 portable 且沒有 blocker；要出貨一個不可攜的值，得寫
 # default_exception: {tracking: <issue>}。
 # 推導、不手寫：「規則包會讀、chart 不出貨」（原 NOT_CHART_ARMED）與「可攜、未出貨、
-# 無阻塞」的 A2 驗證候選集合。
+# 無阻塞、在 defaults 層」的 A2 驗證候選集合。
+#
+# validation（D-A A2a，#1200 裁決 B）：出貨的值憑什麼。arming: default 必填；operator 的
+# key 可以在升級前先登記，登記了就照同一套規則檢查。
+#   basis    vendor（恰好一個來源，來源的值就是本檔的值）| consensus（至少兩個來源，
+#            組織與網址都不重複，本檔的值落在來源值的最小與最大之間，含兩端）。
+#   sources  每個 {org, url, quote, value}，選填 tier（來源在哪個嚴重度響：info｜
+#            warning｜critical）。url 用 https；quote 是從該頁逐字抄下來、寫出數字的那一行
+#            （閘門檢查 quote 裡有 value，或把百分比寫成比值的那個數，例如 80 對 0.8）；
+#            value 換成本 key 的單位。
+# 來源比本檔嚴或鬆不手寫：那是來源的值對本檔的值，改了值規則就自己不成立。兩個組織是否
+# 互相獨立由審查的人判斷。語料（ADR-030）不當依據，只當否決：帶 value_counterexample
+# 的 key 不得 arming: default。
+# 每個 arming: default 的 key 另外綁一支 promtool 測試 tests/rulepacks/armed-<key>_test.yaml
+# （載入真 pack、同一個 tenant 門檻下不響、門檻上先 pending、過了 for: 才響、fixture 的門檻
+# 等於本檔的值），由 tests/rulepacks/test_armed_key_binding.py 檢查。
 #
 # deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。
 # 本區段是 alias SSOT——唯一的 runtime 鏡像 Go（pkg/config/aliases.go）由 pin 測試
@@ -131,6 +146,14 @@ keys:
     metric_class: saturation
     arming: default
     portability: portable
+    validation:
+      basis: vendor
+      sources:
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "(sum(rate(container_cpu_usage_seconds_total{container!=\"\"}[5m])) by (pod, container) / sum(container_spec_cpu_quota{container!=\"\"}/container_spec_cpu_period{container!=\"\"}) by (pod, container) * 100) > 80"
+        value: 80
+        tier: warning
     dimensions:
     - version
   container_cpu_throttle:
@@ -144,6 +167,23 @@ keys:
     metric_class: saturation
     arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "kubernetes-mixin"
+        url: https://raw.githubusercontent.com/kubernetes-monitoring/kubernetes-mixin/master/alerts/resource_alerts.libsonnet
+        quote: "cpuThrottlingPercent: 25,"
+        value: 25
+        tier: info
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "sum(rate(container_cpu_cfs_throttled_periods_total{container!=\"\"}[5m])) by (container, pod, namespace) / sum(rate(container_cpu_cfs_periods_total[5m])) by (container, pod, namespace) > ( 25 / 100 )"
+        value: 25
+        tier: warning
+      - org: "New Relic"
+        url: https://docs.newrelic.com/docs/kubernetes-pixie/kubernetes-integration/installation/recommended-alert-policies.md
+        quote: "This alert condition generates an alert when a container is throttled by more than 25% for more than 5 minutes."
+        value: 25
   container_memory:
     pack: kubernetes
     tier: defaults
@@ -153,6 +193,19 @@ keys:
     metric_class: saturation
     arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "(sum(container_memory_working_set_bytes{name!=\"\"}) BY (instance, name) / sum(container_spec_memory_limit_bytes > 0) BY (instance, name) * 100) > 80"
+        value: 80
+        tier: warning
+      - org: "Netdata"
+        url: https://raw.githubusercontent.com/netdata/netdata/master/src/health/health.d/cgroups.conf
+        quote: "warn: $this > (($status >= $WARNING)  ? (80) : (90))"
+        value: 90
+        tier: warning
     dimensions:
     - version
   container_cpu_critical:
@@ -188,6 +241,24 @@ keys:
     metric_class: saturation
     arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Percona PMM"
+        url: https://raw.githubusercontent.com/percona/pmm/main/managed/data/alerting-templates/postgresql_too_many_connections.yml
+        quote: "value: 80"
+        value: 80
+        tier: warning
+      - org: "Grafana jsonnet-libs"
+        url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/postgres-observ-lib/config.libsonnet
+        quote: "warn: 80,  // percentage"
+        value: 80
+        tier: warning
+      - org: "Datadog"
+        url: https://raw.githubusercontent.com/DataDog/integrations-core/master/postgres/assets/monitors/percent_usage_connections.json
+        quote: "\"warning\": 0.8"
+        value: 80
+        tier: warning
   pg_replication_lag:
     pack: postgresql
     tier: defaults
@@ -197,6 +268,14 @@ keys:
     metric_class: replication
     arming: default
     portability: portable
+    validation:
+      basis: vendor
+      sources:
+      - org: "Grafana jsonnet-libs"
+        url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/postgres-observ-lib/config.libsonnet
+        quote: "warn: 30,  // seconds"
+        value: 30
+        tier: warning
   pg_connections_critical:
     pack: postgresql
     tier: optional_overrides
@@ -225,6 +304,19 @@ keys:
     metric_class: saturation
     arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Percona PMM"
+        url: https://raw.githubusercontent.com/percona/pmm/main/managed/data/alerting-templates/mysql_too_many_connections.yml
+        quote: "value: 80"
+        value: 80
+        tier: warning
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "max_over_time(mysql_global_status_threads_connected[1m]) / mysql_global_variables_max_connections * 100 > 80 and mysql_global_variables_max_connections > 0"
+        value: 80
+        tier: warning
   mysql_threads_running:
     pack: mariadb
     tier: optional_overrides
@@ -251,6 +343,19 @@ keys:
     metric_class: replication
     arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Prometheus mysqld_exporter mixin"
+        url: https://raw.githubusercontent.com/prometheus/mysqld_exporter/main/mysqld-mixin/alerts/galera.yaml
+        quote: "(instance:mysql_slave_lag_seconds > 30)"
+        value: 30
+        tier: critical
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "( (mysql_slave_status_seconds_behind_master - mysql_slave_status_sql_delay) and ON (instance) mysql_slave_status_master_server_id > 0 ) > 30"
+        value: 30
+        tier: critical
   mysql_connection_usage_percent_critical:
     pack: mariadb
     tier: optional_overrides

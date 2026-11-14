@@ -118,7 +118,7 @@
             "portability": {
               "enum": ["portable", "ratio_pending", "site_specific"],
               "description": "Whether ONE value of this key carries across deployments. portable = yes. ratio_pending = an absolute value that does not; the fix is a ratio form (#1320). site_specific = no universal value exists. Required on shipped keys too, so a shipped absolute value is caught.",
-              "$comment": "Same presence rule as arming. A portable, unshipped, unblocked key is a validation candidate (the D-A A2 input), derived by _registry_lib.validation_candidates — never authored."
+              "$comment": "Same presence rule as arming. A portable, unshipped, unblocked key in the defaults tier is a validation candidate (the D-A A2 input), derived by _registry_lib.validation_candidates — never authored."
             },
             "portability_reason": {
               "type": "string",
@@ -150,6 +150,41 @@
               "required": ["tracking"],
               "description": "Records why a non-portable value ships anyway (arming: default with portability other than portable), with the issue that resolves it. Forbidden anywhere else (enforced by _registry_lib.arming_problems).",
               "properties": {"tracking": {"type": "integer", "minimum": 1}}
+            },
+            "validation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["basis", "sources"],
+              "description": "What a shipped value rests on (D-A A2). REQUIRED on every arming: default key; an operator key may carry it ahead of its promotion. vendor = one source that uses this very value. consensus = two or more sources from different organisations whose values bracket it (ends included).",
+              "$comment": "No relation (equal / stricter / looser) is authored: it is the source's value against the registry's, checked by _registry_lib.validation_problems, so it cannot go stale when the value changes. The cross-field rules (vendor: one source, equal value; consensus: >= 2, distinct org and url, value within their range; required iff arming is default; forbidden beside value_counterexample on a default key) live in the gate, not here. Whether two organisations are independent is a reviewer's call. The promtool test that binds the key is tests/rulepacks/armed-<key>_test.yaml, held by tests/rulepacks/test_armed_key_binding.py.",
+              "properties": {
+                "basis": {"enum": ["vendor", "consensus"]},
+                "sources": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["org", "url", "quote", "value"],
+                    "properties": {
+                      "org": {"type": "string", "minLength": 1, "pattern": "^[^\\n\\r]+$"},
+                      "url": {"type": "string", "pattern": "^https://\\S+$"},
+                      "quote": {
+                        "type": "string", "minLength": 1, "pattern": "^[^\\n\\r]+$",
+                        "$comment": "Copied verbatim from the page at url: the one line that states the number. The gate requires the quote to carry value (as written, or as a ratio: 0.8 for 80)."
+                      },
+                      "value": {
+                        "type": "number",
+                        "$comment": "The source's threshold, in this key's unit."
+                      },
+                      "tier": {
+                        "enum": ["info", "warning", "critical"],
+                        "$comment": "The severity the source alerts at, when it states one. Informational: the registry value here is the warning tier."
+                      }
+                    }
+                  }
+                }
+              }
             },
             "critical_of": {
               "type": "string",
