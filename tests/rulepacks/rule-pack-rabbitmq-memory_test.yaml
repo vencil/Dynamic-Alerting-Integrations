@@ -14,9 +14,12 @@
 #   - t-both: both exporters scrape one node, kbudde reads 50 %, the plugin
 #     93 % — the fuller reading wins.
 #   - t-below: 89 % against a warning of 90 → no alert.
-#   - t-zero: a limit that reads 0 → the `> 0` filter drops the node: no ratio
-#     sample, no alert. Clamping the limit to 1 instead read 5 bytes of use as
-#     500 % and paged critical.
+#   - t-zero / t-zero-plugin: a limit that reads 0, one tenant per exporter →
+#     the `> 0` filter drops the node: no ratio sample, no alert. Clamping the
+#     limit to 1 instead read 5 bytes of use as 500 % and paged critical;
+#     dividing by the bare 0 reads +Inf.
+#   - t-crit: 97 % against a critical of 95 → both tiers, and the critical
+#     waits its own 2m too.
 rule_files:
   - ../../rule-packs/rule-pack-rabbitmq.yaml
 
@@ -72,6 +75,25 @@ tests:
       - series: 'user_threshold{tenant="t-zero", component="rabbitmq", metric="node_mem_percent", severity="critical"}'
         values: '95x40'
 
+
+      - series: 'rabbitmq_process_resident_memory_bytes{tenant="t-zero-plugin", instance="mq-0"}'
+        values: '5x40'
+      - series: 'rabbitmq_resident_memory_limit_bytes{tenant="t-zero-plugin", instance="mq-0"}'
+        values: '0x40'
+      - series: 'user_threshold{tenant="t-zero-plugin", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+      - series: 'user_threshold{tenant="t-zero-plugin", component="rabbitmq", metric="node_mem_percent", severity="critical"}'
+        values: '95x40'
+
+      - series: 'rabbitmq_node_mem_used{tenant="t-crit", node="rabbit@a"}'
+        values: '97x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-crit", node="rabbit@a"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="t-crit", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+      - series: 'user_threshold{tenant="t-crit", component="rabbitmq", metric="node_mem_percent", severity="critical"}'
+        values: '95x40'
+
     promql_expr_test:
       - expr: tenant:rabbitmq_node_mem_percent:ratio
         eval_time: 5m
@@ -84,6 +106,8 @@ tests:
             value: 93
           - labels: 'tenant:rabbitmq_node_mem_percent:ratio{tenant="t-below"}'
             value: 89
+          - labels: 'tenant:rabbitmq_node_mem_percent:ratio{tenant="t-crit"}'
+            value: 97
 
       # for: 2m → firing by 5m. 95 is not above a critical threshold of 95.
       - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname=~"RabbitMQHighMemory|RabbitMQHighMemoryCritical"})
@@ -95,6 +119,10 @@ tests:
             value: 1
           - labels: '{alertname="RabbitMQHighMemory", tenant="t-both"}'
             value: 1
+          - labels: '{alertname="RabbitMQHighMemory", tenant="t-crit"}'
+            value: 1
+          - labels: '{alertname="RabbitMQHighMemoryCritical", tenant="t-crit"}'
+            value: 1
 
       # for: is 2m, not 30s: one minute in, the alerts are pending.
       - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"RabbitMQHighMemory|RabbitMQHighMemoryCritical"})
@@ -104,4 +132,9 @@ tests:
         eval_time: 1m
         exp_samples:
           - labels: '{alertname="RabbitMQHighMemory"}'
-            value: 3
+            value: 4
+      - expr: count by(alertname) (ALERTS{alertstate="pending", alertname="RabbitMQHighMemoryCritical"})
+        eval_time: 1m
+        exp_samples:
+          - labels: '{alertname="RabbitMQHighMemoryCritical"}'
+            value: 1
