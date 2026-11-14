@@ -191,14 +191,13 @@ def test_explain_unusable_policy_is_rc2(tmp_path):
 
 
 def test_validate_config_refuses_an_unmet_min_generator_version(tmp_path):
-    """owner 核可的唯一既有呼叫 rc 變更：0 → 2（routes 列擋；#3303 起沒有 policy 列）。"""
+    """owner 核可的唯一既有呼叫 rc 變更：0 → 2。#3797：--policy 在任何列執行前就
+    判定、讀一次，所以這是早退（#3617：沒有列跑過，就沒有文件），不是 routes 列。"""
     conf = _tree(tmp_path, {"receiver": _OK})
     res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _too_new(tmp_path))
     assert res.returncode == 2, res.stdout + res.stderr
-    rows = {r["check"]: r for r in json.loads(res.stdout)}
-    assert "policy" not in rows, rows
-    assert rows["routes"]["status"] == "fail" and rows["routes"]["caller_error"], rows["routes"]
-    assert any("min_generator_version" in d for d in rows["routes"]["details"]), rows["routes"]
+    assert res.stdout == "", res.stdout
+    assert "min_generator_version" in res.stderr, res.stderr
 
 
 def test_validate_config_policy_fail_points_at_the_policy_file(tmp_path):
@@ -232,22 +231,21 @@ def test_validate_config_and_generate_routes_print_no_notice(tmp_path):
 @pytest.mark.parametrize("tool", [_GENERATOR, _VALIDATE, _TESTER, _EXPLAIN],
                          ids=lambda p: p.stem)
 def test_every_tool_reads_policy_through_the_one_resolver(tool):
-    """結構閘門：這四支只經 `resolve_policy` 讀 --policy（validate-config 交給產生器的
-    `validate_tree`，由它讀），不直接叫
-    `load_policy` / `load_policy_document`，也不自己宣告 `--policy`。"""
+    """結構閘門：這四支只經 `resolve_policy` 讀 --policy（#3797：一個宣告過的
+    document，讀一次；validate-config 也自己解析一次、把結果交給產生器的
+    `validate_tree`），不直接叫 `load_policy` / `load_policy_document`，也不自己
+    宣告 `--policy`（一律 `add_policy_argument`）。"""
     tree = ast.parse(tool.read_text(encoding="utf-8"))
     # the resolver's (and the flag's) own body is where the file is read
     tree.body = [n for n in tree.body
                  if not (isinstance(n, ast.FunctionDef)
-                         and n.name in ("resolve_policy", "add_policy_argument"))]
+                         and n.name in ("resolve_policy", "add_policy_argument",
+                                        "resolve_policy_file"))]
     names = {n.attr if isinstance(n, ast.Attribute) else n.id
              for n in ast.walk(tree)
              if isinstance(n, ast.Call)
              for n in [n.func] if isinstance(n, (ast.Attribute, ast.Name))}
-    if tool == _VALIDATE:
-        # its one reader of --policy is the generator's `validate_tree`
-        assert "validate_tree" in names and "resolve_policy" not in names, tool.name
-    elif tool != _GENERATOR:
+    if tool != _GENERATOR:
         assert "resolve_policy" in names, tool.name
     else:
         assert "resolve_policy" in names or "resolve_policy" in {
@@ -257,9 +255,8 @@ def test_every_tool_reads_policy_through_the_one_resolver(tool):
     own_flag = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
                 and getattr(n.func, "attr", None) == "add_argument"
                 and any(isinstance(a, ast.Constant) and a.value == "--policy" for a in n.args)]
-    if tool != _VALIDATE:  # validate-config's --policy also feeds lint_custom_rules
-        assert own_flag == [], tool.name
-        assert "add_policy_argument" in names, tool.name
+    assert own_flag == [], tool.name
+    assert "add_policy_argument" in names, tool.name
 
 
 def test_tester_explain_and_generator_agree_under_a_policy_across_parity_matrix(tmp_path):
@@ -333,8 +330,7 @@ def test_explain_names_a_refused_enforced_receiver(tmp_path):
 def test_validate_config_version_error_gets_the_version_remedy(tmp_path):
     conf = _tree(tmp_path, {"receiver": _OK})
     res = _run(_VALIDATE, "--config-dir", str(conf), "--json", "--policy", _too_new(tmp_path))
-    rows = {r["check"]: r for r in json.loads(res.stdout)}
-    assert rows["routes"]["suggested_action"] == gar.POLICY_VERSION_REMEDY, rows["routes"]
+    assert f"hint: {gar.POLICY_VERSION_REMEDY}" in res.stderr, res.stderr
 
 
 def test_validate_config_a_tenant_named_domain_is_not_an_allowlist_finding(tmp_path):

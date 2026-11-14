@@ -1,0 +1,40 @@
+# promtool unit test — the shipped default of pg_connections.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-postgresql.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # 79 % of max_connections for 5m, then 81 %.
+      - series: 'pg_stat_activity_count{tenant="t-armed", instance="db-0"}'
+        values: '79x20 81x20'
+      - series: 'pg_settings_max_connections{tenant="t-armed", instance="db-0"}'
+        values: '100x41'
+      - series: 'user_threshold{tenant="t-armed", component="pg", metric="connections", severity="warning"}'
+        values: '80x41'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PostgreSQLHighConnections"})
+        eval_time: 4m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="PostgreSQLHighConnections"})
+        eval_time: 5m30s
+        exp_samples:
+          - labels: '{alertname="PostgreSQLHighConnections", tenant="t-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PostgreSQLHighConnections"})
+        eval_time: 5m30s
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PostgreSQLHighConnections"})
+        eval_time: 7m
+        exp_samples:
+          - labels: '{alertname="PostgreSQLHighConnections", tenant="t-armed"}'
+            value: 1

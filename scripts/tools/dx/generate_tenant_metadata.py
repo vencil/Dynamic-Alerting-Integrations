@@ -63,7 +63,8 @@ from _lib_io import (  # noqa: E402  (#1789)
 )
 from _lib_atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
 from _lib_confd import legacy_state_files  # noqa: E402  (#2883)
-from _lib_tenant_state import KEY_GROUPS, StateInputError, load_state  # noqa: E402  (#2883)
+from _lib_tenant_state import (  # noqa: E402  (#2883)
+    KEY_GROUPS, StateInputError, add_state_argument, load_state)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -531,8 +532,8 @@ def main():
         action="store_true",
         help="Print JSON to stdout without writing file",
     )
-    parser.add_argument(
-        "--state",
+    add_state_argument(  # #3797: a declared document (`-`: stdin)
+        parser,
         help="the JSON `tenant-api state show` prints, for custom_groups "
              "(- reads stdin)",
     )
@@ -557,9 +558,9 @@ def main():
     if args.check and args.output and args.output.exists():
         at = recorded_at(_read_existing_for_check(args.output)[0])
     state = None
-    if args.state:
+    if args.state is not None:   # ⛔ not truthiness: '' is given, and refused (#3797)
         try:
-            state = load_state(args.state, lang="en")  # #3512: this tool's language
+            state = load_state(args, lang="en")  # #3512: this tool's language
         except StateInputError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)

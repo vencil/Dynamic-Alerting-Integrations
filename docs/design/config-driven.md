@@ -711,12 +711,12 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
 # CI 驗證（--validate 不寫檔；配 -o 會被拒絕，結束碼 2）
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --validate \
-  --policy .github/custom-rule-policy.yaml
+  --policy .github/deployment-policy.yaml
 
 # 產出合併後的 alertmanager.yml（K8s GitOps 改用 --output-configmap）
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --output-alertmanager --base-config alertmanager.yml \
-  -o alertmanager.new.yml --policy .github/custom-rule-policy.yaml
+  -o alertmanager.new.yml --policy .github/deployment-policy.yaml
 
 # 一站式合併至 Alertmanager ConfigMap + reload
 python3 scripts/tools/ops/generate_alertmanager_routes.py \

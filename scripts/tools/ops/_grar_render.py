@@ -6,7 +6,7 @@ from generate_alertmanager_routes for backwards-compatible test imports.
 
 Functions:
   Output rendering:
-    load_base_config(path)       → base AM YAML; defaults ONLY when the flag was
+    load_base_config(text, path) → base AM YAML; defaults ONLY when the flag was
                                    omitted — a supplied-but-unusable value
                                    raises BaseConfigInputError (#1616)
     merge_generated(base, ...)   → the ONE merge every output mode uses (#1211):
@@ -64,7 +64,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
 from _lib_confd import WARN_LIMIT  # noqa: E402  (#1211: the alert names a line lists)
 from _grar_merge import Finding  # noqa: E402  (#1211: the undelivered-custom-alert finding)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3797: --base-config is a declared document)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
 from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
 from _grar_validate import (  # noqa: E402
@@ -476,23 +476,55 @@ def consumer_read_message(exc: ConsumerReadError) -> str:
     return exc.detail()
 
 
-def load_base_config(path: str | None, *, show_loader_reason: bool = False) -> dict:
-    """Load the base Alertmanager config that generated routes merge into.
+#: --base-config as a declared input reads it (#3797): the file's text,
+#: strict UTF-8, read once by `_lib_input.document`; `load_base_config`
+#: hands it to Alertmanager's own loader.
+BASE_CONFIG_DOCUMENT = _lib_input.Document("text", str)
+
+#: The line after every refusal of the --base-config FILE itself (#3797).
+BASE_CONFIG_REMEDY = (
+    "--base-config takes a PATH to a base Alertmanager YAML (global / route / "
+    "receivers / inhibit_rules). Do not drop the flag to clear this error: that "
+    "substitutes the built-in placeholder `global:` for yours, which is the exact "
+    "silent failure this error exists to stop.")
+
+
+def load_base_config_file(path: str, *, show_loader_reason: bool = False) -> dict:
+    """``load_base_config`` of the file at *path*, read through the same
+    declaration (``BASE_CONFIG_DOCUMENT``) — a library caller's; a tool's
+    ``--base-config`` is the declared document it reads. A file that cannot
+    be judged or read raises BaseConfigInputError."""
+    import argparse  # noqa: PLC0415
+    from _lib_exitcodes import CallerError  # noqa: PLC0415
+    parser = argparse.ArgumentParser(add_help=False)
+    _lib_input.add_input(parser, "--base-config", decode=BASE_CONFIG_DOCUMENT,
+                         remedy=BASE_CONFIG_REMEDY)
+    try:  # `--base-config=<path>`: a path that starts with "-" is the value
+        text = _lib_input.document(parser.parse_args([f"--base-config={path}"]),
+                                   "base_config", lang="en")
+    except CallerError as exc:
+        raise BaseConfigInputError(str(exc)) from exc
+    return load_base_config(text, path, show_loader_reason=show_loader_reason)
+
+
+def load_base_config(raw_text: str | None, path: str | None = None, *,
+                     show_loader_reason: bool = False) -> dict:
+    """The base Alertmanager config that generated routes merge into, from
+    *raw_text* — what `_lib_input.document` read from the ``--base-config``
+    file at *path* (``BASE_CONFIG_DOCUMENT``), None when the flag was not
+    given.
 
     Two outcomes, and they must stay distinguishable (#1616):
 
-    * the flag was OMITTED — ``path is None`` — the built-in defaults apply;
+    * the flag was OMITTED — ``raw_text is None`` — the built-in defaults apply;
     * the flag was SUPPLIED with a value that cannot serve as a base config —
-      raise, and the caller exits 2 (dev-rules #13 / ``_lib_exitcodes``).
+      the declaration refuses a path that is no readable UTF-8 file (rc 2
+      naming the flag), and this raises for content Alertmanager's loader
+      refuses; the caller exits 2 (dev-rules #13 / ``_lib_exitcodes``).
 
-    ⛔ "Supplied" is ``path is None``, NOT ``not path``. An empty string is
-    supplied — it is what an unset shell variable expands to — and a falsy test
-    routes it into the omitted branch, which is the whole defect.
-
-    Everything past the omitted branch reduces to two re-derivable predicates —
-    *the value names a file*, and *Alertmanager's loader accepts it*
-    (``da-read alertmanager``, ADR-036 §12) — so no shape is enumerated and an
-    unanticipated spelling lands on an existing branch.
+    ⛔ "Supplied" is ``is None``, NOT falsiness: an empty string is supplied
+    — what an unset shell variable expands to — and the declaration refuses
+    it; an empty FILE is content, refused by the loader below.
 
     ⚠️ NOT closed: the CONTENT axis (``--policy`` closed its own in #1649;
     this one stays open). A file that IS a mapping but whose ``global:`` is empty or
@@ -502,27 +534,9 @@ def load_base_config(path: str | None, *, show_loader_reason: bool = False) -> d
     or ``inhibit_rules:`` is legitimate (they fall back per key); one without
     ``route:`` is not — Alertmanager refuses it (#3206).
     """
-    if path is None:
+    if raw_text is None:
         return copy.deepcopy(_DEFAULT_BASE_CONFIG)
-    base_config_problem = classify_path(path, "file", lang="en", flag="--base-config")  # #3276
-    if base_config_problem is not None:
-        raise BaseConfigInputError(
-            f"{base_config_problem.message}\n"
-            "  --base-config takes a PATH to a base Alertmanager YAML "
-            "(global / route / receivers / inhibit_rules).\n"
-            "  ⛔ Do not drop the flag to clear this error — that substitutes "
-            "the built-in placeholder `global:` for yours, which is the exact "
-            "silent failure this error exists to stop.")
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-        raw_text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise BaseConfigInputError(
-            f"--base-config: {path!r} is not valid UTF-8: {exc}") from exc
-    except OSError as exc:
-        raise BaseConfigInputError(
-            f"--base-config: cannot read {path!r}: {exc}") from exc
+    raw = raw_text.encode("utf-8")
     # ADR-036 §12 (#3206): the base is an Alertmanager config, so it is read
     # the way Alertmanager loads it (da-read alertmanager), not with PyYAML.
     # ⛔ That makes the base a WHOLE config Alertmanager accepts on its own:

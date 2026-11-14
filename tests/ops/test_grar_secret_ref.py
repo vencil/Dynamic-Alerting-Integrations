@@ -348,11 +348,16 @@ def test_validate_fails_on_a_binding_violation(tmp_path):
     assert "shared_secrets does not list" in r.stdout + r.stderr
 
 
+def vc_gen():
+    import generate_alertmanager_routes as gen
+    return gen
+
+
 def test_validate_config_routes_row_fails_on_a_binding_violation(tmp_path):
     d = _tree(tmp_path, _SHARED_RECEIVER)
-    row = vc.check_routes(str(d), _policy(tmp_path, ""))
+    row = vc.check_routes(str(d), vc_gen().resolve_policy_file(_policy(tmp_path, "")))
     assert row["status"] == vc.FAIL, row
-    row = vc.check_routes(str(d), _policy(tmp_path, _SHARED_POLICY))
+    row = vc.check_routes(str(d), vc_gen().resolve_policy_file(_policy(tmp_path, _SHARED_POLICY)))
     assert row["status"] != vc.FAIL, row
 
 

@@ -656,3 +656,21 @@ def test_a_symlink_back_into_the_tree_is_no_loop_and_no_finding(tmp_path) -> Non
     (root / "a.yaml").write_text(RULES, encoding="utf-8")
     symlink_or_skip(".", str(root / "loop"))
     assert [Path(f).name for f in cr.files_to_read([str(root)])] == ["a.yaml"]
+
+
+def test_files_to_read_looks_at_the_files_in_a_fixed_order(tmp_path, monkeypatch) -> None:
+    """#3797: each realpath is a look at a file, and the fault-injection gate
+    replays a run by the order of its looks: they are made in sorted order,
+    not in a set's (which follows the string hash of the absolute paths)."""
+    for name in ("c.yaml", "a.yaml", "b.yaml", "d.yaml", "e.yaml"):
+        (tmp_path / name).write_text("groups: []\n", encoding="utf-8")
+    seen = []
+    real = cr.os.path.realpath
+
+    def record(p, *a, **kw):
+        seen.append(p)
+        return real(p, *a, **kw)
+    monkeypatch.setattr(cr.os.path, "realpath", record)
+    cr.files_to_read([str(tmp_path)])
+    chosen = [p for p in seen if str(p).endswith(".yaml")]
+    assert chosen == sorted(chosen) and len(chosen) == 5, chosen

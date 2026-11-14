@@ -163,7 +163,9 @@ class TestLoadPolicy:
         釘成「不設限」——webhook 網域白名單整條關掉、rc 0、`[PASS] policy`。
         """
         path = write_yaml(config_dir, "policy.yaml", body)
-        with pytest.raises(PolicyInputError, match="no YAML document"):
+        # #3797: the declared document's refusal (a mapping, not an empty one).
+        with pytest.raises(PolicyInputError,
+                           match=r"the top level is not a mapping \(got an empty document\)"):
             load_policy(path)
 
     def test_nonexistent_policy_raises(self):
@@ -192,12 +194,28 @@ class TestLoadPolicy:
 
         錯誤訊息要說怎麼明示「不設限」，否則最便宜的轉綠是拿掉旗標。
         """
-        path = write_yaml(config_dir, "policy.yaml",
-                          "denied_functions: [holt_winters]\n")
+        path = write_yaml(config_dir, "policy.yaml", 'min_generator_version: "2.9.0"\n')
         with pytest.raises(PolicyInputError,
                            match="no `allowed_domains` key") as exc:
             load_policy(path)
         assert "allowed_domains: []" in str(exc.value)
+
+    def test_a_lint_policy_key_is_refused_and_pointed_to_lint_policy(self, config_dir):
+        """#3797: the deployment policy has no lint keys — a lint policy given as
+        --policy was read as "no domain constraint" by one reader and as the
+        lint policy by the other. Refused, naming the flag that takes it."""
+        path = write_yaml(config_dir, "policy.yaml",
+                          "allowed_domains: []\ndenied_functions: [holt_winters]\n")
+        with pytest.raises(PolicyInputError) as exc:
+            load_policy(path)
+        assert "has key(s) the deployment policy does not have: denied_functions" in str(exc.value)
+        assert "--lint-policy" in str(exc.value)
+
+    def test_any_other_key_is_refused(self, config_dir):
+        path = write_yaml(config_dir, "policy.yaml", "allowed_domains: []\nalowed: [x]\n")
+        with pytest.raises(PolicyInputError, match="does not have: alowed") as exc:
+            load_policy(path)
+        assert "--lint-policy" not in str(exc.value)
 
     def test_a_misspelled_key_is_named(self, config_dir):
         """`allowed_domain:`（少一個 s）→ raise，且訊息點名拼錯的那個鍵。"""

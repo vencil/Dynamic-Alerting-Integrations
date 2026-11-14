@@ -64,7 +64,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -94,10 +94,8 @@ except ImportError:
 # mode, in no tree. A key written twice is a file parse-tree cannot read.
 try:
     from _lib_io import load_confd_file
-    from _lib_paths import classify_path
 except ImportError:
     from scripts.tools._lib_io import load_confd_file  # type: ignore[no-redef]
-    from scripts.tools._lib_paths import classify_path  # type: ignore[no-redef]
 import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
@@ -231,20 +229,39 @@ def load_policies(source: str, config_dir: Optional[str] = None, *,
     return rules_from_policy_data(read_policy_file(source), source=str(source))
 
 
-def read_policy_file(path: str) -> Any:
-    """A standalone policy file (one of no conf.d tree) as yaml.v3 reads it
-    — `da-guard parse-tree`'s file mode (ADR-036 step 4, #2906), with
-    `exclude_tenants` items as their source text (#2114). None for a path
-    that is not a file; an empty file is ``{}``. A file parse-tree cannot
-    read (bad syntax, a key written twice, not UTF-8, a top level that is
-    not a mapping) raises YamlFileError, whose ``cause`` is the
-    `FileUnreadable`; no usable parse-tree raises ParseTreeError."""
-    if not (path and Path(path).is_file()):
-        return None
+#: A standalone policy file as a declared input reads it (#3797): its text,
+#: read once by `_lib_input.document`; ``policy_text_data`` parses it.
+POLICY_FILE_DOCUMENT = _lib_input.Document("text", str)
+
+#: The line after every refusal of the --policy FILE itself (#3797).
+POLICY_FILE_REMEDY = {
+    "en": "Do not drop the flag to clear this — that evaluates without your policy file.",
+    "zh": "不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。",
+}
+
+
+def policy_text_data(text: str, label: str) -> Any:
+    """*text*, the content of the standalone policy file *label* (one of no
+    conf.d tree), as yaml.v3 reads it — `da-guard parse-tree`'s file mode
+    (ADR-036 step 4, #2906), with `exclude_tenants` items as their source
+    text (#2114); an empty file is ``{}``. Content parse-tree cannot read
+    (bad syntax, a key written twice, a top level that is not a mapping)
+    raises YamlFileError, whose ``cause`` is the `FileUnreadable`; no
+    usable parse-tree raises ParseTreeError. The file is never read again
+    (#3797): a second read was a second judgement — a file gone between
+    the two read as "no policy rules", rc 0."""
     try:
-        return _lib_parse_cache.read_file_alone(path, POLICY_READ)
+        return _lib_parse_cache.read_text_alone(text, POLICY_READ, label=label)
     except FileUnreadable as exc:
-        raise YamlFileError(str(path), exc) from exc
+        raise YamlFileError(label, exc) from exc
+
+
+def read_policy_file(path: str) -> Any:
+    """``policy_text_data`` of the file at *path*, read here (a library
+    caller's; a tool's --policy is a declared document). Raises OSError
+    when it cannot be read — never None: a path that is no file is not an
+    empty policy."""
+    return policy_text_data(Path(path).read_bytes().decode("utf-8"), str(path))
 
 
 #: The keys a rule is read for (#2961) — `PolicyRule`'s fields — and those of
@@ -1177,8 +1194,8 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
             empty=_lib_input.EMPTY_ALLOWED, required=True,
             help="conf.d/ 目錄路徑（含 tenant YAML）",
         )
-        parser.add_argument(
-            "--policy", required=False,
+        _lib_input.add_input(  # #3797: a declared document, read once
+            parser, "--policy", decode=POLICY_FILE_DOCUMENT, remedy=POLICY_FILE_REMEDY,
             help="獨立策略檔案路徑（頂層 policies: key）",
         )
         parser.add_argument(
@@ -1198,8 +1215,8 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
             empty=_lib_input.EMPTY_ALLOWED, required=True,
             help="Path to conf.d/ directory containing tenant YAML files",
         )
-        parser.add_argument(
-            "--policy", required=False,
+        _lib_input.add_input(  # #3797: as the zh parser above
+            parser, "--policy", decode=POLICY_FILE_DOCUMENT, remedy=POLICY_FILE_REMEDY,
             help="Path to standalone policy file (top-level policies: key)",
         )
         parser.add_argument(
@@ -1316,14 +1333,12 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
     # `load_yaml_file` returns None for a non-file so `load_policies` gave [].
     # Both then printed "No policy rules found" — a typo'd gate that passes.
     # Omitted is `is None` (argparse default); '' is supplied.
-    policy_problem = (None if args.policy is None
-                      else classify_path(args.policy, "file", lang=lang, flag="--policy"))  # #3276
-    if policy_problem is not None:
-        raise CallerError(
-            f"{policy_problem.message}\n  ⛔ 不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。"
-            if lang == "zh" else
-            f"{policy_problem.message}\n  ⛔ Do not drop the flag to clear this — that evaluates "
-            "without your policy file.", policy_problem.reason)
+    # #3797: judged and read ONCE by its declaration (`_lib_input.document`:
+    # the path, strict UTF-8 — a CallerError naming the flag); its text is
+    # parsed below and the file is never read again. A second read (an
+    # `is_file()` before parse-tree) read a file gone in between as "no
+    # policy rules", rc 0.
+    policy_text = _lib_input.document(args, "policy", lang=lang)
 
     # Load policies
     rules: list[PolicyRule] = []
@@ -1371,7 +1386,7 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
             # ADR-036 step 4 (#2906): yaml.v3, as the tenants it is compared
             # with — parse-tree's file mode; #2114 `exclude_tenants` items as
             # source text, see `load_policies`.
-            policy_data = read_policy_file(args.policy)
+            policy_data = policy_text_data(policy_text, str(args.policy))
         except ParseTreeError as exc:
             return _load_error_exit(exc, args, 0)
         except YamlFileError as e:
@@ -1388,10 +1403,6 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
                 problem = ("policy_file_invalid",
                            f"{args.policy!r} is not valid YAML ({kind}): {message}",
                            f"{args.policy!r} 不是有效的 YAML（{kind}）: {message}")
-        except OSError as e:
-            problem = ("policy_file_unreadable",
-                       f"cannot read {args.policy!r}: {e}",
-                       f"無法讀取 {args.policy!r}: {e}")
         else:
             # An EMPTY file parses to None and stays "no rules" (rc 0 below,
             # the #1649 content axis); any other non-mapping top level is

@@ -18,6 +18,7 @@ Functions:
 """
 from __future__ import annotations
 
+import argparse
 import difflib
 import fnmatch
 import functools
@@ -30,11 +31,11 @@ from types import MappingProxyType
 from typing import Mapping, NamedTuple, Sequence
 from urllib.parse import urlparse
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+import _lib_input  # noqa: E402  (#3797: the deployment policy is a declared document)
 from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     RECEIVER_TYPES,
@@ -46,7 +47,6 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
     TENANT_ROUTING_KEYS,
 )
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
@@ -881,10 +881,22 @@ def assert_tenant_inhibits_verifiable(
 # that turns control characters (newlines included) into `?`.
 _POLICY_KEY_REMEDY = (
     "To allow every webhook domain on purpose, write `allowed_domains: []`; "
-    "to restrict, list the patterns under `allowed_domains:`. A file that is "
-    "only a lint policy needs the `allowed_domains: []` line when it is also "
-    "passed to generate-routes / validate-config. Do not drop the flag to "
-    "clear this error: that turns the webhook domain allowlist off.")
+    "to restrict, list the patterns under `allowed_domains:`. A custom-rule lint "
+    "policy is another file (`validate-config --lint-policy`, `lint --policy`). "
+    "Do not drop the flag to clear this error: that turns the webhook domain "
+    "allowlist off.")
+
+#: The line after every refusal of the --policy FILE itself (#3797: the
+#: declaration's, `add_input(remedy=...)`) — a path, its bytes, its YAML.
+POLICY_INPUT_REMEDY = {
+    "en": ("--policy takes a PATH to the deployment policy YAML (an `allowed_domains:` "
+           "list; `allowed_domains: []` for no constraint). Do not drop the flag to "
+           "clear this error: that turns the webhook domain allowlist off, which is "
+           "what this error exists to stop."),
+    "zh": ("--policy 要的是部署端 policy YAML 的路徑（`allowed_domains:` 清單；不限制請寫 "
+           "`allowed_domains: []`）。不要靠拿掉旗標轉綠：那等於關掉 webhook 網域白名單，"
+           "正是這個錯誤要擋的事。"),
+}
 
 
 class PolicyInputError(ValueError):
@@ -1044,11 +1056,13 @@ def generator_version_problem(own: str | None, minimum: str | None) -> str | Non
 POLICY_HELP = {
     "en": ("Deployment policy YAML (the file generate-routes takes): its "
            "allowed_domains refuse receivers whose host is outside it, its "
-           "min_generator_version refuses an older generator. Without it the "
-           "allowlist is not applied"),
+           "min_generator_version refuses an older generator, its shared_secrets "
+           "name the shared Secrets; any other key is refused (the custom-rule lint "
+           "policy is another file). Without it the allowlist is not applied"),
     "zh": ("部署端 policy YAML（與 generate-routes 同一份）：host 不在 "
            "allowed_domains 內的 receiver 被拒收；比 min_generator_version "
-           "舊的產生器拒絕判定。沒帶時不套用 allowlist"),
+           "舊的產生器拒絕判定；shared_secrets 列共用的 Secret；其他鍵一律拒收"
+           "（custom rule lint 的 policy 是另一份檔）。沒帶時不套用 allowlist"),
 }
 
 #: printed (stderr) by test-notification / explain-route run without --policy
@@ -1073,6 +1087,23 @@ POLICY_VERSION_REMEDY = (
 
 #: the `kind` of the finding that drops a receiver for the allowlist.
 POLICY_REFUSAL_KIND = "receiver_domain_not_allowed"
+
+
+#: The deployment policy as a declared input reads it (#3797): a YAML
+#: mapping. An empty file is refused there (no document is not "no
+#: constraint", #1649); what the mapping holds is `policy_document`'s.
+POLICY_DOCUMENT = _lib_input.Document("yaml", dict)
+
+#: The keys of the deployment policy (`policy_document`); any other key is
+#: refused (#3797).
+POLICY_KEYS = frozenset({"allowed_domains", "min_generator_version", "shared_secrets"})
+
+
+def _lint_policy_keys() -> frozenset:
+    """The custom-rule lint policy's keys (lint_custom_rules.POLICY_KEYS),
+    for the hint when one is given as the deployment policy."""
+    from lint_custom_rules import POLICY_KEYS as lint_keys  # noqa: PLC0415
+    return lint_keys
 
 
 def load_policy(policy_path: str | None) -> list[str]:
@@ -1126,49 +1157,52 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
     # ⛔ `is None`, not `not policy_path`. An empty string is SUPPLIED — it is
     # what an unset shell variable expands to — and the falsy test routed it
     # into the omitted branch, switching the webhook domain allowlist off at
-    # exit 0. Measured on the shipped tree: `--policy ""` produced output
-    # byte-identical to omitting the flag. The flag's argparse default is None,
-    # so nothing else reaches this branch. Same split as #1616's --base-config.
+    # exit 0. Same split as #1616's --base-config.
     if policy_path is None:
         return PolicyDocument([], None)
-    policy_problem = classify_path(policy_path, "file", lang="en", flag="--policy")  # #3276
-    if policy_problem is not None:
+    # #3797: the one reading of a document file (`_lib_input`: the path, the
+    # bytes, strict UTF-8, PyYAML's SafeLoader, a mapping at the top) — the
+    # same a tool's declared --policy (POLICY_DOCUMENT) gets; this by-path
+    # entry is generator-service's, which re-reads the policy per request.
+    import _lib_input  # noqa: PLC0415
+    from _lib_exitcodes import CallerError  # noqa: PLC0415
+    args = argparse.Namespace()
+    parser = argparse.ArgumentParser(add_help=False)
+    _lib_input.add_input(parser, "--policy", decode=POLICY_DOCUMENT, remedy=POLICY_INPUT_REMEDY)
+    try:  # `--policy=<path>`: a path that starts with "-" is the value, not a flag
+        data = _lib_input.document(parser.parse_args([f"--policy={policy_path}"], args),
+                                   "policy", lang="en")
+    except CallerError as exc:
+        # One line: generator-service answers it as one (and validate-config's
+        # row sanitiser turned a newline into `?`); the remedy follows the
+        # refusal on the same line.
+        raise PolicyInputError(" ".join(str(exc).split("\n  "))) from exc
+    return policy_document(data, policy_path)
+
+
+
+
+def _refuse_unknown_keys(data: dict, policy_path: str) -> None:
+    """⛔ A key this policy does not have is refused (#3797): the file is the
+    deployment policy and nothing else — a lint policy key here was
+    silently unused, so `validate-config` linted by the built-in policy. A
+    near-miss of ``allowed_domains`` is named before this (its own hint)."""
+    unknown = sorted(str(k) for k in data if k not in POLICY_KEYS)
+    if unknown:
+        lint = [k for k in unknown if k in _lint_policy_keys()]
+        hint = (f" {', '.join(lint)} belong{'s' if len(lint) == 1 else ''} to the "
+                "custom-rule lint policy: give that file to `validate-config "
+                "--lint-policy` (or `lint --policy`), not to --policy." if lint else "")
         raise PolicyInputError(
-            f"{policy_problem.message}\n"
-            "  --policy takes a PATH to a policy YAML holding an "
-            "`allowed_domains:` list.\n"
-            "  ⛔ Do not drop the flag to clear this error — that turns the "
-            "webhook domain allowlist off, which is what this error exists "
-            "to stop.")
-    # ⛔ "Supplied but unusable" is not only "not a file". A file that exists
-    # but cannot be decoded or parsed is the same operator error, and the first
-    # cut of this function left all three of those escaping as tracebacks with
-    # rc=1 — measured, in the PR whose whole subject is that this class must be
-    # exit 2. dev-rules #13 files "malformed 輸入" under EXIT_CALLER_ERROR
-    # alongside "檔案/路徑不存在"; nothing here may distinguish them.
-    try:
-        with open(policy_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except UnicodeDecodeError as exc:
-        raise PolicyInputError(
-            f"--policy: {policy_path!r} is not valid UTF-8: {exc}") from exc
-    except yaml.YAMLError as exc:
-        raise PolicyInputError(
-            f"--policy: {policy_path!r} is not valid YAML: {exc}") from exc
-    except OSError as exc:
-        raise PolicyInputError(
-            f"--policy: cannot read {policy_path!r}: {exc}") from exc
-    # ⛔ No `or {}` above: folding "no document" into an empty mapping is how
-    # an empty / comment-only file became "no constraint" (#1649).
-    if data is None:
-        raise PolicyInputError(
-            f"--policy: {policy_path!r} holds no YAML document (empty, "
-            f"whitespace or comments only), so it says nothing about "
-            f"`allowed_domains`. {_POLICY_KEY_REMEDY}")
-    if not isinstance(data, dict):
-        raise PolicyInputError(
-            f"--policy: top level of {policy_path!r} is "
-            f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
+            f"--policy: {policy_path!r} has key(s) the deployment policy does not have: "
+            f"{', '.join(unknown)} (it has {', '.join(sorted(POLICY_KEYS))}).{hint}")
+
+
+def policy_document(data: dict, policy_path: str) -> PolicyDocument:
+    """The deployment policy in *data* — the mapping `_lib_input.document`
+    read from the file at *policy_path* (`POLICY_DOCUMENT`) — or a
+    PolicyInputError naming what makes it unusable (the rules above, and
+    a key the policy does not have, ``_refuse_unknown_keys``)."""
     if "allowed_domains" not in data:
         # ⛔ Only allow-list spellings are offered: `disallowed_domains` /
         # `blocked_domains` are close by edit distance but mean the opposite,
@@ -1181,15 +1215,18 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
             n=1, cutoff=0.8)
         hint = (f" (found `{near[0]}` — did you mean `allowed_domains`?)"
                 if near else "")
+        if not near:
+            _refuse_unknown_keys(data, policy_path)
         raise PolicyInputError(
             f"--policy: {policy_path!r} has no `allowed_domains` key{hint}. "
             f"{_POLICY_KEY_REMEDY}")
+    _refuse_unknown_keys(data, policy_path)
     domains = data["allowed_domains"]
     # ⛔ `allowed_domains:` with nothing under it is YAML for an empty value,
     # and it means the same thing as `allowed_domains: []` and as omitting the
     # key: no constraint. An earlier cut of this function raised on it — a
     # REGRESSION against origin/main, and reproducible on this repo's own
-    # `.github/custom-rule-policy.yaml` by commenting the entries out during a
+    # `.github/deployment-policy.yaml` by commenting the entries out during a
     # migration. Worse, the cheapest way to clear that red was to delete the
     # `allowed_domains:` line too, which lands exactly on the silent-off state
     # #1556 exists to abolish. Only a value that is neither a list nor empty

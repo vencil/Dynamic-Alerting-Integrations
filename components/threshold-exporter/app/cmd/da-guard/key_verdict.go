@@ -7,11 +7,12 @@ package main
 //
 // ⛔ NO READING OF ITS OWN. The readings handed to keyverdict.Judge are each
 // the function another subcommand runs:
-//   - served-values with --disable-effects (servedValuesWith,
+//   - served-values with --disable-effects over each tenant's whole UTC day
+//     (servedDay — servedKeys at each piece of the day, key_verdict_day.go —
 //     addDisableEffectsWith, spellAsWritten, keyChecksOf over
-//     config.LoadDirFromScan — runServedValues' own path): whether the
-//     exporter reads a key, why not, the registry's other readers of a `_`
-//     key, what a `disable` does;
+//     config.LoadDirFromScan, runServedValues' own load): whether the
+//     exporter reads a key in some part of the day, why not, the registry's
+//     other readers of a `_` key, what a `disable` does;
 //   - effective (config.EffectiveTreeWith, AsWritten — runEffective's): the
 //     layer and file each key of a tenant's effective config comes from;
 //   - the Policy-as-Code rules of the root carrier (TreeScan.RootCarrier):
@@ -23,6 +24,11 @@ package main
 // It is the only verdict: the Python tools read `da-guard key-verdict`'s
 // document (scripts/tools/_lib_key_verdict.py) and judge nothing themselves.
 // key_verdict_golden_test.go pins the document.
+//
+// ⛔ WHOLE DAY (#3835). Every reading is of each tenant's whole UTC day:
+// --at decides what has expired (`expires:`) and nothing else, so the same
+// tree gives the same document at any time of day (the document's `at`
+// aside) — key_verdict_whole_day_test.go. No field reads one instant.
 
 import (
 	"encoding/json"
@@ -48,8 +54,10 @@ import (
 const keyVerdictCmd = "key-verdict"
 
 // keyVerdictSchema names the document's shape (see servedValuesSchema).
-// v2 (#3489 step 2): the whole verdict; v1 carried the ERROR layer only.
-const keyVerdictSchema = "da-guard.key-verdict/v2"
+// v3 (#3835): judged over the whole day, the per-key `served` (what /metrics
+// served at --at) gone. v2 (#3489 step 2): the whole verdict; v1 carried
+// the ERROR layer only.
+const keyVerdictSchema = "da-guard.key-verdict/v3"
 
 // keyError is one key the verdict reads as unread at severity ERROR — what
 // `da-guard write` compares before and after a batch.
@@ -66,7 +74,9 @@ type keyError struct {
 // keyVerdictDoc is `da-guard key-verdict`'s JSON document.
 type keyVerdictDoc struct {
 	Schema string `json:"schema"`
-	At     string `json:"at"`
+	// At: the instant `expires:` is read at — the one input of the verdict
+	// that is not the whole day (#3835).
+	At string `json:"at"`
 	// Undecidable: no root platform file was read (decision 7): a threshold
 	// key's verdict is "undecidable".
 	Undecidable bool `json:"undecidable"`
@@ -95,8 +105,10 @@ type keyVerdictDoc struct {
 
 // keyVerdictResult is one tree's verdict. judged is false when the tree
 // cannot be judged at all — the exporter's load or effective refuses it (a
-// tenant declared twice, no config file, a file the merge cannot decode, a
-// /metrics that cannot be gathered); why says so.
+// tenant declared twice, no config file, a file the merge cannot decode);
+// why says so. A /metrics that cannot be gathered in some part of the day
+// is judged (#3835: key_verdict_day.go reads that part off the rows built
+// before the Gather).
 type keyVerdictResult struct {
 	judged bool
 	why    error
@@ -148,8 +160,9 @@ type keyVerdictOpts struct {
 	tenantFiles map[string][]string
 }
 
-// keyVerdictOf is the verdict on the tree at dir as opts makes it read, at
-// `at`. dir names the tree in the load (LoadDirReport's argument).
+// keyVerdictOf is the verdict on the tree at dir as opts makes it read,
+// over each tenant's whole day with `expires:` read at `at`. dir names the
+// tree in the load (LoadDirReport's argument).
 func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResult, error) {
 	discard := log.New(io.Discard, "", 0)
 	overlays := opts.scan.Overlays
@@ -207,7 +220,9 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	// not a report: `da-guard write`'s stderr stays what it was before the
 	// key verdict joined it, and `key-verdict` prints JSON only (#3489).
 	sub := subsetConfig(cfg, opts.tenants)
-	served, err := servedValuesWith(sub, at, rep.Undeliverable, false, written, refusedTextsOf(rep), true)
+	// #3835: over each tenant's whole day (key_verdict_day.go), --at
+	// deciding only what has expired.
+	served, err := servedDay(sub, at, rep.Undeliverable, refusedTextsOf(rep))
 	if err == nil {
 		err = addDisableEffectsWith(sub, at, served, written, true)
 	}
@@ -281,7 +296,8 @@ func errorsOf(tree keyverdict.Tree) []keyError {
 	return out
 }
 
-// servedForVerdict is served-values' tenants as keyverdict reads them.
+// servedForVerdict is the whole-day served reading (servedDay) as
+// keyverdict reads it.
 func servedForVerdict(served map[string]servedTenantValues) map[string]keyverdict.ServedTenant {
 	out := make(map[string]keyverdict.ServedTenant, len(served))
 	for t, sv := range served {
@@ -569,7 +585,8 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 	fs := flag.NewFlagSet(programName+" "+keyVerdictCmd, flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	configDir := fs.String("config-dir", "", "Path to the conf.d/ root. Required.")
-	atFlag := fs.String("at", "", "Instant to resolve at, RFC3339. Empty = now.")
+	atFlag := fs.String("at", "", "Instant `expires:` is read at, RFC3339 (every other reading is of the whole\n"+
+		"UTC day: the time of day changes nothing). Empty = now.")
 	var tenants tenantList
 	fs.Var(&tenants, "tenant",
 		"Judge only this tenant (repeatable): the whole tree is still loaded, every platform file read;\n"+
@@ -578,14 +595,16 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--tenant <id> ...]\n", programName, keyVerdictCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the shared key verdict (ADR-038): for every key of every tenant whether\n"+
-			"some reader reads it, and the findings a report prints:\n"+
+			"some reader reads it in some part of the UTC day, and the findings a report prints:\n"+
 			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
-			"verdict, severity, reason, disable, hint, switched_off_with, value, served}]}, \"findings\": [{severity,\n"+
-			"kind, key, file, tenants, reason, hint, base}], \"key_checks\": {<tenant>: {version_labels,\n"+
-			"renames}}, \"parse_failed\": [<file>], \"unreadable\": [{file, reason}]}.\n\n", keyVerdictSchema)
+			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value}]}, \"findings\":\n"+
+			"[{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks}], \"key_checks\":\n"+
+			"{<tenant>: {version_labels, renames}}, \"parse_failed\": [<file>], \"unreadable\": [{file, reason}]}.\n"+
+			"Only `expires:` is read at --at; nothing depends on the time of day.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+
-			"     effective refuses it, e.g. a tenant declared twice), or a conf.d path that is not valid UTF-8\n"+
+			"     effective refuses it, e.g. a tenant declared twice), or a conf.d path that is not valid UTF-8 —\n"+
+			"     never a /metrics that cannot be gathered (the main gate's metrics_not_gatherable)\n"+
 			"  3  config files the exporter cannot decode or cannot read (as served-values names them); the\n"+
 			"     JSON is still written, judged without them\n")
 	}

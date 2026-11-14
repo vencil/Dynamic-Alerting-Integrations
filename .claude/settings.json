@@ -87,6 +87,8 @@
       "Bash(python3 scripts/tools/dx/bump_docs.py --platform 2.4.0)",
       "Bash(python3 scripts/tools/dx/bump_docs.py --sync-counts --check)",
       "Bash(python3 scripts/tools/dx/bump_docs.py --sync-counts)",
+      "Bash(make version-check)",
+      "Bash(make sync-counts)",
       "Bash(python -m pytest tests/ --co -q)",
       "Bash(golangci-lint --version)",
       "Bash(ruff --version)",
