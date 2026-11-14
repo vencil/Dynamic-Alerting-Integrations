@@ -664,8 +664,9 @@ podSecurityContext:
 
 # NetworkPolicy
 # ⛔ enabled: false is FORBIDDEN and will fail `helm template`/`install`
-# (GHSA-3g2h-rf85-5rrv). Port 8080 bypasses oauth2-proxy and trusts injected
-# identity headers; this policy is a required security control, not a toggle.
+# (GHSA-3g2h-rf85-5rrv). Port 8080 serves only /health, /ready and /metrics
+# and answers identity headers with 400 (ADR-027 §3); this policy keeps even
+# that surface to the scrapers. It is a required control, not a toggle.
 networkPolicy:
   enabled: true
   # Namespace that Prometheus is in (allowed to scrape internal port)

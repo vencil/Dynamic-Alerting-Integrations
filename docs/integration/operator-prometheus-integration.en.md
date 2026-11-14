@@ -225,7 +225,7 @@ Each ServiceMonitor selects the Service carrying `dynamic-alerting.io/scrape: pl
 | Chart | Settings that admit the scrape | Default |
 |---|---|---|
 | `threshold-exporter` | `networkPolicy.allowExternal` / `prometheusNamespace` / `prometheusPodLabels` (see 1b) | metrics port open to any source |
-| `tenant-api` | `networkPolicy.prometheusNamespace` + the pod-scoped allow-list `networkPolicy.internalPortAllow.prometheus` (raw `app=prometheus`) and `.prometheusOperator` (kube-prometheus-stack's `app.kubernetes.io/name=prometheus`) | pods with either label in `monitoring`; 8080 trusts identity headers, so it admits a pod-scoped list only |
+| `tenant-api` | `networkPolicy.prometheusNamespace` + the pod-scoped allow-list `networkPolicy.internalPortAllow.prometheus` (raw `app=prometheus`) and `.prometheusOperator` (kube-prometheus-stack's `app.kubernetes.io/name=prometheus`) | pods with either label in `monitoring`; 8080 serves only probes and metrics (identity headers get 400), so the list admits only the Prometheus scrapers |
 | `vector` | the chart ships no NetworkPolicy | — |
 | `federation-gateway` | `networkPolicy.scrapeNamespaceLabel` (label of Prometheus's namespace) | any pod in `monitoring`; `null` = any namespace (`{}` does not clear the default — Helm merges maps) |
 | `federation-reconciler` | `networkPolicy.scrapeNamespaceLabel` (scrape ingress); its VictoriaLogs egress has its own `networkPolicy.victorialogsNamespaceLabel` and does not widen with `null` | same |

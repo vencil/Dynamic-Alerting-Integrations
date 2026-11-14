@@ -1,10 +1,12 @@
 """tenant-api 8080 allow-list: the security doc names exactly what the chart admits (#1666).
 
-WHY: port 8080 trusts identity headers as sent, so the NetworkPolicy allow-list
-IS that port's identity control. `docs/governance-security{,.en}.md` described
+WHY: the NetworkPolicy allow-list decides who reaches port 8080. Since ADR-027
+8080 serves only /health, /ready and /metrics and answers identity headers 400,
+so the list no longer guards identity, but it is still the port's only access
+control and the docs must name it exactly. `docs/governance-security{,.en}.md` described
 it as "two workloads" while both shipped carriers admitted four — a reader doing
-threat modelling would have missed two paths into the header-trust surface, and
-the EN page did not mention the port at all.
+threat modelling would have missed two paths into the port, and the EN page
+did not mention the port at all.
 
 WHAT IS CHECKED: the set of `key=value` selectors under
 `networkPolicy.internalPortAllow` in `helm/tenant-api/values.yaml` equals the set

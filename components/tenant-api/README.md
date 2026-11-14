@@ -475,7 +475,7 @@ Chart 會建立:Deployment + oauth2-proxy sidecar、Service、RBAC ConfigMap、N
 
 conf repo 不能依賴 git 的 filter／diff／merge driver(git-lfs、git-crypt 都是):tenant-api 跑 git 時讀得到的設定(repo、global、system、include、`GIT_CONFIG_*`)裡有 `filter.*.clean/smudge/process`、`diff.*.textconv/command`、`merge.*.driver` 任一個就拒絕啟動,啟動後才出現則拒絕寫入與預覽;repo 的 hooks 照常執行。原因與排查見 [hardening §3.11](../../docs/api/tenant-api-hardening.md)([#3175](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3175))。
 
-對外入口：設 `ingress.enabled=true` 與 `ingress.hosts` 會多建一個 Ingress（預設關閉，#2027）。後端固定是 Service 的 `http` port（→ oauth2-proxy :4180），**不可設定**——internal port 8080 信任注入的身分 header，永遠不經 Ingress 對外（GHSA-3g2h-rf85-5rrv）；oauth2-proxy 一律渲染，沒有關掉它的開關（[ADR-027](../../docs/adr/027-tenant-api-caller-identity.md) §6），values 仍設定 `oauth2Proxy.enabled` 即拒絕 render。
+對外入口：設 `ingress.enabled=true` 與 `ingress.hosts` 會多建一個 Ingress（預設關閉，#2027）。後端固定是 Service 的 `http` port（→ oauth2-proxy :4180），**不可設定**——internal port 8080 只有 `/health`、`/ready`、`/metrics`，帶身分 header 回 400，不經 Ingress 對外（GHSA-3g2h-rf85-5rrv）；oauth2-proxy 一律渲染，沒有關掉它的開關（[ADR-027](../../docs/adr/027-tenant-api-caller-identity.md) §6），values 仍設定 `oauth2Proxy.enabled` 即拒絕 render。
 
 本機 Docker(**僅 Linux**:下面把主機上的 Unix socket bind-mount 進容器,macOS／Windows 的 Docker Desktop 在 VM 裡跑容器,主機的 socket 接不過去——請改用 [try-local](../../try-local/README.md))。從 repo root build,因 go.mod 需 threshold-exporter 模組。tenant-api 需要產生器服務(`TA_GENERATOR_SOCKET`,#2903):conf.d 要是 git repo,產生器與 tenant-api 同一個 uid;完整步驟見 [QUICKSTART](QUICKSTART.md) 路徑 A,或直接用 [try-local](../../try-local/README.md)(compose 已含產生器容器)。
 
