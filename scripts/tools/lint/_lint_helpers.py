@@ -58,6 +58,9 @@ BUILD_EXEMPT = frozenset({
     # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
     # batchpr / parser dispatcher boilerplate. Library, not CLI.
     "_lib_godispatch.py",
+    # #2744 — validate-config's json_schema row imports its verdict. Shipped
+    # as a library; `check_confd_schema` is not a da-tools command.
+    "check_confd_schema.py",
     # v2.8.0 PR #432 — cross-platform compat helpers (try_utf8_stdout
     # consolidated from 4 callsites). Library, not CLI.
     "_lib_compat.py",

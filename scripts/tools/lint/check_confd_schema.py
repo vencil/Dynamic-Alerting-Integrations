@@ -84,21 +84,27 @@ import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the conf.d reader)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 
-# Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
-_DEFAULT_SCHEMA = os.path.normpath(
-    os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "tenant-config.schema.json")
-)
+def _default_schema(name: str) -> str:
+    """Where *name* is: under this tree's `docs/schemas/`, or beside this
+    module when there is no tree (the da-tools image ships the schemas flat
+    with the tools, build.sh REPO_DATA_FILES). Decided by which layout this
+    is, not by counting directories up from `__file__`: the image has no
+    repo tree above the module (#2744)."""
+    from _lib_compat import find_project_root
+    root = find_project_root(_THIS_DIR)
+    if root is None:  # not under scripts/tools: the flat image
+        return os.path.join(_THIS_DIR, name)
+    return os.path.join(str(root), "docs", "schemas", name)
+
+
+_DEFAULT_SCHEMA = _default_schema(CONFD_TENANT_SCHEMA)
 # #658 fast-follow / Gemini #911 對抗3: _defaults.yaml has its own (top-level-key
 # strict, nested-loose) schema. Every OTHER `_`-prefixed meta-file keeps its own
 # validator and is still skipped here.
-_DEFAULT_PLATFORM_SCHEMA = os.path.normpath(
-    os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "platform-defaults.schema.json")
-)
+_DEFAULT_PLATFORM_SCHEMA = _default_schema(CONFD_PLATFORM_SCHEMA)
 # #2245 / #2232 item 3: `_routing_profiles.yaml` — each profile `$ref`s the
 # tenant schema's `routing` definition.
-_DEFAULT_PROFILES_SCHEMA = os.path.normpath(
-    os.path.join(_THIS_DIR, "..", "..", "..", "docs", "schemas", "routing-profiles.schema.json")
-)
+_DEFAULT_PROFILES_SCHEMA = _default_schema(CONFD_ROUTING_PROFILES_SCHEMA)
 
 # The file names the route generator reads routing profiles from
 # (`_grar_parse._parse_platform_config`), matched the same way: exact.

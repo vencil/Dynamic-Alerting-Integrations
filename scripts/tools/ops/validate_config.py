@@ -765,8 +765,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
 # ============================================================
 JSON_SCHEMA_NOT_CHECKED_HINT = (
     "Run validate-config where the Python package jsonschema is installed "
-    "and scripts/tools/lint/check_confd_schema.py is present (a repository "
-    "checkout; the da-tools image has neither) so this row can check "
+    "and check_confd_schema.py is present (the da-tools image, or a "
+    "repository checkout with jsonschema installed) so this row can check "
     "conf.d against its JSON Schemas — without them, a value of the "
     "wrong shape (e.g. `group_by: alertname` where a list is required) is "
     "not detected here.")
@@ -786,9 +786,10 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     error here and cannot mask another violation, while one that is wrong
     even quoted (`group_wait: 30` → `"30"`, no unit) is still reported.
 
-    Without jsonschema (the da-tools image does not install it) or without
-    the lint module beside this tool, the row is WARN and says it did not
-    check — not a caller error: every other row still gave its verdict.
+    Without jsonschema or without the lint module beside this tool (a
+    checkout whose Python lacks the package; the da-tools image ships both,
+    #2744), the row is WARN and says it did not check — not a caller error:
+    every other row still gave its verdict.
     """
     schemas: dict[str, dict] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
