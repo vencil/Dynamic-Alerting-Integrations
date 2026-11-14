@@ -203,9 +203,11 @@ def _run(fixture: str, mode: str, names: "tuple[tuple[str, str], ...]",
 
 def _judged(o: Outcome, paths: "list[str]") -> tuple:
     """What a run judged, its file names aside: the rc and every finding's
-    kind, field, tenant, policy and message, each of *paths* (the tree's,
-    as `shown_file` prints them) in a message written `<F>`."""
-    shown = sorted({shown_file(p) for p in paths}, key=len, reverse=True)
+    kind, field, tenant, policy and message, each of *paths* (the tree's) in
+    a message written `<F>` — as `shown_file` prints it, and as written: a
+    message that prints a name it should not must not make the probe keep
+    that name (the guard would then never see it printed)."""
+    shown = sorted({s for p in paths for s in (p, shown_file(p))}, key=len, reverse=True)
 
     def bare(message: str) -> str:
         for s in shown:
