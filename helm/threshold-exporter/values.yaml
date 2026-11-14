@@ -328,7 +328,7 @@ resources:
 # the same alert fires.
 #
 # ⚠️ The image's validate-config is the one of its tools/v* tag: v2.9.0's
-# predates yaml_quoting, unread_keys (the shared key verdict), guard_errors
+# predates yaml_quoting, the shared key verdict, guard_errors
 # and json_schema, so with it this judges far less than CI on main does.
 # Bump `image.tag` to the next tools/v* release (bump_docs.py --tools does it).
 configValidation:

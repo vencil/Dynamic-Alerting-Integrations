@@ -27,7 +27,9 @@ Checks:
                     `lint/check_confd_schema.py`'s verdict; a misread scalar
                     is left to 1b. WARN "not checked" without jsonschema (#2695)
   3. Routes        — `generate-routes --validate` on the tree (with --policy
-                    and --strict as given): the row is that command's verdict
+                    and --strict as given): the row is that command's verdict,
+                    the shared key verdict included (`_lib_key_verdict`,
+                    ADR-038: keys no reader reads, #3873)
   5. Custom rules  — Deny-list linting on rule-packs/ (if --rule-packs provided)
   6. Profiles      — Tenant _profile references validation
   7. Versions      — bump_docs.py --check version consistency (if --version-check)
@@ -52,14 +54,6 @@ Checks:
                     source of the severity (#3387). Its exit 3 (files the load
                     drops) is a FAIL; its exit 4 (routing / domain policy,
                     which the `routes` row judges) is not
-  14. Unread keys  — every key of every tenant that no reader reads, by the
-                    shared verdict (`_lib_key_verdict`, ADR-038): misspelt
-                    keys, a `disable` that switches nothing off, a key read
-                    in no layer it is written in. FAIL on an error, on a
-                    threshold key no root platform file lets it judge, and
-                    when no verdict is given (exit 2 when da-guard fails);
-                    warnings and notices alone are a WARN (ADR-038
-                    decisions 4–7, #3016)
   15. Custom alert sources — the custom alerts the compiler builds a rule
                     for beside the ones the exporter serves a threshold for
                     (#3042): a rule that never fires, a served threshold no
@@ -224,7 +218,7 @@ from _lib_tenant_values import (  # noqa: E402
     print_load_error,
 )
 from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
-# ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
+# ADR-038: the shared verdict on keys no reader reads (`check_no_alert`).
 import _lib_key_verdict as key_verdict  # noqa: E402
 # #3142: the deployment --policy's remedy, shared with the tools that take it.
 from _grar_validate import (  # noqa: E402
@@ -307,12 +301,32 @@ NOTHING_GENERATED_ROUTES_HINT = (
     "(for example no `_routing` anywhere and `_severity_dedup: disable`), and "
     "`generate-routes --validate` refuses a tree that renders nothing. Give "
     "a tenant a `_routing` receiver or leave severity dedup on, then re-run.")
-# `--validate` reports the shared key verdict too: the unread_keys row is
-# where its lines are explained.
+# #3873: `--validate` reports the shared key verdict (ADR-038), so its
+# `key verdict:` lines are this row's, and so is the advice on them
+# (`_key_verdict_hint`): one of the hints below.
 KEY_VERDICT_ROUTES_HINT = (
-    "The blocking lines above are the shared key verdict's, which "
-    "`generate-routes --validate` reports as well: fix them as the "
-    "unread_keys row says. The routing itself was not what failed.")
+    "On each `key verdict:` line: fix a misspelt key, or remove a key nothing "
+    "reads; a `disable` that switches nothing off usually sits on a misspelt "
+    "key; a value_unread "
+    "line is a key that is read with a value its reader does not read — "
+    "fix the value, not the key; a dead_entry line is a schedule entry "
+    "the windows before it (or, for the default, all of them) cover: "
+    "remove it or reorder the windows; a line on a "
+    "`version` label or a renamed key is the exporter's and says what to "
+    "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
+    "key, who reads it and why not. An error, or a threshold key no root "
+    "platform file lets the verdict judge, fails the run (#3016).")
+KEY_VERDICT_INCOMPLETE_HINT = (
+    "No key was judged: the verdict needs da-guard (built into the image; in "
+    "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
+    "`key verdict incomplete` line names and run again: a tree no verdict was "
+    "given for does not pass (#3016).")
+KEY_VERDICT_UNDECIDABLE_HINT = (
+    "Whether a threshold key is read is judged against the root platform "
+    "files (`_defaults.yaml` at the root of --config-dir); none was read. "
+    "Point --config-dir at the conf.d root (a sharded team's directory alone "
+    "has none: validate the assembled tree), or add the root `_defaults.yaml`, "
+    "and run again (#3016).")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unread — that is the platform's side missing, not a "
@@ -376,10 +390,11 @@ def _no_declared_defaults_hint(config_dir: str) -> str | None:
 
     ⛔ When nothing is declared, the shared key verdict reads every tenant
     threshold key as one no reader reads (``unread … (no_row)``), and the
-    generic hint for the ``unread_keys`` row says to remove a key nothing
+    generic advice on the key verdict says to remove a key nothing
     reads — pointing at overrides that are legal and in force. Following it
-    deletes a working config. (Until ADR-038 §11 the ``schema`` row reported
-    these keys and carried this hint; the verdict's row now does.)
+    deletes a working config. (The ``routes`` row carries this hint since
+    #3873, the ``unread_keys`` row before it, the ``schema`` row until
+    ADR-038 §11.)
 
     Only the *advice* changes here. The findings are the shared verdict's;
     silencing them in this report would hide what the gates will refuse.
@@ -827,13 +842,16 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
 # Check 3: Route validation
 # ============================================================
 def check_routes(config_dir: str, policy_file: str | None = None,
-                 strict: bool = False) -> dict[str, object]:
+                 strict: bool = False, verdict_out: "list | None" = None) -> dict[str, object]:
     """`generate-routes --validate` on the tree, as a row.
 
     The generator's `validate_tree` is the whole judgement: its exit code is
     the row's status (0 → PASS, or WARN when it reported a warning; 1 → FAIL;
     2 → FAIL as a caller error) and what it printed is the row's details.
-    This function decides only which advice line goes with a FAIL.
+    This function decides only which advice line goes with a FAIL or a WARN.
+    *verdict_out*, given, receives the shared key verdict the run gave, or the
+    exception that kept it from being given (`ValidateOutcome.key_verdict`),
+    so the `no_alert` row reads the same one instead of judging the tree again.
     """
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     if tools_dir not in sys.path:
@@ -844,6 +862,8 @@ def check_routes(config_dir: str, policy_file: str | None = None,
     with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
         outcome = gen.validate_tree(config_dir, strict=strict, policy=policy_file)
     details = [ln.rstrip() for ln in printed.getvalue().splitlines() if ln.strip()]
+    if verdict_out is not None and outcome.key_verdict is not None:
+        verdict_out.append(outcome.key_verdict)
 
     if outcome.policy_error is not None:
         # ⛔ hint= is not decoration here. Without it this row inherits the
@@ -855,18 +875,54 @@ def check_routes(config_dir: str, policy_file: str | None = None,
                                if isinstance(outcome.policy_error, gen.PolicyVersionError)
                                else _POLICY_ROUTES_ROW_HINT)
     findings = [gen.as_finding(f) for f in outcome.findings]
+    key_hint = _key_verdict_hint(gen, config_dir, findings)
     if outcome.exit_code == EXIT_OK:
         warned = [f for f in findings if f.severity != "note"]
         if not warned:
             return _make_result("routes", PASS, details)
-        policy_only = all(f.lstrip().startswith(POLICY_WARN_PREFIX) for f in warned)
-        return _make_result("routes", WARN, details,
-                            hint=POLICY_ONLY_WARN_HINT if policy_only else None)
+        others = [f for f in warned if not f.kind.startswith("key_")]
+        hint = ("" if not others else POLICY_ONLY_WARN_HINT
+                if all(f.lstrip().startswith(POLICY_WARN_PREFIX) for f in others) else None)
+        return _with_key_hint(_make_result("routes", WARN, details), hint, key_hint)
     hint = _routes_fail_hint(gen, outcome, findings, strict)
-    row = _make_result("routes", FAIL, details, hint=hint,
+    row = _make_result("routes", FAIL, details,
                        caller_error=outcome.exit_code != EXIT_VIOLATION)
     if hint == POLICY_REFUSAL_REMEDY:
         row["hint_docs"] = "docs/cli-reference.md#validate-config"
+    return _with_key_hint(row, hint, key_hint)
+
+
+def _key_verdict_hint(gen, config_dir: str, findings: list) -> str | None:
+    """The advice on the shared key verdict's lines in a routes row (#3873),
+    by their `kind`; None when no such line is above a notice."""
+    key_lines = [f for f in findings if f.kind.startswith("key_")]
+    if all(f.severity == "note" for f in key_lines):
+        return None
+    kinds = {f.kind for f in key_lines}
+    if "key_verdict_incomplete" in kinds:
+        return KEY_VERDICT_INCOMPLETE_HINT
+    found = kinds & set(gen._KEY_VERDICT_KINDS.values())
+    if not found:
+        # No key was found unread (an exporter key check is no finding):
+        # the advice is about the root file when it was missing.
+        return KEY_VERDICT_UNDECIDABLE_HINT if "key_undecidable" in kinds else KEY_VERDICT_ROUTES_HINT
+    # ⛔ A platform declaring nothing: every key reads as unread, and
+    # "remove a key nothing reads" would delete a working config.
+    return _no_declared_defaults_hint(config_dir) or KEY_VERDICT_ROUTES_HINT
+
+
+def _with_key_hint(row: dict[str, object], hint: str | None,
+                   key_hint: str | None) -> dict[str, object]:
+    """*row* with its advice: *hint* for the lines that are not the key
+    verdict's ("" when none needs any, None for the generic routes line),
+    then *key_hint* for the key verdict's."""
+    if key_hint is None:
+        row["hint"] = hint or None
+    elif hint == "":
+        row["hint"] = key_hint
+        row["hint_docs"] = "docs/cli-reference.md#validate-config"
+    else:
+        row["hint"] = f"{hint or _CHECK_HINTS['routes'][0]} {key_hint}"
     return row
 
 
@@ -874,15 +930,16 @@ def _routes_fail_hint(gen, outcome, findings: list, strict: bool) -> str | None:
     """The advice for a routes FAIL where the generic line would point at the
     wrong thing, by what blocked the run: the findings in force (their
     `kind` / prefix, never the message text), else the verdict on the
-    generated config. None: the generic routes advice."""
+    generated config. None: the generic routes advice; "": only the shared
+    key verdict blocked (`_key_verdict_hint` advises on it)."""
     in_force = gen.in_force_blocks(validate=True, strict=strict)
     in_force_lines = [f for f in findings
                       if f.blocks in in_force and f.kind != "refusal_summary"]
-    # The shared key verdict's lines are the unread_keys row's to explain:
-    # the advice here is for the rest, when there is any.
+    # The shared key verdict's lines have their own advice
+    # (`_key_verdict_hint`): this is for the rest, when there is any.
     blocking = [f for f in in_force_lines if not f.kind.startswith("key_")]
     if in_force_lines and not blocking:
-        return KEY_VERDICT_ROUTES_HINT
+        return ""
     if blocking:
         unusable_policy = [f for f in blocking if f.kind == "domain_policy_unusable"]
         # #3284: the generator refused the whole tree on field-type lines.
@@ -1111,7 +1168,7 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
 
 
 # #2740: one `da-guard effective` run per validate-config run, shared by the
-# rows that read it (`yaml_quoting`, `profiles`, `unread_keys`). `main()`
+# rows that read it (`yaml_quoting`, `profiles`). `main()`
 # opens it for its rows and closes it after them; a check called on its own
 # (None) runs da-guard itself, so a test that edits the tree between calls
 # never reads a stale verdict. Key: the --config-dir string as passed.
@@ -1194,7 +1251,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         and profiles no tenant elects — in a tree with no tenant at all too.
         A generator that cannot read the tree fails the row (fail-closed).
       - No key-name judgment: whether a reader reads a `_` key in a profile
-        is the `unread_keys` row's (the shared verdict, from the registry's
+        is the `routes` row's (the shared verdict, from the registry's
         `profile` layer, bound or not; #3042)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
@@ -1282,7 +1339,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
             warnings.append(f"profile={p_name}: empty profile (no metric keys)")
             continue
         # ⛔ No key-name judgment here (#3042, ADR-038 decision 3): whether a
-        # `_` key in a profile is read is the `unread_keys` row's verdict,
+        # `_` key in a profile is read is the shared key verdict (`routes` row),
         # from the registry's layers — `_custom_alerts`, for one, is read in
         # a profile (ADR-024 §3).
 
@@ -1939,8 +1996,8 @@ def _guard_error_lines(findings) -> list[str]:
     """One line per da-guard error finding — its kind, field, tenant(s) and
     message as da-guard wrote them. Findings that differ only in the tenant
     (the same kind, field and message: one file's key that every tenant
-    below it inherits) are one line listing the tenants, as `unread_keys`
-    lists them."""
+    below it inherits) are one line listing the tenants, as the shared key
+    verdict lists them."""
     groups: dict[tuple[str, str, str], list[str]] = {}
     for f in findings:
         if f.severity != GUARD_REPORT_SEVERITY_ERROR:
@@ -2005,73 +2062,6 @@ def check_guard_errors(config_dir: str) -> dict[str, object]:
     return _make_result("guard_errors", PASS, passed)
 
 
-# ADR-038: the row's own hints where the check-level one ("fix a misspelt
-# key, or remove one nothing reads") would claim a key the row never judged.
-_UNREAD_KEYS_INCOMPLETE_HINT = (
-    "No key was judged: the verdict needs da-guard (built into the image; in "
-    "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
-    "line above names and run again: a tree no verdict was given for does not "
-    "pass (#3016).")
-_UNREAD_KEYS_UNDECIDABLE_HINT = (
-    "Whether a threshold key is read is judged against the root platform "
-    "files (`_defaults.yaml` at the root of --config-dir); none was read. "
-    "Point --config-dir at the conf.d root (a sharded team's directory alone "
-    "has none: validate the assembled tree), or add the root `_defaults.yaml`, "
-    "and run again (#3016).")
-
-
-def check_unread_keys(config_dir: str, verdict_out: "list | None" = None) -> dict[str, object]:
-    """Keys no reader reads (ADR-038), by the shared verdict
-    (`_lib_key_verdict.judge_tree`: `da-guard key-verdict`).
-
-    FAIL when the verdict blocks (#3016): a finding at error, or a
-    threshold key it cannot judge because no root platform file was read
-    (decision 7) — the document's `blocks`, Go's one rule. Warnings and
-    notices alone are a WARN. A verdict that cannot be given is a FAIL too,
-    as tenant-api refuses a write it has no verdict for (decision 5): a
-    caller error when da-guard itself fails (exit 2), a plain FAIL when the
-    tree's own content stops it (rules Policy-as-Code refuses).
-
-    *verdict_out*, given, receives the verdict when one was given, so the
-    `no_alert` row reads the same one instead of judging the tree again.
-    """
-    try:
-        verdict = key_verdict.judge_tree(config_dir)
-    except Exception as exc:  # noqa: BLE001 — any failure is "not judged": no pass
-        # The binary's fault (missing, stale, broken) is a caller error; a
-        # tree da-guard refuses to judge (a tenant in two files) is the
-        # tree's own, already a FAIL in the row that names it (#2725).
-        tool = isinstance(exc, DaGuardNotFoundError) or (
-            isinstance(exc, DaGuardError) and exc.binary_fault)
-        return _make_result("unread_keys", FAIL, [
-            "verdict incomplete: the keys no reader reads were not judged "
-            f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
-            caller_error=tool, hint=_UNREAD_KEYS_INCOMPLETE_HINT)
-    if verdict_out is not None:
-        verdict_out.append(verdict)
-    details = [key_verdict.finding_line(f, WARN_LIMIT) for f in verdict.findings]
-    undecidable = key_verdict.undecidable_line(verdict)
-    if undecidable is not None:
-        details.append(undecidable)
-    # ADR-038 §11: the exporter's own key checks (a `version` label, a
-    # retired spelling), as it words them; this tool judges no key itself.
-    details += [msg for _, _, msg in key_verdict.key_check_lines(verdict)]
-    if details:
-        # Only an undecidable line: no key was found unread, so the advice
-        # is about the root file, not about a key.
-        # (The exporter's key checks are not findings: a rename notice next
-        # to an undecidable tree keeps the root-file advice.)
-        hint = (_UNREAD_KEYS_UNDECIDABLE_HINT
-                if undecidable is not None and not verdict.findings else None)
-        if hint is None and verdict.findings:
-            # ⛔ A platform declaring nothing: every key reads as unread, and
-            # "remove a key nothing reads" would delete a working config.
-            hint = _no_declared_defaults_hint(config_dir)
-        return _make_result("unread_keys", FAIL if verdict.blocks else WARN, details, hint=hint)
-    return _make_result("unread_keys", PASS, [
-        f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
-
-
 _NO_ALERT_HINT = (
     "Judged against the alert rules this platform ships "
     "(`metric_observed_map.yaml`, kept equal to the rule packs by "
@@ -2094,7 +2084,7 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     (`mysql_connectoins` in the root `defaults:`), a `<key>_critical` tier
     whose rule pack has no critical tier.
 
-    The served keys are the shared verdict's (*verdict*: the `unread_keys`
+    The served keys are the shared verdict's (*verdict*: the `routes`
     row's, or judged here): every key the exporter reads and serves, with
     the file its value comes from; the severity each is served at is
     served-values'. Whether an alert compares a key is the observed-map's
@@ -2110,9 +2100,9 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     not judge (no root platform file), or a verdict, served reading or map
     that cannot be read, is a WARN saying the keys were not checked.
 
-    *judge* False (`main`, after the `unread_keys` row gave no verdict): no
-    verdict is judged here — the reason is that row's, already reported — and
-    the row says it was not checked.
+    *judge* False (`main`, after the `routes` row tried and gave no verdict):
+    no verdict is judged here — the reason is that row's, already reported —
+    and the row says it was not checked.
     """
     import _observed_map_lib  # ops/: the observed-map the recommender reads
 
@@ -2121,7 +2111,7 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
             f"not checked: whether a shipped alert compares each served key was not judged ({why})"],
             hint=_NO_ALERT_NOT_CHECKED_HINT)
     if verdict is None and not judge:
-        return not_checked("the unread_keys row gave no verdict; its line says why")
+        return not_checked("the routes row gave no key verdict; its line says why")
     try:
         if verdict is None:
             verdict = key_verdict.judge_tree(config_dir)
@@ -2626,19 +2616,6 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "no_alert": (_NO_ALERT_HINT, "docs/cli-reference.md#validate-config"),
     "tier_inversion": (_TIER_INVERSION_HINT, "docs/cli-reference.md#validate-config"),
-    "unread_keys": (
-        "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
-        "switches nothing off usually sits on a misspelt key; a value_unread "
-        "line is a key that is read with a value its reader does not read — "
-        "fix the value, not the key; a dead_entry line is a schedule entry "
-        "the windows before it (or, for the default, all of them) cover: "
-        "remove it or reorder the windows; a line on a "
-        "`version` label or a renamed key is the exporter's and says what to "
-        "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
-        "key, who reads it and why not. An error, or a threshold key no root "
-        "platform file lets the verdict judge, fails the run (#3016).",
-        "docs/cli-reference.md#validate-config",
-    ),
     # #1653: not a check — the one row `main()` emits under --json when
     # --config-dir is not a directory and no check could run at all.
     "config_dir": (
@@ -3203,10 +3180,12 @@ def _main() -> "Report | None":
                               args.config_dir, _config_dir=args.config_dir))
 
     # 3. `generate-routes --validate` (with --policy / --strict as given):
-    # the one verdict on routing, the generator's tree checks and the
-    # domain policy. There is no row beside it that re-reads its findings.
+    # the one verdict on routing, the generator's tree checks, the domain
+    # policy and the shared key verdict (#3873). There is no row beside it
+    # that re-reads its findings or judges the keys again.
+    verdicts: list = []
     results.append(_run_check("routes", check_routes, args.config_dir,
-                              args.policy, strict=args.strict,
+                              args.policy, strict=args.strict, verdict_out=verdicts,
                               _config_dir=args.config_dir))
 
     # 5. Custom rule lint (if rule-packs dir provided)
@@ -3254,18 +3233,14 @@ def _main() -> "Report | None":
     results.append(_run_check("guard_errors", check_guard_errors,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 14. Keys no reader reads (ADR-038) — unconditional; FAIL when the
-    # verdict blocks or cannot be given (#3016).
-    verdicts: list = []
-    results.append(_run_check("unread_keys", check_unread_keys,
-                              args.config_dir, verdict_out=verdicts, _config_dir=args.config_dir))
-
     # 15. Served keys no shipped alert compares (ADR-038 decision 10, #3591)
     # — unconditional, advisory: WARN at most, never a FAIL. It reads the
-    # verdict the row above gave.
+    # key verdict the routes row gave; judges one only when that row ended
+    # before judging keys (a refusal), and none when it tried and could not.
+    given = verdicts[0] if verdicts else None
     results.append(_run_check("no_alert", check_no_alert, args.config_dir,
-                              verdict=verdicts[0] if verdicts else None, judge=False,
-                              _config_dir=args.config_dir))
+                              verdict=given if isinstance(given, key_verdict.TreeVerdict) else None,
+                              judge=given is None, _config_dir=args.config_dir))
 
     # 16. A tenant's served critical not stricter than its warning, across
     # files (#3691) — unconditional; FAIL on an inverted pair.

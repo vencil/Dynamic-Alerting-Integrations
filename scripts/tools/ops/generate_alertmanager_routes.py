@@ -1440,10 +1440,12 @@ _KEY_CHECK_KINDS = {
 }
 
 
-def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
+def _report_key_verdict(config_dir: str, findings: list[str],
+                        verdict_out: list | None = None) -> list[str]:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
-    ADR-038 §5), under ``--validate``: the same lines validate-config's
-    ``unread_keys`` row prints, on stderr. Returns the lines that block the
+    ADR-038 §5), under ``--validate``, on stderr. *verdict_out*, given,
+    receives the verdict, or the exception that kept it from being given
+    (``ValidateOutcome.key_verdict``). Returns the lines that block the
     run (#3016), each a ``blocks: validate`` finding: the findings the
     verdict says block (an error), the undecidable line when a threshold key
     could not be judged (decision 7), and the one line saying no verdict was
@@ -1463,8 +1465,10 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
             kind="key_verdict_incomplete", blocks="validate")
         print(safe_label(line), file=sys.stderr)
         findings.append(line)
+        if verdict_out is not None:
+            verdict_out.append(exc)
         # The da-guard binary's own fault (missing, stale, broken) is no
-        # verdict on the config: rc 2 as validate-config's unread_keys, and
+        # verdict on the config: rc 2, and
         # ahead of any violation (#3016 review). A tree da-guard refuses to
         # judge is the tree's: a blocking line, rc 1.
         tv = _lib_tenant_values
@@ -1472,6 +1476,8 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
                 isinstance(exc, tv.DaGuardError) and exc.binary_fault):
             sys.exit(EXIT_CALLER_ERROR)
         return [line]
+    if verdict_out is not None:
+        verdict_out.append(verdict)
     lines = []
     for f in verdict.findings:
         level = ("ERROR" if f.blocks else
@@ -1877,13 +1883,15 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
                        key_verdict: bool = True,
                        credential_scope: "frozenset[str] | None" = None,
                        key_blocks: "list[str] | None" = None,
+                       key_verdicts: "list | None" = None,
                        ) -> tuple[TenantTree, list[dict], list[dict], list[dict], list[str]]:
     """Scan *config_dir*, refuse what every mode refuses, generate:
     ``(tree, routes, receivers, inhibit_rules, all_warnings)``. Exits where
     the run ends short of a generation result. *validate*: this is
     ``validate_tree``'s run (the shared key verdict's blocking lines go to
-    *key_blocks*); *assembles_file*: an output mode that writes the render
-    (``--output-configmap`` / ``--output-alertmanager``)."""
+    *key_blocks*, the verdict itself to *key_verdicts*); *assembles_file*: an
+    output mode that writes the render (``--output-configmap`` /
+    ``--output-alertmanager``)."""
     allowed_domains = policy.allowed_domains or []
     # Load tenant configs (routing + dedup + schema warnings + enforced routing)
     # #1460: the tree carries the record of the files that did not parse, and
@@ -1917,7 +1925,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
     # nothing to render is judged too.
     key_blocks = [] if key_blocks is None else key_blocks
     if validate and key_verdict:
-        key_blocks.extend(_report_key_verdict(config_dir, findings))
+        key_blocks.extend(_report_key_verdict(config_dir, findings, key_verdicts))
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -1992,6 +2000,10 @@ class ValidateOutcome(NamedTuple):
     generated: "GeneratedConfigVerdict | None" = None
     #: The unusable ``--policy`` that ended the run (exit 2), if one did.
     policy_error: "PolicyInputError | None" = None
+    #: The shared key verdict the run gave (``_lib_key_verdict.TreeVerdict``),
+    #: the exception that kept it from being given, or None when the run
+    #: ended before the keys were judged (a refusal, an unusable --policy).
+    key_verdict: "object | None" = None
 
 
 def validate_tree(config_dir: str, *, strict: bool = False,
@@ -2015,6 +2027,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     """
     findings = [] if findings is None else findings
     generated: list = []
+    key_verdicts: list = []
     policy_error: PolicyInputError | None = None
     try:
         try:
@@ -2027,7 +2040,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
             config_dir, findings, policy=resolved, mount_root=mount_root,
             strict=strict, validate=True, assembles_file=False,
             key_verdict=key_verdict, credential_scope=credential_scope,
-            key_blocks=key_blocks)
+            key_blocks=key_blocks, key_verdicts=key_verdicts)
         # #1211: a tenant's served page-mode custom alerts with no delivery
         # child under the custom route fall to the firehose receiver, which
         # only a mode that assembles the config it writes knows: --validate
@@ -2042,7 +2055,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     except SystemExit as exc:
         code = _exit_code_of(exc)
     return ValidateOutcome(code, findings, generated[0] if generated else None,
-                           policy_error)
+                           policy_error, key_verdicts[0] if key_verdicts else None)
 
 
 def _run(args: argparse.Namespace, findings: list[str], *,

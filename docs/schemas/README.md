@@ -79,7 +79,7 @@ tenants:
 
 ### "Unread key" findings
 
-**Finding** (validate-config `unread_keys` row): `db-a.yaml: error: unread … (no_row) — tenant(s) db-a`, naming `mysql_conections`
+**Finding** (validate-config `routes` row): `ERROR: key verdict: db-a.yaml: error: unread … (no_row) — tenant(s) db-a`, naming `mysql_conections`
 
 **Cause**: usually a typo in the metric name (missing 'c' in connections): no reader reads the key ([ADR-038](../adr/038-unread-keys-judged-by-readers.md)). ⚠️ But if EVERY tenant key is reported, the cause is on the platform side instead — a `conf.d/` whose `_defaults.yaml` declares nothing (no `defaults:`, or `defaults: {}`) makes every legal override read as unread. `validate-config` says which case you are in; **do not delete keys before checking**.
 

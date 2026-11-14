@@ -105,7 +105,7 @@ tenants:
 # ============================================================
 # threshold-exporter 只發射 _defaults.yaml 宣告過的 key。沒宣告時，
 # 租戶檔的值不發射任何 user_threshold（validate-config 的
-# unread_keys 列報 \`unread … (no_row)\`），上面的告警規則永遠不會響。
+# routes 列報 \`unread … (no_row)\`），上面的告警規則永遠不會響。
 #
 # 值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域
 # 規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical

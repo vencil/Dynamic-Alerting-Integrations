@@ -6,8 +6,8 @@ da-guard reads the tree — what the exporter serves, which file and layer each
 key of a tenant comes from, the reserved-key registry's readers, the
 Policy-as-Code rules of the root carrier, the root platform files'
 `profiles:` — and judges every key of every tenant. This module runs it and
-hands the document to the tools that report it (validate-config's
-`unread_keys` row, the route generator's `--validate`, `explain-keys`, the
+hands the document to the tools that report it (the route generator's
+`--validate`, which is validate-config's `routes` row; `explain-keys`; the
 generator container's write check) in one shape, and formats the lines they
 print.
 
@@ -326,8 +326,8 @@ def _shown_window(window: str) -> str:
 
 
 def finding_line(f: Finding, limit: int) -> str:
-    """The one line a report prints for `f` (validate-config's `unread_keys`
-    row, the route generator's `--validate`): the file, the severity, the
+    """The one line a report prints for `f` (the route generator's
+    `--validate`, validate-config's `routes` row): the file, the severity, the
     kind, the key, the tenants it reaches (at most `limit` named).
 
     ⛔ #3703: `reason` and `hint` are da-guard's own sentences — built from
