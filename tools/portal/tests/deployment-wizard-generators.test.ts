@@ -56,6 +56,14 @@ for (const tier of ['tier1', 'tier2'])
         for (const packs of [[], ['mariadb', 'kubernetes']])
           ALL_CONFIGS.push({ tier, environment, tenantSize, auth, packs });
 
+// The published chart versions platform-data.json carries (#2947): not the
+// tree's Chart.yaml, whose version runs ahead of the registry between releases.
+const releasedChartVersion = (chart: string): string => {
+  const charts = JSON.parse(readFileSync(resolve(__dirname, '../../../docs/assets/platform-data.json'), 'utf8')).charts;
+  const version = charts?.[chart];
+  if (typeof version !== 'string' || !version) throw new Error(`platform-data.json charts has no version for ${chart}`);
+  return version;
+};
 const releaseOf = (cfg: Cfg, chart: string) => {
   const r = deployGenerateHelmReleases(cfg).releases.find((x: { chart: string }) => x.chart === chart);
   if (!r) throw new Error(`no ${chart} release for ${JSON.stringify(cfg)}`);
@@ -177,8 +185,21 @@ describe('releases — tier gating and install commands', () => {
     const rel = releaseOf(config(), 'tenant-api');
     expect(rel.file).toBe('values-tenant-api.yaml');
     expect(rel.install).toBe(
-      'helm upgrade --install tenant-api oci://ghcr.io/vencil/charts/tenant-api -n tenant-api --create-namespace -f values-tenant-api.yaml',
+      `helm upgrade --install tenant-api oci://ghcr.io/vencil/charts/tenant-api --version ${releasedChartVersion('tenant-api')} -n tenant-api --create-namespace -f values-tenant-api.yaml`,
     );
+  });
+
+  it('every install pins that chart\'s published version (#2947)', () => {
+    // Read from platform-data.json, not through the portal's own accessor.
+    let seen = 0;
+    for (const cfg of ALL_CONFIGS)
+      for (const rel of deployGenerateHelmReleases(cfg).releases) {
+        seen += 1;
+        expect(rel.install, `${rel.chart} ${JSON.stringify(cfg)}`).toContain(
+          ` oci://ghcr.io/vencil/charts/${rel.chart} --version ${releasedChartVersion(rel.chart)} `,
+        );
+      }
+    expect(seen).toBeGreaterThan(ALL_CONFIGS.length);
   });
 
   it('emits a date-stamped header in YYYY-MM-DD form (format pinned, value not)', () => {

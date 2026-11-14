@@ -15,7 +15,9 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -479,14 +481,16 @@ def _deployed_third_party_tags() -> dict:
     return out
 
 
-def _chart_app_version(chart_dir: str) -> str:
+def _chart_yaml(chart_dir: str) -> tuple[Path, dict]:
+    """helm/<chart_dir>/Chart.yaml as Helm reads it: (path, the one mapping)."""
     chart = REPO_ROOT / "helm" / chart_dir / "Chart.yaml"
     # Same fail-loud contract as the third-party path above: a renamed/removed
     # chart must say so, not surface as a bare FileNotFoundError traceback.
     if not chart.is_file():
         raise WizardImagesUnreadable(
-            f"ERROR: {chart} not found — a wizard first-party image maps to "
-            f"chart {chart_dir!r}. Update WIZARD_FIRST_PARTY if it was renamed."
+            f"ERROR: {chart} not found — the wizard maps an image or a pinned "
+            f"release to chart {chart_dir!r}. Update WIZARD_FIRST_PARTY / "
+            f"WIZARD_CHARTS if it was renamed."
         )
     # ADR-036 §12 (#3206): Chart.yaml as Helm reads it (sigs.k8s.io/yaml,
     # da-crdecode). An unquoted `appVersion: 1.10` is the number 1.1 there,
@@ -499,6 +503,11 @@ def _chart_app_version(chart_dir: str) -> str:
     data = docs[0] if len(docs) == 1 and isinstance(docs[0], dict) else None
     if data is None:
         raise WizardImagesInconsistent(f"ERROR: {chart} is not one mapping in Helm's reading")
+    return chart, data
+
+
+def _chart_app_version(chart_dir: str) -> str:
+    _chart, data = _chart_yaml(chart_dir)
     app = data.get("appVersion", "")
     if not isinstance(app, str):
         raise WizardImagesInconsistent(
@@ -540,6 +549,122 @@ def build_wizard_images() -> dict:
         images[key] = f"{repo}:v{_chart_app_version(chart_dir)}"
 
     return images
+
+
+# ---------------------------------------------------------------------------
+# Chart versions the Deployment Wizard pins in its `helm upgrade --install`
+# ---------------------------------------------------------------------------
+# WHY (#2947): the wizard's install command carried no `--version`, so a
+# customer copying it installed whatever chart the registry held as newest on
+# that day. The wizard's offline mirror (`_common/data/charts.js`) is held to
+# this block by `charts-fallback-drift.test.ts`.
+#
+# ⛔ NOT derived from Chart.yaml on every run, unlike `images`. A chart's
+# `version:` moves with feature PRs between releases (tenant-api: 2.9.25 in
+# the tree while the registry held 2.9.8), and `helm … --version <unpublished>`
+# does not degrade — it fails. So an ordinary run CARRIES the block already in
+# platform-data.json, and only the release wrap-up rewrites it from Chart.yaml
+# (`make platform-data RELEASE_CHARTS=1`), when those versions are the ones
+# about to be published. `make pre-tag` runs `--check --release-charts`, which
+# refuses a tag whose pins are not the charts being tagged.
+#
+# One entry per chart the wizard emits a release for. A chart added to the
+# wizard without an entry here throws in the browser (`chartVersion()` refuses
+# an unknown chart) instead of emitting a floating install.
+WIZARD_CHARTS = ("threshold-exporter", "tenant-api")
+
+# chart -> the release line whose tag (`<line>/v<version>`) publishes it
+# (.github/workflows/release.yaml).
+WIZARD_CHART_TAG_LINE = {"threshold-exporter": "exporter", "tenant-api": "tenant-api"}
+
+# Exactly what `helm … --version` takes as ONE release: no range, no leading
+# "v". Same grammar the init pin guard accepts (tests/ops/test_init_project.py).
+_EXACT_CHART_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?")
+
+
+def _chart_version(chart_dir: str) -> str:
+    chart, data = _chart_yaml(chart_dir)
+    version = data.get("version", "")
+    if not isinstance(version, str):
+        raise WizardImagesInconsistent(
+            f"ERROR: helm/{chart_dir}/Chart.yaml version is {version!r} in Helm's reading, "
+            f"not a string; quote it (version: \"{version}\").")
+    if not _EXACT_CHART_VERSION.fullmatch(version):
+        raise WizardImagesInconsistent(
+            f"ERROR: helm/{chart_dir}/Chart.yaml version is {version!r}; the wizard "
+            f"pins it with `--version`, which needs one exact X.Y.Z release.")
+    return version
+
+
+def build_wizard_charts() -> dict:
+    """chart name -> the chart's own version: what a release publishes."""
+    return {name: _chart_version(name) for name in WIZARD_CHARTS}
+
+
+def _tag_exists(tag: str) -> bool:
+    """Is `tag` in this checkout? A git that cannot answer is "no": the caller
+    then refuses, which is the safe side for a pin nobody could confirm."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
+            capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def unpublishable_chart_pins(pinned: dict, tree: dict) -> tuple[list[str], list[str]]:
+    """(violations, notes) for the pins a tag is about to ship.
+
+    A pin is fine when it is the chart in the tree (this release publishes
+    it) or when its tag exists (an earlier release did). Anything else names a
+    chart no registry will hold. A pin behind the tree is reported as a note:
+    right when that line is not part of this release, stale when it is.
+    """
+    bad, notes = [], []
+    for name in WIZARD_CHARTS:
+        pin, cur = pinned.get(name), tree[name]
+        if pin == cur:
+            continue
+        tag = f"{WIZARD_CHART_TAG_LINE[name]}/v{pin}"
+        if isinstance(pin, str) and _EXACT_CHART_VERSION.fullmatch(pin) and _tag_exists(tag):
+            notes.append(f"{name}: pinned {pin} (tag {tag}), tree has {cur} — correct only "
+                         f"if this release does not publish {name}")
+        else:
+            bad.append(f"{name}: pinned {pin!r}, tree has {cur}, and tag {tag} is not in "
+                       f"this checkout (fetch tags if it was published)")
+    return bad, notes
+
+
+def carried_wizard_charts() -> dict:
+    """The `charts` block platform-data.json already carries, unchanged.
+
+    It must name exactly WIZARD_CHARTS, each at one exact version: a block
+    that lost a chart or holds a range would reach the customer as a missing
+    or floating `--version`.
+    """
+    how = ("Write it from Chart.yaml with `make platform-data RELEASE_CHARTS=1` "
+           "(release wrap-up), or restore the published versions by hand.")
+    try:
+        existing = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise WizardImagesInconsistent(
+            f"ERROR: {_display_path(OUTPUT_PATH)} does not exist, so there are no "
+            f"released chart versions to carry. {how}") from None
+    except (OSError, ValueError) as e:
+        raise WizardImagesUnreadable(
+            f"ERROR: cannot read {_display_path(OUTPUT_PATH)} for its `charts` block: {e}") from e
+    charts = existing.get("charts") if isinstance(existing, dict) else None
+    if not isinstance(charts, dict) or sorted(charts) != sorted(WIZARD_CHARTS):
+        raise WizardImagesInconsistent(
+            f"ERROR: {_display_path(OUTPUT_PATH)} `charts` is {charts!r}; it must name "
+            f"exactly {sorted(WIZARD_CHARTS)}. {how}")
+    for name, version in charts.items():
+        if not isinstance(version, str) or not _EXACT_CHART_VERSION.fullmatch(version):
+            raise WizardImagesInconsistent(
+                f"ERROR: {_display_path(OUTPUT_PATH)} `charts.{name}` is {version!r}, "
+                f"not one exact X.Y.Z release. {how}")
+    return {name: charts[name] for name in WIZARD_CHARTS}
 
 
 def build_declared_keys(scaffold_packs: dict) -> dict:
@@ -595,7 +720,7 @@ def build_declared_keys(scaffold_packs: dict) -> dict:
     return declared
 
 
-def build_platform_data(at: str | None = None) -> dict:
+def build_platform_data(at: str | None = None, release_charts: bool = False) -> dict:
     """Build the complete platform-data.json structure."""
     rule_counts = gather_rule_counts()
     scaffold_packs = load_scaffold_rule_packs()
@@ -667,6 +792,7 @@ def build_platform_data(at: str | None = None) -> dict:
         "generator": "scripts/tools/generate_platform_data.py",
         "packOrder": PACK_ORDER,
         "images": build_wizard_images(),
+        "charts": build_wizard_charts() if release_charts else carried_wizard_charts(),
         "rulePacks": rule_packs,
         "declaredKeys": build_declared_keys(scaffold_packs),
         "categories": CATEGORIES,
@@ -698,6 +824,11 @@ def main():
                         help="CI mode: exit 1 if output is outdated")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print JSON to stdout without writing file")
+    parser.add_argument("--release-charts", action="store_true",
+                        help="Take `charts` (the wizard's helm --version pins) from "
+                             "each Chart.yaml instead of carrying the block already in "
+                             "the file. Release wrap-up only; with --check, exit 1 "
+                             "unless the pins are the charts in the tree (make pre-tag)")
     args = parser.parse_args()
 
     at = None
@@ -707,7 +838,8 @@ def main():
         except (OSError, ValueError):
             at = None  # the comparison below reports the file itself
     try:
-        data = build_platform_data(at=at)
+        data = (build_platform_data(at=at, release_charts=True) if args.release_charts
+                else build_platform_data(at=at))
     except WizardImagesInconsistent as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
@@ -766,6 +898,23 @@ def main():
             # A hand edit JSON reads but cannot carry (NaN / Infinity): the
             # file is not what the generator writes — outdated, not a crash.
             existing_stable = None
+        if args.release_charts:
+            pinned = existing.get("charts") if isinstance(existing, dict) else None
+            bad, notes = unpublishable_chart_pins(
+                pinned if isinstance(pinned, dict) else {}, data["charts"])
+            for note in notes:
+                print(f"NOTE: wizard chart pin: {note}")
+            if bad:
+                print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} `charts`: the Deployment "
+                      f"Wizard would pin a chart nothing publishes:\n  "
+                      + "\n  ".join(bad)
+                      + "\nRun `make platform-data RELEASE_CHARTS=1` and copy the versions "
+                        "into CHART_MIRROR in "
+                        "tools/portal/src/interactive/tools/_common/data/charts.js.")
+                sys.exit(EXIT_VIOLATION)
+            # The rest of the file is compared with the block as it stands.
+            data["charts"] = pinned
+            new_stable = encode_json(strip_volatile(data)) + "\n"
         if existing_stable != new_stable:
             print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} is outdated. "
                   f"Run `make platform-data` to update.")
