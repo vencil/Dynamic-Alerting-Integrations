@@ -7,7 +7,7 @@ on:
       - develop
     paths:
       # Only the A-13 spec lint runs here now; the smoke run moved to
-      # ci.yml (#1428), whose `e2e` filter owns the paths that decide it.
+      # ci.yml (#1428), where it runs on every PR.
       # These paths are the ones that can change what the lint reads or
       # how it runs.
       - 'tools/portal/**'

@@ -1,19 +1,23 @@
 """paths_filter_glob.py — the one matcher for workflow path-filter patterns
-(`dorny/paths-filter` filters and GitHub's own `on.<event>.paths`).
+(GitHub's `on.<event>.paths`).
 
 Imported by `tests/ops/test_ci_path_filter_coverage.py` (every filter-coverage
-assertion there), by `scripts/ops/go_test_reads.py` (the Go legs' runtime read
-check, #1399) and by `scripts/ops/workflow_path_filter.py` (the generated
+assertion there) and by `scripts/ops/workflow_path_filter.py` (the generated
 `on.pull_request.paths` block, its runtime check and the dead-entry check,
 #3756). It lives here, not in the test module, because the workflow jobs run it
 without pytest installed; a second copy would be a second definition of
 "covered" that could drift from the first.
+
+It was written for `dorny/paths-filter` filters as well, and the notes below
+still say where picomatch (dorny's matcher) was the reference. No workflow uses
+a dorny filter since #3756; picomatch stays the executable reference this
+matcher is compared with (tests/ops/test_workflow_path_filter.py), because
+GitHub's own matcher cannot be run locally.
 """
 from __future__ import annotations
 
 import re
 
-SUFFIX_SEGMENT = re.compile(r"\*\.\w+$")
 # One `[...]` character class: literal characters and `a-z` ranges only. A
 # negated class (`[!x]`, `[^x]`) is spelled differently by the two matchers
 # this module stands in for, so it is not modelled.
@@ -89,7 +93,7 @@ def covers(pattern: str, path: str) -> bool:
     NEGATED pattern (`!x`) therefore fails the opposite way: it would be read as
     the literal segment `"!x"`, return False, and be absorbed while the positive
     patterns still say "covered", making an excluded path look included. That
-    is why negation is rejected by every caller that loads dorny filters rather
+    is why negation is rejected by callers that OR over positive patterns rather
     than handled here, and why `on_paths_covers` (GitHub's ordered rule) matches
     a negated pattern with `negation_may_match` instead of this function.
 

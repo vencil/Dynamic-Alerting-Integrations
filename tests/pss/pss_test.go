@@ -242,8 +242,7 @@ func helmBin(t *testing.T) string {
 
 // readTree opens every file under dir. helm is a child process, so without
 // this Go's test cache would not see an edited chart as an input and could
-// report a cached pass. (go_test_reads.py classes these opens as "walked" and
-// does not check them; the leg's `go` filter carries helm/** and k8s/**.)
+// report a cached pass.
 func readTree(t *testing.T, dir string) {
 	t.Helper()
 	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {

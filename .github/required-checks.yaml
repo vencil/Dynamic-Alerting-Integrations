@@ -13,7 +13,10 @@
 #     pull_request 觸發；`kind: gate` 是 aggregate gate（if: always()），
 #     `kind: job` 沒有 needs／if／matrix。advisory 與 required 不得重疊。
 #   * tests/ops/test_ci_aggregate_gate_contract.py 的 REQUIRED_CHECK_NAMES 由
-#     這裡 `kind: gate` 的項目推導，不再手抄。
+#     這裡 `kind: gate` 的項目推導，不再手抄。同一支測試要求：回報必要檢查的
+#     workflow 裡，每個 job 都落在「名稱登記於本檔（required 或 advisory）的某個
+#     job」的 needs 遞移閉包內。所以「這個 job 紅了為什麼不擋」只寫在下面的
+#     advisory 理由，測試檔裡沒有第二份例外清單。
 #   * .github/workflows/required-checks-drift.yml（每日排程＋改到本檔的 PR）——拿
 #     GitHub 的實際設定比對本檔；不一致就紅，排程失敗開票。它本身是 advisory：
 #     owner 一改設定，所有開著的 PR 不能因此同時轉紅。
@@ -35,7 +38,8 @@ app_id: 15368
 enforcement_level: everyone
 
 required:
-  # ── 由 aggregate gate 回報：底下的實跑 job 可依 path 跳過，gate 一律回報 ──
+  # ── 由 aggregate gate 回報：底下的實跑 job 每支 PR 都跑（#3756 起不設 path
+  #    gate），gate 只在它等待的每個 job 都是 success 時通過 ──
   - {name: Python Tests, kind: gate}
   - {name: Go Tests, kind: gate}
   - {name: Portal Tests, kind: gate}
@@ -57,6 +61,11 @@ required:
   - {name: Check Documentation Links, kind: job}
   - {name: HEAD Blob Hygiene, kind: job}
   - {name: commitlint, kind: job}
+  # Owner 裁決 2026-11-14（#3756）。它跟 advisory 的 `I-4 Runbook Smoke Test` 一樣要
+  # 連網路，卻是必要：它驗的是跨租戶隔離的請求路徑（gateway → proxy → 儲存），沒有
+  # 別的檢查重複擋；而它的網路依賴只有拉映像，runner 會先重試拉取，拉不到時以
+  # exit 2 與點名「拉映像失敗」的訊息結束，不會讀成測試失敗。
+  - {name: Federation E2E (ADR-020 IV-2j), kind: job, pending: true}
 
 # 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
 # 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證
@@ -99,8 +108,8 @@ advisory:
       執行點是 pre-commit hook（#1428）。
   - name: I-4 Runbook Smoke Test
     reason: >-
-      只在文件路徑變動時跑（會下載 amtool／promtool／yq）；沒有 aggregate gate 擁有
-      它的名稱（tests/ops/test_ci_aggregate_gate_contract.py 的 UNWATCHED 帳本）。
+      會下載 amtool／promtool／yq，網路失敗就紅；沒有 aggregate gate 擁有它的名稱，
+      紅了不擋 merge。#3756 起每支 PR 都跑（原本只在文件路徑變動時跑）。
   - name: Python Coverage
     reason: >-
       owner 決定（2026-09-19，PR #1910）：覆蓋率腿只回報與上傳，不擋 merge；放進必要
