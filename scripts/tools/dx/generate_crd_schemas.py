@@ -49,6 +49,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_label import safe_label  # noqa: E402
 from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 try:
@@ -112,21 +113,36 @@ def _fetch(url: str) -> bytes:
         return resp.read()
 
 
+class SourceNotCrd(Exception):
+    """The source answered, and what it sent is not a CRD file: not UTF-8, or
+    a document without the fields a CustomResourceDefinition has (#3519)."""
+
+
 def _schemas_from(raw: bytes, wanted: List[Dict]) -> Tuple[Dict[Tuple[str, str, str], dict], List[Dict]]:
-    """Pull the requested (group, kind, version) openAPIV3Schemas out of one CRD file."""
+    """Pull the requested (group, kind, version) openAPIV3Schemas out of one CRD file.
+
+    Raises :class:`SourceNotCrd` when *raw* is not UTF-8 or a document in it
+    does not have a CRD's shape."""
     want = {(w["group"], w["kind"], w["version"]) for w in wanted}
     found: Dict[Tuple[str, str, str], dict] = {}
-    for doc in _load_crd_docs(raw.decode("utf-8")):
-        if doc["kind"] != "CustomResourceDefinition":   # every doc an object (#3426)
-            continue
-        group = doc["spec"]["group"]
-        kind = doc["spec"]["names"]["kind"]
-        for ver in doc["spec"].get("versions", []):
-            key = (group, kind, ver["name"])
-            if key not in want:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise SourceNotCrd(f"not UTF-8: {e.reason} at byte {e.start}") from e
+    for i, doc in enumerate(_load_crd_docs(text)):
+        try:
+            if doc["kind"] != "CustomResourceDefinition":   # every doc an object (#3426)
                 continue
-            schema = (ver.get("schema") or {}).get("openAPIV3Schema")
-            if schema:
+            group = doc["spec"]["group"]
+            kind = doc["spec"]["names"]["kind"]
+            versions = [(ver["name"], (ver.get("schema") or {}).get("openAPIV3Schema"))
+                        for ver in doc["spec"].get("versions", [])]
+        except (KeyError, TypeError, AttributeError) as e:
+            raise SourceNotCrd(f"document {i + 1} does not have a CustomResourceDefinition's "
+                               f"fields ({type(e).__name__}: {e})") from e
+        for name, schema in versions:
+            key = (group, kind, name)
+            if key in want and schema:
                 found[key] = schema
     missing = [w for w in wanted
                if (w["group"], w["kind"], w["version"]) not in found]
@@ -174,6 +190,10 @@ def run(check_only: bool) -> int:
         except _lib_consumer_read.ConsumerReadError as e:
             detail = e.detail()
             print(f"ERROR: {sid}: CRD could not be read the way kubectl reads it ({detail})",
+                  file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        except SourceNotCrd as e:
+            print(f"ERROR: {sid}: the source did not send a CRD file ({safe_label(e)})",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
         if missing:

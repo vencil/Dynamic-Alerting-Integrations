@@ -8,8 +8,6 @@ from __future__ import annotations
 import http.client
 import json
 import math
-import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
@@ -18,6 +16,8 @@ from typing import Any, Optional
 from _lib_validation import url_problem
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 from _lib_exitcodes import CallerError
+# No import cycle: _lib_label is standard library only.
+from _lib_label import safe_label
 
 #: What a request over urllib raises when it got no usable HTTP answer: the
 #: connection (``OSError``, ``URLError`` among them), a reply that is not
@@ -34,19 +34,31 @@ TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     OSError, http.client.HTTPException, ValueError)
 
 
+#: The most of an exception's own text :func:`transport_error_text` keeps.
+ERROR_TEXT_MAX = 200
+
+
 def transport_error_text(exc: BaseException, *, with_type: bool = False) -> str:
     """The error text of a :data:`TRANSPORT_ERRORS` instance, for the line a
-    caller that catches the list prints. ``str(exc)``, except for a reply
-    that is not HTTP: ``BadStatusLine`` and its kin carry only what the peer
-    sent (or a bare count), so the type is named, and the peer's bytes are
-    cut and kept on one line (a non-printable character, its line ending
-    among them, is shown as ``?``) — the text would otherwise read as a
-    message of ours, on as many lines as the peer chose. *with_type* names
-    the type for every exception (``URLError: <urlopen error …>``)."""
-    if isinstance(exc, http.client.HTTPException) and not isinstance(exc, OSError):
-        said = "".join(c if c.isprintable() else "?" for c in str(exc).strip()[:200])
-        return f"{type(exc).__name__}: {said}"
-    return f"{type(exc).__name__}: {exc}" if with_type else str(exc)
+    caller that catches the list prints.
+
+    Whatever the exception, its text may hold what the peer sent — the
+    status line of a reply that is not HTTP, the reason phrase of an HTTP
+    error, the ``Location`` of a redirect urllib refuses — so every text
+    goes through the same cleaning: ``safe_label`` (each control character,
+    a line ending among them, shown as ``?``), then cut to
+    :data:`ERROR_TEXT_MAX` characters (``…`` marks the cut). One line of
+    bounded length, never a message of the peer's choosing.
+
+    The type is named (``BadStatusLine: …``) for a reply that is not HTTP —
+    such an exception carries only the peer's bytes or a bare count — and,
+    with *with_type*, for every exception.
+    """
+    said = safe_label(str(exc).strip())
+    if len(said) > ERROR_TEXT_MAX:
+        said = said[:ERROR_TEXT_MAX] + "…"
+    not_http = isinstance(exc, http.client.HTTPException) and not isinstance(exc, OSError)
+    return f"{type(exc).__name__}: {said}" if with_type or not_http else said
 
 
 class QueryError(CallerError):
@@ -131,7 +143,8 @@ def http_get_json(
 
     Returns:
         ``(data_dict, None)`` on success, or ``(None, error_message)`` on
-        failure (network error, JSON decode error, etc.).
+        failure (network error, a reply that is not HTTP, JSON decode
+        error, etc.) — :func:`transport_error_text` of the exception.
     """
     try:
         scheme_err = _validate_url_scheme(url)
@@ -148,124 +161,6 @@ def http_get_json(
             return data, None
     except TRANSPORT_ERRORS as exc:
         return None, transport_error_text(exc)
-
-
-def http_post_json(
-    url: str,
-    payload: Any = None,
-    *,
-    timeout: int = 10,
-    headers: Optional[dict[str, str]] = None,
-    method: str = "POST",
-) -> tuple[Optional[dict], Optional[str]]:
-    """HTTP POST (or custom method) with JSON request/response.
-
-    Args:
-        url: Full URL to send the request to.
-        payload: Python object to JSON-encode as the request body.
-            If ``None``, sends an empty body.
-        timeout: Socket timeout in seconds (default 10).
-        headers: Optional extra headers.
-        method: HTTP method (default ``POST``).
-
-    Returns:
-        ``(response_dict, None)`` on success, or ``(None, error_message)``
-        on failure.
-    """
-    try:
-        scheme_err = _validate_url_scheme(url)
-        if scheme_err:
-            return None, scheme_err
-
-        req = urllib.request.Request(url, method=method)  # nosec B310
-        req.add_header("Content-Type", "application/json")
-        if headers:
-            for k, v in headers.items():
-                req.add_header(k, v)
-        data = None
-        if payload is not None:
-            data = json.dumps(payload).encode("utf-8")
-        with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
-            body = resp.read().decode("utf-8")
-            return (json.loads(body) if body else {}), None
-    except urllib.error.HTTPError as exc:
-        return None, f"HTTP {exc.code}: {exc.reason}"
-    except TRANSPORT_ERRORS as exc:
-        return None, transport_error_text(exc)
-
-
-def http_request_with_retry(
-    url: str,
-    *,
-    method: str = "GET",
-    payload: Any = None,
-    timeout: int = 10,
-    max_retries: int = 3,
-) -> dict:
-    """HTTP request with exponential backoff retry（5xx / 連線錯誤自動重試）。
-
-    與 :func:`http_post_json` 不同，此函式在最終失敗時 **raise** 而非回傳
-    ``(None, error)``，適用於必須成功的 API 呼叫（如 Alertmanager silence 管理）。
-
-    重試策略：
-    - 4xx 錯誤：不重試，立即 raise
-    - 5xx / 連線錯誤 / 對端回的不是 HTTP（:data:`TRANSPORT_ERRORS`）：
-      最多重試 *max_retries* 次，間隔 1s → 2s → 4s
-    - 2xx 但 body 不是 UTF-8 的 JSON：不重試，立即 raise ``ValueError``
-
-    Args:
-        url: 完整 URL。
-        method: HTTP method（預設 ``GET``）。
-        payload: JSON-serializable payload（``None`` 表示無 body）。
-        timeout: Socket timeout 秒數。
-        max_retries: 最大重試次數（預設 3）。
-
-    Returns:
-        解析後的 JSON dict。
-
-    Raises:
-        urllib.error.HTTPError: 4xx 錯誤或重試耗盡後的 5xx 錯誤。
-        urllib.error.URLError: 連線錯誤、或對端回的不是 HTTP，且重試耗盡
-            （#3519：``BadStatusLine`` 這類不是 ``OSError`` 的傳輸例外包成
-            ``URLError``，``reason`` 是 :func:`transport_error_text` 的文字，
-            原例外在 ``__cause__``）。
-        OSError: urllib 沒包成 ``URLError`` 的連線錯誤（讀取逾時、連線被重設）
-            且重試耗盡。
-        ValueError: URL 不合法，或 2xx 的 body 不是 UTF-8 的 JSON。
-    """
-    last_error: Optional[Exception] = None
-
-    scheme_err = _validate_url_scheme(url)
-    if scheme_err:
-        raise ValueError(scheme_err)
-
-    for attempt in range(max_retries):
-        try:
-            req = urllib.request.Request(url, method=method)  # nosec B310
-            req.add_header("Content-Type", "application/json")
-            data = None
-            if payload is not None:
-                data = json.dumps(payload).encode("utf-8")
-            with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:  # nosec B310  #scheme validated by _validate_url_scheme upstream
-                raw = resp.read()
-        except urllib.error.HTTPError as exc:
-            if exc.code < 500:
-                raise  # 4xx: 不重試
-            last_error = exc
-        except TRANSPORT_ERRORS as exc:
-            last_error = exc
-        else:
-            # try 之外：body 讀到了，不是 JSON 是確定性的結果，重試無益。
-            body = raw.decode("utf-8")
-            return json.loads(body) if body else {}
-
-        if attempt < max_retries - 1:
-            time.sleep(2 ** attempt)  # 1s, 2s, 4s
-
-    if isinstance(last_error, OSError):  # URLError / HTTPError 都是 OSError
-        raise last_error
-    # 不是 OSError 的傳輸例外（對端回的不是 HTTP）：契約是 URLError。
-    raise urllib.error.URLError(transport_error_text(last_error)) from last_error
 
 
 def probe_health(
@@ -297,8 +192,8 @@ def probe_health(
         ``(body_str, None)`` on success — decoded response body (UTF-8,
         ``errors="replace"`` so a probe that answered 2xx never fails on
         decode; may be ``""``). Reachability-only callers ignore the body.
-        ``(None, err_str)`` on failure — ``str(exception)``, matching the
-        detail strings the hand-rolled sites produced, or the scheme error.
+        ``(None, err_str)`` on failure — :func:`transport_error_text` of the
+        exception (one bounded line), or the scheme error.
     """
     try:
         scheme_err = _validate_url_scheme(url)

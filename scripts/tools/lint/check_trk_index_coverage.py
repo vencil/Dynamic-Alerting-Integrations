@@ -166,9 +166,15 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
             batch = json.load(resp)
             m = _NEXT_RE.search(resp.headers.get("Link") or "")
         pages += 1
+        # 200 但不是 issue 物件的陣列（dict、null、數字陣列…）：量不到，不是「沒有 TRK」。
+        if not isinstance(batch, list) or not all(isinstance(it, dict) for it in batch):
+            raise ValueError("issues API 回的不是物件陣列")
         for it in batch:
-            for hit in _TRK_RE.finditer(it.get("title") or ""):
-                hits.setdefault(hit.group(1), f"#{it['number']}")
+            title = it.get("title") or ""
+            if not isinstance(title, str):
+                raise ValueError("issues API 回的 title 不是字串")
+            for hit in _TRK_RE.finditer(title):
+                hits.setdefault(hit.group(1), f"#{it.get('number', '?')}")
         url = m.group(1) if m else ""
     return hits
 
