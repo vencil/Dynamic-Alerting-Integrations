@@ -118,19 +118,23 @@ func TestServedSchedules_PerTenantMatchesWholeTree(t *testing.T) {
 		}
 		testutil.WriteTree(t, filepath.Dir(dir), tree)
 		for _, at := range ats {
-			args := []string{"--config-dir", dir, "--at", at, "--schedules"}
-			var newOut, newErr, oldOut, oldErr bytes.Buffer
-			newCode := runServedValuesFilled(args, &newOut, &newErr, addSchedules)
-			oldCode := runServedValuesFilled(args, &oldOut, &oldErr, addSchedulesWholeTree)
-			if newCode != oldCode || !bytes.Equal(newOut.Bytes(), oldOut.Bytes()) {
-				t.Fatalf("%s at %s: per tenant exit %d, whole tree exit %d; documents differ\nper tenant:\n%s\nwhole tree:\n%s\nstderr:\n%s\n%s",
-					n, at, newCode, oldCode, newOut.String(), oldOut.String(), newErr.String(), oldErr.String())
-			}
-			if newCode != exitOK && newErr.String() != oldErr.String() {
-				t.Errorf("%s at %s: exit %d, stderr differs:\nper tenant: %s\nwhole tree: %s", n, at, newCode, newErr.String(), oldErr.String())
-			}
-			if strings.Contains(newOut.String(), "give one series user_threshold{") {
-				collided++
+			// #3877: --schedules-only too, whose reading at an --at that
+			// cannot be gathered goes on without the served values.
+			for _, mode := range []string{"--schedules", "--schedules-only"} {
+				args := []string{"--config-dir", dir, "--at", at, mode}
+				var newOut, newErr, oldOut, oldErr bytes.Buffer
+				newCode := runServedValuesFilled(args, &newOut, &newErr, addSchedules)
+				oldCode := runServedValuesFilled(args, &oldOut, &oldErr, addSchedulesWholeTree)
+				if newCode != oldCode || !bytes.Equal(newOut.Bytes(), oldOut.Bytes()) {
+					t.Fatalf("%s at %s %s: per tenant exit %d, whole tree exit %d; documents differ\nper tenant:\n%s\nwhole tree:\n%s\nstderr:\n%s\n%s",
+						n, at, mode, newCode, oldCode, newOut.String(), oldOut.String(), newErr.String(), oldErr.String())
+				}
+				if newCode != exitOK && newErr.String() != oldErr.String() {
+					t.Errorf("%s at %s %s: exit %d, stderr differs:\nper tenant: %s\nwhole tree: %s", n, at, mode, newCode, newErr.String(), oldErr.String())
+				}
+				if strings.Contains(newOut.String(), "give one series user_threshold{") {
+					collided++
+				}
 			}
 		}
 	}
@@ -196,7 +200,7 @@ func randomScheduleTree(r *rand.Rand) map[string]string {
 // addSchedulesWholeTree is addSchedules as it was before #3808, verbatim but
 // for its name: the whole tree read at every cut of the tree.
 func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
-	expiries []config.ResolvedThresholdExpiry, name keyNamer,
+	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool,
 ) error {
 	cuts := cfg.ScheduleCuts()
 	ends := make([]int, len(cuts))
@@ -214,8 +218,11 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 	gatherErrs := make([]string, len(cuts))
 	for i, m := range cuts {
 		r, gerr, err := readingsAt(cfg.AtMinuteOfDay(m), at, name)
-		if err == nil && gerr != "" && i == cur {
+		if err == nil && gerr != "" && i == cur && instantGathered {
 			err = fmt.Errorf("internal: the schedule reading at --at cannot be gathered, the served values could: %s", gerr)
+		}
+		if err == nil && gerr == "" && i == cur && !instantGathered {
+			err = fmt.Errorf("internal: the served values at --at cannot be gathered, the schedule reading at --at could")
 		}
 		if err != nil {
 			return fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
@@ -224,6 +231,9 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 	}
 
 	for tenant, tv := range tenants {
+		if !instantGathered {
+			break
+		}
 		if err := sameAsValues(tenant, tv, passes[cur][tenant]); err != nil {
 			return err
 		}
