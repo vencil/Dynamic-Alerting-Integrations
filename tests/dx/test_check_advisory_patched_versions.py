@@ -264,3 +264,54 @@ def test_pre_tag_runs_the_check() -> None:
     assert " advisory-patched-check " in pre_tag, pre_tag
     recipe = makefile.split("advisory-patched-check: ##", 1)[1].split("\n\n", 1)[0]
     assert "ADVISORY_ACK" not in recipe and "check_advisory_patched_versions.py" in recipe, recipe
+
+
+# ── #3848: the registry is asked through _lib_registry (one client) ─────────
+
+def _reply(status: int, payload, link: str | None = None):
+    import email.message
+    headers = email.message.Message()
+    if link:
+        headers["Link"] = link
+    return status, headers, json.dumps(payload).encode() if not isinstance(payload, bytes) else payload
+
+
+def test_ghcr_tags_pages_through_the_registry_client() -> None:
+    asked = []
+
+    def transport(method, url, headers, timeout):
+        asked.append(url)
+        if "last=" not in url:
+            return _reply(200, {"tags": ["v2.9.7"]}, '</v2/vencil/tenant-api/tags/list?last=v2.9.7&n=1000>; rel="next"')
+        return _reply(200, {"tags": ["v2.9.8"]})
+
+    assert gate.ghcr_tags("ghcr.io/vencil/tenant-api", transport) == {"v2.9.7", "v2.9.8"}
+    assert asked[0] == "https://ghcr.io/v2/vencil/tenant-api/tags/list?n=1000"
+
+
+@pytest.mark.parametrize("reply", [
+    (401, {"errors": [{"code": "UNAUTHORIZED"}]}),     # a repository that does not exist, or private
+    (404, {"errors": [{"code": "NAME_UNKNOWN"}]}),
+    (503, b""), (429, b""), (200, b"<html>"),
+], ids=["401", "404", "503", "429", "not-json"])
+def test_ghcr_tags_that_cannot_be_read_are_a_caller_error(reply) -> None:
+    with pytest.raises(gate.CallerError, match="cannot list the tags"):
+        gate.ghcr_tags("oci://ghcr.io/vencil/charts/tenant-api", lambda *a: _reply(*reply))
+
+
+def test_ghcr_tags_without_a_connection_is_a_caller_error() -> None:
+    def transport(*_a):
+        raise OSError("connection reset")
+    with pytest.raises(gate.CallerError, match="OSError"):
+        gate.ghcr_tags("ghcr.io/vencil/tenant-api", transport)
+
+
+def test_main_is_rc_2_when_the_registry_cannot_be_read(repo, tmp_path, monkeypatch, capsys) -> None:
+    """Fail closed end to end: a 503 from the registry is rc 2, not "no such version"."""
+    real = gate.ghcr_tags
+    monkeypatch.setattr(gate, "REPO_ROOT", repo)
+    monkeypatch.setattr(gate, "ghcr_tags", lambda where: real(where, lambda *a: _reply(503, b"")))
+    f = tmp_path / "a.json"
+    f.write_text(json.dumps([_adv(IMAGE, "<= 2.9.7", "2.9.8")]), encoding="utf-8")
+    assert gate.main(["--advisories-json", str(f)]) == 2
+    assert "could not run" in capsys.readouterr().err

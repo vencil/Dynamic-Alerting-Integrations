@@ -86,6 +86,7 @@ lang: zh
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_advisory_patched_versions.py` | every advisory's `patched_versions` names a version that exists (#1269). |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
+| `check_release_immutable.py` | a released version is never published twice with different content (#3848). |
 | `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
 | `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |
 | `coverage_delta.py` | Per-file + total coverage delta between two runs. |
@@ -120,6 +121,7 @@ lang: zh
 | `pair_bench_ratio.py` | Turn one night's PAIRED benchmark run into per-benchmark ratios (ADR-032). |
 | `paired_trend_watch.py` | Judge a series of PAIRED nightly runs for a sustained regression (ADR-032). |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
+| `release_publish.py` | the only way release.yaml writes to a registry or a GitHub Release (#3848). |
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
 | `renovate_fixup.py` | Finish a Renovate third-party image PR: write the follow-on edits it cannot (#3799). |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |

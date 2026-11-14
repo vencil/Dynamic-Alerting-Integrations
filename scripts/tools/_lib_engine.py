@@ -237,6 +237,33 @@ def _helm_template(proc: subprocess.CompletedProcess, expect: dict) -> str:
     return proc.stdout
 
 
+#: The unindented `name:` / `version:` lines helm prints for a chart.
+_HELM_CHART_NAME = re.compile(r"^name:[ \t]*\S", re.M)
+_HELM_CHART_VERSION = re.compile(r"^version:[ \t]*\S", re.M)
+
+
+def _helm_show_chart(proc: subprocess.CompletedProcess, expect: dict) -> str:
+    """``helm show chart <archive>``: rc 0 and Chart.yaml as helm read it —
+    a `name:` and a `version:` line. Anything else did not read a chart."""
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise NoProof(lines[0] if lines else "helm show chart failed")
+    out = proc.stdout or ""
+    if not (_HELM_CHART_NAME.search(out) and _HELM_CHART_VERSION.search(out)):
+        raise NoProof("printed no chart name / version")
+    return out
+
+
+def _helm_push(proc: subprocess.CompletedProcess, expect: dict) -> str:
+    """``helm push``: rc 0. Its printed summary differs across helm majors, so
+    it is not the proof; the caller reads the registry back instead
+    (release_publish.py chart)."""
+    if proc.returncode != 0:
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        raise NoProof(lines[0] if lines else "helm push failed")
+    return (proc.stdout or "") + (proc.stderr or "")
+
+
 _HADOLINT_FIELDS = frozenset({"file", "line", "code", "level", "message"})
 
 
@@ -445,6 +472,8 @@ def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dic
 PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]] = {
     ("hadolint", "lint"): _hadolint,
     ("helm", "template"): _helm_template,
+    ("helm", "show-chart"): _helm_show_chart,
+    ("helm", "push"): _helm_push,
     ("kube-linter", "lint"): _kube_linter_lint,
     ("mmdc", "render"): _mmdc_render,
     ("node", "esbuild-parse"): _node_esbuild_parse,
