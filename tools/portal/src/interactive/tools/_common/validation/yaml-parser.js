@@ -80,7 +80,11 @@ purpose: |
                            error with config = {} (#3959): the exporter's
                            parse-tree refuses such a file whole
                            (multiple_documents); a trailing `---` counts, a
-                           leading `---` and a lone `...` do not.
+                           leading `---` and `...` lines do not. A threshold
+                           value that writes a merge key (`<<`) is handed
+                           over unexpanded: the exporter judges a schedule by
+                           the mapping's own keys (`{<<: {default: 70}}` is
+                           no schedule).
                            ⛔ Hand its config to
                            ../validation/threshold-value.js readThresholdRow
                            (through alert-engine.js); do not hand parseYaml's
@@ -125,6 +129,13 @@ const YAML_SCHEMA = CORE_SCHEMA.extend({ implicit: [types.merge] });
 const textScalar = (tag) => new Type(tag, { kind: 'scalar', construct: (data) => data });
 const TEXT_SCHEMA = FAILSAFE_SCHEMA.extend({
   implicit: [types.null, types.merge],
+  explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
+});
+
+// TEXT_SCHEMA without the merge key: `<<` stays a key named '<<'. Only for
+// telling a schedule's own `default` from one a merge brought in (#3959).
+const TEXT_SCHEMA_NO_MERGE = FAILSAFE_SCHEMA.extend({
+  implicit: [types.null],
   explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
 });
 
@@ -207,19 +218,42 @@ function loadDocument(text, schema) {
       : t('anchor 的值包含它自己（自我參照）', 'anchor value contains itself (self-reference)');
     return { doc: undefined, error: { message: reason, line: null, column: null } };
   }
-  return { doc: loaded.doc, error: null, documents: loaded.documents };
+  return { doc: loaded.doc, error: null };
 }
 
-// First document of the stream (null when empty), and how many documents
-// the stream holds. Any error in any document throws. The listener collects
-// anchor maps so a cycle can be reported by anchor name.
+// First document of the stream (null when empty). Any error in any
+// document throws. The listener collects anchor maps so a cycle can be
+// reported by anchor name.
 function loadFirstDocument(src, schema) {
   const anchorMaps = new Set();
   const docs = loadAll(src, null, {
     schema,
     listener(_event, state) { if (state && state.anchorMap) anchorMaps.add(state.anchorMap); },
   });
-  return { doc: docs.length ? docs[0] : null, anchorMaps, documents: docs.length };
+  return { doc: docs.length ? docs[0] : null, anchorMaps };
+}
+
+// How many documents yaml.v3's decoder reads from a text that parses (#3959):
+// each `---` line starts one, and so does content before the first. A
+// `...` only ends a document — `a: 1\n...\n...\n` is one, though js-yaml's
+// loadAll returns a null document per `...` — so js-yaml's count is not it.
+// A `---` at the start of a line is always a marker (YAML forbids it inside
+// a scalar). Measured against da-guard parse-tree.
+const DOC_START_RE = /^---(?:[ \t]|$)/;
+const DOC_END_RE = /^\.\.\.(?:[ \t]|$)/;
+function countDocuments(src) {
+  let documents = 0;
+  let content = false;
+  for (const line of src.split(/\r\n|\r|\n/)) {
+    if (DOC_START_RE.test(line)) { documents += 1; content = true; continue; }
+    const text = line.trim();
+    if (!content && text !== '' && !text.startsWith('#') && !text.startsWith('%') && !DOC_END_RE.test(line)) {
+      documents += 1;
+      content = true;
+    }
+    if (DOC_END_RE.test(line)) content = false;
+  }
+  return documents;
 }
 
 // First object/array that is its own ancestor (a self-referencing alias),
@@ -296,20 +330,20 @@ function parseYaml(text) {
 // is known) is left out rather than handed over untyped.
 // A second document is an error here (#3959): the exporter's parse-tree
 // refuses the whole file (multiple_documents), so a page that simulated the
-// first document would show alerts for a file that serves nothing. js-yaml
-// counts documents as yaml.v3's decoder does — a trailing `---` (empty, a
-// comment, `~`) is a second one; a leading `---` and a lone `...` are not
-// (measured against da-guard parse-tree). parseYaml keeps reading the first
-// document: its other callers are not the exporter's reader.
+// first document would show alerts for a file that serves nothing. A
+// trailing `---` (empty, a comment, `~`) is a second document; a leading
+// `---` and any number of `...` are not (countDocuments). parseYaml keeps
+// reading the first document: its other callers are not the exporter's
+// reader.
 function parseTenantYaml(text) {
   const t = window.__t || ((zh, en) => en);
   const typed = parseYaml(text);
   if (typed.errors.length) return typed;
-  const { doc, error, documents } = loadDocument(text, TEXT_SCHEMA);
+  const { doc, error } = loadDocument(text, TEXT_SCHEMA);
   // Not reachable for a text parseYaml took, as far as is known; were it,
   // the page shows the error instead of thresholds read from a typed value.
   if (error) return { config: {}, errors: [error.message] };
-  if (documents > 1) {
+  if (countDocuments(text) > 1) {
     return {
       config: {},
       errors: [t('這份 YAML 有不只一份文件（---）：exporter 會拒收整個檔，不讀其中任何值；這裡不模擬',
@@ -317,6 +351,15 @@ function parseTenantYaml(text) {
     };
   }
   if (!isPlainMap(doc)) return typed;
+  // A mapping is a schedule only by a `default` key of its own: the
+  // exporter (ScheduledValue.UnmarshalYAML) looks at the node's keys before
+  // any merge, so `{<<: {default: 70}}` is an arbitrary mapping it does not
+  // read (value_unparsed). js-yaml has expanded the merge by now, so a
+  // threshold value that writes `<<` is handed over as written, `<<` and
+  // all, for the reader to judge by its own keys (#3959).
+  const unmerged = loadDocument(text, TEXT_SCHEMA_NO_MERGE).doc;
+  const writesMerge = (key) => isPlainMap(unmerged) && isPlainMap(unmerged[key])
+    && Object.prototype.hasOwnProperty.call(unmerged[key], '<<');
   const config = {};
   const memo = new Map();
   for (const key of Object.keys(doc)) {
@@ -325,7 +368,7 @@ function parseTenantYaml(text) {
       if (Object.prototype.hasOwnProperty.call(typed.config, key)) config[key] = typed.config[key];
       continue;
     }
-    config[key] = stripUnsafeKeys(doc[key], memo);
+    config[key] = stripUnsafeKeys(writesMerge(key) ? unmerged[key] : doc[key], memo);
   }
   return { config, errors: [] };
 }

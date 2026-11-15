@@ -23,6 +23,7 @@ import { RoutingTraceTab } from '../src/interactive/tools/RoutingTraceTab.jsx';
 import { RULE_PACK_DATA } from '../src/interactive/tools/_common/data/rule-packs.js';
 import { unreadableThresholdMessage } from '../src/interactive/tools/_common/sim/alert-engine.js';
 import { parseYaml, parseTenantYaml } from '../src/interactive/tools/_common/validation/yaml-parser.js';
+import { readThresholdRow } from '../src/interactive/tools/_common/validation/threshold-value.js';
 
 const EN = (_zh: string, en: string) => en;
 const MULTI = /more than one document/;
@@ -63,6 +64,17 @@ describe('a threshold written as a map or a list', () => {
     expect(screen.getByText(unreadableThresholdMessage(raw))).toBeInTheDocument();
   });
 
+  // Measured with da-guard: the exporter looks for a `default` key of the
+  // mapping's own, before any merge. js-yaml has expanded `<<` by then.
+  it.each([
+    [`${K}:\n  <<: {default: 70}\n`, { kind: 'unreadable', raw: '{<<: {default: 70}}' }], // served the platform default
+    [`s: &s {default: 70}\n${K}: *s\n`, { kind: 'structured' }], // an alias: a schedule, served 70
+    [`${K}: {<<: {default: 70}, default: 80}\n`, { kind: 'structured' }], // its own default: served 80
+    [`<<: {${K}: {default: 70}}\n`, { kind: 'structured' }], // a merge one level up: served 70
+  ])('a merge key: %j', (yaml, row) => {
+    expect(readThresholdRow(parseTenantYaml(yaml).config[K])).toEqual(row);
+  });
+
   it('a schedule with a readable default is still not simulated (the control)', () => {
     preview(`${K}: {default: 80}\n`);
     expect(screen.queryByTestId(`unreadable-${K}`)).toBeNull();
@@ -77,7 +89,7 @@ describe('a second YAML document', () => {
   it('Alert Preview says the exporter refuses the file and simulates nothing', () => {
     preview(yaml);
     expect(screen.getByTestId('parse-errors').textContent).toMatch(MULTI);
-    expect(screen.queryByText('Firing: 1')).toBeNull();
+    // no result rows at all (the summary bar renders only with results)
     expect(screen.queryByText(/^No threshold\/Disabled: /)).toBeNull();
   });
 
@@ -94,11 +106,20 @@ describe('a second YAML document', () => {
     expect(screen.queryByText('Alert Fires')).toBeNull();
   });
 
-  it('a single document with a leading `---` or a closing `...` is one document (the control)', () => {
-    for (const y of [`---\n${K}: 80\n`, `${K}: 80\n...\n`]) {
-      expect(parseTenantYaml(y)).toEqual({ config: { [K]: '80' }, errors: [] });
-    }
-    expect(parseTenantYaml(`${K}: 80\n---\n`).errors).toHaveLength(1); // a trailing `---` is a second (empty) one
+  // Each row measured against da-guard parse-tree on main: true where it
+  // reports multiple_documents. `...` only ends a document; js-yaml's loadAll
+  // returns a null document for each, so its count is not the exporter's.
+  const B = `${K}: 80\n`;
+  it.each([
+    [B, false], [`---\n${B}`, false], [`# c\n---\n${B}`, false], [`%YAML 1.1\n---\n${B}`, false],
+    [`${B}...\n`, false], [`${B}...\n# c\n`, false], [`${B}...\n...\n`, false], [`${B}...\n# c\n...\n`, false],
+    [`${B}...\n...\n...\n`, false], ['---\n...\n', false], ['---\n', false], ['--- ~\n', false], ['', false],
+    [`${B}---\n`, true], [`${B}---\n# c\n`, true], [`${B}--- ~\n`, true], [`${B}--- \n`, true], [`${B}---`, true],
+    [`${B}...\n---\n`, true], [`${B}---\nx: 1\n`, true], [`${B}---\n---\n`, true], [`---\n---\n${B}`, true],
+    [`${B}---\r\nx: 1\r\n`, true],
+  ])('%j is refused as more than one document: %s', (y, multi) => {
+    const { errors } = parseTenantYaml(y);
+    expect(errors.some((e: string) => MULTI.test(e))).toBe(multi);
   });
 
   it('parseYaml, for its other callers, still reads the first document', () => {
