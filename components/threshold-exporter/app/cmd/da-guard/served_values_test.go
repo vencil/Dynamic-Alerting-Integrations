@@ -1358,8 +1358,8 @@ func TestServedValues_SchemaIsNamed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{"t.yaml": "tenants:\n  t:\n    x: 1\n"}, "")
 	mustOK(t, code, stderr)
-	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v1" {
-		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v1")
+	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v2" {
+		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v2")
 	}
 }
 

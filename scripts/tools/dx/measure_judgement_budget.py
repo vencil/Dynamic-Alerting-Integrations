@@ -548,7 +548,7 @@ def judge(spec: dict) -> dict:
         if sv.returncode == 0:
             sv_doc = json.loads(sv.stdout)
             absent = sv_doc.get("tenants_absent")
-            sv_ok = sv_doc.get("schema") == "da-guard.served-values/v1" and not absent
+            sv_ok = sv_doc.get("schema") == "da-guard.served-values/v2" and not absent
         del sv
     except MemoryError as exc:
         memory = memory or f"served-values output: {exc}"

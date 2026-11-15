@@ -93,7 +93,6 @@ values written with a schedule — for the route generator's inhibit rules.
   value under the retired metric identity, `legacy_twin` True (the
   resolver's mark). A key /metrics serves no row for
   (`unserved`, or only `dropped`) has no entry, nor does `_custom_alerts`.
-  A da-guard whose output lacks the field is named as older than this tool.
 * `state_filters` (ADR-037) — every state filter on for the tenant at `at`,
   filter name -> the `severity` label of its `user_state_filter` row on
   /metrics. A filter that is off has no entry; `values["_state_<filter>"]`
@@ -102,8 +101,7 @@ values written with a schedule — for the route generator's inhibit rules.
   `_silent_mode` (one `TimeBox` per silenced severity) or `_state_maintenance`
   -> its `TimeBox(target, expires, expired)`s. The mode's reading in `values`
   only says whether it is in force at `at`; extending it or making it
-  open-ended changes this instead. A da-guard whose output lacks the field is
-  named as older than this tool.
+  open-ended changes this instead.
 * `routing` — the tenant's `_routing` as the exporter module's routing
   resolver reads it, None when it accepts none. The collector does not read
   `_routing` (the route generator does), so it is not in `values`; a
@@ -129,12 +127,15 @@ values written with a schedule — for the route generator's inhibit rules.
   the key off changed anything: with `disable_effects=True` (da-guard
   `--disable-effects`) `disable` says so — "effective" or "noop" — for
   every key that reads `disable` in some part of the day,
-  registered `_` keys aside. A da-guard whose output lacks the field is
-  named as older than this tool.
+  registered `_` keys aside.
 
 The document must name its shape: a `schema` other than
-`SERVED_VALUES_SCHEMA` is refused, and a document with none is named as
-coming from a da-guard older than this tool (ADR-037).
+`SERVED_VALUES_SCHEMA` is refused. One of `SERVED_VALUES_OLDER_SCHEMAS`, or
+none at all, names a da-guard older than this tool (ADR-037); any other may
+be a newer one and is not called older. Every da-guard that writes
+`SERVED_VALUES_SCHEMA` writes every field above, so a document of that
+schema missing one, or carrying one of another shape, is broken output —
+never read as an older binary's.
 
 Whether /metrics serves at all follows Gather over the same collectors
 production /metrics serves. A tree whose output would carry any string that
@@ -346,7 +347,10 @@ __all__ = [
 
 SUBCOMMAND = "served-values"
 # The `schema` value load_served_tree reads; any other is refused (ADR-037).
-SERVED_VALUES_SCHEMA = "da-guard.served-values/v1"
+SERVED_VALUES_SCHEMA = "da-guard.served-values/v2"
+#: Earlier versions of the document: a da-guard writing one is older than
+#: this tool (v1: `key_checks` as sentences that quoted the key — #3703).
+SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1",)
 EFFECTIVE_SUBCOMMAND = "effective"
 # The `schema` value load_effective reads; any other is refused.
 EFFECTIVE_SCHEMA = "da-guard.effective/v1"
@@ -443,31 +447,83 @@ class TenantValues(NamedTuple):
     # not decode (Go's `guard.CustomAlertBlockFindingKind`); None when it
     # decodes. Go's verdict — a reader lists it.
     custom_alerts_finding: str | None = None
-    # ADR-038 §11: the exporter's own messages about the tenant's keys that a
-    # CI reader prints and no longer judges itself; None from a da-guard
-    # older than the field.
-    key_checks: "KeyChecks | None" = None
+    # ADR-038 §11: the exporter's own checks on the tenant's keys that a CI
+    # reader prints and no longer judges itself (#3703: records, `KeyCheck`).
+    # `load_served_tree` always sets it — a document without the field is
+    # broken output; None only on a `TenantValues` built by hand.
+    key_checks: "tuple[KeyCheck, ...] | None" = None
 
 
-class KeyChecks(NamedTuple):
-    """served-values' per-tenant `key_checks`: the exporter's messages
-    (Go's ValidateTenantKeys) about a dimensional key's `version` label
-    (ADR-024 OQ-6) and about a key written in a retired spelling (#1231),
-    each as Go wrote it, sorted. A reader prints them and judges nothing."""
-    version_labels: tuple[str, ...]
-    renames: tuple[str, ...]
+#: The kinds of a key check — Go's `config.KeyCheckKinds`
+#: (pkg/config/key_check.go): a dimensional key's `version` label (ADR-024
+#: OQ-6) and a key in a retired spelling (#1231). A closed set: a kind
+#: outside it is output this reader cannot read.
+#: tests/shared/test_key_check_kinds_parity.py reads the Go constants and
+#: holds both sets to them.
+KEY_CHECK_KINDS = frozenset({
+    "version_label_regex", "version_label_empty", "version_label_default", "version_label_charset",
+    "renamed_shadowed", "renamed_critical_dimensional", "renamed",
+})
+#: The kinds about a retired spelling (Go's `KeyCheckKind.IsRenamed`): an
+#: advisory; the others are about a `version` label the exporter refuses.
+KEY_CHECK_RENAMED_KINDS = frozenset({"renamed_shadowed", "renamed_critical_dimensional", "renamed"})
 
 
-def _key_checks(e: Any) -> KeyChecks:
-    if not isinstance(e, dict):
-        raise TypeError(f"key_checks is a {type(e).__name__}")
+class KeyCheck(NamedTuple):
+    """One entry of served-values' per-tenant `key_checks` (#3703): one of
+    the exporter's checks on a key as written (Go's `config.KeyCheck`).
+    `key` (the key as the tenant's config writes it) and `head` (its metric
+    name) are the author's text — a message names them through
+    `shown_key`; `reason` is Go's constant sentence for the kind, and
+    `replacement_head` the alias table's name of the replacing spelling (a
+    renamed kind only, else None). A reader prints them and judges nothing."""
+    kind: str
+    key: str
+    head: str
+    replacement_head: str | None
+    reason: str
+
+
+#: A tenant's key checks, sorted by key, then kind (as Go writes them).
+KeyChecks = tuple  # tuple[KeyCheck, ...]
+
+_KEY_CHECK_FIELDS = frozenset(KeyCheck._fields)
+
+
+def _key_checks(e: Any, what: str = "key_checks") -> "tuple[KeyCheck, ...]":
+    """A tenant's `key_checks`, checked: a list of records, each with every
+    field of `KeyCheck` and no other, `kind` from `KEY_CHECK_KINDS`, and a
+    `replacement_head` exactly on a renamed kind. The mapping of sentences a
+    da-guard older than #3703 wrote is named by its document's schema
+    (served-values v1, key-verdict v3), never here: under this reader's
+    schemas it is broken output.
+
+    A record carries the author's key, so a message names a place (an
+    index, a field name — da-guard's words, not the author's) and a type
+    name, never a value (#3703): it reaches a generator's stderr and
+    `--findings-json` through the error that reports it."""
+    if not isinstance(e, list):
+        raise TypeError(f"{what} is a {type(e).__name__}, not a list")
     out = []
-    for field in KeyChecks._fields:
-        msgs = e[field]
-        if not isinstance(msgs, list) or not all(isinstance(m, str) for m in msgs):
-            raise TypeError(f"key_checks.{field} is not a list of strings")
-        out.append(tuple(msgs))
-    return KeyChecks(*out)
+    for i, c in enumerate(e):
+        w = f"{what}[{i}]"
+        if not isinstance(c, dict):
+            raise TypeError(f"{w} is a {type(c).__name__}, not a record")
+        if set(c) != _KEY_CHECK_FIELDS:
+            raise TypeError(f"{w} has fields {sorted(map(str, c))}, not {sorted(_KEY_CHECK_FIELDS)}")
+        for f in ("kind", "key", "head", "reason"):
+            if not isinstance(c[f], str):
+                raise TypeError(f"{w}.{f} is a {type(c[f]).__name__}, not a string")
+        kind, repl = c["kind"], c["replacement_head"]
+        if kind not in KEY_CHECK_KINDS:
+            raise ValueError(f"{w}.kind is none of {sorted(KEY_CHECK_KINDS)}")
+        if not isinstance(repl, (str, type(None))):
+            raise TypeError(f"{w}.replacement_head is a {type(repl).__name__}, not a string or null")
+        # `kind` is one of KEY_CHECK_KINDS here: Go's word, safe to name.
+        if (repl is not None) != (kind in KEY_CHECK_RENAMED_KINDS):
+            raise ValueError(f"{w}: kind {kind} {'with' if repl is not None else 'without'} a replacement_head")
+        out.append(KeyCheck(kind, c["key"], c["head"], repl, c["reason"]))
+    return tuple(out)
 
 
 class CustomAlertEntry(NamedTuple):
@@ -913,17 +969,6 @@ class _OlderSchema(ValueError):
     reader reads (`_run_da_guard`'s *older_schemas*)."""
 
 
-class _OlderOutput(ValueError):
-    """A value only a da-guard older than this tool writes (#3046: the
-    retired `disable: partial` effect and `disable_partial` finding kind) —
-    named as a da-guard to upgrade, not as broken output."""
-
-
-#: Disable effects a da-guard older than #3046 writes and this tool no
-#: longer reads: the base's `disable` now switches its family off.
-RETIRED_DISABLE_EFFECTS = frozenset({"partial"})
-
-
 def _fault(subcommand: str, reason: str) -> None:
     """#3862: this da-guard run did not run (see `_lib_tool_fault`)."""
     _lib_tool_fault.record("da-guard", subcommand, reason)
@@ -1111,7 +1156,7 @@ def _run_da_guard(
         # version, #3489, #3016). A schema this reader does not know may be a newer one: not
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, (_OlderSchema, _OlderOutput))
+                 if isinstance(e, _OlderSchema)
                  or (isinstance(e, KeyError) and (e.args in fields_added_since
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
@@ -1144,10 +1189,10 @@ def _run_da_guard(
 
 
 # Fields a da-guard document gained after its first version: one missing
-# names the binary as older than this tool (#3489, #3016). Not key-verdict's:
-# its every older shape is named by its schema since v3 (#3835), so the
-# fields only its v1 / v2 lacked (`blocks`, `undecidable_blocks`,
-# `switched_off_with`, `base`, `hint`) are not listed.
+# names the binary as older than this tool (#3489, #3016). Not key-verdict's
+# nor served-values': their every older shape is named by their schema
+# (key-verdict since v3, #3835; served-values since v2, #3703), so they pass
+# `fields_added_since=()`.
 _FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",),
                        ("dead_entries",))  # #3502: effective's
 
@@ -1305,8 +1350,9 @@ def load_served_tree(
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
-                          _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
-        reads_unreadable=True, dropped_ok=partial)
+                          _subset_absent(doc, requested), doc["root_defaults_refused"]),
+        reads_unreadable=True, dropped_ok=partial,
+        older_schemas=SERVED_VALUES_OLDER_SCHEMAS, fields_added_since=())
     _check_tenant_map(tenants, returncode, stderr)
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
@@ -1321,10 +1367,9 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
                 returncode, stderr, broken=True) from e
-        if "series" not in tv:
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no series — this da-guard is "
-                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        # #3703: every field below is one every da-guard writing this
+        # document's schema writes; one missing is broken output, not an
+        # older da-guard (that is the schema's to say, `_run_da_guard`).
         try:
             series = {str(k): _series_list(v) for k, v in tv["series"].items()}
         except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -1334,34 +1379,19 @@ def load_served_tree(
         try:
             state_filters = _state_filters(tv["state_filters"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
-            # Not "older than this tool": every da-guard that writes this
-            # document's schema writes the field.
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries state_filters that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
-        if "time_boxes" not in tv:
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no time_boxes — this da-guard is "
-                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
         try:
             time_boxes = _time_boxes(tv["time_boxes"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries time_boxes that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
-        if "keys" not in tv:
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no keys — this da-guard is "
-                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
         if not isinstance(tv.get("custom_alerts") or [], list):
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries custom_alerts that are not a list",
                 returncode, stderr, broken=True)
-        if ("custom_alerts" in tv and "custom_alerts_finding" not in tv) or any(
-                isinstance(e, dict) and "finding" not in e for e in tv.get("custom_alerts") or ()):
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has custom alerts without a finding — this "
-                "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
         try:
             keys = {str(k): _served_key(e) for k, e in tv["keys"].items()}
             routing = tv.get("routing")
@@ -1375,26 +1405,19 @@ def load_served_tree(
             custom_alerts_error = tv.get("custom_alerts_error")
             if custom_alerts_error is not None and not isinstance(custom_alerts_error, str):
                 raise TypeError(f"custom_alerts_error is a {type(custom_alerts_error).__name__}")
-            custom_alerts_finding = tv.get("custom_alerts_finding")
+            custom_alerts_finding = (tv["custom_alerts_finding"] if "custom_alerts" in tv
+                                     else tv.get("custom_alerts_finding"))
             if custom_alerts_finding is not None and (not isinstance(custom_alerts_finding, str)
                                                       or custom_alerts_error is None):
                 raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
                                  f"with custom_alerts_error {custom_alerts_error!r}")
-            key_checks = None if "key_checks" not in tv else _key_checks(tv["key_checks"])
-        except _OlderOutput as e:
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries {e} — this da-guard is "
-                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True) from e
+            key_checks = _key_checks(tv["key_checks"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
-            if "schedules" not in tv:
-                raise ServedValuesError(
-                    f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no schedules — this da-guard is "
-                    "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
             try:
                 days = {k: _key_schedule(s) for k, s in tv["schedules"].items()}
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -1459,7 +1482,8 @@ def load_served_schedules(
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested)),
-        reads_unreadable=True, dropped_ok=partial)
+        reads_unreadable=True, dropped_ok=partial,
+        older_schemas=SERVED_VALUES_OLDER_SCHEMAS, fields_added_since=())
     _check_tenant_map(days, returncode, stderr)
     out: dict[str, dict[str, KeySchedule]] = {}
     for tenant_id, tv in days.items():
@@ -1479,8 +1503,9 @@ def load_served_schedules(
 def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcommand: str,
                            error: type) -> "tuple[RootDefaultRefused, ...]":
     """served-values' / effective's `root_defaults_refused` (one build, one
-    shape), checked; a da-guard without it is named as older than this tool,
-    with `error` (the subcommand's error class). Null — effective's when its
+    shape), checked; an effective document without it (`_MISSING`) is named
+    as older than this tool, with `error` (the subcommand's error class) —
+    served-values' schema names its older shapes itself (#3703). Null — effective's when its
     resolve stopped, either's when the exporter dropped the root carrier
     itself — is no verdict: None."""
     if entries is None:
@@ -1540,8 +1565,6 @@ def _served_key(e: Any) -> ServedKey:
     declared = {str(r): tuple(str(l) for l in layers) for r, layers in (e.get("declared") or {}).items()}
     hint = e.get("hint")
     disable = e.get("disable")
-    if disable in RETIRED_DISABLE_EFFECTS:
-        raise _OlderOutput(f"disable {disable!r}")
     if disable is not None and disable not in DISABLE_EFFECTS:
         raise ValueError(f"disable {disable!r}")
     refused = e.get("refused")

@@ -177,8 +177,7 @@ func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 		v.Errors = append(v.Errors, o.Errors...)
 		v.Notices = append(v.Notices, o.Notices...)
 		v.Values = append(v.Values, o.Values...)
-		v.VersionLabels = append(v.VersionLabels, o.VersionLabels...)
-		v.Renames = append(v.Renames, o.Renames...)
+		v.KeyChecks = append(v.KeyChecks, o.KeyChecks...)
 	}
 	tenants := make([]string, 0, len(m.platform))
 	for tid := range m.platform {

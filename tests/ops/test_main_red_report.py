@@ -36,6 +36,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _workflow_steps import effective_shell, run_step
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ops/main_red_report.py"
@@ -1065,46 +1066,23 @@ def test_the_detector_is_not_part_of_a_required_check_workflow(agg) -> None:
     assert not names & (agg._ALL_REQUIRED_NAMES | agg._ADVISORY_NAMES), names
 
 
-def _step_shell_argv(step: dict) -> list[str]:
-    """The argv GitHub runs a `run:` step with, READ FROM THE STEP — not
-    assumed. No `shell:` → `bash -e {0}`; `shell: bash` →
-    `bash --noprofile --norc -eo pipefail {0}`. Either way errexit is ON,
-    and `set -uo pipefail` inside the script does not turn it off."""
-    import shutil
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("needs bash")
-    shell = step.get("shell")
-    if shell is None:
-        return [bash, "-e"]
-    assert shell == "bash", f"unmodelled `shell: {shell}` — teach this helper its flags"
-    return [bash, "--noprofile", "--norc", "-eo", "pipefail"]
-
-
 def _run_step(tmp_path: Path, env: dict, script_rc: int = 0):
-    """Run the WHOLE last step the way GitHub does: its entire `run:` text in a
-    file, under the step's own shell flags, with a stand-in `python3` that
-    prints its arguments and exits `script_rc`. ⛔ Never a slice of the
-    script: the slice that was tested before started after the line that
-    killed the step (#3944)."""
-    import os
-    step = _detector()["jobs"]["report"]["steps"][-1]
+    """Run the WHOLE last step the way GitHub does (tests/_workflow_steps.py:
+    its entire `run:` text, under the flags of the step's own shell), with a
+    stand-in `python3` that prints its arguments and exits `script_rc`.
+    ⛔ Never a slice of the script: the slice that was tested before started
+    after the line that killed the step (#3944)."""
+    doc = _detector()
+    job = doc["jobs"]["report"]
+    step = job["steps"][-1]
     assert "python3 -X utf8 scripts/ops/main_red_report.py" in step["run"]
-    bindir = tmp_path / "bin"
-    bindir.mkdir(exist_ok=True)
-    fake = bindir / "python3"
-    fake.write_text(f'#!/bin/sh\nshift 3\necho "ARGS: $*"\nexit {script_rc}\n', encoding="utf-8")
-    fake.chmod(0o755)
-    script = tmp_path / "step.sh"
-    script.write_text(step["run"], encoding="utf-8")
     summary = tmp_path / "summary.md"
     summary.unlink(missing_ok=True)
-    proc = subprocess.run(
-        [*_step_shell_argv(step), str(script)], capture_output=True, text=True,
-        encoding="utf-8", timeout=30, check=False, cwd=tmp_path,
-        env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path),
-             "GITHUB_STEP_SUMMARY": str(summary), "GITHUB_REPOSITORY": "o/r",
-             "GITHUB_EVENT_PATH": "/ev.json", **env})
+    proc = run_step(
+        step["run"], effective_shell(doc, job, step), tmp_path,
+        {"RUNNER_TEMP": str(tmp_path), "GITHUB_STEP_SUMMARY": str(summary),
+         "GITHUB_REPOSITORY": "o/r", "GITHUB_EVENT_PATH": "/ev.json", **env},
+        {"python3": f'shift 3\necho "ARGS: $*"\nexit {script_rc}\n'})
     return proc, (summary.read_text(encoding="utf-8") if summary.exists() else None)
 
 
@@ -1130,9 +1108,12 @@ def test_only_no_verdict_fails_the_workflow_run(tmp_path, script_rc, step_rc, an
 
 
 def test_the_step_shell_is_one_this_module_models() -> None:
-    """The helper reads the step's `shell:`; this pins which case is live, so a
-    change of shell is a visible change here and not a silent switch of flags."""
-    assert "shell" not in _detector()["jobs"]["report"]["steps"][-1]
+    """The helper reads the step's effective `shell:`; this pins which case is
+    live, so a change of shell is a visible change here and not a silent
+    switch of flags."""
+    doc = _detector()
+    job = doc["jobs"]["report"]
+    assert effective_shell(doc, job, job["steps"][-1]) is None
 
 
 @pytest.mark.parametrize("env, expected_rc, expected_args", [

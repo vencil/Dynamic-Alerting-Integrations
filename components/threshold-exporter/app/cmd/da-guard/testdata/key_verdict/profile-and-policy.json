@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v3",
+  "schema": "da-guard.key-verdict/v4",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -211,14 +211,8 @@
     }
   ],
   "key_checks": {
-    "db-a": {
-      "version_labels": [],
-      "renames": []
-    },
-    "db-b": {
-      "version_labels": [],
-      "renames": []
-    }
+    "db-a": [],
+    "db-b": []
   },
   "parse_failed": [],
   "unreadable": []

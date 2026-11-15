@@ -13,6 +13,9 @@
 #   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段
 #   4. 上述兩個 runtime 面的 optional_overrides: 宣告 key 清單（#1310；
 #      是 list 不是 map——平台認得該 key 但不主張其值）
+#   5. components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go
+#      （arming: default 的 key 與值，加上這張表的摘要；#3832。讀取端編譯進去，
+#      目前還沒有任何解析路徑讀它）
 # 新鮮度由 check_threshold_registry.py --ci 面強制（stale＝硬錯）。
 #
 # ✅ D-A PR-3 起本檔是手寫的唯一來源：閾值、arming、metric_class 與
