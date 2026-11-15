@@ -1527,7 +1527,7 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
     import io  # noqa: PLC0415
     mod = _import_tool("ops", "batch_diagnose")
     import _lib_kubectl  # noqa: PLC0415  (on sys.path once the tool is imported)
-    from _kubectl_fake import kubectl_run  # noqa: PLC0415  (#3349)
+    from _kubectl_fake import install as install_kubectl  # noqa: PLC0415  (#3349)
     found, noise = {}, {}
     for arm, fname in _CASE_ARMS:
         # ⛔ Three neighbours, one per filter this loop applies, so that
@@ -1557,7 +1557,7 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
 
         # #3349: the read is `_lib_kubectl.kubectl_get`'s, so its runner's
         # `subprocess.run` is the kubectl process boundary.
-        monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(_kubectl_only(_Result())))
+        install_kubectl(monkeypatch, _kubectl_only(_Result()))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             found[arm] = mod.resolve_tenants(mod.read_configmap_files())[0]
@@ -1810,8 +1810,8 @@ def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
         stderr = ""
 
     import _lib_kubectl  # noqa: PLC0415  (#3349: the read's runner)
-    from _kubectl_fake import kubectl_run  # noqa: PLC0415  (#3349)
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(_kubectl_only(_Result())))
+    from _kubectl_fake import install as install_kubectl  # noqa: PLC0415  (#3349)
+    install_kubectl(monkeypatch, _kubectl_only(_Result()))
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         found = mod.resolve_tenants(mod.read_configmap_files())[0]

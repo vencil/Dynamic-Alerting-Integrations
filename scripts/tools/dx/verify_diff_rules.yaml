@@ -138,7 +138,7 @@ dir_rules:
     source: "k8s/03-monitoring/configmap-alertmanager.yaml"
     suite: tests/alertmanager-inhibit
     runner: "make test-am-inhibit"
-    justification: harness_test.go 明列的受測輸入②——手貼 generator 輸出的 checked-in 結果（外審 F1）
+    justification: harness_test.go 明列的受測輸入②——generator 合併進去的來源 base（Silent Mode／CustomRecipeSilent 規則；dedup 規則自 #3899 起不在這裡）（外審 F1）
   - name: am-inhibit-input-receiver-cases
     source: "components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json"
     suite: tests/alertmanager-inhibit

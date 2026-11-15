@@ -14,8 +14,8 @@
  * ParseCandidateConfig with liveness assertions. Two ends, one snapshot:
  *   - this file binds  generator output  ==  fixture bytes
  *   - the Go file binds fixture bytes     parse-load + semantically live
- * Because the fixtures live under components/tenant-api/**, regenerating one
- * flips the CI `go_changed` path filter so the Go leg runs on a portal-only PR.
+ * Both CI legs run on every PR (#3756), so regenerating a fixture is checked
+ * from both ends whatever else the PR touches.
  *
  * We deliberately do NOT re-validate the YAML against docs/schemas/rbac.schema.json
  * here: the Go leg already parses the identical bytes through the real engine

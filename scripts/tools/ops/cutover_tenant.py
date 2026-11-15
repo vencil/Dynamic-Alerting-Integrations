@@ -36,7 +36,6 @@
 
 import sys
 import os
-import subprocess
 import argparse
 import datetime
 
@@ -51,6 +50,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_python import add_prometheus_arg, prometheus_url  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --readiness-json is read by the lib)
+from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539)
 from _lib_prometheus import (  # noqa: E402
     QueryError, collapse_replicas, prometheus_instant, vector_count,
 )
@@ -106,25 +106,23 @@ def _run_kubectl(args, dry_run=False):
     Returns (success: bool, output: str).
     In dry_run mode, prints the command and returns success.
     """
-    cmd = ["kubectl"] + args
     if dry_run:
-        print(f"  [dry-run] {' '.join(cmd)}", file=sys.stderr)
+        print(f"  [dry-run] kubectl {' '.join(args)}", file=sys.stderr)
         return True, "(dry-run)"
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-        )
-        output = result.stdout.strip()
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            return False, stderr or f"exit code {result.returncode}"
-        return True, output
-    except subprocess.TimeoutExpired:
-        # #452/#737: env/transport failure = caller-error (exit 2)
-        return False, f"{CALLER_ERROR_PREFIX}kubectl command timed out (30s)"
-    except FileNotFoundError:
-        # #452/#737: missing prerequisite binary = caller-error (exit 2)
-        return False, f"{CALLER_ERROR_PREFIX}kubectl not found in PATH"
+        # #3539: started in one place (_lib_kubectl), every step a write.
+        result = kubectl_run(args[0], args[1:], timeout=30,
+                             what=f"`kubectl {' '.join(args[:3])}`")
+    except KubectlError as exc:
+        # #452/#737: kubectl not on PATH, not startable, or no exit within
+        # 30s = env/transport failure = caller-error (exit 2). ⛔ The message
+        # says which: a step that did not finish in time may have been sent.
+        return False, f"{CALLER_ERROR_PREFIX}{exc}"
+    output = result.stdout.strip()
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        return False, stderr or f"exit code {result.returncode}"
+    return True, output
 
 
 # ---------------------------------------------------------------------------
