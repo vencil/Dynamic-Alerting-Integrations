@@ -11,8 +11,18 @@
 #     Used 60 + 40 + 800 = 900 over the one real limit → 90 %. Summing the -1s
 #     into the max reads 900/998; dropping the unlimited pools from the used
 #     sum reads 80 %, which does not fire.
+#   - t-zgen: Micrometer with generational ZGC: BOTH pools report the whole
+#     heap limit (Old 840/1024, Young 136/1024) → 976/1024 = 95.3125 %. Summing
+#     both limits reads 47.7 % and can never reach a threshold.
 #   - t-two: two JVMs, one at 30 %, one at 90 % → the fuller one, 90 %. Summing
 #     across JVMs reads 60 %.
+#   - t-pods: two JVMs whose series differ ONLY by `pod` (same instance), 30 %
+#     and 90 % → 90 %. Grouping by (tenant, instance) merges them into 60 %.
+#   - t-crit: 97 % against a warning of 80 and a critical of 95 → both tiers.
+#   - t-crit-equal: exactly 95 % against a critical of 95 → the warning only.
+#   - t-maint: 90 % against a warning of 80 and a critical of 85, in
+#     maintenance → neither tier.
+#   - t-zero: a limit that reads 0 on the current names → no sample.
 #   - t-single: client_java / jmx_exporter >= 1.0, one series for the heap, 85 %.
 #   - t-legacy: jmx_exporter < 1.0 names only (jvm_memory_bytes_used /
 #     jvm_memory_bytes_max), 88 %. With only the current names this tenant has
@@ -20,7 +30,8 @@
 #   - t-same: both name sets on the SAME label set, 50 % and 97 % → 97. A bare
 #     `or` keeps the left side and reads 50.
 #   - t-nolimit: the only max is -1 → no sample, no alert.
-#   - t-nolimit-legacy: the same on the legacy names (-1 max).
+#   - t-nolimit-legacy / t-zero-legacy: the legacy names with a max of -1 and
+#     of 0 → no sample either way.
 #   - t-equal: exactly 80 % against a warning of 80 → no alert.
 #   - t-nonheap: area="nonheap" at 99 % is not heap → no sample.
 #
@@ -66,6 +77,80 @@ tests:
         values: '80x60'
       - series: 'user_threshold{tenant="t-g1", component="jvm", metric="memory", severity="critical"}'
         values: '95x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-zgen", instance="app-0", area="heap", id="ZGC Old Generation"}'
+        values: '840x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-zgen", instance="app-0", area="heap", id="ZGC Old Generation"}'
+        values: '1024x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-zgen", instance="app-0", area="heap", id="ZGC Young Generation"}'
+        values: '136x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-zgen", instance="app-0", area="heap", id="ZGC Young Generation"}'
+        values: '1024x60'
+      - series: 'user_threshold{tenant="t-zgen", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-pods", instance="app", pod="app-0", area="heap"}'
+        values: '30x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-pods", instance="app", pod="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-pods", instance="app", pod="app-1", area="heap"}'
+        values: '90x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-pods", instance="app", pod="app-1", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-pods", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-crit", instance="app-0", area="heap"}'
+        values: '97x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-crit", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-crit", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-crit", component="jvm", metric="memory", severity="critical"}'
+        values: '95x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-maint", instance="app-0", area="heap"}'
+        values: '90x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-maint", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="memory", severity="critical"}'
+        values: '85x60'
+      - series: 'user_state_filter{tenant="t-maint", filter="maintenance"}'
+        values: '1x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-crit-equal", instance="app-0", area="heap"}'
+        values: '95x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-crit-equal", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-crit-equal", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-crit-equal", component="jvm", metric="memory", severity="critical"}'
+        values: '95x60'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-maint", instance="app-0"}'
+        values: '0+15x60'
+      - series: 'user_threshold{tenant="t-maint", component="jvm", metric="gc_pause", severity="warning"}'
+        values: '0.5x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-zero", instance="app-0", area="heap"}'
+        values: '5x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-zero", instance="app-0", area="heap"}'
+        values: '0x60'
+      - series: 'user_threshold{tenant="t-zero", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_bytes_used{tenant="t-zero-legacy", instance="app-0", area="heap"}'
+        values: '5x60'
+      - series: 'jvm_memory_bytes_max{tenant="t-zero-legacy", instance="app-0", area="heap"}'
+        values: '0x60'
+      - series: 'user_threshold{tenant="t-zero-legacy", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-equal", instance="app-0"}'
+        values: '0+15x60'
+      - series: 'user_threshold{tenant="t-equal", component="jvm", metric="gc_pause", severity="warning"}'
+        values: '0.5x60'
 
       - series: 'jvm_memory_used_bytes{tenant="t-two", instance="app-0", area="heap"}'
         values: '30x60'
@@ -113,7 +198,7 @@ tests:
       - series: 'jvm_memory_bytes_used{tenant="t-nolimit-legacy", instance="app-0", area="heap"}'
         values: '500x60'
       - series: 'jvm_memory_bytes_max{tenant="t-nolimit-legacy", instance="app-0", area="heap"}'
-        values: '0x60'
+        values: '-1x60'
       - series: 'user_threshold{tenant="t-nolimit-legacy", component="jvm", metric="memory", severity="warning"}'
         values: '80x60'
 
@@ -159,22 +244,70 @@ tests:
             value: 97
           - labels: 'tenant:jvm_memory_used:percent{tenant="t-equal"}'
             value: 80
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-zgen"}'
+            value: 95.3125
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-pods"}'
+            value: 90
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-crit"}'
+            value: 97
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-maint"}'
+            value: 90
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-crit-equal"}'
+            value: 95
 
       # for: 5m → firing by 10m. 90 is not above t-g1's critical of 95.
-      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
+      - expr: count by(alertname, tenant, severity) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
         eval_time: 10m
         exp_samples:
-          - labels: '{alertname="JVMMemoryPressure", tenant="t-g1"}'
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-g1", severity="warning"}'
             value: 1
-          - labels: '{alertname="JVMMemoryPressure", tenant="t-two"}'
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-zgen", severity="warning"}'
             value: 1
-          - labels: '{alertname="JVMMemoryPressure", tenant="t-single"}'
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-two", severity="warning"}'
             value: 1
-          - labels: '{alertname="JVMMemoryPressure", tenant="t-legacy"}'
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-pods", severity="warning"}'
             value: 1
-          - labels: '{alertname="JVMMemoryPressure", tenant="t-same"}'
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-single", severity="warning"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-legacy", severity="warning"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-same", severity="warning"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-crit", severity="warning"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-crit-equal", severity="warning"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressureCritical", tenant="t-crit", severity="critical"}'
             value: 1
 
+      # for: is 5m on the warning and the composite, 3m on the critical.
+      # At 2m30s nothing has fired and both tiers are pending.
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical|JVMPerformanceDegraded"})
+        eval_time: 2m30s
+        exp_samples: []
+      - expr: count by(alertname) (ALERTS{alertstate="pending", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
+        eval_time: 2m30s
+        exp_samples:
+          - labels: '{alertname="JVMMemoryPressure"}'
+            value: 9
+          - labels: '{alertname="JVMMemoryPressureCritical"}'
+            value: 1
+      # At 4m the critical has fired; the warning and the composite have not.
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical|JVMPerformanceDegraded"})
+        eval_time: 4m
+        exp_samples:
+          - labels: '{alertname="JVMMemoryPressureCritical"}'
+            value: 1
+      # By 7m the warning has fired too: its for: is not longer than 5m.
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
+        eval_time: 7m
+        exp_samples:
+          - labels: '{alertname="JVMMemoryPressure"}'
+            value: 9
+          - labels: '{alertname="JVMMemoryPressureCritical"}'
+            value: 1
+
+      # t-equal (heap exactly at its threshold) and t-maint are not degraded.
       - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="JVMPerformanceDegraded"})
         eval_time: 12m
         exp_samples:
