@@ -114,7 +114,7 @@ class Service:
     def __init__(self, tmp: Path, repo: Path, *, bin_dir: Path,
                  args: tuple[str, ...] = (), prelude: str = "",
                  env: Optional[dict] = None, socket_path: Optional[Path] = None,
-                 subdir: str = "conf.d", wait: bool = True,
+                 subdir: str = "conf.d", wait: bool = True, settled: bool = True,
                  cwd: Optional[Path] = None) -> None:
         self.tmp = tmp
         tmp.mkdir(parents=True, exist_ok=True)
@@ -147,9 +147,23 @@ class Service:
             env=run_env, stdout=subprocess.DEVNULL, cwd=cwd,
             stderr=open(self.log, "wb"))  # noqa: SIM115 — closed with the process
         if wait:
-            self.wait_ready()
+            self.wait_ready(settled=settled)
 
-    def wait_ready(self, timeout: float = 60.0) -> None:
+    def wait_ready(self, timeout: float = 60.0, settled: bool = True) -> None:
+        """Until the socket answers — and, *settled*, until the first
+        self-check round has ended (#3943: it starts once the socket is
+        bound; `pending` until then)."""
+        self.wait_listening(timeout)
+        end = time.monotonic() + timeout
+        while settled:
+            _s, st = self.call("GET", "/v1/status")
+            if st["self_check"]["state"] != "pending":
+                return
+            if time.monotonic() > end:
+                raise RuntimeError(f"the first self-check did not end: {st}")
+            time.sleep(0.05)
+
+    def wait_listening(self, timeout: float = 60.0) -> None:
         end = time.monotonic() + timeout
         while time.monotonic() < end:
             if self.proc.poll() is not None:

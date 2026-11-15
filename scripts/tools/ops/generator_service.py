@@ -23,12 +23,13 @@ READINESS (#3943). The service is ready only once the self-check of each
 program a judgement runs — ``da-guard self-check``, ``da-read self-check``,
 ``da-crdecode --self-check``, resolved as the judgement resolves them — has
 passed: each runs every subcommand of its own dispatch table on fixtures
-built into it. It runs once before the socket is bound. A tool fault of a
-judgement or a warming run makes the service not ready at once and starts
-running the self-check again every ``--self-check-seconds``; only a passing
-self-check clears the fault — a judgement that ran may never have reached
-the program that failed. The self-check decides readiness only, never a
-verdict.
+built into it. The first round starts once the socket is bound (``pending``
+until it ends: not ready); a tool fault of a judgement or a warming run
+makes the service not ready at once and starts a round at once too. After a
+failed round the next comes every ``--self-check-seconds``, or at once when
+a new tool fault comes. Only a passing round clears the fault — a judgement
+that ran may never have reached the program that failed. The self-check
+decides readiness only, never a verdict.
 
 Defaults of every limit are in ``--help``; this docstring does not repeat
 them.
@@ -142,6 +143,19 @@ DEFAULT_SELF_CHECK_TIMEOUT_SECONDS = 60.0
 #: anything longer is not it. Its stderr: the start goes to the log.
 _SELF_CHECK_STDOUT_LIMIT = 4096
 _SELF_CHECK_STDERR_LOGGED = 1024
+#: RLIMIT_FSIZE of a self-check process: its stdout and stderr files (and
+#: da-guard's fixture tree copy) live in --work-dir, and a program that
+#: writes without end must not fill it. Far above what a passing one writes.
+_SELF_CHECK_FILE_LIMIT_BYTES = 1 * MiB
+
+
+def _limit_self_check_files() -> None:
+    """In the self-check process, before exec: cap the size of any file it
+    writes. Past it a write fails (EFBIG) or SIGXFSZ ends the process — the
+    self-check fails either way."""
+    import resource
+    resource.setrlimit(resource.RLIMIT_FSIZE,
+                       (_SELF_CHECK_FILE_LIMIT_BYTES, _SELF_CHECK_FILE_LIMIT_BYTES))
 HEADER_LIMIT_BYTES = 16 * 1024
 #: Descriptors kept free beyond the connection slots: stdio, the listening
 #: socket, the event loop's epoll and self-pipe, a judgement's result pipe
@@ -441,6 +455,8 @@ class Service:
         self.self_check_failures: list = []
         self.self_check_running = False
         self._self_check_task: Optional[asyncio.Task] = None
+        #: Set by a tool fault while the loop waits between rounds: run now.
+        self._self_check_wake = asyncio.Event()
         self._self_check_seq = 0
         #: Self-check processes not yet collected: ``_reap_orphans`` leaves
         #: them to their own ``wait``.
@@ -950,23 +966,42 @@ class Service:
         at once, and the self-check runs again until one passes."""
         self.tool_fault = faults
         self._fault_seq += 1
-        self._ensure_self_check_loop(first_delay=0.0)
+        self._ensure_self_check_loop()
 
-    def _ensure_self_check_loop(self, first_delay: float) -> None:
-        """Start the self-check loop unless it is running."""
+    def _ensure_self_check_loop(self) -> None:
+        """Run a self-check round now: start the loop, or — when it is
+        running — wake it from its wait between rounds."""
         if self._self_check_task is None or self._self_check_task.done():
-            self._self_check_task = self.loop.create_task(self._self_check_loop(first_delay))
+            self._self_check_wake.clear()
+            self._self_check_task = self.loop.create_task(self._self_check_loop())
+        else:
+            self._self_check_wake.set()
 
-    async def _self_check_loop(self, first_delay: float) -> None:
-        """A self-check round every --self-check-seconds (the first after
-        *first_delay*) until one passes with no tool fault left."""
-        delay = first_delay
+    async def _self_check_loop(self) -> None:
+        """A self-check round now, then again after each failed one — every
+        --self-check-seconds, or at once when a new tool fault wakes it —
+        until one passes with no tool fault left."""
         while True:
-            if delay > 0:
-                await asyncio.sleep(delay)
+            self._self_check_wake.clear()
             if await self.self_check_round():
                 return
-            delay = self.s.self_check_seconds
+            try:
+                await asyncio.wait_for(self._self_check_wake.wait(),
+                                       self.s.self_check_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    async def stop_self_check(self) -> None:
+        """End the self-check loop and wait for it: a running self-check's
+        process group is killed and collected (``_self_check_in``)."""
+        task = self._self_check_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     @staticmethod
     def _self_check_programs() -> list[tuple[str, Optional[str], tuple[str, ...]]]:
@@ -1047,7 +1082,8 @@ class Service:
             try:
                 proc = subprocess.Popen(  # noqa: S603 — the resolved program, no shell
                     [exe, *args], stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                    cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True)
+                    cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True,
+                    preexec_fn=_limit_self_check_files)
             except OSError as exc:
                 reason = _lib_tool_fault.os_error_reason(exc, exe)
                 _log(f"self-check: {name}: {reason}: {exc.strerror}")
@@ -1398,10 +1434,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="time limit of one warming run; a request arriving ends "
                         "it at once (default: %(default)s)")
     p.add_argument("--self-check-seconds", type=float, default=DEFAULT_SELF_CHECK_SECONDS,
-                   help="while a tool fault, or a failed self-check, keeps the service "
-                        "not ready: the interval between self-checks of da-guard, "
-                        "da-read and da-crdecode; only a passing one makes it ready "
-                        "again (default: %(default)s)")
+                   help="after a failed self-check of da-guard, da-read and "
+                        "da-crdecode, the wait before the next (a new tool fault "
+                        "runs one at once); only a passing one makes the service "
+                        "ready (default: %(default)s)")
     p.add_argument("--self-check-timeout-seconds", type=float,
                    default=DEFAULT_SELF_CHECK_TIMEOUT_SECONDS,
                    help="time limit of one program's self-check; past it the "
@@ -1583,10 +1619,6 @@ def _prepare_work_dir(path: str) -> None:
 async def serve(settings: Settings, object_format: str) -> None:
     service = Service(settings, object_format)
     service.loop = asyncio.get_running_loop()
-    # #3943: before the socket is there, so no answer says ready before the
-    # programs' self-check has passed; a failed one is run again on its own.
-    if not await service.self_check_round():
-        service._ensure_self_check_loop(first_delay=settings.self_check_seconds)
     old = os.umask(0o177)  # the socket is created 0600
     try:
         server = await asyncio.start_unix_server(
@@ -1601,12 +1633,17 @@ async def serve(settings: Settings, object_format: str) -> None:
           flush=True)
     service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
     service.loop.set_exception_handler(service.loop_exception)
+    # #3943: the programs' self-check, on the path a tool fault's rerun takes
+    # — after the signal handlers, so SIGTERM ends it like anything else.
+    # Until its first round has passed the status says `pending`, not ready.
+    service._ensure_self_check_loop()
     service.start_warming()
     try:
         await stop
     finally:
         server.close()
         service.shutdown()
+        await service.stop_self_check()
         try:
             os.unlink(settings.socket)
         except OSError:

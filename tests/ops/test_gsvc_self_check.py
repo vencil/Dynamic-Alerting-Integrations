@@ -2,8 +2,14 @@
 
 對真的服務（Unix socket）量：
 
-- 啟動前就跑一次自檢：程式不存在 ⇒ ``ready`` 為 false、``self_check`` 點名它；
-  三支都通過 ⇒ ``ready`` 為 true。
+- 綁定 socket 之後立刻跑第一輪自檢，跑完之前 ``state`` 為 ``pending``、
+  ``ready`` 為 false；程式不存在 ⇒ ``ready`` 為 false、``self_check`` 點名它；
+  三支都通過 ⇒ ``ready`` 為 true。自檢卡住時 SIGTERM 照常結束服務，自檢的
+  process group 一併結束、不留下行程。
+- 自檢在 SIGCHLD handler 裝好之後結束（故障後的重跑）時，reason 照樣正確：
+  ``_reap_orphans`` 不得先收走自檢行程。
+- 等待下一輪時來了新的工具故障 ⇒ 立刻跑一輪，不等 ``--self-check-seconds``。
+- 自檢程式寫個不停：檔案大小上限（RLIMIT_FSIZE）讓它失敗，不寫滿 work-dir。
 - 自檢的每一種失敗都是失敗、各有封閉的 reason：逾時（``timed_out``）、輸出不是
   通過文件（``bad_output``）、印出失敗文件（``failed``）、契約外的結束碼
   （``unexpected_exit``）、被訊號終止（``signalled``）。
@@ -20,8 +26,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -41,8 +49,9 @@ BINARIES = {"da-guard": cr.DA_GUARD_ENV, "da-read": cr.DA_READ_ENV,
 #: Each program's self-check, as its shim sees the first argument.
 SELF_CHECK_ARG = {name: cr.READER_SELF_CHECK_ARGS[env][0] for name, env in BINARIES.items()}
 
-#: The shim's PATH holds only its stub directory: sleep by its path.
+#: The shim's PATH holds only its stub directory: sleep and head by path.
 SLEEP = shutil.which("sleep") or "/bin/sleep"
+HEAD = shutil.which("head") or "/usr/bin/head"
 
 _SHIM = """#!/bin/sh
 if [ -s '{ctl}' ]; then
@@ -50,6 +59,8 @@ if [ -s '{ctl}' ]; then
   while IFS= read -r c <&3 || [ -n "$c" ]; do
     case "$c" in
       "{name} $1 sleep") '{sleep}' 30; exit 0;;
+      "{name} $1 hang") '{sleep}' '{hang}'; exit 0;;
+      "{name} $1 flood") '{head}' -c 4000000 /dev/zero; exit 0;;
       "{name} $1 rc7") exit 7;;
       "{name} $1 rc2") echo "usage: {name}" >&2; exit 2;;
       "{name} $1 sigkill") kill -9 $$;;
@@ -78,22 +89,38 @@ class _Rig:
         self.tmp, self.ctl = tmp, tmp / "fault.ctl"
         self.shims = tmp / "shims"
         self.shims.mkdir()
+        #: `hang`'s sleep argument: a number no other test's process carries.
+        self.hang = f"300.{uuid.uuid4().int % 10**9:09d}"
         for name, var in BINARIES.items():
             real = os.environ.get(var, "").strip()
             if not real:
                 pytest.skip(f"needs ${var} (the session build sets it)")
             path = self.shims / name
-            path.write_text(_SHIM.format(name=name, ctl=self.ctl, real=real, sleep=SLEEP),
-                            encoding="utf-8")
+            path.write_text(_SHIM.format(name=name, ctl=self.ctl, real=real, sleep=SLEEP,
+                                         head=HEAD, hang=self.hang), encoding="utf-8")
             path.chmod(0o755)
         self.repo = h.init_repo(tmp / "repo")
         self.commit = h.commit_tree(self.repo, dict(cases.FIXTURES["clean"]))
         self.env = {var: str(self.shims / n) for n, var in BINARIES.items()}
 
-    def service(self, name: str, *args: str, env: "dict | None" = None) -> h.Service:
+    def service(self, name: str, *args: str, env: "dict | None" = None,
+                settled: bool = True) -> h.Service:
+        interval = () if "--self-check-seconds" in args else ("--self-check-seconds", "0.2")
         return h.Service(self.tmp / name, self.repo, bin_dir=self.tmp / f"bin-{name}",
-                         args=("--self-check-seconds", "0.2", *args),
-                         env={**self.env, **(env or {})})
+                         args=(*interval, *args), env={**self.env, **(env or {})},
+                         settled=settled)
+
+    def hanging(self) -> "list[int]":
+        """The pids of `hang`'s sleeps still running."""
+        pids = []
+        for d in Path("/proc").iterdir():
+            try:
+                cmd = (d / "cmdline").read_bytes()
+            except OSError:
+                continue
+            if self.hang.encode() in cmd.split(b"\0"):
+                pids.append(int(d.name))
+        return pids
 
     def strike(self, *lines: str) -> None:
         self.ctl.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
@@ -197,3 +224,70 @@ def test_a_tool_fault_is_cleared_only_by_a_self_check(rig):
         _until(lambda: _status(svc)["ready"], "a self-check that passes")
         st = _status(svc)
         assert st["tool_fault"] is None and st["self_check"]["state"] == "passed", st
+
+
+def test_sigterm_during_a_hanging_self_check_ends_the_service_and_the_check(rig):
+    """The first round runs once the socket is bound: `pending` (not ready)
+    while it runs. SIGTERM then ends the service as usual — rc 0 — and the
+    self-check's process group with it: nothing is left running."""
+    rig.strike(f"da-read {SELF_CHECK_ARG['da-read']} hang")
+    svc = rig.service("hang", "--self-check-timeout-seconds", "600", settled=False)
+    try:
+        _until(lambda: rig.hanging(), "the self-check hanging")
+        st = _status(svc)
+        assert st["self_check"] == {"state": "pending", "failures": [], "running": True}, st
+        assert st["ready"] is False, st
+        svc.proc.send_signal(signal.SIGTERM)
+        assert svc.proc.wait(30) == 0, svc.log.read_text(encoding="utf-8")
+        _until(lambda: not rig.hanging(), "the self-check's processes gone", timeout=10)
+    finally:
+        svc.stop()
+        for pid in rig.hanging():
+            os.kill(pid, signal.SIGKILL)
+
+
+#: (shim fault, the reason) — each a self-check that ends after the SIGCHLD
+#: handler is installed, which must leave its exit to the self-check's own wait.
+_AFTER_A_FAULT = [("failed", "failed"), ("sigkill", "signalled"), ("rc7", "unexpected_exit")]
+
+
+@pytest.mark.parametrize("fault,reason", _AFTER_A_FAULT, ids=[f[0] for f in _AFTER_A_FAULT])
+def test_a_rerun_after_a_fault_records_its_own_reason(rig, fault, reason):
+    """The rerun a tool fault starts ends while SIGCHLD's handler
+    (`_reap_orphans`) is installed: the reason is the self-check's own exit,
+    not one read after the reaper took it (an exit that cannot be read is no
+    `failed`, no `signalled`, no `unexpected_exit`)."""
+    with rig.service(f"after-{fault}") as svc:
+        assert _status(svc)["ready"] is True
+        rig.strike("da-read prometheus-rules rc7", f"da-read {SELF_CHECK_ARG['da-read']} {fault}")
+        status, doc = svc.validate(rig.commit)
+        assert status == 503 and doc["reason"] == "tool_fault", doc
+        _until(lambda: _status(svc)["self_check"]["state"] == "failed", "a failed rerun")
+        st = _status(svc)
+        assert st["self_check"]["failures"] == [{"binary": "da-read", "reason": reason}], st
+        assert st["ready"] is False, st
+
+
+def test_a_new_fault_wakes_the_wait_between_rounds(rig):
+    """After a failed round the loop waits --self-check-seconds (here an
+    hour); a new tool fault runs a round at once."""
+    rig.strike(f"da-read {SELF_CHECK_ARG['da-read']} rc7")
+    with rig.service("wake", "--self-check-seconds", "3600") as svc:
+        assert _status(svc)["self_check"]["state"] == "failed"
+        rig.strike("da-read prometheus-rules rc7")  # the self-check passes now
+        status, doc = svc.validate(rig.commit)
+        assert status == 503 and doc["reason"] == "tool_fault", doc
+        _until(lambda: _status(svc)["ready"], "the woken round passing", timeout=30)
+        assert _status(svc)["tool_fault"] is None
+
+
+def test_a_self_check_that_writes_without_end_is_stopped_by_the_file_limit(rig):
+    """Its stdout is a file in --work-dir: a size limit stops it there
+    (EFBIG or SIGXFSZ), and the self-check fails."""
+    rig.strike(f"da-read {SELF_CHECK_ARG['da-read']} flood")
+    with rig.service("flood") as svc:
+        st = _status(svc)
+        assert st["ready"] is False, st
+        [failure] = st["self_check"]["failures"]
+        assert failure["binary"] == "da-read" and failure["reason"] in ("bad_output",
+                                                                         "signalled"), st

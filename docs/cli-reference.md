@@ -2147,7 +2147,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--max-result-bytes <BYTES>` | 判定子程序可送回的結果大小上限 | `16777216` |
 | `--max-writes <N>` | 單一請求的寫入筆數上限；超過回 400 | `10000` |
 | `--warm-seconds <SEC>` | 一次預熱的時間上限；有請求進來時預熱立刻結束 | `300.0` |
-| `--self-check-seconds <SEC>` | 自檢沒過、或判定與預熱留下工具故障而未就緒時，重跑三支程式自檢的間隔；只有通過的自檢讓服務回到就緒 | `30.0` |
+| `--self-check-seconds <SEC>` | 三支程式的自檢沒過之後，到下一輪的等待（新的工具故障會立刻跑一輪）；只有通過的自檢讓服務回到就緒 | `30.0` |
 | `--self-check-timeout-seconds <SEC>` | 一支程式自檢的時間上限；超過算失敗（`timed_out`） | `60.0` |
 | `--git <PATH>` | git 執行檔 | `git` |
 | `--da-guard-binary <PATH>` | 用來回報版本的 da-guard | `$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard` |
@@ -2162,7 +2162,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 
 每次判定在 fork 出的子程序裡做（自成 process group、設 `RLIMIT_DATA`，期限到時整組結束），一次只跑一個，其餘排隊；排隊時間算在期限內。conf.d 檔的解析結果以（檔案內容的 SHA-256, 解析模式）為 key 跨請求快取，同一棵樹只改一個檔時只重新解析那個檔。子程序每解析完一份檔就把結果交回，所以期限到被結束的判定，已完成的解析仍留在快取裡，下一筆接著做。
 
-**自檢與就緒**：服務在綁定 socket 之前，以判定所用的同一套方式找到 da-guard、da-read、da-crdecode，各跑一次它們內建的自檢（`da-guard self-check`、`da-read self-check`、`da-crdecode --self-check`：用打包在程式裡的樣本把分派表裡的每一個子指令或讀法跑一遍、比對預期輸出）。只有結束碼 0 且標準輸出恰好是 `{"self_check":"passed"}` 才算通過；`failures` 的 `reason` 為 `not_found`、`not_executable`、`exec_failed`、`timed_out`、`signalled`、`unexpected_exit`、`bad_output`、`failed`（程式印出 `{"self_check":"failed"}`：有樣本的答案不符）或 `internal_error`，程式的 stderr 只寫進服務的 log。判定或預熱出現工具故障時立刻未就緒，並每隔 `--self-check-seconds` 重跑自檢，直到通過才清掉故障。自檢只影響 `ready`，不影響判定結果。`/metrics` 的 `da_generator_self_checks_total{result}`（`passed`、`failed`）計自檢的輪數。
+**自檢與就緒**：服務綁定 socket 之後立刻（第一輪跑完前 `state` 為 `pending`、`ready` 為 false），以判定所用的同一套方式找到 da-guard、da-read、da-crdecode，各跑一次它們內建的自檢（`da-guard self-check`、`da-read self-check`、`da-crdecode --self-check`：用打包在程式裡的樣本把分派表裡的每一個子指令或讀法跑一遍、比對預期輸出）。只有結束碼 0 且標準輸出恰好是 `{"self_check":"passed"}` 才算通過；`failures` 的 `reason` 為 `not_found`、`not_executable`、`exec_failed`、`timed_out`、`signalled`、`unexpected_exit`、`bad_output`、`failed`（程式印出 `{"self_check":"failed"}`：有樣本的答案不符）或 `internal_error`，程式的 stderr 只寫進服務的 log。判定或預熱出現工具故障時立刻未就緒並立刻跑一輪自檢；沒過就每隔 `--self-check-seconds` 再跑（等待中來了新故障就立刻再跑），直到通過才清掉故障。自檢寫的每個檔案上限 1 MiB。自檢只影響 `ready`，不影響判定結果。`/metrics` 的 `da_generator_self_checks_total{result}`（`passed`、`failed`）計自檢的輪數。
 
 **預熱**：啟動時（`--warm-ref`）以及收到與目前 base 不同的 `base_commit` 之後，服務在請求之外以同樣的子程序讀一次該 commit 的整棵樹，只為了填快取，不給判定、不問 Alertmanager；有自己的期限（`--warm-seconds`）。有請求進來時預熱立刻結束、讓請求先跑，已讀完的部分保留。`/metrics` 的 `da_generator_warm_runs_total{outcome}`（`completed`、`preempted`、`deadline`、`failed`）與 `da_generator_cache_base_coverage_ratio`（最新 base 樹的檔有多少比例已在快取裡；狀態端點同樣回報）可看預熱的狀況。
 
