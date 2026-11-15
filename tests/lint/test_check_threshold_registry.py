@@ -539,32 +539,43 @@ def test_a_missing_builtin_table_is_stale(tmp_path):
                and "does not exist" in e for e in errors), errors
 
 
-def test_the_builtin_table_renders_armed_keys_only_sorted_and_gofmt_aligned(tmp_path):
-    """One line per default-armed key, sorted, values aligned the way gofmt
-    aligns a composite literal; an operator key is not in it; and a fresh copy
-    passes the freshness check while a copy with another value does not."""
+def test_the_builtin_table_renders_armed_keys_only_sorted(tmp_path):
+    """One `{key, value}` line per default-armed key, sorted; an operator key
+    is not in it; and a fresh copy passes the freshness check while a copy
+    with another value does not."""
     doc = {"keys": {
         "zz_long_key_name": {"arming": "default", "value": 0.5},
         "aa": {"arming": "default", "value": 80},
         "mm_operator": {"arming": "operator", "value": 7},
     }}
     text = lib.render_builtin_defaults_go(doc)
-    assert ('var builtinDefaults = map[string]float64{\n'
-            '\t"aa":               80,\n'
-            '\t"zz_long_key_name": 0.5,\n}\n') in text, text
+    assert ('var builtinDefaultEntries = []builtinDefaultEntry{\n'
+            '\t{"aa", 80},\n'
+            '\t{"zz_long_key_name", 0.5},\n}\n') in text, text
     assert "mm_operator" not in text
     digest = lib.builtin_defaults_digest({"aa": "80", "zz_long_key_name": "0.5"})
     assert f'const builtinDefaultsDigest = "{digest}"\n' in text
     go = tmp_path / "gen.go"
     go.write_text(text, encoding="utf-8")
     assert lib.check_builtin_defaults_go(doc, str(go)) is None
-    go.write_text(text.replace("80,", "81,"), encoding="utf-8")
+    go.write_text(text.replace("80}", "81}"), encoding="utf-8")
     assert lib.BUILTIN_DEFAULTS_GO_ID in (lib.check_builtin_defaults_go(doc, str(go)) or "")
 
 
 def test_an_empty_builtin_table_renders_an_empty_literal():
     text = lib.render_builtin_defaults_go({"keys": {"k": {"arming": "operator", "value": 1}}})
-    assert "var builtinDefaults = map[string]float64{}\n" in text, text
+    assert "var builtinDefaultEntries = []builtinDefaultEntry{}\n" in text, text
+
+
+def test_a_long_integral_value_is_written_as_a_go_float_literal():
+    """An integer constant past 512 bits does not compile in Go; the same
+    digits with a fraction do. The digest text keeps no fraction."""
+    doc = {"keys": {"big": {"arming": "default", "value": 1e300},
+                    "small": {"arming": "default", "value": 80}}}
+    text = lib.render_builtin_defaults_go(doc)
+    assert '{"big", 1' + "0" * 300 + ".0},\n" in text
+    assert '{"small", 80},\n' in text
+    assert lib.builtin_defaults(doc)["big"] == "1" + "0" * 300
 
 
 @pytest.mark.parametrize("value, text", [
@@ -578,7 +589,7 @@ def test_a_builtin_number_is_plain_decimal_text(value, text):
     assert lib.builtin_default_number(value) == text
 
 
-@pytest.mark.parametrize("value", [True, "80", None, float("nan"), float("inf"), [80]])
+@pytest.mark.parametrize("value", [True, "80", None, float("nan"), float("inf"), [80], 10 ** 400])
 def test_a_value_that_is_no_finite_number_has_no_builtin_text(value):
     assert lib.builtin_default_number(value) is None
 

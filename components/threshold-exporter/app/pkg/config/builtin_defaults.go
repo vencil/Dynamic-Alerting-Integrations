@@ -26,6 +26,23 @@ import (
 	"strings"
 )
 
+// builtinDefaultEntry is one line of the generated table.
+type builtinDefaultEntry struct {
+	key   string
+	value float64
+}
+
+// builtinDefaults is the generated table by key.
+var builtinDefaults = builtinDefaultsOf(builtinDefaultEntries)
+
+func builtinDefaultsOf(entries []builtinDefaultEntry) map[string]float64 {
+	out := make(map[string]float64, len(entries))
+	for _, e := range entries {
+		out[e.key] = e.value
+	}
+	return out
+}
+
 // BuiltinDefaults is a copy of the built-in table: every default-armed
 // threshold key and the platform's value for it.
 func BuiltinDefaults() map[string]float64 {

@@ -84,6 +84,20 @@ func TestBuiltinDefaults_AreFiniteBaseKeys(t *testing.T) {
 	}
 }
 
+// The generated entries are sorted by key and name each key once: a repeat
+// would be dropped without a word when the table is keyed.
+func TestBuiltinDefaultEntries_AreSortedAndUnique(t *testing.T) {
+	t.Parallel()
+	for i := 1; i < len(builtinDefaultEntries); i++ {
+		if prev, cur := builtinDefaultEntries[i-1].key, builtinDefaultEntries[i].key; prev >= cur {
+			t.Errorf("entry %d: %q does not sort after %q", i, cur, prev)
+		}
+	}
+	if len(BuiltinDefaults()) != len(builtinDefaultEntries) {
+		t.Errorf("the keyed table has %d keys, the generated one %d entries", len(BuiltinDefaults()), len(builtinDefaultEntries))
+	}
+}
+
 // The generated digest constant is the digest of the generated table: the
 // generator and this binary compute it the same way.
 func TestBuiltinDefaultsDigest_IsOfTheTable(t *testing.T) {

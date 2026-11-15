@@ -3,16 +3,16 @@
 
 package config
 
-// builtinDefaults are the thresholds the platform ships armed, each with
-// the platform's value. Read through builtin_defaults.go.
-var builtinDefaults = map[string]float64{
-	"container_cpu":                  80,
-	"container_cpu_throttle":         25,
-	"container_memory":               85,
-	"mysql_connection_usage_percent": 80,
-	"mysql_replication_lag":          30,
-	"pg_connections":                 80,
-	"pg_replication_lag":             30,
+// builtinDefaultEntries are the thresholds the platform ships armed, each
+// with the platform's value. Read through builtin_defaults.go.
+var builtinDefaultEntries = []builtinDefaultEntry{
+	{"container_cpu", 80},
+	{"container_cpu_throttle", 25},
+	{"container_memory", 85},
+	{"mysql_connection_usage_percent", 80},
+	{"mysql_replication_lag", 30},
+	{"pg_connections", 80},
+	{"pg_replication_lag", 30},
 }
 
 // builtinDefaultsDigest names this table: the first 12 hex digits of the
