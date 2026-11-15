@@ -377,8 +377,10 @@ class NewFile:
         with tempfile.TemporaryDirectory(prefix="confedit-preview-") as tmp:
             root = _preview_root_text(self.data)
             if root is not None and self.rel != "_defaults.yaml":
-                with open(os.path.join(tmp, "_defaults.yaml"), "w", encoding="utf-8", newline="\n") as fh:
+                root_path = os.path.join(tmp, "_defaults.yaml")
+                with open(root_path, "w", encoding="utf-8", newline="\n") as fh:
                     fh.write(root)
+                os.chmod(root_path, 0o600)  # a scratch file of this process only
             doc = _one(COMMAND, tmp, self.entry(), True, binary, timeout)
         return doc["content"]
 

@@ -563,25 +563,26 @@ def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
 # while the body still said `010` — tenant-api finds a tenant by file name
 # and answered 404. A name Kubernetes reads as a number is refused now.
 
-# #3832: keys no built-in value arms, so the render — written through
-# `da-guard write` into a tree with no root yet — is judged as before: a
-# default-armed key would have a base there, and `0x1F` / `12:30` are values
-# the exporter refuses.
+# #3832: the render is judged in a tree whose root declares its threshold
+# key (_VALUES_DEFAULTS), so every value is judged; `0x1F` and `12:30` are no
+# threshold the exporter reads, so they sit under `_routing`, which no
+# threshold check reads, and the shapes are the same to judge.
 _VALUES_BLOCK = ("    t1:\n"
                  "      mysql_connection_usage_percent: {q}010{q}\n"
-                 "      mysql_slow_queries: {q}0x1F{q}\n"
-                 "      redis_evicted_keys: {q}12:30{q}\n"
+                 "      _routing:\n"
+                 "        group_interval: {q}0x1F{q}\n"
+                 "        repeat_interval: {q}12:30{q}\n"
                  "      _metadata:\n"
                  "        owner: {q}2026-01-02T03:04:05Z{q}\n")
 # `_VALUES_BLOCK` (unquoted) as Kubernetes stores it, written by hand.
 _VALUES_AS_STORED = ("    t1:\n"
                      "      mysql_connection_usage_percent: 8\n"
-                     "      mysql_slow_queries: 31\n"
-                     "      redis_evicted_keys: \"12:30\"\n"
+                     "      _routing:\n"
+                     "        group_interval: 31\n"
+                     "        repeat_interval: \"12:30\"\n"
                      "      _metadata:\n"
                      "        owner: \"2026-01-02T03:04:05Z\"\n")
-_VALUES_DEFAULTS = ("defaults:\n  mysql_connection_usage_percent: 1\n  mysql_slow_queries: 1\n"
-                    "  redis_evicted_keys: 1\n")
+_VALUES_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 1\n"
 
 
 def _render_values(tmp_path: Path, q: str) -> tuple[str, Path]:
@@ -591,6 +592,10 @@ def _render_values(tmp_path: Path, q: str) -> tuple[str, Path]:
     cr.write_text(_cr("t1", block), encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
+    # #3832: the output directory is judged as its own tree, which is now
+    # judged with no root file too; its root declares the CR's keys, as a
+    # deployment's conf.d root does.
+    (out / "_defaults.yaml").write_text(_VALUES_DEFAULTS, encoding="utf-8")
     assert da_assembler.render_cr_file(cr, out) == 0
     return block, out / "t1" / "t1.yaml"
 
@@ -603,8 +608,8 @@ def test_da_assembler_writes_unquoted_values_as_kubernetes_stores_them(
     keep them text. Before #2476 (#2331): the CR's text, as written."""
     _block, out = _render_values(tmp_path, "")
     body = out.read_text(encoding="utf-8")
-    for line in ("mysql_connection_usage_percent: 8\n", "mysql_slow_queries: 31\n",
-                 'redis_evicted_keys: "12:30"\n',
+    for line in ("mysql_connection_usage_percent: 8\n", "group_interval: 31\n",
+                 'repeat_interval: "12:30"\n',
                  'owner: "2026-01-02T03:04:05Z"\n'):
         assert line in body, (line, body)
 
@@ -614,8 +619,8 @@ def test_da_assembler_quoted_values_stay_quoted(tmp_path):
     """Control: a quoted value was a string before and still is."""
     _block, out = _render_values(tmp_path, '"')
     body = out.read_text(encoding="utf-8")
-    for line in ('mysql_connection_usage_percent: "010"\n', 'mysql_slow_queries: "0x1F"\n',
-                 'redis_evicted_keys: "12:30"\n',
+    for line in ('mysql_connection_usage_percent: "010"\n', 'group_interval: "0x1F"\n',
+                 'repeat_interval: "12:30"\n',
                  'owner: "2026-01-02T03:04:05Z"\n'):
         assert line in body, (line, body)
 

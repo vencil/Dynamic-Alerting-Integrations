@@ -763,9 +763,9 @@ def test_a_new_table_is_not_announced_by_the_old_fragment(tmp_path):
     key = next(k for k, e in doc["keys"].items() if lib.is_chart_armed(e))
     doc["keys"][key]["value"] = float(doc["keys"][key]["value"]) + 1
     assert _digest(doc) != old
-    assert lib.check_builtin_digest_announced(doc, *paths) is not None
-    assert lib.check_builtin_digest_announced(lib.load_registry(), *paths) is None
+    assert gate.check_builtin_digest_announced(doc, *paths) is not None
+    assert gate.check_builtin_digest_announced(lib.load_registry(), *paths) is None
 
 
 def test_live_repo_announces_its_builtin_digest():
-    assert lib.check_builtin_digest_announced(lib.load_registry()) is None
+    assert gate.check_builtin_digest_announced(lib.load_registry()) is None
