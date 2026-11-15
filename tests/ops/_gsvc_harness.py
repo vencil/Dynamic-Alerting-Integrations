@@ -215,7 +215,13 @@ class Service:
             head += f"Content-Length: {len(body)}\r\n"
         status, headers, data = self.raw(head.encode() + b"\r\n" + body, timeout)
         if headers.get("content-type", "").startswith("application/json"):
-            return status, json.loads(data)
+            doc = json.loads(data.decode("ascii"))  # #3961: the one exit encodes ASCII
+            if path == "/v1/validate":
+                # #3961: every answer any test gets is held to the closed shape.
+                import _gsvc_proto
+                problem = _gsvc_proto.validate_answer_problem(status, doc)
+                assert problem is None, (problem, status, doc)
+            return status, doc
         return status, data.decode("utf-8")
 
     def validate(self, commit: str, writes: list[dict] | None = None,

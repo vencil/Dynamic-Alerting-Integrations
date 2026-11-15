@@ -1648,7 +1648,7 @@ def _served_page_custom_alerts(served: "_lib_tenant_values.ServedTree",
     out = {}
     for tenant, values in served.tenants.items():
         names = tuple(str(e.spec.get("name") or f"_custom_alerts[{e.index}]")
-                      for e in values.custom_alerts or ()
+                      for e in values.custom_alerts
                       if e.status == "served" and e.spec.get("mode") != "silent")
         if names:
             out[tenant] = names

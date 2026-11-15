@@ -18,15 +18,42 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
-#: Bytes of the generator's stderr a response carries (the end of it).
-STDERR_TAIL_BYTES = 64 * 1024
-
 #: The reasons a judgement can be refused for — "reject this one write", never
 #: "the container is unusable" (ADR-036 §3).
 REJECT_REASONS = ("deadline", "memory", "incomplete", "git_read", "busy")
 
 #: Why the container answers 503 VALIDATOR_UNAVAILABLE.
 UNAVAILABLE_REASONS = ("tool_fault", "generator_too_old", "internal_error")
+
+#: #3961: an answer to POST /v1/validate carries no free text — these keys
+#: only (a 200 verdict, any other status), each `error` / `reason` from its
+#: closed set. tenant-api renders every message from the reason; what the
+#: service knows beyond it goes to the service's own log.
+VERDICT_KEYS = frozenset({"result", "reason", "rc", "findings", "validated", "cache",
+                          "key_verdict", "queue_wait_ms"})
+ERROR_KEYS = frozenset({"error", "reason", "tool_fault"})
+ERRORS = frozenset({"BAD_REQUEST", "NOT_FOUND", "METHOD_NOT_ALLOWED", "LENGTH_REQUIRED",
+                    "PAYLOAD_TOO_LARGE", "VALIDATOR_UNAVAILABLE", "POLICY_UNAVAILABLE"})
+KEY_VERDICT_KEYS = frozenset({"status", "reason", "tenants", "seconds", "findings", "truncated"})
+ANSWER_REASONS = frozenset({*REJECT_REASONS, *UNAVAILABLE_REASONS, "policy_unusable"})
+
+
+def validate_answer_problem(status: int, doc: object) -> Optional[str]:
+    """Why *doc*, answered with *status* to POST /v1/validate, is not of the
+    closed shape above; None when it is."""
+    if not isinstance(doc, dict):
+        return f"not an object: {type(doc).__name__}"
+    keys = VERDICT_KEYS if status == 200 else ERROR_KEYS
+    if set(doc) - keys:
+        return f"keys outside the closed set: {sorted(set(doc) - keys)}"
+    if status != 200 and doc.get("error") not in ERRORS:
+        return "an error outside the closed set"
+    if "reason" in doc and doc["reason"] not in ANSWER_REASONS:
+        return "a reason outside the closed set"
+    kv = doc.get("key_verdict")
+    if kv is not None and (not isinstance(kv, dict) or set(kv) - KEY_VERDICT_KEYS):
+        return "a key_verdict outside the closed set"
+    return None
 
 #: The constant part of a ``tool_fault`` message (#3862); what follows is
 #: each record — program, subcommand, reason — never a path or its stderr.
@@ -165,7 +192,7 @@ def parse_validate_request(body: bytes, object_format: str,
         raise RequestError(f"writes has {len(raw_writes)} entries; at most "
                            f"{max_writes} per request")
     writes: list[Write] = []
-    seen: set[str] = set()
+    seen: dict[str, int] = {}
     for i, w in enumerate(raw_writes):
         where = f"writes[{i}]"
         if not isinstance(w, dict):
@@ -174,9 +201,16 @@ def parse_validate_request(body: bytes, object_format: str,
         if problem is not None:
             raise RequestError(f"{where}: {problem}")
         path = w["path"]
+        # #3961: a path is the author's file name — a message names a place
+        # (the write's index), never the path. JSON carries a lone surrogate
+        # (`"\udcff"`), which no file name is and no response could encode.
+        try:
+            path.encode("utf-8")
+        except UnicodeEncodeError:
+            raise RequestError(f"{where}: path is not valid UTF-8") from None
         if path in seen:
-            raise RequestError(f"{where}: path {path!r} appears more than once")
-        seen.add(path)
+            raise RequestError(f"{where}: path is the one writes[{seen[path]}] already writes")
+        seen[path] = i
         keys = set(w)
         if keys == {"path", "content_b64"}:
             text = w["content_b64"]

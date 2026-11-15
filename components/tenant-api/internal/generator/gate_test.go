@@ -362,10 +362,11 @@ func TestValidateWrites_HTTPStatuses(t *testing.T) {
 		body   any
 		check  func(error) bool
 	}{
+		// #3961: a message an older service still sends is not read.
 		{"503 validator", 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "tool_fault", "message": "da-read alertmanager (not_found)"},
 			func(err error) bool {
 				var u *UnavailableError
-				return errors.As(err, &u) && u.Code == CodeValidatorUnavailable && u.Reason == "tool_fault" && u.Message == "da-read alertmanager (not_found)"
+				return errors.As(err, &u) && u.Code == CodeValidatorUnavailable && u.Reason == "tool_fault" && u.Message == ""
 			}},
 		{"503 policy", 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "bad"},
 			func(err error) bool {
@@ -385,7 +386,7 @@ func TestValidateWrites_HTTPStatuses(t *testing.T) {
 		{"400", 400, map[string]any{"error": "BAD_REQUEST", "message": "parent is a file"},
 			func(err error) bool {
 				var r *RejectedError
-				return errors.As(err, &r) && r.Reason == ReasonInvalidRequest && r.Message == "parent is a file"
+				return errors.As(err, &r) && r.Reason == ReasonInvalidRequest && r.Message == ""
 			}},
 		{"500", 500, map[string]any{},
 			func(err error) bool {

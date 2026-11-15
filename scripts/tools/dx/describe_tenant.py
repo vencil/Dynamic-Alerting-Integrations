@@ -281,9 +281,8 @@ def custom_alerts_fields(conf_d: Path,
     `_custom_alerts` the exporter takes nothing from: then `custom_alerts`
     is `[]`, so "declared, none served" reads apart from "not declared".
 
-    None, with one WARN line on stderr, when served-values fails; a tenant
-    whose da-guard is older than the field has no entry, with one WARN line.
-    The caller omits what is missing; the exit code does not change.
+    None, with one WARN line on stderr, when served-values fails. The
+    caller omits what is missing; the exit code does not change.
 
     ⛔ Not a `ConfDScanner` method on purpose: `tenant_verify` calls
     `source_info` per tenant, and must not pay a second da-guard run for a
@@ -305,12 +304,9 @@ def custom_alerts_fields(conf_d: Path,
                   file=sys.stderr)
         return None
     out: "dict[str, dict]" = {}
-    stale = False
     for tid, tv in tree.tenants.items():
         fields: dict = {}
-        if tv.custom_alerts is None:
-            stale = True
-        elif not tv.custom_alerts:
+        if not tv.custom_alerts:
             if (declared or {}).get(tid, {}).get("_custom_alerts") and tv.custom_alerts_error is None:
                 fields["custom_alerts"] = []
         else:
@@ -328,10 +324,6 @@ def custom_alerts_fields(conf_d: Path,
             fields["custom_alerts_error"] = tv.custom_alerts_error
         if fields:
             out[tid] = fields
-    if stale:
-        print("WARN: custom_alerts not shown — this da-guard's served-values gives no "
-              "custom_alerts (it is older than this tool): upgrade or rebuild it",
-              file=sys.stderr)
     return out
 
 

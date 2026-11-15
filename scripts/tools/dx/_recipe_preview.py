@@ -211,10 +211,6 @@ def judge(recipe, tenant, confd, deadline=None):
     served = tv.load_served_tree(confd, timeout=_timeout_left(deadline)).tenants.get(tenant)
     if served is None:
         return f"the exporter serves no tenant {tenant!r} from the recipe"
-    if served.custom_alerts is None:
-        raise tv.ServedValuesError(
-            f"da-guard {tv.SUBCOMMAND} has no custom_alerts — this da-guard is older than this "
-            "tool: upgrade or rebuild it", None, "", stale=True)
     if served.custom_alerts_error:
         return f"the exporter does not decode _custom_alerts: {served.custom_alerts_error}"
     entry = served.custom_alerts[0]

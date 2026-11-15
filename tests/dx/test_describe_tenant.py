@@ -989,21 +989,6 @@ class TestCustomAlertsAsTheExporterServes:
         err = capsys.readouterr().err
         assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
 
-    def test_a_da_guard_without_the_field_is_a_warn_and_the_field_is_omitted(self, tmp_path, monkeypatch, capsys):
-        conf_d = _write(tmp_path, self.FILES)
-        real = dt.load_served_tree
-
-        def stale(*a, **kw):
-            tree = real(*a, **kw)
-            return tree._replace(tenants={t: v._replace(custom_alerts=None, custom_alerts_error=None)
-                                          for t, v in tree.tenants.items()})
-
-        monkeypatch.setattr(dt, "load_served_tree", stale)
-        code, out, err = self._main(monkeypatch, capsys, conf_d, "--all")
-        assert code == 0, err
-        assert all("custom_alerts" not in t for t in json.loads(out).values())
-        assert sum("older than this tool" in line for line in err.splitlines()) == 1, err
-
     def test_effective_config_is_an_isolated_copy(self, tmp_path):
         scanner = dt.ConfDScanner(_write(tmp_path, self.FILES))
         eff = scanner.effective_config("ta")
