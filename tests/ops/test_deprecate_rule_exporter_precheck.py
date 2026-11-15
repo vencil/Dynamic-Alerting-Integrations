@@ -376,7 +376,7 @@ def test_a_legacy_spelling_in_a_subtree_carrier_withholds_the_claim(tmp_path, da
         r = _run(conf_d, "--execute")
         assert r.returncode == 1, (key, r.stdout + r.stderr)
         tail = r.stdout.split("下架未完成", 1)[1]
-        assert f"sub/_defaults.yaml" in tail and "--plane subtree" in tail, (key, tail)
+        assert f"sub/_defaults.yaml" in tail and "--subtree sub`" in tail, (key, tail)
         assert key in tail, (key, tail)
 
 

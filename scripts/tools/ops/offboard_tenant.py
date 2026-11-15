@@ -67,6 +67,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and content)
 import _lib_parse_tree  # noqa: E402
+import _lib_input  # noqa: E402  (#3902: --config-dir is a declared input)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: only Go writes conf.d — the delete too)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -121,10 +122,11 @@ def find_config_rel(tenant, config_dir):
     exactly — not case-folded (`Alpha` is another tenant). ADR-036 §2: which
     files there are, and the id each name carries (`tenant_named`), are
     parse-tree's answer (a directory named `<tenant>.yaml/` refuses the run,
-    #3206)."""
-    base = Path(config_dir)
-    if not base.is_dir():
-        return None
+    #3206).
+
+    ⛔ No `is_dir()` of its own (#3902, as `find_carriers`): --config-dir is
+    judged once (`declared_trees`); a second look at it read a tree gone
+    since as "no such tenant" (rc 1). The reader refuses what it cannot read."""
     for rel, e in _selected(config_dir):
         # Go's `role`, not `is_file()` (#3206): a file parse-tree cannot read
         # refuses the run before this line is reached.
@@ -150,8 +152,6 @@ def find_carriers(tenant, config_dir):
     a carrier the exporter counts twice: it stays a cross-reference; nor is a
     subdirectory's `_defaults.yaml` (class `defaults`)."""
     base = Path(config_dir)
-    if not base.is_dir():
-        return []
     out = []
     for rel, e in _selected(config_dir):
         if e.cls != "tenant" or rel in LEGACY_STATE_FILES:
@@ -545,9 +545,15 @@ def main():
         description="安全的 Tenant 下架工具 — Pre-check + 安全移除"
     )
     parser.add_argument("tenant", help="要下架的 tenant 名稱 (例如 db-a)")
-    parser.add_argument("--config-dir",
-                        default="components/threshold-exporter/config/conf.d",
-                        help="conf.d 目錄路徑")
+    # #3902: a declared input, judged once (`declared_trees`, below). A conf.d
+    # with no config file is a pre-check that finds no such tenant (rc 1, as
+    # before); the path, the default not there and a root da-guard cannot
+    # list are refused naming the flag.
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_ALLOWED,
+                         default="components/threshold-exporter/config/conf.d",
+                         absent_default=_lib_input.ABSENT_REFUSED,
+                         help="conf.d 目錄路徑")
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只做 Pre-check)")
     add_state_argument(parser,  # #3797: a declared document (`-`: stdin)
@@ -575,6 +581,7 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
     with _lib_parse_cache.session():  # one parse-tree document for the run
+        _lib_parse_cache.declared_trees(args, "config_dir", lang="zh")
         _run(args, state)
 
 

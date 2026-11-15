@@ -105,6 +105,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_validation import url_type  # noqa: E402  (#3528)
 # ADR-036 step 4 (#2906): the root defaults carrier is parse-tree's choice
 # (`defaults_carriers`) and its content parse-tree's yaml.v3 reading.
+import _lib_input  # noqa: E402  (#3902)
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 
@@ -641,81 +642,54 @@ def generate_json_report(result: PolicyResult) -> dict:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-def build_parser(lang: str = "en") -> argparse.ArgumentParser:
-    """Build CLI argument parser."""
-    if lang == "zh":
-        parser = argparse.ArgumentParser(
-            description="OPA (Open Policy Agent) 策略評估橋接 — 將 tenant 配置轉換為 OPA 輸入並評估。",
-        )
-        parser.add_argument(
-            "--config-dir", required=True,
-            help="conf.d/ 目錄路徑（含 tenant YAML）",
-        )
-        parser.add_argument(
-            "--opa-url", type=url_type(empty="refuse"),  # #3528
-            help="OPA REST API URL（例：http://localhost:8181）",
-        )
-        parser.add_argument(
-            "--opa-binary", default="opa",
-            help="OPA 二進檔路徑（預設：opa）",
-        )
-        parser.add_argument(
-            "--policy-package", default="dynamic_alerting.policy",
-            help="OPA 套件路徑（預設：dynamic_alerting.policy）",
-        )
-        parser.add_argument(
-            "--policy-path",
-            help=".rego 檔案路徑（用於本地評估）",
-        )
-        parser.add_argument(
-            "--json", action="store_true", dest="json_output",
-            help="JSON 格式輸出",
-        )
-        parser.add_argument(
-            "--ci", action="store_true",
-            help="CI 模式：有 error 級違規時 exit 1",
-        )
-        parser.add_argument(
-            "--dry-run", action="store_true",
-            help="僅顯示 OPA 輸入 JSON，不呼叫 OPA",
-        )
-    else:
-        parser = argparse.ArgumentParser(
-            description="OPA (Open Policy Agent) bridge — convert tenant configs to OPA input and evaluate.",
-        )
-        parser.add_argument(
-            "--config-dir", required=True,
-            help="Path to conf.d/ directory containing tenant YAML files",
-        )
-        parser.add_argument(
-            "--opa-url", type=url_type(empty="refuse"),  # #3528
-            help="OPA REST API URL (e.g., http://localhost:8181)",
-        )
-        parser.add_argument(
-            "--opa-binary", default="opa",
-            help="Path to opa binary (default: opa)",
-        )
-        parser.add_argument(
-            "--policy-package", default="dynamic_alerting.policy",
-            help="OPA package path (default: dynamic_alerting.policy)",
-        )
-        parser.add_argument(
-            "--policy-path",
-            help="Path to .rego file(s) for local evaluation",
-        )
-        parser.add_argument(
-            "--json", action="store_true", dest="json_output",
-            help="Output in JSON format",
-        )
-        parser.add_argument(
-            "--ci", action="store_true",
-            help="CI mode: exit 1 if any error-level violations found",
-        )
-        parser.add_argument(
-            "--dry-run", action="store_true",
-            help="Show OPA input JSON only, do not call OPA",
-        )
+#: The parser's text per language (#3902): ONE parser, so each argument —
+#: its type, default and declaration — exists once and the two languages
+#: cannot drift apart.
+_HELP = {
+    "en": {
+        "description": "OPA (Open Policy Agent) bridge — convert tenant configs to OPA input "
+                       "and evaluate.",
+        "config_dir": "Path to conf.d/ directory containing tenant YAML files",
+        "opa_url": "OPA REST API URL (e.g., http://localhost:8181)",
+        "opa_binary": "Path to opa binary (default: opa)",
+        "policy_package": "OPA package path (default: dynamic_alerting.policy)",
+        "policy_path": "Path to .rego file(s) for local evaluation",
+        "json": "Output in JSON format",
+        "ci": "CI mode: exit 1 if any error-level violations found",
+        "dry_run": "Show OPA input JSON only, do not call OPA",
+    },
+    "zh": {
+        "description": "OPA (Open Policy Agent) 策略評估橋接 — 將 tenant 配置轉換為 OPA 輸入並評估。",
+        "config_dir": "conf.d/ 目錄路徑（含 tenant YAML）",
+        "opa_url": "OPA REST API URL（例：http://localhost:8181）",
+        "opa_binary": "OPA 二進檔路徑（預設：opa）",
+        "policy_package": "OPA 套件路徑（預設：dynamic_alerting.policy）",
+        "policy_path": ".rego 檔案路徑（用於本地評估）",
+        "json": "JSON 格式輸出",
+        "ci": "CI 模式：有 error 級違規時 exit 1",
+        "dry_run": "僅顯示 OPA 輸入 JSON，不呼叫 OPA",
+    },
+}
 
+
+def build_parser(lang: str = "en") -> argparse.ArgumentParser:
+    """Build CLI argument parser (its text in *lang*, `_HELP`)."""
+    h = _HELP["zh" if lang == "zh" else "en"]
+    parser = argparse.ArgumentParser(description=h["description"])
+    # #3902: a declared input, judged once in `main` (`declared_trees`); a
+    # tree with no config file is refused (da-guard served-values refuses it).
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True,
+                         help=h["config_dir"])
+    parser.add_argument("--opa-url", type=url_type(empty="refuse"),  # #3528
+                        help=h["opa_url"])
+    parser.add_argument("--opa-binary", default="opa", help=h["opa_binary"])
+    parser.add_argument("--policy-package", default="dynamic_alerting.policy",
+                        help=h["policy_package"])
+    parser.add_argument("--policy-path", help=h["policy_path"])
+    parser.add_argument("--json", action="store_true", dest="json_output", help=h["json"])
+    parser.add_argument("--ci", action="store_true", help=h["ci"])
+    parser.add_argument("--dry-run", action="store_true", help=h["dry_run"])
     return parser
 
 
@@ -731,6 +705,8 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
     args = parser.parse_args(argv)
 
     # Load configs
+    # #3902: judged once, before anything is read — a refusal names the flag.
+    _lib_parse_cache.declared_trees(args, "config_dir", lang=lang)
     tenant_configs, served = load_tenant_inputs(args.config_dir)
     defaults = load_defaults(args.config_dir)
 

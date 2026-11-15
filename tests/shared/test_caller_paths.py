@@ -147,6 +147,17 @@ OPS_SITES = [
      "--config-dir", "dir_not_accessible"),
     ("deprecate-rule --config-dir", "deprecate_rule.py", ["--config-dir", "{D}", "some_metric"],
      "--config-dir", None),
+    # #3902: the conf.d trees da-guard reads, declared (they were `reader` rows).
+    ("backtest --config-dir", "backtest_threshold.py",
+     ["--config-dir", "{D}", "--baseline", "{CONF}", "--json"], "--config-dir",
+     "dir_not_accessible"),
+    ("backtest --baseline", "backtest_threshold.py",
+     ["--config-dir", "{CONF}", "--baseline", "{D}", "--json"], "--baseline",
+     "dir_not_accessible"),
+    ("opa-evaluate --config-dir", "policy_opa_bridge.py",
+     ["--config-dir", "{D}", "--dry-run"], "--config-dir", None),
+    ("offboard --config-dir", "offboard_tenant.py", ["tenant-a", "--config-dir", "{D}"],
+     "--config-dir", None),
     ("notification-tester --config-dir", "notification_tester.py",
      ["--config-dir", "{D}", "--dry-run", "--json"], "--config-dir", "dir_not_accessible"),
     ("notification-tester --policy", "notification_tester.py",
@@ -1363,6 +1374,13 @@ JUDGED_DECLARATIONS = {
     "migrate-credentials --config-dir": ("allowed", None, "refused"),
     "gitops-check local --dir": ("allowed", None, "refused"),
     "deprecate --config-dir": ("allowed", "refused", "refused"),
+    # #3902, measured on main as uid 65534: backtest and opa-evaluate were rc 2
+    # already over an empty tree (da-guard's "no .yaml files found", the flag
+    # unnamed); offboard answers rc 1 (no such tenant), and still does.
+    "backtest --baseline": ("refused", None, "refused"),
+    "backtest --config-dir": ("refused", None, "refused"),
+    "opa-evaluate --config-dir": ("refused", None, "refused"),
+    "offboard --config-dir": ("allowed", "refused", "refused"),
 }
 
 

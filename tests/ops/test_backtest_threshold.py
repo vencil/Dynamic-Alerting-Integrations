@@ -2533,16 +2533,47 @@ class TestTwoTreesCompare:
     @pytest.mark.parametrize("side", ["baseline", "current"])
     def test_a_tree_with_no_config_is_rc2_named(self, tmp_path, cli_argv, capsys, fake_prom,
                                                 side):
-        """A tree holding no config file is one the exporter refuses ("no .yaml
-        files found"): rc 2, named — a PR that adds the first conf.d/ compares
-        against a baseline holding at least a `_defaults.yaml`."""
+        """A tree holding no config file is refused (#3902: the declared
+        input's own `input_empty`, one line naming the flag): rc 2 — a PR that
+        adds the first conf.d/ compares against a baseline holding at least a
+        `_defaults.yaml`."""
         empty = {"README.md": "x\n"}
         full = {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 50\n")}
         cur, base = _dirs(tmp_path, empty if side == "baseline" else full,
                           empty if side == "current" else full)
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert (rc, doc) == (2, None), (doc, err)  # #3617: stdout empty
-        assert "no .yaml files found" in err
+        flag, tree = ("--baseline", base) if side == "baseline" else ("--config-dir", cur)
+        assert err.startswith(f"ERROR: {flag} {tree}: selects nothing"), err
+
+    @pytest.mark.parametrize("case, reason", [
+        ("missing", "dir_not_found"), ("empty", "input_empty"), ("changed", "input_changed")])
+    def test_a_refused_tree_still_writes_the_not_run_report(
+            self, tmp_path, cli_argv, capsys, fake_prom, monkeypatch, case, reason):
+        """#3902: a declared tree refused — not there, no config file, or
+        changed after its judgement (#3724) — is one line naming the flag AND
+        this tool's not-run report in `-o` / `--markdown-output` (#3089: the
+        PR-comment workflow reads the markdown), its `reason` the refusal's
+        own. Without the handlers in `_main` / `_backtest` the refusal goes
+        straight to `run()`: rc 2, the line, and no file."""
+        from _lib_exitcodes import InputChanged
+        full = {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 50\n")}
+        cur, base = _dirs(tmp_path, {"README.md": "x\n"} if case == "empty" else full, full)
+        if case == "missing":
+            base = str(tmp_path / "nope")
+        if case == "changed":
+            def gone(*_a, **_k):
+                raise InputChanged(f"--baseline {base}: changed after it was judged: gone")
+            monkeypatch.setattr(bt, "load_trees", gone)
+        o, md = tmp_path / "o.json", tmp_path / "o.md"
+        rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
+                            "--prometheus", fake_prom().url, "--json",
+                            "-o", str(o), "--markdown-output", str(md))
+        assert rc == 2 and out.out == "", out  # #3617: stdout empty
+        assert out.err.startswith(f"ERROR: --baseline {base}: "), out.err
+        doc = json.loads(o.read_text(encoding="utf-8"))
+        assert (doc["status"], doc["reason"]) == ("caller_error", reason), doc
+        assert reason in md.read_text(encoding="utf-8"), md.read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("name", [
         b"has\nnewline.yaml", b'has"quote.yaml', b"has\\backslash.yaml", b"has space.yaml",

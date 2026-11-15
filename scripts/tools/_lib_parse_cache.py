@@ -235,6 +235,21 @@ def _declared_key(path: "str | os.PathLike[str]") -> "Optional[str]":
     return next((k for k in _spellings(path) if k in _DECLARED), None)
 
 
+def _declared_over(path: "str | os.PathLike[str]") -> "Optional[str]":
+    """The `_DECLARED` key of the declared tree *path* is, or lies in: the
+    NEAREST one (#3902) — a directory of a declared tree read on its own
+    (deprecate's `--subtree`: `da-guard key-refs` runs on it) belongs to
+    that tree, and under two nested declared trees a path belongs to the
+    inner one. None when no declared tree holds it."""
+    best: "Optional[str]" = None
+    for where in _spellings(path):
+        for root in _DECLARED:
+            if (where == root or where.startswith(root.rstrip(os.sep) + os.sep)) and (
+                    best is None or len(root) > len(best)):
+                best = root
+    return best
+
+
 def _declare(root: "str | os.PathLike[str]", flag: str, lang: str) -> None:
     for key in _spellings(root):
         _DECLARED[key] = (flag, lang)
@@ -827,7 +842,8 @@ def record_judgement(root: "str | os.PathLike[str]", flag: str, lang: str,
 
 
 def refuse_changed(root: "str | os.PathLike[str]", detail: str) -> None:
-    """For a tree a declared input named (`judged`) that da-guard refused
+    """For a tree a declared input named (`judged`) — or a directory of one
+    (`_declared_over`, #3902) — that da-guard refused
     after its judgement: when the tree changed since (its root gone,
     replaced, an entry added or removed: not what `declared_trees` saw),
     raise the refusal of it (#3724) — rc 2, naming the flag
@@ -837,7 +853,7 @@ def refuse_changed(root: "str | os.PathLike[str]", detail: str) -> None:
     declared input named, and for one still as it was judged: da-guard's
     refusal is then the tree's own (no config file, a tenant in two files),
     for the caller to report as it does."""
-    where = _declared_key(root)
+    where = _declared_over(root)
     if where is None:
         return
     was = _JUDGED_AS.get(where)
@@ -861,10 +877,8 @@ def refuse_gone(path: "str | os.PathLike[str]", exc: OSError) -> None:
     from _lib_paths import _STAT_MISSING  # lazy, as `_lib_input` keeps it
     if exc.errno not in _STAT_MISSING:
         return
-    for where in _spellings(path):
-        for root in list(_DECLARED):
-            if where == root or where.startswith(root.rstrip(os.sep) + os.sep):
-                refuse_changed(root, f"{path}: {exc.strerror or exc.__class__.__name__}")
+    if _declared_over(path) is not None:  # the nearest declared tree: `refuse_changed`
+        refuse_changed(path, f"{path}: {exc.strerror or exc.__class__.__name__}")
 
 
 def judged(root: "str | os.PathLike[str]") -> bool:
