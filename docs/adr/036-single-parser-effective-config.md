@@ -45,6 +45,7 @@ updated_at: 2026-11-14
 - **2026-11-01 修訂**：§12 的 manifest 讀法另要求每份文件（list 也算）與每個輸出的 item 的 `apiVersion` 與 `metadata` 能解碼成 kubectl 讀它們用的型別，判準是 Kubernetes 的 apimachinery 函式庫本身，呼叫端不再各自檢查這些欄位的型別；item 這一項 kubectl 讀檔時不檢查，列為比 kubectl 嚴格的地方；範例改為現行輸出。同日再修訂：更正這樣的 item 套用時的結果，不是被拒收就是被改掉（item 寫的 annotations 全被清掉、namespace 換成 kubectl 這次用的、自訂資源以 server-side apply 套用時時間欄位被丟掉），不一定被拒收；決策不變。
 - **2026-11-13 修訂**：產生器容器判定前確認的是 da-read（Alertmanager 的設定載入器），不再是 amtool；容器裡不需要 amtool（§3、§4、§5）。
 - **2026-11-14 修訂**：判定要跑的外部程式（da-guard、da-read、da-crdecode）有沒有跑成，改由判定本身回答，不再在判定前逐支探測；一次判定裡任何一支沒跑成，那筆寫入回 503（reason `tool_fault`），容器在下一次跑完全程的判定之前回報未就緒（§3、§5）。
+- **2026-11-15 修訂**：產生器容器對 `POST /v1/validate` 的回應不帶自由文字：拿掉 `message` 與 `stderr_tail`，只留封閉的 `error`／`reason` 與結構化欄位（`result`、`rc`、`findings`、`validated`、`cache`、`key_verdict`，503 `tool_fault` 另帶結構化的 `tool_fault`，與 `GET /v1/status` 的同形）；容器知道的細節寫進它自己的 log。回應以 ASCII 編碼，任何值都編得出來。tenant-api 給呼叫端的文字本來就由 reason 組出（§3、§5）。
 
 ## 摘要
 
@@ -374,7 +375,7 @@ tenant-api pod
   - 容器不可用：`VALIDATOR_UNAVAILABLE`，回 503（§5）。
 - **判定要跑的程式必須跑成**：一次判定會跑三支 Go 程式：da-guard（讀 conf.d、served-values、鍵的判決等）、da-read（Alertmanager 與 Prometheus 規則檔的載入器，§12；Alertmanager 收不收產生出的設定，產生器只問它）、da-crdecode（照 kubectl 的讀法讀 ConfigMap）。其中任何一支在這次判定裡沒跑成，那筆寫入就沒有結論，回 503（reason `tool_fault`），不論產生器沒有它時得出什麼結果，結束碼 0 也一樣。
   - 「沒跑成」指程式本身出了問題：找不到、不可執行或 exec 失敗（例如不是這個系統能跑的檔案）、逾時、被訊號結束、結束碼不在該子指令的契約內、輸出不是它該寫的文件、版本比工具舊（不認得子指令、旗標或欄位）。程式對輸入的回答不算：da-guard 判某個檔讀不了、da-read 拒收一份設定、da-guard 拒絕判定一棵樹，照常是那筆寫入的結果。因判定的記憶體上限由 Go 執行期自己結束的程式也不算故障：以 SIGABRT、SIGSEGV、SIGBUS 結束，或在啟動時就拿不到記憶體、還沒讀到 `GOTRACEBACK` 而以結束碼 2 加上它自己的 out-of-memory 訊息（例如 `fatal error: out of memory allocating heap arena map`）結束；三支程式一律如此，而且只在判定的記憶體上限下這樣認定，命令列不變。產生器少了它得出的結果同樣不算結論：那筆寫入拒收（reason `memory`），容器的就緒狀態維持原樣。同一次判定裡另有故障時，回 503 `tool_fault`。鍵的判決裡發生的，依 [ADR-038](./038-unread-keys-judged-by-readers.md) 決定 5 回「判決未完成」與原因 `memory`。其他訊號（例如外部送的 SIGKILL）算故障。
-  - 判斷的地方只有三處：執行 da-guard、parse-tree、da-read 與 da-crdecode 的三個函式，以及讀它們輸出的地方；它們記下程式名、子指令與原因（一個封閉的清單），不記路徑與程式的 stderr。命令列工具的行為不因此改變；只有判定子程序讀這份記錄，有記錄就回報 `tool_fault`。503 的 message 點名程式、子指令與原因，`GET /v1/status` 的 `tool_fault` 是最近一次判定的記錄（沒有時為 null）。
+  - 判斷的地方只有三處：執行 da-guard、parse-tree、da-read 與 da-crdecode 的三個函式，以及讀它們輸出的地方；它們記下程式名、子指令與原因（一個封閉的清單），不記路徑與程式的 stderr。命令列工具的行為不因此改變；只有判定子程序讀這份記錄，有記錄就回報 `tool_fault`。503 的 `tool_fault` 以結構化欄位列出程式、子指令與原因（2026-11-15 起不再有 message），`GET /v1/status` 的 `tool_fault` 是最近一次判定的記錄（沒有時為 null）。
   - 就緒：`ready` 是 policy 可用、產生器不比 policy 要求的舊、而且最近一次判定沒有工具故障。下一次跑完全程的判定（產生器有結論，沒有故障也沒有記憶體上限的結束）才恢復；請求格式錯誤、讀不到 base commit、記憶體、期限、輸出不完整等沒走到那些程式的結果不清除，否則程式仍缺時 `ready` 會先變回 true；不綁在程式檔案有沒有換過（暫時性的故障會被鎖死），也不在判定前另跑一棵小樹自我測試（服務實際走的旗標比小樹多）。暖機跑出故障同樣標為未就緒，但暖機只跑 parse-tree，它沒有故障不會清掉記錄。
   - 判定前不再逐支探測。三支程式的路徑仍在每次判定前找一次（先看環境變數 `DA_GUARD_BINARY`／`DA_READ_BINARY`／`DA_CRDECODE_BINARY`，沒設再找 PATH），把找到的絕對路徑寫回那個環境變數，判定子程序沿用這個值：子程序在自己的工作目錄裡跑，PATH 上的相對路徑在那裡指向別處。啟動時找不到、之後才出現在 PATH 上的，下一次判定前會找到並固定；固定之後到服務重啟前不再換。
   - 容器裡不需要 amtool（Alertmanager 的命令列工具），有沒有它都不影響判定。
@@ -446,7 +447,7 @@ tenant-api pod
   - 它的說明文字把「沿用上一份可用內容」算成可用；tenant-api 改問產生器容器後不再沿用舊內容，說明文字屆時要改。
 - **沒有放行開關**：部署端 policy 檔或產生器容器不可用時，會改變檔案內容的寫入一律拒收（包括只改閾值的），回 503。
   - 503 只用在這兩種情況。repo 裡的 policy 檔（平台預設、routing profile）有錯，是產生器回報的 finding，照 §4 拒收，不回 503。
-  - 部署端 policy 檔不可用時錯誤碼是 `POLICY_UNAVAILABLE`。產生器容器不可用（常駐程序出錯或沒有回應、判定要跑的外部程式沒跑成、版本比 policy 要求的舊、沒有回鍵的判決）時錯誤碼是 `VALIDATOR_UNAVAILABLE`，原因在 reason（外部程式沒跑成是 `tool_fault`），細節寫在 message 裡。判定子程序逾時或超過記憶體上限不算容器不可用（§3）。
+  - 部署端 policy 檔不可用時錯誤碼是 `POLICY_UNAVAILABLE`。產生器容器不可用（常駐程序出錯或沒有回應、判定要跑的外部程式沒跑成、版本比 policy 要求的舊、沒有回鍵的判決）時錯誤碼是 `VALIDATOR_UNAVAILABLE`，原因在 reason（外部程式沒跑成是 `tool_fault`）；細節寫在容器自己的 log，回應不帶（2026-11-15 修訂）。判定子程序逾時或超過記憶體上限不算容器不可用（§3）。
   - 現行 tenant-api 的範圍較小：只在直接寫入模式、policy 檔存在卻沒有任何一份可用內容時才回；單筆 PUT 一律回；同步批次只要有一筆碰到路由，整個請求回 503；非同步批次在執行時逐筆再判。新規則不分模式。
   - `--policy-unavailable-open` 與計數器 `tenant_api_policy_unavailable_open_total` 移除。告警 `TenantApiPolicyUnavailable` 保留（看的是可用與否的 metric），但它的說明文字提到放行開關與計數器，要一併改。
 - **不輸出整理好的設定 JSON**：目前沒有程式需要讀它。

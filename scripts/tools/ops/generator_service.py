@@ -189,7 +189,9 @@ class Response:
     def body(self) -> bytes:
         if self.text is not None:
             return self.text.encode("utf-8")
-        return (json.dumps(self.doc, ensure_ascii=False) + "\n").encode("utf-8")
+        # ASCII (#3961): any value — a lone surrogate included — encodes, so
+        # an answer is never lost to its own encoding.
+        return (json.dumps(self.doc) + "\n").encode("ascii")
 
     @property
     def ctype(self) -> str:
@@ -238,16 +240,30 @@ def _parse_head(head: bytes) -> tuple[str, str, dict[str, list[str]]]:
     return method, target, headers
 
 
-def _rejected(reason: str, message: str, **extra) -> Response:
-    doc = {"result": "rejected", "reason": reason, "message": message,
-           "rc": None, "findings": None, "stderr_tail": "", "validated": None}
+# #3961: an answer to /v1/validate carries no free text — only a closed
+# `error` / `reason` and the structured fields. What the service knows
+# beyond the reason goes to its own stderr (`_log`), not to tenant-api:
+# tenant-api renders every message from the reason.
+def _rejected(reason: str, **extra) -> Response:
+    doc = {"result": "rejected", "reason": reason, "rc": None, "findings": None,
+           "validated": None}
     doc.update(extra)
     return Response(200, doc)
 
 
-def _unavailable(error: str, reason: str, message: str) -> Response:
-    return Response(503, {"error": error, "reason": reason, "message": message},
-                    headers={"Retry-After": "5"})
+def _unavailable(error: str, reason: str, detail: str, **extra) -> Response:
+    _log(f"{error} ({reason}): {detail}")
+    return Response(503, {"error": error, "reason": reason, **extra}, headers={"Retry-After": "5"})
+
+
+def _error(status: int, error: str, **headers: str) -> Response:
+    """A non-200 answer to a request the service does not take: its closed
+    `error` only."""
+    return Response(status, {"error": error}, headers=headers or None)
+
+
+def _log(line: str) -> None:
+    print(f"generator-service: {line}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -442,8 +458,7 @@ class Service:
                                        _SLOT_FULL_READ_SECONDS)
             except (asyncio.TimeoutError, ConnectionError, OSError):
                 pass
-            await self._send(reader, writer, self._count(_rejected(
-                "busy", "too many open connections; retry")))
+            await self._send(reader, writer, self._count(_rejected("busy")))
             return
         self.connections += 1
         try:
@@ -493,8 +508,7 @@ class Service:
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
         except asyncio.LimitOverrunError:
-            return Response(431, {"error": "BAD_REQUEST",
-                                  "message": "request header too large"})
+            return _error(431, "BAD_REQUEST")
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
             return None
         # #2901 O6: the request's clock starts here — reading the body is
@@ -503,43 +517,33 @@ class Service:
         try:
             method, target, headers = _parse_head(head)
         except Exception:  # noqa: BLE001 — #2901 O1: any bad header is a 400
-            return Response(400, {"error": "BAD_REQUEST",
-                                  "message": "malformed request line or header"})
+            return _error(400, "BAD_REQUEST")
 
         routes = {"/v1/validate": "POST", "/v1/status": "GET", "/metrics": "GET"}
         if target not in routes:
-            return Response(404, {"error": "NOT_FOUND", "message": target})
+            return _error(404, "NOT_FOUND")
         if method != routes[target]:
-            return Response(405, {"error": "METHOD_NOT_ALLOWED",
-                                  "message": f"{target} takes {routes[target]}"},
-                            headers={"Allow": routes[target]})
+            return _error(405, "METHOD_NOT_ALLOWED", Allow=routes[target])
         if "transfer-encoding" in headers:
-            return Response(411, {"error": "LENGTH_REQUIRED",
-                                  "message": "Transfer-Encoding is not supported; "
-                                             "send Content-Length"})
+            return _error(411, "LENGTH_REQUIRED")
         if method == "GET":
             return self._status() if target == "/v1/status" else self._metrics()
 
         lengths = headers.get("content-length")
         if not lengths:
-            return Response(411, {"error": "LENGTH_REQUIRED",
-                                  "message": "Content-Length is required"})
+            return _error(411, "LENGTH_REQUIRED")
         if len(lengths) != 1 or not _CONTENT_LENGTH.fullmatch(lengths[0]):
-            return Response(400, {"error": "BAD_REQUEST",
-                                  "message": "invalid Content-Length"})
+            return _error(400, "BAD_REQUEST")
         length = int(lengths[0])
         if length > self.s.max_body_bytes:
-            resp = Response(413, {"error": "PAYLOAD_TOO_LARGE",
-                                  "message": f"body is {length} bytes; the limit "
-                                             f"is {self.s.max_body_bytes}"})
+            resp = _error(413, "PAYLOAD_TOO_LARGE")
             resp.unread_body = True
             return resp
         # #2901 R1, admission (b): the body's bytes are reserved against the
         # in-flight budget BEFORE they are read, and given back when this
         # request is answered. Over budget: busy, body never read.
         if self.inflight_body_bytes + length > self.s.max_inflight_body_bytes:
-            resp = self._count(_rejected(
-                "busy", "too many request bytes in flight; retry"))
+            resp = self._count(_rejected("busy"))
             resp.unread_body = True
             return resp
         self.inflight_body_bytes += length
@@ -553,7 +557,8 @@ class Service:
                 request = parse_validate_request(body, self.object_format,
                                                  self.s.max_writes)
             except RequestError as exc:
-                return Response(400, {"error": "BAD_REQUEST", "message": str(exc)})
+                _log(f"bad request: {exc}")  # a place and a constant, never a path (#3961)
+                return _error(400, "BAD_REQUEST")
             del body
             return await self.submit(request, received)
         finally:
@@ -565,11 +570,9 @@ class Service:
         budget = judgement_seconds(request.deadline_ms, self.s.max_judgement_seconds,
                                    self.s.deadline_reserve_seconds)
         if budget <= 0:
-            return self._count(_rejected(
-                "deadline", "deadline_ms leaves no time to judge"))
+            return self._count(_rejected("deadline"))
         if len(self.waiting) >= self.s.max_queue:
-            return self._count(_rejected(
-                "busy", "too many judgements are waiting; retry"))
+            return self._count(_rejected("busy"))
         ticket = Ticket(request, received + budget, self.loop.create_future(),
                         received=received)
         self.waiting.append(ticket)
@@ -584,8 +587,7 @@ class Service:
         if ticket in self.waiting:
             self.waiting.remove(ticket)
             if not ticket.future.done():
-                ticket.future.set_result(_rejected(
-                    "deadline", "the deadline passed while queued"))
+                ticket.future.set_result(_rejected("deadline"))
 
     def _preempt_warm(self) -> None:
         """End the warming run for a request. #2901 R2: the flag is set even
@@ -662,7 +664,7 @@ class Service:
     async def _judge(self, ticket: Ticket) -> Response:
         remaining = ticket.deadline_at - self.loop.time()
         if remaining <= 0:
-            return _rejected("deadline", "the deadline passed while queued")
+            return _rejected("deadline")
         # Whether its programs run is the judgement's own answer (#3862):
         # no probe here. Only the readers' paths are pinned before it.
         _pin_readers()
@@ -687,8 +689,8 @@ class Service:
                     raise
                 # #2901 R1: out of descriptors, processes or memory to fork
                 # with is load, not a broken container — reject this write.
-                return _rejected("busy", f"cannot start a judgement "
-                                         f"({errno.errorcode.get(exc.errno, exc.errno)}); retry")
+                _log(f"cannot start a judgement ({errno.errorcode.get(exc.errno, exc.errno)})")
+                return _rejected("busy")
             # ADR-038 §5: how much of its time budget the judgement used,
             # queue included — only when the judgement process ran.
             if ticket.deadline_at > ticket.received:
@@ -859,28 +861,24 @@ class Service:
     def _verdict(self, run: ChildRun) -> Response:
         received = {"received": run.received}
         if run.timed_out:
-            return _rejected("deadline", "the deadline passed while judging",
-                             cache=received)
+            return _rejected("deadline", cache=received)
         if os.WIFSIGNALED(run.status) or os.WEXITSTATUS(run.status) != 0:
-            return _rejected("incomplete", "the judgement process ended without "
-                             "a complete result", cache=received)
+            return _rejected("incomplete", cache=received)
         res = run.reader.result
         if res is None or not run.reader.ended:
-            return _rejected("incomplete", "the judgement process ended without "
-                             "a complete result", cache=received)
+            return _rejected("incomplete", cache=received)
         self.store.touch(tuple(k) for k in res.get("hit_keys", [])
                          if isinstance(k, list) and len(k) == 2)
         outcome = res.get("outcome")
         cache = res.get("cache")
         cache = {**cache, **received} if isinstance(cache, dict) else received
-        common = {"stderr_tail": res.get("stderr_tail", ""),
-                  "validated": res.get("validated"), "cache": cache}
+        common = {"validated": res.get("validated"), "cache": cache}
         if outcome == "tool_fault":
             # #3862: an external program of this judgement did not run, so no
             # verdict was reached — whatever the generator concluded without it.
             self.tool_fault = tool_faults_of(res)
             return _unavailable("VALIDATOR_UNAVAILABLE", "tool_fault",
-                                tool_fault_message(self.tool_fault))
+                                tool_fault_message(self.tool_fault), tool_fault=self.tool_fault)
         if outcome == "ran":
             # #3862: the one outcome that shows every program of the
             # judgement ran. Any other (a bad request, a git read, memory,
@@ -897,23 +895,15 @@ class Service:
                 self.metrics.key_verdict_seconds = float(kv.get("seconds") or 0.0)
             return Response(200, doc)
         if outcome == "bad_request":
-            return Response(400, {"error": "BAD_REQUEST",
-                                  "message": res.get("message", "")})
+            return _error(400, "BAD_REQUEST")
         if outcome == "memory":
-            return _rejected("memory", "the judgement ran out of memory "
-                             "(RLIMIT_DATA)", **common)
+            return _rejected("memory", **common)
         if outcome == "git_read":
-            return _rejected("git_read", "reading the base commit from git "
-                             "failed twice", **common)
-        if outcome == "da_guard":
-            # No reason of its own on the wire (tenant-api's closed list):
-            # no verdict was reached, like any other incomplete judgement;
-            # the message says which step failed.
-            return _rejected("incomplete", "da-guard parse-tree could not classify the "
-                             "base tree's path names: " + str(res.get("message", "")),
-                             **common)
-        return _rejected("incomplete", "the judgement process sent no "
-                         "complete result", **common)
+            return _rejected("git_read", **common)
+        # `da_guard` (names mode could not classify the base tree's path
+        # names) has no reason of its own on the wire (tenant-api's closed
+        # list): no verdict was reached, like any other incomplete judgement.
+        return _rejected("incomplete", **common)
 
     # ── status and metrics ────────────────────────────────────────────────
 

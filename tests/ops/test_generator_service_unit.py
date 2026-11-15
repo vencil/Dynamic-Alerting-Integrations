@@ -251,6 +251,54 @@ def _doc(resp) -> dict:
     return json.loads(resp.body)
 
 
+# ── #3961: the answer carries no free text, and always encodes ──────────
+
+def _every_answer_constructor() -> "list":
+    return [*(gs._rejected(r) for r in proto.REJECT_REASONS),
+            *(gs._unavailable("VALIDATOR_UNAVAILABLE", r, "detail") for r in proto.UNAVAILABLE_REASONS),
+            gs._unavailable("VALIDATOR_UNAVAILABLE", "tool_fault", "detail",
+                            tool_fault=[{"binary": "da-guard", "subcommand": "parse-tree",
+                                         "reason": "not_found"}]),
+            gs._unavailable("POLICY_UNAVAILABLE", "policy_unusable", "detail"),
+            *(gs._error(st, err) for st, err in ((400, "BAD_REQUEST"), (404, "NOT_FOUND"),
+                                                  (405, "METHOD_NOT_ALLOWED"), (411, "LENGTH_REQUIRED"),
+                                                  (413, "PAYLOAD_TOO_LARGE"), (431, "BAD_REQUEST")))]
+
+
+@pytest.mark.parametrize("i", range(len(_every_answer_constructor())))
+def test_every_answer_is_of_the_closed_shape(i, capsys):
+    """Each way the service builds an answer to /v1/validate: keys and
+    `error` / `reason` from `_gsvc_proto`'s closed sets, no `message` and no
+    `stderr_tail`; the detail goes to its log (stderr)."""
+    resp = _every_answer_constructor()[i]
+    doc = _doc(resp)
+    assert proto.validate_answer_problem(resp.status, doc) is None, doc
+    assert not {"message", "stderr_tail"} & set(doc), doc
+
+
+def test_a_verdict_document_is_of_the_closed_shape():
+    """The 200 a judgement that ran answers, built from a child's result."""
+    doc = {"result": "pass", "rc": 0, "findings": {}, "validated": None, "cache": {},
+           "key_verdict": {"status": "complete", "tenants": 0, "seconds": 0.1, "findings": [],
+                           "truncated": 0}, "queue_wait_ms": 0}
+    assert proto.validate_answer_problem(200, doc) is None
+    for extra in ({"message": "x"}, {"stderr_tail": "x"}):
+        assert proto.validate_answer_problem(200, {**doc, **extra}) is not None
+    assert proto.validate_answer_problem(503, {"error": "VALIDATOR_UNAVAILABLE", "reason": "nope"})
+    assert proto.validate_answer_problem(200, {**doc, "key_verdict": {"status": "x", "message": "y"}})
+
+
+@pytest.mark.parametrize("value", ["\udcff", "a\udcffb.yaml", "ZqX \x1b[31m é 中", "\ud83d"])
+def test_every_answer_body_is_ascii_and_reads_back(value):
+    """`Response.body` is the service's one exit: ASCII whatever a value
+    holds (a lone surrogate included), and JSON that reads back as written —
+    an answer is never lost to its own encoding (#3961)."""
+    doc = {"result": "findings", "rc": 1, "findings": {"findings": [{"message": value}]},
+           "validated": {"files": [{"path": value}]}, value: value}
+    body = gs.Response(200, doc).body
+    assert json.loads(body.decode("ascii")) == doc
+
+
 def test_a_request_that_expires_in_the_queue_is_answered_and_removed():
     async def scenario():
         svc = _FakeService(delay=0)
@@ -666,7 +714,7 @@ def test_a_fork_that_fails_for_load_is_busy_and_leaks_no_descriptor(tmp_path, mo
         svc.loop = asyncio.get_running_loop()
         resp = await svc.submit(_req("1" * 40, 25000), svc.loop.time())
         assert resp.status == 200, resp.doc
-        assert _doc(resp)["reason"] == "busy" and err in _doc(resp)["message"]
+        assert _doc(resp)["reason"] == "busy" and "message" not in _doc(resp), _doc(resp)
     asyncio.run(scenario())
     assert len(os.listdir("/proc/self/fd")) <= before
 
@@ -702,7 +750,7 @@ def test_more_than_one_thread_refuses_to_fork(tmp_path, monkeypatch):
         doc = _doc(resp)
         assert resp.status == 503, (resp.status, doc)
         assert doc["error"] == "VALIDATOR_UNAVAILABLE" and doc["reason"] == "internal_error", doc
-        assert "thread" in doc["message"], doc
+        assert set(doc) == {"error", "reason"}, doc  # #3961: the why is its log's
     asyncio.run(scenario())
     assert not forked, "forked with two threads"
     assert len(os.listdir("/proc/self/fd")) <= before

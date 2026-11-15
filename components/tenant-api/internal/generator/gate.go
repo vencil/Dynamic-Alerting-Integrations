@@ -123,11 +123,11 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		}
 		switch v.Result {
 		case ResultRejected:
-			return nil, g.reject(ctx, v.Reason, v.Message)
+			return nil, g.reject(ctx, v.Reason, "")
 		case ResultFindings:
 			// #1560 ⑤-b: only structured fields reach the platform log —
-			// never stderr_tail, a finding's message or its field, which
-			// quote what the tenants wrote. The caller sees the findings
+			// never a finding's message or its field, which quote what the
+			// tenants wrote. The caller sees the findings
 			// in the 422 (disclosedFindings, by RBAC); the CLI on its tree.
 			slog.Info("generator: write refused with findings", "request_id", middleware.GetReqID(ctx),
 				"base", base, "files", len(files), "verdict", v)

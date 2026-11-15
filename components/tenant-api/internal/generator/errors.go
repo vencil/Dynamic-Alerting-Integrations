@@ -126,17 +126,24 @@ func (e *FindingsError) Error() string {
 // RejectedError refuses a write without a verdict on its content: the
 // service could not judge it this time (its own reasons), or tenant-api
 // could not get a judgement it may rely on (see the Reason constants).
+//
+// Message is tenant-api's own text (no_time, mismatch, …); the service's
+// answer carries none (#3961), so a rejection it sends has none.
 type RejectedError struct {
 	Reason  string
 	Message string
 }
 
 func (e *RejectedError) Error() string {
-	return fmt.Sprintf("the generator gave no verdict (%s): %s", e.Reason, e.Message)
+	if msg := strings.TrimSpace(e.Message); msg != "" {
+		return fmt.Sprintf("the generator gave no verdict (%s): %s", e.Reason, msg)
+	}
+	return fmt.Sprintf("the generator gave no verdict (%s)", e.Reason)
 }
 
 // UnavailableError: the generator container cannot judge at all (ADR-036
-// §5). Code is CodeValidatorUnavailable or CodePolicyUnavailable.
+// §5). Code is CodeValidatorUnavailable or CodePolicyUnavailable. Message
+// is tenant-api's own text; the service's 503 carries none (#3961).
 type UnavailableError struct {
 	Code    string
 	Reason  string

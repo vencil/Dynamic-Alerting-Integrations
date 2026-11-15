@@ -76,7 +76,7 @@ import _lib_parse_tree  # noqa: E402
 import _lib_tool_fault  # noqa: E402
 from _lib_validation import shown_file  # noqa: E402  (#3961: the author's paths into a message)
 from _gsvc_proto import (  # noqa: E402
-    STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
+    ValidateRequest, entry_frame, frame, path_problem,
 )
 
 #: Tests only: called with a stage name (``"before_result"``,
@@ -396,17 +396,6 @@ def apply_writes(root: str, request: ValidateRequest,
 
 # ── the judgement process ────────────────────────────────────────────────
 
-def _tail(path: str) -> str:
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - STDERR_TAIL_BYTES))
-            return fh.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
-
-
 def _exit_code_of(exc: SystemExit) -> int:
     if exc.code is None:
         return 0
@@ -468,7 +457,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         msg = " ".join(str(exc).split())
         print(f"generator-service: da-guard could not classify the base tree's "
               f"path names: {msg}", file=sys.stderr)
-        return {"outcome": "da_guard", "message": msg}
+        return {"outcome": "da_guard"}
     except MemoryError:
         # Names mode ended by a signal, or out of memory, under RLIMIT_DATA
         # (this process's own allocation too): `_lib_parse_tree` recorded
@@ -488,7 +477,8 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     try:
         files = apply_writes(tree_dir, job.request, irregular)
     except BadWrite as exc:
-        return {"outcome": "bad_request", "message": str(exc)}
+        print(f"generator-service: write refused: {exc}", file=sys.stderr)
+        return {"outcome": "bad_request"}
 
     if job.warm:
         return _warm(job, tree_dir, stream)
@@ -660,7 +650,7 @@ def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                 cache: "_lib_parse_cache.ParseCache") -> dict:
     """The verdict's report: ``status`` complete or not_completed (with
     ``reason`` no_time / deadline / memory / error / undecidable /
-    platform_file and ``message``), ``tenants`` judged, ``seconds``, and
+    platform_file; #3961: no free text), ``tenants`` judged, ``seconds``, and
     when complete the findings."""
     started = time.monotonic()
     try:
@@ -669,10 +659,7 @@ def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         # The alarm came after the verdict's own handlers, on its way out.
         signal.setitimer(signal.ITIMER_REAL, 0)
         return {"status": "not_completed", "reason": "deadline", "tenants": 0,
-                "seconds": round(time.monotonic() - started, 3), "message": _OUT_OF_TIME}
-
-
-_OUT_OF_TIME = "the judgement deadline ran out"
+                "seconds": round(time.monotonic() - started, 3)}
 
 
 def kept_findings(findings: list) -> "tuple[list, int]":
@@ -692,8 +679,7 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
     def report(status: str, **fields) -> dict:
         return {"status": status, "seconds": round(time.monotonic() - started, 3), **fields}
     if budget < VERDICT_MIN_SECONDS:
-        return report("not_completed", reason="no_time", tenants=0,
-                      message=f"{max(budget, 0.0):.1f}s of the judgement deadline left for it")
+        return report("not_completed", reason="no_time", tenants=0)
     previous = signal.signal(signal.SIGALRM, _on_alarm)
     outer = signal.setitimer(signal.ITIMER_REAL, budget)  # a timer someone set before (a test runner's)
     # The verdict's parses are not streamed: a signal ending it in the middle
@@ -709,23 +695,17 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         if platform:
             # Its keys reach tenants it does not name: the whole tree's
             # verdict (the PR's CI) judges it, not this one.
-            return report("not_completed", reason="platform_file", tenants=0,
-                          message=f"{platform[0]} is a platform file: its keys reach tenants "
-                                  "it does not name, which only a whole-tree verdict judges")
+            return report("not_completed", reason="platform_file", tenants=0)
         if not tenants:
             return report("complete", tenants=0, findings=[], truncated=0)
         verdict = _lib_key_verdict.judge_tree(
             tree_dir, tenants=tenants, timeout=budget, reader=reader)
         # The verdict's own answer (#3016), not re-derived from the keys.
-        undecidable = sorted({k.key for ks in verdict.keys.values() for k in ks
-                              if k.verdict == _lib_key_verdict.UNDECIDABLE})
         if verdict.undecidable_blocks:
             # ADR-038 §7: no root platform file, so a threshold key the
             # tenants write cannot be told from a misspelt one; a retry
             # changes nothing. Reserved keys alone are judged as always.
-            return report("not_completed", reason="undecidable", tenants=len(tenants),
-                          message=f"no root platform file was read: {len(undecidable)} threshold "
-                                  "key(s) cannot be judged")
+            return report("not_completed", reason="undecidable", tenants=len(tenants))
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
                      "tenants": list(f.tenants), "reason": f.reason, "hint": f.hint,
@@ -733,11 +713,9 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                     for f in kept]
         return report("complete", tenants=len(tenants), findings=findings, truncated=truncated)
     except _VerdictDeadline:
-        return report("not_completed", reason="deadline", tenants=len(tenants),
-                      message=_OUT_OF_TIME)
-    except MemoryError as exc:
-        return report("not_completed", reason="memory", tenants=len(tenants),
-                      message=" ".join(str(exc).split())[:300] or "MemoryError")
+        return report("not_completed", reason="deadline", tenants=len(tenants))
+    except MemoryError:
+        return report("not_completed", reason="memory", tenants=len(tenants))
     except _lib_tenant_values.DaGuardError as exc:
         # The verdict's own reading of key-verdict's document (#3862): a
         # field of the wrong shape there is da-guard's output, not the tree's.
@@ -749,11 +727,9 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         # one that exited 2 out of memory before it read GOTRACEBACK
         # (`memory_end`, #3862).
         reason = "memory" if (exc.returncode or 0) < 0 or exc.memory_end else "error"
-        return report("not_completed", reason=reason, tenants=len(tenants),
-                      message=" ".join(str(exc).split())[:300])
-    except BaseException as exc:  # noqa: BLE001 — reported as not completed, with its reason
-        return report("not_completed", reason="error", tenants=len(tenants),
-                      message=f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}")
+        return report("not_completed", reason=reason, tenants=len(tenants))
+    except BaseException:  # noqa: BLE001 — reported as not completed, with its reason
+        return report("not_completed", reason="error", tenants=len(tenants))
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
@@ -830,7 +806,6 @@ def run_child(job: ChildJob, result_fd: int) -> None:
                          if k in result}}
         sys.stdout.flush()
         sys.stderr.flush()
-        result["stderr_tail"] = _tail(os.path.join(job.job_dir, "stderr"))
         if TEST_HOOK is not None:
             TEST_HOOK("before_result")
         _send(result_fd, frame(b"R", json.dumps(result).encode("utf-8")))

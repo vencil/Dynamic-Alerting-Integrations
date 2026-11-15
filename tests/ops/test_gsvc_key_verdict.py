@@ -153,7 +153,7 @@ def test_an_undecidable_key_is_not_completed(monkeypatch, tmp_path):
         findings=[], undecidable=True, undecidable_blocks=True,
         keys={"t-a": [_key(kv.UNDECIDABLE), _key(kv.READ, "_routing")]}))
     assert (got["status"], got["reason"]) == ("not_completed", "undecidable"), got
-    assert "root platform file" in got["message"]
+    assert "message" not in got, got  # #3961: no free text
 
 
 def test_reserved_keys_alone_are_judged_without_a_root_platform_file(tmp_path, monkeypatch):
@@ -256,7 +256,7 @@ def test_a_verdict_that_fails_is_not_completed_never_raised(monkeypatch, tmp_pat
         raise exc
     got = _run(monkeypatch, tmp_path, 15.0, fail)
     assert (got["status"], got["reason"]) == ("not_completed", reason), got
-    assert got["message"]
+    assert "message" not in got, got  # #3961: no free text
 
 
 # ── which tenants a write touches ────────────────────────────────────────

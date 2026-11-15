@@ -161,8 +161,8 @@ def test_the_service_never_relays_alertmanagers_reason(world):
     """#3703：服務跑的判定不會打開 `--show-loader-reason`——它的 argv 是固定的
     （`_gsvc_child._judge`），請求帶不進旗標。一個只有 Alertmanager 的 loader
     拒收、理由會引出值的寫入：結果是 findings、rc 1，回給 tenant-api 的整份
-    回應（含 stderr_tail）裡有 da-read 的固定句（非空過：真的問到 loader），
-    沒有那個值。"""
+    回應裡沒有那個值（#3961 起回應不帶 stderr，da-read 的固定句只在產生器自己的
+    輸出裡）。"""
     beta = cases._tenant("beta", "      receiver:\n        type: webhook\n"
                                  "        url: https://hooks.example.com/b\n"
                                  "        http_config: {{proxy_url: 'http://[CANARY]/'}}\n")
@@ -170,7 +170,6 @@ def test_the_service_never_relays_alertmanagers_reason(world):
         {"path": "beta.yaml", "content_b64": h.b64(beta)}])
     assert status == 200 and (doc["result"], doc["rc"]) == ("findings", 1), doc
     text = json.dumps(doc)
-    assert "refused by Alertmanager's config loader (its reason is not printed" in text, text
     assert "canary" not in text.lower(), text
 
 
@@ -207,7 +206,7 @@ def test_a_write_cannot_go_through_a_symlink_or_file(world, tmp_path):
         name = f"gsvc-escape-{uuid.uuid4().hex}"
         for path in (f"out/{name}", f"alpha.yaml/{name}"):
             status, doc = svc.validate(commit, [{"path": path, "content_b64": h.b64("x")}])
-            assert status == 400 and "not a directory" in doc["message"], doc
+            assert (status, doc) == (400, {"error": "BAD_REQUEST"}), doc
         assert not os.path.exists(f"/tmp/{name}")
 
 
@@ -493,9 +492,6 @@ def test_git_read_is_retried_once(tmp_path, world, mode, want):
         assert status == 200
         got = doc["result"] if doc["result"] != "rejected" else doc["reason"]
         assert got == want, doc
-        assert "git read attempt 1 failed" in doc["stderr_tail"]
-        if mode == "always":
-            assert "git read attempt 2 failed" in doc["stderr_tail"]
 
 
 def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
@@ -525,10 +521,10 @@ def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
                    env={"DA_GUARD_BINARY": str(wrapper)}) as svc:
         status, doc = svc.validate(commit)
     assert status == 503 and doc["reason"] == "tool_fault", doc
-    assert "da-guard parse-tree (unexpected_exit)" in doc["message"], doc
-    assert "git" not in doc["message"], doc
+    assert doc["tool_fault"] == [{"binary": "da-guard", "subcommand": "parse-tree",
+                                  "reason": "unexpected_exit"}], doc
     # A program's prose never reaches the reply (it may carry paths).
-    assert "boom" not in doc["message"], doc
+    assert "boom" not in json.dumps(doc), doc
 
 
 def provide_da_guard_path() -> str:
@@ -626,7 +622,7 @@ def test_a_symlink_or_gitlink_entry_is_not_a_regular_file(tmp_path, world):
         assert status == 200 and set(_unreadable(doc)) == {"zz-real.yaml", "vendor"}, doc
         status, doc = svc.validate(commit, [{"path": "zz-real.yaml/x.yaml",
                                              "content_b64": h.b64("x")}])
-        assert status == 400 and "not a directory" in doc["message"], doc
+        assert (status, doc) == (400, {"error": "BAD_REQUEST"}), doc
     # The CLI over a real directory follows the file symlinks (a ConfigMap
     # mount is made of them): the same tree without the link texts passes.
     tree = h.write_tree(tmp_path / "cli" / "conf.d", files)
@@ -669,7 +665,7 @@ def test_an_irregular_entry_occupies_its_path_for_writes(tmp_path, world):
                  "not a directory"),
                 ([{"path": "zz-d", **tenant}], "is a directory")):
             status, doc = svc.validate(commit, writes)
-            assert status == 400 and why in doc["message"], (writes, doc)
+            assert (status, doc) == (400, {"error": "BAD_REQUEST"}), (writes, why, doc)
         status, doc = svc.validate(commit, [{"path": "zz-a", "delete": True},
                                             {"path": "zz-a/x.yaml", **tenant}])
         assert status == 200 and set(_unreadable(doc)) == links - {"zz-a"}, doc
@@ -677,7 +673,7 @@ def test_an_irregular_entry_occupies_its_path_for_writes(tmp_path, world):
         # still a 400 — only deleting it does.
         status, doc = svc.validate(commit, [{"path": "zz-a", **tenant},
                                             {"path": "zz-a/x.yaml", **tenant}])
-        assert status == 400 and "not a directory" in doc["message"], doc
+        assert (status, doc) == (400, {"error": "BAD_REQUEST"}), doc
         # A hidden path is no tree entry any reader reads: not judged, and
         # nothing stops a write below it.
         status, doc = svc.validate(commit, [{"path": ".x/l.yaml/y.yaml", **tenant}])
@@ -773,58 +769,19 @@ def test_illegal_names_on_the_service_path_print_their_stand_in(tmp_path):
     assert fm._CANARY not in res.text.lower(), res.text
 
 
-def test_a_name_that_is_not_utf8_is_named_as_the_cli_names_it(tmp_path, world):
-    """A conf.d name in the commit that is not valid UTF-8 (the canary
-    matrix's `not_utf8_name` cell, built from git objects): the service puts
-    it into the tree as its bytes, da-guard refuses the tree, and the
-    response names it exactly as the generator CLI does over the same tree —
-    the cell's `_NAMED_ESCAPED` form, the one exception of
-    `_lib_validation.shown_file` (ADR-036 step 9), byte for byte (#3961: no
-    second place names it). Nothing else: no byte that is not UTF-8, no
-    control character, the forged line not a line of its own, the tree's
-    other illegal name not printed."""
-    shape = fm._ENTRY_SHAPES["not_utf8_name"][0]
-    files = {rel: body for rel, body in shape.items() if not rel.startswith("@")}
-    entries = {rel.partition(":")[2]: ("100644", body.encode("utf-8"))
-               for rel, body in shape.items() if rel.startswith("@bytes:")}
-    repo = h.init_repo(tmp_path / "r")
-    commit = _commit_with_entries(repo, files, entries)
-    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
-        status, doc = svc.validate(commit)
-    assert status == 200 and doc["result"] == "findings" and doc["rc"] == 2, doc
-
-    def refusal(text: str, conf: str) -> list[str]:
-        # da-guard's sentence, after the generator's lead-in — which names
-        # how it ran parse-tree (the service's cache lists the tree first,
-        # `--list-only`; the CLI reads it whole).
-        return [ln.replace(conf, "<CONFDIR>").partition(" exited 2: ")[2] for ln in text.splitlines()
-                if "cannot read the conf.d through" in ln]
-
-    got = refusal(doc["stderr_tail"], doc["findings"]["config_dir"])
-    cli = fm._shape("not_utf8_name", fm._SHAPE_MODES["validate"])
-    want = refusal(cli.text, "<WORK>/conf.d")
-    assert len(got) == 1 and got[0] and got == want, (got, want)
-    assert fm._NAMED_ESCAPED["not_utf8_name"][1] in got[0], got
-    text = json.dumps(doc, ensure_ascii=False)
-    strings = [doc["stderr_tail"], *(f["message"] for f in doc["findings"]["findings"])]
-    assert not [v for v in strings for c in ("\udcff", "\ufffd", "\x1b", "\x07") if c in v], strings
-    assert not [ln for v in strings for ln in v.splitlines()
-                if ln.lstrip().startswith("ERROR: forged")], strings
-    assert text.lower().count(fm._CANARY) == 1 and "QqW" not in text, text
-
-
 #: #3961: a conf.d name that is not valid UTF-8, on every kind of git entry
-#: and in a directory component. The oracles differ by entry (round 3):
+#: and in a directory component. The reply carries no free text (round 5:
+#: no `message`, no `stderr_tail`), so it names such a name nowhere — the
+#: generator's findings name it only by `run_failed`, whose sentence is a
+#: constant. The oracles differ by entry:
 #: * a regular file (100644 / 100755) is judged as the CLI judges the same
-#:   tree on disk — the response's refusal line is the CLI's, word for word;
+#:   tree on disk: the same rc and the same findings document;
 #: * an entry that is not a regular file (120000 / 160000) the service
 #:   refuses whatever its name (#2981, ADR-036 §3: `not_regular_file`), where
 #:   the CLI follows a symlink or skips an empty directory — its oracle is the
 #:   service itself: the same entry at a UTF-8 name is judged the same way
-#:   (refused; skipped below a hidden directory), and the only sentence that
-#:   names the path is da-guard's, as the CLI prints it for that path on disk
-#:   as the service puts it there (an empty directory: `materialise`).
-#: Nowhere else in any field: no canary, no surrogate, no control byte.
+#:   (refused; skipped below a hidden directory).
+#: Nowhere in any field: no canary, no escaped name, no surrogate, no control byte.
 #: cell → (path below conf.d, git mode, blob).
 _NOT_UTF8_LEAF = "secret-ZqX\udcff\x1b.yaml"
 _LINK, _GITLINK = ("120000", b"db-x: a"), ("160000", b"")
@@ -860,14 +817,6 @@ def _cli_tree(root: Path, files: dict, rel: str, mode: str, body: bytes) -> Path
     return root
 
 
-def _refusals(text: str, conf: str) -> "list[str]":
-    """da-guard's sentence of each refusal line, after the generator's
-    lead-in (which names how it ran parse-tree: the service's cache lists the
-    tree first, `--list-only`; the CLI reads it whole)."""
-    return [ln.replace(conf, "<CONFDIR>").partition(" exited 2: ")[2] for ln in text.splitlines()
-            if "cannot read the conf.d through" in ln]
-
-
 def _strings(doc: object) -> "list[str]":
     if isinstance(doc, str):
         return [doc]
@@ -882,10 +831,15 @@ def _refused(doc: dict) -> bool:
     return doc["result"] != "pass"
 
 
+def _findings(doc: dict, conf: str) -> list:
+    """A findings document's findings, its config_dir taken out."""
+    text = json.dumps((doc or {}).get("findings") or [], sort_keys=True)
+    return json.loads(text.replace(json.dumps(conf)[1:-1], "<CONFDIR>"))
+
+
 @pytest.mark.parametrize("cell", sorted(_NOT_UTF8_CELLS))
-def test_a_not_utf8_name_is_named_only_by_da_guard(tmp_path, world, cell):
-    """#3961 (ADR-036 step 9, the one exception of `_lib_validation.shown_file`):
-    the oracles of `_NOT_UTF8_CELLS`."""
+def test_a_not_utf8_name_is_named_nowhere_in_the_reply(tmp_path, world, cell):
+    """#3961 (ADR-036 step 9): the oracles of `_NOT_UTF8_CELLS`."""
     rel, mode, body = _NOT_UTF8_CELLS[cell]
     files = dict(cases.FIXTURES["clean"])
     repo = h.init_repo(tmp_path / "r")
@@ -896,27 +850,22 @@ def test_a_not_utf8_name_is_named_only_by_da_guard(tmp_path, world, cell):
         status, doc = svc.validate(commit, write)
         twin_status, twin_doc = svc.validate(twin, write)
     assert status == twin_status == 200, (doc, twin_doc)
-    regular = mode in ("100644", "100755")
-    if not regular:
+    if mode in ("100644", "100755"):
+        conf = _cli_tree(tmp_path / "cli" / "conf.d", {**files, "zz-extra.yaml": EXTRA}, rel, mode, body)
+        env = {k: v for k, v in os.environ.items() if k not in ("PATH", "DA_GUARD_BINARY")}
+        env["PATH"] = str(world["bin"])
+        out = tmp_path / "f.json"
+        cli = subprocess.run([sys.executable, "-s", str(h.GAR), "--config-dir", str(conf), "--validate",
+                              "--strict", "--findings-json", str(out)],
+                             env=env, capture_output=True, timeout=180)
+        assert doc["rc"] == cli.returncode, (cell, doc)
+        want = _findings(json.loads(out.read_text(encoding="utf-8")), str(conf))
+        assert _findings(doc["findings"], doc["findings"]["config_dir"]) == want, (cell, doc, want)
+    else:
         assert _refused(doc) == _refused(twin_doc) == (not cell.startswith("hidden")), (cell, doc, twin_doc)
-    conf = _cli_tree(tmp_path / "cli" / "conf.d", {**files, "zz-extra.yaml": EXTRA}, rel, mode, body)
-    env = {k: v for k, v in os.environ.items() if k not in ("PATH", "DA_GUARD_BINARY")}
-    env["PATH"] = str(world["bin"])
-    cli = subprocess.run([sys.executable, "-s", str(h.GAR), "--config-dir", str(conf), "--validate",
-                          "--strict", "--findings-json", str(tmp_path / "f.json")],
-                         env=env, capture_output=True, timeout=180)
-    want = _refusals(cli.stderr.decode("utf-8", "replace"), str(conf))
-    if regular:
-        assert (doc["rc"], _refused(doc)) == (cli.returncode, cli.returncode != 0), (cell, doc)
-    strings = _strings(doc)
-    conf_svc = (doc.get("findings") or {}).get("config_dir") or "\0"
-    got = [r for v in strings for r in _refusals(v, conf_svc)]
-    assert got == want, (cell, got, want, doc)
-    # The name, escaped or as written, only inside da-guard's sentence.
-    rest = [v.replace(r, "") for v in strings for r in (want or [""])]
-    assert not [v for v in rest if "\\xff" in v or "zqx" in v.lower()], (cell, rest)
-    bad = [v for v in strings for c in ("\udcff", "\ufffd", "\x1b") if c in v]
-    assert not bad, (cell, bad)
+    named = [v for v in _strings(doc) if "zqx" in v.lower() or "\\xff" in v
+             or any(c in v for c in ("\udcff", "\ufffd", "\x1b"))]
+    assert not named, (cell, named)
 
 
 def test_a_write_path_that_is_not_utf8_is_400_unnamed(world):
@@ -926,7 +875,7 @@ def test_a_write_path_that_is_not_utf8_is_400_unnamed(world):
     and the service answers the next request."""
     commit = world["commits"]["clean"]
     status, doc = world["svc"].validate(commit, [{"path": "ZqX\udcff.yaml", "content_b64": h.b64(EXTRA)}])
-    assert status == 400 and doc["message"] == "writes[0]: path is not valid UTF-8", doc
+    assert (status, doc) == (400, {"error": "BAD_REQUEST"}), doc
     status, doc = world["svc"].validate(commit)
     assert status == 200, doc
 
@@ -965,8 +914,9 @@ def test_a_da_read_that_does_not_run_is_503(tmp_path, world, how):
         assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "tool_fault")
         reason = "not_found" if how == "missing" else "not_executable"
         # its first run: the rule files' reading (prometheus-rules)
-        assert f"da-read prometheus-rules ({reason})" in doc["message"], doc
-        assert str(tmp_path) not in doc["message"], doc  # a program's name, never its path
+        assert doc["tool_fault"] == [{"binary": "da-read", "subcommand": "prometheus-rules",
+                                      "reason": reason}], doc
+        assert str(tmp_path) not in json.dumps(doc), doc  # a program's name, never its path
         _s, st = svc.call("GET", "/v1/status")
         assert st["tool_fault"] == [{"binary": "da-read", "subcommand": "prometheus-rules",
                                      "reason": reason}], st
@@ -1062,7 +1012,8 @@ def test_a_da_guard_that_does_not_run_is_503(tmp_path, world, how, reason):
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 503, doc
         assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "tool_fault")
-        assert f"da-guard parse-tree ({reason})" in doc["message"], doc
+        assert doc["tool_fault"][0] == {"binary": "da-guard", "subcommand": "parse-tree",
+                                        "reason": reason}, doc
         _s, st = svc.call("GET", "/v1/status")
         assert st["tool_fault"][0] == {"binary": "da-guard", "subcommand": "parse-tree",
                                        "reason": reason}, st
@@ -1096,11 +1047,12 @@ def test_the_da_guard_flag_is_the_one_that_judges_and_is_reported(tmp_path, worl
         _s, st = svc.call("GET", "/v1/status")
         if flag_is == "blank":
             assert status == 503 and doc["reason"] == "tool_fault", doc
-            assert "da-guard parse-tree (not_found)" in doc["message"], doc
+            assert doc["tool_fault"][0] == {"binary": "da-guard", "subcommand": "parse-tree",
+                                            "reason": "not_found"}, doc
         elif flag_is != "the_real_one":
             assert status == 503, doc
             assert doc["reason"] == "tool_fault", doc
-            assert "da-guard parse-tree" in doc["message"], doc
+            assert doc["tool_fault"][0]["binary"] == "da-guard", doc
             assert st["tool_fault"] and st["da_guard_version"] is None, st
         else:
             assert status == 200 and doc["result"] == "pass", doc
@@ -1150,20 +1102,19 @@ def test_policy_is_read_for_every_judgement(tmp_path, world):
 
         policy.write_text("allowed_domains: 5\n", encoding="utf-8")
         doc = check(503, "POLICY_UNAVAILABLE", "policy_unusable")
-        assert str(policy) in doc["message"]
+        assert str(policy) in svc.log.read_text(encoding="utf-8")  # #3961: its log, not the reply
         _s, st = svc.call("GET", "/v1/status")
         assert st["policy"]["available"] is False and st["ready"] is False
 
         # #3276 G1: a --policy with nothing there is the same refusal, named.
         policy.unlink()
         doc = check(503, "POLICY_UNAVAILABLE", "policy_unusable")
-        assert str(policy) in doc["message"]
 
         major = int(own.split(".")[0])
         policy.write_text(f'allowed_domains: []\nmin_generator_version: "{major + 1}.0.0"\n',
                           encoding="utf-8")
         doc = check(503, "VALIDATOR_UNAVAILABLE", "generator_too_old")
-        assert "image tag" in doc["message"]
+        assert "image tag" in svc.log.read_text(encoding="utf-8")
         _s, st = svc.call("GET", "/v1/status")
         assert st["policy"]["available"] is True and st["ready"] is False
         assert st["policy"]["min_generator_version"] == f"{major + 1}.0.0"
@@ -1871,7 +1822,7 @@ def test_inflight_budget_and_writes_limit_flags(tmp_path, world):
     with h.Service(tmp_path / "b", world["repo"], bin_dir=world["bin"],
                    args=("--max-writes", "1")) as svc:
         status, doc = svc.validate(commit, two)
-        assert status == 400 and "at most 1" in doc["message"]
+        assert (status, doc) == (400, {"error": "BAD_REQUEST"}), doc
         assert svc.validate(commit, two[:1])[1]["result"] == "pass"
 
 
@@ -1987,9 +1938,9 @@ def test_the_service_log_never_carries_the_generators_text(tmp_path):
     with h.Service(tmp_path / "svc", repo, bin_dir=bin_dir) as svc:
         status, doc = svc.validate(commit, [{"path": "t-a.yaml", "content_b64": h.b64(body)}])
         assert status == 200 and doc["result"] == "findings", doc
-        # Positive control: the generator did print it (to its own files,
-        # whose tail is in the reply).
-        assert canary in doc["stderr_tail"], doc["stderr_tail"]
+        # Positive control: the generator did print it — a finding quotes the
+        # name-like value (#3703), the reply's one place for the author's text.
+        assert canary in json.dumps(doc["findings"]), doc
     log = svc.log.read_text(encoding="utf-8", errors="replace")
     assert "listening on" in log, log
     assert canary not in log, log

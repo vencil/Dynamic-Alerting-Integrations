@@ -9,9 +9,10 @@ import (
 )
 
 // #1560 ⑤-b (owner decision: the log keeps structured fields only). The
-// generator and its container answer with text that can quote what tenants
-// wrote (a credential among it), a platform path or a program's stderr: an
-// error's Message, a verdict's stderr_tail, a finding's message and field.
+// generator's findings carry text that can quote what tenants wrote (a
+// credential among it): a finding's message and field; an error's Message is
+// tenant-api's own text, which can name a platform path. (The container's
+// answer itself carries no free text since #3961.)
 // tenant-api's log is read across a trust boundary the 422 (disclosedFindings,
 // by RBAC) is not, so every type here that carries such text logs itself as
 // structured fields only (slog.LogValuer). Error() is unchanged: the
@@ -44,7 +45,7 @@ func (e *FindingsError) LogValue() slog.Value {
 }
 
 // LogValue implements slog.LogValuer: result, reason code, exit code and the
-// findings by kind — never message, stderr_tail or a finding's text.
+// findings by kind — never a finding's text.
 func (v *Verdict) LogValue() slog.Value {
 	attrs := []slog.Attr{slog.String("result", logResult(v.Result))}
 	if v.Reason != "" {
@@ -59,8 +60,7 @@ func (v *Verdict) LogValue() slog.Value {
 	return slog.GroupValue(attrs...)
 }
 
-// LogValue implements slog.LogValuer: status, reason code, tenants, seconds
-// — never the service's Message.
+// LogValue implements slog.LogValuer: status, reason code, tenants, seconds.
 func (kv *KeyVerdict) LogValue() slog.Value {
 	return slog.GroupValue(slog.String("status", logKeyVerdictStatus(kv.Status)),
 		slog.String("reason", keyVerdictLogReason(kv.Reason)),
