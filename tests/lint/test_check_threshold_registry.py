@@ -506,6 +506,108 @@ def test_the_go_table_renders_every_entry_and_names_the_replacement(tmp_path):
     assert lib.RETIRED_KEYS_GO_ID in (lib.check_retired_keys_go(doc, str(go)) or "")
 
 
+# ── the built-in defaults Go table (#3832) ────────────────────────────────
+
+def _armed_key(doc):
+    return sorted(k for k, e in doc["keys"].items() if lib.is_chart_armed(e))[0]
+
+
+def test_the_committed_builtin_table_is_what_the_registry_generates():
+    """Head: the generated Go table is fresh, and it holds every default-armed
+    key of the registry (none would make the freshness check pass on an empty
+    table)."""
+    doc = lib.load_registry()
+    assert lib.check_builtin_defaults_go(doc) is None
+    table = lib.builtin_defaults(doc)
+    assert table and set(table) == {k for k, e in doc["keys"].items() if lib.is_chart_armed(e)}
+
+
+def test_a_changed_armed_value_without_regen_leaves_the_builtin_table_stale(tmp_path):
+    """The values the readers are compiled with follow the registry: changing
+    a default-armed key's value without --regen is red in --ci."""
+    def bump(doc):
+        key = _armed_key(doc)
+        doc["keys"][key]["value"] = doc["keys"][key]["value"] + 1
+    errors = gate.run_check(registry_path=_write_registry_variant(tmp_path, bump))["errors"]
+    assert any(e.startswith("stale-surface:") and lib.BUILTIN_DEFAULTS_GO_ID in e for e in errors), errors
+
+
+def test_a_missing_builtin_table_is_stale(tmp_path):
+    errors = gate.run_check(
+        surface_paths={lib.BUILTIN_DEFAULTS_GO_ID: str(tmp_path / "gone.go")})["errors"]
+    assert any(e.startswith("stale-surface:") and lib.BUILTIN_DEFAULTS_GO_ID in e
+               and "does not exist" in e for e in errors), errors
+
+
+def test_the_builtin_table_renders_armed_keys_only_sorted(tmp_path):
+    """One `{key, value}` line per default-armed key, sorted; an operator key
+    is not in it; and a fresh copy passes the freshness check while a copy
+    with another value does not."""
+    doc = {"keys": {
+        "zz_long_key_name": {"arming": "default", "value": 0.5},
+        "aa": {"arming": "default", "value": 80},
+        "mm_operator": {"arming": "operator", "value": 7},
+    }}
+    text = lib.render_builtin_defaults_go(doc)
+    assert ('var builtinDefaultEntries = []builtinDefaultEntry{\n'
+            '\t{"aa", 80},\n'
+            '\t{"zz_long_key_name", 0.5},\n}\n') in text, text
+    assert "mm_operator" not in text
+    digest = lib.builtin_defaults_digest({"aa": "80", "zz_long_key_name": "0.5"})
+    assert f'const builtinDefaultsDigest = "{digest}"\n' in text
+    go = tmp_path / "gen.go"
+    go.write_text(text, encoding="utf-8")
+    assert lib.check_builtin_defaults_go(doc, str(go)) is None
+    go.write_text(text.replace("80}", "81}"), encoding="utf-8")
+    assert lib.BUILTIN_DEFAULTS_GO_ID in (lib.check_builtin_defaults_go(doc, str(go)) or "")
+
+
+def test_an_empty_builtin_table_renders_an_empty_literal():
+    text = lib.render_builtin_defaults_go({"keys": {"k": {"arming": "operator", "value": 1}}})
+    assert "var builtinDefaultEntries = []builtinDefaultEntry{}\n" in text, text
+
+
+def test_a_long_integral_value_is_written_as_a_go_float_literal():
+    """An integer constant past 512 bits does not compile in Go; the same
+    digits with a fraction do. The digest text keeps no fraction."""
+    doc = {"keys": {"big": {"arming": "default", "value": 1e300},
+                    "small": {"arming": "default", "value": 80}}}
+    text = lib.render_builtin_defaults_go(doc)
+    assert '{"big", 1' + "0" * 300 + ".0},\n" in text
+    assert '{"small", 80},\n' in text
+    assert lib.builtin_defaults(doc)["big"] == "1" + "0" * 300
+
+
+@pytest.mark.parametrize("value, text", [
+    (80, "80"), (80.0, "80"), (0.5, "0.5"), (2500.0, "2500"), (0, "0"), (-0.0, "0"),
+    (1e-7, "0.0000001"), (1e20, "100000000000000000000"), (-2.5, "-2.5"),
+])
+def test_a_builtin_number_is_plain_decimal_text(value, text):
+    """The text is the Go literal and the digest's input, and is what Go's
+    strconv.FormatFloat(v, 'f', -1, 64) writes (the Go side of the digest:
+    TestBuiltinDefaultsDigestOf pins the same two fixture digests)."""
+    assert lib.builtin_default_number(value) == text
+
+
+@pytest.mark.parametrize("value", [True, "80", None, float("nan"), float("inf"), [80], 10 ** 400])
+def test_a_value_that_is_no_finite_number_has_no_builtin_text(value):
+    assert lib.builtin_default_number(value) is None
+
+
+def test_the_digest_names_the_table_content():
+    """Same lines, same digest, whatever the insertion order; another value,
+    key or key set moves it. The two literals are the ones the Go test pins."""
+    n = lib.builtin_default_number
+    base = {"fixture_a": n(80), "fixture_b": n(0.5)}
+    assert lib.builtin_defaults_digest(base) == "04515815be57"
+    assert lib.builtin_defaults_digest(dict(reversed(list(base.items())))) == "04515815be57"
+    assert lib.builtin_defaults_digest(
+        {"fixture_small": n(1e-7), "fixture_big": n(1e20)}) == "ff25ac41be7f"
+    for other in ({"fixture_a": n(81), "fixture_b": n(0.5)}, {"fixture_a": n(80)},
+                  {"fixture_a2": n(80), "fixture_b": n(0.5)}):
+        assert lib.builtin_defaults_digest(other) != "04515815be57"
+
+
 # ── value_counterexample (#1176) ──────────────────────────────────────────
 #
 # The field records that ADR-030's reference library produced a case a shipped

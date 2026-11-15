@@ -1135,6 +1135,13 @@ def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
     module.parent.mkdir(parents=True)
     module.write_text("# stale\n", encoding="utf-8")
     monkeypatch.setattr(lib, "RULE_PACKS_MODULE_PATH", str(module))
+    # …and the two generated Go tables, for the same reason.
+    for attr, name in (("RETIRED_KEYS_GO_PATH", "retired_threshold_keys_gen.go"),
+                       ("BUILTIN_DEFAULTS_GO_PATH", "builtin_defaults_gen.go")):
+        go = root / "go" / name
+        go.parent.mkdir(parents=True, exist_ok=True)
+        go.write_text("// stale\n", encoding="utf-8")
+        monkeypatch.setattr(lib, attr, str(go))
     real = lib.surface_specs
     monkeypatch.setattr(lib, "surface_specs",
                         lambda doc: [s for s in real(doc) if s.get("confd")])
@@ -1377,6 +1384,20 @@ def test_threshold_registry_regen_reports_the_module_it_wrote(tmp_path, monkeypa
     lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch)
     _summary, touched = lib.regen()
     assert str(tmp_path / "repo" / "ops" / "_rule_packs_generated.py") in touched, touched
+
+
+def test_threshold_registry_regen_writes_the_go_tables(tmp_path, monkeypatch):
+    """Both generated Go tables are surfaces the operator must commit: a regen
+    over stale copies rewrites each to what the registry generates and names
+    it among the touched paths."""
+    lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch)
+    doc = lib.load_registry()
+    _summary, touched = lib.regen()
+    for name, render in (("retired_threshold_keys_gen.go", lib.render_retired_keys_go),
+                         ("builtin_defaults_gen.go", lib.render_builtin_defaults_go)):
+        go = tmp_path / "repo" / "go" / name
+        assert str(go) in touched, touched
+        assert go.read_text(encoding="utf-8") == render(doc)
 
 
 def test_threshold_registry_regen_writes_the_surfaces_not_the_registry(tmp_path, monkeypatch):
