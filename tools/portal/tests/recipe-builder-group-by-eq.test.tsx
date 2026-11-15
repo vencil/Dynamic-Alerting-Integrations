@@ -93,6 +93,14 @@ describe('form: the op select on an edit with a stored group_by', () => {
     expect(screen.getByTestId('field-op').hasAttribute('aria-describedby')).toBe(false);
   });
 
+  it('switching kind to threshold drops a held == the new kind would refuse beside the group_by', () => {
+    // A stored rate record with group_by and an `==` rate already refuses;
+    // switched to threshold, opFor judges against the record it would hand off.
+    open({ ...stored, recipe: 'rate', op: '==' });
+    fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'threshold' } });
+    expect((screen.getByTestId('field-op') as HTMLSelectElement).value).toBe('>');
+  });
+
   it('only the op select shows a held value: the other selects are as before', () => {
     open({ ...stored, for: '7m' });
     const forSelect = screen.getByTestId('field-for') as HTMLSelectElement;
