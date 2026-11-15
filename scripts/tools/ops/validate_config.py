@@ -62,8 +62,8 @@ Checks:
                     installed (the repo — the da-tools image ships none)
   16. Unsupplied defaults — a threshold the registry ships armed
                     (`arming: default`), of a pack this tree deploys (the
-                    root platform file carries one of its keys, or a tenant
-                    declares it in `_metadata.db_type`), that the root
+                    root platform file sets one of its keys under `defaults:`,
+                    or a tenant declares it in `_metadata.db_type`), that the root
                     platform file neither sets under `defaults:` nor lists
                     under `optional_overrides:`. Advisory: WARN at most (#3830)
 
@@ -2224,8 +2224,8 @@ _UNSUPPLIED_DEFAULTS_HINT = (
     "stays silent for every tenant. Add the key under `defaults:` (the line "
     "gives the platform's value), or, to leave it off on purpose, list it "
     "under `optional_overrides:` (a tenant can still set it there). A pack "
-    "counts as deployed when the root platform file carries any of its keys "
-    "or a tenant declares it in `_metadata.db_type`. Judged against the "
+    "counts as deployed when the root platform file gives any of its keys a "
+    "value under `defaults:` or a tenant declares it in `_metadata.db_type`. Judged against the "
     "registry this tool was built with: a rule pack older than the tool may "
     "not read the key yet. Never blocks (#3830).")
 
@@ -2251,12 +2251,16 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
 
     A pack is deployed when either holds — no deployment inventory exists:
 
-    * the root platform file carries one of its keys, under `defaults:` or
-      `optional_overrides:`, in any #1231 spelling (the exporter's rule,
-      asked of da-guard), or a retired key whose replacement is one of its
-      keys (#3829; the old key shows the pack, it does not supply the new
-      one). A tenant's or a profile's key adds nothing: one the root file
-      does not declare is already `unread (no_row)`.
+    * the root platform file gives one of its keys a value under
+      `defaults:`, in any #1231 spelling (the exporter's rule, asked of
+      da-guard), or a retired key whose replacement is one of its keys
+      (#3829; the old key shows the pack, it does not supply the new one).
+      A key merely LISTED under `optional_overrides:` shows nothing: that
+      list is shipped whole, every pack's declared keys at once (the chart's
+      values, the try-local seed), so it says what the platform recognises,
+      not what this deployment runs. A tenant's or a profile's key adds
+      nothing: one the root file does not declare is already
+      `unread (no_row)`.
     * a tenant's `_metadata.db_type`, as /metrics serves it (served-values:
       a root platform file's `tenants:` entry counts), names it.
 
@@ -2287,9 +2291,14 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         raw = load_confd_file(config_dir, str(carrier), default={}) if carrier is not None else {}
         block = raw.get("defaults") if isinstance(raw, dict) else None
         listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
+        # A key written as null is not declared at all: the exporter drops it
+        # from `defaults:` before anything reads it (dropNullThresholds), so
+        # it is neither evidence of its pack nor a supplied value.
+        valued = {str(k).partition("{")[0]
+                  for k, v in (block.items() if isinstance(block, dict) else ())
+                  if v is not None}
         written = sorted(
-            {str(k).partition("{")[0] for k in (block if isinstance(block, dict) else {})}
-            | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
+            valued | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
         spell = tv_key_spellings(written)
         served = load_served_tree(config_dir, partial=True)
     except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ParseTreeError,
@@ -2313,8 +2322,12 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         return retired.get(base)
     # pack -> what shows it is deployed: (root keys as written, tenants)
     seen: dict[str, tuple[set[str], set[str]]] = {}
-    for canonical, as_written in supplied.items():
-        pack = pack_of(canonical)
+    # Each valued key on its own spelling: two spellings of one key (a retired
+    # alias under `defaults:`, its canonical name in the listed-only
+    # `optional_overrides:`) must not let the listed one stand in for the
+    # valued one.
+    for as_written in sorted(valued):
+        pack = pack_of(spell.canonical(as_written))
         if pack in armed:
             seen.setdefault(pack, (set(), set()))[0].add(as_written)
     for tenant, tv in served.tenants.items():
@@ -2342,7 +2355,7 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
     for pack, key in missing:
         keys, tenants = seen[pack]
         why = "; ".join(
-            ([f"{where} carries {capped(keys)}"] if keys else [])
+            ([f"{where} sets {capped(keys)}"] if keys else [])
             + ([f"db_type of tenant(s) {capped(tenants)}"] if tenants else []))
         entry = registry[key]
         value = f"{entry['value']} {entry.get('unit', '')}".rstrip()

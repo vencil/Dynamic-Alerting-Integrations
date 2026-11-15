@@ -158,6 +158,19 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
     expect(issueTexts.some((txt) => /saturation/i.test(txt))).toBe(false);
   });
 
+  it('an UNQUOTED 0b101 / 0x1F is an error row, as the exporter refuses it; 1e20 and False are not (#3919)', async () => {
+    const q = await renderTab();
+    setYaml(q, 'mysql_slow_queries: 0b101\nmysql_threads_running: 1e20\nmysql_threads_running_critical: 0x1F\nmysql_connection_usage_percent: False');
+    fireEvent.click(q.getByText('Validate'));
+    const errorRows = Array.from(document.querySelectorAll('[class*="bg-red-50"]')).map((el) => el.textContent || '');
+    const refused = errorRows.filter((txt) => /The exporter will not read this value/.test(txt));
+    expect(refused).toHaveLength(2);
+    // The text that was written is named — not 5 and 31, YAML's reading of it.
+    expect(refused.some((txt) => txt.includes('mysql_slow_queries') && txt.includes('"0b101"'))).toBe(true);
+    expect(refused.some((txt) => txt.includes('mysql_threads_running_critical') && txt.includes('"0x1F"'))).toBe(true);
+    expect(refused.some((txt) => txt.includes('1e20') || txt.includes('False'))).toBe(false);
+  });
+
   it('surfaces a YAML syntax error as an error row, not "All checks passed" (#2033)', async () => {
     // js-yaml refuses duplicate keys; parseYaml then returns config = {} and
     // validateConfig({}) has nothing to say — the parse error must be shown.
