@@ -241,6 +241,8 @@ lang: zh
 | RabbitMQLowConsumers | warning | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ consumer count low  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_consumers:max |
 | RabbitMQHighUnackedMessages | warning | 靜音 | [tier] {{ $labels.tenant }}: unacked messages piling up  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_unacked_messages:max |
 | RabbitMQHighUnackedMessagesCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical unacked backlog  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_unacked_messages:max |
+| RabbitMQMemoryAlarm | critical | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ memory alarm  | 釋放記憶體（消化佇列、增加 consumer）或調高 vm_memory_high_watermark；watermark 為 0 時本來就會擋住所有 publisher | tenant:rabbitmq_memory_alarm:max |
+| RabbitMQDiskAlarm | critical | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ disk alarm  | 釋放該節點的磁碟空間（清除或搬移資料、擴充磁碟）；調低 disk_free_limit 只會縮小磁碟寫滿前的安全邊際 | tenant:rabbitmq_disk_alarm:max |
 | RabbitMQThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---

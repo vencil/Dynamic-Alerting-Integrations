@@ -31,9 +31,9 @@ lang: zh
 | Oracle | rule-pack-oracle.yaml | 13 | 10 | 23 |
 | Platform | rule-pack-platform.yaml | 0 | 54 | 54 |
 | Postgresql | rule-pack-postgresql.yaml | 8 | 8 | 16 |
-| Rabbitmq | rule-pack-rabbitmq.yaml | 14 | 10 | 24 |
+| Rabbitmq | rule-pack-rabbitmq.yaml | 16 | 12 | 28 |
 | Redis | rule-pack-redis.yaml | 12 | 10 | 22 |
-| **TOTAL** | | **165** | **194** | **359** |
+| **TOTAL** | | **167** | **196** | **363** |
 
 ## 架構說明
 

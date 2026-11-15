@@ -95,6 +95,15 @@ RECOMMENDED_ACTIONS = {
         "zh": "看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 \"disable\"，提醒隨之結束",
         "en": "Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write \"disable\" if the alert is not wanted, which also ends the notice",
     },
+    # RabbitMQ resource alarms (#3973): publishers are blocked
+    "MemoryAlarm": {
+        "zh": "釋放記憶體（消化佇列、增加 consumer）或調高 vm_memory_high_watermark；watermark 為 0 時本來就會擋住所有 publisher",
+        "en": "Free memory (drain queues, add consumers) or raise vm_memory_high_watermark; a watermark of 0 blocks publishers by design",
+    },
+    "DiskAlarm": {
+        "zh": "釋放該節點的磁碟空間（清除或搬移資料、擴充磁碟）；調低 disk_free_limit 只會縮小磁碟寫滿前的安全邊際",
+        "en": "Free disk space on the node (purge or move data, grow the volume); lowering disk_free_limit only narrows the margin before the disk fills",
+    },
     # Default fallback
     "default": {
         "zh": "檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊",
