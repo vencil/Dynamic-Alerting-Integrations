@@ -1,0 +1,40 @@
+# promtool unit test — the shipped default of rabbitmq_node_mem_percent.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-rabbitmq.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # 89 % of the memory high watermark for 10m, then 95 %.
+      - series: 'rabbitmq_node_mem_used{tenant="t-armed", node="rabbit@a"}'
+        values: '89x40 95x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-armed", node="rabbit@a"}'
+        values: '100x81'
+      - series: 'user_threshold{tenant="t-armed", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x81'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="RabbitMQHighMemory"})
+        eval_time: 8m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="RabbitMQHighMemory"})
+        eval_time: 11m30s
+        exp_samples:
+          - labels: '{alertname="RabbitMQHighMemory", tenant="t-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="RabbitMQHighMemory"})
+        eval_time: 11m30s
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="RabbitMQHighMemory"})
+        eval_time: 15m
+        exp_samples:
+          - labels: '{alertname="RabbitMQHighMemory", tenant="t-armed"}'
+            value: 1

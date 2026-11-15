@@ -402,8 +402,9 @@ def test_real_not_chart_armed_comes_from_the_registry():
     # 58: 61 less the three keys #3783 removed. #3778 moved mysql_threads_running to
     # the optional_overrides tier, so it and its critical are declared-only
     # (KNOWN_UNWIRED), not defaults-tier-but-unshipped. D-A A2b promoted three
-    # keys; they and their criticals left: 58 -> 52.
-    assert len(expected) == 52
+    # keys; they and their criticals left: 58 -> 52. #3929 promoted
+    # rabbitmq_node_mem_percent: 52 -> 50.
+    assert len(expected) == 50
     assert not hasattr(gate, "NOT_CHART_ARMED")
 
 
@@ -4058,8 +4059,8 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (6, 28), (
-        f"the HEADROOM note beside the key floors says artifacts +6 / generators "
+    assert (up_art, up_gen) == (7, 28), (
+        f"the HEADROOM note beside the key floors says artifacts +7 / generators "
         f"+28 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
