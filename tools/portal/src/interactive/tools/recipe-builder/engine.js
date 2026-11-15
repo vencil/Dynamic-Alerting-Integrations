@@ -29,8 +29,15 @@ purpose: |
                                     "value:severity" into the two fields
     requiredFields(recipe)          required-field list for the state gate
     isFieldValid(field, value)      per-field validity
-    allRequiredValid(recipe, f)     summary/submit gate
-    recipeSummary(recipe, f)        plain-English summary (null until valid)
+    opOptions(recipe[, original])   the operators the op select offers; no `==`
+                                    when the record keeps a stored group_by (#3958)
+    eqBlockedByGroupBy(recipe, original)
+                                    whether `==` is withheld for that reason
+    opFor(recipe, op[, original])   the op to keep when the recipe changes
+    allRequiredValid(recipe, f[, original])
+                                    summary/submit gate
+    recipeSummary(recipe, f[, original])
+                                    plain-English summary (null until valid)
     buildRecipeObject(recipe, f[, original])
                                     the RecipeObject handoff payload; with the
                                     stored recipe an edit opened with, keeps
@@ -199,19 +206,36 @@ function requiredFields(recipe) {
   return ENUMS.fields.filter((field) => all.includes(field));
 }
 
+/* Whether `==` is withheld from an eq recipe because the record the form
+ * hands off keeps the stored recipe's group_by (#3958). The exporter refuses
+ * group_by with op `==` (custom_alert.go: a non-empty group_by and `==`), the
+ * form has no group_by field, and buildRecipeObject carries the stored one
+ * over — so offering `==` would produce a record the save refuses for a
+ * reason the form does not show. An empty list is no group_by there.
+ * Every eq recipe takes group_by by the contract, so carriesOver always
+ * carries it on a kind change; were one not to, this would withhold `==`
+ * more often than needed, never less. */
+function eqBlockedByGroupBy(recipe, original) {
+  if (!original || !ownsKey(original, 'group_by') || !ENUMS.eqRecipes.includes(recipe)) return false;
+  const g = original.group_by;
+  return !(g === null || g === undefined || (Array.isArray(g) && g.length === 0));
+}
+
 /* The operators a recipe accepts: `==` only on the contract's eq recipes
- * (#810 — exact match on a raw gauge; computed floats reject it). */
-function opOptions(recipe) {
+ * (#810 — exact match on a raw gauge; computed floats reject it), and not
+ * when an edit keeps a stored group_by (eqBlockedByGroupBy). */
+function opOptions(recipe, original) {
   const spec = recipeSpec(recipe);
   if (spec && spec.fixedOp) return [spec.fixedOp];
-  return ENUMS.op.filter((op) => op !== '==' || ENUMS.eqRecipes.includes(recipe));
+  const eq = ENUMS.eqRecipes.includes(recipe) && !eqBlockedByGroupBy(recipe, original);
+  return ENUMS.op.filter((op) => op !== '==' || eq);
 }
 
 /* The op to keep when the recipe changes: the current one if the new recipe
  * takes it, else the default — so a `==` picked on threshold does not stay in
  * state (invisible behind a select showing ">") after switching to rate. */
-function opFor(recipe, op) {
-  const options = opOptions(recipe);
+function opFor(recipe, op, original) {
+  const options = opOptions(recipe, original);
   if (options.includes(op)) return op;
   return options.includes(ENUMS.opDefault) ? ENUMS.opDefault : options[0];
 }
@@ -254,7 +278,7 @@ function isFieldValid(field, value) {
 /* allRequiredValid — the state-machine gate for the summary + submit.
  * False until every required field is present and structurally valid, so
  * the plain-English summary never renders [undefined] (review Reef 4). */
-function allRequiredValid(recipe, f) {
+function allRequiredValid(recipe, f, original) {
   if (!formSupported(recipe)) return false; // YAML-only recipe: never "ready"
   const required = requiredFields(recipe);
   // Required fields: must be present AND valid.
@@ -269,15 +293,15 @@ function allRequiredValid(recipe, f) {
   for (const field of (FIELDS_BY_RECIPE[recipe] || [])) {
     if (!required.includes(field) && f[field] && !isFieldValid(field, f[field])) return false;
   }
-  if (f.op && !opOptions(recipe).includes(f.op)) return false;
+  if (f.op && !opOptions(recipe, original).includes(f.op)) return false;
   if (forecastFloorError(recipe, f)) return false;
   return true;
 }
 
 /* ── plain-English summary (dynamic, ZH-primary; NEVER exposes PromQL /
  * series / labels). null until allRequiredValid. ───────────────────── */
-function recipeSummary(recipe, f) {
-  if (!allRequiredValid(recipe, f)) return null;
+function recipeSummary(recipe, f, original) {
+  if (!allRequiredValid(recipe, f, original)) return null;
   const value = thresholdValuePart(f.threshold);
   const sev = f.severity || ENUMS.severityDefault; // dropdown is the SoT
   const op = f.op || ENUMS.opDefault;
@@ -427,6 +451,7 @@ export {
   requiredFields,
   isFieldValid,
   opOptions,
+  eqBlockedByGroupBy,
   opFor,
   forecastFloorError,
   allRequiredValid,

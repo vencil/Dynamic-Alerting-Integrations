@@ -17,6 +17,7 @@ import {
   isValidName,
   isValidMetric,
   opOptions,
+  eqBlockedByGroupBy,
   opFor,
   forecastFloorError,
   allRequiredValid,
@@ -393,8 +394,10 @@ export default function RecipeBuilder(props) {
   useEffect(() => (draftChanged ? holdSignIn() : undefined), [draftChanged]);
 
   const fields = FIELDS_BY_RECIPE[recipe] || [];
-  const summary = useMemo(() => recipeSummary(recipe, f), [recipe, f]);
-  const ready = allRequiredValid(recipe, f);
+  // An edit judges the op against the record it hands off: one that keeps a
+  // stored group_by is not offered `==` (#3958).
+  const summary = useMemo(() => recipeSummary(recipe, f, initialValue), [recipe, f, initialValue]);
+  const ready = allRequiredValid(recipe, f, initialValue);
   const recipeObj = useMemo(() => (ready ? buildRecipeObject(recipe, f) : null), [ready, recipe, f]);
   // #3920: what an edit hands off — the form's fields plus the members of the
   // stored recipe the form does not own (selectors, selectors_re, group_by).
@@ -420,13 +423,18 @@ export default function RecipeBuilder(props) {
     + 'focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]';
   const labelClass = 'block text-sm font-medium mb-1';
 
-  const select = (key, label, options) => (
+  // A value the options leave out (a stored op `==` beside a group_by,
+  // #3958) is shown as a disabled option, not hidden behind the first one:
+  // the select says what the record holds, and picking another changes it.
+  const select = (key, label, options, note = null) => (
     <div className="mb-3" key={key}>
       <label className={labelClass}>{label}</label>
       <select className={inputClass} value={f[key]} aria-label={label}
         data-testid={`field-${key}`} onChange={(e) => set(key, e.target.value)}>
+        {f[key] && !options.includes(f[key]) && <option key={f[key]} value={f[key]} disabled>{f[key]}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
+      {note}
     </div>
   );
 
@@ -449,8 +457,17 @@ export default function RecipeBuilder(props) {
   };
 
   function renderField(field) {
-    if (['op', 'severity', 'mode', 'for', 'horizon'].includes(field)) {
-      return select(field, LABELS[field], field === 'op' ? opOptions(recipe) : ENUMS[field]);
+    if (field === 'op') {
+      const note = eqBlockedByGroupBy(recipe, initialValue) && (
+        <p className="text-xs mt-1 text-[color:var(--da-color-muted)]" data-testid="op-eq-group-by">
+          {t(`這筆 recipe 帶 group_by（${JSON.stringify(initialValue.group_by)}），exporter 不接受 group_by 與 == 並用，所以這裡不提供 ==。要用 ==，請先在租戶 YAML 拿掉 group_by。`,
+            `This recipe has a group_by (${JSON.stringify(initialValue.group_by)}), and the exporter does not accept group_by with ==, so == is not offered here. To use ==, remove the group_by in the tenant YAML first.`)}
+        </p>
+      );
+      return select(field, LABELS[field], opOptions(recipe, initialValue), note);
+    }
+    if (['severity', 'mode', 'for', 'horizon'].includes(field)) {
+      return select(field, LABELS[field], ENUMS[field]);
     }
     if (METRIC_FIELDS.includes(field)) {
       return (
@@ -478,7 +495,7 @@ export default function RecipeBuilder(props) {
           onChange={(e) => {
             const next = e.target.value;
             setRecipe(next);
-            setF((prev) => ({ ...prev, op: opFor(next, prev.op) }));
+            setF((prev) => ({ ...prev, op: opFor(next, prev.op, initialValue) }));
           }}>
           {ENUMS.recipe.map((r) => {
             const st = recipeStatus(r);
