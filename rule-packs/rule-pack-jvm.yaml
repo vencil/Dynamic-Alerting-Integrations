@@ -76,12 +76,14 @@ groups:
       #       grow to, so the limits add up to more than the heap limit the
       #       JVM itself reports. The gap widens as the heap fills: at
       #       OutOfMemoryError this reads 88.5 % (82.7 % with -XX:NewRatio=1)
-      #       while the JVM reports ~98 % — the critical alert never fires.
+      #       while the JVM reports ~98 % — at the reference critical
+      #       threshold of 95 the critical alert never fires (a lower
+      #       tenant threshold can).
       #       (Measured, JDK 21, -Xmx1g.)
       #     - OpenJ9 balanced: three of its four heap pools report the whole
       #       heap as their limit, so this reads about a quarter of the real
-      #       figure and never fires. (Read from OpenJ9's modronapi.cpp, not
-      #       run.)
+      #       figure: at the 80 / 95 reference thresholds it never fires.
+      #       (Read from OpenJ9's modronapi.cpp, not run.)
       #     G1, Serial, ZGC and non-generational Shenandoah read exactly
       #     (measured, JDK 21).
       #   - The second branch reads the names jmx_exporter < 1.0 exports
