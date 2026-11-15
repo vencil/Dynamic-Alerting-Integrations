@@ -322,8 +322,9 @@ _ENTRY_SHAPES: "dict[str, tuple[dict[str, str], tuple[str, str], tuple[str, ...]
 #: (its basis, the name as the output must show it — da-guard's Go `%q`,
 #: every byte that is not printable UTF-8 escaped). Basis: ADR-036 step 9,
 #: "樹裡有不是 UTF-8 的檔名時，工具同樣必須以非 0 結束…並以跳脫形式點名那個檔名"
-#: (tests/shared/test_confd_behaviour_matrix.py, `refused` row). Why not a
-#: stand-in: see `_lib_validation.shown_file`.
+#: (docs/adr/036-single-parser-effective-config.md; the `refused` row of
+#: tests/shared/test_confd_behaviour_matrix.py holds every tool to it). Why
+#: not a stand-in: see `_lib_validation.shown_file`.
 _NAMED_ESCAPED: "dict[str, tuple[str, str]]" = {
     "not_utf8_name": (
         "ADR-036 step 9: a file name that is not UTF-8 is named, escaped",
@@ -418,6 +419,12 @@ def test_the_exception_names_the_file_only_escaped(name, mode):
     res = _shape(name, _SHAPE_MODES[mode])
     assert res.rc != 0 and what in res.text, (res.rc, ascii(res.raw[-3000:]))
     assert _NAMED_ESCAPED[name][1] in res.text, ascii(res.raw[-3000:])
+    # Named once, and only there: a second, differently cleaned copy of the
+    # name (control characters swapped for `?`, say) passes every byte check.
+    shown = _NAMED_ESCAPED[name][1]
+    for word in (_CANARY, "forged"):
+        assert res.text.lower().count(word) == shown.lower().count(word) == 1, (
+            word, ascii(res.raw[-3000:]))
     for raw_byte in (b"\xff", b"\x1b", b"\x07"):
         assert raw_byte not in res.raw, (raw_byte, ascii(res.raw[-3000:]))
     lines = res.raw.splitlines()

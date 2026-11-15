@@ -1558,7 +1558,8 @@ def shown_file(path: Any) -> "str | None":
     route is generated — and its stderr names that entry escaped (Go
     ``%q``: one line, every byte that is not printable UTF-8, newline and
     control characters included, written as ``\\xff`` / ``\\n`` / ``\\x1b``);
-    ``parse_tree_failure_exit`` repeats that line as it is. ADR-036 step 9
+    ``parse_tree_failure_exit`` — the exit of every tool that reads the
+    tree — repeats that line, runs of whitespace folded to one space. ADR-036 step 9
     requires every tool to name that file escaped: the operator must know
     which entry to rename, and a stand-in cannot be traced back to a name
     whose bytes are not text. Pinned, and kept to that one cell, by

@@ -143,8 +143,9 @@ def parse_tree_failure_exit(e: ParseTreeError, config_dir: str) -> "None":
     """No usable `da-guard parse-tree` (missing, failing, a document this
     tool cannot read): nothing of the tree was read, so exit 2 — the caller
     error every tool gives a missing or failing da-guard."""
-    # #3703: da-guard's line may name a non-UTF-8 entry escaped, repeated as
-    # it is — the one exception to `shown_file`'s rule (see its docstring).
+    # #3703: da-guard's line may name a non-UTF-8 entry escaped, repeated
+    # here for every caller — the one exception to `shown_file`'s rule (see
+    # its docstring).
     print(f"ERROR: {safe_label(config_dir)}: cannot read the conf.d through "
           f"`da-guard parse-tree` (ADR-036): {' '.join(str(e).split())}", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
