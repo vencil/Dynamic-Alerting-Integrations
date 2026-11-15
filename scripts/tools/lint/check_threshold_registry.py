@@ -263,6 +263,13 @@ def run_check(
     if msg:
         errors.append(f"unannounced: {msg}")
 
+    # 3f. the generated Go table of the operator-supplied keys (#1200 D-A A3),
+    #     the keys the exporter judges unset per tenant.
+    unset_path = (surface_paths or {}).get(registry_lib.UNSET_KEYS_GO_ID)
+    msg = registry_lib.check_unset_keys_go(doc, unset_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+
     # 4. header-prose key membership (F6).
     if prose_files is None:
         # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;

@@ -90,6 +90,11 @@ RECOMMENDED_ACTIONS = {
         "zh": "分析死鎖查詢日誌、調整應用邏輯減少衝突；考慮增加鎖定超時時間",
         "en": "Analyze deadlock query logs, adjust application logic to reduce contention; consider increasing lock timeout",
     },
+    # Unconfigured threshold (#1200 D-A A3)
+    "ThresholdNotConfigured": {
+        "zh": "看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 \"disable\"，提醒隨之結束",
+        "en": "Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write \"disable\" if the alert is not wanted, which also ends the notice",
+    },
     # Default fallback
     "default": {
         "zh": "檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊",

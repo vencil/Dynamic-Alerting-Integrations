@@ -447,6 +447,7 @@ class TestKafkaRabbitMQAlertCompleteness:
             "KafkaHighConsumerLag", "KafkaHighConsumerLagCritical",
             "KafkaUnderReplicatedPartitions", "KafkaUnderReplicatedPartitionsCritical",
             "KafkaLowBrokerCount",
+            "KafkaThresholdNotConfigured",  # #1200 D-A A3: opt-in unset-threshold notice
         ]
         assert sorted(alerts) == sorted(expected)
 

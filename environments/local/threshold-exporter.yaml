@@ -59,6 +59,14 @@ thresholdConfig:
       reasons: []
       severity: "info"
       default_state: "disable"
+    # #1200 D-A A3: <Pack>ThresholdNotConfigured — an info alert naming each
+    # threshold key that serves the tenant no threshold. Off by default; set
+    # default_state to "enable" to notify every tenant, or a tenant writes
+    # _state_unset_thresholds: "enable" (or "disable") to choose for itself.
+    unset_thresholds:
+      reasons: []
+      severity: "info"
+      default_state: "disable"
   tenants:
     db-a:
       mysql_connection_usage_percent: "70"

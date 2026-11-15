@@ -439,3 +439,28 @@ func TestGuard_ABaseOnlyDimensionsNamesKeepsItsFindings(t *testing.T) {
 		t.Errorf("root null: kinds %v, want root_default_null_undeclared", got)
 	}
 }
+
+// #1200 D-A A3: a `disable` that ends a subscribed tenant's unset notice
+// switches something off (user_threshold_unset is served output); the same
+// `disable` from a tenant that did not subscribe switches nothing off.
+func TestServedValues_DisableEffectsCountTheUnsetNotice(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": "optional_overrides: [oracle_wait_time_rate]\n" +
+			"state_filters:\n  unset_thresholds: {reasons: [], severity: info, default_state: disable}\n",
+		"a.yaml": "tenants:\n  a:\n    _state_unset_thresholds: enable\n" +
+			"    oracle_wait_time_rate: disable\n    redis_replication_lag: disable\n",
+		"b.yaml": "tenants:\n  b:\n    oracle_wait_time_rate: disable\n",
+	}, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	for tenant, byKey := range map[string]map[string]string{
+		"a": {"oracle_wait_time_rate": disableEffective, "redis_replication_lag": disableEffective},
+		"b": {"oracle_wait_time_rate": disableNoop},
+	} {
+		for k, w := range byKey {
+			if got := disableOf(t, doc, tenant, k); got != w {
+				t.Errorf("%s: keys[%q].disable = %q, want %q", tenant, k, got, w)
+			}
+		}
+	}
+}
