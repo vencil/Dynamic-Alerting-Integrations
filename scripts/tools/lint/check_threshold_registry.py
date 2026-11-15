@@ -119,6 +119,7 @@ def run_check(
     surface_paths: dict[str, str] | None = None,
     prose_files: list[str] | None = None,
     extra_allowed: set[str] | None = None,
+    changelog_paths: tuple[str, str] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors}. Inputs default to the real artifacts; hermetic tests
     inject synthetic docs/packs/paths to exercise each branch.
@@ -129,6 +130,9 @@ def run_check(
       every rule-packs/rule-pack-*.yaml).
     - ``extra_allowed``: membership-universe extras (defaults to KNOWN_UNWIRED
       + scaffold state-filter names).
+    - ``changelog_paths``: (fragments dir, CHANGELOG path) the built-in
+      table's digest must be announced in (defaults to changelog.d/ and
+      CHANGELOG.md).
     """
     errors: list[str] = []
 
@@ -192,6 +196,14 @@ def run_check(
     msg = registry_lib.check_builtin_defaults_go(doc, builtin_path)
     if msg:
         errors.append(f"stale-surface: {msg}")
+
+    # 3e. a change to the built-in table is breaking (#3832): its digest is
+    #     named by a `⚠️ breaking` changelog fragment or the released
+    #     CHANGELOG.
+    msg = registry_lib.check_builtin_digest_announced(
+        doc, *(changelog_paths or (None, None)))
+    if msg:
+        errors.append(f"unannounced: {msg}")
 
     # 4. header-prose key membership (F6).
     if prose_files is None:

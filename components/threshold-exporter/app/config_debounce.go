@@ -281,6 +281,9 @@ type reloadPriorState struct {
 	// (#2117): what this tick's is compared with, and reused as is when no
 	// root platform file moved.
 	profiles *config.PlatformProfiles
+	// withholdBuiltin is the last commit's TreeScan.RootDefaultsUnreadable
+	// (#3832): merged_hash left the built-in layer out.
+	withholdBuiltin bool
 	// mergeRetry is the tenants the last tick could not recompute because
 	// a read failed (#2100): recomputed on this tick even if nothing that
 	// feeds them moved.
@@ -310,6 +313,11 @@ type reloadScanState struct {
 	// profile's content moved, which skips the per-tenant question.
 	profiles        *config.PlatformProfiles
 	changedProfiles map[string]struct{}
+	// withholdBuiltin is this tick's TreeScan.RootDefaultsUnreadable
+	// (#3832); withholdMoved: it differs from the prior commit's, so every
+	// tenant's merged_hash is computed again (the chain may not have moved:
+	// an unreadable `_defaults.yml` beside a readable `_defaults.yaml`).
+	withholdBuiltin, withholdMoved bool
 }
 
 // reloadResult bundles classifyAndCount's output for installNewHierarchyState
@@ -339,11 +347,12 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 		hashes:           m.hierarchy.hashes,
 		mergedHashes:     m.hierarchy.mergedHashes,
 		tenantSources:    m.hierarchy.tenantSources,
-		parsedDefaults:   m.hierarchy.parsedDefaults, // Issue #61
-		graph:            m.hierarchy.graph,          // #1964: prior chain membership
-		platform:         m.hierarchy.platform,       // #2019: prior platform per-tenant blocks
-		profiles:         m.hierarchy.profiles,       // #2117: prior profiles
-		mergeRetry:       m.hierarchy.mergeRetry,     // #2100: failed-read tenants to retry
+		parsedDefaults:   m.hierarchy.parsedDefaults,  // Issue #61
+		graph:            m.hierarchy.graph,           // #1964: prior chain membership
+		platform:         m.hierarchy.platform,        // #2019: prior platform per-tenant blocks
+		profiles:         m.hierarchy.profiles,        // #2117: prior profiles
+		withholdBuiltin:  m.hierarchy.withholdBuiltin, // #3832
+		mergeRetry:       m.hierarchy.mergeRetry,      // #2100: failed-read tenants to retry
 		hierarchicalMode: m.hierarchy.enabled,
 		tree:             m.flat.tree,
 	}
@@ -423,6 +432,8 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 		platformMoved:   platformMoved,
 		profiles:        profiles,
 		changedProfiles: changedProfiles,
+		withholdBuiltin: scan.RootDefaultsUnreadable(),
+		withholdMoved:   scan.RootDefaultsUnreadable() != prior.withholdBuiltin,
 	}, false, nil
 }
 
@@ -520,7 +531,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	defaultsChanged := membershipChanged || len(scopePaths) > 0
 	_, retrying := prior.mergeRetry[tid]
 
-	if !sourceChanged && !defaultsChanged && !retrying {
+	if !sourceChanged && !defaultsChanged && !retrying && !scan.withholdMoved {
 		// Reuse cached merged_hash — nothing that feeds this tenant moved.
 		if prev, ok := prior.mergedHashes[tid]; ok {
 			res.newMergedHashes[tid] = prev
@@ -531,7 +542,7 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 	}
 
 	overlay := config.PlatformOverlayFor(scan.platform, tid)
-	mh, mergeErr := m.recomputeMergedHashWith(tid, srcPath, defaultsChain, config.TenantLayers{Overlay: overlay, Profiles: scan.profiles}, tenantFiles)
+	mh, mergeErr := m.recomputeMergedHashWith(tid, srcPath, defaultsChain, config.TenantLayers{Overlay: overlay, Profiles: scan.profiles, WithholdBuiltin: scan.withholdBuiltin}, tenantFiles)
 	if mergeErr != nil {
 		// #2100: a failed READ is not a fact about the inputs this tick
 		// commits (their hashes come from the scan), so the tenant is
@@ -739,6 +750,7 @@ func (m *ConfigManager) installNewHierarchyState(scan reloadScanState, result re
 	m.hierarchy.parsedDefaults = result.newParsedDefaults
 	m.hierarchy.platform = scan.platform
 	m.hierarchy.profiles = scan.profiles
+	m.hierarchy.withholdBuiltin = scan.withholdBuiltin
 	m.hierarchy.mergeRetry = result.newMergeRetry
 	m.hierarchy.gen++
 	afterHierarchyInstall := m.afterHierarchyInstall
@@ -910,6 +922,7 @@ func (m *ConfigManager) retryFailedMergedHashes() {
 	graph := m.hierarchy.graph
 	platform := m.hierarchy.platform
 	profiles := m.hierarchy.profiles
+	withhold := m.hierarchy.withholdBuiltin
 	m.mu.RUnlock()
 
 	subset := make(map[string]string, len(retry))
@@ -929,7 +942,7 @@ func (m *ConfigManager) retryFailedMergedHashes() {
 		if graph != nil {
 			chain = graph.TenantDefaults[tid]
 		}
-		mh, err := m.recomputeMergedHashWith(tid, src, chain, config.TenantLayers{Overlay: config.PlatformOverlayFor(platform, tid), Profiles: profiles}, tenantFiles)
+		mh, err := m.recomputeMergedHashWith(tid, src, chain, config.TenantLayers{Overlay: config.PlatformOverlayFor(platform, tid), Profiles: profiles, WithholdBuiltin: withhold}, tenantFiles)
 		if err != nil {
 			if isMergeReadError(err) {
 				continue // still unreadable: stays marked, already logged

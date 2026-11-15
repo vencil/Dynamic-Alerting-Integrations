@@ -62,9 +62,9 @@ func TestParseRefusedMatrix_MetricAndLog(t *testing.T) {
 				if s.kind != "" {
 					refused = promtest.ToFloat64(fresh.parseRefused.WithLabelValues(broken, s.kind))
 				}
-				t1, t1ok := seriesFor(t, m, "t1", "connections")
-				_, t2ok := seriesFor(t, m, "t2", "connections")
-				_, cpuOK := seriesFor(t, m, "t2", "slow_queries")
+				t1, t1ok := seriesFor(t, m, "t1", "mysql_connections")
+				_, t2ok := seriesFor(t, m, "t2", "mysql_connections")
+				_, cpuOK := seriesFor(t, m, "t2", "mysql_slow_queries")
 
 				if s.kind == "" {
 					if failures != 0 || promtest.CollectAndCount(fresh.parseRefused) != 0 {
@@ -150,7 +150,7 @@ func TestParseRefused_OnReload(t *testing.T) {
 				t.Errorf("the reload log does not name the kind:\n%s", logs.String())
 			}
 			t1ok := strings.Contains(scrapeBody(t, m), `tenant="t1"`)
-			_, cpuOK := seriesFor(t, m, "t2", "slow_queries")
+			_, cpuOK := seriesFor(t, m, "t2", "mysql_slow_queries")
 			if tc.file == "t1.yaml" && t1ok {
 				t.Errorf("t1 still served after its file became a second-document file")
 			}

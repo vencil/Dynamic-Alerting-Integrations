@@ -368,7 +368,9 @@ _SEVERITY_DEDUP_MODES = frozenset({"enable", "disable"})
 _SEVERITY_DEDUP_LAYERS = frozenset({"tenant", "platform_tenants", "profile"})
 _SEVERITY_DEDUP_SECTIONS = frozenset({"tenants", "profiles"})
 _KEY_REF_SECTIONS = frozenset({"defaults", "optional_overrides", "tenants", "profiles"})
-_KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
+# "builtin" (#3832): the platform's default-armed value, compiled into the
+# readers below the root `defaults:` — no file, no level.
+_KEY_LAYERS = frozenset({"builtin", "defaults", "platform", "profile", "tenant"})
 # Seconds: generous for a large tree, and a hang still ends.
 DEFAULT_TIMEOUT = 600
 
@@ -1866,7 +1868,10 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
                 if (level is None) == (layer == "defaults"):
                     raise _ShapeError(f"tenant '{shown_key(tenant_id)}' key '{shown_key(key)}': layer {shown_value(layer)} "
                                      f"with level {shown_value(level)}")
-                sources[key] = KeySource(layer, ks["file"], level)
+                if ("file" in ks) == (layer == "builtin"):
+                    raise _ShapeError(f"tenant '{shown_key(tenant_id)}' key '{shown_key(key)}': layer {shown_value(layer)} "
+                                     f"with file {shown_value(ks.get('file'))}")
+                sources[key] = KeySource(layer, ks.get("file", ""), level)
             effective = dict(t["effective_config"])
             if "not_served" not in t:
                 raise EffectiveError(

@@ -55,7 +55,8 @@ func TestResolve_UnregisteredUnderscoreKeyServesNoRow(t *testing.T) {
 			t.Errorf("tenant %s: a row for %q (component %q, value %v, severity %s)",
 				r.Tenant, r.Metric, r.Component, r.Value, r.Severity)
 		}
-		if r.Metric == "cpu" {
+		// Not the built-in container_cpu (#3832), whose metric is cpu too.
+		if _, builtin := builtinDefaults[r.Component+"_"+r.Metric]; r.Metric == "cpu" && !builtin {
 			cpu[r.Tenant] = r.Value
 		}
 	}

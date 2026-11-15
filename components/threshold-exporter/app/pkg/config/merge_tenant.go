@@ -598,7 +598,14 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 	// join a root holding only `_defaults.yml` or `_DEFAULTS.YAML` — both served
 	// by the exporter — read as NO platform surface, so the tenant-api write
 	// gate refused valid keys as unknown and GET under-reported (blind review).
-	if c := root.carrier(); c != nil {
+	// #3832: the built-in layer goes under the root carrier's values, as on
+	// /metrics (BuildFlatConfig) — withheld when the root carrier exists but
+	// cannot be read or parsed (builtin_defaults.go).
+	c := root.carrier()
+	if !root.rootUnreadable && (c == nil || c.parsed.err == nil) {
+		defer seedBuiltinDefaults(merged.Defaults)
+	}
+	if c != nil {
 		if c.parsed.err != nil {
 			// A file that EXISTS but cannot be decoded is not the benign case
 			// the missing-file comment above describes. This function is the
@@ -693,6 +700,10 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 // to it, its files or their decodes after loadRootPlatform returns.
 type rootPlatform struct {
 	files []rootPlatformFile
+	// rootUnreadable: the walk met a root defaults carrier it could not
+	// stat or read (TreeScan.RootDefaultsUnreadable); the built-in layer is
+	// withheld (#3832).
+	rootUnreadable bool
 	// carrierPos is 1 + the index into files of the selected root carrier;
 	// 0 = none. Offset by one so the ZERO rootPlatform (and so the zero
 	// RootPlatform) means "no carrier" instead of indexing an empty files.
@@ -727,7 +738,7 @@ func loadRootPlatform(configDir string) rootPlatform {
 // — loadRootPlatform's half after the walk, shared with
 // LoadRootPlatformChecked.
 func rootPlatformFrom(scan *TreeScan) rootPlatform {
-	var out rootPlatform
+	out := rootPlatform{rootUnreadable: scan.RootDefaultsUnreadable()}
 	carrierKey := selectedRootCarrierKey(scan)
 	for _, k := range rootPlatformKeys(scan) {
 		f := scan.Files[k]

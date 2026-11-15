@@ -166,7 +166,10 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		chainBytes = append(chainBytes, files[dp])
 	}
 
-	parts, err := computeEffectiveConfigBytesDetailed(req.TenantYAML, req.TenantID, chainBytes, nil, simulateProfiles(chain, files))
+	// The request tree is in memory: its root entry, when it has one, is
+	// read and parsed (rejectWhatTheExporterSkips refused it otherwise), so
+	// the built-in layer (#3832) is never withheld here.
+	parts, err := computeEffectiveConfigBytesDetailed(req.TenantYAML, req.TenantID, chainBytes, nil, simulateProfiles(chain, files), true)
 	if err != nil {
 		return nil, fmt.Errorf("simulate merge: %w", err)
 	}
@@ -197,7 +200,7 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		SourceHash:    ComputeSourceHash(req.TenantYAML),
 		MergedHash:    mergedHash,
 		DefaultsChain: append([]string(nil), chain...),
-		Config:        effectiveView(blocks, parts.override),
+		Config:        effectiveView(withBuiltinBase(rootRefusedAsBuiltin(blocks, rootLevel, true), true), parts.override),
 	}, nil
 }
 

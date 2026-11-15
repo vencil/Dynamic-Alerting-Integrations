@@ -211,7 +211,7 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 			"were not checked for a reader", which, strings.ReplaceAll(fmt.Sprint(why), "\n", " ")))
 	}
 	now, err := keyVerdictOf(root, keyVerdictOpts{scan: config.ScanOptions{Overlays: overlays,
-		OverlayMakesDirs: mkdirs, SkipDuplicated: true}, rootPlatform: hasRootPlatformFile(afterDoc),
+		OverlayMakesDirs: mkdirs, SkipDuplicated: true},
 		profiles: rootProfilesOf(afterDoc), tenantFiles: tenantFileKeysOf(afterDoc)}, at)
 	if err != nil {
 		return nil, err
@@ -234,7 +234,7 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 	if err != nil {
 		return nil, err
 	}
-	opts.scan, opts.rootPlatform = config.ScanOptions{SkipDuplicated: true}, true
+	opts.scan = config.ScanOptions{SkipDuplicated: true}
 	was, err := keyVerdictOf(root, opts, at)
 	if err != nil {
 		return nil, err

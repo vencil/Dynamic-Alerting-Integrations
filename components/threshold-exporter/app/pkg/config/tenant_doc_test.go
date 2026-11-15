@@ -157,7 +157,7 @@ func TestTenantDocIsolatesTenantsSharingOneParse(t *testing.T) {
 	doc := ParseTenantDoc(b)
 
 	for _, tid := range []string{"t-1", "t-2"} {
-		first, err := computeEffectiveConfigDocDetailed(doc, tid, chain, nil, nil)
+		first, err := computeEffectiveConfigDocDetailed(doc, tid, chain, nil, nil, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,11 +171,11 @@ func TestTenantDocIsolatesTenantsSharingOneParse(t *testing.T) {
 		first.merged["cpu"] = "888"
 
 		for _, other := range []string{"t-1", "t-2"} {
-			got, err := computeEffectiveConfigDocDetailed(doc, other, chain, nil, nil)
+			got, err := computeEffectiveConfigDocDetailed(doc, other, chain, nil, nil, true)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want, err := computeEffectiveConfigBytesDetailed(b, other, chain, nil, nil)
+			want, err := computeEffectiveConfigBytesDetailed(b, other, chain, nil, nil, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -212,8 +212,8 @@ func TestTenantDocKeepsEachTenantsErrors(t *testing.T) {
 			t.Parallel()
 			doc := ParseTenantDoc([]byte(tc.tenant))
 			for _, tid := range tc.tids {
-				got, gotErr := computeEffectiveConfigDocDetailed(doc, tid, tc.chain, nil, nil)
-				want, wantErr := computeEffectiveConfigBytesDetailed([]byte(tc.tenant), tid, tc.chain, nil, nil)
+				got, gotErr := computeEffectiveConfigDocDetailed(doc, tid, tc.chain, nil, nil, true)
+				want, wantErr := computeEffectiveConfigBytesDetailed([]byte(tc.tenant), tid, tc.chain, nil, nil, true)
 				if fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
 					t.Errorf("%s: err %v, own parse %v", tid, gotErr, wantErr)
 				}
@@ -232,8 +232,8 @@ func TestTenantDocKeepsEachTenantsErrors(t *testing.T) {
 				}
 			}
 			// Each tenant's *tenantParseError is its own value.
-			_, e1 := computeEffectiveConfigDocDetailed(doc, tc.tids[0], nil, nil, nil)
-			_, e2 := computeEffectiveConfigDocDetailed(doc, tc.tids[1], nil, nil, nil)
+			_, e1 := computeEffectiveConfigDocDetailed(doc, tc.tids[0], nil, nil, nil, true)
+			_, e2 := computeEffectiveConfigDocDetailed(doc, tc.tids[1], nil, nil, nil, true)
 			if e1 != nil && strings.HasPrefix(e1.Error(), "parse tenant:") && e1 == e2 {
 				t.Errorf("two tenants share one error value %p", e1)
 			}

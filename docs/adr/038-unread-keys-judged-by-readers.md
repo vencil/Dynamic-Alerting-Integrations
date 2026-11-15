@@ -72,6 +72,8 @@ updated_at: 2026-11-15
 
 2026-11-15 修訂：子目錄 `_defaults.yaml` 的 defaults 寫了 exporter 不套用的保留鍵，判決報 `unread`、原因 `subtree_default_reserved_key`，與 da-guard 同名 finding 讀同一份集合（決定 10）。
 
+2026-11-15 修訂：平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11）。沒讀到任何根平台檔的樹不再無從判斷，租戶寫的閾值鍵照常判；租戶寫預設啟用的鍵，即使根目錄沒寫，也判為有讀；這些鍵的 `disable` 過期即失效（決定 4、7、8）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -266,7 +268,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 |---|---|---|
 | `read` | 至少一個讀取端讀它；登記為 `annotation` 的鍵也算 | — |
 | `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`）；閾值 registry `retired_keys:` 登記的退役閾值鍵也是（原因 `retired`），即使 exporter 仍為它送出一列——部署方根 `defaults:` 寫的也算；finding 的 `hint` 點名替代鍵 | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
-| `undecidable` | 沒有讀到任何根平台檔，租戶寫的閾值鍵在 exporter 那半無從判斷；保留鍵照常判（見決定 7） | 判決輸出回 rc 2 |
+| `undecidable` | 不再出現：沒讀到任何根平台檔的樹，閾值鍵照常判（見決定 7）。判決文件保留 `undecidable` 欄位，恆為 false | — |
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 
@@ -310,7 +312,7 @@ profiles:
 - 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。判全天（決定 1）讓判決的工作量隨每個租戶的時窗數成長，帶著時窗的租戶越多，越可能在期限內判不完；判不完時這筆寫入以可重試的錯誤不收，不會被當成 finding 擋下，也不會照收。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
   - 被寫入的檔裡、屬於寫入對象租戶、判決說會擋（`blocks`）的 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
-  - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；今天 Go 對這種樹的閾值鍵也會擋。
+  - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；da-guard 已不再給出這個結果（決定 7）。
   - 擋不擋讀判決的 `blocks`，tenant-api 與容器都不依等級另判；容器原樣轉送每筆 finding 的 `blocks`，判不了的閾值鍵讀判決的 `undecidable_blocks`。finding 不帶 `blocks`（映像早於 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）與沒有回判決同樣是容器太舊，回 503。
   - 找不到或無法執行 da-guard，或容器沒有回判決（映像早於這一步），依 ADR-036 §3 是容器不可用，回 503；與找不到 da-read 相同，每次判定前先確認 da-guard，所以長期缺 da-guard 會出現在容器可用性的告警上，不會變成一筆筆的拒收。
   - 其餘的 finding 放進寫入回應的 `warnings`。
@@ -369,7 +371,7 @@ tenants:
 
 exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，而不是 conf.d 裡有沒有某個檔：
 
-- **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：租戶寫的閾值鍵標 `undecidable`。保留鍵照常判。整棵樹的 CI 擋下，因為沒判的鍵不能當成判過、沒問題；要驗，就驗組好的整棵樹。tenant-api 對判不了的寫入同樣不收。
+- **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：照常判。平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），不靠根平台檔，所以租戶寫這些鍵判為有讀，其他閾值鍵沒有任何一層宣告，判為 `unread`（原因 `no_row`）。例：沒有根檔的樹，租戶 `t1` 寫 `pg_connections: "70"` 與 `redis_connected_clients: "5"`，前者 `read`、後者 `unread`。分片樹裡判為 `unread` 的鍵，組好整棵樹之後可能有根檔宣告它；要驗，就驗組好的整棵樹。
 - **有讀到根平台檔，但沒有宣告任何閾值**（例如只有 profiles、只有子目錄的 `_defaults.yaml`）：這是可以判定的錯誤，照現有的精確 finding 報（例如「子目錄的 defaults 送不到 exporter」），不降級成無從判斷。
 - **只有路由設定的樹**：沒有閾值鍵，也就沒有判不了的鍵，rc 0。
 
@@ -379,7 +381,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 ### 8. `disable` 關掉什麼、有沒有作用
 
-閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
+閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值或由內建層給值（ADR-017 決策 11）的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
 
 只想留 critical 那一級，寫 `X: "90:critical"`，並刪掉 `X_critical`：它送出的 series 與舊的 `X: disable` 加 `X_critical: 90` 相同，兩者並存則會送出同一條 series 兩次，整份 `/metrics` 失敗。只想停 critical 那一級，寫 `X_critical: disable`。
 

@@ -339,7 +339,7 @@ func TestEdit_ChangedBeforeAnyRenameWritesNothing(t *testing.T) {
 // one is kept, ops after it apply on the new one, and the read-back holds
 // the result to the content given.
 func TestEdit_SetTheWholeTopLevel(t *testing.T) {
-	root := writeTree(t, map[string]string{"gen.yaml": "# generated\nold: &a {x: \"1\"}\nkeep: *a\n"})
+	root := writeTreeDeclared(t, map[string]string{"gen.yaml": "# generated\nold: &a {x: \"1\"}\nkeep: *a\n"})
 	body := `{"ops":[{"op":"set","path":[],"value":{"map":[["tenants",{"map":[["t1",{"map":[["cpu",{"int":"5"}]]}]]}]]}},` +
 		`{"op":"set","path":["tenants","t1","mem"],"value":{"str":"6"}}]}`
 	code, res := runW(t, writeCmd, body, "--config-dir", root, "--path", "gen.yaml", "--dry-run")
@@ -350,7 +350,7 @@ func TestEdit_SetTheWholeTopLevel(t *testing.T) {
 	if code, res = runW(t, writeCmd, body, "--config-dir", root, "--path", "gen.yaml"); code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v", code, res)
 	}
-	if got := snapshot(t, root)["gen.yaml"]; got != want {
+	if got := snapshotDeclared(t, root)["gen.yaml"]; got != want {
 		t.Fatalf("written %q, want %q", got, want)
 	}
 	// The same content again is unchanged.
@@ -367,11 +367,11 @@ func TestEdit_SetTheWholeTopLevel(t *testing.T) {
 			`{"op":"set","path":["tenants","t1","cpu"],"value":{"int":"1"}}]}`, writeStatusRefused, writeReasonEditNotApplicable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			before := snapshot(t, root)
+			before := snapshotDeclared(t, root)
 			if _, res := runW(t, writeCmd, tc.body, "--config-dir", root, "--path", "gen.yaml"); res.Status != tc.status || reasonOf(res) != tc.reason {
 				t.Fatalf("%+v (%v)", res, res.Message)
 			}
-			sameTree(t, before, snapshot(t, root))
+			sameTree(t, before, snapshotDeclared(t, root))
 		})
 	}
 }

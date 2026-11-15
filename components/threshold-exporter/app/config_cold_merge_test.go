@@ -464,7 +464,7 @@ func TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount(t *testing.T) {
 	}
 	// Proof the control reload actually consumed the edit, so its +0 is not
 	// a reload that never happened.
-	if got, ok := seriesFor(t, mgr, "t-1", "connections"); !ok || got != 65 {
+	if got, ok := seriesFor(t, mgr, "t-1", "mysql_connections"); !ok || got != 65 {
 		t.Fatalf("after the valid edit t-1 emits %v (present=%v), want the edited subtree's 65", got, ok)
 	}
 

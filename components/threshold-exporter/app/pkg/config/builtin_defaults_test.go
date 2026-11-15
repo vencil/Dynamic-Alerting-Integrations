@@ -161,3 +161,84 @@ func TestBuiltinDefault_MatchesTheKeyExactly(t *testing.T) {
 		}
 	}
 }
+
+// No key of the built-in table may have a #1231 alias spelling: the chain's
+// spelling machinery (dropShallowerSpellings, noteSpellingWriters) is not
+// taught a level with no file, so a root writing the other spelling would
+// not beat the built-in value. Arming an aliased key needs that taught first.
+func TestBuiltinDefaults_NoAliasSpelling(t *testing.T) {
+	for k := range builtinDefaults {
+		if _, s := SpellingsOf(k); len(s) != 1 {
+			t.Errorf("built-in key %q has the spellings %v", k, s)
+		}
+	}
+}
+
+// A refused root value (refusedDefault's NaN) and an absent key both fall
+// to the built-in value; a finite root value, 0 included, stays.
+func TestSeedBuiltinDefaults(t *testing.T) {
+	var k string
+	for k = range builtinDefaults {
+		break
+	}
+	want := builtinDefaults[k]
+	for name, tc := range map[string]struct {
+		in   map[string]float64
+		want float64
+	}{
+		"absent":            {map[string]float64{}, want},
+		"refused unparsed":  {map[string]float64{k: refusedDefault(RefusedUnparsed)}, want},
+		"refused nonfinite": {map[string]float64{k: refusedDefault(RefusedNonFinite)}, want},
+		"root value":        {map[string]float64{k: 7}, 7},
+		"root zero":         {map[string]float64{k: 0}, 0},
+	} {
+		seedBuiltinDefaults(tc.in)
+		if got := tc.in[k]; got != tc.want {
+			t.Errorf("%s: %s = %v, want %v", name, k, got, tc.want)
+		}
+		if len(tc.in) != len(builtinDefaults) && name == "absent" {
+			t.Errorf("%s: %d keys seeded, want %d", name, len(tc.in), len(builtinDefaults))
+		}
+	}
+}
+
+// The tenant-api write check (mergeTenantConfig) lays the built-in layer as
+// /metrics does: under a root with no value, and not under a root that
+// cannot be read (does not parse, or is a dangling link).
+func TestMergeTenantWithRootDefaults_BuiltinLayer(t *testing.T) {
+	tenant := []byte("tenants:\n  t1:\n    pg_connections: \"70\"\n")
+	for name, tc := range map[string]struct {
+		root    func(dir string) error
+		builtin bool
+	}{
+		"no root": {func(string) error { return nil }, true},
+		"root valued": {func(d string) error {
+			return os.WriteFile(filepath.Join(d, "_defaults.yaml"), []byte("defaults:\n  container_memory: 70\n"), 0o644)
+		}, true},
+		"root syntax": {func(d string) error {
+			return os.WriteFile(filepath.Join(d, "_defaults.yaml"), []byte("defaults: [x\n"), 0o644)
+		}, false},
+		"root link": {func(d string) error { return os.Symlink("nowhere.yaml", filepath.Join(d, "_defaults.yaml")) }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := tc.root(dir); err != nil {
+				t.Skipf("setup: %v", err)
+			}
+			m := MergeTenantWithRootDefaults(dir, "t1", tenant)
+			for k, v := range builtinDefaults {
+				got, ok := m.Defaults[k]
+				switch {
+				case !tc.builtin && ok:
+					t.Errorf("%s = %v laid over a root that cannot be read", k, got)
+				case tc.builtin && k == "container_memory" && name == "root valued":
+					if got != 70 {
+						t.Errorf("%s = %v, want the root's 70", k, got)
+					}
+				case tc.builtin && got != v:
+					t.Errorf("%s = %v (present %v), want the built-in %v", k, got, ok, v)
+				}
+			}
+		})
+	}
+}

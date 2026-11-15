@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/internal/testutil"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // judged is one CLI run's outcome as the JSON report gives it.
@@ -255,8 +257,9 @@ func TestUndetermined_ExitPrecedence(t *testing.T) {
 func TestUndetermined_WarnAsErrorAffectsOnlyOne(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{"_defaults.yaml": udDefaults, "tx.yaml": udTenant + udRouting}
-	// A predicted count within a cap of 3 but above a warn floor of 0.
-	warn := []string{"--cardinality-limit", "3", "--cardinality-warn-ratio", "0.2"}
+	// A predicted count within a cap of 3 (plus the built-in rows, #3832)
+	// but above the warn floor.
+	warn := []string{"--cardinality-limit", strconv.Itoa(3 + len(config.BuiltinDefaults())), "--cardinality-warn-ratio", "0.2"}
 	got := runJudged(t, files, "", warn...)
 	if got.code != exitUndetermined || !hasWarn(got.findings) {
 		t.Fatalf("exit %d, findings %v; want 4 beside a warning", got.code, got.findings)

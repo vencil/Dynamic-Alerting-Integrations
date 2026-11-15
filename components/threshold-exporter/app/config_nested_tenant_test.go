@@ -33,6 +33,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -302,8 +303,17 @@ func TestTheSameTenantFlattenedIsFine(t *testing.T) {
 // asserts a tenant is PRESENT; this is how the tests below assert it is
 // present with the RIGHT NUMBER — the half that stays broken if only the
 // scanner is fixed.
-func seriesFor(t *testing.T, m *ConfigManager, tenant, metric string) (float64, bool) {
+// seriesFor finds tenant's user_threshold series for metricKey, a whole
+// metric key (`mysql_connections`), split as the exporter labels it:
+// component before the first `_`, metric after. Matching the metric label
+// alone also hit the built-in `pg_connections` (#3832), whose metric label is
+// `connections` too.
+func seriesFor(t *testing.T, m *ConfigManager, tenant, metricKey string) (float64, bool) {
 	t.Helper()
+	component, metric, ok := strings.Cut(metricKey, "_")
+	if !ok {
+		t.Fatalf("seriesFor: %q is not a <component>_<metric> key", metricKey)
+	}
 	reg := prometheus.NewRegistry()
 	if err := reg.Register(NewThresholdCollector(m)); err != nil {
 		t.Fatalf("register collector: %v", err)
@@ -321,7 +331,7 @@ func seriesFor(t *testing.T, m *ConfigManager, tenant, metric string) (float64, 
 			for _, pair := range mm.Label {
 				labels[pair.GetName()] = pair.GetValue()
 			}
-			if labels["tenant"] == tenant && labels["metric"] == metric {
+			if labels["tenant"] == tenant && labels["component"] == component && labels["metric"] == metric {
 				return mm.Gauge.GetValue(), true
 			}
 		}
@@ -370,7 +380,7 @@ func TestTheEmittedValueMatchesTheResolvedOne(t *testing.T) {
 	}
 
 	// Control first: a root-level tenant is unaffected by any of this.
-	if got, ok := seriesFor(t, m, "tenant-flat", "connections"); !ok || got != 55 {
+	if got, ok := seriesFor(t, m, "tenant-flat", "mysql_connections"); !ok || got != 55 {
 		t.Fatalf("control: tenant-flat should emit its own 55, got %v (present=%v)", got, ok)
 	}
 	// And the global defaults map is untouched — a subtree file must never
@@ -388,7 +398,7 @@ func TestTheEmittedValueMatchesTheResolvedOne(t *testing.T) {
 		t.Fatalf("premise: /effective should report the subtree default 60, got %v", got)
 	}
 
-	got, ok := seriesFor(t, m, "tenant-inheritor", "connections")
+	got, ok := seriesFor(t, m, "tenant-inheritor", "mysql_connections")
 	if !ok {
 		t.Fatalf("#1521: no series at all for the inheriting tenant")
 	}
@@ -413,7 +423,7 @@ func TestATenantsOwnValueBeatsWhatItInherits(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	got, ok := seriesFor(t, m, "tenant-own", "connections")
+	got, ok := seriesFor(t, m, "tenant-own", "mysql_connections")
 	if !ok {
 		t.Fatalf("tenant-own emitted no series")
 	}
@@ -433,7 +443,7 @@ func TestADisabledKeyIsNotRevivedByInheritance(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got, ok := seriesFor(t, m, "tenant-off", "connections"); ok {
+	if got, ok := seriesFor(t, m, "tenant-off", "mysql_connections"); ok {
 		t.Errorf("tenant-off set mysql_connections to \"disable\" and inherits 60; "+
 			"a series appeared anyway at %v. Silently re-enabling a threshold a "+
 			"tenant switched off is the worst failure this overlay can have — it "+
@@ -496,7 +506,7 @@ func TestTheDeepestSubtreeDefaultWins(t *testing.T) {
 		t.Fatalf("premise: /effective should report the deepest default 70, got %v", got)
 	}
 
-	got, present := seriesFor(t, m, inheritor, "connections")
+	got, present := seriesFor(t, m, inheritor, "mysql_connections")
 	if !present {
 		t.Fatalf("no series for %s", inheritor)
 	}
@@ -509,7 +519,7 @@ func TestTheDeepestSubtreeDefaultWins(t *testing.T) {
 
 	// The other half, in the same fixture: depth must not start overwriting
 	// what a tenant declared for itself.
-	if got, present := seriesFor(t, m, author, "connections"); !present || got != 88 {
+	if got, present := seriesFor(t, m, author, "mysql_connections"); !present || got != 88 {
 		t.Errorf("%s declared 88 through three levels of inherited defaults; the "+
 			"series says %v (present=%v)", author, got, present)
 	}

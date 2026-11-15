@@ -83,12 +83,12 @@ func TestASubtreeOnlyKeyIsRefusedLoudly(t *testing.T) {
 	// The half that IS delivered: a key the ROOT declares carries the
 	// subtree's value. Without this control the test would pass with the
 	// overlay removed entirely.
-	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 60 {
+	if got, ok := seriesFor(t, m, "t1", "mysql_connections"); !ok || got != 60 {
 		t.Fatalf("control: the root-declared key should carry the subtree's 60, got %v (present=%v)", got, ok)
 	}
 
 	// The half that is NOT delivered — and must not pretend to be.
-	if _, present := seriesFor(t, m, "t1", "evicted_keys"); present {
+	if _, present := seriesFor(t, m, "t1", "redis_evicted_keys"); present {
 		t.Errorf("a subtree-only key emitted a series; either per-subtree delivery " +
 			"landed or the global declared surface was widened again")
 	}
@@ -152,7 +152,7 @@ func TestAScheduledSubtreeDefaultAgreesOnBothPlanes(t *testing.T) {
 	defer m.Close()
 	logged := captureLoad(t, m)
 
-	got, ok := seriesFor(t, m, "t1", "connections")
+	got, ok := seriesFor(t, m, "t1", "mysql_connections")
 	if !ok {
 		t.Fatalf("no series for the inheriting tenant at all")
 	}
@@ -235,7 +235,7 @@ func TestASymlinkedConfigRootStillLoads(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load through a symlinked config root: %v", err)
 	}
-	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 70 {
+	if got, ok := seriesFor(t, m, "t1", "mysql_connections"); !ok || got != 70 {
 		t.Fatalf("tenant behind a symlinked root: got %v (present=%v), want 70", got, ok)
 	}
 }
@@ -328,7 +328,7 @@ func TestAnUppercaseExtensionAtTheRootStillEmits(t *testing.T) {
 	captureLoad(t, m)
 
 	for tenant, want := range map[string]float64{"t-upper": 81, "t-mixed": 82} {
-		if got, ok := seriesFor(t, m, tenant, "connections"); !ok || got != want {
+		if got, ok := seriesFor(t, m, tenant, "mysql_connections"); !ok || got != want {
 			t.Errorf("%s: got %v (present=%v), want %v — the flat scanner's extension "+
 				"match is case-sensitive again", tenant, got, ok, want)
 		}
@@ -493,7 +493,7 @@ func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 		}
 	}
 	// Control: a threshold-shaped key the ROOT declares still arrives.
-	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 44 {
+	if got, ok := seriesFor(t, m, "t1", "mysql_connections"); !ok || got != 44 {
 		t.Fatalf("control: the threshold-shaped subtree value must still arrive, got %v (present=%v)", got, ok)
 	}
 	// The genuinely unreachable THRESHOLD key is reported — and it is what
@@ -656,7 +656,7 @@ func TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload(t *testing
 	m := NewConfigManager(dir)
 	defer m.Close()
 	captureLoad(t, m)
-	if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != 60 {
+	if got, ok := seriesFor(t, m, "t1", "mysql_connections"); !ok || got != 60 {
 		t.Fatalf("cold load: got %v (present=%v), want the subtree's 60", got, ok)
 	}
 
@@ -666,7 +666,7 @@ func TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload(t *testing
 	if err := watchReload(m); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	got, ok := seriesFor(t, m, "t1", "connections")
+	got, ok := seriesFor(t, m, "t1", "mysql_connections")
 	if !ok {
 		t.Fatalf("the nested tenant vanished from the output plane after a reload")
 	}
@@ -717,14 +717,14 @@ func TestWhatASubtreeMayAndMayNotHandDown(t *testing.T) {
 	captureLoad(t, m)
 	cfg := m.GetConfig()
 
-	if _, present := seriesFor(t, m, "t1", "connections"); present {
+	if _, present := seriesFor(t, m, "t1", "mysql_connections"); present {
 		t.Errorf("a subtree `disable` was not inherited: the tenant still emits a " +
 			"threshold while /effective resolves it to disabled")
 	}
-	if got, ok := seriesFor(t, m, "t1", "evicted_keys"); !ok || got != 77 {
+	if got, ok := seriesFor(t, m, "t1", "redis_evicted_keys"); !ok || got != 77 {
 		t.Errorf("inline `value:severity` from a subtree: got %v (present=%v), want 77", got, ok)
 	}
-	if got, ok := seriesFor(t, m, "t1", "replication_lag"); !ok || got != 88 {
+	if got, ok := seriesFor(t, m, "t1", "mongo_replication_lag"); !ok || got != 88 {
 		t.Errorf("a schedule whose value lives only in `overrides:` was dropped: "+
 			"got %v (present=%v), want the window's 88", got, ok)
 	}

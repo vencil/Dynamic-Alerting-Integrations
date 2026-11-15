@@ -709,3 +709,63 @@ def test_prose_may_name_deprecated_alias_spellings(tmp_path):
         encoding="utf-8")
     result = gate.run_check(prose_files=[str(f)])
     assert not any("membership" in e for e in result["errors"]), result
+
+
+# ── #3832: a change to the built-in table is announced as breaking ─────────
+
+def _announce_dirs(tmp_path, fragment: str | None, changelog: str = ""):
+    frag = tmp_path / "changelog.d"
+    frag.mkdir()
+    (frag / "README.md").write_text(
+        "⚠️ breaking " + lib.builtin_defaults_digest(lib.builtin_defaults(lib.load_registry())),
+        encoding="utf-8")  # the README never counts, whatever it says
+    if fragment is not None:
+        (frag / "3832-x.md").write_text(fragment, encoding="utf-8")
+    cl = tmp_path / "CHANGELOG.md"
+    cl.write_text(changelog, encoding="utf-8")
+    return str(frag), str(cl)
+
+
+def _digest(doc=None):
+    return lib.builtin_defaults_digest(lib.builtin_defaults(doc or lib.load_registry()))
+
+
+def test_builtin_digest_unannounced_is_an_error(tmp_path):
+    paths = _announce_dirs(tmp_path, None)
+    result = gate.run_check(changelog_paths=paths)
+    assert any(e.startswith("unannounced:") and _digest() in e for e in result["errors"]), result
+
+
+def test_builtin_digest_needs_the_breaking_marker(tmp_path):
+    paths = _announce_dirs(tmp_path, f"- table {_digest()}\n")
+    result = gate.run_check(changelog_paths=paths)
+    assert any(e.startswith("unannounced:") for e in result["errors"]), result
+
+
+def test_builtin_digest_announced_by_a_breaking_fragment(tmp_path):
+    paths = _announce_dirs(tmp_path, f"- **⚠️ Breaking: x** digest `{_digest()}`\n")
+    result = gate.run_check(changelog_paths=paths)
+    assert not any(e.startswith("unannounced:") for e in result["errors"]), result
+
+
+def test_builtin_digest_announced_by_the_released_changelog(tmp_path):
+    paths = _announce_dirs(tmp_path, None, changelog=f"## [v3.0.0]\n- table {_digest()}\n")
+    result = gate.run_check(changelog_paths=paths)
+    assert not any(e.startswith("unannounced:") for e in result["errors"]), result
+
+
+def test_a_new_table_is_not_announced_by_the_old_fragment(tmp_path):
+    """The digest binds the fragment to one table: change a default-armed
+    value and the fragment naming the old digest no longer counts."""
+    old = _digest()
+    paths = _announce_dirs(tmp_path, f"- ⚠️ breaking {old}\n")
+    doc = lib.load_registry()
+    key = next(k for k, e in doc["keys"].items() if lib.is_chart_armed(e))
+    doc["keys"][key]["value"] = float(doc["keys"][key]["value"]) + 1
+    assert _digest(doc) != old
+    assert lib.check_builtin_digest_announced(doc, *paths) is not None
+    assert lib.check_builtin_digest_announced(lib.load_registry(), *paths) is None
+
+
+def test_live_repo_announces_its_builtin_digest():
+    assert lib.check_builtin_digest_announced(lib.load_registry()) is None

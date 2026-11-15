@@ -1147,6 +1147,51 @@ def check_builtin_defaults_go(doc: dict, path: Optional[str] = None) -> Optional
     return None
 
 
+#: Where a change to the built-in table is announced (#3832): the unreleased
+#: changelog fragments, and the released CHANGELOG they are assembled into.
+CHANGELOG_FRAGMENTS_DIR = _in_repo("changelog.d")
+CHANGELOG_PATH = _in_repo("CHANGELOG.md")
+
+#: The marker a breaking changelog fragment carries (changelog.d/README.md).
+BREAKING_MARKER = "⚠️ breaking"
+
+
+def check_builtin_digest_announced(
+        doc: dict,
+        fragments_dir: Optional[str] = None,
+        changelog_path: Optional[str] = None) -> Optional[str]:
+    """None when the digest of *doc*'s built-in table is announced, else why not.
+
+    A change to the built-in table — a value, a key armed or disarmed —
+    changes what every reader of conf.d serves with no diff in the
+    deployer's repo, so it is BREAKING (#3832, decision 5). Announced means:
+    a changelog fragment under *fragments_dir* (not its README) carrying
+    BREAKING_MARKER names the table's digest, or the released CHANGELOG at
+    *changelog_path* names it (a fragment's text is assembled there at
+    release, the digest with it). The digest binds the announcement to the
+    exact table: the next change moves it, and the fragment naming the old
+    one no longer counts."""
+    digest = builtin_defaults_digest(builtin_defaults(doc))
+    fdir = fragments_dir or CHANGELOG_FRAGMENTS_DIR
+    if fdir and os.path.isdir(fdir):
+        for name in sorted(os.listdir(fdir)):
+            if not name.endswith(".md") or name.lower() == "readme.md":
+                continue
+            with open(os.path.join(fdir, name), encoding="utf-8") as fh:
+                text = fh.read()
+            if digest in text and BREAKING_MARKER in text.lower():
+                return None
+    cpath = changelog_path or CHANGELOG_PATH
+    if cpath and os.path.isfile(cpath):
+        with open(cpath, encoding="utf-8") as fh:
+            if digest in fh.read():
+                return None
+    return (f"the built-in defaults table (digest {digest}) is announced nowhere: "
+            f"a change to it is breaking, so a changelog.d/ fragment marked "
+            f"`{BREAKING_MARKER}` must name the digest {digest} (the released "
+            "CHANGELOG.md naming it counts too)")
+
+
 def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     """``--regen``: every generated surface from the committed registry.
 
