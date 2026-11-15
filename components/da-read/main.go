@@ -76,7 +76,9 @@
 //	   refuses. `prometheus-rules` prints its whole JSON with that `answer`
 //	   beside `files`, the refused files with their problem. The document
 //	   holds only those constants, never text of the input; the reason is on
-//	   stderr, prefixed with the file's name. Bad arguments (the usage), a
+//	   stderr, prefixed with the file's name. Bad arguments (the usage; a
+//	   promql-selectors <series> or promql-label-flow <label> it does not
+//	   take; their standard input not the JSON object or array they read), a
 //	   file that cannot be opened, standard input that cannot be read or
 //	   stdout that cannot be written print no refusal document: they are no
 //	   answer about the input, and a caller must not take them for one.
@@ -188,7 +190,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			say(stderr, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		out, err := guarded(func(d []byte) ([]byte, error) { return readPromQLLabelFlow(args[1], d) }, data)
+		req, err := labelFlowRequestOf(args[1], data)
+		if err != nil {
+			// the caller's argument or framing: no answer about the input
+			say(stderr, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		out, err := guarded(func([]byte) ([]byte, error) { return readPromQLLabelFlow(args[1], req) }, data)
 		if err != nil {
 			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 			return refuse(stdout, stderr)
@@ -204,7 +212,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			say(stderr, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		out, err := guarded(func(d []byte) ([]byte, error) { return readPromQLSelectors(args[1], d) }, data)
+		want, exprs, err := selectorsRequest(args[1], data)
+		if err != nil {
+			// the caller's argument or framing: no answer about the input
+			say(stderr, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		out, err := guarded(func([]byte) ([]byte, error) { return readPromQLSelectors(want, exprs) }, data)
 		if err != nil {
 			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 			return refuse(stdout, stderr)

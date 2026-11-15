@@ -28,16 +28,10 @@ import (
 //	                  "start": <byte offset>, "end": <byte offset, exclusive>}, …], …]]}
 //
 // one list per expression, in input order, its selectors in the order they
-// appear. An expression Prometheus' parser refuses refuses the input (rc 2).
-func readPromQLSelectors(series string, data []byte) ([]byte, error) {
-	want, err := seriesLabels(series)
-	if err != nil {
-		return nil, err
-	}
-	var exprs []string
-	if err := json.Unmarshal(data, &exprs); err != nil {
-		return nil, fmt.Errorf("standard input is not a JSON array of strings: %w", err)
-	}
+// appear. An expression Prometheus' parser refuses refuses the input (rc 2,
+// the refusal document); a bad <series> or standard input that is not a JSON
+// array of strings is the caller's error (selectorsRequest).
+func readPromQLSelectors(want map[string]string, exprs []string) ([]byte, error) {
 	out := make([][]selectorHit, 0, len(exprs))
 	for i, e := range exprs {
 		hits, err := selectorsMatching(e, want)
@@ -49,6 +43,22 @@ func readPromQLSelectors(series string, data []byte) ([]byte, error) {
 	return json.Marshal(struct {
 		Documents [][][]selectorHit `json:"documents"`
 	}{Documents: [][][]selectorHit{out}})
+}
+
+// selectorsRequest reads the caller's part of a promql-selectors run: the
+// <series> argument and the JSON framing of standard input. ⛔ Both are the
+// caller's, not the input's (#3943): an error here is a caller error (exit
+// 2, no refusal document), never an answer about the expressions.
+func selectorsRequest(series string, data []byte) (map[string]string, []string, error) {
+	want, err := seriesLabels(series)
+	if err != nil {
+		return nil, nil, err
+	}
+	var exprs []string
+	if err := json.Unmarshal(data, &exprs); err != nil {
+		return nil, nil, fmt.Errorf("standard input is not a JSON array of strings: %w", err)
+	}
+	return want, exprs, nil
 }
 
 type selectorHit struct {

@@ -17,9 +17,10 @@ A field renamed on one side turns the refusal rows red.
 * every reading's refusal: exit 2, the refusal document, ``InputRefused``;
   for every reading but ``prometheus-rules`` the document is the constants
   alone, with no text of the input (ADR-036, #3703);
-* no answer — usage, a file that cannot be opened, standard input that
-  cannot be read, stdout that cannot be written: exit 2, no refusal
-  document, never ``InputRefused``.
+* no answer — usage, a promql-selectors <series> or a JSON framing of
+  standard input the subcommand does not take, a file that cannot be
+  opened, standard input that cannot be read, stdout that cannot be
+  written: exit 2, no refusal document, never ``InputRefused``.
 """
 from __future__ import annotations
 
@@ -124,6 +125,28 @@ def test_a_usage_error_is_no_refusal(row) -> None:
     _assert_no_answer(_run(env, args, b""))
     with pytest.raises(cr.ConsumerReadError) as exc:
         cr._run(os.environ[env], name, env, "make", args, b"")
+    assert not isinstance(exc.value, cr.InputRefused)
+
+
+@pytest.mark.parametrize("args,stdin", [
+    # a <series> promql-selectors does not take (no metric name; a regex
+    # matcher), with expressions it would read
+    (["promql-selectors", '{filter="x"}', "-"], json.dumps(["up"])),
+    (["promql-selectors", 'up{filter=~"x"}', "-"], json.dumps(["up +"])),
+    # standard input that is not the request object
+    (["promql-label-flow", "tenant", "-"], json.dumps(["up +"])),
+], ids=["series-no-metric", "series-regex", "label-flow-framing"])
+def test_the_callers_argument_is_no_refusal(args, stdin) -> None:
+    """The <series> argument and the JSON framing of standard input are the
+    caller's: wrong, they are a caller error (no refusal document), even
+    when an expression in it would be refused."""
+    _assert_no_answer(_run(cr.DA_READ_ENV, args, stdin.encode("utf-8")))
+    with pytest.raises(cr.ConsumerReadError) as exc:
+        if args[0] == "promql-selectors":
+            cr.promql_selectors(args[1], json.loads(stdin))
+        else:
+            cr._run(os.environ[cr.DA_READ_ENV], cr.DA_READ_BINARY_NAME, cr.DA_READ_ENV,
+                    "make", args, stdin.encode("utf-8"))
     assert not isinstance(exc.value, cr.InputRefused)
 
 

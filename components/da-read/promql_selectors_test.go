@@ -107,18 +107,28 @@ func TestRunPromQLSelectors(t *testing.T) {
 		t.Fatalf("output %s", out.String())
 	}
 
+	// An expression the parser refuses is the input refused: the refusal
+	// document. A <series> it does not take, standard input that is not a
+	// JSON array of strings, a file argument are the caller's errors: no
+	// document (#3943).
 	for _, bad := range []struct {
-		args []string
-		in   string
+		args    []string
+		in      string
+		refused bool
 	}{
-		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up +"]`},
-		{[]string{"promql-selectors", maintenanceSeries, "-"}, `{"not": "a list"}`},
-		{[]string{"promql-selectors", `{filter="x"}`, "-"}, `["up"]`},
-		{[]string{"promql-selectors", maintenanceSeries, "file.yaml"}, `["up"]`},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up +"]`, true},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `{"not": "a list"}`, false},
+		{[]string{"promql-selectors", `{filter="x"}`, "-"}, `["up"]`, false},
+		{[]string{"promql-selectors", `up{a=~"x"}`, "-"}, `["up +"]`, false},
+		{[]string{"promql-selectors", maintenanceSeries, "file.yaml"}, `["up"]`, false},
 	} {
 		var o, e bytes.Buffer
-		if rc := run(bad.args, strings.NewReader(bad.in), &o, &e); rc != exitCallerErr {
-			t.Errorf("%v with %s: rc %d, want %d", bad.args, bad.in, rc, exitCallerErr)
+		want := ""
+		if bad.refused {
+			want = refusedOut
+		}
+		if rc := run(bad.args, strings.NewReader(bad.in), &o, &e); rc != exitCallerErr || o.String() != want {
+			t.Errorf("%v with %s: rc %d stdout %q, want rc %d stdout %q", bad.args, bad.in, rc, o.String(), exitCallerErr, want)
 		}
 	}
 }

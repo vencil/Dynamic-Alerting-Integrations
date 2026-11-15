@@ -162,8 +162,28 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 		got.Documents[0][0][0].LHS != "dropped" || got.Documents[0][0][0].Op != "unless" {
 		t.Fatalf("got %s", stdout.String())
 	}
-	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(`{"expressions": ["up +"]}`), &stdout, &stderr); rc != exitCallerErr {
-		t.Fatalf("an expression the parser refuses: rc %d, want %d", rc, exitCallerErr)
+	// An expression or record the parser refuses is the input refused: the
+	// refusal document. An empty <label> or standard input that is not the
+	// request object is the caller's error: no document (#3943).
+	for _, bad := range []struct {
+		label, in string
+		refused   bool
+	}{
+		{"tenant", `{"expressions": ["up +"]}`, true},
+		{"tenant", `{"expressions": [], "records": {"r": [{"expr": "up +"}]}}`, true},
+		{"", `{"expressions": ["up"]}`, false},
+		{"tenant", `["up"]`, false},
+		{"tenant", `{"records": {}}`, false},
+	} {
+		stdout.Reset()
+		want := ""
+		if bad.refused {
+			want = refusedOut
+		}
+		if rc := run([]string{"promql-label-flow", bad.label, "-"}, strings.NewReader(bad.in), &stdout, &stderr); rc != exitCallerErr ||
+			stdout.String() != want {
+			t.Errorf("label %q, %s: rc %d stdout %q, want rc %d stdout %q", bad.label, bad.in, rc, stdout.String(), exitCallerErr, want)
+		}
 	}
 }
 

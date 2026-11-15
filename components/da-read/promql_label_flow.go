@@ -42,21 +42,11 @@ import (
 // "dropped": some series it yields lack it. "unknown": this reading cannot
 // tell (a function that writes the label, one it does not model, a record
 // cycle) — a caller that needs a proof refuses it.
-func readPromQLLabelFlow(label string, data []byte) ([]byte, error) {
-	if label == "" {
-		return nil, fmt.Errorf("label is empty")
-	}
-	var in struct {
-		Expressions []string `json:"expressions"`
-		Records     map[string][]struct {
-			Expr   string            `json:"expr"`
-			Labels map[string]string `json:"labels"`
-		} `json:"records"`
-		Aliases []string `json:"aliases"`
-	}
-	if err := json.Unmarshal(data, &in); err != nil || in.Expressions == nil {
-		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
-	}
+//
+// An expression or record the parser refuses refuses the input (rc 2, the
+// refusal document); an empty <label> or standard input that is not the
+// object above is the caller's error (labelFlowRequestOf).
+func readPromQLLabelFlow(label string, in *labelFlowRequest) ([]byte, error) {
 	f := &flowReader{label: label, records: map[string][]recordDef{}, visiting: map[string]bool{},
 		aliases: map[string]bool{}}
 	for _, a := range in.Aliases {
@@ -82,6 +72,31 @@ func readPromQLLabelFlow(label string, data []byte) ([]byte, error) {
 	return json.Marshal(struct {
 		Documents [][][]setMatch `json:"documents"`
 	}{Documents: [][][]setMatch{out}})
+}
+
+// labelFlowRequest is promql-label-flow's standard input.
+type labelFlowRequest struct {
+	Expressions []string `json:"expressions"`
+	Records     map[string][]struct {
+		Expr   string            `json:"expr"`
+		Labels map[string]string `json:"labels"`
+	} `json:"records"`
+	Aliases []string `json:"aliases"`
+}
+
+// labelFlowRequestOf reads the caller's part of a promql-label-flow run: the
+// <label> argument and the JSON framing of standard input. ⛔ Both are the
+// caller's, not the input's (#3943): an error here is a caller error (exit
+// 2, no refusal document), never an answer about the expressions.
+func labelFlowRequestOf(label string, data []byte) (*labelFlowRequest, error) {
+	if label == "" {
+		return nil, fmt.Errorf("label is empty")
+	}
+	var in labelFlowRequest
+	if err := json.Unmarshal(data, &in); err != nil || in.Expressions == nil {
+		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
+	}
+	return &in, nil
 }
 
 // flowReader judges label flow for one label, resolving recording rules.
