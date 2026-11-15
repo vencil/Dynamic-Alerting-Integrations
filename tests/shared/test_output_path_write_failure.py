@@ -66,17 +66,84 @@ in-process stub server from ``test_json_stdout_contract`` (the same one the
 ``--json`` and ``--dry-run`` gates use); ``generate_changelog`` gets a
 throw-away git repository with one conventional commit.
 
+THE TWO CLASSES (#3107) — ``Row.cls``
+-------------------------------------
+Every row says which kind of path its flag names. One rule, stated here and
+nowhere else:
+
+* ``artifact`` — the path is a constant inside the repo or the flag's
+  DEFAULT, that file is tracked (``git ls-files``), and the tool or its
+  ``--check`` reads the previous version back. Written by atomic replace
+  (``_lib_io.write_repo_artifact``): a failed run leaves the old file whole.
+* ``operator`` — the path is the value of an argparse flag (or a file the
+  tool names under a directory flag), and the flag has no default or one
+  that is not a tracked file. Opened in place by the kernel
+  (``_lib_io.write_operator_output`` / ``open_operator_output``).
+
+Owner rulings that the rule alone would not give (#3107, 2026-10-24 and
+2026-11-15): ``generate-routes -o/--output``, ``configmap_assemble
+--output`` and ``state-reconcile --manifest-path`` are artifacts — a half
+written one is a config some reader will load. A row carries the class its
+flag SHOULD have; where the tool does not write that way yet, the row is on
+one of the lists below, not reclassified to match.
+
+THE WRITE AUDIT (#3107) — WHICH ENTRY WROTE IT
+----------------------------------------------
+The control run is also the measurement of who wrote. It runs under
+``_write_audit/sitecustomize.py``, an audit hook that logs every filesystem
+change the tool and its Python children make, with the stack that made it.
+After the run, every change UNDER THE OUTPUT PATH must have come through the
+entry of the row's class (``_lib_io.OUTPUT_ENTRY_POINTS`` says which
+functions those are; ``ensure_dir`` is the entry for a ``mkdir``).
+
+"Under the output path" is the directory the control run hands the tool —
+``good/``, which this test creates empty and which holds the flag's value
+and nothing else. So it is the output FILE and anything put beside it (a
+temp file, the parent's ``mkdir``), or the whole TREE of a directory flag —
+every file in it, not one chosen as representative.
+
+What is not counted, each for a stated reason and each with a test
+(``TestWriteAuditPlacing``, ``TestTheHookItself``):
+
+* an event on a file descriptor — the file was named by the open that made
+  the fd, which is its own line;
+* a path relative to a ``dir_fd`` the hook could not resolve — it is never
+  read against the working directory;
+* nothing else. A ``.pyc`` and ``/dev/null`` are not excluded, they are just
+  not under ``good/``. The tool's ``TMPDIR`` is set to a directory beside
+  ``good/``: pytest's ``tmp_path`` is itself under the system temp
+  directory, so "it is a temp file" can never stand in for "it is elsewhere".
+
+Three things make a row FAIL rather than pass on an empty log: no log at
+all, no ``loaded`` line from the tool's own process, and no file written
+under the output path. And the log is matched against the disk: a file the
+run left under the output path with NO logged write to it was put there by a
+process the hook cannot see. That is only accepted where the row says so —
+``writer="da-guard"`` (a ``da-guard write`` child puts every file; Python
+must have opened none) or ``"python+da-guard"`` (both do) — and then the
+``da-guard write`` spawn has to be in the log.
+
+Tools that do not write that way YET are on three lists, each exact in both
+directions (``VIA_OLD_NAMES``, ``RAW_UNDER_OUT``, ``VIA_OTHER_CLASS``): they
+record what the control runs logged, they may only shrink, and an entry that
+is no longer true is a failure telling you to remove it.
+
 POPULATION — WHAT THIS TABLE CAN AND CANNOT SEE
 ----------------------------------------------
-``test_every_flag_naming_tool_has_a_row`` derives, from the tree, the set of
-tool modules that pass ``flag=`` to one of the WRITER KEYS — the secure
-writers, ``ensure_dir``, and (#1789) the ``output_write`` context manager
+``test_every_flag_named_at_a_writer_has_a_row`` derives, from the tree, the
+(tool, flag) pairs that pass ``flag=`` to one of the WRITER NAMES — every
+function ``_lib_io.OUTPUT_ENTRY_POINTS`` lists: the two classes' entries, the
+old names, ``ensure_dir``, and (#1789) the ``output_write`` context manager
 that wraps a raw sink. A tool that grows an output flag and names it in one
-of those without adding a row goes red.
+of those without adding a row goes red. So does a second flag on a tool that
+already has a row for its first (#3107: the population used to be tools).
+``test_every_output_flag_of_the_manifest_has_a_row`` adds the declaration
+side for da-tools commands: a ``kind: output`` flag in
+``caller_path_manifest.yaml`` must be a row.
 
-⛔ The population is the writer keys, nothing else. A tool that writes its
+⛔ The population is the writer names, nothing else. A tool that writes its
 output with a RAW sink — a bare ``open(..., "w")``, ``Path.write_text``,
-``os.makedirs``, ``shutil.copy2`` — and never routes it through a writer key
+``os.makedirs``, ``shutil.copy2`` — and never routes it through a writer name
 is INVISIBLE here: it does not appear as a missing row, it does not appear at
 all. That is a property of deriving the population from the fix rather than
 from the defect, and it is why the raw sinks carry a separate static pin in
@@ -89,18 +156,21 @@ measured and rejected: 37 hits, 2 of them input flags mis-collected, and it
 still missed ``--summary-file``. (``dx/paired_trend_watch``'s row is the one
 that flag names — the derived population found it, the grep would not have.)
 
-⛔ And one more hole, named rather than hidden: ``NO_OFFLINE_ROW`` at the
-bottom of this file lists tools that ARE in the derived population but whose
-write cannot be reached without infrastructure this test suite does not have.
-An entry means "the behavioural gate is silent about this tool", not "covered
+⛔ And one more hole, named rather than hidden: ``NO_ROW`` near the bottom of
+this file lists (tool, flag) pairs that ARE in the derived population but
+whose write no run here can reach — it needs infrastructure this test suite
+does not have, or no argv gets to it at all.
+An entry means "the behavioural gate is silent about this write", not "covered
 elsewhere". It is exit-locked (fixed size, every entry re-checked against the
 derived population) so it cannot quietly grow into the place where evidence
 should be.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -111,7 +181,7 @@ from typing import Callable
 import pytest
 
 import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.path)
-from _platform_fs import DIR_WRITE_ERROR
+from _platform_fs import DIR_WRITE_ERROR, symlink_or_skip
 from _go_refusal import assert_refused  # (#3206)
 
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
@@ -280,7 +350,7 @@ def _inject_report(tmp: Path) -> str:
 
     Built here rather than produced by `inject_waveform`, because that tool
     needs a live vmsingle plus a `vmalert` binary and cannot run offline —
-    which is also why it has no row of its own (see `NO_OFFLINE_ROW`).
+    which is also why it has no row of its own (see `NO_ROW`).
     The one alert fires INSIDE the fault window, so the verdict is PASS and
     the control half exits 0; a FAIL verdict would exit 1.
     """
@@ -353,6 +423,20 @@ def _state_dir(tmp: Path) -> str:
     return str(d)
 
 
+def _plaintext_conf_d(tmp: Path) -> str:
+    """`--config-dir` for `ops/migrate_credentials`: tenant `alpha` writes its
+    Slack URL out in plain text — the one thing that makes the tool write a
+    Secret manifest. Built per run under tmp: `--write` rewrites the file."""
+    d = tmp / "plaintext-conf.d"
+    if not d.is_dir():
+        d.mkdir()
+        (d / "alpha.yaml").write_text(
+            "tenants:\n  alpha:\n    _routing:\n      receiver:\n        type: slack\n"
+            "        api_url: https://hooks.slack.example.com/services/x\n",
+            encoding="utf-8")
+    return str(d)
+
+
 def _one_rule_pack_dir(tmp: Path) -> str:
     d = tmp / "rule-packs"
     d.mkdir()
@@ -388,6 +472,7 @@ class Row:
     tool: str                                   # relative to scripts/tools
     flag: str                                   # must appear in stderr verbatim
     kind: str                                   # "file" | "dir"
+    cls: str                                    # "operator" | "artifact" — see THE TWO CLASSES
     build: Callable[[Ctx, Path], list[str]]     # (ctx, out_path) -> argv
     reach: str                                  # how the write is reached offline
     out_name: str = "out"
@@ -433,6 +518,25 @@ class Row:
     # different terminal path (#3089: backtest's skip / no_changes) — part of
     # the id so the two stay distinguishable.
     variant: str = ""
+    # Who puts the FILES under the output path: this Python process and its
+    # Python children ("python"), a `da-guard write` child ("da-guard"), or
+    # both ("python+da-guard"). The write audit cannot see inside a process
+    # that is not Python, so every file the run leaves there is matched to a
+    # logged write, and one that has none must be da-guard's — declared here,
+    # with the spawn in the log — instead of passing on "no event was bad".
+    writer: str = "python"
+    # The exit code of the CONTROL run. 0 everywhere but where the tool's own
+    # contract makes the run that writes a finding: `migrate_credentials`
+    # writes its manifests exactly when it found a credential written out,
+    # and that is its rc 1 ("the report is the answer").
+    control_rc: int = 0
+    # "shared": the bad path ends in the shared `cannot <action> <path>: … —
+    # check the value given to <flag>` line. "own": the tool refuses the path
+    # in a pre-check of its own, in its own words, before any writer runs —
+    # still rc 2, still ONE `ERROR:` line naming the flag and the blocked
+    # path, still no traceback (the contract at the top of this file), but
+    # not the shared sentence.
+    wording: str = "shared"
 
     @property
     def id(self) -> str:
@@ -443,15 +547,15 @@ class Row:
 R = Row
 ROWS: list[Row] = [
     # ── dx ─────────────────────────────────────────────────────────────────
-    R("dx/describe_tenant.py", "-o/--output", "file",
+    R("dx/describe_tenant.py", "-o/--output", "file", "operator",
       lambda c, out: ["--conf-d", str(_jsc.SEED_CONF_D), "--all", "-o", str(out)],
       reach="in-repo try-local seed conf.d; --all is what reaches the write",
       out_name="tenants.json"),
-    R("dx/migrate_conf_d.py", "-o/--output-plan", "file",
+    R("dx/migrate_conf_d.py", "-o/--output-plan", "file", "operator",
       lambda c, out: ["--conf-d", str(_jsc.SEED_CONF_D), "-o", str(out)],
       reach="in-repo try-local seed conf.d (dry-run is the default)",
       out_name="migration-plan.json"),
-    R("dx/scan_component_health.py", "--output", "file",
+    R("dx/scan_component_health.py", "--output", "file", "operator",
       lambda c, out: ["--output", str(out), "--today", "2026-09-08"],
       reach="in-repo docs/assets/tool-registry.yaml + tools/portal sources",
       out_name="component-health.json",
@@ -461,16 +565,16 @@ ROWS: list[Row] = [
       # no shape here can make the write fail while the mkdir succeeds for
       # a FILE-shaped output flag.
       shapes=("parent_is_file",)),
-    R("dx/compile_custom_alerts.py", "--out", "file",
+    R("dx/compile_custom_alerts.py", "--out", "file", "operator",
       lambda c, out: ["--config-dir", _custom_alerts_conf_d(c.tmp), "--out", str(out)],
       reach="tmp conf.d with one _custom_alerts threshold recipe",
       out_name="rule-pack-custom-alerts.yaml"),
-    R("dx/generate_changelog.py", "-o/--output", "file",
+    R("dx/generate_changelog.py", "-o/--output", "file", "operator",
       lambda c, out: ["-o", str(out)],
       reach="throw-away git repo with one conventional commit (cwd)",
       out_name="CHANGELOG-draft.md",
       cwd=lambda c: _git_repo_with_one_commit(c.tmp)),
-    R("dx/generate_tenant_metadata.py", "--output", "file",
+    R("dx/generate_tenant_metadata.py", "--output", "file", "operator",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
       reach="in-repo try-local seed conf.d",
       out_name="tenant-metadata.json",
@@ -486,11 +590,11 @@ ROWS: list[Row] = [
     # tool refuses a non-empty output directory (rc=2, no ERROR line) before
     # any of them runs, which is what the `artifact_is_dir` shape would need.
     # They are wrapped, and the static pin is the only evidence for them.
-    *[R("dx/generate_tenant_fixture.py", "-o/--output", "dir",
+    *[R("dx/generate_tenant_fixture.py", "-o/--output", "dir", "operator",
         (lambda layout: lambda c, out: ["--count", "2", "--layout", layout,
                                         "-o", str(out)])(_layout),
         reach=f"flags only; --layout {_layout}",
-        out_name="conf.d",
+        out_name="conf.d", writer="da-guard",
         shapes=("parent_is_file", "target_is_file"))
       for _layout in ("flat", "hierarchical", "synthetic-v2")],
     # `--summary-file` is why the population is derived from the WRITER and
@@ -500,13 +604,13 @@ ROWS: list[Row] = [
     # different errno, and is kept because an APPEND to an existing path is
     # this tool's normal case (the CI runner's $GITHUB_STEP_SUMMARY already
     # exists) — the shape that most resembles the real one.
-    R("dx/paired_trend_watch.py", "--summary-file", "file",
+    R("dx/paired_trend_watch.py", "--summary-file", "file", "operator",
       lambda c, out: ["--dataset", str(PAIRED_DATASET), "--summary-file", str(out)],
       reach="the frozen six-night archival dataset in the repo; --dataset is "
             "the offline source (--from-gh would need the gh CLI)",
       out_name="paired-trend.md",
       shapes=("missing_parent", "parent_is_file", "target_is_dir")),
-    R("dx/pair_bench_ratio.py", "--out", "file",
+    R("dx/pair_bench_ratio.py", "--out", "file", "operator",
       lambda c, out: ["--reference", _bench_side(c.tmp, "ref"),
                       "--main", _bench_side(c.tmp, "main"),
                       "--reference-tag", "v1.0.0", "--out", str(out)],
@@ -515,7 +619,7 @@ ROWS: list[Row] = [
       # `--out`'s own `mkdir -p` creates a missing parent, so only the
       # blocked-parent shape reaches a failure.
       shapes=("parent_is_file",)),
-    R("dx/render_soak_diff.py", "--output", "file",
+    R("dx/render_soak_diff.py", "--output", "file", "operator",
       lambda c, out: ["--input-dir", _soak_output_dir(c.tmp), "--output", str(out),
                       "--warmup-sec", "0"],
       reach="hand-built soak output dir (run-config.json + flat timeseries CSV)",
@@ -526,7 +630,7 @@ ROWS: list[Row] = [
     # no-op (the `finally` still runs and still writes both files) and
     # `--reload-interval-sec 9999` keeps the chaos from touching the fixture
     # conf.d. All three artefact sinks were measured individually reachable.
-    R("dx/run_chaos_soak.py", "--output-dir", "dir",
+    R("dx/run_chaos_soak.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--target-url", c.stub + "/soak",
                       "--config-dir", _soak_config_dir(c.tmp),
                       "--duration-min", "0", "--reload-interval-sec", "9999",
@@ -534,7 +638,7 @@ ROWS: list[Row] = [
       reach="the shared stub's /soak personality (Go-runtime /metrics body); "
             "the first-probe check is what a wrong stub would fail on",
       shapes=("parent_is_file", "target_is_file")),
-    *[R("dx/run_chaos_soak.py", "--output-dir", "dir",
+    *[R("dx/run_chaos_soak.py", "--output-dir", "dir", "operator",
         lambda c, out: ["--target-url", c.stub + "/soak",
                         "--config-dir", _soak_config_dir(c.tmp),
                         "--duration-min", "0", "--reload-interval-sec", "9999",
@@ -543,7 +647,7 @@ ROWS: list[Row] = [
         shapes=("artifact_is_dir",),
         artifact=_artefact)
       for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
-    R("dx/sync_glossary_abbr.py", "--output", "file",
+    R("dx/sync_glossary_abbr.py", "--output", "file", "artifact",
       lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
       out_name="abbreviations.md",
@@ -555,7 +659,7 @@ ROWS: list[Row] = [
     # arrives behind `ERROR [ERR_OUTPUT]: ` instead of the shared `ERROR: `,
     # and declaring that head here means the tool cannot quietly drop either
     # half.
-    R("dx/waveform_score.py", "--out", "file",
+    R("dx/waveform_score.py", "--out", "file", "operator",
       lambda c, out: [_inject_report(c.tmp), "--tolerances", str(WAVEFORM_TOLERANCES),
                       "--out", str(out)],
       reach="a synthetic inject report whose one alert fires inside the fault "
@@ -563,34 +667,34 @@ ROWS: list[Row] = [
             "matrix",
       out_name="waveform-score.json",
       prefix="ERROR [ERR_OUTPUT]: "),
-    R("dx/waveform_compile.py", "--out", "dir",
+    R("dx/waveform_compile.py", "--out", "dir", "operator",
       lambda c, out: ["--compile", "--out", str(out), "--allow-selftest",
                       str(WAVEFORM_FIXTURE)],
       reach="in-repo self-test waveform pack fixture",
       shapes=("parent_is_file", "target_is_file")),
     # ── lint ───────────────────────────────────────────────────────────────
-    R("lint/trufflehog_to_sarif.py", "--output", "file",
+    R("lint/trufflehog_to_sarif.py", "--output", "file", "operator",
       lambda c, out: ["--input", _trufflehog_ndjson(c.tmp), "--output", str(out)],
       reach="a one-finding NDJSON transcript; no trufflehog binary is needed, "
             "the tool only converts",
       out_name="trufflehog.sarif"),
     # ── ops: single-file outputs ───────────────────────────────────────────
-    R("ops/analyze_rule_pack_gaps.py", "-o/--output", "file",
+    R("ops/analyze_rule_pack_gaps.py", "-o/--output", "file", "operator",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
       reach="in-repo try-local seed conf.d", out_name="gaps.json"),
-    R("ops/backtest_threshold.py", "-o/--output", "file",
+    R("ops/backtest_threshold.py", "-o/--output", "file", "operator",
       lambda c, out: ["--tenant", "alpha", "--metric", "max_connections",
                       "--old-value", "100", "--new-value", "150",
                       "--prometheus", c.stub, "--output", str(out)],
       reach="local Prometheus stub (empty range vector)", out_name="backtest.json"),
-    R("ops/backtest_threshold.py", "--markdown-output", "file",
+    R("ops/backtest_threshold.py", "--markdown-output", "file", "operator",
       lambda c, out: ["--tenant", "alpha", "--metric", "max_connections",
                       "--old-value", "100", "--new-value", "150",
                       "--prometheus", c.stub, "--markdown-output", str(out)],
       reach="local Prometheus stub (empty range vector)", out_name="backtest.md"),
     # #3089: the two paths that run no backtest write both outputs too, and
     # an unwritable one is rc 2 there as well (it used to be rc 0, unwritten).
-    *(R("ops/backtest_threshold.py", flag, "file",
+    *(R("ops/backtest_threshold.py", flag, "file", "operator",
         (lambda a, f: lambda c, out: [*a(c), f, str(out)])(argv, opt),
         reach=reach, out_name=name, variant=variant,
         shapes=("missing_parent", "parent_is_file", "target_is_dir"))
@@ -606,12 +710,12 @@ ROWS: list[Row] = [
            "in-repo seed conf.d as both trees (zero changes) + local Prometheus stub"))
       for flag, opt, name in (("-o/--output", "--output", "backtest.json"),
                               ("--markdown-output", "--markdown-output", "backtest.md"))),
-    R("ops/batch_diagnose.py", "-o/--output", "file",
+    R("ops/batch_diagnose.py", "-o/--output", "file", "operator",
       lambda c, out: ["--tenants", "db-a,db-b", "--prometheus", c.stub,
                       "--output", str(out)],
       reach="local Prometheus stub + the --json gate's fake kubectl (#1525)",
       out_name="health.json", env=lambda c: _fake_kubectl_env(c.tmp)),
-    R("ops/discover_instance_mappings.py", "-o/--output", "file",
+    R("ops/discover_instance_mappings.py", "-o/--output", "file", "operator",
       lambda c, out: ["--prometheus", c.stub + "/rich", "--instance", "stub:9104",
                       "--output", str(out)],
       reach="local Prometheus stub (/rich personality carries schema=)",
@@ -623,25 +727,25 @@ ROWS: list[Row] = [
     # unwritable also makes it unreadable, and the deliberately unguarded READ
     # at `_load_history` dies first (measured: rc=1 traceback at that line).
     # It is wrapped; the static pin is the only evidence for it.
-    R("ops/config_history.py", "--config-dir", "dir",
+    R("ops/config_history.py", "--config-dir", "dir", "operator",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="a one-shard conf.d built in place; `snapshot` is what writes",
       out_name="conf.d", artifact=".da-history",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/config_history.py", "--config-dir", "dir",
+    R("ops/config_history.py", "--config-dir", "dir", "operator",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot subdirectory blocked",
       out_name="conf.d", artifact=".da-history/snap-1",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/config_history.py", "--config-dir", "dir",
+    R("ops/config_history.py", "--config-dir", "dir", "operator",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot COPY of alpha.yaml blocked",
       out_name="conf.d", artifact=".da-history/snap-1/alpha.yaml",
       shapes=("sibling_is_dir",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/da_assembler.py", "--config-dir", "dir",
+    R("ops/da_assembler.py", "--config-dir", "dir", "operator",
       lambda c, out: ["--render-cr", str(THRESHOLDCONFIG_CR), "--config-dir", str(out)],
       reach="in-repo example ThresholdConfig CR through --render-cr; the "
             "offline path needs no Kubernetes client",
@@ -656,8 +760,8 @@ ROWS: list[Row] = [
       # put a directory where the rendered file goes. The sinks behind it
       # (`write_text` + `chmod`) were already masked from this row and are
       # held by the static pin.
-      shapes=("parent_is_file", "target_is_file")),
-    R("ops/state_reconcile.py", "--manifest-path", "file",
+      shapes=("parent_is_file", "target_is_file"), writer="da-guard"),
+    R("ops/state_reconcile.py", "--manifest-path", "file", "artifact",
       lambda c, out: ["--state-dir", _state_dir(c.tmp), "--manifest-path", str(out)],
       reach="a state dir with one current-schema file: no migration runs, so "
             "the manifest write is the only sink the run reaches",
@@ -679,13 +783,13 @@ ROWS: list[Row] = [
       # .da/manifest.json`) are CWD-relative; run in tmp so a future argv
       # slip writes there and not into the checkout.
       cwd=lambda c: c.tmp),
-    R("ops/federation_keygen.py", "--jwks-out", "file",
+    R("ops/federation_keygen.py", "--jwks-out", "file", "operator",
       lambda c, out: ["--jwks-out", str(out)],
       reach="flags only; the private key goes to stdout (a pipe, never a tty) "
             "and the JWKS to --jwks-out — needs openssl for the keypair",
       out_name="federation-jwks.json",
       requires="openssl"),
-    R("ops/generate_alertmanager_routes.py", "-o/--output", "file",
+    R("ops/generate_alertmanager_routes.py", "-o/--output", "file", "artifact",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output-alertmanager",
                       "-o", str(out)],
       reach="in-repo try-local seed conf.d; --output-alertmanager writes the "
@@ -693,31 +797,39 @@ ROWS: list[Row] = [
       out_name="alertmanager-routes.yaml"),
     # #1560: the mount list is a second sink, written after -o; -o is a
     # writable tmp file so the run reaches it.
-    R("ops/generate_alertmanager_routes.py", "--secret-mounts-out", "file",
+    R("ops/generate_alertmanager_routes.py", "--secret-mounts-out", "file", "operator",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output-alertmanager",
                       "-o", str(c.tmp / "alertmanager.yml"), "--secret-mounts-out", str(out)],
       reach="same seed conf.d; -o writable, so the run reaches the mount-list write",
       out_name="secret-mounts.json"),
-    R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file",
+    # #3107: the findings document is its own sink, written on every exit of
+    # every mode; --validate needs no -o, so this flag is the run's only file.
+    R("ops/generate_alertmanager_routes.py", "--findings-json", "file", "operator",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--validate",
+                      "--findings-json", str(out)],
+      reach="same seed conf.d; --validate renders nothing to a file, so the "
+            "findings document is the only write",
+      out_name="findings.json"),
+    R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file", "operator",
       lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",
                       "-o", str(out)],
       reach="tmp conf.d with a two-tenant _instance_mapping.yaml",
       out_name="mapping-rules.yaml"),
-    R("ops/assemble_config_dir.py", "--output", "dir",
+    R("ops/assemble_config_dir.py", "--output", "dir", "operator",
       lambda c, out: ["--sources", _shard_source_dir(c.tmp), "--output", str(out)],
       reach="one tmp conf.d shard with a single tenant file",
       # `--output` and `--manifest` are two flags on two different paths, so
       # they get a row each. Only the `mkdir` is the tool's own sink here:
       # since #3206 the files are put in place by `da-guard write` (a copy
       # batch), whose failures are its own named refusals, not this flag's.
-      shapes=("parent_is_file", "target_is_file")),
-    R("ops/assemble_config_dir.py", "--manifest", "file",
+      shapes=("parent_is_file", "target_is_file"), writer="da-guard"),
+    R("ops/assemble_config_dir.py", "--manifest", "file", "operator",
       lambda c, out: ["--sources", _shard_source_dir(c.tmp),
                       "--output", str(c.tmp / "assembled"), "--manifest", str(out)],
       reach="same shard; `--output` is a writable tmp dir so the run reaches "
             "the manifest write, which is the sink under test",
       out_name="assembly-manifest.json"),
-    R("ops/baseline_discovery.py", "-o/--output-dir", "dir",
+    R("ops/baseline_discovery.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--tenant", "t1", "--prometheus", c.stub,
                       "--duration", "1", "--interval", "1", "-o", str(out)],
       reach="the stub Prometheus answers every query (an empty vector), so the "
@@ -730,35 +842,65 @@ ROWS: list[Row] = [
       # module docstring says, and only the static pin speaks for it.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="baseline-t1-timeseries.csv"),
+    # The convergence report of a --watch run: its own flag, its own path
+    # (it lands under -o when the flag is absent — that is the -o row's).
+    R("ops/validate_migration.py", "--convergence-output", "file", "operator",
+      lambda c, out: ["--old", "up", "--new", "up", "--prometheus", c.stub + "/rich",
+                      "--watch", "--rounds", "2", "--interval", "0",
+                      "--auto-detect-convergence", "--stability-window", "2",
+                      "-o", str(c.tmp / "validation"), "--convergence-output", str(out)],
+      reach="local Prometheus stub (/rich: identical vectors ⇒ match); two watch "
+            "rounds with a stability window of two converge (rc 0) and write the "
+            "report",
+      out_name="convergence.json",
+      # Its own `mkdir -p` creates a missing parent.
+      shapes=("parent_is_file", "target_is_dir")),
     # ── ops: output directories ────────────────────────────────────────────
-    R("ops/init_project.py", "-o/--output-dir", "dir",
+    # #1560 ⑤-a: one Secret manifest per tenant, named after it, with --write.
+    # Two things here are this tool's own contract, declared rather than
+    # worked around: it refuses a bad DIR in a pre-check of its own ("nothing
+    # was written" — the conf.d rewrite and the manifests go together, so the
+    # refusal comes before either), and the run that writes manifests is the
+    # run that found a credential written out, rc 1.
+    R("ops/migrate_credentials.py", "--manifests-out", "dir", "operator",
+      lambda c, out: ["--config-dir", _plaintext_conf_d(c.tmp), "--manifests-out", str(out),
+                      "--write"],
+      reach="a tmp conf.d whose one tenant writes its Slack URL out; --write "
+            "rewrites that file (da-guard) and writes the tenant's Secret manifest",
+      out_name="secrets", artifact="da-alpha.yaml",
+      shapes=("target_is_file", "artifact_is_dir"),
+      wording="own", control_rc=1),
+    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb"],
       reach="non-interactive flags only",
-      shapes=("parent_is_file", "target_is_file")),
-    R("ops/migrate_rule.py", "-o/--output-dir", "dir",
+      # The conf.d files in it are `da-guard write`'s; the rest is Python's.
+      shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
+    R("ops/migrate_rule.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "-o", str(out)],
       reach="tmp legacy Prometheus rules file",
-      shapes=("parent_is_file", "target_is_file")),
-    R("ops/migrate_to_operator.py", "--output-dir", "dir",
+      # The conf.d files in it are `da-guard write`'s; the rest is Python's.
+      shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
+    R("ops/migrate_to_operator.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
       reach="in-repo k8s/03-monitoring",
       shapes=("parent_is_file", "target_is_file")),
-    R("ops/onboard_platform.py", "-o/--output-dir", "dir",
+    R("ops/onboard_platform.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--alertmanager-config", str(_jsc.ALERTMANAGER_YML), "-o", str(out)],
       reach="in-repo try-local alertmanager.yml",
       shapes=("parent_is_file", "target_is_file")),
-    R("ops/scaffold_tenant.py", "-o/--output-dir", "dir",
+    R("ops/scaffold_tenant.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--tenant", "alpha", "--db", "mariadb", "--non-interactive",
                       "-o", str(out)],
       reach="non-interactive flags only",
-      shapes=("parent_is_file", "target_is_file")),
-    R("ops/validate_migration.py", "-o/--output-dir", "dir",
+      # The conf.d files in it are `da-guard write`'s; the rest is Python's.
+      shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
+    R("ops/validate_migration.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--old", "up", "--new", "up", "--prometheus", c.stub + "/rich",
                       "-o", str(out)],
       reach="local Prometheus stub (/rich: identical vectors ⇒ match)",
       shapes=("parent_is_file", "target_is_file")),
-    R("ops/generate_rule_pack_split.py", "--output-dir", "dir",
+    R("ops/generate_rule_pack_split.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--rule-packs-dir", _one_rule_pack_dir(c.tmp), "--output-dir", str(out)],
       reach="tmp rule-packs dir holding a copy of rule-pack-mariadb.yaml",
       # `parent_is_file` dies at the first `_safe_mkdir` (edge-rules/), which
@@ -769,10 +911,25 @@ ROWS: list[Row] = [
       # that wrapper deleted.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="validation-report.json"),
-    R("ops/operator_generate.py", "--output-dir", "dir",
+    R("ops/operator_generate.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--rule-packs-dir", str(_jsc.RULE_PACKS), "--output-dir", str(out)],
       reach="in-repo rule-packs",
       shapes=("parent_is_file", "target_is_file")),
+    # ── scripts/ops (outside scripts/tools; `tool` is relative to it) ──────
+    R("../ops/configmap_assemble.py", "--output", "file", "artifact",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
+      reach="in-repo try-local seed conf.d through a stand-in `kubectl` that "
+            "builds the ConfigMap from --from-file (test_configmap_assemble's)",
+      out_name="configmap.yaml",
+      env=lambda c: _kubectl_shim_env(c.tmp),
+      shapes=("parent_is_file", "target_is_dir")),
+    R("../ops/audit_rules_drift.py", "--out", "file", "operator",
+      lambda c, out: ["--out", str(out)],
+      reach="the repo's own rule corpus; the memory directory is absent off a "
+            "maintainer machine, which the tool reports and carries on from",
+      out_name="rules-drift.md",
+      # Its own `mkdir -p` creates a missing parent.
+      shapes=("parent_is_file", "target_is_dir")),
 ]
 
 
@@ -795,18 +952,51 @@ def _fake_kubectl_env(tmp: Path) -> dict[str, str]:
     return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
 
 
-def _run(row: Row, ctx: Ctx, out: Path) -> subprocess.CompletedProcess:
+def _kubectl_shim_env(tmp: Path) -> dict[str, str]:
+    """PATH with test_configmap_assemble's stand-in `kubectl` first (it builds
+    the ConfigMap YAML from `--from-file`), plus the opt-in the tool wants
+    before it reads a conf.d inside the repo."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_cmasm_tests", REPO_ROOT / "tests" / "ops" / "test_configmap_assemble.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    bindir = tmp / "kubectl-shim"
+    bindir.mkdir(parents=True, exist_ok=True)
+    exe = bindir / "kubectl"
+    exe.write_text(mod._SHIM.format(python=sys.executable), encoding="utf-8")
+    exe.chmod(0o755)
+    return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "ALLOW_SAMPLE_CONFDIR": "1"}
+
+
+def _files_under(scope: Path) -> frozenset[str]:
+    """Every file (or symlink) under *scope*, relative to it."""
+    return frozenset(p.relative_to(scope).as_posix() for p in scope.rglob("*")
+                     if p.is_file() or p.is_symlink())
+
+
+def _run(row: Row, ctx: Ctx, out: Path, *,
+         audit_log: Path | None = None) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     if row.env is not None:
         if os.name == "nt":
             pytest.skip(f"{row.id}: its fake executable is a POSIX launcher")
         env.update(row.env(ctx))
+    if audit_log is not None:
+        env.update(_audit_env(audit_log, ctx.tmp))
     cwd = row.cwd(ctx) if row.cwd else None
-    return subprocess.run(
-        [sys.executable, str(TOOLS_DIR / row.tool), *row.build(ctx, out)],
+    argv = row.build(ctx, out)
+    # After the row's fixtures, before the tool: what is already under the
+    # control run's output directory is the fixture's, not the run's.
+    before = _files_under(out.parent) if audit_log is not None else frozenset()
+    proc = subprocess.run(
+        [sys.executable, str(TOOLS_DIR / row.tool), *argv],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=TIMEOUT_S, env=env, cwd=cwd,
     )
+    proc.files_before = before
+    return proc
 
 
 SHAPES = ("missing_parent", "parent_is_file", "target_is_dir",
@@ -971,9 +1161,343 @@ def _error_lines(stderr: str, prefix: str) -> list[str]:
             and line[len(prefix):].startswith("cannot ")]
 
 
+def _own_refusal_problem(row: Row, shape: str, out: Path, stderr: str) -> str | None:
+    """What is wrong with a `wording="own"` row's refusal, or None.
+
+    Held to the contract at the top of this file minus the shared sentence:
+    exactly one line with the row's head, and that line names the flag and
+    the path this shape blocks. The path must END there — followed by nothing
+    a path could continue with — so a line about `<out>/da-x.yaml` does not
+    pass for a shape that blocks `<out>` itself (the substring hole
+    `_named_path` describes)."""
+    lines = [line for line in stderr.splitlines() if line.startswith(row.prefix)]
+    if len(lines) != 1:
+        return f"expected exactly one {row.prefix!r} line, got {len(lines)}"
+    line = lines[0]
+    if "cannot " in line and "check the value given to" in line:
+        return ("the line is the shared sentence — the row should say "
+                'wording="shared" and be held to it')
+    if row.flag not in line:
+        return f"the refusal does not name {row.flag}"
+    blocked = str(_expected_fragment(row, shape, out))
+    if not re.search(re.escape(blocked) + r"(?![\w./\\-])", line):
+        return f"the refusal does not name the blocked path {blocked}"
+    return None
+
+
 def _fail(row: Row, proc: subprocess.CompletedProcess, why: str) -> str:
     return (f"{row.id}: {why}\n  argv : {proc.args[1:]}\n  exit : {proc.returncode}\n"
             f"  stdout:\n{proc.stdout[-1500:]}\n  stderr:\n{proc.stderr[-1500:]}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The write audit (#3107): which entry each write under the output path came
+# from. The control run is the measurement; everything here reads its log.
+# ═══════════════════════════════════════════════════════════════════════════
+AUDIT_DIR = Path(__file__).resolve().parent / "_write_audit"
+CLASSES = ("operator", "artifact")
+WRITERS = ("python", "da-guard", "python+da-guard")
+#: Events that put a file's content or name in place (a `mkdir` does neither).
+_FILE_EVENTS = frozenset({"open", "os.rename", "os.link", "os.symlink", "os.truncate"})
+
+
+def _audit_env(log: Path, tmp: Path) -> dict[str, str]:
+    """The environment that loads the hook into the tool and its Python
+    children. ``TMPDIR`` is a directory BESIDE the output path, never the
+    default: pytest's ``tmp_path`` is itself under the system temp directory,
+    so "under the temp directory" would otherwise also say "under the output
+    path", and a tool's scratch file could not be told from its output."""
+    scratch = tmp / "tool-tmp"
+    scratch.mkdir(exist_ok=True)
+    return {"DA_WRITE_AUDIT_LOG": str(log), "TMPDIR": str(scratch),
+            "PYTHONPATH": os.pathsep.join(
+                [str(AUDIT_DIR), *filter(None, [os.environ.get("PYTHONPATH")])])}
+
+
+def _read_audit_log(log: Path) -> list[dict] | None:
+    """The events, or None when there is no log at all (the hook never ran)."""
+    if not log.is_file():
+        return None
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def _entry_frames() -> dict[str, str]:
+    """``<file relative to the repo>:<function>`` → what kind of entry it is,
+    for every function `_lib_io.OUTPUT_ENTRY_POINTS` names as one that
+    writes. Read from the library, not listed here a second time."""
+    import _lib_io
+    frames = {}
+    for kind, names in _lib_io.OUTPUT_ENTRY_POINTS.items():
+        if kind in ("names_flag_only", "wrapper"):
+            continue  # neither opens anything: the write under them is another frame's
+        for name in names:
+            module, func = name.split(".")
+            frames[f"scripts/tools/{module}.py:{func}"] = kind
+    return frames
+
+
+def _via(event: dict, frames: dict[str, str]) -> str:
+    """The kind of the INNERMOST entry on the event's stack, or ``raw``.
+    Innermost: `write_yaml_crd` → `write_text_secure` is a legacy write, and
+    stays one whatever is above it."""
+    for frame in event["stack"]:
+        if frame in frames:
+            return frames[frame]
+    return "raw"
+
+
+def _placed(event: dict) -> str | None:
+    """Where the event landed, as an absolute path with its directory
+    resolved — or None when the log cannot say:
+
+    * the path is a FILE DESCRIPTOR (``open(fd, "w")`` wrapping an fd the
+      entry already opened, ``fchmod``): the file was named by the event that
+      opened it, which is in the log on its own line;
+    * the path is relative to a ``dir_fd`` the hook could not resolve. It
+      carries no ``cwd`` and must not be read against one: `shutil.rmtree`
+      under a `TemporaryDirectory` removes ``<name>`` relative to the temp
+      directory's fd, and joined to the working directory that would be a
+      path inside whatever tree the tool was started in.
+    """
+    path = event.get("path")
+    if not isinstance(path, str):
+        return None
+    if not os.path.isabs(path):
+        if "cwd" not in event:
+            return None
+        path = os.path.join(event["cwd"], path)
+    head, tail = os.path.split(os.path.normpath(path))
+    return os.path.join(os.path.realpath(head), tail)
+
+
+def _under(path: str, scope: Path) -> str | None:
+    """*path* relative to *scope* (``.`` for *scope* itself), or None when it
+    is not inside it. By path component: ``good-2/x`` is not under ``good``.
+    Nothing is excluded by name — a ``.pyc`` or ``/dev/null`` is simply not
+    under an output directory, and one that were would be a finding."""
+    root = os.path.realpath(scope)
+    if path == root:
+        return "."
+    if path.startswith(root + os.sep):
+        return path[len(root) + 1:].replace(os.sep, "/")
+    return None
+
+
+@dataclass(frozen=True)
+class Audit:
+    """What the log says about one run, under one scope."""
+    logged: bool                              # a log exists at all
+    loaded: bool                              # the tool's own process reported in
+    sites: dict[str, tuple[tuple[str, str], ...]]   # kind → ((event, relative path), …)
+    spawned: tuple[tuple[str, ...], ...]      # argv head of every process spawned
+    unlogged: tuple[str, ...] = ()            # files the run left that no logged write made
+
+
+def _audit(events: list[dict] | None, scope: Path, tool: Path,
+           made: frozenset[str] = frozenset()) -> Audit:
+    """*made*: the files under *scope* that are there after the run and were
+    not before it. One with no logged write to its path was put there by
+    something the hook did not see."""
+    if events is None:
+        return Audit(False, False, {}, ())
+    frames = _entry_frames()
+    tool_path = os.path.realpath(tool)
+    loaded = any(e["ev"] == "loaded"
+                 and any(os.path.realpath(a) == tool_path for a in e["argv"][:3])
+                 for e in events)
+    sites: dict[str, list[tuple[str, str]]] = {}
+    spawned = []
+    for event in events:
+        if event["ev"] == "loaded":
+            continue
+        if event["ev"] == "spawn":
+            argv = event["argv"] or [event["exe"]]
+            spawned.append((os.path.basename(str(argv[0])), *map(str, argv[1:])))
+            continue
+        placed = _placed(event)
+        rel = _under(placed, scope) if placed is not None else None
+        if rel is None:
+            continue
+        site = (event["ev"], rel)
+        bucket = sites.setdefault(_via(event, frames), [])
+        if site not in bucket:
+            bucket.append(site)
+    logged = {rel for bucket in sites.values() for event, rel in bucket
+              if event in _FILE_EVENTS}
+    return Audit(True, loaded, {k: tuple(v) for k, v in sites.items()}, tuple(spawned),
+                 tuple(sorted(made - logged)))
+
+
+@dataclass(frozen=True)
+class Seen:
+    faults: list[str]            # wrong whatever any list says
+    legacy: bool                 # some write came through an old name
+    raw: tuple[str, ...]         # "<event> <path under the scope>" of each raw site, sorted
+    raw_is_all: bool             # no write under the scope came through any entry
+    other_class: str | None      # the OTHER class's entry wrote here
+
+
+def _verdict(row: Row, audit: Audit) -> Seen:
+    """Hold one run to the row's class. Pure: the harness controls below
+    drive it with hand-made logs."""
+    faults: list[str] = []
+    if not audit.logged:
+        faults.append("the write audit left no log — the hook did not load, so nothing "
+                      "was measured (this is not 'nothing was written')")
+    elif not audit.loaded:
+        faults.append("no `loaded` line from the tool's own process — the hook did not "
+                      "load in it, so its writes were not measured")
+    files = [(kind, site) for kind, sites in audit.sites.items() for site in sites
+             if site[0] in _FILE_EVENTS]
+    if row.writer not in WRITERS:
+        faults.append(f"unknown writer {row.writer!r} (one of {WRITERS})")
+    by_python, by_da_guard = "python" in row.writer, "da-guard" in row.writer
+    if by_python and audit.loaded and not files:
+        faults.append("no file was written under the output path by any audited "
+                      "process — a dead row, or a writer the hook cannot see "
+                      "(then the row must say `writer=`)")
+    if not by_python and files:
+        faults.append("the row says `da-guard write` puts the files, but Python "
+                      f"wrote under the output path too: {files}")
+    if by_da_guard:
+        if not any(argv[:2] == ("da-guard", "write") for argv in audit.spawned):
+            faults.append("the row says `da-guard write` puts files, and the run "
+                          f"spawned none: {sorted(set(a[:2] for a in audit.spawned))}")
+        if audit.loaded and not audit.unlogged:
+            faults.append("the row says `da-guard write` puts files, and every file "
+                          "the run left has a logged Python write — say what the "
+                          "writer is")
+    elif audit.unlogged:
+        faults.append("file(s) under the output path that no audited process wrote: "
+                      f"{list(audit.unlogged)} — put there by a process the hook "
+                      "cannot see; the row must say which (`writer=`)")
+    if row.cls not in CLASSES:
+        faults.append(f"unknown class {row.cls!r} (one of {CLASSES})")
+    other = next((c for c in CLASSES if c != row.cls and audit.sites.get(c)), None)
+
+    for kind, sites in audit.sites.items():
+        if kind == "operator":
+            # The kernel opens an operator path in place: nothing is renamed
+            # onto it, and no mode is set by name afterwards.
+            for event, rel in sites:
+                if event != "open":
+                    faults.append(f"{event} {rel} under the operator entry: an operator "
+                                  "output is opened in place, nothing else")
+        elif kind == "artifact":
+            renamed = {rel for event, rel in sites if event == "os.rename"}
+            if not renamed:
+                faults.append(f"the artifact entry renamed nothing into place: {sites}")
+            for event, rel in sites:
+                if event == "open" and rel in renamed:
+                    faults.append(f"open {rel} under the artifact entry: the artifact "
+                                  "itself was opened for writing (not atomic)")
+        elif kind == "directory":
+            for event, rel in sites:
+                if event != "os.mkdir":
+                    faults.append(f"{event} {rel} under ensure_dir: it makes directories only")
+    raw = tuple(sorted(f"{event} {rel}" for event, rel in audit.sites.get("raw", ())))
+    through_an_entry = any(sites for kind, sites in audit.sites.items() if kind != "raw")
+    return Seen(faults, bool(audit.sites.get("legacy")), raw,
+                bool(raw) and not through_an_entry, other)
+
+
+# ── The lists that may only shrink ─────────────────────────────────────────
+# Keyed by (tool, flag). Each is EXACT in both directions: a row that does
+# what a list says and is not on it is red, and so is a row that is on a list
+# and no longer does it ("take it off"). Nothing here is a judgement — every
+# entry is what the control run under the audit hook logged on this tree.
+# To see what a row logs, make its entry wrong and read the failure, or:
+#   pytest tests/shared/test_output_path_write_failure.py -k control -q
+Key = tuple[str, str]
+
+#: Rows whose output is written through an old name (`write_text_secure`,
+#: `write_json_secure`, their `_or_die` forms — also when reached through
+#: `write_yaml_crd` / `write_onboard_hints`). Emptied by the migration to the
+#: two classes (#3107 steps ①–③).
+VIA_OLD_NAMES: frozenset[Key] = frozenset({
+    ("dx/generate_changelog.py", "-o/--output"),
+    ("dx/sync_glossary_abbr.py", "--output"),
+    ("dx/waveform_compile.py", "--out"),
+    ("dx/waveform_score.py", "--out"),
+    ("ops/analyze_rule_pack_gaps.py", "-o/--output"),
+    ("ops/backtest_threshold.py", "--markdown-output"),
+    ("ops/backtest_threshold.py", "-o/--output"),
+    ("ops/batch_diagnose.py", "-o/--output"),
+    ("ops/discover_instance_mappings.py", "-o/--output"),
+    ("ops/generate_alertmanager_routes.py", "-o/--output"),
+    ("ops/generate_rule_pack_split.py", "--output-dir"),
+    ("ops/generate_tenant_mapping_rules.py", "-o/--output"),
+    ("ops/init_project.py", "-o/--output-dir"),
+    ("ops/migrate_rule.py", "-o/--output-dir"),
+    ("ops/migrate_to_operator.py", "--output-dir"),
+    ("ops/onboard_platform.py", "-o/--output-dir"),
+    ("ops/operator_generate.py", "--output-dir"),
+    ("ops/scaffold_tenant.py", "-o/--output-dir"),
+    ("ops/validate_migration.py", "--convergence-output"),
+    ("ops/validate_migration.py", "-o/--output-dir"),
+})
+
+#: Rows with a write under the output path that came through NO entry: each
+#: site as "<event> <path under the control run's output directory>", and
+#: whether that is all the run wrote there ("all") or it also wrote through
+#: an entry ("some"). A `mkdir` counts — `ensure_dir` is the entry for it.
+RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
+    ("../ops/audit_rules_drift.py", "--out"): ("some", ("os.mkdir .",)),
+    ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
+    ("dx/describe_tenant.py", "-o/--output"): ("all", ("open tenants.json",)),
+    ("dx/generate_tenant_fixture.py", "-o/--output"): ("all", ("os.mkdir conf.d",)),
+    ("dx/generate_tenant_metadata.py", "--output"): ("some", ("os.mkdir .",)),
+    ("dx/migrate_conf_d.py", "-o/--output-plan"): ("all", ("open migration-plan.json",)),
+    ("dx/pair_bench_ratio.py", "--out"): ("all", ("open bench-paired.json", "os.mkdir .")),
+    ("dx/paired_trend_watch.py", "--summary-file"): ("all", ("open paired-trend.md",)),
+    ("dx/render_soak_diff.py", "--output"): ("all", ("open soak-report.md",)),
+    ("dx/run_chaos_soak.py", "--output-dir"): (
+        "all", ("open out/metrics-timeseries.csv", "open out/run-config.json",
+                "open out/summary.txt", "os.mkdir out")),
+    ("dx/scan_component_health.py", "--output"): (
+        "all", ("open component-health.json", "os.mkdir .")),
+    ("lint/trufflehog_to_sarif.py", "--output"): ("all", ("open trufflehog.sarif",)),
+    ("ops/assemble_config_dir.py", "--output"): ("all", ("os.mkdir out",)),
+    ("ops/baseline_discovery.py", "-o/--output-dir"): ("some", ("os.mkdir out",)),
+    ("ops/config_history.py", "--config-dir"): (
+        "some", ("open .da-history/history.json", "os.mkdir .da-history",
+                 "os.mkdir .da-history/snap-1")),
+    ("ops/da_assembler.py", "--config-dir"): ("all", ("os.mkdir out",)),
+    ("ops/generate_rule_pack_split.py", "--output-dir"): (
+        "some", ("open out/validation-report.json",)),
+    ("ops/migrate_credentials.py", "--manifests-out"): ("some", ("os.mkdir secrets",)),
+    ("ops/state_reconcile.py", "--manifest-path"): ("some", ("os.mkdir .",)),
+}
+
+#: Rows whose output came through the entry of the OTHER class than the row
+#: declares, and which one. Each is a tool to move or a row to reclassify.
+VIA_OTHER_CLASS: dict[Key, str] = {
+    # Neither flag has a default that is a tracked file (the first has none,
+    # the second a dated report name the tool never reads back): operator by
+    # the rule at the top. Both write it with `atomic_write_text`.
+    ("../ops/audit_rules_drift.py", "--out"): "artifact",
+    ("dx/generate_tenant_metadata.py", "--output"): "artifact",
+}
+
+
+def _list_faults(row: Row, seen: Seen) -> list[str]:
+    key = (row.tool, row.flag)
+    out = []
+    if seen.legacy != (key in VIA_OLD_NAMES):
+        out.append(f"{key} writes through an old name and is not in VIA_OLD_NAMES"
+                   if seen.legacy else
+                   f"{key} no longer writes through an old name — take it off VIA_OLD_NAMES")
+    listed = RAW_UNDER_OUT.get(key)
+    found = (("all" if seen.raw_is_all else "some"), seen.raw) if seen.raw else None
+    if found != listed:
+        out.append(f"raw writes under the output path of {key}: the run made {found}, "
+                   f"RAW_UNDER_OUT says {listed} — route a new one through its entry; "
+                   "shrink or drop the entry for one that is gone")
+    if seen.other_class != VIA_OTHER_CLASS.get(key):
+        out.append(f"{key} is declared {row.cls} and the run wrote through the "
+                   f"{seen.other_class} entry; VIA_OTHER_CLASS says "
+                   f"{VIA_OTHER_CLASS.get(key)}")
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -992,6 +1516,10 @@ def test_unwritable_output_path_is_rc2_one_line_no_traceback(row, shape, tmp_pat
         row, proc, f"expected rc={EXIT_CALLER_ERROR} (EXIT_CALLER_ERROR) for shape "
                    f"{shape}; rc=1 would read as EXIT_VIOLATION")
     assert "Traceback" not in proc.stderr, _fail(row, proc, "a traceback leaked")
+    if row.wording == "own":
+        problem = _own_refusal_problem(row, shape, out, proc.stderr)
+        assert problem is None, _fail(row, proc, problem)
+        return
     # The declared head must actually be emitted: for two rows it is a CI
     # contract of its own, so a row cannot use it to loosen the match.
     error_lines = _error_lines(proc.stderr, row.prefix)
@@ -1021,9 +1549,11 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     _skip_if_unavailable(row)
     out = tmp_path / "good" / row.out_name
     out.parent.mkdir()
-    proc = _run(row, Ctx(tmp_path, stub_url), out)
+    log = tmp_path / "write-audit.jsonl"
+    proc = _run(row, Ctx(tmp_path, stub_url), out, audit_log=log)
 
-    assert proc.returncode == 0, _fail(row, proc, "control run did not exit 0")
+    assert proc.returncode == row.control_rc, _fail(
+        row, proc, f"control run did not exit {row.control_rc}")
     assert "Traceback" not in proc.stderr, _fail(row, proc, "control run leaked a traceback")
     assert not _error_lines(proc.stderr, row.prefix), _fail(
         row, proc, "control run printed a write error")
@@ -1051,6 +1581,14 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     else:
         written = [p for p in out.rglob("*") if p.is_file()]
         assert written, _fail(row, proc, f"control run wrote nothing under {out}")
+    # And WHICH ENTRY wrote it (#3107): everything the run changed under the
+    # directory this test handed it — `good/`, which holds the output path
+    # and nothing else — came through the entry of the row's class, or the
+    # row is on one of the lists that may only shrink.
+    seen = _verdict(row, _audit(_read_audit_log(log), out.parent, TOOLS_DIR / row.tool,
+                                _files_under(out.parent) - proc.files_before))
+    problems = seen.faults + _list_faults(row, seen)
+    assert not problems, _fail(row, proc, "write audit:\n  " + "\n  ".join(problems))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1102,6 +1640,7 @@ def test_a_bad_source_entry_does_not_blame_the_output_flag(tmp_path):
 # ═══════════════════════════════════════════════════════════════════════════
 def _control_row(**kw) -> Row:
     kw.setdefault("kind", "dir")
+    kw.setdefault("cls", "operator")
     return Row(tool="dx/run_chaos_soak.py", flag="--output-dir",
                build=lambda c, out: [], reach="synthetic control", **kw)
 
@@ -1304,6 +1843,9 @@ def test_rows_point_at_real_tools_and_fixtures():
     for row in ROWS:
         assert (TOOLS_DIR / row.tool).is_file(), row.tool
         assert row.kind in ("file", "dir"), row.id
+        assert row.cls in CLASSES, row.id
+        assert row.writer in WRITERS, row.id
+        assert row.wording in ("shared", "own"), row.id
         assert row.shapes, row.id
         assert set(row.shapes) <= set(SHAPES), f"{row.id}: unknown shape(s)"
         # The two fields are each other's precondition: a row that names an
@@ -1346,52 +1888,147 @@ def test_soak_metrics_stub_is_a_working_target():
     assert b"schema=" in _jsc._stub_payload("/rich/metrics")[1]
 
 
-def _tools_naming_a_flag() -> set[str]:
-    """Tool modules under scripts/tools that pass ``flag=`` to a WRITER KEY —
-    i.e. declare an argv-sourced output path at the point of writing.
+#: Where a CLI can live. ``scripts/ops`` is one of them since #3107: its tools
+#: write through the same entries, and before that only the (retired)
+#: file-level audit knew they did. A tool outside ``scripts/tools`` is named
+#: relative to it (``../ops/x.py``), the same string its ``Row.tool`` carries.
+_CLI_ROOTS = (TOOLS_DIR, REPO_ROOT / "scripts" / "ops")
+_UNRESOLVED = "<cannot tell which flag: {}>"
 
-    The keys are the secure writers, ``ensure_dir``, and the ``output_write``
-    context manager (#1789), which is how a RAW sink (bare ``open``,
-    ``mkdir``, ``shutil.copy2``) joins this population without changing the
-    bytes it emits. See the module docstring for what this population cannot
-    see: a raw sink that was never wrapped is not a missing row, it is
-    absent."""
-    import ast
-    writers = {"write_text_or_die", "write_json_or_die", "ensure_dir_or_die", "ensure_dir",
-               "write_text_secure", "write_json_secure", "write_yaml_crd",
-               "write_onboard_hints", "output_write"}
-    found: set[str] = set()
-    for py in sorted(TOOLS_DIR.rglob("*.py")):
-        if py.name.startswith("_"):
-            continue  # libraries forward `flag=`; they are not CLI rows
-        tree = ast.parse(py.read_text(encoding="utf-8"), str(py))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+
+def _writer_names() -> frozenset[str]:
+    """Every function `_lib_io.OUTPUT_ENTRY_POINTS` names — the entries, the
+    two that only name the flag, and the wrappers. Read from the library:
+    the hand-kept copy of this list that used to live here did not know
+    `write_operator_output` / `write_repo_artifact` / `atomic_write_text`, so
+    each tool migrated to them left this population without a word
+    (`ops/federation_keygen` had; `ops/migrate_credentials` never entered)."""
+    import _lib_io
+    return frozenset(name.split(".")[1]
+                     for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names)
+
+
+def _called_name(call: ast.Call) -> str | None:
+    f = call.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
+
+
+def _flag_values(node: ast.expr, module: ast.Module, parents: dict,
+                 seen: frozenset = frozenset()) -> set[str]:
+    """The flag strings the expression *node* can be, read off the module.
+
+    A literal is itself (``None`` is no flag: an internally derived path). A
+    conditional is both arms. A name is what it is bound to: a PARAMETER of
+    the function it sits in is whatever that function's callers in this
+    module pass for it (and its default); any other name is every assignment
+    to it in that function, or at module level. A call of a module function
+    is what the function returns. Anything else is reported as unresolved —
+    a string the caller turns into a failure, never a silent "no flag".
+    """
+    def again(expr: ast.expr, more: frozenset = seen) -> set[str]:
+        return _flag_values(expr, module, parents, more)
+
+    if isinstance(node, ast.Constant):
+        return {node.value} if isinstance(node.value, str) else set()
+    if isinstance(node, ast.IfExp):
+        return again(node.body) | again(node.orelse)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        returned = [r.value for fn in ast.walk(module)
+                    if isinstance(fn, ast.FunctionDef) and fn.name == node.func.id
+                    for r in ast.walk(fn) if isinstance(r, ast.Return) and r.value is not None]
+        if returned and node.func.id not in seen:
+            more = seen | {node.func.id}
+            return set().union(*(again(value, more) for value in returned))
+    if isinstance(node, ast.Name):
+        scope = parents.get(node)
+        while scope is not None and not isinstance(scope, ast.FunctionDef):
+            scope = parents.get(scope)
+        key = (getattr(scope, "name", None), node.id)
+        if key in seen:
+            return set()
+        more = seen | {key}
+        values: set[str] = set()
+        bound = False
+        if scope is not None:
+            params = scope.args.args + scope.args.kwonlyargs
+            if node.id in [a.arg for a in params]:
+                bound = True
+                at = [a.arg for a in scope.args.args].index(node.id) \
+                    if node.id in [a.arg for a in scope.args.args] else None
+                defaults = dict(zip([a.arg for a in scope.args.args][::-1],
+                                    scope.args.defaults[::-1]))
+                defaults.update({a.arg: d for a, d in zip(scope.args.kwonlyargs,
+                                                         scope.args.kw_defaults) if d})
+                if node.id in defaults:
+                    values |= again(defaults[node.id], more)
+                for call in ast.walk(module):
+                    if isinstance(call, ast.Call) and _called_name(call) == scope.name:
+                        for kw in call.keywords:
+                            if kw.arg == node.id:
+                                values |= again(kw.value, more)
+                        if at is not None and len(call.args) > at:
+                            values |= again(call.args[at], more)
+        if not bound:
+            for where in ([scope] if scope is not None else []) + [module]:
+                body = ast.walk(where) if where is not module else iter(module.body)
+                for stmt in body:
+                    if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+                        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                        if any(isinstance(t, ast.Name) and t.id == node.id for t in targets):
+                            bound = True
+                            values |= again(stmt.value, more)
+                if bound:
+                    break
+        if bound:
+            return values
+    return {_UNRESOLVED.format(ast.unparse(node))}
+
+
+def _flags_named_at_a_writer() -> dict[str, set[str]]:
+    """tool → the flags it passes as ``flag=`` to a writer name, for every CLI
+    module (not a ``_``-prefixed library: those forward the caller's flag).
+
+    A tool is here when it DECLARES, at the point of writing, that the path
+    came from argv. See the module docstring for what that cannot see: a raw
+    sink never wrapped is not a missing row, it is absent — and so is a write
+    whose entry is passed around as a value and called under another name
+    (`_registry_lib` hands `write_text_secure` to `_write_or_stop`). Those
+    pass no flag; the control runs' audit sees them when a row runs them.
+    """
+    writers = _writer_names()
+    found: dict[str, set[str]] = {}
+    for root in _CLI_ROOTS:
+        for py in sorted(root.rglob("*.py")):
+            if py.name.startswith("_"):
                 continue
-            f = node.func
-            name = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else None
-            if name in writers and any(kw.arg == "flag" and kw.value is not None
-                                       and not (isinstance(kw.value, ast.Constant)
-                                                and kw.value.value is None)
-                                       for kw in node.keywords):
-                found.add(py.relative_to(TOOLS_DIR).as_posix())
-                break
+            module = ast.parse(py.read_text(encoding="utf-8"), str(py))
+            parents = {child: node for node in ast.walk(module)
+                       for child in ast.iter_child_nodes(node)}
+            for node in ast.walk(module):
+                if not (isinstance(node, ast.Call) and _called_name(node) in writers):
+                    continue
+                for kw in node.keywords:
+                    if kw.arg == "flag":
+                        flags = _flag_values(kw.value, module, parents)
+                        if flags:
+                            tool = Path(os.path.relpath(py, TOOLS_DIR)).as_posix()
+                            found.setdefault(tool, set()).update(flags)
     return found
 
 
-# ⛔ Tools that DECLARE an output flag at their writer but cannot have a
-# control pair here, each with the measured reason. Exit-locked like every
-# other exception list in this ticket: `==` on the size, and an entry whose
-# tool is no longer in the derived population (or which grew a row) is a
+# ⛔ (tool, flag) pairs that DECLARE an output flag at their writer but cannot
+# have a control pair here, each with the measured reason. Exit-locked like
+# every other exception list in this ticket: `==` on the size, and an entry
+# that is no longer in the derived population (or which grew a row) is a
 # failure, so the list can only shrink.
 #
-# ⚠️ An entry is NOT "this tool is covered by something else". It is "the
-# behavioural gate is silent about this tool", and the only thing speaking
+# ⚠️ An entry is NOT "this is covered by something else". It is "the
+# behavioural gate is silent about this write", and the only thing speaking
 # for it is the static side (test_write_failure_class for a secure writer,
 # test_output_write_sites_stay_guarded for a raw sink) — which sees the shape
 # of the code, never the rc an operator gets.
-NO_OFFLINE_ROW: dict[str, str] = {
-    "dx/inject_waveform.py":
+NO_ROW: dict[Key, str] = {
+    ("dx/inject_waveform.py", "--out"):
         "Its `--out` write is the LAST step of an injection run: the tool "
         "pushes a waveform into an isolated vmsingle over HTTP and then "
         "shells out to a `vmalert` binary with `-replay`. Neither exists in "
@@ -1408,37 +2045,573 @@ NO_OFFLINE_ROW: dict[str, str] = {
         "standard line. That is a weaker pair than a row — no subprocess, no "
         "control half — and it is the reason this entry exists rather than "
         "being silently absent.",
+    ("ops/state_reconcile.py", "--state-dir"):
+        "The write is the rewrite of a state file after a schema migration, "
+        "and no migration exists: `state_reconcile.MIGRATIONS` is empty (the "
+        "schema has had one version), so every file that is not at the "
+        "current version is reported as unresolvable and none is written. No "
+        "argv reaches the call. `test_the_unreachable_state_migration_is_"
+        "still_unreachable` holds that premise: the day a migration is "
+        "registered it goes red, and this entry gives way to a row.",
 }
-_NO_OFFLINE_ROW_CEILING = 1
+_NO_ROW_CEILING = 2
 
 
-def test_every_flag_naming_tool_has_a_row():
-    """Derived, not enumerated: a tool that names an output flag in its
-    writer must have a control pair here, or the row table has gone stale."""
-    naming = _tools_naming_a_flag()
-    assert naming, "no tool passes flag= to a secure writer — scanner drift"
-    covered = {r.tool for r in ROWS}
-    missing = sorted(naming - covered - set(NO_OFFLINE_ROW))
+def test_every_flag_named_at_a_writer_has_a_row():
+    """Derived, not enumerated: a (tool, flag) that names an output flag at a
+    writer must have a control pair here, or the row table has gone stale.
+
+    Per FLAG, not per tool (#3107): `generate_alertmanager_routes` had rows
+    for `-o` and `--secret-mounts-out`, so the tool counted as covered while
+    `--findings-json` — a third sink behind its own flag — had none."""
+    named = _flags_named_at_a_writer()
+    assert named, "no tool passes flag= to a writer — scanner drift"
+    unresolved = sorted((tool, flag) for tool, flags in named.items() for flag in flags
+                        if flag.startswith("<"))
+    assert not unresolved, (
+        "a writer is handed a flag this scan cannot read off the module — teach "
+        f"`_flag_values` the shape, do not skip it: {unresolved}")
+    rowed = {(r.tool, r.flag) for r in ROWS}
+    missing = sorted({(tool, flag) for tool, flags in named.items() for flag in flags}
+                     - rowed - set(NO_ROW))
     assert not missing, (
-        "tool(s) name an output flag in a secure writer but have no control "
-        f"pair in ROWS: {missing}")
+        "(tool, flag) named at a writer with no control pair in ROWS: "
+        f"{missing}")
 
 
-def test_the_no_offline_row_list_is_exact_and_not_stale():
+def test_every_row_is_about_a_flag_its_tool_names_at_a_writer():
+    """The other direction: a row whose flag the tool no longer names at any
+    writer is evidence about nothing the population holds — the tool renamed
+    the flag, or stopped declaring it."""
+    named = _flags_named_at_a_writer()
+    stale = sorted({(r.tool, r.flag) for r in ROWS
+                    if r.flag not in named.get(r.tool, ())})
+    assert not stale, f"row(s) for a flag the tool does not name at a writer: {stale}"
+
+
+def test_every_caller_of_a_two_class_entry_has_a_row():
+    """File level, and regardless of ``flag=``: a module under the CLI roots
+    — a library too — that CALLS one of `_lib_io`'s operator or artifact
+    entries has a row that runs it. The pair-level test above reads ``flag=``
+    and skips libraries; a call that names no flag, or sits in a library, is
+    still a write through an entry that some control run has to exercise
+    (carried over from the file-level audit this table replaced)."""
+    import _lib_io
+    entries = {name.split(".")[1] for kind in CLASSES
+               for name in _lib_io.OUTPUT_ENTRY_POINTS[kind] if name.startswith("_lib_io.")}
+    callers = set()
+    for root in _CLI_ROOTS:
+        for py in sorted(root.rglob("*.py")):
+            if py.name == "_lib_io.py":
+                continue
+            if any(isinstance(node, ast.Call) and _called_name(node) in entries
+                   for node in ast.walk(ast.parse(py.read_text(encoding="utf-8")))):
+                callers.add(Path(os.path.relpath(py, TOOLS_DIR)).as_posix())
+    assert callers, "no caller of an operator/artifact entry found — the scan measured nothing"
+    missing = sorted(callers - {r.tool for r in ROWS})
+    assert not missing, f"module(s) calling an operator/artifact entry with no row: {missing}"
+
+
+def test_the_no_row_list_is_exact_and_not_stale():
     """The exception list's own gate: fixed size, every entry still in the
     population, none of them quietly grown a row (which would make the
     exception a lie), and every entry carrying a reason."""
-    assert len(NO_OFFLINE_ROW) == _NO_OFFLINE_ROW_CEILING, sorted(NO_OFFLINE_ROW)
-    naming = _tools_naming_a_flag()
-    covered = {r.tool for r in ROWS}
+    assert len(NO_ROW) == _NO_ROW_CEILING, sorted(NO_ROW)
+    named = _flags_named_at_a_writer()
+    rowed = {(r.tool, r.flag) for r in ROWS}
     stale = []
-    for tool, reason in sorted(NO_OFFLINE_ROW.items()):
+    for (tool, flag), reason in sorted(NO_ROW.items()):
+        where = f"{tool} {flag}"
         if not (TOOLS_DIR / tool).is_file():
-            stale.append(f"{tool}: no such tool any more")
-        elif tool not in naming:
-            stale.append(f"{tool}: no longer names a flag at its writer — delete this entry")
-        elif tool in covered:
-            stale.append(f"{tool}: has a row now — delete this entry")
+            stale.append(f"{where}: no such tool any more")
+        elif flag not in named.get(tool, ()):
+            stale.append(f"{where}: no longer named at a writer — delete this entry")
+        elif (tool, flag) in rowed:
+            stale.append(f"{where}: has a row now — delete this entry")
         elif not reason.strip():
-            stale.append(f"{tool}: needs a reason")
+            stale.append(f"{where}: needs a reason")
     assert not stale, "\n".join(stale)
+
+
+def test_the_unreachable_state_migration_is_still_unreachable():
+    """NO_ROW's reason for `state_reconcile --state-dir`, held: with no
+    migration registered, no run rewrites a state file."""
+    import state_reconcile
+    assert state_reconcile.MIGRATIONS == {}, (
+        "a state migration is registered: the rewrite under --state-dir is "
+        "reachable now — give it a row and drop its NO_ROW entry")
+
+
+def test_the_entry_point_list_is_complete():
+    """`_lib_io.OUTPUT_ENTRY_POINTS` is what the population and the audit are
+    derived from, so a writer missing from it is a hole in both. Held from
+    the code: every name resolves to a function that takes ``flag``; every
+    top-level function of `_lib_io` / `_lib_atomic_write` that takes ``flag``
+    is named; and so is every function of a library module that hands its
+    own ``flag`` on to a named one (a wrapper)."""
+    import _lib_io
+    named = {name for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names}
+    assert len(named) == sum(len(v) for v in _lib_io.OUTPUT_ENTRY_POINTS.values()), (
+        "a function is listed under two kinds")
+    takes_flag: dict[str, ast.FunctionDef] = {}
+    for py in sorted(TOOLS_DIR.glob("_*.py")):
+        for fn in ast.parse(py.read_text(encoding="utf-8")).body:
+            if isinstance(fn, ast.FunctionDef) and "flag" in [
+                    a.arg for a in fn.args.args + fn.args.kwonlyargs]:
+                takes_flag[f"{py.stem}.{fn.name}"] = fn
+    assert not sorted(named - set(takes_flag)), (
+        f"listed, but no such function taking flag=: {sorted(named - set(takes_flag))}")
+    short = {name.split(".")[1] for name in named}
+    should = set()
+    for name, fn in takes_flag.items():
+        if name.split(".")[0] in ("_lib_io", "_lib_atomic_write"):
+            should.add(name)
+        elif any(isinstance(n, ast.Call) and _called_name(n) in short
+                 and any(kw.arg == "flag" and isinstance(kw.value, ast.Name)
+                         and kw.value.id == "flag" for kw in n.keywords)
+                 for n in ast.walk(fn)):
+            should.add(name)
+    assert not sorted(should - named), (
+        "function(s) that write an output path for a caller's flag and are not "
+        f"in _lib_io.OUTPUT_ENTRY_POINTS: {sorted(should - named)}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The flag manifest ⇔ this table (#3107 S2)
+#
+# `caller_path_manifest.yaml` declares every da-tools flag; `kind: output` is
+# "a path the tool writes". Each such flag must be a row here — so declaring
+# an output flag is what brings it under the bad-path pair and the write
+# audit, with no second registry to keep in step.
+# ═══════════════════════════════════════════════════════════════════════════
+
+#: `kind: output` flags with no row, and why. Exact both ways, like the lists
+#: above: a new output flag without a row is red, and so is an entry whose
+#: flag got a row or left the manifest.
+MANIFEST_OUTPUT_WITHOUT_ROW: dict[Key, str] = {
+    ("generator-service", "--socket"):
+        "Not a file the tool writes: the Unix socket the service binds and "
+        "listens on (an old socket there is replaced, anything else refuses). "
+        "No write entry is, or should be, on that path; `output` is the "
+        "nearest kind the manifest has for a path the tool creates.",
+    ("generator-service", "--work-dir"):
+        "Not an output the operator reads: the scratch directory the service "
+        "builds each judged tree in (`jobs/…`) and removes afterwards. A "
+        "long-running service has no control run that ends rc 0 with a file "
+        "left to look at.",
+}
+
+
+def _manifest_output_flags() -> dict[Key, str]:
+    """(command, flag) → the script behind the command, for every flag the
+    manifest declares ``kind: output``. The command → script map is the walk
+    of the da-tools parsers the manifest's own gate uses."""
+    import test_caller_path_manifest as manifest
+    parsed, _unreached = manifest.parsed_arguments()
+    outputs = {}
+    for key, declared in manifest._entries(manifest.load_manifest()).items():
+        if declared.get("kind") == "output":
+            assert key in parsed, f"{key}: declared in the manifest, not on the parser"
+            outputs[key] = parsed[key]
+    return outputs
+
+
+def manifest_join_faults(outputs: dict[Key, str], rows: list[Row],
+                         without_row: dict[Key, str]) -> list[str]:
+    """Hold the manifest's output flags to the rows. A row answers for a
+    manifest flag when it is the same script and the flag is one of the
+    spellings in ``Row.flag`` (``-o/--output-dir`` answers ``--output-dir``)."""
+    rowed = {(row.tool, spelling) for row in rows for spelling in row.flag.split("/")}
+    faults = []
+    for (command, flag), script in sorted(outputs.items()):
+        key = (command, flag)
+        if (script, flag) in rowed:
+            if key in without_row:
+                faults.append(f"{command} {flag}: has a row now — drop it from "
+                              "MANIFEST_OUTPUT_WITHOUT_ROW")
+        elif key not in without_row:
+            faults.append(f"{command} {flag}: declared `kind: output` and {script} has "
+                          "no row for it — add the control pair")
+    for command, flag in sorted(set(without_row) - set(outputs)):
+        faults.append(f"{command} {flag}: not an output flag of the manifest any more — "
+                      "drop it from MANIFEST_OUTPUT_WITHOUT_ROW")
+    for key, reason in sorted(without_row.items()):
+        if not reason.strip():
+            faults.append(f"{key[0]} {key[1]}: needs a reason")
+    return faults
+
+
+def test_every_output_flag_of_the_manifest_has_a_row():
+    outputs = _manifest_output_flags()
+    assert outputs, "the manifest declares no output flag — the join measured nothing"
+    faults = manifest_join_faults(outputs, ROWS, MANIFEST_OUTPUT_WITHOUT_ROW)
+    assert not faults, "\n".join(faults)
+
+
+class TestManifestJoin:
+    _OUT = {("cmd", "--output-dir"): "ops/t.py"}
+    _ROW = [Row("ops/t.py", "-o/--output-dir", "dir", "operator", lambda c, out: [],
+                reach="synthetic")]
+
+    def test_a_row_answers_for_either_spelling(self):
+        assert manifest_join_faults(self._OUT, self._ROW, {}) == []
+
+    def test_an_output_flag_without_a_row_is_a_fault(self):
+        assert len(manifest_join_faults(self._OUT, [], {})) == 1
+        other_script = [Row("ops/u.py", "-o/--output-dir", "dir", "operator",
+                            lambda c, out: [], reach="synthetic")]
+        assert len(manifest_join_faults(self._OUT, other_script, {})) == 1
+
+    def test_a_listed_exception_stands_only_while_it_is_true(self):
+        listed = {("cmd", "--output-dir"): "because"}
+        assert manifest_join_faults(self._OUT, [], listed) == []
+        assert manifest_join_faults(self._OUT, self._ROW, listed) == [
+            "cmd --output-dir: has a row now — drop it from MANIFEST_OUTPUT_WITHOUT_ROW"]
+        assert manifest_join_faults({}, [], listed) == [
+            "cmd --output-dir: not an output flag of the manifest any more — "
+            "drop it from MANIFEST_OUTPUT_WITHOUT_ROW"]
+        assert manifest_join_faults(self._OUT, [], {("cmd", "--output-dir"): " "}) == [
+            "cmd --output-dir: needs a reason"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Write-audit controls — the hook and the verdict, on hand-made input
+#
+# Every control run is on a list or clean TODAY, so by themselves they say
+# nothing about whether a wrong write would be caught. These drive each
+# rule both ways: on a log written by hand, and on the real hook run over a
+# few lines of Python.
+# ═══════════════════════════════════════════════════════════════════════════
+_OP = ["scripts/tools/_lib_io.py:_kernel_open_operator_output",
+       "scripts/tools/_lib_io.py:open_operator_output",
+       "scripts/tools/_lib_io.py:write_operator_output", "scripts/tools/ops/t.py:main"]
+_ART = ["scripts/tools/_lib_atomic_write.py:_try_atomic",
+        "scripts/tools/_lib_atomic_write.py:atomic_write_text",
+        "scripts/tools/_lib_io.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
+_OLD = ["scripts/tools/_lib_io.py:write_text_secure", "scripts/tools/_lib_yaml.py:write_yaml_crd",
+        "scripts/tools/ops/t.py:main"]
+_MKDIR = ["scripts/tools/_lib_io.py:ensure_dir", "scripts/tools/ops/t.py:main"]
+_RAW = ["scripts/tools/ops/t.py:main"]
+
+
+def _audit_row(cls: str = "operator", **kw) -> Row:
+    return Row("ops/t.py", "--out", "file", cls, lambda c, out: [], reach="synthetic", **kw)
+
+
+class _Log:
+    """A hand-made audit log for a run whose output directory is *scope*."""
+
+    def __init__(self, scope: Path, loaded: bool = True):
+        self.scope = scope
+        self.tool = TOOLS_DIR / "ops" / "t.py"
+        self.events: list[dict] = (
+            [{"ev": "loaded", "argv": ["python3", str(self.tool)], "pid": 1}] if loaded else [])
+
+    def add(self, ev: str, rel: str, stack: list[str], **more) -> "_Log":
+        self.events.append({"ev": ev, "path": str(self.scope / rel), "stack": stack,
+                            "pid": 1, **more})
+        return self
+
+    def spawn(self, *argv: str) -> "_Log":
+        self.events.append({"ev": "spawn", "exe": argv[0], "argv": list(argv), "pid": 1})
+        return self
+
+    def seen(self, row: Row, made: tuple[str, ...] = ()) -> Seen:
+        return _verdict(row, _audit(self.events, self.scope, self.tool, frozenset(made)))
+
+
+class TestWriteAuditVerdict:
+    def test_an_operator_write_through_the_operator_entry_is_clean(self, tmp_path):
+        seen = _Log(tmp_path).add("os.mkdir", ".", _MKDIR).add("open", "o.json", _OP).seen(
+            _audit_row())
+        assert seen == Seen([], False, (), False, None)
+
+    def test_an_artifact_replaced_through_the_artifact_entry_is_clean(self, tmp_path):
+        log = _Log(tmp_path).add("open", ".o.json.tmp", _ART)
+        log.add("os.rename", "o.json", _ART, src=str(tmp_path / ".o.json.tmp"))
+        assert log.seen(_audit_row("artifact")) == Seen([], False, (), False, None)
+
+    def test_the_wrong_class_is_seen(self, tmp_path):
+        """Both directions: the row's class is an assertion about the entry."""
+        seen = _Log(tmp_path).add("open", "o.json", _OP).seen(_audit_row("artifact"))
+        assert seen.other_class == "operator"
+        log = _Log(tmp_path).add("open", ".t", _ART).add("os.rename", "o.json", _ART)
+        assert log.seen(_audit_row("operator")).other_class == "artifact"
+
+    def test_a_raw_write_is_listed_by_site(self, tmp_path):
+        log = _Log(tmp_path).add("open", "o.json", _OP).add("open", "extra.json", _RAW)
+        log.add("os.mkdir", "sub", _RAW)
+        seen = log.seen(_audit_row())
+        assert seen.raw == ("open extra.json", "os.mkdir sub") and not seen.raw_is_all
+        only_raw = _Log(tmp_path).add("open", "o.json", _RAW).seen(_audit_row())
+        assert only_raw.raw == ("open o.json",) and only_raw.raw_is_all
+
+    def test_an_old_name_is_the_innermost_entry(self, tmp_path):
+        """`write_yaml_crd` → `write_text_secure`: legacy, whatever is above."""
+        seen = _Log(tmp_path).add("open", "o.yaml", _OLD).add("os.chmod", "o.yaml", _OLD).seen(
+            _audit_row())
+        assert seen.legacy and not seen.raw and not seen.faults
+
+    def test_the_innermost_entry_decides(self, tmp_path):
+        """What is asked is who opened the file. Were an old name made a thin
+        wrapper over the operator entry, the write would be the operator
+        entry's — and one entry calling another must not count twice."""
+        nested = [*_OP[:3], "scripts/tools/_lib_io.py:write_text_secure",
+                  "scripts/tools/ops/t.py:main"]
+        seen = _Log(tmp_path).add("open", "o.json", nested).seen(_audit_row())
+        assert seen == Seen([], False, (), False, None)
+
+    def test_no_log_is_a_fault_not_a_pass(self, tmp_path):
+        seen = _verdict(_audit_row(), _audit(None, tmp_path, TOOLS_DIR / "ops" / "t.py"))
+        assert len(seen.faults) == 1 and "left no log" in seen.faults[0]
+
+    def test_a_tool_that_never_reported_in_is_a_fault(self, tmp_path):
+        """A log some OTHER process wrote (a child) does not vouch for the tool."""
+        log = _Log(tmp_path, loaded=False).add("open", "o.json", _OP)
+        log.events.insert(0, {"ev": "loaded", "argv": ["python3", "-c", "pass"], "pid": 2})
+        assert any("no `loaded` line" in f for f in log.seen(_audit_row()).faults)
+
+    def test_no_file_written_under_the_output_path_is_a_fault(self, tmp_path):
+        """Not "no bad event": the empty set is a failure."""
+        seen = _Log(tmp_path).add("os.mkdir", ".", _MKDIR).seen(_audit_row())
+        assert any("no file was written" in f for f in seen.faults)
+        elsewhere = _Log(tmp_path / "good")
+        elsewhere.events.append({"ev": "open", "path": str(tmp_path / "other" / "o.json"),
+                                 "stack": _OP, "pid": 1})
+        assert any("no file was written" in f for f in elsewhere.seen(_audit_row()).faults)
+
+    def test_a_da_guard_row_needs_the_spawn_and_no_python_write(self, tmp_path):
+        row = _audit_row(writer="da-guard")
+        ok = _Log(tmp_path).add("os.mkdir", ".", _MKDIR).spawn("/x/da-guard", "write", "--json")
+        assert ok.seen(row, made=("a.yaml",)).faults == []
+        no_spawn = _Log(tmp_path).spawn("/x/da-guard", "parse-tree")
+        assert any("spawned none" in f for f in no_spawn.seen(row, made=("a.yaml",)).faults)
+        wrote = _Log(tmp_path).spawn("da-guard", "write").add("open", "o.json", _OP)
+        assert any("Python wrote" in f for f in wrote.seen(row, made=("a.yaml",)).faults)
+        nothing_left = _Log(tmp_path).spawn("da-guard", "write")
+        assert any("say what the writer is" in f for f in nothing_left.seen(row).faults)
+
+    def test_a_file_with_no_logged_write_needs_a_declared_writer(self, tmp_path):
+        """The log against the disk: a file the run left that nothing in the
+        log wrote is not waved through — the row has to say who."""
+        log = _Log(tmp_path).add("open", "o.json", _OP).spawn("da-guard", "write")
+        made = ("o.json", "conf.d/a.yaml")
+        assert any("no audited process wrote: ['conf.d/a.yaml']" in f
+                   for f in log.seen(_audit_row(), made).faults)
+        assert log.seen(_audit_row(writer="python+da-guard"), made).faults == []
+        # ... and "both" is held on both sides.
+        assert any("say what the writer is" in f for f in
+                   log.seen(_audit_row(writer="python+da-guard"), ("o.json",)).faults)
+        only_guard = _Log(tmp_path).spawn("da-guard", "write")
+        assert any("no file was written" in f for f in
+                   only_guard.seen(_audit_row(writer="python+da-guard"), ("a.yaml",)).faults)
+        # A temp file renamed into place is logged under its final name.
+        atomic = _Log(tmp_path).add("open", ".o.tmp", _ART).add("os.rename", "o.json", _ART)
+        assert atomic.seen(_audit_row("artifact"), ("o.json",)).faults == []
+
+    def test_an_operator_path_is_only_ever_opened(self, tmp_path):
+        seen = _Log(tmp_path).add("open", "o.json", _OP).add("os.chmod", "o.json", _OP).seen(
+            _audit_row())
+        assert any("os.chmod o.json under the operator entry" in f for f in seen.faults)
+
+    def test_an_artifact_is_renamed_into_place_never_opened(self, tmp_path):
+        in_place = _Log(tmp_path).add("open", "o.json", _ART).seen(_audit_row("artifact"))
+        assert any("renamed nothing" in f for f in in_place.faults)
+        both = _Log(tmp_path).add("open", "o.json", _ART).add("os.rename", "o.json", _ART)
+        assert any("opened for writing" in f for f in both.seen(_audit_row("artifact")).faults)
+
+    def test_ensure_dir_makes_directories_only(self, tmp_path):
+        seen = _Log(tmp_path).add("open", "o.json", _MKDIR).seen(_audit_row())
+        assert any("under ensure_dir" in f for f in seen.faults)
+
+
+class TestWriteAuditPlacing:
+    """What is, and is not, under the output path."""
+
+    def test_a_file_descriptor_cannot_be_placed(self):
+        assert _placed({"ev": "open", "path": 7, "stack": []}) is None
+
+    def test_a_dir_fd_relative_path_is_not_read_against_the_cwd(self, tmp_path):
+        """`rmtree` under a TemporaryDirectory removes `<name>` relative to
+        the temp directory's fd. Unresolved, it has no `cwd`; joining it to
+        one would put a scratch file inside the tree the tool runs in."""
+        assert _placed({"ev": "os.remove", "path": "o.json", "dir_fd": 9, "stack": []}) is None
+        with_cwd = {"ev": "open", "path": "o.json", "cwd": str(tmp_path), "stack": []}
+        assert _placed(with_cwd) == str(tmp_path / "o.json")
+
+    def test_under_is_by_path_component(self, tmp_path):
+        good = tmp_path / "good"
+        good.mkdir()
+        assert _under(str(good), good) == "."
+        assert _under(str(good / "a" / "b.json"), good) == "a/b.json"
+        assert _under(str(tmp_path / "good-2" / "b.json"), good) is None
+        assert _under(str(tmp_path / "tool-tmp" / "x"), good) is None
+        assert _under("/dev/null", good) is None
+        assert _under(str(REPO_ROOT / "scripts/tools/__pycache__/x.pyc"), good) is None
+
+    def test_the_tools_temp_directory_is_beside_the_output_path(self, tmp_path):
+        """pytest's tmp_path is under the system temp directory. Were the
+        tool's TMPDIR left alone, "a scratch file" and "under the output
+        path" could not be told apart by where they are."""
+        good = tmp_path / "good"
+        good.mkdir()
+        env = _audit_env(tmp_path / "log", tmp_path)
+        assert _under(env["TMPDIR"], good) is None
+        assert _under(env["TMPDIR"], tmp_path) == "tool-tmp"
+
+    def test_a_symlinked_directory_is_resolved(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        symlink_or_skip(real, tmp_path / "link", target_is_directory=True)
+        placed = _placed({"ev": "open", "path": str(tmp_path / "link" / "o.json"), "stack": []})
+        assert _under(placed, real) == "o.json"
+
+
+_HOOK_SNIPPET = """
+import os, subprocess, sys, tempfile
+out = sys.argv[1]
+sys.path.insert(0, os.path.join(sys.argv[2], "ops", ".."))   # how a tool under ops/ finds it
+import _lib_io
+_lib_io.write_text_secure(os.path.join(out, "old.txt"), "x")
+_lib_io.write_operator_output(os.path.join(out, "op.txt"), "x", flag=None)
+_lib_io.write_repo_artifact(os.path.join(out, "art.txt"), "x")
+_lib_io.ensure_dir(os.path.join(out, "sub"))
+os.chdir(out)
+open("raw.txt", "w").close()
+with tempfile.TemporaryDirectory() as scratch:
+    open(os.path.join(scratch, "in-tmp.txt"), "w").close()
+open(os.devnull, "w").close()
+open("raw.txt").close()
+subprocess.run([sys.executable, "-c", "open('child.txt', 'w').close()"], check=True)
+subprocess.run([sys.executable, "-c", "pass"], check=True)
+"""
+
+
+class TestTheHookItself:
+    """The real hook over a few lines of Python: what it logs is what the
+    verdict above is fed."""
+
+    @pytest.fixture()
+    def run(self, tmp_path):
+        good = tmp_path / "good"
+        good.mkdir()
+        script = tmp_path / "snippet.py"
+        script.write_text(_HOOK_SNIPPET, encoding="utf-8")
+        log = tmp_path / "log.jsonl"
+
+        def go(env: dict[str, str]) -> Audit:
+            subprocess.run([sys.executable, str(script), str(good), str(TOOLS_DIR)],
+                           env={**os.environ, **env}, check=True, timeout=TIMEOUT_S,
+                           capture_output=True)
+            return _audit(_read_audit_log(log), good, script)
+        return go, log, tmp_path
+
+    def test_each_write_is_attributed_to_its_entry(self, run):
+        go, log, tmp = run
+        audit = go(_audit_env(log, tmp))
+        assert audit.logged and audit.loaded
+        assert audit.sites["legacy"] == (("open", "old.txt"), ("os.chmod", "old.txt"))
+        assert audit.sites["operator"] == (("open", "op.txt"),)
+        assert ("os.rename", "art.txt") in audit.sites["artifact"]
+        assert ("open", "art.txt") not in audit.sites["artifact"]
+        assert audit.sites["directory"] == (("os.mkdir", "sub"),)
+        # A relative path (after the chdir) and a child Python's write both
+        # land under the output path, raw; the read-mode open does not.
+        assert set(audit.sites["raw"]) == {("open", "raw.txt"), ("open", "child.txt")}
+        assert (Path(sys.executable).name, "-c", "pass") in audit.spawned
+
+    def test_the_scratch_file_and_its_cleanup_are_not_under_the_output_path(self, run):
+        go, log, tmp = run
+        go(_audit_env(log, tmp))
+        events = _read_audit_log(log)
+        scratch = [e for e in events if isinstance(e.get("path"), str)
+                   and e["path"].endswith("in-tmp.txt")]
+        assert {e["ev"] for e in scratch} == {"open", "os.remove"}, scratch
+        for event in scratch:
+            assert _under(_placed(event), tmp / "tool-tmp") is not None, event
+        assert any(e.get("path") == "/dev/null" for e in events)
+        assert any(isinstance(e.get("path"), int) for e in events), (
+            "the operator entry wraps its fd: an fd-open is in every real log")
+
+    def test_without_the_hook_on_the_path_there_is_no_log(self, run):
+        """The environment minus PYTHONPATH: the run succeeds, nothing is
+        logged, and the verdict is a fault — not an empty, passing log."""
+        go, log, tmp = run
+        env = _audit_env(log, tmp)
+        env["PYTHONPATH"] = os.environ.get("PYTHONPATH", "")
+        audit = go(env)
+        assert not audit.logged
+        assert _verdict(_audit_row(), audit).faults
+
+
+class TestTheLists:
+    """`_list_faults` on a row that is on no list, and on one that is on each."""
+    _CLEAN = Seen([], False, (), False, None)
+
+    def test_a_clean_row_on_no_list_has_no_fault(self):
+        assert _list_faults(_audit_row(), self._CLEAN) == []
+
+    def test_an_unlisted_legacy_raw_or_other_class_write_is_a_fault(self):
+        row = _audit_row()
+        assert len(_list_faults(row, Seen([], True, (), False, None))) == 1
+        assert len(_list_faults(row, Seen([], False, ("open x",), True, None))) == 1
+        assert len(_list_faults(row, Seen([], False, (), False, "artifact"))) == 1
+
+    def test_a_listed_row_that_is_clean_now_must_come_off(self):
+        """Each list, on its own first entry: clean ⇒ red."""
+        for key in (sorted(VIA_OLD_NAMES)[0], sorted(RAW_UNDER_OUT)[0],
+                    sorted(VIA_OTHER_CLASS)[0]):
+            row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic")
+            faults = _list_faults(row, self._CLEAN)
+            assert faults, key
+
+    def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self):
+        key = ("dx/run_chaos_soak.py", "--output-dir")
+        row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
+        how, sites = RAW_UNDER_OUT[key]
+        assert _list_faults(row, Seen([], False, sites, how == "all", None)) == []
+        assert _list_faults(row, Seen([], False, (*sites, "open out/zz.json"), True, None))
+        assert _list_faults(row, Seen([], False, sites[1:], True, None))
+        assert _list_faults(row, Seen([], False, sites, how != "all", None))
+
+    def test_every_list_entry_is_a_row(self):
+        rowed = {(r.tool, r.flag) for r in ROWS}
+        for name, listed in (("VIA_OLD_NAMES", VIA_OLD_NAMES), ("RAW_UNDER_OUT", RAW_UNDER_OUT),
+                             ("VIA_OTHER_CLASS", VIA_OTHER_CLASS)):
+            assert not sorted(set(listed) - rowed), (
+                f"{name} names (tool, flag) no row runs: {sorted(set(listed) - rowed)}")
+
+
+class TestOwnWordedRefusal:
+    """`wording="own"` is not a looser match: one line, the flag, and the
+    blocked path ending where it ends."""
+
+    def _case(self, tmp_path):
+        row = _control_row(wording="own", shapes=("target_is_file",))
+        return row, _bad_path(tmp_path, "target_is_file", row)
+
+    def test_one_line_naming_the_flag_and_the_blocked_path_passes(self, tmp_path):
+        row, out = self._case(tmp_path)
+        line = f"ERROR: --output-dir {out} is not a directory; nothing was written\n"
+        assert _own_refusal_problem(row, "target_is_file", out, "note\n" + line) is None
+
+    def test_a_path_under_the_blocked_one_does_not_pass_for_it(self, tmp_path):
+        row, out = self._case(tmp_path)
+        line = f"ERROR: --output-dir {out}/da-a.yaml: Not a directory; nothing was written\n"
+        assert "blocked path" in _own_refusal_problem(row, "target_is_file", out, line)
+        line = f"ERROR: --output-dir {out}-2 is not a directory\n"
+        assert "blocked path" in _own_refusal_problem(row, "target_is_file", out, line)
+
+    def test_the_flag_and_the_line_count_are_held(self, tmp_path):
+        row, out = self._case(tmp_path)
+        assert "does not name --output-dir" in _own_refusal_problem(
+            row, "target_is_file", out, f"ERROR: {out} is not a directory\n")
+        line = f"ERROR: --output-dir {out} is not a directory\n"
+        assert "exactly one" in _own_refusal_problem(row, "target_is_file", out, line * 2)
+        assert "exactly one" in _own_refusal_problem(row, "target_is_file", out, "")
+
+    def test_the_shared_sentence_is_not_an_own_wording(self, tmp_path):
+        row, out = self._case(tmp_path)
+        line = (f"ERROR: cannot create directory {out}: File exists (errno 17) — "
+                "check the value given to --output-dir\n")
+        assert "shared sentence" in _own_refusal_problem(row, "target_is_file", out, line)

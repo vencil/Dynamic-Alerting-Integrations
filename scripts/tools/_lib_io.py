@@ -1041,6 +1041,33 @@ def write_json_or_die(
 
 STDOUT_PATH = "-"
 
+#: #3107: every function an output path is written (or its directory made)
+#: through, as ``<module>.<function>``, by what it is. Names only — nothing
+#: here changes what any of them does. The write gates read it
+#: (``tests/shared/test_output_path_write_failure.py``): the population of
+#: "tools that name an output flag at a writer", and "which entry did this
+#: write come from" under the run-time write audit. A function added here or
+#: in ``_lib_yaml`` / ``_lib_atomic_write`` that takes ``flag=`` and is not
+#: named below turns that file's ``test_the_entry_point_list_is_complete`` red.
+OUTPUT_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
+    # A path the operator named on a flag: opened by the kernel, in place.
+    "operator": ("_lib_io.open_operator_output", "_lib_io.write_operator_output",
+                 "_lib_io.write_operator_output_or_die"),
+    # A committed file a tool rewrites: replaced atomically.
+    "artifact": ("_lib_io.write_repo_artifact", "_lib_atomic_write.atomic_write_text"),
+    # The names from before the two classes existed (in-place write + 0600
+    # for either kind of path); being migrated to one of the two above.
+    "legacy": ("_lib_io.write_text_secure", "_lib_io.write_json_secure",
+               "_lib_io.write_text_or_die", "_lib_io.write_json_or_die"),
+    # ``mkdir -p`` of an output directory, for either class.
+    "directory": ("_lib_io.ensure_dir", "_lib_io.ensure_dir_or_die"),
+    # Not writers: they name the flag for a write made by other code — a raw
+    # sink inside ``output_write``, the artifact's pre-read check.
+    "names_flag_only": ("_lib_io.output_write", "_lib_io.check_repo_artifact"),
+    # Call one of the above with the caller's ``flag``.
+    "wrapper": ("_lib_io.write_onboard_hints", "_lib_yaml.write_yaml_crd"),
+}
+
 
 def claim_stdout(owner: str) -> None:
     """Record that *owner* (a flag, or ``"report"`` for the tool's own stdout
