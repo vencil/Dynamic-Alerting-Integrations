@@ -764,7 +764,12 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 	// What fill returned last, kept for the document (#3991): a run calls
 	// it once at most when it does not fail — servedSchedulesOnly calls it
 	// itself only where the reading at --at, which would have, failed first.
+	// [] until then: a tree whose every file is unreadable reads nothing,
+	// and its document still says so with the field present.
 	var ungathered *[]ungatheredPart
+	if f.schedules || f.schedulesOnly {
+		ungathered = &[]ungatheredPart{}
+	}
 	recorded := func(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
 		expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool) ([]ungatheredPart, error) {
 		parts, err := fill(cfg, at, tenants, expiries, name, instantGathered)

@@ -9,6 +9,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -102,5 +104,31 @@ func TestServedSchedulesOnly_UngatheredCoversATenantServingNoKey(t *testing.T) {
 	u := *doc.Ungathered
 	if segErr == "" || len(u) != 1 || u[0].From != "01:00" || u[0].To != "03:00" || u[0].Error != segErr {
 		t.Errorf("ungathered = %+v, want one part 01:00-03:00 carrying tx's segment error %q", u, segErr)
+	}
+}
+
+// TestServedSchedules_UngatheredOnATreeNoFileOfWhichReads: every config
+// file is unreadable, so nothing is read — exit 3, no tenant — and the
+// document still carries ungathered, [] (not absent), in both schedule
+// modes: a reader takes the field as the field, and the files as
+// unreadable, never the document as broken.
+func TestServedSchedules_UngatheredOnATreeNoFileOfWhichReads(t *testing.T) {
+	t.Parallel()
+	dir := writeConfD(t, map[string]string{"_keep.txt": ""})
+	if err := os.Symlink(filepath.Join(t.TempDir(), "nowhere.yaml"), filepath.Join(dir, "a.yaml")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	for _, mode := range []string{"--schedules", "--schedules-only"} {
+		code, stdout, _ := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", "2026-07-01T12:00:00Z", mode)
+		if code != exitParseFailed {
+			t.Fatalf("%s: exit %d, want %d (every file unreadable):\n%s", mode, code, exitParseFailed, stdout)
+		}
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(doc["ungathered"]); got != "[]" {
+			t.Errorf("%s: ungathered = %q, want []", mode, got)
+		}
 	}
 }

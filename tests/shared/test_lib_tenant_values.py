@@ -1392,3 +1392,15 @@ def test_key_checks_of_the_wrong_shape_are_refused_not_read_as_none():
             tv._key_checks(bad)
     with pytest.raises(TypeError):
         tv._key_checks({"version_labels": ["a"], "renames": []})
+
+
+def test_served_schedules_of_a_tree_no_file_of_which_reads_name_the_files(tmp_path, da_guard):
+    """#3991：每個設定檔都讀不到時 da-guard 什麼都沒讀（exit 3），文件仍帶 `ungathered: []`；
+    讀取端照 `unreadable` 點名那些檔，不把文件當成壞掉的輸出。"""
+    require_shebang_scripts()  # a POSIX symlink stands in for the unreadable file
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    (conf_d / "a.yaml").symlink_to(tmp_path / "nowhere.yaml")
+    day = tv.load_served_schedules(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, partial=True)
+    assert day.tenants == {} and day.ungathered == ()
+    assert [(u.file, u.reason) for u in day.unreadable] == [("a.yaml", "stat_error")]
