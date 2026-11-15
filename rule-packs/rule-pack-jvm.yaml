@@ -13,7 +13,8 @@
 #   jvm_memory: 80
 #       % — Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed
 #       before dividing)
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+#       未啟用（聚合錯誤，#3976）：Micrometer 的逐 pool 上限加總不等於 heap 上限：Parallel GC 預設旗標下到 OutOfMemoryError 都讀不到
+#       95，OpenJ9 balanced 讀成約四分之一
 #   jvm_threads: 500   # count — Active thread count warning
 #       未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
 #
@@ -70,9 +71,17 @@ groups:
       #     limit and the reading stops at 50 % — an alert that can never fire.
       #     One generation's limit is the heap's. (ZGC measured on JDK 21;
       #     Shenandoah read from OpenJDK's shenandoahMemoryPool.cpp.)
-      #   - Known limit: on Parallel GC the pool limits add up to a little more
-      #     than the heap limit the JVM itself reports (one survivor space is
-      #     not usable), so the reading runs up to ~10 points low near full.
+      #   - Known limits (#3976; why jvm_memory is not shipped by default):
+      #     - Parallel GC, default flags: Eden's pool limit is the size it MAY
+      #       grow to, so the limits add up to more than the heap limit the
+      #       JVM itself reports. The gap widens as the heap fills: at
+      #       OutOfMemoryError this reads 88.5 % (82.7 % with -XX:NewRatio=1)
+      #       while the JVM reports ~98 % — the critical alert never fires.
+      #       (Measured, JDK 21, -Xmx1g.)
+      #     - OpenJ9 balanced: three of its four heap pools report the whole
+      #       heap as their limit, so this reads about a quarter of the real
+      #       figure and never fires. (Read from OpenJ9's modronapi.cpp, not
+      #       run.)
       #     G1, Serial, ZGC and non-generational Shenandoah read exactly
       #     (measured, JDK 21).
       #   - The second branch reads the names jmx_exporter < 1.0 exports

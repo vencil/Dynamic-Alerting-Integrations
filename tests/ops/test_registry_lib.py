@@ -638,19 +638,30 @@ def test_real_validation_candidates_are_derived():
     deliberate test edit. The two DB2 keys in optional_overrides are not in
     it (D-A A2a): the shipping gate refuses `default` outside the defaults
     tier, so they are not promotable as they stand (#1320 decides their tier).
-    D-A A2b took five out: three `%` keys were promoted, and two got a
-    blocker (jvm_memory: aggregation_bug, #3928; rabbitmq_node_mem_percent:
-    value_disputed, #3929 — since resolved and promoted). #3928 fixed the
-    JVM heap rule, so jvm_memory is back: the one `%` candidate, to be
-    promoted by the A2b procedure. The other three are not `%` keys, which
-    D-A does not promote."""
+    D-A A2b promoted four `%` keys. The last four candidates are blocked
+    (#1200, 2026-11-15): jvm_memory is aggregation_bug (#3976 — Micrometer's
+    per-pool limits do not add up to the heap limit), and the three non-`%`
+    keys, which D-A does not promote, are unmeasured (#3979 — no source to
+    register). The set is empty: nothing is waiting to be promoted."""
     doc = lib.build_registry_doc()
-    assert lib.validation_candidates(doc) == {
-        "redis_replication_lag", "mongodb_replication_lag",
-        # #3770 fixed the URP sum, so its blocker is gone and 0 is portable
-        "kafka_under_replicated_partitions",
-        # #3928 fixed the per-pool division
-        "jvm_memory"}
+    assert lib.validation_candidates(doc) == frozenset()
+
+
+def test_former_candidates_point_at_their_tracking_issue():
+    """Each former candidate carries the blocker the owner decided on, so
+    removing one returns the key to the candidate set silently only if the
+    pin above is also edited — and this one names which issue lifts it."""
+    doc = lib.build_registry_doc()
+    keys = doc["keys"]
+    got = {k: (keys[k]["blocker"]["kind"], keys[k]["blocker"]["tracking"])
+           for k in ("jvm_memory", "redis_replication_lag",
+                     "mongodb_replication_lag",
+                     "kafka_under_replicated_partitions")}
+    assert got == {
+        "jvm_memory": ("aggregation_bug", 3976),
+        "redis_replication_lag": ("unmeasured", 3979),
+        "mongodb_replication_lag": ("unmeasured", 3979),
+        "kafka_under_replicated_partitions": ("unmeasured", 3979)}
 
 
 # #3783: the declared danielqsj/kafka_exporter exports neither metric (one is a
@@ -667,8 +678,11 @@ def test_real_kafka_unwired_keys_are_removed_not_blocked():
     keys = doc["keys"]
     assert _KAFKA_REMOVED_KEYS.isdisjoint(keys)
     assert not any(e.get("critical_of") in _KAFKA_REMOVED_KEYS for e in keys.values())
+    # #3783 removed the unwired keys instead of blocking them; a kafka key
+    # blocked for another reason (#3979: unmeasured) is not that.
     assert {k for k, e in keys.items()
-            if "blocker" in e and k.startswith("kafka_")} == set()
+            if e.get("blocker", {}).get("kind") == "unwired"
+            and k.startswith("kafka_")} == set()
 
 
 def test_real_kafka_pack_reads_no_unexported_metric():

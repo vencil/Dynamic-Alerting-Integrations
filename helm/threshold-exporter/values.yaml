@@ -154,10 +154,12 @@ thresholdConfig:
     #   redis_connected_clients 未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients
     #     的比例（redis_config_maxclients），待 #1320
     #   redis_evicted_keys_rate 未啟用（依部署而定）：LRU 快取淘汰是常態，可容忍的速率取決於工作負載
-    #   redis_replication_lag 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+    #   redis_replication_lag 未啟用（尚未量測，#3979）：尚未找到給出 replica lag 門檻的來源（只查了
+    #     awesome-prometheus-alerts）；30 秒是比照 MySQL／PostgreSQL 訂的
     # ── mongodb ──
     #   mongodb_connections_current 未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320
-    #   mongodb_replication_lag 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+    #   mongodb_replication_lag 未啟用（尚未量測，#3979）：來源的值不一致（10 秒與 30 秒），現行 exporter
+    #     是否還輸出規則讀的指標也沒確認（#3833）
     #   mongodb_opcounters_rate 未啟用（依部署而定）：操作量是工作負載而非故障，任何數字都只適用於特定部署
     # ── elasticsearch ──
     #   es_pending_tasks 未啟用（依部署而定）：正常的 pending task 量隨叢集規模與變更頻率而定
@@ -178,8 +180,8 @@ thresholdConfig:
     #   clickhouse_active_connections 未啟用（待改比值）：絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定
     # ── kafka ──
     #   kafka_consumer_lag 未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
-    #   kafka_under_replicated_partitions 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool
-    #     測試、登記廠商或共識依據），通過後才出貨
+    #   kafka_under_replicated_partitions 未啟用（尚未量測，#3979）：尚未找到可逐字引用、針對這個 exporter 指標說明 0 的來源；for:
+    #     30s 在 broker 滾動重啟時可能就會響
     #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
     # ── rabbitmq ──
     #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
@@ -189,7 +191,8 @@ thresholdConfig:
     #   rabbitmq_unacked_messages 未啟用（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
     # ── jvm ──
     #   jvm_gc_pause 未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
-    #   jvm_memory 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+    #   jvm_memory 未啟用（聚合錯誤，#3976）：Micrometer 的逐 pool 上限加總不等於 heap 上限：Parallel GC 預設旗標下到
+    #     OutOfMemoryError 都讀不到 95，OpenJ9 balanced 讀成約四分之一
     #   jvm_threads 未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
     # ── nginx ──
     #   nginx_connections 未啟用（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母
