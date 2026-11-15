@@ -787,8 +787,9 @@ def test_illegal_names_on_the_service_path_print_their_stand_in(tmp_path):
 #: * an entry that is not a regular file (120000 / 160000) the service
 #:   refuses whatever its name (#2981, ADR-036 §3: `not_regular_file`), where
 #:   the CLI follows a symlink or skips an empty directory — its oracle is the
-#:   service itself: the same entry at a UTF-8 name is judged the same way
-#:   (refused; skipped below a hidden directory).
+#:   service itself: the same entry at a UTF-8 name is refused as
+#:   `not_regular_file` (rc 1), the entry itself by da-guard refusing the tree
+#:   (rc 2, `run_failed`); below a hidden directory both pass.
 #: Nowhere in any field: no canary, no escaped name, no surrogate, no control byte.
 #: cell → (path below conf.d, git mode, blob).
 _NOT_UTF8_LEAF = "secret-ZqX\udcff\x1b.yaml"
@@ -870,10 +871,33 @@ def test_a_not_utf8_name_is_named_nowhere_in_the_reply(tmp_path, world, cell):
         want = _findings(json.loads(out.read_text(encoding="utf-8")), str(conf))
         assert _findings(doc["findings"], doc["findings"]["config_dir"]) == want, (cell, doc, want)
     else:
-        assert _refused(doc) == _refused(twin_doc) == (not cell.startswith("hidden")), (cell, doc, twin_doc)
+        if cell.startswith("hidden"):
+            assert doc["result"] == twin_doc["result"] == "pass", (cell, doc, twin_doc)
+        else:
+            # Refused for what it is, not for some other reason: the UTF-8
+            # twin as `not_regular_file` (rc 1); the entry itself as da-guard
+            # refuses the tree it is put in (rc 2, `run_failed` only — the
+            # CLI's answer for that path on disk as an empty directory).
+            assert (twin_doc["result"], twin_doc["rc"]) == ("findings", 1), (cell, twin_doc)
+            assert [m for m in _unreadable(twin_doc).values() if "(not_regular_file)" in m], (cell, twin_doc)
+            assert (doc["result"], doc["rc"]) == ("findings", 2), (cell, doc)
+            assert {f["kind"] for f in doc["findings"]["findings"]} == {"run_failed"}, (cell, doc)
     named = [v for v in _strings(doc) if "zqx" in v.lower() or "\\xff" in v
              or any(c in v for c in ("\udcff", "\ufffd", "\x1b"))]
     assert not named, (cell, named)
+
+
+def test_a_request_field_cannot_forge_a_service_log_line(tmp_path, world):
+    """#3961: the service logs why it refused a request; an unknown field's
+    name (the request's own text) cannot start a line of that log."""
+    body = json.dumps({"base_commit": world["commits"]["clean"], "writes": [], "deadline_ms": 1000,
+                       "\nERROR: forged": 1}).encode()
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"]) as svc:
+        status, _headers, _data = svc.raw(
+            b"POST /v1/validate HTTP/1.1\r\nHost: g\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+    log = svc.log.read_text(encoding="utf-8", errors="replace")
+    assert status == 400 and "bad request: unknown field(s):" in log, log
+    assert not [ln for ln in log.splitlines() if ln.lstrip().startswith("ERROR: forged")], log
 
 
 def test_a_write_path_that_is_not_utf8_is_400_unnamed(world):

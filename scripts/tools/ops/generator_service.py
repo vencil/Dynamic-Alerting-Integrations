@@ -263,7 +263,9 @@ def _error(status: int, error: str, **headers: str) -> Response:
 
 
 def _log(line: str) -> None:
-    print(f"generator-service: {line}", file=sys.stderr, flush=True)
+    # One line whatever it holds (#3961): a request's own text (an unknown
+    # field's name) must not forge a log line — `safe_label`, the one exit.
+    print(f"generator-service: {safe_label(line)}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -903,6 +905,8 @@ class Service:
         # `da_guard` (names mode could not classify the base tree's path
         # names) has no reason of its own on the wire (tenant-api's closed
         # list): no verdict was reached, like any other incomplete judgement.
+        if outcome == "da_guard":
+            _log("incomplete: da-guard names mode could not classify the base tree's path names")
         return _rejected("incomplete", **common)
 
     # ── status and metrics ────────────────────────────────────────────────

@@ -288,6 +288,27 @@ def test_a_verdict_document_is_of_the_closed_shape():
     assert proto.validate_answer_problem(200, {**doc, "key_verdict": {"status": "x", "message": "y"}})
 
 
+def test_a_da_guard_outcome_is_incomplete_with_one_fixed_log_line(capsys):
+    """#3961: names mode could not classify the base tree's path names — the
+    reply says `incomplete` and nothing more; the service's log gets one
+    fixed line naming the failure's class, no path."""
+    from types import SimpleNamespace
+    reader = SimpleNamespace(result={"outcome": "da_guard", "cache": {}}, ended=True)
+    resp = _FakeService(delay=0)._verdict(gs.ChildRun(False, 0, reader, 0))
+    assert _doc(resp)["reason"] == "incomplete", _doc(resp)
+    assert capsys.readouterr().err == ("generator-service: incomplete: da-guard names mode could "
+                                       "not classify the base tree's path names\n")
+
+
+def test_the_log_is_one_line_whatever_it_is_given(capsys):
+    """#3961: `_log` is the service's one way into its log; a value it is
+    given (a request's unknown field name) cannot start a line of its own."""
+    gs._log("bad request: unknown field(s): \nERROR: forged \x1b[31m")
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and not [ln for ln in err.splitlines() if ln.startswith("ERROR")], err
+    assert "\x1b" not in err, err
+
+
 @pytest.mark.parametrize("value", ["\udcff", "a\udcffb.yaml", "ZqX \x1b[31m é 中", "\ud83d"])
 def test_every_answer_body_is_ascii_and_reads_back(value):
     """`Response.body` is the service's one exit: ASCII whatever a value

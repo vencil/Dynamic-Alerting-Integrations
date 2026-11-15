@@ -515,6 +515,22 @@ def test_served_schedules_refuse_a_document_with_instant_fields(tmp_path):
     assert ei.value.binary_fault and "not schedules alone" in str(ei.value)
 
 
+def test_a_field_name_da_guard_wrote_is_counted_not_named(tmp_path):
+    """#3961: a refusal about a document's fields gives counts, not the names
+    it found — `key_checks[i]` and a `--schedules-only` tenant alike."""
+    rec = {"kind": "renamed", "key": "k", "head": "k", "replacement_head": "k2", "reason": "r",
+           _CANARY: 1}
+    with pytest.raises(TypeError) as ei:
+        tv._key_checks([rec])
+    assert "has 1 other(s)" in str(ei.value) and _CANARY not in str(ei.value), ei.value
+    doc = json.loads(_ARGV_DOC)
+    doc["tenants"]["t"] = {"schedules": {}, _CANARY: 1}
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_schedules(tmp_path, binary=_old_da_guard(tmp_path, json.dumps(doc)))
+    assert "not schedules alone: 1 other field(s)" in str(ei.value), ei.value
+    assert _CANARY not in str(ei.value), ei.value
+
+
 def test_da_guard_without_schedules_only_is_named_as_too_old(tmp_path):
     """不認得 --schedules-only 的 da-guard（Go flag：exit 2，`-h` 亦然）指出要升級。"""
     require_shebang_scripts()  # the stand-in da-guard is a `#!` script

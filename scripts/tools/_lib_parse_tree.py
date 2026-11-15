@@ -565,7 +565,8 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
     if missing:
         raise ShapeError(f"{where}: no {', '.join(missing)} — {_OLDER}")
     if set(e) - set(ENTRY_FIELDS):
-        raise ShapeError(f"{where}: fields this reader does not know: {sorted(set(e) - set(ENTRY_FIELDS))}")
+        # A count, never the names: the message is constants and counts (#3961).
+        raise ShapeError(f"{where}: fields this reader does not know: {len(set(e) - set(ENTRY_FIELDS))}")
     depth, cls, tenant = e["depth"], e["class"], e["tenant_named"]
     names = mode == "names"
     if not isinstance(path, str) or not path:

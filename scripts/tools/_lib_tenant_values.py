@@ -513,7 +513,9 @@ def _key_checks(e: Any, what: str = "key_checks") -> "tuple[KeyCheck, ...]":
         if not isinstance(c, dict):
             raise _ShapeError(f"{w} is a {type(c).__name__}, not a record")
         if set(c) != _KEY_CHECK_FIELDS:
-            raise _ShapeError(f"{w} has fields {sorted(map(str, c))}, not {sorted(_KEY_CHECK_FIELDS)}")
+            # Counts, never the document's field names (#3961).
+            raise _ShapeError(f"{w} lacks {len(_KEY_CHECK_FIELDS - set(c))} of the fields "
+                              f"{sorted(_KEY_CHECK_FIELDS)} and has {len(set(c) - _KEY_CHECK_FIELDS)} other(s)")
         for f in ("kind", "key", "head", "reason"):
             if not isinstance(c[f], str):
                 raise _ShapeError(f"{w}.{f} is a {type(c[f]).__name__}, not a string")
@@ -1491,7 +1493,8 @@ def load_served_schedules(
             if set(tv) != {"schedules"}:
                 # A document of --schedules instead (a binary that ignores the
                 # flag would not exit 0 on it): never read as the day alone.
-                raise _ShapeError(f"fields {sorted(tv)}, not schedules alone")
+                raise _ShapeError(f"not schedules alone: {len(set(tv) - {'schedules'})} other field(s)"
+                                  f"{'' if 'schedules' in tv else ', and no schedules'}")
             out[tenant_id] = {str(k): _key_schedule(sch) for k, sch in tv["schedules"].items()}
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
