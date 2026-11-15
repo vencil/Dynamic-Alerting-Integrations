@@ -69,6 +69,9 @@ def test_documentation_paths_are_exempt(path):
     ".claude/agents/reviewer.md",
     ".claude/settings.json",
     "nested/.claude/notes.md",
+    # the directory exceptions ignore case too (as the file-name ones do)
+    ".CLAUDE/agents/reviewer.md",
+    "nested/.Agents/reference.md",
     # ordinary code / config
     "scripts/tools/dx/pr_preflight.py",
     ".github/workflows/ci.yml",

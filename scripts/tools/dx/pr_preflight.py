@@ -745,7 +745,7 @@ def is_doc_only_path(path: str) -> bool:
     `.claude` match as a path segment at any depth.
     """
     parts = path.split("/")
-    if any(p in _PASS2_NEVER_DOC_DIRS for p in parts[:-1]):
+    if any(p.lower() in _PASS2_NEVER_DOC_DIRS for p in parts[:-1]):
         return False
     if parts[-1].lower() in _PASS2_NEVER_DOC_NAMES:
         return False
