@@ -106,6 +106,39 @@ EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
     "rabbitmq": ("rabbitmq_up", "rabbitmq_identity_info"),
 }
 
+#: pack → the presence metric(s) of an exporter whose kind is no db_type: the
+#: application packs whose threshold keys the platform does not ship a value
+#: for (#1200 D-A A3). Kept apart from EXPORTER_PRESENCE, whose keys must be
+#: exactly the db_type enum (liveness opt-in). jvm: the heap used series of
+#: client_java / jmx_exporter / Micrometer (jvm_memory_used_bytes) and of
+#: jmx_exporter before 1.0 (jvm_memory_bytes_used), the two names
+#: rule-pack-jvm.yaml reads; nginx: nginxinc/nginx-prometheus-exporter's
+#: nginx_up, written on every scrape.
+APP_PRESENCE: dict[str, tuple[str, ...]] = {
+    "jvm": ("jvm_memory_used_bytes", "jvm_memory_bytes_used"),
+    "nginx": ("nginx_up",),
+}
+
+#: pack → the prefix every alert of that pack carries. Alertnames are unique
+#: across rule packs (check_vmalert_coverage), so the unconfigured-threshold
+#: alert is <prefix>ThresholdNotConfigured (#1200 D-A A3);
+#: tests/rulepacks/test_exporter_presence.py holds each prefix to the pack's
+#: own alerts.
+ALERT_PREFIX: dict[str, str] = {
+    "clickhouse": "ClickHouse", "db2": "DB2", "elasticsearch": "Elasticsearch",
+    "jvm": "JVM", "kafka": "Kafka", "mariadb": "MariaDB", "mongodb": "MongoDB",
+    "nginx": "Nginx", "oracle": "Oracle", "rabbitmq": "RabbitMQ", "redis": "Redis",
+}
+UNSET_NOTICE_SUFFIX = "ThresholdNotConfigured"
+
+
+def unset_notice_alert(pack: str) -> str:
+    """The unconfigured-threshold alert's name in *pack*."""
+    if pack not in ALERT_PREFIX:
+        raise ValueError(f"pack {pack!r} reads unset-notice keys but has no ALERT_PREFIX")
+    return ALERT_PREFIX[pack] + UNSET_NOTICE_SUFFIX
+
+
 JOB_SELECTOR = 'job="tenant-exporters"'
 #: How far back TenantExporterUndeclared looks for a database exporter: an
 #: undeclared tenant whose exporters all went down stays named for this long
@@ -147,6 +180,46 @@ def presence_over_time_expr() -> str:
                             for m in metrics)
         terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
     return "\nor ".join(terms)
+
+
+def pack_presence(pack: str) -> tuple[str, ...]:
+    """The presence metric(s) of *pack*'s exporter: EXPORTER_PRESENCE for a
+    database pack (its name is the db_type), APP_PRESENCE otherwise."""
+    return EXPORTER_PRESENCE.get(pack) or APP_PRESENCE.get(pack) or ()
+
+
+def unset_notice_packs() -> list[str]:
+    """The packs that read a threshold key the platform ships no value for —
+    each carries <prefix>ThresholdNotConfigured (#1200 D-A A3). Derived from the
+    threshold registry, never listed here."""
+    ops_dir = os.path.join(_HERE, "ops")
+    if ops_dir not in sys.path:
+        sys.path.insert(0, ops_dir)
+    import _registry_lib  # noqa: PLC0415  (scripts/tools/ops)
+    return sorted(set(_registry_lib.unset_notice_keys(_registry_lib.load_registry()).values()))
+
+
+def unset_notice_expr(pack: str) -> str:
+    """<prefix>ThresholdNotConfigured's expr for *pack*: every user_threshold_unset
+    series of the pack for a tenant whose exporter of that kind is answering
+    under the tenant-exporters job, outside maintenance. The exporter's own
+    `instance` / `pod` are aggregated away first (as tenant_expected_exporter
+    is): with two replicas each key would otherwise fire twice, and a rollout
+    would restart the alert's `for:` with the new pod's series."""
+    metrics = pack_presence(pack)
+    if not metrics:
+        raise ValueError(f"pack {pack!r} reads unset-notice keys but has no presence metric "
+                         "(EXPORTER_PRESENCE / APP_PRESENCE)")
+    inner = " or ".join(f"{m}{{{JOB_SELECTOR}}}" for m in metrics)
+    return "\n".join([
+        "(",
+        f'  max without(instance, pod) (user_threshold_unset{{pack="{pack}"}})',
+        "  and on(tenant)",
+        f"  ({inner})",
+        ")",
+        "unless on(tenant)",
+        '(user_state_filter{filter="maintenance"} == 1)',
+    ])
 
 
 def _absent_pairs() -> str:
@@ -191,7 +264,10 @@ def alert_exprs() -> dict[tuple[Path, str], str]:
         "unless on(tenant)",
         '(user_state_filter{filter="maintenance"} == 1)',
     ])
+    notices = {(Path(RULE_PACKS.directory) / RULE_PACKS.file_name(p), unset_notice_alert(p)):
+               unset_notice_expr(p) for p in unset_notice_packs()}
     return {
+        **notices,
         (LIVENESS_PACK, "TenantExporterAbsent"): absent,
         (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared,
         (PLATFORM_PACK, "MassExporterOutage"): mass,

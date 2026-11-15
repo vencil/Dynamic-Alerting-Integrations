@@ -122,9 +122,13 @@ func TestGather_DeclaredKeyReachesTheScrapeSurface(t *testing.T) {
 	if strings.Contains(out, "tenant=t-2,") && strings.Contains(out, "metric=wait_time_rate,") {
 		lines := strings.Split(out, "\n")
 		for _, l := range lines {
-			if strings.Contains(l, "tenant=t-2,") && strings.Contains(l, "wait_time_rate") {
+			if strings.HasPrefix(l, "user_threshold{") && strings.Contains(l, "tenant=t-2,") && strings.Contains(l, "wait_time_rate") {
 				t.Errorf("a tenant that set nothing must not get a row: %s", l)
 			}
 		}
+	}
+	// The unset notice (#1200 D-A A3) is opt-in: no tenant here subscribes.
+	if strings.Contains(out, "user_threshold_unset{") {
+		t.Errorf("no tenant subscribed to unset_thresholds: no user_threshold_unset series:\n%s", out)
 	}
 }

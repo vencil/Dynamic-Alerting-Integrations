@@ -62,6 +62,10 @@ type Reserved struct {
 	// MaintenanceExpiries is the structured _state_maintenance reading
 	// da_config_event{event="maintenance_expired"} is emitted from.
 	MaintenanceExpiries []config.ResolvedMaintenanceExpiry
+	// Unset is the unconfigured-threshold reading user_threshold_unset is
+	// emitted from (#1200 D-A A3): da-guard counts a disable that ends a
+	// notice as one that switches something off.
+	Unset []config.UnsetThreshold
 }
 
 // NewCollector is the exporter's collector over src.
@@ -158,10 +162,12 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	metadata := cfg.ResolveMetadataLogf(c.logf)
 	c.collectMetadata(ch, metadata)
 	c.collectTenantExpectedExporter(ch, metadata)
+	unset := cfg.UnsetThresholdsAt(now, config.UnsetThresholdsSubscribed(ops.StateFilters))
+	c.collectUnsetThresholds(ch, unset)
 
 	if c.observe != nil {
 		c.observe(Reserved{Metadata: metadata, SeverityDedup: dedup, Ops: ops, ThresholdExpiries: expiries,
-			MaintenanceExpiries: maintenance})
+			MaintenanceExpiries: maintenance, Unset: unset})
 	}
 }
 
@@ -469,6 +475,39 @@ func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []conf
 			md.Tenant, md.RunbookURL, md.Owner, md.Tier)
 		if err != nil {
 			c.logf("WARN: failed to create tenant_metadata_info metric for tenant=%s: %v", md.Tenant, err)
+			continue
+		}
+		ch <- m
+	}
+}
+
+// collectUnsetThresholds emits user_threshold_unset{tenant, pack, key, fix}=1
+// for every operator-supplied threshold key that serves a subscribed tenant
+// no threshold (#1200 D-A A3, #1175; the judgement and the subscription are
+// config.UnsetThresholdsAt). Each rule pack joins its own keys with the
+// presence of its exporter for the tenant and raises
+// <Pack>ThresholdNotConfigured (info, e.g. RedisThresholdNotConfigured): the
+// alert on that key has no threshold and stays silent. `fix` says who can arm
+// it: the tenant (the root declares the key) or the platform (it does not).
+//
+// Not counted against max_metrics_per_tenant (that cap is on user_threshold
+// rows): at most one series per generated key per subscribed tenant.
+func (c *Collector) collectUnsetThresholds(ch chan<- prometheus.Metric, unset []config.UnsetThreshold) {
+	if len(unset) == 0 {
+		return
+	}
+	desc := prometheus.NewDesc(
+		"user_threshold_unset",
+		"Always 1: a threshold key the platform ships no value for that serves this tenant no threshold and that it "+
+			"does not disable; only tenants whose state filter unset_thresholds is on. The alert reading it stays "+
+			"silent; fix names who can arm it (#1200 D-A A3).",
+		[]string{"tenant", "pack", "key", "fix"},
+		nil,
+	)
+	for _, u := range unset {
+		m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, 1.0, u.Tenant, u.Pack, u.Key, u.Fix)
+		if err != nil {
+			c.logf("WARN: failed to create user_threshold_unset metric for tenant=%s key=%s: %v", u.Tenant, u.Key, err)
 			continue
 		}
 		ch <- m

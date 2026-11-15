@@ -25,7 +25,7 @@
       "exporter": "mysqld_exporter",
       "configMap": "prometheus-rules-mariadb",
       "recordingRules": 11,
-      "alertRules": 17,
+      "alertRules": 18,
       "required": false,
       "defaults": {
         "mysql_connection_usage_percent": {
@@ -105,7 +105,7 @@
       "exporter": "redis_exporter",
       "configMap": "prometheus-rules-redis",
       "recordingRules": 12,
-      "alertRules": 9,
+      "alertRules": 10,
       "required": false,
       "defaults": {
         "redis_memory_used_bytes": {
@@ -155,7 +155,7 @@
       "exporter": "mongodb_exporter",
       "configMap": "prometheus-rules-mongodb",
       "recordingRules": 10,
-      "alertRules": 10,
+      "alertRules": 11,
       "required": false,
       "defaults": {
         "mongodb_connections_current": {
@@ -199,7 +199,7 @@
       "exporter": "elasticsearch_exporter",
       "configMap": "prometheus-rules-elasticsearch",
       "recordingRules": 14,
-      "alertRules": 11,
+      "alertRules": 12,
       "required": false,
       "defaults": {
         "es_heap_usage_percent": {
@@ -250,7 +250,7 @@
       "exporter": "oracledb_exporter",
       "configMap": "prometheus-rules-oracle",
       "recordingRules": 13,
-      "alertRules": 9,
+      "alertRules": 10,
       "required": false,
       "defaults": {
         "oracle_sessions_active": {
@@ -294,7 +294,7 @@
       "exporter": "db2_exporter",
       "configMap": "prometheus-rules-db2",
       "recordingRules": 15,
-      "alertRules": 10,
+      "alertRules": 11,
       "required": false,
       "defaults": {
         "db2_connections_active": {
@@ -350,7 +350,7 @@
       "exporter": "built-in /metrics",
       "configMap": "prometheus-rules-clickhouse",
       "recordingRules": 12,
-      "alertRules": 7,
+      "alertRules": 8,
       "required": false,
       "defaults": {
         "clickhouse_queries_rate": {
@@ -388,7 +388,7 @@
       "exporter": "kafka_exporter",
       "configMap": "prometheus-rules-kafka",
       "recordingRules": 8,
-      "alertRules": 5,
+      "alertRules": 6,
       "required": false,
       "defaults": {
         "kafka_consumer_lag": {
@@ -434,7 +434,7 @@
       "exporter": "rabbitmq_exporter",
       "configMap": "prometheus-rules-rabbitmq",
       "recordingRules": 14,
-      "alertRules": 9,
+      "alertRules": 10,
       "required": false,
       "defaults": {
         "rabbitmq_queue_messages": {
@@ -491,7 +491,7 @@
       "exporter": "jmx_exporter",
       "configMap": "prometheus-rules-jvm",
       "recordingRules": 9,
-      "alertRules": 7,
+      "alertRules": 8,
       "required": false,
       "defaults": {
         "jvm_gc_pause": {
@@ -535,7 +535,7 @@
       "exporter": "nginx-prometheus-exporter",
       "configMap": "prometheus-rules-nginx",
       "recordingRules": 9,
-      "alertRules": 6,
+      "alertRules": 7,
       "required": false,
       "defaults": {
         "nginx_connections": {
