@@ -7,12 +7,18 @@ GitHub's settings and the file disagree.
 
 Exit codes (scripts/tools/_lib_exitcodes.py contract):
   0  file and settings agree
-  1  they disagree — every difference is printed, one per line
+  1  they disagree — `DIFFER_LINE`, then every difference, one per line
   2  the settings could not be read: `protection` or its
      `required_status_checks` is missing, or the JSON / YAML is malformed.
      ⛔ Never treated as "no required checks": an empty answer from a token
      that cannot see the field would otherwise read as "everything was
      removed" or, worse, as agreement with an empty file.
+
+⛔ Exit 1 alone does not mean "they disagree": the interpreter also exits 1
+when this file cannot even start (an import that fails, a syntax error). A
+caller that must tell the two apart looks for a whole line of stdout that is
+exactly `AGREE_LINE` or `DIFFER_LINE` — printed only after the comparison ran
+to its end. .github/workflows/required-checks-drift.yml does (#3946).
 
 `pending: true` entries are declared but not yet enabled — the step between
 "the job has reported once" and "the owner ticks it" (see the file header).
@@ -35,6 +41,10 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 import yaml  # noqa: E402
 
 EXIT_DRIFT = 1
+# The verdict, as one whole line of stdout. The workflow greps for these exact
+# strings; tests/ops/test_required_checks_drift_workflow.py holds the two together.
+AGREE_LINE = "required checks: .github/required-checks.yaml matches branch protection"
+DIFFER_LINE = "required checks: .github/required-checks.yaml DIFFERS from branch protection"
 EXIT_UNREADABLE = 2
 DEFAULT_SSOT = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                             os.pardir, os.pardir, ".github", "required-checks.yaml")
@@ -116,11 +126,12 @@ def main(argv: list[str] | None = None) -> int:
     except (Unreadable, ValueError, yaml.YAMLError) as err:
         sys.stderr.write(f"required_checks_drift: cannot compare — {err}\n")
         return EXIT_UNREADABLE
-    for line in problems:
-        print(line)
     if problems:
+        print(DIFFER_LINE)
+        for line in problems:
+            print(line)
         return EXIT_DRIFT
-    print("required checks: .github/required-checks.yaml matches branch protection")
+    print(AGREE_LINE)
     return 0
 
 

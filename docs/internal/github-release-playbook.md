@@ -116,6 +116,7 @@ git push -u origin chore/vX.Y.Z-release-wrapup
 - 這段期間 nightly 的 delivered 映像掃描（`delivered-da-tools`）**預期有一晚 degraded**（拉不到映像），不是事故；
 - 這段期間碰到 `scripts/tools/ops/init_project.py` 的 PR，`image-ref-resolve` 的 delivered scope 也會紅（非必要 check）。
 - init 產生的 helm 部署也固定 threshold-exporter chart 的版本（[#2932](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2932)），值是收尾 PR 調好的 `Chart.yaml` `version`。同一輪 `exporter/v*` 與 `tools/v*` 都要發時，兩條 job 並行；新的 da-tools 映像若比 chart 先發布，在 `exporter/v*` 的 `helm push` 完成之前，用它產生的 `--version` 拉不到 chart。所以兩個 tag 一起推，`exporter/v*` 的 job 沒跑完不要對外宣布新版 da-tools。⛔ 反過來，**只發 `tools/v*`、不發 `exporter/v*` 的前提是 `helm/threshold-exporter/` 會被 `helm package` 打包的檔案自上次 `exporter/v<pin>` 起沒有改動**（`.helmignore` 掉的 chart README 等不算）：否則 init 會對已發布的舊 chart 印出它沒有的設定（#1425：舊 chart 沒有 values schema，`existingConfigMap` 被靜默忽略，`threshold-config` 變成兩個寫入者）。`make pre-tag` 的 `init-chart-pin-published` 擋這件事，release.yaml 的 `tools/v*` job 以 `--require-tag` 再擋一次。
+- portal 部署精靈的 `helm upgrade --install` 也固定 chart 版本（[#2947](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2947)），值在 `docs/assets/platform-data.json` 的 `charts`。它平常**不跟** `Chart.yaml` 走（兩次發版之間 `Chart.yaml` 的版號在 registry 上還不存在，釘它指令會直接失敗）。收尾 PR 升完版號後跑 `make platform-data RELEASE_CHARTS=1`，再把同一組版號抄進 `tools/portal/src/interactive/tools/_common/data/charts.js` 的 `CHART_MIRROR`（`charts-fallback-drift.test.ts` 會比對）。`make pre-tag` 的 `wizard-chart-pins-released` 擋「釘的版本既不是樹裡的 chart、也沒有對應 tag」；釘的版本落後於樹時只印 `NOTE`，這一版有發那條線就要重跑上面那步。
 
 間隔拉得越長，這兩個訊號越像真問題。推完 tag、`release.yaml` 發布映像後即恢復。
 
