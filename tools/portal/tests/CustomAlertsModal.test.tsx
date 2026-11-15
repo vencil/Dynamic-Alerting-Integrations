@@ -53,6 +53,83 @@ describe('CustomAlertsModal', () => {
     expect(screen.queryByTestId('recipe-old_name')).toBeNull(); // no duplicate / orphan
   });
 
+  // #3920: the form's output replaces the stored recipe, and the form has no
+  // field for selectors / selectors_re / group_by. These go through the modal
+  // to the PUT payload — the recipe as the API will store it.
+  describe('#3920: an edit keeps the members the form has no field for', () => {
+    const TENANT = 'tenant-fixture';
+    const stored = () => ({
+      recipe: 'threshold',
+      name: 'pvc_usage',
+      selectors: { namespace: 'ns-one' },
+      metric: 'volume_used_ratio',
+      selectors_re: { persistentvolumeclaim: 'data-.*' },
+      group_by: ['persistentvolumeclaim'],
+      threshold: '80:critical',
+      window: '10m',
+    });
+    const other = () => ({ recipe: 'threshold', name: 'untouched_one', metric: 'm', threshold: '1', window: '5m' });
+
+    async function openEdit() {
+      const save = vi.fn(() => Promise.resolve({ ok: true, status: 200, data: apiFixture('PutCustomAlertsResponse', { source_hash: 'h2' }) }));
+      render(<CustomAlertsModal tenantId={TENANT} onClose={() => {}} fetchTenant={fetchTenant([other(), stored()])}
+        fetchMetrics={mockMetrics(['volume_used_ratio'])} saveCustomAlerts={save} />);
+      await waitFor(() => expect(screen.getByTestId('edit-pvc_usage')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('edit-pvc_usage'));
+      return save;
+    }
+    async function submitAndSave(save: any, listedAs: string) {
+      fireEvent.click(screen.getByTestId('submit'));
+      await waitFor(() => expect(screen.getByTestId(`recipe-${listedAs}`)).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('save'));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      expect(save.mock.calls[0][0]).toBe(TENANT);
+      return save.mock.calls[0][1].custom_alerts;
+    }
+
+    it('edit → submit untouched → save: the PUT carries selectors, selectors_re and group_by as stored', async () => {
+      const save = await openEdit();
+      const sent = await submitAndSave(save, 'pvc_usage');
+      expect(sent).toHaveLength(2);
+      expect(sent[1].selectors).toEqual({ namespace: 'ns-one' });
+      expect(sent[1].selectors_re).toEqual({ persistentvolumeclaim: 'data-.*' });
+      expect(sent[1].group_by).toEqual(['persistentvolumeclaim']);
+      // nothing was changed, so nothing is: same members, same order
+      expect(sent).toEqual([other(), stored()]);
+      expect(Object.keys(sent[1])).toEqual(Object.keys(stored()));
+    });
+
+    it('a rename and a changed threshold take the form values; the three members stay', async () => {
+      const save = await openEdit();
+      fireEvent.change(screen.getByTestId('field-name'), { target: { value: 'pvc_usage_v2' } });
+      fireEvent.change(screen.getByTestId('field-threshold'), { target: { value: '90' } });
+      const sent = await submitAndSave(save, 'pvc_usage_v2');
+      expect(sent[1]).toEqual({ ...stored(), name: 'pvc_usage_v2', threshold: '90:critical' });
+    });
+
+    it('changing the kind to one that takes no group_by drops it and keeps the selectors', async () => {
+      const save = await openEdit();
+      fireEvent.change(screen.getByTestId('field-recipe'), { target: { value: 'absence' } });
+      const sent = await submitAndSave(save, 'pvc_usage');
+      expect(sent[1].recipe).toBe('absence');
+      expect(sent[1]).not.toHaveProperty('group_by');
+      expect(sent[1].selectors).toEqual({ namespace: 'ns-one' });
+      expect(sent[1].selectors_re).toEqual({ persistentvolumeclaim: 'data-.*' });
+    });
+
+    it('control: a new recipe is sent with the form fields only', async () => {
+      const save = vi.fn(() => Promise.resolve({ ok: true, status: 200, data: apiFixture('PutCustomAlertsResponse', { source_hash: 'h2' }) }));
+      render(<CustomAlertsModal tenantId={TENANT} onClose={() => {}} fetchTenant={fetchTenant([stored()])}
+        fetchMetrics={mockMetrics(['queue_depth'])} saveCustomAlerts={save} />);
+      await waitFor(() => expect(screen.getByTestId('add')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('add'));
+      fillRecipeForm('new_one', 'queue_depth');
+      const sent = await submitAndSave(save, 'new_one');
+      expect(sent[0]).toEqual(stored());
+      expect(sent[1]).toEqual({ recipe: 'threshold', name: 'new_one', metric: 'queue_depth', threshold: '100:warning', op: '>', window: '5m', mode: 'page', for: '1m' });
+    });
+  });
+
   it('delete removes a recipe', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'gone', metric: 'm', threshold: '1', window: '5m' }]);
     render(<CustomAlertsModal tenantId="db-a" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} />);
