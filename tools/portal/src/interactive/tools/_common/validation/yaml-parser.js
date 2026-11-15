@@ -381,12 +381,16 @@ function scheduleDecodeError(own, v) {
 // one, at any depth of merges. A key brought in by a root merge is thereby
 // judged by its own keys too, as the exporter judges it
 // (`<<: {k: {<<: {default: [1]}}}` is no schedule).
-function writtenValue(map, key) {
+// `seen` holds the sources already searched: the search stops at the first
+// find, so a source met again has nothing for this key, and skipping it
+// keeps a chain of `<<: [*m, *m]` linear instead of exponential.
+function writtenValue(map, key, seen = new Set()) {
   if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
+  seen.add(map);
   const merge = map['<<'];
   for (const source of Array.isArray(merge) ? merge : [merge]) {
-    if (!isPlainMap(source)) continue;
-    const found = writtenValue(source, key);
+    if (!isPlainMap(source) || seen.has(source)) continue;
+    const found = writtenValue(source, key, seen);
     if (found !== undefined) return found;
   }
   return undefined;
@@ -435,7 +439,11 @@ function parseTenantYaml(text) {
   // threshold value that writes `<<` is handed over as written, `<<` and
   // all, for the reader to judge by its own keys (#3959).
   const unmerged = loadDocument(text, TEXT_SCHEMA_NO_MERGE).doc;
-  const written = (key) => (isPlainMap(unmerged) ? writtenValue(unmerged, key) : undefined);
+  // When the unexpanded parse fails — an explicit `!!merge` tag, which this
+  // schema does not take — every key is judged by its merged value rather
+  // than not at all. The exporter refuses such a file whole anyway: its
+  // parse-tree does not read a `!!merge` tag (tag_not_allowed, measured).
+  const written = (key) => (isPlainMap(unmerged) ? writtenValue(unmerged, key) : doc[key]);
   // Every key, `__proto__` and the other UNSAFE_KEYS too: the exporter has
   // no such keys, and decodes their schedules as any other (measured).
   const undecodable = Object.keys(doc)

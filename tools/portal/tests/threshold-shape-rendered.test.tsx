@@ -191,6 +191,10 @@ describe('a schedule the exporter cannot decode (#3974)', () => {
     [`<<: {<<: {${K}: {default: [1]}}}`, 'default'], // through a merge in the merge source
     ['__proto__: {default: [1]}', 'default'], // the exporter has no unsafe keys: parse_failed
     ['constructor: {default: 70, overrides: 5}', 'overrides'],
+    // An explicit merge tag elsewhere in the file: the unexpanded parse fails,
+    // and the schedule is judged merged instead of not at all (the exporter
+    // refuses the file over the tag as well: tag_not_allowed).
+    ["a: {default: [1]}\nb: {!!merge '<<': {}}", 'default'],
   ])('%j is refused: %s', (yaml, field) => {
     const { config, errors } = parseTenantYaml(`${yaml}\n`);
     expect(config).toEqual({});
@@ -220,5 +224,16 @@ describe('a schedule the exporter cannot decode (#3974)', () => {
   it('every undecodable key is named, one error each', () => {
     const { errors } = parseTenantYaml(`a: {default: [1]}\nb: 80\n_c: {default: 70, expires: {x: 1}}\n`);
     expect(errors.map((e: string) => e.split(':')[0])).toEqual(['a', '_c']);
+  });
+
+  it('a long chain of shared merge sources is searched in linear time', () => {
+    const lines = ['_m0: &m0 {}'];
+    for (let i = 1; i <= 40; i += 1) lines.push(`_m${i}: &m${i} {<<: [*m${i - 1}, *m${i - 1}]}`);
+    lines.push(`<<: [*m40, {${K}: {default: [1]}}]`, '');
+    const started = Date.now();
+    const { errors } = parseTenantYaml(lines.join('\n'));
+    expect(Date.now() - started).toBeLessThan(2000); // 2^40 paths without the seen set
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`${K}: the exporter cannot decode this schedule — default `);
   });
 });
