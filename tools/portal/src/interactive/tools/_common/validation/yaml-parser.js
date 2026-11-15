@@ -84,7 +84,8 @@ purpose: |
                            value that writes a merge key (`<<`) is handed
                            over unexpanded: the exporter judges a schedule by
                            the mapping's own keys (`{<<: {default: 70}}` is
-                           no schedule).
+                           no schedule). Not modelled: such a value brought
+                           in by a merge one level up, or inside a list.
                            ⛔ Hand its config to
                            ../validation/threshold-value.js readThresholdRow
                            (through alert-engine.js); do not hand parseYaml's
@@ -238,13 +239,16 @@ function loadFirstDocument(src, schema) {
 // `...` only ends a document — `a: 1\n...\n...\n` is one, though js-yaml's
 // loadAll returns a null document per `...` — so js-yaml's count is not it.
 // A `---` at the start of a line is always a marker (YAML forbids it inside
-// a scalar). Measured against da-guard parse-tree.
+// a scalar). Lines break where yaml.v3 breaks them: CR, LF, CRLF, and also
+// NEL (U+0085), U+2028 and U+2029, which js-yaml does not. Content after a
+// `...` with no `---` counts too: yaml.v3 refuses that text (syntax_error),
+// so the file is refused either way. Measured against da-guard parse-tree.
 const DOC_START_RE = /^---(?:[ \t]|$)/;
 const DOC_END_RE = /^\.\.\.(?:[ \t]|$)/;
 function countDocuments(src) {
   let documents = 0;
   let content = false;
-  for (const line of src.split(/\r\n|\r|\n/)) {
+  for (const line of src.split(/\r\n|[\r\n\u0085\u2028\u2029]/)) {
     if (DOC_START_RE.test(line)) { documents += 1; content = true; continue; }
     const text = line.trim();
     if (!content && text !== '' && !text.startsWith('#') && !text.startsWith('%') && !DOC_END_RE.test(line)) {

@@ -107,7 +107,8 @@ describe('a second YAML document', () => {
   });
 
   // Each row measured against da-guard parse-tree on main: true where it
-  // reports multiple_documents. `...` only ends a document; js-yaml's loadAll
+  // refuses the file — multiple_documents, or (`...` then content with no
+  // `---`) syntax_error. `...` only ends a document; js-yaml's loadAll
   // returns a null document for each, so its count is not the exporter's.
   const B = `${K}: 80\n`;
   it.each([
@@ -116,7 +117,8 @@ describe('a second YAML document', () => {
     [`${B}...\n...\n...\n`, false], ['---\n...\n', false], ['---\n', false], ['--- ~\n', false], ['', false],
     [`${B}---\n`, true], [`${B}---\n# c\n`, true], [`${B}--- ~\n`, true], [`${B}--- \n`, true], [`${B}---`, true],
     [`${B}...\n---\n`, true], [`${B}---\nx: 1\n`, true], [`${B}---\n---\n`, true], [`---\n---\n${B}`, true],
-    [`${B}---\r\nx: 1\r\n`, true],
+    [`${B}---\r\nx: 1\r\n`, true], [`${B}---\t\n`, true], [`${B}...\nj: 1\n`, true],
+    [`${B}\u2028---\u2028x: 1\n`, true], [`${B}\u2029---\u2029x: 1\n`, true], [`${B}\u0085---\u0085x: 1\n`, true],
   ])('%j is refused as more than one document: %s', (y, multi) => {
     const { errors } = parseTenantYaml(y);
     expect(errors.some((e: string) => MULTI.test(e))).toBe(multi);
