@@ -51,7 +51,10 @@ FLOATING_GO_VERSION_ALLOWED: dict[tuple[str, str], str] = {}
 
 _GO_DIRECTIVE = re.compile(r"^go\s+(\S+)\s*$", re.MULTILINE)
 _GOLANG_FROM = re.compile(
-    r"^FROM\s+(?:--platform=\S+\s+)?golang:([^\s@]+)", re.MULTILINE | re.IGNORECASE)
+    # Leading whitespace is legal before a Dockerfile instruction; without `\s*`
+    # an indented builder would be invisible here AND (being otherwise well
+    # formed) pass _unverifiable_from_lines below — compared by neither.
+    r"^\s*FROM\s+(?:--platform=\S+\s+)?golang:([^\s@]+)", re.MULTILINE | re.IGNORECASE)
 _MATRIX_REF = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
 
 
@@ -151,6 +154,125 @@ def test_go_dockerfile_builders_match_their_go_mod() -> None:
         "Dockerfile Go builder != go.mod `go` directive — the image would ship a "
         "different stdlib than CI tested (the #1058 / #1278 split):\n  "
         + "\n  ".join(bad))
+
+
+_FROM_LINE = re.compile(r"^\s*FROM\s+(.*)$", re.MULTILINE | re.IGNORECASE)
+
+
+def _unverifiable_from_lines(text: str) -> list[str]:
+    """FROM lines the builder check above cannot see but may hide a Go builder.
+
+    `_GOLANG_FROM` only reads `golang:<tag>` at the start of the image ref, so a
+    builder spelled `docker.io/library/golang:…`, pinned by digest alone
+    (`golang@sha256:…`), or taken from a build arg (`${GO_IMAGE}`) yields no
+    tag at all — and `test_go_dockerfile_builders_match_their_go_mod` then has
+    nothing to compare, so a builder rolled back that way stays green. Fail
+    closed instead: any such line must be rewritten to the parsed form (or the
+    parser taught it) before it can land.
+    """
+    bad = []
+    for rest in _FROM_LINE.findall(text):
+        tokens = [t for t in rest.split() if not t.startswith("--")]
+        if not tokens:
+            continue
+        image = tokens[0]
+        line = f"FROM {rest.strip()}"
+        if image.startswith("$"):
+            bad.append(line)
+        elif "golang" in image.lower() and not _GOLANG_FROM.match(line):
+            bad.append(line)
+    return bad
+
+
+def test_every_golang_from_line_is_parsed() -> None:
+    """A Go builder the parser cannot read is a builder nobody compares (review of #3637)."""
+    bad = [f"{df}: {line}" for df in _rel("Dockerfile")
+           for line in _unverifiable_from_lines((ROOT / df).read_text(encoding="utf-8"))]
+    assert not bad, (
+        "FROM line whose Go version this guard cannot read — write the builder as "
+        "`FROM [--platform=…] golang:<ver>-…` (a digest may follow the tag), or "
+        "extend _GOLANG_FROM to the new spelling:\n  " + "\n  ".join(bad))
+
+
+@pytest.mark.parametrize("line, unverifiable", [
+    ("FROM docker.io/library/golang:1.26.10-alpine3.23 AS b", True),
+    ("FROM golang@sha256:abc AS b", True),
+    ("FROM ${GO_IMAGE} AS b", True),
+    ("FROM $GO_IMAGE", True),
+    ("FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine3.23 AS builder", False),
+    ("FROM golang:1.26.11-alpine3.23@sha256:abc AS b", False),
+    ("FROM --platform=$BUILDPLATFORM node:24-alpine3.23@sha256:abc AS build", False),
+    ("FROM python:3.14.10-alpine3.23", False),
+    ("  FROM docker.io/library/golang:1.27.0-alpine3.23 AS b", True),
+])
+def test_unverifiable_from_predicate(line: str, unverifiable: bool) -> None:
+    """Pin the predicate both ways, so the repo-wide scan cannot pass vacuously."""
+    assert bool(_unverifiable_from_lines(line + "\n")) is unverifiable
+
+
+@pytest.mark.parametrize("dockerfile, tags", [
+    ("FROM golang:1.26.11-alpine3.23 AS b\n", ["1.26.11-alpine3.23"]),
+    ("  FROM golang:1.27.0-alpine3.23 AS b\n", ["1.27.0-alpine3.23"]),
+    ("\tFROM --platform=$BUILDPLATFORM golang:1.27.0 AS b\n", ["1.27.0"]),
+    ("RUN echo FROM golang:1.0\n", []),
+])
+def test_builder_parser_reads_indented_from(dockerfile: str, tags: list[str]) -> None:
+    """The builder comparison must see an indented FROM, not skip it."""
+    assert _GOLANG_FROM.findall(dockerfile) == tags
+
+
+_TOOLCHAIN_LINE = re.compile(r"^\s*toolchain\b(.*)$", re.MULTILINE)
+
+
+def _toolchain_directives(gomod: str) -> list[str]:
+    """Every `toolchain` value in a go.mod, trailing `// comment` stripped.
+
+    A line that starts with `toolchain` but has no single value after the
+    comment is stripped is returned verbatim, so it compares unequal to the
+    SSOT and fails rather than reading as "no toolchain line" (go.mod allows
+    end-of-line comments, and setup-go still reads the version from such a line).
+    """
+    out = []
+    for rest in _TOOLCHAIN_LINE.findall(gomod):
+        value = rest.split("//", 1)[0].split()
+        out.append(value[0] if len(value) == 1 else f"toolchain{rest}")
+    return out
+
+
+@pytest.mark.parametrize("gomod, want", [
+    ("go 1.26.11\n", []),
+    ("go 1.26.11\ntoolchain go1.26.11\n", ["go1.26.11"]),
+    ("go 1.26.11\ntoolchain go1.26.11 // pinned\n", ["go1.26.11"]),
+    ("go 1.26.11\ntoolchain go1.27.0 // pinned\n", ["go1.27.0"]),
+    ("go 1.26.11\n  toolchain go1.27.0\n", ["go1.27.0"]),
+    ("go 1.26.11\ntoolchain\n", ["toolchain"]),
+])
+def test_toolchain_directive_parser(gomod: str, want: list[str]) -> None:
+    """Pin the parser, so a commented or odd line cannot read as absent."""
+    assert _toolchain_directives(gomod) == want
+
+
+def test_go_mod_toolchain_line_does_not_split_from_ssot() -> None:
+    """A `toolchain` line overrides the `go` line for setup-go, not for the builder.
+
+    `actions/setup-go` with `go-version-file` prefers `toolchain goX.Y.Z` when a
+    go.mod has one; the golang builder image follows the `go` line (the checks
+    above). So a `toolchain go1.27.x` that `go get` writes on its own would make
+    CI test one stdlib while the images ship another, with every other check
+    here still green. Today no go.mod carries one; if one appears it must name
+    the SSOT.
+    """
+    want = f"go{_ssot()}"
+    bad = {}
+    for m in _modules():
+        if m in VENDORED_GO_MODULES:
+            continue
+        found = _toolchain_directives((ROOT / m / "go.mod").read_text(encoding="utf-8"))
+        if any(t != want for t in found):
+            bad[m] = found
+    assert not bad, (
+        f"go.mod `toolchain` line differs from the SSOT ({want}): {bad}. Drop it "
+        f"(`go mod edit -toolchain=none`) or set it to {want}.")
 
 
 def test_devcontainer_go_feature_matches_ssot() -> None:

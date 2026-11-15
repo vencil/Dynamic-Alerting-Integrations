@@ -15,7 +15,7 @@
 # The builder's Go version MUST equal the module's go.mod `go` directive
 # (tests/ops/test_go_toolchain_parity.py): Trivy reads the toolchain the
 # shipped binary was compiled with. This stage is discarded.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23 AS gobuild
+FROM --platform=$BUILDPLATFORM golang:1.26.11-alpine3.23 AS gobuild
 
 WORKDIR /src
 COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/go.sum ./
