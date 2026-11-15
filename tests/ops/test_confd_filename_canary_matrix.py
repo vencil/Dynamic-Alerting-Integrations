@@ -28,6 +28,10 @@
 
 改名做不出來的條目形狀（symlink、FIFO、非 UTF-8 的名字）另列在
 `_ENTRY_SHAPES`，它們的跑法也算進第 2 道的涵蓋。
+
+唯一的明文例外是 `_NAMED_ESCAPED`：非 UTF-8 的檔名讓 da-guard 整棵拒收，
+產生器照 ADR-036 以跳脫形式點名它（理由見 `_lib_validation.shown_file`）。
+那一格正面斷言「只以跳脫形式出現」，例外清單本身也被釘住。
 """
 from __future__ import annotations
 
@@ -152,6 +156,7 @@ class Outcome(NamedTuple):
     text: str                               # stdout + stderr + the findings file
     findings: "tuple[tuple, ...]"           # (kind, field, tenant, policy, message)
     hits: "tuple[tuple[str, int, int, bool, str | None], ...]"
+    raw: bytes                              # `text`'s bytes, as written (undecoded)
 
 
 def _site_tag(path: "str | Path", line: int, col: int) -> str:
@@ -172,20 +177,26 @@ def _drive(conf: Path, argv: "list[str]", tag: bool = False) -> Outcome:
     p = subprocess.run(
         [sys.executable, "-s", "-c", _DRIVER, str(TOOLS), str(_GAR), str(hits), "01"[tag],
          "--config-dir", str(conf), *argv, "--findings-json", str(out)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=300, env=env)
-    assert "Traceback" not in p.stderr, p.stderr
-    assert out.exists(), p.stderr
-    written = out.read_text(encoding="utf-8", errors="replace")
+        capture_output=True, timeout=300, env=env)
+    raw = p.stdout + p.stderr + (out.read_bytes() if out.exists() else b"")
+    stdout, stderr = (b.decode("utf-8", errors="replace") for b in (p.stdout, p.stderr))
+    assert "Traceback" not in stderr, stderr
+    assert out.exists(), stderr
+    written = out.read_bytes().decode("utf-8", errors="replace")
     records = json.loads(written)["findings"]
     kinds = Counter(f["kind"] for f in records)
     rows = (tuple(json.loads(line)) for line in
             (hits.read_text(encoding="utf-8").splitlines() if hits.exists() else ()))
+    # The work directory is this test's random temp name, the operator's
+    # argument and no author text: taken out of what the canary is searched
+    # in, or a name like `tmpzqx…` reads as a canary printed (seen in CI).
+    here = str(work)
+    raw = raw.replace(here.encode(), b"<WORK>")
     return Outcome(p.returncode, tuple(sorted(kinds.items())),
-                   p.stdout + p.stderr + written,
+                   (stdout + stderr + written).replace(here, "<WORK>"),
                    tuple((f["kind"], f["field"], f["tenant"], f["policy"],
                           f["message"].replace(str(conf), "<CONFDIR>"))
-                         for f in records), tuple(rows))
+                         for f in records), tuple(rows), raw)
 
 
 @functools.lru_cache(maxsize=None)
@@ -302,36 +313,44 @@ _ENTRY_SHAPES: "dict[str, tuple[dict[str, str], tuple[str, str], tuple[str, ...]
                  "@fifo:ZqX FIFO@x.yaml": ""},
                 ("kind", "tenant_file_unreadable"), ("ZqX LINK@x.yaml", "ZqX FIFO@x.yaml")),
     # A name that is not valid UTF-8: da-guard refuses the whole tree, and
-    # the generator's rc-2 line repeats da-guard's stderr, which quotes the
-    # name. Known: see `_KNOWN`.
+    # the generator's rc-2 line repeats da-guard's stderr, which names it
+    # escaped — the exception `_NAMED_ESCAPED`. The name holds a byte that is
+    # not UTF-8, control characters and a forged log line; beside it, a name
+    # that is valid UTF-8 but not a legal file name, which stays unprinted.
     "not_utf8_name": ({"_defaults.yaml": _ROOT, "db-ok.yaml": _tenant("db-ok"),
-                       "@bytes:ZqX\udcff@x.yaml": _tenant("db-x")},
+                       "@bytes:ZqX\udcff\nERROR: forged\x1b[31m\x07 X@x.yaml": _tenant("db-x"),
+                       "QqW OTHER@x.yaml": _tenant("db-y")},
                       ("text", "cannot read the conf.d through `da-guard parse-tree`"), ()),
 }
 
-#: Cells that break the rule today, as xfail(strict=True): the day one is
-#: fixed it XPASSes and goes red until its entry is deleted.
-_KNOWN = {
+#: The one explicit exception to the rule (#3703, owner ruling): cell →
+#: (its basis, the name as the output must show it — da-guard's Go `%q`,
+#: every byte that is not printable UTF-8 escaped). Basis: ADR-036 step 9,
+#: "樹裡有不是 UTF-8 的檔名時，工具同樣必須以非 0 結束…並以跳脫形式點名那個檔名"
+#: (docs/adr/036-single-parser-effective-config.md; the `refused` row of
+#: tests/shared/test_confd_behaviour_matrix.py holds every tool to it). Why
+#: not a stand-in: see `_lib_validation.shown_file`.
+_NAMED_ESCAPED: "dict[str, tuple[str, str]]" = {
     "not_utf8_name": (
-        "#3703 open, owner ruling: `parse_tree_failure_exit` repeats da-guard's "
-        "stderr, which quotes the file name; tests/shared/test_confd_behaviour_matrix.py "
-        "(ADR-036 §7, `refused` row) requires every tool to name that file, so "
-        "not printing it breaks that contract"),
+        "ADR-036 step 9: a file name that is not UTF-8 is named, escaped",
+        r'"ZqX\xff\nERROR: forged\x1b[31m\a X@x.yaml"'),
 }
 
 #: Entry shapes also rendered (`--output-alertmanager`).
 _RENDERED = ("special", "not_utf8_name")
 
+_SHAPE_MODES = {"validate": ("--validate", "--strict"),
+                "render": ("--output-alertmanager", "--dry-run")}
 
-def _params(names):
-    return [pytest.param(n, marks=[pytest.mark.xfail(strict=True, raises=AssertionError,
-                                                     reason=_KNOWN[n])] if n in _KNOWN else [])
-            for n in names]
+#: The cells the rule holds in, and the exception's cells.
+_RULED = sorted(set(_ENTRY_SHAPES) - set(_NAMED_ESCAPED))
+_EXCEPTION_RUNS = [(n, m) for n in sorted(_NAMED_ESCAPED) for m in _SHAPE_MODES
+                   if m == "validate" or n in _RENDERED]
 
 
 def _build(d: Path, files: "dict[str, str]") -> None:
     for name, body in files.items():
-        kind, _, rel = name.rpartition(":") if name.startswith("@") else ("", "", name)
+        kind, _, rel = name.partition(":") if name.startswith("@") else ("", "", name)
         p = d / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         if kind == "@symlink":
@@ -359,17 +378,17 @@ def _shape(name: str, argv: "tuple[str, ...]", tag: bool = False) -> Outcome:
         _build(conf, files)
         res = _drive(conf, list(argv), tag)
     # A tree da-guard refuses whole is the run's caller error (rc 2,
-    # `run_failed`): that is what `not_utf8_name` measures; anywhere else a
-    # run that judged nothing has no canary to find.
+    # `run_failed`): that is what `not_utf8_name` measures (`_NAMED_ESCAPED`);
+    # anywhere else a run that judged nothing has no canary to find.
     if "@bytes:" not in "".join(files):
         assert "run_failed" not in dict(res.kinds), res.text[-3000:]
     return res
 
 
-@pytest.mark.parametrize("name", _params(sorted(_ENTRY_SHAPES)))
+@pytest.mark.parametrize("name", _RULED)
 def test_an_entry_shape_prints_no_name_under_validate(name):
     _files, (how, what), shows = _ENTRY_SHAPES[name]
-    res = _shape(name, ("--validate", "--strict"))
+    res = _shape(name, _SHAPE_MODES["validate"])
     if how == "kind":
         assert what in dict(res.kinds), (what, res.kinds)
     else:
@@ -379,12 +398,46 @@ def test_an_entry_shape_prints_no_name_under_validate(name):
     assert _CANARY not in res.text.lower(), res.text
 
 
-@pytest.mark.parametrize("name", _params(_RENDERED))
+@pytest.mark.parametrize("name", [n for n in _RENDERED if n in _RULED])
 def test_an_entry_shape_prints_no_name_under_render(name):
-    res = _shape(name, ("--output-alertmanager", "--dry-run"))
+    res = _shape(name, _SHAPE_MODES["render"])
     for rel in _ENTRY_SHAPES[name][2]:
         assert shown_file(rel) in res.text, (rel, res.text[-3000:])
     assert _CANARY not in res.text.lower(), res.text
+
+
+def test_the_exception_is_exactly_the_not_utf8_cell():
+    """`_NAMED_ESCAPED` stays one cell: a name that cannot be stood in for
+    because it is not text. Any other cell added to it is the rule broken."""
+    assert set(_NAMED_ESCAPED) == {"not_utf8_name"}, sorted(_NAMED_ESCAPED)
+    for n in _NAMED_ESCAPED:
+        assert sum(f.startswith("@bytes:") for f in _ENTRY_SHAPES[n][0]) == 1, n
+
+
+@pytest.mark.parametrize("name,mode", _EXCEPTION_RUNS,
+                         ids=[f"{n}/{m}" for n, m in _EXCEPTION_RUNS])
+def test_the_exception_names_the_file_only_escaped(name, mode):
+    """rc not 0 with the refusal line; the name only in its escaped form —
+    no byte that is not UTF-8, no ESC / BEL, the forged line not a line of
+    its own; and the tree's other illegal name not printed at all."""
+    files, (_how, what), _shows = _ENTRY_SHAPES[name]
+    res = _shape(name, _SHAPE_MODES[mode])
+    assert res.rc != 0 and what in res.text, (res.rc, ascii(res.raw[-3000:]))
+    assert _NAMED_ESCAPED[name][1] in res.text, ascii(res.raw[-3000:])
+    # Named once, and only there: a second, differently cleaned copy of the
+    # name (control characters swapped for `?`, say) passes every byte check.
+    shown = _NAMED_ESCAPED[name][1]
+    for word in (_CANARY, "forged"):
+        assert res.text.lower().count(word) == shown.lower().count(word) == 1, (
+            word, ascii(res.raw[-3000:]))
+    for raw_byte in (b"\xff", b"\x1b", b"\x07"):
+        assert raw_byte not in res.raw, (raw_byte, ascii(res.raw[-3000:]))
+    lines = res.raw.splitlines()
+    assert not [ln for ln in lines if ln.lstrip().startswith(b"ERROR: forged")], ascii(res.raw)
+    for rel in files:
+        if not rel.startswith("@") and shown_file(rel) != rel:
+            assert rel not in res.text and rel.split()[0].lower() not in res.text.lower(), (
+                rel, ascii(res.raw[-3000:]))
 
 
 # ── guard 2: every call site is reached with a name it replaces ───────────
@@ -448,8 +501,8 @@ _UNREACHED: "dict[str, str]" = {
 
 def _corpus() -> "list[Outcome]":
     jobs = [functools.partial(_case, f, m, True, True) for f, m in _RUNS]
-    jobs += [functools.partial(_shape, n, ("--validate", "--strict"), True)
-             for n in _ENTRY_SHAPES if n not in _KNOWN]
+    jobs += [functools.partial(_shape, n, _SHAPE_MODES["validate"], True)
+             for n in _ENTRY_SHAPES]
     with ThreadPoolExecutor(max_workers=4) as pool:
         return list(pool.map(lambda job: job(), jobs))
 
