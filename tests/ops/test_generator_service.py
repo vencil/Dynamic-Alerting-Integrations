@@ -37,6 +37,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _grar_findings_cases as cases  # noqa: E402
 import _gsvc_harness as h  # noqa: E402
+import test_confd_filename_canary_matrix as fm  # noqa: E402  (#3961: its shown_file recorder)
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 import _gsvc_child  # noqa: E402
@@ -705,6 +706,93 @@ def test_an_irregular_policy_file_is_an_unusable_policy(tmp_path, world):
     assert len(policy) == 1, found
     assert "is not a regular file (not_regular_file): git tree mode 120000" \
         in json.dumps(policy[0]), policy
+
+
+# ── #3961: illegal conf.d names on the service's own path ─────────────────
+
+#: Two `shown_file(` calls only the service reaches: the not-regular entry
+#: it read from git (`_GIT_IRREGULAR`) and the NOTICE for a credential in a
+#: file the write does not change (`credential_scope`). Names that are not
+#: legal file names (a space and `@`), holding the canary matrix's canary.
+SERVICE_ONLY_SITES = ("_grar_parse.py:_parse_config_files#2", "_grar_parse.py:credential_findings#2")
+_ILLEGAL_LINK = "ZqX LINK@x.yaml"
+_ILLEGAL_CRED = "ZqX CRED@x.yaml"
+
+
+def _commit_with_entries(repo: Path, files: dict[str, str],
+                         entries: "dict[str, tuple[str, bytes]]") -> str:
+    """Commit *files* plus *entries* (conf.d path → (git mode, blob)) put in
+    the index directly: no filesystem has to make the entry."""
+    h.write_tree(repo / "conf.d", files)
+    h.run_git(repo, "add", "-A")
+    for rel, (mode, blob) in entries.items():
+        oid = h.run_git(repo, "hash-object", "-w", "--stdin", stdin=blob)
+        h.run_git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},conf.d/{rel}")
+    h.run_git(repo, "commit", "-qm", "x")
+    return h.run_git(repo, "rev-parse", "HEAD")
+
+
+def illegal_name_outcome(tmp: Path) -> "fm.Outcome":
+    """The service judging two writes to another file: one over a tree with
+    an illegal-named file holding a credential written out, one over a tree
+    with an illegal-named symlink entry (which refuses the tree, so it is a
+    judgement of its own). Every `shown_file` call is recorded and tagged
+    with its call site's own stand-in (`fm.recorder_prelude`); `text` is the
+    two whole responses — what tenant-api reads; `rc` the higher. The canary
+    matrix's guard 2 counts it (tests/ops/test_confd_filename_canary_matrix.py)."""
+    repo = h.init_repo(tmp / "r")
+    files = dict(cases.FIXTURES["credential"])
+    files[_ILLEGAL_CRED] = files.pop("beta.yaml")
+    commits = [_commit_with_entries(repo, files, {}),
+               _commit_with_entries(repo, dict(cases.FIXTURES["clean"]),
+                                    {_ILLEGAL_LINK: ("120000", b"db-x: a\n")})]
+    hits = tmp / "hits.jsonl"
+    docs = []
+    with h.Service(tmp / "s", repo, bin_dir=tmp / "bin", prelude=fm.recorder_prelude(hits)) as svc:
+        for commit in commits:
+            status, doc = svc.validate(commit, [{"path": "zz-extra.yaml", "content_b64": h.b64(EXTRA)}])
+            assert status == 200 and doc["result"] in ("pass", "findings"), doc
+            docs.append(doc)
+    rows = tuple(tuple(json.loads(line)) for line in hits.read_text(encoding="utf-8").splitlines())
+    text = "\n".join(json.dumps(doc, ensure_ascii=False) for doc in docs)
+    return fm.Outcome(max(doc["rc"] for doc in docs), (), text, (), rows, text.encode("utf-8"))
+
+
+def test_illegal_names_on_the_service_path_print_their_stand_in(tmp_path):
+    """#3703 on the service's own path (#3961): each call only the service
+    reaches prints its stand-in into the response, and no illegal name is
+    printed as written — the not-regular entry still refuses the write, the
+    credential outside the write is still the NOTICE."""
+    res = illegal_name_outcome(tmp_path)
+    sites = fm._call_sites()
+    for key in SERVICE_ONLY_SITES:
+        assert fm._site_tag(*sites[key]) in res.text, (key, res.text[-3000:])
+    assert res.rc == 1 and "NOTICE (credential)" in res.text and "not_regular_file" in res.text, res.text
+    assert fm._CANARY not in res.text.lower(), res.text
+
+
+def test_a_name_that_is_not_utf8_is_named_only_escaped(tmp_path, world):
+    """A conf.d name in the commit that is not valid UTF-8: the service
+    judges no tree (git's listing is not text), and the one place that
+    names the entry escapes it — the ADR-036 step 9 exception
+    (`_lib_validation.shown_file`, the canary matrix's `_NAMED_ESCAPED`):
+    no byte that is not UTF-8, no control character, the forged line not a
+    line of its own; the tree's other illegal name not printed."""
+    repo = h.init_repo(tmp_path / "r")
+    files = dict(cases.FIXTURES["clean"])
+    files["QqW OTHER@x.yaml"] = cases._tenant("db-y")
+    commit = _commit_with_entries(repo, files, {
+        "ZqX\udcff\nERROR: forged\x1b[31m\x07 X@x.yaml": ("100644", cases._tenant("db-x").encode())})
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit)
+    assert status == 200 and doc["result"] == "rejected" and doc["reason"] == "git_read", doc
+    text = json.dumps(doc, ensure_ascii=False)
+    assert r"ZqX\\xff\\nERROR: forged\\x1b[31m\\x07 X@x.yaml" in text, text
+    strings = [v for v in doc.values() if isinstance(v, str)]
+    assert not [v for v in strings for c in ("\udcff", "\ufffd", "\x1b", "\x07") if c in v], strings
+    assert not [ln for v in strings for ln in v.splitlines()
+                if ln.lstrip().startswith("ERROR: forged")], strings
+    assert "QqW" not in text, text
 
 
 def test_sha256_repository(tmp_path, world):
