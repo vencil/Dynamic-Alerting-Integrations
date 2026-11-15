@@ -622,12 +622,13 @@ class TestCLI:
 
     def test_a_change_to_a_key_served_on_neither_side_says_so(self, tmp_path):
         """No `_defaults.yaml`: /metrics serves the key on neither side, and
-        the table says so on both values (#3022)."""
-        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
-        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": "50"})
+        the table says so on both values (#3022). (#3832: a key the platform
+        does not arm — a built-in key is served with no `_defaults.yaml`.)"""
+        _write_tenant(tmp_path / "old", {"mongodb_connections_current": "80"})
+        _write_tenant(tmp_path / "new", {"mongodb_connections_current": "50"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
-        assert ("| mysql_connection_usage_percent | 80 (not served) | 50 (not served) | tighter |"
+        assert ("| mongodb_connections_current | 80 (not served) | 50 (not served) | tighter |"
                 in p.stdout), p.stdout
 
     def test_old_dir_missing_is_a_first_import(self, tmp_path):
@@ -745,14 +746,15 @@ class TestCLI:
     @pytest.mark.parametrize("side", ["old", "new"])
     def test_threshold_table_cell_cannot_break_out(self, tmp_path, side):
         """表格欄位的值來自 PR 的檔案：`|` 會結束欄位、換行會結束表格，後面的字就成了
-        PR 留言裡自己的 Markdown（標題、連結）。exporter 不送出、照原文列出的值也一樣。"""
+        PR 留言裡自己的 Markdown（標題、連結）。exporter 不送出、照原文列出的值也一樣。
+        （#3832：用平台不預設啟用的鍵——內建鍵在沒有根檔時也有預設列，讀不了的值改送平台值。）"""
         evil = "70\n\n## Approved | [x](https://e.example)\n"
-        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": evil if side == "old" else "70"})
-        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": evil if side == "new" else "70"})
+        _write_tenant(tmp_path / "old", {"mongodb_connections_current": evil if side == "old" else "70"})
+        _write_tenant(tmp_path / "new", {"mongodb_connections_current": evil if side == "new" else "70"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
         assert not any(ln.startswith("## Approved") for ln in p.stdout.splitlines()), p.stdout
-        row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mysql_connection_usage_percent |"))
+        row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mongodb_connections_current |"))
         # 6 欄（含 Tenants），5 個欄位分隔
         assert "\\|" in row and row.count(" | ") == 5, row
 

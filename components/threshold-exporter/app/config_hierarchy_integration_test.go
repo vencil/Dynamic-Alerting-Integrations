@@ -113,7 +113,7 @@ func TestHierarchicalLoad_CommitsChainAndServesOverride(t *testing.T) {
 	if len(ec.DefaultsChain) == 0 {
 		t.Errorf("DefaultsChain empty; expected at least 1 (L0 _defaults.yaml)")
 	}
-	if got, ok := seriesFor(t, m, "tenant-a", "connections"); !ok || got != 90 {
+	if got, ok := seriesFor(t, m, "tenant-a", "mysql_connections"); !ok || got != 90 {
 		t.Errorf("/metrics connections for tenant-a = %v (present=%v), want 90 — the tenant override must win over the L0 default 80", got, ok)
 	}
 	if _, ok := committedTenantState(m, "nonexistent-tenant"); ok {

@@ -240,15 +240,29 @@ func TestReadScan_StuckReadWalkFailsLaterReadsUntilItReturns(t *testing.T) {
 		t.Fatalf("first read: err = %v, want ErrTenantTreeScan wrapping the timeout", err)
 	}
 
-	start := time.Now()
-	if _, _, err := previewDryRun(context.Background(), w, "rs-b", tenantBody("rs-b")); !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
+	// #3943: "fail at once" asserted as behaviour, not as "took < the bound"
+	// (a load spike alone can outrun 100 ms). The bound is raised to an hour
+	// first, so a read that waited on a walk's bound would be still waiting
+	// at the 10 s below; walks (checked after) counts one that walked.
+	w.treeScanTimeout = time.Hour
+	reads := make(chan [2]error, 1)
+	go func() {
+		_, _, dryErr := previewDryRun(context.Background(), w, "rs-b", tenantBody("rs-b"))
+		_, diffErr := w.Diff("rs-b", tenantBody("rs-b"))
+		reads <- [2]error{dryErr, diffErr}
+	}()
+	var errs [2]error
+	select {
+	case errs = <-reads:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("reads while stuck still running after 10s with an hour's walk bound: " +
+			"they waited on a walk instead of failing at once")
+	}
+	if err := errs[0]; !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
 		t.Errorf("dry-run while stuck: err = %v, want ErrTenantTreeScan wrapping errTreeScanStuck", err)
 	}
-	if _, err := w.Diff("rs-b", tenantBody("rs-b")); !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
+	if err := errs[1]; !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
 		t.Errorf("diff while stuck: err = %v, want ErrTenantTreeScan wrapping errTreeScanStuck", err)
-	}
-	if took := time.Since(start); took >= w.treeScanTimeout {
-		t.Errorf("reads while stuck took %v: they waited instead of failing at once", took)
 	}
 	if n := walks.Load(); n != 1 {
 		t.Errorf("walks = %d, want 1: a read while stuck must not start another walk", n)

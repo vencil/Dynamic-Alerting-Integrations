@@ -74,8 +74,9 @@ import _lib_tenant_values  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 import _lib_tool_fault  # noqa: E402
+from _lib_validation import shown_file  # noqa: E402  (#3961: the author's paths into a message)
 from _gsvc_proto import (  # noqa: E402
-    STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
+    ValidateRequest, entry_frame, frame, path_problem,
 )
 
 #: Tests only: called with a stage name (``"before_result"``,
@@ -195,9 +196,17 @@ def tree_entries(git: str, repo: str, commit: str, sub: str) -> list[tuple[str, 
         meta, _tab, raw_path = rec.partition(b"\t")
         try:
             mode, _type, oid = meta.decode("ascii").split(" ")
-            path = raw_path.decode("utf-8")
         except ValueError as exc:
-            raise GitReadError(f"unreadable ls-tree record: {rec[:200]!r}") from exc
+            # git's own fields, not the author's: a fixed sentence, never the
+            # record — its path is the author's file name (#3961).
+            raise GitReadError("unreadable ls-tree record: its mode / type / object id do not parse") from exc
+        # A name that is not valid UTF-8 is not refused here: it goes into the
+        # tree as its bytes (surrogateescape, which the filesystem calls
+        # encode back to them),
+        # and da-guard refuses the tree naming it escaped, as for the CLI —
+        # the one exception of `_lib_validation.shown_file` (ADR-036 step 9,
+        # #3703); no second place names it (#3961).
+        path = raw_path.decode("utf-8", "surrogateescape")
         if sub:
             if not path.startswith(sub + "/"):
                 continue
@@ -263,7 +272,7 @@ def _parent_dir(root: str, rel: str, err: type) -> str:
             os.mkdir(cur, 0o700)
             continue
         if not stat.S_ISDIR(st.st_mode):
-            raise err(f"{rel}: {part!r} in its path is not a directory in the base tree")
+            raise err(f"{shown_file(rel)}: '{shown_file(part)}' in its path is not a directory in the base tree")
     return cur
 
 
@@ -276,7 +285,7 @@ def _write_file(root: str, rel: str, content: bytes, err: type) -> None:
         st = None
     if st is not None:
         if stat.S_ISDIR(st.st_mode):
-            raise err(f"{rel}: is a directory in the base tree")
+            raise err(f"{shown_file(rel)}: is a directory in the base tree")
         os.unlink(target)
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as fh:
@@ -308,11 +317,23 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
     others: list[tuple[str, str]] = []
     for mode, _oid, rel, content in tree:
         if path_problem(rel) is not None:
-            raise GitReadError(f"tree entry with an unusable path: {rel!r}")
+            raise GitReadError(f"tree entry with an unusable path: '{shown_file(rel)}'")
         if mode in REGULAR_MODES:
             _write_file(root, rel, content, GitReadError)
         else:
             others.append((rel, mode))
+    # #3961: an entry whose path is not valid UTF-8 is put on disk as what a
+    # checkout makes of it at that name — here an empty directory, the
+    # gitlink's checkout; a symlink's text is never written (#2981) — and
+    # da-guard judges the tree as for the CLI: it refuses it naming the
+    # path escaped (ADR-036 step 9), or skips it below a hidden directory.
+    # Nothing in Python names it, and names mode (JSON) cannot carry it.
+    not_text = [(rel, mode) for rel, mode in others if not _is_text(rel)]
+    others = [(rel, mode) for rel, mode in others if _is_text(rel)]
+    for rel, _mode in not_text:
+        target = os.path.join(_parent_dir(root, rel, GitReadError), rel.split("/")[-1])
+        if not os.path.lexists(target):
+            os.mkdir(target, 0o700)
     parts = sorted({part for rel, _m in others for part in rel.split("/")})
     classes = _lib_parse_tree.classify_names(parts) if parts else {}
     irregular: dict[str, str] = {}
@@ -321,6 +342,16 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
             _parent_dir(root, rel, GitReadError)
             irregular[rel] = mode
     return irregular
+
+
+def _is_text(rel: str) -> bool:
+    """Whether *rel* is valid UTF-8 (`tree_entries` surrogate-escapes a
+    path that is not)."""
+    try:
+        rel.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def apply_writes(root: str, request: ValidateRequest,
@@ -344,14 +375,14 @@ def apply_writes(root: str, request: ValidateRequest,
         parts = w.path.split("/")
         for i in range(1, len(parts)):
             if "/".join(parts[:i]) in irregular:
-                raise BadWrite(f"{w.path}: {parts[i - 1]!r} in its path is not a directory "
+                raise BadWrite(f"{shown_file(w.path)}: '{shown_file(parts[i - 1])}' in its path is not a directory "
                                f"in the base tree")
         irregular.pop(w.path, None)
         if w.delete:
             parent = _parent_dir(root, w.path, BadWrite)
             target = os.path.join(parent, w.path.split("/")[-1])
             if os.path.isdir(target) and not os.path.islink(target):
-                raise BadWrite(f"{w.path}: is a directory in the base tree")
+                raise BadWrite(f"{shown_file(w.path)}: is a directory in the base tree")
             if os.path.lexists(target):
                 os.unlink(target)
             files.append({"path": w.path, "deleted": True})
@@ -364,17 +395,6 @@ def apply_writes(root: str, request: ValidateRequest,
 
 
 # ── the judgement process ────────────────────────────────────────────────
-
-def _tail(path: str) -> str:
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - STDERR_TAIL_BYTES))
-            return fh.read().decode("utf-8", "replace")
-    except OSError:
-        return ""
-
 
 def _exit_code_of(exc: SystemExit) -> int:
     if exc.code is None:
@@ -411,6 +431,10 @@ class _Stream:
 
 
 def _judge(job: ChildJob, stream: _Stream) -> dict:
+    # #3961: the program-end records `_judge` answers from (a memory end,
+    # the faults read after it) are this judgement's only: whatever this
+    # process recorded before is cleared here, by the one reader of them.
+    _lib_tool_fault.clear()
     tree_dir = os.path.join(job.job_dir, "conf.d")
     tree = None
     for attempt in (1, 2):
@@ -433,7 +457,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         msg = " ".join(str(exc).split())
         print(f"generator-service: da-guard could not classify the base tree's "
               f"path names: {msg}", file=sys.stderr)
-        return {"outcome": "da_guard", "message": msg}
+        return {"outcome": "da_guard"}
     except MemoryError:
         # Names mode ended by a signal, or out of memory, under RLIMIT_DATA
         # (this process's own allocation too): `_lib_parse_tree` recorded
@@ -453,7 +477,8 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     try:
         files = apply_writes(tree_dir, job.request, irregular)
     except BadWrite as exc:
-        return {"outcome": "bad_request", "message": str(exc)}
+        print(f"generator-service: write refused: {exc}", file=sys.stderr)
+        return {"outcome": "bad_request"}
 
     if job.warm:
         return _warm(job, tree_dir, stream)
@@ -625,7 +650,7 @@ def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                 cache: "_lib_parse_cache.ParseCache") -> dict:
     """The verdict's report: ``status`` complete or not_completed (with
     ``reason`` no_time / deadline / memory / error / undecidable /
-    platform_file and ``message``), ``tenants`` judged, ``seconds``, and
+    platform_file; #3961: no free text), ``tenants`` judged, ``seconds``, and
     when complete the findings."""
     started = time.monotonic()
     try:
@@ -634,10 +659,7 @@ def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         # The alarm came after the verdict's own handlers, on its way out.
         signal.setitimer(signal.ITIMER_REAL, 0)
         return {"status": "not_completed", "reason": "deadline", "tenants": 0,
-                "seconds": round(time.monotonic() - started, 3), "message": _OUT_OF_TIME}
-
-
-_OUT_OF_TIME = "the judgement deadline ran out"
+                "seconds": round(time.monotonic() - started, 3)}
 
 
 def kept_findings(findings: list) -> "tuple[list, int]":
@@ -657,8 +679,7 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
     def report(status: str, **fields) -> dict:
         return {"status": status, "seconds": round(time.monotonic() - started, 3), **fields}
     if budget < VERDICT_MIN_SECONDS:
-        return report("not_completed", reason="no_time", tenants=0,
-                      message=f"{max(budget, 0.0):.1f}s of the judgement deadline left for it")
+        return report("not_completed", reason="no_time", tenants=0)
     previous = signal.signal(signal.SIGALRM, _on_alarm)
     outer = signal.setitimer(signal.ITIMER_REAL, budget)  # a timer someone set before (a test runner's)
     # The verdict's parses are not streamed: a signal ending it in the middle
@@ -674,23 +695,17 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         if platform:
             # Its keys reach tenants it does not name: the whole tree's
             # verdict (the PR's CI) judges it, not this one.
-            return report("not_completed", reason="platform_file", tenants=0,
-                          message=f"{platform[0]} is a platform file: its keys reach tenants "
-                                  "it does not name, which only a whole-tree verdict judges")
+            return report("not_completed", reason="platform_file", tenants=0)
         if not tenants:
             return report("complete", tenants=0, findings=[], truncated=0)
         verdict = _lib_key_verdict.judge_tree(
             tree_dir, tenants=tenants, timeout=budget, reader=reader)
         # The verdict's own answer (#3016), not re-derived from the keys.
-        undecidable = sorted({k.key for ks in verdict.keys.values() for k in ks
-                              if k.verdict == _lib_key_verdict.UNDECIDABLE})
         if verdict.undecidable_blocks:
             # ADR-038 §7: no root platform file, so a threshold key the
             # tenants write cannot be told from a misspelt one; a retry
             # changes nothing. Reserved keys alone are judged as always.
-            return report("not_completed", reason="undecidable", tenants=len(tenants),
-                          message=f"no root platform file was read: {len(undecidable)} threshold "
-                                  "key(s) cannot be judged")
+            return report("not_completed", reason="undecidable", tenants=len(tenants))
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
                      "tenants": list(f.tenants), "reason": f.reason, "hint": f.hint,
@@ -698,11 +713,9 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                     for f in kept]
         return report("complete", tenants=len(tenants), findings=findings, truncated=truncated)
     except _VerdictDeadline:
-        return report("not_completed", reason="deadline", tenants=len(tenants),
-                      message=_OUT_OF_TIME)
-    except MemoryError as exc:
-        return report("not_completed", reason="memory", tenants=len(tenants),
-                      message=" ".join(str(exc).split())[:300] or "MemoryError")
+        return report("not_completed", reason="deadline", tenants=len(tenants))
+    except MemoryError:
+        return report("not_completed", reason="memory", tenants=len(tenants))
     except _lib_tenant_values.DaGuardError as exc:
         # The verdict's own reading of key-verdict's document (#3862): a
         # field of the wrong shape there is da-guard's output, not the tree's.
@@ -714,11 +727,9 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         # one that exited 2 out of memory before it read GOTRACEBACK
         # (`memory_end`, #3862).
         reason = "memory" if (exc.returncode or 0) < 0 or exc.memory_end else "error"
-        return report("not_completed", reason=reason, tenants=len(tenants),
-                      message=" ".join(str(exc).split())[:300])
-    except BaseException as exc:  # noqa: BLE001 — reported as not completed, with its reason
-        return report("not_completed", reason="error", tenants=len(tenants),
-                      message=f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}")
+        return report("not_completed", reason=reason, tenants=len(tenants))
+    except BaseException:  # noqa: BLE001 — reported as not completed, with its reason
+        return report("not_completed", reason="error", tenants=len(tenants))
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
@@ -784,8 +795,7 @@ def run_child(job: ChildJob, result_fd: int) -> None:
             os.dup2(out, fd)
             os.close(out)
         stream = _Stream(result_fd, job.max_transfer)
-        _lib_tool_fault.clear()  # a fork: nothing of the service's own runs
-        result = _judge(job, stream)
+        result = _judge(job, stream)  # starts from no program-end records
         faults = _lib_tool_fault.faults()  # not a memory end: `_judge` answered that
         if faults:
             # #3862: a verdict reached without one of its programs is no
@@ -796,7 +806,6 @@ def run_child(job: ChildJob, result_fd: int) -> None:
                          if k in result}}
         sys.stdout.flush()
         sys.stderr.flush()
-        result["stderr_tail"] = _tail(os.path.join(job.job_dir, "stderr"))
         if TEST_HOOK is not None:
             TEST_HOOK("before_result")
         _send(result_fd, frame(b"R", json.dumps(result).encode("utf-8")))

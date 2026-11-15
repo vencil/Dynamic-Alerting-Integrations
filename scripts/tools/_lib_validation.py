@@ -1436,6 +1436,29 @@ def shown_key(key: Any) -> str:
     return _stand_in(key)
 
 
+class ShapeError(TypeError, ValueError):
+    """An answer (a da-guard document, a binary's reply) not of its shape,
+    said in the tool's own words: a place (the answer's field names), a type,
+    and anything the answer echoes from the tree through ``shown_value`` /
+    ``shown_key`` / ``shown_file`` (#3961). ``error_text`` prints its message
+    and no other exception's. A TypeError and a ValueError both, so it is
+    caught wherever the one it replaced was."""
+
+
+def error_text(e: BaseException) -> str:
+    """⛔ THE one way an exception's text enters a message about an answer
+    not of its shape (#3961): a ``ShapeError`` says its own sentence; a
+    KeyError's argument is a name (a field of the answer, or a key of the
+    tree) and goes through ``shown_key``; any other exception — Python's own
+    ``ValueError`` from ``int()`` / ``float()`` / ``fromisoformat`` and the
+    like carries the value it refused — is its type name only."""
+    if isinstance(e, ShapeError):
+        return str(e)
+    if isinstance(e, KeyError) and len(e.args) == 1:
+        return f"KeyError: '{shown_key(e.args[0])}'"
+    return type(e).__name__
+
+
 def _stand_in(name: Any) -> str:
     """``<key:xxxxxx>``: the first 6 hex chars of SHA-256 of *name*'s UTF-8
     text (``str()`` of a non-string) — the one stand-in ``shown_key`` and

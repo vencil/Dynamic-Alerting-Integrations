@@ -192,8 +192,11 @@ func TestSimulate_L1QuotedNumberIsServed(t *testing.T) {
 }
 
 // The control tree's merged_hash is the one measured before #1981
-// (origin/main 9b1f4e47): the full-parse gate adds a refusal, never a change
-// to an accepted request's result.
+// (origin/main 9b1f4e47), c0c3733f5958582f, moved only by the built-in layer
+// (#3832): the full-parse gate adds a refusal, never a change to an accepted
+// request's result. The value below is that body ({cpu: "70",
+// mysql_connections: "90"}) with the built-in keys beside it, hashed by
+// Python's json.dumps(sort_keys, ensure_ascii=False, separators=(",", ":")).
 func TestSimulate_FullParseLeavesValidResultUnchanged(t *testing.T) {
 	t.Parallel()
 	sim, err := SimulateEffective(SimulateRequest{
@@ -204,7 +207,7 @@ func TestSimulate_FullParseLeavesValidResultUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "c0c3733f5958582f"
+	const want = "ef576018daebc450"
 	if sim.MergedHash != want {
 		t.Fatalf("merged_hash = %s, want %s (config %v)", sim.MergedHash, want, sim.Config)
 	}

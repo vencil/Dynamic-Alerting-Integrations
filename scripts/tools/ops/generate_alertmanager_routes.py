@@ -177,8 +177,11 @@ from _grar_render import (  # noqa: E402
 from _grar_render import watchdog_receiver_findings  # noqa: E402
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, consumer_read_message, emitted_alertmanager_yml,
+    AM_CONFIGMAP_KEY, ConsumerReadError, configmap_data_bytes, consumer_read_message,
+    emitted_configmap_data,
 )
+# #3900: the limits Kubernetes puts on the ConfigMap this run writes.
+from _lib_kubectl import ANNOTATION_TOTAL_LIMIT_BYTES, CONFIGMAP_DATA_LIMIT_BYTES  # noqa: E402
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
 # #2311: the verdict on a generation result (`validate_tree`'s last step).
@@ -250,6 +253,31 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
     print(f"FAIL: the assembled Alertmanager config was refused — {refusing}:"
           f"\n  {safe_label(str(exc))}", file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
+
+
+def _judge_configmap_size(data: "dict[str, str]", manifest: str, target: str) -> None:
+    """#3900: the emitted ConfigMap against the limits Kubernetes applies.
+    Its values (*data*, as kubectl reads them) over the data limit: no API
+    server stores it, so it is refused here (rc 1), naming the bytes. The
+    manifest over the annotation limit: a WARN only — a client-side
+    `kubectl apply` (or a GitOps tool applying client-side) stores the whole
+    object in an annotation and fails there, a server-side apply does not.
+    Measured on the manifest's YAML; the annotation holds the same object as
+    JSON, of the same order. Other keys the target object already holds also
+    count toward the data limit; this offline run cannot see them."""
+    total = configmap_data_bytes(data)
+    if total > CONFIGMAP_DATA_LIMIT_BYTES:
+        print(f"FAIL: the ConfigMap's values total {total} bytes; Kubernetes refuses a "
+              f"ConfigMap over {CONFIGMAP_DATA_LIMIT_BYTES} bytes — refusing to write it to "
+              f"{target} (nothing was written)", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    size = len(manifest.encode("utf-8"))
+    if size > ANNOTATION_TOTAL_LIMIT_BYTES:
+        print(f"WARN: the ConfigMap is {size} bytes, over the {ANNOTATION_TOTAL_LIMIT_BYTES}-byte "
+              "limit Kubernetes puts on an object's annotations: a client-side `kubectl apply -f` "
+              "stores the whole object in `last-applied-configuration` and fails with "
+              "`metadata.annotations: Too long`. Apply it with `kubectl apply --server-side`, or "
+              "in Argo CD with the `ServerSideApply=true` sync option.", file=sys.stderr)
 
 
 def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
@@ -514,12 +542,14 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     # Alertmanager's (da-read).
     if as_configmap:
         try:
-            am_yml = emitted_alertmanager_yml(content)
+            emitted_data = emitted_configmap_data(content)
         except ConsumerReadError as exc:
             print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
                   f"to write it to {target} (nothing was written): "
                   f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        am_yml = emitted_data[AM_CONFIGMAP_KEY]
+        _judge_configmap_size(emitted_data, content, target)
     else:
         am_yml = content
     # #3689: the one gate --validate and --apply ask too, in its one order.
@@ -1597,35 +1627,36 @@ def _report_key_verdict(config_dir: str, findings: list[str],
 
 # ── #1211: served page-mode custom alerts that reach no one ─────────
 
-def _load_served_tree(config_dir: str, *, disable_effects: bool,
-                      ) -> "_lib_tenant_values.ServedTree | BaseException":
-    """The run's ONE da-guard served-values reading of *config_dir*, or the
+def _load_served_facts(config_dir: str) -> "_lib_tenant_values.ServedFacts | BaseException":
+    """The run's ONE da-guard served-values reading of *config_dir* — its
+    config facts (`--config-facts`, #3918), which resolve and gather nothing,
+    so what this run says does not depend on when it runs: a /metrics that
+    cannot be gathered at the run's instant is no failure here — or the
     exception that stopped it (each reader reports that its own way: never a
     refusal — a broken da-guard must not fail a run the generator passed)."""
     try:
-        return _lib_tenant_values.load_served_tree(config_dir,
-                                                   disable_effects=disable_effects)
+        return _lib_tenant_values.load_served_facts(config_dir)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not checked", never a refusal
         return exc
 
 
-def _served_page_custom_alerts(served: "_lib_tenant_values.ServedTree",
+def _served_page_custom_alerts(served: "_lib_tenant_values.ServedFacts",
                                ) -> dict[str, tuple[str, ...]]:
     """tenant -> the names of its custom alerts the exporter SERVES in page
     mode (``mode`` unset or ``page``), declaration order. The exporter is the
     authority on which custom alerts a tenant has (#3042): a rejected,
     duplicate or switched-off entry is not one."""
     out = {}
-    for tenant, values in served.tenants.items():
+    for tenant, facts in served.tenants.items():
         names = tuple(str(e.spec.get("name") or f"_custom_alerts[{e.index}]")
-                      for e in values.custom_alerts or ()
+                      for e in facts.custom_alerts
                       if e.status == "served" and e.spec.get("mode") != "silent")
         if names:
             out[tenant] = names
     return out
 
 
-def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedTree | BaseException",
+def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedFacts | BaseException",
                                routes: list[dict], tree: TenantTree,
                                findings: list[str]) -> list[UndeliveredCustomAlerts]:
     """The tenants whose served page-mode custom alerts get no delivery child
@@ -2122,7 +2153,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
         # child under the custom route fall to the firehose receiver, which
         # only a mode that assembles the config it writes knows: --validate
         # says it could not check.
-        served = _load_served_tree(config_dir, disable_effects=False)
+        served = _load_served_facts(config_dir)
         undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
         if undelivered:
             _emit_custom_firehose_findings(undelivered, None, strict=strict,
@@ -2289,7 +2320,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # assembles the config it writes (--output-configmap, --output-alertmanager,
     # --apply) knows that receiver — it judges there. The same modes judge
     # the watchdog-heartbeat receiver.
-    served = _load_served_tree(args.config_dir, disable_effects=False)
+    served = _load_served_facts(args.config_dir)
     undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
     # A real base: the operator's --base-config, or the cluster's on --apply.
     assembled_judge = _assembled_judge(

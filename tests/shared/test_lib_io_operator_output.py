@@ -105,6 +105,75 @@ def test_an_artifact_is_replaced_and_ends_with_the_mode_asked(tmp_path):
     assert os.stat(p).st_ino != ino  # replaced, not rewritten in place
 
 
+# ── The mode of an artifact nobody named a mode for (#3107) ──────────────
+# Git records one bit of a file's mode — the owner's execute bit — so that is
+# the one bit a rewrite keeps; everything else is what a checkout would give.
+
+@pytest.mark.parametrize("before,after", [
+    (0o644, 0o644),
+    (0o755, 0o755),
+    (0o600, 0o644),   # what the old names left behind: put back
+    (0o700, 0o755),   # the execute bit is kept, the rest is not copied
+    (0o664, 0o644),   # nor is anything else of the old mode
+    (0o654, 0o644),   # a group execute bit is not the bit git tracks
+], ids=lambda m: oct(m))
+def test_an_artifact_keeps_only_the_execute_bit_of_the_file_it_replaces(tmp_path, before, after):
+    p = tmp_path / "a.md"
+    p.write_text("old", encoding="utf-8")
+    p.chmod(before)
+    _lib_io.write_repo_artifact(str(p), "new", flag="--output")
+    assert p.read_text(encoding="utf-8") == "new" and _mode(p) == after
+
+
+def test_a_new_artifact_is_0644(tmp_path):
+    p = tmp_path / "a.md"
+    _lib_io.write_repo_artifact(str(p), "new", flag="--output")
+    assert _mode(p) == 0o644
+
+
+@pytest.mark.parametrize("existing", [None, 0o644, 0o755, 0o600], ids=str)
+def test_the_umask_is_not_read(tmp_path, existing):
+    """A 077 umask (a hardened shell) makes a NEW file 0600 and a script
+    0700; the artifact's mode is the checkout's, whatever the shell's is."""
+    p = tmp_path / "a.md"
+    if existing is not None:
+        p.write_text("old", encoding="utf-8")
+        p.chmod(existing)
+    old = os.umask(0o077)
+    try:
+        _lib_io.write_repo_artifact(str(p), "new", flag="--output")
+    finally:
+        os.umask(old)
+    assert _mode(p) == (0o755 if existing == 0o755 else 0o644)
+
+
+@pytest.mark.parametrize("existing", [None, 0o644, 0o755], ids=str)
+@pytest.mark.parametrize("asked", [0o600, 0o640, 0o644])
+def test_a_mode_the_caller_names_is_the_mode(tmp_path, existing, asked):
+    """`state-reconcile` and `configmap_assemble` pass 0600 for a manifest
+    that holds secrets: the file being replaced has no say in it."""
+    p = tmp_path / "m.yaml"
+    if existing is not None:
+        p.write_text("old", encoding="utf-8")
+        p.chmod(existing)
+    _lib_io.write_repo_artifact(str(p), "new", flag="--output", mode=asked, atomic_only=True)
+    assert _mode(p) == asked
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o755], ids=oct)
+def test_an_artifact_reached_through_a_symlink_has_the_targets_execute_bit(tmp_path, mode):
+    """The bit is read from the file, not from the link: a symlink's own mode
+    is 0777, so reading the link would make every linked artifact 0755."""
+    target = tmp_path / "real.sh"
+    target.write_text("old", encoding="utf-8")
+    target.chmod(mode)
+    link = tmp_path / "link.sh"
+    symlink_or_skip(target, link)
+    _lib_io.write_repo_artifact(str(link), "new", flag="--output")
+    assert target.read_text(encoding="utf-8") == "new" and _mode(target) == mode
+    assert link.is_symlink()
+
+
 def test_the_file_stdout_already_is_counts_as_dash(tmp_path, monkeypatch):
     """R3: reopening the file fd 1 writes to with O_TRUNC would wipe what the
     shell redirect already holds; it is written through stdout instead."""

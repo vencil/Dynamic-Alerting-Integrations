@@ -63,6 +63,14 @@ var (
 	// (config.RootDefaultRefusals). Field is `<file>:defaults.<key>`.
 	FindingRootDefaultRefused = register("root_default_refused",
 		"judges a value the exporter refuses in the conf.d root defaults")
+	// FindingRootOptionalBuiltin (error, TenantID ""; #3832): a default-armed
+	// key (config.BuiltinDefault) listed under the conf.d root carrier's
+	// `optional_overrides:` while its `defaults:` gives it no number (the key
+	// is absent there or null). The list declares a key without a platform
+	// value; it does not switch the built-in value off, which every tenant
+	// keeps getting. Field is `<file>:optional_overrides.<key>`.
+	FindingRootOptionalBuiltin = register("root_optional_builtin",
+		"judges a default-armed key the conf.d root lists under optional_overrides without a number")
 	// FindingRootDefaultsReservedKey (error, TenantID ""; #3250): a `_` key
 	// under the conf.d root carrier's `defaults:` mapping
 	// (config.RootDefaultsReservedKey; a routing key is the route generator's

@@ -53,7 +53,8 @@ def _run_apply(monkeypatch, tmp_path, config_dir, inhibit_rule):
 
     def fake(argv, *, timeout, stdin_text=None, text=True):
         calls.append(list(argv))
-        out = (json.dumps({"data": {"alertmanager.yml": yaml.safe_dump(existing)}})
+        out = (json.dumps({"metadata": {"managedFields": []},
+                           "data": {"alertmanager.yml": yaml.safe_dump(existing)}})
                if argv[:2] == ["kubectl", "get"] else "")
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
@@ -90,7 +91,7 @@ def test_control_a_benign_cluster_rule_is_applied(
     out = capsys.readouterr()
     assert rc == EXIT_OK, out.err
     assert "FAIL:" not in out.err
-    assert ["kubectl", "apply"] in [c[:2] for c in calls], calls
+    assert ["kubectl", "replace"] in [c[:2] for c in calls], calls
 
 
 def test_only_the_merge_step_is_converted(monkeypatch):

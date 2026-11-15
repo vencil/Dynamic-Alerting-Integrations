@@ -571,6 +571,17 @@ def test_a_list_entry_wrong_anywhere_is_named(tmp_path, monkeypatch, change, mat
         pt.list_tree(tmp_path)
 
 
+def test_an_unknown_entry_field_is_counted_not_named(tmp_path, monkeypatch) -> None:
+    """#3961: the refusal is constants and counts — an extra field's name
+    (whatever da-guard wrote) is not printed."""
+    doc = _list_doc([_entry("a.yaml")])
+    doc["entries"][0]["canary text xyz!"] = 1
+    monkeypatch.setenv("DA_GUARD_BINARY", _emit(tmp_path, doc))
+    with pytest.raises(pt.ParseTreeError, match="fields this reader does not know: 1") as ei:
+        pt.list_tree(tmp_path)
+    assert "canary" not in str(ei.value), ei.value
+
+
 def _script(tmp: pathlib.Path, body: str) -> str:
     from _platform_fs import require_shebang_scripts
     require_shebang_scripts()

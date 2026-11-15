@@ -138,10 +138,11 @@ def test_a_comment_block_is_its_lines_text():
 
 
 def test_a_new_files_preview_is_the_text_da_guard_writes(tmp_path):
-    f = ce.NewFile("t-a.yaml", {"tenants": {"t-a": {"cpu": "70"}}}, "head",
-                   "foot", node_head=lambda at, v: "on cpu" if at[-1] == "cpu" else None)
+    # #3832: a default-armed key, read in a tree with no root carrier too.
+    f = ce.NewFile("t-a.yaml", {"tenants": {"t-a": {"container_cpu": "70"}}}, "head",
+                   "foot", node_head=lambda at, v: "on cpu" if at[-1] == "container_cpu" else None)
     text = f.preview()
-    assert text == ('# head\n\ntenants:\n  t-a:\n    # on cpu\n    cpu: "70"\n'
+    assert text == ('# head\n\ntenants:\n  t-a:\n    # on cpu\n    container_cpu: "70"\n'
                     '\n# foot\n')
     root = _tree(tmp_path / "conf.d", {"t-a.yaml": "tenants:\n  t-a: {}\n# old\n"})
     ce.write_all(root, [f.entry(replace=True)])
@@ -277,12 +278,13 @@ def test_the_batch_is_judged_as_one_tree(tmp_path):
 
 def test_emit_all_writes_every_new_file(tmp_path):
     root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    # #3832: a default-armed key, read in a tree with no root carrier too.
     files = [(f"team/t-{i}.yaml", ce.map_value([("tenants", ce.map_value(
-        [(f"t-{i}", ce.map_value([("cpu", ce.cli_value("70"))]))]))])) for i in range(3)]
+        [(f"t-{i}", ce.map_value([("container_cpu", ce.cli_value("70"))]))]))])) for i in range(3)]
     docs = ce.emit_all(root, files)
     assert [d["status"] for d in docs] == [ce.WRITTEN] * 3
     assert (root / "team" / "t-1.yaml").read_text(encoding="utf-8") == (
-        "tenants:\n  t-1:\n    cpu: 70\n")
+        "tenants:\n  t-1:\n    container_cpu: 70\n")
     with pytest.raises(ce.EditCallerError) as exc:  # they exist now
         ce.emit_all(root, files)
     assert (exc.value.path, exc.value.reason) == ("team/t-0.yaml", "path_exists")
@@ -494,12 +496,13 @@ def test_move_is_byte_for_byte_and_refuses_an_existing_target(tmp_path):
 
 def test_comments_are_written_as_comments(tmp_path):
     root = _tree(tmp_path / "conf.d", {})
+    # #3832: a default-armed key, read in a tree with no root carrier too.
     content = ce.map_value([("tenants", ce.map_value([
-        ("t-a", ce.map_value([("cpu", {"int": "80"}, ce.comments(head="⚠ counterexample", line="default"))])),
+        ("t-a", ce.map_value([("container_cpu", {"int": "80"}, ce.comments(head="⚠ counterexample", line="default"))])),
     ]))])
     doc = ce.emit(root, "t-a.yaml", content, head_comment="a header", dry_run=True)
     assert doc["content"] == ("# a header\n\ntenants:\n  t-a:\n    # ⚠ counterexample\n"
-                              "    cpu: 80 # default\n")
+                              "    container_cpu: 80 # default\n")
     with pytest.raises(ce.EditCallerError) as exc:  # a line comment is one line
         ce.emit(root, "t-a.yaml", ce.map_value([("tenants", ce.map_value([]),
                                                   ce.comments(line="x\ntenants: {}"))]))
@@ -581,7 +584,9 @@ def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
 
 # ── write: copy（另一棵樹的檔，位元組原樣；assemble_config_dir）──────
 
-_COPIED = "# team-b — 團隊 B\ntenants:\n  t-c:\n    cpu: 010 # as written\n    note: \"警報\"\n"
+# #3832: keys a reader reads in a tree with no root carrier — a default-armed
+# threshold as written (`010`) and `_metadata` for the non-ASCII text.
+_COPIED = "# team-b — 團隊 B\ntenants:\n  t-c:\n    container_cpu: 010 # as written\n    _metadata: {owner: \"警報\"}\n"
 
 
 def test_copy_entry_is_the_contracts_shape(tmp_path):
@@ -719,12 +724,13 @@ def test_comment_field_refuses_a_line_break_only_inside_one_line():
 # ── write_all_or_exit: the one CLI exit every conf.d writer shares (#3206 10c) ──
 
 def test_write_all_or_exit_returns_the_results_when_the_batch_passes(tmp_path, capsys):
+    # #3832: a default-armed key, read in a tree with no root carrier too.
     out = ce.write_all_or_exit(tmp_path, [
-        ce.create_entry("a.yaml", ce.data_value({"tenants": {"tenant-a": {"k": "1"}}}))],
+        ce.create_entry("a.yaml", ce.data_value({"tenants": {"tenant-a": {"container_cpu": "1"}}}))],
         tool="t")
     assert [r["status"] for r in out] == [ce.WRITTEN]
     assert (tmp_path / "a.yaml").read_text(encoding="utf-8") == \
-        'tenants:\n  tenant-a:\n    k: "1"\n'
+        'tenants:\n  tenant-a:\n    container_cpu: "1"\n'
     assert capsys.readouterr().err == ""
 
 

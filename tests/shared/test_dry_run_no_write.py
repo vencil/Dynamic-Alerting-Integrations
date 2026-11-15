@@ -304,7 +304,8 @@ def _threshold_cr(tmp: Path) -> str:
         "spec:\n"
         "  tenants:\n"
         "    tenant-one:\n"
-        "      max_connections: '100'\n"
+        # #3832: a default-armed key, read in the rootless config dir too.
+        "      container_cpu: '100'\n"
     ))
 
 

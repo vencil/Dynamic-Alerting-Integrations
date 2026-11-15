@@ -222,8 +222,8 @@ from _lib_tenant_values import (  # noqa: E402
     ParseFailedError,
     load_effective_tree,
     load_guard_report,
+    load_served_facts,
     load_served_schedules,
-    load_served_tree,
     print_load_error,
 )
 from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
@@ -2262,8 +2262,9 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
       not what this deployment runs. A tenant's or a profile's key adds
       nothing: one the root file does not declare is already
       `unread (no_row)`.
-    * a tenant's `_metadata.db_type`, as /metrics serves it (served-values:
-      a root platform file's `tenants:` entry counts), names it.
+    * a tenant's `_metadata.db_type`, as the exporter reads it (served-values
+      `--config-facts`, which reads no instant — #3918; a root platform
+      file's `tenants:` entry counts), names it.
 
     The root platform file is the one parse-tree says the root's chain
     selects (`_defaults.yaml` / `_defaults.yml`): a key only a subtree
@@ -2301,7 +2302,7 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         written = sorted(
             valued | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
         spell = tv_key_spellings(written)
-        served = load_served_tree(config_dir, partial=True)
+        served = load_served_facts(config_dir, partial=True)
     except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ParseTreeError,
             *_INPUT_ERRORS) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
@@ -2331,9 +2332,8 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         pack = pack_of(spell.canonical(as_written))
         if pack in armed:
             seen.setdefault(pack, (set(), set()))[0].add(as_written)
-    for tenant, tv in served.tenants.items():
-        meta = tv.values.get("_metadata")
-        kinds = meta.get("db_type") if isinstance(meta, dict) else None
+    for tenant, facts in served.tenants.items():
+        kinds = facts.metadata.get("db_type")
         for kind in ([kinds] if isinstance(kinds, str) else kinds if isinstance(kinds, list) else []):
             if isinstance(kind, str) and kind in armed:
                 seen.setdefault(kind, (set(), set()))[1].add(tenant)

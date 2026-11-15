@@ -66,8 +66,8 @@ jobs:
           echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
 
       # #3111: a PR that adds the first conf.d/ has no base tree to compare
-      # with; say so in the comment instead of ending rc 2
-      # `served_values_unavailable`.
+      # with; say so in the comment instead of ending rc 2 on a --baseline
+      # that is not there or holds no config file.
       - name: Check the PR base has a conf.d/
         id: base
         run: |

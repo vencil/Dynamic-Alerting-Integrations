@@ -1665,6 +1665,34 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
     return sorted(chosen)
 
 
+class _FilesToRead:
+    """``select`` of a declared input whose every value is a rule file or a
+    directory of them (`_lib_input.add_input`, a gatherer, #3901):
+    :func:`files_to_read` of the values — ``lint``'s paths, ``onboard
+    --rule-files``, ``silencer-drift-check --rule-source``."""
+
+    wanted = FILES_TO_READ_WANTED
+
+    @staticmethod
+    def gather(targets: "Iterable[str]", exclude: "Iterable[str]" = ()) -> "list[str]":
+        return files_to_read(targets, exclude)
+
+    @staticmethod
+    def problems(exc: BaseException) -> "list[tuple[str | None, str]] | None":
+        """`files_to_read`'s refusal as ``[(path, why)]`` — each entry it
+        could not choose — or one ``(None, text)`` for a refusal naming no
+        entry (``--exclude`` left nothing); None when *exc* is not one."""
+        if isinstance(exc, SourcesUnlisted):
+            return [(p, f"cannot be chosen to read: {why}") for p, why in exc.files]
+        if isinstance(exc, EverythingExcluded):
+            return [(None, str(exc))]
+        return None
+
+
+#: The one such selector (#3901).
+FILES_TO_READ = _FilesToRead()
+
+
 # --- Where this repo ships rule files: the one declaration (#3438) ----------
 
 

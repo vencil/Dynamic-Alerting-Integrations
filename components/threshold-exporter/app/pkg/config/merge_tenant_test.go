@@ -39,8 +39,9 @@ func TestMergeTenantWithRootDefaults_PopulatesDefaults(t *testing.T) {
 }
 
 // TestMergeTenantWithRootDefaults_NoDefaultsFile confirms a missing
-// _defaults.yaml is tolerated (empty Defaults): the merge does not fabricate
-// defaults, it only surfaces ones that genuinely exist on disk. Whether a
+// _defaults.yaml is tolerated: Defaults is the built-in layer alone (#3832,
+// a tree with no root carrier is a legal tree and gets the platform's
+// default-armed values), nothing else is fabricated. Whether a
 // key with no platform value is read is the shared key verdict's (ADR-038
 // §11), so ValidateTenantKeys says nothing about it.
 func TestMergeTenantWithRootDefaults_NoDefaultsFile(t *testing.T) {
@@ -50,8 +51,8 @@ func TestMergeTenantWithRootDefaults_NoDefaultsFile(t *testing.T) {
 	body := []byte("tenants:\n  db-a:\n    container_cpu: \"70\"\n")
 	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
 
-	if len(merged.Defaults) != 0 {
-		t.Errorf("expected empty Defaults without a _defaults.yaml, got: %v", merged.Defaults)
+	if !reflect.DeepEqual(merged.Defaults, BuiltinDefaults()) {
+		t.Errorf("Defaults without a _defaults.yaml = %v, want the built-in table %v", merged.Defaults, BuiltinDefaults())
 	}
 	if warnings := merged.ValidateTenantKeys().Errors; len(warnings) != 0 { // #1231 c2 accessor
 		t.Errorf("a key name is judged here: %q", warnings)

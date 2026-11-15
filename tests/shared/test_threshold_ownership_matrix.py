@@ -23,6 +23,9 @@ import pytest
 import yaml
 
 import _lib_tenant_values as tv
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
 import threshold_govern as tg
 import threshold_recommend as tr
 
@@ -217,7 +220,10 @@ def test_inherited_reserved_keys_are_not_listed(tmp_path, stubs):
     eff = tv.load_effective(conf_d)["t"]
     assert {"_policies", "_foo"} <= set(eff.effective_config)  # premise: Go carries them
     [rep] = tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub")
-    assert [r.key for r in rep.inherited] == [], [r.key for r in rep.inherited]
+    # #3832: what it inherits is the built-in layer's thresholds (every one
+    # but the key the tenant writes), and no `_` key.
+    assert sorted(r.key for r in rep.inherited) == sorted(
+        set(BUILTIN_DEFAULTS) - {"mysql_connection_usage_percent"}), [r.key for r in rep.inherited]
     assert [r.key for r in rep.keys] == ["mysql_connection_usage_percent"]
 
 
@@ -225,8 +231,13 @@ def test_an_inherited_key_reports_no_confidence(tmp_path, stubs):
     """F8: not queried is not "too few samples" — no LOW, in text or JSON."""
     conf_d = _tree(tmp_path, MATRIX["mixed"][0])
     reports = tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub", tenant_filter="tenant-a")
-    [inh] = tr.json_document(reports)["tenants"][0]["inherited"]
+    inherited = tr.json_document(reports)["tenants"][0]["inherited"]
+    # #3832: the built-in layer's keys are inherited too; this pins the
+    # tree's own inherited key.
+    [inh] = [r for r in inherited if r["key"] not in BUILTIN_DEFAULTS
+             or r["key"] == "mysql_connection_usage_percent"]
     assert (inh["key"], inh["confidence"]) == ("mysql_connection_usage_percent", tr.CONFIDENCE_NOT_QUERIED)
+    assert all(r["confidence"] == tr.CONFIDENCE_NOT_QUERIED for r in inherited), inherited
     row = next(ln for ln in tr.format_text_report(reports).splitlines()
                if ln.strip().startswith("mysql_connection_usage_percent"))
     assert "LOW" not in row and tr.CONFIDENCE_NOT_QUERIED in row, row

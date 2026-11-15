@@ -236,15 +236,17 @@ class TestPatchLegacy:
                 "config.yaml": yaml.dump({"tenants": {}}),
             }
         }
-        result = pc.patch_legacy(cm_data, "db-new", "cpu", "90")
+        # #3832: a default-armed key — read in a tree with no root carrier.
+        result = pc.patch_legacy(cm_data, "db-new", "container_cpu", "90")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert patched["tenants"]["db-new"]["cpu"] == 90
+        assert patched["tenants"]["db-new"]["container_cpu"] == 90
 
     def test_no_tenants_key(self):
-        cm_data = {"data": {"config.yaml": yaml.dump({"defaults": {"cpu": 50}})}}
-        result = pc.patch_legacy(cm_data, "db-a", "cpu", "90")
+        # #3832: a default-armed key — read in a tree with no root carrier.
+        cm_data = {"data": {"config.yaml": yaml.dump({"defaults": {"container_cpu": 50}})}}
+        result = pc.patch_legacy(cm_data, "db-a", "container_cpu", "90")
         patched = yaml.safe_load(result["data"]["config.yaml"])
-        assert patched["tenants"]["db-a"]["cpu"] == 90
+        assert patched["tenants"]["db-a"]["container_cpu"] == 90
 
 
 # ---------------------------------------------------------------------------
@@ -277,16 +279,18 @@ class TestPatchMultifile:
         assert "db-a" in patched["tenants"]
 
     def test_new_tenant_file(self):
+        # #3832: a default-armed key — read in a tree with no root carrier.
         cm_data = {"data": {}}
-        result = pc.patch_multifile(cm_data, "db-new", "cpu", "90")
+        result = pc.patch_multifile(cm_data, "db-new", "container_cpu", "90")
         patched = yaml.safe_load(result["data"]["db-new.yaml"])
-        assert patched["tenants"]["db-new"]["cpu"] == 90
+        assert patched["tenants"]["db-new"]["container_cpu"] == 90
 
     def test_empty_existing_tenant_yaml(self):
+        # #3832: a default-armed key — read in a tree with no root carrier.
         cm_data = {"data": {"db-a.yaml": ""}}
-        result = pc.patch_multifile(cm_data, "db-a", "cpu", "90")
+        result = pc.patch_multifile(cm_data, "db-a", "container_cpu", "90")
         patched = yaml.safe_load(result["data"]["db-a.yaml"])
-        assert patched["tenants"]["db-a"]["cpu"] == 90
+        assert patched["tenants"]["db-a"]["container_cpu"] == 90
 
 
 class TestPatchRefusesAKeyNoReaderReads:
@@ -707,9 +711,10 @@ class TestCarrierAndValueShapes:
 
     def test_legacy_empty_config_yaml_is_not_reported_missing(self):
         """key 在、內容空，不是「not found」。"""
-        patch = pc.patch_legacy(_cm(**{"config.yaml": ""}), "tb", "m", "1")
+        # #3832: a default-armed key — read in a tree with no root carrier.
+        patch = pc.patch_legacy(_cm(**{"config.yaml": ""}), "tb", "container_memory", "1")
         assert yaml.safe_load(patch["data"]["config.yaml"]) == {
-            "tenants": {"tb": {"m": 1}}}
+            "tenants": {"tb": {"container_memory": 1}}}
 
     @pytest.mark.parametrize("word", ["Default", "DEFAULT"])
     def test_default_is_case_insensitive(self, word):
@@ -1001,8 +1006,9 @@ class TestNoOpIsDaGuardsToSay:
 
     def test_a_legacy_config_yaml_of_comments_only_is_patched(self):
         """只有註解的 `config.yaml` 當成空檔改（da-guard write），註解留在最前面。"""
-        patch = pc.patch_legacy(_cm(**{"config.yaml": "# c\n"}), "tb", "m", "1")
-        assert patch["data"]["config.yaml"] == "# c\ntenants:\n  tb:\n    m: 1\n", patch
+        # #3832: a default-armed key — read in a tree with no root carrier.
+        patch = pc.patch_legacy(_cm(**{"config.yaml": "# c\n"}), "tb", "container_memory", "1")
+        assert patch["data"]["config.yaml"] == "# c\ntenants:\n  tb:\n    container_memory: 1\n", patch
 
 
 class TestSameValueAndUnrelatedCarriers:

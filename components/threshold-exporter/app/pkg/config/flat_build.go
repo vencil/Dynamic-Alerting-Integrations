@@ -282,6 +282,14 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	exists := tenantExistenceFor(fileConfigs, scan)
 	reportPlatformOrphans(fileConfigs, exists, logger)
 	merged := mergePartialConfigs(fileConfigs, exists)
+	// #3832: the built-in layer, under the root carrier's values — withheld
+	// when the root carrier exists but cannot be read (builtin_defaults.go).
+	rootDropped := rootCarrier != "" && slices.Contains(parseFailed, rootCarrier)
+	// (rootDropped is RootBuiltinWithheld's DropsConfFile half, already
+	// known here without decoding the carrier again.)
+	if !rootDropped && !scan.RootDefaultsUnreadable() {
+		seedBuiltinDefaults(merged.Defaults)
+	}
 	// #2513: the profile WARNs go to the caller's logger like every other
 	// line of this build, not to the process-global log. The exporter passes
 	// log.Default() (same output as ApplyProfiles' log.Printf); LoadDir with a

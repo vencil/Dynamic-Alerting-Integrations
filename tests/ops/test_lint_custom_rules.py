@@ -414,9 +414,7 @@ def test_main_missing_target_is_caller_error(tmp_path, monkeypatch, capsys, extr
     """
     missing = tmp_path / "missing"
     monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(missing), *extra])
-    with pytest.raises(SystemExit) as exc:
-        lint_custom_rules.main()
-    assert exc.value.code == 2
+    assert _main_code() == 2
     err = capsys.readouterr().err
     assert f"ERROR: {missing}: " in err
     assert "Do not drop the path" in err
@@ -428,9 +426,7 @@ def test_main_missing_target_names_only_the_missing_one(tmp_path, monkeypatch, c
     real.mkdir()
     missing = tmp_path / "missing"
     monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(real), str(missing)])
-    with pytest.raises(SystemExit) as exc:
-        lint_custom_rules.main()
-    assert exc.value.code == 2
+    assert _main_code() == 2
     err = capsys.readouterr().err
     assert f"ERROR: {missing}: " in err
     assert str(real) not in err
@@ -449,9 +445,7 @@ def test_main_empty_string_target_is_caller_error(tmp_path, monkeypatch, capsys,
     monkeypatch.chdir(tmp_path)
     (tmp_path / "rules.yaml").write_text(_HOLT_RULE, encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["lint_custom_rules", "", *extra])
-    with pytest.raises(SystemExit) as exc:
-        lint_custom_rules.main()
-    assert exc.value.code == 2
+    assert _main_code() == 2
     captured = capsys.readouterr()
     assert "''" in captured.err
     assert "Do not drop the path" in captured.err
@@ -464,9 +458,7 @@ def test_main_empty_string_alongside_real_dir_names_only_the_empty_one(
     real = tmp_path / "real"
     real.mkdir()
     monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(real), ""])
-    with pytest.raises(SystemExit) as exc:
-        lint_custom_rules.main()
-    assert exc.value.code == 2
+    assert _main_code() == 2
     err = capsys.readouterr().err
     assert "''" in err
     assert repr(str(real)) not in err
@@ -817,14 +809,26 @@ _OK_RULE = (
 )
 
 
-def _run_main(argv, monkeypatch):
-    """main() 的 exit code：失敗時 sys.exit，乾淨時正常 return（= 0）。"""
-    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", *argv])
+def _main_code():
+    """`main()` 以 `run()` 的方式結束後的 exit code：`sys.exit` 的碼、乾淨 return 的 0，
+    或 `CallerError`（#3901：宣告的輸入被拒）——stderr 一行、rc 2。"""
+    from _lib_exitcodes import CallerError, exit_on_crash
     try:
         lint_custom_rules.main()
     except SystemExit as exc:
         return exc.code
+    except CallerError as exc:
+        try:
+            exit_on_crash(exc)
+        except SystemExit as done:
+            return done.code
     return 0
+
+
+def _run_main(argv, monkeypatch):
+    """main() 的 exit code：失敗時 sys.exit，乾淨時正常 return（= 0）。"""
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", *argv])
+    return _main_code()
 
 
 _CHART = "apiVersion: v2\nname: c\nversion: 0.1.0\n"

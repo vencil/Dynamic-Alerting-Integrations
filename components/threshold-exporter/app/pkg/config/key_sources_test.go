@@ -49,7 +49,13 @@ func TestKeySources_OnlyEffectiveTreeFillsThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	ks := tr.Tenants[0].KeySources
-	if ks["a"].Layer != KeyLayerDefaults || ks["b"].Layer != KeyLayerProfile || ks["_profile"].Layer != KeyLayerTenant || len(ks) != 3 {
+	// #3832: plus one `builtin` entry, with no file, per built-in key.
+	if ks["a"].Layer != KeyLayerDefaults || ks["b"].Layer != KeyLayerProfile || ks["_profile"].Layer != KeyLayerTenant || len(ks) != 3+len(builtinDefaults) {
 		t.Errorf("EffectiveTree: KeySources = %+v", ks)
+	}
+	for k := range builtinDefaults {
+		if ks[k] != (KeySource{Layer: KeyLayerBuiltin}) {
+			t.Errorf("EffectiveTree: KeySources[%q] = %+v, want {builtin, no file}", k, ks[k])
+		}
 	}
 }

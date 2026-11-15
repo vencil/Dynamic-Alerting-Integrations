@@ -103,9 +103,13 @@ func TestGetTenantEffective_NonFiniteFloat_ReadableWithPythonHash(t *testing.T) 
 	if got := ov["match"].(map[string]any)["severity"]; got != "Infinity" {
 		t.Errorf("severity = %#v, want \"Infinity\"", got)
 	}
-	// sha256 of describe_tenant.py's json.dumps of the same tenant body,
-	// first 16 hex (same fixture as pkg/config's RoutingOverrideInf test).
-	if ec.MergedHash != "b35b4f8f5c95253c" {
-		t.Errorf("merged_hash = %q, want Python's b35b4f8f5c95253c", ec.MergedHash)
+	// sha256 of Python's json.dumps(sort_keys, separators=(",", ":"),
+	// ensure_ascii=False) of the merged body, first 16 hex — an independent
+	// computation of the canonical JSON (same fixture as pkg/config's
+	// RoutingOverrideInf test). #3832: the merged config also holds the
+	// built-in layer, so the body is `_routing` beside the built-in keys; it
+	// was b35b4f8f5c95253c for `_routing` alone.
+	if ec.MergedHash != "e76ea1620d94b760" {
+		t.Errorf("merged_hash = %q, want e76ea1620d94b760", ec.MergedHash)
 	}
 }

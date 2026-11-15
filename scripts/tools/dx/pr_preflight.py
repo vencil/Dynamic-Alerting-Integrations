@@ -718,9 +718,75 @@ def check_pr_title(title: str, repo_root: Path, max_length: int = 70) -> int:
     return EXIT_OK
 
 
+# Single definition of which PRs may omit the Self-Review-Pass-2 trailer
+# (#3935). `.github/PULL_REQUEST_TEMPLATE.md` points here instead of
+# restating the rule; keep the two from drifting by editing only this block.
+PASS2_DOC_ONLY_RULE = (
+    "every path changed in <base>...HEAD is documentation: a file ending in "
+    ".md (case-sensitive), anywhere; nothing else counts, including non-.md "
+    "files under docs/ or changelog.d/ -- except that files named "
+    "CLAUDE.md / AGENTS.md / SKILL.md at any depth, and anything "
+    "under a .agents/ or .claude/ directory, are rules, not documentation, "
+    "and still require the trailer"
+)
+_PASS2_NEVER_DOC_NAMES = frozenset({"claude.md", "agents.md", "skill.md"})
+_PASS2_NEVER_DOC_DIRS = frozenset({".agents", ".claude"})
+
+
+def is_doc_only_path(path: str) -> bool:
+    """True when `path` (repo-relative, `/`-separated, as `git diff
+    --name-only` prints it) counts as documentation for the
+    Self-Review-Pass-2 exemption. See PASS2_DOC_ONLY_RULE.
+
+    Only the `.md` suffix makes a path documentation: a schema, asset or
+    script under docs/ can carry behaviour, so the directory alone does not
+    exempt it. The exceptions win and are matched case-insensitively, so
+    every ambiguity falls toward requiring the trailer. `.agents` /
+    `.claude` match as a path segment at any depth.
+    """
+    parts = path.split("/")
+    if any(p.lower() in _PASS2_NEVER_DOC_DIRS for p in parts[:-1]):
+        return False
+    if parts[-1].lower() in _PASS2_NEVER_DOC_NAMES:
+        return False
+    return path.endswith(".md")
+
+
+def _pass2_doc_only_exemption(base_ref: str) -> Tuple[Optional[bool], str]:
+    """Decide whether `<base_ref>...HEAD` qualifies for the doc-only
+    exemption. Returns (exempt, detail); exempt is None on git error so the
+    caller fails closed.
+
+    Merge-base diff (three dots): only what the PR itself changes, not what
+    landed on base meanwhile. `--no-renames` lists both sides of a rename so
+    moving a file out of docs/ counts the destination; deletions are listed
+    as changed paths. `-z` keeps non-ASCII paths unquoted. An empty diff
+    (e.g. a revert pair) is NOT exempt: there is no documentation change to
+    point at, and all() over nothing must not grant a pass.
+    """
+    proc = run(
+        ["git", "diff", "--name-only", "--no-renames", "-z", f"{base_ref}...HEAD"],
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return None, (proc.stderr or "").strip()
+    paths = [p for p in (proc.stdout or "").split("\0") if p]
+    if not paths:
+        return False, "the merge-base diff is empty"
+    non_doc = [p for p in paths if not is_doc_only_path(p)]
+    if non_doc:
+        shown = ", ".join(non_doc[:5]) + (" ..." if len(non_doc) > 5 else "")
+        return False, f"{len(non_doc)} non-documentation path(s): {shown}"
+    return True, f"{len(paths)} documentation path(s)"
+
+
 def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
     """Validate at least one commit in `<base_ref>..HEAD` has a Self-Review-Pass-2
     trailer. Used as a CI strict-mode gate (issue #454).
+
+    Doc-only exemption (#3935): when no commit carries the trailer but every
+    changed path passes `is_doc_only_path` (rule: PASS2_DOC_ONLY_RULE), the
+    gate SKIPs. A git error while computing the diff fails closed.
 
     Why this lives here, not in a standalone script:
       - Reuses pr_preflight's existing commit-msg validation infrastructure
@@ -745,8 +811,10 @@ def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
       check_behind_main instead.
 
     Returns:
-      0 = PASS (trailer present somewhere in range, or range is empty)
-      1 = FAIL (range non-empty, no trailer in any commit, or git error)
+      0 = PASS (trailer present somewhere in range, range is empty, or the
+          PR changes only documentation paths)
+      1 = FAIL (range non-empty, no trailer in any commit and a
+          non-documentation path changed, or git error)
     """
     # Probe the range is non-empty BEFORE asking for trailers — distinguishes
     # "PR has no commits ahead of base" (SKIP) from "PR has commits but none
@@ -789,9 +857,26 @@ def check_pass2_trailer_strict(base_ref: str = "origin/main") -> int:
     if log_proc.stdout.strip():
         return EXIT_OK
 
+    exempt, detail = _pass2_doc_only_exemption(base_ref)
+    if exempt is None:
+        print(
+            f"❌ git diff {base_ref}...HEAD failed: {detail}\n"
+            "   Cannot decide the doc-only exemption; failing closed.",
+            file=sys.stderr,
+        )
+        return EXIT_VIOLATION
+    if exempt:
+        print(
+            "⏭️  No Self-Review-Pass-2 trailer, but the PR changes only "
+            f"documentation ({detail}); skipping.\n"
+            f"   Exemption rule (pr_preflight.is_doc_only_path): {PASS2_DOC_ONLY_RULE}."
+        )
+        return EXIT_OK
+
     print(
         "❌ PR is missing the `Self-Review-Pass-2:` trailer in every commit "
         f"between {base_ref} and HEAD.\n"
+        f"   Not doc-only ({detail}), so the exemption does not apply.\n"
         "\n"
         "   Add to ANY commit message (the trailer must be on its own line\n"
         "   in the bottom paragraph, separated from the body by a blank line):\n"
@@ -1631,7 +1716,9 @@ def main() -> int:
         "--check-pass2-trailer-strict",
         action="store_true",
         help="Validate at least one commit in <base-ref>..HEAD carries a "
-             "Self-Review-Pass-2: trailer; exit 1 if missing (#454 strict CI gate)",
+             "Self-Review-Pass-2: trailer; exit 1 if missing (#454 strict CI gate). "
+             "Skipped when the PR changes only documentation paths "
+             "(is_doc_only_path, #3935)",
     )
     parser.add_argument(
         "--base-ref",

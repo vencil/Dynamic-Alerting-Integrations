@@ -134,7 +134,7 @@ func TestPlatformTenantsLayerStacksAcrossAliasSpellings(t *testing.T) {
 			}
 			got := map[string]any{}
 			for k, v := range eff {
-				if strings.HasPrefix(k, "mysql_") {
+				if _, builtin := builtinDefaults[k]; strings.HasPrefix(k, "mysql_") && !builtin {
 					got[k] = v
 				}
 			}
@@ -206,9 +206,15 @@ func TestTouchesAliasIsExactlyTheAliasShapes(t *testing.T) {
 	}
 }
 
+// mysqlRows is the rows of the mysql_* thresholds the trees write: the
+// built-in layer's mysql_* keys (#3832) are left out.
 func mysqlRows(rows []string) []string {
 	var out []string
 	for _, r := range rows {
+		key, _, _ := strings.Cut(r, "{")
+		if _, builtin := builtinDefaults[key]; builtin {
+			continue
+		}
 		if strings.HasPrefix(r, "mysql_") {
 			out = append(out, r)
 		}

@@ -109,8 +109,9 @@ tenants:
 
 	cfg := mgr.GetConfig()
 
-	if len(cfg.Defaults) != 3 {
-		t.Errorf("expected 3 defaults, got %d", len(cfg.Defaults))
+	// The root's 3, plus the built-in keys (#3832) it does not write.
+	if want := 3 + builtinKeysNotIn("container_cpu"); len(cfg.Defaults) != want {
+		t.Errorf("expected %d defaults, got %d", want, len(cfg.Defaults))
 	}
 	if len(cfg.StateFilters) != 2 {
 		t.Errorf("expected 2 state_filters, got %d", len(cfg.StateFilters))
@@ -128,9 +129,11 @@ tenants:
 	// db-a: 3 metrics, db-b: 3 metrics = 6; #1231 adds one legacy
 	// metric="cpu" twin per tenant for the mysql_threads_running alias
 	// window (retired spelling: mysql_threads_running) = 8.
+	// Plus, per tenant, a default row for each built-in key (#3832) the
+	// tree does not write.
 	resolved := cfg.ResolveAt(fixedNow)
-	if len(resolved) != 8 {
-		t.Errorf("expected 8 resolved thresholds, got %d: %+v", len(resolved), resolved)
+	if want := 8 + 2*builtinKeysNotIn("container_cpu"); len(resolved) != want {
+		t.Errorf("expected %d resolved thresholds, got %d: %+v", want, len(resolved), resolved)
 	}
 }
 
@@ -389,7 +392,8 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().ResolveAt(fixedNow)
+	// The built-in layer's rows (#3832) are not this test's.
+	resolved := dropBuiltinRows(mgr.GetConfig().ResolveAt(fixedNow))
 	sort.Slice(resolved, func(i, j int) bool {
 		return resolved[i].Severity < resolved[j].Severity
 	})

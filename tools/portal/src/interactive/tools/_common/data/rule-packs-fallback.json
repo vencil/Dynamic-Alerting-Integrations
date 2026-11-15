@@ -503,7 +503,7 @@
         "jvm_memory": {
           "value": 80,
           "unit": "%",
-          "desc": "Heap memory usage warning",
+          "desc": "Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed before dividing)",
           "metricClass": "saturation"
         },
         "jvm_threads": {

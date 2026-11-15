@@ -24,7 +24,10 @@
    照常往下跑）。每個呼叫點至少要在一個情境裡印出替身、**且它專屬的那個替
    身出現在該次的輸出裡**——只被呼叫、結果沒印出來的不算（先存成別名、只在
    沒走到的分支裡印），別的呼叫點印了同一個名字也不算；做不到的只能列在
-   `_UNREACHED`（附理由），列了卻做到了、或呼叫點已不存在，都紅。
+   `_UNREACHED`（附理由），列了卻做到了、或呼叫點已不存在，都紅。只有產生器
+   服務走得到的呼叫點（從 git 讀到的非一般檔、寫入範圍外的 credential NOTICE）
+   由 `test_generator_service.illegal_name_outcome` 起真的服務、以同一個記錄
+   包裝判兩筆寫入來涵蓋（#3961；服務只在 Linux 上跑，這道守衛也是）。
 
 改名做不出來的條目形狀（symlink、FIFO、非 UTF-8 的名字）另列在
 `_ENTRY_SHAPES`，它們的跑法也算進第 2 道的涵蓋。
@@ -122,13 +125,14 @@ def _referenced_names(files: "dict[str, str]") -> "list[str]":
 #: it returned] for every call. With *tag* "1" a stand-in segment it returns
 #: is the CALL SITE's own `<key:…>` (`_site_tag`) rather than the name's, so
 #: the output shows which call printed it — still a stand-in (`shown_file`
-#: keeps it as it is), so the run goes on as it would. argv: tools dir,
-#: generator, hits file, tag, the generator's argv.
-_DRIVER = r"""
-import hashlib, json, os, runpy, sys
-tools, gar, hits, tag = sys.argv[1:5]
-sys.argv = [gar, *sys.argv[5:]]
-sys.path.insert(0, tools)
+#: keeps it as it is), so the run goes on as it would. `_RECORDER` is that
+#: replacement (it reads `hits` and `tag`, and needs the tools dir on
+#: sys.path); `recorder_prelude` hands it to a generator service started by
+#: tests/ops/test_generator_service.py, whose judgements fork from the
+#: process it patched (#3961). argv of `_DRIVER`: tools dir, generator, hits
+#: file, tag, the generator's argv.
+_RECORDER = r"""
+import hashlib, json, os, sys
 import _lib_validation
 _shown_file = _lib_validation.shown_file
 def shown_file(path):
@@ -146,8 +150,21 @@ def shown_file(path):
                              path is not None and out != str(path), out]) + "\n")
     return out
 _lib_validation.shown_file = shown_file
+"""
+_DRIVER = r"""
+import runpy, sys
+tools, gar, hits, tag = sys.argv[1:5]
+sys.argv = [gar, *sys.argv[5:]]
+sys.path.insert(0, tools)
+""" + _RECORDER + r"""
 runpy.run_path(gar, run_name="__main__")
 """
+
+
+def recorder_prelude(hits: Path) -> str:
+    """`_RECORDER`, tagged, writing to *hits*: code a process runs before it
+    imports the generator."""
+    return f"hits, tag = {str(hits)!r}, '1'\n" + _RECORDER
 
 
 class Outcome(NamedTuple):
@@ -475,12 +492,6 @@ def _call_sites() -> "dict[str, tuple[str, int, int]]":
 #: Call sites no run of the corpus makes print a stand-in, each with why.
 #: Keep it short: a case that reaches one belongs in `CASES`.
 _UNREACHED: "dict[str, str]" = {
-    "_grar_parse.py:_parse_config_files#2":
-        "#2981: `_GIT_IRREGULAR` holds the entries the generator service read "
-        "from git as not regular files; the CLI never fills it",
-    "_grar_parse.py:credential_findings#2":
-        "the NOTICE for a credential in a file the write does not change: only "
-        "the generator service's write passes `credential_scope`; the CLI never does",
     # A `routing_tree_problems` record of a kind that does not block: the
     # generator prints only the blocking ones (`BLOCKING_TREE_KINDS`); the
     # record's text is validate-config's / explain_route's to print, and their
@@ -499,14 +510,27 @@ _UNREACHED: "dict[str, str]" = {
 }
 
 
+def _service_outcome() -> Outcome:
+    """#3961: the calls only the generator service reaches (the entries it
+    read from git as not regular files, the credential NOTICE outside its
+    write's scope), from its own judgements —
+    tests/ops/test_generator_service.py's `illegal_name_outcome`."""
+    import test_generator_service as gsvc
+    with tempfile.TemporaryDirectory() as tmp:
+        return gsvc.illegal_name_outcome(Path(tmp))
+
+
 def _corpus() -> "list[Outcome]":
     jobs = [functools.partial(_case, f, m, True, True) for f, m in _RUNS]
     jobs += [functools.partial(_shape, n, _SHAPE_MODES["validate"], True)
              for n in _ENTRY_SHAPES]
+    jobs.append(_service_outcome)
     with ThreadPoolExecutor(max_workers=4) as pool:
         return list(pool.map(lambda job: job(), jobs))
 
 
+@pytest.mark.skipif(sys.platform != "linux",
+                    reason="counts the generator service's judgements: fork + pidfd, Linux only")
 def test_every_shown_file_call_site_prints_a_stand_in():
     sites = _call_sites()
     assert len(sites) >= 40, sorted(sites)  # the derivation did not collapse

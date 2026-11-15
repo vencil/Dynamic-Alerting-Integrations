@@ -259,21 +259,25 @@ def _as_confd(files: dict[str, str]) -> dict[str, str]:
 def test_patch_config_changes_only_the_patched_key(tmp_path, da_guard,
                                                    layout, tid):
     files = _multi_file() if layout == "multi-file" else _legacy()
+    # #3832: patch_config judges a legacy `config.yaml` as a tree with no
+    # root carrier (its `defaults:` is no root platform file there), so the
+    # patched key is one the built-in layer arms — read in such a tree too.
+    key = "mysql_threads_running" if layout == "multi-file" else "container_memory"
     before = _served(_write_tree(tmp_path / "before", _as_confd(files)),
                      da_guard)
-    written = _patched(files, layout, tid, "mysql_threads_running", "50")
+    written = _patched(files, layout, tid, key, "50")
     after = _served(_write_tree(tmp_path / "after", _as_confd(written)),
                     da_guard)
-    assert _changes(_minus(before, "mysql_threads_running", {tid}),
-                    _minus(after, "mysql_threads_running", {tid})) == []
-    assert after[tid][0]["mysql_threads_running"] == 50.0
+    assert _changes(_minus(before, key, {tid}),
+                    _minus(after, key, {tid})) == []
+    assert after[tid][0][key] == 50.0
     # The rewritten key: what was not patched is written as it was read; the
     # new value is a canonical decimal, so da-guard write writes it as a number
     # (#3206; it was `'50'`, a quoted string, while PyYAML wrote the text).
     rewritten = "config.yaml" if layout == "legacy" else f"{tid}.yaml"
     for line in _KEPT_LINES[tid]:
         assert line in written[rewritten], written[rewritten]
-    assert "mysql_threads_running: 50\n" in written[rewritten], written[rewritten]
+    assert f"{key}: 50\n" in written[rewritten], written[rewritten]
     if layout == "legacy":
         for line in ("mysql_threads_running: 010", "max_metrics_per_tenant: 500"):
             assert line in written["config.yaml"], written["config.yaml"]
@@ -399,7 +403,7 @@ def test_patch_config_writes_a_typed_severity_value_as_a_string():
 def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path):
     """The refusal names the type yaml.v3 gives it (`!!int`, from parse-tree,
     ADR-036 §2), not `RawPlain`. A scalar `defaults:` is servable only in a
-    subtree carrier, so this is the `--plane subtree` reading: the subtree's
+    subtree carrier, so this is the `--subtree` reading: the subtree's
     reader cut from the root's index (#3206)."""
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 1\n", encoding="utf-8")
     (tmp_path / "team").mkdir()

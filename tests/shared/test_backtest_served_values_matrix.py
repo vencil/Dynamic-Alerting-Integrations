@@ -557,22 +557,24 @@ _NO_BASE = ("skipped: served as a non-critical row of {} (its base is not declar
 
 def test_a_critical_key_without_its_base_is_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """`mysql_connection_usage_percent_critical` with no `mysql_connection_usage_percent` in the root
+    """`oracle_process_count_critical` with no `oracle_process_count` in the root
     `defaults:` is served as a warning row of metric
-    `connection_usage_percent_critical` (da-guard warns it skips the critical
-    row): the `_critical` alert selects metric="connection_usage_percent",
+    `process_count_critical` (da-guard warns it skips the critical
+    row): the `_critical` alert selects metric="process_count",
     severity="critical", so nothing compares it — it
-    used to be replayed against the critical alert's series (HIGH, rc 1)."""
+    used to be replayed against the critical alert's series (HIGH, rc 1).
+    (#3832: the base must be a key the platform does not arm — a built-in
+    base has a value in every tree.)"""
     def files(v: str) -> dict[str, str]:
-        return {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent_critical: 95\n",
-                "tx.yaml": f"tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"{v}\"\n"}
+        return {"_defaults.yaml": "defaults:\n  oracle_process_count_critical: 95\n",
+                "tx.yaml": f"tenants:\n  tx:\n    oracle_process_count_critical: \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("90")), _tree(tmp_path / "cur", files("50"))
     served = tv.load_served_values(c, at=AT)["tx"]
-    assert served.series["mysql_connection_usage_percent_critical"][0].labels["severity"] == "warning"
+    assert served.series["oracle_process_count_critical"][0].labels["severity"] == "warning"
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
-        ("mysql_connection_usage_percent_critical", "not_backtested", _NO_BASE.format("mysql_connection_usage_percent_critical"))]
+        ("oracle_process_count_critical", "not_backtested", _NO_BASE.format("oracle_process_count_critical"))]
     assert (rc, asked) == (0, [])
 
 

@@ -62,6 +62,20 @@ type unreadableShape struct {
 	tenantB map[string]any
 }
 
+// withBuiltin is m over the built-in layer (#3832): what a tenant of a tree
+// whose root reads gets for every default-armed key it does not write. A
+// root that cannot be read withholds it (the `_defaults.yaml` shapes: {}).
+func withBuiltin(m map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range config.BuiltinDefaults() {
+		out[k] = v
+	}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 func unreadableShapes() []unreadableShape {
 	return []unreadableShape{
 		{
@@ -71,7 +85,7 @@ func unreadableShapes() []unreadableShape {
 			},
 			want:    []skippedFile{{"tenant-c.yaml", config.UnreadableStatError}},
 			tenants: []string{"tenant-a", "tenant-b"},
-			tenantB: map[string]any{"mysql_connections": float64(80)},
+			tenantB: withBuiltin(map[string]any{"mysql_connections": float64(80)}),
 		},
 		{
 			// The #2588 extreme: a tenant with no value of its own reads as
@@ -96,7 +110,7 @@ func unreadableShapes() []unreadableShape {
 			},
 			want:    []skippedFile{{"tenant-a.yaml", config.UnreadableReadError}},
 			tenants: []string{"tenant-b"},
-			tenantB: map[string]any{"mysql_connections": float64(80)},
+			tenantB: withBuiltin(map[string]any{"mysql_connections": float64(80)}),
 		},
 		{
 			name:    "_defaults.yaml 0000",

@@ -239,7 +239,8 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().ResolveAt(fixedNow)
+	// The built-in layer's rows (#3832) are not this test's.
+	resolved := dropBuiltinRows(mgr.GetConfig().ResolveAt(fixedNow))
 	// Expected: redis_memory=75 + redis_db_keys{db=db0}=1000 = 2 (db1 disabled)
 	if len(resolved) != 2 {
 		t.Fatalf("expected 2, got %d: %+v", len(resolved), resolved)
@@ -381,7 +382,8 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().ResolveAt(fixedNow)
+	// #3832: the built-in rows are not this test's.
+	resolved := dropBuiltinRows(mgr.GetConfig().ResolveAt(fixedNow))
 	if len(resolved) != 2 {
 		t.Fatalf("expected 2, got %d: %+v", len(resolved), resolved)
 	}

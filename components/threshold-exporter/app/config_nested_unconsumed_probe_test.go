@@ -105,7 +105,7 @@ func TestNestedPlatformFileProbe_OnlyTheCarrierIsJudgedByItsDecode(t *testing.T)
 			}
 			// The tree is otherwise served: the subtree tenant keeps the
 			// root default, so the file did not take its subtree down.
-			if got, ok := seriesFor(t, mgr, "t-team", "connections"); !ok || got != 80 {
+			if got, ok := seriesFor(t, mgr, "t-team", "mysql_connections"); !ok || got != 80 {
 				t.Errorf("t-team emits %v (present=%v), want the root default 80", got, ok)
 			}
 		})

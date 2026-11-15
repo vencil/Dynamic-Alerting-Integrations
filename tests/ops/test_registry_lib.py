@@ -587,8 +587,10 @@ def test_real_registry_chart_default_set():
     D-A A2b then promoted the three `%` candidates that carry a validation
     (es_disk_usage_percent, es_heap_usage_percent,
     oracle_tablespace_used_percent): 7 -> 10. jvm_memory stayed operator with
-    a blocker (aggregation_bug, #3928 — the rule divides per heap pool, its
-    sources measure the whole heap). #3929 then made the RabbitMQ memory rule
+    a blocker (aggregation_bug, #3928 — the rule divided per heap pool, its
+    sources measure the whole heap); #3928 fixed the rule and lifted the
+    blocker, the key is a candidate again and still operator-supplied.
+    #3929 then made the RabbitMQ memory rule
     divide per node, moved rabbitmq_node_mem_percent from 80 to the 90 its
     source uses, and promoted it: 10 -> 11."""
     doc = lib.build_registry_doc()
@@ -638,13 +640,17 @@ def test_real_validation_candidates_are_derived():
     tier, so they are not promotable as they stand (#1320 decides their tier).
     D-A A2b took five out: three `%` keys were promoted, and two got a
     blocker (jvm_memory: aggregation_bug, #3928; rabbitmq_node_mem_percent:
-    value_disputed, #3929 — since resolved and promoted). The three left are
-    not `%` keys, which D-A does not promote."""
+    value_disputed, #3929 — since resolved and promoted). #3928 fixed the
+    JVM heap rule, so jvm_memory is back: the one `%` candidate, to be
+    promoted by the A2b procedure. The other three are not `%` keys, which
+    D-A does not promote."""
     doc = lib.build_registry_doc()
     assert lib.validation_candidates(doc) == {
         "redis_replication_lag", "mongodb_replication_lag",
         # #3770 fixed the URP sum, so its blocker is gone and 0 is portable
-        "kafka_under_replicated_partitions"}
+        "kafka_under_replicated_partitions",
+        # #3928 fixed the per-pool division
+        "jvm_memory"}
 
 
 # #3783: the declared danielqsj/kafka_exporter exports neither metric (one is a

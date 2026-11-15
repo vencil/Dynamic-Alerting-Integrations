@@ -54,6 +54,7 @@ import (
 	"log"
 	"math"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -408,7 +409,11 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 
 	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
 	doc := r.tenantDoc(tenantFile, tenantBytes)
-	parts, err := computeEffectiveConfigDocAt(doc, tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel)
+	// #3832: the built-in layer is withheld when the root carrier cannot be
+	// read: unreadable on the walk, or dropped by the build (#2296, above).
+	rootDropped := rootLevel >= 0 && slices.Contains(chainParseFailed, r.rel(chain[rootLevel]))
+	builtin := !r.scan.RootBuiltinWithheld() && !rootDropped
+	parts, err := computeEffectiveConfigDocAt(doc, tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel, builtin)
 	if err != nil {
 		// #2123: name the file whose bytes the decode rejected, so a caller
 		// can tell "this file is broken" from any other resolve failure
@@ -450,7 +455,9 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	// #3341: a reserved key a subtree level does not carry is not laid —
 	// /metrics applies none — and is named in not_served below.
 	blocks, notCarried := withoutSubtreeReserved(blocks, rootLevel)
-	view := effectiveView(blocks, parts.override)
+	// #3832: a refused root value of a built-in key shows the built-in value.
+	blocks = rootRefusedAsBuiltin(blocks, rootLevel, builtin)
+	view := effectiveView(withBuiltinBase(blocks, builtin), parts.override)
 
 	ec := &EffectiveConfig{
 		ChainParseFailed:   chainParseFailed,
@@ -589,7 +596,7 @@ func computeEffectiveConfigBytes(
 	defaultsChainYAML [][]byte,
 	overlay []PlatformBlock,
 ) (map[string]any, error) {
-	parts, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay, nil)
+	parts, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML, overlay, nil, true)
 	return parts.merged, err
 }
 
@@ -637,8 +644,9 @@ func computeEffectiveConfigBytesDetailed(
 	defaultsChainYAML [][]byte,
 	overlay []PlatformBlock,
 	profiles *PlatformProfiles,
+	builtin bool,
 ) (effectiveParts, error) {
-	return computeEffectiveConfigDocDetailed(ParseTenantDoc(tenantYAMLBytes), tenantID, defaultsChainYAML, overlay, profiles)
+	return computeEffectiveConfigDocDetailed(ParseTenantDoc(tenantYAMLBytes), tenantID, defaultsChainYAML, overlay, profiles, builtin)
 }
 
 // computeEffectiveConfigDocDetailed is computeEffectiveConfigBytesDetailed
@@ -656,14 +664,23 @@ func computeEffectiveConfigDocDetailed(
 	defaultsChainYAML [][]byte,
 	overlay []PlatformBlock,
 	profiles *PlatformProfiles,
+	builtin bool,
 ) (effectiveParts, error) {
-	return computeEffectiveConfigDocAt(tenantDoc, tenantID, defaultsChainYAML, overlay, profiles, -1)
+	return computeEffectiveConfigDocAt(tenantDoc, tenantID, defaultsChainYAML, overlay, profiles, -1, builtin)
 }
 
 // computeEffectiveConfigDocAt is computeEffectiveConfigDocDetailed with
 // rootLevel: the index in defaultsChainYAML of the conf.d root's own
 // `_defaults.yaml`, or -1 when the chain has none or the caller does not
 // know. The merged config does not depend on it; only mergedDefaults does.
+//
+// builtin: the built-in layer (#3832, builtin_defaults.go) is the bottom of
+// the fold; false withholds it (the root carrier cannot be read). Unlike
+// rootLevel it moves the merged config: merged_hash covers the built-in
+// values. A root value the root decode refuses stays in the merged config,
+// as written (merged_hash is the merge's identity); mergedDefaults, the
+// fallback da-guard compares against, takes the built-in value instead, as
+// /metrics serves it.
 //
 // ⛔ #2544: a `<metric>_critical` key (either #1231 spelling) that only the
 // root level writes is the same shape. The root's key is served as a row of
@@ -679,6 +696,7 @@ func computeEffectiveConfigDocAt(
 	overlay []PlatformBlock,
 	profiles *PlatformProfiles,
 	rootLevel int,
+	builtin bool,
 ) (effectiveParts, error) {
 	// Parse-and-fold one file at a time. A file after a broken one is never
 	// parsed. ⚠️ This is the debounced path's per-tenant call: a heap slice
@@ -706,6 +724,9 @@ func computeEffectiveConfigDocAt(
 		}
 	}
 
+	if builtin {
+		fillBuiltinUnder(merged)
+	}
 	chain := merged
 	p, err := mergeTenantOver(chain, tenantDoc, tenantID, overlay, profiles)
 	if err != nil {
@@ -756,6 +777,16 @@ func computeEffectiveConfigDocAt(
 	// serves it as the labelled series for a tenant that does not write it.)
 	chainD := dropRootOnlyTenantMapKeys(
 		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims, rootRefused)
+	// #3832: a built-in key the root writes as a refused value falls back to
+	// the built-in value, not to nothing — unless a deeper level writes it.
+	// dropRootOnlyTenantMapKeys has dropped it (so chainD is a copy).
+	if builtin {
+		for k := range rootRefused {
+			if v, ok := builtinDefaults[k]; ok && !subtreeDims[k] {
+				chainD[k] = v
+			}
+		}
+	}
 	switch {
 	case pr == nil && pi == nil:
 		p.mergedDefaults = deepCopyMap(chainD)
@@ -1066,13 +1097,16 @@ func defaultsBlockNode(doc *yaml.Node) *yaml.Node {
 // mergeDefaultsChain folds the chain L0→Ln. The first entry that failed to
 // parse ends it with `parse defaults[%d]: %w` — the error text
 // emitParseFailureSignal (app) maps back to the file by that index.
-func mergeDefaultsChain(chain []ChainDefaults) (map[string]any, error) {
+func mergeDefaultsChain(chain []ChainDefaults, builtin bool) (map[string]any, error) {
 	merged := make(map[string]any)
 	var err error
 	for i, pd := range chain {
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return nil, err
 		}
+	}
+	if builtin {
+		fillBuiltinUnder(merged)
 	}
 	return merged, nil
 }
@@ -1673,6 +1707,11 @@ func CanonicalJSON(data any) ([]byte, error) { return canonicalJSON(data) }
 type TenantLayers struct {
 	Overlay  []PlatformBlock
 	Profiles *PlatformProfiles
+	// WithholdBuiltin: the tree's root carrier cannot be read
+	// (TreeScan.RootBuiltinWithheld), so the built-in layer (#3832) is not
+	// the bottom of the merge — as /metrics serves no default row then. The
+	// zero value merges it.
+	WithholdBuiltin bool
 }
 
 // oneLayers is the optional TenantLayers argument: the zero value when none
@@ -1705,7 +1744,7 @@ func ComputeEffectiveConfig(
 	layers ...TenantLayers,
 ) (map[string]any, error) {
 	l := oneLayers(layers)
-	parts, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML, l.Overlay, l.Profiles)
+	parts, err := computeEffectiveConfigBytesDetailed(tenantYAMLBytes, tenantID, defaultsChainYAML, l.Overlay, l.Profiles, !l.WithholdBuiltin)
 	return parts.merged, err
 }
 
@@ -1734,7 +1773,7 @@ func ComputeMergedHashDoc(
 	layers ...TenantLayers,
 ) (string, error) {
 	l := oneLayers(layers)
-	parts, err := computeEffectiveConfigDocDetailed(tenantDoc, tenantID, defaultsChainYAML, l.Overlay, l.Profiles)
+	parts, err := computeEffectiveConfigDocDetailed(tenantDoc, tenantID, defaultsChainYAML, l.Overlay, l.Profiles, !l.WithholdBuiltin)
 	if err != nil {
 		return "", err
 	}
@@ -1767,11 +1806,11 @@ func ComputeMergedHashFromChainDoc(
 	defaultsChain []ChainDefaults,
 	layers ...TenantLayers,
 ) (string, error) {
-	merged, err := mergeDefaultsChain(defaultsChain)
+	l := oneLayers(layers)
+	merged, err := mergeDefaultsChain(defaultsChain, !l.WithholdBuiltin)
 	if err != nil {
 		return "", err
 	}
-	l := oneLayers(layers)
 	tm, err := mergeTenantOver(merged, tenantDoc, tenantID, l.Overlay, l.Profiles)
 	if err != nil {
 		return "", err

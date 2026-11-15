@@ -13,5 +13,5 @@
 ## Refs
 
 <!-- `Refs: #N`。不用 closing 動詞（Close(s) / Fix(es) / Resolve(s)），它們會自動關票。
-     `Self-Review-Pass-2: <改了什麼>; <哪支測試抓到> (✓)` 寫在 commit 訊息底部的 trailer block（CLAUDE.md 不可協商 #2）；doc-only／chore-only 零邏輯變更可略，在 Summary 註明。
+     `Self-Review-Pass-2: <改了什麼>; <哪支測試抓到> (✓)` 寫在 commit 訊息底部的 trailer block（CLAUDE.md 不可協商 #2）。哪些 PR 可以不寫，只由閘門定義：`scripts/tools/dx/pr_preflight.py` 的 `is_doc_only_path()`（規則全文在同檔 `PASS2_DOC_ONLY_RULE`），這裡不另述。
      回歸測試的 intentional-break 驗法見 vibe-subagent-review；要跳過某支 lint 的逃生門是 body 裡的 `bypass-lint: <lint-name>`（docs/internal/lint-policy.md §4）。 -->

@@ -67,6 +67,7 @@ Tenant ids are fixture names (CLAUDE.md #9).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -295,12 +296,9 @@ def _assert_tool_fault(rig, binary: str, subcommand: "str | None", reasons: "set
     if subcommand is not None:
         named = [f for f in named if f["subcommand"] == subcommand]
         assert named, (where, faults)
-        assert any(f"{binary} {subcommand} ({f['reason']})" in doc["message"]
-                   for f in named), (where, doc)
-    else:
-        assert f"{binary} " in doc["message"], (where, doc)
-        assert any(f"({f['reason']})" in doc["message"] for f in named), (where, doc)
-    assert str(rig.tmp) not in doc["message"], doc  # a name, never a path
+    # #3961: the reply's own record is the status's — structured, no prose.
+    assert doc["tool_fault"] == faults, (where, doc, faults)
+    assert str(rig.tmp) not in json.dumps(doc), doc  # a name, never a path
 
 
 @pytest.mark.parametrize("fault", sorted(_MODE_REASONS))

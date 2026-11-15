@@ -1182,8 +1182,14 @@ def _go_texts(entries):
 
 def render_tenant_config(results, tenant):
     """*tenant* 的租戶檔的內容字串：`tenant_config_entry` 經 `da-guard write
-    --dry-run` 產生的文字（Go 的，需要可用的 da-guard）。"""
-    return _go_texts([tenant_config_entry(results, tenant)])[0]
+    --dry-run` 產生的文字（Go 的，需要可用的 da-guard）。
+
+    #3832：與它的根 defaults 片段（`defaults_snippet_entry`）同一批 dry run，
+    如同 `write_outputs` 把兩個檔一起寫。沒有根層檔的樹照常由共用判決判，
+    租戶檔單獨一個時，沒有任何一層宣告的 key 被判 unread、dry run 被拒；
+    租戶檔的文字不受同批的檔影響。"""
+    return _go_texts([tenant_config_entry(results, tenant),
+                      defaults_snippet_entry(results)])[0]
 
 
 def _defaults_value(raw):

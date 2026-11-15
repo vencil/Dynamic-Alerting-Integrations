@@ -138,7 +138,7 @@ _SHIM = r'''
 import json, os, subprocess, sys
 p = subprocess.run([os.environ["KC_REAL_GUARD"], *sys.argv[1:]], capture_output=True)
 brk = json.loads(os.environ["KC_BREAK"])
-if (sys.argv[1:2] or [""])[0] != brk["sub"]:
+if (sys.argv[1:2] or [""])[0] != brk["sub"] or "--config-facts" in sys.argv:
     sys.stdout.buffer.write(p.stdout); sys.stderr.buffer.write(p.stderr); sys.exit(p.returncode)
 d = json.loads(p.stdout)
 kv = brk["sub"] == "key-verdict"
@@ -291,7 +291,10 @@ def test_a_broken_record_is_reported_without_its_content(tmp_path, monkeypatch, 
     elif sub == "key-verdict":
         assert "key_verdict_incomplete" in kinds, kinds
     else:
-        assert "custom_alert_delivery_unchecked" in kinds, kinds
+        # #3918: the generator reads served-values' config facts only (no
+        # key_checks), so a broken served-values record reaches it nowhere:
+        # the key check is key-verdict's, read whole.
+        assert "key_version_label" in kinds and "custom_alert_delivery_unchecked" not in kinds, kinds
 
 
 # ── key_check_line itself (#3703 review) ──────────────────────────────────

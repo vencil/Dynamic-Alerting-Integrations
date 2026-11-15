@@ -137,28 +137,25 @@ def test_a_refused_tree_is_not_judged(tmp_path):
     assert _key_records(doc) == []
 
 
-def test_a_threshold_key_no_root_platform_file_lets_the_verdict_judge_fails(tmp_path):
-    """#3016 option A: an undecidable threshold key fails `--validate`, as
-    tenant-api refuses such a write (422)."""
+def test_a_tree_with_no_root_platform_file_is_judged(tmp_path):
+    """#3832 (ADR-038 decision 7): a tree with no root platform file is
+    judged as any other — the thresholds the platform ships armed are built
+    into the readers, so a tenant writing one is read and `--validate`
+    passes; no `key_undecidable` line."""
     files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n"}
     res, doc = _cli(tmp_path, files, "--validate")
-    assert res.returncode == 1, res.stderr
-    recs = _key_records(doc)
-    assert [(r["kind"], r["severity"], r["blocks"]) for r in recs] == [
-        ("key_undecidable", "error", "validate")], recs
-    assert "1 threshold key(s) cannot be judged (undecidable)" in recs[0]["message"]
+    assert res.returncode == 0, res.stderr
+    assert [r for r in _key_records(doc) if r["kind"] == "key_undecidable"] == [], doc
 
 
-def test_an_undecidable_key_beside_an_error_is_marked_as_blocking_too(tmp_path):
-    """#3016 review: with an error also there, the undecidable line still
-    says it blocks — fixing the error alone leaves rc 1 (Go's
-    `undecidable_blocks`, not inferred from the findings)."""
+def test_an_error_in_a_tree_with_no_root_platform_file_is_reported_alone(tmp_path):
+    """#3832: with no root platform file, an unread key is the one blocking
+    line; no undecidable line beside it."""
     files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n    _routng: x\n"}
     res, doc = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr
     got = {(r["kind"], r["severity"], r["blocks"]) for r in _key_records(doc)}
-    assert ("key_undecidable", "error", "validate") in got, doc
-    assert ("key_unread", "error", "validate") in got, doc
+    assert got == {("key_unread", "error", "validate")}, doc
 
 
 def test_a_key_name_with_a_control_character_is_never_printed_raw(tmp_path):
@@ -190,14 +187,14 @@ def test_a_routing_only_root_defaults_file_passes(tmp_path):
 
 
 def test_a_tree_with_only_routing_and_no_root_platform_file_passes(tmp_path):
-    """ADR-038 decision 7: a tree with only routing settings has no
-    threshold key the verdict could not judge — rc 0, the line a note."""
+    """ADR-038 decision 7: a tree with only routing settings and no root
+    platform file passes, rc 0, with no key verdict line."""
     files = {"t-a.yaml": "tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n"
                          "        url: https://hooks.example.com/t-a\n"}
     res, doc = _cli(tmp_path, files, "--validate")
     assert res.returncode == 0, res.stderr
-    assert [(r["kind"], r["severity"], r["blocks"]) for r in _key_records(doc)] == [
-        ("key_undecidable", "note", "never")], doc
+    # #3832: no tree is undecidable any more, so no note either.
+    assert _key_records(doc) == [], doc
 
 
 # ── in-process: a verdict that cannot be given, and who asks for one ──────
@@ -243,10 +240,21 @@ def test_key_verdict_false_asks_for_none(tmp_path, monkeypatch, capsys):
     assert len(calls) == 1
 
 
-def test_the_generator_container_does_not_judge_keys_inside_the_generator(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stale_memory_end", [False, True])
+def test_the_generator_container_does_not_judge_keys_inside_the_generator(
+        tmp_path, monkeypatch, stale_memory_end):
     """The container runs `gar.main` in its judgement process and judges the
     keys itself afterwards (`_gsvc_child.key_verdict`, its own deadline): the
-    generator must not judge them a second time, outside it."""
+    generator must not judge them a second time, outside it.
+
+    #3961: a program-end record left in this process by anything before the
+    judgement (here a memory end, as an earlier test on the same worker left
+    one) is not this judgement's: `_judge` starts from no records, so it does
+    not answer `memory` for a run that never ran out of memory."""
+    if stale_memory_end:
+        import _lib_tool_fault as tf
+        monkeypatch.setattr(tf, "_RECORDS", [])
+        tf.record("da-guard", "served-values", tf.MEMORY_END)
     repo = h.init_repo(tmp_path / "repo")
     base = h.commit_tree(repo, {"_defaults.yaml": DEFAULTS,
                                 "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"50\"\n"})

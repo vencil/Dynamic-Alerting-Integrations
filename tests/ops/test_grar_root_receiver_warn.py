@@ -156,7 +156,7 @@ class TestOtherModesDoNotWarn:
 # ── --apply (in-process fake cluster) ───────────────────────────────
 def _fake_cluster(monkeypatch, root_receiver: dict) -> list[list[str]]:
     calls: list[list[str]] = []
-    cm = json.dumps({"data": {"alertmanager.yml": yaml.dump({
+    cm = json.dumps({"metadata": {"managedFields": []}, "data": {"alertmanager.yml": yaml.dump({
         "route": {"receiver": root_receiver["name"], "routes": []},
         "receivers": [root_receiver],
         "inhibit_rules": [],
@@ -190,7 +190,7 @@ class TestApply:
     def test_empty_cluster_root_receiver_warns(self, monkeypatch, capsys, strict):
         calls = _fake_cluster(monkeypatch, {"name": "default"})
         assert self._run(strict) == 0
-        assert any(c[:2] == ["kubectl", "apply"] for c in calls), calls
+        assert any(c[:2] == ["kubectl", "replace"] for c in calls), calls
         assert capsys.readouterr().err.count(_WARN) == 1
 
     def test_cluster_root_receiver_with_integration_no_warn(self, monkeypatch, capsys):

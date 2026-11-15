@@ -15,6 +15,20 @@ import _lib_kubectl  # noqa: E402
 from _kubectl_fake import install as install_kubectl  # noqa: E402  (#3349)
 from _lib_tenant_values import ServedValuesError  # noqa: E402
 import subprocess  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
+
+
+def _own(inh):
+    """*inh* (resolve_inheritance_chain's answer, or --show-inheritance's
+    document) without the built-in layer (#3832): its `builtin` chain entry
+    and the resolved values that entry supplied. The tests below pin the
+    tree's own layers; test_basic_defaults_only pins the built-in one."""
+    builtin = {k for c in inh["chain"] if c["layer"] == "builtin" for k in c["keys"]}
+    out = dict(inh)
+    out["chain"] = [c for c in inh["chain"] if c["layer"] != "builtin"]
+    out["resolved"] = {k: v for k, v in inh["resolved"].items() if k not in builtin}
+    return out
 
 # #2526: the chain is `da-guard effective`'s answer.
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -231,8 +245,11 @@ class TestResolveInheritanceChain:
         assert result is not None
         assert result["profile_name"] is None
         assert result["resolved"]["cpu"] == 80
-        assert result["chain"] == [{"layer": "defaults", "source": "_defaults.yaml",
-                                    "keys": {"cpu": 80, "mem": 70}}]
+        # #3832: the built-in layer comes first, supplying every
+        # default-armed key at the platform's value, without a file.
+        assert result["chain"] == [
+            {"layer": "builtin", "source": "(built-in)", "keys": BUILTIN_DEFAULTS},
+            {"layer": "defaults", "source": "_defaults.yaml", "keys": {"cpu": 80, "mem": 70}}]
 
     def test_full_three_layers(self, tmp_path):
         # Layer 1: defaults
@@ -261,8 +278,9 @@ class TestResolveInheritanceChain:
         assert result["resolved"]["mem"] == 70
         assert result["resolved"]["disk"] == 90
 
-        # Chain has 3 layers, each listing the keys it supplies
-        assert result["chain"] == [
+        # Chain has 3 layers, each listing the keys it supplies (and the
+        # built-in layer, #3832, which _own takes out)
+        assert _own(result)["chain"] == [
             {"layer": "defaults", "source": "_defaults.yaml", "keys": {"disk": 90, "mem": 70}},
             {"layer": "profile", "source": "_profiles.yaml → high-load", "keys": {"net": 60}},
             {"layer": "tenant", "source": "db-a.yaml", "keys": {"cpu": 99}},
@@ -299,7 +317,7 @@ class TestResolveInheritanceChain:
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
         assert result["profile_name"] is None   # bound to none
         assert result["resolved"]["mem"] == 80  # no /metrics row: /effective's value
-        assert [c["layer"] for c in result["chain"]] == ["defaults", "tenant"]
+        assert [c["layer"] for c in _own(result)["chain"]] == ["defaults", "tenant"]
 
     def test_a_tenant_below_the_root_is_found(self, tmp_path):
         """The exporter's tree is hierarchical; the old reader was flat."""
@@ -310,7 +328,7 @@ class TestResolveInheritanceChain:
                                                         encoding="utf-8")
         (tmp_path / "eu" / "db-a.yaml").write_text("tenants:\n  db-a:\n    mem: 2\n",
                                                    encoding="utf-8")
-        result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
+        result = _own(diagnose.resolve_inheritance_chain("db-a", str(tmp_path)))  # #3832
         assert result["resolved"] == {"cpu": 60, "mem": 2}
         assert result["chain"] == [
             {"layer": "defaults", "source": "eu/_defaults.yaml", "keys": {"cpu": 60}},
@@ -874,7 +892,7 @@ class TestProfileLookupSharesTheChainRead:
         chain = diagnose.resolve_inheritance_chain("tx", d)
         assert "skipped_unusable_files" not in chain
         if resolved is not None:
-            assert chain["resolved"] == resolved
+            assert _own(chain)["resolved"] == resolved  # #3832: the tree's own
         result = self._check(d)
         assert "skipped_unusable_files" not in result["inheritance_chain"]
         _assert_only_unread_declared_warns(
@@ -982,7 +1000,7 @@ class TestSetTagReadAsTheExporterReadsIt:
         chain = diagnose.resolve_inheritance_chain("tx", d)
         assert "skipped_unusable_files" not in chain
         assert chain["profile_name"] == profile
-        assert chain["resolved"] == served
+        assert _own(chain)["resolved"] == served  # #3832: the tree's own
         assert diagnose.lookup_tenant_profile("tx", d) == profile
         _assert_only_unread_declared_warns(capsys.readouterr().err, False)
 
@@ -1051,7 +1069,7 @@ class TestRound1ReviewPins:
             "_defaults.yaml": "defaults:\n  cpu: 50\n  mem: 60\n",
             "A/_defaults.yaml": "defaults:\n  cpu: 51\n",
             "A/ta.yaml": "tenants:\n  ta:\n    x: 1\n"})
-        chain = diagnose.resolve_inheritance_chain("ta", d)
+        chain = _own(diagnose.resolve_inheritance_chain("ta", d))  # #3832
         assert [c["source"] for c in chain["chain"]] == [
             "_defaults.yaml", "A/_defaults.yaml", "A/ta.yaml"]
 
@@ -1069,8 +1087,8 @@ class TestRound1ReviewPins:
         """No /metrics row: /effective's value (1, not served-values' text '1')."""
         d = self._tree(tmp_path, {"_defaults.yaml": "defaults:\n  cpu: 50\n",
                                   "ta.yaml": "tenants:\n  ta:\n    x: 1\n    cpu: disable\n"})
-        assert diagnose.resolve_inheritance_chain("ta", d)["resolved"] == {
-            "cpu": "disable", "x": 1}
+        assert _own(diagnose.resolve_inheritance_chain("ta", d))["resolved"] == {
+            "cpu": "disable", "x": 1}  # #3832: the tree's own
 
     def test_effective_warnings_are_printed(self, tmp_path, capsys, monkeypatch):
         """Go fills no `warnings` today; when it does, they reach stderr."""
@@ -1157,8 +1175,9 @@ class TestGivenConfigDirIsNeverSilent:
     def test_must_fire_control_the_good_tree_still_answers(self, tmp_path):
         p, doc = self._cli("db-a", "--config-dir", self._tree(tmp_path), "--show-inheritance")
         assert p.returncode == 0, p.stderr
-        assert [c["layer"] for c in doc["chain"]] == ["defaults", "tenant"], doc
-        assert doc["resolved"] == {"cpu": 90, "mem": 60}, doc
+        own = _own(doc)  # #3832: the tree's own layers
+        assert [c["layer"] for c in own["chain"]] == ["defaults", "tenant"], doc
+        assert own["resolved"] == {"cpu": 90, "mem": 60}, doc
 
     def test_the_cli_refuses_before_any_cluster_query(self, tmp_path, monkeypatch):
         """Without `--show-inheritance`: refused before `check()` queries

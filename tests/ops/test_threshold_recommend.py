@@ -792,6 +792,23 @@ class TestCLI:
         assert "preserved 1" in captured.err  # merge stats surfaced
         assert captured.out == ""
 
+    def test_generate_observed_map_that_cannot_be_written_is_exit_2(self, capsys, monkeypatch):
+        """#1641／#3107：map 寫不進去是 rc 2 加一行 ERROR，不是 traceback。"""
+        import _lib_io
+
+        def refused(out_path=None, pack_paths=None):
+            raise _lib_io.OutputWriteError("m.yaml", OSError(13, "Permission denied"))
+
+        monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", refused)
+        with patch("sys.argv", ["threshold_recommend.py", "--generate-observed-map"]):
+            with pytest.raises(SystemExit) as exc_info:
+                tr.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        lines = captured.err.splitlines()
+        assert len(lines) == 1 and lines[0].startswith("ERROR: cannot write m.yaml"), captured.err
+        assert captured.out == ""
+
     def test_generate_observed_map_json_envelope(self, tmp_path, capsys, monkeypatch):
         """#1112: --generate-observed-map --json → stdout 恰好一份 JSON。
 
