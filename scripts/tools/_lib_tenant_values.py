@@ -323,6 +323,7 @@ __all__ = [
     "TenantEffective",
     "TenantFacts",
     "TenantValues",
+    "UngatheredPart",
     "UnreadableFile",
     "YamlFileError",
     "EffectiveTree",
@@ -360,10 +361,11 @@ __all__ = [
 
 SUBCOMMAND = "served-values"
 # The `schema` value load_served_tree reads; any other is refused (ADR-037).
-SERVED_VALUES_SCHEMA = "da-guard.served-values/v2"
+SERVED_VALUES_SCHEMA = "da-guard.served-values/v3"
 #: Earlier versions of the document: a da-guard writing one is older than
-#: this tool (v1: `key_checks` as sentences that quoted the key — #3703).
-SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1",)
+#: this tool (v1: `key_checks` as sentences that quoted the key — #3703;
+#: v2: no `ungathered` beside the schedules — #3991).
+SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1", "da-guard.served-values/v2")
 #: The fields of every --config-facts tenant (`custom_alerts_error` only
 #: beside a block that does not decode; #3918).
 _FACTS_FIELDS = frozenset({"custom_alerts", "custom_alerts_finding", "metadata"})
@@ -651,13 +653,27 @@ class ServedTree(NamedTuple):
     root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = ()
 
 
+class UngatheredPart(NamedTuple):
+    """One part of the UTC day in which the exporter's /metrics cannot be
+    gathered at all (#3991): its scrape fails as a whole, so no tenant is
+    served anything in [start, end)."""
+    start: str  # "HH:MM", UTC
+    end: str    # "HH:MM", UTC; at most "24:00"
+    error: str  # da-guard's text: the Gather's failure
+
+
 class ServedSchedules(NamedTuple):
     """`load_served_schedules`' answer (#3877): `ServedTree` with each
     tenant's schedules alone — no field read at an instant exists to be
-    misread."""
+    misread. `ungathered` (#3991) is every part of the day /metrics cannot
+    be gathered in, in order, for the whole tree: a key's segments carry
+    such a part only where its tenant serves the key, so a tenant serving
+    no key there — or a tree that cannot be gathered all day, every
+    tenant's schedules then empty — is known from it alone."""
     tenants: dict[str, dict[str, KeySchedule]]
     skipped: list[SkippedFile]
     stderr_lines: list[str]
+    ungathered: "tuple[UngatheredPart, ...]"
     parse_failed: "tuple[str, ...] | list[str]" = ()
     unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
     absent: "tuple[str, ...]" = ()
@@ -1479,21 +1495,31 @@ def load_served_schedules(
     the day /metrics cannot be gathered in is a segment whose `error` is set,
     wherever `at` (RFC3339; None = now) falls. Same exceptions as
     `load_served_tree`; a da-guard without `--schedules-only` is named as
-    older than this tool."""
+    older than this tool. `ungathered` is the document's (#3991): the parts
+    of the day no segment may name, since no key is served in them."""
     extra = ["--at", at] if at is not None else []
     extra.append("--schedules-only")
     subset, requested = _subset_args(tenants)
     extra += subset
-    (days, skipped, dropped, absent), returncode, stderr = _run_da_guard(
+    (days, skipped, dropped, absent, ungathered), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
-                          _subset_absent(doc, requested)),
+                          _subset_absent(doc, requested),
+                          doc["ungathered"]),
         reads_unreadable=True, dropped_ok=partial,
         older_schemas=SERVED_VALUES_OLDER_SCHEMAS, fields_added_since=())
     _check_tenant_map(days, returncode, stderr)
+    try:
+        if not isinstance(ungathered, list):
+            raise _ShapeError(f"a {type(ungathered).__name__}, not a list")
+        parts = tuple(UngatheredPart(str(p["from"]), str(p["to"]), str(p["error"])) for p in ungathered)
+    except (KeyError, TypeError, _ShapeError) as e:
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND}: `ungathered` is not of its shape ({error_text(e)})",
+            returncode, stderr, broken=True) from e
     out: dict[str, dict[str, KeySchedule]] = {}
     for tenant_id, tv in days.items():
         try:
@@ -1507,7 +1533,7 @@ def load_served_schedules(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries a schedule that is not of its shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
-    return ServedSchedules(out, skipped, _nonempty_lines(stderr), *dropped, absent)
+    return ServedSchedules(out, skipped, _nonempty_lines(stderr), parts, *dropped, absent)
 
 
 class TenantFacts(NamedTuple):

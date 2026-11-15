@@ -55,25 +55,30 @@ import (
 // over the tenants failing in it, which are the ones it names). The document
 // is, byte for byte, the one reading the whole tree at every cut of the tree
 // gave (served_schedules_differential_test.go).
+//
+// The parts it returns are those same parts of the day, written once for
+// the whole document (#3991): a key's segments carry them only where the
+// tenant serves the key, so a tenant serving no key in them — or a tree
+// that cannot be gathered all day — would leave no trace of them otherwise.
 func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
 	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool,
-) error {
+) ([]ungatheredPart, error) {
 	utc := at.UTC()
 	atMinute := utc.Hour()*60 + utc.Minute()
 
 	ungatherable, err := ungatherableParts(cfg, at, name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if gerr := ungatherable.at(atMinute); (gerr != "") == instantGathered {
 		cuts := cfg.ScheduleCuts()
 		ends := cutEnds(cuts)
 		i := sort.SearchInts(cuts, atMinute+1) - 1
 		if instantGathered {
-			return fmt.Errorf("from %s to %s UTC: internal: the schedule reading at --at cannot be gathered, the served values could: %s",
+			return nil, fmt.Errorf("from %s to %s UTC: internal: the schedule reading at --at cannot be gathered, the served values could: %s",
 				hhmm(cuts[i]), hhmm(ends[i]), gerr)
 		}
-		return fmt.Errorf("from %s to %s UTC: internal: the served values at --at cannot be gathered, the schedule reading at --at could",
+		return nil, fmt.Errorf("from %s to %s UTC: internal: the served values at --at cannot be gathered, the schedule reading at --at could",
 			hhmm(cuts[i]), hhmm(ends[i]))
 	}
 
@@ -84,7 +89,7 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 			expiryOf[te.Tenant] = map[string]config.ResolvedThresholdExpiry{}
 		}
 		if prev, dup := expiryOf[te.Tenant][canon]; dup {
-			return fmt.Errorf("internal: tenant %s: keys %q and %q both time-box %q", te.Tenant, prev.MetricKey, te.MetricKey, canon)
+			return nil, fmt.Errorf("internal: tenant %s: keys %q and %q both time-box %q", te.Tenant, prev.MetricKey, te.MetricKey, canon)
 		}
 		expiryOf[te.Tenant][canon] = te
 	}
@@ -132,26 +137,26 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 					err = fmt.Errorf("internal: tenant %s: its rows cannot be gathered, yet the first pass found they could: %s", tenant, gerr)
 				}
 				if err != nil {
-					return fmt.Errorf("from %s to %s UTC: %w", hhmm(own[j]), hhmm(ownEnds[j]), err)
+					return nil, fmt.Errorf("from %s to %s UTC: %w", hhmm(own[j]), hhmm(ownEnds[j]), err)
 				}
 				readAt, read = j, r
 			}
 			passes[i] = map[string]map[string]reading{tenant: read[tenant]}
 			if m <= atMinute && atMinute < ends[i] {
 				if err := sameAsValues(tenant, tv, read[tenant]); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
 
 		schedules, err := tenantSchedules(cfg, at, tenant, cuts, ends, passes, gatherErrs, expiryOf[tenant], name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		tv.Schedules = &schedules
 		tenants[tenant] = tv
 	}
-	return nil
+	return mergedParts(ungatherable.bounds, ungatherable.errs), nil
 }
 
 // tenantSchedules is the tenant's schedules over the pieces [cuts[i],
@@ -224,6 +229,35 @@ func cutEnds(cuts []int) []int {
 type ungatherableDay struct {
 	bounds []int
 	errs   []string
+}
+
+// ungatheredPart is one entry of the document's `ungathered` (#3991): a part
+// [From, To) of the UTC day ("HH:MM", To at most "24:00") in which the
+// exporter's /metrics cannot be gathered at all, and Error, that Gather's
+// failure — the same text every key's segment there carries.
+type ungatheredPart struct {
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Error string `json:"error"`
+}
+
+// mergedParts is the pieces [bounds[i], bounds[i+1]) with errs[i] set, in
+// order, adjacent ones with the same error merged; never nil. The last
+// bound ends the last piece.
+func mergedParts(bounds []int, errs []string) []ungatheredPart {
+	out := []ungatheredPart{}
+	for i, e := range errs {
+		if e == "" {
+			continue
+		}
+		from, to := hhmm(bounds[i]), hhmm(bounds[i+1])
+		if n := len(out); n > 0 && out[n-1].To == from && out[n-1].Error == e {
+			out[n-1].To = to
+			continue
+		}
+		out = append(out, ungatheredPart{From: from, To: to, Error: e})
+	}
+	return out
 }
 
 // at is the Gather error of the piece holding minute, "" when it gathers.

@@ -220,6 +220,7 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
     ParseFailedError,
+    UngatheredPart,
     load_effective_tree,
     load_guard_report,
     load_served_facts,
@@ -2113,6 +2114,34 @@ _NO_ALERT_NOT_CHECKED_HINT = (
     "working da-guard) and run again. Never blocks (#3591).")
 
 
+def _ungathered_reading(parts: "tuple[UngatheredPart, ...]") -> tuple[bool, list[str]]:
+    """What a reader of the whole day (`load_served_schedules`) says of the
+    parts of it /metrics cannot be gathered in (#3991): whether they cover
+    the whole day — nothing was served at any minute, so nothing was judged
+    and the row is "not checked", never a PASS — and otherwise the line
+    naming them as not judged ([] when there is none). Read off the
+    document's `ungathered`, not off the keys' segments: a segment exists
+    only where its tenant serves the key."""
+    covered = 0
+    for p in parts:
+        if _hhmm(p.start) != covered:
+            break
+        covered = _hhmm(p.end)
+    if covered >= _MINUTES_PER_DAY:
+        return True, []
+    if not parts:
+        return False, []
+    spans = [f"{p.start}-{p.end} UTC" for p in parts]
+    more = f" (+{len(spans) - WARN_LIMIT} more)" if len(spans) > WARN_LIMIT else ""
+    return False, [f"not judged where /metrics cannot be gathered (nothing is served): "
+                   f"{', '.join(spans[:WARN_LIMIT])}{more}"]
+
+
+_MINUTES_PER_DAY = 24 * 60
+_ALL_DAY_UNGATHERED = ("the exporter's /metrics cannot be gathered at any minute of the day, so "
+                       "nothing is served to judge — the guard_errors row names why")
+
+
 def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = None,
                    judge: bool = True) -> dict[str, object]:
     """Threshold keys /metrics serves that no shipped alert compares (ADR-038
@@ -2127,8 +2156,9 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     `--schedules-only` (#3883). Nothing here is read at one instant: the
     time of day the check runs at changes nothing — `expires:` alone is read
     at the run's clock, as the verdict reads it. A part of the day /metrics
-    cannot be gathered in serves nothing, so no severity is read there.
-    Whether an alert compares a key is the observed-map's
+    cannot be gathered in serves nothing, so no severity is read there: it
+    is named as not judged, and a day with no part that gathers is not
+    checked (#3991). Whether an alert compares a key is the observed-map's
     answer (`_observed_map_lib.lookup`), asked for the key in the exporter's
     canonical spelling (asked of da-guard), the dimension part dropped — and
     for a key served at critical by its value (`"95:critical"`), for its
@@ -2159,7 +2189,8 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         if verdict.undecidable:
             return not_checked("no root platform file was read, so the threshold keys were not judged")
         observed = _observed_map_lib.load_observed_map()
-        days = load_served_schedules(config_dir, partial=True).tenants
+        schedules = load_served_schedules(config_dir, partial=True)
+        days = schedules.tenants
         # #3883: (tenant, key) -> every severity /metrics serves the key at,
         # in any part of the day (the key verdict carries no value read at
         # one instant since #3835).
@@ -2182,6 +2213,9 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
             YamlFileError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+    all_day, note = _ungathered_reading(schedules.ungathered)
+    if all_day:
+        return not_checked(_ALL_DAY_UNGATHERED)
     # ONE LINE PER KEY (#3591): what is judged is the key — no shipped alert
     # compares it, whatever file writes it — so the line is the key's in the
     # exporter's canonical spelling, the dimension part dropped (the lookup's
@@ -2205,7 +2239,7 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     if not found:
         return _make_result("no_alert", PASS, [
             f"{len(served)} served key row(s): every one is compared by a shipped alert "
-            "(or deferred by the observed-map)"])
+            "(or deferred by the observed-map)", *note])
 
     def capped(names: "set[str]") -> str:
         ordered = sorted(names)
@@ -2216,7 +2250,7 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         tier = " (served as critical)" if promoted else ""
         details.append(f"no_alert `{key}`{tier} — served, but no shipped alert compares it "
                        f"— file(s) {capped(files)} — tenant(s) {capped(tenants)}")
-    return _make_result("no_alert", WARN, details)
+    return _make_result("no_alert", WARN, details + note)
 
 
 _UNSUPPLIED_DEFAULTS_HINT = (
@@ -2420,7 +2454,8 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
     or one whose files the exporter's load drops (the dropped files' tenants
     are not served, so not judged), is a WARN saying it was not checked. A
     part of the day /metrics cannot be gathered in (nothing is served then)
-    is named as not judged — wherever in the day the check runs.
+    is named as not judged — wherever in the day the check runs — and a day
+    with no part that gathers is not checked (#3991).
 
     `at` (RFC3339; None = now) is the instant time-boxes (`expires:`) are
     judged at; its time of day changes nothing.
@@ -2443,9 +2478,13 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
         # a PASS would read as "every tenant checked".
         return not_checked(f"the exporter's load drops {', '.join(sorted(dropped))}; "
                            "their tenants are not served")
+    # A part of the day /metrics cannot be gathered in serves nothing, so
+    # nothing is inverted there — but it was not judged either (#3691).
+    all_day, note = _ungathered_reading(tree.ungathered)
+    if all_day:
+        return not_checked(_ALL_DAY_UNGATHERED)
 
     found: list[str] = []
-    ungathered: list[str] = []
     pairs = 0
     for tenant, days in sorted(tree.tenants.items()):
         # metric_key -> severity -> [(start, end, value)]. Dimensions are
@@ -2457,8 +2496,6 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
         rows: dict[str, dict[str, list[tuple[int, int, float]]]] = {}
         for sched in days.values():
             for seg in sched.segments:
-                if seg.error is not None:
-                    ungathered.append(f"tenant {tenant!r} {seg.start}-{seg.end} UTC")
                 if seg.value is None or not seg.series:
                     continue
                 for se in seg.series:
@@ -2510,12 +2547,6 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
                     f"critical {cv:g} is not {'above' if direction == '>' else 'below'} "
                     f"warning {wv:g} (the shipped alert compares the tenant's largest of each "
                     f"and fires when the value is {direction} the threshold)")
-    # A part of the day /metrics cannot be gathered in serves nothing, so
-    # nothing is inverted there — but it was not judged either (#3691).
-    note = ([f"not judged where /metrics cannot be gathered (nothing is served): "
-             f"{', '.join(sorted(set(ungathered))[:WARN_LIMIT])}"
-             + (f" (+{len(set(ungathered)) - WARN_LIMIT} more)" if len(set(ungathered)) > WARN_LIMIT else "")]
-            if ungathered else [])
     if not found:
         if not pairs:
             # Nothing compared is not "compared and fine" (#3691).
