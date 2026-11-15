@@ -45,6 +45,8 @@ thresholdConfig:
     es_disk_usage_percent: 85   # % of the data path used
     es_heap_usage_percent: 85   # % of the max JVM heap
     oracle_tablespace_used_percent: 85   # % of the tablespace used
+    # #3929：節點記憶體佔 memory high watermark 的百分比，逐節點量、取最滿的一台。
+    rabbitmq_node_mem_percent: 90   # % of the memory high watermark
   state_filters:
     container_crashloop:
       reasons: ["CrashLoopBackOff"]

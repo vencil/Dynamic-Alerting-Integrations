@@ -16,8 +16,9 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 	{"oracle_tablespace_used_percent", 85},
 	{"pg_connections", 80},
 	{"pg_replication_lag", 30},
+	{"rabbitmq_node_mem_percent", 90},
 }
 
 // builtinDefaultsDigest names this table: the first 12 hex digits of the
 // SHA-256 of its `key=value` lines, sorted by key.
-const builtinDefaultsDigest = "fdb5d41873fc"
+const builtinDefaultsDigest = "63343e1d88e9"

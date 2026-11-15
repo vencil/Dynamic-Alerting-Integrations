@@ -505,10 +505,16 @@ class TestKafkaRabbitMQAlertCompleteness:
         assert "> 10000" not in section
 
     def test_rabbitmq_mem_division_by_zero_protection(self):
-        """RabbitMQ memory ratio recording rule 使用 clamp_min 防止除以零。"""
+        """RabbitMQ memory ratio 把上限為 0 的節點濾掉，不是把上限墊成 1。
+
+        `clamp_min(limit, 1)` 會把 5 bytes 的用量讀成 500% 並送出 critical
+        （#3929）；行為由 tests/rulepacks/rule-pack-rabbitmq-memory_test.yaml
+        的 t-zero 租戶驗。"""
         with open(os.path.join(RULE_PACKS_DIR, "rule-pack-rabbitmq.yaml"), encoding="utf-8") as f:
             content = f.read()
-        assert "clamp_min" in content
+        assert "(rabbitmq_node_mem_limit > 0)" in content
+        assert "(rabbitmq_resident_memory_limit_bytes > 0)" in content
+        assert "clamp_min" not in content
 
 
 # ── ConfigMap ↔ Rule Pack Sync ─────────────────────────────────────
