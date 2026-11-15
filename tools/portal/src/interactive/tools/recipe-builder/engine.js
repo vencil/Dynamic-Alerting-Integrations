@@ -31,7 +31,10 @@ purpose: |
     isFieldValid(field, value)      per-field validity
     allRequiredValid(recipe, f)     summary/submit gate
     recipeSummary(recipe, f)        plain-English summary (null until valid)
-    buildRecipeObject(recipe, f)    the RecipeObject handoff payload
+    buildRecipeObject(recipe, f[, original])
+                                    the RecipeObject handoff payload; with the
+                                    stored recipe an edit opened with, keeps
+                                    the members the form does not own (#3920)
     yamlValue(v)                    quote YAML-ambiguous scalars
     yamlSnippet(tenantId, obj)      copy-paste _custom_alerts YAML block
     FIELDS_BY_RECIPE / METRIC_FIELDS  render-order field model
@@ -60,11 +63,29 @@ function recipeStatus(r) {
  * DEFERRED (S6b-1 scope): `selectors` / `selectors_re` (label filters) and
  * `group_by` are NOT yet surfaced — the MVP authors whole-metric recipes; a
  * dynamic key→value selectors editor is a fast-follow (the schema + compiler
- * already accept them). */
+ * already accept them). The form cannot AUTHOR them, but editing a stored
+ * recipe that has them keeps them: buildRecipeObject carries every member the
+ * form does not own back from the original (#3920). */
 const FORM_FIELDS = [
   'metric', 'denominator_metric', 'capacity_metric', 'op', 'window', 'horizon',
   'quantile', 'threshold', 'mode', 'for',
 ];
+
+/* The members of a stored recipe the form owns: what it renders (FORM_FIELDS),
+ * the two it renders outside the per-recipe layout (the recipe select and the
+ * name input) and `severity`, its half of threshold's value:severity. On an
+ * edit these are the form's to write or to leave out; every other member is
+ * carried back as stored (#3920). tests/recipe-builder-engine.test.ts holds
+ * this set equal to the form state's keys, so a field added to the form
+ * cannot stay "not the form's" here and come back after the user cleared it. */
+const FORM_OWNED_KEYS = ['recipe', 'name', 'severity', ...FORM_FIELDS];
+
+/* The form fields the exporter fills in when a declaration leaves them out,
+ * with the value it fills in (the recipe contract's defaults). */
+const CONTRACT_DEFAULTS = {
+  op: ENUMS.opDefault, quantile: ENUMS.quantileDefault,
+  mode: ENUMS.modeDefault, for: ENUMS.forDefault,
+};
 
 const METRIC_FIELDS = ['metric', 'denominator_metric', 'capacity_metric'];
 
@@ -290,13 +311,67 @@ function recipeSummary(recipe, f) {
 }
 
 /* ── recipe object + YAML snippet (the Dumb Handoff payload) ────────── */
-function buildRecipeObject(recipe, f) {
+function ownsKey(obj, k) { return Object.prototype.hasOwnProperty.call(obj, k); }
+
+/* A copy that shares nothing mutable with the stored recipe (its values are
+ * JSON: scalars, lists and maps). */
+function cloneStored(v) {
+  if (Array.isArray(v)) return v.map(cloneStored);
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, cloneStored(x)]));
+  }
+  return v;
+}
+
+/* Whether a member the form does not own is carried from `original` into a
+ * recipe of kind `recipe`. Same kind: always — it is what was stored. Kind
+ * changed: only what the new kind takes by the recipe contract (its params;
+ * group_by where the recipe takes it), so slo_burn_rate's objective does not
+ * land on a threshold recipe and group_by does not land on absence, which the
+ * exporter refuses. A member the contract does not list at all is not this
+ * form's to judge and stays. */
+function carriesOver(recipe, original, key) {
+  if (original.recipe === recipe || !ENUMS.fields.includes(key)) return true;
+  const spec = recipeSpec(recipe);
+  if (!spec) return true;
+  return key === 'group_by' ? !!spec.groupBy : spec.params.includes(key);
+}
+
+/* buildRecipeObject(recipe, f[, original]) — what the form hands off.
+ *
+ * `original` is the stored recipe an EDIT opened with (#3920). The caller
+ * replaces the stored recipe with the result, so whatever is not in the
+ * result is deleted from the tenant's file:
+ *   - a member the form does not own (selectors, selectors_re, group_by, …)
+ *     comes back as stored. Dropping it would widen what the alert matches
+ *     without anyone having asked for that.
+ *   - a member the form owns is the form's: its value, or absent when the
+ *     form emits none (a cleared optional field is NOT restored from
+ *     `original`).
+ *   - a field `original` left to the exporter's default is not written back
+ *     while the form still holds that default.
+ *   - members keep `original`'s order; what the form adds comes after. */
+function buildRecipeObject(recipe, f, original) {
   const obj = { recipe, name: f.name, metric: f.metric, threshold: composeThreshold(f) };
   const fields = FIELDS_BY_RECIPE[recipe] || [];
   for (const k of ['op', 'window', 'horizon', 'quantile', 'denominator_metric', 'capacity_metric', 'mode', 'for']) {
-    if (fields.includes(k) && f[k]) obj[k] = f[k];
+    if (!fields.includes(k) || !f[k]) continue;
+    if (original && !ownsKey(original, k) && f[k] === CONTRACT_DEFAULTS[k]) continue;
+    obj[k] = f[k];
   }
-  return obj;
+  if (!original) return obj;
+  const out = {};
+  for (const k of Object.keys(original)) {
+    if (FORM_OWNED_KEYS.includes(k)) {
+      if (ownsKey(obj, k)) out[k] = obj[k];
+    } else if (carriesOver(recipe, original, k)) {
+      out[k] = cloneStored(original[k]);
+    }
+  }
+  for (const k of Object.keys(obj)) {
+    if (!ownsKey(out, k)) out[k] = obj[k];
+  }
+  return out;
 }
 
 /* yamlValue — quote anything a YAML reader could take as a NON-string scalar.
@@ -361,4 +436,5 @@ export {
   yamlSnippet,
   FIELDS_BY_RECIPE,
   METRIC_FIELDS,
+  FORM_OWNED_KEYS,
 };
