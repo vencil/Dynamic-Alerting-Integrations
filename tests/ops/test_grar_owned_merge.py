@@ -543,7 +543,7 @@ def _apply(tmp_path, *extra) -> int:
 def _replaced(calls: _Calls) -> dict:
     """The object `kubectl replace -f -` was handed on stdin (#3900)."""
     [i] = [n for n, c in enumerate(calls) if c[:2] == ["kubectl", "replace"]]
-    return json.loads(calls.stdin[i])
+    return yaml.safe_load(calls.stdin[i])
 
 
 def _created(calls: _Calls) -> dict[str, str]:
@@ -996,11 +996,14 @@ def test_apply_sends_the_object_on_stdin_to_kubectl_replace(tmp_path, monkeypatc
 
 def test_apply_keeps_everything_but_the_two_keys(tmp_path, monkeypatch, capsys):
     """An object a client-side `kubectl apply` wrote before (labels, another
-    key such as a notification template, its last-applied annotation): all of
-    it stays; the resourceVersion is sent back, so a ConfigMap changed since
-    it was read is refused by the API server rather than overwritten."""
+    annotation, another key such as a notification template): all of it
+    stays; the resourceVersion is sent back, so a ConfigMap changed since it
+    was read is refused by the API server rather than overwritten. Its
+    last-applied annotation does not: `kubectl replace` would rewrite it with
+    the whole object (the annotation limit again)."""
     extra = {"metadata": {"labels": {"app": "alertmanager"}, "resourceVersion": "4711",
-                          "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}"}},
+                          "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}",
+                                          "team": "sre"}},
              "data": {"alertmanager.yml": _CUSTOMER_BASE, "custom.tmpl": "{{ define \"x\" }}{{ end }}"},
              "binaryData": {"logo.png": "iVBORw0K"}}
     calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=["kubectl-client-side-apply"], extra=extra)
@@ -1008,7 +1011,7 @@ def test_apply_keeps_everything_but_the_two_keys(tmp_path, monkeypatch, capsys):
     body = _replaced(calls)
     assert body["metadata"]["labels"] == {"app": "alertmanager"}
     assert body["metadata"]["resourceVersion"] == "4711"
-    assert body["metadata"]["annotations"] == extra["metadata"]["annotations"]
+    assert body["metadata"]["annotations"] == {"team": "sre"}
     assert "managedFields" not in body["metadata"]
     assert body["data"]["custom.tmpl"] == extra["data"]["custom.tmpl"]
     assert body["binaryData"] == {"logo.png": "iVBORw0K"}
@@ -1065,6 +1068,34 @@ def test_apply_refuses_a_configmap_kubernetes_would_refuse(tmp_path, monkeypatch
     err = capsys.readouterr().err
     assert str(_lib_kubectl.CONFIGMAP_DATA_LIMIT_BYTES) in err and "nothing was applied" in err, err[-2000:]
     assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
+
+
+@pytest.mark.parametrize("text", ["route: {}\n# \x80 \x9f C1\n", "route: {}\n# 告警 🚨\n",
+                                  "route: {}\n# tab\there\n"],
+                         ids=["c1", "cjk-emoji", "tab"])
+def test_the_replaced_object_reads_back_as_written(text):
+    """What the gate reads back (Kubernetes' reading of the body) is what was
+    written: the body is YAML, the reading kubectl applies to it."""
+    body = render.replaced_configmap({"metadata": {"name": "c"}}, {"alertmanager.yml": text}, "c", "ns")
+    assert render.emitted_configmap_data(body)["alertmanager.yml"] == text
+
+
+def test_apply_refuses_an_immutable_configmap(tmp_path, monkeypatch, capsys):
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, extra={"immutable": True})
+    assert _apply(tmp_path) == 2
+    assert "is immutable" in capsys.readouterr().err
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
+
+
+def test_a_failed_replace_says_to_run_apply_again(monkeypatch, capsys):
+    """A refused replace (the ConfigMap changed since it was read, say):
+    False, kubectl's words, and how to go on."""
+    def kubectl_run(verb, args, **kw):
+        return subprocess.CompletedProcess([verb, *args], 1, "", "the object has been modified")
+    monkeypatch.setattr(render, "kubectl_run", kubectl_run)
+    assert render._apply_merged_configmap("kind: ConfigMap\n", "monitoring", "c") is False
+    err = capsys.readouterr().err
+    assert "the object has been modified" in err and "run --apply again" in err, err
 
 
 def test_binary_data_counts_decoded_bytes():

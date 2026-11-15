@@ -76,7 +76,7 @@ conf.d 改了就拿**同一份** `alertmanager.base.yaml` 再跑一次，不要�
 
 ```bash
 kubectl create secret generic da-alertmanager-config -n monitoring \
-  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply --server-side -f -
+  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply --server-side --force-conflicts -f -
 ```
 
 - ⛔ **key 必須是 `alertmanager.yaml`**：Operator 只讀這個 key。`--from-file=alertmanager.yaml` 以檔名當 key，所以輸出檔請就叫這個名字。Secret 裡的其他 key 會被複製進 Operator 產生的 Secret，掛在 `/etc/alertmanager/config/` 當額外檔案（例如模板）。

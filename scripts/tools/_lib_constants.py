@@ -57,11 +57,13 @@ DOCS_INSTALL_URL: Final[str] = (
 
 #: The one command that creates or updates the Alertmanager's configSecret
 #: from a rendered alertmanager.yaml (#3900: server-side, so a large config
-#: meets no last-applied annotation limit). Every remedy and checklist that
+#: meets no last-applied annotation limit; --force-conflicts keeps the
+#: overwrite the client-side apply it replaces always did, also of a Secret
+#: first made by `kubectl create`). Every remedy and checklist that
 #: teaches it reads it from here.
 OPERATOR_SECRET_APPLY_COMMAND: Final[str] = (
     "kubectl create secret generic <secret> -n <namespace> --from-file=alertmanager.yaml "
-    "--dry-run=client -o yaml | kubectl apply --server-side -f -")
+    "--dry-run=client -o yaml | kubectl apply --server-side --force-conflicts -f -")
 
 OPERATOR_ROUTING_REMEDY_EN: Final[str] = (
     "Alertmanager routing is no longer generated as AlertmanagerConfig CRDs (#3572): "

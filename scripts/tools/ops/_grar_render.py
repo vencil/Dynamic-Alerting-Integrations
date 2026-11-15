@@ -1229,7 +1229,7 @@ class AlertmanagerConfigInvariantViolated(ValueError):
     platform invariant (ADR-025: an inhibit rule that would suppress the
     Watchdog heartbeat or let a tenant silence a platform alert; #1132 under
     ``strict``). Raised by ``apply_to_configmap`` before Alertmanager's
-    loader or kubectl apply runs, so nothing reached the cluster. A verdict on the config (rc
+    loader or kubectl replace runs, so nothing reached the cluster. A verdict on the config (rc
     1), like ``assemble_configmap``'s ``ValueError`` on the other write paths
     (#2260) — a ``ValueError`` subclass for that reason, and a class of its
     own so the caller catches the merge step only, not every ``ValueError``
@@ -1355,8 +1355,9 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
 APPLY_FIELD_MANAGER = "da-generate-routes"
 
 #: The field managers that are kubectl itself — one per kubectl verb that
-#: writes, the client-side apply's, and the server-side apply upgrade's
-#: marker — plus this tool: owners --apply may take a key over from, as the
+#: writes, the client-side apply's, and `before-first-apply` (the name the
+#: API server gives fields that existed before an object's first tracked
+#: write) — plus this tool: owners --apply may take a key over from, as the
 #: client-side apply it replaces always did. Listed, never a `kubectl-`
 #: prefix: a kubectl plugin (`kubectl-<name>`) that sets no field manager is
 #: named after its binary, and is another tool (#3900, owner decision B).
@@ -1418,13 +1419,27 @@ def configmap_manifest(name: str, namespace: str, data: "dict[str, str]") -> str
                      default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+#: The annotation a client-side `kubectl apply` keeps the whole object in.
+LAST_APPLIED_ANNOTATION = "kubectl.kubernetes.io/last-applied-configuration"
+
+
 def replaced_configmap(live: dict, data: "dict[str, str]", name: str = "",
                        namespace: str = "") -> str:
-    """*live* (the cluster's ConfigMap) with *data*'s keys replaced and
-    nothing else changed, as the JSON `kubectl replace -f -` sends (#3900):
-    its labels, annotations and every other key stay; its resourceVersion
-    stays too, so a ConfigMap changed since it was read is refused, not
-    overwritten; its managedFields are left for the API server to keep."""
+    """*live* (the cluster's ConfigMap) with *data*'s keys replaced, as the
+    YAML `kubectl replace -f -` sends (#3900): its labels, every other
+    annotation and every other key stay; its resourceVersion stays too, so a
+    ConfigMap changed since it was read is refused, not overwritten; its
+    managedFields are left for the API server to keep.
+
+    ⛔ The client-side `last-applied-configuration` annotation an earlier
+    `--apply` (or the operator's own `kubectl apply -f`) left is removed:
+    `kubectl replace` rewrites that annotation with the whole object it sends
+    whenever the object carries one, so a large config would meet the
+    annotation limit again, and a later client-side apply would three-way
+    merge against it and delete what it does not list. YAML, not JSON: kubectl
+    reads a `-f -` that starts with `{` with its JSON decoder, which the
+    reading the gate asks (da-crdecode, YAML) does not match on every
+    character."""
     body = copy.deepcopy(live)
     body.setdefault("apiVersion", "v1")
     body.setdefault("kind", "ConfigMap")
@@ -1434,16 +1449,22 @@ def replaced_configmap(live: dict, data: "dict[str, str]", name: str = "",
     if namespace:
         meta.setdefault("namespace", namespace)
     meta.pop("managedFields", None)
+    annotations = meta.get("annotations")
+    if isinstance(annotations, dict):
+        annotations.pop(LAST_APPLIED_ANNOTATION, None)
+        if not annotations:
+            meta.pop("annotations")
     body.setdefault("data", {}).update(data)
-    return json.dumps(body, ensure_ascii=False, indent=2)
+    return yaml.dump(body, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def _apply_merged_configmap(body: str, namespace: str, configmap_name: str) -> bool:
     """Replace the cluster's ConfigMap with *body* (``replaced_configmap``),
     sent on stdin (#3900): the config is in no argument, so its size meets no
-    argv limit; no ``last-applied-configuration`` annotation is written; the
-    object's other keys and labels are kept, and a ConfigMap changed since it
-    was read (its resourceVersion) is refused by the API server.
+    argv limit; the body carries no ``last-applied-configuration``, so none
+    is written; the object's other keys and labels are kept, and a ConfigMap
+    changed since it was read (its resourceVersion) is refused by the API
+    server.
 
     Returns True if successful, False otherwise.
     """
@@ -1457,7 +1478,9 @@ def _apply_merged_configmap(body: str, namespace: str, configmap_name: str) -> b
         print(f"ERROR: kubectl replace failed: {exc}", file=sys.stderr)
         return False
     if result.returncode != 0:
-        print(f"ERROR: kubectl replace failed: {result.stderr}", file=sys.stderr)
+        print(f"ERROR: kubectl replace failed (nothing was applied): {result.stderr.strip()}\n"
+              "       If the ConfigMap was changed after --apply read it, run --apply again: "
+              "it reads the ConfigMap afresh.", file=sys.stderr)
         return False
 
     print(f"ConfigMap {namespace}/{configmap_name} updated")
@@ -1512,8 +1535,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
          --output-configmap / --output-alertmanager)
       3. ``alertmanager_check`` on the merged text: Alertmanager's loader
          (da-read; #2219, #3689)
-      4. kubectl apply the ConfigMap: the output under alertmanager.yml, the
-         source under alertmanager.base.yml
+      4. kubectl replace the ConfigMap (#3900): the cluster's object with the
+         output under alertmanager.yml and the source under alertmanager.base.yml
       5. curl POST /-/reload to trigger Alertmanager configuration reload
 
     Notes:
@@ -1559,7 +1582,15 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     if owners is None:
         print(f"ERROR: ConfigMap {namespace}/{configmap_name}: kubectl returned no "
               "managedFields, so who manages its keys cannot be told — refusing to write it "
-              "(nothing was applied). kubectl must support `get --show-managed-fields`.",
+              "(nothing was applied). Either this kubectl does not support "
+              "`get --show-managed-fields`, or the object carries none (it has not been "
+              "written since the API server began tracking field managers): update it once "
+              "with kubectl, then run --apply again.", file=sys.stderr)
+        return False
+    if live.get("immutable") is True:
+        print(f"ERROR: ConfigMap {namespace}/{configmap_name} is immutable "
+              "(`immutable: true`): Kubernetes refuses any change to its data — refusing "
+              "to write it (nothing was applied). Recreate it as a mutable ConfigMap first.",
               file=sys.stderr)
         return False
     if owners:
