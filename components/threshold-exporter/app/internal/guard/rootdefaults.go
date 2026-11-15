@@ -33,6 +33,7 @@ package guard
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -304,6 +305,19 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 			if r.Reason == config.RefusedNonFinite {
 				why = "is not a finite number: an alert compared against NaN or an infinity never fires or always fires"
 			}
+			if v, armed := config.BuiltinDefault(r.Key); armed {
+				// #3832: a default-armed key falls to the built-in value.
+				out = append(out, Finding{
+					Severity: SeverityError,
+					Kind:     findingkind.FindingRootDefaultRefused,
+					Field:    f.Name + ":defaults." + r.Key,
+					Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves "+
+						"the platform's built-in value %s for `%s` instead, as if the line were not there. Write a "+
+						"finite number to serve your own value (a root default takes no `:severity`), or delete the "+
+						"line to keep the platform's.", f.Name, r.Key, r.Text, why, formatBuiltin(v), r.Key),
+				})
+				continue
+			}
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     findingkind.FindingRootDefaultRefused,
@@ -317,6 +331,67 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 	}
 	return out
 }
+
+// checkRootOptionalBuiltin reports findingkind.FindingRootOptionalBuiltin
+// for each default-armed key (config.BuiltinDefault) the conf.d root
+// carrier lists under its top-level `optional_overrides:` while its
+// `defaults:` mapping does not give the key a value — the key is absent there
+// or written as null (#3832). Such a list entry declares the key without a
+// platform value, which for a default-armed key changes nothing: the built-in
+// layer still gives every tenant the platform's value. A tree that lists the
+// key to keep its alert off (what validate-config's `unsupplied_defaults` row
+// once advised) gets the alert after the upgrade, so the list entry is an
+// error, not a no-op. A value the root does write — a number, or one the
+// decode refuses (checkRootDefaultsRefused's) — is not this check's. A file
+// in ParseFailed is skipped, as checkRootCriticalKeys does.
+func checkRootOptionalBuiltin(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil {
+			continue
+		}
+		list, _ := doc["optional_overrides"].([]any)
+		var defaults map[string]any
+		if wrappedInMapping(doc) {
+			defaults, _ = doc["defaults"].(map[string]any)
+		}
+		seen := map[string]bool{}
+		for _, item := range list {
+			k, ok := item.(string)
+			if !ok || seen[k] {
+				continue
+			}
+			seen[k] = true
+			v, armed := config.BuiltinDefault(k)
+			if !armed || defaults[k] != nil {
+				continue
+			}
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootOptionalBuiltin,
+				Field:    f.Name + ":optional_overrides." + k,
+				Message: fmt.Sprintf("%s: `%s` is listed under the conf.d root `optional_overrides:` without a "+
+					"number under `defaults:`. The platform arms `%s` by default: every tenant gets its built-in "+
+					"value %s, and the list does not switch it off. To keep its alert off, write `%s: disable` in "+
+					"a subtree `_defaults.yaml` or in the tenant files; to serve your own value, give it a number "+
+					"under `defaults:`. Then delete the list entry.", f.Name, k, k, formatBuiltin(v), k),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
+	return out
+}
+
+// formatBuiltin is a built-in value as the generated table writes it.
+func formatBuiltin(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // checkRootDimensionsCriticalBase reports
 // findingkind.FindingRootDimensionsCriticalBase for each base under the

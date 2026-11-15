@@ -278,8 +278,11 @@ func TestComputeMergedHash_NoDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeMergedHash: %v", err)
 	}
-	// Matches golden flat/tenant-a
-	want := "44e866a34cc1952d"
+	// Matches golden flat/tenant-a. The merge lays the built-in layer
+	// (#3832) under the tenant even with no chain, so the hash is that of the
+	// tenant body plus the built-in table: Python's json.dumps(sort_keys=True,
+	// separators=(",", ":"), ensure_ascii=False) of that dict, first 16 hex.
+	want := "bd23af153253911e"
 	if got != want {
 		t.Errorf("got %q, want %q (flat scenario)", got, want)
 	}

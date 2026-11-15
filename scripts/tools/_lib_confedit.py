@@ -363,11 +363,56 @@ class NewFile:
     def preview(self, *, binary: Optional[str] = None,
                 timeout: Optional[float] = None) -> str:
         """The text `da-guard write` writes for this file: a dry run of it
-        alone, in an empty directory of its own. Raises as `emit`."""
+        alone, in a directory of its own. Raises as `emit`.
+
+        #3832: a tree with no root platform file is judged by the shared key
+        verdict like any other, so a tenant key no layer declares is unread
+        and the dry run is refused (worsens_tree). The text da-guard writes
+        does not depend on the tree, so the directory gets a root
+        `_defaults.yaml` that gives every threshold key of the file's tenants
+        (and the base of a `<key>_critical`) a value and defines every
+        profile they name (`_preview_root_text`); a preview answers "what
+        text", never "is it read"."""
         import tempfile  # noqa: PLC0415
         with tempfile.TemporaryDirectory(prefix="confedit-preview-") as tmp:
+            root = _preview_root_text(self.data)
+            if root is not None and self.rel != "_defaults.yaml":
+                root_path = os.path.join(tmp, "_defaults.yaml")
+                with open(root_path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(root)
+                os.chmod(root_path, 0o600)  # a scratch file of this process only
             doc = _one(COMMAND, tmp, self.entry(), True, binary, timeout)
         return doc["content"]
+
+
+def _preview_root_text(data: dict) -> Optional[str]:
+    """A root `_defaults.yaml` text declaring what *data*'s `tenants:` bodies
+    write (NewFile.preview): every key not starting with `_` gets the value 1
+    under `defaults:` — a `<key>_critical` its base too — and every string
+    `_profile` an empty profile. None when *data* declares no tenant."""
+    tenants = data.get("tenants") if isinstance(data, dict) else None
+    if not isinstance(tenants, dict):
+        return None
+    keys: set = set()
+    profiles: set = set()
+    for body in tenants.values():
+        if not isinstance(body, dict):
+            continue
+        for k, v in body.items():
+            k = str(k)
+            if k == "_profile" and isinstance(v, str):
+                profiles.add(v)
+            if k.startswith("_"):
+                continue
+            keys.add(k)
+            if k.endswith("_critical"):
+                keys.add(k[: -len("_critical")])
+    lines = ["defaults:\n" if keys else "defaults: {}\n"]
+    lines += [f"  {json.dumps(k)}: 1\n" for k in sorted(keys)]
+    if profiles:
+        lines.append("profiles:\n")
+        lines += [f"  {json.dumps(p)}: {{}}\n" for p in sorted(profiles)]
+    return "".join(lines)
 
 
 def copy_entry(rel: str, source: "Path | str", *, replace: bool = False) -> dict:

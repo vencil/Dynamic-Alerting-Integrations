@@ -115,6 +115,7 @@ func assertColdStateMatchesRecompute(t *testing.T, mgr *ConfigManager) int {
 		t.Fatal("no inheritance graph installed")
 	}
 
+	withhold := builtinWithheldOn(t, mgr.path) // #3832
 	oracle := NewConfigManager(mgr.path)
 	oracleMetrics, _ := freshMetrics(t)
 	oracleLog, _ := newTestLogger()
@@ -127,7 +128,7 @@ func assertColdStateMatchesRecompute(t *testing.T, mgr *ConfigManager) int {
 	}
 	sort.Strings(tids)
 	for _, tid := range tids {
-		want, werr := oracle.recomputeMergedHash(tid, sources[tid], graph.TenantDefaults[tid], config.TenantLayers{})
+		want, werr := oracle.recomputeMergedHash(tid, sources[tid], graph.TenantDefaults[tid], config.TenantLayers{WithholdBuiltin: withhold})
 		have, ok := got[tid]
 		switch {
 		case werr != nil && ok:
@@ -464,7 +465,7 @@ func TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount(t *testing.T) {
 	}
 	// Proof the control reload actually consumed the edit, so its +0 is not
 	// a reload that never happened.
-	if got, ok := seriesFor(t, mgr, "t-1", "connections"); !ok || got != 65 {
+	if got, ok := seriesFor(t, mgr, "t-1", "mysql_connections"); !ok || got != 65 {
 		t.Fatalf("after the valid edit t-1 emits %v (present=%v), want the edited subtree's 65", got, ok)
 	}
 

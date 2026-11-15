@@ -718,6 +718,11 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # string `receiver`, which it lists as not judged in every tree — so its
 # answer is the same with the tenant files removed. A tenant receiver with
 # a plaintext credential in the fixture would make it visible.
+#
+# ⛔ `threshold_govern.py` LEFT this set in #3832. The fixture's tenants
+# wrote no threshold the tool governs, so it governed the same nothing with
+# or without them; every tenant is now served the built-in layer's
+# thresholds, so removing the tenant files changes what it governs.
 KNOWN_INSENSITIVE: set[str] = {
     "analyze_rule_pack_gaps.py",
     "backtest_threshold.py",
@@ -728,7 +733,6 @@ KNOWN_INSENSITIVE: set[str] = {
     "generate_tenant_mapping_rules.py",
     "migrate_credentials.py",
     "tenant_verify.py",
-    "threshold_govern.py",
 }
 
 # ⛔ `policy_engine.py` and `policy_opa_bridge.py` used to sit in the

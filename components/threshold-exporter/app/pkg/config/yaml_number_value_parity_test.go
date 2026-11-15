@@ -72,7 +72,11 @@ func TestYAMLNumberValueMatrix_GoJSONIsTheExportersEffectiveConfig(t *testing.T)
 		for _, side := range sides {
 			t.Run(side.name+"/"+row.Source, func(t *testing.T) {
 				tenant, defaults := side.tenant(row.Source), side.defaults(row.Source)
-				eff, err := ComputeEffectiveConfig(tenant, "t1", defaults)
+				// The table is the value's rendering, not the layering: it
+				// is judged with the built-in layer (#3832) withheld, and the
+				// layer is checked to add its own keys and nothing else below.
+				bare := TenantLayers{WithholdBuiltin: true}
+				eff, err := ComputeEffectiveConfig(tenant, "t1", defaults, bare)
 				if row.GoJSON == nil {
 					if err == nil {
 						t.Fatalf("table says yaml.v3 refuses %q, it merged %v", row.Source, eff)
@@ -93,7 +97,21 @@ func TestYAMLNumberValueMatrix_GoJSONIsTheExportersEffectiveConfig(t *testing.T)
 				if gotType := fmt.Sprintf("%T", x["v"]); gotType != row.GoType {
 					t.Errorf("type of %q: got %s, table says %s", row.Source, gotType, row.GoType)
 				}
-				hash, err := ComputeMergedHash(tenant, "t1", defaults)
+				full, err := ComputeEffectiveConfig(tenant, "t1", defaults)
+				if err != nil {
+					t.Fatalf("ComputeEffectiveConfig with the built-in layer: %v", err)
+				}
+				for k, v := range builtinDefaults {
+					if full[k] != v {
+						t.Errorf("built-in %s = %v, want %v", k, full[k], v)
+					}
+					delete(full, k)
+				}
+				// Compared as canonical JSON: a NaN is not DeepEqual to itself.
+				if fj, err := CanonicalJSON(full); err != nil || string(fj) != string(got) {
+					t.Errorf("the built-in layer changed a key of its own tree: %s, want %s (%v)", fj, got, err)
+				}
+				hash, err := ComputeMergedHash(tenant, "t1", defaults, bare)
 				if err != nil {
 					t.Fatalf("ComputeMergedHash: %v", err)
 				}

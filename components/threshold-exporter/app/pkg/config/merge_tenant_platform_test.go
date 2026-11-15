@@ -31,6 +31,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -376,7 +377,8 @@ func TestZeroRootPlatformIsAnEmptyRoot(t *testing.T) {
 	if a, b := resolvedRows(&got, "tx"), resolvedRows(&want, "tx"); strings.Join(a, "\n") != strings.Join(b, "\n") {
 		t.Errorf("zero root rows %v, empty root rows %v", a, b)
 	}
-	if len(got.Defaults) != 0 || len(got.Tenants["tx"]) != 1 {
+	// #3832: no carrier ⇒ the built-in layer alone.
+	if !reflect.DeepEqual(got.Defaults, BuiltinDefaults()) || len(got.Tenants["tx"]) != 1 {
 		t.Errorf("zero root merged to Defaults %v, Tenants %v", got.Defaults, got.Tenants)
 	}
 	gv, wv := got.ValidateTenantKeys(), want.ValidateTenantKeys()

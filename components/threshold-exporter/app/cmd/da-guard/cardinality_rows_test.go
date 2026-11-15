@@ -12,8 +12,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,12 @@ func predictedRows(t *testing.T, dir, tenant string) int {
 	}
 	return n
 }
+
+// builtinRows is the rows the built-in layer (#3832) adds to every tenant of
+// a fixture whose root writes none of its keys: one per default-armed key.
+// The counts below are the fixture's own plus these; the limits move with
+// them, so "at the limit" and "over it" stay what each test says.
+func builtinRows() int { return len(config.BuiltinDefaults()) }
 
 func loadTree(t *testing.T, dir string) *config.ThresholdConfig {
 	t.Helper()
@@ -162,35 +170,38 @@ func TestCardinality_PredictionIsWhatMetricsServes(t *testing.T) {
 			if served := peakMetricsRows(t, cfg, tc.tenant); got != served {
 				t.Errorf("predicted %d rows, /metrics serves %d series (cap lifted, busiest minute)", got, served)
 			}
-			if got != tc.want {
-				t.Errorf("predicted %d rows, want %d", got, tc.want)
+			if want := tc.want + builtinRows(); got != want {
+				t.Errorf("predicted %d rows, want %d", got, want)
 			}
 		})
 	}
 }
 
-// The prediction ignores the exporter's own cut: /metrics keeps 2 series of
-// tx, the prediction is the 5 the tenant asks for.
+// The prediction ignores the exporter's own cut: /metrics keeps the cap's
+// series of tx, the prediction is the 5 (plus the built-in rows) the tenant
+// asks for.
 func TestCardinality_OverTheExportersCapIsPredictedUncut(t *testing.T) {
 	t.Parallel()
+	limit, rows := 2+builtinRows(), 5+builtinRows()
 	dir := writeTree(t, map[string]string{
-		"_defaults.yaml": "max_metrics_per_tenant: 2\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n",
+		"_defaults.yaml": fmt.Sprintf("max_metrics_per_tenant: %d\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n", limit),
 		"tx.yaml":        "tenants:\n  tx:\n    m1_critical: \"9\"\n",
 	})
-	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", false); served != 2 {
-		t.Fatalf("control: /metrics serves %d series of tx, want 2 (the exporter's cap)", served)
+	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", false); served != limit {
+		t.Fatalf("control: /metrics serves %d series of tx, want %d (the exporter's cap)", served, limit)
 	}
 	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--format", "md")
-	if code != exitFindings || !strings.Contains(stdout, "would produce 5 user_threshold rows") ||
+	if code != exitFindings || !strings.Contains(stdout, fmt.Sprintf("would produce %d user_threshold rows", rows)) ||
 		!strings.Contains(stdout, "cardinality_exceeded") ||
-		!strings.Contains(stdout, "truncate them to its max_metrics_per_tenant of 2") {
-		t.Errorf("exit = %d, want %d with 5 rows over the cap of 2. stdout=%q stderr=%q", code, exitFindings, stdout, stderr)
+		!strings.Contains(stdout, fmt.Sprintf("truncate them to its max_metrics_per_tenant of %d", limit)) {
+		t.Errorf("exit = %d, want %d with %d rows over the cap of %d. stdout=%q stderr=%q", code, exitFindings, rows, limit, stdout, stderr)
 	}
 }
 
 // End to end on fixture A: the one series t1 is served is not over a limit
 // of 1 (before #3380: cardinality_exceeded, the subtree key counted as a
-// row) and is no finding at a limit of 2 (before: cardinality_warning). The
+// row) and is no finding at a limit of 2 (before: cardinality_warning) —
+// since #3832 each count and limit plus the built-in rows. The
 // run's only error is the subtree key's own subtree_default_undeliverable,
 // so the cardinality check adds no error and changes no exit code.
 func TestCardinality_FixtureA_EndToEnd(t *testing.T) {
@@ -219,19 +230,22 @@ func TestCardinality_FixtureA_EndToEnd(t *testing.T) {
 		}
 		return code, out
 	}
-	baseCode, base := kinds("0") // 0 = no cardinality check
+	at := func(n int) string { return strconv.Itoa(n + builtinRows()) } // #3832: plus the built-in rows
+	baseCode, base := kinds("0")                                        // 0 = no cardinality check
 	if base["subtree_default_undeliverable"] != "error" || len(base) != 1 || baseCode != exitFindings {
 		t.Fatalf("control (limit 0): exit %d, findings %v; want exit %d with subtree_default_undeliverable only",
 			baseCode, base, exitFindings)
 	}
-	code, got := kinds("1")
+	code, got := kinds(at(1))
 	if code != baseCode || got["cardinality_exceeded"] != "" || got["cardinality_warning"] != "warn" || len(got) != 2 {
 		t.Errorf("limit 1: exit %d, findings %v; want exit %d, the control's findings plus a cardinality_warning (1 row = 100%% of 1)",
 			code, got, baseCode)
 	}
-	code, got = kinds("2")
+	// Twice t1's rows: below the warn tier (0.8), as 1 row at a limit of 2
+	// was before the built-in rows.
+	code, got = kinds(strconv.Itoa(2 * (1 + builtinRows())))
 	if code != baseCode || len(got) != 1 {
-		t.Errorf("limit 2: exit %d, findings %v; want the control's (no cardinality finding)", code, got)
+		t.Errorf("limit of twice the rows: exit %d, findings %v; want the control's (no cardinality finding)", code, got)
 	}
 }
 
@@ -245,16 +259,17 @@ func TestCardinality_DeclaredSubtreeKey_ExitsZero(t *testing.T) {
 		"finance/_defaults.yaml": "defaults:\n  redis_evicted_keys: 100\n",
 		"finance/t1.yaml":        "tenants:\n  t1: {}\n",
 	})
-	if served := metricsRows(t, loadTree(t, dir), fixedNow, "t1", true); served != 2 {
-		t.Fatalf("control: /metrics serves %d series of t1, want 2", served)
+	rows := 2 + builtinRows() // #3832: plus the built-in rows
+	if served := metricsRows(t, loadTree(t, dir), fixedNow, "t1", true); served != rows {
+		t.Fatalf("control: /metrics serves %d series of t1, want %d", served, rows)
 	}
-	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", "2", "--format", "md")
+	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", strconv.Itoa(rows), "--format", "md")
 	if code != exitOK || strings.Contains(stdout, "cardinality_exceeded") {
 		t.Errorf("exit = %d, want %d. stdout=%q stderr=%q", code, exitOK, stdout, stderr)
 	}
-	code, stdout, _ = runOnce(t, "--config-dir", dir, "--cardinality-limit", "1", "--format", "md")
-	if code != exitFindings || !strings.Contains(stdout, "would produce 2 user_threshold rows") {
-		t.Errorf("must-trigger: limit 1 exit = %d, want %d with 2 rows: %q", code, exitFindings, stdout)
+	code, stdout, _ = runOnce(t, "--config-dir", dir, "--cardinality-limit", strconv.Itoa(rows-1), "--format", "md")
+	if code != exitFindings || !strings.Contains(stdout, fmt.Sprintf("would produce %d user_threshold rows", rows)) {
+		t.Errorf("must-trigger: limit %d exit = %d, want %d with %d rows: %q", rows-1, code, exitFindings, rows, stdout)
 	}
 }
 
@@ -288,9 +303,10 @@ func TestCardinality_ScopedRunPredictsInScopeTenantsAsTheWholeTree(t *testing.T)
 			t.Errorf("%s: predicted %d, /metrics serves %d", id, got[id], served)
 		}
 	}
-	// tb: mysql_connections, its critical, redis_keys.
-	if got["ta"] != 2 || got["tb"] != 3 {
-		t.Errorf("predicted %v, want ta 2, tb 3", got)
+	// tb: mysql_connections, its critical, redis_keys — each plus the
+	// built-in rows (#3832).
+	if b := builtinRows(); got["ta"] != 2+b || got["tb"] != 3+b {
+		t.Errorf("predicted %v, want ta %d, tb %d", got, 2+b, 3+b)
 	}
 }
 
@@ -315,7 +331,8 @@ func TestCardinality_EachTenantAtItsOwnBusiestMinute(t *testing.T) {
 			"      overrides:\n        - window: \"09:00-17:00\"\n          value: disable\n",
 	})
 	cfg := loadTree(t, dir)
-	for id, want := range map[string]int{"ta": 2, "tb": 3, "tc": 2} {
+	b := builtinRows() // #3832: every count plus the built-in rows
+	for id, want := range map[string]int{"ta": 2 + b, "tb": 3 + b, "tc": 2 + b} {
 		got := predictedRows(t, dir, id)
 		if served := peakMetricsRows(t, cfg, id); got != served {
 			t.Errorf("%s: predicted %d, /metrics serves at most %d", id, got, served)
@@ -324,10 +341,11 @@ func TestCardinality_EachTenantAtItsOwnBusiestMinute(t *testing.T) {
 			t.Errorf("%s: predicted %d, want %d", id, got, want)
 		}
 	}
-	// fixedNow (10:00) is inside tc's window: /metrics serves it nothing
-	// then, and the prediction still counts its busiest minute.
-	if n := metricsRows(t, cfg, fixedNow, "tc", true); n != 0 {
-		t.Errorf("control: /metrics serves tc %d series at 10:00, want 0", n)
+	// fixedNow (10:00) is inside tc's window: /metrics serves it none of
+	// its own series then (only the built-in ones), and the prediction still
+	// counts its busiest minute.
+	if n := metricsRows(t, cfg, fixedNow, "tc", true); n != b {
+		t.Errorf("control: /metrics serves tc %d series at 10:00, want %d (the built-in rows)", n, b)
 	}
 }
 
@@ -355,8 +373,8 @@ func TestCardinality_ExpiresIsReadAtTheRunsInstant(t *testing.T) {
 			if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", true); got != served {
 				t.Errorf("predicted %d, /metrics serves %d at the same instant", got, served)
 			}
-			if got != tc.want {
-				t.Errorf("predicted %d, want %d", got, tc.want)
+			if want := tc.want + builtinRows(); got != want {
+				t.Errorf("predicted %d, want %d", got, want)
 			}
 		})
 	}
@@ -384,8 +402,11 @@ func TestCardinality_ExplicitLimitBelowTheExportersCapSaysNoTruncation(t *testin
 // the budget, and rows within it follow the budget (#3380).
 func TestCardinality_RaisedLimitStillReportsTheExportersCut(t *testing.T) {
 	t.Parallel()
+	// #3832: the cap moves with the built-in rows, so ty stays exactly at it
+	// and tx one over.
+	limit := 3 + builtinRows()
 	dir := writeTree(t, map[string]string{
-		"_defaults.yaml": "max_metrics_per_tenant: 3\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n",
+		"_defaults.yaml": fmt.Sprintf("max_metrics_per_tenant: %d\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n", limit),
 		"tx.yaml":        "tenants:\n  tx: {}\n",
 		"ty.yaml":        "tenants:\n  ty:\n    m4: disable\n",
 	})
@@ -406,14 +427,14 @@ func TestCardinality_RaisedLimitStillReportsTheExportersCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(doc.Report.Findings) != 1 {
-		t.Fatalf("findings %+v, want one (tx; ty's 3 rows are within the exporter's cap of 3)", doc.Report.Findings)
+		t.Fatalf("findings %+v, want one (tx; ty's %d rows are within the exporter's cap of %d)", doc.Report.Findings, limit, limit)
 	}
 	f := doc.Report.Findings[0]
 	if f.TenantID != "tx" || f.Kind != "cardinality_exceeded" ||
-		!strings.Contains(f.Message, "within the per-tenant cardinality limit of 100 but over the exporter's own max_metrics_per_tenant of 3; the exporter would silently truncate them to 3") {
-		t.Errorf("finding %+v, want tx cardinality_exceeded naming the cut to 3 and the budget of 100", f)
+		!strings.Contains(f.Message, fmt.Sprintf("within the per-tenant cardinality limit of 100 but over the exporter's own max_metrics_per_tenant of %d; the exporter would silently truncate them to %d", limit, limit)) {
+		t.Errorf("finding %+v, want tx cardinality_exceeded naming the cut to %d and the budget of 100", f, limit)
 	}
-	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", false); served != 3 {
-		t.Errorf("control: /metrics serves tx %d series, want 3 (cut from 4)", served)
+	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", false); served != limit {
+		t.Errorf("control: /metrics serves tx %d series, want %d (cut from %d)", served, limit, limit+1)
 	}
 }

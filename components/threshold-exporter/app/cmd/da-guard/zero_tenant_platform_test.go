@@ -134,6 +134,12 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: .nan\n"},
 		finding: findingkind.FindingRootDefaultRefused,
 	},
+	// #3832: a default-armed key listed without a number is judged in the
+	// carrier.
+	"default-armed key only listed in the root optional_overrides": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\noptional_overrides: [pg_connections]\n"},
+		finding: findingkind.FindingRootOptionalBuiltin,
+	},
 	// #3250: a reserved key in the root defaults is judged in the carrier.
 	"reserved key in the root defaults": {
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  _silent_mode: warning\n"},
@@ -198,6 +204,7 @@ var zeroTenantKindClass = map[string]string{
 	"defaults_toplevel_ignored":     kindTreeLevel,
 	"root_defaults_critical_key":    kindTreeLevel,
 	"root_default_refused":          kindTreeLevel,
+	"root_optional_builtin":         kindTreeLevel,
 	"root_defaults_reserved_key":    kindTreeLevel,
 	"root_dimensions_critical_base": kindTreeLevel,
 	// The whole tree's /metrics.

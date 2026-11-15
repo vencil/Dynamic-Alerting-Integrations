@@ -304,7 +304,7 @@ func TestWrite_RefusalsWriteNothing(t *testing.T) {
 // unreadable (RefusalsWriteNothing).
 func TestWrite_RepairsAFileTheExporterCannotServe(t *testing.T) {
 	broken := "# kept\ntenants:\n  t1:\n    cpu:\n      default: [1, 2]\n    mem: \"5\"\n"
-	root := writeTree(t, map[string]string{"t1.yaml": broken})
+	root := writeTreeDeclared(t, map[string]string{"t1.yaml": broken})
 	code, res := runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"int":"70"}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
@@ -319,13 +319,13 @@ func TestWrite_RepairsAFileTheExporterCannotServe(t *testing.T) {
 	}
 	// The repaired file is now one an edit judges like any other: an edit
 	// that would break it again is refused at the read-back.
-	before := snapshot(t, root)
+	before := snapshotDeclared(t, root)
 	code, res = runW(t, writeCmd, `{"ops":[{"op":"set","path":["tenants","t1","cpu"],"value":{"map":[["default",{"seq":[{"int":"1"}]}]]}}]}`,
 		"--config-dir", root, "--path", "t1.yaml")
 	if code != exitFindings || reasonOf(res) != writeReasonReadBackMismatch {
 		t.Fatalf("worsening edit: exit %d %+v", code, res)
 	}
-	sameTree(t, before, snapshot(t, root))
+	sameTree(t, before, snapshotDeclared(t, root))
 }
 
 // TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne: a file holding only
@@ -338,7 +338,7 @@ func TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne(t *testing.T) {
 		{"CRLF", "# c\r\n", "# c\r\ntenants:\r\n  t1:\r\n    a: \"1\"\r\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := writeTree(t, map[string]string{"t1.yaml": tc.text})
+			root := writeTreeDeclared(t, map[string]string{"t1.yaml": tc.text})
 			code, res := runW(t, writeCmd, `{"ops":[{"op":"ensure-map","path":["tenants","t1"]},`+
 				`{"op":"set","path":["tenants","t1","a"],"value":{"str":"1"}}]}`, "--config-dir", root, "--path", "t1.yaml")
 			if code != exitOK || res.Status != writeStatusWritten {
@@ -354,13 +354,13 @@ func TestWrite_ACommentsOnlyFileIsEditedAsAnEmptyOne(t *testing.T) {
 		})
 	}
 	// An edit that means nothing on it is `unchanged`, the file untouched.
-	root := writeTree(t, map[string]string{"t1.yaml": "# only\n"})
-	before := snapshot(t, root)
+	root := writeTreeDeclared(t, map[string]string{"t1.yaml": "# only\n"})
+	before := snapshotDeclared(t, root)
 	code, res := runW(t, writeCmd, `{"ops":[{"op":"unset","path":["tenants"]}]}`, "--config-dir", root, "--path", "t1.yaml")
 	if code != exitOK || res.Status != writeStatusUnchanged {
 		t.Fatalf("exit %d %+v", code, res)
 	}
-	sameTree(t, before, snapshot(t, root))
+	sameTree(t, before, snapshotDeclared(t, root))
 }
 
 func TestWrite_ReadBackNamesTheValue(t *testing.T) {

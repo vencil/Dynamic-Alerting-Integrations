@@ -118,6 +118,15 @@ class TestLoadMonitoredDbTypes:
 
     _DEFAULTS = "defaults:\n  mysql_connections: 80\n  redis_memory: 1024\n"
 
+    @staticmethod
+    def _builtin_types():
+        """The DB types of the built-in layer's keys (#3832): every tenant is
+        served those rows, as it is a root default's, so every tenant counts
+        as monitored for them."""
+        import _registry_lib
+        keys = _registry_lib.builtin_defaults(_registry_lib.load_registry())
+        return {t for t in map(bsd._infer_db_type_from_metric, keys) if t}
+
     def test_flat_file_is_not_a_tenant_and_is_named(self, capsys):
         """平面格式（無 `tenants:` 包裝）：exporter 不當租戶，不算已監控，並具名 WARN（R3）。
         改寫前：被當成租戶 `db-a`、算 mariadb＋redis 已監控。"""
@@ -149,7 +158,8 @@ class TestLoadMonitoredDbTypes:
                             "db-a.yaml": "tenants:\n  db-a:\n    _severity_dedup: enable\n"
                                          "    mysql_connections: 50\n"})
             result = bsd.load_monitored_db_types(d)
-            assert set(result) == {"mariadb", "redis"}
+            # #3832: plus the built-in layer's types.
+            assert set(result) == {"mariadb", "redis"} | self._builtin_types()
 
     def test_skips_defaults_file(self):
         """`_defaults.yaml` 本身不是租戶：沒有租戶檔 → 沒有已監控。"""
@@ -167,7 +177,11 @@ class TestLoadMonitoredDbTypes:
                             "db-b.yaml": "tenants:\n  db-b:\n    mysql_slow_queries: 5\n"})
             result = bsd.load_monitored_db_types(d)
             # db-b 只有 defaults 的 redis_memory；db-a 關掉了它。
-            assert result == {"redis": {"db-b"}}
+            # #3832: the built-in layer's types count for both tenants.
+            builtin = self._builtin_types()
+            assert result.pop("redis") == {"db-b"}
+            assert set(result) == builtin - {"redis"}
+            assert all(v == {"db-a", "db-b"} for v in result.values())
 
     @pytest.mark.parametrize("name, reason", [("nope", "dir_not_found"), ("f", "dir_not_found")])
     def test_a_config_dir_that_is_not_a_directory_is_a_caller_error(self, tmp_path, name,

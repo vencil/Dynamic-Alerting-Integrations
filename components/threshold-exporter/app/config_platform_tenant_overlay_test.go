@@ -390,7 +390,17 @@ func assertWalkerRow(t *testing.T, dir, tree, tenant string, want *overlayWalker
 		return
 	}
 	gotCfg, _ := json.Marshal(ec.EffectiveConfig)
-	wantCfg, _ := json.Marshal(want.EffectiveConfig)
+	// The table names the tree's own keys; the built-in layer (#3832) lies
+	// under them for every tenant, each key the table does not set at the
+	// platform's value.
+	wantFull := map[string]any{}
+	for k, v := range config.BuiltinDefaults() {
+		wantFull[k] = v
+	}
+	for k, v := range want.EffectiveConfig {
+		wantFull[k] = v
+	}
+	wantCfg, _ := json.Marshal(wantFull)
 	if !bytes.Equal(gotCfg, wantCfg) {
 		t.Errorf("%s: /effective %s effective_config = %s, want %s", tree, tenant, gotCfg, wantCfg)
 	}

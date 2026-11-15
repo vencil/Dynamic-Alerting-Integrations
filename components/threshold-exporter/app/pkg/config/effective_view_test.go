@@ -28,7 +28,7 @@ var effectiveViewAt = time.Date(2026, 7, 1, 23, 0, 0, 0, time.UTC)
 
 func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 	t.Parallel()
-	const subtreeSchedule = "defaults:\n  pg_connections:\n    default: \"150\"\n" +
+	const subtreeSchedule = "defaults:\n  redis_connected_clients:\n    default: \"150\"\n" +
 		"    overrides:\n      - window: \"22:00-06:00\"\n        value: \"300\"\n"
 	cases := []struct {
 		name     string
@@ -137,51 +137,51 @@ func TestEffectiveView_MatchesMetricsPerThreshold(t *testing.T) {
 		{
 			name: "f4-tenant-default-over-subtree-schedule", diverged: true,
 			files: map[string]string{
-				"_defaults.yaml":     "defaults:\n  pg_connections: 100\n",
+				"_defaults.yaml":     "defaults:\n  redis_connected_clients: 100\n",
 				"sub/_defaults.yaml": subtreeSchedule,
-				"sub/tx.yaml":        "tenants:\n  tx:\n    pg_connections:\n      default: \"160\"\n",
+				"sub/tx.yaml":        "tenants:\n  tx:\n    redis_connected_clients:\n      default: \"160\"\n",
 			},
-			effective: `{"pg_connections":{"default":"160"}}`, key: "pg_connections",
+			effective: `{"redis_connected_clients":{"default":"160"}}`, key: "redis_connected_clients",
 			layer: KeyLayerTenant, file: "sub/tx.yaml", level: -1,
-			row: []string{"pg_connections{}=160/warning"},
+			row: []string{"redis_connected_clients{}=160/warning"},
 		},
 		{
 			name: "f4-control-tenant-default-over-platform-schedule",
 			files: map[string]string{
-				"_defaults.yaml": "defaults:\n  pg_connections: 100\ntenants:\n  tx:\n" +
-					"    pg_connections:\n      default: \"150\"\n" +
+				"_defaults.yaml": "defaults:\n  redis_connected_clients: 100\ntenants:\n  tx:\n" +
+					"    redis_connected_clients:\n      default: \"150\"\n" +
 					"      overrides:\n        - window: \"22:00-06:00\"\n          value: \"300\"\n",
-				"sub/tx.yaml": "tenants:\n  tx:\n    pg_connections:\n      default: \"160\"\n",
+				"sub/tx.yaml": "tenants:\n  tx:\n    redis_connected_clients:\n      default: \"160\"\n",
 			},
-			effective: `{"pg_connections":{"default":"160"}}`, key: "pg_connections",
+			effective: `{"redis_connected_clients":{"default":"160"}}`, key: "redis_connected_clients",
 			layer: KeyLayerTenant, file: "sub/tx.yaml", level: -1,
-			row: []string{"pg_connections{}=160/warning"},
+			row: []string{"redis_connected_clients{}=160/warning"},
 		},
 		{
 			name: "f4-deeper-subtree-default-over-shallower-schedule", diverged: true,
 			files: map[string]string{
-				"_defaults.yaml":          "defaults:\n  pg_connections: 100\n",
+				"_defaults.yaml":          "defaults:\n  redis_connected_clients: 100\n",
 				"sub/_defaults.yaml":      subtreeSchedule,
-				"sub/deep/_defaults.yaml": "defaults:\n  pg_connections:\n    default: \"170\"\n",
+				"sub/deep/_defaults.yaml": "defaults:\n  redis_connected_clients:\n    default: \"170\"\n",
 				"sub/deep/tx.yaml":        "tenants:\n  tx:\n    _silent_mode: disable\n",
 			},
-			effective: `{"pg_connections":{"default":"170"}}`, key: "pg_connections",
+			effective: `{"redis_connected_clients":{"default":"170"}}`, key: "redis_connected_clients",
 			layer: KeyLayerDefaults, file: "sub/deep/_defaults.yaml", level: 2,
-			row: []string{"pg_connections{}=170/warning"},
+			row: []string{"redis_connected_clients{}=170/warning"},
 		},
 		// The winning layer's own windows stay: the view drops what a layer
 		// below wrote, never what the winner wrote.
 		{
 			name: "f4-control-subtree-schedule-inherited-whole",
 			files: map[string]string{
-				"_defaults.yaml":     "defaults:\n  pg_connections: 100\n",
+				"_defaults.yaml":     "defaults:\n  redis_connected_clients: 100\n",
 				"sub/_defaults.yaml": subtreeSchedule,
 				"sub/tx.yaml":        "tenants:\n  tx:\n    _silent_mode: disable\n",
 			},
-			effective: `{"pg_connections":{"default":"150","overrides":[{"value":"300","window":"22:00-06:00"}]}}`,
-			key:       "pg_connections",
+			effective: `{"redis_connected_clients":{"default":"150","overrides":[{"value":"300","window":"22:00-06:00"}]}}`,
+			key:       "redis_connected_clients",
 			layer:     KeyLayerDefaults, file: "sub/_defaults.yaml", level: 1,
-			row: []string{"pg_connections{}=300/warning"},
+			row: []string{"redis_connected_clients{}=300/warning"},
 		},
 	}
 	for _, tc := range cases {
@@ -274,10 +274,14 @@ func twin(v string) []string {
 
 // servedRowsAt is every row /metrics serves for tenantID at `at`, rendered
 // like resolvedRows.
+//
+// The built-in layer's rows (#3832) are left out: no tree here writes a
+// built-in key (the scalar/schedule cases use redis_connected_clients for
+// that reason), and every tenant gets them whatever it writes.
 func servedRowsAt(c *ThresholdConfig, tenantID string, at time.Time) []string {
 	var out []string
 	for _, r := range c.ResolveAt(at) {
-		if r.Tenant != tenantID {
+		if _, builtin := builtinDefaults[r.Component+"_"+r.Metric]; r.Tenant != tenantID || builtin {
 			continue
 		}
 		out = append(out, fmt.Sprintf("%s_%s{}=%g/%s", r.Component, r.Metric, r.Value, r.Severity))
@@ -286,12 +290,13 @@ func servedRowsAt(c *ThresholdConfig, tenantID string, at time.Time) []string {
 	return out
 }
 
-// thresholdKeysJSON is m without its `_` keys, as JSON (sorted keys).
+// thresholdKeysJSON is m without its `_` keys and without the built-in
+// layer's keys (#3832; see servedRowsAt), as JSON (sorted keys).
 func thresholdKeysJSON(t *testing.T, m map[string]any) string {
 	t.Helper()
 	th := map[string]any{}
 	for k, v := range m {
-		if len(k) > 0 && k[0] != '_' {
+		if _, builtin := builtinDefaults[k]; len(k) > 0 && k[0] != '_' && !builtin {
 			th[k] = v
 		}
 	}
@@ -310,7 +315,7 @@ func thresholdKeysJSON(t *testing.T, m map[string]any) string {
 // the schedule tree the subtree's window inside the tenant's schedule.
 func TestEffectiveView_SimulateIsTheEffectiveAnswer(t *testing.T) {
 	t.Parallel()
-	const subtreeSchedule = "defaults:\n  pg_connections:\n    default: \"150\"\n" +
+	const subtreeSchedule = "defaults:\n  redis_connected_clients:\n    default: \"150\"\n" +
 		"    overrides:\n      - window: \"22:00-06:00\"\n        value: \"300\"\n"
 	cases := []struct {
 		name   string
@@ -326,15 +331,15 @@ func TestEffectiveView_SimulateIsTheEffectiveAnswer(t *testing.T) {
 		},
 		{
 			name:   "schedule-tenant-default-over-subtree-schedule",
-			chain:  []string{"defaults:\n  pg_connections: 100\n", subtreeSchedule},
-			tenant: "tenants:\n  tx:\n    pg_connections:\n      default: \"160\"\n",
-			want:   `{"pg_connections":{"default":"160"}}`,
+			chain:  []string{"defaults:\n  redis_connected_clients: 100\n", subtreeSchedule},
+			tenant: "tenants:\n  tx:\n    redis_connected_clients:\n      default: \"160\"\n",
+			want:   `{"redis_connected_clients":{"default":"160"}}`,
 		},
 		{
 			name:   "control-same-spelling-scalar",
-			chain:  []string{"defaults:\n  pg_connections: 100\n", "defaults:\n  pg_connections: 120\n"},
+			chain:  []string{"defaults:\n  redis_connected_clients: 100\n", "defaults:\n  redis_connected_clients: 120\n"},
 			tenant: "tenants:\n  tx:\n    _silent_mode: disable\n",
-			want:   `{"pg_connections":120}`,
+			want:   `{"redis_connected_clients":120}`,
 		},
 	}
 	for _, tc := range cases {

@@ -72,7 +72,7 @@ func TestScrapeResolvesAtTheManagersClock(t *testing.T) {
 		{"23:59:30", time.Date(2026, 8, 1, 23, 59, 30, 0, time.UTC), 60, 1},
 	} {
 		clock.Advance(tc.at.Sub(clock.Now()))
-		if got, ok := seriesFor(t, m, "t1", "connections"); !ok || got != tc.want {
+		if got, ok := seriesFor(t, m, "t1", "mysql_connections"); !ok || got != tc.want {
 			t.Errorf("at %s: connections = %v (present=%v), want %v", tc.name, got, ok, tc.want)
 		}
 		if got := maintenanceExpiredCount(t, m); got != tc.expired {

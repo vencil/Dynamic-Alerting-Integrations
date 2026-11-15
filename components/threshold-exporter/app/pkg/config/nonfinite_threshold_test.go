@@ -33,7 +33,9 @@ func TestParseThresholdNumber_RefusesNonFinite(t *testing.T) {
 }
 
 // rowsAndNotServed loads files as a conf.d tree and returns tenant tx's rows
-// ("key=value/severity", sorted) and its NotServed reasons.
+// ("key=value/severity", sorted) and its NotServed reasons. The rows of the
+// built-in layer (#3832) are left out: no tree here writes a built-in key,
+// and every tenant gets those rows whatever it writes.
 func rowsAndNotServed(t *testing.T, files map[string]string) ([]string, map[string]string) {
 	t.Helper()
 	tmp := t.TempDir()
@@ -53,6 +55,9 @@ func rowsAndNotServed(t *testing.T, files map[string]string) ([]string, map[stri
 	}
 	var rows []string
 	for _, k := range keyed {
+		if _, builtin := builtinDefaults[k.Key]; builtin {
+			continue
+		}
 		if k.Tenant == "tx" && !k.LegacyTwin {
 			rows = append(rows, fmt.Sprintf("%s=%g/%s", k.Key, k.Value, k.Severity))
 		}
@@ -117,7 +122,8 @@ func TestNonFiniteThreshold_SubtreeDefaultsRefused(t *testing.T) {
 		}
 		var got []float64
 		for _, r := range cfg.ResolveAt(fixedNow) {
-			if r.Tenant == "tx" && r.Metric == "connections" {
+			// mysql only: the built-in pg_connections is metric=connections too.
+			if r.Tenant == "tx" && r.Component == "mysql" && r.Metric == "connections" {
 				got = append(got, r.Value)
 			}
 		}

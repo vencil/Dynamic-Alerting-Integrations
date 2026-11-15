@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-10-28
+updated_at: 2026-11-15
 ---
 # ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載
 
@@ -17,7 +17,7 @@ updated_at: 2026-10-28
 
 > 與 [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)（conf.d/ 目錄分層）為一組：ADR-016 決定設定檔怎麼分目錄放，本篇決定各層的預設值怎麼往下傳，以及預設值改了之後怎麼判斷影響了哪些租戶。
 
-**決策摘要**：conf.d/ 的每一層目錄都可以放一份 `_defaults.yaml`，租戶的設定是從根目錄往下逐層疊上預設值、最後疊上租戶檔的結果。每個租戶記兩個雜湊：租戶檔本身的，與疊完之後的最終設定的；後者用來判斷一次預設值變更有沒有真的改到這個租戶。
+**決策摘要**：conf.d/ 的每一層目錄都可以放一份 `_defaults.yaml`，租戶的設定是從根目錄往下逐層疊上預設值、最後疊上租戶檔的結果；平台出貨即啟用的閾值由讀 conf.d 的程式內建，墊在根目錄之下，客戶的檔案只放覆寫與退出。每個租戶記兩個雜湊：租戶檔本身的，與疊完之後的最終設定的；後者用來判斷一次預設值變更有沒有真的改到這個租戶。
 
 ## 狀態
 
@@ -34,6 +34,7 @@ updated_at: 2026-10-28
 | 2026-10-27 | 子目錄 `_defaults.yaml` 不再帶 `_` 開頭的鍵（da-guard 報 error）；租戶這一側把這類鍵寫成 `null` 一律回到平台預設 | 決策 2、4、10 |
 | 2026-10-27 | 閾值在每一層同一種讀法（原文讀成數字）：根目錄 `defaults:` 讀不了的純量只拒收那個鍵、不再丟掉整份檔；最終設定與 `merged_hash` 讀到的與 exporter 相同；根目錄 `defaults:` 裡的保留鍵不傳給任何租戶 | 決策 4、6、10 |
 | 2026-10-28 | 子目錄才寫、根目錄沒宣告的閾值：da-guard 報 error（結束碼 1） | 決策 3 |
+| 2026-11-15 | 平台預設啟用的閾值由讀取端內建，排在根目錄 `_defaults.yaml` 之下：根目錄沒寫、寫 `null` 或寫了讀不了的值，都拿平台值；最終設定與 `merged_hash` 涵蓋它 | 決策 1、2、3、4、7、11 |
 
 ## 名詞
 
@@ -71,6 +72,8 @@ conf.d/
 
 套用順序是根目錄 → 往下每一層 → 租戶檔，後套用的覆蓋先套用的。每一層都可以省略，層數也不限於上圖。
 
+根目錄之下還有一層**內建層**：平台出貨即啟用的閾值與它的平台值，編譯在讀 conf.d 的程式裡，不是 conf.d 裡的檔（決策 11）。所以完整的順序是內建層 → 根目錄 → 往下每一層 → 租戶檔。
+
 ### 2. 合併規則
 
 | 值的型別 | 規則 | 例子 |
@@ -78,6 +81,8 @@ conf.d/
 | 對照表（mapping） | 深合併：子層新增的鍵保留，同名鍵由子層覆蓋 | 上層 `{p: 1, q: 1}`、租戶 `{q: 9}` → `{p: 1, q: 9}` |
 | 清單（list） | 整個取代，不串接 | 上層 `[ns-a, ns-b]`、租戶 `[ns-c]` → `[ns-c]` |
 | 純量（數字、字串） | 子層覆蓋 | 上層 `200`、租戶 `"150"` → `"150"` |
+
+內建層給的值，在 `da-guard effective` 的 `key_sources` 標 `{"layer": "builtin"}`，沒有 `file` 與 `level`。
 
 三個例外：
 
@@ -112,36 +117,44 @@ tenants:
     pg_stat_activity_count: "150"
 ```
 
-`da-guard effective --config-dir conf.d` 的輸出（節錄）：
+`da-guard effective --config-dir conf.d` 的輸出（節錄；`…` 處是內建層其餘的鍵）：
 
 ```json
 "effective_config": {
+  "container_cpu": 80,
+  …
+  "pg_connections": 80,
   "pg_locks_count": 100,
+  "pg_replication_lag": 30,
   "pg_replication_lag_seconds": 30,
-  "pg_stat_activity_count": "150"
+  "pg_stat_activity_count": "150",
+  …
 },
 "key_sources": {
+  "container_cpu":              {"layer": "builtin"},
+  …
   "pg_locks_count":             {"layer": "defaults", "file": "finance/_defaults.yaml", "level": 1},
   "pg_replication_lag_seconds": {"layer": "defaults", "file": "_defaults.yaml", "level": 0},
-  "pg_stat_activity_count":     {"layer": "tenant",   "file": "finance/fin-db-001.yaml"}
+  "pg_stat_activity_count":     {"layer": "tenant",   "file": "finance/fin-db-001.yaml"},
+  …
 },
 "source_hash": "45006e7b8bf54ba3",
-"merged_hash": "5db367c3efd997ce"
+"merged_hash": "78ecf0a647d7b526"
 ```
 
-`da-guard served-values --config-dir conf.d` 顯示 `/metrics` 送出同樣三個值：`pg_locks_count` 100、`pg_replication_lag_seconds` 30、`pg_stat_activity_count` 150。
+`da-guard served-values --config-dir conf.d` 顯示 `/metrics` 送出同樣的值：`pg_locks_count` 100、`pg_replication_lag_seconds` 30、`pg_stat_activity_count` 150，另加內建層的每個鍵。`merged_hash` 涵蓋內建層的值，平台改了內建表它就會跟著變（決策 7、11）。
 
 讀這個範例要注意兩件事：
 
 - **租戶的值加引號，`defaults:` 裡不加。** 租戶的閾值是字串或帶排程的物件，未加引號的數字會被 `check_confd_schema.py` 擋下；平台預設只收數字。
-- **子目錄只能改根目錄已宣告的閾值。** 把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值（exporter 只為這種基底送 critical 列），只在 `optional_overrides:` 宣告或根目錄寫成 null 都不算，同樣標 `undeliverable`；根目錄 `defaults:` 直接給了該 `_critical` key 的值時例外（它被當成一個獨立的閾值讀）。
+- **子目錄只能改根目錄已宣告的閾值；內建層給值的鍵算已宣告。** 子目錄寫 `pg_connections: 60`，即使根目錄沒寫它，`/metrics` 也送 60。把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值，或由內建層給值（exporter 只為這種基底送 critical 列），只在 `optional_overrides:` 宣告或根目錄寫成 null 都不算，同樣標 `undeliverable`；根目錄 `defaults:` 直接給了該 `_critical` key 的值時例外（它被當成一個獨立的閾值讀）。
 
 ### 4. 閾值寫 `null` 等於這一層沒寫
 
-在租戶檔或子目錄 `_defaults.yaml` 把閾值鍵寫成 `null` 不會關掉告警（根目錄 `defaults:` 寫 `null` 的效果見下方第二條）；要關掉，在這兩處寫 `"disable"`。根目錄 `defaults:` 不要寫 `"disable"`：根目錄的預設值只收數字，`disable` 是讀不了的值，exporter 只拒收那個鍵——不送它的預設列，同檔其他閾值照送；`check_confd_schema.py` 不會擋，da-guard 以 `root_default_refused` 報錯，結束碼 1。
+在租戶檔或子目錄 `_defaults.yaml` 把閾值鍵寫成 `null` 不會關掉告警（根目錄 `defaults:` 寫 `null` 的效果見下方第二條）；要關掉，在這兩處寫 `"disable"`。根目錄 `defaults:` 不要寫 `"disable"`：根目錄的預設值只收數字，`disable` 是讀不了的值，exporter 只拒收那個鍵——不送它的預設列（內建層給值的鍵改送平台值，決策 11），同檔其他閾值照送；`check_confd_schema.py` 不會擋，da-guard 以 `root_default_refused` 報錯，結束碼 1。
 
 - 租戶檔或子目錄 `_defaults.yaml` 寫 `null` 時，`/metrics`（`da-guard served-values`）、`/effective`（`da-guard effective`）與 `describe_tenant` 的結果與這一層沒寫這個鍵相同。不過租戶檔寫 `null`（含 `kx:`、`kx: ~`）會被 `check_confd_schema.py` 擋下；租戶要沿用上層的值，就刪掉這個鍵。
-- 根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值，`/metrics` 不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared` 指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名。同一個鍵若列在根目錄的 `optional_overrides:`，租戶給的值照常送出。（`optional_overrides:` 是根目錄 `_defaults.yaml` 頂層的一份鍵名清單：宣告這些閾值存在、但不給平台預設值，租戶自己寫了才送。）
+- 根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值。內建層給值的鍵落到內建值，`/metrics` 送平台值；其他鍵 `/metrics` 不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared` 指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名。同一個鍵若列在根目錄的 `optional_overrides:`，租戶給的值照常送出。（`optional_overrides:` 是根目錄 `_defaults.yaml` 頂層的一份鍵名清單：宣告這些閾值存在、但不給平台預設值，租戶自己寫了才送。）
 
 **為什麼不讓 `null` 代表關閉**：YAML 裡 `kx:` 後面留白，解析出來和 `kx: ~` 一樣是 `null`。如果 `null` 代表關閉，打到一半忘了填值就會靜靜關掉一條告警。設定寫錯時，寧可多出告警，也不要少掉告警。
 
@@ -188,7 +201,7 @@ tenants:
 
 這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效。
 
-**根目錄平台檔的 `tenants:` 區塊**（寫在 `_defaults.yaml` 或其他 `_` 開頭的根目錄檔，例如 `_ops.yaml`；根目錄同時有 `_defaults.yaml` 與 `_defaults.yml` 時只讀前者，後者整份被忽略並記 WARN）是平台給既有租戶的預設值。它會進最終設定與 `merged_hash`：例如在範例的根目錄加上 `tenants: {fin-db-001: {_silent_mode: warning}}`，`fin-db-001` 的最終設定多出 `_silent_mode: warning`，`key_sources` 標為 `layer: platform`，`platform_overlay` 列出提供它的檔與鍵（寫在 `_ops.yaml` 時就標 `_ops.yaml`），`merged_hash` 從 `5db367c3efd997ce` 變成 `73e76f3cabed3a9f`，`/metrics` 也多出 `user_silent_mode{tenant,target_severity}`。同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
+**根目錄平台檔的 `tenants:` 區塊**（寫在 `_defaults.yaml` 或其他 `_` 開頭的根目錄檔，例如 `_ops.yaml`；根目錄同時有 `_defaults.yaml` 與 `_defaults.yml` 時只讀前者，後者整份被忽略並記 WARN）是平台給既有租戶的預設值。它會進最終設定與 `merged_hash`：例如在範例的根目錄加上 `tenants: {fin-db-001: {_silent_mode: warning}}`，`fin-db-001` 的最終設定多出 `_silent_mode: warning`，`key_sources` 標為 `layer: platform`，`platform_overlay` 列出提供它的檔與鍵（寫在 `_ops.yaml` 時就標 `_ops.yaml`），`merged_hash` 從 `78ecf0a647d7b526` 變成 `d6f6230d027d11df`，`/metrics` 也多出 `user_silent_mode{tenant,target_severity}`。同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
 
 **根目錄 `profiles:` 區塊**（通常寫在 `_profiles.yaml`）也會進：租戶寫 `_profile: std` 選用一個 profile 時，profile 的值進入最終設定（`key_sources` 標 `layer: profile`）；改 profile 裡的值時，`key_sources` 把該鍵標為 `layer: profile`、且 `file` 是改的那個檔的租戶 `merged_hash` 跟著變，以 `tenant-verify --expect-merged-hash` 帶入變更前記下的雜湊時回 1；該鍵被租戶檔或根目錄平台檔的 `tenants:` 蓋掉的租戶不受影響。
 
@@ -215,16 +228,18 @@ tenants:
 | `source_hash` | 租戶檔位元組的 SHA-256，取前 16 個十六進位字元 | 租戶檔有沒有變 |
 | `merged_hash` | 最終設定轉成正規化 JSON（鍵排序、無空白）後的 SHA-256，取前 16 個十六進位字元 | 最終設定有沒有變 |
 
-以範例的 `fin-db-001` 對照：
+以範例的 `fin-db-001` 對照（第二條指令把最終設定排序鍵、去掉空白再算雜湊）：
 
 ```bash
 $ sha256sum conf.d/finance/fin-db-001.yaml | cut -c1-16
 45006e7b8bf54ba3
-$ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_activity_count":"150"}' | sha256sum | cut -c1-16
-5db367c3efd997ce
+$ da-guard effective --config-dir conf.d | jq -jcS '.tenants["fin-db-001"].effective_config' | sha256sum | cut -c1-16
+78ecf0a647d7b526
 ```
 
-所以對任何檔案跑 `sha256sum` 都對不上 `merged_hash`。也因為 `merged_hash` 只看最終設定，範例裡根目錄的 `pg_locks_count` 改成什麼值或拿掉，`fin-db-001` 的 `merged_hash` 都還是 `5db367c3efd997ce`：finance 層已經覆蓋了它。
+所以對任何檔案跑 `sha256sum` 都對不上 `merged_hash`。也因為 `merged_hash` 只看最終設定，範例裡根目錄的 `pg_locks_count` 改成什麼值或拿掉，`fin-db-001` 的 `merged_hash` 都還是 `78ecf0a647d7b526`：finance 層已經覆蓋了它。
+
+內建層的值也在最終設定裡：平台改了內建表的某個值，沒覆寫那個鍵的租戶 `merged_hash` 跟著變，這正是它要回答的問題。根目錄對每個內建鍵都寫了與平台相同數字的樹，加不加內建層，每個租戶的最終設定與 `merged_hash` 都相同。
 
 **重新載入的時機**：exporter 每 30 秒（`-reload-interval`）掃描一次 conf.d/。偵測到變動後等 300 毫秒（`-scan-debounce`）再重新載入：這段等待叫去抖動（debounce），把短時間內接連發生的變動合成一次，`git pull` 一次改了 20 個檔也只重新載入一次。
 
@@ -296,6 +311,58 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 4. **鏈上語法壞掉的 `_defaults.yaml` 不讓租戶消失。** exporter 不讀那個檔；`/effective` 把它當成空檔，租戶照常回傳並列在 `chain_parse_failed`，`merged_hash` 以略過該檔後的鏈計算。tenant-api 回 HTTP 200，`da-guard effective` 結束碼 3，da-guard 的主檢查也以結束碼 3 停下。
 5. **鍵名保留撰寫者的拼法。** 舊拼法（例如 `mysql_cpu`）不算 `not_served`：`/metrics` 以正式名稱送出同一個閾值，兩種拼法的對照在 `da-guard served-values` 的 `aliases`。
 
+### 11. 內建層：平台預設啟用的閾值由讀取端自己帶著
+
+閾值登錄表（`rule-packs/threshold-registry.yaml`，平台所有閾值鍵的唯一來源）把平台出貨即啟用的鍵標為 `arming: default`。這些鍵與它們的平台值編譯在 exporter、da-guard 與 tenant-api 裡（三者共用同一套 Go 程式庫，`da-tools validate-config` 經 da-guard 取得答案），排在根目錄 `_defaults.yaml` 之下，叫做內建層。登錄表標為 `operator`（平台不主張值、要部署方自己校準）的鍵與所有 `_critical` 鍵不在內建層。
+
+**為什麼**：在此之前，平台的預設值要由 `da-tools init` 連數字複製進客戶的根目錄 `_defaults.yaml`。那份檔案之後歸客戶所有，平台新增的預設啟用鍵與重新校準的值都進不來，對應的告警不會響，也沒有錯誤訊息。Helm chart 的值隨 chart 升級、客戶只寫差異，conf.d 這一側沒有同樣的機制。現在客戶的樹只放覆寫與退出，預設值跟著讀取端出貨。
+
+**一條規則決定它的所有行為：內建層給的值，效果等同把同一個數字寫在根目錄 `defaults:`，差別只有來源標示。** 根目錄給了數字的鍵用根目錄的數字；根目錄沒寫、寫 `null`（決策 4）或寫了讀不了的值（da-guard 照舊以 `root_default_refused` 報錯）的鍵，都拿內建值。所以凡是「根目錄 `defaults:` 有值」的既有規則，內建層給值的鍵一律適用：子目錄與租戶可以覆寫它、可以寫 `"disable"` 關掉它；租戶寫的 `<鍵>_critical` 會送出 critical 列；租戶寫這個鍵不會被判為沒有讀取端讀（[ADR-038](038-unread-keys-judged-by-readers.md) 決定 7）；`"disable"` 過期（`expires:`）後失效，基底列回來。
+
+| 想要的結果 | 寫法 |
+|:--|:--|
+| 用平台值，並跟著平台之後的校準 | 不寫這個鍵 |
+| 整個平台用自己的數字（也等於釘住，不跟平台變動） | 根目錄 `defaults:` 寫 `<鍵>: 70` |
+| 某一層子目錄或某個租戶不要這條告警 | 子目錄 `_defaults.yaml` 或租戶檔寫 `<鍵>: "disable"` |
+| 某個租戶用自己的數字 | 租戶檔寫 `<鍵>: "70"` |
+
+根目錄檔的狀態決定內建層給不給：
+
+| 根目錄 `_defaults.yaml` | 內建層 |
+|:--|:--|
+| 不存在，或 `defaults:` 是空的 | 給值。這是合法的樹 |
+| 讀不了：語法錯，或檔案存在卻讀不到（例如 symlink 指向不存在的檔） | 不給值，整棵樹不送任何預設列（da-guard 結束碼 3）。根目錄讀不了時，寫在裡面的覆寫與退出也讀不到；這時送出平台值，等於替客戶打開他關掉的告警 |
+
+內建層對每個租戶都給值，不看部署裡有沒有裝對應的規則包：多一列不等於多一條告警，告警要響還需要規則包已部署、指標存在。Helm chart 的 `thresholdConfig.defaults` 照舊渲染這些值，它們在 ConfigMap 裡算根目錄寫的數字。
+
+根目錄的 `optional_overrides:`（宣告「平台認得這個鍵、但不給值」的鍵名清單）不影響內建層。根目錄沒給數字卻把預設啟用鍵列在裡面時，da-guard 以 `root_optional_builtin` 報錯，結束碼 1：列名關不掉這條告警。
+
+例：`conf.d/_defaults.yaml` 寫 `defaults: {redis_connected_clients: 1000}`，`conf.d/t1.yaml` 寫：
+
+```yaml
+tenants:
+  t1:
+    pg_connections: "70"
+    pg_replication_lag_critical: "60"
+    container_cpu: "disable"
+```
+
+`da-guard served-values --config-dir conf.d` 給 `t1` 的值（節錄）：`pg_connections` 70（租戶覆寫）、`pg_replication_lag` 30（內建層）、`pg_replication_lag_critical` 60、severity `critical`（基底有內建值，租戶的 critical 送出）、`redis_connected_clients` 1000（根目錄），以及內建層其餘的每個鍵；`container_cpu` 被租戶的 `"disable"` 關掉，沒有列。
+
+**內建表怎麼產生**：`scripts/tools/lint/check_threshold_registry.py --regen` 從登錄表生成 Go 原始碼（`components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go`），三個讀取端從同一份原始碼編譯；登錄表改了沒有重新生成時，`--ci` 檢查失敗。這張表以摘要命名：它每一行 `鍵=值` 依鍵排序後的 SHA-256 前 12 個十六進位字元。
+
+**改動內建表是 breaking change。** 改值、新增或移除預設啟用鍵，都會在客戶的 repo 沒有任何 diff 的情況下改變告警行為。所以 `check_threshold_registry.py --ci` 要求新表的摘要出現在一份標 `⚠️ breaking` 的 `changelog.d/` 片段裡（或已發布的 `CHANGELOG.md`），摘要變了，舊片段就不算數。
+
+**以摘要對齊，不以版號。** exporter、da-tools（內含 da-guard）、tenant-api 各有自己的發布線與版號，規則包沒有自己的發布線，「同一版」沒有可以比對的東西；兩個元件的內建表摘要相同，就是對齊。元件之間的落差依方向有不同後果，都不會報錯：
+
+| 落差 | 結果 |
+|:--|:--|
+| 規則包的登錄表比 exporter 新 | 新的預設啟用鍵沒有內建值，告警不響 |
+| exporter 比規則包新 | 新增的鍵多出沒有規則讀的列；重新校準過的值由舊規則照讀 |
+| CI 的 da-guard 或 tenant-api 比部署中的 exporter 新 | 靠內建層的樹或寫入在檢查端通過，exporter 卻不送那些列（[ADR-036](036-single-parser-effective-config.md) §6） |
+
+升級與回退時要注意同一件事：還沒有內建層的舊版讀取端，讀到一棵只放覆寫的樹，那些鍵就沒有值。所以要先把讀取端都升級完，才刪掉根目錄裡與平台相同的數字；要回退到舊版，先把它們放回去。
+
 ## 後果
 
 - **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，受影響租戶數的 metrics 看得出一次變更真正影響了誰。
@@ -303,6 +370,10 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
   - 根目錄 `_routing_defaults`、`state_filters` 這類頂層鍵的變更，在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
   - 沒有 `defaults:` 的子目錄檔整份併入，它的頂層鍵（例如 `state_filters`）因此也進最終設定：改它會讓該子樹每個租戶的 `merged_hash` 都動。
+  - **省略一個鍵的意思是「用平台值」**（決策 11）。平台改了內建表，會在客戶沒有 diff 的情況下改變告警；不接受的客戶把數字寫進根目錄，就釘住了。
+  - 元件之間的內建表落差只能靠比對摘要發現，目前沒有任何元件或告警替你比對（決策 11 的落差表）。
+  - 內建層多出的列計入 `max_metrics_per_tenant`。超過上限時 exporter 截斷，先被截掉的可能是租戶自己寫的列；da-guard 以 `cardinality_exceeded` 指名這些租戶，結束碼 1。
+  - exporter 不把「讀不了的檔出現或消失」當成變更：根目錄多出一個讀不了的 `_defaults.yml` 時，exporter 要到下一次有其他檔變動才重新載入、撤掉內建層，da-guard 與 tenant-api 則立刻反映。
 
 ## 考量過的替代方案
 
@@ -327,6 +398,17 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 3. **深合併表達不了路由的語意。** 租戶的 `_routing` 是逐頂層鍵覆蓋 `_routing_defaults`，不是同鍵深合併。改平台的 `group_wait` 時，自帶 `_routing.group_wait` 的租戶 route 完全不變；深合併卻會讓它的 `merged_hash` 移動，被記成受影響。
 
 這類鍵的變更本來就不依賴 `merged_hash` 生效：只改 `state_filters` 的 severity，`/metrics` 的 `user_state_filter` 跟著變，`merged_hash` 不動；對照組改 `defaults:` 底下的鍵，沒覆蓋它的租戶 `merged_hash` 就會動。
+
+### E：內建層的其他做法
+
+- **維持由 init 複製預設值，只靠檢查點名缺的鍵**：訊號只給有跑檢查的部署，而且每次平台新增預設啟用鍵，每個客戶都要手動補一次。
+- **讓 init 重跑來更新**：`init --force` 會重寫它產生的每一個檔，丟掉所有手改。
+- **登錄表隨規則包出貨、exporter 在執行期讀檔**：值與讀它的規則永遠同版，落差消失；但 CI 裡的 da-guard 與 tenant-api 手上沒有那個檔，三個讀取端的答案會不同，違反「同一棵樹只有一個答案」（ADR-036）。
+- **只在組裝 ConfigMap 時注入預設值**：走既有 ConfigMap 的部署與 tenant-api 的 Git 工作目錄拿不到，讀取端之間不一致。
+- **用 `optional_overrides:` 列名當退出**：退出之後的鍵照那個欄位的規則走（租戶把基底開回來時 `_critical` 不送、profile 給的值不套用）；而且 init 把這份清單複製進客戶的樹，日後平台把清單上的鍵升為預設啟用時，既有的樹會把它讀成已退出，也沒有錯誤。
+- **讓根目錄的 `null` 代表退出**：理由同決策 4，留白的鍵不該靜靜關掉告警。
+- **只對部署了對應規則包的租戶給值**：exporter 不知道部署了哪些規則包，只能從樹的內容推論，推論有已知的誤判。
+- **升級時自動刪掉客戶檔裡與平台相同的數字**：那個數字可能是刻意釘住的，刪掉之後它會跟著平台變動，這該由客戶決定。
 
 ## 影響範圍
 

@@ -96,8 +96,9 @@ tenants:
 	}
 
 	cfg := mgr.GetConfig()
-	if len(cfg.Defaults) != 2 {
-		t.Errorf("expected 2 defaults, got %d", len(cfg.Defaults))
+	// #3832: the built-in layer goes under the file's own two defaults.
+	if want := 2 + builtinKeysNotIn(); len(cfg.Defaults) != want {
+		t.Errorf("expected %d defaults, got %d", want, len(cfg.Defaults))
 	}
 	if len(cfg.Tenants) != 2 {
 		t.Errorf("expected 2 tenants, got %d", len(cfg.Tenants))

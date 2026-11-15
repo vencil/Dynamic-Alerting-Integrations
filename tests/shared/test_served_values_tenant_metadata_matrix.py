@@ -37,6 +37,9 @@ import pytest
 
 import _lib_tenant_values as tv
 import generate_tenant_metadata as gtm
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
 import _lib_parse_cache
 from _go_refusal import assert_refused, go_refused, refuses  # noqa: E402  (#3206)
 
@@ -131,11 +134,14 @@ def test_matches_served_values(where, tmp_path):
     # #3771：db_type 是列表（字串宣告＝一元素），沒宣告是 []。
     assert meta["tenant-a"]["db_type"] == [], where
     assert meta["tenant-b"]["db_type"] == ["redis"], where
+    # #3832：內建層的鍵每個租戶都有列，推得出的規則包與列數一併算進來。
+    builtin_packs = set(gtm.infer_rule_packs(dict.fromkeys(BUILTIN_DEFAULTS)))
     for tenant in ("tenant-a", "tenant-b"):
         # 繼承的 mysql_connections 與 redis_connected_clients 都算數。
-        assert meta[tenant]["rule_packs"] == ["mariadb", "operational", "platform", "redis"], (
+        assert meta[tenant]["rule_packs"] == sorted(
+            {"mariadb", "operational", "platform", "redis"} | builtin_packs), (
             where, tenant, meta[tenant]["rule_packs"])
-        assert meta[tenant]["metric_count"] == 2, (where, tenant)
+        assert meta[tenant]["metric_count"] == 2 + len(BUILTIN_DEFAULTS), (where, tenant)
 
 
 @pytest.mark.parametrize("where", sorted(POSITIONS))

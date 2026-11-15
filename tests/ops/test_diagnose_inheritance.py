@@ -13,6 +13,13 @@ import yaml
 import diagnose  # noqa: E402
 import pytest  # noqa: E402
 
+
+def _tree_layers(result):
+    """The chain without the built-in layer (#3832), which every chain now
+    starts with (test_diagnose.py's test_basic_defaults_only pins it)."""
+    assert result["chain"][0]["layer"] == "builtin", result["chain"]
+    return result["chain"][1:]
+
 # #2526: the chain is `da-guard effective`'s answer.
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -41,8 +48,8 @@ class TestResolveInheritanceChain:
                 tenants={"db-a": {}})
             result = diagnose.resolve_inheritance_chain("db-a", d)
             assert result is not None
-            assert len(result["chain"]) == 1
-            assert result["chain"][0]["layer"] == "defaults"
+            assert len(_tree_layers(result)) == 1  # #3832: after the built-in layer
+            assert _tree_layers(result)[0]["layer"] == "defaults"
             assert result["resolved"]["mysql_connections"] == 80
             assert result["profile_name"] is None
 
@@ -55,7 +62,7 @@ class TestResolveInheritanceChain:
             result = diagnose.resolve_inheritance_chain("db-a", d)
             # #2526: each key is listed in the layer that supplies it, so the
             # overridden default is not listed and the defaults layer is gone.
-            assert [c["layer"] for c in result["chain"]] == ["tenant"]
+            assert [c["layer"] for c in _tree_layers(result)] == ["tenant"]  # #3832
             assert result["resolved"]["mysql_connections"] == 50  # /metrics serves the number (#2526)
 
     def test_full_chain_with_profile(self):
@@ -75,8 +82,8 @@ class TestResolveInheritanceChain:
             assert result["profile_name"] == "standard"
 
             # Should have 3 layers: defaults, profile (fill-in), tenant
-            assert len(result["chain"]) == 3
-            layers = [c["layer"] for c in result["chain"]]
+            assert len(_tree_layers(result)) == 3  # #3832: after the built-in layer
+            layers = [c["layer"] for c in _tree_layers(result)]
             assert layers == ["defaults", "profile", "tenant"]
 
             # Tenant override wins for mysql_connections

@@ -262,7 +262,9 @@ def query_prometheus(prom_url: str, promql: str):
 # the whole tenant file, `tenants: !!set {tx}` declared no tenant.
 #
 # The order in which `chain` lists the layers, lowest first.
-_LAYER_ORDER = ("defaults", "platform", "profile", "tenant")
+# "builtin" (#3832): the platform's default-armed values, built into the
+# readers below the root `defaults:`; it has no file.
+_LAYER_ORDER = ("builtin", "defaults", "platform", "profile", "tenant")
 
 
 class TenantNotFoundError(CallerError):
@@ -493,7 +495,10 @@ def chain_for(tenant: str, source: ChainSource) -> dict[str, object]:
 
     chain = []
     for (layer, file), keys in sorted(groups.items(), key=_order):
-        source = f"{file} → {te.profile}" if layer == "profile" and te.profile else file
+        if layer == "builtin":
+            source = "(built-in)"
+        else:
+            source = f"{file} → {te.profile}" if layer == "profile" and te.profile else file
         chain.append({"layer": layer, "source": source, "keys": keys})
 
     return {

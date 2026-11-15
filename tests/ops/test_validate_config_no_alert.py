@@ -93,8 +93,11 @@ def test_a_retired_spelling_is_looked_up_in_the_canonical_one(tmp_path, monkeypa
         "_defaults.yaml": f"defaults:\n  {new}: 80\n",
         "ta.yaml": f"tenants:\n  ta:\n    {old}: \"70:critical\"\n"}))
     assert r["status"] == vc.PASS, r
-    assert r["details"][0].startswith("1 served key row(s)"), r
-    assert asked == [f"{new}_critical"], asked
+    # #3832: the built-in layer's rows are served (and looked up) too.
+    import _registry_lib
+    builtin = set(_registry_lib.builtin_defaults(_registry_lib.load_registry()))
+    assert r["details"][0].startswith(f"{1 + len(builtin)} served key row(s)"), r
+    assert [k for k in asked if k not in builtin] == [f"{new}_critical"], asked
 
 
 def test_a_retired_spelling_whose_canonical_key_no_alert_compares_is_listed(tmp_path, monkeypatch):
@@ -134,11 +137,12 @@ def test_a_deferred_base_is_not_listed_at_critical_either(tmp_path):
     assert r["status"] == vc.PASS, r
 
 
-def test_a_tree_the_verdict_cannot_judge_is_not_checked_not_a_pass(tmp_path):
-    """沒有根平台檔：閾值鍵判不了，這一列不能說「每個都有告警比較」。"""
+def test_a_tree_with_no_root_platform_file_is_checked(tmp_path):
+    """#3832：沒有根平台檔的樹不再判不了（平台預設啟用的閾值內建在讀取端），這一列照常判：
+    拼錯的鍵沒有列，送出的是內建層的列，每一列都有出貨告警比較。"""
     r = vc.check_no_alert(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_connectoins: \"5\"\n"}))
-    assert r["status"] == vc.WARN and r["details"][0].startswith("not checked:"), r
-    assert r["hint"] == vc._NO_ALERT_NOT_CHECKED_HINT, r
+    assert r["status"] == vc.PASS, r
+    assert not r["details"][0].startswith("not checked:"), r
 
 
 def test_no_verdict_from_the_routes_row_is_not_judged_again(tmp_path, monkeypatch):

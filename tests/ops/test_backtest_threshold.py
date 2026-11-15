@@ -26,6 +26,8 @@ from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 import backtest_threshold as bt  # noqa: E402
 from _go_refusal import assert_refused  # noqa: E402  (#3206)
 from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
 
 
 def _main_exit():
@@ -2420,18 +2422,19 @@ class TestRefusedRowsFromTwoTrees:
     def test_a_row_lost_to_a_non_finite_root_default_is_high(
             self, tmp_path, cli_argv, capsys, fake_prom, root):
         """根 `defaults:` 改成非有限數、租戶沒寫這個 key：沒有預設列，served-values
-        標 `root_default_refused`，判 HIGH（不是「Metric disabled」MEDIUM）。"""
+        標 `root_default_refused`，判 HIGH（不是「Metric disabled」MEDIUM）。
+        （#3832：平台不預設啟用的鍵；內建鍵被拒收時改送平台值，列不會掉。）"""
         p = fake_prom(values=(60, 80, 90, 100))
         tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
         cur, base = _dirs(tmp_path, {**_D, **tenant},
-                          {"_defaults.yaml": _CRIT_DEFAULTS.replace("mysql_connection_usage_percent: 80",
-                                                                    f"mysql_connection_usage_percent: {root}"),
+                          {"_defaults.yaml": _CRIT_DEFAULTS.replace("mongodb_connections_current: 300",
+                                                                    f"mongodb_connections_current: {root}"),
                            **tenant})
         rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
                             "--prometheus", p.url, "--json")
         rows = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
                 for r in json.loads(out.out)["changes"]]
-        assert (rc, rows) == (1, [("mysql_connection_usage_percent", "80", None, "HIGH")]), out.out
+        assert (rc, rows) == (1, [("mongodb_connections_current", "300", None, "HIGH")]), out.out
 
     def test_a_non_finite_root_default_under_a_retired_alias_is_high(
             self, tmp_path, cli_argv, capsys, fake_prom):
@@ -2756,8 +2759,11 @@ class TestRecipeNoteFromTheWholeTree:
 
     def _capped(self, monkeypatch, cli_argv, capsys, tmp_path, before, after):
         # A limit of 1 metric per tenant: r1 is served, any later recipe is cut.
+        # #3832: the tenant switches the other built-in keys off — their rows
+        # (`container_*`) sort ahead of the recipe rows and would take the slot.
         capped = {"_defaults.yaml": _CRIT_DEFAULTS + "max_metrics_per_tenant: 1\n"}
-        head = "    mysql_connection_usage_percent: '70'\n"
+        head = "    mysql_connection_usage_percent: '70'\n" + "".join(
+            f"    {k}: disable\n" for k in sorted(BUILTIN_DEFAULTS) if k != "mysql_connection_usage_percent")
         return self._note(monkeypatch, cli_argv, capsys, tmp_path,
                           {**capped, "db-a.yaml": self._t("db-a", head + before)},
                           {**capped, "db-a.yaml": self._t("db-a", head + after)})

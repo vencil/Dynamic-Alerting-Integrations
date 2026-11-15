@@ -316,7 +316,8 @@ tenants:
 
 	// During backup window
 	inside := time.Date(2026, 1, 15, 3, 0, 0, 0, time.UTC)
-	resolved := cfg.ResolveAt(inside)
+	// #3832: the built-in rows are not this test's.
+	resolved := dropBuiltinRows(cfg.ResolveAt(inside))
 	sort.Slice(resolved, func(i, j int) bool { return resolved[i].Tenant < resolved[j].Tenant })
 
 	if len(resolved) != 2 {
@@ -331,7 +332,7 @@ tenants:
 
 	// Outside window
 	outside := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
-	resolved = cfg.ResolveAt(outside)
+	resolved = dropBuiltinRows(cfg.ResolveAt(outside))
 	sort.Slice(resolved, func(i, j int) bool { return resolved[i].Tenant < resolved[j].Tenant })
 
 	if resolved[0].Tenant != "db-a" || resolved[0].Value != 70 {

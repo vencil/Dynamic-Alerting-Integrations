@@ -407,10 +407,11 @@ def test_every_row_of_a_recipe_counts_not_only_the_first():
 
 
 # ── unserved ↔ 出列（#3022）───────────────────────────────────────────────
+# #3832：用平台不預設啟用的鍵——內建鍵不論根檔寫不寫都有預設列。
 
 
-_NO_PG = _DEFAULTS
-_WITH_PG = _DEFAULTS.replace("  container_memory: 85\n", "  container_memory: 85\n  pg_connections: 80\n")
+_NO_BASE = _DEFAULTS
+_WITH_BASE = _DEFAULTS.replace("  container_memory: 85\n", "  container_memory: 85\n  redis_connected_clients: 80\n")
 
 
 def _served_metric(b, p):
@@ -418,39 +419,39 @@ def _served_metric(b, p):
 
 
 @pytest.mark.parametrize("base_defaults, pr_defaults, change, not_served", [
-    (_NO_PG, _WITH_PG, "added", ["old"]),     # 補上 base：開始出列
-    (_WITH_PG, _NO_PG, "removed", ["new"]),   # 拿掉 base：不再出列
+    (_NO_BASE, _WITH_BASE, "added", ["old"]),     # 補上 base：開始出列
+    (_WITH_BASE, _NO_BASE, "removed", ["new"]),   # 拿掉 base：不再出列
 ])
 def test_a_key_crossing_unserved_and_served_is_reported_with_the_same_number(
         tmp_path, da_guard, base_defaults, pr_defaults, change, not_served):
     """寫入的數字沒變，但 /metrics 有沒有這列變了：告警因此開始或停止生效。
     舊行為把 `'85'`（unserved 原文）與 `85` 比成相同，整列不報。"""
-    tenants = {"t": {"pg_connections": "85"}}
+    tenants = {"t": {"redis_connected_clients": "85"}}
     b, p = _served(tmp_path, da_guard, tenants, tenants,
                    base_defaults=base_defaults, pr_defaults=pr_defaults)
-    got = _by_key(_served_metric(b, p)["t"])["pg_connections"]
+    got = _by_key(_served_metric(b, p)["t"])["redis_connected_clients"]
     assert (got["change"], got["not_served"]) == (change, not_served)
     # 讀數本身維持 served-values 給的樣子（遮罩與格式化照舊作用在它上面）
     assert {float(got["old"]), float(got["new"])} == {85.0}
 
 
 def test_a_crossing_with_a_new_number_is_still_added(tmp_path, da_guard):
-    b, p = _served(tmp_path, da_guard, {"t": {"pg_connections": "85"}},
-                   {"t": {"pg_connections": "90"}}, base_defaults=_NO_PG, pr_defaults=_WITH_PG)
-    got = _by_key(_served_metric(b, p)["t"])["pg_connections"]
+    b, p = _served(tmp_path, da_guard, {"t": {"redis_connected_clients": "85"}},
+                   {"t": {"redis_connected_clients": "90"}}, base_defaults=_NO_BASE, pr_defaults=_WITH_BASE)
+    got = _by_key(_served_metric(b, p)["t"])["redis_connected_clients"]
     assert (got["change"], got["not_served"]) == ("added", ["old"])
 
 
 def test_an_unserved_key_that_stays_unserved_is_not_a_change(tmp_path, da_guard):
-    tenants = {"t": {"pg_connections": "85"}}
+    tenants = {"t": {"redis_connected_clients": "85"}}
     b, p = _served(tmp_path, da_guard, tenants, tenants)
     assert "t" not in _served_metric(b, p)
 
 
 def test_a_change_on_a_key_served_on_neither_side_is_marked_on_both(tmp_path, da_guard):
-    b, p = _served(tmp_path, da_guard, {"t": {"pg_connections": "85"}},
-                   {"t": {"pg_connections": "90"}})
-    got = _by_key(_served_metric(b, p)["t"])["pg_connections"]
+    b, p = _served(tmp_path, da_guard, {"t": {"redis_connected_clients": "85"}},
+                   {"t": {"redis_connected_clients": "90"}})
+    got = _by_key(_served_metric(b, p)["t"])["redis_connected_clients"]
     assert got["not_served"] == ["old", "new"]
     assert cd._format_side(got, "old") == "85 (not served)"
 

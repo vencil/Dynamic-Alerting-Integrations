@@ -316,8 +316,11 @@ class TestAssembleWritesThroughDaGuard:
     `copy` 交給 `da-guard write`，整批一次判定、全部通過才寫；`--check` 問同一批的
     dry run。"""
 
+    # #3832: a rootless output tree is judged by the key verdict, so the
+    # shard writes keys a reader reads: a default-armed threshold (as written,
+    # `010`) and `_metadata` for the non-ASCII text in flow style.
     _BODY = ("# owned by team-b — 團隊 B\ntenants:\n  t-b:\n"
-             "    cpu: 010 # as written\n    note: \"警報\"\n    flow: {a: \"1\"}\n")
+             "    container_cpu: 010 # as written\n    _metadata: {owner: \"警報\"}\n")
 
     def test_the_bytes_are_the_sources_as_they_are(self, config_dir):
         src = Path(config_dir) / "src"
@@ -444,8 +447,9 @@ class TestMainCLI:
         src_b = Path(config_dir) / "team-b"
         src_a.mkdir()
         src_b.mkdir()
-        _write_file(src_a / "db-a.yaml", "tenants:\n  db-a:\n    x: '1'")
-        _write_file(src_b / "db-b.yaml", "tenants:\n  db-b:\n    y: '2'")
+        # #3832: default-armed keys, read in the rootless output tree too.
+        _write_file(src_a / "db-a.yaml", "tenants:\n  db-a:\n    container_cpu: '1'")
+        _write_file(src_b / "db-b.yaml", "tenants:\n  db-b:\n    container_memory: '2'")
         return f"{src_a},{src_b}"
 
     def test_check_mode_no_conflicts(self, config_dir, monkeypatch, cli_argv):

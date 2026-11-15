@@ -36,6 +36,9 @@ import blind_spot_discovery as bsd
 from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
 
@@ -115,7 +118,10 @@ def test_blind_spot_monitored_set_matches_served_values(where, tmp_path):
     got = bsd.load_monitored_db_types(str(conf_d))
     assert got == want, where
     # 繼承來的 mysql_connections：兩個租戶在四個位置都算 mariadb 已監控。
-    assert got == {"mariadb": {"tenant-a", "tenant-b"}}, where
+    # #3832：內建層的鍵每個租戶都有列，它們推得出的 db 類型也算已監控。
+    both = {"tenant-a", "tenant-b"}
+    builtin = {db for k in BUILTIN_DEFAULTS if (db := bsd._infer_db_type_from_metric(k))}
+    assert got == {db: both for db in {"mariadb"} | builtin}, where
 
 
 def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
@@ -128,8 +134,13 @@ def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
     served = tv.load_served_values(conf_d)
     assert "redis_memory" not in served["tenant-a"].values
     assert "mysql_slow_queries" not in served["tenant-b"].values
-    assert bsd.load_monitored_db_types(str(conf_d)) == {"redis": {"tenant-b"}}
-    assert arg.load_tenant_configs(config_dir=str(conf_d)) == {
+    # #3832：內建層的鍵每個租戶都有列；這裡驗的是 disable 與不送的鍵，把它們除開。
+    builtin = {db for k in BUILTIN_DEFAULTS if (db := bsd._infer_db_type_from_metric(k))}
+    got = bsd.load_monitored_db_types(str(conf_d))
+    assert {db: t for db, t in got.items() if db not in builtin} == {"redis": {"tenant-b"}}
+    assert "redis" not in builtin  # the control above would hide redis otherwise
+    cfgs = arg.load_tenant_configs(config_dir=str(conf_d))
+    assert {t: {k: v for k, v in c.items() if k not in BUILTIN_DEFAULTS} for t, c in cfgs.items()} == {
         "tenant-a": {}, "tenant-b": {"redis_memory": 1024.0}}
 
 

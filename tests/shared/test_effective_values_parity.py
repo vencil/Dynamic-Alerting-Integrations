@@ -27,6 +27,10 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 
 from _go_build import go_build_argv  # #3425: 建置旗標的單一來源，與出貨同形
 import _lib_tenant_values as tv
+import sys  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import with_builtin  # noqa: E402  (#3832)
 from _lib_io import YamlFileError
 from _platform_fs import (  # noqa: E402
     require_posix_modes,
@@ -284,7 +288,8 @@ def test_directory_symlink_is_not_unreadable(tmp_path, da_guard):
     symlink_or_skip("realdir", conf_d / "x.yaml")
     got = tv.load_effective(conf_d, binary=da_guard)
     assert sorted(got) == ["tenant-a", "tenant-b"]
-    assert got["tenant-b"].effective_config == {"mysql_connections": 80}
+    # #3832：內建層的鍵在每個有效設定之下。
+    assert got["tenant-b"].effective_config == with_builtin({"mysql_connections": 80})
 
 
 def test_output_without_unreadable_is_refused(tmp_path):
