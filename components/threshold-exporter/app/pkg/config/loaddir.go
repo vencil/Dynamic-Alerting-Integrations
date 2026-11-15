@@ -138,6 +138,17 @@ type LoadReport struct {
 	// are — in the file and layer that writes each, only where the exporter
 	// reads the key (LayerScheduleProblems). Set by LoadDirFromScan only.
 	ScheduleProblems []LayerValueProblem
+	// SubtreeReserved (#3881): subtreeReservedKeys over the chain the build
+	// was given — tenantID → each key a subtree `_defaults.yaml` writes and
+	// does not carry, with its writes — the set ScopedTenants.SubtreeReserved
+	// reads for the in-scope tenants (da-guard's
+	// subtree_default_reserved_key). DefaultsFiles: the scan's defaults
+	// carriers with their bytes (ScopedTenants.DefaultsFiles over the whole
+	// tree), which that finding's filter reads (guard.SubtreeReservedReported).
+	// SubtreeReserved is set by every load that builds, DefaultsFiles by
+	// LoadDirFromScan only; each nil when none.
+	SubtreeReserved map[string]map[string][]SubtreeReservedWrite
+	DefaultsFiles   []DefaultsFile
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -214,6 +225,7 @@ func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *Thres
 	rep.ValueProblems = LayerValueProblems(scan, built)
 	rep.ScheduledReserved = scheduledReservedOfFiles(built.FileConfigs)
 	rep.ScheduleProblems = LayerScheduleProblems(scan, built)
+	rep.DefaultsFiles = scopeDefaultsFiles(scan, ".")
 	return cfg, rep, writtenKeys(scan, built), nil
 }
 
@@ -233,11 +245,13 @@ func loadDirFromScan(scan *TreeScan, dir string, logger *log.Logger, reported bo
 	if len(scan.Files) == 0 {
 		return nil, LoadReport{Unreadable: scan.Unreadable}, nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
-	b, err := loadDirBuild(scan, dir, logger, nil)
+	in := loadDirBuildInput(scan, dir, logger, nil)
+	b, err := BuildFlatConfig(scan, in)
 	if err != nil {
 		return nil, LoadReport{}, nil, err
 	}
 	built = &b
+	rep.SubtreeReserved = subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults)
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
 	rep.Undeliverable = built.Undeliverable

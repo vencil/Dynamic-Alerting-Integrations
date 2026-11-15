@@ -731,3 +731,33 @@ def test_unread_routing_is_one_finding_printed_as_every_blocking_line(tmp_path, 
     render = _gar("--config-dir", str(d), "--output-alertmanager", "-o", str(tmp_path / "out.yaml"))
     unread = next(f["message"] for f in found if f["kind"] == "routing_in_unread_location")
     assert render.stderr.count(unread) == 1, render.stderr
+
+
+def test_a_reserved_key_in_a_subtree_defaults_blocks_validate(tmp_path):
+    """#3881: a subtree `_defaults.yaml` writing `_silent_mode` /
+    `_severity_dedup` is applied by no reader there (#3341). da-guard's own
+    check named it (subtree_default_reserved_key); the shared key verdict did
+    not, so --validate passed. It now blocks, on the subtree file, naming
+    the tenants that inherit it — and the dedup rule still reads the tenant
+    as enabled, as the exporter does (the subtree `disable` is not applied).
+    Control: `_silent_mode` in the tenant's own entry is read."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _DECL,
+        "team/_defaults.yaml": "defaults:\n  _silent_mode: all\n  _severity_dedup: disable\n",
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate")
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    for key in ("_severity_dedup", "_silent_mode"):
+        assert (f"team/_defaults.yaml: error: unread `{key}` (subtree_default_reserved_key)"
+                " — tenant(s) t-team") in res.stderr, res.stderr
+    out = res.stdout + res.stderr
+    assert "1 inhibit rule(s)" in out and "severity_dedup disabled" not in out, out
+
+    ctl = _write(tmp_path / "ctl", {
+        "_defaults.yaml": _DECL,
+        "team/t-team.yaml": _tenant("t-team", "    _silent_mode: all\n"),
+    })
+    res = _gar("--config-dir", str(ctl), "--validate")
+    assert "subtree_default_reserved_key" not in res.stderr, res.stderr
+    assert res.returncode == 0, res.stderr
