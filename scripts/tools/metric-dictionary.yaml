@@ -439,7 +439,13 @@ jvm_memory_used_bytes:
   maps_to: jvm_memory
   golden_rule: JVMMemoryPressure
   rule_pack: jvm
-  note: "Heap memory usage — jvm_memory_used_bytes{area='heap'} / max * 100"
+  note: "Heap memory usage — sum of jvm_memory_used_bytes{area='heap'} over the heap pools / sum of their max * 100"
+
+jvm_memory_bytes_used:
+  maps_to: jvm_memory
+  golden_rule: JVMMemoryPressure
+  rule_pack: jvm
+  note: "Heap memory usage as jmx_exporter < 1.0 names it — jvm_memory_bytes_used{area='heap'} / jvm_memory_bytes_max * 100"
 
 jvm_threads_current:
   maps_to: jvm_threads

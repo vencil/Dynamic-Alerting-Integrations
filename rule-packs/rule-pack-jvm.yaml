@@ -10,9 +10,10 @@
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   jvm_gc_pause: 0.5   # seconds/5m — GC pause duration rate warning
 #       未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
-#   jvm_memory: 80   # % — Heap memory usage warning
-#       未啟用（聚合錯誤，#3928）：規則逐 series 相除，Micrometer 的 JVM（每個 heap pool 一條 series）會因最滿的那個 pool 就響；80
-#       的依據量的是整體 heap。
+#   jvm_memory: 80
+#       % — Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed
+#       before dividing)
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #   jvm_threads: 500   # count — Active thread count warning
 #       未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
 #
@@ -53,13 +54,33 @@ groups:
             rate(jvm_gc_pause_seconds_sum[5m])
           )
 
-      # Heap memory usage — percentage of max
+      # Heap memory usage — the whole heap as % of its max, fullest JVM per
+      # tenant (#3928).
+      #   - `sum without(id)`: Micrometer exports one series per heap pool
+      #     (`id="G1 Eden Space"`, …). Dividing per series reads the fullest
+      #     POOL — an Eden space is close to full in normal operation — so a
+      #     heap at 18 % overall fired at 95 %. The pools are summed first; a
+      #     JVM that exports one series for the whole heap (client_java,
+      #     jmx_exporter) sums to itself.
+      #   - `> 0`: a pool with no limit of its own reports max -1 (G1 Eden and
+      #     Survivor). It stays in the used sum and leaves the max sum.
+      #   - The second branch reads the names jmx_exporter < 1.0 exports
+      #     (jvm_memory_bytes_used / jvm_memory_bytes_max); with only the first
+      #     the alert never fired for those deployments.
+      #   - Each branch is tagged before `or`, which otherwise keeps the left
+      #     sample when both carry the same label set.
       - record: tenant:jvm_memory_used:percent
         expr: |
           max by(tenant) (
-            jvm_memory_used_bytes{area="heap"}
-            / jvm_memory_max_bytes{area="heap"}
-            * 100
+            label_replace(
+              100 * sum without(id) (jvm_memory_used_bytes{area="heap"})
+                / sum without(id) (jvm_memory_max_bytes{area="heap"} > 0),
+              "mem_source", "current", "", "")
+            or
+            label_replace(
+              100 * jvm_memory_bytes_used{area="heap"}
+                / (jvm_memory_bytes_max{area="heap"} > 0),
+              "mem_source", "legacy", "", "")
           )
 
       # Active thread count

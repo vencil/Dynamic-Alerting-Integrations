@@ -1,0 +1,182 @@
+# promtool unit test — JVM heap as % of its max, measured on the whole heap (#3928).
+# Run: promtool test rules tests/rulepacks/rule-pack-jvm-memory_test.yaml
+#
+# The observed series is tenant:jvm_memory_used:percent = used / max of the
+# WHOLE heap, fullest JVM per tenant.
+#   - t-pools: Micrometer, one series per heap pool (Parallel GC shape). Eden
+#     95/100, Survivor 5/20, Old 100/880 → 200/1000 = 20 %. Per series the
+#     fullest pool reads 95 % and fires — this tenant is what turns the test
+#     red if the pools stop being summed.
+#   - t-g1: Micrometer with G1: Eden and Survivor report max -1, Old 800/1000.
+#     Used 60 + 40 + 800 = 900 over the one real limit → 90 %. Summing the -1s
+#     into the max reads 900/998; dropping the unlimited pools from the used
+#     sum reads 80 %, which does not fire.
+#   - t-two: two JVMs, one at 30 %, one at 90 % → the fuller one, 90 %. Summing
+#     across JVMs reads 60 %.
+#   - t-single: client_java / jmx_exporter >= 1.0, one series for the heap, 85 %.
+#   - t-legacy: jmx_exporter < 1.0 names only (jvm_memory_bytes_used /
+#     jvm_memory_bytes_max), 88 %. With only the current names this tenant has
+#     no sample and no alert.
+#   - t-same: both name sets on the SAME label set, 50 % and 97 % → 97. A bare
+#     `or` keeps the left side and reads 50.
+#   - t-nolimit: the only max is -1 → no sample, no alert.
+#   - t-nolimit-legacy: the same on the legacy names (-1 max).
+#   - t-equal: exactly 80 % against a warning of 80 → no alert.
+#   - t-nonheap: area="nonheap" at 99 % is not heap → no sample.
+#
+# JVMPerformanceDegraded (GC pause AND heap, both over their warnings) reads the
+# same series: t-pools and t-single both have GC pauses over the threshold, and
+# only t-single — whose heap really is over 80 % — is degraded.
+rule_files:
+  - ../../rule-packs/rule-pack-jvm.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'jvm_memory_used_bytes{tenant="t-pools", instance="app-0", area="heap", id="PS Eden Space"}'
+        values: '95x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-pools", instance="app-0", area="heap", id="PS Eden Space"}'
+        values: '100x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-pools", instance="app-0", area="heap", id="PS Survivor Space"}'
+        values: '5x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-pools", instance="app-0", area="heap", id="PS Survivor Space"}'
+        values: '20x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-pools", instance="app-0", area="heap", id="PS Old Gen"}'
+        values: '100x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-pools", instance="app-0", area="heap", id="PS Old Gen"}'
+        values: '880x60'
+      - series: 'user_threshold{tenant="t-pools", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-g1", instance="app-0", area="heap", id="G1 Eden Space"}'
+        values: '60x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-g1", instance="app-0", area="heap", id="G1 Eden Space"}'
+        values: '-1x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-g1", instance="app-0", area="heap", id="G1 Survivor Space"}'
+        values: '40x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-g1", instance="app-0", area="heap", id="G1 Survivor Space"}'
+        values: '-1x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-g1", instance="app-0", area="heap", id="G1 Old Gen"}'
+        values: '800x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-g1", instance="app-0", area="heap", id="G1 Old Gen"}'
+        values: '1000x60'
+      - series: 'user_threshold{tenant="t-g1", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-g1", component="jvm", metric="memory", severity="critical"}'
+        values: '95x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-two", instance="app-0", area="heap"}'
+        values: '30x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-two", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-two", instance="app-1", area="heap"}'
+        values: '90x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-two", instance="app-1", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-two", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-single", instance="app-0", area="heap"}'
+        values: '85x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-single", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-single", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_bytes_used{tenant="t-legacy", instance="app-0", area="heap"}'
+        values: '88x60'
+      - series: 'jvm_memory_bytes_max{tenant="t-legacy", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-legacy", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-same", instance="app-0", area="heap"}'
+        values: '50x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-same", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'jvm_memory_bytes_used{tenant="t-same", instance="app-0", area="heap"}'
+        values: '97x60'
+      - series: 'jvm_memory_bytes_max{tenant="t-same", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-same", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-nolimit", instance="app-0", area="heap"}'
+        values: '500x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-nolimit", instance="app-0", area="heap"}'
+        values: '-1x60'
+      - series: 'user_threshold{tenant="t-nolimit", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_bytes_used{tenant="t-nolimit-legacy", instance="app-0", area="heap"}'
+        values: '500x60'
+      - series: 'jvm_memory_bytes_max{tenant="t-nolimit-legacy", instance="app-0", area="heap"}'
+        values: '0x60'
+      - series: 'user_threshold{tenant="t-nolimit-legacy", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-equal", instance="app-0", area="heap"}'
+        values: '80x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-equal", instance="app-0", area="heap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-equal", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-nonheap", instance="app-0", area="nonheap"}'
+        values: '99x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-nonheap", instance="app-0", area="nonheap"}'
+        values: '100x60'
+      - series: 'user_threshold{tenant="t-nonheap", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-pools", instance="app-0"}'
+        values: '0+15x60'
+      - series: 'user_threshold{tenant="t-pools", component="jvm", metric="gc_pause", severity="warning"}'
+        values: '0.5x60'
+      - series: 'jvm_gc_pause_seconds_sum{tenant="t-single", instance="app-0"}'
+        values: '0+15x60'
+      - series: 'user_threshold{tenant="t-single", component="jvm", metric="gc_pause", severity="warning"}'
+        values: '0.5x60'
+
+    promql_expr_test:
+      - expr: tenant:jvm_memory_used:percent
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-pools"}'
+            value: 20
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-g1"}'
+            value: 90
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-two"}'
+            value: 90
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-single"}'
+            value: 85
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-legacy"}'
+            value: 88
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-same"}'
+            value: 97
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-equal"}'
+            value: 80
+
+      # for: 5m → firing by 10m. 90 is not above t-g1's critical of 95.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname=~"JVMMemoryPressure|JVMMemoryPressureCritical"})
+        eval_time: 10m
+        exp_samples:
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-g1"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-two"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-single"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-legacy"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-same"}'
+            value: 1
+
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="JVMPerformanceDegraded"})
+        eval_time: 12m
+        exp_samples:
+          - labels: '{alertname="JVMPerformanceDegraded", tenant="t-single"}'
+            value: 1

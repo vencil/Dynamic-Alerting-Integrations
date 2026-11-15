@@ -1048,15 +1048,10 @@ keys:
     tier: defaults
     value: 80
     unit: '%'
-    desc: Heap memory usage warning
+    desc: 'Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed before dividing)'
     metric_class: saturation
     arming: operator
     portability: portable
-    blocker:
-      kind: aggregation_bug
-      tracking: 3928
-      reason: The rule divides per series, so a Micrometer JVM (one series per heap pool) fires on its fullest pool; the sources for 80 measure the whole heap.
-      reason_zh: 規則逐 series 相除，Micrometer 的 JVM（每個 heap pool 一條 series）會因最滿的那個 pool 就響；80 的依據量的是整體 heap。
   jvm_threads:
     pack: jvm
     tier: defaults
