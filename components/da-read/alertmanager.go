@@ -128,9 +128,6 @@ const showLoaderReasonFlag = "--show-loader-reason"
 const loaderRefused = "refused by Alertmanager's config loader (its reason is not printed: it can quote " +
 	"the file's values; `da-read alertmanager " + showLoaderReasonFlag + "` prints it)"
 
-// loaderRefusal is the one spelling of "Alertmanager's loader refused the
-// text": the fixed sentence, or with *showReason* the loader's own reason
-// after it.
 // loadAlertmanager is config.Load with its panics recovered (loaderPanic):
 // a panic of Alertmanager's loader on the input refuses it, as the loader
 // fails on it in Alertmanager too.
@@ -139,6 +136,9 @@ func loadAlertmanager(data []byte) (cfg *config.Config, err error) {
 	return config.Load(string(data))
 }
 
+// loaderRefusal is the one spelling of "Alertmanager's loader refused the
+// text": the fixed sentence, or with *showReason* the loader's own reason
+// after it.
 func loaderRefusal(err error, showReason bool) error {
 	if showReason {
 		return fmt.Errorf("refused by Alertmanager's config loader: %v", err)
