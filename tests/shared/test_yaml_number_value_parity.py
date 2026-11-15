@@ -21,6 +21,9 @@ from pathlib import Path
 import pytest
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
 MATRIX = json.loads((Path(__file__).parent / "yaml_number_value_matrix.json")
@@ -48,6 +51,31 @@ def _tree(tmp_path: Path, source: str, side: str = "tenant") -> Path:
 
 def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _with_builtin(go_json: str) -> str:
+    """`go_json` (one tree's CanonicalJSON) with the built-in layer (#3832)
+    laid under it, as the merged config da-guard hashes holds it: every
+    built-in key the row does not write, at the platform's value, spliced in
+    key order. The row's own values are kept as their text, so a number
+    Python would print otherwise (1e400, a long integer) is not re-written.
+    The matrix itself holds the tree without the built-in layer — the Go
+    half compares it with that layer withheld."""
+    dec = json.JSONDecoder()
+    body = go_json.strip()
+    assert body[0] == "{" and body[-1] == "}", go_json
+    pairs: dict[str, str] = {}
+    i = 1
+    while body[i] != "}":
+        key, i = dec.raw_decode(body, i)
+        assert body[i] == ":", go_json
+        _, end = dec.raw_decode(body, i + 1)
+        pairs[key] = body[i + 1:end]
+        i = end + (body[end] == ",")
+    for k, v in BUILTIN_DEFAULTS.items():
+        pairs.setdefault(k, str(int(v)) if v.is_integer() else repr(v))
+    return "{" + ",".join(json.dumps(k, ensure_ascii=False) + ":" + pairs[k]
+                          for k in sorted(pairs)) + "}"
 
 
 def _describe(conf_d: Path, *args: str) -> subprocess.CompletedProcess:
@@ -92,8 +120,11 @@ def test_describe_tenant_shows_the_exporters_value_and_hash(tmp_path: Path, row:
     assert not go["parse_failed"], go
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
-    assert out["effective_config"] == _as_sent(json.loads(row["go_json"]))
-    assert out["merged_hash"] == _hash(row["go_json"]), out
+    # #3832: the effective config and merged_hash hold the built-in layer.
+    want = _with_builtin(row["go_json"])
+    assert out["effective_config"] == _as_sent(json.loads(want))
+    assert out["merged_hash"] == _hash(want), out
+    assert out["merged_hash"] == go["tenants"]["t1"]["merged_hash"], out
 
 
 def _as_sent(value):
@@ -109,13 +140,15 @@ def _as_sent(value):
 
 
 # The issue's five divergent rows, end to end through the CLI, with the
-# merged_hash measured on the Go side and the value's JSON type.
+# merged_hash measured on the Go side and the value's JSON type. #3832: the
+# hashes are of the merged config with the built-in layer (before it:
+# 5447b9dc…, a68f3ce1…, d4f79575…, 924c76cb…, d041446c…).
 ISSUE_ROWS = {
-    "1.0": (1, "5447b9dcc066b19a"),
-    "0o17": (15, "a68f3ce1a63b337d"),
-    "12:30:45": ("12:30:45", "d4f79575ddbf404a"),
-    "1_2:30": ("1_2:30", "924c76cb45e897fe"),
-    "1e3": (1000, "d041446c0445886e"),
+    "1.0": (1, "dd360f46f76b3c30"),
+    "0o17": (15, "c60c356858456001"),
+    "12:30:45": ("12:30:45", "0c959491299a944d"),
+    "1_2:30": ("1_2:30", "fee53532cfbbb454"),
+    "1e3": (1000, "7b247f9f807685ac"),
 }
 
 
@@ -130,7 +163,7 @@ def test_cli_prints_the_exporters_value_and_hash(tmp_path: Path, source: str) ->
     got = out["effective_config"]["_x"]["v"]
     assert got == value and type(got) is type(value), (got, value)
     row = next(r for r in ROWS if r["source"] == source)
-    assert _hash(row["go_json"]) == merged_hash
+    assert _hash(_with_builtin(row["go_json"])) == merged_hash  # #3832
 
 
 def test_yaml_one_one_bools_are_the_exporters(tmp_path: Path) -> None:

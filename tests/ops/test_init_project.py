@@ -1183,8 +1183,10 @@ class TestCriticalTierPlacement:
             conf.mkdir()
             (conf / '_defaults.yaml').write_text(
                 'defaults:\n  mysql_connection_usage_percent: 80\n', encoding='utf-8')
+            # #3832: a base outside the built-in table — `pg_connections` has
+            # a built-in value now, so its `_critical` no longer dangles.
             (conf / 'db-a.yaml').write_text(
-                'tenants:\n  db-a:\n    pg_connections_critical: "150"\n',
+                'tenants:\n  db-a:\n    redis_connected_clients_critical: "150"\n',
                 encoding='utf-8')
             env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1'}
             for extra in ([], ['--strict']):
@@ -1193,7 +1195,7 @@ class TestCriticalTierPlacement:
                     capture_output=True, text=True, encoding='utf-8',
                     errors='replace', env=env, timeout=180)
                 assert run.returncode == 1, (extra, run.returncode, run.stdout[-800:])
-                assert 'pg_connections_critical' in run.stdout, (extra, run.stdout[-800:])
+                assert 'redis_connected_clients_critical' in run.stdout, (extra, run.stdout[-800:])
 
     def test_force_really_discards_hand_edits_in_both_files(self):
         """The header tells the operator that `--force` is the only in-tool

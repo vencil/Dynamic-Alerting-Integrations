@@ -34,7 +34,8 @@ func servedMySQLConnections(t *testing.T, dir, tenantID string) float64 {
 		t.Fatalf("oracle: the flat plane does not serve tenant %q (it serves %q) — the case tests nothing", tenantID, got)
 	}
 	for _, r := range cfg.ResolveAt(fixedNow) {
-		if r.Tenant == tenantID && r.Component == "mysql" && r.Severity == "warning" {
+		// metric connections: the built-in layer (#3832) serves other mysql rows.
+		if r.Tenant == tenantID && r.Component == "mysql" && r.Metric == "connections" && r.Severity == "warning" {
 			return r.Value
 		}
 	}

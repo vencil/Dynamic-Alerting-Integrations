@@ -9,9 +9,36 @@ package config
 // `check_threshold_registry.py --regen`; `--ci` fails while it is stale. This
 // file is the read access to it.
 //
-// ⛔ NOTHING RESOLVES A THRESHOLD FROM THIS TABLE YET. It is the source the
-// built-in layer of #3832 will read; until that lands, a key a tree does not
-// write has no value, exactly as before.
+// THE BUILT-IN LAYER (#3832). The table is the bottom of every reader's
+// merge, below the conf.d root's `defaults:`. One rule decides all of its
+// behaviour: a value the built-in layer gives has the effect of the same
+// number written under the root `defaults:`; only the source differs
+// (key_sources `layer: builtin`, no file). So a key the root gives a number
+// takes the root's number; a key the root does not write, writes as null, or
+// writes as a value the root decode refuses takes the built-in value; and
+// every rule that holds for a root-valued key (a subtree or tenant `disable`,
+// a tenant's `<key>_critical` row, the key verdict) holds for it.
+//
+// Both representations of the defaults take it in, from this file only:
+//
+//   - the typed ThresholdConfig.Defaults (/metrics, served-values, the
+//     tenant-api write check): seedBuiltinDefaults, after the root carrier is
+//     merged;
+//   - the generic defaults chain (/effective, merged_hash, key_sources,
+//     /simulate): builtinChainBase under the fold (foldDefaults' first
+//     input) and under the view (viewChainBlocks).
+//
+// ⛔ WITHHELD WHEN THE ROOT CANNOT BE READ. A root carrier that exists but
+// does not parse, or cannot be stat'ed or read (TreeScan.RootDefaultsUnreadable),
+// may hold the overrides and opt-outs of this table; serving the platform's
+// values then would switch on alerts the tree switched off. The tree serves
+// no default row at all, as before the built-in layer. A tree with no root
+// carrier, or one whose `defaults:` is empty, is a legal tree and gets the
+// whole table.
+//
+// ⚠️ No key of the table may have a #1231 alias spelling
+// (TestBuiltinDefaults_NoAliasSpelling): the spelling machinery of the chain
+// (dropShallowerSpellings and the like) is not taught a level with no file.
 //
 // Why a digest and not a version: the exporter, da-tools (da-guard) and
 // tenant-api are released on lines of their own, and the rule packs have no
@@ -24,6 +51,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
 
 // builtinDefaultEntry is one line of the generated table.
@@ -90,4 +119,166 @@ func builtinDefaultsDigestOf(table map[string]float64) string {
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+// seedBuiltinDefaults lays the built-in layer under d, a merged root
+// `defaults:` (ThresholdConfig.Defaults), in place: every built-in key d
+// holds no finite value for gets the platform's value. A value the root
+// decode refused (a NaN, refusedDefault) falls to the built-in value: the
+// refusal is still reported, from the file's bytes (RootDefaultRefusals),
+// and a refused text never leaves an alert off.
+func seedBuiltinDefaults(d map[string]float64) {
+	for k, v := range builtinDefaults {
+		if cur, ok := d[k]; ok && finiteThreshold(cur) {
+			continue
+		}
+		d[k] = v
+	}
+}
+
+// SeedBuiltinDefaults is seedBuiltinDefaults, for package main's flat
+// incremental reload (config.go) and its single-file load, each of which
+// asks RootBuiltinWithheld itself first.
+func SeedBuiltinDefaults(d map[string]float64) { seedBuiltinDefaults(d) }
+
+// builtinChainBase is the built-in layer as a defaults-chain block
+// (map[string]any, values float64), a fresh map per call; nil when builtin
+// is false (the layer is withheld).
+func builtinChainBase(builtin bool) map[string]any {
+	if !builtin {
+		return nil
+	}
+	out := make(map[string]any, len(builtinDefaults))
+	for k, v := range builtinDefaults {
+		out[k] = v
+	}
+	return out
+}
+
+// fillBuiltinUnder lays the built-in layer under m, a defaults chain folded
+// without it, in place: every built-in key m does not hold gets the
+// platform's value. It is the fold with the layer as its first input — a
+// level that writes a key (any value, a schedule included) replaces it, and
+// one that writes null or a schedule writing nothing leaves it (deepMerge) —
+// without copying the layer through every level of every tenant's chain.
+func fillBuiltinUnder(m map[string]any) {
+	for k, v := range builtinDefaults {
+		if _, ok := m[k]; !ok {
+			m[k] = v
+		}
+	}
+}
+
+// RootDefaultsUnreadable reports whether the scan holds, at the conf.d root,
+// a defaults carrier it could not stat or read (an Unreadable entry whose
+// base name is a carrier's: a dangling or looping link, a file it may not
+// read, a special file). The built-in layer is withheld from such a tree
+// (see the top of this file). A root carrier that reads but does not parse
+// is the build's own verdict (FlatBuild.RootDefaultsUnjudged), not this.
+func (s *TreeScan) RootDefaultsUnreadable() bool {
+	if s == nil {
+		return false
+	}
+	for _, u := range s.Unreadable {
+		if !strings.Contains(u.RelKey, "/") && confdname.IsDefaults(u.RelKey) {
+			return true
+		}
+	}
+	return false
+}
+
+// RootBuiltinWithheld reports whether the built-in layer is withheld from
+// the tree the scan walked: the root holds a defaults carrier the walk could
+// not stat or read (RootDefaultsUnreadable), or the selected root carrier is
+// one the exporter's build drops whole (DropsConfFile: a syntax error, or a
+// document its typed decode refuses, such as a list where a number goes).
+// Every reader asks this one predicate, so /metrics, /effective, the
+// tenant-api write check and the exporter's merged_hash withhold together.
+// A carrier whose bytes the scan did not keep is read from disk; one that
+// cannot be read then withholds too.
+func (s *TreeScan) RootBuiltinWithheld() bool {
+	if s == nil {
+		return false
+	}
+	if s.RootDefaultsUnreadable() {
+		return true
+	}
+	key := selectedRootCarrierKey(s)
+	if key == "" {
+		return false
+	}
+	f := s.Files[key]
+	if f == nil {
+		return false
+	}
+	data := f.Data
+	if data == nil {
+		b, err := ReadConfFile(f.AbsPath)
+		if err != nil {
+			return true
+		}
+		data = b
+	}
+	return DropsConfFile(key, data, true)
+}
+
+// rootRefusedAsBuiltin is the chain's blocks as the effective view and
+// key_sources read them: the root level's (rootLevel; -1 = none) built-in
+// keys whose value the root decode refuses taken out, so the built-in value
+// shows through, as /metrics serves it (seedBuiltinDefaults). blocks itself
+// when builtin is false or nothing is taken out; a block that changes is
+// copied, blocks is not written.
+func rootRefusedAsBuiltin(blocks []map[string]any, rootLevel int, builtin bool) []map[string]any {
+	if !builtin || rootLevel < 0 || rootLevel >= len(blocks) {
+		return blocks
+	}
+	b := withoutRefusedBuiltin(blocks[rootLevel])
+	if len(b) == len(blocks[rootLevel]) {
+		return blocks
+	}
+	out := append([]map[string]any(nil), blocks...)
+	out[rootLevel] = b
+	return out
+}
+
+// withBuiltinBase is the chain's blocks with the built-in layer laid first
+// (builtinChainBase), what effectiveView lays under the tenant side; blocks
+// itself when builtin is false.
+func withBuiltinBase(blocks []map[string]any, builtin bool) []map[string]any {
+	if !builtin {
+		return blocks
+	}
+	return append([]map[string]any{builtinChainBase(true)}, blocks...)
+}
+
+// withoutRefusedBuiltin is a root block without its built-in keys whose
+// value the root decode refuses (refusedRootThresholds); block itself when
+// there is none.
+func withoutRefusedBuiltin(block map[string]any) map[string]any {
+	refused := refusedBuiltinKeys(block)
+	if len(refused) == 0 {
+		return block
+	}
+	out := make(map[string]any, len(block))
+	for k, v := range block {
+		if !refused[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// refusedBuiltinKeys is the built-in keys of a root block whose value the
+// root decode refuses; nil when none.
+func refusedBuiltinKeys(block map[string]any) map[string]bool {
+	var out map[string]bool
+	for k := range refusedRootThresholds(block) {
+		if _, ok := builtinDefaults[k]; ok {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[k] = true
+		}
+	}
+	return out
 }

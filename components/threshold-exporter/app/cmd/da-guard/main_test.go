@@ -15,10 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // runOnce is the test harness — wraps run() with captured stdout
@@ -201,9 +203,11 @@ func TestRun_CardinalityWarn_DoesNotExitOne_ByDefault(t *testing.T) {
     m1: 10
 `,
 	})
+	// 5 rows of the tree's own plus the built-in ones (#3832) under a limit
+	// one above: the warn tier, not exceeded.
 	code, stdout, _ := runOnce(t,
 		"--config-dir", filepath.Join(tmp, "conf.d"),
-		"--cardinality-limit", "6",
+		"--cardinality-limit", strconv.Itoa(6+len(config.BuiltinDefaults())),
 	)
 	if code != exitOK {
 		t.Errorf("exit = %d, want %d (warn does not block). stdout=%q",
@@ -230,9 +234,11 @@ func TestRun_CardinalityWarn_WithWarnAsError_ExitsOne(t *testing.T) {
     m1: 10
 `,
 	})
+	// As above: the warn tier (#3832: the limit moves with the built-in
+	// rows), so exit 1 comes from --warn-as-error, not from an exceeded cap.
 	code, _, _ := runOnce(t,
 		"--config-dir", filepath.Join(tmp, "conf.d"),
-		"--cardinality-limit", "6",
+		"--cardinality-limit", strconv.Itoa(6+len(config.BuiltinDefaults())),
 		"--warn-as-error",
 	)
 	if code != exitFindings {

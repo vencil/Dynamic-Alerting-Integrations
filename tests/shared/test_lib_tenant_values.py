@@ -1081,17 +1081,19 @@ def test_real_da_guard_names_a_root_refused_default_the_tenant_does_not_write(tm
     tenant that does not write the key no row; `keys[]` names it
     (`root_default_refused`, `refused` why) instead of leaving the key out,
     so a reader does not take the lost row for a removal, and the tree names
-    it once with the text written (`root_defaults_refused`)."""
+    it once with the text written (`root_defaults_refused`). (#3832: keys
+    the platform does not arm — a refused built-in key falls to the
+    built-in value and is served.)"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: NaN\n  pg_connections: abc\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: NaN\n  redis_connected_clients: abc\n",
         "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"70\"\n",
     })
     tree = tv.load_served_tree(conf_d, binary=da_guard)
     got = tree.tenants["t"]
     assert got.keys["redis_memory"] == tv.ServedKey(False, "root_default_refused", refused="non_finite")
-    assert got.keys["pg_connections"] == tv.ServedKey(False, "root_default_refused", refused="unparsed")
+    assert got.keys["redis_connected_clients"] == tv.ServedKey(False, "root_default_refused", refused="unparsed")
     assert "redis_memory" not in got.values and "redis_memory" not in (got.unserved or {})
-    assert tree.root_defaults_refused == (tv.RootDefaultRefused("pg_connections", "abc", "unparsed"),
+    assert tree.root_defaults_refused == (tv.RootDefaultRefused("redis_connected_clients", "abc", "unparsed"),
                                           tv.RootDefaultRefused("redis_memory", "NaN", "non_finite"))
 
 

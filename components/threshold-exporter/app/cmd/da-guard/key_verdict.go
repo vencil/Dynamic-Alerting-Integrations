@@ -150,11 +150,6 @@ type keyVerdictOpts struct {
 	// tenants: compute and judge only these (served-values' and effective's
 	// --tenant); nil for the whole tree.
 	tenants []string
-	// rootPlatform: a root platform file is read (hasRootPlatformFile of
-	// parse-tree's document of the same tree): without one the threshold
-	// keys are undecidable (decision 7). A write's baseline sets it whatever
-	// the tree holds (write_worsen.go).
-	rootPlatform bool
 	// profiles: rootProfilesOf the same document — the profile layer; nil:
 	// not judged. The facts, not the document: the document of a large tree
 	// need not stay in memory through the verdict.
@@ -170,7 +165,6 @@ type keyVerdictOpts struct {
 func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResult, error) {
 	discard := log.New(io.Discard, "", 0)
 	overlays := opts.scan.Overlays
-	rootPlatform := opts.rootPlatform
 	scan, err := config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
 		Overlays: overlays, OverlayMakesDirs: opts.scan.OverlayMakesDirs})
 	if err != nil {
@@ -192,7 +186,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	}
 	empty := func() keyVerdictResult {
 		return keyVerdictResult{judged: true, tree: keyverdict.Tree{Keys: map[string][]keyverdict.KeyVerdict{},
-			Findings: []keyverdict.Finding{}, Undecidable: !rootPlatform},
+			Findings: []keyverdict.Finding{}},
 			keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{}, errors: []keyError{},
 			setAside: setAside}
 	}
@@ -247,10 +241,12 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 		return unjudged(err)
 	}
 	in := keyverdict.Input{
-		Served:      servedForVerdict(served),
-		Effective:   make(map[string]keyverdict.EffectiveTenant, len(tree.Tenants)),
-		Heads:       heads,
-		Undecidable: !rootPlatform,
+		Served:    servedForVerdict(served),
+		Effective: make(map[string]keyverdict.EffectiveTenant, len(tree.Tenants)),
+		Heads:     heads,
+		// #3832: never undecidable. A tree with no root platform file gets
+		// the built-in layer, so the exporter half of every threshold key
+		// is judged as in any other tree (ADR-038 decision 7).
 	}
 	for _, ec := range tree.Tenants {
 		ec = ec.AsWritten() // #2031: as `da-guard effective` prints it
@@ -466,18 +462,6 @@ func setAsideOverlays(root string, overlays []config.FileOverlay, aside map[stri
 	return out, nil
 }
 
-// hasRootPlatformFile is Python's `root_platform_files(...) != []`: a
-// config file (role config, readable or not) of class defaults or platform
-// at depth 0 of parse-tree's document.
-func hasRootPlatformFile(doc *parseTreeDoc) bool {
-	for _, e := range doc.Entries {
-		if e.Role == config.RoleConfig && e.Depth == 0 && (e.Class == classDefaults || e.Class == classPlatform) {
-			return true
-		}
-	}
-	return false
-}
-
 // policyHeadsOf is Python's `policy_targets(_tree_rules(...))` over the root
 // carrier's bytes: the top-level `policies` when the document has that key
 // (whatever its value), else `_policies`; each rule's `target` and
@@ -570,7 +554,7 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // treeFacts is what parse-tree's document of the tree at dir says for the
-// verdict (keyVerdictOpts.rootPlatform, .profiles, .tenantFiles). The document itself does
+// verdict (keyVerdictOpts.profiles, .tenantFiles). The document itself does
 // not outlive this call: a large tree's need not stay in memory through the
 // verdict.
 func treeFacts(dir string) (keyVerdictOpts, error) {
@@ -582,7 +566,7 @@ func treeFacts(dir string) (keyVerdictOpts, error) {
 	if err != nil {
 		return keyVerdictOpts{}, err
 	}
-	return keyVerdictOpts{rootPlatform: hasRootPlatformFile(doc), profiles: rootProfilesOf(doc),
+	return keyVerdictOpts{profiles: rootProfilesOf(doc),
 		tenantFiles: tenantFileKeysOf(doc)}, nil
 }
 

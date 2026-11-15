@@ -133,9 +133,18 @@ Last reload:   2026-03-12T10:05:30Z
 Config mode:   directory
 Resolve at:    2026-03-12T03:30:00Z (overridden)
 
-Defaults (2 metrics):
+Defaults (11 metrics):
   container_cpu: 80
+  container_cpu_throttle: 25
+  container_memory: 85
+  es_disk_usage_percent: 85
+  es_heap_usage_percent: 85
   mysql_connection_usage_percent: 80
+  mysql_replication_lag: 30
+  oracle_tablespace_used_percent: 85
+  pg_connections: 80
+  pg_replication_lag: 30
+  rabbitmq_node_mem_percent: 90
 
 Tenants (1):
   tenant-a:
@@ -145,7 +154,18 @@ Tenants (1):
 Resolved thresholds:
   tenant=tenant-a metric=cpu value=95 severity=warning component=container
   tenant=tenant-a metric=connection_usage_percent value=70 severity=warning component=mysql
+  tenant=tenant-a metric=cpu_throttle value=25 severity=warning component=container
+  tenant=tenant-a metric=memory value=85 severity=warning component=container
+  tenant=tenant-a metric=disk_usage_percent value=85 severity=warning component=es
+  tenant=tenant-a metric=heap_usage_percent value=85 severity=warning component=es
+  tenant=tenant-a metric=replication_lag value=30 severity=warning component=mysql
+  tenant=tenant-a metric=tablespace_used_percent value=85 severity=warning component=oracle
+  tenant=tenant-a metric=connections value=80 severity=warning component=pg
+  tenant=tenant-a metric=replication_lag value=30 severity=warning component=pg
+  tenant=tenant-a metric=node_mem_percent value=90 severity=warning component=rabbitmq
 ```
+
+`_defaults.yaml` 只寫了兩個鍵，`Defaults` 卻列出更多：沒寫的平台預設啟用閾值由 exporter 內建的平台值補上（內建層，[#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832)），每個租戶都送出這些列。
 
 這個範例有測試實跑：把上面兩個 yaml 放進空目錄載入，再比對輸出（`api_readme_examples_parity_test.go`）。
 

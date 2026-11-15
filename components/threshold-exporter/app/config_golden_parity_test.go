@@ -216,7 +216,10 @@ func TestGoldenParity_MergedHash(t *testing.T) {
 				defaultsBytes = append(defaultsBytes, b)
 			}
 
-			got, err := computeMergedHash(tenantBytes, g.TenantID, defaultsBytes)
+			// #3832: the built-in layer is withheld where the exporter
+			// drops the fixture's root carrier, as the golden records.
+			got, err := computeMergedHash(tenantBytes, g.TenantID, defaultsBytes,
+				config.TenantLayers{WithholdBuiltin: builtinWithheldOn(t, confD)})
 			if err != nil {
 				t.Fatalf("computeMergedHash: %v", err)
 			}
@@ -269,7 +272,8 @@ func TestGoldenParity_EffectiveConfig(t *testing.T) {
 				defaultsBytes = append(defaultsBytes, b)
 			}
 
-			got, err := config.ComputeEffectiveConfig(tenantBytes, g.TenantID, defaultsBytes)
+			got, err := config.ComputeEffectiveConfig(tenantBytes, g.TenantID, defaultsBytes,
+				config.TenantLayers{WithholdBuiltin: builtinWithheldOn(t, confD)}) // #3832
 			if err != nil {
 				t.Fatalf("config.ComputeEffectiveConfig: %v", err)
 			}

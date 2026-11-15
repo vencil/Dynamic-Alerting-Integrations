@@ -291,7 +291,9 @@ type KeyVerdict struct {
 	// Layer: the effective layer the tenant's value comes from; nil when
 	// effective has no source for the key.
 	Layer *string `json:"layer"`
-	// File: the file the tenant's value comes from; nil as Layer.
+	// File: the file the tenant's value comes from; nil as Layer, and nil
+	// for a value of the built-in layer (#3832: config.KeyLayerBuiltin, no
+	// file).
 	File *string `json:"file"`
 	// ReadBy: the readers that read it, sorted; [] for none.
 	ReadBy   []string `json:"read_by"`
@@ -593,7 +595,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		}
 	}
 	return KeyVerdict{
-		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
+		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc && src.File != ""),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
 		Disable: optional(disable), Hint: optional(hint), SwitchedOffWith: optional(sk.SwitchedOffWith),
 		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value,

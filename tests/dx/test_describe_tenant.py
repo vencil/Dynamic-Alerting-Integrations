@@ -30,6 +30,8 @@ import describe_tenant as dt  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
+sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
+from _builtin_layer import with_builtin  # noqa: E402  (#3832)
 
 DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
 
@@ -114,7 +116,8 @@ class TestConfDScanner:
         scanner = dt.ConfDScanner(conf_d)
         assert "acme-prod" in scanner.tenants
         assert scanner.tenants["acme-prod"].defaults_chain == ["_defaults.yaml", "acme/_defaults.yaml"]
-        assert scanner.effective_config("acme-prod") == {"timeout": 20, "retries": 2, "replicas": 3}
+        # #3832: the built-in layer is under every effective config.
+        assert scanner.effective_config("acme-prod") == with_builtin({"timeout": 20, "retries": 2, "replicas": 3})
 
     def test_scanner_effective_config_with_defaults(self, tmp_path):
         conf_d = tmp_path / "conf.d"
@@ -456,7 +459,8 @@ class TestDuplicateDeclaration:
         assert dt.ConfDScanner(conf_d).duplicates == {}
         r = self._run(conf_d, "acme")
         assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
+        # #3832: the built-in layer is under every effective config.
+        assert json.loads(r.stdout)["effective_config"] == with_builtin({"cpu_pct": 70})
 
     def test_a_file_the_exporter_drops_declares_nothing(self, tmp_path):
         """`zbad.yaml` also declares `other: 5` — a scalar tenant body, which
@@ -1127,7 +1131,8 @@ class TestPlatformOverlayCLI:
         tx = self._run("tx", "--conf-d", str(conf_d))
         assert tx.returncode == 0, tx.stderr
         out = json.loads(tx.stdout)
-        assert out["effective_config"] == {"mysql_connections": "60"}
+        # #3832: the built-in layer is under every effective config.
+        assert out["effective_config"] == with_builtin({"mysql_connections": "60"})
         assert out["platform_overlay"] == [{"file": "_defaults.yaml", "keys": ["mysql_connections"]}]
         ty = self._run("ty", "--conf-d", str(conf_d))
         assert ty.returncode == 0, ty.stderr
@@ -1211,7 +1216,8 @@ class TestProfileOverlayCLI:
         tx = self._run("tx", "--conf-d", str(conf_d))
         assert tx.returncode == 0, tx.stderr
         out = json.loads(tx.stdout)
-        assert out["effective_config"] == {"_profile": "std", "mysql_connections": 60}
+        # #3832: the built-in layer is under every effective config.
+        assert out["effective_config"] == with_builtin({"_profile": "std", "mysql_connections": 60})
         assert out["profile_overlay"] == [
             {"profile": "std", "file": "_profiles.yaml", "keys": ["mysql_connections"]}]
         ty = self._run("ty", "--conf-d", str(conf_d))
@@ -1499,8 +1505,13 @@ DEFAULTS_SHAPES = {
     'document-scalar': b'hello\n',
     'document-false': b'false\n',
 }
+# #3832: a carrier the exporter reads gets the built-in layer under it, so
+# its hash moved (control 664e2553… → 4fb74de7…, `defaults: ~`
+# dc8202df… → 4a2020f6…, the tagged bools 1ec35adf… / 6212cbcf… →
+# 10df64d4… / 409d2d72…). A carrier the exporter drops withholds the layer
+# too, so those rows keep dc8202df….
 DEFAULTS_DOCUMENTS = {
-    'control': ('defaults:\n  mysql_connections: 80\n', '664e2553d242d345'),
+    'control': ('defaults:\n  mysql_connections: 80\n', '4fb74de74e74a125'),
     # The multi-document rows, and the `!!binary` one below, hashed the first
     # document (664e2553…) until ADR-036 step 6 (#3206): parse-tree refuses
     # them (multiple_documents, tag_not_allowed), the exporter drops the
@@ -1509,13 +1520,13 @@ DEFAULTS_DOCUMENTS = {
     'multi-doc-later-unparseable': ('defaults:\n  mysql_connections: 80\n---\n: : [\n', 'dc8202dfc4683b17'),
     'multi-doc-later-bad-shape': ('defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n', 'dc8202dfc4683b17'),
     'multi-doc-empty-first': ('---\n---\ndefaults:\n  mysql_connections: 80\n', 'dc8202dfc4683b17'),
-    'defaults-null': ('defaults: ~\n', 'dc8202dfc4683b17'),
-    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '664e2553d242d345'),
+    'defaults-null': ('defaults: ~\n', '4a2020f6754295a7'),
+    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '4fb74de74e74a125'),
     # #3250: a threshold YAML types as a bool is its text in the merge (the
     # exporter reads the text and refuses it), so the two spellings, one
     # hash before, are two now.
-    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '1ec35adf03530953'),
-    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '6212cbcfd717bd09'),
+    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '10df64d4dab4d8b6'),
+    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '409d2d72fcb9b56b'),
     'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', 'dc8202dfc4683b17'),
 }
 NOT_A_MAPPING = {'list': '- 1\n- 2\n', 'scalar': 'hello\n', 'false': 'false\n'}
@@ -1634,7 +1645,7 @@ class TestShowsGoValuesVerbatim:
     def test_a_subdirectory_defaults_not_a_mapping_is_served_as_go_serves_it(self, tmp_path):
         """In a sub-directory the exporter serves `defaults: [1]` beside
         `mysql_connections: 81` (both planes take the whole document;
-        merged_hash cef3dbb6…). This tool used to refuse it (rc 2, "an
+        merged_hash d4033b70…, cef3dbb6… before the built-in layer, #3832). This tool used to refuse it (rc 2, "an
         unsupported shape"); it now shows Go's answer."""
         conf_d = _write(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
                                    "team/_defaults.yaml": "defaults: [1]\nmysql_connections: 81\n",
@@ -1644,7 +1655,7 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert out["effective_config"]["mysql_connections"] == 81
-        assert out["merged_hash"].startswith("cef3dbb6"), out["merged_hash"]
+        assert out["merged_hash"].startswith("d4033b70"), out["merged_hash"]
 
     @pytest.mark.parametrize("files", [
         {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      at: 2026-12-31T10:20:30+08:00\n"},
@@ -1682,8 +1693,9 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = yaml.safe_load(res.stdout) if fmt == "yaml" else json.loads(res.stdout)
         assert set(out) == {"010", "8"}, out
-        assert out["010"]["effective_config"] == {"mysql_connections": 10}
-        assert out["8"]["effective_config"] == {"mysql_connections": 8}
+        # #3832: the built-in layer is under every effective config.
+        assert out["010"]["effective_config"] == with_builtin({"mysql_connections": 10})
+        assert out["8"]["effective_config"] == with_builtin({"mysql_connections": 8})
 
 
 class TestTreesGoDoesNotResolve:
@@ -1749,8 +1761,9 @@ class TestTreesGoDoesNotResolve:
         res = self._run("--all", "--conf-d", str(conf_d))
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
-        assert out["tr"]["effective_config"] == {"mysql_connections": 10}
-        assert out["ts"]["effective_config"] == {"mysql_connections": 50}
+        # #3832: the built-in layer is under every effective config.
+        assert out["tr"]["effective_config"] == with_builtin({"mysql_connections": 10})
+        assert out["ts"]["effective_config"] == with_builtin({"mysql_connections": 50})
         assert "skips or cannot read" not in res.stderr
 
     def test_control_unparseable_tenant_file_refuses_too(self, tmp_path):

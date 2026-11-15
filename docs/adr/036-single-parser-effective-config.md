@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-11-14
+updated_at: 2026-11-15
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -46,6 +46,7 @@ updated_at: 2026-11-14
 - **2026-11-13 修訂**：產生器容器判定前確認的是 da-read（Alertmanager 的設定載入器），不再是 amtool；容器裡不需要 amtool（§3、§4、§5）。
 - **2026-11-14 修訂**：判定要跑的外部程式（da-guard、da-read、da-crdecode）有沒有跑成，改由判定本身回答，不再在判定前逐支探測；一次判定裡任何一支沒跑成，那筆寫入回 503（reason `tool_fault`），容器在下一次跑完全程的判定之前回報未就緒（§3、§5）。
 - **2026-11-15 修訂**：產生器容器對 `POST /v1/validate` 的回應不帶自由文字：拿掉 `message` 與 `stderr_tail`，只留封閉的 `error`／`reason` 與結構化欄位（`result`、`rc`、`findings`、`validated`、`cache`、`key_verdict`，503 `tool_fault` 另帶結構化的 `tool_fault`，與 `GET /v1/status` 的同形）；容器知道的細節寫進它自己的 log。回應以 ASCII 編碼，任何值都編得出來。tenant-api 給呼叫端的文字本來就由 reason 組出（§3、§5）。
+- **2026-11-15 修訂**：§6 多一種會放行的版本落差：平台預設啟用的閾值內建在讀取端之後，檢查端比部署中的 exporter 新時，靠內建值的樹在檢查端通過、exporter 卻不送那些列；決策不變。
 
 ## 摘要
 
@@ -460,7 +461,11 @@ tenant-api pod
 - 客戶 CI 的版本比較嚴格時，tenant-api 接受的寫入會在 CI 被擋下。結果是晚一步擋下，不會放行。
 - tenant-api 容器裡的版本比較嚴格時，tenant-api 會拒收 CI 原本會接受的寫入。
 
-兩種情況都不會放行違規的設定，代價是兩邊的判定不一致。縮小版本落差的做法：
+兩種情況都不會放行違規的設定，代價是兩邊的判定不一致。
+
+這條「任一邊拒收就進不去」不涵蓋平台預設啟用的閾值。這些鍵的值編譯在讀取端裡（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），檢查端（CI 的 da-guard、tenant-api）比部署中的 exporter 新時，一棵靠內建值的樹或一筆寫入在檢查端通過，exporter 卻不送那些列，也不報錯。這是放行，比上面兩種嚴重；兩邊是否對齊，看兩者內建表的摘要是否相同。
+
+縮小版本落差的做法：
 
 - tenant-api 的 chart 預設固定一個 da-tools 版本，CI 對這一組版本跑相容性測試。
 - `da-tools init` 產生的設定改成固定版本，不再用 `latest`。

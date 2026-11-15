@@ -37,6 +37,7 @@ import (
 
 // Layer names of KeySource.Layer.
 const (
+	KeyLayerBuiltin  = "builtin"
 	KeyLayerDefaults = "defaults"
 	KeyLayerPlatform = "platform"
 	KeyLayerProfile  = "profile"
@@ -50,7 +51,7 @@ type KeySource struct {
 	Layer string `json:"layer"`
 	// File is the file that wrote the value, relative to the scan root,
 	// slash-separated (the spelling of DefaultsChain / SourceFile).
-	File string `json:"file"`
+	File string `json:"file,omitempty"`
 	// Level is the file's index in DefaultsChain (0 = the root) for the
 	// defaults layer; absent for the other layers.
 	Level *int `json:"level,omitempty"`
@@ -72,6 +73,11 @@ func keySources(
 	out := make(map[string]KeySource, len(merged))
 
 	// Lowest precedence first; each later layer overwrites.
+	for k := range builtinDefaults {
+		if _, in := merged[k]; in {
+			out[k] = KeySource{Layer: KeyLayerBuiltin}
+		}
+	}
 	for i, block := range chainBlocks {
 		for k, v := range block {
 			if v == nil || nullThreshold(k, v) {

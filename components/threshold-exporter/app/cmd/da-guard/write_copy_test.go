@@ -19,8 +19,10 @@ import (
 )
 
 // copied holds comments, flow style, a non-canonical int and non-ASCII text:
-// a decode and re-encode would change each of them.
-const copied = "# owned by team-b — 團隊 B\ntenants:\n  t7:\n    cpu: 010 # as written\n    note: \"警報\"\n    flow: {a: \"1\"}\n"
+// a decode and re-encode would change each of them. Every key has a reader
+// (writeTreeDeclared declares `cpu`, `_metadata` is a tenant key): the copy
+// is judged by the key verdict and the value checks like any written file.
+const copied = "# owned by team-b — 團隊 B\ntenants:\n  t7:\n    cpu: 010 # as written\n    _metadata: {owner: \"警報\"}\n"
 
 // sourceFile writes body to a file in a directory of its own (outside any
 // --config-dir) and returns its absolute path.
@@ -48,7 +50,7 @@ func batchOf(entries ...string) string {
 }
 
 func TestWrite_ACopyCarriesTheBytesAsTheyAre(t *testing.T) {
-	root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
+	root := writeTreeDeclared(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
 	src := sourceFile(t, "b.yaml", copied)
 	in := batchOf(copyEntry("team/b.yaml", src, false))
 
@@ -65,7 +67,7 @@ func TestWrite_ACopyCarriesTheBytesAsTheyAre(t *testing.T) {
 		t.Fatalf("exit %d %v %+v (%v)", code, statuses(res), res.Files, res.Message)
 	}
 	want := map[string]string{"x.yaml": "tenants:\n  t9: {}\n", "team/b.yaml": copied}
-	if got := snapshot(t, root); !reflect.DeepEqual(got, want) {
+	if got := snapshotDeclared(t, root); !reflect.DeepEqual(got, want) {
 		t.Fatalf("tree %q, want %q", got, want)
 	}
 	if b, err := os.ReadFile(src); err != nil || string(b) != copied {
@@ -83,17 +85,17 @@ func TestWrite_ACopysTargetMustNotExistUnlessReplaced(t *testing.T) {
 	src := sourceFile(t, "b.yaml", copied)
 
 	t.Run("no replace: path_exists, nothing written", func(t *testing.T) {
-		root := writeTree(t, map[string]string{"b.yaml": old})
-		before := snapshot(t, root)
+		root := writeTreeDeclared(t, map[string]string{"b.yaml": old})
+		before := snapshotDeclared(t, root)
 		code, res := runBatch(t, writeCmd, batchOf(copyEntry("b.yaml", src, false)), "--config-dir", root)
 		if code != exitCallerErr || !reflect.DeepEqual(statuses(res), []string{"caller_error/path_exists"}) ||
 			!strings.Contains(*res.Files[0].Message, `"replace": true`) {
 			t.Fatalf("exit %d %v %v", code, statuses(res), res.Files[0].Message)
 		}
-		sameTree(t, before, snapshot(t, root))
+		sameTree(t, before, snapshotDeclared(t, root))
 	})
 	t.Run("replace: the bytes, the old file's mode", func(t *testing.T) {
-		root := writeTree(t, map[string]string{"b.yaml": old})
+		root := writeTreeDeclared(t, map[string]string{"b.yaml": old})
 		abs := filepath.Join(root, "b.yaml")
 		if err := os.Chmod(abs, 0o640); err != nil {
 			t.Fatal(err)
@@ -102,7 +104,7 @@ func TestWrite_ACopysTargetMustNotExistUnlessReplaced(t *testing.T) {
 		if code != exitOK || res.Status != writeStatusWritten {
 			t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Message)
 		}
-		if got := snapshot(t, root); got["b.yaml"] != copied {
+		if got := snapshotDeclared(t, root); got["b.yaml"] != copied {
 			t.Fatalf("tree %q", got)
 		}
 		if runtime.GOOS != "windows" {
@@ -112,16 +114,16 @@ func TestWrite_ACopysTargetMustNotExistUnlessReplaced(t *testing.T) {
 		}
 	})
 	t.Run("replace, the same bytes: unchanged", func(t *testing.T) {
-		root := writeTree(t, map[string]string{"b.yaml": copied})
+		root := writeTreeDeclared(t, map[string]string{"b.yaml": copied})
 		code, res := runBatch(t, writeCmd, batchOf(copyEntry("b.yaml", src, true)), "--config-dir", root)
 		if code != exitOK || res.Status != writeStatusUnchanged || res.Files[0].Status != writeStatusUnchanged {
 			t.Fatalf("exit %d %v", code, statuses(res))
 		}
 	})
 	t.Run("replace, no file there: a create", func(t *testing.T) {
-		root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
+		root := writeTreeDeclared(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
 		code, res := runBatch(t, writeCmd, batchOf(copyEntry("b.yaml", src, true)), "--config-dir", root)
-		if code != exitOK || res.Status != writeStatusWritten || snapshot(t, root)["b.yaml"] != copied {
+		if code != exitOK || res.Status != writeStatusWritten || snapshotDeclared(t, root)["b.yaml"] != copied {
 			t.Fatalf("exit %d %v", code, statuses(res))
 		}
 	})
@@ -226,8 +228,8 @@ func TestWrite_ACopyIsJudgedWithTheBatch(t *testing.T) {
 // last); the copy, already linked, is removed again as a create is, and so is
 // the directory the call made.
 func TestWrite_AFailedWriteRemovesACopyAgain(t *testing.T) {
-	root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1:\n    cpu: \"5\"\n"})
-	before := snapshot(t, root)
+	root := writeTreeDeclared(t, map[string]string{"a.yaml": "tenants:\n  t1:\n    cpu: \"5\"\n"})
+	before := snapshotDeclared(t, root)
 	src := sourceFile(t, "b.yaml", copied)
 	w := &writer{cmd: writeCmd, rename: func(string, string) error { return errors.New("disk full") }}
 	in := batchOf(`{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1","cpu"]}]}`, copyEntry("team/b.yaml", src, false))
@@ -236,7 +238,7 @@ func TestWrite_AFailedWriteRemovesACopyAgain(t *testing.T) {
 		callReason(res) != writeReasonWriteFailed || !reflect.DeepEqual(statuses(res), want) {
 		t.Fatalf("exit %d reason %q files %v, want %v", code, callReason(res), statuses(res), want)
 	}
-	sameTree(t, before, snapshot(t, root))
+	sameTree(t, before, snapshotDeclared(t, root))
 	if _, err := os.Lstat(filepath.Join(root, "team")); !os.IsNotExist(err) {
 		t.Fatalf("the directory the call made is left: %v", err)
 	}

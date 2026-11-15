@@ -51,8 +51,10 @@ func TestRootDefaultsCapTakesEffectInDirectoryMode(t *testing.T) {
 	}
 	// End to end: the cap is what ResolveAt truncates to, not just a field.
 	_, stats := cfg.ResolveAtWithStats(fixedNow)
-	if got := stats.PerTenantOverLimit["t-a"]; got != 1 {
-		t.Errorf("PerTenantOverLimit[t-a] = %d, want 1 (3 metrics against a cap of 2)", got)
+	// 3 metrics of the fixture plus one default row per built-in key
+	// (#3832), against a cap of 2.
+	if got, want := stats.PerTenantOverLimit["t-a"], 1+builtinKeysNotIn(); got != want {
+		t.Errorf("PerTenantOverLimit[t-a] = %d, want %d (%d metrics against a cap of 2)", got, want, want+2)
 	}
 }
 
