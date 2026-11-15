@@ -244,6 +244,27 @@ class TestFixDrift:
         content = doc.read_text(encoding="utf-8")
         assert "version: v2.0.0" in content
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+    @pytest.mark.parametrize("mode", [0o644, 0o755], ids=oct)
+    def test_fix_leaves_the_doc_with_the_mode_it_was_checked_out_with(
+            self, tmp_path, monkeypatch, mode):
+        """#3107: a doc is a tracked file. `--fix` used to leave every doc it
+        touched 0600, which `git status` does not show."""
+        monkeypatch.setattr(cfv, "REPO_ROOT", tmp_path)
+        doc = tmp_path / "docs" / "test.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("---\ntitle: Test\nversion: v1.0.0\n---\n# Hello\n",
+                       encoding="utf-8")
+        doc.chmod(mode)
+        items = [cfv.DriftItem(
+            file="docs/test.md", line=3,
+            current_version="1.0.0", expected_version="2.0.0",
+            severity="error",
+        )]
+        assert cfv.fix_drift(items, "2.0.0") == 1
+        assert "version: v2.0.0" in doc.read_text(encoding="utf-8")
+        assert os.stat(doc).st_mode & 0o7777 == mode
+
     def test_fix_skips_warnings(self, tmp_path, monkeypatch):
         """只修復 error，跳過 warning（missing version）"""
         monkeypatch.setattr(cfv, "REPO_ROOT", tmp_path)

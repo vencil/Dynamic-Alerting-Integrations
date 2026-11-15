@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import write_text_or_die  # noqa: E402
+from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#3107)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_versions import (  # noqa: E402
     read_platform_version as _read_shared_platform_version,
@@ -210,8 +210,10 @@ def fix_drift(items: List[DriftItem], expected_version: str) -> int:
             if old_line != new_line:
                 lines[item.line - 1] = new_line
                 # #1641: internal (repo-derived) path — no flag to name; an
-                # unwritable doc is still rc=2, not a traceback at rc=1.
-                write_text_or_die(str(file_path), "".join(lines))
+                # unwritable doc is still rc=2, not a traceback at rc=1 (the
+                # decorator on main). #3107: a tracked doc, replaced whole,
+                # its mode left as a checkout made it.
+                write_repo_artifact(file_path, "".join(lines))
                 fixed += 1
 
     return fixed
@@ -305,6 +307,7 @@ def json_document(
     }
 
 
+@exit_on_output_write_error
 def main(argv: Optional[List[str]] = None) -> "Report | None":
     """CLI entry point."""
     parser = argparse.ArgumentParser(

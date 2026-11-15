@@ -43,7 +43,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
-from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
+from _lib_python import ensure_dir_or_die  # noqa: E402
+from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#3107)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
@@ -185,6 +186,7 @@ def generate_abbreviations_file(abbreviations: dict) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: Sync abbreviations from glossary.md to MkDocs snippet."""
     try_utf8_stdout()
@@ -255,9 +257,11 @@ def main():
             sys.exit(EXIT_VIOLATION)
 
     # Write mode. #1641: an unusable --output is rc=2 + one line naming the
-    # flag, not a traceback at rc=1 (which reads as "out of sync").
+    # flag, not a traceback at rc=1 (which reads as "out of sync"); the
+    # decorator on main ends the run there. #3107: the snippet is a tracked
+    # file, so it is replaced whole and keeps the mode a checkout gave it.
     ensure_dir_or_die(output_path.parent, flag="--output")
-    write_text_or_die(str(output_path), new_content, flag="--output")
+    write_repo_artifact(output_path, new_content, flag="--output")
 
     print(f"Synced {len(abbreviations)} abbreviations from glossary.md → abbreviations.md")
 

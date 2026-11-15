@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -1307,7 +1308,7 @@ def test_threshold_registry_regen_names_what_was_written_when_a_later_write_fail
     written (not rolled back); the registry, written last, is not."""
     monkeypatch.syspath_prepend(str(TOOLS / "lint"))
     import check_threshold_registry as gate
-    import _lib_python
+    import _lib_io
     import _registry_lib
     all_specs = _registry_lib.surface_specs  # before `_regen_setup` filters it
     lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
@@ -1324,20 +1325,55 @@ def test_threshold_registry_regen_names_what_was_written_when_a_later_write_fail
         s for s in all_specs(doc) if s.get("confd") or s["id"] == "helm-defaults"])
     registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
     registry_before = registry.read_bytes()
-    real_write = _lib_python.write_text_secure
+    real_write = _lib_io.write_repo_artifact
 
     def failing(path, *a, **k):
         if str(path) == str(helm):
             raise OSError(28, "No space left on device")
         return real_write(path, *a, **k)
 
-    monkeypatch.setattr(_lib_python, "write_text_secure", failing)
+    monkeypatch.setattr(_lib_io, "write_repo_artifact", failing)
     assert gate.main(["--regen"]) == 2
     err = capsys.readouterr().err
     assert f"regen stopped: writing {helm} failed:" in err, err
     assert f"not rolled back: {dev}, {seed}" in err, err
     assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
     assert registry.read_bytes() == registry_before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+def test_threshold_registry_regen_leaves_each_surface_with_the_mode_it_was_checked_out_with(
+        tmp_path, monkeypatch):
+    """#3107: every surface a regen rewrites is a tracked file — the helm
+    values (`write_planned`), the RULE_PACKS module and the two Go tables
+    (`regen`). Each used to come out 0600, which `git status` does not show.
+    The module is made executable here to show that bit is the one kept."""
+    import _registry_lib
+    all_specs = _registry_lib.surface_specs  # before `_regen_setup` filters it
+    lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch)
+    root = tmp_path / "repo"
+    helm = root / "helm" / "values.yaml"
+    helm.parent.mkdir()
+    marker = lib.begin_marker("helm-defaults", " " * 4) + "\n"
+    text = (REPO / "helm" / "threshold-exporter" / "values.yaml").read_text(encoding="utf-8")
+    assert text.count(marker) == 1
+    helm.write_text(text.replace(marker, marker + "    gone_key: 1\n"), encoding="utf-8")
+    monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
+    monkeypatch.setattr(lib, "surface_specs", lambda doc: [
+        s for s in all_specs(doc) if s["id"] == "helm-defaults"])
+    module = root / "ops" / "_rule_packs_generated.py"
+    want = {helm: 0o644, module: 0o755,
+            root / "go" / "retired_threshold_keys_gen.go": 0o644,
+            root / "go" / "builtin_defaults_gen.go": 0o644}
+    before = {}
+    for path, mode in want.items():
+        path.chmod(mode)
+        before[path] = path.read_bytes()
+    _summary, touched = lib.regen()
+    for path, mode in want.items():
+        assert str(path) in touched, (path, touched)
+        assert path.read_bytes() != before[path], path  # it was rewritten
+        assert stat.S_IMODE(os.stat(path).st_mode) == mode, path
 
 
 def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
