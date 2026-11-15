@@ -18,24 +18,24 @@ data:
     n)\\n\"\n  - record: tenant:jvm_memory_used:percent\n    expr: \"max by(tenant)\
     \ (\\n  label_replace(\\n    100 * sum without(id) (jvm_memory_used_bytes{area=\\\
     \"heap\\\"})\\n      / sum without(id) (jvm_memory_max_bytes{area=\\\"heap\\\"\
-    , id!=\\\"ZGC Young Generation\\\"} > 0),\\n    \\\"mem_source\\\", \\\"current\\\
-    \", \\\"\\\", \\\"\\\")\\n  or\\n  label_replace(\\n    100 * jvm_memory_bytes_used{area=\\\
-    \"heap\\\"}\\n      / (jvm_memory_bytes_max{area=\\\"heap\\\"} > 0),\\n    \\\"\
-    mem_source\\\", \\\"legacy\\\", \\\"\\\", \\\"\\\")\\n)\\n\"\n  - record: tenant:jvm_threads:current\n\
-    \    expr: \"max by(tenant) (\\n  jvm_threads_current\\n)\\n\"\n- name: jvm-threshold-normalization\n\
-    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_pause\n\
-    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_gc_pause_critical\n\
-    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\"\
-    , severity=\"critical\"})\n  - record: tenant:alert_threshold:jvm_memory\n   \
-    \ expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:jvm_memory_critical\n    expr:\
-    \ max by(tenant) (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"\
-    critical\"})\n  - record: tenant:alert_threshold:jvm_threads\n    expr: max by(tenant)\
-    \ (user_threshold{component=\"jvm\", metric=\"threads\", severity=\"warning\"\
-    })\n  - record: tenant:alert_threshold:jvm_threads_critical\n    expr: max by(tenant)\
-    \ (user_threshold{component=\"jvm\", metric=\"threads\", severity=\"critical\"\
-    })\n"
+    , id!~\\\"ZGC Young Generation|Shenandoah Young Gen\\\"} > 0),\\n    \\\"mem_source\\\
+    \", \\\"current\\\", \\\"\\\", \\\"\\\")\\n  or\\n  label_replace(\\n    100 *\
+    \ jvm_memory_bytes_used{area=\\\"heap\\\"}\\n      / (jvm_memory_bytes_max{area=\\\
+    \"heap\\\"} > 0),\\n    \\\"mem_source\\\", \\\"legacy\\\", \\\"\\\", \\\"\\\"\
+    )\\n)\\n\"\n  - record: tenant:jvm_threads:current\n    expr: \"max by(tenant)\
+    \ (\\n  jvm_threads_current\\n)\\n\"\n- name: jvm-threshold-normalization\n  interval:\
+    \ 15s\n  rules:\n  - record: tenant:alert_threshold:jvm_gc_pause\n    expr: max\
+    \ by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:jvm_gc_pause_critical\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"jvm\", metric=\"gc_pause\", severity=\"\
+    critical\"})\n  - record: tenant:alert_threshold:jvm_memory\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"warning\"})\n\
+    \  - record: tenant:alert_threshold:jvm_memory_critical\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"jvm\", metric=\"memory\", severity=\"critical\"\
+    })\n  - record: tenant:alert_threshold:jvm_threads\n    expr: max by(tenant) (user_threshold{component=\"\
+    jvm\", metric=\"threads\", severity=\"warning\"})\n  - record: tenant:alert_threshold:jvm_threads_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"jvm\", metric=\"threads\"\
+    , severity=\"critical\"})\n"
   jvm-alert.yml: "groups:\n- name: jvm-alerts\n  rules:\n  - alert: JVMHighGCPause\n\
     \    expr: \"(\\n  tenant:jvm_gc_pause:rate5m\\n  > on(tenant) group_left\\n \
     \ tenant:alert_threshold:jvm_gc_pause\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\

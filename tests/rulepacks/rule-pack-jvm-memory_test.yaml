@@ -14,6 +14,8 @@
 #   - t-zgen: Micrometer with generational ZGC: BOTH pools report the whole
 #     heap limit (Old 840/1024, Young 136/1024) → 976/1024 = 95.3125 %. Summing
 #     both limits reads 47.7 % and can never reach a threshold.
+#   - t-shen: the same shape under generational Shenandoah (pools
+#     "Shenandoah Young Gen" / "Shenandoah Old Gen"), 136 + 840 over 1024.
 #   - t-two: two JVMs, one at 30 %, one at 90 % → the fuller one, 90 %. Summing
 #     across JVMs reads 60 %.
 #   - t-pods: two JVMs whose series differ ONLY by `pod` (same instance), 30 %
@@ -87,6 +89,17 @@ tests:
       - series: 'jvm_memory_max_bytes{tenant="t-zgen", instance="app-0", area="heap", id="ZGC Young Generation"}'
         values: '1024x60'
       - series: 'user_threshold{tenant="t-zgen", component="jvm", metric="memory", severity="warning"}'
+        values: '80x60'
+
+      - series: 'jvm_memory_used_bytes{tenant="t-shen", instance="app-0", area="heap", id="Shenandoah Old Gen"}'
+        values: '840x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-shen", instance="app-0", area="heap", id="Shenandoah Old Gen"}'
+        values: '1024x60'
+      - series: 'jvm_memory_used_bytes{tenant="t-shen", instance="app-0", area="heap", id="Shenandoah Young Gen"}'
+        values: '136x60'
+      - series: 'jvm_memory_max_bytes{tenant="t-shen", instance="app-0", area="heap", id="Shenandoah Young Gen"}'
+        values: '1024x60'
+      - series: 'user_threshold{tenant="t-shen", component="jvm", metric="memory", severity="warning"}'
         values: '80x60'
 
       - series: 'jvm_memory_used_bytes{tenant="t-pods", instance="app", pod="app-0", area="heap"}'
@@ -246,6 +259,8 @@ tests:
             value: 80
           - labels: 'tenant:jvm_memory_used:percent{tenant="t-zgen"}'
             value: 95.3125
+          - labels: 'tenant:jvm_memory_used:percent{tenant="t-shen"}'
+            value: 95.3125
           - labels: 'tenant:jvm_memory_used:percent{tenant="t-pods"}'
             value: 90
           - labels: 'tenant:jvm_memory_used:percent{tenant="t-crit"}'
@@ -262,6 +277,8 @@ tests:
           - labels: '{alertname="JVMMemoryPressure", tenant="t-g1", severity="warning"}'
             value: 1
           - labels: '{alertname="JVMMemoryPressure", tenant="t-zgen", severity="warning"}'
+            value: 1
+          - labels: '{alertname="JVMMemoryPressure", tenant="t-shen", severity="warning"}'
             value: 1
           - labels: '{alertname="JVMMemoryPressure", tenant="t-two", severity="warning"}'
             value: 1
@@ -289,7 +306,7 @@ tests:
         eval_time: 2m30s
         exp_samples:
           - labels: '{alertname="JVMMemoryPressure"}'
-            value: 9
+            value: 10
           - labels: '{alertname="JVMMemoryPressureCritical"}'
             value: 1
       # At 4m the critical has fired; the warning and the composite have not.
@@ -303,7 +320,7 @@ tests:
         eval_time: 7m
         exp_samples:
           - labels: '{alertname="JVMMemoryPressure"}'
-            value: 9
+            value: 10
           - labels: '{alertname="JVMMemoryPressureCritical"}'
             value: 1
 
