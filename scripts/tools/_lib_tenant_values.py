@@ -278,6 +278,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import os
 import re
 import subprocess
@@ -714,10 +715,13 @@ BUILTIN_STATES = frozenset({"builtin", "overridden", "withheld"})
 class BuiltinDefault(NamedTuple):
     """One key of effective's `builtin_defaults` (#3832): `value` the
     platform's, `state` one of BUILTIN_STATES, `root_value` the number the
-    tree's `defaults:` gives the key (`overridden` only, else None)."""
+    tree's `defaults:` gives the key (`overridden` only, else None),
+    `tenants` how many tenants /metrics serves the platform's value
+    (`builtin` only, else None)."""
     value: float
     state: str
     root_value: float | None
+    tenants: int | None = None
 
 
 class BuiltinDefaults(NamedTuple):
@@ -1982,8 +1986,9 @@ def _root_defaults_reserved(entries: Any, returncode: int, stderr: str) -> "tupl
 def _builtin_defaults(doc: Any, returncode: int, stderr: str) -> "BuiltinDefaults | None":
     """effective's `builtin_defaults` (#3832), checked: None when da-guard
     wrote null (no build ran: not judged); a da-guard without the field is
-    named as older than this tool. Every key carries a finite `value` and a
-    state from BUILTIN_STATES, `root_value` exactly on `overridden`."""
+    named as older than this tool. The table is not empty; every key carries
+    a finite `value` and a state from BUILTIN_STATES, `root_value` (finite)
+    exactly on `overridden`, `tenants` (a count) exactly on `builtin`."""
     if doc is _MISSING:
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND} exited {returncode} without the expected JSON "
@@ -1993,19 +1998,29 @@ def _builtin_defaults(doc: Any, returncode: int, stderr: str) -> "BuiltinDefault
         return None
     try:
         digest, keys = doc["digest"], doc["keys"]
-        if not isinstance(digest, str) or not digest or not isinstance(keys, dict):
-            raise _ShapeError(f"digest {shown_value(digest)} with keys {shown_value(type(keys).__name__)}")
+        if not isinstance(digest, str) or not digest or not isinstance(keys, dict) or not keys:
+            raise _ShapeError(f"digest {shown_value(digest)} with keys {shown_value(keys)}")
+
+        def finite(v: Any, what: str) -> float:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise _ShapeError(f"{what} is not a finite number: {shown_value(v)}")
+            return float(v)
         out: dict[str, BuiltinDefault] = {}
         for key, e in keys.items():
-            state, root = e["state"], e.get("root_value")
+            state, root, tenants = e["state"], e.get("root_value"), e.get("tenants")
             if state not in BUILTIN_STATES:
                 raise _ShapeError(f"key '{shown_key(key)}': state {shown_value(state)} is none of "
                                   f"{sorted(BUILTIN_STATES)}")
             if (root is None) == (state == "overridden"):
                 raise _ShapeError(f"key '{shown_key(key)}': state {shown_value(state)} with "
                                   f"root_value {shown_value(root)}")
-            out[str(key)] = BuiltinDefault(_threshold(e["value"]), state,
-                                           None if root is None else _threshold(root))
+            if (tenants is None) == (state == "builtin") or (tenants is not None and (
+                    isinstance(tenants, bool) or not isinstance(tenants, int) or tenants < 0)):
+                raise _ShapeError(f"key '{shown_key(key)}': state {shown_value(state)} with "
+                                  f"tenants {shown_value(tenants)}")
+            out[str(key)] = BuiltinDefault(finite(e["value"], f"key '{shown_key(key)}' value"), state,
+                                           None if root is None else finite(root, f"key '{shown_key(key)}' root_value"),
+                                           tenants)
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: builtin_defaults is not of its shape "
                              f"({error_text(e)})", returncode, stderr, broken=True) from e

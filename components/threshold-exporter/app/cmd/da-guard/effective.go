@@ -121,6 +121,12 @@ type builtinDefaultKey struct {
 	// RootValue is the number the tree's `defaults:` gives the key; present
 	// for `overridden` only.
 	RootValue *float64 `json:"root_value,omitempty"`
+	// Tenants: for `builtin`, how many tenants of the tree /metrics serves
+	// the platform's value for the key — those that write no value of their
+	// own and those whose value falls back (read at the tenant value's
+	// default, not its time windows or `expires:`); present for `builtin`
+	// only.
+	Tenants *int `json:"tenants,omitempty"`
 }
 
 // builtinDefaultsOf is the document's builtin_defaults for tree; nil when
@@ -133,7 +139,12 @@ func builtinDefaultsOf(tree *config.ScopedTenants) *builtinDefaultsDoc {
 	doc := &builtinDefaultsDoc{Digest: config.BuiltinDefaultsDigest(),
 		Keys: make(map[string]builtinDefaultKey, len(states))}
 	for k, st := range states {
-		doc.Keys[k] = builtinDefaultKey{Value: st.Value, State: st.State, RootValue: st.Root}
+		e := builtinDefaultKey{Value: st.Value, State: st.State, RootValue: st.Root}
+		if st.State == config.BuiltinStateBuiltin {
+			n := st.Tenants
+			e.Tenants = &n
+		}
+		doc.Keys[k] = e
 	}
 	return doc
 }

@@ -343,7 +343,7 @@ def test_effective_root_defaults_null_is_not_judged(tmp_path):
 
 
 _BUILTIN_OK = {"digest": "abc123def456", "keys": {
-    "cpu": {"value": 80, "state": "builtin"},
+    "cpu": {"value": 80, "state": "builtin", "tenants": 3},
     "mem": {"value": 85, "state": "overridden", "root_value": 70},
     "lag": {"value": 30, "state": "withheld"}}}
 
@@ -356,7 +356,7 @@ def test_effective_tree_reads_builtin_defaults_and_refuses_output_without_it(tmp
     got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(
         tmp_path, json.dumps({**base, "builtin_defaults": _BUILTIN_OK})))
     assert got.builtin_defaults == tv.BuiltinDefaults("abc123def456", {
-        "cpu": tv.BuiltinDefault(80.0, "builtin", None),
+        "cpu": tv.BuiltinDefault(80.0, "builtin", None, 3),
         "mem": tv.BuiltinDefault(85.0, "overridden", 70.0),
         "lag": tv.BuiltinDefault(30.0, "withheld", None)})
     with pytest.raises(tv.EffectiveError) as ei:
@@ -366,16 +366,24 @@ def test_effective_tree_reads_builtin_defaults_and_refuses_output_without_it(tmp
 
 
 @pytest.mark.parametrize("bad", [
-    {"keys": {}},
-    {"digest": "", "keys": {}},
+    {"keys": {"cpu": {"value": 80, "state": "builtin", "tenants": 1}}},
+    {"digest": "", "keys": {"cpu": {"value": 80, "state": "builtin", "tenants": 1}}},
     {"digest": "abc", "keys": []},
+    {"digest": "abc", "keys": {}},
     {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "on"}}},
     {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "overridden"}}},
-    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "builtin", "root_value": 70}}},
-    {"digest": "abc", "keys": {"cpu": {"value": "80", "state": "builtin"}}},
-    {"digest": "abc", "keys": {"cpu": {"state": "builtin"}}},
-], ids=["no-digest", "empty-digest", "keys-list", "unknown-state", "overridden-no-root",
-        "root-on-builtin", "value-text", "no-value"])
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "builtin", "tenants": 1, "root_value": 70}}},
+    {"digest": "abc", "keys": {"cpu": {"value": "80", "state": "builtin", "tenants": 1}}},
+    {"digest": "abc", "keys": {"cpu": {"value": "NaN", "state": "builtin", "tenants": 1}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "overridden", "root_value": "+Inf"}}},
+    {"digest": "abc", "keys": {"cpu": {"state": "builtin", "tenants": 1}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "builtin"}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "builtin", "tenants": -1}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "builtin", "tenants": True}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "withheld", "tenants": 0}}},
+], ids=["no-digest", "empty-digest", "keys-list", "empty-table", "unknown-state", "overridden-no-root",
+        "root-on-builtin", "value-text", "value-nan", "root-inf", "no-value", "builtin-no-tenants",
+        "tenants-negative", "tenants-bool", "tenants-on-withheld"])
 def test_builtin_defaults_not_of_its_shape_is_broken_output(tmp_path, bad):
     """`builtin_defaults` 不合形狀：da-guard 壞掉的輸出（broken），不猜成某個狀態。"""
     doc = {**_doc(), "skipped": [], "root_defaults_refused": [], "root_defaults_reserved": [],

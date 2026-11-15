@@ -98,9 +98,13 @@ func TestBuiltinDefaultsDoc_TheRootDecides(t *testing.T) {
 		t.Errorf("keys[%q] = %+v, want overridden with root_value 7", valued, e)
 	}
 	for _, k := range []string{nulled, refused} {
-		if e := got.Keys[k]; e.State != config.BuiltinStateBuiltin || e.RootValue != nil {
-			t.Errorf("keys[%q] = %+v, want builtin", k, e)
+		if e := got.Keys[k]; e.State != config.BuiltinStateBuiltin || e.RootValue != nil ||
+			e.Tenants == nil || *e.Tenants != 1 {
+			t.Errorf("keys[%q] = %+v, want builtin served to 1 tenant", k, e)
 		}
+	}
+	if e := got.Keys[valued]; e.Tenants != nil {
+		t.Errorf("keys[%q].tenants = %v, want absent on overridden", valued, *e.Tenants)
 	}
 	// The same tree's own answers agree: the tenant's key_sources and its rows.
 	et := builtinEffectiveOf(t, dir, "t1")
@@ -164,5 +168,45 @@ func TestBuiltinDefaultsDoc_ATenantFileTheLoadDropsLeavesTheRootJudged(t *testin
 		if e.State != config.BuiltinStateBuiltin {
 			t.Errorf("keys[%q] = %+v, want builtin", k, e)
 		}
+	}
+}
+
+// TestBuiltinDefaultsDoc_TheTenantCountIsWhatMetricsServes: `tenants` counts
+// the tenants /metrics serves the platform's value — none written, null, or
+// a value that falls back (in the tenant's file or a subtree) — and not those
+// that set a number or `disable` (#3832 review: key_sources alone said 2).
+func TestBuiltinDefaultsDoc_TheTenantCountIsWhatMetricsServes(t *testing.T) {
+	t.Parallel()
+	k := sortedBuiltinKeys()[0]
+	files := map[string]string{
+		"plain.yaml":         "tenants:\n  plain: {}\n",
+		"tnull.yaml":         "tenants:\n  tnull:\n    " + k + ": null\n",
+		"tabc.yaml":          "tenants:\n  tabc:\n    " + k + ": abc\n",
+		"own.yaml":           "tenants:\n  own:\n    " + k + ": \"5\"\n",
+		"sched.yaml":         "tenants:\n  sched:\n    " + k + ":\n      default: \"70\"\n",
+		"off.yaml":           "tenants:\n  off:\n    " + k + ": disable\n",
+		"bad/_defaults.yaml": "defaults:\n  " + k + ": abc\n",
+		"bad/tb.yaml":        "tenants:\n  tb: {}\n",
+		"sub/_defaults.yaml": "defaults:\n  " + k + ": 6\n",
+		"sub/deep.yaml":      "tenants:\n  deep: {}\n",
+	}
+	code, got := builtinDefaultsOut(t, builtinTree(t, files))
+	if code != exitOK {
+		t.Fatalf("exit %d", code)
+	}
+	if e := got.Keys[k]; e.Tenants == nil || *e.Tenants != 4 {
+		t.Errorf("keys[%q] = %+v, want tenants 4 (plain, tnull, tabc, tb)", k, e)
+	}
+	sc, doc, _, stderr := servedWith(t, files, "")
+	mustOK(t, sc, stderr)
+	want, _ := config.BuiltinDefault(k)
+	served := 0
+	for _, tv := range doc.Tenants {
+		if v, ok := tv.Values[k].(float64); ok && v == want {
+			served++
+		}
+	}
+	if served != 4 {
+		t.Errorf("served-values serves %d tenant(s) the platform value, want 4", served)
 	}
 }

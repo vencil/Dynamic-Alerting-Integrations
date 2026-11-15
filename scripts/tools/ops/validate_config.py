@@ -2224,7 +2224,7 @@ _PLATFORM_DEFAULTS_HINT = (
 
 
 _PLATFORM_DEFAULTS_WITHHELD_HINT = (
-    "Make the root _defaults.yaml read again (the rows above name what is "
+    "Make the root platform file (_defaults.yaml) read again (the rows above name what is "
     "wrong with it): while it does not, no tenant gets a platform default "
     "row, built-in or written, because the file may hold the overrides and "
     "opt-outs of those defaults. Never blocks (#3832).")
@@ -2239,9 +2239,10 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
 
     * `builtin` — the root `defaults:` gives it no value (not written,
       written as null, or a value the root decode refuses): the built-in
-      layer gives the platform's, to the number of tenants shown (those whose
-      key_sources say `layer: builtin`; the others override or switch it off
-      in a subtree, a profile or their own file);
+      layer gives the platform's, to the number of tenants da-guard counts
+      as served it (those with no value of their own, and those whose value
+      falls back to the default; the others set a number or `disable` in a
+      subtree, a profile or their own file);
     * `overridden` — the root `defaults:` gives it a number, every tenant's
       unless it writes its own; noted when the number is the platform's.
 
@@ -2249,8 +2250,8 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
     the exporter, tenant-api and da-tools are known to hold the same table.
 
     Every answer is the reader's own, from one `da-guard effective` run
-    (its `builtin_defaults` and each tenant's `key_sources`): this tool
-    reads no registry and works out nothing itself.
+    (its `builtin_defaults`): this tool reads no registry and works out
+    nothing itself.
 
     An explanation, not a finding: a tree that does not write a default-armed
     key is the normal state, so the row is PASS. WARN only when it cannot
@@ -2269,7 +2270,7 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
         if builtin is not None and builtin.keys and all(
                 k.state == "withheld" for k in builtin.keys.values()):
             return _make_result("platform_defaults", WARN, [
-                f"withheld: the root _defaults.yaml does not read, so none of the "
+                f"withheld: the root platform file does not read, so none of the "
                 f"{len(builtin.keys)} default-armed threshold(s) of the built-in table "
                 f"{builtin.digest} is served to any tenant"], hint=_PLATFORM_DEFAULTS_WITHHELD_HINT)
         dropped = [*exc.parse_failed, *(u.file for u in exc.unreadable)]
@@ -2286,19 +2287,17 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
     for key, entry in sorted(builtin.keys.items()):
         value = _fmt_threshold(entry.value)
         if entry.state == "builtin":
-            served = sum(1 for t in tree.tenants.values()
-                         if (src := t.key_sources.get(key)) is not None and src.layer == "builtin")
-            details.append(f"builtin `{key}` = {value} — the root _defaults.yaml does not give it a "
-                           f"value; the built-in layer serves {served} of {total} tenant(s)")
+            details.append(f"builtin `{key}` = {value} — the root platform file does not give it a "
+                           f"value; the built-in layer serves {entry.tenants} of {total} tenant(s)")
         elif entry.state == "overridden":
             same = " (the platform's value)" if entry.root_value == entry.value else ""
             details.append(f"overridden `{key}` = {_fmt_threshold(entry.root_value)}{same} — set "
-                           f"under `defaults:` of the root _defaults.yaml; platform value {value}")
+                           f"under `defaults:` of the root platform file; platform value {value}")
         else:
             # A build that read the root file withholds nothing (da-guard's
             # contract); a state this row has no sentence for is not guessed at.
             return not_checked(f"da-guard gives `{key}` the state {entry.state!r} on a tree whose "
-                               "root _defaults.yaml reads")
+                               "root platform file reads")
     return _make_result("platform_defaults", PASS, details)
 
 

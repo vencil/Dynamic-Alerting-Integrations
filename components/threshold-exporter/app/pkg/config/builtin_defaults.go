@@ -169,14 +169,35 @@ type BuiltinDefaultState struct {
 	// Root is the number `defaults:` gives the key, which every tenant
 	// inherits; set for BuiltinStateOverridden only.
 	Root *float64
+	// Tenants is, for BuiltinStateBuiltin, how many tenants of the build
+	// /metrics serves the platform's value for the key (servesBuiltinValue);
+	// 0 otherwise.
+	Tenants int
+}
+
+// servesBuiltinValue reports whether a tenant whose merged value for a
+// built-in key is sv (ok false: none) is served the root's value for it, as
+// resolveBaseRows decides: no value, or one that is neither a threshold nor
+// a `disable` (the row falls back to the default, value_unparsed). The
+// tenant's default is read; its time windows and `expires:` are not, so the
+// answer does not depend on when it is asked.
+func servesBuiltinValue(sv ScheduledValue, ok bool) bool {
+	if !ok {
+		return true
+	}
+	if off, _ := thresholdRowDisabled(sv.Default); off {
+		return false
+	}
+	_, _, parsed := parseThresholdValue(sv.Default)
+	return !parsed
 }
 
 // BuiltinDefaultStates is, per key of the built-in table, what the
 // exporter's own build of the tree does with it (FlatBuild.BuiltinSeeded and
 // BuiltinWithheld, read off the same build as Config): the tree-level answer
-// beneath every tenant's key_sources. A subtree, profile or tenant may still
-// override or disable the key for the tenants it covers. nil when no build
-// ran (#3832; validate-config's platform_defaults row).
+// beneath every tenant's key_sources, with the number of tenants /metrics
+// serves the built-in value. nil when no build ran (#3832; validate-config's
+// platform_defaults row).
 func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
 	if s == nil || s.built == nil {
 		return nil
@@ -189,6 +210,12 @@ func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
 		case b.BuiltinWithheld:
 		case slices.Contains(b.BuiltinSeeded, k):
 			st.State = BuiltinStateBuiltin
+			for _, overrides := range b.Config.Tenants {
+				sv, ok := overrides[k]
+				if servesBuiltinValue(sv, ok) {
+					st.Tenants++
+				}
+			}
 		default:
 			root := b.Config.Defaults[k]
 			st.State, st.Root = BuiltinStateOverridden, &root

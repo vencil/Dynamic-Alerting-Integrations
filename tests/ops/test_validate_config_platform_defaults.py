@@ -76,7 +76,7 @@ def test_a_tree_that_writes_no_default_lists_every_key_as_builtin(tmp_path, file
                                  "2 tenant(s)"), row
     for key in _KEYS:
         assert _line(row, key) == (f"builtin `{key}` = {_fmt(BUILTIN_DEFAULTS[key])} — the root "
-                                   "_defaults.yaml does not give it a value; the built-in layer "
+                                   "platform file does not give it a value; the built-in layer "
                                    "serves 2 of 2 tenant(s)"), row
     assert len(row["details"]) == 1 + len(_KEYS), row
 
@@ -90,9 +90,9 @@ def test_a_number_under_the_root_defaults_is_overridden(tmp_path):
     }))
     assert row["status"] == vc.PASS, row
     assert _line(row, other) == (f"overridden `{other}` = 7 — set under `defaults:` of the root "
-                                 f"_defaults.yaml; platform value {_fmt(BUILTIN_DEFAULTS[other])}"), row
+                                 f"platform file; platform value {_fmt(BUILTIN_DEFAULTS[other])}"), row
     assert _line(row, same) == (f"overridden `{same}` = {_fmt(BUILTIN_DEFAULTS[same])} (the platform's "
-                                "value) — set under `defaults:` of the root _defaults.yaml; platform value "
+                                "value) — set under `defaults:` of the root platform file; platform value "
                                 f"{_fmt(BUILTIN_DEFAULTS[same])}"), row
     assert _line(row, _KEYS[2]).startswith(f"builtin `{_KEYS[2]}`"), row
 
@@ -110,19 +110,31 @@ def test_a_root_value_that_gives_nothing_falls_to_builtin(tmp_path, text):
     assert _line(row, key).endswith("serves 1 of 1 tenant(s)"), row
 
 
-def test_the_tenant_count_is_the_tenants_the_builtin_value_reaches(tmp_path):
-    """受影響的租戶數取自每個租戶的 `key_sources`：自己覆寫、在子目錄被覆寫、或寫
-    `disable` 的租戶不算。"""
+def test_the_tenant_count_is_the_tenants_metrics_serves_the_builtin_value(tmp_path):
+    """受影響的租戶數是 `/metrics` 實際送平台值的租戶（da-guard 依 exporter 出列規則數）：
+    沒寫、寫 `null`、寫了讀不懂而改用預設的（租戶檔或子目錄）都算；自己給了數字、在子目錄
+    給了數字、或寫 `disable` 的不算。數字與 served-values 逐租戶對照。"""
     key = _KEYS[0]
-    row = vc.check_platform_defaults(_tree(tmp_path, {
+    tree = _tree(tmp_path, {
         "plain.yaml": "tenants:\n  plain: {}\n",
+        "tnull.yaml": f"tenants:\n  tnull:\n    {key}: null\n",
+        "tabc.yaml": f"tenants:\n  tabc:\n    {key}: abc\n",
+        "tinf.yaml": f"tenants:\n  tinf:\n    {key}: .inf\n",
         "own.yaml": f"tenants:\n  own:\n    {key}: \"5\"\n",
         "off.yaml": f"tenants:\n  off:\n    {key}: disable\n",
         "sub/_defaults.yaml": f"defaults:\n  {key}: 6\n",
         "sub/deep.yaml": "tenants:\n  deep: {}\n",
-    }))
-    assert _line(row, key).endswith("the built-in layer serves 1 of 4 tenant(s)"), row
-    assert _line(row, _KEYS[1]).endswith("the built-in layer serves 4 of 4 tenant(s)"), row
+        "bad/_defaults.yaml": f"defaults:\n  {key}: abc\n",
+        "bad/tb.yaml": "tenants:\n  tb: {}\n",
+    })
+    row = vc.check_platform_defaults(tree)
+    assert _line(row, key).endswith("the built-in layer serves 5 of 8 tenant(s)"), row
+    assert _line(row, _KEYS[1]).endswith("the built-in layer serves 8 of 8 tenant(s)"), row
+    served = json.loads(subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir", tree],
+                                       capture_output=True, text=True, encoding="utf-8",
+                                       timeout=120).stdout)
+    platform = sorted(t for t, v in served["tenants"].items() if v["values"].get(key) == BUILTIN_DEFAULTS[key])
+    assert platform == ["plain", "tabc", "tb", "tinf", "tnull"], platform
 
 
 @pytest.mark.parametrize("root", ["defaults: [oops\n", f"defaults:\n  {_KEYS[0]}: [1, 2]\n"],
@@ -133,9 +145,9 @@ def test_a_root_file_that_does_not_read_withholds_the_builtin_layer(tmp_path, ro
     rc, row = _cli(_tree(tmp_path, {"_defaults.yaml": root, "t1.yaml": "tenants:\n  t1: {}\n"}))
     assert row["status"] == vc.WARN, row
     assert row["details"] == [
-        f"withheld: the root _defaults.yaml does not read, so none of the {len(_KEYS)} default-armed "
+        f"withheld: the root platform file does not read, so none of the {len(_KEYS)} default-armed "
         f"threshold(s) of the built-in table {_DIGEST} is served to any tenant"], row
-    assert "root _defaults.yaml read again" in row["suggested_action"], row
+    assert "read again" in row["suggested_action"], row
 
 
 def test_another_file_the_load_drops_is_not_checked_never_a_pass(tmp_path):
@@ -172,7 +184,7 @@ def test_the_answer_is_da_guards_not_this_tools(tmp_path, monkeypatch):
     row = vc.check_platform_defaults(_tree(tmp_path / "t", {"t1.yaml": "tenants:\n  t1: {}\n"}))
     assert row["details"][0].startswith("built-in table feedfacecafe: "), row
     assert _line(row, key) == (f"overridden `{key}` = 41 — set under `defaults:` of the root "
-                               "_defaults.yaml; platform value 42"), row
+                               "platform file; platform value 42"), row
 
 
 def test_a_da_guard_without_the_answer_is_not_checked(tmp_path, monkeypatch):
