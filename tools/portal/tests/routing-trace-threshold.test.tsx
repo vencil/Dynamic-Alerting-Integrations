@@ -57,10 +57,32 @@ describe('Routing Trace — a threshold read as the exporter reads it', () => {
     expect(screen.queryByTestId(/^trace-unreadable-/)).toBeNull();
   });
 
-  it('a readable value, quoted or not, is shown as its number; 0 included', () => {
-    trace(`${K}: 0\n`);
+  it.each([['0'], ['"0"']])('a readable value, quoted or not, is shown as its number; 0 included (%s)', (v) => {
+    trace(`${K}: ${v}\n`);
     expect(thresholdLine()!.textContent).toBe('threshold: 0');
     expect(screen.queryByTestId(/^trace-unreadable-/)).toBeNull();
+  });
+
+  it('a base switched off takes its critical tier with it: nothing inhibits the warning', () => {
+    trace(`${K}: disable\n${K}_critical: 80\n`);
+    expect(thresholdLine()).toBeNull();
+    expect(screen.queryByText(INHIBITED)).toBeNull();
+    expect(screen.getByText(PASS)).toBeInTheDocument();
+  });
+
+  it.each([['"70:critical"', 'threshold: 70(critical)'], ['"70:warning"', 'threshold: 70']])(
+    'the base key\'s own severity is shown: %s', (v, shown) => {
+      trace(`${K}: ${v}\n`);
+      expect(thresholdLine()!.textContent).toBe(shown);
+    });
+
+  it('a `_` key is no threshold, even one written like a number', () => {
+    render(<RoutingTraceTab />);
+    fireEvent.change(screen.getByPlaceholderText(K), { target: { value: '_foo' } });
+    fireEvent.change(screen.getByLabelText('Routing Profile YAML'), { target: { value: '_foo: 0x1F\n_foo_critical: 80\n' } });
+    fireEvent.click(screen.getByText('Trace Alert Path'));
+    expect(thresholdLine()).toBeNull();
+    expect(screen.queryByText(INHIBITED)).toBeNull();
   });
 
   it('a disabled or absent key shows no threshold and no unreadable note', () => {

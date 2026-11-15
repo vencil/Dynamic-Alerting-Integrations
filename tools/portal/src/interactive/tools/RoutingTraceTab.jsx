@@ -41,11 +41,17 @@ function RoutingTraceTab() {
 
     // Build alert trace. A `_critical` key's whole value is its number
     // (tier 'critical'): `80:critical` there is no critical tier, so it
-    // inhibits nothing.
-    const baseRow = readThresholdRow(config[traceMetric]);
-    const critRow = readThresholdRow(config[`${traceMetric}_critical`], 'critical');
+    // inhibits nothing. A base switched off takes its critical tier with it
+    // (the exporter's familyHeadOff). A `_` key is no threshold (the
+    // exporter's baseRowsSkipKey), and parseTenantYaml types it as parseYaml
+    // does, which the reader must not be handed.
+    const isKey = !traceMetric.startsWith('_');
+    const baseRow = isKey ? readThresholdRow(config[traceMetric]) : { kind: 'absent' };
+    const critRow = isKey ? readThresholdRow(config[`${traceMetric}_critical`], 'critical') : { kind: 'absent' };
     const threshold = baseRow.kind === 'number' ? baseRow.number : null;
-    const critThreshold = critRow.kind === 'number' ? critRow.number : null;
+    // `70:critical` on the base key is a critical-severity row, not a warning one.
+    const thresholdSeverity = baseRow.kind === 'number' ? baseRow.severity : null;
+    const critThreshold = critRow.kind === 'number' && baseRow.kind !== 'disabled' ? critRow.number : null;
     const hasCritical = critThreshold !== null;
     const unreadable = [
       baseRow.kind === 'unreadable' && { key: traceMetric, msg: unreadableThresholdMessage(baseRow.raw) },
@@ -71,6 +77,7 @@ function RoutingTraceTab() {
         metric: traceMetric,
         severity: traceSeverity,
         threshold,
+        thresholdSeverity,
         criticalThreshold: critThreshold,
         hasCritical,
         isInhibited,
@@ -170,6 +177,7 @@ function RoutingTraceTab() {
               {result.trace.threshold !== null && (
                 <div>
                   <span className="text-gray-500">threshold:</span> {result.trace.threshold}
+                  {result.trace.thresholdSeverity === 'critical' && <span className="ml-1 text-red-700">(critical)</span>}
                   {result.trace.hasCritical && <span className="ml-2 text-gray-500">critical: {result.trace.criticalThreshold}</span>}
                 </div>
               )}
