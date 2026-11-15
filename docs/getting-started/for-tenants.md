@@ -49,7 +49,7 @@ tenants:
 
 第一類（你沒填）與第三類（base 還沒供給）的結果一樣：沒有閾值 series ⇒ 規則配不到 ⇒ 回空，這是 config-driven join 的機制本身。
 
-**想知道哪些告警因此靜默，可以訂閱提醒**（[#1175](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1175)，預設關閉）：在你的租戶檔寫 `_state_unset_thresholds: "enable"`（平台若已在 `state_filters:` 把 `unset_thresholds` 設成 `default_state: "enable"`，就不必自己寫；不想收則寫 `"disable"`）。之後對平台不出貨值、而你這邊沒有送出任何門檻值的 key，若這個 pack 的 exporter 正在為你回應，30 分鐘後會發 info 告警 `<Pack>ThresholdNotConfigured`（例如 `RedisThresholdNotConfigured`），標籤 `key` 是那個 key、`fix` 說明誰能處理：`tenant`＝寫一個門檻值就會啟用，`platform`＝平台沒有宣告這個 key，你寫的值不會被讀，要請平台先在根層宣告。不需要某條告警就對那個 key 寫 `"disable"`，該則提醒隨之結束。寫了但不會被送出的值（打錯字、平台沒宣告的 key、只寫 `<key>_critical`）不算設定。維護模式下不發。
+**想知道哪些告警因此靜默，可以訂閱提醒**（[#1175](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1175)，預設關閉）。前提是根層 `_defaults.yaml` 的 `state_filters:` 有 `unset_thresholds`：新版 chart、`scaffold-tenant`、`da-tools init` 都會帶，既有部署要先請平台加上，否則租戶寫了也不會生效。之後在你的租戶檔寫 `_state_unset_thresholds: "enable"`（平台若已在 `state_filters:` 把 `unset_thresholds` 設成 `default_state: "enable"`，就不必自己寫；不想收則寫 `"disable"`）。之後對平台不出貨值、而你這邊沒有送出任何門檻值的 key，若這個 pack 的 exporter 正在為你回應，30 分鐘後會發 info 告警 `<Pack>ThresholdNotConfigured`（例如 `RedisThresholdNotConfigured`），標籤 `key` 是那個 key、`fix` 說明誰能處理：`tenant`＝寫一個門檻值就會啟用，`platform`＝平台沒有宣告這個 key，你寫的值不會被讀，要請平台先在根層宣告。不需要某條告警就對那個 key 寫 `"disable"`，該則提醒隨之結束。寫了但不會被送出的值（打錯字、平台沒宣告的 key、只寫 `<key>_critical`）不算設定。維護模式下不發。
 
 **不確定某個 key 落在哪一類？不要用眼睛判**——下面〈自助驗證 › 檢視繼承鏈〉那一行指令會直接把答案分段列出來。
 

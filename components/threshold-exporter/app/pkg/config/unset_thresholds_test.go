@@ -174,7 +174,7 @@ func TestUnsetThresholds_FixSaysWhoCanArmIt(t *testing.T) {
 	got := unsetOf(cfg, "ta")
 	for key, want := range map[string]string{
 		"redis_replication_lag": UnsetFixPlatform, // written, not declared: not read
-		"jvm_memory":            UnsetFixPlatform, // only its dimensions declared: a flat value is not read
+		"jvm_memory":            UnsetFixTenant,   // dimensions declared: a labelled value is read (a flat one is not)
 		"oracle_wait_time_rate": UnsetFixTenant,
 	} {
 		if got[key] != want {

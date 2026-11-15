@@ -190,9 +190,12 @@ data:
     disable\" 可結束這則提醒。{{ else }}{{ $labels.key }} 沒有送出任何門檻值，{{ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫\
     \ \"disable\" 則維持關閉並結束這則提醒。{{ end }}'\n      owner: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
-    \ }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: '{{ $labels.key }} has no threshold for {{ $labels.tenant\
-    \ }}: the alert on it stays silent'\n      summary_zh: '{{ $labels.tenant }} 沒有設定\
-    \ {{ $labels.key }}：讀它的告警不會響'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '{{ $labels.key }}: no threshold,\
+    \ so its alert never fires (fix: {{ $labels.fix }})'\n      platform_summary_zh:\
+    \ '{{ $labels.key }}：沒有門檻值，讀它的告警不會響（處理方：{{ $labels.fix }}）'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ '{{ $labels.key }} has no threshold for {{ $labels.tenant }}: the alert on it\
+    \ stays silent'\n      summary_zh: '{{ $labels.tenant }} 沒有設定 {{ $labels.key }}：讀它的告警不會響'\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

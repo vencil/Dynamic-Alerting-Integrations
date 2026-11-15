@@ -39,9 +39,10 @@ package config
 // second resolve of everything it writes (BenchmarkUnsetThresholdsAt).
 //
 // Each notice says who can fix it (`fix`): `tenant` when the root declares
-// the key (in `defaults:` or `optional_overrides:`), so a tenant value is
-// read; `platform` when it does not, so a tenant value is not read until the
-// platform declares the key.
+// the key (in `defaults:`, `optional_overrides:` or `dimensions:` — under the
+// last only a labelled value is read), so a tenant value is read; `platform`
+// when it does not, so a tenant value is not read until the platform declares
+// the key.
 
 import (
 	"sort"
@@ -150,6 +151,8 @@ func (c *ThresholdConfig) UnsetThresholdsAt(now time.Time, subscribed map[string
 				fix = UnsetFixTenant
 			} else if _, valued := defaults[e.key]; valued {
 				fix = UnsetFixTenant
+			} else if _, dimensioned := c.Dimensions[e.key]; dimensioned {
+				fix = UnsetFixTenant // a labelled value (`key{label="v"}`) is read
 			}
 			out = append(out, UnsetThreshold{Tenant: t, Pack: e.pack, Key: e.key, Fix: fix})
 		}

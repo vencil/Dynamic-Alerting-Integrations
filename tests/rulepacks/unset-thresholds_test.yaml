@@ -55,6 +55,8 @@ tests:
             exp_annotations:
               summary: "redis_replication_lag has no threshold for t1: the alert on it stays silent"
               summary_zh: "t1 沒有設定 redis_replication_lag：讀它的告警不會響"
+              platform_summary: "redis_replication_lag: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "redis_replication_lag：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for redis_replication_lag, so the redis alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "redis_replication_lag 沒有送出任何門檻值，redis 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -101,6 +103,8 @@ tests:
             exp_annotations:
               summary: "mysql_threads_running has no threshold for t1: the alert on it stays silent"
               summary_zh: "t1 沒有設定 mysql_threads_running：讀它的告警不會響"
+              platform_summary: "mysql_threads_running: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "mysql_threads_running：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for mysql_threads_running, so the mariadb alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "mysql_threads_running 沒有送出任何門檻值，mariadb 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -144,6 +148,8 @@ tests:
             exp_annotations:
               summary: "rabbitmq_connections has no threshold for t1: the alert on it stays silent"
               summary_zh: "t1 沒有設定 rabbitmq_connections：讀它的告警不會響"
+              platform_summary: "rabbitmq_connections: no threshold, so its alert never fires (fix: platform)"
+              platform_summary_zh: "rabbitmq_connections：沒有門檻值，讀它的告警不會響（處理方：platform）"
               description: "The platform does not declare rabbitmq_connections, so a tenant value for it is not read and the rabbitmq alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice."
               description_zh: "平台沒有宣告 rabbitmq_connections，租戶寫的值不會被讀，rabbitmq 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。"
               runbook_url: ""
@@ -162,6 +168,8 @@ tests:
             exp_annotations:
               summary: "jvm_memory has no threshold for t2: the alert on it stays silent"
               summary_zh: "t2 沒有設定 jvm_memory：讀它的告警不會響"
+              platform_summary: "jvm_memory: no threshold, so its alert never fires (fix: platform)"
+              platform_summary_zh: "jvm_memory：沒有門檻值，讀它的告警不會響（處理方：platform）"
               description: "The platform does not declare jvm_memory, so a tenant value for it is not read and the jvm alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice."
               description_zh: "平台沒有宣告 jvm_memory，租戶寫的值不會被讀，jvm 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。"
               runbook_url: ""
@@ -177,6 +185,8 @@ tests:
             exp_annotations:
               summary: "jvm_threads has no threshold for t3: the alert on it stays silent"
               summary_zh: "t3 沒有設定 jvm_threads：讀它的告警不會響"
+              platform_summary: "jvm_threads: no threshold, so its alert never fires (fix: platform)"
+              platform_summary_zh: "jvm_threads：沒有門檻值，讀它的告警不會響（處理方：platform）"
               description: "The platform does not declare jvm_threads, so a tenant value for it is not read and the jvm alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice."
               description_zh: "平台沒有宣告 jvm_threads，租戶寫的值不會被讀，jvm 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。"
               runbook_url: ""
@@ -195,6 +205,8 @@ tests:
             exp_annotations:
               summary: "nginx_connections has no threshold for t4: the alert on it stays silent"
               summary_zh: "t4 沒有設定 nginx_connections：讀它的告警不會響"
+              platform_summary: "nginx_connections: no threshold, so its alert never fires (fix: platform)"
+              platform_summary_zh: "nginx_connections：沒有門檻值，讀它的告警不會響（處理方：platform）"
               description: "The platform does not declare nginx_connections, so a tenant value for it is not read and the nginx alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice."
               description_zh: "平台沒有宣告 nginx_connections，租戶寫的值不會被讀，nginx 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。"
               runbook_url: ""
@@ -228,6 +240,8 @@ tests:
             exp_annotations:
               summary: "redis_replication_lag has no threshold for t1: the alert on it stays silent"
               summary_zh: "t1 沒有設定 redis_replication_lag：讀它的告警不會響"
+              platform_summary: "redis_replication_lag: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "redis_replication_lag：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for redis_replication_lag, so the redis alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "redis_replication_lag 沒有送出任何門檻值，redis 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -255,6 +269,8 @@ tests:
             exp_annotations:
               summary: "clickhouse_active_connections has no threshold for t-clickhouse: the alert on it stays silent"
               summary_zh: "t-clickhouse 沒有設定 clickhouse_active_connections：讀它的告警不會響"
+              platform_summary: "clickhouse_active_connections: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "clickhouse_active_connections：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for clickhouse_active_connections, so the clickhouse alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "clickhouse_active_connections 沒有送出任何門檻值，clickhouse 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -281,6 +297,8 @@ tests:
             exp_annotations:
               summary: "db2_bufferpool_hit_ratio has no threshold for t-db2: the alert on it stays silent"
               summary_zh: "t-db2 沒有設定 db2_bufferpool_hit_ratio：讀它的告警不會響"
+              platform_summary: "db2_bufferpool_hit_ratio: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "db2_bufferpool_hit_ratio：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for db2_bufferpool_hit_ratio, so the db2 alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "db2_bufferpool_hit_ratio 沒有送出任何門檻值，db2 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -307,6 +325,8 @@ tests:
             exp_annotations:
               summary: "es_pending_tasks has no threshold for t-elasticsearch: the alert on it stays silent"
               summary_zh: "t-elasticsearch 沒有設定 es_pending_tasks：讀它的告警不會響"
+              platform_summary: "es_pending_tasks: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "es_pending_tasks：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for es_pending_tasks, so the elasticsearch alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "es_pending_tasks 沒有送出任何門檻值，elasticsearch 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -333,6 +353,8 @@ tests:
             exp_annotations:
               summary: "jvm_gc_pause has no threshold for t-jvm: the alert on it stays silent"
               summary_zh: "t-jvm 沒有設定 jvm_gc_pause：讀它的告警不會響"
+              platform_summary: "jvm_gc_pause: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "jvm_gc_pause：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for jvm_gc_pause, so the jvm alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "jvm_gc_pause 沒有送出任何門檻值，jvm 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -359,6 +381,8 @@ tests:
             exp_annotations:
               summary: "kafka_broker_count has no threshold for t-kafka: the alert on it stays silent"
               summary_zh: "t-kafka 沒有設定 kafka_broker_count：讀它的告警不會響"
+              platform_summary: "kafka_broker_count: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "kafka_broker_count：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for kafka_broker_count, so the kafka alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "kafka_broker_count 沒有送出任何門檻值，kafka 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -385,6 +409,8 @@ tests:
             exp_annotations:
               summary: "mysql_threads_running has no threshold for t-mariadb: the alert on it stays silent"
               summary_zh: "t-mariadb 沒有設定 mysql_threads_running：讀它的告警不會響"
+              platform_summary: "mysql_threads_running: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "mysql_threads_running：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for mysql_threads_running, so the mariadb alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "mysql_threads_running 沒有送出任何門檻值，mariadb 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -411,6 +437,8 @@ tests:
             exp_annotations:
               summary: "mongodb_connections_current has no threshold for t-mongodb: the alert on it stays silent"
               summary_zh: "t-mongodb 沒有設定 mongodb_connections_current：讀它的告警不會響"
+              platform_summary: "mongodb_connections_current: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "mongodb_connections_current：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for mongodb_connections_current, so the mongodb alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "mongodb_connections_current 沒有送出任何門檻值，mongodb 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -437,6 +465,8 @@ tests:
             exp_annotations:
               summary: "nginx_connections has no threshold for t-nginx: the alert on it stays silent"
               summary_zh: "t-nginx 沒有設定 nginx_connections：讀它的告警不會響"
+              platform_summary: "nginx_connections: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "nginx_connections：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for nginx_connections, so the nginx alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "nginx_connections 沒有送出任何門檻值，nginx 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -463,6 +493,8 @@ tests:
             exp_annotations:
               summary: "oracle_pga_allocated_bytes has no threshold for t-oracle: the alert on it stays silent"
               summary_zh: "t-oracle 沒有設定 oracle_pga_allocated_bytes：讀它的告警不會響"
+              platform_summary: "oracle_pga_allocated_bytes: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "oracle_pga_allocated_bytes：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for oracle_pga_allocated_bytes, so the oracle alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "oracle_pga_allocated_bytes 沒有送出任何門檻值，oracle 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -489,6 +521,8 @@ tests:
             exp_annotations:
               summary: "rabbitmq_connections has no threshold for t-rabbitmq: the alert on it stays silent"
               summary_zh: "t-rabbitmq 沒有設定 rabbitmq_connections：讀它的告警不會響"
+              platform_summary: "rabbitmq_connections: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "rabbitmq_connections：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for rabbitmq_connections, so the rabbitmq alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "rabbitmq_connections 沒有送出任何門檻值，rabbitmq 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
@@ -515,6 +549,8 @@ tests:
             exp_annotations:
               summary: "redis_connected_clients has no threshold for t-redis: the alert on it stays silent"
               summary_zh: "t-redis 沒有設定 redis_connected_clients：讀它的告警不會響"
+              platform_summary: "redis_connected_clients: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "redis_connected_clients：沒有門檻值，讀它的告警不會響（處理方：tenant）"
               description: "No threshold is served for redis_connected_clients, so the redis alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
               description_zh: "redis_connected_clients 沒有送出任何門檻值，redis 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
