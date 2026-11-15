@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -28,21 +32,41 @@ func TestPrometheusURLsKeepTheirPassword(t *testing.T) {
 func TestPrometheusLoaderPanicIsARefusal(t *testing.T) {
 	t.Parallel()
 	rc, out, errOut := runPrometheus(t, "alerting:\n  alertmanagers: [~]\n")
-	if rc != exitCallerErr || out != "" ||
+	if rc != exitCallerErr || out != refusedOut ||
 		!strings.Contains(errOut, "Prometheus' config loader panicked on this input") ||
 		strings.Contains(errOut, "goroutine") || strings.Count(errOut, "\n") != 1 {
 		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and one line naming the loader's panic", rc, out, errOut)
 	}
 }
 
-// Any panic of a reader refuses that file; in a rule batch the other files
-// are still read.
-func TestAPanicRefusesOnlyThatFile(t *testing.T) {
+// ownPanicEnv makes this test binary, run as da-read (TestMain), panic in
+// da-read's own code — a reader of its own, not a consumer's library.
+const ownPanicEnv = "DA_READ_TEST_OWN_PANIC"
+
+func TestMain(m *testing.M) {
+	if os.Getenv(ownPanicEnv) != "" {
+		readers["prometheus"] = func([]byte) ([]byte, error) { panic("a bug of da-read's own") }
+		main()
+	}
+	os.Exit(m.Run())
+}
+
+// #3943: only a consumer's library is guarded (loaderPanic). A panic of
+// da-read's own code is a crash: the Go runtime's exit 2, its goroutine
+// dump, and no refusal document — never an answer about the input.
+func TestOwnPanicIsACrashNotARefusal(t *testing.T) {
 	t.Parallel()
-	_, err := guarded(func([]byte) ([]byte, error) { panic("boom") }, nil)
-	if err == nil || !strings.Contains(err.Error(), "da-read panicked while reading this file") ||
-		!strings.Contains(err.Error(), "boom") {
-		t.Fatalf("err = %v", err)
+	cmd := exec.Command(os.Args[0], "prometheus", "-")
+	cmd.Env = append(os.Environ(), ownPanicEnv+"=1")
+	cmd.Stdin = strings.NewReader("global: {scrape_interval: 1m}\n")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != exitCallerErr || stdout.Len() != 0 ||
+		!strings.Contains(stderr.String(), "panic: a bug of da-read's own") {
+		t.Fatalf("err=%v stdout=%q stderr=%q; want the runtime's exit 2, its panic, no stdout",
+			err, stdout.String(), stderr.String())
 	}
 }
 
@@ -51,7 +75,7 @@ func TestAPanicRefusesOnlyThatFile(t *testing.T) {
 func TestUnreadableLaterDocumentIsDaReadsRefusal(t *testing.T) {
 	t.Parallel()
 	rc, out, errOut := runPrometheus(t, "global: {scrape_interval: 5s}\n---\na: [\n")
-	if rc != exitCallerErr || out != "" ||
+	if rc != exitCallerErr || out != refusedOut ||
 		!strings.Contains(errOut, "YAML document 2 of the file cannot be read") ||
 		strings.Contains(errOut, "refused by Prometheus' config loader") {
 		t.Fatalf("prometheus: rc=%d stdout=%q stderr=%q", rc, out, errOut)
@@ -71,7 +95,7 @@ func TestPrometheusRefusesScrapeConfigFiles(t *testing.T) {
 	t.Parallel()
 	rc, out, errOut := runPrometheus(t, "scrape_config_files: [sc/a.yml]\n"+
 		"scrape_configs:\n- job_name: inline\n  static_configs: [{targets: ['i:1']}]\n")
-	if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "scrape_config_files [sc/a.yml]") ||
+	if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, "scrape_config_files [sc/a.yml]") ||
 		!strings.Contains(errOut, "da-read does not read these files") {
 		t.Fatalf("rc=%d stdout=%q stderr=%q", rc, out, errOut)
 	}
@@ -106,7 +130,7 @@ func TestNullEntriesAreReadAsTheLoaderReadsThem(t *testing.T) {
 		"scrape_configs:\n- job_name: a\n  kubernetes_sd_configs: [~]\n": "empty or null section in kubernetes_sd_configs",
 	} {
 		rc, out, errOut := runPrometheus(t, in)
-		if rc != exitCallerErr || out != "" || !strings.Contains(errOut, wantErr) {
+		if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, wantErr) {
 			t.Errorf("%q: rc=%d stdout=%q stderr=%q; want %q", in, rc, out, errOut, wantErr)
 		}
 	}

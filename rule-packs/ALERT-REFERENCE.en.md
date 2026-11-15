@@ -28,6 +28,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | ClickHouseReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse replication queue high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:clickhouse_replication_queue:max |
 | ClickHouseHighMemoryUsage | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse memory usage high  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:clickhouse_memory_tracking:max |
 | ClickHouseHighFailedQueryRate | warning | muted | Failed query rate: {{ $value \| printf "%.1f" }} queries/sec | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:clickhouse_failed_queries:rate5m |
+| ClickHouseThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -45,6 +46,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | DB2HighLockWaitTime | warning | muted | [tier] {{ $labels.tenant }}: DB2 lock wait time high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_lock_wait_time:rate5m |
 | DB2HighLockWaitTimeCritical | critical | muted | [tier] {{ $labels.tenant }}: DB2 lock waits at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_lock_wait_time:rate5m |
 | DB2HighSortOverflow | warning | muted | [tier] {{ $labels.tenant }}: DB2 sort overflow ratio high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_sort_overflow_ratio:avg |
+| DB2ThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -63,6 +65,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | ElasticsearchUnassignedShards | warning | muted | [tier] {{ $labels.tenant }}: ES unassigned shards  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_unassigned_shards:count |
 | ElasticsearchPendingTasks | warning | muted | [tier] {{ $labels.tenant }}: ES pending cluster tasks  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_pending_tasks:max |
 | ElasticsearchPendingTasksCritical | critical | muted | [tier] {{ $labels.tenant }}: ES master task backlog at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_pending_tasks:max |
+| ElasticsearchThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -77,6 +80,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | JVMThreadPoolExhaustion | warning | muted | [tier] {{ $labels.tenant }}: thread pool saturation  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_threads:current |
 | JVMThreadPoolExhaustionCritical | critical | muted | [tier] {{ $labels.tenant }}: critical thread exhaustion  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_threads:current |
 | JVMPerformanceDegraded | critical | muted | [tier] {{ $labels.tenant }}: multi-signal JVM degradation  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:jvm_gc_pause:rate5m |
+| JVMThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -89,6 +93,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | KafkaUnderReplicatedPartitions | warning | muted | [tier] {{ $labels.tenant }}: under-replicated partitions  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:sum |
 | KafkaUnderReplicatedPartitionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical under-replication  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:sum |
 | KafkaLowBrokerCount | warning | muted | [tier] {{ $labels.tenant }}: broker count below minimum  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_broker_count:max |
+| KafkaThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -144,6 +149,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | MariaDBRecentRestart | info | muted | Uptime is only {{ $value }}s (< 5 min) | Check alert metrics and review related logs; contact platform team for assistance if needed | mysql_global_status_uptime |
 | MariaDBHighSlowQueries | warning | muted | [tier] {{ $labels.tenant }}: slow query rate elevated  | Check slow query logs, identify optimization candidates; consider parameter tuning | tenant:mysql_slow_queries:rate5m |
 | MariaDBHighAbortedConnections | warning | muted | [tier] {{ $labels.tenant }}: aborted connection rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mysql_aborted_connections:rate5m |
+| MariaDBThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -161,6 +167,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | MongoDBHighOperations | warning | muted | [tier] {{ $labels.tenant }}: MongoDB operation rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_opcounters:rate5m |
 | MongoDBHighPageFaults | warning | muted | [tier] {{ $labels.tenant }}: MongoDB page fault rate high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_page_faults:rate5m |
 | MongoDBConnectionSaturation | warning | muted | [tier] {{ $labels.tenant }}: MongoDB connection pool near saturation  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_connection_usage:ratio |
+| MongoDBThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -174,6 +181,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | NginxRequestRateSpikeCritical | critical | muted | [tier] {{ $labels.tenant }}: critical request rate  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:nginx_requests:rate5m |
 | NginxConnectionBacklog | warning | muted | [tier] {{ $labels.tenant }}: connection backlog building  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:nginx_connections_waiting:max |
 | NginxConnectionBacklogCritical | critical | muted | [tier] {{ $labels.tenant }}: critical connection backlog  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:nginx_connections_waiting:max |
+| NginxThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -201,6 +209,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | OracleHighProcessCount | warning | muted | [tier] {{ $labels.tenant }}: Oracle process count high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_process_count:max |
 | OracleHighPGAUsage | warning | muted | [tier] {{ $labels.tenant }}: Oracle PGA usage high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_pga_allocated_bytes:max |
 | OracleHighSessionUtilization | warning | muted | [tier] {{ $labels.tenant }}: Oracle session limit approaching  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_session_utilization:ratio |
+| OracleThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -232,6 +241,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | RabbitMQLowConsumers | warning | muted | [tier] {{ $labels.tenant }}: RabbitMQ consumer count low  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_consumers:max |
 | RabbitMQHighUnackedMessages | warning | muted | [tier] {{ $labels.tenant }}: unacked messages piling up  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_unacked_messages:max |
 | RabbitMQHighUnackedMessagesCritical | critical | muted | [tier] {{ $labels.tenant }}: critical unacked backlog  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_unacked_messages:max |
+| RabbitMQThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---
 
@@ -248,5 +258,6 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | RedisReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: Redis replication lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_replication_lag:max |
 | RedisReplicationLagCritical | critical | muted | [tier] {{ $labels.tenant }}: Redis replica far behind  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_replication_lag:max |
 | RedisLowHitRatio | warning | muted | [tier] {{ $labels.tenant }}: low cache hit ratio  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_keyspace_hit_ratio:avg |
+| RedisThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---

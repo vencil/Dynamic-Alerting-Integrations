@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 
 import _lib_exporter_presence as presence  # noqa: E402
+from _lib_consumer_read import RULE_PACKS  # noqa: E402
 import _lib_metric_sources as ms  # noqa: E402
 
 SCHEMA = ROOT / "docs" / "schemas" / "tenant-config.schema.json"
@@ -107,12 +108,15 @@ def test_cli_check_mode_reports_fresh(capsys):
 
 def test_cli_check_mode_reports_stale(tmp_path):
     texts = {}
-    for pack in (presence.LIVENESS_PACK, presence.PLATFORM_PACK):
+    # Every pack the generator writes must be under --root (#1200 D-A A3 added
+    # <prefix>ThresholdNotConfigured to the packs with unset keys).
+    for pack in sorted({p for p, _alert in presence.alert_exprs()}):
         dst = tmp_path / pack
         dst.parent.mkdir(parents=True, exist_ok=True)
         texts[dst] = (ROOT / pack).read_text(encoding="utf-8")
-        dst.write_text(texts[dst].replace('mysql_up{job="tenant-exporters"}', "mysql_up"),
-                       encoding="utf-8")
+        stale = (texts[dst].replace('mysql_up{job="tenant-exporters"}', "mysql_up")
+                 if pack in (presence.LIVENESS_PACK, presence.PLATFORM_PACK) else texts[dst])
+        dst.write_text(stale, encoding="utf-8")
     assert presence.main(["--root", str(tmp_path)]) == 1
     assert presence.main(["--root", str(tmp_path), "--write"]) == 0
     for dst, text in texts.items():
@@ -186,3 +190,89 @@ def test_federation_split_central_absent_fires(tmp_path):
     run = subprocess.run(["promtool", "test", "rules", str(test)], capture_output=True,
                          text=True, encoding="utf-8", timeout=120, check=False)
     assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+
+
+# --- <prefix>ThresholdNotConfigured (#1200 D-A A3) --------------------------
+
+def _pack_alerts(pack: str) -> list[str]:
+    return [r["alert"] for r in _rules(ROOT / RULE_PACKS.directory / RULE_PACKS.file_name(pack)) if "alert" in r]
+
+
+def test_the_unset_notice_is_on_exactly_the_packs_with_unset_keys():
+    """Every pack reading a key the platform ships no value for carries
+    <prefix>ThresholdNotConfigured, and no other pack carries one — both
+    directions, derived from the registry. A pack without it would leave its
+    unset keys silent; a pack with it and no such key would join a series the
+    exporter never serves."""
+    packs = set(presence.unset_notice_packs())
+    assert packs, "the registry has no operator key: the derivation is broken"
+    carrying = set()
+    for path in RULE_PACKS.files_in(ROOT / RULE_PACKS.directory):
+        if any(r.get("alert", "").endswith(presence.UNSET_NOTICE_SUFFIX) for r in _rules(path)):
+            carrying.add(path.stem.removeprefix("rule-pack-"))
+    assert carrying == packs
+    for pack in packs:
+        assert _pack_alerts(pack).count(presence.unset_notice_alert(pack)) == 1, pack
+
+
+def test_alert_prefix_is_the_packs_own():
+    """Each ALERT_PREFIX entry is the prefix every alert of that pack already
+    carries, so the generated name follows the pack's convention."""
+    for pack, prefix in presence.ALERT_PREFIX.items():
+        alerts = _pack_alerts(pack)
+        assert alerts, pack
+        assert all(a.startswith(prefix) for a in alerts), (pack, [a for a in alerts if not a.startswith(prefix)])
+
+
+def test_every_unset_notice_pack_has_a_presence_metric():
+    for pack in presence.unset_notice_packs():
+        assert presence.pack_presence(pack), pack
+
+
+def test_app_presence_is_not_a_db_type():
+    """APP_PRESENCE holds the packs whose kind a tenant cannot declare as
+    db_type; a row there that is also a db_type would have two sources."""
+    assert set(presence.APP_PRESENCE).isdisjoint(_schema_enum())
+
+
+def test_a_pack_with_unset_keys_and_no_presence_metric_is_refused(monkeypatch):
+    monkeypatch.setattr(presence, "APP_PRESENCE", {})
+    with pytest.raises(ValueError, match="no presence metric"):
+        presence.unset_notice_expr("jvm")
+
+
+def test_threshold_not_configured_joins_the_pack_on_tenant_outside_maintenance():
+    expr = presence.unset_notice_expr("redis")
+    assert 'max without(instance, pod) (user_threshold_unset{pack="redis"})' in expr
+    assert "and on(tenant)" in expr
+    assert 'redis_up{job="tenant-exporters"}' in expr
+    assert 'unless on(tenant)\n(user_state_filter{filter="maintenance"} == 1)' in expr
+
+
+def _shipped_state_filter_copies() -> dict[str, dict]:
+    """Every place the platform ships `state_filters` from, as parsed."""
+    sys.path.insert(0, str(ROOT / "scripts" / "tools" / "ops"))
+    import init_project  # noqa: PLC0415
+    import scaffold_tenant  # noqa: PLC0415
+
+    def load(rel: str) -> dict:
+        return yaml.safe_load((ROOT / rel).read_text(encoding="utf-8"))
+
+    copies = {
+        "helm values": load("helm/threshold-exporter/values.yaml")["thresholdConfig"]["state_filters"],
+        "environments/local": load("environments/local/threshold-exporter.yaml")["thresholdConfig"]["state_filters"],
+        "dev conf.d": load("components/threshold-exporter/config/conf.d/_defaults.yaml")["state_filters"],
+        "scaffold": scaffold_tenant.RULE_PACKS["kubernetes"]["state_filters"],
+    }
+    copies["init"] = init_project._defaults_file(["kubernetes"], "monitoring").data["state_filters"]
+    return copies
+
+
+def test_every_shipped_state_filter_copy_offers_the_unset_notice_off():
+    """The unset notice is opt-in (owner 2026-11-15): every root the platform
+    ships carries the `unset_thresholds` filter — without it a tenant cannot
+    subscribe — and every copy defaults it off."""
+    for where, filters in _shipped_state_filter_copies().items():
+        f = filters.get("unset_thresholds")
+        assert f, f"{where}: no unset_thresholds state filter"
+        assert f.get("default_state") == "disable", (where, f)

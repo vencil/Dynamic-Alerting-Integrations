@@ -107,18 +107,40 @@ func TestRunPromQLSelectors(t *testing.T) {
 		t.Fatalf("output %s", out.String())
 	}
 
+	// An empty list is an answer about no expressions.
+	var empty bytes.Buffer
+	if rc := run([]string{"promql-selectors", maintenanceSeries, "-"}, strings.NewReader(`[]`), &empty, &errb); rc != exitOK ||
+		empty.String() != `{"documents":[[]]}`+"\n" {
+		t.Fatalf("[]: rc %d stdout %q", rc, empty.String())
+	}
+
+	// An expression the parser refuses is the input refused: the refusal
+	// document. A <series> it does not take, standard input that is not a
+	// JSON array of strings, a file argument are the caller's errors: no
+	// document (#3943).
 	for _, bad := range []struct {
-		args []string
-		in   string
+		args    []string
+		in      string
+		refused bool
 	}{
-		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up +"]`},
-		{[]string{"promql-selectors", maintenanceSeries, "-"}, `{"not": "a list"}`},
-		{[]string{"promql-selectors", `{filter="x"}`, "-"}, `["up"]`},
-		{[]string{"promql-selectors", maintenanceSeries, "file.yaml"}, `["up"]`},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up +"]`, true},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `{"not": "a list"}`, false},
+		// json.Unmarshal reads a null list as none and a null element as "":
+		// framing, not an expression the parser refuses.
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `null`, false},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `[null]`, false},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up", 1]`, false},
+		{[]string{"promql-selectors", `{filter="x"}`, "-"}, `["up"]`, false},
+		{[]string{"promql-selectors", `up{a=~"x"}`, "-"}, `["up +"]`, false},
+		{[]string{"promql-selectors", maintenanceSeries, "file.yaml"}, `["up"]`, false},
 	} {
 		var o, e bytes.Buffer
-		if rc := run(bad.args, strings.NewReader(bad.in), &o, &e); rc != exitCallerErr {
-			t.Errorf("%v with %s: rc %d, want %d", bad.args, bad.in, rc, exitCallerErr)
+		want := ""
+		if bad.refused {
+			want = refusedOut
+		}
+		if rc := run(bad.args, strings.NewReader(bad.in), &o, &e); rc != exitCallerErr || o.String() != want {
+			t.Errorf("%v with %s: rc %d stdout %q, want rc %d stdout %q", bad.args, bad.in, rc, o.String(), exitCallerErr, want)
 		}
 	}
 }

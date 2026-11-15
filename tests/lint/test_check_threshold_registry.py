@@ -562,6 +562,55 @@ def test_the_builtin_table_renders_armed_keys_only_sorted(tmp_path):
     assert lib.BUILTIN_DEFAULTS_GO_ID in (lib.check_builtin_defaults_go(doc, str(go)) or "")
 
 
+def test_the_committed_unset_keys_table_is_what_the_registry_generates():
+    """Head: the generated Go table is fresh and holds exactly the operator
+    keys of both tiers (#1200 D-A A3), with their packs."""
+    doc = lib.load_registry()
+    assert lib.check_unset_keys_go(doc) is None
+    table = lib.unset_notice_keys(doc)
+    assert table == {k: e["pack"] for k, e in doc["keys"].items()
+                     if e.get("arming") == "operator"}
+    assert not any(k.endswith("_critical") for k in table)
+    assert {e["tier"] for k, e in doc["keys"].items() if k in table} == {
+        "defaults", "optional_overrides"}
+
+
+def test_an_operator_key_armed_without_regen_leaves_the_unset_table_stale(tmp_path):
+    """Promoting an operator key to `default` takes it out of the exporter's
+    unset judgement; without --regen that is red in --ci."""
+    def promote(doc):
+        key = next(k for k, e in sorted(doc["keys"].items()) if e.get("arming") == "operator")
+        doc["keys"][key]["arming"] = "default"
+    errors = gate.run_check(registry_path=_write_registry_variant(tmp_path, promote))["errors"]
+    assert any(e.startswith("stale-surface:") and lib.UNSET_KEYS_GO_ID in e for e in errors), errors
+
+
+def test_a_missing_unset_keys_table_is_stale(tmp_path):
+    errors = gate.run_check(
+        surface_paths={lib.UNSET_KEYS_GO_ID: str(tmp_path / "gone.go")})["errors"]
+    assert any(e.startswith("stale-surface:") and lib.UNSET_KEYS_GO_ID in e
+               and "does not exist" in e for e in errors), errors
+
+
+def test_the_unset_keys_table_renders_operator_keys_only_sorted(tmp_path):
+    doc = {"keys": {
+        "zz_op": {"arming": "operator", "pack": "zz"},
+        "aa_op": {"arming": "operator", "pack": "aa"},
+        "mm_armed": {"arming": "default", "pack": "mm", "value": 1},
+        "aa_op_critical": {"critical_of": "aa_op", "pack": "aa"},
+    }}
+    text = lib.render_unset_keys_go(doc)
+    assert ('var unsetThresholdKeys = []unsetThresholdKey{\n'
+            '\t{"aa_op", "aa"},\n'
+            '\t{"zz_op", "zz"},\n}\n') in text, text
+    assert "mm_armed" not in text and "aa_op_critical" not in text
+    go = tmp_path / "gen.go"
+    go.write_text(text, encoding="utf-8")
+    assert lib.check_unset_keys_go(doc, str(go)) is None
+    go.write_text(text.replace('"zz"}', '"yy"}'), encoding="utf-8")
+    assert lib.UNSET_KEYS_GO_ID in (lib.check_unset_keys_go(doc, str(go)) or "")
+
+
 def test_an_empty_builtin_table_renders_an_empty_literal():
     text = lib.render_builtin_defaults_go({"keys": {"k": {"arming": "operator", "value": 1}}})
     assert "var builtinDefaultEntries = []builtinDefaultEntry{}\n" in text, text

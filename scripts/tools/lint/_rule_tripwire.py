@@ -189,6 +189,8 @@ def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
     for reg in _lib_consumer_read.CHART_VALUES_RULES:
         registered.setdefault(reg.values, []).append(reg.key_path)
     todo = [rel for rel in tracked_yaml if rel not in skip]
+    # A file gone from the work tree (deleted, not yet staged) or unreadable
+    # is refused by the reader itself (#3943), and rings below by name.
     readings = _lib_consumer_read.any_yaml_documents_of(
         [str(Path(repo_root, rel)) for rel in todo], keep_refusals=True)
     ask = ("declare it in _lib_consumer_read (a RULE_SOURCES entry, or a "
@@ -196,7 +198,8 @@ def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
            "(NOT_RULE_FILES, with the reason)")
     alarms: "dict[str, str]" = {}
     inner: "list[tuple[str, str]]" = []          # (rel, a text inside it)
-    for rel, docs in zip(todo, readings.values()):
+    for rel in todo:
+        docs = readings[str(Path(repo_root, rel))]
         try:
             raw = Path(repo_root, rel).read_bytes()
         except OSError as e:

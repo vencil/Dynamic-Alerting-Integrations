@@ -329,7 +329,7 @@ func runGroupProperty(t *testing.T, l loaderRun) {
 		rc, out, errOut := l.run(t, in)
 		if loadErr != nil {
 			refused++
-			if rc != exitCallerErr || out != "" {
+			if rc != exitCallerErr || out != refusedOut {
 				t.Errorf("%s: %s refuses (%v) but rc=%d stdout=%q", c, l.name, loadErr, rc, out)
 			}
 			continue

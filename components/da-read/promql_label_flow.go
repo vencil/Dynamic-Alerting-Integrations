@@ -42,21 +42,11 @@ import (
 // "dropped": some series it yields lack it. "unknown": this reading cannot
 // tell (a function that writes the label, one it does not model, a record
 // cycle) — a caller that needs a proof refuses it.
-func readPromQLLabelFlow(label string, data []byte) ([]byte, error) {
-	if label == "" {
-		return nil, fmt.Errorf("label is empty")
-	}
-	var in struct {
-		Expressions []string `json:"expressions"`
-		Records     map[string][]struct {
-			Expr   string            `json:"expr"`
-			Labels map[string]string `json:"labels"`
-		} `json:"records"`
-		Aliases []string `json:"aliases"`
-	}
-	if err := json.Unmarshal(data, &in); err != nil || in.Expressions == nil {
-		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
-	}
+//
+// An expression or record the parser refuses refuses the input (rc 2, the
+// refusal document); an empty <label> or standard input that is not the
+// object above is the caller's error (labelFlowRequestOf).
+func readPromQLLabelFlow(label string, in *labelFlowRequest) ([]byte, error) {
 	f := &flowReader{label: label, records: map[string][]recordDef{}, visiting: map[string]bool{},
 		aliases: map[string]bool{}}
 	for _, a := range in.Aliases {
@@ -64,7 +54,7 @@ func readPromQLLabelFlow(label string, data []byte) ([]byte, error) {
 	}
 	for name, defs := range in.Records {
 		for _, d := range defs {
-			node, err := ruleParser.ParseExpr(d.Expr)
+			node, err := parseExpr(d.Expr)
 			if err != nil {
 				return nil, fmt.Errorf("record %s: %w", name, err)
 			}
@@ -73,7 +63,7 @@ func readPromQLLabelFlow(label string, data []byte) ([]byte, error) {
 	}
 	out := make([][]setMatch, 0, len(in.Expressions))
 	for i, e := range in.Expressions {
-		node, err := ruleParser.ParseExpr(e)
+		node, err := parseExpr(e)
 		if err != nil {
 			return nil, fmt.Errorf("expression %d: %w", i, err)
 		}
@@ -82,6 +72,74 @@ func readPromQLLabelFlow(label string, data []byte) ([]byte, error) {
 	return json.Marshal(struct {
 		Documents [][][]setMatch `json:"documents"`
 	}{Documents: [][][]setMatch{out}})
+}
+
+// labelFlowRequest is promql-label-flow's standard input.
+type labelFlowRequest struct {
+	Expressions []string `json:"expressions"`
+	Records     map[string][]struct {
+		Expr   string            `json:"expr"`
+		Labels map[string]string `json:"labels"`
+	} `json:"records"`
+	Aliases []string `json:"aliases"`
+}
+
+// labelFlowRequestOf reads the caller's part of a promql-label-flow run: the
+// <label> argument and the JSON framing of standard input. ⛔ Both are the
+// caller's, not the input's (#3943): an error here is a caller error (exit
+// 2, no refusal document), never an answer about the expressions.
+func labelFlowRequestOf(label string, data []byte) (*labelFlowRequest, error) {
+	if label == "" {
+		return nil, fmt.Errorf("label is empty")
+	}
+	var in labelFlowRequest
+	err := json.Unmarshal(data, &in)
+	if err == nil {
+		in.Expressions, err = labelFlowFraming(data)
+	}
+	if err != nil {
+		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
+	}
+	return &in, nil
+}
+
+// labelFlowFraming checks the strings the caller writes in a
+// promql-label-flow request and returns "expressions" (jsonStrings). ⛔
+// json.Unmarshal reads a null where a string goes as "" (#3943): a null
+// "expr" of a record would reach the parser and refuse the input over the
+// caller's framing, a null alias would pass unseen. So "expressions" must be
+// an array of strings, every record's "expr" a string, and "aliases", when
+// given, an array of strings; anything else is the caller's error. A label
+// value of a record's "labels" is left as json.Unmarshal reads it: null is
+// "", which is what Prometheus reads `labels: {x: ~}` as (remove x).
+func labelFlowFraming(data []byte) ([]string, error) {
+	var framing struct {
+		Expressions json.RawMessage `json:"expressions"`
+		Records     map[string][]struct {
+			Expr json.RawMessage `json:"expr"`
+		} `json:"records"`
+		Aliases json.RawMessage `json:"aliases"`
+	}
+	if err := json.Unmarshal(data, &framing); err != nil {
+		return nil, err
+	}
+	exprs, err := jsonStrings(framing.Expressions)
+	if err != nil {
+		return nil, fmt.Errorf("expressions: %w", err)
+	}
+	for name, defs := range framing.Records {
+		for i, d := range defs {
+			if _, err := jsonString(d.Expr); err != nil {
+				return nil, fmt.Errorf("records[%q][%d].expr: %w", name, i, err)
+			}
+		}
+	}
+	if framing.Aliases != nil {
+		if _, err := jsonStrings(framing.Aliases); err != nil {
+			return nil, fmt.Errorf("aliases: %w", err)
+		}
+	}
+	return exprs, nil
 }
 
 // flowReader judges label flow for one label, resolving recording rules.

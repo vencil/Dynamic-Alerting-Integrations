@@ -298,7 +298,7 @@ func (r *cutReading) fingerprint(tenant string) string {
 // readCut reads cfg (one part of the day) through keyedRowsWith, silently.
 // A Gather failure is a reading (failed), not an error.
 func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet bool) (*cutReading, error) {
-	served, _, series, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name, quiet)
+	served, _, series, reserved, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name, quiet)
 	var ng *notGatherableError
 	if errors.As(err, &ng) {
 		return &cutReading{failed: true}, nil
@@ -307,15 +307,22 @@ func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet boo
 		return nil, err
 	}
 	r := &cutReading{rows: map[string]string{}, series: series}
+	parts := map[string][]string{}
 	for t := range served {
-		var parts []string
 		for k, rows := range served[t] {
 			for _, row := range rows {
-				parts = append(parts, "kept\x00"+k+"\x00"+rowOrder(row))
+				parts[t] = append(parts[t], "kept\x00"+k+"\x00"+rowOrder(row))
 			}
 		}
-		sort.Strings(parts)
-		r.rows[t] = strings.Join(parts, "\x01")
+	}
+	// #1200 D-A A3: a user_threshold_unset series is served output too, so a
+	// disable that ends a subscribed tenant's notice switches something off.
+	for _, u := range reserved.Unset {
+		parts[u.Tenant] = append(parts[u.Tenant], "unset\x00"+u.Key+"\x00"+u.Fix)
+	}
+	for t, p := range parts {
+		sort.Strings(p)
+		r.rows[t] = strings.Join(p, "\x01")
 	}
 	return r, nil
 }

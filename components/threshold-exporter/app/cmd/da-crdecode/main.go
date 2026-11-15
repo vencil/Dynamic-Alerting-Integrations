@@ -102,7 +102,17 @@
 // Exit codes:
 //
 //	0  decoded; JSON on stdout
-//	2  caller error: bad arguments, the file cannot be read, a `---` line
+//	2  the input is refused, or da-crdecode could not answer. Only a refusal
+//	   prints the refusal document on stdout (#3943), the one da-read prints
+//	   too:
+//
+//	     {"answer": "refused"}
+//
+//	   It holds only those constants, never text of the input; the reason is
+//	   on stderr. Bad arguments (the usage), a file that cannot be opened,
+//	   standard input that cannot be read or stdout that cannot be written
+//	   print no refusal document: they are no answer about the input. A
+//	   refusal is: a `---` line
 //	   carries content, the conversion refuses a document (the reason is on
 //	   stderr, with the line the document starts on when the file holds
 //	   several), a piece between two
@@ -144,6 +154,41 @@ type output struct {
 	Reading         string            `json:"reading"`
 }
 
+// answerRefused is the `answer` of the refusal document (#3943): printed on
+// stdout, with exit 2, only when the input is refused — never for a usage
+// error, a file that cannot be opened or an I/O failure, which exit 2 too.
+// The caller (scripts/tools/_lib_consumer_read.py, REFUSAL_KEY / REFUSED)
+// takes exit 2 as a refusal only with this document. da-read prints the
+// same document; tests/shared/test_reader_refusal_document.py holds both
+// binaries to the caller's definition. ⛔ Constants only: no text of the
+// input (ADR-036, #3703).
+const answerRefused = "refused"
+
+// refusal is the refusal document.
+type refusal struct {
+	Answer string `json:"answer"`
+}
+
+// refuse writes the refusal document and exits 2.
+func refuse(stdout, stderr io.Writer) int {
+	b, err := json.Marshal(refusal{Answer: answerRefused})
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	return write(stdout, stderr, append(b, '\n'), exitCallerErr)
+}
+
+// write prints *out* and returns *rc*; exit 2, with nothing more, when
+// stdout cannot be written.
+func write(stdout, stderr io.Writer, out []byte, rc int) int {
+	if _, err := stdout.Write(out); err != nil {
+		fmt.Fprintf(stderr, "%s: writing stdout: %v\n", programName, err)
+		return exitCallerErr
+	}
+	return rc
+}
+
 // The values of output.Reading.
 const (
 	readingManifest = "manifest"
@@ -174,7 +219,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			"`-` reads standard input. Every document must be a Kubernetes object (a mapping "+
 			"with a non-empty string `kind`, whose `apiVersion` and `metadata` decode as kubectl reads them; "+
 			"a list is replaced by its items) unless %s is given, which reads YAML "+
-			"that is not a manifest (a ConfigMap data value, a rule file, Helm values).\n", anyShapeFlag)
+			"that is not a manifest (a ConfigMap data value, a rule file, Helm values). "+
+			"Exit 2 when the input is refused, with {\"answer\": \"refused\"} on stdout; exit 2 "+
+			"without it when da-crdecode could not answer (bad arguments, a file that cannot be "+
+			"opened, an I/O error).\n", anyShapeFlag)
 		return exitCallerErr
 	}
 	name := args[0]
@@ -193,7 +241,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	pieces, err := splitDocuments(data)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, name, err)
-		return exitCallerErr
+		return refuse(stdout, stderr)
 	}
 	result := output{Documents: []json.RawMessage{}, DiffersFromText: [][]difference{}, Reading: readingManifest}
 	if anyShape {
@@ -212,7 +260,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			} else {
 				fmt.Fprintf(stderr, "%s: %s: %v\n", programName, name, err)
 			}
-			return exitCallerErr
+			return refuse(stdout, stderr)
 		}
 		if skip {
 			continue
@@ -225,12 +273,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, name, err)
 		return exitCallerErr
 	}
-	out = append(out, '\n')
-	if _, err := stdout.Write(out); err != nil {
-		fmt.Fprintf(stderr, "%s: writing stdout: %v\n", programName, err)
-		return exitCallerErr
-	}
-	return exitOK
+	return write(stdout, stderr, append(out, '\n'), exitOK)
 }
 
 // piece is the text between two `---` lines and the line it starts on.
