@@ -20,7 +20,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import policy_opa_bridge as pob  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
@@ -548,14 +548,14 @@ def _no_tenant_tree(root):
 class TestMain:
     def test_dir_without_config_files_is_caller_error(self, monkeypatch, tmp_path, capsys):
         """#2115 0-B 行為變更：沒有任何設定檔的目錄（原本 rc 0「No tenant configs」）
-        現在照 da-guard 的判定 rc 2、一行 ERROR、沒有 traceback。"""
+        現在 rc 2、一行 ERROR 點名 --config-dir、沒有 traceback。"""
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(CallerError) as exc:  # rc 2 through `run()`
             _as_run(pob.main(["--config-dir", str(tmp_path), "--dry-run"]))
-        assert exc.value.code == EXIT_CALLER_ERROR
-        captured = capsys.readouterr()
-        assert captured.err.startswith("ERROR: da-guard served-values exited 2"), captured.err
-        assert captured.out == ""
+        # #3902: the declared input's own refusal, naming the flag.
+        assert exc.value.reason == "input_empty"
+        assert str(exc.value).startswith(f"--config-dir {tmp_path}: selects nothing"), exc.value
+        assert capsys.readouterr().out == ""
 
     def test_no_tenant_configs_returns_zero(self, monkeypatch, tmp_path, capsys):
         # Empty config-dir → no tenant configs → return 0 with informational msg.
@@ -599,6 +599,7 @@ class TestMain:
     def test_dry_run_prints_input_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         # Stub load_tenant_inputs to return one tenant.
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})
@@ -612,6 +613,7 @@ class TestMain:
 
     def test_no_url_no_path_returns_caller_error(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
@@ -622,6 +624,7 @@ class TestMain:
 
     def test_opa_url_path_evaluates_via_rest(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
@@ -648,6 +651,7 @@ class TestMain:
 
     def test_policy_path_evaluates_via_binary(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
@@ -674,6 +678,7 @@ class TestMain:
     def test_ci_with_errors_returns_one(self, monkeypatch, tmp_path, capsys, extra):
         """Under --json too: the document's status is the exit (#3216)."""
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
@@ -692,6 +697,7 @@ class TestMain:
 
     def test_ci_with_only_warnings_returns_zero(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
@@ -708,6 +714,7 @@ class TestMain:
 
     def test_json_output_emits_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
@@ -732,6 +739,7 @@ class TestMain:
 
     def test_zh_no_url_no_path_error_message(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
+        _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})

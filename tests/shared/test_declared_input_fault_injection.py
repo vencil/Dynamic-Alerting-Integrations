@@ -95,6 +95,16 @@ ROWS = ([("D", rid, s, f, spec, argv) for rid, s, f, spec, argv, _r in _T._decla
         + [("F", rid, s, f, spec, argv)
            for rid, s, f, spec, argv, _r in _T._declared_inputs(documents=True)])
 
+#: Row id → further rows of the same declared input (#3902): the tool takes
+#: another path over the same flag (deprecate's `--subtree`: the reader cut
+#: from the root's document, no carrier check after the writes). Each is a
+#: row ``"<id> [<name>]"`` and must have its own ``LIVE`` entry with an argv
+#: (`test_every_variant_row_has_its_own_argv`) — else it would run the row
+#: it is a variant of a second time.
+VARIANTS = {"deprecate --config-dir": ("subtree",)}
+ROWS += [(kind, f"{rid} [{name}]", script, flag, spec, argv)
+         for kind, rid, script, flag, spec, argv in list(ROWS) for name in VARIANTS.get(rid, ())]
+
 _SERVED_CHAIN = REPO / "tests" / "golden" / "fixtures" / "served-chain" / "conf.d"
 _RULE_PACK = REPO / "rule-packs" / "rule-pack-mariadb.yaml"
 
@@ -599,6 +609,60 @@ LIVE.update({
 })
 
 
+def _chain_with(value: str):
+    """The served-chain tree with tenant-served-chain's mysql_connections at *value*."""
+    def build(dst: pathlib.Path) -> None:
+        shutil.copytree(_SERVED_CHAIN, dst)
+        (dst / "db" / "mariadb" / "tenants.yaml").write_text(
+            f'tenants:\n  tenant-served-chain:\n    mysql_connections: "{value}"\n',
+            encoding="utf-8")
+    return build
+
+
+#: A root with one subtree (`team/`) that still holds the metric — in the
+#: subtree's carrier and in its tenant file — and the same tree without it.
+_SUBTREE_CONFD = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 70\n  some_metric: 5\n",
+    "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: \"90\"\n",
+    "team/_defaults.yaml": "defaults:\n  some_metric: \"7\"\n",
+    "team/tenant-a.yaml": "tenants:\n  tenant-a:\n    some_metric: \"80\"\n",
+}
+_SUBTREE_CONFD_MIN = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+    "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: \"90\"\n",
+    "team/_defaults.yaml": "defaults:\n  mysql_connections: \"7\"\n",
+    "team/tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"80\"\n",
+}
+
+# ── #3902: the conf.d trees da-guard reads, declared ──
+LIVE.update({
+    # One threshold changed between the two trees, against none.
+    "backtest --baseline": {
+        "argv": ["--config-dir", "{BOX}/cur", "--baseline", "{D}", "--prometheus", "{PROM}",
+                 "--json"],
+        "box": {"cur": _copy_tree(_SERVED_CHAIN)},
+        "live": _chain_with("50"), "minimal": _copy_tree(_SERVED_CHAIN),
+    },
+    "backtest --config-dir": {
+        "argv": ["--config-dir", "{D}", "--baseline", "{BOX}/base", "--prometheus", "{PROM}",
+                 "--json"],
+        "box": {"base": _copy_tree(_SERVED_CHAIN)},
+        "live": _chain_with("50"), "minimal": _copy_tree(_SERVED_CHAIN),
+    },
+    # The pre-check of a tenant that is there, with and without a neighbour.
+    "offboard --config-dir": {
+        "live": _files(_STATE_CONFD),
+        "minimal": _files({k: v for k, v in _STATE_CONFD.items() if k != "tenant-b.yaml"}),
+    },
+    # The subtree plane: its carrier is read by `carrier_health_at`, and no
+    # later read of it (the root plane's check after the writes) stands behind.
+    "deprecate --config-dir [subtree]": {
+        "argv": ["--config-dir", "{D}", "--subtree", "team", "some_metric"],
+        "live": _files(_SUBTREE_CONFD), "minimal": _files(_SUBTREE_CONFD_MIN),
+    },
+})
+
+
 def _empty_vector(_path: str, _params: dict) -> dict:
     return {"status": "success", "data": {"resultType": "vector", "result": []}}
 
@@ -650,6 +714,15 @@ class _Prometheus:
 def test_every_live_override_is_a_row():
     rows = {r[1] for r in ROWS}
     assert not set(LIVE) - rows, f"LIVE names no row: {sorted(set(LIVE) - rows)}"
+
+
+def test_every_variant_row_has_its_own_argv():
+    rows = {r[1] for r in ROWS}
+    for rid, names in VARIANTS.items():
+        assert rid in rows, f"VARIANTS names no row: {rid}"
+        for name in names:
+            assert "argv" in LIVE.get(f"{rid} [{name}]", {}), (
+                f"{rid} [{name}]: a variant without its own LIVE argv runs {rid} twice")
 
 
 # ── running a row ────────────────────────────────────────────────────────
@@ -1057,3 +1130,47 @@ def test_the_refusal_is_one_line_whatever_the_path_holds(tmp_path, fresh_declara
     with pytest.raises(InputChanged) as exc:
         pc.refuse_changed(root, "x\n\x1b[31my")
     assert "\n" not in str(exc.value) and "\x1b" not in str(exc.value), str(exc.value)
+
+
+def test_a_directory_of_a_declared_tree_is_refused_as_that_tree(tmp_path, fresh_declarations):
+    """#3902: a directory below a declared tree, read on its own (deprecate's
+    `--subtree`: `da-guard key-refs` runs on it), is that tree — its refusal
+    after the tree changed names the flag; with the tree as it was judged the
+    refusal is the directory's own (no raise). Looked up by the exact root
+    only, a vanished subtree was a "not checked" run that went on."""
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    root = tmp_path / "conf.d"
+    (root / "team").mkdir(parents=True)
+    (root / "team" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    pc.record_judgement(root, "--config-dir", "en", ["team/t.yaml"])
+    pc.refuse_changed(root / "team", "da-guard key-refs: no .yaml files")  # as judged
+    assert not pc.judged(root / "team")  # the judgement itself stays the root's
+    (root / "team" / "t.yaml").unlink()
+    with pytest.raises(InputChanged, match=f"^--config-dir {re.escape(str(root))}: changed"):
+        pc.refuse_changed(root / "team", "da-guard key-refs: no .yaml files")
+
+
+def test_a_file_under_two_declared_trees_is_the_inner_ones(tmp_path, fresh_declarations):
+    """#3902: with one declared tree inside another (backtest's --baseline
+    below its --config-dir), a file gone is named by the NEAREST tree — by
+    `refuse_gone` as by `refuse_changed`, whatever order they were declared in."""
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    outer, inner = tmp_path / "conf.d", tmp_path / "conf.d" / "base"
+    inner.mkdir(parents=True)
+    (inner / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    gone = FileNotFoundError(2, "No such file or directory")
+    for order in ((outer, inner), (inner, outer)):
+        for name in ("_DECLARED", "_JUDGED_AS", "_GIVEN"):
+            getattr(pc, name).clear()
+        (inner / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+        for tree in order:
+            pc.record_judgement(tree, "--baseline" if tree == inner else "--config-dir", "en",
+                                ["t.yaml"] if tree == inner else ["base/t.yaml"])
+        (inner / "t.yaml").unlink()
+        for refuse in (lambda: pc.refuse_gone(inner / "t.yaml", gone),
+                       lambda: pc.refuse_changed(inner, "gone")):
+            with pytest.raises(InputChanged, match="^--baseline "):
+                refuse()
+

@@ -613,7 +613,7 @@ def _is_guard(handler: str) -> bool:
 # is adding a hand-written exception to the shared rule, and the ticket's
 # whole point was one answer, not twenty-one.
 _HAND_GUARDED: dict[str, tuple[str, str]] = {
-    "ops/backtest_threshold.py": ("_main", "YamlFileError"),  # --json envelope
+    "ops/backtest_threshold.py": ("_backtest", "YamlFileError"),  # --json envelope (#3902: the run, split from _main)
     "ops/policy_engine.py": ("_main", "YamlFileError"),       # --json envelope
 }
 
