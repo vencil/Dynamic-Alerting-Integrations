@@ -78,14 +78,29 @@ func jsonStrings(raw []byte) ([]string, error) {
 	}
 	out := make([]string, len(elems))
 	for i, e := range elems {
-		if len(e) == 0 || e[0] != '"' {
-			return nil, fmt.Errorf("element %d is %s, not a string", i, e)
-		}
-		if err := json.Unmarshal(e, &out[i]); err != nil {
+		s, err := jsonString(e)
+		if err != nil {
 			return nil, fmt.Errorf("element %d: %w", i, err)
 		}
+		out[i] = s
 	}
 	return out, nil
+}
+
+// jsonString decodes *raw* as one JSON string. A missing value (nil), null
+// or any other JSON value is an error, never "" (see jsonStrings).
+func jsonString(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || raw[0] != '"' {
+		if len(raw) == 0 {
+			return "", fmt.Errorf("missing, not a string")
+		}
+		return "", fmt.Errorf("%s is not a string", raw)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", err
+	}
+	return s, nil
 }
 
 type selectorHit struct {

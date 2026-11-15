@@ -145,8 +145,13 @@ def test_a_usage_error_is_no_refusal(row) -> None:
     (["promql-selectors", 'user_state_filter{filter="maintenance"}', "-"], "null"),
     (["promql-selectors", 'user_state_filter{filter="maintenance"}', "-"], "[null]"),
     (["promql-label-flow", "tenant", "-"], json.dumps({"expressions": [None]})),
+    (["promql-label-flow", "tenant", "-"],
+     json.dumps({"expressions": ["up"], "records": {"r": [{"expr": None}]}})),
+    (["promql-label-flow", "tenant", "-"],
+     json.dumps({"expressions": ["up"], "aliases": ["namespace", None]})),
 ], ids=["series-no-metric", "series-regex", "label-flow-framing", "selectors-null",
-        "selectors-null-element", "label-flow-null-element"])
+        "selectors-null-element", "label-flow-null-element", "label-flow-null-record-expr",
+        "label-flow-null-alias"])
 def test_the_callers_argument_is_no_refusal(args, stdin) -> None:
     """The <series> argument and the JSON framing of standard input are the
     caller's: wrong, they are a caller error (no refusal document), even

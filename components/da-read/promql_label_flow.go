@@ -93,22 +93,53 @@ func labelFlowRequestOf(label string, data []byte) (*labelFlowRequest, error) {
 		return nil, fmt.Errorf("label is empty")
 	}
 	var in labelFlowRequest
-	var framing struct {
-		Expressions json.RawMessage `json:"expressions"`
-	}
 	err := json.Unmarshal(data, &in)
 	if err == nil {
-		err = json.Unmarshal(data, &framing)
-	}
-	if err == nil {
-		// "expressions" must be an array of strings, not null or holding one
-		// (jsonStrings): json.Unmarshal reads a null element as "".
-		in.Expressions, err = jsonStrings(framing.Expressions)
+		in.Expressions, err = labelFlowFraming(data)
 	}
 	if err != nil {
 		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
 	}
 	return &in, nil
+}
+
+// labelFlowFraming checks the strings the caller writes in a
+// promql-label-flow request and returns "expressions" (jsonStrings). ⛔
+// json.Unmarshal reads a null where a string goes as "" (#3943): a null
+// "expr" of a record would reach the parser and refuse the input over the
+// caller's framing, a null alias would pass unseen. So "expressions" must be
+// an array of strings, every record's "expr" a string, and "aliases", when
+// given, an array of strings; anything else is the caller's error. A label
+// value of a record's "labels" is left as json.Unmarshal reads it: null is
+// "", which is what Prometheus reads `labels: {x: ~}` as (remove x).
+func labelFlowFraming(data []byte) ([]string, error) {
+	var framing struct {
+		Expressions json.RawMessage `json:"expressions"`
+		Records     map[string][]struct {
+			Expr json.RawMessage `json:"expr"`
+		} `json:"records"`
+		Aliases json.RawMessage `json:"aliases"`
+	}
+	if err := json.Unmarshal(data, &framing); err != nil {
+		return nil, err
+	}
+	exprs, err := jsonStrings(framing.Expressions)
+	if err != nil {
+		return nil, fmt.Errorf("expressions: %w", err)
+	}
+	for name, defs := range framing.Records {
+		for i, d := range defs {
+			if _, err := jsonString(d.Expr); err != nil {
+				return nil, fmt.Errorf("records[%q][%d].expr: %w", name, i, err)
+			}
+		}
+	}
+	if framing.Aliases != nil {
+		if _, err := jsonStrings(framing.Aliases); err != nil {
+			return nil, fmt.Errorf("aliases: %w", err)
+		}
+	}
+	return exprs, nil
 }
 
 // flowReader judges label flow for one label, resolving recording rules.
