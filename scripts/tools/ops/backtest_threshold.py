@@ -526,7 +526,7 @@ def _recipe_view(tenant_values):
     if isinstance(refused, str) and refused.strip() in _EMPTY_REFUSED_RECIPES:
         refused = None
     return json.dumps([tenant_values.values.get("_custom_alerts") or [],
-                       tenant_values.custom_alert_rows or 0, refused], sort_keys=True)
+                       tenant_values.custom_alert_rows, refused], sort_keys=True)
 
 
 def changed_recipe_tenants(trees):

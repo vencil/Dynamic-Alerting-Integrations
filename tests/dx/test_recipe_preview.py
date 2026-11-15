@@ -301,17 +301,14 @@ class TestJudgedByTheExporter:
         assert not isinstance(rp.judge(_THRESHOLD, "shop-a", tmp_path), str)
         assert seen == [("served-values", rp._TIMEOUT), ("compile-custom-alerts", rp._TIMEOUT)]
 
-    def test_a_da_guard_older_than_the_core_is_the_services_fault(self, monkeypatch):
-        """A served-values without `custom_alerts` (an older da-guard) is an
-        error naming the preview's da-guard — not a 500, not the recipe's."""
-        real = rp.tv.load_served_tree
+    def test_a_broken_da_guard_is_the_services_fault(self, monkeypatch):
+        """served-values output this core cannot read (#3961: a document
+        without `custom_alerts` is broken, not older) is an error naming the
+        preview's da-guard — not a 500, not the recipe's."""
+        def broken(*a, **k):
+            raise rp.tv.ServedValuesError("da-guard served-values: broken", None, "", broken=True)
 
-        def old(*a, **k):
-            tree = real(*a, **k)
-            return tree._replace(tenants={t: v._replace(custom_alerts=None)
-                                          for t, v in tree.tenants.items()})
-
-        monkeypatch.setattr(rp.tv, "load_served_tree", old)
+        monkeypatch.setattr(rp.tv, "load_served_tree", broken)
         out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
         assert out["states"][0]["state"] == "error"
         assert out["states"][0]["reason"].startswith("the preview's da-guard cannot judge recipes"), out

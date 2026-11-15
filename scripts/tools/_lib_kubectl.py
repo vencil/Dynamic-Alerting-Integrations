@@ -10,7 +10,7 @@ raises ``KubectlError`` when there is none to read:
   permission, a file the kernel cannot execute, a ``#!`` interpreter that
   does not exist) — nothing was sent to the cluster;
 * kubectl does not finish within the timeout, or is killed by a signal. ⛔
-  For a write (``apply``, ``patch``, ``label``, ``delete``) that says nothing
+  For a write (``apply``, ``patch``, ``replace``, ``label``, ``delete``) that says nothing
   about the cluster: the request may have been sent and applied.
 
 kubectl's stdin is the caller's manifest when one is given; otherwise the
@@ -62,6 +62,23 @@ from typing import Any, Optional, Sequence
 
 import _lib_engine
 from _lib_exitcodes import CallerError
+
+
+#: What a ConfigMap's `data` (with `binaryData`) may total: k8s core
+#: validation (`ValidateConfigMap`: the VALUES summed — `data` as UTF-8,
+#: `binaryData` decoded — keys and metadata not counted,
+#: `> core.MaxSecretSize` -> "may not exceed 1048576 bytes"). A
+#: Secret has the same ceiling. The one copy every tool that writes a
+#: ConfigMap checks against (#3900).
+CONFIGMAP_DATA_LIMIT_BYTES = 1024 * 1024
+
+#: What an object's annotations may total (apimachinery
+#: `TotalAnnotationSizeLimitB`, checked before the `data` rule): a
+#: client-side `kubectl apply` stores the whole object in the
+#: `last-applied-configuration` annotation, so an object over this fails
+#: there with `metadata.annotations: Too long`; `--server-side` and
+#: `kubectl replace` store no such annotation (#3900).
+ANNOTATION_TOTAL_LIMIT_BYTES = 256 * 1024
 
 
 class KubectlError(CallerError):

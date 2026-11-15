@@ -31,6 +31,18 @@ from _platform_fs import symlink_or_skip  # noqa: E402
 
 import silencer_drift_check as sdc
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError  # noqa: E402
+
+
+def _main(argv):
+    """`sdc.main(argv)`, a refused declared input (#3901: a `CallerError`)
+    ended as `run()` ends it: its one line on stderr, rc 2."""
+    import sys
+    try:
+        return sdc.main(argv)
+    except CallerError as exc:
+        print(exc.error_line, file=sys.stderr)
+        return 2
 
 
 # ─── Helpers + fixtures ───────────────────────────────────────────────
@@ -110,7 +122,7 @@ def _silences_refusal(path, rule_pack_file):
 
 
 def test_load_silences_valid(silences_file, rule_pack_file):
-    assert emit_result(sdc.main(["--silences-file", str(silences_file),
+    assert emit_result(_main(["--silences-file", str(silences_file),
                                  "--rule-source", str(rule_pack_file)])) == 0
 
 
@@ -282,14 +294,14 @@ def test_main_exits_2_on_an_unread_rule_source_file_and_exclude_clears_it(tmp_pa
     silences = tmp_path / "s.json"
     silences.write_text("[]", encoding="utf-8")
     argv = ["--silences-file", str(silences), "--rule-source", str(tmp_path / "rules")]
-    assert emit_result(sdc.main(argv)) == 2
+    assert emit_result(_main(argv)) == 2
     out, err = capsys.readouterr()
     assert "Chart.yaml" in out and "--exclude" in out, out
     assert "could not be read" in err
-    assert emit_result(sdc.main([*argv, "--exclude", "Chart.yaml"])) == 0
+    assert emit_result(_main([*argv, "--exclude", "Chart.yaml"])) == 0
     capsys.readouterr()
     # #3216: under --json the report is the document and the exit is still 2
-    assert emit_result(sdc.main([*argv, "--json"])) == 2
+    assert emit_result(_main([*argv, "--json"])) == 2
     assert json.loads(capsys.readouterr().out)["errors"]
 
 
@@ -804,7 +816,7 @@ def test_exit_code_ci_clean_exits_0():
 
 
 def test_main_clean_run(silences_file, rule_pack_file, capsys):
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         ["--silences-file", str(silences_file), "--rule-source", str(rule_pack_file)]
     ))
     assert rc == 0
@@ -835,7 +847,7 @@ def test_main_orphan_text_output(tmp_path, capsys):
     rules = _write(tmp_path / "p.yaml", """
         groups: [{name: g, rules: [{alert: OtherAlert, expr: up}]}]
     """)
-    rc = emit_result(sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)]))
+    rc = emit_result(_main(["--silences-file", str(silences), "--rule-source", str(rules)]))
     out = capsys.readouterr().out
     assert "Orphaned silences" in out
     assert "orph" in out
@@ -866,7 +878,7 @@ def test_main_ci_exits_1_on_orphans(tmp_path, capsys, extra):
     rules = _write(tmp_path / "p.yaml", """
         groups: [{name: g, rules: [{alert: OtherAlert, expr: up}]}]
     """)
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         ["--silences-file", str(silences), "--rule-source", str(rules), "--ci", *extra]
     ))
     assert rc == 1
@@ -875,7 +887,7 @@ def test_main_ci_exits_1_on_orphans(tmp_path, capsys, extra):
 
 
 def test_main_json_output(silences_file, rule_pack_file, capsys):
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         [
             "--silences-file",
             str(silences_file),
@@ -923,7 +935,7 @@ def test_main_text_output_shows_match_coverage(tmp_path, capsys):
                 expr: up
                 labels: {severity: critical}
     """)
-    rc = emit_result(sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)]))
+    rc = emit_result(_main(["--silences-file", str(silences), "--rule-source", str(rules)]))
     out = capsys.readouterr().out
     assert rc == 0
     assert "Match coverage" in out
@@ -960,7 +972,7 @@ def test_main_json_coverage_name_list_is_not_truncated(tmp_path, capsys):
     rules.write_text(
         "groups:\n  - name: g\n    rules:\n" + rule_lines + "\n", encoding="utf-8"
     )
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         ["--silences-file", str(silences), "--rule-source", str(rules), "--json"]
     ))
     assert rc == 0
@@ -993,25 +1005,43 @@ def test_main_missing_rule_source(silences_file, tmp_path, capsys):
     assert f"--rule-source {tmp_path / 'nope'}: " in str(exc.value)
 
 
+def test_a_rule_source_is_judged_as_given_and_reported_normalised(
+        silences_file, rule_pack_file, tmp_path, capsys):
+    """#3901: `--rule-source` is judged as the caller gave it — a file with a
+    trailing slash is no directory (rc 2, named; `Path()` used to drop the
+    slash and read the file) — while the report names the source normalised,
+    as it always did (`./rules/` is `rules`)."""
+    rc = emit_result(_main(["--silences-file", str(silences_file),
+                            "--rule-source", f"{rule_pack_file}/"]))
+    assert rc == 2
+    assert f"ERROR: --rule-source {rule_pack_file}/: " in capsys.readouterr().err
+    spelled = f"{rule_pack_file.parent}/./"
+    rc = emit_result(_main(["--silences-file", str(silences_file), "--rule-source", spelled,
+                            "--json"]))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["rule_source"] == str(rule_pack_file.parent)
+
+
 def test_main_empty_rule_source(silences_file, tmp_path, capsys):
     """Empty (no YAML files) rule source must error explicitly so
     a typo'd --rule-source isn't silently treated as 'all silences
     orphaned'."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         ["--silences-file", str(silences_file), "--rule-source", str(empty_dir)]
     ))
     assert rc == 2
     err = capsys.readouterr().err
-    assert "no YAML files found" in err
+    # #3901: the declared input's own refusal (`input_empty`), naming the flag.
+    assert f"ERROR: --rule-source {empty_dir}: selects nothing" in err
 
 
 def test_main_empty_silences_clean(rule_pack_file, tmp_path, capsys):
     """Empty silences list (no silences) → 0 orphans, clean exit."""
     empty = tmp_path / "empty.json"
     empty.write_text("[]", encoding="utf-8")
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         ["--silences-file", str(empty), "--rule-source", str(rule_pack_file)]
     ))
     assert rc == 0
@@ -1211,7 +1241,7 @@ def test_json_output_keeps_alertname_byte_faithful(tmp_path, capsys):
         ),
         encoding="utf-8",
     )
-    rc = emit_result(sdc.main(
+    rc = emit_result(_main(
         ["--silences-file", str(silences), "--rule-source", str(pack), "--json"]
     ))
     assert rc == 0
@@ -1281,13 +1311,13 @@ def test_rule_pack_dir_reads_the_declared_packs(tmp_path, capsys):
     (rp / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
     (rp / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
     argv = ["--silences-file", _silences_none(tmp_path), "--rule-pack-dir", str(rp)]
-    assert emit_result(sdc.main(argv)) == 0
+    assert emit_result(_main(argv)) == 0
     assert "1 alerts loaded" in capsys.readouterr().out
     (rp / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
-    assert emit_result(sdc.main(argv)) == 2
+    assert emit_result(_main(argv)) == 2
     assert "stray.yaml" in capsys.readouterr().err
-    assert emit_result(sdc.main([*argv, "--exclude", "x"])) == 2
-    assert emit_result(sdc.main(["--silences-file", _silences_none(tmp_path)])) == 2
+    assert emit_result(_main([*argv, "--exclude", "x"])) == 2
+    assert emit_result(_main(["--silences-file", _silences_none(tmp_path)])) == 2
 
 
 def test_an_exclude_that_leaves_nothing_exits_2(tmp_path, capsys):
@@ -1295,7 +1325,7 @@ def test_an_exclude_that_leaves_nothing_exits_2(tmp_path, capsys):
     _write(tmp_path / "rules/a.yaml", """
         groups: [{name: g, rules: [{alert: A, expr: up}]}]
     """)
-    rc = emit_result(sdc.main(["--silences-file", _silences_none(tmp_path),
+    rc = emit_result(_main(["--silences-file", _silences_none(tmp_path),
                    "--rule-source", str(tmp_path / "rules"), "--exclude", "*.yaml"]))
     assert rc == 2
     assert "every one excluded" in capsys.readouterr().err
@@ -1312,7 +1342,7 @@ def test_an_empty_file_or_a_dangling_symlink_exits_2(tmp_path, capsys, name):
         (rules / name).write_text("", encoding="utf-8")
     else:
         symlink_or_skip(str(rules / "gone.yaml"), str(rules / name))
-    rc = emit_result(sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(rules)]))
+    rc = emit_result(_main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(rules)]))
     assert rc == 2
     captured = capsys.readouterr()
     assert name in captured.out + captured.err
@@ -1328,7 +1358,7 @@ def test_a_configmap_mount_as_rule_source_exits_0(tmp_path, capsys):
     """)
     symlink_or_skip("..2024_01_01", str(mount / "..data"))
     symlink_or_skip("..data/r.yaml", str(mount / "r.yaml"))
-    rc = emit_result(sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(mount),
+    rc = emit_result(_main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(mount),
                    "--json"]))
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)

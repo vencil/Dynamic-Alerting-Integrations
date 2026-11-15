@@ -247,10 +247,11 @@ _PART_WAY = [
      ["Cutover completed successfully", '"success": true']),
     ("bench-synth-tenants inject", 1, {"data": {}}, ["get configmap"], ["Injected"]),
     ("bench-synth-tenants cleanup", 1, {"data": {}}, ["patch configmap"], ["Removed"]),
-    ("generate-alertmanager-routes --apply", 1, {"data": {"alertmanager.yml": _MIN_AM}},
+    ("generate-alertmanager-routes --apply", 1,
+     {"metadata": {"managedFields": []}, "data": {"alertmanager.yml": _MIN_AM}},
      ["get configmap"], ["updated"]),
-    ("generate-alertmanager-routes --apply", 2, {"data": {"alertmanager.yml": _MIN_AM}},
-     ["get configmap", "create configmap"], ["updated"]),
+    # #3900: --apply makes two kubectl calls (get, a replace); the row above
+    # strikes the second.
 ]
 
 

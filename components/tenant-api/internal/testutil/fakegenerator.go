@@ -135,8 +135,8 @@ func FindingsVerdict(req FakeValidateRequest, configDir string, findings ...map[
 
 // RejectedVerdict is a 200 `rejected` with reason.
 func RejectedVerdict(reason string) map[string]any {
-	return map[string]any{"result": "rejected", "reason": reason, "message": "fake " + reason,
-		"rc": nil, "findings": nil, "stderr_tail": "", "validated": nil}
+	return map[string]any{"result": "rejected", "reason": reason,
+		"rc": nil, "findings": nil, "validated": nil}
 }
 
 // Verdict is a 200 body with result and a `validated` naming req.
@@ -150,7 +150,7 @@ func Verdict(result string, req FakeValidateRequest, policySHA *string) map[stri
 	if policySHA != nil {
 		policy = *policySHA
 	}
-	return map[string]any{"result": result, "rc": nil, "findings": nil, "stderr_tail": "",
+	return map[string]any{"result": result, "rc": nil, "findings": nil,
 		"validated": map[string]any{"base_commit": req.BaseCommit, "files": files, "policy_sha256": policy}}
 }
 
@@ -184,14 +184,14 @@ func (f *FakeGenerator) serve(w http.ResponseWriter, r *http.Request) {
 			DeadlineMS int64 `json:"deadline_ms"`
 		}
 		if err := json.Unmarshal(raw, &wire); err != nil {
-			reply(400, map[string]any{"error": "BAD_REQUEST", "message": err.Error()})
+			reply(400, map[string]any{"error": "BAD_REQUEST"})
 			return
 		}
 		req := FakeValidateRequest{BaseCommit: wire.BaseCommit, DeadlineMS: wire.DeadlineMS}
 		for _, wr := range wire.Writes {
 			c, err := base64.StdEncoding.DecodeString(wr.ContentB64)
 			if err != nil {
-				reply(400, map[string]any{"error": "BAD_REQUEST", "message": err.Error()})
+				reply(400, map[string]any{"error": "BAD_REQUEST"})
 				return
 			}
 			req.Writes = append(req.Writes, FakeWrite{Path: wr.Path, Content: c})

@@ -66,6 +66,17 @@ when a refusal is raised, as in `_lib_paths`.
   level of the wrong type, for a reader that is not ``document`` (a file
   da-guard reads).
 
+* ``add_input(parser, name, *, select=<a gatherer>, many=True)`` (#3901) —
+  an input whose every value is a FILE OR A DIRECTORY: the selector answers
+  ``gather(targets, exclude)`` (the files of all the values: a file as
+  given, a directory walked), ``wanted`` and ``problems(exc)``
+  (``_lib_consumer_read.FILES_TO_READ`` is the one there is). ``many=True``:
+  several values — a positional (*name* with no leading ``-``) or a flag
+  whose every use adds to the list; without it, one value. ``selected``
+  judges each value on its own, then gathers; it returns the paths as
+  strings, spelled as the selector found them. A positional has no flag to
+  name: its refusals name the path alone.
+
 PyYAML is imported inside ``decode_bytes``' YAML branch only: this module stays
 importable with the standard library alone. (Not named ``decode``: that is
 ``add_input``'s keyword, and the YAML-reader gate,
@@ -162,6 +173,17 @@ class TopLevel(NamedTuple):
 
 def _is_selector(select: Any) -> bool:
     return (callable(getattr(select, "choose", None))
+            and isinstance(getattr(select, "wanted", None), str))
+
+
+def _is_gatherer(select: Any) -> bool:
+    """A selector of FILES OR DIRECTORIES (#3901): ``gather(targets,
+    exclude)`` — the files the targets select, raising its own refusal —
+    ``wanted``, and ``problems(exc)``: that refusal as ``[(path, why)]``
+    (each entry it could not choose), or ``(None, text)`` pairs for one that
+    names no entry, or None for an exception that is not its refusal."""
+    return (callable(getattr(select, "gather", None))
+            and callable(getattr(select, "problems", None))
             and isinstance(getattr(select, "wanted", None), str))
 
 
@@ -314,8 +336,18 @@ class InputSpec(NamedTuple):
     remedy: Any = None
     """What to do about a refusal of this input (#3797) — a str, or
     ``{"en": ..., "zh": ...}`` — said on the line after every refusal
-    ``document`` raises for it: the ⛔ a tool used to put after its own
-    "not a file" (dropping the flag is not the fix)."""
+    ``document`` raises for it (and ``selected``, for a gatherer, #3901):
+    the ⛔ a tool used to put after its own "not a file" (dropping the flag
+    is not the fix)."""
+    many: bool = False
+    """Several values, each a file or a directory (#3901): a gatherer
+    ``select`` only. ``selected`` judges each value on its own."""
+
+    @property
+    def named(self) -> Optional[str]:
+        """The flag as a refusal names it: None for a positional, which the
+        caller never typed a name for (the path alone is named)."""
+        return self.flag if self.flag.startswith("-") else None
 
 
 class _Value(str):
@@ -335,6 +367,33 @@ class _Value(str):
         self.given = given
         self.absent = None
         return self
+
+
+class _Many(list):
+    """The values of a ``many=True`` input as the namespace holds them: a
+    list of ``_Value`` (so a tool joins or prints them as the strings they
+    are), plus the declaration."""
+
+    spec: "InputSpec"
+
+
+class _ManyAction(argparse.Action):
+    """Adds every value given — by one use of the flag or several — to the
+    list (``_Many``), each tagged with the declaration. No value at all (a
+    positional the caller left out) leaves the namespace's None."""
+
+    input_spec: "InputSpec"
+
+    def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
+                 values: Any, option_string: Optional[str] = None) -> None:
+        if not values:
+            return
+        held = getattr(namespace, self.dest, None)
+        if not isinstance(held, _Many):
+            held = _Many()
+            held.spec = self.input_spec
+            setattr(namespace, self.dest, held)
+        held.extend(_Value(v, self.input_spec, True) for v in values)
 
 
 class _InputAction(argparse._StoreAction):
@@ -358,7 +417,8 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
               decode: Optional[Document] = None, empty: str = EMPTY_ALLOWED,
               default: Optional[str] = None, absent_default: Optional[str] = None,
               missing: str = ABSENT_REFUSED, separator: Optional[str] = None,
-              stdin: bool = False, remedy: Any = None, **kwargs: Any) -> argparse.Action:
+              stdin: bool = False, remedy: Any = None, many: bool = False,
+              **kwargs: Any) -> argparse.Action:
     """Add the input flag *flag* (and its short *aliases*, ``-i``) to
     *parser* and declare what it is: exactly one of *select* or *decode*.
 
@@ -381,6 +441,14 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
     *decode* — a file input whose content the tool reads: a
     :class:`Document`, read by :func:`document`. It takes no *empty*,
     *default* or *absent_default* (#3445: a file nobody gave is not read).
+
+    A gatherer *select* (#3901; see the module docstring) is an input whose
+    value is a file or a directory: no *default*, *missing*
+    ``ABSENT_REFUSED``, and it may take a *remedy*. *many*: several values —
+    *flag* with no leading ``-`` is then a positional (zero or more values;
+    the tool says when none is an error), else a flag taking one or more
+    values whose every use adds to the list. Only a *many* input may be a
+    positional.
 
     *kwargs* go to ``add_argument`` (``help``, ``required``, ``metavar``);
     the value is always the string given, so ``type`` / ``nargs`` /
@@ -411,11 +479,21 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
                              "columns= is for a csv document only")
         if any(col not in decode.columns for col, _f in decode.formats):
             raise ValueError("formats= names columns of columns= only (a csv document)")
-    elif stdin or remedy is not None:
-        raise ValueError("stdin= / remedy= are for a decode= input only")
+    elif stdin:
+        raise ValueError("stdin= is for a decode= input only")
+    elif _is_gatherer(select):
+        if default is not None or missing != ABSENT_REFUSED or separator is not None:
+            raise ValueError("a gatherer input takes no default=, missing= or separator=")
+    elif remedy is not None:
+        raise ValueError("remedy= is for a decode= input or a gatherer select= only")
     elif not (select == DA_GUARD_LISTS or _is_selector(select)):
-        raise TypeError("select must be a selector (choose(directory, names), wanted) "
+        raise TypeError("select must be a selector (choose(directory, names), wanted), a "
+                        "gatherer (gather(targets, exclude), wanted, problems(exc)) "
                         f"or DA_GUARD_LISTS, not {select!r}")
+    if many and not _is_gatherer(select):
+        raise TypeError("many= is for a gatherer select= (a file or a directory per value)")
+    if not flag.startswith("-") and not many:
+        raise TypeError("a positional input is a many=True input")
     if empty not in (EMPTY_ALLOWED, EMPTY_REFUSED):
         raise ValueError(f"empty must be {EMPTY_ALLOWED!r} or {EMPTY_REFUSED!r}")
     if (default is None) != (absent_default is None):
@@ -430,9 +508,14 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
                          "input with no default= and missing=ABSENT_REFUSED")
     if default is not None and len(default) > 1 and default.endswith(("/", os.sep)):
         raise ValueError(f"default {default!r}: no trailing separator (see add_input)")
-    action = parser.add_argument(flag, *aliases, action=_InputAction, default=None, **kwargs)
+    if many:
+        action = parser.add_argument(flag, *aliases, action=_ManyAction, default=None,
+                                     nargs="+" if flag.startswith("-") else "*", **kwargs)
+    else:
+        action = parser.add_argument(flag, *aliases, action=_InputAction, default=None,
+                                     **kwargs)
     spec = InputSpec(flag, action.dest, select, empty, default, absent_default, decode,
-                     missing, separator, stdin, remedy)
+                     missing, separator, stdin, remedy, many)
     action.input_spec = spec
     if default is not None:
         action.default = _Value(default, spec, False)
@@ -483,7 +566,7 @@ def spec_of(args: argparse.Namespace, dest: str) -> InputSpec:
     Raises TypeError for a flag ``add_input`` did not declare, or one with no
     value (no default, not given)."""
     value = getattr(args, dest)
-    if not isinstance(value, _Value):
+    if not isinstance(value, (_Value, _Many)):
         raise TypeError(f"{dest} was not declared with _lib_input.add_input, or has no value")
     return value.spec
 
@@ -541,7 +624,82 @@ def _list(directory: "str | os.PathLike[str]") -> "list[str]":
     return sorted(os.listdir(directory))
 
 
-def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
+def _dangling(path: str) -> bool:
+    """A symlink whose target is not there (ENOENT only: one that cannot be
+    reached, or loops, is the path's own problem). It is there — ``ls``
+    lists it — so the gatherer names it, not "no such file"."""
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        return os.path.islink(path)
+    except OSError:
+        return False
+    return False
+
+
+def _with_remedy(exc: BaseException, spec: InputSpec, lang: str) -> BaseException:
+    """*exc* (a refusal: a str ``reason``) with the declaration's remedy on
+    the line after it; *exc* itself when there is none to add."""
+    if spec.remedy is None or not isinstance(getattr(exc, "reason", None), str):
+        return exc
+    said = spec.remedy.get(lang, spec.remedy["en"]) if isinstance(spec.remedy, dict) \
+        else spec.remedy
+    return type(exc)(f"{exc}\n  ⛔ {said}", exc.reason)
+
+
+def _gathered(values: "list[_Value]", spec: InputSpec, *, lang: str,
+              exclude: Any) -> "list[str]":
+    """`selected` of a gatherer input (#3901): each of *values* judged on its
+    own as a path, every such problem named at once (with the declaration's
+    *remedy*: it is about the path given); then what the selector gathers
+    from all of them, less *exclude* — an entry it cannot choose is named
+    then; then ``empty``; then the judgement of each value is done
+    (``JUDGED_EVENT``, once per distinct value).
+
+    ⛔ A value that is itself a dangling symlink is refused here, whatever
+    *exclude* says: *exclude* leaves out files FOUND under a value, never a
+    value the caller gave that is not there to read (`lint good dangling.yaml
+    --exclude dangling.yaml` was rc 0)."""
+    flag = spec.named
+    items = list(dict.fromkeys(str(v) for v in values))  # a value given twice is one
+    try:
+        if "" in items:
+            # #3392 (owner): '' names nothing — never the current directory.
+            said = "空值不指向任何檔案" if lang == "zh" else "an empty value names no file"
+            raise _caller_error(f"{_label('', flag)}: {said}", "file_not_found")
+        said = "懸空的 symlink" if lang == "zh" else "a dangling symlink"
+        found = [(f"{_label(i, flag)}: {said}", "path_not_found") if _dangling(i)
+                 else ((p.message, p.reason) if p is not None else None)
+                 for i in items for p in [None if _dangling(i) else
+                                          classify_path(i, "any", lang=lang, flag=flag)]]
+        found = [f for f in found if f is not None]
+        if found:
+            raise _caller_error("\nERROR: ".join(m for m, _r in found), found[0][1])
+    except Exception as exc:  # a CallerError: the refusal (a str reason)
+        again = _with_remedy(exc, spec, lang)
+        if again is exc:
+            raise
+        raise again from exc
+    try:
+        files = spec.select.gather(items, exclude)
+    except Exception as exc:  # noqa: BLE001 — the selector says whether it is its refusal
+        found = spec.select.problems(exc)
+        if found is None:
+            raise
+        whole = ", ".join(safe_label(i) for i in items)
+        raise _caller_error("\nERROR: ".join(
+            f"{_label(path, flag) if path is not None else (f'{flag} {whole}' if flag else whole)}"
+            f": {safe_label(why)}" for path, why in found), "input_not_selectable") from exc
+    if not files and spec.empty == EMPTY_REFUSED:
+        whole = ", ".join(safe_label(i) for i in items)
+        raise refuse_empty(f"{flag} {whole}" if flag else whole, spec.select.wanted, lang=lang)
+    for item in items:
+        judged(spec.flag, item)
+    return list(files)
+
+
+def selected(args: argparse.Namespace, dest: str, *, lang: str,
+             exclude: Any = ()) -> "list[Any]":
     """The paths the value of the flag declared at *dest* selects.
 
     A value that is not a usable directory is refused
@@ -559,11 +717,17 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
     value = getattr(args, dest)
     if value is None:
         return []
-    if not isinstance(value, _Value):
+    if not isinstance(value, (_Value, _Many)):
         raise TypeError(f"{dest} was not declared with _lib_input.add_input")
     spec = value.spec
     if spec.select is None:
         raise TypeError(f"{dest} is a file input (decode=): read it with document()")
+    if _is_gatherer(spec.select):
+        # #3901: a file or a directory per value; *exclude* is the tool's
+        # --exclude patterns. The paths come back as the selector spelled
+        # them (strings: `./d/a.yaml` stays that).
+        return _gathered(list(value) if isinstance(value, _Many) else [value], spec,
+                         lang=lang, exclude=exclude)
     if not value.given:
         # argparse hands every parse the SAME default object (`action.default`):
         # judge a copy of it, so what one run found (`absent`) is never read
@@ -630,6 +794,19 @@ def read_bytes(path: "str | os.PathLike[str]", *, flag: Optional[str], lang: str
         missing = exc.errno in _STAT_MISSING
         said = _DETAIL[lang]["missing" if missing else "inaccessible"](exc)
         raise _caller_error(f"{_label(path, flag)}: {said}", "file_unreadable") from exc
+
+
+def confirm_read(paths: "list[Any]", *, flag: Optional[str], lang: str) -> None:
+    """For a tool whose READER takes the selected files by path (a Go
+    reader: da-read, da-crdecode) — after it ran, before anything is printed
+    or written: every one of *paths* is still a file this process reads
+    (``read_bytes``: gone or unreadable is ``file_unreadable``, rc 2, naming
+    it). ⛔ Without it a file gone after the judgement is the reader's "no
+    such file" — one error among a report made from the files that were
+    left (#3901: rc 2 with a partial report, and onboard had written its
+    plan by then)."""
+    for path in paths:
+        read_bytes(path, flag=flag, lang=lang)
 
 
 #: The value of a ``stdin=True`` file input that is standard input (#3797).
@@ -699,11 +876,10 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
     try:
         return _document(args, value, spec, lang=lang)
     except Exception as exc:  # a CallerError: the refusal (a str reason)
-        if spec.remedy is None or not isinstance(getattr(exc, "reason", None), str):
+        again = _with_remedy(exc, spec, lang)
+        if again is exc:
             raise
-        said = spec.remedy.get(lang, spec.remedy["en"]) if isinstance(spec.remedy, dict) \
-            else spec.remedy
-        raise type(exc)(f"{exc}\n  ⛔ {said}", exc.reason) from exc
+        raise again from exc
 
 
 def _document(args: argparse.Namespace, value: "_Value", spec: InputSpec, *,

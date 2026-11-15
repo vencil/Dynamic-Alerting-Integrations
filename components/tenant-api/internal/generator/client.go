@@ -104,29 +104,24 @@ type FindingsDoc struct {
 	Findings  []Finding `json:"findings"`
 }
 
-// Verdict is a 200 answer of POST /v1/validate.
+// Verdict is a 200 answer of POST /v1/validate. The answer carries no free
+// text (#3961): every message tenant-api shows is built from Reason.
 type Verdict struct {
-	Result     string       `json:"result"` // pass | findings | rejected
-	Reason     string       `json:"reason"` // when rejected
-	Message    string       `json:"message"`
-	RC         *int         `json:"rc"`
-	Findings   *FindingsDoc `json:"findings"`
-	StderrTail string       `json:"stderr_tail"`
-	Validated  *Validated   `json:"validated"`
+	Result    string       `json:"result"` // pass | findings | rejected
+	Reason    string       `json:"reason"` // when rejected
+	RC        *int         `json:"rc"`
+	Findings  *FindingsDoc `json:"findings"`
+	Validated *Validated   `json:"validated"`
 	// KeyVerdict is the key verdict on a pass (ADR-038 decision 5); nil
 	// from a service that predates it.
 	KeyVerdict *KeyVerdict `json:"key_verdict"`
 }
 
 // KeyVerdict is a pass's `key_verdict`: status complete or not_completed
-// (with reason and message), findings when complete, truncated the
-// findings not sent. Message is the service's own text, never shown to a
-// caller nor logged (it can carry a platform path or a program's stderr;
-// #1560 ⑤-b: the log keeps KeyVerdict.LogValue's fields only).
+// (with reason), findings when complete, truncated the findings not sent.
 type KeyVerdict struct {
 	Status    string       `json:"status"`
 	Reason    string       `json:"reason"`
-	Message   string       `json:"message"`
 	Tenants   int          `json:"tenants"`
 	Seconds   float64      `json:"seconds"`
 	Findings  []KeyFinding `json:"findings"`
@@ -151,11 +146,10 @@ type KeyFinding struct {
 	Blocks *bool `json:"blocks"`
 }
 
-// errorBody is the service's non-200 JSON body.
+// errorBody is the service's non-200 JSON body: closed codes only (#3961).
 type errorBody struct {
-	Error   string `json:"error"`
-	Reason  string `json:"reason"`
-	Message string `json:"message"`
+	Error  string `json:"error"`
+	Reason string `json:"reason"`
 }
 
 // Validate asks the service to judge base with writes, giving it remaining
@@ -211,15 +205,11 @@ func (c *Client) Validate(ctx context.Context, base string, writes []Write, rema
 		if reason == "" {
 			reason = ReasonUnknown
 		}
-		return nil, &UnavailableError{Code: code, Reason: reason, Message: e.Message}
+		return nil, &UnavailableError{Code: code, Reason: reason}
 	case http.StatusRequestEntityTooLarge:
-		var e errorBody
-		_ = json.Unmarshal(raw, &e)
-		return nil, &RejectedError{Reason: ReasonTooLarge, Message: e.Message}
+		return nil, &RejectedError{Reason: ReasonTooLarge}
 	case http.StatusBadRequest:
-		var e errorBody
-		_ = json.Unmarshal(raw, &e)
-		return nil, &RejectedError{Reason: ReasonInvalidRequest, Message: e.Message}
+		return nil, &RejectedError{Reason: ReasonInvalidRequest}
 	}
 	return nil, unavailable(ReasonBadResponse, fmt.Sprintf("the validate answer has HTTP status %d", status))
 }

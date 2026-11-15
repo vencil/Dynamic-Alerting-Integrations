@@ -22,6 +22,7 @@ function AlertPreviewTab() {
   const [yaml, setYaml] = useState('');
   const [metrics, setMetrics] = useState({});
   const [alerts, setAlerts] = useState(null);
+  const [parseErrors, setParseErrors] = useState([]);
   const [recData, setRecData] = useState(null);
 
   // Build metric sliders from selected packs
@@ -68,10 +69,12 @@ function AlertPreviewTab() {
 
   const simulate = useCallback(() => {
     // parseTenantYaml, not parseYaml: thresholds are read from the text that
-    // was written, as the exporter reads them (#3919).
-    const { config } = parseTenantYaml(yaml);
-    const result = simulateAlerts(config, metrics);
-    setAlerts(result);
+    // was written, as the exporter reads them (#3919). A file it cannot read
+    // (a syntax error, a second document, #3959) is said so, not simulated as
+    // an empty config: every row would read "no threshold".
+    const { config, errors } = parseTenantYaml(yaml);
+    setParseErrors(errors);
+    setAlerts(errors.length ? null : simulateAlerts(config, metrics));
   }, [yaml, metrics]);
 
   const updateMetric = (key, value) => {
@@ -209,6 +212,12 @@ function AlertPreviewTab() {
           </button>
         )}
       </div>
+
+      {parseErrors.length > 0 && (
+        <div className="mt-4 p-3 rounded-lg border border-red-300 bg-red-50 text-sm text-red-800" data-testid="parse-errors">
+          {parseErrors.map((msg) => <div key={msg}>{msg}</div>)}
+        </div>
+      )}
 
       {alerts && (
         <div className="mt-4">

@@ -44,10 +44,10 @@ func TestLogValuer_ErrorTypesLogNoMessage(t *testing.T) {
 			`"reason":"unknown"`},
 		"FindingsError": {error(&FindingsError{Findings: []Finding{finding}, RC: 1}),
 			`"findings_by_kind":["credential_plaintext=1"]`},
-		"Verdict": {&Verdict{Result: ResultFindings, RC: &rc, StderrTail: logCanary, Message: logCanary,
+		"Verdict": {&Verdict{Result: ResultFindings, RC: &rc,
 			Findings: &FindingsDoc{ConfigDir: "/w/" + logCanary, Findings: []Finding{finding}}},
 			`"findings_by_kind":["credential_plaintext=1"]`},
-		"KeyVerdict": {&KeyVerdict{Status: "not_completed", Reason: "error", Message: logCanary},
+		"KeyVerdict": {&KeyVerdict{Status: "not_completed", Reason: "error"},
 			`"reason":"error"`},
 		"FindingsError, a kind outside the catalog": {error(&FindingsError{Findings: []Finding{
 			{Kind: "k-" + logCanary}}, RC: 1}), `"findings_by_kind":["other=1"]`},

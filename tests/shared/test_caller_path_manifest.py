@@ -64,10 +64,15 @@ cannot be read, for every declaration) and the content audit run.
 A declaration the parser no longer has is a fault too: the manifest may not
 outlive the flag it describes.
 
-What a judged kind is checked against: the row's own argument — a row that
-hands the flag a locked DIRECTORY ({D}) proves ``dir``, a locked FILE ({F})
-``file``; ``any`` takes either. A site (script, flag) answers for one
-declaration only.
+What a declared input is checked against: the row's own argument — a row
+that hands the flag a locked DIRECTORY ({D}) proves a directory, a locked
+FILE ({F}) a file; a gatherer (#3901: each value a file or a directory)
+takes either. A site (script, flag) answers for one declaration only.
+
+#3901: a value that is a file or a directory is declared with
+``add_input(select=<a gatherer>)`` too (``many=True`` for several, a
+positional among them), so the manifest's ``any`` kind is gone, as ``dir``
+(#3755) and ``file`` (#3797) went.
 
 ⚠️ Not mechanised, so a green run does not claim it:
 
@@ -94,10 +99,10 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 MANIFEST = pathlib.Path(__file__).with_name("caller_path_manifest.yaml")
 
-KINDS = {"any", "reader", "output", "url", "url_list", "not_path", "pending"}
+KINDS = {"reader", "output", "url", "url_list", "not_path", "pending"}
 URL_KINDS = {"url", "url_list"}
-JUDGED = {"any"}
-#: The `--json` reason prefix each judged kind answers with (`_lib_paths`).
+#: The `--json` reason prefix a declared input of each kind answers with
+#: (`_lib_paths`): `any` is a gatherer's (#3901: a file or a directory).
 REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 
 #: ⛔ The ceiling of `pending`: remove an entry when its flag is migrated; an
@@ -181,6 +186,12 @@ def parsed_arguments(specs: "dict | None" = None, actions: "dict | None" = None,
         script = cli._resolve(command_map[command]).relative_to(TOOLS).as_posix()
         walk(command, model.parser, script)
     return found, sorted(u.split()[0] for u in unscoreable)
+
+
+def is_gatherer(spec: object) -> bool:
+    """Whether an ``add_input`` declaration takes a file or a directory per
+    value (#3901: its ``select`` gathers)."""
+    return callable(getattr(getattr(spec, "select", None), "gather", None))
 
 
 def is_document(spec: object) -> bool:
@@ -282,11 +293,17 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         # is; a file whose content is read (decode=, #3445) is held to `file`.
         where = f"{key[0]} {key[1]}"
         site = (parsed[key], key[1] if key[1].startswith("-") else None)
-        kind = "file" if is_document(specs[key]) else "dir"
-        noun = {"dir": "directory", "file": "file"}[kind]
-        other = {"dir": "file", "file": "directory"}[kind]
+        kind = ("file" if is_document(specs[key])
+                else "any" if is_gatherer(specs[key]) else "dir")
+        noun = {"dir": "directory", "file": "file", "any": "file or directory"}[kind]
+        other = {"dir": "file", "file": "directory", "any": None}[kind]
         holders = {holder for holder, _reason in rows.get(site, [])}
-        if kind[0].upper() not in holders:
+        if kind == "any":
+            if not holders:
+                faults.append(f"{where}: declared with _lib_input.add_input but no "
+                              "OPS_SITES row hands it a locked file or directory — the "
+                              "declared-input rows are made from that row")
+        elif kind[0].upper() not in holders:
             faults.append(f"{where}: declared with _lib_input.add_input but no "
                           f"OPS_SITES row hands it a locked {noun} — the declared-input "
                           f"rows and the {'content' if kind == 'file' else 'listing'} audit "
@@ -294,7 +311,7 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         if site in rows:
             claims.setdefault(site, []).append(where)
             for holder, reason in rows[site]:
-                if holder != kind[0].upper():
+                if other is not None and holder != kind[0].upper():
                     faults.append(f"{where}: declared with _lib_input.add_input (a "
                                   f"{noun}), its row hands it a locked {other}")
                 if reason is not None and reason.startswith(tuple(REASON_PREFIX.values())) \
@@ -316,22 +333,15 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
             faults.append(f"{where}: a file is declared with _lib_input.add_input(decode=...), "
                           "not a manifest line (#3797: the file kind is gone)")
             continue
+        if kind == "any":
+            faults.append(f"{where}: a file or a directory is declared with "
+                          "_lib_input.add_input(select=<a gatherer>), not a manifest line "
+                          "(#3901: the any kind is gone)")
+            continue
         if kind not in KINDS:
             faults.append(f"{where}: kind {kind!r} is not one of {sorted(KINDS)}")
             continue
-        if kind in JUDGED:
-            site = (parsed[key], key[1] if key[1].startswith("-") else None)
-            if site in rows:
-                claims.setdefault(site, []).append(where)
-                for _holder, reason in rows[site]:
-                    if reason is not None and reason.startswith(tuple(REASON_PREFIX.values())) \
-                            and not reason.startswith(REASON_PREFIX[kind]):
-                        faults.append(f"{where}: declared {kind}, its row answers {reason}")
-            elif not (decl.get("no_row") and _test_exists(decl.get("pinned_by", ""))):
-                faults.append(f"{where}: judged as {kind} but no row runs it — add one to "
-                              "test_caller_paths.py, or say why not (no_row) and name the "
-                              "test that pins it (pinned_by)")
-        elif kind == "reader":
+        if kind == "reader":
             if not _test_exists(decl.get("pinned_by", "")):
                 faults.append(f"{where}: reader without a pinned_by test that exists")
         elif kind == "pending":
@@ -645,48 +655,52 @@ def _faults(commands, *, parsed=_PARSED, rows=_ROWS, ceiling=frozenset(), dispat
 
 
 def test_a_complete_manifest_has_no_fault():
-    assert _faults({"t": {"--d": "any", "--n": "not_path"}}) == []
+    assert _faults({"t": {"--d": "not_path", "--n": "not_path"}}) == []
 
 
 def test_an_undeclared_argument_is_a_fault():
-    assert _faults({"t": {"--d": "any"}}) == ["t --n: takes a value and is not declared"]
+    assert _faults({"t": {"--d": "not_path"}}) == ["t --n: takes a value and is not declared"]
 
 
 def test_a_declaration_without_its_argument_is_a_fault():
-    assert _faults({"t": {"--d": "any", "--n": "not_path", "--gone": "not_path"}}) == [
+    assert _faults({"t": {"--d": "not_path", "--n": "not_path", "--gone": "not_path"}}) == [
         "t --gone: declared, but the parser has no such argument"]
 
 
-def test_a_judged_argument_without_a_row_is_a_fault():
-    faults = _faults({"t": {"--d": "any", "--n": "any"}})
-    assert len(faults) == 1 and faults[0].startswith("t --n: judged as any but no row")
+def test_a_manifest_any_line_is_a_fault():
+    """#3901: a file-or-directory input is declared with add_input (a
+    gatherer), never a manifest ``any`` line — and none is left."""
+    assert _faults({"t": {"--d": "any", "--n": "not_path"}}) == [
+        "t --d: a file or a directory is declared with _lib_input.add_input(select=<a "
+        "gatherer>), not a manifest line (#3901: the any kind is gone)"]
+    assert not [k for k, d in _entries(load_manifest()).items() if d.get("kind") == "any"]
 
 
-def test_no_row_needs_a_test_that_exists():
-    ok = {"kind": "any", "no_row": "x",
-          "pinned_by": "tests/shared/test_caller_path_manifest.py::test_no_row_needs_a_test_that_exists"}
-    assert _faults({"t": {"--d": "any", "--n": ok}}) == []
-    bad = dict(ok, pinned_by="tests/shared/test_caller_path_manifest.py::test_not_there")
-    assert len(_faults({"t": {"--d": "any", "--n": bad}})) == 1
+class _Gatherer:
+    class select:  # noqa: N801 — a stand-in for the selector on a spec
+        @staticmethod
+        def gather(targets, exclude=()):
+            return []
 
 
-def test_a_reason_its_kind_contradicts_is_a_fault():
-    rows = {("ops/t.py", "--d"): [("D", "dir_not_accessible")]}
-    assert _faults({"t": {"--d": "any", "--n": "not_path"}}, rows=rows) == [
-        "t --d: declared any, its row answers dir_not_accessible"]
-
-
-def test_any_takes_a_row_of_either_holder():
+def test_a_gatherer_takes_a_row_of_either_holder_and_answers_path_reasons():
+    """#3901: what the `any` line held, held on the declaration: a row of
+    either holder, a `path_*` reason, and a row at all."""
+    parsed = {("t", "--d"): "ops/t.py"}
+    specs = {("t", "--d"): _Gatherer()}
     for holder in ("D", "F"):
-        rows = {("ops/t.py", "--d"): [(holder, None)]}
-        assert _faults({"t": {"--d": "any", "--n": "not_path"}}, rows=rows) == []
-
-
-def test_one_row_answers_for_one_declaration():
-    parsed = {("t", "--d"): "ops/t.py", ("u", "--d"): "ops/t.py"}
-    faults = _faults({"t": {"--d": "any"}, "u": {"--d": "any"}}, parsed=parsed)
-    assert faults == ["t --d / u --d: one row (ops/t.py --d) cannot answer for more than "
-                      "one declaration"]
+        rows = {("ops/t.py", "--d"): [(holder, "path_not_accessible")]}
+        assert manifest_faults(parsed, [], {"commands": {}}, rows, frozenset(), specs) == []
+    wrong = {("ops/t.py", "--d"): [("D", "dir_not_accessible")]}
+    assert manifest_faults(parsed, [], {"commands": {}}, wrong, frozenset(), specs) == [
+        "t --d: declared with _lib_input.add_input (a file or directory), its row answers "
+        "dir_not_accessible"]
+    faults = manifest_faults(parsed, [], {"commands": {}}, {}, frozenset(), specs)
+    assert len(faults) == 1 and "no OPS_SITES row hands it a locked file or directory" in faults[0]
+    # a positional's site is (script, None)
+    pos = {("ops/t.py", None): [("D", None), ("F", None)]}
+    assert manifest_faults({("t", "paths"): "ops/t.py"}, [], {"commands": {}}, pos, frozenset(),
+                           {("t", "paths"): _Gatherer()}) == []
 
 
 def test_a_pinning_test_is_a_collected_test_function(tmp_path):
@@ -710,14 +724,14 @@ def test_spelled_only_in_a_string():
 
 
 def test_an_unknown_kind_is_a_fault():
-    assert len(_faults({"t": {"--d": "any", "--n": "path"}})) == 1
+    assert len(_faults({"t": {"--d": "not_path", "--n": "path"}})) == 1
 
 
 def test_a_reader_needs_its_pinning_test():
     ok = {"kind": "reader",
           "pinned_by": "tests/shared/test_caller_path_manifest.py::test_a_reader_needs_its_pinning_test"}
-    assert _faults({"t": {"--d": "any", "--n": ok}}) == []
-    assert len(_faults({"t": {"--d": "any", "--n": {"kind": "reader"}}})) == 1
+    assert _faults({"t": {"--d": "not_path", "--n": ok}}) == []
+    assert len(_faults({"t": {"--d": "not_path", "--n": {"kind": "reader"}}})) == 1
 
 
 def test_a_manifest_file_line_is_a_fault():
@@ -741,19 +755,19 @@ def test_a_manifest_dir_line_is_a_fault():
 def test_pending_is_a_ceiling_that_only_shrinks():
     pending = {"kind": "pending", "ticket": 1}
     key = frozenset({("t", "--n")})
-    assert _faults({"t": {"--d": "any", "--n": pending}}, ceiling=key) == []
+    assert _faults({"t": {"--d": "not_path", "--n": pending}}, ceiling=key) == []
     # a new one
-    assert len(_faults({"t": {"--d": "any", "--n": pending}})) == 1
+    assert len(_faults({"t": {"--d": "not_path", "--n": pending}})) == 1
     # one that left
-    assert _faults({"t": {"--d": "any", "--n": "not_path"}}, ceiling=key) == [
+    assert _faults({"t": {"--d": "not_path", "--n": "not_path"}}, ceiling=key) == [
         "t --n: no longer pending — drop it from PENDING"]
     # no ticket
-    assert len(_faults({"t": {"--d": "any", "--n": {"kind": "pending"}}}, ceiling=key)) == 1
+    assert len(_faults({"t": {"--d": "not_path", "--n": {"kind": "pending"}}}, ceiling=key)) == 1
 
 
 def test_the_go_dispatchers_are_named():
-    assert len(_faults({"t": {"--d": "any", "--n": "not_path"}}, dispatched=["guard"])) == 0
-    assert len(manifest_faults(_PARSED, ["guard"], {"commands": {"t": {"--d": "any",
+    assert len(_faults({"t": {"--d": "not_path", "--n": "not_path"}}, dispatched=["guard"])) == 0
+    assert len(manifest_faults(_PARSED, ["guard"], {"commands": {"t": {"--d": "not_path",
                                "--n": "not_path"}}}, _ROWS, frozenset())) == 1
 
 
@@ -766,7 +780,7 @@ def test_an_add_input_flag_needs_no_manifest_line_and_may_not_have_one():
     dirs = {("ops/t.py", "--d"): [("D", "dir_not_accessible")]}
     assert manifest_faults(parsed, [], {"commands": {"t": {"--n": "not_path"}}},
                            dirs, frozenset(), {("t", "--d"): spec}) == []
-    assert manifest_faults(parsed, [], {"commands": {"t": {"--d": "any", "--n": "not_path"}}},
+    assert manifest_faults(parsed, [], {"commands": {"t": {"--d": "not_path", "--n": "not_path"}}},
                            dirs, frozenset(), {("t", "--d"): spec}) == [
         "t --d: declared with _lib_input.add_input — drop its manifest line "
         "(one declaration per flag)"]
@@ -802,11 +816,11 @@ def test_an_add_input_flag_is_held_to_dir_like_a_manifest_dir_line():
     assert manifest_faults(parsed, [], {"commands": {}}, wrong, frozenset(),
                            {("t", "--d"): spec}) == [
         "t --d: declared with _lib_input.add_input (a directory), its row answers file_not_found"]
-    # one site answering for an add_input flag and a manifest declaration
+    # one site answering for two declarations (two commands of one script)
     two = {("t", "--d"): "ops/t.py", ("u", "--d"): "ops/t.py"}
-    either = {("ops/t.py", "--d"): [("D", None)]}  # one row `any` and the add_input both accept
-    faults = manifest_faults(two, [], {"commands": {"u": {"--d": "any"}}}, either, frozenset(),
-                             {("t", "--d"): spec})
+    either = {("ops/t.py", "--d"): [("D", None)]}
+    faults = manifest_faults(two, [], {"commands": {}}, either, frozenset(),
+                             {("t", "--d"): spec, ("u", "--d"): spec})
     assert faults == ["t --d / u --d: one row (ops/t.py --d) cannot answer for more than "
                       "one declaration"], faults
 

@@ -175,7 +175,7 @@ def _apply(monkeypatch, tmp_path, config_dir, rules):
 
     def fake(argv, *, timeout, stdin_text=None, text=True):
         calls.append(list(argv))
-        stdout = (json.dumps({"data": {"alertmanager.yml":
+        stdout = (json.dumps({"metadata": {"managedFields": []}, "data": {"alertmanager.yml":
                                        yaml.safe_dump(existing)}})
                   if argv[:2] == ["kubectl", "get"] else "")
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
@@ -212,7 +212,7 @@ def test_apply_control_degraded_without_tenant_rule_applies(
     rc, calls = _apply(monkeypatch, tmp_path, tenant_dir, [_BENIGN_RULE])
     err = capsys.readouterr().err
     assert rc == EXIT_OK, err
-    assert ["kubectl", "apply"] in [c[:2] for c in calls], calls
+    assert ["kubectl", "replace"] in [c[:2] for c in calls], calls
 
 
 def test_merge_exempts_generated_rules_but_not_lookalikes(degraded):

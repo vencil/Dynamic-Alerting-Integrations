@@ -292,6 +292,7 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
     sys.path.append(str(_HERE / "ops"))
 
 from _lib_io import YamlFileError, safe_label  # noqa: E402
+from _lib_validation import ShapeError as _ShapeError, error_text, shown_key, shown_value  # noqa: E402  (#3961: what da-guard echoes from the tree)
 from _lib_exitcodes import exit_caller_error  # noqa: E402
 from _lib_constants import (  # noqa: E402
     TOP_LEVEL_READ_ELSEWHERE, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
@@ -448,13 +449,15 @@ class TenantValues(NamedTuple):
     # The custom-alert rows the tenant's `_custom_alerts` asks /metrics to
     # serve, counted before the per-tenant metric limit truncates them
     # (#3042: what the per-tenant cap is judged on; `values["_custom_alerts"]`
-    # is what survives the truncation). None from a da-guard older than the
-    # field.
-    custom_alert_rows: int | None = None
+    # is what survives the truncation). `load_served_tree` always sets it
+    # (#3961: a document without the field is broken output); the default
+    # is only for a `TenantValues` built by hand.
+    custom_alert_rows: int = 0
     # Every element of the tenant's `_custom_alerts`, in declaration order, as
     # the exporter's resolver judges it (#3042; what the custom-alert compiler
-    # builds its rules from); None from a da-guard older than the field.
-    custom_alerts: "tuple[CustomAlertEntry, ...] | None" = None
+    # builds its rules from); () when it has none or the block does not
+    # decode (`custom_alerts_error`). Always set, as `custom_alert_rows`.
+    custom_alerts: "tuple[CustomAlertEntry, ...]" = ()
     # Why the tenant's `_custom_alerts` does not decode (no entry, nothing
     # served); None when it does.
     custom_alerts_error: str | None = None
@@ -518,25 +521,27 @@ def _key_checks(e: Any, what: str = "key_checks") -> "tuple[KeyCheck, ...]":
     name, never a value (#3703): it reaches a generator's stderr and
     `--findings-json` through the error that reports it."""
     if not isinstance(e, list):
-        raise TypeError(f"{what} is a {type(e).__name__}, not a list")
+        raise _ShapeError(f"{what} is a {type(e).__name__}, not a list")
     out = []
     for i, c in enumerate(e):
         w = f"{what}[{i}]"
         if not isinstance(c, dict):
-            raise TypeError(f"{w} is a {type(c).__name__}, not a record")
+            raise _ShapeError(f"{w} is a {type(c).__name__}, not a record")
         if set(c) != _KEY_CHECK_FIELDS:
-            raise TypeError(f"{w} has fields {sorted(map(str, c))}, not {sorted(_KEY_CHECK_FIELDS)}")
+            # Counts, never the document's field names (#3961).
+            raise _ShapeError(f"{w} lacks {len(_KEY_CHECK_FIELDS - set(c))} of the fields "
+                              f"{sorted(_KEY_CHECK_FIELDS)} and has {len(set(c) - _KEY_CHECK_FIELDS)} other(s)")
         for f in ("kind", "key", "head", "reason"):
             if not isinstance(c[f], str):
-                raise TypeError(f"{w}.{f} is a {type(c[f]).__name__}, not a string")
+                raise _ShapeError(f"{w}.{f} is a {type(c[f]).__name__}, not a string")
         kind, repl = c["kind"], c["replacement_head"]
         if kind not in KEY_CHECK_KINDS:
-            raise ValueError(f"{w}.kind is none of {sorted(KEY_CHECK_KINDS)}")
+            raise _ShapeError(f"{w}.kind is none of {sorted(KEY_CHECK_KINDS)}")
         if not isinstance(repl, (str, type(None))):
-            raise TypeError(f"{w}.replacement_head is a {type(repl).__name__}, not a string or null")
+            raise _ShapeError(f"{w}.replacement_head is a {type(repl).__name__}, not a string or null")
         # `kind` is one of KEY_CHECK_KINDS here: Go's word, safe to name.
         if (repl is not None) != (kind in KEY_CHECK_RENAMED_KINDS):
-            raise ValueError(f"{w}: kind {kind} {'with' if repl is not None else 'without'} a replacement_head")
+            raise _ShapeError(f"{w}: kind {kind} {'with' if repl is not None else 'without'} a replacement_head")
         out.append(KeyCheck(kind, c["key"], c["head"], repl, c["reason"]))
     return tuple(out)
 
@@ -740,25 +745,25 @@ def dead_entries(v: Any, what: str) -> "tuple[DeadEntry, ...]":
     its type, every reason from DEAD_ENTRY_REASONS, a window exactly on a
     window's entry."""
     if not isinstance(v, list):
-        raise TypeError(f"{what}: not a list: {v!r}")
+        raise _ShapeError(f"{what}: not a list: {shown_value(v)}")
     out = []
     for e in v:
         if not isinstance(e, dict):
-            raise TypeError(f"{what}: not an object: {e!r}")
+            raise _ShapeError(f"{what}: not an object: {shown_value(e)}")
         entry, value, reason, window = e["entry"], e["value"], e["reason"], e.get("window")
         if not all(isinstance(x, str) for x in (entry, value, reason)) or (
                 window is not None and not isinstance(window, str)):
-            raise TypeError(f"{what}: not strings: {e!r}")
+            raise _ShapeError(f"{what}: not strings: {shown_value(e)}")
         if reason not in DEAD_ENTRY_REASONS:
-            raise ValueError(f"{what}: reason {reason!r} is none of {sorted(DEAD_ENTRY_REASONS)}")
+            raise _ShapeError(f"{what}: reason {shown_value(reason)} is none of {sorted(DEAD_ENTRY_REASONS)}")
         if (entry == "default") != (window is None):
-            raise ValueError(f"{what}: entry {entry!r} with window {window!r}")
+            raise _ShapeError(f"{what}: entry {shown_value(entry)} with window {shown_value(window)}")
         # The entry names the default or an override by its 0-based index,
         # and each has its own reason: the default is covered by the windows,
         # a window by the windows written before it.
         want = "default_covered" if entry == "default" else "window_covered"
         if (entry != "default" and not _OVERRIDE_ENTRY.fullmatch(entry)) or reason != want:
-            raise ValueError(f"{what}: entry {entry!r} with reason {reason!r}")
+            raise _ShapeError(f"{what}: entry {shown_value(entry)} with reason {shown_value(reason)}")
         out.append(DeadEntry(entry, window, value, reason))
     return tuple(out)
 
@@ -969,17 +974,17 @@ def _threshold(v: Any) -> float:
     number for."""
     if isinstance(v, str):
         if v not in _NON_FINITE:
-            raise ValueError(f"not a threshold value: {v!r}")
+            raise _ShapeError(f"not a threshold value: {shown_value(v)}")
         return _NON_FINITE[v]
     if isinstance(v, bool) or not isinstance(v, (int, float)):
-        raise ValueError(f"not a threshold value: {v!r}")
+        raise _ShapeError(f"not a threshold value: {shown_value(v)}")
     return float(v)
 
 
 _T = TypeVar("_T")
 
 
-class _OlderSchema(ValueError):
+class _OlderSchema(_ShapeError):
     """A da-guard document whose `schema` is an older version of the one its
     reader reads (`_run_da_guard`'s *older_schemas*)."""
 
@@ -1157,7 +1162,7 @@ def _run_da_guard(
         doc = json.loads(proc.stdout.decode("utf-8"))
         if schema is not None and doc["schema"] != schema:
             older = doc["schema"] in older_schemas
-            raise (_OlderSchema if older else ValueError)(
+            raise (_OlderSchema if older else _ShapeError)(
                 f"schema {doc['schema']!r}, this reader reads {schema!r}")
         parse_failed = list(doc["parse_failed"])
         got = read(doc)
@@ -1179,7 +1184,7 @@ def _run_da_guard(
         # tree holds (#2725).
         _fault(subcommand, "stale" if stale else "bad_output")
         raise error(
-            f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
+            f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({error_text(e)}){stale}",
             proc.returncode, stderr, stale=bool(stale), broken=not stale) from e
 
     if (parse_failed or unreadable) and not dropped_ok:
@@ -1296,11 +1301,11 @@ def requested_tenants(tenants: "Iterable[str] | None") -> "list[str] | None":
     requested = list(tenants)
     for t in requested:
         if not isinstance(t, str):
-            raise TypeError(f"tenant id {t!r} is not a string")
+            raise TypeError(f"tenant id '{shown_key(t)}' is not a string")
         try:
             t.encode("utf-8")
         except UnicodeEncodeError:
-            raise ValueError(f"tenant id {t!r} is not valid UTF-8") from None
+            raise ValueError(f"tenant id '{shown_key(t)}' is not valid UTF-8") from None
     if not requested or "" in requested:
         raise ValueError("tenants must name at least one tenant, and no empty one")
     return sorted(set(requested))
@@ -1322,14 +1327,15 @@ def _subset_absent(doc: dict[str, Any], requested: "list[str] | None") -> "tuple
     () for the whole tree, whose document carries neither field."""
     if requested is None:
         if "tenants_requested" in doc or "tenants_absent" in doc:
-            raise ValueError("a whole-tree document carries tenants_requested / tenants_absent")
+            raise _ShapeError("a whole-tree document carries tenants_requested / tenants_absent")
         return ()
     got, absent = doc["tenants_requested"], doc["tenants_absent"]
     if not isinstance(absent, list) or got != requested:
-        raise ValueError(f"tenants_requested {got!r}, this reader asked for {requested!r}")
+        raise _ShapeError(f"tenants_requested {shown_value(got)}, this reader asked for {shown_value(requested)}")
     present = set(doc["tenants"])
     if present & set(absent) or present | set(absent) != set(requested):
-        raise ValueError(f"tenants {sorted(present)!r} / tenants_absent {absent!r} do not answer {requested!r}")
+        raise _ShapeError(f"tenants {shown_value(sorted(present))} / tenants_absent {shown_value(absent)} "
+                         f"do not answer {shown_value(requested)}")
     return tuple(str(t) for t in absent)
 
 
@@ -1380,7 +1386,7 @@ def load_served_tree(
                 row["value"] = _threshold(row["value"])
         except (ValueError, KeyError, TypeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries a value that is not a threshold ({error_text(e)})",
                 returncode, stderr, broken=True) from e
         # #3703: every field below is one every da-guard writing this
         # document's schema writes; one missing is broken output, not an
@@ -1389,37 +1395,33 @@ def load_served_tree(
             series = {str(k): _series_list(v) for k, v in tv["series"].items()}
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries series that are not of their shape ({e})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries series that are not of their shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
         try:
             state_filters = _state_filters(tv["state_filters"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries state_filters that are not of their shape ({e!r})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries state_filters that are not of their shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
         try:
             time_boxes = _time_boxes(tv["time_boxes"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries time_boxes that are not of their shape ({e!r})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries time_boxes that are not of their shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
-        if not isinstance(tv.get("custom_alerts") or [], list):
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries custom_alerts that are not a list",
-                returncode, stderr, broken=True)
         try:
             keys = {str(k): _served_key(e) for k, e in tv["keys"].items()}
             routing = tv.get("routing")
             if routing is not None and not isinstance(routing, dict):
-                raise TypeError(f"routing is a {type(routing).__name__}")
-            alert_rows = tv.get("custom_alert_rows")
-            if alert_rows is not None and (type(alert_rows) is not int or alert_rows < 0):
-                raise TypeError(f"custom_alert_rows is {alert_rows!r}")
+                raise _ShapeError(f"routing is a {type(routing).__name__}")
+            alert_rows = tv["custom_alert_rows"]
+            if type(alert_rows) is not int or alert_rows < 0:
+                raise _ShapeError(f"custom_alert_rows is not a non-negative int ({type(alert_rows).__name__})")
             custom_alerts, custom_alerts_error, custom_alerts_finding = _custom_alerts_fields(tv)
             key_checks = _key_checks(tv["key_checks"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries keys, routing or custom alerts that are not of their shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
@@ -1427,14 +1429,14 @@ def load_served_tree(
                 days = {k: _key_schedule(s) for k, s in tv["schedules"].items()}
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 raise ServedValuesError(
-                    f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
+                    f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries a schedule that is not of its shape ({error_text(e)})",
                     returncode, stderr, broken=True) from e
         try:
             unserved = dict(tv["unserved"])
             dropped_keys = {k: list(v) for k, v in tv["dropped"].items()}
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries unserved or dropped keys that are not of their shape ({e!r})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries unserved or dropped keys that are not of their shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, unserved,
                                      dropped_keys, days, series,
@@ -1457,7 +1459,7 @@ def _check_tenant_map(tenants: Any, returncode: int, stderr: str) -> None:
     for tenant_id, tv in tenants.items():
         if not isinstance(tv, dict):
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} is a {type(tv).__name__}, "
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' is a {type(tv).__name__}, "
                 "not an object", returncode, stderr, broken=True)
 
 
@@ -1496,11 +1498,12 @@ def load_served_schedules(
             if set(tv) != {"schedules"}:
                 # A document of --schedules instead (a binary that ignores the
                 # flag would not exit 0 on it): never read as the day alone.
-                raise ValueError(f"fields {sorted(tv)}, not schedules alone")
+                raise _ShapeError(f"not schedules alone: {len(set(tv) - {'schedules'})} other field(s)"
+                                  f"{'' if 'schedules' in tv else ', and no schedules'}")
             out[tenant_id] = {str(k): _key_schedule(sch) for k, sch in tv["schedules"].items()}
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries a schedule that is not of its shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
     return ServedSchedules(out, skipped, _nonempty_lines(stderr), *dropped, absent)
 
@@ -1557,15 +1560,16 @@ def load_served_facts(
             if not _FACTS_FIELDS <= set(tv) <= _FACTS_FIELDS | {"custom_alerts_error"}:
                 # Another mode's document (a binary that ignores the flag
                 # would not exit 0 on it): never read as these facts.
-                raise ValueError(f"fields {sorted(tv)}, not a --config-facts tenant")
+                raise _ShapeError(f"not a --config-facts tenant: {len(set(tv) - _FACTS_FIELDS - {'custom_alerts_error'})} "
+                                  f"other field(s), {len(_FACTS_FIELDS - set(tv))} missing")
             custom_alerts, error, finding = _custom_alerts_fields(tv)
             metadata = tv["metadata"]
             if not isinstance(metadata, dict):
-                raise TypeError(f"metadata is a {type(metadata).__name__}")
+                raise _ShapeError(f"metadata is a {type(metadata).__name__}")
             out[tenant_id] = TenantFacts(custom_alerts, error, finding, metadata)
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries config facts that are not of their shape ({e})",
+                f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries config facts that are not of their shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
     return ServedFacts(out, skipped, _nonempty_lines(stderr), *dropped)
 
@@ -1588,29 +1592,31 @@ def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcomman
         out = tuple(RootDefaultRefused(str(e["key"]), str(e["text"]), str(e["refused"])) for e in entries)
         bad = [e.refused for e in out if e.refused not in SERVED_KEY_REFUSALS]
         if bad:
-            raise ValueError(f"refused {bad[0]!r}")
+            raise _ShapeError(f"refused {shown_value(bad[0])}")
     except (ValueError, KeyError, TypeError) as e:
         raise error(
-            f"da-guard {subcommand}: root_defaults_refused is not of its shape ({e!r})",
+            f"da-guard {subcommand}: root_defaults_refused is not of its shape ({error_text(e)})",
             returncode, stderr, broken=True) from e
     return out
 
 
-def _custom_alerts_fields(tv: dict) -> "tuple[tuple[CustomAlertEntry, ...] | None, str | None, str | None]":
+def _custom_alerts_fields(tv: dict) -> "tuple[tuple[CustomAlertEntry, ...], str | None, str | None]":
     """A served-values tenant's `custom_alerts`, `custom_alerts_error` and
-    `custom_alerts_finding`, checked (one reading for every mode, #3918).
-    `custom_alerts` None: the tenant carries no such field. Raises
-    ValueError / KeyError / TypeError on a shape Go does not write."""
-    custom_alerts = (None if "custom_alerts" not in tv
-                     else tuple(_custom_alert_entry(e) for e in tv["custom_alerts"]))
+    `custom_alerts_finding`, checked — one reading for the default mode and
+    --config-facts (#3918). Every field but `custom_alerts_error` (written
+    only beside a block that does not decode) is required (#3961). Raises
+    ShapeError / KeyError on a shape Go does not write."""
+    if not isinstance(tv["custom_alerts"], list):
+        raise _ShapeError(f"custom_alerts is a {type(tv['custom_alerts']).__name__}, not a list")
+    custom_alerts = tuple(_custom_alert_entry(e) for e in tv["custom_alerts"])
     error = tv.get("custom_alerts_error")
     if error is not None and not isinstance(error, str):
-        raise TypeError(f"custom_alerts_error is a {type(error).__name__}")
-    finding = tv["custom_alerts_finding"] if "custom_alerts" in tv else tv.get("custom_alerts_finding")
+        raise _ShapeError(f"custom_alerts_error is a {type(error).__name__}")
+    finding = tv["custom_alerts_finding"]
     if finding is not None and (not isinstance(finding, str) or error is None):
-        raise ValueError(f"custom_alerts_finding {finding!r} with custom_alerts_error {error!r}")
+        raise _ShapeError(f"custom_alerts_finding {shown_value(finding)} "
+                          f"with custom_alerts_error {shown_value(error)}")
     return custom_alerts, error, finding
-
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:
     """One `custom_alerts` entry, checked: a status from the closed set, a
@@ -1619,19 +1625,19 @@ def _custom_alert_entry(e: Any) -> CustomAlertEntry:
     only on an entry that is neither served nor disabled."""
     status = e["status"]
     if status not in CUSTOM_ALERT_STATUSES:
-        raise ValueError(f"custom_alerts status {status!r}")
+        raise _ShapeError(f"custom_alerts status {shown_value(status)}")
     index, spec = e["index"], e["spec"]
     if type(index) is not int or not isinstance(spec, dict):
-        raise TypeError(f"custom_alerts entry index {index!r} / spec {type(spec).__name__}")
+        raise _ShapeError(f"custom_alerts entry index {shown_value(index)} / spec {type(spec).__name__}")
     rid, sevs = e.get("recipe_id"), tuple(e.get("severities") or ())
     if (status in ("served", "disabled")) != bool(rid and sevs):
-        raise ValueError(f"custom_alerts entry {index} is {status} with recipe_id {rid!r}, severities {sevs!r}")
+        raise _ShapeError(f"custom_alerts entry {index} is {status} with recipe_id {shown_value(rid)}, severities {shown_value(sevs)}")
     refused = e.get("refused")
     if refused is not None and (refused not in SERVED_KEY_REFUSALS or status != "rejected"):
-        raise ValueError(f"custom_alerts entry {index} is {status} with refused {refused!r}")
+        raise _ShapeError(f"custom_alerts entry {index} is {status} with refused {shown_value(refused)}")
     finding = e["finding"]
     if finding is not None and (not isinstance(finding, str) or status in ("served", "disabled")):
-        raise ValueError(f"custom_alerts entry {index} is {status} with finding {finding!r}")
+        raise _ShapeError(f"custom_alerts entry {index} is {status} with finding {shown_value(finding)}")
     return CustomAlertEntry(index, dict(spec), status, e.get("reason"), rid, tuple(str(s) for s in sevs),
                             refused, finding)
 
@@ -1641,26 +1647,26 @@ def _served_key(e: Any) -> ServedKey:
     read the key, and from the closed set."""
     exporter = e["exporter"]
     if not isinstance(exporter, bool):
-        raise TypeError(f"exporter is a {type(exporter).__name__}")
+        raise _ShapeError(f"exporter is a {type(exporter).__name__}")
     reason = e.get("reason")
     if exporter == (reason is not None) or (reason is not None and reason not in SERVED_KEY_REASONS):
-        raise ValueError(f"exporter {exporter} with reason {reason!r}")
+        raise _ShapeError(f"exporter {exporter} with reason {shown_value(reason)}")
     registered = e.get("registered")
     if registered is not None and not isinstance(registered, bool):
-        raise TypeError(f"registered is a {type(registered).__name__}")
+        raise _ShapeError(f"registered is a {type(registered).__name__}")
     declared = {str(r): tuple(str(l) for l in layers) for r, layers in (e.get("declared") or {}).items()}
     hint = e.get("hint")
     disable = e.get("disable")
     if disable is not None and disable not in DISABLE_EFFECTS:
-        raise ValueError(f"disable {disable!r}")
+        raise _ShapeError(f"disable {shown_value(disable)}")
     refused = e.get("refused")
     if refused is not None and refused not in SERVED_KEY_REFUSALS:
-        raise ValueError(f"refused {refused!r}")
+        raise _ShapeError(f"refused {shown_value(refused)}")
     if (reason in SERVED_KEY_REFUSED_REASONS) != (refused is not None and not exporter):
-        raise ValueError(f"reason {reason!r} with refused {refused!r}")
+        raise _ShapeError(f"reason {shown_value(reason)} with refused {shown_value(refused)}")
     switched = e.get("switched_off_with")
     if switched is not None and not isinstance(switched, str):
-        raise TypeError(f"switched_off_with is a {type(switched).__name__}")
+        raise _ShapeError(f"switched_off_with is a {type(switched).__name__}")
     dead = dead_entries(e.get("dead_entries", []), "dead_entries")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
                      disable, refused, switched, dead)
@@ -1669,16 +1675,16 @@ def _served_key(e: Any) -> ServedKey:
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
     """A tenant's `time_boxes`, as da-guard wrote it."""
     if not isinstance(m, dict):
-        raise TypeError(f"not a mapping: {m!r}")
+        raise _ShapeError(f"not a mapping: {shown_value(m)}")
     out = {}
     for key, boxes in m.items():
         if not isinstance(boxes, list):
-            raise TypeError(f"{key}: not a list: {boxes!r}")
+            raise _ShapeError(f"{shown_key(key)}: not a list: {shown_value(boxes)}")
         items = []
         for b in boxes:
             expires, expired = b["expires"], b["expired"]
             if not isinstance(expires, str) or not expires or not isinstance(expired, bool):
-                raise TypeError(f"{key}: not a time-box: {b!r}")
+                raise _ShapeError(f"{shown_key(key)}: not a time-box: {shown_value(b)}")
             items.append(TimeBox(str(b.get("target", "")), expires, expired))
         out[str(key)] = tuple(items)
     return out
@@ -1688,31 +1694,31 @@ def _state_filters(m: Any) -> dict[str, str]:
     """A tenant's `state_filters`, as da-guard wrote it: filter name ->
     {"severity": <non-empty string>}."""
     if not isinstance(m, dict):
-        raise TypeError(f"not a mapping: {m!r}")
+        raise _ShapeError(f"not a mapping: {shown_value(m)}")
     out = {}
     for name, sf in m.items():
         sev = sf["severity"]
         if not isinstance(sev, str) or not sev:
-            raise TypeError(f"{name}: severity is not a non-empty string: {sev!r}")
+            raise _ShapeError(f"{shown_key(name)}: severity is not a non-empty string: {shown_value(sev)}")
         out[str(name)] = sev
     return out
 
 
 def _str_map(m: Any) -> dict[str, str]:
     if not isinstance(m, dict):
-        raise TypeError(f"not a mapping: {m!r}")
+        raise _ShapeError(f"not a mapping: {shown_value(m)}")
     return {str(k): str(v) for k, v in m.items()}
 
 
 def _series_list(items: Any) -> tuple[Series, ...]:
     """One key's `series`, as da-guard wrote it (a non-empty list)."""
     if not isinstance(items, list) or not items:
-        raise ValueError(f"series is not a non-empty list: {items!r}")
+        raise _ShapeError(f"series is not a non-empty list: {shown_value(items)}")
     out = []
     for s in items:
         twin = s["legacy_twin"]
         if not isinstance(twin, bool):
-            raise TypeError(f"legacy_twin is not a boolean: {twin!r}")
+            raise _ShapeError(f"legacy_twin is not a boolean: {shown_value(twin)}")
         out.append(Series(str(s["name"]), _str_map(s["labels"]), str(s["metric_key"]), twin,
                           _str_map(s["dimensions"]), _str_map(s["dimensions_regex"])))
     return tuple(out)
@@ -1730,7 +1736,7 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
         value = seg["value"]
         reason = seg.get("reason")
         if reason is not None and (value is not None or reason not in SEGMENT_REASONS):
-            raise ValueError(f"segment reason {reason!r} with value {value!r}")
+            raise _ShapeError(f"segment reason {shown_value(reason)} with value {shown_value(value)}")
         segments.append(ScheduleSegment(
             str(seg["from"]), str(seg["to"]),
             None if value is None else _threshold(value),
@@ -1740,7 +1746,7 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
             reason))
     expired = s.get("expired")
     if expired is not None and not isinstance(expired, bool):
-        raise ValueError(f"expired is not a boolean: {expired!r}")
+        raise _ShapeError(f"expired is not a boolean: {shown_value(expired)}")
     expires = s.get("expires")
     return KeySchedule(segments, None if expires is None else str(expires), expired)
 
@@ -1930,7 +1936,7 @@ def _root_defaults_reserved(entries: Any, returncode: int, stderr: str) -> "tupl
         return None
     if not isinstance(entries, list) or not all(isinstance(k, str) for k in entries):
         raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: root_defaults_reserved is not of its shape "
-                             f"({entries!r})", returncode, stderr, broken=True)
+                             f"({shown_value(entries)})", returncode, stderr, broken=True)
     return tuple(entries)
 
 
@@ -1940,19 +1946,20 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
     try:
         for tenant_id, t in tenants.items():
             if t["tenant_id"] != tenant_id:
-                raise ValueError(f"entry {tenant_id!r} carries tenant_id {t['tenant_id']!r}")
+                raise _ShapeError(f"entry '{shown_key(tenant_id)}' carries tenant_id '{shown_key(t['tenant_id'])}'")
             sources: dict[str, KeySource] = {}
             for key, ks in t["key_sources"].items():
                 layer, level = ks["layer"], ks.get("level")
                 if layer not in _KEY_LAYERS:
-                    raise ValueError(f"tenant {tenant_id!r} key {key!r}: unknown layer {layer!r}")
+                    raise _ShapeError(f"tenant '{shown_key(tenant_id)}' key '{shown_key(key)}': unknown layer {shown_value(layer)}")
                 if (level is None) == (layer == "defaults"):
-                    raise ValueError(f"tenant {tenant_id!r} key {key!r}: layer {layer!r} with level {level!r}")
+                    raise _ShapeError(f"tenant '{shown_key(tenant_id)}' key '{shown_key(key)}': layer {shown_value(layer)} "
+                                     f"with level {shown_value(level)}")
                 sources[key] = KeySource(layer, ks["file"], level)
             effective = dict(t["effective_config"])
             if "not_served" not in t:
                 raise EffectiveError(
-                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `not_served` — "
+                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant '{shown_key(tenant_id)}' has no `not_served` — "
                     "this da-guard is older than this tool: upgrade or rebuild it",
                     returncode, stderr, stale=True)
             not_served = {}
@@ -1960,19 +1967,19 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
                 if v["reason"] not in NOT_SERVED_REASONS:
                     # #3502: a reason this reader does not know is not read as
                     # one it does (fail-closed).
-                    raise ValueError(f"tenant {tenant_id!r} key {k!r}: not_served reason {v['reason']!r} "
+                    raise _ShapeError(f"tenant '{shown_key(tenant_id)}' key '{shown_key(k)}': not_served reason {shown_value(v['reason'])} "
                                      f"is none of {sorted(NOT_SERVED_REASONS)}")
                 not_served[str(k)] = NotServedKey(str(v["reason"]), str(v.get("file") or ""))
             if "dead_entries" not in t:
                 raise EffectiveError(
-                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `dead_entries` — "
+                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant '{shown_key(tenant_id)}' has no `dead_entries` — "
                     "this da-guard is older than this tool: upgrade or rebuild it",
                     returncode, stderr, stale=True)
-            dead = {str(k): dead_entries(v, f"tenant {tenant_id!r} dead_entries.{k}")
+            dead = {str(k): dead_entries(v, f"tenant '{shown_key(tenant_id)}' dead_entries.{shown_key(k)}")
                     for k, v in t["dead_entries"].items()}
             if set(sources) != set(effective):
-                raise ValueError(f"tenant {tenant_id!r}: key_sources and effective_config differ on "
-                                 f"{sorted(set(sources) ^ set(effective))!r}")
+                raise _ShapeError(f"tenant '{shown_key(tenant_id)}': key_sources and effective_config differ on "
+                                 f"{shown_value(sorted(set(sources) ^ set(effective)))}")
             out[tenant_id] = TenantEffective(
                 tenant_id=tenant_id,
                 effective_config=effective,
@@ -1990,7 +1997,7 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
             )
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise EffectiveError(
-            f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
+            f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({error_text(e)})",
             returncode, stderr, broken=True) from e
     return out
 
@@ -2015,7 +2022,7 @@ def load_key_refs(
                 ref = KeyRef(r["file"], r["section"], r["owner"], r["key"], r["nested"])
                 if (not all(isinstance(v, str) for v in ref[:4]) or not isinstance(ref.nested, bool)
                         or ref.section not in _KEY_REF_SECTIONS):
-                    raise ValueError(f"reference {r!r} is not of its shape")
+                    raise _ShapeError(f"reference {shown_value(r)} is not of its shape")
                 got.append(ref)
             refs[m] = got
         return KeyRefsTree(
@@ -2051,19 +2058,19 @@ def load_severity_dedup(
         for tenant, entry in doc["tenants"].items():
             mode = entry["mode"]
             if mode not in _SEVERITY_DEDUP_MODES:
-                raise ValueError(f"tenant {tenant!r}: mode {mode!r} is neither enable nor disable")
+                raise _ShapeError(f"tenant '{shown_key(tenant)}': mode {shown_value(mode)} is neither enable nor disable")
             modes[tenant] = mode
         problems = []
         for p in doc["problems"]:
             problem = SeverityDedupProblem(p["file"], p["layer"], p["owner"], p["problem"], p["value"])
             if not all(isinstance(v, str) for v in problem) or problem.layer not in _SEVERITY_DEDUP_LAYERS:
-                raise ValueError(f"problem {p!r} is not of its shape")
+                raise _ShapeError(f"problem {shown_value(p)} is not of its shape")
             problems.append(problem)
         schedules = []
         for e in doc["schedules"]:
             sched = SeverityDedupSchedule(e["file"], e["section"], e["owner"])
             if not all(isinstance(v, str) for v in sched) or sched.section not in _SEVERITY_DEDUP_SECTIONS:
-                raise ValueError(f"schedule {e!r} is not of its shape")
+                raise _ShapeError(f"schedule {shown_value(e)} is not of its shape")
             schedules.append(sched)
         return SeverityDedupTree(
             modes, problems, schedules, [str(f) for f in doc["parse_failed"]],
@@ -2087,23 +2094,23 @@ def load_custom_alert_pack(
         groups = doc["groups"]
         shapes = doc["shapes"]
         if not isinstance(groups, list) or not all(isinstance(g, dict) for g in groups):
-            raise TypeError(f"groups is not a list of groups: {type(groups).__name__}")
+            raise _ShapeError(f"groups is not a list of groups: {type(groups).__name__}")
         if type(shapes) is not int or shapes < 0:
-            raise TypeError(f"shapes is {shapes!r}")
+            raise _ShapeError(f"shapes is {shown_value(shapes)}")
         not_compiled = []
         for e in doc["not_compiled"]:
             nc = NotCompiledEntry(e["tenant"], e["index"], e["name"], e["status"], e["reason"])
             if (type(nc.index) is not int or not all(isinstance(v, str) for v in (nc.tenant, nc.name, nc.reason))
                     or nc.status not in ("rejected", "duplicate")):
-                raise ValueError(f"not_compiled entry {e!r} is not of its shape")
+                raise _ShapeError(f"not_compiled entry {shown_value(e)} is not of its shape")
             not_compiled.append(nc)
         block_errors, lifecycle = doc["block_errors"], doc["lifecycle"]
         if not isinstance(block_errors, dict) or not isinstance(lifecycle, list):
-            raise TypeError("block_errors / lifecycle is not of its shape")
+            raise _ShapeError("block_errors / lifecycle is not of its shape")
         uses = []
         for u in lifecycle:
             if not isinstance(u["tenants"], list):
-                raise TypeError(f"lifecycle entry {u!r} is not of its shape")
+                raise _ShapeError(f"lifecycle entry {shown_value(u)} is not of its shape")
             uses.append(LifecycleUse(str(u["recipe"]), str(u["status"]), tuple(str(t) for t in u["tenants"])))
         block_errors = {str(k): str(v) for k, v in block_errors.items()}
         return CustomAlertPack(
@@ -2217,11 +2224,11 @@ class GuardReportError(DaGuardError):
 
 def _guard_finding(f: Any) -> GuardFinding:
     if not isinstance(f, dict):
-        raise TypeError(f"a finding that is not an object: {f!r}")
+        raise _ShapeError(f"a finding that is not an object: {shown_value(f)}")
     sev, kind, msg = f["severity"], f["kind"], f["message"]
     tenant, field = f.get("tenant_id", ""), f.get("field", "")
     if not all(isinstance(v, str) for v in (sev, kind, msg, tenant, field)):
-        raise TypeError(f"a finding whose fields are not strings: {f!r}")
+        raise _ShapeError(f"a finding whose fields are not strings: {shown_value(f)}")
     return GuardFinding(sev, kind, tenant, field, msg)
 
 
@@ -2281,13 +2288,13 @@ def load_guard_report(
         elif isinstance(report, dict):
             findings = [_guard_finding(f) for f in (report["findings"] or [])]
         else:
-            raise TypeError(f"report is {type(report).__name__}")
+            raise _ShapeError(f"report is {type(report).__name__}")
         parse_failed = [str(f) for f in (doc.get("parse_failed") or [])]
         unreadable = [UnreadableFile(str(e["file"]), str(e["reason"]))
                       for e in (doc.get("unreadable") or [])]
         undetermined = len(doc["undetermined"])
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
-        raise GuardReportError(f"da-guard exited {rc} without the expected JSON ({e})",
+        raise GuardReportError(f"da-guard exited {rc} without the expected JSON ({error_text(e)})",
                                rc, stderr, broken=True) from e
     has_error = any(f.severity == GUARD_REPORT_SEVERITY_ERROR for f in findings)
     dropped = bool(parse_failed or unreadable)
