@@ -249,7 +249,7 @@ docker run --rm \
 
 ### 5.3 GitOps 完整 ConfigMap 產出
 
-`generate-routes --output-configmap` 產出可直接 `kubectl apply` 的完整 Alertmanager ConfigMap YAML，適合 Git PR flow：
+`generate-routes --output-configmap` 產出完整的 Alertmanager ConfigMap YAML（以 `kubectl apply --server-side` 套用，或在 Argo CD 開 `ServerSideApply=true`），適合 Git PR flow：
 
 ```bash
 docker run --rm \

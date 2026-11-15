@@ -82,7 +82,12 @@ _TOOLS = _THIS_DIR.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: kubectl's own manifest, read kubectl's way)
 import _lib_io  # noqa: E402
-from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539)
+from _lib_kubectl import (  # noqa: E402  (#3539; the k8s limits, #3900)
+    ANNOTATION_TOTAL_LIMIT_BYTES,
+    CONFIGMAP_DATA_LIMIT_BYTES,
+    KubectlError,
+    kubectl_run,
+)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
@@ -124,7 +129,7 @@ _KUBECTL_TIMEOUT_S = 120
 #: What a ConfigMap's `data` may total, transcribed from k8s core validation
 #: (`ValidateConfigMap`: `totalSize > core.MaxSecretSize` -> "may not exceed
 #: 1048576 bytes"). ⛔ Summed over the VALUES, not over the manifest.
-_MAX_CONFIGMAP_BYTES = 1024 * 1024
+_MAX_CONFIGMAP_BYTES = CONFIGMAP_DATA_LIMIT_BYTES
 
 
 # ── what the ARTIFACT has to say back (#1796, second half) ───────────
@@ -137,7 +142,7 @@ _MAX_CONFIGMAP_BYTES = 1024 * 1024
 # object's annotations at `TotalAnnotationSizeLimitB`, a QUARTER of the data
 # ceiling. Under it a 400 KB tree passes every check here and dies at apply
 # on `metadata.annotations: Too long`, naming no file.
-_ANNOTATION_TOTAL_LIMIT = 256 * 1024
+_ANNOTATION_TOTAL_LIMIT = ANNOTATION_TOTAL_LIMIT_BYTES
 
 
 def _carriers(config_dir: Path) -> list[Path]:
