@@ -442,6 +442,10 @@ class _Stream:
 
 
 def _judge(job: ChildJob, stream: _Stream) -> dict:
+    # #3961: the program-end records `_judge` answers from (a memory end,
+    # the faults read after it) are this judgement's only: whatever this
+    # process recorded before is cleared here, by the one reader of them.
+    _lib_tool_fault.clear()
     tree_dir = os.path.join(job.job_dir, "conf.d")
     tree = None
     for attempt in (1, 2):
@@ -815,8 +819,7 @@ def run_child(job: ChildJob, result_fd: int) -> None:
             os.dup2(out, fd)
             os.close(out)
         stream = _Stream(result_fd, job.max_transfer)
-        _lib_tool_fault.clear()  # a fork: nothing of the service's own runs
-        result = _judge(job, stream)
+        result = _judge(job, stream)  # starts from no program-end records
         faults = _lib_tool_fault.faults()  # not a memory end: `_judge` answered that
         if faults:
             # #3862: a verdict reached without one of its programs is no

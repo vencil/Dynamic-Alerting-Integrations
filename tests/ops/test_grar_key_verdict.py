@@ -243,10 +243,21 @@ def test_key_verdict_false_asks_for_none(tmp_path, monkeypatch, capsys):
     assert len(calls) == 1
 
 
-def test_the_generator_container_does_not_judge_keys_inside_the_generator(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stale_memory_end", [False, True])
+def test_the_generator_container_does_not_judge_keys_inside_the_generator(
+        tmp_path, monkeypatch, stale_memory_end):
     """The container runs `gar.main` in its judgement process and judges the
     keys itself afterwards (`_gsvc_child.key_verdict`, its own deadline): the
-    generator must not judge them a second time, outside it."""
+    generator must not judge them a second time, outside it.
+
+    #3961: a program-end record left in this process by anything before the
+    judgement (here a memory end, as an earlier test on the same worker left
+    one) is not this judgement's: `_judge` starts from no records, so it does
+    not answer `memory` for a run that never ran out of memory."""
+    if stale_memory_end:
+        import _lib_tool_fault as tf
+        monkeypatch.setattr(tf, "_RECORDS", [])
+        tf.record("da-guard", "served-values", tf.MEMORY_END)
     repo = h.init_repo(tmp_path / "repo")
     base = h.commit_tree(repo, {"_defaults.yaml": DEFAULTS,
                                 "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"50\"\n"})
