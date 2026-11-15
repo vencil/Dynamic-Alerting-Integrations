@@ -11,7 +11,8 @@
 #   jvm_gc_pause: 0.5   # seconds/5m — GC pause duration rate warning
 #       未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
 #   jvm_memory: 80   # % — Heap memory usage warning
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+#       未啟用（聚合錯誤，#3928）：規則逐 series 相除，Micrometer 的 JVM（每個 heap pool 一條 series）會因最滿的那個 pool 就響；80
+#       的依據量的是整體 heap。
 #   jvm_threads: 500   # count — Active thread count warning
 #       未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
 #

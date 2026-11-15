@@ -33,8 +33,8 @@ purpose: |
       (ENUMS.thresholdDisable) with no ':severity' suffix. `disable:critical`
       is NOT a disable of a threshold row — the exporter cannot read it.
     thresholdScalarText(v) -> string | null
-      The text of a parsed YAML scalar: a string as is, a number or a
-      boolean through String(). null for anything else (a map, a list, null).
+      The text of a scalar: a string as is, a number or a boolean through
+      String(). null for anything else (a map, a list, null).
     isCriticalKey(key) -> boolean
       Whether a tenant key is a `<base>_critical` companion (the exporter's
       criticalRowBase: the suffix, and not a `_` key).
@@ -42,7 +42,10 @@ purpose: |
         | { kind: 'disabled', raw } | { kind: 'structured' }
         | { kind: 'unreadable', raw }
         | { kind: 'number', raw, number, severity }
-      What a simulator does with one value of a parsed tenant config.
+      What a simulator does with one value of a tenant config. A value
+      that comes from YAML must be the scalar's text — yaml-parser.js
+      parseTenantYaml's config, not parseYaml's (see "Where the text comes
+      from" below).
       'absent' is undefined / null. 'structured' is a map or a list (a
       scheduled value among them): the simulators model no schedule and say
       nothing about it. 'unreadable' is a scalar the exporter does not read
@@ -56,13 +59,20 @@ purpose: |
       served AT THAT DEFAULT, a declared key and a `_critical` key are not
       served. The pages say so (alert-engine.js unreadableThresholdMessage).
 
-  ⚠️ Known limit: the value arrives already typed by the YAML parser
-  (yaml-parser.js, js-yaml CORE_SCHEMA), and the exporter reads the scalar's
-  TEXT. A value the parser made a number is taken as that number — its text
-  is gone, and String() of it is not what was written (`1e20` comes back as
-  21 digits). So unquoted spellings the exporter refuses are read here: a
-  non-decimal integer (`0x1F`, `0o17`, `0b101` → 31, 15, 5) and a number of
-  more than 20 digits. Quoted, the text survives and is refused here too.
+  Where the text comes from (#3919): the exporter reads a YAML scalar's
+  TEXT (ScheduledValue.UnmarshalYAML), quoted or not — `0x1F`, `0o17`,
+  `0b101` and a number of more than 20 digits are refused either way, and
+  `1e20` is served. So a page that hands YAML to alert-engine.js (Alert
+  Preview, YAML Validator) parses with yaml-parser.js parseTenantYaml, which hands every threshold scalar over as
+  the string that was written, and readThresholdRow holds that string to the
+  grammar. A YAML null (`~`, `null`, an empty value) arrives as null: the
+  exporter takes such a key as not written (#2518).
+  A JavaScript NUMBER is read as that number, with no grammar check: it is
+  what a caller with no text has — a number field (`<input type="number">`),
+  a value built in code. There is nothing written to hold to the grammar
+  (String(1e20) is 21 digits, which the grammar refuses). ⛔ That is why
+  parseYaml's typed config must not be handed here: its numbers are the YAML
+  parser's reading, not the exporter's.
 
   Closure deps: none. All data is ESM-imported from ../data/recipe-enums.json
   (generated from the exporter's recipe contract and the matrix header by
@@ -144,8 +154,10 @@ function readThresholdRow(v, tier = 'base') {
   const raw = thresholdScalarText(v);
   if (raw === null) return { kind: 'structured' };
   const severity = tier === 'critical' ? 'critical' : ENUMS.severityDefault;
-  // The parser has already made it a number: there is no text to hold to the
-  // grammar (String(1e20) is 21 digits, which the grammar refuses).
+  // A number from a caller that has no text (a number field, a value built
+  // in code): nothing was written to hold to the grammar, and String(1e20)
+  // is 21 digits, which the grammar refuses. YAML never arrives this way —
+  // parseTenantYaml hands over the text (#3919).
   if (typeof v === 'number') {
     return Number.isFinite(v) ? { kind: 'number', raw, number: v, severity } : { kind: 'unreadable', raw };
   }

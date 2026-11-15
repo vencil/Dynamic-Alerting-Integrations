@@ -12,7 +12,8 @@ purpose: |
     defaults. Used to seed the YAML editor on first load.
 
   validateConfig(config, packs)
-    Lint a parsed tenant config against the validation constants
+    Lint a parsed tenant config (yaml-parser.js parseTenantYaml — ⛔ not
+    parseYaml, see "Thresholds" below) against the validation constants
     (RECEIVER_TYPES / TIMING_GUARDRAILS) + DOMAIN_POLICIES; no key
     name is judged here (ADR-038 §11). Returns
     {issues: [{level, field, msg}]}.
@@ -38,6 +39,13 @@ purpose: |
     its critical tier fires; the `_critical` companion is read whole (no
     `:severity`), and an unreadable one puts its text in
     `critical_unreadable`. A map or a list (a scheduled value) has no row.
+
+  Thresholds (#3919): the exporter reads the TEXT of a threshold scalar. A
+    config that comes from YAML must be parseTenantYaml's, whose threshold
+    keys hold that text; parseYaml's has already made `0x1F` the number 31
+    and `0b101` the number 5, which the exporter never serves. A JavaScript
+    number handed in by a caller that has no text (a number field, a value
+    built in code) is taken as that number.
 
   simulateWithDedup(config, metrics, dedupEnabled, alertDefs)
     Alert-simulator model: each config key is an independent alert whose
@@ -334,8 +342,8 @@ function simulateAlerts(config, metricValues) {
 
   for (const [metric, val] of Object.entries(metricValues)) {
     const threshold = config[metric];
-    // parseYaml keeps YAML types (#2033): an unquoted `0` is the number 0,
-    // which is a real threshold — test for absence, not falsiness.
+    // `0` (the text, or a caller's number) is a real threshold — test for
+    // absence, not falsiness.
     const row = readThresholdRow(threshold);
     if (row.kind === 'absent' || row.kind === 'disabled') {
       alerts.push({

@@ -57,12 +57,39 @@ purpose: |
                            prototype) are dropped at every depth so
                            consumers can assign into it freely. `errors` is
                            a list of strings (syntax errors carry the line).
+    parseTenantYaml(text)  -> { config, errors }, as parseYaml, for a page
+                           that READS THRESHOLDS from the config (#3919).
+                           The exporter reads a threshold scalar's TEXT
+                           (ScheduledValue.UnmarshalYAML takes the node's
+                           value), so every top-level key that does not
+                           start with `_` — the threshold keys — holds what
+                           a second parse with a text-keeping schema reads:
+                           each scalar as the string that was written
+                           (`0x1F` is '0x1F', `80` and `"80"` are both '80',
+                           `False` is 'False'), at any depth (a scheduled
+                           value's `default` and `overrides[].value` too),
+                           and a YAML null (`~`, `null`, an empty value) as
+                           null. `_` keys are parseYaml's, typed. The
+                           threshold keys' NAMES are the text too (`0x1F: 5`
+                           is the key '0x1F', as the exporter has it).
+                           Which documents are an error is parseYaml's, run
+                           first: a document it refuses is refused here with
+                           the same error (so `0x1F: a` beside `31: b` is its
+                           duplicate key, though the exporter has two keys,
+                           and a second document is ignored, though the
+                           exporter refuses a file with one).
+                           ⛔ Hand its config to
+                           ../validation/threshold-value.js readThresholdRow
+                           (through alert-engine.js); do not hand parseYaml's
+                           there: a number the YAML parser made has no text
+                           left to hold to the exporter's grammar.
 
   Behaviour notes:
     Values keep their YAML types: `80` is a number, `"80"` a string,
     `true` a boolean, block and flow lists are arrays, nested maps are
-    objects at any depth. Duplicate keys, tab indentation and other
-    syntax errors are errors (js-yaml default).
+    objects at any depth (parseTenantYaml's threshold keys excepted, see
+    above). Duplicate keys, tab indentation and other syntax errors are
+    errors (js-yaml default).
     A non-mapping document root yields an error and config = {}.
 
   Closure deps: window.__t (host-page i18n thunk, per-call). UNSAFE_KEYS
@@ -72,13 +99,31 @@ purpose: |
   Consumers import these directly via ESM (dev-rules §S6).
 ---
 
-import { loadAll, CORE_SCHEMA, types } from 'js-yaml';
+import { loadAll, CORE_SCHEMA, FAILSAFE_SCHEMA, Type, types } from 'js-yaml';
 import { UNSAFE_KEYS, MAX_YAML_SIZE } from './constants.js';
 // #2711: generated from the schema's definitions.duration. Do not write a
 // second duration regex here; run `make am-duration-json` after a schema change.
 import AM_DURATION_RULE from '../data/am-duration.json';
 
 const YAML_SCHEMA = CORE_SCHEMA.extend({ implicit: [types.merge] });
+
+// The same documents with every scalar left as its text (#3919): no implicit
+// int / float / bool, so `0x1F` stays '0x1F'. Null and the merge key are
+// kept, because the exporter's decoder (yaml.v3) acts on both before a
+// threshold is read: a null value never reaches ScheduledValue.UnmarshalYAML
+// (the key writes nothing, #2518), and `<<` is expanded. A scalar under an
+// explicit `!!int` / `!!float` / `!!bool` tag is its text as well, so the
+// tags are listed for this schema to take the documents YAML_SCHEMA takes.
+// ⛔ It takes MORE than YAML_SCHEMA does: these types resolve anything, so
+// `!!int 1e20`, `!!bool off` or an empty `!!int` parse here while YAML_SCHEMA
+// (and the exporter's parse-tree) refuse them. parseTenantYaml is right only
+// because it runs parseYaml FIRST and returns its error; do not drop that
+// first parse (tests/parseYaml.test.ts holds the order).
+const textScalar = (tag) => new Type(tag, { kind: 'scalar', construct: (data) => data });
+const TEXT_SCHEMA = FAILSAFE_SCHEMA.extend({
+  implicit: [types.null, types.merge],
+  explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
+});
 
 const AM_DURATION_RE = new RegExp(AM_DURATION_RULE.pattern);
 // prometheus/common model.ParseDuration's units (time.go unitMap), in
@@ -124,6 +169,10 @@ function isPlainMap(v) {
 }
 
 function loadYamlDocument(text) {
+  return loadDocument(text, YAML_SCHEMA);
+}
+
+function loadDocument(text, schema) {
   const t = window.__t || ((zh, en) => en);
 
   const src = typeof text === 'string' ? text : '';
@@ -135,7 +184,7 @@ function loadYamlDocument(text) {
   }
   let loaded;
   try {
-    loaded = loadFirstDocument(src);
+    loaded = loadFirstDocument(src, schema);
   } catch (e) {
     const mark = e && e.mark;
     const line = mark && typeof mark.line === 'number' ? mark.line + 1 : null;
@@ -161,10 +210,10 @@ function loadYamlDocument(text) {
 // First document of the stream (null when empty). Any error in any
 // document throws. The listener collects anchor maps so a cycle can be
 // reported by anchor name.
-function loadFirstDocument(src) {
+function loadFirstDocument(src, schema) {
   const anchorMaps = new Set();
   const docs = loadAll(src, null, {
-    schema: YAML_SCHEMA,
+    schema,
     listener(_event, state) { if (state && state.anchorMap) anchorMaps.add(state.anchorMap); },
   });
   return { doc: docs.length ? docs[0] : null, anchorMaps };
@@ -238,4 +287,29 @@ function parseYaml(text) {
   return { config: stripUnsafeKeys(doc), errors: [] };
 }
 
-export { parseDuration, parseYaml, loadYamlDocument, isPlainMap };
+// parseYaml, with the threshold keys (top-level, not `_`-prefixed) read as
+// text. The keys are walked from the text parse, so a threshold key is named
+// as written; a `_` key the typed parse does not have under that name (none
+// is known) is left out rather than handed over untyped.
+function parseTenantYaml(text) {
+  const typed = parseYaml(text);
+  if (typed.errors.length) return typed;
+  const { doc, error } = loadDocument(text, TEXT_SCHEMA);
+  // Not reachable for a text parseYaml took, as far as is known; were it,
+  // the page shows the error instead of thresholds read from a typed value.
+  if (error) return { config: {}, errors: [error.message] };
+  if (!isPlainMap(doc)) return typed;
+  const config = {};
+  const memo = new Map();
+  for (const key of Object.keys(doc)) {
+    if (UNSAFE_KEYS.has(key)) continue;
+    if (key.startsWith('_')) {
+      if (Object.prototype.hasOwnProperty.call(typed.config, key)) config[key] = typed.config[key];
+      continue;
+    }
+    config[key] = stripUnsafeKeys(doc[key], memo);
+  }
+  return { config, errors: [] };
+}
+
+export { parseDuration, parseYaml, parseTenantYaml, loadYamlDocument, isPlainMap };

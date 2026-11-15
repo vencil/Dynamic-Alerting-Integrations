@@ -675,8 +675,8 @@ def find_nondecimal_numbers(root: Any, schema: dict,
 # `validate-config`'s `yaml_quoting` row: were they to differ, a value would
 # be reported twice, or read as quoted by json_schema in a file yaml_quoting
 # never walked, so nobody reports it (#2695). It lives here, not in
-# check_confd_schema, because the da-tools image ships this module and not
-# that lint (yaml_quoting must run there).
+# check_confd_schema, because yaml_quoting runs without that lint and
+# without jsonschema.
 CONFD_TENANT_SCHEMA = "tenant-config.schema.json"
 CONFD_PLATFORM_SCHEMA = "platform-defaults.schema.json"
 CONFD_ROUTING_PROFILES_SCHEMA = "routing-profiles.schema.json"

@@ -12,7 +12,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   getAllMetricKeys, getValueCounterexample, counterexampleComment,
 } from './_common/data/rule-packs.js';
-import { parseYaml } from './_common/validation/yaml-parser.js';
+import { parseTenantYaml } from './_common/validation/yaml-parser.js';
 import { generateSampleYaml, validateConfig } from './_common/sim/alert-engine.js';
 import { MetricAutocomplete, RulePackSelector } from './portal-shared.jsx';
 
@@ -88,7 +88,9 @@ function YamlValidatorTab() {
   }, [allMetrics, yaml]);
 
   const validate = useCallback(() => {
-    const { config, errors } = parseYaml(yaml);
+    // parseTenantYaml, not parseYaml: thresholds are read from the text that
+    // was written, as the exporter reads them (#3919).
+    const { config, errors } = parseTenantYaml(yaml);
     const validation = validateConfig(config, selectedPacks);
     // A syntax error leaves config = {} (#2033: the js-yaml parser no longer
     // guesses past it), and validateConfig({}) has nothing to report — so the

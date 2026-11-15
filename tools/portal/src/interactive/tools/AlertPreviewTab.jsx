@@ -10,7 +10,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // load time: no module in the graph imported portal-shared.jsx, so
 // the producer never ran.
 import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
-import { parseYaml } from './_common/validation/yaml-parser.js';
+import { parseTenantYaml } from './_common/validation/yaml-parser.js';
 import { fetchPageData } from './_common/api/api-fetch.js';
 import { generateSampleYaml, simulateAlerts, unreadableThresholdMessage } from './_common/sim/alert-engine.js';
 import { RulePackSelector } from './portal-shared.jsx';
@@ -67,7 +67,9 @@ function AlertPreviewTab() {
   }, []);
 
   const simulate = useCallback(() => {
-    const { config } = parseYaml(yaml);
+    // parseTenantYaml, not parseYaml: thresholds are read from the text that
+    // was written, as the exporter reads them (#3919).
+    const { config } = parseTenantYaml(yaml);
     const result = simulateAlerts(config, metrics);
     setAlerts(result);
   }, [yaml, metrics]);
@@ -185,7 +187,7 @@ function AlertPreviewTab() {
         {recData?.recommendations && (
           <button
             onClick={() => {
-              const { config } = parseYaml(yaml);
+              const { config } = parseTenantYaml(yaml);
               if (!config || !config.rules) {
                 alert(t('無法解析 YAML 配置', 'Unable to parse YAML config'));
                 return;
