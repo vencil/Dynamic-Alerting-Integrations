@@ -17,15 +17,12 @@ name: Security Audit (Python SAST)
 # .github/required-checks.yaml), and it CANNOT be listed as one as written: the `paths:` filters below mean the workflow does not run at all
 # on a PR that touches nothing in scope, so a required context would never be
 # reported and such PRs would hang on "Expected — Waiting for status".
-# Making it required needs the workflow to run on every PR first. The pattern
-# is already documented in validate.yaml's banner (no top-level `paths:`; gate
-# individual jobs with `if:` on detect-changes, because a skipped job DOES
-# report and satisfies the requirement).
-# ⛔ Adopting that pattern lands you in the NEXT failure mode, which is what
-# #1398 tracks: a job skipped because its detect job BROKE also reports
-# `skipped`, and skip satisfies a required check — the gate is then green
-# without ever running. Opposite direction from this one (too tight vs too
-# loose), so #1398 does NOT already cover the case below.
+# Making it required needs the workflow to run on every PR first (no top-level
+# `paths:`). ⛔ Do not then gate the JOB on paths instead: a skipped job
+# reports `skipped`, which satisfies a required check — the gate is green
+# without ever running. validate.yaml once did exactly that with
+# dorny/paths-filter and retired it in #3756 for this reason. Opposite
+# direction from the one above (too loose vs too tight).
 # ⛔ BOTH have to be done, in this order: (A) make the workflow always run,
 # (B) add the fail-closed aggregation #1398 asks for. Doing (A) alone hands
 # you a required check that passes when bandit never ran.

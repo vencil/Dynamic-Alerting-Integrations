@@ -16,11 +16,15 @@ A probe inside pytest was measured and rejected: `ci.yml::python-tests-run` has
 no `setup-go`, so it would skip in CI, and a vacuous control is worse than a
 declared gap.
 
-⛔ Matching and condition evaluation are IMPORTED from
+⛔ The workflow loader and the tracked-file set are IMPORTED from
 `test_ci_path_filter_coverage`, never reimplemented. Step-level `if:` and
-`continue-on-error:` are deliberately not re-checked here — that module already
-raises on both for this job (`GATED_LEGS` contains `("validate.yaml",
-"go-lint")`).
+`continue-on-error:` are deliberately not re-checked here —
+`test_ci_aggregate_gate_contract` already refuses both on every job the
+`Go Lint` gate waits for, this one included.
+
+Until #3756 this module also asserted that editing any linted module woke the
+job through validate.yaml's path filter. The job is not path-gated any more —
+it runs on every PR — so there is nothing left for a module to fail to wake.
 """
 
 from __future__ import annotations
@@ -45,10 +49,8 @@ LINT_JOB = "go-lint"
 
 sys.path.insert(0, str(ROOT / "tests" / "ops"))
 from test_ci_path_filter_coverage import (  # noqa: E402
-    _condition_triggers,
     _load_workflow,
     _tracked_files,
-    _workflow_filters,
 )
 from _vendored_go import VENDORED_GO_MODULES  # noqa: E402
 
@@ -381,30 +383,6 @@ def test_the_invariant_itself_reds_on_a_file_dotdotdot_skips(monkeypatch) -> Non
     reached = f"{_ANCHOR_MODULE}/internal/zz/zz.go"
     monkeypatch.setattr(module, "_tracked_files", lambda: real + (reached,))
     test_every_go_file_is_under_a_linted_module()
-
-
-def test_editing_a_module_wakes_the_lint_job() -> None:
-    """A gate the changed file cannot wake never runs on the PR that breaks it.
-
-    ⛔ Ordering: adding a lint step before the filter reaches the module
-    installs a gate that reports `0 issues` and never runs (#1399's shape).
-    """
-    filters = _workflow_filters(VALIDATE)
-    condition = str(_load_workflow(VALIDATE)["jobs"][LINT_JOB]["if"])
-
-    assert not _condition_triggers(condition, "zzz-not-a-tree/probe.go",
-                                   filters), (
-        "an unrelated top-level path reports as triggering, so this test "
-        "cannot tell covered from uncovered — look for a catch-all entry.")
-
-    unreachable = sorted(
-        d for d in set(_lint_steps().values())
-        if not _condition_triggers(condition, f"{d}/probe.go", filters))
-    assert not unreachable, (
-        f"these modules cannot trigger {LINT_JOB}: {unreachable}. The run leg is "
-        "skipped and its always-run gate reports success on the required check — "
-        f"the step is real and never runs on the PR that breaks it. Widen the `validate` filter in "
-        f"{VALIDATE.name} first.")
 
 
 # ── build tags ─────────────────────────────────────────────────────────────

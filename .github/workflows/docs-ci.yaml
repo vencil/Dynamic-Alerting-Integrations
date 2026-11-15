@@ -2,25 +2,23 @@
 #
 # Validates and renders documentation.
 #
-# The workflow itself triggers on EVERY pull_request to main (no top-level
-# `paths:` filter) — only individual jobs are gated, via the detect-changes
-# job's `docs_changed` output. Reason: several of these job NAMES are
-# enrolled in main's branch protection required_status_checks. A workflow
-# suppressed entirely by a top-level `paths:` filter reports NO status at
-# all for a PR that doesn't touch those paths, and GitHub treats a required
-# check with no reported status as permanently pending — blocking merge even
-# when every check that DID run is green (PR #928 / #957 both needed a
-# manual `--admin` bypass for this). A job that runs and is skipped via its
-# own `if:`, by contrast, reports `skipped` — which also satisfies the
-# requirement, and that is the opposite problem: when detect-changes itself
-# fails, every gated job skips and the PR merges having checked nothing
-# (#1398). So the required NAMES of gated legs belong to the `*-gate` jobs at
-# the end of this file, which always run and fail unless their leg succeeded
-# or was skipped because detect-changes said it was not needed; the legs
-# themselves are named `… — run`. check-links is not gated and carries its
-# required name directly (#2107). See detect-changes below.
+# The workflow triggers on EVERY pull_request to main (no top-level `paths:`
+# filter) and no job in it is path-gated (#3756): every PR runs every job.
+# Reason for the first half: several of these job NAMES are enrolled in
+# main's branch protection required_status_checks. A workflow suppressed
+# entirely by a top-level `paths:` filter reports NO status at all for a PR
+# that doesn't touch those paths, and GitHub treats a required check with no
+# reported status as permanently pending — blocking merge even when every
+# check that DID run is green (PR #928 / #957 both needed a manual `--admin`
+# bypass for this). Reason for the second: a job skipped by its own `if:`
+# reports `skipped`, which also satisfies the requirement — so a path filter
+# that missed one input skipped the check that would have caught the break,
+# and the PR merged green. The filter was a hand-kept list; it is gone.
 #
-# A job with no `if:` is unconditional on purpose; its own comment says why.
+# The required NAMES of the `… — run` legs belong to the `*-gate` jobs at the
+# end of this file (#1398), which always run and fail unless their leg
+# concluded `success` — a skipped, cancelled or failed leg fails its gate.
+# check-links and head-blob-hygiene carry their required names directly.
 #
 # Uses caching (npm + pip) for speed.
 
@@ -46,132 +44,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Explicit least-privilege grant (repo default is read-only; every sibling
-# workflow declares this block too). pull-requests:read is specifically for
-# detect-changes' dorny/paths-filter@v3 REST-API mode below.
+# workflow declares this block too).
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  detect-changes:
-    name: Detect Documentation Changes
-    runs-on: ubuntu-24.04
-    # Runs on every event so its result is `success` on push too — the
-    # `*-gate` jobs refuse anything else (#1398). Only the filter STEP is
-    # PR-only; off a PR the output is forced 'true', so on a push to main
-    # every gated job runs (the same shape as ci.yml's detect-changes).
-    # ⚠️ Before #1398 this job was skipped on push, so were all eight gated
-    # jobs behind it, and main never re-built the docs after a merge.
-    outputs:
-      docs_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.docs }}
-    steps:
-      # No actions/checkout here: dorny/paths-filter's default REST-API mode
-      # for pull_request events queries the changed-files list via the
-      # GitHub API and doesn't need a local clone (see its README's "For
-      # pull requests it's not necessary to checkout the code").
-      - name: Filter changed paths
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
-        with:
-          filters: |
-            docs:
-              - "docs/**/*.md"
-              - "docs/**/*.html"
-              - "rule-packs/**/*.md"
-              - "README.md"
-              - "README.en.md"
-              - "CLAUDE.md"
-              - "AGENTS.md"
-              - ".agents/**"
-              - "CHANGELOG.md"
-              - "mkdocs.yml"
-              - "scripts/tools/**/*.py"
-              # cli_contract 的契約來源：COMMAND_MAP 與二層 dispatcher
-              - "components/da-tools/app/**"
-              # cli_contract 的其餘輸入：帳本與三個 landing page（與 pre-commit 的 files: 同一組）
-              - "docs/internal/cli-contract-baseline.yaml"
-              - "components/da-tools/README.md"
-              - "components/da-tools/app/QUICKSTART.md"
-              - "try-local/README.md"
-              # cli_contract 的 CLI Playground 載體（以 node 求值 catalog 與 engine，#1379）
-              - "tools/portal/src/interactive/tools/cli-playground/commands.js"
-              - "tools/portal/src/interactive/tools/cli-playground/engine.js"
-              - "scripts/tools/lint/**/*.sh"
-              # i4-runbook-smoke-test verifies its tool downloads with it.
-              - "scripts/ops/_verify_download.sh"
-              # i4-runbook-smoke-test takes amtool from the image this pins (#2294).
-              - "k8s/03-monitoring/deployment-alertmanager.yaml"
-              # ⛔ Inputs reached INDIRECTLY — through a script a gated job
-              # merely invokes. That is exactly the class the coverage guard in
-              # tests/ops/test_ci_path_filter_coverage.py documents it
-              # CANNOT see, so this group is maintained by measurement, not by
-              # review: every `python … .py` command in every gated leg of this
-              # workflow was replayed under an open()/read_text recorder, and
-              # these are the tracked files that came back uncovered.
-              #   * scripts/tools/lint/mkdocs-anchor-debt.txt — the ledger
-              #     `mkdocs-build` passes or fails on, compared as a SET in BOTH
-              #     directions (`comm -13` then `comm -23`), so deleting a line
-              #     is as fatal as adding one. It landed 2026-08-08 (c33508d2)
-              #     already outside this filter: the `**/*.sh` entry above covers
-              #     the script but not its data file.
-              #   * components/threshold-exporter/README.md — `drift-checks`
-              #     (validate_all `versions` → validate_docs_versions.py)
-              #     checks its chart version; a wrong one reds it (#2107).
-              # ⚠️ The sweep is in-process, so it under-reports any leg that
-              # fans out through subprocess — `drift-checks` (validate_all.py,
-              # which shells out) is the one that does. Its inputs are NOT
-              # established by this measurement. #2079 re-ran every leg under
-              # strace (subprocesses included); its per-leg results are there.
-              - "scripts/tools/lint/mkdocs-anchor-debt.txt"
-              - "components/threshold-exporter/README.md"
-              # #3206 (ADR-036 §12): `drift-checks` builds da-crdecode
-              # (`make da-crdecode-build`, invisible to the coverage guard —
-              # `make` is not an interpreter it follows) and validate_all's
-              # `byo_rulepack_table` reads the Prometheus Deployment through
-              # it, so a change to that reading can change the table. Same
-              # entry image-ref-resolve.yaml carries for the same binary.
-              - "components/threshold-exporter/app/cmd/da-crdecode/**"
-              # The mkdocs hooks `mkdocs.yml` loads (`hooks:`): `mkdocs-build`
-              # executes them on every build, so breaking one fails that
-              # required check. `test_docs_filter_covers_every_mkdocs_hook`
-              # derives the set from `hooks:`, so a hook no `docs` pattern
-              # covers reds it.
-              - "scripts/mkdocs/**"
-              # ⛔ The pin SSOT most of this workflow's gated jobs INSTALL FROM
-              # (`pip install … -c requirements/ci-constraints.txt`, #1158) —
-              # not a file any doc check reads, which is why no "does a test
-              # read it?" review ever caught it. `mkdocs-build` installs the
-              # pinned mkdocs-material / static-i18n / pymdown set from it and
-              # is the ONLY pre-merge verification that the docs still build
-              # (the pre-push strict hook is local and optional). Without
-              # this entry a bump of those pins touches no `docs` path, every
-              # gated leg reports `skipped`, and the `*-gate` jobs accept a
-              # skip whenever `docs_changed` is not 'true' — correctly, since
-              # the filter said nothing relevant changed. So the bump merges
-              # with NO pre-merge doc-build signal at all, which is the whole
-              # point of a required check. The break then lands post-merge on
-              # this workflow's own push-to-main run (detect-changes forces
-              # `docs_changed` true off a PR, so `mkdocs-build` runs there) —
-              # i.e. main goes red for everyone instead of the PR going red for
-              # its author.
-              #
-              # Accepted cost: `docs` is ONE filter gating every leg, so a pin
-              # bump now also runs the two that do not install from it —
-              # doc-line-count and i4-runbook-smoke-test (whose three curl
-              # downloads are a network-flake surface). Worth
-              # it against a silently unbuilt doc site; recorded so it is a
-              # choice, not a surprise. Enforced by
-              # tests/ops/test_ci_path_filter_coverage.py.
-              - "requirements/**"
-              - ".github/workflows/docs-ci.yaml"
-              - ".pre-commit-config.yaml"
-
   validate-mermaid:
     name: Validate Mermaid Diagrams — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -230,10 +110,10 @@ jobs:
     # itself — no gate job. Its input set is every Markdown file plus every
     # link target, wherever it lives; no path filter can express that, so a
     # PR that only deleted or renamed a linked non-doc file skipped this leg
-    # and merged a broken link. Same reasoning as the `python` catch-all in
-    # ci.yml. Re-adding an `if:` reds test_ci_path_filter_coverage's
-    # path-gated set. Accepted cost: every PR now pays checkout + pip, and a
-    # network flake there reds this required check.
+    # and merged a broken link. Re-adding an `if:` reds
+    # tests/ops/test_required_checks_ssot.py (`kind: job`). Accepted cost:
+    # every PR pays checkout + pip, and a network flake there reds this
+    # required check.
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -297,8 +177,6 @@ jobs:
   check-frontmatter:
     name: Check Documentation Front Matter — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -331,8 +209,6 @@ jobs:
   check-coverage:
     name: Check Documentation Coverage — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -369,8 +245,6 @@ jobs:
   mkdocs-build:
     name: MkDocs Build Verification — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -403,10 +277,8 @@ jobs:
   doc-line-count:
     name: Documentation Line Count Monitor — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
     # On a push `pull_request.base.sha` is empty, so `base` checks out the
     # pushed commit itself and the delta is 0 — a no-op, not a failure.
-    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout PR
         uses: actions/checkout@v6
@@ -432,8 +304,6 @@ jobs:
   drift-checks:
     name: Drift Detection (validate_all.py) — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.docs_changed == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -448,8 +318,7 @@ jobs:
       - name: Fetch the PR base (changelog_format's new-entry cap diffs against origin/$GITHUB_BASE_REF, else origin/main)
         # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
         # exits 2 rather than silently falling back to HEAD when it is absent.
-        # A plain `run:`, not a step `if:`: tests/ops/test_ci_path_filter_coverage.py
-        # refuses step conditions on computed values inside a path-gated job.
+        # A plain `run:`, not a step `if:` — see the ⛔ note in the script.
         run: |
           # ⛔ Unconditional, and defaulted: the cap now resolves its base
           # through the repo's ONE resolver (_lint_helpers.resolve_diff_base),
@@ -537,12 +406,10 @@ jobs:
     # are ~10s total on ubuntu-latest (jq/curl already built-in).
     name: I-4 Runbook Smoke Test
     runs-on: ubuntu-24.04
-    needs: detect-changes
     # Not a required status check (`advisory:` in
-    # .github/required-checks.yaml), but without this gate it would now run
-    # (downloading amtool/promtool/yq) on every PR once the workflow-level
-    # `paths:` filter above is removed — this keeps today's cost profile.
-    if: needs.detect-changes.outputs.docs_changed == 'true'
+    # .github/required-checks.yaml). It runs on every PR since #3756 — it was
+    # behind the docs path filter only to save its tool downloads, and that
+    # filter is gone with the rest.
     steps:
       - uses: actions/checkout@v6
 
@@ -606,29 +473,19 @@ jobs:
     name: Validate Mermaid Diagrams
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, validate-mermaid]
-    # The REQUIRED check (#1398). `validate-mermaid` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [validate-mermaid]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `validate-mermaid`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify mermaid validation succeeded (or was path-skipped as not needed)
+      - name: Verify mermaid validation succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
           RUN_RESULT: ${{ needs.validate-mermaid.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
           echo "validate-mermaid: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::validate-mermaid did not succeed (result=$RUN_RESULT)"
@@ -638,29 +495,19 @@ jobs:
     name: Check Documentation Front Matter
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, check-frontmatter]
-    # The REQUIRED check (#1398). `check-frontmatter` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [check-frontmatter]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `check-frontmatter`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify the front-matter check succeeded (or was path-skipped as not needed)
+      - name: Verify the front-matter check succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
           RUN_RESULT: ${{ needs.check-frontmatter.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
           echo "check-frontmatter: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::check-frontmatter did not succeed (result=$RUN_RESULT)"
@@ -670,29 +517,19 @@ jobs:
     name: Check Documentation Coverage
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, check-coverage]
-    # The REQUIRED check (#1398). `check-coverage` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [check-coverage]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `check-coverage`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify the coverage check succeeded (or was path-skipped as not needed)
+      - name: Verify the coverage check succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
           RUN_RESULT: ${{ needs.check-coverage.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
           echo "check-coverage: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::check-coverage did not succeed (result=$RUN_RESULT)"
@@ -702,29 +539,19 @@ jobs:
     name: MkDocs Build Verification
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, mkdocs-build]
-    # The REQUIRED check (#1398). `mkdocs-build` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [mkdocs-build]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `mkdocs-build`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify the mkdocs build succeeded (or was path-skipped as not needed)
+      - name: Verify the mkdocs build succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
           RUN_RESULT: ${{ needs.mkdocs-build.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
           echo "mkdocs-build: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::mkdocs-build did not succeed (result=$RUN_RESULT)"
@@ -734,29 +561,19 @@ jobs:
     name: Documentation Line Count Monitor
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, doc-line-count]
-    # The REQUIRED check (#1398). `doc-line-count` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [doc-line-count]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `doc-line-count`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify the line-count monitor succeeded (or was path-skipped as not needed)
+      - name: Verify the line-count monitor succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
           RUN_RESULT: ${{ needs.doc-line-count.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
           echo "doc-line-count: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::doc-line-count did not succeed (result=$RUN_RESULT)"
@@ -766,29 +583,19 @@ jobs:
     name: Drift Detection (validate_all.py)
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, drift-checks]
-    # The REQUIRED check (#1398). `drift-checks` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [drift-checks]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `drift-checks`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify drift detection succeeded (or was path-skipped as not needed)
+      - name: Verify drift detection succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          DOCS_CHANGED: ${{ needs.detect-changes.outputs.docs_changed }}
           RUN_RESULT: ${{ needs.drift-checks.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (docs_changed=$DOCS_CHANGED)"
           echo "drift-checks: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$DOCS_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::drift-checks did not succeed (result=$RUN_RESULT)"

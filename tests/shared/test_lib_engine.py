@@ -11,6 +11,7 @@ outputs they print are the shapes the pinned engines were measured to print
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -403,3 +404,162 @@ def test_helm_push_is_proven_by_its_exit_status_only():
     assert "Pushed" in proof(_proc(0, "Pushed: x\n"), {})
     with pytest.raises(E.NoProof, match="denied"):
         proof(_proc(1, "", "Error: denied"), {})
+
+
+# ── #3539: found but not startable; output read from files ──────────────────
+
+def test_an_engine_on_path_without_execute_permission_is_not_called_absent(tmp_path, monkeypatch):
+    """`which` skips a file nothing may execute, and "install the pint
+    binary" sends the operator after a binary they have: the lookup names
+    the file and what is wrong with it. An executable one later on PATH is
+    still found (as the kernel's own search does)."""
+    first = tmp_path / "first"
+    first.mkdir()
+    (first / "pint").write_text("#!/bin/sh\n", encoding="utf-8")
+    (first / "pint").chmod(0o644)
+    monkeypatch.setenv("PATH", str(first))
+    nv = E.locate("pint")
+    assert isinstance(nv, E.NoVerdict)
+    assert nv.reason == (f"cannot run pint: {first / 'pint'} is on PATH but is not "
+                         "executable (no execute permission)")
+    assert "install" not in nv.reason
+
+    second = tmp_path / "second"
+    second.mkdir()
+    (second / "pint").write_text("#!/bin/sh\n", encoding="utf-8")
+    (second / "pint").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{first}{os.pathsep}{second}")
+    assert E.locate("pint").path == str(second / "pint")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX `#!` lines")
+def test_a_missing_interpreter_is_told_apart_from_a_missing_engine(tmp_path, monkeypatch):
+    exe = tmp_path / "kubectl"
+    exe.write_text("#!/no/such/interp\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    r = E.run(E.locate("kubectl"), "get", ["pods"], timeout=10)
+    assert isinstance(r, E.NoVerdict)
+    assert "cannot run kubectl" in r.reason and "interpreter" in r.reason
+    assert str(exe) in r.reason
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell and background job")
+@pytest.mark.parametrize("capture, answered", [("file", True), ("pipe", False)])
+def test_file_capture_reads_the_output_when_the_engine_exits(tmp_path, monkeypatch,
+                                                              capture, answered):
+    """#3349 review, now the engine layer's (`capture="file"`): the engine
+    answers and exits, leaving a child that still holds its stdout. Read from
+    files, the answer is there when the engine exits; read through pipes
+    (the control), the read waits for the child and the budget runs out."""
+    import signal
+    pidfile = tmp_path / "child.pid"
+    exe = tmp_path / "kubectl"
+    exe.write_text(f"#!/bin/sh\necho answer\nsleep 30 &\necho $! > {pidfile}\nexit 0\n",
+                   encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    try:
+        r = E.run(E.locate("kubectl"), "get", ["pods"], timeout=3, capture=capture)
+        if answered:
+            assert isinstance(r, E.Ran) and r.proc.stdout == "answer\n"
+        else:
+            assert isinstance(r, E.NoVerdict) and "did not finish within 3s" in r.reason
+    finally:
+        try:
+            os.kill(int(pidfile.read_text().strip()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+
+
+def test_capture_is_pipe_or_file(tmp_path, monkeypatch):
+    exe = tmp_path / "kubectl"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(ValueError, match="capture"):
+        E.run(E.locate("kubectl"), "get", [], timeout=3, capture="tty")
+
+
+def test_every_kubectl_verb_shares_the_one_proof():
+    """kubectl's exit status is its answer, the caller's to judge
+    (`_lib_kubectl`); the proof only refuses a run that has none."""
+    import subprocess as sp
+    verbs = sorted(sub for engine, sub in E.PROOFS if engine == "kubectl")
+    assert verbs == ["apply", "create", "delete", "get", "label", "logs", "patch"]
+    for verb in verbs:
+        proof = E.PROOFS[("kubectl", verb)]
+        done = sp.CompletedProcess(["kubectl", verb], 1, "", "refused")
+        assert proof(done, {}) is done
+
+
+# ── review of #3539: killed by a signal, a missing cwd, no temporary directory ──
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+@pytest.mark.parametrize("engine, subcommand, capture", [
+    ("kubectl", "apply", "file"), ("kubectl", "get", "pipe"), ("helm", "template", "pipe"),
+])
+def test_an_engine_killed_by_a_signal_is_not_said_to_have_not_run(tmp_path, monkeypatch,
+                                                                  engine, subcommand, capture):
+    """It ran until the signal, and what it had done by then is unknown — a
+    kubectl write may have reached the cluster. The reason says "was killed
+    by signal N" for every engine, never "did not run" (which is what the
+    proof's generic sentence said)."""
+    exe = tmp_path / engine
+    exe.write_text("#!/bin/sh\necho partial >&2\nkill -KILL $$\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    r = E.run(E.locate(engine), subcommand, ["x"], timeout=10, capture=capture)
+    assert isinstance(r, E.NoVerdict)
+    assert r.reason == f"{engine} {subcommand} was killed by signal 9"
+    assert r.detail == "partial"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX `#!` lines")
+def test_a_missing_cwd_is_not_blamed_on_the_interpreter(tmp_path, monkeypatch):
+    """ENOENT is also what a working directory that does not exist gives;
+    the `#!` hint is for a file that is there and a cwd that is too."""
+    exe = tmp_path / "kubectl"
+    exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    r = E.run(E.locate("kubectl"), "get", [], timeout=10, cwd=str(tmp_path / "gone"))
+    assert isinstance(r, E.NoVerdict)
+    assert "cannot run kubectl" in r.reason and "interpreter" not in r.reason
+    assert isinstance(E.run(E.locate("kubectl"), "get", [], timeout=10, cwd=str(tmp_path)), E.Ran)
+
+
+def test_no_temporary_directory_is_named_as_that(tmp_path, monkeypatch):
+    """`capture="file"` needs a writable temporary directory. Without one the
+    engine was never started, and the reason is about the temporary file —
+    not "cannot run kubectl … interpreter"."""
+    started = tmp_path / "started"
+    exe = tmp_path / "kubectl"
+    exe.write_text(f"#!/bin/sh\ntouch {started}\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+
+    def no_tmp(*a, **kw):
+        raise FileNotFoundError(2, "No usable temporary directory found")
+    monkeypatch.setattr(E.tempfile, "TemporaryFile", no_tmp)
+    r = E.run(E.locate("kubectl"), "apply", ["-f", "-"], timeout=10, capture="file",
+              stdin_text="x")
+    assert isinstance(r, E.NoVerdict)
+    assert r.reason.startswith("cannot capture the output of kubectl: no temporary file")
+    assert "interpreter" not in r.reason and "cannot run" not in r.reason
+    assert not started.exists()
+    # the pipe path needs none
+    assert isinstance(E.run(E.locate("kubectl"), "apply", [], timeout=10), E.Ran)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell")
+def test_stdin_text_that_utf8_cannot_encode_is_sent_not_a_crash(tmp_path, monkeypatch):
+    """A lone surrogate (text decoded with surrogateescape upstream) reaches
+    the engine as `?`; it used to be an uncaught UnicodeEncodeError."""
+    exe = tmp_path / "kubectl"
+    exe.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    r = E.run(E.locate("kubectl"), "apply", ["-f", "-"], timeout=10, capture="file",
+              stdin_text="a\udc80b\n")
+    assert isinstance(r, E.Ran) and r.proc.stdout == "a?b\n"

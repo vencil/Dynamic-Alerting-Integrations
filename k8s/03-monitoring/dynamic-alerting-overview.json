@@ -120,12 +120,12 @@
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" }
     },
     {
-      "title": "Dedup Disabled",
-      "description": "Tenants that explicitly disabled severity dedup (receiving both warning + critical notifications simultaneously)",
+      "title": "Dedup Enabled",
+      "description": "Tenants with severity dedup on (a critical suppresses the warning of the same tenant and metric_group). A tenant set to _severity_dedup: disable exports no user_severity_dedup series, so disabled tenants cannot be counted from this metric",
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
       "targets": [{
-        "expr": "count(max without(instance, pod) (user_severity_dedup{mode=\"disable\"})) or vector(0)",
+        "expr": "count(max without(instance, pod) (user_severity_dedup{mode=\"enable\"})) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -134,8 +134,7 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "blue", "value": 1 }
+              { "color": "blue", "value": null }
             ]
           }
         }

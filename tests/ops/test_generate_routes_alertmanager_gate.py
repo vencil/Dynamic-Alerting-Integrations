@@ -47,6 +47,7 @@ from factories import make_routing_config, make_tenant_yaml
 
 import _grar_render as render
 import generate_alertmanager_routes as gar
+from _kubectl_fake import run_from_argv as kubectl_from_argv  # noqa: E402  (#3539)
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
@@ -275,6 +276,7 @@ def _fake_cluster(monkeypatch, *, curl_rc: int = 0):
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
+    monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
     return calls
 
 

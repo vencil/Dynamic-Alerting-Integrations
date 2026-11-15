@@ -42,7 +42,11 @@ as written).
 string where it shows up in a field not named like a credential — a YAML
 alias or a copy puts it there, and the renders cannot tell (#2865).
 Inhibit rules are compared as a multiset, each belonging to the tenant its
-`tenant="X"` matcher names.
+`tenant="X"` matcher names. The severity dedup rule names no tenant (#3899:
+one rule for every tenant); when it changes only in its target's
+`tenant!~"a|b"` exclusion list, the change belongs to each tenant that list
+gained or lost — one removed / added pair per such tenant — not to the
+platform.
 
 served-values is compared per tenant and per field (`values`, `severities`,
 `state_filters`, `unserved`, `dropped`, `schedules`): one `ValueChange` per
@@ -424,12 +428,72 @@ def diff_routes(base: dict[str, Any], pr: dict[str, Any]) -> list:
         out.append(ReceiverChange(name, tenants, kind, _field_changes(b or {}, p or {})))
 
     bi, pi = _inhibit_counts(base), _inhibit_counts(pr)
+    removed: list[dict[str, Any]] = []
+    added: list[dict[str, Any]] = []
     for key in sorted(set(bi) | set(pi)):
-        rule = json.loads(key)
         n = pi.get(key, 0) - bi.get(key, 0)
-        for _ in range(abs(n)):
-            out.append(InhibitChange(_tenant_of_rule(rule), "added" if n > 0 else "removed", rule))
+        (added if n > 0 else removed).extend(json.loads(key) for _ in range(abs(n)))
+    for old, new in _exclusion_pairs(removed, added):
+        # #3899: one dedup rule for every tenant, a tenant set to `disable` in
+        # its `tenant!~` list — the change belongs to the tenants that list
+        # gained or lost, not to the platform.
+        for tenant in sorted(_excluded_tenants(old) ^ _excluded_tenants(new)):
+            out.append(InhibitChange(tenant, "removed", old))
+            out.append(InhibitChange(tenant, "added", new))
+    out.extend(InhibitChange(_tenant_of_rule(r), "removed", r) for r in removed)
+    out.extend(InhibitChange(_tenant_of_rule(r), "added", r) for r in added)
     return out
+
+
+#: A target matcher excluding tenants: `tenant!~"<alternation>"`, the
+#: value in matcher quoting (``\\`` / ``\"``) — the generator's exclusion list.
+_TENANT_EXCLUSION = re.compile(r'^\s*tenant\s*!~\s*"((?:[^"\\]|\\.)*)"\s*$')
+
+
+def _exclusion_parts(rule: dict[str, Any]) -> tuple[str, set[str]] | None:
+    """*rule* without its target's ``tenant!~`` matcher (canonical JSON), and
+    the tenants that matcher excludes — None when its value is not an
+    alternation of literal tenant ids (then it is not attributed)."""
+    targets = rule.get("target_matchers")
+    if not isinstance(targets, list):
+        return None
+    rest, excluded = [], set()
+    for m in targets:
+        hit = _TENANT_EXCLUSION.match(m) if isinstance(m, str) else None
+        if hit is None:
+            rest.append(m)
+            continue
+        value = re.sub(r'\\(.)', r'\1', hit.group(1))  # matcher quoting
+        for alt in value.split("|"):
+            literal = re.sub(r"\\(.)", r"\1", alt)       # regex escaping
+            if not literal or re.escape(literal).replace("\\-", "-") != alt:
+                return None
+            excluded.add(literal)
+    return _canon({**rule, "target_matchers": rest}), excluded
+
+
+def _excluded_tenants(rule: dict[str, Any]) -> set[str]:
+    parts = _exclusion_parts(rule)
+    return parts[1] if parts else set()
+
+
+def _exclusion_pairs(removed: list[dict[str, Any]], added: list[dict[str, Any]]
+                     ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Pop from *removed* / *added* each pair of rules that differ only in
+    their ``tenant!~`` exclusion list (in place), and return the pairs."""
+    pairs = []
+    for new in list(added):
+        np = _exclusion_parts(new)
+        if np is None:
+            continue
+        for old in removed:
+            op = _exclusion_parts(old)
+            if op is not None and op[0] == np[0] and op[1] != np[1]:
+                pairs.append((old, new))
+                removed.remove(old)
+                added.remove(new)
+                break
+    return pairs
 
 
 def flatten_routes(cfg: dict[str, Any]) -> dict[tuple[str, ...], dict[str, Any]]:

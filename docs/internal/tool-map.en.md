@@ -264,7 +264,7 @@ lang: en
 - `scripts/tools/_lib_input.py`: Which files a value the caller gave selects, and the bytes read from them (#3446).
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_key_verdict.py`: The shared verdict on "does any reader read this key" (ADR-038), as
-- `scripts/tools/_lib_kubectl.py`: Read Kubernetes resources through ``kubectl get -o json`` (#3207, #3210).
+- `scripts/tools/_lib_kubectl.py`: Run kubectl: the one place that starts it, for reads and writes (#3207, #3210, #3539).
 - `scripts/tools/_lib_label.py`: `safe_label`: neutralise control characters in a value before it is printed.
 - `scripts/tools/_lib_metric_sources.py`: Where each metric a rule reads comes from — and whether a Prometheus Operator install has that source.
 - `scripts/tools/_lib_parse_cache.py`: the conf.d reader of the routing tools, with a cache.
@@ -278,6 +278,7 @@ lang: en
 - `scripts/tools/_lib_tenant_state.py`: Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`: Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_tenant_values.py`: Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
+- `scripts/tools/_lib_tool_fault.py`: The one record of "an external program of this process did not run" (#3862).
 - `scripts/tools/_lib_toolcount.py`: One scan behind the "N 個 Python 工具" sentence.
 - `scripts/tools/_lib_validation.py`: Validation and parsing helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_versions.py`: Version SSOT readers for the dx doc-generation tools.

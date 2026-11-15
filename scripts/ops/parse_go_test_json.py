@@ -14,8 +14,7 @@ Why Python rather than Go
 -------------------------
 This parser is the ONLY thing standing between a red nightly and a silent one, so
 it has to be tested. Python puts its unit tests in `tests/ops/`, which the existing
-"Python Tests" required check already runs (and whose path filter already
-includes `.github/workflows/**` and `scripts/**`). A Go parser would force
+"Python Tests" required check already runs, on every PR. A Go parser would force
 `setup-go` onto the report job purely to parse JSON. Stdlib only — no install step.
 
 Contract notes measured against a real Go 1.26 run, not assumed

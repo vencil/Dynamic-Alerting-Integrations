@@ -207,8 +207,13 @@ TOOL_FILES=(
     _lib_compat.py
     _lib_prometheus.py
     # #3207/#3210 — the one cluster reader (kubectl get -o json) of
-    # ops/operator_check.py. Stdlib + _lib_exitcodes.
+    # ops/operator_check.py; #3539 — the one place kubectl is started, for
+    # the writes too (grafana_import, cutover_tenant, _grar_render).
+    # Stdlib + _lib_exitcodes + _lib_engine.
     _lib_kubectl.py
+    # #3611 / #3539 — stdlib only: locates and runs an external engine and
+    # says whether it ran at all. Imported by _lib_kubectl (above).
+    _lib_engine.py
     # #3276 — stdlib only: safe_label (re-exported by _lib_io) and the
     # one judgement of a caller-given path (_lib_paths imports _lib_label).
     _lib_label.py
@@ -233,6 +238,11 @@ TOOL_FILES=(
     # subcommands (guard / batchpr / parser). Imported by their
     # respective ops/*_dispatch.py shims.
     _lib_godispatch.py
+    # #3862 — stdlib only: the one record of "da-guard / da-read /
+    # da-crdecode did not run", imported by _lib_tenant_values,
+    # _lib_parse_tree and _lib_consumer_read (below); the generator service
+    # answers a judgement that has one 503 tool_fault.
+    _lib_tool_fault.py
     # #2115 — per-tenant values as /metrics serves them (runs `da-guard
     # served-values`, shipped in this image). Imported by
     # blind_spot_discovery, analyze_rule_pack_gaps, policy_engine,

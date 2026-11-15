@@ -734,3 +734,98 @@ class TestFlatScanSaysSoOutLoud:
 
         dd.compute_dir_manifest(str(d))
         assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# compute_crd_manifest — the cluster read, through _lib_kubectl (#3539)
+# ---------------------------------------------------------------------------
+
+class TestComputeCrdManifest:
+    """`--mode operator` reads the cluster's PrometheusRules with
+    `_lib_kubectl.kubectl_list`: a read kubectl did not answer is
+    KubectlError (rc 2), never an empty cluster and never a traceback."""
+
+    @staticmethod
+    def _kubectl(monkeypatch, answer):
+        import subprocess
+        from _kubectl_fake import install
+        calls = []
+
+        def fake(cmd, **kw):
+            calls.append(cmd)
+            TestComputeCrdManifest.kwargs = kw
+            if isinstance(answer, BaseException):
+                raise answer
+            return subprocess.CompletedProcess(cmd, *answer)
+        install(monkeypatch, fake)
+        return calls
+
+    def test_kubectl_gets_30_seconds_and_this_tools_stdin(self, monkeypatch):
+        """As before #3539, when this tool started kubectl itself: 30 s, and
+        stdin inherited (None — not /dev/null), so an exec credential plugin
+        can prompt."""
+        self._kubectl(monkeypatch, (0, '{"items": []}', ""))
+        dd.compute_crd_manifest("ns")
+        assert self.kwargs["timeout"] == 30
+        assert self.kwargs.get("stdin") is None and "input" not in self.kwargs
+
+    def test_a_non_zero_exit_prints_kubectls_whole_stderr(self, monkeypatch):
+        """Review of #3539: the reason an apiserver is unreachable is in the
+        lines client-go logs BEFORE kubectl's own last line; this tool
+        printed all of stderr before and must not keep the last line only.
+        Control characters are replaced."""
+        from _lib_kubectl import KubectlError
+        stderr = ("E1114 memcache.go:265] dial tcp 10.0.0.1:6443: i/o timeout\x1b[2J\n"
+                  "Unable to connect to the server: net/http: TLS handshake timeout\n")
+        self._kubectl(monkeypatch, (1, "", stderr))
+        with pytest.raises(KubectlError) as exc:
+            dd.compute_crd_manifest("ns")
+        said = str(exc.value)
+        assert "failed (exit 1): Unable to connect to the server" in said
+        assert "dial tcp 10.0.0.1:6443: i/o timeout?[2J\n" in said
+        assert "\x1b" not in said
+
+    def test_one_long_stderr_line_is_printed_past_the_messages_300_characters(self, monkeypatch):
+        """CodeRabbit on #3539: "one line: the message already holds it" was
+        wrong for a line longer than the 300 characters the message keeps —
+        the rest was dropped while the docs said the stderr is printed."""
+        from _lib_kubectl import KubectlError
+        line = "error: " + "x" * 600 + " the-end-of-the-line"
+        self._kubectl(monkeypatch, (1, "", line + "\n"))
+        with pytest.raises(KubectlError) as exc:
+            dd.compute_crd_manifest("ns")
+        assert "the-end-of-the-line" in str(exc.value)
+
+    def test_a_short_one_line_stderr_is_not_printed_twice(self, monkeypatch):
+        from _lib_kubectl import KubectlError
+        self._kubectl(monkeypatch, (1, "", "error: You must be logged in\n"))
+        with pytest.raises(KubectlError) as exc:
+            dd.compute_crd_manifest("ns")
+        assert str(exc.value).count("You must be logged in") == 1
+
+    def test_each_rule_is_hashed_by_its_groups(self, monkeypatch):
+        import hashlib
+        groups = [{"name": "g", "rules": []}]
+        calls = self._kubectl(monkeypatch, (0, json.dumps({"items": [
+            {"metadata": {"name": "pack-a"}, "spec": {"groups": groups}}]}), ""))
+        manifest = dd.compute_crd_manifest("ns", kubeconfig="/kc", context="ctx")
+        assert calls == [["kubectl", "--kubeconfig", "/kc", "--context", "ctx", "get",
+                          "prometheusrules", "-n", "ns", "-o", "json"]]
+        want = hashlib.sha256(json.dumps(
+            groups, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert manifest.files == {"pack-a.yaml": want}
+        assert (manifest.label, manifest.path) == ("cluster-crd", "kubernetes:ns")
+
+    @pytest.mark.parametrize("answer, why", [
+        (PermissionError(13, "Permission denied", "kubectl"), "cannot run kubectl"),
+        (OSError(8, "Exec format error", "kubectl"), "cannot run kubectl"),
+        ((1, '{"items": []}', "Error from server (Forbidden): nope"), "Forbidden"),
+        ((0, "not json", ""), "not JSON"),
+        ((0, '{"items": {}}', ""), "not a list of objects"),
+    ], ids=["eacces", "enoexec", "forbidden", "not-json", "items-not-a-list"])
+    def test_a_read_without_an_answer_is_kubectl_error(self, monkeypatch, answer, why):
+        from _lib_kubectl import KubectlError
+        self._kubectl(monkeypatch, answer)
+        with pytest.raises(KubectlError, match=why) as exc:
+            dd.compute_crd_manifest("ns")
+        assert isinstance(exc.value, CallerError)   # rc 2 at run()'s exit
