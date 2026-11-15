@@ -255,7 +255,7 @@ class TestAlertmanagerModeIsGated:
 
 # ── --apply (in-process: no shell stub, runs on every platform) ─────
 def _existing_cm_json() -> str:
-    return json.dumps({"data": {"alertmanager.yml": yaml.dump({
+    return json.dumps({"metadata": {"managedFields": []}, "data": {"alertmanager.yml": yaml.dump({
         "route": {"receiver": "default", "routes": []},
         "receivers": [{"name": "default"}],
         "inhibit_rules": [],
@@ -301,7 +301,7 @@ _REFUSED_RECEIVERS = [{"name": "tenant-t1", "webhook_configs": [{
 
 
 def _kubectl_writes(calls):
-    return [c for c in calls if c[:2] in (["kubectl", "apply"], ["kubectl", "create"])]
+    return [c for c in calls if c[:2] in (["kubectl", "apply"], ["kubectl", "create"], ["kubectl", "replace"])]
 
 
 class TestApplyGate:
@@ -325,12 +325,12 @@ class TestApplyGate:
 
     def test_the_loader_read_the_exact_text_passed_to_kubectl(self, monkeypatch):
         """#3900: the text the loader judged is the manifest's
-        alertmanager.yml as kubectl reads it — the manifest the server-side
-        apply was handed on stdin."""
+        alertmanager.yml as kubectl reads it — the object `kubectl replace`
+        was handed on stdin."""
         calls = _fake_cluster(monkeypatch)
         seen = _spy_reading(monkeypatch)
         assert self._run_apply_mode() == 0
-        apply = next(c for c in calls if c[:2] == ["kubectl", "apply"])
+        apply = next(c for c in calls if c[:2] == ["kubectl", "replace"])
         [manifest] = [a[1] for a in apply if isinstance(a, tuple) and a[0] == "stdin"]
         # earlier readings are the cluster's existing config (the merge source)
         assert seen[-1] == render.emitted_alertmanager_yml(manifest)
@@ -351,7 +351,7 @@ class TestApplyGate:
         """Without this, the row above passes for a tool that always exits 2."""
         calls = _fake_cluster(monkeypatch, curl_rc=0)
         assert self._run_apply_mode() == 0
-        assert any(c[:2] == ["kubectl", "apply"] for c in calls), calls
+        assert any(c[:2] == ["kubectl", "replace"] for c in calls), calls
         assert _ACCEPTED in capsys.readouterr().err
 
 

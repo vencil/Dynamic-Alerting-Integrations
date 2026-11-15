@@ -13,10 +13,13 @@ Functions:
                                    renders output = merge(source base, conf.d)
     assemble_alertmanager_yml(...) → merged alertmanager.yml text
     assemble_configmap(...)      → the same text wrapped as a K8s ConfigMap
+                                   (configmap_manifest)
 
   ConfigMap operations (--apply mode, K8s cluster deploy):
-    _read_existing_configmap(...)         → kubectl get + parse
-    _apply_merged_configmap(...)          → kubectl apply --server-side via stdin
+    _read_existing_configmap(...)         → kubectl get --show-managed-fields + parse
+    foreign_owners(live, keys)            → the non-kubectl managers of those keys (#3900)
+    replaced_configmap(live, data)        → the live object with those keys replaced
+    _apply_merged_configmap(...)          → kubectl replace via stdin
     _reload_alertmanager(namespace)       → curl POST /-/reload (False on failure, #2219)
     apply_to_configmap(...)              → orchestrate read → merge →
                                            alertmanager_check → apply → reload
@@ -27,9 +30,11 @@ Functions:
                                            carrying the loader's reading
 
   Reading Alertmanager configs (ADR-036 §12, #3206) — never PyYAML:
-    emitted_alertmanager_yml(cm_yaml)     → the `alertmanager.yml` string of an
-                                           assembled ConfigMap, as kubectl reads
-                                           it (da-crdecode)
+    emitted_configmap_data(cm_yaml)       → an assembled ConfigMap's `data`, as
+                                           kubectl reads it (da-crdecode)
+    emitted_alertmanager_yml(cm_yaml)     → its `alertmanager.yml` string
+    configmap_data_bytes / configmap_binary_bytes → what Kubernetes counts
+                                           toward the ConfigMap limit (#3900)
     alertmanager_reading(text)            → the config as Alertmanager loads it
                                            (da-read alertmanager)
 
@@ -39,6 +44,7 @@ Functions:
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import copy
 import io
@@ -1344,77 +1350,114 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
     return existing, warnings, existing_yml, cm
 
 
-#: The field manager --apply's server-side apply writes as (#3900). Not
-#: `kubectl`: under that name the API server rewrites the client-side
-#: `last-applied-configuration` annotation, and drops it silently once the
-#: object outgrows the annotation limit.
+#: The field manager --apply's write is recorded under (#3900): the
+#: object's managedFields name this tool as the owner of the keys it wrote.
 APPLY_FIELD_MANAGER = "da-generate-routes"
 
+#: The field managers that are kubectl itself — one per kubectl verb that
+#: writes, the client-side apply's, and the server-side apply upgrade's
+#: marker — plus this tool: owners --apply may take a key over from, as the
+#: client-side apply it replaces always did. Listed, never a `kubectl-`
+#: prefix: a kubectl plugin (`kubectl-<name>`) that sets no field manager is
+#: named after its binary, and is another tool (#3900, owner decision B).
+_KUBECTL_MANAGERS = frozenset({
+    "kubectl", "kubectl-client-side-apply", "kubectl-create", "kubectl-edit",
+    "kubectl-patch", "kubectl-replace", "kubectl-label", "kubectl-annotate",
+    "kubectl-set", "kubectl-last-applied", "before-first-apply", APPLY_FIELD_MANAGER,
+})
 
-def _kubectl_owned(manager: str) -> bool:
-    """Whether a field manager is kubectl itself (any verb — client-side
-    apply, create, edit, patch, replace), its SSA upgrade marker, or this
-    tool: an owner --apply may take a field over from, as the client-side
-    apply it replaces always did. Anything else (a GitOps controller, Helm,
-    an operator) is another tool's (#3900, owner decision B)."""
-    return (manager in ("kubectl", "before-first-apply", APPLY_FIELD_MANAGER)
-            or manager.startswith("kubectl-"))
 
-
-def foreign_owners(live: dict | None, keys: "tuple[str, ...]") -> list[str]:
-    """The field managers of *live* (a ConfigMap with its managedFields) that
-    own one of its ``data`` *keys* and are not kubectl or this tool, sorted.
-    A server-side apply that took those keys over would flip with that tool
-    on its every sync, so --apply refuses instead and names them (#3900)."""
+def foreign_owners(live: dict, keys: "tuple[str, ...]") -> "list[str] | None":
+    """The field managers of *live* (a ConfigMap as `kubectl get
+    --show-managed-fields` returns it) that own one of its ``data`` *keys*
+    and are not kubectl or this tool, sorted — by any operation (Apply or
+    Update). Taking those keys over would flip with that tool on its every
+    sync, so --apply refuses instead and names them (#3900). None when the
+    object carries no managedFields: who owns the keys is unknown, which is
+    no "nobody else" (a kubectl that strips them, a server without them)."""
+    entries = (live.get("metadata") or {}).get("managedFields")
+    if not isinstance(entries, list):
+        return None
     out = set()
-    for entry in (live or {}).get("metadata", {}).get("managedFields") or []:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
         manager = str(entry.get("manager") or "")
         data = ((entry.get("fieldsV1") or {}).get("f:data") or {})
         if isinstance(data, dict) and any(f"f:{k}" in data for k in keys) \
-                and not _kubectl_owned(manager):
+                and manager not in _KUBECTL_MANAGERS:
             out.add(manager or "(unnamed)")
     return sorted(out)
 
 
 def configmap_data_bytes(data: "dict[str, str]") -> int:
-    """What Kubernetes counts toward a ConfigMap's limit: its values' UTF-8
-    bytes, summed (`ValidateConfigMap`); keys and metadata are not counted."""
+    """What Kubernetes counts toward a ConfigMap's limit from its ``data``:
+    the values' UTF-8 bytes, summed (`ValidateConfigMap`); keys and metadata
+    are not counted."""
     return sum(len(v.encode("utf-8")) for v in data.values())
 
 
+def configmap_binary_bytes(binary: "dict[str, str]") -> int:
+    """The same for ``binaryData``, whose values the API carries as base64:
+    Kubernetes counts the DECODED bytes. A value that is not base64 counts as
+    its text (the API server would refuse it anyway)."""
+    total = 0
+    for v in binary.values():
+        try:
+            total += len(base64.b64decode(v, validate=True))
+        except (ValueError, TypeError):
+            total += len(v.encode("utf-8"))
+    return total
+
+
 def configmap_manifest(name: str, namespace: str, data: "dict[str, str]") -> str:
-    """A ConfigMap manifest holding *data*: the one builder of the ConfigMap
-    --output-configmap writes and --apply sends (#3900)."""
+    """A ConfigMap manifest holding *data*: what --output-configmap writes."""
     return yaml.dump({"apiVersion": "v1", "kind": "ConfigMap",
                       "metadata": {"name": name, "namespace": namespace},
                       "data": data},
                      default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
-def _apply_merged_configmap(manifest: str, namespace: str, configmap_name: str) -> bool:
-    """Server-side apply *manifest* (``configmap_manifest``) as
-    ``APPLY_FIELD_MANAGER``, sent on stdin (#3900): the config is never an
-    argument, so its size meets no argv limit, and no
-    ``last-applied-configuration`` annotation is written. ``--force-conflicts``
-    takes the keys over from kubectl's own managers only — another tool's
-    are refused before this is called (``foreign_owners``).
+def replaced_configmap(live: dict, data: "dict[str, str]", name: str = "",
+                       namespace: str = "") -> str:
+    """*live* (the cluster's ConfigMap) with *data*'s keys replaced and
+    nothing else changed, as the JSON `kubectl replace -f -` sends (#3900):
+    its labels, annotations and every other key stay; its resourceVersion
+    stays too, so a ConfigMap changed since it was read is refused, not
+    overwritten; its managedFields are left for the API server to keep."""
+    body = copy.deepcopy(live)
+    body.setdefault("apiVersion", "v1")
+    body.setdefault("kind", "ConfigMap")
+    meta = body.setdefault("metadata", {})
+    if name:
+        meta.setdefault("name", name)
+    if namespace:
+        meta.setdefault("namespace", namespace)
+    meta.pop("managedFields", None)
+    body.setdefault("data", {}).update(data)
+    return json.dumps(body, ensure_ascii=False, indent=2)
+
+
+def _apply_merged_configmap(body: str, namespace: str, configmap_name: str) -> bool:
+    """Replace the cluster's ConfigMap with *body* (``replaced_configmap``),
+    sent on stdin (#3900): the config is in no argument, so its size meets no
+    argv limit; no ``last-applied-configuration`` annotation is written; the
+    object's other keys and labels are kept, and a ConfigMap changed since it
+    was read (its resourceVersion) is refused by the API server.
 
     Returns True if successful, False otherwise.
     """
     try:
-        pipe_result = kubectl_run(
-            "apply", ["--server-side", f"--field-manager={APPLY_FIELD_MANAGER}",
-                      "--force-conflicts", "-f", "-"],
-            timeout=120, stdin_text=manifest, what="`kubectl apply --server-side -f -`")
+        result = kubectl_run(
+            "replace", [f"--field-manager={APPLY_FIELD_MANAGER}", "-f", "-"],
+            timeout=120, stdin_text=body, what="`kubectl replace -f -`")
     except KubectlError as exc:
         # ⛔ The message says which: a kubectl that could not be started sent
-        # nothing; one that did not finish in time may have applied it.
-        print(f"ERROR: kubectl apply failed: {exc}", file=sys.stderr)
+        # nothing; one that did not finish in time may have replaced it.
+        print(f"ERROR: kubectl replace failed: {exc}", file=sys.stderr)
         return False
-    if pipe_result.returncode != 0:
-        print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
+    if result.returncode != 0:
+        print(f"ERROR: kubectl replace failed: {result.stderr}", file=sys.stderr)
         return False
 
     print(f"ConfigMap {namespace}/{configmap_name} updated")
@@ -1513,6 +1556,12 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     # them back on its next sync, and the two would flip. Refused before
     # anything is merged or sent.
     owners = foreign_owners(live, (AM_CONFIGMAP_KEY, AM_BASE_CONFIGMAP_KEY))
+    if owners is None:
+        print(f"ERROR: ConfigMap {namespace}/{configmap_name}: kubectl returned no "
+              "managedFields, so who manages its keys cannot be told — refusing to write it "
+              "(nothing was applied). kubectl must support `get --show-managed-fields`.",
+              file=sys.stderr)
+        return False
     if owners:
         print(f"ERROR: ConfigMap {namespace}/{configmap_name}: its "
               f"'{AM_CONFIGMAP_KEY}' / '{AM_BASE_CONFIGMAP_KEY}' keys are managed by "
@@ -1549,20 +1598,20 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     data = {AM_CONFIGMAP_KEY: dump_output_yml(existing)}
     if source_yml is not None:
         data[AM_BASE_CONFIGMAP_KEY] = source_yml
-    manifest = configmap_manifest(configmap_name, namespace, data)
+    manifest = replaced_configmap(live, data, configmap_name, namespace)
 
     # #3900: the limit Kubernetes applies to the whole object — what this
-    # tool writes and every other key a server-side apply leaves in place.
-    others = {k: v for k, v in ((live or {}).get("data") or {}).items()
+    # tool writes and every other key the replace keeps.
+    others = {k: v for k, v in (live.get("data") or {}).items()
               if k not in data and isinstance(v, str)}
-    others.update({f"binaryData.{k}": v for k, v in ((live or {}).get("binaryData") or {}).items()
-                   if isinstance(v, str)})
-    total = configmap_data_bytes(data) + configmap_data_bytes(others)
+    binary = {k: v for k, v in (live.get("binaryData") or {}).items() if isinstance(v, str)}
+    kept = configmap_data_bytes(others) + configmap_binary_bytes(binary)
+    total = configmap_data_bytes(data) + kept
     if total > CONFIGMAP_DATA_LIMIT_BYTES:
+        names = sorted(others) + [f"binaryData.{k}" for k in sorted(binary)]
         print(f"ERROR: ConfigMap {namespace}/{configmap_name} would hold {total} bytes of "
               f"values ({configmap_data_bytes(data)} written here"
-              + (f", {configmap_data_bytes(others)} in other keys: {', '.join(sorted(others))}"
-                 if others else "")
+              + (f", {kept} in other keys: {', '.join(names)}" if names else "")
               + f"); Kubernetes refuses a ConfigMap over {CONFIGMAP_DATA_LIMIT_BYTES} bytes "
               "(nothing was applied).", file=sys.stderr)
         # A verdict on the config (rc 1), as --output-configmap's refusal is.

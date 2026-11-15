@@ -62,8 +62,12 @@ import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_paths import supplied  # noqa: E402  (#3392)
 from _lib_constants import (  # noqa: E402  (#3572)
-    DOCS_SITE_BASE, OPERATOR_ROUTING_REMEDY_EN, OPERATOR_ROUTING_REMEDY_ZH)
+    DOCS_SITE_BASE, OPERATOR_ROUTING_REMEDY_EN, OPERATOR_ROUTING_REMEDY_ZH,
+    OPERATOR_SECRET_APPLY_COMMAND)
 import _lib_input  # noqa: E402  (#3446: --source-dir is a directory da-guard lists)
+
+#: The checklists' Secret step: the one command, in the namespace they use (#3900).
+_SECRET_APPLY = OPERATOR_SECRET_APPLY_COMMAND.replace("<namespace>", "monitoring")
 
 # #3572: the flags that only fed AlertmanagerConfig, as (flag, dest). Still
 # parsed — hidden (`help=argparse.SUPPRESS`), `default=None`, no type /
@@ -438,7 +442,7 @@ Alertmanager 路由不以 AlertmanagerConfig CRD 產生（#3572）：Prometheus 
   ```
 - [ ] 建立／更新 Secret：
   ```
-  kubectl create secret generic <secret> -n monitoring --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
+  {_SECRET_APPLY}
   ```
 - [ ] 把 Alertmanager 的 configSecret 設為 `<secret>`（kube-prometheus-stack：`alertmanager.alertmanagerSpec.configSecret`）
 - [ ] 若叢集裡還有舊版 operator-generate 產生的 AlertmanagerConfig（`kubectl get alertmanagerconfig -A -l app.kubernetes.io/part-of=dynamic-alerting`），將它們刪除（`da-tools operator-check` 會以警告列出）
@@ -541,7 +545,7 @@ synthetic probe, sentinel) could not come first. See {_ROUTING_DOC_URL}
   ```
 - [ ] Create / update the Secret:
   ```
-  kubectl create secret generic <secret> -n monitoring --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
+  {_SECRET_APPLY}
   ```
 - [ ] Set the Alertmanager's configSecret to `<secret>` (kube-prometheus-stack: `alertmanager.alertmanagerSpec.configSecret`)
 - [ ] Delete any AlertmanagerConfigs an older operator-generate left in the cluster (`kubectl get alertmanagerconfig -A -l app.kubernetes.io/part-of=dynamic-alerting`; `da-tools operator-check` warns about them)

@@ -654,7 +654,7 @@ class TestOutputAndClusterExitCodes:
         import _grar_render as render
 
         def fake(argv, *, timeout, stdin_text=None):
-            out = json.dumps({"data": {"alertmanager.yml":
+            out = json.dumps({"metadata": {"managedFields": []}, "data": {"alertmanager.yml":
                                        "global: {}\nroute: {receiver: d}\n"
                                        "receivers: [{name: d}]\n"}}) \
                 if argv[:2] == ["kubectl", "get"] else ""
@@ -3287,6 +3287,19 @@ class TestPlatformAlertPlaneContract:
 # ============================================================
 # apply_to_configmap (mocked kubectl/curl)
 # ============================================================
+def _with_managed_fields(stdout: str) -> str:
+    """A ConfigMap JSON as `kubectl get --show-managed-fields` returns it:
+    with a (here empty) managedFields list (#3900)."""
+    try:
+        obj = json.loads(stdout)
+    except ValueError:
+        return stdout
+    if isinstance(obj, dict):
+        obj.setdefault("metadata", {}).setdefault("managedFields", [])
+        return json.dumps(obj)
+    return stdout
+
+
 class TestApplyToConfigmap:
     """apply_to_configmap() with mocked subprocess calls."""
 
@@ -3307,8 +3320,8 @@ class TestApplyToConfigmap:
 
             if "get" in cmd and "configmap" in cmd:
                 result.returncode = kubectl_get_rc
-                result.stdout = kubectl_get_stdout
-            elif "apply" in cmd:
+                result.stdout = _with_managed_fields(kubectl_get_stdout)
+            elif "replace" in cmd or "apply" in cmd:
                 result.returncode = kubectl_apply_rc
                 result.stdout = ""
             elif "curl" in cmd:
@@ -3364,20 +3377,19 @@ class TestApplyToConfigmap:
         monkeypatch.setattr(render, "kubectl_run", kubectl_run)
         return verbs
 
-    def test_the_apply_is_handed_the_manifest_on_stdin(self, monkeypatch, capsys):
-        """#3900: one server-side apply, the manifest on its stdin, whole —
-        no `create --dry-run=client` step, and the config in no argument."""
+    def test_the_replace_is_handed_the_object_on_stdin(self, monkeypatch, capsys):
+        """#3900: one `kubectl replace`, the object on its stdin, whole — no
+        `create --dry-run=client` step, and the config in no argument."""
         import _grar_render as render
         seen = {}
-        manifest = render.configmap_manifest("am-config", "monitoring", {"alertmanager.yml": "route: {}\n"})
+        body = render.replaced_configmap({"metadata": {"name": "am-config"}}, {"alertmanager.yml": "route: {}\n"})
 
         def kubectl_run(verb, args, **kw):
             seen[verb] = (list(args), kw.get("stdin_text"))
             return subprocess.CompletedProcess([verb, *args], 0, "", "")
         monkeypatch.setattr(render, "kubectl_run", kubectl_run)
-        assert render._apply_merged_configmap(manifest, "monitoring", "am-config") is True
-        assert seen == {"apply": (["--server-side", "--field-manager=da-generate-routes",
-                                   "--force-conflicts", "-f", "-"], manifest)}
+        assert render._apply_merged_configmap(body, "monitoring", "am-config") is True
+        assert seen == {"replace": (["--field-manager=da-generate-routes", "-f", "-"], body)}
         assert "ConfigMap monitoring/am-config updated" in capsys.readouterr().out
 
     def test_a_read_kubectl_could_not_start_is_explained_not_empty(self, monkeypatch):
@@ -3392,10 +3404,10 @@ class TestApplyToConfigmap:
         """The `apply` cannot be started — False, the reason on stderr, and no
         "updated" line."""
         import _grar_render as render
-        verbs = self._kubectl_dies_at(monkeypatch, "apply")
-        assert render._apply_merged_configmap("kind: ConfigMap\n", "monitoring", "am-config") is False
+        verbs = self._kubectl_dies_at(monkeypatch, "replace")
+        assert render._apply_merged_configmap("{}", "monitoring", "am-config") is False
         out, err = capsys.readouterr()
-        assert verbs == ["apply"]
+        assert verbs == ["replace"]
         assert "updated" not in out + err
         assert "cannot run kubectl" in err
 

@@ -592,6 +592,7 @@ PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]
     ("kubectl", "label"): _kubectl_exited,
     ("kubectl", "logs"): _kubectl_exited,
     ("kubectl", "patch"): _kubectl_exited,
+    ("kubectl", "replace"): _kubectl_exited,  # #3900: generate-routes --apply
     ("mmdc", "render"): _mmdc_render,
     ("node", "esbuild-parse"): _node_esbuild_parse,
     ("node", "cli-playground"): _node_cli_playground,
