@@ -30,6 +30,9 @@ import { DEPLOY_TIERS as TIERS, DEPLOY_ENVIRONMENTS as ENVIRONMENTS, DEPLOY_TENA
 // digest — see _common/data/images.js). They used to be literals here and
 // rotted to a v2.7.0-era snapshot, one of them to a ref that does not exist.
 import { PLATFORM_IMAGES, imageRepository, imageTag } from '../../_common/data/images.js';
+// #2947: every install names the exact chart version the values file was
+// written against. Without it the customer gets the registry's newest chart.
+import { chartVersion } from '../../_common/data/charts.js';
 
 const t = (zh, en) => (window.__t || ((_zh, e) => e))(zh, en);
 
@@ -148,7 +151,7 @@ function release(chart, namespace, yaml) {
     chart,
     namespace,
     file,
-    install: `helm upgrade --install ${chart} ${CHART_REPO}/${chart} -n ${namespace} --create-namespace -f ${file}`,
+    install: `helm upgrade --install ${chart} ${CHART_REPO}/${chart} --version ${chartVersion(chart)} -n ${namespace} --create-namespace -f ${file}`,
     yaml,
   };
 }
