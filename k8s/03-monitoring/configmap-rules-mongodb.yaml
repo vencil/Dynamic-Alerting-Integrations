@@ -225,4 +225,28 @@ data:
     \ }}{{ end }}{{ end }}'\n      summary: MongoDB connection pool near saturation\
     \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線池接近飽和'\n\
     \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    - name: mongodb-unset-thresholds\n  rules:\n  - alert: MongoDBThresholdNotConfigured\n\
+    \    expr: \"(\\n  max without(instance, pod) (user_threshold_unset{pack=\\\"\
+    mongodb\\\"})\\n  and on(tenant)\\n  (mongodb_up{job=\\\"tenant-exporters\\\"\
+    })\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} ==\
+    \ 1)\\n\"\n    for: 30m\n    labels:\n      maintenance: mute\n      severity:\
+    \ info\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
+    \ '{{ if eq $labels.fix \"platform\" }}The platform does not declare {{ $labels.key\
+    \ }}, so a tenant value for it is not read and the {{ $labels.pack }} alert that\
+    \ reads it never fires. The platform must add it to the root defaults or optional_overrides;\
+    \ write \"disable\" to end this notice.{{ else }}No threshold is served for {{\
+    \ $labels.key }}, so the {{ $labels.pack }} alert that reads it never fires. Write\
+    \ a threshold to arm it, or \"disable\" to keep it off and end this notice.{{\
+    \ end }}'\n      description_zh: '{{ if eq $labels.fix \"platform\" }}平台沒有宣告 {{\
+    \ $labels.key }}，租戶寫的值不會被讀，{{ $labels.pack }} 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults\
+    \ 或 optional_overrides；寫 \"disable\" 可結束這則提醒。{{ else }}{{ $labels.key }} 沒有送出任何門檻值，{{\
+    \ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。{{ end }}'\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: '{{ $labels.key }} has no threshold for {{ $labels.tenant\
+    \ }}: the alert on it stays silent'\n      summary_zh: '{{ $labels.tenant }} 沒有設定\
+    \ {{ $labels.key }}：讀它的告警不會響'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

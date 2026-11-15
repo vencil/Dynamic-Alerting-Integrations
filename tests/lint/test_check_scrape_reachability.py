@@ -201,6 +201,7 @@ _THRESHOLD_EXPORTER_METRICS = (
     "user_silent_mode",
     "user_state_filter",
     "user_threshold",
+    "user_threshold_unset",  # #1200 D-A A3: internal/scrape/collector.go collectUnsetThresholds
     "tenant_metadata_info",
     "tenant_expected_exporter",
 )

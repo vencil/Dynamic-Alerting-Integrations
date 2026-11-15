@@ -43,6 +43,10 @@ pack_level:
 # ---------------------------------------------------------------------
 absent_from_candidate:
   oracle:
+    - alert: OracleThresholdNotConfigured
+      reason: >-
+        讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的
+        key 尚未設定時的 info 提醒；candidate 是 inline 出貨值的參考檔，沒有這個訊號可對照。
     - alert: OracleHighActiveSessionsCritical
       reason: >-
         critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in（#3658；
@@ -50,6 +54,10 @@ absent_from_candidate:
     - alert: OracleTablespaceAlmostFullCritical
       reason: 同 OracleHighActiveSessionsCritical——critical 級為租戶 opt-in（#3658），無出貨預設值可 inline。
   db2:
+    - alert: DB2ThresholdNotConfigured
+      reason: >-
+        讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的
+        key 尚未設定時的 info 提醒；candidate 是 inline 出貨值的參考檔，沒有這個訊號可對照。
     - alert: DB2TablespaceAlmostFull
       reason: >-
         盲寫函式庫沒有 tablespace 故障 signature（anti-circularity：不回頭照規則
