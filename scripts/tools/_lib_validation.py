@@ -1551,7 +1551,18 @@ def shown_file(path: Any) -> "str | None":
     A segment that is already a stand-in stays as it is, so the exit is
     idempotent (``Finding.with_text`` and a pickled ``Finding`` rebuild from
     a shown ``file``). ``None`` is ``None``. ``--config-dir`` is the
-    operator's argument, not the author's text: it does not come here."""
+    operator's argument, not the author's text: it does not come here.
+
+    ⛔ The one exception (#3703, owner ruling): a conf.d name that is not
+    valid UTF-8. da-guard refuses the whole tree — nothing is read, no
+    route is generated — and its stderr names that entry escaped (Go
+    ``%q``: one line, every byte that is not printable UTF-8, newline and
+    control characters included, written as ``\\xff`` / ``\\n`` / ``\\x1b``);
+    ``parse_tree_failure_exit`` repeats that line as it is. ADR-036 step 9
+    requires every tool to name that file escaped: the operator must know
+    which entry to rename, and a stand-in cannot be traced back to a name
+    whose bytes are not text. Pinned, and kept to that one cell, by
+    ``_NAMED_ESCAPED`` in ``tests/ops/test_confd_filename_canary_matrix.py``."""
     if path is None:
         return None
     return "/".join(
