@@ -192,3 +192,86 @@ def test_every_rule_file_the_repo_ships_is_read(tmp_path) -> None:
     assert len(results) == len(files)
     empty = [os.path.basename(r.path) for r in results if not r.groups]
     assert not empty, empty
+
+
+# --- #3943: Python's open is the authority; da-read's "cannot open" only
+# sends `_lib_consumer_read` to ask Python again ---------------------------
+
+def _da_read_that(tmp_path: Path, body: str) -> str:
+    """A da-read that counts its runs in `runs` and then does *body*."""
+    fake = tmp_path / "fake-da-read"
+    fake.write_text(f"#!/bin/sh\necho x >> '{tmp_path / 'runs'}'\n{body}\n", encoding="utf-8")
+    fake.chmod(0o755)
+    return str(fake)
+
+
+def _runs(tmp_path: Path) -> int:
+    runs = tmp_path / "runs"
+    return len(runs.read_text(encoding="utf-8").split()) if runs.exists() else 0
+
+
+def test_a_rule_file_gone_under_da_read_is_refused_and_the_rest_read(
+        tmp_path, da_read_env) -> None:
+    """da-read's first run finds a file gone (exit 2, no refusal document):
+    that file is refused with `CANNOT_OPEN`, the others are read in a second
+    run, and no tool fault is recorded."""
+    import _lib_tool_fault
+    a, gone, b = (_write(tmp_path, n, GOOD) for n in ("a.yml", "gone.yml", "b.yml"))
+    fake = _da_read_that(tmp_path, (
+        f"if [ -e '{gone}' ]; then rm -f '{gone}'; "
+        f"echo 'da-read: open {gone}: no such file or directory' >&2; exit 2; fi\n"
+        f"exec '{da_read_env}' \"$@\""))
+    _lib_tool_fault.clear()
+    try:
+        results = cr.prometheus_rule_file_results([a, gone, b], binary=fake)
+        assert _lib_tool_fault.records() == []
+    finally:
+        _lib_tool_fault.clear()
+    assert [r.path for r in results] == [a, gone, b]
+    assert results[0].groups and results[2].groups
+    assert results[1].problem == f"{cr.CANNOT_OPEN}: No such file or directory"
+    assert _runs(tmp_path) == 2
+
+
+@pytest.mark.parametrize("remove,runs", [(False, 1), (True, 2)])
+def test_cannot_open_of_rule_files_python_still_reads_is_a_tool_fault(
+        tmp_path, remove, runs) -> None:
+    """Every file still reads: da-read's "cannot open" is a tool fault at
+    once. A file gone, and the retry with the rest says it again: a tool
+    fault too — one retry, never more, and one fault recorded."""
+    import _lib_tool_fault
+    a, b = _write(tmp_path, "a.yml", GOOD), _write(tmp_path, "b.yml", GOOD)
+    rm = f"rm -f '{b}'; " if remove else ""
+    fake = _da_read_that(tmp_path, f"{rm}echo 'da-read: open {a}: no such file' >&2; exit 2")
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.prometheus_rule_file_results([a, b], binary=fake)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert [f.reason for f in _lib_tool_fault.records()] == ["unexpected_exit"]
+    finally:
+        _lib_tool_fault.clear()
+    assert _runs(tmp_path) == runs
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_prometheus_config_cannot_open_is_judged_by_python(tmp_path, remove) -> None:
+    """`da-read prometheus` on a path: a file gone under it is refused
+    (`CANNOT_OPEN`); a file Python still reads is a tool fault."""
+    import _lib_tool_fault
+    p = tmp_path / "prometheus.yml"
+    p.write_text("rule_files: [a.yml]\n", encoding="utf-8")
+    rm = f"rm -f '{p}'; " if remove else ""
+    fake = _da_read_that(tmp_path, f"{rm}echo 'da-read: open: no such file' >&2; exit 2")
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.prometheus_config(p, binary=fake)
+        assert isinstance(exc.value, cr.InputRefused) == remove
+        if remove:
+            assert exc.value.stderr_lines == [
+                f"da-read: {p}: {cr.CANNOT_OPEN}: No such file or directory"]
+        assert [f.reason for f in _lib_tool_fault.records()] == (
+            [] if remove else ["unexpected_exit"])
+    finally:
+        _lib_tool_fault.clear()

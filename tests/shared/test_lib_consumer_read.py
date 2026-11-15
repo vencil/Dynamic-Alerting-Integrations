@@ -294,3 +294,58 @@ def test_a_subdirectory_that_cannot_be_listed_is_named_not_skipped(tmp_path, mon
     with pytest.raises(cr.SourcesUnlisted) as exc:
         cr.files_to_read([str(tmp_path)])
     assert (str(locked), "cannot list this directory: Permission denied") in exc.value.files
+
+
+# --- #3943: Python's open is the authority; da-crdecode's "cannot open" only
+# sends `_lib_consumer_read` to ask Python again ---------------------------
+
+def _cannot_open(tmp_path, *, remove: bool) -> str:
+    """A da-crdecode that says it cannot open its file (exit 2, no refusal
+    document) — after removing it first, when *remove*."""
+    rm = 'rm -f "$f"; ' if remove else ""
+    return _fake(tmp_path, 'for a; do f="$a"; done; ' + rm
+                 + 'echo "da-crdecode: open $f: no such file or directory" >&2; exit 2')
+
+
+def test_cannot_open_of_a_file_python_still_reads_is_a_tool_fault(tmp_path) -> None:
+    """The file is there: da-crdecode's "cannot open" is no answer about it
+    (a tool fault, recorded once per run), never a refusal of the file."""
+    import _lib_tool_fault
+    p = tmp_path / "a.yaml"
+    p.write_text("kind: A\n", encoding="utf-8")
+    fake = _cannot_open(tmp_path, remove=False)
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.kubernetes_documents(str(p), binary=fake)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert "without a refusal document" in str(exc.value)
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.any_yaml_documents_of([p], binary=fake, keep_refusals=True)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert [f.reason for f in _lib_tool_fault.records()] == ["unexpected_exit"] * 2
+    finally:
+        _lib_tool_fault.clear()
+    assert p.exists()
+
+
+def test_a_file_gone_under_da_crdecode_is_refused_not_a_fault(tmp_path) -> None:
+    """The file went between Python's read and da-crdecode's open (a race):
+    Python, asked again, cannot read it — refused with `CANNOT_OPEN`, as one
+    gone before, and no tool fault is recorded."""
+    import _lib_tool_fault
+    _lib_tool_fault.clear()
+    try:
+        p = tmp_path / "a.yaml"
+        p.write_text("kind: A\n", encoding="utf-8")
+        with pytest.raises(cr.InputRefused) as exc:
+            cr.kubernetes_documents(str(p), binary=_cannot_open(tmp_path, remove=True))
+        assert exc.value.stderr_lines == [
+            f"da-crdecode: {p}: {cr.CANNOT_OPEN}: No such file or directory"]
+        p.write_text("kind: A\n", encoding="utf-8")
+        got = cr.kubernetes_documents_of([p], binary=_cannot_open(tmp_path, remove=True),
+                                         keep_refusals=True)
+        assert isinstance(got[str(p)], cr.InputRefused)
+        assert _lib_tool_fault.records() == []
+    finally:
+        _lib_tool_fault.clear()
