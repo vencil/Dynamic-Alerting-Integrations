@@ -96,11 +96,18 @@ purpose: |
                            shape fails that decode and the exporter drops the
                            whole file (served-values parse_failed;
                            parse-tree does not say so). Other fields, and a
-                           null anywhere, are fine. Not modelled: a `default`
-                           key written as an alias (`{*d : [1]}` with
-                           `&d default`) — yaml.v3 sees the alias, not the
-                           word, so the exporter has no schedule there, and
-                           this check says it refuses the file.
+                           null anywhere, are fine. A key written as an
+                           alias counts by its anchor's NAME, as yaml.v3
+                           compares it (#3999): `{*d : [1]}` with
+                           `&d default` is no schedule, `{*default : [1]}`
+                           with `&default foo` is one. Not modelled: such a value is
+                           handed to the reader resolved, so it is shown as a
+                           schedule (not simulated) where the exporter serves
+                           the platform default instead.
+                           tests/shared/tenant_file_matrix.json (written by
+                           Go from the exporter's file reader) holds this
+                           whole-file verdict on the shapes it lists
+                           (tests/tenant-file-matrix.test.ts).
                            ⛔ Hand its config to
                            ../validation/threshold-value.js readThresholdRow
                            (through alert-engine.js); do not hand parseYaml's
@@ -161,6 +168,41 @@ const TEXT_SCHEMA_NO_MERGE = FAILSAFE_SCHEMA.extend({
 // only, which is the difference. Only for finding the value a root merge
 // brings in, as written.
 const MERGE_MARK = '\u0000<<';
+// An alias, in the same marked parse (#3999): yaml.v3 judges a schedule by
+// its key nodes' own values, and an alias node's own value is the anchor's
+// NAME — so `{*d : [1]}` beside `&d default` is no schedule to the exporter,
+// and `{*default : [1]}` beside `&default foo` is one. Everywhere else
+// (the tenant's map, a merge source's) yaml.v3 resolves the alias. js-yaml
+// hands every alias over resolved; so an alias that resolves to a string is
+// marked with both: ALIAS_MARK, its name, ALIAS_MARK, the resolved text.
+// At js-yaml's listener an alias is the one node that closes with no kind
+// (a scalar of any style has kind 'scalar'); its text, from where the node
+// opened to where it closed, holds only blanks, comments and `*name` (an
+// alias takes no tag or anchor), so the name is read from there.
+const ALIAS_MARK = '\u0000*';
+const COMMENT_RE = /(^|[ \t])#.*$/gm;
+const ALIAS_NAME_RE = /\*([^\s,[\]{}]+)/;
+function aliasMarker() {
+  const opened = [];
+  const made = new Map(); // mark → { name, resolved }: only marks made here are read back
+  const onNode = (event, state) => {
+    if (event === 'open') { opened.push(state.position); return; }
+    const start = opened.pop();
+    // js-yaml closes an alias twice where it tries a block mapping first (an
+    // explicit `? *k` key): mark it once.
+    if (state.kind !== null || typeof state.result !== 'string' || made.has(state.result)) return;
+    const name = ALIAS_NAME_RE.exec(state.input.slice(start, state.position).replace(COMMENT_RE, '$1'));
+    if (!name) return;
+    const mark = `${ALIAS_MARK}${name[1]}${ALIAS_MARK}${state.result}`;
+    made.set(mark, { name: name[1], resolved: state.result });
+    state.result = mark;
+  };
+  // A key as yaml.v3 compares it: `name` its own value, `resolved` the key it
+  // decodes to in a map. A key this parse did not mark is both, whatever it
+  // spells (a written key that happens to start with ALIAS_MARK included).
+  const keyOf = (k) => made.get(k) || { name: k, resolved: k };
+  return { onNode, keyOf };
+}
 const TEXT_SCHEMA_MERGE_MARKED = FAILSAFE_SCHEMA.extend({
   implicit: [types.null, new Type('tag:da-portal,2026:merge-mark', {
     kind: 'scalar', resolve: (data) => data === '<<', construct: () => MERGE_MARK,
@@ -215,7 +257,7 @@ function loadYamlDocument(text) {
   return loadDocument(text, YAML_SCHEMA);
 }
 
-function loadDocument(text, schema) {
+function loadDocument(text, schema, onNode = null) {
   const t = window.__t || ((zh, en) => en);
 
   const src = typeof text === 'string' ? text : '';
@@ -227,7 +269,7 @@ function loadDocument(text, schema) {
   }
   let loaded;
   try {
-    loaded = loadFirstDocument(src, schema);
+    loaded = loadFirstDocument(src, schema, onNode);
   } catch (e) {
     const mark = e && e.mark;
     const line = mark && typeof mark.line === 'number' ? mark.line + 1 : null;
@@ -253,11 +295,17 @@ function loadDocument(text, schema) {
 // First document of the stream (null when empty). Any error in any
 // document throws. The listener collects anchor maps so a cycle can be
 // reported by anchor name.
-function loadFirstDocument(src, schema) {
+// `onNode`, when given, sees js-yaml's listener events ('open' as a node
+// starts, 'close' as it ends) and may replace `state.result` at 'close' —
+// the value the node takes.
+function loadFirstDocument(src, schema, onNode = null) {
   const anchorMaps = new Set();
   const docs = loadAll(src, null, {
     schema,
-    listener(_event, state) { if (state && state.anchorMap) anchorMaps.add(state.anchorMap); },
+    listener(event, state) {
+      if (state && state.anchorMap) anchorMaps.add(state.anchorMap);
+      if (onNode && state) onNode(event, state);
+    },
   });
   return { doc: docs.length ? docs[0] : null, anchorMaps };
 }
@@ -368,11 +416,11 @@ function parseYaml(text) {
 // `value`. A key the struct does not have is not decoded, whatever it holds.
 // Measured with da-guard served-values on main (parse_failed).
 const isScalarNode = (v) => v === null || typeof v !== 'object';
-function scheduleDecodeError(own, v) {
+function scheduleDecodeError(own, v, keyOf) {
   // `v` is the same node as `own`, merged: a mapping whenever `own` is one.
   // Should a lookup ever pair them wrongly, a non-mapping `v` is no schedule
   // here rather than a crash of the page.
-  if (!isPlainMap(own) || !Object.prototype.hasOwnProperty.call(own, 'default') || !isPlainMap(v)) return null;
+  if (!isPlainMap(own) || !Object.keys(own).some((k) => keyOf(k).name === 'default') || !isPlainMap(v)) return null;
   for (const field of ['default', 'expires', 'reason']) {
     if (!isScalarNode(v[field])) return { field, list: false };
   }
@@ -401,13 +449,28 @@ function scheduleDecodeError(own, v) {
 // `seen` holds the sources already searched: the search stops at the first
 // find, so a source met again has nothing for this key, and skipping it
 // keeps a chain of `<<: [*m, *m]` linear instead of exponential.
-function writtenValue(map, key, seen = new Set()) {
+function writtenValue(map, key, keyOf, index, seen = new Set()) {
+  // A key of the tenant's map (or of a merge source) written as an alias is
+  // the key it resolves to: yaml.v3 resolves an alias key when it decodes a
+  // map. Only a schedule's own keys are compared by name (aliasMarker). A key
+  // as written is looked up directly; the marked ones through `index`, built
+  // once per map, so a lookup stays O(1).
   if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
+  let byResolved = index.get(map);
+  if (!byResolved) {
+    byResolved = new Map();
+    for (const k of Object.keys(map)) {
+      const { resolved } = keyOf(k);
+      if (resolved !== k && !byResolved.has(resolved)) byResolved.set(resolved, k);
+    }
+    index.set(map, byResolved);
+  }
+  if (byResolved.has(key)) return map[byResolved.get(key)];
   seen.add(map);
   const merge = map[MERGE_MARK];
   for (const source of Array.isArray(merge) ? merge : [merge]) {
     if (!isPlainMap(source) || seen.has(source)) continue;
-    const found = writtenValue(source, key, seen);
+    const found = writtenValue(source, key, keyOf, index, seen);
     if (found !== undefined) return found;
   }
   return undefined;
@@ -460,12 +523,14 @@ function parseTenantYaml(text) {
   // schema does not take — every key is judged by its merged value rather
   // than not at all. The exporter refuses such a file whole anyway: its
   // parse-tree does not read a `!!merge` tag (tag_not_allowed, measured).
-  const marked = loadDocument(text, TEXT_SCHEMA_MERGE_MARKED).doc;
-  const written = (key) => (isPlainMap(marked) ? writtenValue(marked, key) : doc[key]);
+  const marker = aliasMarker();
+  const marked = loadDocument(text, TEXT_SCHEMA_MERGE_MARKED, marker.onNode).doc;
+  const index = new WeakMap();
+  const written = (key) => (isPlainMap(marked) ? writtenValue(marked, key, marker.keyOf, index) : doc[key]);
   // Every key, `__proto__` and the other UNSAFE_KEYS too: the exporter has
   // no such keys, and decodes their schedules as any other (measured).
   const undecodable = Object.keys(doc)
-    .map((key) => [key, scheduleDecodeError(written(key), doc[key])])
+    .map((key) => [key, scheduleDecodeError(written(key), doc[key], marker.keyOf)])
     .filter(([, error]) => error !== null);
   if (undecodable.length) {
     return { config: {}, errors: undecodable.map(([key, error]) => scheduleDecodeMessage(key, error)) };
