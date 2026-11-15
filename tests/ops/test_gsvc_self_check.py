@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _grar_findings_cases as cases  # noqa: E402
 import _gsvc_harness as h  # noqa: E402
 import _gsvc_proto  # noqa: E402
+import generator_service as gs  # noqa: E402
 import _lib_consumer_read as cr  # noqa: E402
 from _platform_fs import require_os_attrs  # noqa: E402
 
@@ -52,6 +53,9 @@ SELF_CHECK_ARG = {name: cr.READER_SELF_CHECK_ARGS[env][0] for name, env in BINAR
 #: The shim's PATH holds only its stub directory: sleep and head by path.
 SLEEP = shutil.which("sleep") or "/bin/sleep"
 HEAD = shutil.which("head") or "/usr/bin/head"
+#: `ulimit -d` (KiB) under --memory-limit-bytes' default: the judgement's Go
+#: programs' RLIMIT_DATA, which a self-check runs under too.
+DATA_LIMIT_KIB = str(gs.DEFAULT_MEMORY_LIMIT_BYTES // 1024)
 
 _SHIM = """#!/bin/sh
 if [ -s '{ctl}' ]; then
@@ -60,7 +64,8 @@ if [ -s '{ctl}' ]; then
     case "$c" in
       "{name} $1 sleep") '{sleep}' 30; exit 0;;
       "{name} $1 hang") '{sleep}' '{hang}'; exit 0;;
-      "{name} $1 flood") '{head}' -c 4000000 /dev/zero; exit 0;;
+      "{name} $1 flood") exec '{head}' -c 4000000 /dev/zero;;
+      "{name} $1 datalimit") [ "$(ulimit -d)" = '{datalimit}' ] || exit 7; exec '{real}' "$@";;
       "{name} $1 rc7") exit 7;;
       "{name} $1 rc2") echo "usage: {name}" >&2; exit 2;;
       "{name} $1 sigkill") kill -9 $$;;
@@ -97,7 +102,8 @@ class _Rig:
                 pytest.skip(f"needs ${var} (the session build sets it)")
             path = self.shims / name
             path.write_text(_SHIM.format(name=name, ctl=self.ctl, real=real, sleep=SLEEP,
-                                         head=HEAD, hang=self.hang), encoding="utf-8")
+                                         head=HEAD, hang=self.hang,
+                                         datalimit=DATA_LIMIT_KIB), encoding="utf-8")
             path.chmod(0o755)
         self.repo = h.init_repo(tmp / "repo")
         self.commit = h.commit_tree(self.repo, dict(cases.FIXTURES["clean"]))
@@ -123,7 +129,7 @@ class _Rig:
         return pids
 
     def strike(self, *lines: str) -> None:
-        self.ctl.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+        h.write_atomic(self.ctl, "".join(f"{line}\n" for line in lines))
 
 
 @pytest.fixture
@@ -282,12 +288,21 @@ def test_a_new_fault_wakes_the_wait_between_rounds(rig):
 
 
 def test_a_self_check_that_writes_without_end_is_stopped_by_the_file_limit(rig):
-    """Its stdout is a file in --work-dir: a size limit stops it there
-    (EFBIG or SIGXFSZ), and the self-check fails."""
+    """Its stdout is a file in --work-dir: RLIMIT_FSIZE stops a program
+    writing past it — SIGXFSZ ends it (`signalled`). Without the limit it
+    would exit 0 with 4 MB on stdout (`bad_output`)."""
     rig.strike(f"da-read {SELF_CHECK_ARG['da-read']} flood")
     with rig.service("flood") as svc:
         st = _status(svc)
         assert st["ready"] is False, st
-        [failure] = st["self_check"]["failures"]
-        assert failure["binary"] == "da-read" and failure["reason"] in ("bad_output",
-                                                                         "signalled"), st
+        assert st["self_check"]["failures"] == [{"binary": "da-read", "reason": "signalled"}], st
+
+
+def test_a_self_check_runs_under_the_judgement_memory_limit(rig):
+    """RLIMIT_DATA of a self-check is --memory-limit-bytes, the one a
+    judgement's Go programs run under (ADR-036 §3's budget): the shim passes
+    on to the real program only when `ulimit -d` is that limit."""
+    rig.strike(f"da-read {SELF_CHECK_ARG['da-read']} datalimit")
+    with rig.service("datalimit") as svc:
+        st = _status(svc)
+        assert st["self_check"]["state"] == "passed" and st["ready"] is True, st

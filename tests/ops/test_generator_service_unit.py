@@ -900,3 +900,44 @@ def test_a_judgement_that_ran_clears_no_tool_fault():
 ])
 def test_the_self_check_document_is_closed(doc, ok):
     assert (proto.self_check_problem(doc) is None) is ok
+
+
+def test_a_self_check_never_overlaps_a_judgement():
+    """ADR-036 §3's memory budget holds one judgement (and its Go program)
+    at a time; a self-check round is one more Go program. It waits for the
+    running judgement, and while it runs no queued request starts — they
+    wait in the queue, then run once it is done."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.gate = asyncio.Event()  # the first judgement runs until released
+        check_gate = asyncio.Event()
+        seen = []
+
+        async def one(name, exe, args):
+            seen.append((name, svc.running is None, list(svc.judged)))
+            await check_gate.wait()
+            return None
+        svc._self_check_one = one
+        svc._self_check_programs = lambda: list(_PROGRAMS)
+        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), svc.loop.time()))
+        await _settle()
+        assert svc.running is not None
+        round_ = asyncio.ensure_future(svc.self_check_round())
+        await _settle()
+        assert seen == [], seen  # waits for the running judgement
+        second = asyncio.create_task(svc.submit(_req("2" * 40, 25000), svc.loop.time()))
+        await _settle()
+        svc.gate.set()
+        assert _doc(await first)["result"] == "pass"
+        await _settle()
+        # the round runs alone: the queued request has not started
+        assert seen == [("da-crdecode", True, ["1" * 40])], seen
+        assert svc.running is None and len(svc.waiting) == 1
+        check_gate.set()
+        assert await round_ is True
+        assert [name for name, _free, _judged in seen] == ["da-crdecode", "da-guard", "da-read"]
+        assert all(free for _name, free, _judged in seen)
+        assert _doc(await second)["result"] == "pass"
+        assert svc.judged == ["1" * 40, "2" * 40]
+    asyncio.run(main())

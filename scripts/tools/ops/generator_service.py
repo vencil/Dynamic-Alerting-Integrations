@@ -149,13 +149,20 @@ _SELF_CHECK_STDERR_LOGGED = 1024
 _SELF_CHECK_FILE_LIMIT_BYTES = 1 * MiB
 
 
-def _limit_self_check_files() -> None:
-    """In the self-check process, before exec: cap the size of any file it
-    writes. Past it a write fails (EFBIG) or SIGXFSZ ends the process — the
-    self-check fails either way."""
-    import resource
-    resource.setrlimit(resource.RLIMIT_FSIZE,
-                       (_SELF_CHECK_FILE_LIMIT_BYTES, _SELF_CHECK_FILE_LIMIT_BYTES))
+def _self_check_limits(memory_limit: int):
+    """The self-check process's limits, set before exec: RLIMIT_DATA
+    *memory_limit* — --memory-limit-bytes, the one a judgement's Go programs
+    run under (inherited from the judgement process), so a self-check fits
+    the container's budget as one of them does — and RLIMIT_FSIZE, so a
+    program that writes without end is stopped (EFBIG, or SIGXFSZ ends it)."""
+    def limit() -> None:
+        import resource
+        resource.setrlimit(resource.RLIMIT_DATA, (memory_limit, memory_limit))
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (_SELF_CHECK_FILE_LIMIT_BYTES, _SELF_CHECK_FILE_LIMIT_BYTES))
+    return limit
+
+
 HEADER_LIMIT_BYTES = 16 * 1024
 #: Descriptors kept free beyond the connection slots: stdio, the listening
 #: socket, the event loop's epoll and self-pipe, a judgement's result pipe
@@ -457,6 +464,10 @@ class Service:
         self._self_check_task: Optional[asyncio.Task] = None
         #: Set by a tool fault while the loop waits between rounds: run now.
         self._self_check_wake = asyncio.Event()
+        #: A self-check round holds (or waits for) the judgement slot; set
+        #: by ``_start_next`` when the slot is free for it.
+        self._self_check_slot = False
+        self._slot_free = asyncio.Event()
         self._self_check_seq = 0
         #: Self-check processes not yet collected: ``_reap_orphans`` leaves
         #: them to their own ``wait``.
@@ -655,6 +666,11 @@ class Service:
 
     def _start_next(self) -> None:
         if self.running is not None or self.warming is not None:
+            return
+        if self._self_check_slot:
+            # #3943: a self-check round holds the slot — it runs alone, as a
+            # judgement does (the memory budget, ADR-036 §3); the queue waits.
+            self._slot_free.set()
             return
         if self.waiting:
             ticket = self.waiting.popleft()
@@ -973,6 +989,10 @@ class Service:
         running — wake it from its wait between rounds."""
         if self._self_check_task is None or self._self_check_task.done():
             self._self_check_wake.clear()
+            # the slot is the round's from now, not from when its task first
+            # runs: a judgement or warming run started in between would only
+            # be waited for (or a warming run preempted)
+            self._self_check_slot = True
             self._self_check_task = self.loop.create_task(self._self_check_loop())
         else:
             self._self_check_wake.set()
@@ -1020,13 +1040,34 @@ class Service:
             out.append((name, exe, _lib_consumer_read.READER_SELF_CHECK_ARGS[env]))
         return sorted(out)
 
+    async def _take_slot(self) -> None:
+        """Hold the one slot judgements and warming runs take: no new one
+        starts (``_start_next``), a warming run is ended, and a running
+        judgement is waited for — so a self-check never overlaps either and
+        the container's memory budget holds (ADR-036 §3). A request that
+        comes meanwhile waits in the queue, its deadline running."""
+        self._self_check_slot = True
+        if self.warming is not None and self.pending_warm is None:
+            self.pending_warm = self.warming  # warmed again after the round
+        self._preempt_warm()
+        while self.running is not None or self.warming is not None:
+            self._slot_free.clear()
+            await self._slot_free.wait()
+
+    def _free_slot(self) -> None:
+        self._self_check_slot = False
+        if self.loop is not None:
+            self._start_next()
+
     async def self_check_round(self) -> bool:
-        """Run the three self-checks at once and record the round; whether
-        it passed and no tool fault is left. A pass clears the tool fault
-        unless a newer one came while it ran."""
+        """Run the three self-checks one after another, alone in the slot
+        (``_take_slot``), and record the round; whether it passed and no
+        tool fault is left. A pass clears the tool fault unless a newer one
+        came while it ran."""
         seq = self._fault_seq
         self.self_check_running = True
         try:
+            await self._take_slot()
             try:
                 programs = self._self_check_programs()
             except Exception as exc:  # noqa: BLE001 — the round fails, the service stays up
@@ -1034,10 +1075,13 @@ class Service:
                 programs = [(name, None, ()) for name in _lib_tool_fault.BINARIES]
                 reasons = ["internal_error"] * len(programs)
             else:
-                reasons = await asyncio.gather(
-                    *(self._self_check_one(name, exe, args) for name, exe, args in programs))
+                # one at a time: each is one Go program under the judgement's
+                # memory limit, as a judgement runs one at a time
+                reasons = [await self._self_check_one(name, exe, args)
+                           for name, exe, args in programs]
         finally:
             self.self_check_running = False
+            self._free_slot()
         self.self_check_failures = [{"binary": name, "reason": reason}
                                     for (name, _exe, _args), reason in zip(programs, reasons)
                                     if reason is not None]
@@ -1078,16 +1122,27 @@ class Service:
     async def _self_check_in(self, name: str, exe: str, args: tuple[str, ...],
                              work: str) -> Optional[str]:
         out_path, err_path = os.path.join(work, "stdout"), os.path.join(work, "stderr")
-        with open(out_path, "wb") as out, open(err_path, "wb") as err:
-            try:
-                proc = subprocess.Popen(  # noqa: S603 — the resolved program, no shell
-                    [exe, *args], stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                    cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True,
-                    preexec_fn=_limit_self_check_files)
-            except OSError as exc:
-                reason = _lib_tool_fault.os_error_reason(exc, exe)
-                _log(f"self-check: {name}: {reason}: {exc.strerror}")
-                return reason
+        # 0600 from creation (the work directory is 0700 already): what a
+        # self-check prints is the service's to read, nobody else's
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        out = os.open(out_path, flags, 0o600)
+        try:
+            err = os.open(err_path, flags, 0o600)
+        except OSError:
+            os.close(out)
+            raise
+        try:
+            proc = subprocess.Popen(  # noqa: S603 — the resolved program, no shell
+                [exe, *args], stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True,
+                preexec_fn=_self_check_limits(self.s.memory_limit_bytes))
+        except OSError as exc:
+            reason = _lib_tool_fault.os_error_reason(exc, exe)
+            _log(f"self-check: {name}: {reason}: {exc.strerror}")
+            return reason
+        finally:
+            os.close(out)
+            os.close(err)
         # No await between the fork and this: _reap_orphans (a SIGCHLD
         # callback on this loop) cannot have collected it.
         self._held_pids.add(proc.pid)

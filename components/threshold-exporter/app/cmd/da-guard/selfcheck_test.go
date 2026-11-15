@@ -129,7 +129,7 @@ func TestSelfCheckFailsOnAChangedAnswer(t *testing.T) {
 func TestSelfCheckFailsOnAChangedTree(t *testing.T) {
 	t.Parallel()
 	fixtures := fixturesCopy(t)
-	fixtures["selfcheck/tree/_defaults.yaml"].Data = []byte("defaults:\n  mysql_connection_usage_percent: 81\n  mysql_slave_lag: 30\n")
+	fixtures["selfcheck/conf.d/_defaults.yaml"].Data = []byte("defaults:\n  mysql_connection_usage_percent: 81\n  mysql_slave_lag: 30\n")
 	var errOut bytes.Buffer
 	if failed := selfCheck(dispatchNames(), selfCheckCases, fixtures, &errOut); len(failed) == 0 {
 		t.Fatal("a changed tree still passed")
@@ -160,4 +160,19 @@ func TestSelfCheckFailsWithoutADefaultCheckFixture(t *testing.T) {
 		}
 	}
 	assertSelfCheckFails(t, dispatchNames(), cases, selfCheckFixtures, defaultMode)
+}
+
+// A $TMPDIR whose name JSON escapes (`&`, `"`, `<`, `>`): the tree copy's
+// path is read back as `{tree}` in that escaped form too, and the
+// self-check still passes. Not parallel: it sets $TMPDIR.
+func TestSelfCheckPassesUnderATmpdirJSONEscapes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), `a&b"c<d>`)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", dir)
+	var errOut bytes.Buffer
+	if failed := selfCheck(dispatchNames(), selfCheckCases, selfCheckFixtures, &errOut); len(failed) != 0 {
+		t.Fatalf("failed=%q stderr=%q", failed, errOut.String())
+	}
 }

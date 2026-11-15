@@ -32,7 +32,7 @@ import (
 // Arguments after `self-check` are a usage error (exit 2, nothing on stdout).
 //
 // The fixtures that read a conf.d tree each get their own copy of
-// selfcheck/tree, written below $TMPDIR (os.MkdirTemp) and removed after;
+// selfcheck/conf.d, written below $TMPDIR (os.MkdirTemp) and removed after;
 // `{tree}` in a fixture's arguments is that copy, and the copy's path in
 // what it prints reads `{tree}` again before the comparison.
 const selfCheckCmd = "self-check"
@@ -123,14 +123,14 @@ type selfCheckRun struct {
 	stdout, stderr []byte
 }
 
-// copyTree writes *fixtures*' selfcheck/tree into a new directory below
+// copyTree writes *fixtures*' selfcheck/conf.d into a new directory below
 // $TMPDIR and returns it.
 func copyTree(fixtures fs.FS) (string, error) {
 	dir, err := os.MkdirTemp("", "da-guard-self-check-")
 	if err != nil {
 		return "", err
 	}
-	const root = "selfcheck/tree"
+	const root = "selfcheck/conf.d"
 	err = fs.WalkDir(fixtures, root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -177,8 +177,8 @@ func runSelfCheckCase(c selfCheckCase, fixtures fs.FS) (selfCheckRun, error) {
 	rc := dispatch(args, bytes.NewReader(input), &out, &errOut, guard.CheckDefaultsImpact)
 	got := selfCheckRun{rc, out.Bytes(), errOut.Bytes()}
 	if tree != "" {
-		got.stdout = bytes.ReplaceAll(got.stdout, []byte(tree), []byte(selfCheckTree))
-		got.stderr = bytes.ReplaceAll(got.stderr, []byte(tree), []byte(selfCheckTree))
+		got.stdout = withoutTree(got.stdout, tree)
+		got.stderr = withoutTree(got.stderr, tree)
 	}
 	// The build's version (main.Version, set by -ldflags) is no answer of the
 	// code: a release build and a test build answer alike.
@@ -187,6 +187,21 @@ func runSelfCheckCase(c selfCheckCase, fixtures fs.FS) (selfCheckRun, error) {
 			append([]byte(`"da_guard_version":`), v...), []byte(`"da_guard_version":"`+selfCheckVersion+`"`))
 	}
 	return got, nil
+}
+
+// withoutTree is *out* with the tree copy's path *tree* read back as
+// `{tree}` in each form da-guard writes it: as one shell word in a remedy
+// (shellQuote, quoted when $TMPDIR holds a byte a shell reads), as it is,
+// and as a JSON string holds it (encoding/json escapes `"`, `\`, `<`, `>`
+// and `&`). The quoted form first: it holds the plain one.
+func withoutTree(out []byte, tree string) []byte {
+	out = bytes.ReplaceAll(out, []byte(shellQuote(tree)), []byte(selfCheckTree))
+	out = bytes.ReplaceAll(out, []byte(tree), []byte(selfCheckTree))
+	if quoted, err := json.Marshal(tree); err == nil {
+		escaped := quoted[1 : len(quoted)-1]
+		out = bytes.ReplaceAll(out, escaped, []byte(selfCheckTree))
+	}
+	return out
 }
 
 // selfCheckVersion is the placeholder of the build's version in an answer.

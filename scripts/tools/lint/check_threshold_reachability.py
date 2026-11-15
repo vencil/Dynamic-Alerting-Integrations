@@ -717,6 +717,12 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      conf.d `_defaults.yaml` gained it, 19 -> 20, total 85 -> 86, the artifact
 #      floor went 73 -> 74 (the full-l0-l3 probe reads 73 against it, DOWN stays
 #      12), and with the biggest group one larger again UP is +7.)
+#     (#3943 added da-guard's self-check fixture tree,
+#      `components/threshold-exporter/app/cmd/da-guard/selfcheck/conf.d` — a
+#      conf.d root embedded in the binary, its `_defaults.yaml` 2 keys — +2
+#      artifact keys, total 86 -> 88. Same remedy as #3258: the floor went
+#      74 -> 76, the full-l0-l3 probe reads 75 against it, and both figures
+#      here stay at +7 / 12.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -741,7 +747,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 76
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -975,6 +981,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # accounted for explicitly in `_DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS` below.
 _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "components/da-tools/app/examples/cardinality-demo/conf.d",
+    "components/threshold-exporter/app/cmd/da-guard/selfcheck/conf.d",
     "components/threshold-exporter/config/conf.d",
     "rule-packs/recipes/examples/conf.d",
     "try-local/seed/conf.d",

@@ -84,6 +84,15 @@ def stub(bin_dir: Path, name: str, script: str) -> Path:
     return p
 
 
+def write_atomic(path: Path, text: str) -> None:
+    """*text* into *path* by a rename of a file beside it: a shim that reads
+    *path* (a fault control file) meanwhile reads the old text or the new,
+    never a cut one."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def b64(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
 

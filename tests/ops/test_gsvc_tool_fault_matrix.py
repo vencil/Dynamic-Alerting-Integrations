@@ -255,12 +255,12 @@ class _Rig:
             binary = ln.split(" ", 1)[0]
             if not any(f" {m}" in ln for m in _MEMORY_FAULTS):
                 lines.append(f"{binary} {SELF_CHECK_CELL[binary]} rc7")
-        self.ctl.write_text("".join(f"{ln}\n" for ln in lines), encoding="utf-8")
+        h.write_atomic(self.ctl, "".join(f"{ln}\n" for ln in lines))
 
     def assert_recovers(self) -> None:
         """Every program as it was: a judgement passes, and a self-check
         passing makes the service ready again."""
-        self.ctl.write_text("", encoding="utf-8")
+        h.write_atomic(self.ctl, "")
         for name in BINARIES:
             self.restore(name)
         status, doc, _st, _cells = self.judge()
@@ -344,7 +344,7 @@ def _assert_memory(rig, where: str) -> None:
     """The judgement under *where*'s fault: that write's memory — never a
     503, and never a verdict (pass / findings) reached without that
     program. The service stays ready."""
-    rig.ctl.write_text(where, encoding="utf-8")
+    h.write_atomic(rig.ctl, where)
     status, doc, st, _ran = rig.judge()
     assert status == 200, (where, doc)
     assert st["ready"] is True and st["tool_fault"] is None, (where, st)
@@ -369,7 +369,7 @@ def test_every_cell_ended_by_the_go_runtime_out_of_memory_is_rejected_as_memory(
     rig.assert_recovers()
     for binary, cell in cells:
         _assert_memory(rig, f"{binary} {cell} {fault}")
-    rig.ctl.write_text("", encoding="utf-8")
+    h.write_atomic(rig.ctl, "")
 
 
 #: RLIMIT_DATA levels (KiB) that end the real programs while their Go
@@ -426,7 +426,7 @@ def test_every_cell_out_of_memory_under_a_small_limit_is_rejected_as_memory(rig,
                 continue
             _assert_memory(rig, f"{binary} {cell} ulimit {kib}")
             struck += 1
-    rig.ctl.write_text("", encoding="utf-8")
+    h.write_atomic(rig.ctl, "")
     assert struck >= 2 * len(cells), (struck, ends)
     rig.assert_recovers()
 
@@ -444,7 +444,7 @@ def test_a_fault_wins_over_a_memory_end(rig, cells):
                                   ("da-read", "alertmanager")} <= ran, ran
         assert all(f["reason"] != _lib_tool_fault.MEMORY_END for f in st["tool_fault"]), st
     finally:
-        rig.ctl.write_text("", encoding="utf-8")
+        h.write_atomic(rig.ctl, "")
     rig.assert_recovers()
 
 
@@ -500,7 +500,7 @@ def test_names_mode_of_a_base_tree_with_a_symlink_struck(rig, cells, tmp_path):
             assert (doc["result"], doc["reason"]) == ("rejected", "memory"), (fault, doc)
             assert st["ready"] is True and st["tool_fault"] is None, (fault, st)
     finally:
-        rig.ctl.write_text("", encoding="utf-8")
+        h.write_atomic(rig.ctl, "")
         svc.stop()
 
 
@@ -568,8 +568,10 @@ def test_only_a_self_check_clears(rig, cells):
         _assert_tool_fault(rig, "da-read", None, {"not_found"}, "da-read still missing")
         # There again for judgements, its self-check still failing: a
         # judgement that ran in full clears nothing.
-        rig.restore("da-read")
+        # the self-check made to fail first: restored first, a round could
+        # pass in between and clear the fault this test reads
         rig.strike(f"da-read {SELF_CHECK_CELL['da-read']} rc7")
+        rig.restore("da-read")
         status, doc, st, _ran = rig.judge()
         assert status == 200 and doc["result"] == "pass", doc
         assert st["ready"] is False and st["tool_fault"], st
