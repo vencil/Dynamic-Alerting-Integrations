@@ -18,7 +18,7 @@
 // higher of the two requirements.
 module github.com/vencil/dynamic-alerting/components/da-read
 
-go 1.26.10
+go 1.26.11
 
 // #2295, #3522: parse URLs as the prom/alertmanager release binaries do. Go
 // 1.26 made net/url refuse a second colon in an http(s) host

@@ -1,3 +1,3 @@
 module github.com/vencil/dynamic-alerting/tests/e2e-bench/receiver
 
-go 1.26.10
+go 1.26.11

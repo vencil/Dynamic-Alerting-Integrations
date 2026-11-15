@@ -6,7 +6,7 @@
 // (scripts/ops/kind-node-image.env) by TestLibraryTracksTheNodeImage.
 module github.com/vencil/dynamic-alerting-integrations/tests/pss
 
-go 1.26.10
+go 1.26.11
 
 require (
 	k8s.io/apimachinery v0.37.0
