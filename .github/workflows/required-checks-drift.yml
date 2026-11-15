@@ -68,9 +68,16 @@ jobs:
           fi
           # stderr too: an rc-2 reason is printed there, and the summary and the
           # issue must say WHY nothing could be compared.
+          #
+          # ⛔ `|| rc=$?`, never a separate `rc=$?` line: this step has no
+          # `shell:`, so GitHub runs it as `bash -e`, and `set -uo pipefail`
+          # does not turn errexit off. A bare non-zero exit ended the step
+          # right here — no drift text in the log, no summary, no `rc` output,
+          # no `::error::` — on exactly the runs that had something to say
+          # (#3946). Held by tests/ops/test_workflow_status_reads.py.
+          rc=0
           python3 -X utf8 scripts/ops/required_checks_drift.py "$RUNNER_TEMP/branch.json" \
-            > "$RUNNER_TEMP/drift.txt" 2>&1
-          rc=$?
+            > "$RUNNER_TEMP/drift.txt" 2>&1 || rc=$?
           cat "$RUNNER_TEMP/drift.txt"
           {
             echo "### Required checks vs branch protection (rc=${rc})"
@@ -78,9 +85,13 @@ jobs:
             sed 's/^/- /' "$RUNNER_TEMP/drift.txt"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "rc=${rc}" >> "$GITHUB_OUTPUT"
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::.github/required-checks.yaml and branch protection disagree (rc=${rc}) — see the summary"
-          fi
+          # 0 they agree · 1 they differ · 2 nothing could be compared. The
+          # two failures are different findings and must not share a message.
+          case "$rc" in
+            0) ;;
+            1) echo "::error::.github/required-checks.yaml and branch protection disagree (rc=1) — see the summary" ;;
+            *) echo "::error::required_checks_drift.py compared nothing (rc=${rc}) — see the summary; this says nothing about the file" ;;
+          esac
           exit "$rc"
 
       - name: Open or update the tracking issue (scheduled runs only)
@@ -88,10 +99,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Empty when the compare step never got to report: a step before it
+          # failed, or it was skipped.
+          COMPARE_RC: ${{ steps.compare.outputs.rc }}
         run: |
           set -euo pipefail
           title="[ci] required checks drift: .github/required-checks.yaml ≠ branch protection"
-          body="$(printf 'The daily comparison failed: %s\n\n' "$RUN_URL"; cat "$RUNNER_TEMP/drift.txt" 2>/dev/null || true)"
+          # `failure()` is true for ANY failed step, and the title is fixed (it
+          # is how the issue is found again) — so the body says first which of
+          # the three this run was. Only rc 1 is a finding about the file.
+          case "$COMPARE_RC" in
+            1) what="The file and branch protection DIFFER (rc=1)." ;;
+            2) what="NOTHING WAS COMPARED (rc=2): branch protection could not be read or understood. This run says nothing about the file." ;;
+            *) what="NO RESULT (rc='${COMPARE_RC}'): the comparison did not report one — a step failed before it could. This run says nothing about the file." ;;
+          esac
+          body="$(printf '%s\n\nRun: %s\n\n' "$what" "$RUN_URL"; cat "$RUNNER_TEMP/drift.txt" 2>/dev/null || true)"
           # GitHub's search drops punctuation and matches loosely, so the hit
           # list is narrowed to an EXACT title before reusing an issue.
           existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \

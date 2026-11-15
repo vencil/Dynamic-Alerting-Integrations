@@ -117,6 +117,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `tests/conftest.py` | sys.path 設定 + pytest fixtures（session + function scope）+ Hypothesis profile（見下）；`pytest_configure` 先從本 checkout 建 da-guard、da-crdecode、da-read（冷 cache 要數分鐘），CI 裡每個 pytest session 都要設 `VIBE_TEST_GO_BINARIES=build` 或 `skip`（`GITHUB_ACTIONS=true` 且未設定即 usage error；`test_workflow_pytest_declares_go_binaries.py` 在執行前檢查 workflow 步驟；其他值是 usage error） |
 | `tests/factories.py` | 所有 factory helpers + PipelineBuilder + mock_http_response（含完整 docstring） |
 | `pyproject.toml` | pytest markers + coverage config（`testpaths = ["tests"]` 自動遞迴） |
+| `tests/_workflow_steps.py` | 測 workflow 的 `run:` step 一律用 `run_step()`：把**整個** `run:` 交給 bash，旗標由該 step 生效的 `shell:` 決定（沒寫 → `bash -e`；`shell: bash` → `--noprofile --norc -eo pipefail`；其他值拒絕）。不要切一段出來跑、也不要用 `bash -c`：step 在 errexit 下跑，`指令` 換行 `rc=$?` 在指令失敗時根本到不了那一行，寫法是先 `rc=0` 再 `指令 \|\| rc=$?`。全部 workflow 由 `tests/ops/test_workflow_status_reads.py` 守（實際執行腳本、逐一讓指令失敗，看每個 `$?` 讀不讀得到非零；看得到與看不到的形狀列在該檔檔頭） |
 | `tests/_tree.py` | 掃「repo 裡有哪些檔」的測試一律用 `repo_files()`（`git ls-files`，fail-closed），不要 `REPO_ROOT.rglob`：後者會走進 `.claude/worktrees` 裡整份 repo 的副本與 `node_modules`，把副本當成本樹比對，而且在平行跑時慢上數個數量級 |
 
 ### Hypothesis deadline 慣例（property-based 測試）
