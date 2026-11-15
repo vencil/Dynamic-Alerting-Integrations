@@ -37,6 +37,15 @@ of day cannot change the answer; `at` still decides what has expired. For a
 caller that judges the whole day and reads no value at an instant. The other
 fields, `partial` and `tenants` are `load_served_tree`'s.
 
+`load_served_facts(conf_d, binary=None, partial=False, tenants=None)`
+(#3918) returns a `ServedFacts`: `tenants` is each tenant's `TenantFacts`
+(`custom_alerts`, `custom_alerts_error`, `custom_alerts_finding`,
+`metadata`), from `da-guard served-values --config-facts`, which resolves
+and gathers nothing — so the time the run starts at, and a part of the day
+/metrics cannot be gathered in, change nothing. For a caller whose verdict
+must not depend on when it runs. The other fields, `partial` and `tenants`
+are `load_served_tree`'s.
+
 `load_severity_dedup(conf_d, binary=None)` (#3621) returns a
 `SeverityDedupTree`: each tenant's `_severity_dedup` mode as the exporter
 reads it (`da-guard severity-dedup`), the values it does not read and the
@@ -305,11 +314,13 @@ __all__ = [
     "DEAD_ENTRY_REASONS",
     "ScheduleSegment",
     "Series",
+    "ServedFacts",
     "ServedSchedules",
     "ServedTree",
     "ServedValuesError",
     "SkippedFile",
     "TenantEffective",
+    "TenantFacts",
     "TenantValues",
     "UnreadableFile",
     "YamlFileError",
@@ -337,6 +348,7 @@ __all__ = [
     "SeverityDedupProblem",
     "SeverityDedupSchedule",
     "SeverityDedupTree",
+    "load_served_facts",
     "load_served_schedules",
     "load_served_tree",
     "load_served_values",
@@ -351,6 +363,9 @@ SERVED_VALUES_SCHEMA = "da-guard.served-values/v2"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: `key_checks` as sentences that quoted the key — #3703).
 SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1",)
+#: The fields of every --config-facts tenant (`custom_alerts_error` only
+#: beside a block that does not decode; #3918).
+_FACTS_FIELDS = frozenset({"custom_alerts", "custom_alerts_finding", "metadata"})
 EFFECTIVE_SUBCOMMAND = "effective"
 # The `schema` value load_effective reads; any other is refused.
 EFFECTIVE_SCHEMA = "da-guard.effective/v1"
@@ -1400,17 +1415,7 @@ def load_served_tree(
             alert_rows = tv.get("custom_alert_rows")
             if alert_rows is not None and (type(alert_rows) is not int or alert_rows < 0):
                 raise TypeError(f"custom_alert_rows is {alert_rows!r}")
-            custom_alerts = (None if "custom_alerts" not in tv
-                             else tuple(_custom_alert_entry(e) for e in tv["custom_alerts"]))
-            custom_alerts_error = tv.get("custom_alerts_error")
-            if custom_alerts_error is not None and not isinstance(custom_alerts_error, str):
-                raise TypeError(f"custom_alerts_error is a {type(custom_alerts_error).__name__}")
-            custom_alerts_finding = (tv["custom_alerts_finding"] if "custom_alerts" in tv
-                                     else tv.get("custom_alerts_finding"))
-            if custom_alerts_finding is not None and (not isinstance(custom_alerts_finding, str)
-                                                      or custom_alerts_error is None):
-                raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
-                                 f"with custom_alerts_error {custom_alerts_error!r}")
+            custom_alerts, custom_alerts_error, custom_alerts_finding = _custom_alerts_fields(tv)
             key_checks = _key_checks(tv["key_checks"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
@@ -1500,6 +1505,74 @@ def load_served_schedules(
     return ServedSchedules(out, skipped, _nonempty_lines(stderr), *dropped, absent)
 
 
+class TenantFacts(NamedTuple):
+    """One tenant of `load_served_facts` (#3918): the fields the exporter
+    reads at no instant. `custom_alerts` / `custom_alerts_error` /
+    `custom_alerts_finding` as `TenantValues` carries them (a custom alert's
+    `status` is the exporter's walk of the entry, not whether /metrics can be
+    gathered); `metadata` is `_metadata` as the exporter's resolver reads it,
+    as `TenantValues.values["_metadata"]`."""
+    custom_alerts: "tuple[CustomAlertEntry, ...]"
+    custom_alerts_error: str | None
+    custom_alerts_finding: str | None
+    metadata: dict[str, Any]
+
+
+class ServedFacts(NamedTuple):
+    """`load_served_facts`' answer (#3918): `ServedTree` with each tenant's
+    `TenantFacts` alone."""
+    tenants: dict[str, TenantFacts]
+    skipped: list[SkippedFile]
+    stderr_lines: list[str]
+    parse_failed: "tuple[str, ...] | list[str]" = ()
+    unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
+    absent: "tuple[str, ...]" = ()
+
+
+def load_served_facts(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    partial: bool = False,
+    tenants: "Iterable[str] | None" = None,
+) -> ServedFacts:
+    """Each tenant's fields the exporter reads at no instant (`da-guard
+    served-values --config-facts`, #3918): nothing is resolved or gathered,
+    so neither the time the run starts at nor a part of the day /metrics
+    cannot be gathered in changes the answer — for a reader whose verdict
+    must not depend on when it runs. Same exceptions as `load_served_tree`;
+    a da-guard without `--config-facts` is named as older than this tool."""
+    subset, requested = _subset_args(tenants)
+    (facts, skipped, dropped, absent), returncode, stderr = _run_da_guard(
+        SUBCOMMAND, ["--config-facts", *subset], conf_d, binary, timeout, ServedValuesError,
+        schema=SERVED_VALUES_SCHEMA,
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+                          ([str(f) for f in doc["parse_failed"]],
+                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
+                          _subset_absent(doc, requested)),
+        reads_unreadable=True, dropped_ok=partial,
+        older_schemas=SERVED_VALUES_OLDER_SCHEMAS, fields_added_since=())
+    _check_tenant_map(facts, returncode, stderr)
+    out: dict[str, TenantFacts] = {}
+    for tenant_id, tv in facts.items():
+        try:
+            if not _FACTS_FIELDS <= set(tv) <= _FACTS_FIELDS | {"custom_alerts_error"}:
+                # Another mode's document (a binary that ignores the flag
+                # would not exit 0 on it): never read as these facts.
+                raise ValueError(f"fields {sorted(tv)}, not a --config-facts tenant")
+            custom_alerts, error, finding = _custom_alerts_fields(tv)
+            metadata = tv["metadata"]
+            if not isinstance(metadata, dict):
+                raise TypeError(f"metadata is a {type(metadata).__name__}")
+            out[tenant_id] = TenantFacts(custom_alerts, error, finding, metadata)
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries config facts that are not of their shape ({e})",
+                returncode, stderr, broken=True) from e
+    return ServedFacts(out, skipped, _nonempty_lines(stderr), *dropped, absent)
+
+
 def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcommand: str,
                            error: type) -> "tuple[RootDefaultRefused, ...]":
     """served-values' / effective's `root_defaults_refused` (one build, one
@@ -1524,6 +1597,22 @@ def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcomman
             f"da-guard {subcommand}: root_defaults_refused is not of its shape ({e!r})",
             returncode, stderr, broken=True) from e
     return out
+
+
+def _custom_alerts_fields(tv: dict) -> "tuple[tuple[CustomAlertEntry, ...] | None, str | None, str | None]":
+    """A served-values tenant's `custom_alerts`, `custom_alerts_error` and
+    `custom_alerts_finding`, checked (one reading for every mode, #3918).
+    `custom_alerts` None: the tenant carries no such field. Raises
+    ValueError / KeyError / TypeError on a shape Go does not write."""
+    custom_alerts = (None if "custom_alerts" not in tv
+                     else tuple(_custom_alert_entry(e) for e in tv["custom_alerts"]))
+    error = tv.get("custom_alerts_error")
+    if error is not None and not isinstance(error, str):
+        raise TypeError(f"custom_alerts_error is a {type(error).__name__}")
+    finding = tv["custom_alerts_finding"] if "custom_alerts" in tv else tv.get("custom_alerts_finding")
+    if finding is not None and (not isinstance(finding, str) or error is None):
+        raise ValueError(f"custom_alerts_finding {finding!r} with custom_alerts_error {error!r}")
+    return custom_alerts, error, finding
 
 
 def _custom_alert_entry(e: Any) -> CustomAlertEntry:
@@ -1659,7 +1748,7 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
     return KeySchedule(segments, None if expires is None else str(expires), expired)
 
 
-def print_load_warnings(tree: "ServedTree | CustomAlertPack", stream: TextIO | None = None) -> None:
+def print_load_warnings(tree: "ServedTree | ServedFacts | CustomAlertPack", stream: TextIO | None = None) -> None:
     """Every non-empty line da-guard wrote to stderr, each behind
     `DA_GUARD_PREFIX`, then one `WARN: <file>: <reason>` line per file the
     load serves no tenant from, in the load's order (#2115 R3). Every line is

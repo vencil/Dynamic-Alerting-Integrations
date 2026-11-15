@@ -1597,35 +1597,36 @@ def _report_key_verdict(config_dir: str, findings: list[str],
 
 # ── #1211: served page-mode custom alerts that reach no one ─────────
 
-def _load_served_tree(config_dir: str, *, disable_effects: bool,
-                      ) -> "_lib_tenant_values.ServedTree | BaseException":
-    """The run's ONE da-guard served-values reading of *config_dir*, or the
+def _load_served_facts(config_dir: str) -> "_lib_tenant_values.ServedFacts | BaseException":
+    """The run's ONE da-guard served-values reading of *config_dir* — its
+    config facts (`--config-facts`, #3918), which resolve and gather nothing,
+    so what this run says does not depend on when it runs: a /metrics that
+    cannot be gathered at the run's instant is no failure here — or the
     exception that stopped it (each reader reports that its own way: never a
     refusal — a broken da-guard must not fail a run the generator passed)."""
     try:
-        return _lib_tenant_values.load_served_tree(config_dir,
-                                                   disable_effects=disable_effects)
+        return _lib_tenant_values.load_served_facts(config_dir)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not checked", never a refusal
         return exc
 
 
-def _served_page_custom_alerts(served: "_lib_tenant_values.ServedTree",
+def _served_page_custom_alerts(served: "_lib_tenant_values.ServedFacts",
                                ) -> dict[str, tuple[str, ...]]:
     """tenant -> the names of its custom alerts the exporter SERVES in page
     mode (``mode`` unset or ``page``), declaration order. The exporter is the
     authority on which custom alerts a tenant has (#3042): a rejected,
     duplicate or switched-off entry is not one."""
     out = {}
-    for tenant, values in served.tenants.items():
+    for tenant, facts in served.tenants.items():
         names = tuple(str(e.spec.get("name") or f"_custom_alerts[{e.index}]")
-                      for e in values.custom_alerts or ()
+                      for e in facts.custom_alerts
                       if e.status == "served" and e.spec.get("mode") != "silent")
         if names:
             out[tenant] = names
     return out
 
 
-def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedTree | BaseException",
+def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedFacts | BaseException",
                                routes: list[dict], tree: TenantTree,
                                findings: list[str]) -> list[UndeliveredCustomAlerts]:
     """The tenants whose served page-mode custom alerts get no delivery child
@@ -2122,7 +2123,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
         # child under the custom route fall to the firehose receiver, which
         # only a mode that assembles the config it writes knows: --validate
         # says it could not check.
-        served = _load_served_tree(config_dir, disable_effects=False)
+        served = _load_served_facts(config_dir)
         undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
         if undelivered:
             _emit_custom_firehose_findings(undelivered, None, strict=strict,
@@ -2289,7 +2290,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # assembles the config it writes (--output-configmap, --output-alertmanager,
     # --apply) knows that receiver — it judges there. The same modes judge
     # the watchdog-heartbeat receiver.
-    served = _load_served_tree(args.config_dir, disable_effects=False)
+    served = _load_served_facts(args.config_dir)
     undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
     # A real base: the operator's --base-config, or the cluster's on --apply.
     assembled_judge = _assembled_judge(

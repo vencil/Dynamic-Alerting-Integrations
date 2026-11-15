@@ -309,6 +309,38 @@ func customAlertFinding(e config.CustomAlertEntry) *string {
 	return kindOrNil(guard.CustomAlertFindingKind(e))
 }
 
+// customAlertsOf is a tenant's `custom_alerts`, `custom_alerts_error` and
+// `custom_alerts_finding` (overrides: its built map) — the exporter's walk of
+// its `_custom_alerts` (config.CustomAlertEntries), which reads no instant:
+// the one builder of those fields, for every mode of served-values (#3918).
+func customAlertsOf(tenant string, overrides map[string]config.ScheduledValue) ([]servedCustomAlert, string, *string) {
+	entries, blockErr := config.CustomAlertEntries(tenant, overrides)
+	out := make([]servedCustomAlert, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, servedCustomAlert{Index: e.Index, Spec: e.Spec.Fields(),
+			Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities,
+			Refused: e.Refused, Finding: customAlertFinding(e)})
+	}
+	return out, blockErr, kindOrNil(guard.CustomAlertBlockFindingKind(blockErr))
+}
+
+// metadataReading is a tenant's `_metadata` as the exporter's resolver reads
+// it (config.ResolvedMetadata, which reads no instant): `values._metadata`
+// of the default mode and `metadata` of --config-facts (#3918).
+func metadataReading(m config.ResolvedMetadata) map[string]any {
+	return map[string]any{
+		"runbook_url": m.RunbookURL,
+		"owner":       m.Owner,
+		"tier":        m.Tier,
+		"environment": m.Environment,
+		"region":      m.Region,
+		"domain":      m.Domain,
+		"db_type":     nonNilStrings(m.DBType),
+		"tags":        nonNilStrings(m.Tags),
+		"groups":      nonNilStrings(m.Groups),
+	}
+}
+
 // kindOrNil is k's name, or nil for the zero Kind.
 func kindOrNil(k findingkind.Kind) *string {
 	if k.IsZero() {
@@ -575,6 +607,7 @@ type servedValuesFlags struct {
 	at             string
 	schedules      bool
 	schedulesOnly  bool
+	configFacts    bool
 	disableEffects bool
 	tenants        tenantList
 }
@@ -596,6 +629,12 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"gathered is a segment carrying that error wherever --at falls, never exit 2 —\n"+
 			"so the time of day of --at (default now) cannot change the outcome.\n"+
 			"--at still decides what has expired. Not with --schedules or --disable-effects.")
+	fs.BoolVar(&f.configFacts, "config-facts", false,
+		"Print each tenant's fields the exporter reads at no instant and nothing else (#3918):\n"+
+			"custom_alerts, custom_alerts_error, custom_alerts_finding (as the default mode writes them)\n"+
+			"and metadata (the default mode's values._metadata). Nothing is resolved or gathered: a part\n"+
+			"of the day /metrics cannot be gathered in, or the time the run starts at, changes nothing.\n"+
+			"Not with --at, --schedules, --schedules-only or --disable-effects.")
 	fs.BoolVar(&f.disableEffects, "disable-effects", false,
 		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
 			"what /metrics serves (effective / noop), by resolving the tree again without it, and\n"+
@@ -606,7 +645,7 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"the document then carries tenants_requested and tenants_absent (requested, not in the tree),\n"+
 			"and whether /metrics can be gathered is judged over the requested tenants only.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules | --schedules-only] [--disable-effects] [--tenant <id> ...]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules | --schedules-only | --config-facts] [--disable-effects] [--tenant <id> ...]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
 			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
@@ -648,6 +687,20 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "%s %s: --schedules-only prints no keys, so --disable-effects has nothing to fill\n", programName, servedValuesCmd)
 		return nil, errors.New("--schedules-only with --disable-effects")
 	}
+	if f.configFacts {
+		// #1650's class: a flag accepted and then never read is a caller error.
+		for _, other := range []struct {
+			given bool
+			name  string
+		}{{f.at != "", "--at"}, {f.schedules, "--schedules"}, {f.schedulesOnly, "--schedules-only"},
+			{f.disableEffects, "--disable-effects"}} {
+			if other.given {
+				fmt.Fprintf(errOut, "%s %s: --config-facts reads nothing at an instant or over the day, so %s has nothing to do\n",
+					programName, servedValuesCmd, other.name)
+				return nil, errors.New("--config-facts with " + other.name)
+			}
+		}
+	}
 	return f, nil
 }
 
@@ -688,10 +741,13 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 	}
 	tenants := map[string]servedTenantValues{}
 	days := map[string]servedTenantDay{}
+	facts := map[string]servedTenantFacts{}
 	requested := f.tenants.requested()
 	if !allUnreadable {
 		sub := subsetConfig(cfg, requested)
-		if f.schedulesOnly {
+		if f.configFacts {
+			facts = servedConfigFacts(sub)
+		} else if f.schedulesOnly {
 			days, err = servedSchedulesOnly(sub, at, rep.Undeliverable, fill, written, refusedTextsOf(rep))
 		} else {
 			var withSchedules scheduleFiller
@@ -707,7 +763,7 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		if !f.schedulesOnly {
+		if !f.schedulesOnly && !f.configFacts {
 			spellAsWritten(tenants, written)
 			keyChecksOf(sub, tenants)
 		}
@@ -717,6 +773,10 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 	if f.schedulesOnly {
 		docTenants = days
 		present = func(t string) bool { _, ok := days[t]; return ok }
+	}
+	if f.configFacts {
+		docTenants = facts
+		present = func(t string) bool { _, ok := facts[t]; return ok }
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
@@ -941,6 +1001,35 @@ type servedTenantDay struct {
 	Schedules map[string]servedSchedule `json:"schedules"`
 }
 
+// servedTenantFacts is one tenant of the --config-facts document (#3918):
+// the fields the exporter reads at no instant, as the default mode writes
+// them, read without resolving or gathering anything — so neither the time
+// of day nor whether /metrics can be gathered changes them, and the reading
+// costs one load of the tree. Status is the exporter's walk of the entry
+// (customAlertsOf): whether /metrics can be gathered, and the per-scrape
+// max_metrics_per_tenant truncation, are not in it.
+type servedTenantFacts struct {
+	CustomAlerts        []servedCustomAlert `json:"custom_alerts"`
+	CustomAlertsError   string              `json:"custom_alerts_error,omitempty"`
+	CustomAlertsFinding *string             `json:"custom_alerts_finding"`
+	// Metadata: the tenant's `_metadata` as the exporter's resolver reads it
+	// (metadataReading) — the default mode's `values._metadata`.
+	Metadata map[string]any `json:"metadata"`
+}
+
+// servedConfigFacts is --config-facts' tenants (#3918). The resolver's
+// `_metadata` WARN lines are printed here once, as the collector's scrape
+// prints them in the other modes (#2374: never twice in one run).
+func servedConfigFacts(cfg *config.ThresholdConfig) map[string]servedTenantFacts {
+	out := make(map[string]servedTenantFacts, len(cfg.Tenants))
+	for _, m := range cfg.ResolveMetadataLogf(log.Printf) {
+		f := servedTenantFacts{Metadata: metadataReading(m)}
+		f.CustomAlerts, f.CustomAlertsError, f.CustomAlertsFinding = customAlertsOf(m.Tenant, cfg.Tenants[m.Tenant])
+		out[m.Tenant] = f
+	}
+	return out
+}
+
 // servedSchedulesOnly is --schedules-only's tenants (#3877). The tree is
 // read as --schedules reads it — the reading at `at` included, so the piece
 // of the day holding `at` is still checked against it (sameAsValues) — but
@@ -1070,14 +1159,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 
 			CustomAlertRows: config.CustomAlertRowCount(tenant, overrides),
 		}
-		entries, blockErr := config.CustomAlertEntries(tenant, overrides)
-		tv.CustomAlerts, tv.CustomAlertsError = make([]servedCustomAlert, 0, len(entries)), blockErr
-		tv.CustomAlertsFinding = kindOrNil(guard.CustomAlertBlockFindingKind(blockErr))
-		for _, e := range entries {
-			tv.CustomAlerts = append(tv.CustomAlerts, servedCustomAlert{Index: e.Index, Spec: e.Spec.Fields(),
-				Status: e.Status, Reason: e.Reason, RecipeID: e.RecipeID, Severities: e.Severities,
-				Refused: e.Refused, Finding: customAlertFinding(e)})
-		}
+		tv.CustomAlerts, tv.CustomAlertsError, tv.CustomAlertsFinding = customAlertsOf(tenant, overrides)
 		for _, b := range timeBoxes[tenant] {
 			tv.TimeBoxes[b.key] = append(tv.TimeBoxes[b.key], b.box)
 		}
@@ -1111,17 +1193,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		// Reserved keys, as the exporter's own resolvers read them.
 		reserved := map[string]any{}
 		m := metadata[tenant]
-		reserved["_metadata"] = map[string]any{
-			"runbook_url": m.RunbookURL,
-			"owner":       m.Owner,
-			"tier":        m.Tier,
-			"environment": m.Environment,
-			"region":      m.Region,
-			"domain":      m.Domain,
-			"db_type":     nonNilStrings(m.DBType),
-			"tags":        nonNilStrings(m.Tags),
-			"groups":      nonNilStrings(m.Groups),
-		}
+		reserved["_metadata"] = metadataReading(m)
 		if mode, ok := dedup[tenant]; ok {
 			reserved["_severity_dedup"] = mode
 		} else {

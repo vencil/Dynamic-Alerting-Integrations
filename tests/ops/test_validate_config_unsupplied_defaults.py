@@ -297,7 +297,7 @@ def test_a_da_guard_that_cannot_answer_is_not_checked_never_a_pass(tmp_path, mon
     """da-guard 答不出來：WARN、說沒判，不是 PASS 也不是 FAIL。"""
     def broken(*_a, **_k):
         raise vc.DaGuardError("da-guard exited 2", 2, "")
-    monkeypatch.setattr(vc, "load_served_tree", broken)
+    monkeypatch.setattr(vc, "load_served_facts", broken)
     pack = _MULTI[0]
     r = vc.check_unsupplied_defaults(_tree(tmp_path, {"_defaults.yaml": _defaults(_ARMED[pack])}))
     assert r["status"] == vc.WARN, r
@@ -307,7 +307,7 @@ def test_a_da_guard_that_cannot_answer_is_not_checked_never_a_pass(tmp_path, mon
 
 
 @pytest.mark.parametrize("where,exc", [
-    ("load_served_tree", AttributeError("a bug")),
+    ("load_served_facts", AttributeError("a bug")),
     ("_registry", KeyError("DEFAULT_ARMED_KEYS")),
     ("_registry", ValueError("a broken generated module")),
 ])

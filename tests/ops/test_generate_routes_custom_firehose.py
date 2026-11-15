@@ -290,15 +290,15 @@ def test_apply_judges_the_clusters_firehose(tmp_path, monkeypatch, capsys,
 # ── da-guard：一次讀取、讀不到只是 NOTICE ───────────────────────────
 
 def test_one_served_values_run_per_invocation(tmp_path, monkeypatch, capsys):
-    """--validate 下 key verdict 與本檢查共用同一次 served-values。"""
-    real = _lib_tenant_values.load_served_tree
+    """--validate 下本檢查只讀一次 served-values（不讀時刻的 config facts，#3918）。"""
+    real = _lib_tenant_values.load_served_facts
     calls = []
 
     def counting(*a, **kw):
         calls.append(kw)
         return real(*a, **kw)
 
-    monkeypatch.setattr(_lib_tenant_values, "load_served_tree", counting)
+    monkeypatch.setattr(_lib_tenant_values, "load_served_facts", counting)
     code = _main(["--config-dir", str(_tree(tmp_path, "page_no_routing")), "--validate"])
     err = capsys.readouterr().err
     assert code == 0, err[-2000:]
@@ -311,7 +311,7 @@ def test_a_failing_served_values_read_is_a_notice_not_a_refusal(tmp_path, monkey
     def boom(*_a, **_kw):
         raise _lib_tenant_values.ServedValuesError("da-guard broke", 1, "")
 
-    monkeypatch.setattr(_lib_tenant_values, "load_served_tree", boom)
+    monkeypatch.setattr(_lib_tenant_values, "load_served_facts", boom)
     code = _main(["--config-dir", str(_tree(tmp_path, "page_no_routing")),
                   "--output-configmap", "--strict", "-o", str(tmp_path / "cm.yaml")])
     err = capsys.readouterr().err

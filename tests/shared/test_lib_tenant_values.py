@@ -527,6 +527,45 @@ def test_da_guard_without_schedules_only_is_named_as_too_old(tmp_path):
     assert ei.value.stale and "older than this tool: upgrade or rebuild it" in str(ei.value)
 
 
+def test_da_guard_without_config_facts_is_named_as_too_old(tmp_path):
+    """#3918：不認得 --config-facts 的 da-guard（Go flag：exit 2，`-h` 亦然）指出要升級。"""
+    require_shebang_scripts()  # the stand-in da-guard is a `#!` script
+    fake = tmp_path / "pre-3918-da-guard"
+    fake.write_text("#!/bin/sh\necho 'flag provided but not defined: -config-facts' >&2\nexit 2\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_facts(tmp_path, binary=str(fake))
+    assert ei.value.stale and "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_served_facts_refuse_another_modes_document(tmp_path):
+    """`--config-facts` 的租戶只有不讀時刻的欄位；一般模式的文件（帶 `values` 等）不是它的輸出。"""
+    fake = _old_da_guard(tmp_path, _ARGV_DOC)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_facts(tmp_path, binary=fake)
+    assert ei.value.binary_fault and "not a --config-facts tenant" in str(ei.value)
+
+
+def test_served_facts_read_what_the_default_mode_reads(tmp_path, da_guard):
+    """#3918：`load_served_facts` 的每個欄位，等於 `load_served_tree` 在 Gather 得起來時讀到的
+    （custom alerts 與 `values["_metadata"]`），含解碼失敗的 `_custom_alerts`。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  redis_memory: 90\n",
+        "tc.yaml": ("tenants:\n  tc:\n    _metadata:\n      db_type: [mariadb, redis]\n    _custom_alerts:\n"
+                    "      - recipe: threshold\n        name: q_high\n        metric: q_high_depth\n"
+                    "        op: \">\"\n        window: 5m\n        threshold: \"1000:warning\"\n"),
+        "tbad.yaml": "tenants:\n  tbad:\n    _custom_alerts: \"oops\"\n",
+    })
+    facts = tv.load_served_facts(conf_d, binary=da_guard).tenants
+    full = tv.load_served_tree(conf_d, binary=da_guard).tenants
+    assert sorted(facts) == sorted(full) == ["tbad", "tc"]
+    for t, v in full.items():
+        assert facts[t] == tv.TenantFacts(v.custom_alerts, v.custom_alerts_error,
+                                          v.custom_alerts_finding, v.values["_metadata"]), t
+    assert facts["tbad"].custom_alerts_error and facts["tc"].metadata["db_type"] == ["mariadb", "redis"]
+
+
 def test_a_retired_spelling_is_found_through_the_exporters_rule(tmp_path, da_guard):
     """舊拼法寫的 key 照 exporter 的規則（`key_spellings`，#3556）找得到；Python 端
     沒有別名表，served-values 也不再給一份。"""
