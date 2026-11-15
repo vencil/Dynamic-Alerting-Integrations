@@ -33,7 +33,7 @@ of being read as "no entries". A workflow that is not a mapping raises too.
 
 ⚠️ What this does NOT measure: that the (a) job or the (b) tests still RED on
 a violation the hook rejects (measured once per entry when #2644 planted one),
-that an (a) job is unconditional (go-fmt's job is path-gated on purpose), or
+that an (a) job is unconditional, or
 that a by-id call is itself a gate (`tests/_ci_lint_wiring.py` pins that for
 the hooks listed in `tests/lint/test_ci_lint_hook_entries.py`).
 """

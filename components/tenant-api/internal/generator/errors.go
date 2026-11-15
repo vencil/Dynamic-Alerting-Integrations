@@ -73,8 +73,10 @@ var RejectionReasons = []string{
 
 // Reasons of an *UnavailableError the service gives (its 503s, ADR-036 §5).
 const (
-	ReasonDaReadMissing   = "da_read_missing"
-	ReasonDaGuardMissing  = "da_guard_missing"
+	// ReasonToolFault: an external program the judgement runs (da-guard,
+	// da-read, da-crdecode) did not run, so no verdict was reached (#3862);
+	// the service's message names the program, its subcommand and why.
+	ReasonToolFault       = "tool_fault"
 	ReasonGeneratorTooOld = "generator_too_old"
 	ReasonInternalError   = "internal_error"
 	ReasonPolicyUnusable  = "policy_unusable"
@@ -156,7 +158,7 @@ func unavailable(reason, message string) *UnavailableError {
 // UnavailableReasons lists every *UnavailableError reason tenant-api knows:
 // the service's and its own.
 var UnavailableReasons = []string{
-	ReasonDaReadMissing, ReasonDaGuardMissing, ReasonGeneratorTooOld, ReasonInternalError, ReasonPolicyUnusable,
+	ReasonToolFault, ReasonGeneratorTooOld, ReasonInternalError, ReasonPolicyUnusable,
 	ReasonUnreachable, ReasonBadResponse, ReasonInternal, ReasonUnknown, ReasonPolicyUnreadable,
 }
 

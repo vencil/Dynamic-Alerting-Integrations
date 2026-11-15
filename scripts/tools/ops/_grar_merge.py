@@ -46,6 +46,7 @@ from _lib_validation import (  # noqa: E402  (#1560 Secret references)
     is_secret_ref, receiver_value_repr, ref_path_text, ref_value_at, shown_value,
     site_path_text,
 )
+from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into findings)
 
 
 # ── #2766 (ADR-036 §4): every warning-stream line is a structured finding ──
@@ -153,6 +154,10 @@ FINDING_KINDS: dict[str, str] = {
         "A _severity_dedup the exporter does not read, or one written with a "
         "time window or expires (da-guard severity-dedup, #3621); the whole "
         "tree is refused in every mode.",
+    "severity_dedup_excluded":
+        "A tenant set _severity_dedup: disable, so it is in the tenant!~ list "
+        "of the one severity dedup inhibit rule (#3899): both its warning and "
+        "critical notifications are sent. A note; never blocks.",
     "unknown_routing_profile":
         "A tenant's _routing_profile names a profile its directory chain "
         "does not define.",
@@ -379,7 +384,9 @@ class Finding(str):
         obj.blocks = blocks
         obj.tenant = tenant
         obj.policy = policy
-        obj.file = file
+        # #3703: a conf.d path the author named, through its one exit here,
+        # so every `file=` of every producer is covered.
+        obj.file = shown_file(file)
         obj.field = field
         return obj
 

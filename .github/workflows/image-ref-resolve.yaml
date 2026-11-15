@@ -104,6 +104,7 @@ on:
       - "scripts/tools/_lib_prometheus.py"
       - "scripts/tools/_lib_python.py"
       - "scripts/tools/_lib_registry.py"
+      - "scripts/tools/_lib_tool_fault.py"
       - "scripts/tools/_lib_validation.py"
       - "scripts/tools/_lib_write_check.py"
       - "scripts/tools/ops/_registry_lib.py"

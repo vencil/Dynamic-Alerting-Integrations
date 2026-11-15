@@ -149,7 +149,7 @@ D-01 叫你**砍掉**守衛，D-04／D-05 叫你**補齊**守衛，而 D-06 叫�
 **為什麼**：規則出現在 context 裡不會自動套用。要在「**寫完斷言**」這個時點主動叫用它。
 
 **已知的失效層**（每一層都與「gate 正常運作」畫面相同）
-- **輸入來源不在 CI 的 path filter 內**——注意是「gate 讀什麼」不是「gate 住在哪」。新增測試時尤其：**會漏的是它讀的別人家的樹**。
+- **輸入來源不在 CI 的 path filter 內**——注意是「gate 讀什麼」不是「gate 住在哪」。新增測試時尤其：**會漏的是它讀的別人家的樹**。（本 repo 的必要檢查自 [#3756](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3756) 起不設 path filter；帶 `on.pull_request.paths` 的 advisory workflow 仍是這一層。）
 - **hook 沒有被任何 workflow 具名叫到**（`git grep <hook-id> -- .github`）。
 - **gate 與它的測試跑在不同 job**，而那個 job 的 checkout／工具鏈不足。
 - **樣本會過期**（手寫探針集）／**樣本從一開始就不是真的**（fixture 的形狀是 production 從不產生的）。
