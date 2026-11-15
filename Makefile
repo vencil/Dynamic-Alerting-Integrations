@@ -781,10 +781,10 @@ sync-counts: $(DA_READ_PREREQ) ## 把 README／CLAUDE.md 等處的計數寫回�
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check advisory-patched-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published wizard-chart-pins-released playbook-freshness-ll changelog-fragments-consumed draft-advisory-check advisory-patched-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
-	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  init-chart-pin ✅  playbook-freshness (advisory — read its output above; it never blocks)"
+	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  init-chart-pin ✅  wizard-chart-pins ✅  playbook-freshness (advisory — read its output above; it never blocks)"
 	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Advisory patched versions ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
@@ -983,7 +983,7 @@ byo-rulepack-table: $(DA_READ_PREREQ) ## 重新產生 BYO Prometheus 文件內�
 
 .PHONY: platform-data
 platform-data: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
-	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py $(if $(RELEASE_CHARTS),--release-charts)
 
 .PHONY: renovate-fixup
 renovate-fixup: $(DA_CRDECODE_PREREQ) ## 在 Renovate「third-party container images」PR 分支上補齊它寫不到的連動修改（da-read go.sum、oauth2-proxy 測試函式庫、federation-e2e／try-local compose、platform-data＋portal IMAGE_MIRROR＋dist；#3799）。需要 go 與 make；剩下的紅燈是上游 API 變更，要人修
@@ -1106,6 +1106,10 @@ lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門
 .PHONY: init-chart-pin-published
 init-chart-pin-published: ## #1425 init 釘的 chart 版本必須就是樹裡的 chart：helm/threshold-exporter/ 在 exporter/v<pin> 之後有改動就失敗（pre-tag 會跑；release.yaml 的 tools/v* job 以 --require-tag 再跑）
 	@python3 ./scripts/tools/lint/check_init_chart_pin_published.py
+
+.PHONY: wizard-chart-pins-released
+wizard-chart-pins-released: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## #2947 部署精靈釘的 chart 版本必須是樹裡的 chart 或已有 tag 的版本（pre-tag 會跑）；發版收尾用 `make platform-data RELEASE_CHARTS=1` 從 Chart.yaml 重寫
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py --check --release-charts
 
 .PHONY: lint-egress
 lint-egress: $(DA_CRDECODE_PREREQ) ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；渲染結果經 da-crdecode 讀；ARGS="--values prod.yaml --allow-host siem.example.com"）

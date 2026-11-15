@@ -674,11 +674,14 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--output-dir", _stale_rule_packs(t), "--dry-run"],
       write_control=True),
 
+    # platform-data.json 自己也是輸入（#2947）：`charts` 平常原樣帶著檔案裡既有的
+    # 那一塊，沒有這個檔就沒有已發布的 chart 版本可帶，rc 1。
     R("generate_platform_data",
       lambda t, s: ["--dry-run"],
       sandbox=("rule-packs", "k8s", "helm",
                "components/threshold-exporter/config/conf.d",
-               "scripts/ops/check_image_refs_resolve.py"),
+               "scripts/ops/check_image_refs_resolve.py",
+               "docs/assets/platform-data.json"),
       cwd="repo", write_control=True),
 
     R("generate_tenant_metadata",
