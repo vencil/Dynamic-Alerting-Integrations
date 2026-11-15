@@ -69,7 +69,7 @@ type selectorHit struct {
 
 // seriesLabels reads *series* as a selector of equality matchers.
 func seriesLabels(series string) (map[string]string, error) {
-	ms, err := ruleParser.ParseMetricSelector(series)
+	ms, err := parseMetricSelector(series)
 	if err != nil {
 		return nil, fmt.Errorf("series %q: %w", series, err)
 	}
@@ -89,7 +89,7 @@ func seriesLabels(series string) (map[string]string, error) {
 // selectorsMatching returns the vector selectors of *expr* that could select
 // a series with the labels *want* (and others, of unknown value).
 func selectorsMatching(expr string, want map[string]string) ([]selectorHit, error) {
-	node, err := ruleParser.ParseExpr(expr)
+	node, err := parseExpr(expr)
 	if err != nil {
 		return nil, err
 	}
@@ -116,4 +116,19 @@ func couldMatch(ms []*labels.Matcher, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// parseExpr and parseMetricSelector are the PromQL parser's, with its panics
+// recovered (loaderPanic): a panic of the parser on an expression refuses
+// the input — Prometheus' rule loader fails on it the same way. Only the
+// consumer library is guarded: a panic of da-read's own code around it is a
+// crash (exit 2, no refusal document; #3943).
+func parseExpr(e string) (node parser.Expr, err error) {
+	defer loaderPanic("Prometheus' PromQL parser", &err)
+	return ruleParser.ParseExpr(e)
+}
+
+func parseMetricSelector(s string) (ms []*labels.Matcher, err error) {
+	defer loaderPanic("Prometheus' PromQL parser", &err)
+	return ruleParser.ParseMetricSelector(s)
 }

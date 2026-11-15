@@ -138,6 +138,32 @@ def test_a_rule_file_refusal_is_the_refusal_document(tmp_path, answer, stderr, r
     assert not isinstance(exc.value, cr.InputRefused)
 
 
+@pytest.mark.parametrize("payload,rc", [
+    # the refusal's `answer` under exit 0
+    ('{"answer": "refused", "files": [{"path": "%s", "documents": [{"groups": []}], '
+     '"problem": null}]}', 0),
+    # the document with a key beside `answer` and `files`
+    ('{"answer": "refused", "extra": 1, "files": [{"path": "%s", "documents": null, '
+     '"problem": {"message": "x"}}]}', 2),
+])
+def test_a_rule_file_answer_out_of_place_is_bad_output(tmp_path, payload, rc) -> None:
+    """#3943: `answer` belongs to exit 2, beside `files` alone."""
+    import _lib_tool_fault
+    a = _write(tmp_path, "a.yml", GOOD)
+    fake = tmp_path / "fake-da-read"
+    fake.write_text(f"#!/bin/sh\necho '{payload % a}'; echo x >&2; exit {rc}\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.prometheus_rule_file_results([a], binary=str(fake))
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert [f.reason for f in _lib_tool_fault.records()] == ["bad_output"]
+    finally:
+        _lib_tool_fault.clear()
+
+
 def _repo_rule_files(tmp_path: Path) -> "list[str]":
     # #3471: the repo's rule files as the declaration lists them.
     files = [str(p) for p in cr.RULE_PACKS.files_under(REPO)]

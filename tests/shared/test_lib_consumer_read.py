@@ -212,6 +212,32 @@ def test_other_failures_are_not_input_refused(tmp_path, body) -> None:
     assert not isinstance(exc.value, cr.InputRefused)
 
 
+@pytest.mark.parametrize("stdout,reason", [
+    # exactly the document, nothing beside it, or it is not the document
+    ('{"answer": "refused", "files": []}', "bad_output"),
+    ('{"answer": "refused", "reason": "x"}', "bad_output"),
+    ('{"answer": "refused"} {"answer": "refused"}', "bad_output"),
+    ('not json', "bad_output"),
+    ("", "unexpected_exit"),
+])
+def test_exit_2_with_anything_but_the_document_is_no_refusal(tmp_path, stdout, reason) -> None:
+    """#3943: a single-input reading's refusal is stdout exactly
+    {"answer": "refused"}. Anything else printed with exit 2 is output that
+    is not the document (`bad_output`); nothing printed is no answer
+    (`unexpected_exit`)."""
+    import _lib_tool_fault
+    say = f"printf '%s\\n' '{stdout}'; " if stdout else ""
+    fake = _fake(tmp_path, f"{say}echo 'da-crdecode: <stdin>: x' >&2; exit 2")
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.kubernetes_text_documents("a: 1\n", binary=fake)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert [f.reason for f in _lib_tool_fault.records()] == [reason]
+    finally:
+        _lib_tool_fault.clear()
+
+
 def test_a_run_that_does_not_finish_is_not_input_refused(tmp_path, monkeypatch) -> None:
     fake = _fake(tmp_path, "echo 'slow' >&2; exec sleep 5")
     monkeypatch.setattr(cr, "TIMEOUT_SECONDS", 0.5)

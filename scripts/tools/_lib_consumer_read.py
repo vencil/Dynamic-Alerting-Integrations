@@ -207,8 +207,10 @@ class InputRefused(ConsumerReadError):
 #: The refusal document (#3943): what da-crdecode and da-read print on
 #: stdout, with exit 2, exactly when they refuse the input — a JSON object
 #: whose ``answer`` is ``"refused"``. ``da-read prometheus-rules`` prints it
-#: beside its ``files``; every other reading prints it alone. It holds
-#: constants only, never text of the input (ADR-036, #3703). The Go side's
+#: beside its ``files``; every other reading prints it alone, exactly (see
+#: ``_refusal``). ``answer`` is a constant, never text of the input
+#: (ADR-036, #3703); ``files[].problem.message`` beside it is the loader's
+#: own text, as it always was. The Go side's
 #: copies (``answerRefused`` in components/da-read/main.go and
 #: cmd/da-crdecode/main.go) are held to these by
 #: tests/shared/test_reader_refusal_document.py, which runs both binaries.
@@ -216,27 +218,40 @@ REFUSAL_KEY = "answer"
 REFUSED = "refused"
 
 
-def _refusal(proc: subprocess.CompletedProcess) -> "dict | None":
-    """The refusal document *proc* printed — the parsed stdout, when it
-    exited 2 and its stdout is a JSON object whose ``answer`` is
-    ``"refused"`` — else None (see :class:`InputRefused`)."""
+def _refusal(proc: subprocess.CompletedProcess, *, beside: "str | None" = None) -> "dict | None":
+    """The refusal document *proc* printed, else None (see
+    :class:`InputRefused`): it exited 2 and its stdout is exactly a JSON
+    object whose ``answer`` is ``"refused"`` — that key alone, or for a
+    reading that prints the document beside its output (``beside``:
+    ``"files"`` for ``da-read prometheus-rules``) that key and *beside*.
+    Anything more is not the document (``_no_answer`` names it
+    ``bad_output``)."""
     if proc.returncode != 2:
         return None
     try:
         out = json.loads(proc.stdout)
     except ValueError:  # JSONDecodeError, or stdout that is not UTF-8
         return None
-    return out if isinstance(out, dict) and out.get(REFUSAL_KEY) == REFUSED else None
+    keys = {REFUSAL_KEY} if beside is None else {REFUSAL_KEY, beside}
+    if isinstance(out, dict) and set(out) == keys and out[REFUSAL_KEY] == REFUSED:
+        return out
+    return None
 
 
 def _no_answer(name: str, args: "list[str]", proc: subprocess.CompletedProcess,
                lines: "list[str]") -> ConsumerReadError:
     """The error for a run of *name* that gave no answer: an exit other than
-    0 without the refusal document. Exit 2 without it is a usage error, a Go
-    crash, an I/O failure or a binary older than the refusal document — the
-    stderr lines say which."""
+    0 without the refusal document. Exit 2 with nothing on stdout is a usage
+    error, a Go crash, an I/O failure or a binary older than the refusal
+    document — the stderr lines say which; exit 2 with something else on
+    stdout is output that is not the document (``bad_output``)."""
+    printed = proc.returncode == 2 and bool(proc.stdout and proc.stdout.strip())
     if proc.returncode > 0:  # a signal was recorded by _invoke
-        _fault(name, args, "unexpected_exit")
+        _fault(name, args, "bad_output" if printed else "unexpected_exit")
+    if printed:
+        return ConsumerReadError(
+            f"{name} exited 2 and printed something that is not the refusal document "
+            f"{{\"{REFUSAL_KEY}\": \"{REFUSED}\"}}", lines)
     if proc.returncode == 2:
         return ConsumerReadError(
             f"{name} exited 2 without a refusal document: no answer about the input "
@@ -752,11 +767,17 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     # 2 without it (a usage error, a crash, a file it cannot open, an I/O
     # error, an older da-read), any other rc — is not an answer about the
     # files.
-    out = _refusal(proc)
+    out = _refusal(proc, beside="files")
     if out is None:
         if proc.returncode != 0:
             raise _no_answer(DA_READ_BINARY_NAME, args, proc, lines)
         out = _json(proc, DA_READ_BINARY_NAME, lines, args)
+        if isinstance(out, dict) and REFUSAL_KEY in out:
+            # the refusal's `answer` under exit 0: no one reading of the files
+            _fault(DA_READ_BINARY_NAME, args, "bad_output")
+            raise ConsumerReadError(
+                f"{DA_READ_BINARY_NAME} exited 0 but printed the refusal's "
+                f"\"{REFUSAL_KEY}\"", lines)
     files = out.get("files") if isinstance(out, dict) else None
     if not isinstance(files, list) or len(files) != len(given):
         _fault(DA_READ_BINARY_NAME, args, "stale")

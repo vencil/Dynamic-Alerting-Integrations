@@ -54,7 +54,7 @@ func readPromQLLabelFlow(label string, in *labelFlowRequest) ([]byte, error) {
 	}
 	for name, defs := range in.Records {
 		for _, d := range defs {
-			node, err := ruleParser.ParseExpr(d.Expr)
+			node, err := parseExpr(d.Expr)
 			if err != nil {
 				return nil, fmt.Errorf("record %s: %w", name, err)
 			}
@@ -63,7 +63,7 @@ func readPromQLLabelFlow(label string, in *labelFlowRequest) ([]byte, error) {
 	}
 	out := make([][]setMatch, 0, len(in.Expressions))
 	for i, e := range in.Expressions {
-		node, err := ruleParser.ParseExpr(e)
+		node, err := parseExpr(e)
 		if err != nil {
 			return nil, fmt.Errorf("expression %d: %w", i, err)
 		}

@@ -91,8 +91,9 @@ def test_a_refused_rule_file_prints_the_refusal_document_beside_its_files(tmp_pa
     bad.write_text(BAD_PROMQL, encoding="utf-8")
     proc = _run(cr.DA_READ_ENV, ["prometheus-rules", str(good), str(bad)])
     assert proc.returncode == 2, proc.stderr
-    doc = cr._refusal(proc)
+    doc = cr._refusal(proc, beside="files")
     assert doc is not None and set(doc) == {cr.REFUSAL_KEY, "files"}, proc.stdout
+    assert cr._refusal(proc) is None  # not the single-input document
     with pytest.raises(cr.RuleFilesRefused) as exc:
         cr.prometheus_rule_files([good, bad])
     assert [r.path for r in exc.value.refused] == [str(bad)]

@@ -80,8 +80,10 @@
 //	   promql-selectors <series> or promql-label-flow <label> it does not
 //	   take; their standard input not the JSON object or array they read), a
 //	   file that cannot be opened, standard input that cannot be read or
-//	   stdout that cannot be written print no refusal document: they are no
-//	   answer about the input, and a caller must not take them for one.
+//	   stdout that cannot be written, and a panic of da-read's own code (only
+//	   a consumer library's panic on the input is a refusal) print no refusal
+//	   document: they are no answer about the input, and a caller must not
+//	   take them for one.
 package main
 
 import (
@@ -196,7 +198,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			say(stderr, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		out, err := guarded(func([]byte) ([]byte, error) { return readPromQLLabelFlow(args[1], req) }, data)
+		out, err := readPromQLLabelFlow(args[1], req)
 		if err != nil {
 			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 			return refuse(stdout, stderr)
@@ -218,7 +220,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			say(stderr, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		out, err := guarded(func([]byte) ([]byte, error) { return readPromQLSelectors(want, exprs) }, data)
+		out, err := readPromQLSelectors(want, exprs)
 		if err != nil {
 			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 			return refuse(stdout, stderr)
@@ -241,7 +243,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		say(stderr, "%s: %v\n", programName, err)
 		return exitCallerErr
 	}
-	out, err := guarded(read, data)
+	out, err := read(data)
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, name, err)
 		return refuse(stdout, stderr)
@@ -267,21 +269,14 @@ func write(stdout, stderr io.Writer, out []byte, rc int) int {
 	return rc
 }
 
-// guarded is read(data) with any panic turned into a refusal of the file:
-// a loader that panics on one input (Prometheus' config.Load does, on
-// `alerting: {alertmanagers: [~]}`; the readers name their own loader,
-// loaderPanic) refuses that file, with rc 2, the refusal document and no
-// goroutine dump. ⛔ That is a refusal, not a fault of da-read (#3943): the
-// consumer's own loader fails on the same file the same way, so "the
-// consumer does not read this input" is the answer.
-func guarded(read func([]byte) ([]byte, error), data []byte) (out []byte, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			out, err = nil, fmt.Errorf("da-read panicked while reading this file (a bug; the file is refused): %v", r)
-		}
-	}()
-	return read(data)
-}
+// A consumer's library that panics on one input is that input refused:
+// each call into a loader or the PromQL parser recovers its panics
+// (loaderPanic; Prometheus' config.Load panics on `alerting:
+// {alertmanagers: [~]}`), with rc 2, the refusal document and no goroutine
+// dump — the consumer's own loader fails on the same file the same way.
+// ⛔ Only those calls are guarded (#3943): a panic of da-read's own code is
+// a crash — exit 2 from the Go runtime, no refusal document — never an
+// answer about the input.
 
 // ruleFile is one entry of `prometheus-rules`' output.
 type ruleFile struct {
@@ -320,7 +315,7 @@ func runRules(files []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return exitCallerErr
 		}
 		entry := ruleFile{Path: name}
-		doc, err := guarded(readRuleFile, data)
+		doc, err := readRuleFile(data)
 		if err != nil {
 			out.Answer = answerRefused
 			entry.Problem = &problem{Message: err.Error()}
