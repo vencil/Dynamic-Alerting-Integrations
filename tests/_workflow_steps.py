@@ -84,6 +84,11 @@ class RunStep:
 def _steps_of(file: str, job_id: str, doc: dict, job: dict) -> list[RunStep]:
     found = []
     for index, step in enumerate(job.get("steps") or []):
+        # Also what a `steps:` that is a map or a string comes down to: its
+        # items are keys or characters. Without this, `"run" in step` is a
+        # substring test and the job reads as having no `run:` at all.
+        if not isinstance(step, dict):
+            raise TypeError(f"{job_id} step #{index}: not a mapping")
         if "run" not in step:
             continue
         if not isinstance(step["run"], str):

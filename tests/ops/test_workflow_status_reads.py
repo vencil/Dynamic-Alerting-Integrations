@@ -31,6 +31,14 @@ sh-like (pwsh, python, cmd, …) fails and cannot be listed.
 NOT SEEN, by construction:
   * `a | b || rc=$?` without pipefail reads `b`, not `a`. (`PIPESTATUS` has
     its own lint: scripts/tools/lint/check_pipestatus_errexit.py.)
+  * `echo "$(cmd)" || rc=$?` reads `echo`, not `cmd` — the read is of the
+    command left of `||`, whatever that command hides. (The one shape of this
+    that is refused is a declaration: `local x=$(cmd) || rc=$?` can only
+    read 0.)
+  * a row of `_BARE_READS` is keyed by its text, not by why it is safe: move
+    `set +e` away from a listed read and the row still matches.
+  * text that is not this script's own command line: a heredoc that writes
+    another script, a multi-line quoted string handed to `bash -c`.
   * scripts a step calls (`scripts/**/*.sh`) — files with their own flags.
 """
 from __future__ import annotations
@@ -49,9 +57,13 @@ from _workflow_steps import (
     step_shell_argv,
 )
 
-READ = re.compile(r"\$\?|\$\{\?\}")
+# `${?` and not `${?}`: `${?:-0}`, `${?#x}` are reads too, and none is the allowed form.
+READ = re.compile(r"\$\?|\$\{\?")
 ALLOWED = re.compile(
     r"\|\|\s*(?:(?:local\s+)?[A-Za-z_][A-Za-z0-9_]*=|exit\s+|return\s+)(?:\$\?|\$\{\?\})\s*\Z")
+# `local x=$(cmd) || rc=$?` reads the declaration's status, which is 0 whatever
+# `cmd` did — the allowed form on paper, a read that can never be non-zero.
+DECLARES = re.compile(r"\s*(?:local|export|declare|typeset|readonly)\s[^|]*\$\(")
 # No `shell:` is bash. A custom template counts when its program is one of these.
 SH_LIKE = {"bash", "sh"}
 # Fewer than this many `run:` steps means the walk lost most of the tree.
@@ -93,7 +105,9 @@ def logical_lines(run: str) -> list[str]:
     continuations joined."""
     joined: list[str] = []
     pending = ""
-    for line in run.splitlines():
+    # Not `splitlines()`: it also breaks on U+2028 and friends, which bash
+    # does not — the rest of such a line would be read as a line of its own.
+    for line in run.replace("\r\n", "\n").split("\n"):
         if line.lstrip().startswith("#"):
             continue
         if line.endswith("\\"):
@@ -109,7 +123,9 @@ def logical_lines(run: str) -> list[str]:
 def bare_reads(run: str) -> list[str]:
     """Each logical line (stripped) that holds a `$?` outside the allowed form."""
     return [line.strip() for line in logical_lines(run)
-            if READ.search(line) and not (len(READ.findall(line)) == 1 and ALLOWED.search(line))]
+            if READ.search(line) and not (len(READ.findall(line)) == 1
+                                          and ALLOWED.search(line)
+                                          and not DECLARES.match(line))]
 
 
 def sh_like(shell: str | None) -> bool:
@@ -197,6 +213,11 @@ def test_the_allowed_forms_pass(script) -> None:
 @pytest.mark.parametrize("script, flagged", [
     ("cmd a\nrc=$?\n", ["rc=$?"]),
     ("cmd a\nrc=${?}\n", ["rc=${?}"]),
+    ("cmd a\nrc=${?:-0}\n", ["rc=${?:-0}"]),
+    ("cmd a || rc=${?#x}\n", ["cmd a || rc=${?#x}"]),
+    ("local out=$(cmd a) || rc=$?\n", ["local out=$(cmd a) || rc=$?"]),
+    ("  export OUT=$(cmd a) || rc=$?\n", ["export OUT=$(cmd a) || rc=$?"]),
+    ("x=\u2028# not a comment; rc=$?\n", ["x=\u2028# not a comment; rc=$?"]),
     ("cmd a\n  local rc=$?\n", ["local rc=$?"]),
     ('cmd a\necho "rc=$?"\n', ['echo "rc=$?"']),
     ("cmd a\nif [ $? -ne 0 ]; then echo no; fi\n", ["if [ $? -ne 0 ]; then echo no; fi"]),
@@ -220,7 +241,9 @@ def test_the_allowed_forms_pass(script) -> None:
     ("trap 'rc=$?; echo $rc' EXIT\n", ["trap 'rc=$?; echo $rc' EXIT"]),
     ("set +e\ncmd a\nrc=$?\n", ["rc=$?"]),
     ("if cmd a; then :; else\n  rc=$?\nfi\n", ["rc=$?"]),
-], ids=["bare", "braced", "local", "echo", "test", "case", "exit-without-or",
+], ids=["bare", "braced", "braced-with-a-default", "braced-with-a-trim",
+        "declaration-hides-the-command", "export-hides-the-command", "u2028-is-not-a-newline",
+        "local", "echo", "test", "case", "exit-without-or",
         "return-without-or", "substitution-in-the-message", "echo-after-or", "trailing-comment",
         "two-reads", "more-after", "quoted", "and", "pipe", "semicolon", "glued", "continued-on",
         "heredoc", "for-another-shell", "in-a-substitution", "trap", "after-set-plus-e",
@@ -349,10 +372,14 @@ def test_composite_actions_are_walked(tmp_path) -> None:
     ("bad.yml", "on: push\njobs: []\n"), ("bad.yml", "on: push\njobs:\n  j: nope\n"),
     ("bad.yml", "on: push\njobs:\n  j:\n    steps:\n      - run: [a, b]\n"),
     ("bad.yml", "on: push\njobs:\n  j:\n    steps:\n      - run: 3\n"),
+    ("bad.yml", "on: push\njobs:\n  j:\n    steps:\n      a: {run: 'x'}\n"),
+    ("bad.yml", "on: push\njobs:\n  j:\n    steps: nope\n"),
+    ("bad.yml", "on: push\njobs:\n  j:\n    steps:\n      - nope\n"),
     ("z/action.yml", "runs: [\n"), ("z/action.yml", "name: a\n"),
     ("z/action.yml", "runs:\n  steps:\n    - run: {a: b}\n"),
 ], ids=["not-yaml", "empty", "a-list", "no-jobs", "jobs-is-a-list", "job-is-a-string",
-        "run-is-a-list", "run-is-a-number", "action-not-yaml", "action-no-runs",
+        "run-is-a-list", "run-is-a-number", "steps-is-a-map", "steps-is-a-string",
+        "step-is-a-string", "action-not-yaml", "action-no-runs",
         "action-run-is-a-map"])
 def test_a_file_that_cannot_be_read_is_a_problem_not_a_skip(tmp_path, name, text) -> None:
     problems = _problems(tmp_path, {"good.yaml": _workflow(_BARE), name: text})
