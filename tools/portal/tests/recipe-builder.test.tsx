@@ -280,6 +280,26 @@ describe('RecipeBuilder would-fire preview (#657)', () => {
       { value: 1500 }, expect.anything());
   });
 
+  it('#3920: on an edit the preview judges the recipe that gets saved, selectors included', async () => {
+    const storedRecipe = {
+      recipe: 'threshold', name: 'pvc_usage', metric: 'volume_used_ratio', window: '10m', threshold: '80:critical',
+      selectors: { namespace: 'ns-one' }, selectors_re: { persistentvolumeclaim: 'data-.*' }, group_by: ['persistentvolumeclaim'],
+    };
+    const previewFetch = vi.fn(() => Promise.resolve({ supported: false, states: [], warnings: ['regex selectors'] }));
+    const onSubmit = vi.fn();
+    render(<RecipeBuilder tenantId="tenant-fixture" fetchMetrics={mockFetch([])} previewFetch={previewFetch}
+      onSubmit={onSubmit} initialValue={storedRecipe} />);
+    fill('wouldfire-value', '90');
+    fireEvent.click(screen.getByTestId('wouldfire-run'));
+    await waitFor(() => expect(previewFetch).toHaveBeenCalledTimes(1));
+    const previewed = previewFetch.mock.calls[0][1];
+    expect(previewed).toMatchObject({
+      selectors: storedRecipe.selectors, selectors_re: storedRecipe.selectors_re, group_by: storedRecipe.group_by,
+    });
+    fireEvent.click(screen.getByTestId('submit'));
+    expect(onSubmit.mock.calls[0][0]).toEqual(previewed);
+  });
+
   it('inactive verdict: renders the neutral "would not fire"', async () => {
     const previewFetch = vi.fn(() => Promise.resolve({ supported: true, states: [{ state: 'inactive' }], warnings: [] }));
     render(<RecipeBuilder tenantId="db-a" fetchMetrics={mockFetch(['queue_depth'])} previewFetch={previewFetch} />);
