@@ -433,13 +433,15 @@ class TenantValues(NamedTuple):
     # The custom-alert rows the tenant's `_custom_alerts` asks /metrics to
     # serve, counted before the per-tenant metric limit truncates them
     # (#3042: what the per-tenant cap is judged on; `values["_custom_alerts"]`
-    # is what survives the truncation). None from a da-guard older than the
-    # field.
-    custom_alert_rows: int | None = None
+    # is what survives the truncation). `load_served_tree` always sets it
+    # (#3961: a document without the field is broken output); the default
+    # is only for a `TenantValues` built by hand.
+    custom_alert_rows: int = 0
     # Every element of the tenant's `_custom_alerts`, in declaration order, as
     # the exporter's resolver judges it (#3042; what the custom-alert compiler
-    # builds its rules from); None from a da-guard older than the field.
-    custom_alerts: "tuple[CustomAlertEntry, ...] | None" = None
+    # builds its rules from); () when it has none or the block does not
+    # decode (`custom_alerts_error`). Always set, as `custom_alert_rows`.
+    custom_alerts: "tuple[CustomAlertEntry, ...]" = ()
     # Why the tenant's `_custom_alerts` does not decode (no entry, nothing
     # served); None when it does.
     custom_alerts_error: str | None = None
@@ -1388,25 +1390,21 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries time_boxes that are not of their shape ({e!r})",
                 returncode, stderr, broken=True) from e
-        if not isinstance(tv.get("custom_alerts") or [], list):
-            raise ServedValuesError(
-                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries custom_alerts that are not a list",
-                returncode, stderr, broken=True)
         try:
             keys = {str(k): _served_key(e) for k, e in tv["keys"].items()}
             routing = tv.get("routing")
             if routing is not None and not isinstance(routing, dict):
                 raise TypeError(f"routing is a {type(routing).__name__}")
-            alert_rows = tv.get("custom_alert_rows")
-            if alert_rows is not None and (type(alert_rows) is not int or alert_rows < 0):
-                raise TypeError(f"custom_alert_rows is {alert_rows!r}")
-            custom_alerts = (None if "custom_alerts" not in tv
-                             else tuple(_custom_alert_entry(e) for e in tv["custom_alerts"]))
+            alert_rows = tv["custom_alert_rows"]
+            if type(alert_rows) is not int or alert_rows < 0:
+                raise TypeError(f"custom_alert_rows is not a non-negative int ({type(alert_rows).__name__})")
+            if not isinstance(tv["custom_alerts"], list):
+                raise TypeError(f"custom_alerts is a {type(tv['custom_alerts']).__name__}, not a list")
+            custom_alerts = tuple(_custom_alert_entry(e) for e in tv["custom_alerts"])
             custom_alerts_error = tv.get("custom_alerts_error")
             if custom_alerts_error is not None and not isinstance(custom_alerts_error, str):
                 raise TypeError(f"custom_alerts_error is a {type(custom_alerts_error).__name__}")
-            custom_alerts_finding = (tv["custom_alerts_finding"] if "custom_alerts" in tv
-                                     else tv.get("custom_alerts_finding"))
+            custom_alerts_finding = tv["custom_alerts_finding"]
             if custom_alerts_finding is not None and (not isinstance(custom_alerts_finding, str)
                                                       or custom_alerts_error is None):
                 raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "

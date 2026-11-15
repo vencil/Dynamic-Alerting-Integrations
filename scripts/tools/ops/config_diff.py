@@ -900,12 +900,11 @@ def _removed_note(tv, name):
     side), as served-values' `custom_alerts[]` says (#3140 PR2): no entry
     names it (deleted), every entry naming it is switched off (`status`
     "disabled"), or rejected for its threshold (`refused`). Anything else —
-    or a da-guard older than `custom_alerts`, or the tenant gone — is
-    SERVED_REMOVED_NOTE, which does not tell them apart."""
-    entries = None if tv is None else tv.custom_alerts
-    if entries is None:
+    or the tenant gone — is SERVED_REMOVED_NOTE, which does not tell them
+    apart."""
+    if tv is None:
         return SERVED_REMOVED_NOTE
-    named = [e for e in entries if isinstance(e.spec, dict) and str(e.spec.get("name")) == name]
+    named = [e for e in tv.custom_alerts if isinstance(e.spec, dict) and str(e.spec.get("name")) == name]
     if not named:
         return SERVED_DELETED_NOTE
     statuses = {e.status for e in named}

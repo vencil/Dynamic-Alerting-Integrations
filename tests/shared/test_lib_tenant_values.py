@@ -551,7 +551,7 @@ def _old_da_guard(tmp_path: Path, doc: str) -> str:
 def test_output_without_schedules_is_refused(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
@@ -563,7 +563,7 @@ def test_output_without_series_is_refused(tmp_path):
     缺它是壞掉的輸出（#3703：較舊的形狀由 schema 指出）。"""
     fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
+                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "series" in str(ei.value) and ei.value.binary_fault
@@ -583,14 +583,14 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
     fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
 _WHOLE_SV_HEAD = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
             '"unreadable": [], "aliases": {}, "root_defaults_refused": [], ')
 _WHOLE_SV_TENANT = ('"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, '
-              '"state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []')
+              '"state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null')
 
 
 @pytest.mark.parametrize("load,tenants", [
@@ -625,7 +625,7 @@ def test_a_document_wrong_inside_is_broken_output_and_recorded(tmp_path, load, t
 
 _ARGV_DOC = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
-             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
+             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
 
 
 @pytest.mark.parametrize("asked", [False, True])
@@ -759,7 +759,7 @@ def test_load_custom_alert_pack_refuses_a_document_not_of_its_shape(tmp_path, fi
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────
 
 _SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
-_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}, "keys": {}, "key_checks": []'
+_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null'
 
 
 def _sv_doc(schema: str | None, tenant_extra: str = ', "state_filters": {}') -> str:
@@ -924,6 +924,22 @@ def test_output_without_key_checks_is_broken(tmp_path):
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "key_checks" in str(ei.value) and ei.value.broken and not ei.value.stale
+
+
+@pytest.mark.parametrize("field", [', "custom_alert_rows": 0', ', "custom_alerts": []'],
+                         ids=["custom_alert_rows", "custom_alerts"])
+def test_output_without_a_custom_alert_field_is_broken(tmp_path, field):
+    """這支工具讀的 schema 卻沒有 custom_alert_rows／custom_alerts：壞掉的輸出，
+    不靜默讀成 None（#3961：比這兩欄舊的 da-guard 寫的是較舊的 schema）。"""
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA)
+    t = tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc)).tenants["t"]
+    assert (t.custom_alert_rows, t.custom_alerts) == (0, ())
+    assert field in doc
+    fake = _old_da_guard(tmp_path, doc.replace(field, ''))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    name = field.split('"')[1]
+    assert name in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
 @pytest.mark.parametrize("keys", [
@@ -1100,7 +1116,8 @@ def _custom_alerts_doc(entry: str) -> str:
     return ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
             '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
             '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
-            f'"keys": {{}}, "custom_alerts": [{entry}], "custom_alerts_finding": null}}}}}}')
+            f'"keys": {{}}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [{entry}], '
+            '"custom_alerts_finding": null}}}')
 
 
 @pytest.mark.parametrize("entry, why", [
@@ -1192,7 +1209,6 @@ def test_a_subset_document_that_does_not_answer_the_request_is_refused(tmp_path,
     da-guard's (`broken`), never a reading."""
     require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
     doc = json.loads(_sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"t": {', '"t-a": {'))
-    doc["tenants"]["t-a"].update({"keys": {}, "key_checks": [], "custom_alerts": []})
     doc.update({"tenants_requested": ["t-a", "t-b"], "tenants_absent": ["t-b"]}, **change)
     out = tmp_path / "doc.json"
     out.write_text(json.dumps(doc), encoding="utf-8")
