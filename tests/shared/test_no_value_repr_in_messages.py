@@ -9,7 +9,7 @@ f-string 直接插值（`'{val}'`）它抓不到，用字串述詞守「值不�
 出口是 `_lib_validation.shown_value`（`receiver_value_repr`、`scalar_text`、
 `value_text` 都經它）。這裡掃 `scripts/tools/_lib_validation.py`、產生器經由它們讀
 da-guard 的 `_lib_tenant_values.py` 與 `_lib_key_verdict.py`、產生器服務的判定子程序
-`ops/_gsvc_child.py` 與 `_lib_parse_tree.py`（#3961），以及
+`ops/_gsvc_child.py`、`ops/_gsvc_proto.py` 與 `_lib_parse_tree.py`（#3961），以及
 `scripts/tools/ops/_grar_*.py`，每個 repr 類寫法都必須在下面的白名單裡並附理由；
 白名單裡對不到程式的條目也會轉紅。
 """
@@ -30,6 +30,8 @@ FILES = [REPO / "scripts" / "tools" / "_lib_validation.py",
          # #3961: da-guard parse-tree's reader — every tool reads conf.d
          # through it, the generator and its service included.
          REPO / "scripts" / "tools" / "_lib_parse_tree.py",
+         # #3961: the service's request checks — a 400's message reaches tenant-api.
+         REPO / "scripts" / "tools" / "ops" / "_gsvc_proto.py",
          *sorted((REPO / "scripts" / "tools" / "ops").glob("_grar_*.py"))]
 
 _ARGV = "a command-line argument of the tool, not a conf.d value"

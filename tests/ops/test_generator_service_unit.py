@@ -92,7 +92,10 @@ def test_a_valid_request():
     (_body(writes=["x"]), "object"),
     (_body(writes=[{"path": "../a", "delete": True}]), "'..'"),
     (_body(writes=[{"path": "a", "delete": True}, {"path": "a", "delete": True}]),
-     "more than once"),
+     r"writes\[1\]: path is the one writes\[0\] already writes"),
+    # #3961: a lone surrogate (JSON's `\udcff`) is no file name; refused
+    # here, unnamed — encoding the response would fail on it.
+    (_body(writes=[{"path": "a\udcffb.yaml", "delete": True}]), r"writes\[0\]: path is not valid UTF-8"),
     (_body(writes=[{"path": "a", "delete": False}]), "delete must be true"),
     (_body(writes=[{"path": "a", "content_b64": "!!"}]), "not base64"),
     (_body(writes=[{"path": "a", "content_b64": 5}]), "string"),
@@ -112,6 +115,16 @@ def test_a_valid_request():
 def test_malformed_requests(body, needle):
     with pytest.raises(proto.RequestError, match=needle):
         proto.parse_validate_request(body, "sha1", 100)
+
+
+def test_a_refused_path_is_not_named():
+    """#3961: a write's path is the author's file name — the message names
+    the write by its index, not the path (it reaches tenant-api's 400)."""
+    for writes in ([{"path": "ZqX dup@x.yaml", "delete": True}] * 2,
+                   [{"path": "ZqX\udcff.yaml", "delete": True}]):
+        with pytest.raises(proto.RequestError) as ei:
+            proto.parse_validate_request(_body(writes=writes), "sha1", 100)
+        assert "zqx" not in str(ei.value).lower() and "\udcff" not in str(ei.value), ei.value
 
 
 def test_sha256_repo_takes_64_char_commits():

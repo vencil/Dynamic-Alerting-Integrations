@@ -813,35 +813,50 @@ def test_a_name_that_is_not_utf8_is_named_as_the_cli_names_it(tmp_path, world):
     assert text.lower().count(fm._CANARY) == 1 and "QqW" not in text, text
 
 
-#: #3961 round 2: a conf.d name that is not valid UTF-8, on every kind of git
-#: entry and in a directory component — the CLI over the same tree is the
-#: oracle. cell → (path below conf.d, git mode, blob).
+#: #3961: a conf.d name that is not valid UTF-8, on every kind of git entry
+#: and in a directory component. The oracles differ by entry (round 3):
+#: * a regular file (100644 / 100755) is judged as the CLI judges the same
+#:   tree on disk — the response's refusal line is the CLI's, word for word;
+#: * an entry that is not a regular file (120000 / 160000) the service
+#:   refuses whatever its name (#2981, ADR-036 §3: `not_regular_file`), where
+#:   the CLI follows a symlink or skips an empty directory — its oracle is the
+#:   service itself: the same entry at a UTF-8 name is judged the same way
+#:   (refused; skipped below a hidden directory), and the only sentence that
+#:   names the path is da-guard's, as the CLI prints it for that path on disk
+#:   as the service puts it there (an empty directory: `materialise`).
+#: Nowhere else in any field: no canary, no surrogate, no control byte.
+#: cell → (path below conf.d, git mode, blob).
 _NOT_UTF8_LEAF = "secret-ZqX\udcff\x1b.yaml"
+_LINK, _GITLINK = ("120000", b"db-x: a"), ("160000", b"")
 _NOT_UTF8_CELLS = {
     **{f"leaf-{mode}": (_NOT_UTF8_LEAF, mode, body) for mode, body in (
         ("100644", cases._tenant("db-x").encode()), ("100755", cases._tenant("db-x").encode()),
-        ("120000", b"db-x: a"), ("160000", b""))},
+        _LINK, _GITLINK)},
     **{f"dir-{mode}": ("d-ZqX\udcff/x.yaml", mode, body) for mode, body in (
-        ("100644", cases._tenant("db-x").encode()), ("120000", b"db-x: a"), ("160000", b""))},
-    # Below a hidden directory no reader reads it: neither names it.
-    "hidden-120000": (".h/" + _NOT_UTF8_LEAF, "120000", b"db-x: a"),
+        ("100644", cases._tenant("db-x").encode()), _LINK, _GITLINK)},
+    # Not config-named: da-guard refuses no such regular file, but the
+    # service refuses every entry that is not one.
+    **{f"{tag}-{mode}": (name, mode, body)
+       for tag, name in (("bare", "\udcff"), ("underscore", "_\udcff"), ("txt", "x\udcff.txt"))
+       for mode, body in (_LINK, _GITLINK)},
+    # Below a hidden directory no reader reads it: skipped, as at a UTF-8 name.
+    "hidden-120000": (".h/" + _NOT_UTF8_LEAF, *_LINK),
 }
 
 
 def _cli_tree(root: Path, files: dict, rel: str, mode: str, body: bytes) -> Path:
-    """The tree a checkout of the commit is on disk: a file, a symlink to
-    its link text, an empty directory for a gitlink."""
+    """*files*, plus *rel* on disk: a file of *body* (mode 100644 / 100755),
+    an empty directory (any other mode — a gitlink's checkout, and what the
+    service puts at a path that is not UTF-8)."""
     h.write_tree(root, files)
     target = os.fsencode(root / rel)
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    if mode == "120000":
-        symlink_or_skip(os.fsdecode(body), Path(os.fsdecode(target)))
-    elif mode == "160000":
-        os.mkdir(target)
-    else:
+    if mode in ("100644", "100755"):
         with open(target, "wb") as fh:
             fh.write(body)
         os.chmod(target, 0o755 if mode == "100755" else 0o644)
+    else:
+        os.mkdir(target)
     return root
 
 
@@ -863,20 +878,27 @@ def _strings(doc: object) -> "list[str]":
     return []
 
 
+def _refused(doc: dict) -> bool:
+    return doc["result"] != "pass"
+
+
 @pytest.mark.parametrize("cell", sorted(_NOT_UTF8_CELLS))
-def test_a_not_utf8_name_is_named_by_the_service_as_the_cli_names_it(tmp_path, world, cell):
-    """#3961 (ADR-036 step 9, the one exception of
-    `_lib_validation.shown_file`): whatever the entry, the service's response
-    names a conf.d name that is not valid UTF-8 only where — and exactly as —
-    the generator CLI names it over the same tree: da-guard's `%q` sentence.
-    Nowhere else in any field: no canary, no surrogate, no control byte."""
+def test_a_not_utf8_name_is_named_only_by_da_guard(tmp_path, world, cell):
+    """#3961 (ADR-036 step 9, the one exception of `_lib_validation.shown_file`):
+    the oracles of `_NOT_UTF8_CELLS`."""
     rel, mode, body = _NOT_UTF8_CELLS[cell]
     files = dict(cases.FIXTURES["clean"])
     repo = h.init_repo(tmp_path / "r")
     commit = _commit_with_entries(repo, files, {rel: (mode, body)})
+    twin = _commit_with_entries(repo, files, {rel.replace("\udcff", "q"): (mode, body)})
+    write = [{"path": "zz-extra.yaml", "content_b64": h.b64(EXTRA)}]
     with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
-        status, doc = svc.validate(commit, [{"path": "zz-extra.yaml", "content_b64": h.b64(EXTRA)}])
-    assert status == 200, doc
+        status, doc = svc.validate(commit, write)
+        twin_status, twin_doc = svc.validate(twin, write)
+    assert status == twin_status == 200, (doc, twin_doc)
+    regular = mode in ("100644", "100755")
+    if not regular:
+        assert _refused(doc) == _refused(twin_doc) == (not cell.startswith("hidden")), (cell, doc, twin_doc)
     conf = _cli_tree(tmp_path / "cli" / "conf.d", {**files, "zz-extra.yaml": EXTRA}, rel, mode, body)
     env = {k: v for k, v in os.environ.items() if k not in ("PATH", "DA_GUARD_BINARY")}
     env["PATH"] = str(world["bin"])
@@ -884,15 +906,29 @@ def test_a_not_utf8_name_is_named_by_the_service_as_the_cli_names_it(tmp_path, w
                           "--strict", "--findings-json", str(tmp_path / "f.json")],
                          env=env, capture_output=True, timeout=180)
     want = _refusals(cli.stderr.decode("utf-8", "replace"), str(conf))
+    if regular:
+        assert (doc["rc"], _refused(doc)) == (cli.returncode, cli.returncode != 0), (cell, doc)
     strings = _strings(doc)
     conf_svc = (doc.get("findings") or {}).get("config_dir") or "\0"
     got = [r for v in strings for r in _refusals(v, conf_svc)]
     assert got == want, (cell, got, want, doc)
-    named = [v for v in strings if fm._CANARY in v.lower()]
-    assert len(named) == len(want) and all(r in v for r, v in zip(want, named)), (cell, named, want)
-    assert all(v.lower().count(fm._CANARY) == 1 for v in named), named
+    # The name, escaped or as written, only inside da-guard's sentence.
+    rest = [v.replace(r, "") for v in strings for r in (want or [""])]
+    assert not [v for v in rest if "\\xff" in v or "zqx" in v.lower()], (cell, rest)
     bad = [v for v in strings for c in ("\udcff", "\ufffd", "\x1b") if c in v]
     assert not bad, (cell, bad)
+
+
+def test_a_write_path_that_is_not_utf8_is_400_unnamed(world):
+    """#3961: a write path with a lone surrogate (JSON's `\\udcff`) is no
+    file name. It is a 400 that does not name it — before the check, the
+    response could not be encoded and the connection was dropped unanswered —
+    and the service answers the next request."""
+    commit = world["commits"]["clean"]
+    status, doc = world["svc"].validate(commit, [{"path": "ZqX\udcff.yaml", "content_b64": h.b64(EXTRA)}])
+    assert status == 400 and doc["message"] == "writes[0]: path is not valid UTF-8", doc
+    status, doc = world["svc"].validate(commit)
+    assert status == 200, doc
 
 
 def test_sha256_repository(tmp_path, world):

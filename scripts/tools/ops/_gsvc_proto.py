@@ -165,7 +165,7 @@ def parse_validate_request(body: bytes, object_format: str,
         raise RequestError(f"writes has {len(raw_writes)} entries; at most "
                            f"{max_writes} per request")
     writes: list[Write] = []
-    seen: set[str] = set()
+    seen: dict[str, int] = {}
     for i, w in enumerate(raw_writes):
         where = f"writes[{i}]"
         if not isinstance(w, dict):
@@ -174,9 +174,16 @@ def parse_validate_request(body: bytes, object_format: str,
         if problem is not None:
             raise RequestError(f"{where}: {problem}")
         path = w["path"]
+        # #3961: a path is the author's file name — a message names a place
+        # (the write's index), never the path. JSON carries a lone surrogate
+        # (`"\udcff"`), which no file name is and no response could encode.
+        try:
+            path.encode("utf-8")
+        except UnicodeEncodeError:
+            raise RequestError(f"{where}: path is not valid UTF-8") from None
         if path in seen:
-            raise RequestError(f"{where}: path {path!r} appears more than once")
-        seen.add(path)
+            raise RequestError(f"{where}: path is the one writes[{seen[path]}] already writes")
+        seen[path] = i
         keys = set(w)
         if keys == {"path", "content_b64"}:
             text = w["content_b64"]
