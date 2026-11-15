@@ -11,7 +11,8 @@
 #   rabbitmq_queue_messages: 100000   # messages — Queue depth warning
 #       未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
 #   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+#       未啟用（值有爭議，#3929）：沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana
+#       rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
 #   rabbitmq_connections: 1000   # count — Connection count warning
 #       未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定
 #   rabbitmq_consumers: 5   # count — Minimum consumer count warning
