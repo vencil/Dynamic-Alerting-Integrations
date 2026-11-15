@@ -155,6 +155,19 @@ const TEXT_SCHEMA_NO_MERGE = FAILSAFE_SCHEMA.extend({
   explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
 });
 
+// TEXT_SCHEMA_NO_MERGE with each merge key marked (#3974): a plain `<<`
+// becomes the key MERGE_MARK, while a quoted `"<<"` — no merge key to js-yaml
+// or yaml.v3 — stays the key '<<'. An implicit type resolves plain scalars
+// only, which is the difference. Only for finding the value a root merge
+// brings in, as written.
+const MERGE_MARK = '\u0000<<';
+const TEXT_SCHEMA_MERGE_MARKED = FAILSAFE_SCHEMA.extend({
+  implicit: [types.null, new Type('tag:da-portal,2026:merge-mark', {
+    kind: 'scalar', resolve: (data) => data === '<<', construct: () => MERGE_MARK,
+  })],
+  explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
+});
+
 const AM_DURATION_RE = new RegExp(AM_DURATION_RULE.pattern);
 // prometheus/common model.ParseDuration's units (time.go unitMap), in
 // nanoseconds. Which units are legal, and in what order, is the schema
@@ -357,7 +370,9 @@ function parseYaml(text) {
 const isScalarNode = (v) => v === null || typeof v !== 'object';
 function scheduleDecodeError(own, v) {
   // `v` is the same node as `own`, merged: a mapping whenever `own` is one.
-  if (!isPlainMap(own) || !Object.prototype.hasOwnProperty.call(own, 'default')) return null;
+  // Should a lookup ever pair them wrongly, a non-mapping `v` is no schedule
+  // here rather than a crash of the page.
+  if (!isPlainMap(own) || !Object.prototype.hasOwnProperty.call(own, 'default') || !isPlainMap(v)) return null;
   for (const field of ['default', 'expires', 'reason']) {
     if (!isScalarNode(v[field])) return { field, list: false };
   }
@@ -375,9 +390,11 @@ function scheduleDecodeError(own, v) {
   return null;
 }
 
-// The value of `key` as written in `map` (merge keys unexpanded), or
-// undefined: an entry of the map's own, else the first source of its merge
-// key (`<<: {…}` or `<<: [{…}, …]`, the earlier source winning) that has
+// The value of `key` as written in `map` (a TEXT_SCHEMA_MERGE_MARKED parse:
+// merge keys unexpanded and marked), or undefined: an entry of the map's
+// own, else the first source of its merge key (`<<: {…}` or
+// `<<: [{…}, …]`, the earlier source winning; a quoted `"<<"` is an
+// ordinary key, as it is to the exporter) that has
 // one, at any depth of merges. A key brought in by a root merge is thereby
 // judged by its own keys too, as the exporter judges it
 // (`<<: {k: {<<: {default: [1]}}}` is no schedule).
@@ -387,7 +404,7 @@ function scheduleDecodeError(own, v) {
 function writtenValue(map, key, seen = new Set()) {
   if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
   seen.add(map);
-  const merge = map['<<'];
+  const merge = map[MERGE_MARK];
   for (const source of Array.isArray(merge) ? merge : [merge]) {
     if (!isPlainMap(source) || seen.has(source)) continue;
     const found = writtenValue(source, key, seen);
@@ -439,11 +456,12 @@ function parseTenantYaml(text) {
   // threshold value that writes `<<` is handed over as written, `<<` and
   // all, for the reader to judge by its own keys (#3959).
   const unmerged = loadDocument(text, TEXT_SCHEMA_NO_MERGE).doc;
-  // When the unexpanded parse fails — an explicit `!!merge` tag, which this
+  // When the marked parse fails — an explicit `!!merge` tag, which that
   // schema does not take — every key is judged by its merged value rather
   // than not at all. The exporter refuses such a file whole anyway: its
   // parse-tree does not read a `!!merge` tag (tag_not_allowed, measured).
-  const written = (key) => (isPlainMap(unmerged) ? writtenValue(unmerged, key) : doc[key]);
+  const marked = loadDocument(text, TEXT_SCHEMA_MERGE_MARKED).doc;
+  const written = (key) => (isPlainMap(marked) ? writtenValue(marked, key) : doc[key]);
   // Every key, `__proto__` and the other UNSAFE_KEYS too: the exporter has
   // no such keys, and decodes their schedules as any other (measured).
   const undecodable = Object.keys(doc)

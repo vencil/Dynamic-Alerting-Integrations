@@ -189,6 +189,8 @@ describe('a schedule the exporter cannot decode (#3974)', () => {
     [`<<: {${K}: {default: [1]}}`, 'default'], // a merge at the root brings the schedule in
     [`<<: [{a: 1}, {${K}: {default: [1]}}]`, 'default'], // from a later source of a merge list
     [`<<: {<<: {${K}: {default: [1]}}}`, 'default'], // through a merge in the merge source
+    // a quoted "<<" is an ordinary key (no merge), so K comes from the second source
+    [`<<: [{"<<": {${K}: {x: 1}}}, {${K}: {default: [1]}}]`, 'default'],
     ['__proto__: {default: [1]}', 'default'], // the exporter has no unsafe keys: parse_failed
     ['constructor: {default: 70, overrides: 5}', 'overrides'],
     // An explicit merge tag elsewhere in the file: the unexpanded parse fails,
@@ -216,6 +218,9 @@ describe('a schedule the exporter cannot decode (#3974)', () => {
     // so no schedule (served-values: value refused, the file served)
     `<<: {${K}: {<<: {default: [1]}}}`, `<<: [{${K}: {<<: {default: 70, overrides: 5}}}]`,
     `_x: &m {${K}: {<<: {default: [1]}}}\n<<: *m`,
+    // ... and is never followed as one: K's own keys are those of the second source
+    `<<: [{"<<": {${K}: {default: 1}}}, {${K}: {reason: [x]}}]`,
+    `<<: [{"<<": {${K}: {default: 1}}}, {${K}: null}]`,
     `${K}: {a: [1]}`, `${K}: [[1]]`, // not a schedule either
   ])('%j is decoded: no error', (yaml) => {
     expect(parseTenantYaml(`${yaml}\n`).errors).toEqual([]);
