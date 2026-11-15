@@ -155,6 +155,20 @@ func builtinChainBase(builtin bool) map[string]any {
 	return out
 }
 
+// fillBuiltinUnder lays the built-in layer under m, a defaults chain folded
+// without it, in place: every built-in key m does not hold gets the
+// platform's value. It is the fold with the layer as its first input — a
+// level that writes a key (any value, a schedule included) replaces it, and
+// one that writes null or a schedule writing nothing leaves it (deepMerge) —
+// without copying the layer through every level of every tenant's chain.
+func fillBuiltinUnder(m map[string]any) {
+	for k, v := range builtinDefaults {
+		if _, ok := m[k]; !ok {
+			m[k] = v
+		}
+	}
+}
+
 // RootDefaultsUnreadable reports whether the scan holds, at the conf.d root,
 // a defaults carrier it could not stat or read (an Unreadable entry whose
 // base name is a carrier's: a dangling or looping link, a file it may not

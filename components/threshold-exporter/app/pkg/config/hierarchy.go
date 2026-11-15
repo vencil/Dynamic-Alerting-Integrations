@@ -708,10 +708,7 @@ func computeEffectiveConfigDocAt(
 	var rootRefused map[string]bool // #3250: root thresholds the root decode refuses
 	var buf [8]ChainDefaults
 	parsed := buf[:0]
-	merged := builtinChainBase(builtin)
-	if merged == nil {
-		merged = make(map[string]any)
-	}
+	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		pd := ParseChainDefaults(defBytes)
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
@@ -727,6 +724,9 @@ func computeEffectiveConfigDocAt(
 		}
 	}
 
+	if builtin {
+		fillBuiltinUnder(merged)
+	}
 	chain := merged
 	p, err := mergeTenantOver(chain, tenantDoc, tenantID, overlay, profiles)
 	if err != nil {
@@ -1098,15 +1098,15 @@ func defaultsBlockNode(doc *yaml.Node) *yaml.Node {
 // parse ends it with `parse defaults[%d]: %w` — the error text
 // emitParseFailureSignal (app) maps back to the file by that index.
 func mergeDefaultsChain(chain []ChainDefaults, builtin bool) (map[string]any, error) {
-	merged := builtinChainBase(builtin)
-	if merged == nil {
-		merged = make(map[string]any)
-	}
+	merged := make(map[string]any)
 	var err error
 	for i, pd := range chain {
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return nil, err
 		}
+	}
+	if builtin {
+		fillBuiltinUnder(merged)
 	}
 	return merged, nil
 }

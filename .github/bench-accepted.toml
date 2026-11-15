@@ -29,3 +29,41 @@
 # metric = "B/op"
 # max_delta_pct = 10
 # reason = "ScheduledValue 新增 deleted 標記（48→56 B），租戶層 null 需要它；省掉會讓 ApplyProfiles 把值填回去"
+
+# #3832：內建層上線，每個租戶多送平台預設啟用的閾值列（目前 11 個鍵），
+# 載入時要多解析、多存這些列，merged_hash 與最終設定也多這些鍵。
+[[accepted]]
+benches = ["BenchmarkFullDirLoad_1000", "BenchmarkFullDirLoad_Hierarchical_1000", "BenchmarkFullDirLoad_MixedMode_500flat_500hier", "BenchmarkFullDirLoad_MixedMode_100flat_900hier"]
+metric = "sec/op"
+max_delta_pct = 25
+reason = "內建層讓每個租戶多出預設啟用鍵的閾值列（#3832）：多解析、多送的列是功能本身；鏈上的複製已改成合併後補值"
+
+[[accepted]]
+benches = ["BenchmarkFullDirLoad_1000", "BenchmarkFullDirLoad_Hierarchical_1000", "BenchmarkFullDirLoad_MixedMode_500flat_500hier", "BenchmarkFullDirLoad_MixedMode_100flat_900hier", "BenchmarkDiffAndReload_Hierarchical_1000_Churn10pct", "BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000"]
+metric = "B/op"
+max_delta_pct = 35
+reason = "內建層讓每個租戶多出預設啟用鍵的閾值列與最終設定的鍵（#3832），省掉就是不送平台預設值"
+
+[[accepted]]
+benches = ["BenchmarkFullDirLoad_1000", "BenchmarkFullDirLoad_Hierarchical_1000", "BenchmarkFullDirLoad_MixedMode_500flat_500hier", "BenchmarkFullDirLoad_MixedMode_100flat_900hier", "BenchmarkDiffAndReload_Hierarchical_1000_Churn10pct", "BenchmarkBlastRadius_DefaultsChange_Hierarchical_1000"]
+metric = "allocs/op"
+max_delta_pct = 17
+reason = "內建層讓每個租戶多出預設啟用鍵的閾值列與最終設定的鍵（#3832），省掉就是不送平台預設值"
+
+[[accepted]]
+benches = ["BenchmarkMergeParsedPlatform_1000_Cached"]
+metric = "B/op"
+max_delta_pct = 10
+reason = "寫入檢查的合併也墊內建層（#3832），多 11 個鍵；根層讀不讀得了改用已快取的解碼，不再每次重解"
+
+[[accepted]]
+benches = ["BenchmarkMergeParsedPlatform_1000_Cached"]
+metric = "allocs/op"
+max_delta_pct = 8
+reason = "寫入檢查的合併也墊內建層（#3832），多 11 個鍵；根層讀不讀得了改用已快取的解碼，不再每次重解"
+
+[[accepted]]
+benches = ["BenchmarkMergeParsedPlatform_1000_Cached"]
+metric = "sec/op"
+max_delta_pct = 15
+reason = "寫入檢查的合併也墊內建層（#3832），多 11 個鍵；根層讀不讀得了改用已快取的解碼，不再每次重解"
