@@ -168,9 +168,10 @@ function structuredText(v) {
 // cannot read is. A schedule is not simulated ('structured') unless its
 // `default` is a scalar this reader refuses: the exporter refuses that
 // schedule the same way. Not modelled: a value inside `overrides` (read only
-// in its window). A non-scalar `default` never arrives from parseTenantYaml:
-// the exporter refuses the whole file over it, and so does parseTenantYaml
-// (#3974).
+// in its window). A non-scalar `default` arrives from parseTenantYaml only
+// under a `default` key written as an alias (#3999), which is no schedule to
+// the exporter; everywhere else the exporter refuses the whole file over it,
+// and so does parseTenantYaml (#3974).
 function structuredRow(v, tier) {
   if (!Object.prototype.hasOwnProperty.call(v, 'default')) { // a list has no `default` either
     return { kind: 'unreadable', raw: structuredText(v) };
