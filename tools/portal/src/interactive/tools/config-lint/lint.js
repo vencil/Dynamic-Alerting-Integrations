@@ -138,8 +138,13 @@ function parseValue(raw) {
 // needlessly, which is all it can do.
 const MERGE_KEY_RE = /(?:^|[\s{,[])<<[ \t]*:/m;
 
+// parseTenantYaml judges its top level as one tenant's keys; this page's top
+// level is tenants, so its schedule check would judge a tenant as a schedule
+// (a tenant key named `default`) and never see a threshold's schedule
+// (#4001). Not asked for here: a schedule is not checked on this page, as it
+// was not before #3974. Its syntax and second-document errors still are.
 function readThresholds(yamlText) {
-  const { config, errors } = parseTenantYaml(yamlText);
+  const { config, errors } = parseTenantYaml(yamlText, { schedules: false });
   return { config, error: errors.length ? errors[0] : null, mergeKeys: MERGE_KEY_RE.test(yamlText) };
 }
 
