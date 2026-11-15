@@ -61,7 +61,7 @@ DOCS_INSTALL_URL: Final[str] = (
 #: overwrite the client-side apply it replaces always did, also of a Secret
 #: first made by `kubectl create`). Every remedy and checklist that
 #: teaches it reads it from here.
-OPERATOR_SECRET_APPLY_COMMAND: Final[str] = (
+OPERATOR_CONFIG_APPLY_COMMAND: Final[str] = (
     "kubectl create secret generic <secret> -n <namespace> --from-file=alertmanager.yaml "
     "--dry-run=client -o yaml | kubectl apply --server-side --force-conflicts -f -")
 
@@ -73,7 +73,7 @@ OPERATOR_ROUTING_REMEDY_EN: Final[str] = (
     "generator and give it to the Alertmanager as its configSecret:\n"
     "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
     "--base-config <your alertmanager.yaml> -o alertmanager.yaml\n"
-    "  " + OPERATOR_SECRET_APPLY_COMMAND + "\n"
+    "  " + OPERATOR_CONFIG_APPLY_COMMAND + "\n"
     "  then set the Alertmanager's configSecret to <secret> "
     "(kube-prometheus-stack: alertmanager.alertmanagerSpec.configSecret)."
 )
@@ -84,7 +84,7 @@ OPERATOR_ROUTING_REMEDY_ZH: Final[str] = (
     "產出 alertmanager.yaml，交給 Alertmanager 當作它的 configSecret：\n"
     "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
     "--base-config <你的 alertmanager.yaml> -o alertmanager.yaml\n"
-    "  " + OPERATOR_SECRET_APPLY_COMMAND + "\n"
+    "  " + OPERATOR_CONFIG_APPLY_COMMAND + "\n"
     "  再把 Alertmanager 的 configSecret 設為 <secret>"
     "（kube-prometheus-stack：alertmanager.alertmanagerSpec.configSecret）。"
 )
