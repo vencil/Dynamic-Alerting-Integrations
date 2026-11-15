@@ -13,21 +13,36 @@ One JSON line per event, in the order raised:
   ``os.rmdir`` — with ``path`` (the destination, for the two-path events),
   ``pid``, and ``stack``: the repo's ``scripts/`` frames that raised it,
   innermost first, as ``<file relative to the repo, symlinks and ``..``
-  resolved>:<function>``.
+  resolved>:<function>``; ``lines`` holds each frame's line number.
 * ``spawn`` — ``subprocess.Popen`` / ``os.posix_spawn`` / ``os.exec`` /
   ``os.system``, with the executable. A process that is not Python writes
   where this hook cannot see; the spawn is the only trace of it.
+* ``hook-error`` — the hook itself raised while handling an event. The
+  exception never reaches the audited program; this line is what is left of
+  the event, and the gate treats it as a failure.
 
-What a reader of the log has to know about ``path``:
+Where an event landed (``path``), and when the hook cannot say:
 
-* It is what the caller passed. A RELATIVE one carries ``cwd`` (the working
-  directory when the event was raised) so it can be placed.
+* An absolute path is itself. A RELATIVE one carries ``cwd`` (the working
+  directory when the event was raised).
 * A path relative to a ``dir_fd`` (``shutil.rmtree`` under
-  ``TemporaryDirectory`` cleanup) is resolved through ``/proc/self/fd`` where
-  that exists; where it cannot be, the line carries ``dir_fd`` and NO ``cwd``
-  — it must not be read against the working directory.
-* An integer ``path`` is a file descriptor (``open(fd, "w")``,
-  ``os.truncate(fd, …)``): the file it names was opened by an earlier event.
+  ``TemporaryDirectory`` cleanup) and a FILE DESCRIPTOR (``open(fd, "w")``,
+  ``fchmod``, ``ftruncate``) are resolved through ``/proc/self/fd``; such a
+  line carries ``fd`` (the descriptor) or ``dir_fd``. A descriptor that is
+  no file — a pipe, a socket — resolves to a name that is not absolute
+  (``pipe:[…]``) and is logged as that.
+* ``unplaced`` (true) marks an event whose target the hook could not
+  determine, and which must therefore not be read against anything:
+  - a descriptor or ``dir_fd`` it could not resolve (no ``/proc``);
+  - a relative path whose working directory is gone;
+  - a relative path given to ``os.open``: the audit event does not carry
+    ``dir_fd``, so "relative to the working directory" and "relative to some
+    directory descriptor" cannot be told apart. (The builtin ``open`` has no
+    ``dir_fd``; its relative path is relative to ``cwd``.)
+
+The hook does not replace the environment's own ``sitecustomize``: after
+installing itself it runs the next one on ``sys.path``, as Python would have
+without this directory in front.
 
 The log is raw on purpose: what counts as noise is the gate's rule
 (``test_output_path_write_failure.py``), stated and tested there.
@@ -35,8 +50,10 @@ The log is raw on purpose: what counts as noise is the gate's rule
 import json
 import os
 import sys
+import threading
 
 _LOG = os.environ.get("DA_WRITE_AUDIT_LOG")
+_HERE = os.path.dirname(os.path.realpath(__file__))
 _WRITE_BITS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 # event -> (index of the path it changes, index of its dir_fd or None)
 _PATH_EVENTS = {
@@ -53,9 +70,11 @@ _PATH_EVENTS = {
 _SPAWN_EVENTS = {"subprocess.Popen", "os.posix_spawn", "os.exec", "os.system"}
 if _LOG:
     _fd = os.open(_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    _busy = False
-    _REPO = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.realpath(__file__)))))
+    # Per THREAD: the guard is against this hook's own calls re-entering it.
+    # One flag for the whole process dropped every event another thread
+    # raised while one was being written.
+    _state = threading.local()
+    _REPO = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
     _SCRIPTS = os.path.join(_REPO, "scripts") + os.sep
     _real: dict = {}
 
@@ -68,15 +87,16 @@ if _LOG:
                                if real.startswith(_SCRIPTS) else None)
         return _real[filename]
 
-    def _frames():
+    def _frames(rec):
         f = sys._getframe(2)
-        out = []
+        stack, lines = [], []
         while f is not None:
             rel = _repo_file(f.f_code.co_filename)
             if rel is not None:
-                out.append(f"{rel}:{f.f_code.co_name}")
+                stack.append(f"{rel}:{f.f_code.co_name}")
+                lines.append(f.f_lineno)
             f = f.f_back
-        return out
+        rec["stack"], rec["lines"] = stack, lines
 
     def _text(value):
         if isinstance(value, int) or value is None:
@@ -86,35 +106,48 @@ if _LOG:
         except TypeError:
             return repr(value)
 
-    def _place(rec, dir_fd):
-        """Say what a relative ``rec["path"]`` is relative to."""
+    def _place(rec, dir_fd, os_open):
+        """Say where ``rec["path"]`` is, or mark the event ``unplaced``."""
         path = rec["path"]
+        if isinstance(path, int):
+            rec["fd"] = path
+            try:
+                rec["path"] = os.readlink(f"/proc/self/fd/{path}")
+            except OSError:
+                rec["unplaced"] = True
+            return
         if not isinstance(path, str) or os.path.isabs(path):
             return
-        if dir_fd is None or dir_fd == -1:  # -1: how the event spells "no dir_fd"
-            rec["cwd"] = os.getcwd()
+        if dir_fd is not None and dir_fd != -1:  # -1: how the event spells "no dir_fd"
+            rec["dir_fd"] = dir_fd
+            try:
+                rec["path"] = os.path.join(os.readlink(f"/proc/self/fd/{dir_fd}"), path)
+            except OSError:
+                rec["unplaced"] = True
+            return
+        if os_open:
+            rec["unplaced"] = True
             return
         try:
-            rec["path"] = os.path.join(os.readlink(f"/proc/self/fd/{dir_fd}"), path)
+            rec["cwd"] = os.getcwd()
         except OSError:
-            rec["dir_fd"] = dir_fd
+            rec["unplaced"] = True
 
     def _emit(rec):
         rec["pid"] = os.getpid()
         os.write(_fd, (json.dumps(rec) + "\n").encode())
 
-    def _hook(event, args):
-        global _busy
-        if _busy:
-            return
+    def _record(event, args):
         rec = None
         dir_fd = None
+        os_open = False
         if event == "open":
             path, mode, flags = args
             if path is None:
                 return
             if (mode and any(c in mode for c in "wax+")) or (mode is None and flags & _WRITE_BITS):
                 rec = {"ev": "open", "path": _text(path), "flags": flags}
+                os_open = mode is None
         elif event in _PATH_EVENTS:
             at, fd_at = _PATH_EVENTS[event]
             rec = {"ev": event, "path": _text(args[at])}
@@ -132,14 +165,40 @@ if _LOG:
                 rec = {"ev": "spawn", "exe": _text(exe), "argv": []}
         if rec is None:
             return
-        _busy = True
+        if rec["ev"] != "spawn":
+            _place(rec, dir_fd, os_open)
+            _frames(rec)
+        _emit(rec)
+
+    def _hook(event, args):
+        if getattr(_state, "busy", False):
+            return
+        _state.busy = True
         try:
-            if rec["ev"] != "spawn":
-                _place(rec, dir_fd)
-                rec["stack"] = _frames()
-            _emit(rec)
+            _record(event, args)
+        except Exception as exc:  # noqa: BLE001 — nothing may reach the audited program
+            try:
+                _emit({"ev": "hook-error", "event": event, "error": repr(exc)})
+            except Exception:  # noqa: BLE001
+                pass
         finally:
-            _busy = False
+            _state.busy = False
 
     _emit({"ev": "loaded", "argv": list(getattr(sys, "orig_argv", sys.argv))})
     sys.addaudithook(_hook)
+
+
+def _run_the_next_sitecustomize():
+    """Python imports ONE ``sitecustomize``: with this directory first on
+    ``sys.path``, the environment's own would never run. Find it the way the
+    import would have without this directory, and run it."""
+    from importlib.machinery import PathFinder
+    from importlib.util import module_from_spec
+    rest = [p for p in sys.path if os.path.realpath(p or os.curdir) != _HERE]
+    spec = PathFinder.find_spec("sitecustomize", rest)
+    if spec is None or spec.loader is None:
+        return
+    spec.loader.exec_module(module_from_spec(spec))
+
+
+_run_the_next_sitecustomize()
