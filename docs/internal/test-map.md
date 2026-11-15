@@ -189,7 +189,7 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
 - 測試本身在驗 crash 結束碼時，標 `@pytest.mark.real_crash_exit_code`；墊片在該測試期間也會把變數從明確傳入的 `env=` 拿掉（模組層 `dict(os.environ)` 在 import 時就複製了它）。
 - 守衛：`tests/shared/test_crash_code_under_tests.py`（變數不生效、墊片拿掉、opt-out 失效都會轉紅）。
 - 涵蓋不到的：
-  - Go 的 panic（rc 2）。
+  - Go 的 panic（rc 2）。da-read 與 da-crdecode 例外：拒收時 stdout 一定有被拒文件（`{"answer": "refused"}`），panic、用法錯與 I/O 失敗都沒有，所以斷言「被拒」要看這份文件（`_lib_consumer_read._refusal`），不要只看 rc 2（#3943；矩陣在 `tests/shared/test_reader_refusal_document.py`）。
   - 墊片只包 `subprocess.Popen`；`os.posix_spawn`、`os.spawn*e`、`os.exec*e` 帶自建 env 時不會補上變數（目前 `tests/`、`scripts/` 都沒有用到）。
   - 工具自己用寬的 `except Exception` 接住例外、再以 `EXIT_CALLER_ERROR` 結束的（例如 `dx/waveform_score.py` 的 `main` 的 `ERR_UNEXPECTED`），不會經過 crash 出口：這類工具的 rc 2 斷言仍分不出「具名錯誤」與「意外例外」，要另外比對 stderr 的具名錯誤。
 

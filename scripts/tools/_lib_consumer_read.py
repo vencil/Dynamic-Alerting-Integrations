@@ -89,6 +89,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -186,34 +187,77 @@ class ConsumerReadError(Exception):
 
 
 class InputRefused(ConsumerReadError):
-    """The binary ran and refused its input (exit 2 with its reason on
-    stderr): the consumer does not read this text. Every other
+    """The binary ran and refused its input: the consumer does not read this
+    text (its reason is in ``stderr_lines``). Every other
     :class:`ConsumerReadError` means the reading could not be had at all —
     a caller that reports a refused input as a finding must not report a
     missing binary that way.
 
-    ⛔ Only :func:`_refused` decides this, so there is one judgement of it:
-    exit 2 (da-crdecode's and da-read's answer to the input; the arguments
-    are ours, so not a usage error) with a reason on stderr that is not a Go
-    runtime crash — a panic also exits 2 with stderr, and is not an answer
-    about the input — nor a usage line (a binary too old for our arguments). Not found, could not run, did not finish, any other exit
-    code, exit 0 without the JSON contract: a plain ConsumerReadError.
+    ⛔ Only :func:`_refusal` decides this, so there is one judgement of it:
+    exit 2 **and** the refusal document on stdout (#3943). da-crdecode and
+    da-read exit 2 for much that is no answer about the input too — a usage
+    error (a binary older than our arguments), a Go panic or fatal error, a
+    file it cannot open, stdin or stdout it cannot read or write — and print
+    no refusal document then; nor does a binary older than this contract.
+    Each of those is a plain ConsumerReadError, as are not found, could not
+    run, did not finish, any other exit code, and exit 0 without the JSON
+    contract.
     """
 
 
-#: A Go runtime crash: the first stderr line of an unrecovered panic or a
-#: fatal runtime error (both exit 2, as a refusal does) — and the usage
-#: line, which a binary older than the arguments we give it prints (exit 2;
-#: an old da-crdecode does not know ``--any-shape``, #3426). None of them is
-#: an answer about the input.
-_GO_CRASH_PREFIXES = ("panic: ", "fatal error: ", "usage: ")
+#: The refusal document (#3943): what da-crdecode and da-read print on
+#: stdout, with exit 2, exactly when they refuse the input — a JSON object
+#: whose ``answer`` is ``"refused"``. ``da-read prometheus-rules`` prints it
+#: beside its ``files``; every other reading prints it alone, exactly (see
+#: ``_refusal``). ``answer`` is a constant, never text of the input
+#: (ADR-036, #3703); ``files[].problem.message`` beside it is the loader's
+#: own text, as it always was. The Go side's
+#: copies (``answerRefused`` in components/da-read/main.go and
+#: cmd/da-crdecode/main.go) are held to these by
+#: tests/shared/test_reader_refusal_document.py, which runs both binaries.
+REFUSAL_KEY = "answer"
+REFUSED = "refused"
 
 
-def _refused(returncode: int, lines: list[str]) -> bool:
-    """Whether a run that exited *returncode* with stderr *lines* is the
-    binary refusing its input (see :class:`InputRefused`)."""
-    return (returncode == 2 and bool(lines)
-            and not lines[0].startswith(_GO_CRASH_PREFIXES))
+def _refusal(proc: subprocess.CompletedProcess, *, beside: "str | None" = None) -> "dict | None":
+    """The refusal document *proc* printed, else None (see
+    :class:`InputRefused`): it exited 2 and its stdout is exactly a JSON
+    object whose ``answer`` is ``"refused"`` — that key alone, or for a
+    reading that prints the document beside its output (``beside``:
+    ``"files"`` for ``da-read prometheus-rules``) that key and *beside*.
+    Anything more is not the document (``_no_answer`` names it
+    ``bad_output``)."""
+    if proc.returncode != 2:
+        return None
+    try:
+        out = json.loads(proc.stdout)
+    except ValueError:  # JSONDecodeError, or stdout that is not UTF-8
+        return None
+    keys = {REFUSAL_KEY} if beside is None else {REFUSAL_KEY, beside}
+    if isinstance(out, dict) and set(out) == keys and out[REFUSAL_KEY] == REFUSED:
+        return out
+    return None
+
+
+def _no_answer(name: str, args: "list[str]", proc: subprocess.CompletedProcess,
+               lines: "list[str]") -> ConsumerReadError:
+    """The error for a run of *name* that gave no answer: an exit other than
+    0 without the refusal document. Exit 2 with nothing on stdout is a usage
+    error, a Go crash, an I/O failure or a binary older than the refusal
+    document — the stderr lines say which; exit 2 with something else on
+    stdout is output that is not the document (``bad_output``)."""
+    printed = proc.returncode == 2 and bool(proc.stdout and proc.stdout.strip())
+    if proc.returncode > 0:  # a signal was recorded by _invoke
+        _fault(name, args, "bad_output" if printed else "unexpected_exit")
+    if printed:
+        return ConsumerReadError(
+            f"{name} exited 2 and printed something that is not the refusal document "
+            f"{{\"{REFUSAL_KEY}\": \"{REFUSED}\"}}", lines)
+    if proc.returncode == 2:
+        return ConsumerReadError(
+            f"{name} exited 2 without a refusal document: no answer about the input "
+            f"(bad arguments, a crash, an I/O error, or an older {name}? rebuild it)", lines)
+    return ConsumerReadError(f"{name} exited {proc.returncode}", lines)
 
 
 def error_text(e: ConsumerReadError) -> str:
@@ -322,19 +366,17 @@ def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str],
 
 
 def _run(binary: str | None, name: str, env: str, build_hint: str,
-         args: list[str], stdin: bytes | None) -> dict:
+         args: list[str], stdin: bytes | None, *, defer_no_document: bool = False) -> dict:
+    """*defer_no_document* (a run handed a path): exit 2 without the
+    refusal document raises ``_NoDocument`` for the caller to judge
+    (``_recheck``) instead of the tool fault."""
     proc, lines = _invoke(binary, name, env, build_hint, args, stdin)
-    if proc.returncode == 2 and lines and lines[0].startswith("usage: "):
-        _fault(name, args, "stale")
-        raise ConsumerReadError(
-            f"{name} printed its usage for the arguments {args[:-1] or args} "
-            f"(an older {name}? rebuild it)", lines)
-    if _refused(proc.returncode, lines):
+    if _refusal(proc) is not None:
         raise InputRefused(f"{name} refused the input", lines)
+    if proc.returncode == 2 and defer_no_document:
+        raise _NoDocument(name, args, proc, lines)
     if proc.returncode != 0:
-        if proc.returncode > 0:  # a signal was recorded by _invoke
-            _fault(name, args, "unexpected_exit")
-        raise ConsumerReadError(f"{name} exited {proc.returncode}", lines)
+        raise _no_answer(name, args, proc, lines)
     out = _json(proc, name, lines, args)
     docs = out.get("documents") if isinstance(out, dict) else None
     if not isinstance(docs, list):
@@ -352,18 +394,117 @@ _READING_MANIFEST = "manifest"
 _READING_ANY_SHAPE = "any-shape"
 
 
+#: The fixed reason a file is refused with when Python cannot open or read
+#: it (#3943), followed by ``os.strerror``: every reading here that hands
+#: da-crdecode / da-read a path reads the file's bytes first and never hands
+#: over one it cannot read — those programs answer a file they cannot open
+#: with no answer at all (a tool fault), which would take a whole batch down
+#: for one unreadable file.
+#:
+#: ⛔ Python's open is the authority on whether a file can be read; the Go
+#: program's "cannot open" (exit 2 without the refusal document) is only a
+#: signal to ask Python again (``_NoDocument`` / ``_recheck``). A file gone
+#: between Python's read and the program's (a race) is then refused like
+#: one gone before, with the same reason; a program that says "cannot open"
+#: of a file Python still reads stays a tool fault.
+CANNOT_OPEN = "the file cannot be opened"
+
+#: The reason a path that is not a regular file is refused with
+#: (``_unopenable``): ``CANNOT_OPEN`` and a fixed cause, never opened.
+NOT_REGULAR = f"{CANNOT_OPEN}: not a regular file"
+
+
+def _unopenable(path: str) -> "str | None":
+    """None when *path* is a regular file (a symlink to one included) that
+    opens and its bytes read to the end; else ``CANNOT_OPEN`` and the
+    system's reason (``os.strerror``), or ``NOT_REGULAR`` — no other text
+    (ADR-036: no text of the input).
+
+    ⛔ Anything but a regular file is refused before it is opened: opening a
+    FIFO blocks until a writer comes, and a device such as ``/dev/zero``
+    never reads to EOF — neither is under the Go program's timeout, since
+    this read happens before the program runs."""
+    try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return NOT_REGULAR
+        with open(path, "rb") as fh:
+            while fh.read(1 << 20):
+                pass
+    except OSError as e:
+        return f"{CANNOT_OPEN}: {os.strerror(e.errno) if e.errno else type(e).__name__}"
+    return None
+
+
+class _Unopenable(InputRefused):
+    """The file *path* (absolute) cannot be read (``_unopenable``): refused
+    by this module, named as *name* names a file it refuses (``<name>:
+    <path>: <reason>``). ``why`` is the reason alone."""
+
+    def __init__(self, name: str, path: str, why: str) -> None:
+        super().__init__(f"{name} refused the input", [f"{name}: {path}: {why}"])
+        self.why = why
+
+
+def _refuse_unopenable(name: str, path: str) -> None:
+    """Raise :class:`InputRefused` for the file *path* (absolute) when it
+    cannot be read (``_unopenable``); it is then never handed to *name*."""
+    why = _unopenable(path)
+    if why is not None:
+        raise _Unopenable(name, path, why)
+
+
+class _NoDocument(Exception):
+    """A run handed paths exited 2 without the refusal document, and no
+    judgement of it is made yet: the caller first asks Python again whether
+    the paths read (``_recheck``). Deliberately no ConsumerReadError — one
+    that escaped would be read as a fault nobody recorded. ``fault()`` is
+    the tool fault, recorded only when it is the judgement."""
+
+    def __init__(self, name: str, args: "list[str]", proc: subprocess.CompletedProcess,
+                 lines: "list[str]") -> None:
+        super().__init__(name)
+        self.name, self.args, self.proc, self.lines = name, args, proc, lines
+
+    def fault(self) -> ConsumerReadError:
+        return _no_answer(self.name, self.args, self.proc, self.lines)
+
+
+def _recheck(nd: _NoDocument, path: str) -> ConsumerReadError:
+    """The judgement of *nd*, a run on the one file *path* (absolute): the
+    file refused (``_Unopenable``) when Python cannot read it now, else the
+    tool fault. ⛔ Python's open is the authority; the program's "cannot
+    open" only sent us to ask it again (see ``CANNOT_OPEN``)."""
+    why = _unopenable(path)
+    if why is not None:
+        return _Unopenable(nd.name, path, why)
+    return nd.fault()
+
+
 def _crdecode(source: "str | None", data: "bytes | None", binary: str | None,
-              any_shape: bool) -> list[Any]:
+              any_shape: bool, *, judge: bool = True) -> list[Any]:
     """One da-crdecode run on the file *source* (or *data* on stdin), with
     the manifest reading or ``--any-shape``. The public functions below each
     fix *any_shape*; none takes it as an argument, so a name says which
-    reading it is."""
+    reading it is.
+
+    *judge* False (``_files_of``'s worker threads only): the caller has
+    already read *source* (in its own thread, in input order) and judges an
+    exit 2 without the refusal document itself — this raises
+    ``_NoDocument`` for it, so no file is opened from a worker thread and no
+    fault is recorded before the judgement."""
     resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
     # An absolute path never starts with `-`, so it is not read as stdin.
     target = ["-"] if source is None else [os.path.abspath(source)]
+    if source is not None and resolved and judge:   # no binary: its "not found" first
+        _refuse_unopenable(CRDECODE_BINARY_NAME, target[0])
     args = ([_ANY_SHAPE_FLAG] if any_shape else []) + target
-    out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
-               args, data)
+    try:
+        out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
+                   args, data, defer_no_document=source is not None)
+    except _NoDocument as nd:
+        if not judge:
+            raise
+        raise _recheck(nd, target[0]) from None
     want = _READING_ANY_SHAPE if any_shape else _READING_MANIFEST
     if out.get("reading") != want:
         # An older da-crdecode prints no `reading`: its manifest reading does
@@ -425,7 +566,7 @@ def kubernetes_documents_of(paths: Iterable[Any], binary: str | None = None, *,
     that reports per file. A run that gave no reason (no binary, it could not
     run, it printed no JSON contract) is raised either way — that is not an
     answer about the file."""
-    return _files_of(paths, binary, keep_refusals, kubernetes_documents)
+    return _files_of(paths, binary, keep_refusals, any_shape=False)
 
 
 def kubernetes_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
@@ -461,7 +602,7 @@ def any_yaml_documents_of(paths: Iterable[Any], binary: str | None = None, *,
                           ) -> "dict[str, list[Any] | ConsumerReadError]":
     """:func:`any_yaml_documents` for every path, as
     :func:`kubernetes_documents_of` runs and reports them."""
-    return _files_of(paths, binary, keep_refusals, any_yaml_documents)
+    return _files_of(paths, binary, keep_refusals, any_shape=True)
 
 
 def any_yaml_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
@@ -472,15 +613,15 @@ def any_yaml_text_documents_each(texts: Iterable[str | bytes], binary: str | Non
     return _texts_each(texts, binary, keep_refusals, any_yaml_text_documents)
 
 
-def _files_of(paths: Iterable[Any], binary: str | None, keep_refusals: bool,
-              read_one) -> "dict[str, list[Any] | ConsumerReadError]":
+def _files_of(paths: Iterable[Any], binary: str | None, keep_refusals: bool, *,
+              any_shape: bool) -> "dict[str, list[Any] | ConsumerReadError]":
     keys = [str(p) for p in paths]
     resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
 
-    def one(path: str) -> "list[Any] | ConsumerReadError":
+    def one(path: str) -> "list[Any] | ConsumerReadError | _NoDocument":
         try:
-            return read_one(path, binary=resolved)
-        except ConsumerReadError as e:
+            return _crdecode(path, None, resolved, any_shape, judge=False)
+        except (ConsumerReadError, _NoDocument) as e:
             return e
 
     if not keys:
@@ -488,10 +629,26 @@ def _files_of(paths: Iterable[Any], binary: str | None, keep_refusals: bool,
     if not resolved:
         # the "not found" message of a single read, once, before any run
         _run(None, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build", [], None)
+    # #3943: every file is read by Python here, in this thread and in the
+    # order given, before any run is handed to the pool — a file opened from
+    # a worker thread is opened in an order no two runs share. Only the
+    # files that read are handed to da-crdecode.
+    results: "dict[str, Any]" = {}
+    for path in keys:
+        absolute = os.path.abspath(path)
+        why = _unopenable(absolute)
+        if why is not None:
+            results[path] = _Unopenable(CRDECODE_BINARY_NAME, absolute, why)
+    todo = [p for p in keys if p not in results]
     with ThreadPoolExecutor(max_workers=PARALLEL_RUNS) as pool:
-        results = list(pool.map(one, keys))
+        ran = list(pool.map(one, todo))
+    for path, res in zip(todo, ran):   # judged here, in the order given
+        if isinstance(res, _NoDocument):
+            res = _recheck(res, os.path.abspath(path))
+        results[path] = res
     out: "dict[str, list[Any]]" = {}
-    for path, res in zip(keys, results):
+    for path in keys:
+        res = results[path]
         if isinstance(res, ConsumerReadError):
             if keep_refusals and _is_refusal(res):
                 out[path] = res
@@ -572,16 +729,24 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
     prometheus``), only the keys the text writes. *source* is the text
     (``str`` or ``bytes``) or the path of the file (``os.PathLike``, e.g. a
     ``pathlib.Path``)."""
+    resolved = da_read_binary(binary)
     if isinstance(source, os.PathLike):
         # An absolute path never starts with `-`, so it is not read as stdin.
         args, data = ["prometheus", os.path.abspath(os.fspath(source))], None
+        if resolved:   # no binary: its "not found" first
+            _refuse_unopenable(DA_READ_BINARY_NAME, args[1])
     elif isinstance(source, (str, bytes)):
         args = ["prometheus", "-"]
         data = source.encode("utf-8") if isinstance(source, str) else source
     else:
         raise TypeError(f"prometheus_config takes text or a path, not {type(source).__name__}")
-    resolved = da_read_binary(binary)
-    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build", args, data)
+    try:
+        out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build", args,
+                   data, defer_no_document=data is None)
+    except _NoDocument as nd:
+        # Python's open is the authority (see CANNOT_OPEN): the file gone
+        # since it was read is refused; one Python still reads is a fault.
+        raise _recheck(nd, args[1]) from None
     return _one_document(out, "config", "prometheus")
 
 
@@ -715,29 +880,76 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     """Every rule file of *paths* as Prometheus loads it (``da-read
     prometheus-rules``, one run for all), one :class:`RuleFile` per path in
     the order given — refused ones included, each with its ``problem``.
-    ``RuleFile.path`` is the path as given. For callers that report each
-    refused file themselves; everyone else calls ``prometheus_rule_files``."""
+    ``RuleFile.path`` is the path as given. A file that cannot be read is
+    refused here, never handed to da-read: its ``problem`` is
+    ``CANNOT_OPEN`` and the system's reason (#3943). For callers that
+    report each refused file themselves; everyone else calls
+    ``prometheus_rule_files``."""
     given = [os.fspath(p) for p in paths]
     if not given:
         return []
     resolved = da_read_binary(binary)
+    if resolved:
+        # #3943: a file that cannot be opened is refused here, with its
+        # reason, and never handed to da-read (which answers it with no
+        # answer at all); the others are read in one run.
+        # Read in this thread, in the order given.
+        return _rule_results_split(given, resolved, retry=True)
+    return _rule_results_of(given, resolved, retry=False)
+
+
+def _rule_results_split(given: "list[str]", resolved: str, *, retry: bool,
+                        why: "list[str | None] | None" = None) -> "list[RuleFile]":
+    """Every file of *given* Python cannot read (``_unopenable``, asked in
+    the order given; *why* when already asked) as a refused
+    :class:`RuleFile`, the others read in one ``_rule_results_of`` run
+    (*retry* as there)."""
+    if why is None:
+        why = [_unopenable(os.path.abspath(p)) for p in given]
+    opened = [p for p, w in zip(given, why) if w is None]
+    read = iter(_rule_results_of(opened, resolved, retry=retry) if opened else [])
+    return [RuleFile(p, None, w) if w is not None else next(read) for p, w in zip(given, why)]
+
+
+def _rule_results_of(given: "list[str]", resolved: "str | None", *,
+                     retry: bool) -> "list[RuleFile]":
+    """One ``da-read prometheus-rules`` run on *given* (see
+    :func:`prometheus_rule_file_results`).
+
+    An exit 2 without the refusal document, with *retry*: Python reads every
+    file of *given* again. ⛔ Python's open is the authority (see
+    ``CANNOT_OPEN``); da-read's "cannot open" is only the signal to ask it.
+    A file it cannot read now (gone since it was read: a race) is refused
+    with ``CANNOT_OPEN``, and the others are handed to da-read once more —
+    once: a second exit 2 without the document is the tool fault. When
+    every file still reads, it is the tool fault at once."""
     # Absolute paths never start with `-`, so none is read as stdin.
     absolute = [os.path.abspath(p) for p in given]
     args = ["prometheus-rules", *absolute]
     proc, lines = _invoke(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                           args, None)
-    # rc 0 is "every file read"; a refusal (`_refused`: rc 2 with a reason on
-    # stderr that is not a Go crash — da-read names each refused file there)
-    # with the JSON on stdout is "a file is refused". Anything else — rc 2
-    # with nothing on stdout (a usage error), a crash, any other rc — is not
-    # an answer about the files.
-    if not proc.stdout.strip() or not (
-            proc.returncode == 0 or _refused(proc.returncode, lines)):
-        if proc.returncode >= 0:  # a signal was recorded by _invoke
-            stale = proc.returncode == 2 and lines and lines[0].startswith("usage: ")
-            _fault(DA_READ_BINARY_NAME, args, "stale" if stale else "unexpected_exit")
-        raise ConsumerReadError(f"{DA_READ_BINARY_NAME} exited {proc.returncode}", lines)
-    out = _json(proc, DA_READ_BINARY_NAME, lines, args)
+    # rc 0 is "every file read"; rc 2 with the refusal document (`_refusal`:
+    # its `answer` beside `files`) is "a file is refused". Anything else — rc
+    # 2 without it (a usage error, a crash, a file it cannot open, an I/O
+    # error, an older da-read), any other rc — is not an answer about the
+    # files.
+    out = _refusal(proc, beside="files")
+    if out is None and proc.returncode == 2 and retry:
+        why = [_unopenable(p) for p in absolute]
+        if any(w is not None for w in why):
+            # No fault is recorded for this run: the files are judged anew.
+            return _rule_results_split(given, resolved, retry=False,  # type: ignore[arg-type]
+                                       why=why)
+    if out is None:
+        if proc.returncode != 0:
+            raise _no_answer(DA_READ_BINARY_NAME, args, proc, lines)
+        out = _json(proc, DA_READ_BINARY_NAME, lines, args)
+        if isinstance(out, dict) and REFUSAL_KEY in out:
+            # the refusal's `answer` under exit 0: no one reading of the files
+            _fault(DA_READ_BINARY_NAME, args, "bad_output")
+            raise ConsumerReadError(
+                f"{DA_READ_BINARY_NAME} exited 0 but printed the refusal's "
+                f"\"{REFUSAL_KEY}\"", lines)
     files = out.get("files") if isinstance(out, dict) else None
     if not isinstance(files, list) or len(files) != len(given):
         _fault(DA_READ_BINARY_NAME, args, "stale")
@@ -1193,6 +1405,9 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
        annotation value ``.inf``, say): Prometheus' rule loader decides. A
        file it reads ``groups`` from is a rule file; any other is refused.
 
+    A file that cannot be read is refused before any of these, its reason
+    ``CANNOT_OPEN`` and the system's (#3943).
+
     Refused files — every one, each with its readers' reason — raise
     :class:`RuleFileSourcesRefused`; with *keep_refusals* each is instead a
     :class:`RuleFile` with that ``problem`` and ``unread`` True, for a caller
@@ -1204,13 +1419,30 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
     out: "dict[str, list[RuleFile]]" = {p: [] for p in keys}
     if not keys:
         return out
-    manifests = kubernetes_documents_of(keys, crdecode_binary, keep_refusals=True)
-    not_manifests = [p for p in keys if isinstance(manifests[p], ConsumerReadError)]
+    refused: "dict[str, str]" = {}
+    if resolve_binary(crdecode_binary, CRDECODE_ENV, CRDECODE_BINARY_NAME):
+        # #3943: a file that cannot be read is refused once, with its own
+        # reason, and no reader is asked about it (no binary: its "not
+        # found" comes first, from the reading below).
+        for p in keys:
+            why = _unopenable(os.path.abspath(p))
+            if why is not None:
+                refused[p] = why
+    readable = [p for p in keys if p not in refused]
+    manifests = kubernetes_documents_of(readable, crdecode_binary, keep_refusals=True)
+    not_manifests = []
+    for p in readable:
+        if isinstance(manifests[p], _Unopenable):   # gone since it was read
+            refused[p] = manifests[p].why
+        elif isinstance(manifests[p], ConsumerReadError):
+            not_manifests.append(p)
     as_yaml = any_yaml_documents_of(not_manifests, crdecode_binary, keep_refusals=True)
-    plain, undecided, refused = [], [], {}
+    plain, undecided = [], []
     for p in not_manifests:
         docs = as_yaml[p]
-        if isinstance(docs, ConsumerReadError):
+        if isinstance(docs, _Unopenable):
+            refused[p] = docs.why
+        elif isinstance(docs, ConsumerReadError):
             undecided.append(p)
         elif _documents_declare_rule_groups(docs):
             plain.append(p)

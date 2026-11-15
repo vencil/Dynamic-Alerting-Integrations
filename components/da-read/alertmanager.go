@@ -89,7 +89,7 @@ func readAlertmanager(data []byte, showReason bool) ([]byte, error) {
 		return nil, fmt.Errorf("YAML document %d of the file has content; Alertmanager reads only "+
 			"the first document and drops the rest without a word, so it is refused here", extra)
 	}
-	cfg, err := config.Load(string(data))
+	cfg, err := loadAlertmanager(data)
 	if err != nil {
 		return nil, loaderRefusal(err, showReason)
 	}
@@ -127,6 +127,14 @@ const showLoaderReasonFlag = "--show-loader-reason"
 // told safe to print.
 const loaderRefused = "refused by Alertmanager's config loader (its reason is not printed: it can quote " +
 	"the file's values; `da-read alertmanager " + showLoaderReasonFlag + "` prints it)"
+
+// loadAlertmanager is config.Load with its panics recovered (loaderPanic):
+// a panic of Alertmanager's loader on the input refuses it, as the loader
+// fails on it in Alertmanager too.
+func loadAlertmanager(data []byte) (cfg *config.Config, err error) {
+	defer loaderPanic("Alertmanager's config loader", &err)
+	return config.Load(string(data))
+}
 
 // loaderRefusal is the one spelling of "Alertmanager's loader refused the
 // text": the fixed sentence, or with *showReason* the loader's own reason

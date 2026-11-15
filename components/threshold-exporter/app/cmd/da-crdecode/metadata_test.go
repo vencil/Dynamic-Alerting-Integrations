@@ -36,7 +36,7 @@ func TestManifestMetadataDecodesAsKubectlReadsIt(t *testing.T) {
 				}
 				return
 			}
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) {
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.wantErr) {
 				t.Fatalf("kubectl: %s\nrc=%d stdout=%q stderr=%q; want rc 2, stderr with %q",
 					tc.kubectl, rc, out, errOut, tc.wantErr)
 			}

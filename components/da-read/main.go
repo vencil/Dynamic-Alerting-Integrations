@@ -39,11 +39,13 @@
 // rule manager loads it (prometheus_rules.go), and prints one entry per
 // argument, in argument order:
 //
-//	{"files": [{"path": <as given; "<stdin>" for ->,
+//	{"answer": "refused" (only when a file is refused),
+//	 "files": [{"path": <as given; "<stdin>" for ->,
 //	            "documents": [<the rule groups>] or null,
-//	            "problem": null or {"message": <why it cannot be read>}}]}
+//	            "problem": null or {"message": <why the loader refuses it>}}]}
 //
-// `documents` and `problem` are never both null and never both set.
+// `documents` and `problem` are never both null and never both set. A file
+// that cannot be opened is no entry: the run prints nothing (exit codes).
 //
 // `promql-selectors` reads a JSON array of PromQL expressions on standard
 // input and prints, per expression, the vector selectors that could select
@@ -63,13 +65,25 @@
 // Exit codes (every subcommand):
 //
 //	0  every file read; JSON on stdout
-//	2  caller error, or a file is refused: bad arguments (nothing on
-//	   stdout), a file that cannot be opened, a YAML document after the first
-//	   that has content, the consumer's loader refuses it, or a key the text
-//	   writes is not in the consumer's reading. `alertmanager` and
-//	   `prometheus` print nothing on stdout then; `prometheus-rules` still
-//	   prints the whole JSON, the refused files with their problem. The
-//	   reason is on stderr too, prefixed with the file's name.
+//	2  the input is refused, or da-read could not answer. Only a refusal
+//	   prints a refusal document on stdout (#3943):
+//
+//	     {"answer": "refused"}
+//
+//	   — a YAML document after the first that has content, the consumer's
+//	   loader refuses the input (or panics on it), a key the text writes is
+//	   not in the consumer's reading, an expression the PromQL parser
+//	   refuses. `prometheus-rules` prints its whole JSON with that `answer`
+//	   beside `files`, the refused files with their problem. The document
+//	   holds only those constants, never text of the input; the reason is on
+//	   stderr, prefixed with the file's name. Bad arguments (the usage; a
+//	   promql-selectors <series> or promql-label-flow <label> it does not
+//	   take; their standard input not the JSON object or array they read), a
+//	   file that cannot be opened, standard input that cannot be read or
+//	   stdout that cannot be written, and a panic of da-read's own code (only
+//	   a consumer library's panic on the input is a refusal) print no refusal
+//	   document: they are no answer about the input, and a caller must not
+//	   take them for one.
 package main
 
 import (
@@ -89,6 +103,33 @@ const (
 
 // stdinName is how standard input is named in messages and in `path`.
 const stdinName = "<stdin>"
+
+// answerRefused is the `answer` of the refusal document (#3943): printed on
+// stdout, with exit 2, only when the input is refused — never for a usage
+// error, a file that cannot be opened or an I/O failure, which exit 2 too.
+// The caller (scripts/tools/_lib_consumer_read.py, REFUSAL_KEY /
+// REFUSED) takes exit 2 as a refusal only with this document, so it never
+// reads a run that could not answer as an answer about the input.
+// da-crdecode prints the same document;
+// tests/shared/test_reader_refusal_document.py holds both binaries to the
+// caller's definition. ⛔ Constants only: no text of the input (ADR-036,
+// #3703).
+const answerRefused = "refused"
+
+// refusal is the refusal document of the single-input subcommands.
+type refusal struct {
+	Answer string `json:"answer"`
+}
+
+// refuse writes the refusal document and exits 2.
+func refuse(stdout, stderr io.Writer) int {
+	b, err := json.Marshal(refusal{Answer: answerRefused})
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	return write(stdout, stderr, append(b, '\n'), exitCallerErr)
+}
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -113,9 +154,11 @@ func usage(stderr io.Writer) int {
 		"(at most once). promql-selectors reads a JSON array of PromQL expressions on "+
 		"standard input and prints, per expression, the selectors that could select "+
 		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether the left side of "+
-		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when a file is refused; "+
-		"a refusal by Alertmanager's loader leaves the loader's reason out (it can quote the "+
-		"file's values) unless "+showLoaderReasonFlag+" is given.\n")
+		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when the input is refused, "+
+		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+
+		"exit 2 without it when da-read could not answer (bad arguments, a file that cannot be "+
+		"opened, an I/O error). A refusal by Alertmanager's loader leaves the loader's reason "+
+		"out (it can quote the file's values) unless "+showLoaderReasonFlag+" is given.\n")
 	return exitCallerErr
 }
 
@@ -150,10 +193,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			say(stderr, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		out, err := guarded(func(d []byte) ([]byte, error) { return readPromQLLabelFlow(args[1], d) }, data)
+		req, err := labelFlowRequestOf(args[1], data)
+		if err != nil {
+			// the caller's argument or framing: no answer about the input
+			say(stderr, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		out, err := readPromQLLabelFlow(args[1], req)
 		if err != nil {
 			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
-			return exitCallerErr
+			return refuse(stdout, stderr)
 		}
 		return write(stdout, stderr, append(out, '\n'), exitOK)
 	}
@@ -166,10 +215,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			say(stderr, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		out, err := guarded(func(d []byte) ([]byte, error) { return readPromQLSelectors(args[1], d) }, data)
+		want, exprs, err := selectorsRequest(args[1], data)
+		if err != nil {
+			// the caller's argument or framing: no answer about the input
+			say(stderr, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		out, err := readPromQLSelectors(want, exprs)
 		if err != nil {
 			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
-			return exitCallerErr
+			return refuse(stdout, stderr)
 		}
 		return write(stdout, stderr, append(out, '\n'), exitOK)
 	}
@@ -189,10 +244,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		say(stderr, "%s: %v\n", programName, err)
 		return exitCallerErr
 	}
-	out, err := guarded(read, data)
+	out, err := read(data)
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, name, err)
-		return exitCallerErr
+		return refuse(stdout, stderr)
 	}
 	return write(stdout, stderr, append(out, '\n'), exitOK)
 }
@@ -215,18 +270,14 @@ func write(stdout, stderr io.Writer, out []byte, rc int) int {
 	return rc
 }
 
-// guarded is read(data) with any panic turned into a refusal of the file:
-// a loader that panics on one input (Prometheus' config.Load does, on
-// `alerting: {alertmanagers: [~]}`; the readers name their own loader,
-// loaderPanic) refuses that file, with rc 2 and no goroutine dump.
-func guarded(read func([]byte) ([]byte, error), data []byte) (out []byte, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			out, err = nil, fmt.Errorf("da-read panicked while reading this file (a bug; the file is refused): %v", r)
-		}
-	}()
-	return read(data)
-}
+// A consumer's library that panics on one input is that input refused:
+// each call into a loader or the PromQL parser recovers its panics
+// (loaderPanic; Prometheus' config.Load panics on `alerting:
+// {alertmanagers: [~]}`), with rc 2, the refusal document and no goroutine
+// dump — the consumer's own loader fails on the same file the same way.
+// ⛔ Only those calls are guarded (#3943): a panic of da-read's own code is
+// a crash — exit 2 from the Go runtime, no refusal document — never an
+// answer about the input.
 
 // ruleFile is one entry of `prometheus-rules`' output.
 type ruleFile struct {
@@ -250,18 +301,24 @@ func runRules(files []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			stdinSeen = true
 		}
 	}
+	// `answer` is the refusal document's (answerRefused) when a file is
+	// refused, and absent when every file is read.
 	out := struct {
-		Files []ruleFile `json:"files"`
+		Answer string     `json:"answer,omitempty"`
+		Files  []ruleFile `json:"files"`
 	}{Files: make([]ruleFile, 0, len(files))}
 	rc := exitOK
 	for _, f := range files {
 		name, data, err := open(f, stdin)
-		entry := ruleFile{Path: name}
-		var doc []byte
-		if err == nil {
-			doc, err = guarded(readRuleFile, data)
-		}
 		if err != nil {
+			// No answer about the file: nothing is printed (#3943).
+			say(stderr, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		entry := ruleFile{Path: name}
+		doc, err := readRuleFile(data)
+		if err != nil {
+			out.Answer = answerRefused
 			entry.Problem = &problem{Message: err.Error()}
 			say(stderr, "%s: %s: %v\n", programName, name, err)
 			rc = exitCallerErr

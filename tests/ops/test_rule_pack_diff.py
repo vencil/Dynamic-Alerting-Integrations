@@ -67,7 +67,9 @@ def test_load_rule_pack_missing_file(tmp_path, capsys):
     data = rpd.load_rule_pack(tmp_path / "nonexistent.yaml")
     assert data is None
     err = capsys.readouterr().err
-    assert "Prometheus' rule loader refuses" in err and "no such file" in err
+    # #3943: refused by _lib_consumer_read itself (CANNOT_OPEN + strerror)
+    assert "Prometheus' rule loader refuses" in err and "the file cannot be opened" in err
+    assert "no such file" in err.lower()
 
 
 def test_load_rule_pack_invalid_yaml(tmp_path, capsys):

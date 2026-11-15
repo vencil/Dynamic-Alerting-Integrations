@@ -1301,12 +1301,18 @@ class TestCheckAlertmanagerInhibitSemantics:
         assert sem["status"] == "fail" and sem["caller_error"] is True
 
     def test_exit_2_with_a_reason_is_the_refusal_path(self, tmp_path, monkeypatch):
-        """rc 2 with the loader's reason is a refusal: the named warn."""
+        """rc 2 with the refusal document and the loader's reason is a refusal:
+        the named warn. The same reason without the document is no answer
+        (#3943): a failed check."""
+        reason = "echo 'da-read: <stdin>: no route provided in config' >&2; exit 2"
         self._fake_da_read(tmp_path, monkeypatch,
-                           "echo 'da-read: <stdin>: no route provided in config' >&2; exit 2")
+                           "echo '{\"answer\": \"refused\"}'; " + reason)
         sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
         assert sem["status"] == "warn" and "caller_error" not in sem
         assert "loader refuses" in sem["detail"] and "no route" in sem["detail"]
+        self._fake_da_read(tmp_path, monkeypatch, reason)
+        sem = self._run(self._ROUTE, [])["alertmanager_inhibit_semantics"]
+        assert sem["status"] == "fail" and sem["caller_error"] is True
 
     def test_malformed_status_payload_is_a_caller_error(self):
         """#3133 batch 4: a status answer that is not read (config null or not

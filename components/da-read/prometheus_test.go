@@ -146,9 +146,9 @@ func TestPrometheusRefusesWhatPrometheusRefuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runPrometheus(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) ||
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.wantErr) ||
 				!strings.HasPrefix(errOut, programName+": ") {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, no stdout, stderr with %q", rc, out, errOut, tc.wantErr)
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, the refusal document, stderr with %q", rc, out, errOut, tc.wantErr)
 			}
 		})
 	}
