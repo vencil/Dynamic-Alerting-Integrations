@@ -121,8 +121,10 @@ function parseValue(raw) {
 //     them. `_defaults` gets one threshold-not-checked finding instead of
 //     silence; any other `_` block is no tenant (`_routing_defaults`, an
 //     anchor block a tenant merges from);
-//   - a top-level `tenants:` (a conf.d file pasted whole): its entries are
-//     tenants, not thresholds, and this page reads one level of tenants;
+//   - a top-level `tenants:` that is a conf.d file pasted whole
+//     (pastedConfdFile): its entries are tenants, not thresholds, and this
+//     page reads one level of tenants. confd-tenants-wrapper says so, and
+//     lintConfig drops every other finding on `tenants`;
 //   - what a tenant brings in with a merge key (`t1: {<<: *base}`):
 //     parseTenantYaml hands a top-level value that writes `<<` over
 //     unexpanded (#3959; it is built for a file whose top level is the
@@ -145,9 +147,26 @@ function isMapping(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+// A conf.d tenant file pasted whole: a top-level `tenants:` whose every entry
+// is a tenant — a mapping (or empty) under a key that does not start with
+// `_` and is no merge key, and no schedule (a mapping with a `default` key of
+// its own). A tenant of this page's own that is named `tenants` holds
+// thresholds, `_` keys, schedules or a merge, and stays a tenant — unless
+// every threshold it holds is empty (`tenants:\n  x_usage:`), which reads the
+// same as empty tenants.
+// Judged on the YAML as read (parseTenantYaml), never on the lenient parse:
+// that one reads `tenants: |`, a list or a quoted key into the same shape as
+// tenants, so it would take inputs that are no conf.d file for one. When the
+// YAML cannot be read the file is not recognised (its error is reported).
+function pastedConfdFile(thresholds) {
+  const section = thresholds.config.tenants;
+  return isMapping(section) && Object.entries(section).every(([key, v]) => !key.startsWith('_') && key !== '<<'
+    && (v === null || (isMapping(v) && !Object.prototype.hasOwnProperty.call(v, 'default'))));
+}
+
 function thresholdTenants(thresholds) {
   return Object.entries(thresholds.config).filter(([tenant, keys]) => !tenant.startsWith('_')
-    && tenant !== 'routing_profiles' && tenant !== 'tenants' && isMapping(keys));
+    && tenant !== 'routing_profiles' && isMapping(keys));
 }
 
 // Only a 'number' row has a `number`: a comparison with any other row's
@@ -353,6 +372,21 @@ const LINT_RULES = [
     },
   },
   {
+    // #3998: a conf.d tenant file pasted whole (`tenants:\n  t1: …`). This
+    // page reads tenants at the top level, so it would take `tenants` for a
+    // tenant and its tenants for keys; say so instead (lintConfig drops the
+    // other rules' findings on the pseudo-tenant `tenants`). Not unwrapped
+    // here: the lenient parser above reads two levels by indentation, and a
+    // second YAML lexer is not to be grown in this file (see above).
+    id: 'confd-tenants-wrapper',
+    severity: 'warning',
+    category: t('配置', 'Config'),
+    check: (tenants, thresholds) => (thresholds.pasted
+      ? [{ tenant: 'tenants', key: '-', message: t('這是 conf.d 的租戶檔（最上層是 tenants:）：這頁把最上層的 key 當成租戶，請貼 tenants: 底下那一層再檢查',
+        'This is a conf.d tenant file (tenants: at the top): this page reads the top-level keys as tenants, so paste what is under tenants: to lint it') }]
+      : []),
+  },
+  {
     id: 'disabled-all-in-pack',
     severity: 'info',
     category: t('配置', 'Config'),
@@ -438,16 +472,31 @@ function lintConfig(yamlText) {
     const tenants = parseYaml(yamlText);
     const thresholds = readThresholds(yamlText);
     const allFindings = [];
+    // #3998: on a pasted conf.d file `tenants` is no tenant; only the
+    // wrapper's own finding speaks for it. When the file is all there is,
+    // it speaks for the file as well (the file-level findings, tenant '-',
+    // judge the page's own shape); beside real tenants they stay — a YAML
+    // error there is what says those tenants went unchecked.
+    const pasted = pastedConfdFile(thresholds);
+    thresholds.pasted = pasted;
+    // The lenient parse keeps a quoted key's quotes (`"tenants":`), which the
+    // YAML reading above drops: compare without them.
+    const unquoted = (k) => (/^(["']).*\1$/.test(k) ? k.slice(1, -1) : k);
+    const isPseudo = (k) => pasted && unquoted(k) === 'tenants';
+    const alone = !Object.keys(tenants).some((k) => !k.startsWith('_') && !isPseudo(k) && k !== 'routing_profiles');
     for (const rule of LINT_RULES) {
       const findings = rule.check(tenants, thresholds);
       for (const f of findings) {
+        if (pasted && rule.id !== 'confd-tenants-wrapper'
+          && (isPseudo(f.tenant) || (alone && f.tenant === '-'))) continue;
         allFindings.push({ ...f, ruleId: rule.id, severity: rule.severity, category: rule.category });
       }
     }
     // Sort: error -> warning -> info
     const order = { error: 0, warning: 1, info: 2 };
     allFindings.sort((a, b) => order[a.severity] - order[b.severity]);
-    return { ok: true, findings: allFindings, tenantCount: Object.keys(tenants).filter(k => !k.startsWith('_')).length };
+    const tenantCount = Object.keys(tenants).filter((k) => !k.startsWith('_') && !isPseudo(k)).length;
+    return { ok: true, findings: allFindings, tenantCount };
   } catch (e) {
     return { ok: false, findings: [], error: e.message, tenantCount: 0 };
   }

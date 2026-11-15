@@ -6,7 +6,11 @@
  * tests drive the real rules end-to-end through lintConfig.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { lintConfig, LINT_RULES, parseYaml } from '../src/interactive/tools/config-lint/lint.js';
+import { parseTenantYaml } from '../src/interactive/tools/_common/validation/yaml-parser.js';
 
 describe('parseYaml', () => {
   it('parses tenants, coerces numbers, and keeps the disable sentinel', () => {
@@ -318,5 +322,178 @@ describe('threshold values are read as the exporter reads them (#3964)', () => {
     expect(lintConfig('t1:\n  x_warning: 5:warning\n').findings.map((f: any) => f.ruleId)).toContain('threshold-too-low');
     // a key with `_critical` inside is left out of too-low, as before
     expect(lintConfig('t1:\n  x_critical_warning: 5\n').findings.map((f: any) => f.ruleId)).not.toContain('threshold-too-low');
+  });
+});
+
+describe('Config Lint ↔ the exporter (threshold_value_matrix.json)', () => {
+  // Every row of the table Go writes from the exporter's own readers, on a
+  // base key and a `_critical` key, as the page reads it. The value goes in as
+  // a double-quoted YAML scalar (a JSON string is one), so the text the page
+  // reads is the row's `value` exactly. A page that read a threshold its own
+  // way (#3964: Number() on the lenient parse) fails here row by row.
+  type Row = { value: string; ok: boolean; value_part?: string; float_ok?: boolean; row_disabled: boolean };
+  const here = dirname(fileURLToPath(import.meta.url));
+  const rows: Row[] = JSON.parse(readFileSync(resolve(here, '../../../tests/shared/threshold_value_matrix.json'), 'utf8')).rows;
+  const served = (r: Row) => r.ok && r.float_ok === true;
+  const findings = (yaml: string) => lintConfig(yaml).findings.filter((f: any) => f.ruleId.startsWith('threshold-'))
+    .map((f: any) => [f.ruleId, f.key]);
+
+  it('the table has served, unreadable and disabled rows', () => {
+    expect(rows.filter((r) => !r.row_disabled && served(r)).length).toBeGreaterThan(3);
+    expect(rows.filter((r) => !r.row_disabled && !served(r)).length).toBeGreaterThan(3);
+    expect(rows.filter((r) => r.row_disabled).length).toBeGreaterThan(3);
+  });
+
+  it('a base key: not read where the exporter refuses, too high only on what it serves', () => {
+    const wrong: string[] = [];
+    for (const r of rows) {
+      const got = findings(`t1:\n  x_usage: ${JSON.stringify(r.value)}\n  _routing:\n    receiver: x\n`);
+      let want: string[][] = [];
+      if (r.row_disabled) want = [];
+      else if (!served(r)) want = [['threshold-not-read', 'x_usage']];
+      else if (Number(r.value_part) > 95) want = [['threshold-too-high', 'x_usage']];
+      if (JSON.stringify(got) !== JSON.stringify(want)) wrong.push(`${JSON.stringify(r.value)}: ${JSON.stringify(got)}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('the same rows written as plain scalars, where the YAML text reading gives the row back', () => {
+    // A page that took YAML's typed reading (`0x64` → 100) passes the quoted
+    // rows above; it fails these.
+    const plain = rows.filter((r) => r.value !== '' && !/[\s#'"\\]/.test(r.value)
+      && parseTenantYaml(`k: ${r.value}\n`).config.k === r.value);
+    expect(plain.length).toBeGreaterThan(50);
+    const wrong: string[] = [];
+    for (const r of plain) {
+      const got = findings(`t1:\n  x_usage: ${r.value}\n  _routing:\n    receiver: x\n`);
+      let want: string[][] = [];
+      if (r.row_disabled) want = [];
+      else if (!served(r)) want = [['threshold-not-read', 'x_usage']];
+      else if (Number(r.value_part) > 95) want = [['threshold-too-high', 'x_usage']];
+      if (JSON.stringify(got) !== JSON.stringify(want)) wrong.push(`${r.value}: ${JSON.stringify(got)}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('a `_critical` key is read whole: not read unless the exporter serves the whole value', () => {
+    const wrong: string[] = [];
+    for (const r of rows) {
+      const got = findings(`t1:\n  y_critical: ${JSON.stringify(r.value)}\n  _routing:\n    receiver: x\n`);
+      const notRead = !r.row_disabled && !(served(r) && !r.value.includes(':'));
+      const want = notRead ? [['threshold-not-read', 'y_critical']] : [];
+      if (JSON.stringify(got) !== JSON.stringify(want)) wrong.push(`${JSON.stringify(r.value)}: ${JSON.stringify(got)}`);
+    }
+    expect(wrong).toEqual([]);
+  });
+});
+
+describe('a conf.d tenant file pasted whole (#3998)', () => {
+  const FILE = 'tenants:\n  t1:\n    mysql_connection_usage_percent: 0x64\n    _routing:\n      receiver: x\n';
+
+  it('says so once, and nothing is reported on a tenant named "tenants"', () => {
+    const r = lintConfig(FILE);
+    expect(r.ok).toBe(true);
+    expect(r.findings.map((f: any) => [f.ruleId, f.tenant, f.severity])).toEqual([['confd-tenants-wrapper', 'tenants', 'warning']]);
+    expect(r.findings[0].message).toContain('paste what is under tenants:');
+  });
+
+  it('flow style and a file without _routing are the same file', () => {
+    for (const y of ['tenants: {t1: {x_usage: 99}}\n', 'tenants:\n  t1:\n    x_warning: 5\n']) {
+      expect(lintConfig(y).findings.map((f: any) => f.ruleId), y).toEqual(['confd-tenants-wrapper']);
+    }
+  });
+
+  it('findings on real tenants beside it stay', () => {
+    const ids = lintConfig(`${FILE}t2:\n  x_usage: 99\n`).findings.map((f: any) => [f.ruleId, f.tenant]);
+    expect(ids).toContainEqual(['confd-tenants-wrapper', 'tenants']);
+    expect(ids).toContainEqual(['threshold-too-high', 't2']);
+    expect(ids).toContainEqual(['no-routing', 't2']);
+  });
+
+  it('a tenant of the page\'s own named `tenants` stays a tenant', () => {
+    const ids = lintConfig('tenants:\n  x_usage: 99\n').findings.map((f: any) => [f.ruleId, f.tenant]);
+    expect(ids).toEqual([['threshold-too-high', 'tenants'], ['no-routing', 'tenants']]);
+    expect(lintConfig('tenants:\n  t1:\n    x_usage: 50\n  x_usage: 99\n').findings.map((f: any) => f.ruleId))
+      .not.toContain('confd-tenants-wrapper');
+  });
+
+  it('a conf.d file with an empty tenant is still one', () => {
+    expect(lintConfig('tenants:\n  t1:\n  t2:\n    x_usage: 50\n').findings.map((f: any) => f.ruleId)).toEqual(['confd-tenants-wrapper']);
+    expect(lintConfig('tenants: {}\n').findings.map((f: any) => f.ruleId)).toEqual(['confd-tenants-wrapper']);
+  });
+
+  it('a page tenant named `tenants` with schedules or `_` keys stays a tenant', () => {
+    const ids = (y: string) => lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant]);
+    expect(ids('tenants:\n  x_usage:\n    default: "0x64"\n')).toEqual([['threshold-not-read', 'tenants'], ['no-routing', 'tenants']]);
+    expect(ids('tenants:\n  _routing:\n    receiver: x\n')).toEqual([]);
+  });
+
+  it('a conf.d file the YAML reader refuses is not recognised: its error is reported instead', () => {
+    for (const y of ['tenants:\n  t1:\n    x_usage: "70"\n---\n', 'tenants:\n  t1:\n    a: 1\n  t1:\n    a: 2\n']) {
+      const ids = lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant]);
+      expect(ids.map(([r]: string[]) => r), y).not.toContain('confd-tenants-wrapper');
+      expect(ids, y).toContainEqual(['threshold-not-read', '-']);
+    }
+  });
+
+  it('a page tenant named `tenants` that only merges stays a tenant', () => {
+    const y = '_base: &base\n  x_usage: 99\n  _routing:\n    receiver: x\ntenants:\n  <<: *base\n';
+    const ids = lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant]);
+    expect(ids.map(([r]: string[]) => r)).not.toContain('confd-tenants-wrapper');
+    expect(ids).toContainEqual(['threshold-not-checked', '-']);
+    expect(lintConfig(y).tenantCount).toBe(1);
+  });
+
+  it('file-level findings give way to it too: a merge key in a pasted conf.d file', () => {
+    const y = '_b: &b {x_usage: 99}\ntenants:\n  t1:\n    <<: *b\n';
+    expect(lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant])).toEqual([['confd-tenants-wrapper', 'tenants']]);
+  });
+
+  it('unreadable YAML: nothing is taken for a conf.d file, and the error is said', () => {
+    const ids = (y: string) => lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant]);
+    for (const y of ['tenants: 5\n---\n', 'tenants: [a, b]\nt2:\n  x_usage: 99\nt2:\n  x_usage: 98\n',
+      'tenants:\n  - a\n  - b\n---\n', 'tenants:\n  foo\n---\n', 'tenants: |\n  t1:\n    a: 1\n---\n',
+      'tenants:\n  x_usage:\n    "default": "0x64"\n---\n']) {
+      expect(ids(y).map(([r]: string[]) => r), y).not.toContain('confd-tenants-wrapper');
+      expect(ids(y), y).toContainEqual(['threshold-not-read', '-']);
+    }
+  });
+
+  it('routing_profiles and `_` blocks beside it are no tenants: the wrapper still speaks for the file', () => {
+    // (no-routing on `routing_profiles` is the lenient rule's own, as on main)
+    const y = 'routing_profiles:\n  p:\n    group_wait: 30s\n_b: &b {x_usage: 1}\ntenants:\n  t1:\n    <<: *b\n';
+    const ids = lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant]);
+    expect(ids.filter(([, t]: string[]) => t === '-' || t === 'tenants')).toEqual([['confd-tenants-wrapper', 'tenants']]);
+  });
+
+  it('beside real tenants, the file-level findings stay', () => {
+    const y = '_b: &b {x_usage: 99}\ntenants:\n  t1:\n    <<: *b\nt2:\n  x_usage: 50\n  _routing:\n    receiver: x\n';
+    const ids = lintConfig(y).findings.map((f: any) => [f.ruleId, f.tenant]);
+    expect(ids).toContainEqual(['confd-tenants-wrapper', 'tenants']);
+    expect(ids).toContainEqual(['threshold-not-checked', '-']);
+  });
+
+  it('no conf.d file and no tenant: a YAML error is still said', () => {
+    expect(lintConfig('_x: [\n').findings.map((f: any) => [f.ruleId, f.tenant])).toEqual([['threshold-not-read', '-']]);
+  });
+
+  it('a quoted `tenants:` key is the same file', () => {
+    for (const y of ['"tenants":\n  t1:\n    x_usage: 99\n', "'tenants':\n  t1:\n    x_usage: 50\n    _routing:\n      receiver: x\n"]) {
+      const r = lintConfig(y);
+      expect(r.findings.map((f: any) => [f.ruleId, f.tenant]), y).toEqual([['confd-tenants-wrapper', 'tenants']]);
+      expect(r.tenantCount, y).toBe(0);
+    }
+  });
+
+  it('`tenants` is not counted as a tenant', () => {
+    expect(lintConfig(`${FILE}t2:\n  x_usage: 50\n`).tenantCount).toBe(1);
+    expect(lintConfig('tenants:\n  x_usage: 99\n').tenantCount).toBe(1);
+  });
+
+  it('not a conf.d file: `tenants` that holds no tenant mappings', () => {
+    expect(lintConfig('tenants: 5\n').findings.map((f: any) => f.ruleId)).not.toContain('confd-tenants-wrapper');
+    // a list of tenant-like mappings is still no `tenants:` section
+    expect(lintConfig('tenants: [{a: 1}, ~]\n').findings.map((f: any) => f.ruleId)).not.toContain('confd-tenants-wrapper');
+    expect(lintConfig('tenants: [a]\n').findings.map((f: any) => f.ruleId)).not.toContain('confd-tenants-wrapper');
   });
 });
