@@ -1,0 +1,7 @@
+tenants:
+  t1:
+    mysql_connection_usage_percent: "70"
+    mysql_slave_lag: disable
+    _severity_dedup: enable
+    _custom_alerts:
+      - {recipe: threshold, name: q_high, metric: qd, op: ">", window: 5m, threshold: "100"}

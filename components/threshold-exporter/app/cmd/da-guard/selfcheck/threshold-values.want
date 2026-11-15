@@ -1,0 +1,1 @@
+[{"key":"mysql_connection_usage_percent","text":"70","number":70,"non_finite":"","severity":"warning","refused":""},{"key":"mysql_slave_lag","text":"disable","number":null,"non_finite":"","severity":"warning","refused":""},{"key":"mysql_slave_lag","text":"30:critical","number":30,"non_finite":"","severity":"critical","refused":""}]

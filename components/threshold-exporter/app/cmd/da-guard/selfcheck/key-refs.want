@@ -1,0 +1,24 @@
+{
+  "schema": "da-guard.key-refs/v1",
+  "parse_failed": [],
+  "unreadable": [],
+  "unscanned": [],
+  "refs": {
+    "mysql_connection_usage_percent": [
+      {
+        "file": "_defaults.yaml",
+        "section": "defaults",
+        "owner": "",
+        "key": "mysql_connection_usage_percent",
+        "nested": false
+      },
+      {
+        "file": "team/t1.yaml",
+        "section": "tenants",
+        "owner": "t1",
+        "key": "mysql_connection_usage_percent",
+        "nested": false
+      }
+    ]
+  }
+}

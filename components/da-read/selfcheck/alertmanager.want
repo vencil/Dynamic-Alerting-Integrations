@@ -1,0 +1,1 @@
+{"documents":[{"route":{"receiver":"default","group_by":["alertname","tenant"]},"receivers":[{"name":"default"}]}]}

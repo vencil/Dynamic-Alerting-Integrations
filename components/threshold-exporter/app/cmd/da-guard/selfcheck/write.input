@@ -1,0 +1,1 @@
+{"files":[{"path":"team/t1.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_connection_usage_percent"],"value":{"str":"60"}}]}]}
