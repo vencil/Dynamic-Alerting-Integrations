@@ -160,14 +160,17 @@ def test_a_mode_the_caller_names_is_the_mode(tmp_path, existing, asked):
     assert _mode(p) == asked
 
 
-def test_an_artifact_reached_through_a_symlink_keeps_the_targets_execute_bit(tmp_path):
+@pytest.mark.parametrize("mode", [0o644, 0o755], ids=oct)
+def test_an_artifact_reached_through_a_symlink_has_the_targets_execute_bit(tmp_path, mode):
+    """The bit is read from the file, not from the link: a symlink's own mode
+    is 0777, so reading the link would make every linked artifact 0755."""
     target = tmp_path / "real.sh"
     target.write_text("old", encoding="utf-8")
-    target.chmod(0o755)
+    target.chmod(mode)
     link = tmp_path / "link.sh"
     symlink_or_skip(target, link)
     _lib_io.write_repo_artifact(str(link), "new", flag="--output")
-    assert target.read_text(encoding="utf-8") == "new" and _mode(target) == 0o755
+    assert target.read_text(encoding="utf-8") == "new" and _mode(target) == mode
     assert link.is_symlink()
 
 

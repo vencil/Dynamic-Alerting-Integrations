@@ -739,7 +739,7 @@ ROWS: list[Row] = [
       lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
       out_name="abbreviations.md",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_dir")),
     # A non-default `prefix`. This tool funnels every error through
     # `_emit_error`, which stamps a de-identified error CODE — a documented
     # `--redact` contract (the SME triages by code without a re-run, and under
@@ -2528,13 +2528,17 @@ def test_every_row_is_about_a_flag_its_tool_names_at_a_writer():
 ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
     "lint/check_frontmatter_versions.py":
         "`--fix` rewrites the docs it has just scanned under the repository's "
-        "own `docs/`; the tool takes no path. Held by "
-        "tests/lint/test_check_frontmatter_versions.py (TestFixDrift).",
+        "own `docs/`; the tool takes no path. A write that fails is held by "
+        "tests/lint/test_check_frontmatter_versions.py "
+        "(test_cli_fix_that_cannot_write_a_doc_is_exit_2).",
     "ops/_observed_map_lib.py":
         "`threshold-recommend --generate-observed-map` rewrites the committed "
         "`metric_observed_map.yaml` beside the library; the flag is a switch, "
-        "not a path. Held by tests/ops/test_observed_map_lib.py.",
+        "not a path. A write that fails is held by "
+        "tests/ops/test_threshold_recommend.py "
+        "(test_generate_observed_map_that_cannot_be_written_is_exit_2).",
 }
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 2
 
 
 def test_every_caller_of_a_two_class_entry_has_a_row():
@@ -2562,6 +2566,8 @@ def test_every_caller_of_a_two_class_entry_has_a_row():
         "listed as calling an entry with no flag, and it calls none, has a row, "
         f"or names a flag at a writer: {stale}")
     assert all(why.strip() for why in ENTRY_CALLERS_WITH_NO_FLAG.values())
+    assert len(ENTRY_CALLERS_WITH_NO_FLAG) == _ENTRY_CALLERS_WITH_NO_FLAG_CEILING, sorted(
+        ENTRY_CALLERS_WITH_NO_FLAG)
 
 
 def test_the_no_row_list_is_exact_and_not_stale():

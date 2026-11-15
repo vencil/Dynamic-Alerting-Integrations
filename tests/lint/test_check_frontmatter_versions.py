@@ -403,6 +403,29 @@ class TestCLI:
 
         assert emit_result(cfv.main(["--json"])) == 0  # Should not exit
 
+    def test_cli_fix_that_cannot_write_a_doc_is_exit_2(self, tmp_path, monkeypatch, capsys):
+        """#1641／#3107：--fix 寫不進文件是 rc 2 加一行 ERROR，不是 traceback。"""
+        import _lib_io
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        doc = docs / "old.md"
+        doc.write_text("---\nversion: v1.0.0\n---\n", encoding="utf-8")
+        monkeypatch.setattr(cfv, "DOCS_DIR", docs)
+        monkeypatch.setattr(cfv, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(cfv, "read_platform_version", lambda: "2.0.0")
+
+        def refused(path, content, **kw):
+            raise _lib_io.OutputWriteError(path, OSError(13, "Permission denied"))
+
+        monkeypatch.setattr(cfv, "write_repo_artifact", refused)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--fix"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        lines = captured.err.splitlines()
+        assert len(lines) == 1 and lines[0].startswith(f"ERROR: cannot write {doc}"), captured.err
+        assert doc.read_text(encoding="utf-8") == "---\nversion: v1.0.0\n---\n"
+
     def test_cli_ci_exit_on_error(self, tmp_path, monkeypatch):
         """--ci 有 error 時 exit 1"""
         docs = tmp_path / "docs"
