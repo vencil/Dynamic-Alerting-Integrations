@@ -726,7 +726,9 @@ def _commit_with_entries(repo: Path, files: dict[str, str],
     h.write_tree(repo / "conf.d", files)
     h.run_git(repo, "add", "-A")
     for rel, (mode, blob) in entries.items():
-        oid = h.run_git(repo, "hash-object", "-w", "--stdin", stdin=blob)
+        # A gitlink names a commit of another repository: no object here.
+        oid = ("1" * 40 if mode == "160000"
+               else h.run_git(repo, "hash-object", "-w", "--stdin", stdin=blob))
         h.run_git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},conf.d/{rel}")
     h.run_git(repo, "commit", "-qm", "x")
     return h.run_git(repo, "rev-parse", "HEAD")
@@ -809,6 +811,88 @@ def test_a_name_that_is_not_utf8_is_named_as_the_cli_names_it(tmp_path, world):
     assert not [ln for v in strings for ln in v.splitlines()
                 if ln.lstrip().startswith("ERROR: forged")], strings
     assert text.lower().count(fm._CANARY) == 1 and "QqW" not in text, text
+
+
+#: #3961 round 2: a conf.d name that is not valid UTF-8, on every kind of git
+#: entry and in a directory component — the CLI over the same tree is the
+#: oracle. cell → (path below conf.d, git mode, blob).
+_NOT_UTF8_LEAF = "secret-ZqX\udcff\x1b.yaml"
+_NOT_UTF8_CELLS = {
+    **{f"leaf-{mode}": (_NOT_UTF8_LEAF, mode, body) for mode, body in (
+        ("100644", cases._tenant("db-x").encode()), ("100755", cases._tenant("db-x").encode()),
+        ("120000", b"db-x: a"), ("160000", b""))},
+    **{f"dir-{mode}": ("d-ZqX\udcff/x.yaml", mode, body) for mode, body in (
+        ("100644", cases._tenant("db-x").encode()), ("120000", b"db-x: a"), ("160000", b""))},
+    # Below a hidden directory no reader reads it: neither names it.
+    "hidden-120000": (".h/" + _NOT_UTF8_LEAF, "120000", b"db-x: a"),
+}
+
+
+def _cli_tree(root: Path, files: dict, rel: str, mode: str, body: bytes) -> Path:
+    """The tree a checkout of the commit is on disk: a file, a symlink to
+    its link text, an empty directory for a gitlink."""
+    h.write_tree(root, files)
+    target = os.fsencode(root / rel)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if mode == "120000":
+        symlink_or_skip(os.fsdecode(body), Path(os.fsdecode(target)))
+    elif mode == "160000":
+        os.mkdir(target)
+    else:
+        with open(target, "wb") as fh:
+            fh.write(body)
+        os.chmod(target, 0o755 if mode == "100755" else 0o644)
+    return root
+
+
+def _refusals(text: str, conf: str) -> "list[str]":
+    """da-guard's sentence of each refusal line, after the generator's
+    lead-in (which names how it ran parse-tree: the service's cache lists the
+    tree first, `--list-only`; the CLI reads it whole)."""
+    return [ln.replace(conf, "<CONFDIR>").partition(" exited 2: ")[2] for ln in text.splitlines()
+            if "cannot read the conf.d through" in ln]
+
+
+def _strings(doc: object) -> "list[str]":
+    if isinstance(doc, str):
+        return [doc]
+    if isinstance(doc, dict):
+        return [x for k, v in doc.items() for x in (*_strings(k), *_strings(v))]
+    if isinstance(doc, list):
+        return [x for v in doc for x in _strings(v)]
+    return []
+
+
+@pytest.mark.parametrize("cell", sorted(_NOT_UTF8_CELLS))
+def test_a_not_utf8_name_is_named_by_the_service_as_the_cli_names_it(tmp_path, world, cell):
+    """#3961 (ADR-036 step 9, the one exception of
+    `_lib_validation.shown_file`): whatever the entry, the service's response
+    names a conf.d name that is not valid UTF-8 only where — and exactly as —
+    the generator CLI names it over the same tree: da-guard's `%q` sentence.
+    Nowhere else in any field: no canary, no surrogate, no control byte."""
+    rel, mode, body = _NOT_UTF8_CELLS[cell]
+    files = dict(cases.FIXTURES["clean"])
+    repo = h.init_repo(tmp_path / "r")
+    commit = _commit_with_entries(repo, files, {rel: (mode, body)})
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
+        status, doc = svc.validate(commit, [{"path": "zz-extra.yaml", "content_b64": h.b64(EXTRA)}])
+    assert status == 200, doc
+    conf = _cli_tree(tmp_path / "cli" / "conf.d", {**files, "zz-extra.yaml": EXTRA}, rel, mode, body)
+    env = {k: v for k, v in os.environ.items() if k not in ("PATH", "DA_GUARD_BINARY")}
+    env["PATH"] = str(world["bin"])
+    cli = subprocess.run([sys.executable, "-s", str(h.GAR), "--config-dir", str(conf), "--validate",
+                          "--strict", "--findings-json", str(tmp_path / "f.json")],
+                         env=env, capture_output=True, timeout=180)
+    want = _refusals(cli.stderr.decode("utf-8", "replace"), str(conf))
+    strings = _strings(doc)
+    conf_svc = (doc.get("findings") or {}).get("config_dir") or "\0"
+    got = [r for v in strings for r in _refusals(v, conf_svc)]
+    assert got == want, (cell, got, want, doc)
+    named = [v for v in strings if fm._CANARY in v.lower()]
+    assert len(named) == len(want) and all(r in v for r, v in zip(want, named)), (cell, named, want)
+    assert all(v.lower().count(fm._CANARY) == 1 for v in named), named
+    bad = [v for v in strings for c in ("\udcff", "\ufffd", "\x1b") if c in v]
+    assert not bad, (cell, bad)
 
 
 def test_sha256_repository(tmp_path, world):

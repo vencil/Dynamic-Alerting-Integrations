@@ -136,6 +136,7 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 import guard_dispatch  # noqa: E402
 from _lib_consumer_read import DA_GUARD_ENV  # noqa: E402  (the env-name register, #3424)
 import _lib_tool_fault  # noqa: E402  (#3862: where "da-guard did not run" is recorded)
+from _lib_validation import ShapeError, error_text, shown_file, shown_key, shown_value  # noqa: E402  (#3961)
 
 SUBCOMMAND = "parse-tree"
 #: da-guard's exit code for a caller error — of parse-tree, also its answer
@@ -287,7 +288,9 @@ def run_files_raw(root: Path | str, items: "list[tuple[str, bytes]]",
         try:
             rel.encode("utf-8")
         except UnicodeEncodeError:
-            raise ParseTreeError(f"{rel!r}: not valid UTF-8; batch file mode cannot "
+            # Not named: a name that is not valid UTF-8 is named only by
+            # da-guard, escaped (ADR-036 step 9; #3961).
+            raise ParseTreeError("a path that is not valid UTF-8: batch file mode cannot "
                                  "carry it") from None
     payload = json.dumps([{"path": rel, "input": base64.b64encode(text).decode("ascii")}
                           for rel, text in items]).encode("ascii")
@@ -411,11 +414,11 @@ def read_document(raw: bytes, *, check: "Callable[[dict], None] | None" = None,
             got = doc.get("schema") if isinstance(doc, dict) else None
             wrong_schema, older = isinstance(got, str), got in _OLDER_SCHEMAS
             hint = f" — {_OLDER}" if older else ""
-            raise ValueError(f"schema {got!r}, this reader reads {schema!r}{hint}")
+            raise ShapeError(f"schema {got!r}, this reader reads {schema!r}{hint}")
         check(doc)
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         # ADR-036 §2: a document a reader cannot decode is unusable whole.
-        msg = f"da-guard {what} wrote no document this tool can read ({e}); nothing of it is used"
+        msg = f"da-guard {what} wrote no document this tool can read ({error_text(e)}); nothing of it is used"
         _fault(what.split()[0], "stale" if older else "bad_output")
         if wrong_schema:
             raise NotThisDocument(msg, older=older) from e
@@ -555,68 +558,68 @@ def _entry_of(e: Any, i: int, mode: str) -> Entry:
     """One raw entry, checked whole. A field absent from it is a da-guard
     older than this tool (every field is always written), named as such."""
     if not isinstance(e, dict):
-        raise ValueError(f"entries[{i}] is not an object")
+        raise ShapeError(f"entries[{i}] is not an object")
     path = e.get("path")
-    where = f"entries[{i}] ({path!r})"
+    where = f"entries[{i}] ('{shown_file(path)}')"
     missing = [f for f in ENTRY_FIELDS if f not in e]
     if missing:
-        raise ValueError(f"{where}: no {', '.join(missing)} — {_OLDER}")
+        raise ShapeError(f"{where}: no {', '.join(missing)} — {_OLDER}")
     if set(e) - set(ENTRY_FIELDS):
-        raise ValueError(f"{where}: fields this reader does not know: {sorted(set(e) - set(ENTRY_FIELDS))}")
+        raise ShapeError(f"{where}: fields this reader does not know: {sorted(set(e) - set(ENTRY_FIELDS))}")
     depth, cls, tenant = e["depth"], e["class"], e["tenant_named"]
     names = mode == "names"
     if not isinstance(path, str) or not path:
-        raise ValueError(f"entries[{i}] has no path")
+        raise ShapeError(f"entries[{i}] has no path")
     if not isinstance(depth, int) or isinstance(depth, bool) or depth < 0:
-        raise ValueError(f"{where}: depth is not a count")
+        raise ShapeError(f"{where}: depth is not a count")
     classes = {"tree": WALK_CLASSES, "list": WALK_CLASSES, "names": NAME_CLASSES,
                "file": WALK_CLASSES | NAME_CLASSES}[mode]
     if cls not in classes:
-        raise ValueError(f"{where}: class {cls!r} is not one this reader knows in {mode} mode")
+        raise ShapeError(f"{where}: class {shown_value(cls)} is not one this reader knows in {mode} mode")
     if tenant is not None and not (cls == "tenant" and isinstance(tenant, str) and tenant):
-        raise ValueError(f"{where}: tenant_named does not match class {cls!r}")
+        raise ShapeError(f"{where}: tenant_named does not match class {shown_value(cls)}")
     if not isinstance(e["defaults_document"], bool):
-        raise ValueError(f"{where}: defaults_document is not a boolean")
+        raise ShapeError(f"{where}: defaults_document is not a boolean")
     if not isinstance(e["config_extension"], bool):
-        raise ValueError(f"{where}: config_extension is not a boolean")
+        raise ShapeError(f"{where}: config_extension is not a boolean")
     readers, role, not_read, bad = e["readers"], e["role"], e["not_read"], e["problem"]
     verdict = e["verdict"]
     if verdict is not None and verdict not in VERDICTS:
-        raise ValueError(f"{where}: verdict {verdict!r} is not one this reader knows")
+        raise ShapeError(f"{where}: verdict {shown_value(verdict)} is not one this reader knows")
     if verdict == "tree_refused" and bad is None:
         # Go names a path tree_refused only for its problem.
-        raise ValueError(f"{where}: verdict tree_refused with no problem")
+        raise ShapeError(f"{where}: verdict tree_refused with no problem")
     if names:
         if readers is not None or role is not None or bad is not None or verdict is not None:
-            raise ValueError(f"{where}: readers, role, problem or verdict in names mode")
+            raise ShapeError(f"{where}: readers, role, problem or verdict in names mode")
         if not_read is not None and not (not_read == UNSELECTED_CARRIER and cls == "defaults"):
-            raise ValueError(f"{where}: not_read {not_read!r} in names mode (only "
+            raise ShapeError(f"{where}: not_read {shown_value(not_read)} in names mode (only "
                              f"{UNSELECTED_CARRIER} on a defaults carrier)")
     else:
         if not (isinstance(readers, list) and all(isinstance(r, str) for r in readers)):
-            raise ValueError(f"{where}: readers is not a list of reader names")
+            raise ShapeError(f"{where}: readers is not a list of reader names")
         if role not in ROLES:
-            raise ValueError(f"{where}: role {role!r} is not one this reader knows")
+            raise ShapeError(f"{where}: role {shown_value(role)} is not one this reader knows")
         if not_read is not None and not (isinstance(not_read, str) and not_read):
-            raise ValueError(f"{where}: not_read is not a reason")
+            raise ShapeError(f"{where}: not_read is not a reason")
         if role in ("dir", "unlistable_dir"):
             # A directory, listed or not, is no file a reader reads, and
             # nothing is passed over.
             if readers or not_read is not None:
-                raise ValueError(f"{where}: a {role} with readers {readers!r} / "
-                                 f"not_read {not_read!r}")
+                raise ShapeError(f"{where}: a {role} with readers {shown_value(readers)} / "
+                                 f"not_read {shown_value(not_read)}")
         elif (not_read is None) == (not readers):
-            raise ValueError(f"{where}: readers {readers!r} with not_read {not_read!r}")
+            raise ShapeError(f"{where}: readers {shown_value(readers)} with not_read {shown_value(not_read)}")
     if role in ("not_a_file", "unlistable_dir") and bad is None:
         # Go always says why a path is no file it reads: one without the why
         # is a document this reader does not understand.
-        raise ValueError(f"{where}: role {role} with no problem")
+        raise ShapeError(f"{where}: role {role} with no problem")
     problem = None
     if bad is not None:
         kind = bad.get("kind") if isinstance(bad, dict) else None
         kinds_ok = kind in LIST_PROBLEM_KINDS if mode == "list" else isinstance(kind, str) and bool(kind)
         if not (kinds_ok and set(bad) == {"kind", "message"} and isinstance(bad.get("message"), str)):
-            raise ValueError(f"{where}: problem is not {{kind, message}} of a kind {mode} mode gives")
+            raise ShapeError(f"{where}: problem is not {{kind, message}} of a kind {mode} mode gives")
         problem = (bad["kind"], bad["message"])
     return Entry(path=path, depth=depth, cls=cls, tenant_named=tenant,
                  defaults_document=e["defaults_document"],
@@ -718,27 +721,27 @@ def entries_of(doc: dict) -> "tuple[Entry, ...]":
     as `Entry` objects. Raises ValueError for one it would not accept."""
     mode = doc.get("mode")
     if mode not in MODES:
-        raise ValueError(f"mode {mode!r} is not one this reader knows")
+        raise ShapeError(f"mode {shown_value(mode)} is not one this reader knows")
     raw = doc.get("entries")
     if not isinstance(raw, list):
-        raise ValueError(f"field 'entries' missing or not a list — {_OLDER}")
+        raise ShapeError(f"field 'entries' missing or not a list — {_OLDER}")
     out = tuple(_entry_of(e, i, mode) for i, e in enumerate(raw))
     if mode != "names" and len({e.path for e in out}) != len(out):
-        raise ValueError("a path is listed twice")
+        raise ShapeError("a path is listed twice")
     return out
 
 
 def _check_index(doc: dict, modes: "frozenset[str]") -> "tuple[Entry, ...]":
     for field in ("mode", "da_guard_version"):
         if field not in doc:
-            raise ValueError(f"no {field!r} — {_OLDER}")
+            raise ShapeError(f"no {shown_value(field)} — {_OLDER}")
     if not isinstance(doc["da_guard_version"], str):
-        raise ValueError("da_guard_version is not a string")
+        raise ShapeError("da_guard_version is not a string")
     if doc.get("mode") not in modes:
-        raise ValueError(f"mode {doc.get('mode')!r}, this reader asked for {' or '.join(sorted(modes))}")
+        raise ShapeError(f"mode {shown_value(doc.get('mode'))}, this reader asked for {' or '.join(sorted(modes))}")
     dc = doc.get("defaults_carriers")
     if not (isinstance(dc, dict) and all(isinstance(v, str) for v in dc.values())):
-        raise ValueError("defaults_carriers is not {dir: path}")
+        raise ShapeError("defaults_carriers is not {dir: path}")
     return entries_of(doc)
 
 
@@ -749,11 +752,11 @@ def check_shape(doc: dict) -> None:
     entries = _check_index(doc, frozenset({"tree", "file"}))
     for field in ("files", "rendered_by"):
         if not isinstance(doc.get(field), dict):
-            raise ValueError(f"field {field!r} missing or not an object — {_OLDER}"
-                             if field not in doc else f"field {field!r} is not an object")
+            raise ShapeError(f"field {shown_value(field)} missing or not an object — {_OLDER}"
+                             if field not in doc else f"field {shown_value(field)} is not an object")
     for f, content in doc["files"].items():
         if not isinstance(content, dict) or is_scalar(content):
-            raise ValueError(f"files[{f!r}] is not a mapping")
+            raise ShapeError(f"files['{shown_file(f)}'] is not a mapping")
         stack: list[Any] = [content]
         while stack:
             v = stack.pop()
@@ -761,38 +764,38 @@ def check_shape(doc: dict) -> None:
                 stack.extend(v)
             elif is_scalar(v):
                 if not (isinstance(v["tag"], str) and isinstance(v.get("value"), (str, bool, type(None)))):
-                    raise ValueError(f"files[{f!r}] holds a scalar of the wrong shape: {v!r:.80}")
+                    raise ShapeError(f"files['{shown_file(f)}'] holds a scalar of the wrong shape: {shown_value(v)}")
             elif isinstance(v, dict) and not isinstance(v.get("text"), str):  # a mapping
                 stack.extend(v.values())
             else:
-                raise ValueError(f"files[{f!r}] holds a value of the wrong shape: {v!r:.80}")
+                raise ShapeError(f"files['{shown_file(f)}'] holds a value of the wrong shape: {shown_value(v)}")
     for f, keys in doc["rendered_by"].items():
         if not (isinstance(keys, dict) and all(
                 isinstance(rs, list) and all(isinstance(r, str) for r in rs) for rs in keys.values())):
-            raise ValueError(f"rendered_by[{f!r}] is not {{key: [reader]}}")
+            raise ShapeError(f"rendered_by['{shown_file(f)}'] is not {{key: [reader]}}")
     # parse-tree's own invariants: content belongs to an entry, never beside
     # a problem; tree mode reads every config file a reader reads.
     by_path = {e.path: e for e in entries}
     for f in doc["files"]:
         if f not in by_path:
-            raise ValueError(f"files[{f!r}] is no entry's")
+            raise ShapeError(f"files['{shown_file(f)}'] is no entry's")
         if by_path[f].problem is not None:
-            raise ValueError(f"{f!r} has content and a problem")
+            raise ShapeError(f"'{shown_file(f)}' has content and a problem")
         if doc["mode"] == "tree" and not by_path[f].config_file:
-            raise ValueError(f"{f!r} has content but role {by_path[f].role!r}")
+            raise ShapeError(f"'{shown_file(f)}' has content but role {shown_value(by_path[f].role)}")
     if doc["mode"] == "file" and len(entries) != 1:
-        raise ValueError("a file-mode document holds one entry")
+        raise ShapeError("a file-mode document holds one entry")
     for e in entries:
         if doc["mode"] == "tree" and e.config_file and e.readers and e.problem is None \
                 and e.path not in doc["files"]:
-            raise ValueError(f"{e.path!r}: a config file a reader reads, with neither content nor a problem")
+            raise ShapeError(f"'{shown_file(e.path)}': a config file a reader reads, with neither content nor a problem")
         # A directory --path (role dir / unlistable_dir: the walk's own entry)
         # is no file: file mode reads no text for it, and that is no gap.
         if doc["mode"] == "file" and e.problem is None and e.path not in doc["files"] \
                 and e.role not in ("dir", "unlistable_dir"):
-            raise ValueError(f"{e.path!r}: file mode gave neither content nor a problem")
+            raise ShapeError(f"'{shown_file(e.path)}': file mode gave neither content nor a problem")
         if doc["mode"] == "file" and e.role in ("dir", "unlistable_dir") and e.path in doc["files"]:
-            raise ValueError(f"{e.path!r}: file mode read text for a directory")
+            raise ShapeError(f"'{shown_file(e.path)}': file mode read text for a directory")
 
 
 def is_scalar(v: Any) -> bool:
@@ -846,7 +849,7 @@ _FLOAT_TEXT = re.compile(r"-?[0-9]+(?:\.[0-9]+)?")
 
 def _scalar(node: dict) -> Any:
     if not _SCALAR_KEYS.issuperset(node):
-        raise ValueError(f"a scalar with fields beyond text, tag, value: {node!r:.80}")
+        raise ShapeError(f"a scalar with fields beyond text, tag, value: {shown_value(node)}")
     tag, text = node["tag"], node["text"]
     has, value = "value" in node, node.get("value")
     if tag == "!!str" and has and isinstance(value, str):
@@ -863,7 +866,7 @@ def _scalar(node: dict) -> Any:
         return _FLOAT_WORDS[text]
     if tag == "!!timestamp" and not has:
         return Timestamp(text)
-    raise ValueError(f"a scalar this reader does not read: {node!r:.80}")
+    raise ShapeError(f"a scalar this reader does not read: {shown_value(node)}")
 
 
 def _new(node: Any) -> tuple[Any, bool]:
@@ -874,7 +877,7 @@ def _new(node: Any) -> tuple[Any, bool]:
         return {}, True
     if isinstance(node, list):
         return [], True
-    raise ValueError(f"not a parse-tree node: {node!r:.80}")
+    raise ShapeError(f"not a parse-tree node: {shown_value(node)}")
 
 
 def to_python(node: Any, *, text_sequences: "frozenset[str]" = frozenset()) -> Any:
@@ -907,7 +910,7 @@ def to_python(node: Any, *, text_sequences: "frozenset[str]" = frozenset()) -> A
 def scalar_text(node: Any) -> str:
     """A scalar node's source text — what the exporter reads a threshold from."""
     if not is_scalar(node):
-        raise ValueError(f"not a scalar node: {node!r:.80}")
+        raise ShapeError(f"not a scalar node: {shown_value(node)}")
     return node["text"]
 
 
@@ -957,7 +960,7 @@ def tree_of(doc: dict) -> Tree:
     except (ValueError, TypeError, KeyError) as e:
         _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} wrote no document this tool can "
-                             f"read ({e}); nothing of it is used") from e
+                             f"read ({error_text(e)}); nothing of it is used") from e
     files = doc["files"]
     selected = {e.path: e.readers for e in entries if e.path in files or e.problem is not None}
     return Tree(
@@ -1085,7 +1088,7 @@ def _check_list(mode: str) -> "Callable[[dict], None]":
     def check(doc: dict) -> None:
         for field in ("files", "rendered_by"):
             if field in doc:
-                raise ValueError(f"{mode} mode with {field!r}")
+                raise ShapeError(f"{mode} mode with {shown_value(field)}")
         _check_index(doc, frozenset({mode}))
     return check
 
@@ -1222,8 +1225,10 @@ def _run_names(names: "list[str]", binary: Optional[str],
         except UnicodeEncodeError:
             # `os.fsdecode`'s lone surrogates: JSON cannot carry the name,
             # and encoding it anyway hands da-guard a different one.
-            raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: the name "
-                                 f"{n!r} is not valid UTF-8; JSON cannot carry it") from None
+            # Not named: a name that is not valid UTF-8 is named only by
+            # da-guard, escaped (ADR-036 step 9; #3961).
+            raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: a name "
+                                 "is not valid UTF-8; JSON cannot carry it") from None
     raw = json.dumps(names, ensure_ascii=False).encode("utf-8")
     doc = _run([SUBCOMMAND, "--list-only", "--names", "-"], binary, timeout, stdin=raw,
                check=_check_list("names"), what=f"{SUBCOMMAND} --list-only --names")
@@ -1242,7 +1247,7 @@ def _run_names(names: "list[str]", binary: Optional[str],
             (chosen is not None and chosen not in defaults) or losers != defaults - {chosen}:
         _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: defaults_carriers "
-                             f"{dict(carriers)!r} does not match the entries' not_read; nothing "
+                             f"{shown_value(dict(carriers))} does not match the entries' not_read; nothing "
                              "of it is used")
     return {e.path: e for e in entries}, chosen
 
@@ -1288,25 +1293,25 @@ def key_spellings(keys: "Iterable[str]", binary: Optional[str] = None,
     try:
         raw = json.dumps(keys, ensure_ascii=False).encode("utf-8")
     except (TypeError, UnicodeEncodeError) as e:
-        raise ParseTreeError(f"da-guard {what}: a key JSON cannot carry ({e})") from None
+        raise ParseTreeError(f"da-guard {what}: a key JSON cannot carry ({error_text(e)})") from None
     out = _run_stdout([KEY_SPELLINGS], binary, timeout, stdin=raw, what=what)
     try:
         doc = json.loads(out.decode("utf-8"))
         if not isinstance(doc, list) or len(doc) != len(keys):
-            raise ValueError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
+            raise ShapeError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
                              f"answers for {len(keys)} keys")
         of: dict[str, tuple[str, tuple[str, ...]]] = {}
         for key, a in zip(keys, doc):
             if not isinstance(a, dict) or set(a) != _SPELLING_FIELDS or a["key"] != key:
-                raise ValueError(f"an answer is not {sorted(_SPELLING_FIELDS)} for {key!r}: {a!r}")
+                raise ShapeError(f"an answer is not {sorted(_SPELLING_FIELDS)} for '{shown_key(key)}': {shown_value(a)}")
             canon, spellings = a["canonical"], a["spellings"]
             if not isinstance(canon, str) or not isinstance(spellings, list) or not spellings \
                     or spellings[0] != canon or not all(isinstance(x, str) for x in spellings):
-                raise ValueError(f"an answer of the wrong shape: {a!r}")
+                raise ShapeError(f"an answer of the wrong shape: {shown_value(a)}")
             of[key] = (canon, tuple(spellings))
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         _fault(what, "bad_output")
-        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
+        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({error_text(e)}); "
                              "nothing of it is used") from e
     return KeySpellings(MappingProxyType(of))
 
@@ -1353,26 +1358,26 @@ def threshold_values(items: "Iterable[tuple[str, str]]", binary: Optional[str] =
         raw = json.dumps([{"key": k, "text": t} for k, t in items],
                          ensure_ascii=False).encode("utf-8")
     except (TypeError, UnicodeEncodeError) as e:
-        raise ParseTreeError(f"da-guard {what}: a key or text JSON cannot carry ({e})") from None
+        raise ParseTreeError(f"da-guard {what}: a key or text JSON cannot carry ({error_text(e)})") from None
     out = _run_stdout([THRESHOLD_VALUES], binary, timeout, stdin=raw, what=what)
     try:
         doc = json.loads(out.decode("utf-8"))
         if not isinstance(doc, list) or len(doc) != len(items):
-            raise ValueError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
+            raise ShapeError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
                              f"answers for {len(items)} values")
         readings = []
         for (key, text), a in zip(items, doc):
             if not isinstance(a, dict) or set(a) != _THRESHOLD_FIELDS:
-                raise ValueError(f"an answer is not {sorted(_THRESHOLD_FIELDS)}: {a!r}")
+                raise ShapeError(f"an answer is not {sorted(_THRESHOLD_FIELDS)}: {shown_value(a)}")
             number = a["number"]
             if a["key"] != key or a["text"] != text:
-                raise ValueError(f"answer for {(a['key'], a['text'])!r}, asked {(key, text)!r}")
+                raise ShapeError(f"answer for {shown_value((a['key'], a['text']))}, asked {shown_value((key, text))}")
             if number is not None and (isinstance(number, bool)
                                        or not isinstance(number, (int, float))):
-                raise ValueError(f"number {number!r}")
+                raise ShapeError(f"number {shown_value(number)}")
             if a["non_finite"] not in _NON_FINITE or not all(
                     isinstance(a[f], str) for f in ("severity", "refused")):
-                raise ValueError(f"an answer of the wrong shape: {a!r}")
+                raise ShapeError(f"an answer of the wrong shape: {shown_value(a)}")
             readings.append(ThresholdReading(
                 key=key, text=text,
                 number=None if number is None else float(number),
@@ -1380,6 +1385,6 @@ def threshold_values(items: "Iterable[tuple[str, str]]", binary: Optional[str] =
                 severity=a["severity"], refused=a["refused"]))
     except (ValueError, TypeError, KeyError) as e:  # UnicodeDecodeError is a ValueError
         _fault(what, "bad_output")
-        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
+        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({error_text(e)}); "
                              "nothing of it is used") from e
     return readings

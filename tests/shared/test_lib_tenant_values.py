@@ -963,6 +963,20 @@ def test_a_broken_document_is_reported_without_what_it_echoes_from_the_tree(tmp_
     assert ei.value.broken and _CANARY not in str(ei.value), str(ei.value)
 
 
+def test_pythons_own_value_error_is_reported_by_its_type_only(tmp_path, monkeypatch):
+    """#3961: an error Python itself raises inside a reading (`float()` here:
+    its ValueError quotes the text it refused) reaches the message as its type
+    name only (`_lib_validation.error_text`); only this module's own
+    `ShapeError` says its sentence."""
+    monkeypatch.setattr(tv, "_threshold", float)
+    doc = json.loads(_sv_doc(tv.SERVED_VALUES_SCHEMA))
+    doc["tenants"]["t"].update({"severities": {"k": "warning"}, "values": {"k": _CANARY}})
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, json.dumps(doc)))
+    assert ei.value.broken and "(ValueError)" in str(ei.value), str(ei.value)
+    assert _CANARY not in str(ei.value), str(ei.value)
+
+
 @pytest.mark.parametrize("keys", [
     '[]',
     '{"k": {}}',

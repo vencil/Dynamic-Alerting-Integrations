@@ -322,6 +322,18 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
             _write_file(root, rel, content, GitReadError)
         else:
             others.append((rel, mode))
+    # #3961: an entry whose path is not valid UTF-8 is put on disk as what a
+    # checkout makes of it at that name — here an empty directory, the
+    # gitlink's checkout; a symlink's text is never written (#2981) — and
+    # da-guard judges the tree as for the CLI: it refuses it naming the
+    # path escaped (ADR-036 step 9), or skips it below a hidden directory.
+    # Nothing in Python names it, and names mode (JSON) cannot carry it.
+    not_text = [(rel, mode) for rel, mode in others if not _is_text(rel)]
+    others = [(rel, mode) for rel, mode in others if _is_text(rel)]
+    for rel, _mode in not_text:
+        target = os.path.join(_parent_dir(root, rel, GitReadError), rel.split("/")[-1])
+        if not os.path.lexists(target):
+            os.mkdir(target, 0o700)
     parts = sorted({part for rel, _m in others for part in rel.split("/")})
     classes = _lib_parse_tree.classify_names(parts) if parts else {}
     irregular: dict[str, str] = {}
@@ -330,6 +342,16 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
             _parent_dir(root, rel, GitReadError)
             irregular[rel] = mode
     return irregular
+
+
+def _is_text(rel: str) -> bool:
+    """Whether *rel* is valid UTF-8 (`tree_entries` surrogate-escapes a
+    path that is not)."""
+    try:
+        rel.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def apply_writes(root: str, request: ValidateRequest,
