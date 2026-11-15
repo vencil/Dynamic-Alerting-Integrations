@@ -74,6 +74,7 @@ import _lib_tenant_values  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 import _lib_tool_fault  # noqa: E402
+from _lib_validation import shown_file  # noqa: E402  (#3961: the author's paths into a message)
 from _gsvc_proto import (  # noqa: E402
     STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
 )
@@ -195,9 +196,17 @@ def tree_entries(git: str, repo: str, commit: str, sub: str) -> list[tuple[str, 
         meta, _tab, raw_path = rec.partition(b"\t")
         try:
             mode, _type, oid = meta.decode("ascii").split(" ")
-            path = raw_path.decode("utf-8")
         except ValueError as exc:
-            raise GitReadError(f"unreadable ls-tree record: {rec[:200]!r}") from exc
+            # git's own fields, not the author's: a fixed sentence, never the
+            # record — its path is the author's file name (#3961).
+            raise GitReadError("unreadable ls-tree record: its mode / type / object id do not parse") from exc
+        # A name that is not valid UTF-8 is not refused here: it goes into the
+        # tree as its bytes (surrogateescape, which the filesystem calls
+        # encode back to them),
+        # and da-guard refuses the tree naming it escaped, as for the CLI —
+        # the one exception of `_lib_validation.shown_file` (ADR-036 step 9,
+        # #3703); no second place names it (#3961).
+        path = raw_path.decode("utf-8", "surrogateescape")
         if sub:
             if not path.startswith(sub + "/"):
                 continue
@@ -263,7 +272,7 @@ def _parent_dir(root: str, rel: str, err: type) -> str:
             os.mkdir(cur, 0o700)
             continue
         if not stat.S_ISDIR(st.st_mode):
-            raise err(f"{rel}: {part!r} in its path is not a directory in the base tree")
+            raise err(f"{shown_file(rel)}: '{shown_file(part)}' in its path is not a directory in the base tree")
     return cur
 
 
@@ -276,7 +285,7 @@ def _write_file(root: str, rel: str, content: bytes, err: type) -> None:
         st = None
     if st is not None:
         if stat.S_ISDIR(st.st_mode):
-            raise err(f"{rel}: is a directory in the base tree")
+            raise err(f"{shown_file(rel)}: is a directory in the base tree")
         os.unlink(target)
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as fh:
@@ -308,7 +317,7 @@ def materialise(root: str, tree: list[tuple[str, str, str, bytes]]) -> dict[str,
     others: list[tuple[str, str]] = []
     for mode, _oid, rel, content in tree:
         if path_problem(rel) is not None:
-            raise GitReadError(f"tree entry with an unusable path: {rel!r}")
+            raise GitReadError(f"tree entry with an unusable path: '{shown_file(rel)}'")
         if mode in REGULAR_MODES:
             _write_file(root, rel, content, GitReadError)
         else:
@@ -344,14 +353,14 @@ def apply_writes(root: str, request: ValidateRequest,
         parts = w.path.split("/")
         for i in range(1, len(parts)):
             if "/".join(parts[:i]) in irregular:
-                raise BadWrite(f"{w.path}: {parts[i - 1]!r} in its path is not a directory "
+                raise BadWrite(f"{shown_file(w.path)}: '{shown_file(parts[i - 1])}' in its path is not a directory "
                                f"in the base tree")
         irregular.pop(w.path, None)
         if w.delete:
             parent = _parent_dir(root, w.path, BadWrite)
             target = os.path.join(parent, w.path.split("/")[-1])
             if os.path.isdir(target) and not os.path.islink(target):
-                raise BadWrite(f"{w.path}: is a directory in the base tree")
+                raise BadWrite(f"{shown_file(w.path)}: is a directory in the base tree")
             if os.path.lexists(target):
                 os.unlink(target)
             files.append({"path": w.path, "deleted": True})

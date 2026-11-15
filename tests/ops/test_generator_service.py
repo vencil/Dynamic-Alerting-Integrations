@@ -771,28 +771,44 @@ def test_illegal_names_on_the_service_path_print_their_stand_in(tmp_path):
     assert fm._CANARY not in res.text.lower(), res.text
 
 
-def test_a_name_that_is_not_utf8_is_named_only_escaped(tmp_path, world):
-    """A conf.d name in the commit that is not valid UTF-8: the service
-    judges no tree (git's listing is not text), and the one place that
-    names the entry escapes it — the ADR-036 step 9 exception
-    (`_lib_validation.shown_file`, the canary matrix's `_NAMED_ESCAPED`):
-    no byte that is not UTF-8, no control character, the forged line not a
-    line of its own; the tree's other illegal name not printed."""
+def test_a_name_that_is_not_utf8_is_named_as_the_cli_names_it(tmp_path, world):
+    """A conf.d name in the commit that is not valid UTF-8 (the canary
+    matrix's `not_utf8_name` cell, built from git objects): the service puts
+    it into the tree as its bytes, da-guard refuses the tree, and the
+    response names it exactly as the generator CLI does over the same tree —
+    the cell's `_NAMED_ESCAPED` form, the one exception of
+    `_lib_validation.shown_file` (ADR-036 step 9), byte for byte (#3961: no
+    second place names it). Nothing else: no byte that is not UTF-8, no
+    control character, the forged line not a line of its own, the tree's
+    other illegal name not printed."""
+    shape = fm._ENTRY_SHAPES["not_utf8_name"][0]
+    files = {rel: body for rel, body in shape.items() if not rel.startswith("@")}
+    entries = {rel.partition(":")[2]: ("100644", body.encode("utf-8"))
+               for rel, body in shape.items() if rel.startswith("@bytes:")}
     repo = h.init_repo(tmp_path / "r")
-    files = dict(cases.FIXTURES["clean"])
-    files["QqW OTHER@x.yaml"] = cases._tenant("db-y")
-    commit = _commit_with_entries(repo, files, {
-        "ZqX\udcff\nERROR: forged\x1b[31m\x07 X@x.yaml": ("100644", cases._tenant("db-x").encode())})
+    commit = _commit_with_entries(repo, files, entries)
     with h.Service(tmp_path / "s", repo, bin_dir=world["bin"]) as svc:
         status, doc = svc.validate(commit)
-    assert status == 200 and doc["result"] == "rejected" and doc["reason"] == "git_read", doc
+    assert status == 200 and doc["result"] == "findings" and doc["rc"] == 2, doc
+
+    def refusal(text: str, conf: str) -> list[str]:
+        # da-guard's sentence, after the generator's lead-in — which names
+        # how it ran parse-tree (the service's cache lists the tree first,
+        # `--list-only`; the CLI reads it whole).
+        return [ln.replace(conf, "<CONFDIR>").partition(" exited 2: ")[2] for ln in text.splitlines()
+                if "cannot read the conf.d through" in ln]
+
+    got = refusal(doc["stderr_tail"], doc["findings"]["config_dir"])
+    cli = fm._shape("not_utf8_name", fm._SHAPE_MODES["validate"])
+    want = refusal(cli.text, "<WORK>/conf.d")
+    assert len(got) == 1 and got[0] and got == want, (got, want)
+    assert fm._NAMED_ESCAPED["not_utf8_name"][1] in got[0], got
     text = json.dumps(doc, ensure_ascii=False)
-    assert r"ZqX\\xff\\nERROR: forged\\x1b[31m\\x07 X@x.yaml" in text, text
-    strings = [v for v in doc.values() if isinstance(v, str)]
+    strings = [doc["stderr_tail"], *(f["message"] for f in doc["findings"]["findings"])]
     assert not [v for v in strings for c in ("\udcff", "\ufffd", "\x1b", "\x07") if c in v], strings
     assert not [ln for v in strings for ln in v.splitlines()
                 if ln.lstrip().startswith("ERROR: forged")], strings
-    assert "QqW" not in text, text
+    assert text.lower().count(fm._CANARY) == 1 and "QqW" not in text, text
 
 
 def test_sha256_repository(tmp_path, world):

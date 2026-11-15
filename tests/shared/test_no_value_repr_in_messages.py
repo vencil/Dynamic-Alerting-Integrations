@@ -8,7 +8,8 @@ f-string 直接插值（`'{val}'`）它抓不到，用字串述詞守「值不�
 
 出口是 `_lib_validation.shown_value`（`receiver_value_repr`、`scalar_text`、
 `value_text` 都經它）。這裡掃 `scripts/tools/_lib_validation.py`、產生器經由它們讀
-da-guard 的 `_lib_tenant_values.py` 與 `_lib_key_verdict.py`（#3961），以及
+da-guard 的 `_lib_tenant_values.py` 與 `_lib_key_verdict.py`、產生器服務的判定子程序
+`ops/_gsvc_child.py`（#3961），以及
 `scripts/tools/ops/_grar_*.py`，每個 repr 類寫法都必須在下面的白名單裡並附理由；
 白名單裡對不到程式的條目也會轉紅。
 """
@@ -23,6 +24,9 @@ REPO = Path(__file__).resolve().parents[2]
 FILES = [REPO / "scripts" / "tools" / "_lib_validation.py",
          REPO / "scripts" / "tools" / "_lib_tenant_values.py",
          REPO / "scripts" / "tools" / "_lib_key_verdict.py",
+         # #3961: the generator service's judgement child — its messages
+         # reach the response tenant-api reads.
+         REPO / "scripts" / "tools" / "ops" / "_gsvc_child.py",
          *sorted((REPO / "scripts" / "tools" / "ops").glob("_grar_*.py"))]
 
 _ARGV = "a command-line argument of the tool, not a conf.d value"
@@ -105,6 +109,9 @@ ALLOWED: dict[tuple[str, str, str, str], str] = {
         "da-guard's schema id (a constant of the binary), never a conf.d value",
     ("_lib_tenant_values.py", "_run_da_guard", "!r", "schema"):
         "the schema id this reader reads, a constant of the tool",
+    ("_gsvc_child.py", "read_tree", "!r", "head"):
+        "the header line `git cat-file --batch` writes for an object id the "
+        "service asked for (id, type, size): git's own text, never a path",
 }
 
 
