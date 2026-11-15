@@ -480,15 +480,12 @@ function lintConfig(yamlText) {
     const pasted = pastedConfdFile(thresholds);
     thresholds.pasted = pasted;
     // The lenient parse keeps a quoted key as written (`"tenants":`, with
-    // escapes), which the YAML reading above decodes: compare it decoded. A
-    // double-quoted key's escapes are read as JSON's (a subset of YAML's: an
-    // escape JSON lacks leaves the key as written), a single-quoted key's `''`
-    // is one quote.
+    // escapes), which the YAML reading above decodes: compare it as that
+    // reading has it — the key read on its own by the same reader.
     const unquoted = (k) => {
-      if (/^".*"$/.test(k)) {
-        try { return JSON.parse(k); } catch { return k.slice(1, -1); }
-      }
-      return /^'.*'$/.test(k) ? k.slice(1, -1).replace(/''/g, "'") : k;
+      if (!/^["']/.test(k)) return k;
+      const keys = Object.keys(parseTenantYaml(`${k}: ~\n`).config);
+      return keys.length === 1 ? keys[0] : k;
     };
     const isPseudo = (k) => pasted && unquoted(k) === 'tenants';
     const alone = !Object.keys(tenants).some((k) => !k.startsWith('_') && !isPseudo(k) && k !== 'routing_profiles');

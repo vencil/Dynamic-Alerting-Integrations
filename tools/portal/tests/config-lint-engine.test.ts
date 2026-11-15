@@ -479,7 +479,7 @@ describe('a conf.d tenant file pasted whole (#3998)', () => {
 
   it('a quoted `tenants:` key is the same file', () => {
     for (const y of ['"tenants":\n  t1:\n    x_usage: 99\n', "'tenants':\n  t1:\n    x_usage: 50\n    _routing:\n      receiver: x\n",
-      '"tenant\\u0073":\n  t1:\n    x_usage: 99\n']) {
+      '"tenant\\u0073":\n  t1:\n    x_usage: 99\n', '"tenant\\x73":\n  t1:\n    x_usage: 99\n']) {
       const r = lintConfig(y);
       expect(r.findings.map((f: any) => [f.ruleId, f.tenant]), y).toEqual([['confd-tenants-wrapper', 'tenants']]);
       expect(r.tenantCount, y).toBe(0);
