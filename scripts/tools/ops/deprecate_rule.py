@@ -34,8 +34,8 @@ key 以外的節點、註解、寫法（`~`、`!!float 1`、`0o17`）照原樣�
 找不到可用的 da-guard（`$DA_GUARD_BINARY` → `$PATH`）是 rc 2。
 
 NOT GUARDED（da-guard 也沒回答的）:
-  * 平面判定仍靠 `--plane`: da-guard 把 --config-dir 當 root 判，所以
-    `--plane subtree` 不採用它對 `_` 前綴檔的判定（租戶檔與拼法照用）。
+  * 平面判定仍靠 `--subtree`: `da-guard key-refs` 把它拿到的目錄當 root 判，所以
+    給了 `--subtree` 時不採用它對 `_` 前綴檔的判定（租戶檔與拼法照用）。
   * 本工具依 parse-tree 讀出的型別判載體（`_node_verdicts`）；parse-tree 讀不了、
     exporter 其實收的檔（封閉清單以外的差異，ADR-036 §2）仍擋。
 
@@ -276,6 +276,9 @@ def carrier_health_at(path):
         with open(p, "rb"):
             pass
     except OSError as e:
+        # #3902: gone since --config-dir was judged — the tree changed, never
+        # an "unreadable" verdict the run goes on from (#3724).
+        _lib_parse_cache.refuse_gone(p, e)
         return [(None, e.strerror or e.__class__.__name__, UNREADABLE)]
     reader = _reader(p.parent)
     return _verdicts_of(lambda: reader.node(p.name))
@@ -288,7 +291,7 @@ OWNER_EXPORTER = "exporter"  # exporter 自己會丟棄／不讀，不算殘留�
 
 
 def _in_subtree(name, plane):
-    """子樹裡的檔: 子目錄裡的（`name` 含 `/`），或 `--plane subtree` 的這一層。"""
+    """子樹裡的檔: 子目錄裡的（`name` 含 `/`），或 `--subtree` 的這一層。"""
     return "/" in name or plane == "subtree"
 
 
@@ -348,14 +351,16 @@ def exporter_drop_reason(name, section, plane="root", *, cls):
     return f"的 {block} 區塊 exporter 會丟棄（只從 `_` 前綴檔讀），本工具不寫入"
 
 
-def manual_reason(name, section, key, val, config_dir, *, reserved, root_dir=None):
-    """`OWNER_MANUAL` 殘留的那一句話（預覽與執行同一句）。*reserved* 同 `section_owner`。"""
+def manual_reason(name, section, key, val, root, *, reserved, rel=None):
+    """`OWNER_MANUAL` 殘留的那一句話（預覽與執行同一句）。*reserved* 同 `section_owner`。
+    *root* 是 conf.d 的 root（--config-dir），*rel* 是這一輪的 `--subtree`（root 這一層
+    時 None）；*name* 相對這一輪處理的目錄。指引一律寫成 root 與相對它的子樹。"""
     where = f"[{section}] {key}: {val}"
     block = section.split(".", 1)[0]
     if "/" in name and (block in ("defaults", "optional_overrides") or not reserved):
-        subtree = os.path.join(str(config_dir), *name.split("/")[:-1])
+        subtree = "/".join(([rel] if rel else []) + name.split("/")[:-1])
         return (f"子目錄裡的檔，本工具不遞迴寫入；請對該子樹跑 "
-                f"`--config-dir {subtree} --plane subtree --root-dir {root_dir or config_dir}`："
+                f"`--config-dir {root} --subtree {subtree}`："
                 f"{where}")
     if block == "profiles":
         return f"`_` 前綴檔的 `profiles:` 區塊本工具射程外，請手動移除：{where}"
@@ -491,7 +496,7 @@ def out_of_reach(config_dir, plane="root"):
     for name, listed in sorted(_top(reader).items()):
         if listed.is_dir:
             out.append((f"{name}/", "子目錄，本工具不遞迴寫入；殘留請對該子樹跑 "
-                                    "`--config-dir <子樹> --plane subtree --root-dir <root>`"))
+                                    "`--config-dir <root> --subtree <子樹>`"))
         elif not listed.config_file:
             continue
         elif name in tree.not_read and listed.cls == "defaults":
@@ -592,7 +597,7 @@ def _carrier_ops(node, keys):
     return ops
 
 
-#: `--plane subtree`：子樹目錄（realpath）→ conf.d 的 root（`--root-dir`）。
+#: `--subtree`：子樹目錄（realpath）→ conf.d 的 root（`--config-dir`）。
 #: da-guard write 依路徑在整棵樹裡的位置判它（同 `_lib_parse_cache.subtree_reader`
 #: 的讀法）：在子樹上跑會把子樹當 root 判，子樹載體合法的字串值就被當成 root
 #: defaults 拒寫。
@@ -603,7 +608,7 @@ def _edit_files(config_dir, items):
     """ADR-036 §2（#3206）：`[(path, ops), ...]` 交給 `da-guard write`，全部或一個
     都不寫（`_lib_confedit.edit_all`：一次 da-guard、整批判定，任一被拒就
     `EditsRefused`、一個位元組都不寫；全部通過才寫，寫到一半失敗是
-    `PartialWrite`，列出已寫入的檔）。*config_dir* 是 `--plane subtree` 的子樹時
+    `PartialWrite`，列出已寫入的檔）。*config_dir* 是 `--subtree` 的子樹時
     （`_EDIT_ROOTS`），edit 在 root 上跑、路徑是子樹裡的那個檔。"""
     base = Path(config_dir)
     root = _EDIT_ROOTS.get(os.path.realpath(base))
@@ -882,7 +887,8 @@ def _health_reason(key, raw, kind):
     return (f"`defaults:` 的 {key} 的值 {raw} exporter 讀不成數字（defaults 的型別是 "
             f"map[string]float64），這份載體會被整份丟棄，下架不會生效；請先修掉它。"
             f"若這個 --config-dir 其實是子樹載體（exporter 的 -config-dir 之下的"
-            f"目錄），請加 `--plane subtree --root-dir <exporter 的 -config-dir>`")
+            f"目錄），請把 --config-dir 改成 exporter 的 -config-dir，並加 "
+            f"`--subtree <相對它的路徑>`")
 
 
 @_lib_parse_cache.exit_on_parse_tree_error  # ADR-036 §2: no usable da-guard → rc 2
@@ -909,64 +915,67 @@ def _main():
                          help="conf.d 目錄路徑")
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只預覽)")
-    parser.add_argument("--plane", choices=("root", "subtree"), default="root",
-                        help="這個 --config-dir 是 conf.d 的 root（預設）還是"
-                             "一層子樹載體。root 會對這一層 `_` 前綴檔做載體"
-                             "體檢；subtree 跳過（子樹平面的字串值合法），並需要 --root-dir")
-    parser.add_argument("--root-dir", default=None,
-                        help="--plane subtree 時必填：exporter 的 -config-dir（conf.d 的 "
-                             "root），--config-dir 必須是它底下 exporter 會走進的目錄")
+    # #3902: --config-dir is always the conf.d ROOT — the one tree given,
+    # declared and judged. The directory below it this run works on is a
+    # path RELATIVE to it, so the root is said once and the two cannot
+    # disagree (two flags, one of which had to lie under the other, did).
+    parser.add_argument("--subtree", default=None, metavar="DIR",
+                        help="只處理 --config-dir 底下的這個子樹：相對 --config-dir 的路徑"
+                             "（例如 team 或 team/db），必須是 exporter 會走進的目錄。"
+                             "不給就是 conf.d 的 root 這一層：會對這一層 `_` 前綴檔做載體"
+                             "體檢；子樹跳過（子樹平面的字串值合法）。"
+                             "名字以 - 開頭時寫成 --subtree=<名字>")
 
     args = parser.parse_args()
-    if args.plane == "subtree":
-        # #3206: a subtree is not a root — `da-guard parse-tree` run on it
-        # judges it as one (a subtree carrier's legal string value reads as a
-        # root default the exporter drops). The run's index is the ROOT's
-        # tree-mode document: the shared refusal is taken on the whole tree,
-        # and the subtree's reader is cut from it (`subtree_reader`); the
-        # writes stay in --config-dir.
-        if args.root_dir is None:
-            parser.error("--plane subtree requires --root-dir <the conf.d root>")
-        try:
-            _lib_parse_cache.subtree_reader(args.config_dir, args.root_dir)
-        except ValueError as exc:
-            # A --config-dir that is not a usable path is refused as that,
-            # naming the flag (#3276), before the plane's own refusal.
-            _lib_input.selected(args, "config_dir", lang="zh")
-            parser.error(f"--config-dir / --root-dir: {exc}")
-        _EDIT_ROOTS[os.path.realpath(args.config_dir)] = args.root_dir
-    elif args.root_dir is not None:
-        parser.error("--root-dir is for --plane subtree only")
     # #3751: judged once, before anything is printed, read or written — the
     # path (#3276), a root da-guard cannot list — each refusal naming
-    # --config-dir (a CallerError: rc 2 through `run()`). On the subtree
-    # plane the reader judged is the one `subtree_reader` cut from the
-    # root's document above, never a parse-tree run on the subtree.
-    _lib_parse_cache.declared_trees(args, "config_dir", lang="zh")
-    return _deprecate(args)
+    # --config-dir (a CallerError: rc 2 through `run()`).
+    [root] = (str(r) for r in _lib_parse_cache.declared_trees(args, "config_dir", lang="zh"))
+    if args.subtree is None:
+        return _deprecate(args, root, root, None)
+    # #3206: a subtree is not a root — `da-guard parse-tree` run on it judges
+    # it as one (a subtree carrier's legal string value reads as a root
+    # default the exporter drops). The run's index is the ROOT's tree-mode
+    # document, just judged: the shared refusal is taken on the whole tree,
+    # and the subtree's reader is cut from it (`subtree_reader`); the writes
+    # stay in the subtree.
+    given = args.subtree
+    rel = Path(os.path.normpath(given)).as_posix()  # `team/`, `./team` → `team`
+    work = os.path.join(root, rel)
+    try:
+        if os.path.isabs(given) or ".." in given.replace(os.sep, "/").split("/"):
+            raise ValueError("不是 --config-dir 底下的相對路徑")
+        _lib_parse_cache.subtree_reader(work, root)
+    except ValueError as exc:
+        parser.error(f"--subtree {safe_label(given)}: {exc}")
+    _EDIT_ROOTS[os.path.realpath(work)] = root
+    return _deprecate(args, work, root, rel)
 
 
-def _deprecate(args):
-    """The run, once the arguments are parsed and --config-dir is judged."""
+def _deprecate(args, work, root, rel):
+    """The run, once the arguments are parsed and --config-dir is judged:
+    *work* is the directory this run reads and writes — *root* (the conf.d
+    --config-dir names) itself, or the `--subtree` *rel* (root-relative) of it."""
+    plane = "root" if rel is None else "subtree"
     mode = "執行" if args.execute else "預覽"
 
     print(f"{'='*60}")
     print(f"🗑️  規則下架工具 — {mode}模式")
     print(f"{'='*60}\n")
     print(f"目標 Metrics: {', '.join(args.metrics)}")
-    print(f"Config 目錄: {args.config_dir}\n")
+    print(f"Config 目錄: {work}\n")
 
     # 目錄的性質印一次、印在 per-metric 迴圈之前（#1607）。`warn_nested` 與這次
     # 平面列舉同一個 scope；列舉失敗就讓它失敗，`scan_for_metric` 會用同一個目錄。
-    base = Path(args.config_dir)
-    reader = _reader(args.config_dir)
+    base = Path(work)
+    reader = _reader(work)
     # #3206：這一輪只有一份索引——`reader` 讀內容的那份文件。取得它就是共用的
     # fail-closed 出口（`ConfdReader.tree`）：樹上有 da-guard 驗證會點名的路徑
     # （列不出內容的目錄、懸空連結、名字像設定檔的目錄、exporter 解不開的檔……）
     # 就在任何寫入之前逐條點名、rc 2——不再「略過」或結尾列為未完成。
     listing = reader.listing()
     warn_nested(base, tool="deprecate_rule", listing=listing)
-    unreachable = out_of_reach(base, args.plane)
+    unreachable = out_of_reach(base, plane)
     if unreachable:
         print("\n  ℹ️  本工具射程外（若仍持有該 metric 的 key，結尾會具名、rc 1）：")
         for name, reason in unreachable:
@@ -976,7 +985,7 @@ def _deprecate(args):
     # #1822: 任何寫入之前（預覽與 --execute 一樣）問 exporter 一次。da-guard 的
     # stderr 整份照轉（每行加前綴）；問不到就明說「未體檢」，行為照舊。
     oracle, unchecked, guard_lines = exporter_precheck(
-        args.config_dir, args.metrics)
+        work, args.metrics)
     _print_guard_lines("da-guard key-refs（現況）", guard_lines)
     if unchecked:
         print(f"\n  ⚠️  未體檢：{safe_label(unchecked)}——exporter 讀不讀得進這棵樹、"
@@ -999,7 +1008,7 @@ def _deprecate(args):
             continue
         items = carrier_health_at(e)
         name = safe_label(e.name)
-        if args.plane != "root":
+        if plane != "root":
             # 子樹載體的字串值合法；本工具自己讀不了／讀不到的仍要擋寫入。
             if reader.entry(e.name).cls == CLS_DEFAULTS:
                 items = [i for i in items if i[2] == UNREADABLE]
@@ -1033,9 +1042,9 @@ def _deprecate(args):
             print(f"  ⚠️  da-guard 列不出 {safe_label(u.file)} 的 key"
                   f"（{safe_label(u.reason)}）——這份檔的其他拼法未體檢")
         dropped = []
-        if args.plane == "root":
+        if plane == "root":
             after, after_why = exporter_after_writes(
-                args.config_dir, args.metrics, spellings)
+                work, args.metrics, spellings)
             if after is not None:
                 dropped += [(n, "本輪寫入後仍在 parse_failed") for n in after]
             else:
@@ -1048,11 +1057,11 @@ def _deprecate(args):
             if ("/" in name or name == "." or entry is None or not entry.reserved
                     or name in blocked):
                 continue
-            if args.plane != "root":
+            if plane != "root":
                 continue
             health.setdefault(name, []).append((None, why, EXPORTER_DROPPED))
             blocked.add(name)
-    if args.plane != "root" and carriers_here:
+    if plane != "root" and carriers_here:
         print("  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
               "（`computeEffectiveConfig` 走 map[string]any），"
               "root 的 map[string]float64 規則不適用於這一層。")
@@ -1102,8 +1111,8 @@ def _deprecate(args):
         print(f"{'─'*40}\n")
 
         # 掃描（印出的 Step 1 之前）
-        findings = scan_for_metric(metric, args.config_dir, spellings[metric])
-        nested = nested_residue(metric, args.config_dir, spellings[metric])
+        findings = scan_for_metric(metric, work, spellings[metric])
+        nested = nested_residue(metric, work, spellings[metric])
         findings_by_metric[metric] = findings
         nested_by_metric[metric] = nested
         if findings:
@@ -1124,7 +1133,7 @@ def _deprecate(args):
         warned = set()
         for f in findings + nested:
             for section, _key, _val in f["occurrences"]:
-                if section_owner(f["filename"], section, args.plane,
+                if section_owner(f["filename"], section, plane,
                                  cls=f["cls"]) != OWNER_EXPORTER:
                     continue
                 block = section.split(".", 1)[0]
@@ -1132,14 +1141,14 @@ def _deprecate(args):
                     continue
                 warned.add((f["filename"], block))
                 print(f"  ⚠️  {safe_label(f['filename'])} "
-                      f"{safe_label(exporter_drop_reason(f['filename'], section, args.plane, cls=f['cls']))}")
+                      f"{safe_label(exporter_drop_reason(f['filename'], section, plane, cls=f['cls']))}")
 
         # Step 1 (as printed): 從每個 defaults 載體移除相關 key
-        if args.plane != "root" and not carriers_here:
+        if plane != "root" and not carriers_here:
             print("\n  Step 1: 此子樹沒有自己的載體，跳過")
             results = []
         else:
-            results = remove_from_all_defaults(metric, args.config_dir,
+            results = remove_from_all_defaults(metric, work,
                                                spellings=spellings[metric],
                                                done=write)
         for carrier, ok, msg, removed in results:
@@ -1158,7 +1167,7 @@ def _deprecate(args):
 
         # Step 2 (as printed): 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
-        removed = remove_from_tenants(metric, args.config_dir,
+        removed = remove_from_tenants(metric, work,
                                       spellings=spellings[metric], done=write)
         if removed:
             for filename, tenant, key, val in removed:
@@ -1182,25 +1191,23 @@ def _deprecate(args):
     # 載體體檢已具名的檔不再以「無法讀取」重複列。
     after = None
     if write:
-        after = (_lib_parse_cache.subtree_reader(args.config_dir, args.root_dir, fresh=True)
-                 if args.plane == "subtree" else _lib_parse_cache.ConfdReader(args.config_dir))
+        after = (_lib_parse_cache.subtree_reader(work, root, fresh=True)
+                 if plane == "subtree" else _lib_parse_cache.ConfdReader(work))
     for metric in args.metrics:
         # After the writes: a NEW parse-tree read (the run's document is the
         # tree as it was before them).
-        findings = (scan_for_metric(metric, args.config_dir, spellings[metric],
+        findings = (scan_for_metric(metric, work, spellings[metric],
                                     reader=after)
                     if write else findings_by_metric[metric])
         findings = findings + nested_by_metric[metric]
         reserved = {f["filename"] for f in findings if f["reserved"]}
         for name, section, key, val, designed in unclearable_occurrences(
-                metric, findings, predict=not write, plane=args.plane):
+                metric, findings, predict=not write, plane=plane):
             if designed:
-                # The guidance names the conf.d ROOT: --root-dir on the subtree
-                # plane (#3206), --config-dir on the root plane.
-                reason = manual_reason(name, section, key, val, args.config_dir,
-                                       reserved=name in reserved,
-                                       root_dir=args.root_dir if args.plane == "subtree"
-                                       else None)
+                # The guidance names the conf.d ROOT (--config-dir) and the
+                # subtree relative to it (#3902).
+                reason = manual_reason(name, section, key, val, root,
+                                       reserved=name in reserved, rel=rel)
             else:
                 reason = f"重掃仍有引用：[{section}] {key}: {val}"
             incomplete.append((metric, name, reason))

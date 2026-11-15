@@ -235,11 +235,13 @@ describe('readThresholdRow ↔ the exporter', () => {
       .toEqual(['Threshold 100000000000000000000 exceeds 100, verify if correct']);
   });
 
-  it('a page that reads thresholds through the engine parses with parseTenantYaml, not parseYaml', () => {
+  it('a page that reads thresholds through the engine or the reader parses with parseTenantYaml, not parseYaml', () => {
     // parseYaml's numbers are the YAML parser's reading; the reader takes a
     // JavaScript number as given (a number field has no text). So the wiring
     // is what keeps `0x1F` out, and this holds it for every page outside
     // _common/ (a module in there that fed the engine would not be seen).
+    // A page that calls readThresholdRow itself (Routing Trace, #3957) is
+    // held as the engine's callers are.
     const toolsDir = resolve(here, '../src/interactive/tools');
     const pages = readdirSync(toolsDir, { recursive: true, encoding: 'utf8' })
       .filter((f) => /\.[jt]sx?$/.test(f) && !f.includes('_common'))
@@ -268,8 +270,11 @@ describe('readThresholdRow ↔ the exporter', () => {
     expect(importsFrom("import { a } from './x/other.js';", 'x/m.js')).toEqual([]);
 
     const engine = ['simulateAlerts', 'validateConfig', 'simulateWithDedup', '*'];
-    const engineUsers = pages.filter(([, src]) => importsFrom(src, 'sim/alert-engine.js').some((n) => engine.includes(n)));
-    expect(engineUsers.map(([f]) => f).sort()).toEqual(['AlertPreviewTab.jsx', 'YamlValidatorTab.jsx', 'alert-simulator.jsx']);
+    const reader = ['readThresholdRow', '*'];
+    const engineUsers = pages.filter(([, src]) => importsFrom(src, 'sim/alert-engine.js').some((n) => engine.includes(n))
+      || importsFrom(src, 'validation/threshold-value.js').some((n) => reader.includes(n)));
+    expect(engineUsers.map(([f]) => f).sort())
+      .toEqual(['AlertPreviewTab.jsx', 'RoutingTraceTab.jsx', 'YamlValidatorTab.jsx', 'alert-simulator.jsx']);
     // Only the text-keeping parse (and the duration helper) beside the
     // engine: parseYaml, loadYamlDocument and a namespace import all hand
     // over typed values.

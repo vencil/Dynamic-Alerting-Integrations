@@ -1041,6 +1041,33 @@ def write_json_or_die(
 
 STDOUT_PATH = "-"
 
+#: #3107: every function an output path is written (or its directory made)
+#: through, as ``<module>.<function>``, by what it is. Names only — nothing
+#: here changes what any of them does. The write gates read it
+#: (``tests/shared/test_output_path_write_failure.py``): the population of
+#: "tools that name an output flag at a writer", and "which entry did this
+#: write come from" under the run-time write audit. A function added here or
+#: in ``_lib_yaml`` / ``_lib_atomic_write`` that takes ``flag=`` and is not
+#: named below turns that file's ``test_the_entry_point_list_is_complete`` red.
+OUTPUT_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
+    # A path the operator named on a flag: opened by the kernel, in place.
+    "operator": ("_lib_io.open_operator_output", "_lib_io.write_operator_output",
+                 "_lib_io.write_operator_output_or_die"),
+    # A committed file a tool rewrites: replaced atomically.
+    "artifact": ("_lib_io.write_repo_artifact", "_lib_atomic_write.atomic_write_text"),
+    # The names from before the two classes existed (in-place write + 0600
+    # for either kind of path); being migrated to one of the two above.
+    "legacy": ("_lib_io.write_text_secure", "_lib_io.write_json_secure",
+               "_lib_io.write_text_or_die", "_lib_io.write_json_or_die"),
+    # ``mkdir -p`` of an output directory, for either class.
+    "directory": ("_lib_io.ensure_dir", "_lib_io.ensure_dir_or_die"),
+    # Not writers: they name the flag for a write made by other code — a raw
+    # sink inside ``output_write``, the artifact's pre-read check.
+    "names_flag_only": ("_lib_io.output_write", "_lib_io.check_repo_artifact"),
+    # Call one of the above with the caller's ``flag``.
+    "wrapper": ("_lib_io.write_onboard_hints", "_lib_yaml.write_yaml_crd"),
+}
+
 
 def claim_stdout(owner: str) -> None:
     """Record that *owner* (a flag, or ``"report"`` for the tool's own stdout
@@ -1272,8 +1299,22 @@ def check_repo_artifact(path: Any, *, flag: Optional[str] = None) -> str:
     return p
 
 
+def _repo_artifact_mode(path: str) -> int:
+    """The mode a rewritten artifact gets when the caller names none: what
+    git would check it out with. Git tracks one bit of a file's mode, the
+    owner's execute bit, so that bit is kept and nothing else is read — not
+    the other bits of the file being replaced, not the umask: ``0o755`` for
+    an existing file that has ``S_IXUSR``, ``0o644`` for any other and for a
+    new one."""
+    try:
+        executable = bool(os.stat(path).st_mode & stat.S_IXUSR)
+    except OSError:
+        executable = False
+    return 0o755 if executable else 0o644
+
+
 def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
-                        mode: int = 0o644, atomic_only: bool = False) -> None:
+                        mode: Optional[int] = None, atomic_only: bool = False) -> None:
     """Atomically rewrite a committed artifact a regen tool owns.
 
     The ``_atomic_write`` contract, behind two kernel-side preconditions:
@@ -1282,8 +1323,16 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     before any userspace ``realpath`` runs — and an existing target must be
     a regular file. ``-``, devices, FIFOs and sockets are
     refused with :class:`OutputWriteError`.
+
+    *mode* (#3107): the permission bits the file ends up with. Left out, it
+    is :func:`_repo_artifact_mode` — a regen leaves a tracked file the way a
+    checkout made it (``0o644``, or ``0o755`` for an executable one), where
+    the old names made it ``0o600`` behind ``git status``'s back. A caller
+    that passes one (a manifest holding secrets: ``0o600``) gets exactly it.
     """
     p = check_repo_artifact(path, flag=flag)
+    if mode is None:
+        mode = _repo_artifact_mode(p)
     # Imported here: _lib_atomic_write imports this module (OutputWriteError).
     from _lib_atomic_write import atomic_write_text  # noqa: E402  (implementation)
     atomic_write_text(p, content, mode=mode, flag=flag, atomic_only=atomic_only)

@@ -63,8 +63,11 @@ from _lib_python import YamlFileError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
+import _lib_input  # noqa: E402  (#3902 the two trees are declared inputs)
+import _lib_parse_cache  # noqa: E402  (#3902 their one judgement)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, OutputNotSerializable, Report, encode_json)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, InputChanged,
+    OutputNotSerializable, Report, encode_json)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import THRESHOLD_SEVERITIES  # noqa: E402  (#3071)
 # #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
@@ -1558,6 +1561,16 @@ def _end_refused(args, bad, lines):
     sys.exit(EXIT_CALLER_ERROR)
 
 
+def _end_input_refused(args, exc):
+    """#3902: a declared tree (`--config-dir` / `--baseline`) refused — at
+    its judgement (`CallerError`) or changed after it (`InputChanged`): its
+    one line naming the flag on stderr, then the not-run report whose
+    `reason` is the refusal's own (`dir_not_found`, `input_empty`,
+    `input_changed`, …: `_lib_input`'s, never spelled here)."""
+    print(exc.error_line, file=sys.stderr)
+    _end_not_run(args, "caller_error", exc.reason, EXIT_CALLER_ERROR)
+
+
 def _end_not_run(args, status, reason, rc, recipe_tenants=()):
     """A path that ran no backtest: its envelope on stdout under `--json`,
     the same envelope in `-o`, why in `--markdown-output`, then exit *rc*."""
@@ -1607,16 +1620,20 @@ def _main():
     # `--git-diff=x` answers first.
     parser.add_argument("--git-diff", nargs="?", const=True, default=None,
                         help=argparse.SUPPRESS)
-    source.add_argument(
-        "--config-dir",
-        help="Current config directory (requires --baseline)",
-    )
+    # #3902: both trees are declared inputs, judged once (`declared_trees`,
+    # below); a tree with no config file is refused — there is no row to
+    # compare (da-guard served-values refuses it too).
+    _lib_input.add_input(source, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED,
+                         help="Current config directory (requires --baseline)")
     source.add_argument(
         "--tenant",
         help="Single tenant (requires --metric and at least one of --old-value/--new-value)",
     )
 
-    parser.add_argument("--baseline", help="Baseline config directory (with --config-dir)")
+    _lib_input.add_input(parser, "--baseline", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED,
+                         help="Baseline config directory (with --config-dir)")
     parser.add_argument("--metric", help="Metric key (with --tenant)")
     parser.add_argument("--old-value", help="Old threshold value (with --tenant)")
     parser.add_argument("--new-value", help="New threshold value (with --tenant)")
@@ -1677,7 +1694,18 @@ def _main():
     # #3089 (b): after the argument checks, before any served-values,
     # observed-map or Prometheus work — every path below writes the outputs.
     _preflight_outputs(args)
+    try:
+        return _backtest(args)
+    except InputChanged as exc:
+        # #3902: a declared tree that changed after its judgement (#3724).
+        # ⛔ Caught here only to write this tool's not-run report (#3089:
+        # every path after the preflight writes `-o` / `--markdown-output`);
+        # the run still ends, rc 2, on the one line naming the flag.
+        _end_input_refused(args, exc)
 
+
+def _backtest(args):
+    """The run, once the arguments are checked and the outputs preflighted."""
     # #2119: the two trees are read by da-guard, and this runs BEFORE the
     # Prometheus check: `--skip-if-unavailable` is about Prometheus, and must
     # not turn "a tree the exporter refuses" into a green skip.
@@ -1694,6 +1722,8 @@ def _main():
             # through the shared refusal, and this tool still writes `-o` /
             # `--markdown-output` for it (`_end_refused`).
             with _lib_parse_tree.on_refusal(lambda bad, lines: _end_refused(args, bad, lines)):
+                for dest in ("baseline", "config_dir"):  # #3902: judged once, here
+                    _lib_parse_cache.declared_trees(args, dest, lang="en")
                 trees = load_trees(args.config_dir, args.baseline)
                 recipe_tenants = changed_recipe_tenants(trees)
                 if recipe_tenants:
@@ -1702,6 +1732,12 @@ def _main():
                                                         trees=trees)
         except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
             _exit_served_values_error(exc, args, recipe_tenants)
+        except CallerError as exc:  # #3902: a declared tree refused (its judgement is first)
+            _end_input_refused(args, exc)
+        except _lib_parse_tree.ParseTreeError as exc:  # the listing's own da-guard run
+            print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
+            _end_not_run(args, "caller_error", "served_values_unavailable", EXIT_CALLER_ERROR,
+                         recipe_tenants)
 
     # #3017: the observed-map says what every alert compares; without it no
     # change can be backtested, so an unusable map is rc 2 — and BEFORE the

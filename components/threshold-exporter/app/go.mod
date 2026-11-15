@@ -1,6 +1,6 @@
 module github.com/vencil/threshold-exporter
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/VictoriaMetrics/metricsql v0.87.0

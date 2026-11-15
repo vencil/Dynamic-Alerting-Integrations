@@ -645,11 +645,11 @@ def write_observed_map(
     """
     if yaml is None:
         raise RuntimeError("pyyaml required")
-    # write_text_secure performs the os.chmod(0o600) that the repo SAST
-    # convention (tests/shared/test_sast.py) requires for write-mode files.
+    # #3107: the map is a tracked file — replaced whole, and left with the
+    # mode a checkout gave it (the old writer made it 0600).
     sys.path.insert(0, _THIS_DIR)
     sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-    from _lib_python import write_text_secure  # noqa: E402
+    from _lib_io import write_repo_artifact  # noqa: E402
 
     packs = pack_paths or default_pack_paths()
     out = out_path or DEFAULT_MAP_PATH
@@ -675,7 +675,7 @@ def write_observed_map(
         "keys": keys,
     }
     body = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, default_flow_style=False)
-    write_text_secure(out, _MAP_HEADER + body)
+    write_repo_artifact(out, _MAP_HEADER + body)
     nr = sum(1 for v in keys.values() if v.get("needs_review"))
     return {
         "path": out,

@@ -4,6 +4,10 @@ name: Self-Review-Pass-2 Trailer
 # `Self-Review-Pass-2:` trailer (per testing-playbook §LL v2.8.0 §5/§6 —
 # intentional-break dogfood). Issue #454.
 #
+# Doc-only PRs are exempt: the rule is defined once, in
+# `scripts/tools/dx/pr_preflight.py` `is_doc_only_path` /
+# `PASS2_DOC_ONLY_RULE` (#3935). Do not restate it here.
+#
 # Soft-fail (continue-on-error) until trailer-adoption stabilises; the check
 # still surfaces as a separate status row on the PR so reviewers see the
 # state. Flip `continue-on-error` off once the default expectation is uniform.

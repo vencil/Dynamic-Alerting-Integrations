@@ -23,7 +23,7 @@ func TestTenantWrite_BlockedTreeScanFailsClosedAndRecovers(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"stuck-t.yaml": tenantBody("stuck-t")})
 	w := newTestWriter(dir, dir)
 	w.treeScanTimeout = 200 * time.Millisecond
-	_, _, release := holdFirstWalk(t, w)
+	walks, _, release := holdFirstWalk(t, w)
 	merge := func([]byte) (string, error) { return tenantBody("stuck-t"), nil }
 
 	start := time.Now()
@@ -36,14 +36,28 @@ func TestTenantWrite_BlockedTreeScanFailsClosedAndRecovers(t *testing.T) {
 	}
 
 	// While that walk is still blocked, a second write does not start (and
-	// leak) another one behind it.
-	start = time.Now()
-	_, err = w.WriteMerged(context.Background(), "stuck-t", "op@example.com", merge)
+	// leak) another one behind it, nor wait on one. #3943: asserted as
+	// behaviour, not as "took < the bound" (a write's own git work outran
+	// 200 ms on a loaded host). The bound is raised to an hour first, so a
+	// write that waited on a walk's bound would be still waiting at the 10 s
+	// below, and a write that walked would be counted by the seam.
+	w.treeScanTimeout = time.Hour
+	second := make(chan error, 1)
+	go func() {
+		_, err := w.WriteMerged(context.Background(), "stuck-t", "op@example.com", merge)
+		second <- err
+	}()
+	select {
+	case err = <-second:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("second write still running after 10s with an hour's walk bound: " +
+			"it waited on a walk instead of failing at once")
+	}
 	if !errors.Is(err, ErrTenantTreeScan) || !errors.Is(err, errTreeScanStuck) {
 		t.Fatalf("second write err = %v, want ErrTenantTreeScan wrapping errTreeScanStuck", err)
 	}
-	if took := time.Since(start); took >= w.treeScanTimeout {
-		t.Errorf("second write took %v: it waited on a new walk instead of failing at once", took)
+	if n := walks.Load(); n != 1 {
+		t.Errorf("walks = %d, want 1: a write while stuck must not start another walk", n)
 	}
 
 	// Release the walk: it returns, the counter drains, and the next write

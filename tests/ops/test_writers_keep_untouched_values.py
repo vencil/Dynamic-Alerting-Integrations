@@ -399,7 +399,7 @@ def test_patch_config_writes_a_typed_severity_value_as_a_string():
 def test_deprecate_rule_still_names_a_scalar_defaults_by_its_yaml_type(tmp_path):
     """The refusal names the type yaml.v3 gives it (`!!int`, from parse-tree,
     ADR-036 §2), not `RawPlain`. A scalar `defaults:` is servable only in a
-    subtree carrier, so this is the `--plane subtree` reading: the subtree's
+    subtree carrier, so this is the `--subtree` reading: the subtree's
     reader cut from the root's index (#3206)."""
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 1\n", encoding="utf-8")
     (tmp_path / "team").mkdir()
