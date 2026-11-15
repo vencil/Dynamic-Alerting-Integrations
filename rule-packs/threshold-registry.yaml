@@ -921,8 +921,8 @@ keys:
     blocker:
       kind: unmeasured
       tracking: 3979
-      reason: "No quotable source for 0 on this exporter's metric found yet, and for: 30s may fire during a rolling restart"
-      reason_zh: "尚未找到可逐字引用、針對這個 exporter 指標說明 0 的來源；for: 30s 在 broker 滾動重啟時可能就會響"
+      reason: "Only one source reads this exporter's metric (Strimzi, an example to adapt), and no source gives a for: that a rolling restart will not trip"
+      reason_zh: "讀這個 exporter 指標的來源只有 Strimzi 一個（自稱是要自行調整的範例）；也沒有來源給出滾動重啟不會誤觸的 for: 長度"
   kafka_broker_count:
     pack: kafka
     tier: defaults
