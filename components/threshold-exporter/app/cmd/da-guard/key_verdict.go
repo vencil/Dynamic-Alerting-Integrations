@@ -46,6 +46,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/keyverdict"
 )
@@ -261,6 +262,9 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	in.RootProfiles = opts.profiles
 	in.Values = rep.ValueProblems
 	in.Schedules = rep.ScheduleProblems
+	// #3881: the subtree_default_reserved_key set, filtered as da-guard's own
+	// finding filters it — one set for both.
+	in.SubtreeReserved = guard.SubtreeReservedReported(rep.SubtreeReserved, rep.DefaultsFiles, rep.ParseFailed)
 	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants, setAsideFiles)
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a

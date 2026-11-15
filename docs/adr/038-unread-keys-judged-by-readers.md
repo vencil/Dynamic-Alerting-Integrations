@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-14
+updated_at: 2026-11-15
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -69,6 +69,8 @@ updated_at: 2026-11-14
 2026-11-14 修訂：判決對每個租戶判全天：任一時段有讀取端讀就算被讀，整天都沒人讀才是 `unread`，只有 `expires:` 是否已過依執行的時間點判；/metrics 收集不了的時段以送進 registry 之前已產生的列判。判決不再判閾值的值（讀不懂、非有限數的值交給主閘門）；判決文件拿掉只在那一刻成立的 `served`，格式升為 `da-guard.key-verdict/v3` 與 `da-tools.explain-keys/v2`（決定 1、5、8、9、10）。
 
 2026-11-14 修訂：`key_checks` 改成每項檢查一筆結構化記錄（種類、作者寫的鍵與它的指標名、改名時替代的指標名、每種一句不帶作者文字的說明），產生器與 validate-config 依這些欄位以固定句型印出，不再原樣印 Go 寫好、引用整個鍵與 label 值的句子；判決文件升為 `da-guard.key-verdict/v4`、served-values 文件升為 `da-guard.served-values/v2`（決定 11）。
+
+2026-11-15 修訂：子目錄 `_defaults.yaml` 的 defaults 寫了 exporter 不套用的保留鍵，判決報 `unread`、原因 `subtree_default_reserved_key`，與 da-guard 同名 finding 讀同一份集合（決定 10）。
 
 ## 摘要
 
@@ -422,6 +424,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
 | 保留鍵寫成排程（`overrides:` 時窗，或 `{default: …, expires: …}` 形式的 `expires:`／`reason:`） | exporter 與 annotation 這些讀取端只讀 `default`，時窗與到期時間都不生效。判決報 `schedule_unread`，判在寫它的檔與層，規則與 `value_unread` 相同；涵蓋那一層有任何讀取端讀的鍵，不只 exporter 讀的（annotation 讀的 `_namespaces` 也只讀 `default`；產生器讀的 `_routing_profile` 寫成 mapping 時，產生器整棵樹拒收，`routing_profile_invalid`）；那一層沒有讀取端讀的鍵（例如 profile 裡的 `_severity_dedup`）只報那個鍵本身沒人讀。寫入閘門以寫下的原樣比對新舊，挪動時窗算新的；tenant-api 不因它另外拒收，沿用決定 12 的寫入檢查 | 租戶檔：error；平台檔與 profile：notice |
+| 子目錄 `_defaults.yaml` 的 defaults 寫了保留鍵，或寫了做不成閾值列的 `_` 鍵（例如 `_silent_mode: all`，也包括排程寫法） | 子目錄 defaults 不帶這些鍵，exporter 不論值為何都不套用。判決報 `unread`、原因 `subtree_default_reserved_key`，掛在子目錄檔，每個檔與鍵一筆，列出繼承它的租戶。這份集合與 da-guard 主檢查的同名 finding 共用一個函式，所以一邊報、另一邊一定也報。`da-guard write` 只列主檢查那一筆。路由鍵（`_routing`、`_routing_<…>`）由產生器自己判，不在此列 | error |
 
 值在寫它的那一份檔、那一層判，不在合併後的值上判。合併後的租戶設定已經帶著 profile 與根平台檔 `tenants:` 填進來的值；在那上面判，profile 裡一個錯字會算到每個選用它的租戶頭上，擋下它們與這個值無關的寫入，而它們沒辦法在自己的檔裡修。例如 profile `gold` 寫了 `_silent_mode: purple`，選用它的 `ta`、`tb` 只得到一筆掛在 profile 檔上的 notice，列出這兩個租戶：
 
