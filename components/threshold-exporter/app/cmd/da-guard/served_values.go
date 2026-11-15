@@ -44,8 +44,10 @@ const servedValuesCmd = "served-values"
 
 // servedValuesSchema names this document's shape. A reader refuses any other
 // value (and a document without one), so a change to the shape a reader
-// relies on is a new value here (ADR-037).
-const servedValuesSchema = "da-guard.served-values/v1"
+// relies on is a new value here (ADR-037), and a reader names an earlier
+// value as a da-guard older than itself. v1 wrote each tenant's key_checks
+// as sentences that quoted the key; v2 writes records (#3703).
+const servedValuesSchema = "da-guard.served-values/v2"
 
 // customAlertsKey is the reserved key whose rows are the tenant's custom
 // alerts; its value is the list of those rows rather than one number.

@@ -283,7 +283,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     # never a value (`tv._key_checks`), and the tenant through `shown_key`.
     if not isinstance(doc["key_checks"], dict):
         raise TypeError(f"key_checks is a {type(doc['key_checks']).__name__}, not an object")
-    checks = {t: tv._key_checks(c, f"key_checks.{shown_key(t)}", older_shape_is_older=False)
+    checks = {t: tv._key_checks(c, f"key_checks.{shown_key(t)}")
               for t, c in doc["key_checks"].items()}
     return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks, undecidable_blocks)
 

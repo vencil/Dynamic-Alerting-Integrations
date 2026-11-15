@@ -119,8 +119,8 @@ def test_no_key_check_carries_the_key_as_written(tmp_path, kind, place):
 # ── Records of the wrong shape (#3703 review) ─────────────────────────────
 #
 # A record da-guard writes wrong is output this reader cannot read: it is
-# reported as such (a `DaGuardError` that is `broken`, or `stale` for the
-# shape an older da-guard wrote), never read as some other answer — and the
+# reported as such (a `DaGuardError` that is `broken`, or `stale` for a
+# document whose schema is an older version), never read as some other answer — and the
 # message that reports it names the place and a type, never a value: the
 # record carries the author's key. A shim runs the real da-guard and breaks
 # its `key_checks` one way per cell; every way of breaking a record is
@@ -146,7 +146,9 @@ checks = d["key_checks"] if kv else {t: v["key_checks"] for t, v in d["tenants"]
 if not checks.get("t-a"):
     sys.exit("shim: the real da-guard wrote no key check for t-a: %r" % (checks,))
 where, value = brk["where"], brk.get("value")
-if where == "container":
+if where == "schema":
+    d["schema"] = value[brk["sub"]]
+elif where == "container":
     d["key_checks"] = value
 elif where == "tenant" and kv:
     d["key_checks"]["t-a"] = value
@@ -202,8 +204,13 @@ def _breaks() -> list[tuple[str, dict, str]]:
     out += [
         ("container", {"where": "container", "value": [_CANARY]}, "broken"),
         ("tenant", {"where": "tenant", "value": _CANARY}, "broken"),
+        # #3703: the sentences an older da-guard wrote, under this reader's
+        # schema, are broken output; an older da-guard is named by its schema.
         ("tenant-older-shape", {"where": "tenant",
-                                "value": {"version_labels": [f"WARN {_CANARY}"], "renames": []}}, "older"),
+                                "value": {"version_labels": [f"WARN {_CANARY}"], "renames": []}}, "broken"),
+        ("older-schema", {"where": "schema",
+                          "value": {"key-verdict": klv.OLDER_SCHEMAS[-1],
+                                    "served-values": tv.SERVED_VALUES_OLDER_SCHEMAS[-1]}}, "older"),
         ("record", {"where": "record", "value": _CANARY}, "broken"),
     ]
     return out
@@ -264,7 +271,7 @@ def test_a_broken_record_is_reported_without_its_content(tmp_path, monkeypatch, 
         with pytest.raises(tv.DaGuardError) as ei:
             read()
         err = ei.value
-        stale = expected == "older" and sub == "served-values"
+        stale = expected == "older"
         assert (err.stale, err.broken) == (stale, not stale), (err.stale, err.broken, str(err))
         _no_canary(str(err))
 
