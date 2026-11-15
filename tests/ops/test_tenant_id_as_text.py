@@ -563,21 +563,25 @@ def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
 # while the body still said `010` — tenant-api finds a tenant by file name
 # and answered 404. A name Kubernetes reads as a number is refused now.
 
+# #3832: keys no built-in value arms, so the render — written through
+# `da-guard write` into a tree with no root yet — is judged as before: a
+# default-armed key would have a base there, and `0x1F` / `12:30` are values
+# the exporter refuses.
 _VALUES_BLOCK = ("    t1:\n"
                  "      mysql_connection_usage_percent: {q}010{q}\n"
-                 "      container_cpu: {q}0x1F{q}\n"
-                 "      pg_connections: {q}12:30{q}\n"
+                 "      mysql_slow_queries: {q}0x1F{q}\n"
+                 "      redis_evicted_keys: {q}12:30{q}\n"
                  "      _metadata:\n"
                  "        owner: {q}2026-01-02T03:04:05Z{q}\n")
 # `_VALUES_BLOCK` (unquoted) as Kubernetes stores it, written by hand.
 _VALUES_AS_STORED = ("    t1:\n"
                      "      mysql_connection_usage_percent: 8\n"
-                     "      container_cpu: 31\n"
-                     "      pg_connections: \"12:30\"\n"
+                     "      mysql_slow_queries: 31\n"
+                     "      redis_evicted_keys: \"12:30\"\n"
                      "      _metadata:\n"
                      "        owner: \"2026-01-02T03:04:05Z\"\n")
-_VALUES_DEFAULTS = ("defaults:\n  mysql_connection_usage_percent: 1\n  container_cpu: 1\n"
-                    "  pg_connections: 1\n")
+_VALUES_DEFAULTS = ("defaults:\n  mysql_connection_usage_percent: 1\n  mysql_slow_queries: 1\n"
+                    "  redis_evicted_keys: 1\n")
 
 
 def _render_values(tmp_path: Path, q: str) -> tuple[str, Path]:
@@ -599,8 +603,8 @@ def test_da_assembler_writes_unquoted_values_as_kubernetes_stores_them(
     keep them text. Before #2476 (#2331): the CR's text, as written."""
     _block, out = _render_values(tmp_path, "")
     body = out.read_text(encoding="utf-8")
-    for line in ("mysql_connection_usage_percent: 8\n", "container_cpu: 31\n",
-                 'pg_connections: "12:30"\n',
+    for line in ("mysql_connection_usage_percent: 8\n", "mysql_slow_queries: 31\n",
+                 'redis_evicted_keys: "12:30"\n',
                  'owner: "2026-01-02T03:04:05Z"\n'):
         assert line in body, (line, body)
 
@@ -610,8 +614,8 @@ def test_da_assembler_quoted_values_stay_quoted(tmp_path):
     """Control: a quoted value was a string before and still is."""
     _block, out = _render_values(tmp_path, '"')
     body = out.read_text(encoding="utf-8")
-    for line in ('mysql_connection_usage_percent: "010"\n', 'container_cpu: "0x1F"\n',
-                 'pg_connections: "12:30"\n',
+    for line in ('mysql_connection_usage_percent: "010"\n', 'mysql_slow_queries: "0x1F"\n',
+                 'redis_evicted_keys: "12:30"\n',
                  'owner: "2026-01-02T03:04:05Z"\n'):
         assert line in body, (line, body)
 

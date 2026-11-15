@@ -137,8 +137,8 @@ func seedBuiltinDefaults(d map[string]float64) {
 }
 
 // SeedBuiltinDefaults is seedBuiltinDefaults, for package main's flat
-// reload of a tree with no `_defaults` carrier (config.go), whose root
-// therefore cannot be unreadable.
+// incremental reload (config.go) and its single-file load, each of which
+// asks RootBuiltinWithheld itself first.
 func SeedBuiltinDefaults(d map[string]float64) { seedBuiltinDefaults(d) }
 
 // builtinChainBase is the built-in layer as a defaults-chain block
@@ -171,6 +171,41 @@ func (s *TreeScan) RootDefaultsUnreadable() bool {
 		}
 	}
 	return false
+}
+
+// RootBuiltinWithheld reports whether the built-in layer is withheld from
+// the tree the scan walked: the root holds a defaults carrier the walk could
+// not stat or read (RootDefaultsUnreadable), or the selected root carrier is
+// one the exporter's build drops whole (DropsConfFile: a syntax error, or a
+// document its typed decode refuses, such as a list where a number goes).
+// Every reader asks this one predicate, so /metrics, /effective, the
+// tenant-api write check and the exporter's merged_hash withhold together.
+// A carrier whose bytes the scan did not keep is read from disk; one that
+// cannot be read then withholds too.
+func (s *TreeScan) RootBuiltinWithheld() bool {
+	if s == nil {
+		return false
+	}
+	if s.RootDefaultsUnreadable() {
+		return true
+	}
+	key := selectedRootCarrierKey(s)
+	if key == "" {
+		return false
+	}
+	f := s.Files[key]
+	if f == nil {
+		return false
+	}
+	data := f.Data
+	if data == nil {
+		b, err := ReadConfFile(f.AbsPath)
+		if err != nil {
+			return true
+		}
+		data = b
+	}
+	return DropsConfFile(key, data, true)
 }
 
 // rootRefusedAsBuiltin is the chain's blocks as the effective view and

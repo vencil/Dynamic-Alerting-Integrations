@@ -1156,6 +1156,17 @@ CHANGELOG_PATH = _in_repo("CHANGELOG.md")
 BREAKING_MARKER = "⚠️ breaking"
 
 
+def _changelog_tool():
+    """scripts/tools/dx/generate_changelog.py, imported on first use."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_generate_changelog_for_registry",
+        os.path.join(_THIS_DIR, "..", "dx", "generate_changelog.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def check_builtin_digest_announced(
         doc: dict,
         fragments_dir: Optional[str] = None,
@@ -1165,7 +1176,8 @@ def check_builtin_digest_announced(
     A change to the built-in table — a value, a key armed or disarmed —
     changes what every reader of conf.d serves with no diff in the
     deployer's repo, so it is BREAKING (#3832, decision 5). Announced means:
-    a changelog fragment under *fragments_dir* (not its README) carrying
+    a changelog fragment under *fragments_dir* (a directory named
+    ``changelog.d``, as the changelog tool lists it; not its README) carrying
     BREAKING_MARKER names the table's digest, or the released CHANGELOG at
     *changelog_path* names it (a fragment's text is assembled there at
     release, the digest with it). The digest binds the announcement to the
@@ -1174,11 +1186,12 @@ def check_builtin_digest_announced(
     digest = builtin_defaults_digest(builtin_defaults(doc))
     fdir = fragments_dir or CHANGELOG_FRAGMENTS_DIR
     if fdir and os.path.isdir(fdir):
-        for name in sorted(os.listdir(fdir)):
-            if not name.endswith(".md") or name.lower() == "readme.md":
-                continue
-            with open(os.path.join(fdir, name), encoding="utf-8") as fh:
-                text = fh.read()
+        # The fragments as the changelog tool itself enumerates them
+        # (generate_changelog.fragment_paths: the directory's `*.md`, its
+        # README excluded) — this module lists no directory of its own.
+        from pathlib import Path
+        for path in _changelog_tool().fragment_paths(Path(fdir).parent):
+            text = path.read_text(encoding="utf-8")
             if digest in text and BREAKING_MARKER in text.lower():
                 return None
     cpath = changelog_path or CHANGELOG_PATH

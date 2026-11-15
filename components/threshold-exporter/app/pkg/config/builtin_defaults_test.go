@@ -219,6 +219,9 @@ func TestMergeTenantWithRootDefaults_BuiltinLayer(t *testing.T) {
 			return os.WriteFile(filepath.Join(d, "_defaults.yaml"), []byte("defaults: [x\n"), 0o644)
 		}, false},
 		"root link": {func(d string) error { return os.Symlink("nowhere.yaml", filepath.Join(d, "_defaults.yaml")) }, false},
+		"root refused": {func(d string) error {
+			return os.WriteFile(filepath.Join(d, "_defaults.yaml"), []byte("defaults:\n  pg_connections: [1, 2]\n"), 0o644)
+		}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

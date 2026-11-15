@@ -32,24 +32,13 @@
     ],
     "effective_config": {
       "alert_group": "baseline",
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90,
       "threshold": {
         "cpu": 85,
         "memory": 65
       }
     },
     "fixture_dir": "l0-only",
-    "merged_hash": "4d8b0eb544c1199a",
+    "merged_hash": "4b008f7b9fda4406",
     "scenario": "l0-only",
     "source_file": "tenants.yaml",
     "source_hash": "52f0dd0f686f023b",
@@ -63,22 +52,11 @@
       "db/mariadb/prod/_defaults.yaml"
     ],
     "effective_config": {
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
       "custom_tag": "leaf",
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
       "level": "L3",
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
       "pages": [
         "b"
       ],
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90,
       "region": "us-east",
       "threshold": {
         "connections": 90,
@@ -87,7 +65,7 @@
       }
     },
     "fixture_dir": "full-l0-l3",
-    "merged_hash": "70f6da29f6b1a3a3",
+    "merged_hash": "3c2c91dee380107e",
     "scenario": "full-l0-l3",
     "source_file": "db/mariadb/prod/tenant-x.yaml",
     "source_hash": "aa7e83b8f3a9e54f",
@@ -151,17 +129,6 @@
       "_defaults.yaml"
     ],
     "effective_config": {
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90,
       "receivers": [
         "pagerduty-custom"
       ],
@@ -170,7 +137,7 @@
       }
     },
     "fixture_dir": "array-replace",
-    "merged_hash": "97c7bbdf1e1496e9",
+    "merged_hash": "092a4881e80c7ce4",
     "scenario": "array-replace",
     "source_file": "tenants.yaml",
     "source_hash": "675786b05a655234",
@@ -182,17 +149,6 @@
     ],
     "effective_config": {
       "alert_group": "baseline",
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90,
       "threshold": {
         "connections": 50,
         "cpu": 70,
@@ -200,7 +156,7 @@
       }
     },
     "fixture_dir": "opt-out-null",
-    "merged_hash": "72d2b63db9452e1f",
+    "merged_hash": "b6c67d95f32e28c2",
     "scenario": "opt-out-null",
     "source_file": "tenants.yaml",
     "source_hash": "d0d42110c018826d",
@@ -263,23 +219,12 @@
       "_defaults.yaml"
     ],
     "effective_config": {
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90,
       "threshold": {
         "cpu": 80
       }
     },
     "fixture_dir": "metadata-skipped",
-    "merged_hash": "55e7255759c14f31",
+    "merged_hash": "d1f689e79d8c8b5a",
     "scenario": "metadata-skipped",
     "source_file": "tenants.yaml",
     "source_hash": "a45e4f69518f27dd",
@@ -403,21 +348,10 @@
           "alertname"
         ],
         "inherited_str": "30s"
-      },
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90
+      }
     },
     "fixture_dir": "reserved-null",
-    "merged_hash": "32dddf7bbef2e6de",
+    "merged_hash": "339185b9e5179569",
     "scenario": "reserved-nested-null",
     "source_file": "nested/tenants.yaml",
     "source_hash": "45e36c5a758a9a94",
@@ -434,21 +368,10 @@
           "alertname"
         ],
         "inherited_str": "30s"
-      },
-      "container_cpu": 80,
-      "container_cpu_throttle": 25,
-      "container_memory": 85,
-      "es_disk_usage_percent": 85,
-      "es_heap_usage_percent": 85,
-      "mysql_connection_usage_percent": 80,
-      "mysql_replication_lag": 30,
-      "oracle_tablespace_used_percent": 85,
-      "pg_connections": 80,
-      "pg_replication_lag": 30,
-      "rabbitmq_node_mem_percent": 90
+      }
     },
     "fixture_dir": "reserved-null",
-    "merged_hash": "8c99f549169bd846",
+    "merged_hash": "c6353e0b1ceb0ab0",
     "scenario": "reserved-null-delete",
     "source_file": "child/tenants.yaml",
     "source_hash": "dd3254cba933947c",

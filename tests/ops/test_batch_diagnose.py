@@ -24,6 +24,8 @@ import batch_diagnose as bd  # noqa: E402
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 from _lib_tenant_values import DaGuardError, DaGuardNotFoundError  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206: the shared refusal)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import without_builtin  # noqa: E402  (#3832)
 
 
 _REAL_RUN = subprocess.run
@@ -149,9 +151,12 @@ class TestDiscoverTenants:
         })
         tenants, chains = bd.resolve_tenants(bd.read_configmap_files())
         assert tenants == ["db-a", "db-b"]
-        assert chains["db-a"]["resolved"] == {"cpu": 90, "mem": 60}
-        assert chains["db-b"]["resolved"] == {"cpu": 50, "mem": 70}
-        assert [c["source"] for c in chains["db-a"]["chain"]] == ["_defaults.yaml", "team-x.yaml"]
+        # #3832: the built-in layer lies under every tenant; the tree's own
+        # values are what this pins.
+        assert without_builtin(chains["db-a"]["resolved"]) == {"cpu": 90, "mem": 60}
+        assert without_builtin(chains["db-b"]["resolved"]) == {"cpu": 50, "mem": 70}
+        assert [c["source"] for c in chains["db-a"]["chain"]] == [
+            "(built-in)", "_defaults.yaml", "team-x.yaml"]
 
     def test_binary_data_is_part_of_the_tree(self, mock_run):
         """The kubelet mounts binaryData keys as files too."""
@@ -628,8 +633,9 @@ class TestMainCLI:
         doc = json.loads(capsys.readouterr().out)
         for t in ("db-a", "db-b"):
             chain = doc["tenants"][t]["inheritance_chain"]
-            assert [c["layer"] for c in chain["layers"]] == ["tenant"], chain
-            assert chain["layers"][0]["source"] == "tenants.yaml", chain
+            # #3832: the built-in layer first, then the tree's own.
+            assert [c["layer"] for c in chain["layers"]] == ["builtin", "tenant"], chain
+            assert chain["layers"][1]["source"] == "tenants.yaml", chain
 
     def test_a_tree_the_exporter_cannot_load_checks_no_tenant(self, monkeypatch, cli_argv):
         """A broken ConfigMap stops the whole batch (rc 2) before any check —

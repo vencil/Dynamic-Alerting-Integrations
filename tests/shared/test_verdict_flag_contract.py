@@ -352,13 +352,15 @@ class _StubHandler(BaseHTTPRequestHandler):
             self._send({"status": "success",
                         "data": {"resultType": "vector", "result": result}})
         elif url.path == "/api/v1/targets":
-            # redis, postgres and mysql exporter targets (blind_spot_discovery).
+            # redis, mongodb and mysql exporter targets (blind_spot_discovery).
             # Job names differ from the db_type they map to, so excluding by
-            # job name and by db_type give different answers.
+            # job name and by db_type give different answers. #3832: not
+            # postgres — `pg_*` is in the built-in layer, which every tenant
+            # is served, so postgresql is never a blind spot.
             self._send({"status": "success", "data": {"activeTargets": [
                 {"labels": {"job": job, "instance": inst, "namespace": "db"}}
                 for job, inst in (("redis-exporter", "r1:9121"),
-                                  ("postgres-exporter", "p1:9187"),
+                                  ("mongodb-exporter", "g1:9216"),
                                   ("mysql-exporter", "m1:9104"))]}})
         elif (url.path == "/api/v1/query_range"
               and "tenant_threshold_" in params.get("query", [""])[0]):
@@ -476,8 +478,8 @@ def _avg_correlations(proc: subprocess.CompletedProcess) -> object:
 
 
 def _mysql_only_confd(tmp: Path) -> str:
-    """One tenant monitored for mysql only — the stub's redis and postgres
-    targets are the blind spots."""
+    """One tenant monitored for mysql only (and the built-in layer's types,
+    #3832) — the stub's redis and mongodb targets are the blind spots."""
     d = tmp / "confd-mysql-only"
     _write(d / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
     _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 90\n")
@@ -747,10 +749,10 @@ RECIPES: list[Recipe] = [
     R("blind_spot_discovery", "--exclude-jobs",
       lambda t, s: ["--prometheus", s, "--config-dir", _mysql_only_confd(t),
                     "--json-output"],
-      flip=("--exclude-jobs", "postgres-exporter,redis-exporter"),
-      boundary=("--exclude-jobs", "redis,postgresql"),
-      without=["postgresql", "redis"], with_=[], observe=_blind_spots,
-      note="unmonitored redis + postgres: excluding both jobs clears them; "
+      flip=("--exclude-jobs", "mongodb-exporter,redis-exporter"),
+      boundary=("--exclude-jobs", "redis,mongodb"),
+      without=["mongodb", "redis"], with_=[], observe=_blind_spots,
+      note="unmonitored redis + mongodb: excluding both jobs clears them; "
            "their db_type names exclude nothing"),
 
     # The flag's DEFAULT does the work: both of its prefixes are needed, one

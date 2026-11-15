@@ -253,7 +253,10 @@ def test_pass_says_when_no_threshold_was_compared(root, tmp_path):
     if root:   # 對照組：只有原本那一行
         assert row["details"] == ["1 rules evaluated across 1 tenants — all passed"], row
     else:
-        assert "/metrics serves no threshold value for any tenant" in text, row
+        # #3832: with no root defaults /metrics still serves the built-in
+        # layer's values, so the "serves no threshold value" line is gone;
+        # the tenant's own unserved value is still named.
+        assert "/metrics serves no threshold value for any tenant" not in text, row
         assert "1 threshold value(s) are configured but not served" in text, row
         assert "tenant-a: mysql_connections" in text, row
 

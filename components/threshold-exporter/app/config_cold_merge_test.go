@@ -115,6 +115,7 @@ func assertColdStateMatchesRecompute(t *testing.T, mgr *ConfigManager) int {
 		t.Fatal("no inheritance graph installed")
 	}
 
+	withhold := builtinWithheldOn(t, mgr.path) // #3832
 	oracle := NewConfigManager(mgr.path)
 	oracleMetrics, _ := freshMetrics(t)
 	oracleLog, _ := newTestLogger()
@@ -127,7 +128,7 @@ func assertColdStateMatchesRecompute(t *testing.T, mgr *ConfigManager) int {
 	}
 	sort.Strings(tids)
 	for _, tid := range tids {
-		want, werr := oracle.recomputeMergedHash(tid, sources[tid], graph.TenantDefaults[tid], config.TenantLayers{})
+		want, werr := oracle.recomputeMergedHash(tid, sources[tid], graph.TenantDefaults[tid], config.TenantLayers{WithholdBuiltin: withhold})
 		have, ok := got[tid]
 		switch {
 		case werr != nil && ok:

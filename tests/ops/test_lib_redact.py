@@ -241,7 +241,9 @@ def test_a_credential_in_a_non_credential_field_is_masked_by_value(tmp_path, da_
     assert doc["masked_by_value"] == 2
     assert "Masked by value: 2 place(s)" in md.stdout
     # 對照：不是憑證的值照印
-    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", "80", "90")]
+    # #3832: container_cpu has a built-in value, so it is served (a number)
+    # in this rootless tree; the threshold change itself is never masked.
+    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", 80, 90)]
 
 
 def test_nothing_masked_by_value_says_nothing(tmp_path, da_guard_env):
@@ -342,7 +344,9 @@ def test_a_numeric_credential_in_a_non_credential_field_is_masked(tmp_path, da_g
     for raw in (old_key, new_key):
         assert raw not in js.stdout + js.stderr and str(float(raw)) not in js.stdout, js.stdout
     assert doc["masked_by_value"] == 2
-    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", "80", "90")]
+    # #3832: container_cpu has a built-in value, so it is served (a number)
+    # in this rootless tree; the threshold change itself is never masked.
+    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", 80, 90)]
 
 
 

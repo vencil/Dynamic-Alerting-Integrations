@@ -80,13 +80,14 @@ func assertHashesMatchPerTenantParse(t *testing.T, mgr *ConfigManager) int {
 	profiles := mgr.hierarchy.profiles
 	mgr.mu.RUnlock()
 
+	withhold := builtinWithheldOn(t, mgr.path) // #3832
 	oracle := NewConfigManager(mgr.path)
 	oracleMetrics, _ := freshMetrics(t)
 	oracleLog, _ := newTestLogger()
 	oracle.SetMetrics(oracleMetrics)
 	oracle.SetLogger(oracleLog)
 	for tid, src := range sources {
-		layers := config.TenantLayers{Overlay: config.PlatformOverlayFor(platform, tid), Profiles: profiles}
+		layers := config.TenantLayers{Overlay: config.PlatformOverlayFor(platform, tid), Profiles: profiles, WithholdBuiltin: withhold}
 		want, werr := oracle.recomputeMergedHash(tid, src, graph.TenantDefaults[tid], layers)
 		// A reload tick records a tenant whose merge fails with no prior
 		// hash as "" (classifyAndCount), a cold load leaves it out: both

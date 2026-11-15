@@ -281,7 +281,7 @@ type reloadPriorState struct {
 	// (#2117): what this tick's is compared with, and reused as is when no
 	// root platform file moved.
 	profiles *config.PlatformProfiles
-	// withholdBuiltin is the last commit's TreeScan.RootDefaultsUnreadable
+	// withholdBuiltin is the last commit's TreeScan.RootBuiltinWithheld
 	// (#3832): merged_hash left the built-in layer out.
 	withholdBuiltin bool
 	// mergeRetry is the tenants the last tick could not recompute because
@@ -313,7 +313,7 @@ type reloadScanState struct {
 	// profile's content moved, which skips the per-tenant question.
 	profiles        *config.PlatformProfiles
 	changedProfiles map[string]struct{}
-	// withholdBuiltin is this tick's TreeScan.RootDefaultsUnreadable
+	// withholdBuiltin is this tick's TreeScan.RootBuiltinWithheld
 	// (#3832); withholdMoved: it differs from the prior commit's, so every
 	// tenant's merged_hash is computed again (the chain may not have moved:
 	// an unreadable `_defaults.yml` beside a readable `_defaults.yaml`).
@@ -422,6 +422,7 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 			changedProfiles = config.ChangedProfiles(prior.profiles, profiles)
 		}
 	}
+	withhold := scan.RootBuiltinWithheld() // #3832
 	return reloadScanState{
 		tenants:         scan.Tenants,
 		defaults:        scan.Defaults,
@@ -432,8 +433,8 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 		platformMoved:   platformMoved,
 		profiles:        profiles,
 		changedProfiles: changedProfiles,
-		withholdBuiltin: scan.RootDefaultsUnreadable(),
-		withholdMoved:   scan.RootDefaultsUnreadable() != prior.withholdBuiltin,
+		withholdBuiltin: withhold,
+		withholdMoved:   withhold != prior.withholdBuiltin,
 	}, false, nil
 }
 

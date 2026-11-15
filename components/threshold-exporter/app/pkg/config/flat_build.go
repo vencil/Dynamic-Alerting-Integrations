@@ -285,6 +285,8 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	// #3832: the built-in layer, under the root carrier's values — withheld
 	// when the root carrier exists but cannot be read (builtin_defaults.go).
 	rootDropped := rootCarrier != "" && slices.Contains(parseFailed, rootCarrier)
+	// (rootDropped is RootBuiltinWithheld's DropsConfFile half, already
+	// known here without decoding the carrier again.)
 	if !rootDropped && !scan.RootDefaultsUnreadable() {
 		seedBuiltinDefaults(merged.Defaults)
 	}

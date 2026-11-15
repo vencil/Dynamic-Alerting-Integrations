@@ -382,7 +382,8 @@ tenants:
 		t.Fatalf("Load failed: %v", err)
 	}
 
-	resolved := mgr.GetConfig().ResolveAt(fixedNow)
+	// #3832: the built-in rows are not this test's.
+	resolved := dropBuiltinRows(mgr.GetConfig().ResolveAt(fixedNow))
 	if len(resolved) != 2 {
 		t.Fatalf("expected 2, got %d: %+v", len(resolved), resolved)
 	}

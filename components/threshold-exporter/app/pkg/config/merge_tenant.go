@@ -700,9 +700,8 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 // to it, its files or their decodes after loadRootPlatform returns.
 type rootPlatform struct {
 	files []rootPlatformFile
-	// rootUnreadable: the walk met a root defaults carrier it could not
-	// stat or read (TreeScan.RootDefaultsUnreadable); the built-in layer is
-	// withheld (#3832).
+	// rootUnreadable: the root carrier cannot be read
+	// (TreeScan.RootBuiltinWithheld); the built-in layer is withheld (#3832).
 	rootUnreadable bool
 	// carrierPos is 1 + the index into files of the selected root carrier;
 	// 0 = none. Offset by one so the ZERO rootPlatform (and so the zero
@@ -738,7 +737,7 @@ func loadRootPlatform(configDir string) rootPlatform {
 // — loadRootPlatform's half after the walk, shared with
 // LoadRootPlatformChecked.
 func rootPlatformFrom(scan *TreeScan) rootPlatform {
-	out := rootPlatform{rootUnreadable: scan.RootDefaultsUnreadable()}
+	out := rootPlatform{rootUnreadable: scan.RootBuiltinWithheld()}
 	carrierKey := selectedRootCarrierKey(scan)
 	for _, k := range rootPlatformKeys(scan) {
 		f := scan.Files[k]

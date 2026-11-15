@@ -147,10 +147,9 @@ class TestGeneratedNameCollision:
         d, _kind = clash
         row = vc.check_routes(str(d))
         assert row["status"] == vc.FAIL, row
-        # The tree has no root platform file, so the key verdict's advice
-        # follows the collision's on the same row (#3873).
-        assert row["hint"] == (f"{vc.RECEIVER_COLLISION_ROUTES_HINT} "
-                               f"{vc.KEY_VERDICT_UNDECIDABLE_HINT}"), row
+        # #3832: a tree with no root platform file is no longer undecidable,
+        # so the collision's advice is the row's only one.
+        assert row["hint"] == vc.RECEIVER_COLLISION_ROUTES_HINT, row
 
     def test_control_no_collision_is_unaffected(self, tmp_path):
         """Same shape minus the colliding tenant: rc 0, file written, PASS."""

@@ -108,7 +108,7 @@ type hierarchyState struct {
 	// above were computed with (#2117) — a tenant's `_profile` fills in keys
 	// on /metrics (ApplyProfiles), so it is part of what merged_hash hashes.
 	profiles *config.PlatformProfiles
-	// withholdBuiltin is the last commit's TreeScan.RootDefaultsUnreadable
+	// withholdBuiltin is the last commit's TreeScan.RootBuiltinWithheld
 	// (#3832): merged_hash leaves the built-in layer out while it holds.
 	withholdBuiltin bool
 	// mergeRetry is the tenants whose merged_hash recompute failed to READ
@@ -653,9 +653,13 @@ func (m *ConfigManager) Load() error {
 	if cfg.Profiles == nil {
 		cfg.Profiles = make(map[string]map[string]ScheduledValue)
 	}
-
 	// #2153: measured before ApplyProfiles — see commitConfig.
 	shape := configShapeOf(&cfg)
+
+	// #3832: the single file is the root carrier, read and parsed (an
+	// error returned above), so the built-in layer goes under its values —
+	// after the shape, which is the file's as written.
+	config.SeedBuiltinDefaults(cfg.Defaults)
 
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
@@ -1046,7 +1050,13 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	m.mu.RLock()
 	prev := m.config
 	m.mu.RUnlock()
-	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil
+	// #3832: this tree has no root carrier, so its merged Defaults are the
+	// built-in layer exactly, or nothing while a root carrier the walk
+	// cannot read withholds it (TreeScan.RootBuiltinWithheld). The patch
+	// copies prev's Defaults, so it is taken only while that state holds.
+	withhold := scan.RootBuiltinWithheld()
+	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil &&
+		(len(prev.Defaults) == 0) == withhold
 	reportPlatformOrphans(newConfigs, exists, m.getLogger())
 	if patchBranch {
 		// Incremental patch: copy existing merged config, patch only affected
@@ -1056,7 +1066,9 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
 		merged = mergePartialConfigs(newConfigs, exists)
-		config.SeedBuiltinDefaults(merged.Defaults)
+		if !withhold {
+			config.SeedBuiltinDefaults(merged.Defaults)
+		}
 	}
 	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
 	// the else above, so the tenant-patch path published tenants exactly as
@@ -1731,7 +1743,7 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 
 	// #3832: the built-in layer is withheld from merged_hash when the root
 	// carrier cannot be read, as /metrics then serves no default row.
-	withholdBuiltin := scan.RootDefaultsUnreadable()
+	withholdBuiltin := scan.RootBuiltinWithheld()
 
 	newMergedHashes := make(map[string]string, len(tenants))
 	// File by file (#2153): in.tenants parses each tenant file once.

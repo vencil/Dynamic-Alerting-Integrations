@@ -412,7 +412,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	// #3832: the built-in layer is withheld when the root carrier cannot be
 	// read: unreadable on the walk, or dropped by the build (#2296, above).
 	rootDropped := rootLevel >= 0 && slices.Contains(chainParseFailed, r.rel(chain[rootLevel]))
-	builtin := !r.scan.RootDefaultsUnreadable() && !rootDropped
+	builtin := !r.scan.RootBuiltinWithheld() && !rootDropped
 	parts, err := computeEffectiveConfigDocAt(doc, tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel, builtin)
 	if err != nil {
 		// #2123: name the file whose bytes the decode rejected, so a caller
@@ -1708,7 +1708,7 @@ type TenantLayers struct {
 	Overlay  []PlatformBlock
 	Profiles *PlatformProfiles
 	// WithholdBuiltin: the tree's root carrier cannot be read
-	// (TreeScan.RootDefaultsUnreadable), so the built-in layer (#3832) is not
+	// (TreeScan.RootBuiltinWithheld), so the built-in layer (#3832) is not
 	// the bottom of the merge — as /metrics serves no default row then. The
 	// zero value merges it.
 	WithholdBuiltin bool

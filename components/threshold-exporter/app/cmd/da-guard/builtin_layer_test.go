@@ -160,6 +160,12 @@ func TestBuiltinLayer_ARootThatCannotBeReadWithholdsIt(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"a value the typed decode refuses": func(t *testing.T, dir string) {
+			// YAML parses; the exporter's decode drops the file whole.
+			if err := os.WriteFile(filepath.Join(dir, "_defaults.yaml"), []byte("defaults:\n  pg_connections: [1, 2]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"dangling link": func(t *testing.T, dir string) {
 			if err := os.Symlink("nowhere.yaml", filepath.Join(dir, "_defaults.yaml")); err != nil {
 				t.Skipf("symlink: %v", err)
