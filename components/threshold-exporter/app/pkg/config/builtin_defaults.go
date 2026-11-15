@@ -48,6 +48,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -126,20 +127,76 @@ func builtinDefaultsDigestOf(table map[string]float64) string {
 // holds no finite value for gets the platform's value. A value the root
 // decode refused (a NaN, refusedDefault) falls to the built-in value: the
 // refusal is still reported, from the file's bytes (RootDefaultRefusals),
-// and a refused text never leaves an alert off.
-func seedBuiltinDefaults(d map[string]float64) {
+// and a refused text never leaves an alert off. It returns the keys it gave
+// the platform's value, sorted (FlatBuild.BuiltinSeeded).
+func seedBuiltinDefaults(d map[string]float64) []string {
+	var seeded []string
 	for k, v := range builtinDefaults {
 		if cur, ok := d[k]; ok && finiteThreshold(cur) {
 			continue
 		}
 		d[k] = v
+		seeded = append(seeded, k)
 	}
+	sort.Strings(seeded)
+	return seeded
 }
 
 // SeedBuiltinDefaults is seedBuiltinDefaults, for package main's flat
 // incremental reload (config.go) and its single-file load, each of which
 // asks RootBuiltinWithheld itself first.
 func SeedBuiltinDefaults(d map[string]float64) { seedBuiltinDefaults(d) }
+
+// The states of BuiltinDefaultState.State (#3832).
+const (
+	// BuiltinStateBuiltin: the tree's `defaults:` gives the key no value, so
+	// the built-in layer gives the platform's.
+	BuiltinStateBuiltin = "builtin"
+	// BuiltinStateOverridden: the tree's `defaults:` gives the key a number,
+	// which every tenant inherits in place of the platform's.
+	BuiltinStateOverridden = "overridden"
+	// BuiltinStateWithheld: the root carrier cannot be read, so the layer is
+	// withheld and the key has no value at the root (RootBuiltinWithheld).
+	BuiltinStateWithheld = "withheld"
+)
+
+// BuiltinDefaultState is one key of ScopedTenants.BuiltinDefaultStates.
+type BuiltinDefaultState struct {
+	// Value is the platform's value (the built-in table's).
+	Value float64
+	// State is one of the BuiltinState* constants.
+	State string
+	// Root is the number `defaults:` gives the key, which every tenant
+	// inherits; set for BuiltinStateOverridden only.
+	Root *float64
+}
+
+// BuiltinDefaultStates is, per key of the built-in table, what the
+// exporter's own build of the tree does with it (FlatBuild.BuiltinSeeded and
+// BuiltinWithheld, read off the same build as Config): the tree-level answer
+// beneath every tenant's key_sources. A subtree, profile or tenant may still
+// override or disable the key for the tenants it covers. nil when no build
+// ran (#3832; validate-config's platform_defaults row).
+func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
+	if s == nil || s.built == nil {
+		return nil
+	}
+	b := s.built
+	out := make(map[string]BuiltinDefaultState, len(builtinDefaults))
+	for k, v := range builtinDefaults {
+		st := BuiltinDefaultState{Value: v, State: BuiltinStateWithheld}
+		switch {
+		case b.BuiltinWithheld:
+		case slices.Contains(b.BuiltinSeeded, k):
+			st.State = BuiltinStateBuiltin
+		default:
+			root := b.Config.Defaults[k]
+			st.State, st.Root = BuiltinStateOverridden, &root
+		}
+		out[k] = st
+	}
+	return out
+}
 
 // builtinChainBase is the built-in layer as a defaults-chain block
 // (map[string]any, values float64), a fresh map per call; nil when builtin

@@ -305,7 +305,7 @@ def test_effective_tree_reads_skipped_and_refuses_output_without_it(tmp_path):
     served-values 取它）；沒有這個欄位的 da-guard 點名為比本工具舊，不當成「沒有檔被跳過」。
     `load_effective` 不讀它，所以不要求它（舊 da-guard 對那些讀取端照常可用）。"""
     with_skipped = {**_doc(), "skipped": [{"file": "flat.yaml", "reason": "declares no tenant"}],
-                    "root_defaults_refused": [], "root_defaults_reserved": []}
+                    "root_defaults_refused": [], "root_defaults_reserved": [], "builtin_defaults": None}
     got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(with_skipped)))
     assert got.skipped == [tv.SkippedFile("flat.yaml", "declares no tenant")]
     assert set(got.tenants) == {"t"}
@@ -319,7 +319,7 @@ def test_effective_tree_reads_root_defaults_refused_and_refuses_output_without_i
     """`load_effective_tree` 讀 effective 的 `root_defaults_refused` 與 `root_defaults_reserved`
     （#3250：validate-config 的 root_defaults 列由同一次 effective 讀它們，不另跑 served-values）；
     少了任一欄位的 da-guard 點名為比本工具舊，不當成「根 defaults 沒有被拒的值」。"""
-    base = {**_doc(), "skipped": []}
+    base = {**_doc(), "skipped": [], "builtin_defaults": None}
     doc = {**base, "root_defaults_refused": [{"key": "cpu", "text": "0x1F", "refused": "unparsed"}],
            "root_defaults_reserved": ["_silent_mode"]}
     got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
@@ -335,9 +335,70 @@ def test_effective_tree_reads_root_defaults_refused_and_refuses_output_without_i
 def test_effective_root_defaults_null_is_not_judged(tmp_path):
     """effective 在 resolve 中止時把兩欄寫成 null（沒有 build 的判定可給）：讀成 None，
     不可讀成「根 defaults 沒有被拒的值」的空 tuple。"""
-    doc = {**_doc(), "skipped": [], "root_defaults_refused": None, "root_defaults_reserved": None}
+    doc = {**_doc(), "skipped": [], "root_defaults_refused": None, "root_defaults_reserved": None,
+           "builtin_defaults": None}
     got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
     assert got.root_defaults_refused is None and got.root_defaults_reserved is None
+    assert got.builtin_defaults is None
+
+
+_BUILTIN_OK = {"digest": "abc123def456", "keys": {
+    "cpu": {"value": 80, "state": "builtin"},
+    "mem": {"value": 85, "state": "overridden", "root_value": 70},
+    "lag": {"value": 30, "state": "withheld"}}}
+
+
+def test_effective_tree_reads_builtin_defaults_and_refuses_output_without_it(tmp_path):
+    """`load_effective_tree` 讀 effective 的 `builtin_defaults`（#3832：validate-config 的
+    platform_defaults 列由它與 key_sources 作答）；沒有這個欄位的 da-guard 點名為比本工具舊，
+    不當成「沒有內建表」。`load_effective` 不讀它，所以不要求它。"""
+    base = {**_doc(), "skipped": [], "root_defaults_refused": [], "root_defaults_reserved": []}
+    got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(
+        tmp_path, json.dumps({**base, "builtin_defaults": _BUILTIN_OK})))
+    assert got.builtin_defaults == tv.BuiltinDefaults("abc123def456", {
+        "cpu": tv.BuiltinDefault(80.0, "builtin", None),
+        "mem": tv.BuiltinDefault(85.0, "overridden", 70.0),
+        "lag": tv.BuiltinDefault(30.0, "withheld", None)})
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(base)))
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value) and "builtin_defaults" in str(ei.value)
+    assert set(tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(base)))) == {"t"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"keys": {}},
+    {"digest": "", "keys": {}},
+    {"digest": "abc", "keys": []},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "on"}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "overridden"}}},
+    {"digest": "abc", "keys": {"cpu": {"value": 80, "state": "builtin", "root_value": 70}}},
+    {"digest": "abc", "keys": {"cpu": {"value": "80", "state": "builtin"}}},
+    {"digest": "abc", "keys": {"cpu": {"state": "builtin"}}},
+], ids=["no-digest", "empty-digest", "keys-list", "unknown-state", "overridden-no-root",
+        "root-on-builtin", "value-text", "no-value"])
+def test_builtin_defaults_not_of_its_shape_is_broken_output(tmp_path, bad):
+    """`builtin_defaults` 不合形狀：da-guard 壞掉的輸出（broken），不猜成某個狀態。"""
+    doc = {**_doc(), "skipped": [], "root_defaults_refused": [], "root_defaults_reserved": [],
+           "builtin_defaults": bad}
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert "builtin_defaults is not of its shape" in str(ei.value), str(ei.value)
+    assert ei.value.binary_fault, ei.value
+
+
+def test_parse_failed_error_carries_the_withheld_builtin_layer(tmp_path, da_guard):
+    """真 da-guard：根 carrier 讀不了（exit 3）時，ParseFailedError 帶著 builtin_defaults，
+    每個鍵都是 `withheld`；別的檔被丟掉時，根層照樣判、不是 `withheld`。"""
+    with pytest.raises(tv.ParseFailedError) as ei:
+        tv.load_effective_tree(_tree(tmp_path / "root", {
+            "_defaults.yaml": "defaults: [oops\n", "t1.yaml": "tenants:\n  t1: {}\n"}), binary=da_guard)
+    got = ei.value.builtin_defaults
+    assert got is not None and got.keys and {k.state for k in got.keys.values()} == {"withheld"}, got
+    with pytest.raises(tv.ParseFailedError) as ei:
+        tv.load_effective_tree(_tree(tmp_path / "tenant", {
+            "t1.yaml": "tenants:\n  t1: {}\n", "t2.yaml": "tenants:\n  t2: [1]\n"}), binary=da_guard)
+    got = ei.value.builtin_defaults
+    assert got is not None and {k.state for k in got.keys.values()} == {"builtin"}, got
 
 
 def test_parse_failed_error_keeps_the_root_verdicts(tmp_path, da_guard):
