@@ -1528,6 +1528,7 @@ class ServedFacts(NamedTuple):
     unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
 
 
+@_records_output_faults(SUBCOMMAND)
 def load_served_facts(
     conf_d: str | Path,
     binary: str | None = None,
