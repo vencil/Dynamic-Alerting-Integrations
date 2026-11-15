@@ -75,8 +75,9 @@ def test_the_tripwire_answers_messages_not_files(tmp_path):
 def test_a_tracked_file_gone_from_the_work_tree_rings_by_name(tmp_path):
     """`git ls-files` still lists a file deleted but not yet staged: the
     tripwire names it ("cannot be read"), the other files are still judged.
-    da-crdecode answers a file it cannot open with no answer (#3943), so the
-    tripwire must not hand it such a path: that would end the run."""
+    da-crdecode answers a file it cannot open with no answer (#3943):
+    `_lib_consumer_read` refuses such a file itself, before da-crdecode, so
+    one unreadable file does not end the run."""
     (tmp_path / "k8s").mkdir()
     (tmp_path / "k8s" / "x.yaml").write_text(yaml.safe_dump(RULES), encoding="utf-8")
     got = _rule_tripwire.rule_shaped_outside_declaration(

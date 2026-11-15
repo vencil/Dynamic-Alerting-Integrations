@@ -151,7 +151,7 @@ def test_the_callers_argument_is_no_refusal(args, stdin) -> None:
     assert not isinstance(exc.value, cr.InputRefused)
 
 
-def test_a_file_that_cannot_be_opened_is_no_refusal(tmp_path) -> None:
+def test_a_file_that_cannot_be_opened_is_no_answer_of_the_binaries(tmp_path) -> None:
     missing = tmp_path / "missing.yaml"
     for env, args in ((cr.CRDECODE_ENV, [str(missing)]),
                       (cr.CRDECODE_ENV, ["--any-shape", str(missing)]),
@@ -159,13 +159,28 @@ def test_a_file_that_cannot_be_opened_is_no_refusal(tmp_path) -> None:
                       (cr.DA_READ_ENV, ["prometheus", str(missing)]),
                       (cr.DA_READ_ENV, ["prometheus-rules", str(missing)])):
         _assert_no_answer(_run(env, args))
+    # The binaries give no answer for it; `_lib_consumer_read` never hands
+    # them such a file: it refuses it itself, naming it with CANNOT_OPEN and
+    # the system's reason, so one unreadable file is that file's refusal.
     for read in (lambda: cr.kubernetes_documents(str(missing)),
                  lambda: cr.any_yaml_documents(str(missing)),
-                 lambda: cr.prometheus_config(missing),
-                 lambda: cr.prometheus_rule_file_results([missing])):
-        with pytest.raises(cr.ConsumerReadError) as exc:
+                 lambda: cr.prometheus_config(missing)):
+        with pytest.raises(cr.InputRefused) as exc:
             read()
-        assert not isinstance(exc.value, cr.InputRefused)
+        assert exc.value.stderr_lines == [
+            f"{exc.value.args[0].split()[0]}: {missing}: {cr.CANNOT_OPEN}: "
+            "No such file or directory"], exc.value.stderr_lines
+    [rf] = cr.prometheus_rule_file_results([missing])
+    assert rf.problem == f"{cr.CANNOT_OPEN}: No such file or directory"
+    # Per-file readings: that file's refusal, the other files still read.
+    good = tmp_path / "good.yaml"
+    good.write_text("groups: []\n", encoding="utf-8")
+    got = cr.any_yaml_documents_of([missing, good], keep_refusals=True)
+    assert isinstance(got[str(missing)], cr.InputRefused) and got[str(good)] == [{"groups": []}]
+    found = cr.rule_files_in([missing, good], keep_refusals=True)
+    [unread] = found[str(missing)]
+    assert unread.unread and unread.problem == f"{cr.CANNOT_OPEN}: No such file or directory"
+    assert [r.problem for r in found[str(good)]] == [None]
 
 
 def test_standard_input_that_cannot_be_read_is_no_refusal(tmp_path) -> None:

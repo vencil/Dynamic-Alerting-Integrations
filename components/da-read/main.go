@@ -110,9 +110,10 @@ const stdinName = "<stdin>"
 // The caller (scripts/tools/_lib_consumer_read.py, REFUSAL_KEY /
 // REFUSED) takes exit 2 as a refusal only with this document, so it never
 // reads a run that could not answer as an answer about the input.
-// da-crdecode prints the same document; tests/shared/
-// test_reader_refusal_document.py holds both binaries to the caller's
-// definition. ⛔ Constants only: no text of the input (ADR-036, #3703).
+// da-crdecode prints the same document;
+// tests/shared/test_reader_refusal_document.py holds both binaries to the
+// caller's definition. ⛔ Constants only: no text of the input (ADR-036,
+// #3703).
 const answerRefused = "refused"
 
 // refusal is the refusal document of the single-input subcommands.

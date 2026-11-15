@@ -189,26 +189,23 @@ def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
     for reg in _lib_consumer_read.CHART_VALUES_RULES:
         registered.setdefault(reg.values, []).append(reg.key_path)
     todo = [rel for rel in tracked_yaml if rel not in skip]
+    # A file gone from the work tree (deleted, not yet staged) or unreadable
+    # is refused by the reader itself (#3943), and rings below by name.
+    readings = _lib_consumer_read.any_yaml_documents_of(
+        [str(Path(repo_root, rel)) for rel in todo], keep_refusals=True)
     ask = ("declare it in _lib_consumer_read (a RULE_SOURCES entry, or a "
            "CHART_VALUES_RULES registration), or declare that it ships no rules "
            "(NOT_RULE_FILES, with the reason)")
     alarms: "dict[str, str]" = {}
-    # Each file's bytes first: a tracked path may be gone from the work tree
-    # (deleted, not yet staged) or unreadable. That is an alarm naming it —
-    # and it is said here, because da-crdecode answers a file it cannot open
-    # with no answer at all (#3943), which would end the whole run.
-    raws: "dict[str, bytes]" = {}
+    inner: "list[tuple[str, str]]" = []          # (rel, a text inside it)
     for rel in todo:
+        docs = readings[str(Path(repo_root, rel))]
         try:
-            raws[rel] = Path(repo_root, rel).read_bytes()
+            raw = Path(repo_root, rel).read_bytes()
         except OSError as e:
             alarms[rel] = (f"cannot be read ({e.strerror}), so whether it holds "
                            "rules is unknown")
-    readings = _lib_consumer_read.any_yaml_documents_of(
-        [str(Path(repo_root, rel)) for rel in raws], keep_refusals=True)
-    inner: "list[tuple[str, str]]" = []          # (rel, a text inside it)
-    for rel, docs in zip(raws, readings.values()):
-        raw = raws[rel]
+            continue
         text, enc = _decode_manifest(raw)
         if text is None:
             alarms[rel] = (f"no standard encoding decodes it ({enc}); neither this "

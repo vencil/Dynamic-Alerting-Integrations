@@ -89,16 +89,23 @@ def test_a_refused_rule_file_cannot_be_read_as_empty(tmp_path) -> None:
         results[1].documents
 
 
-def test_a_rule_file_that_cannot_be_opened_is_no_refusal(tmp_path) -> None:
-    """#3943: da-read cannot open it — no answer about any file (exit 2, no
-    refusal document), never a refused file."""
+def test_a_rule_file_that_cannot_be_opened_is_refused_by_name(tmp_path) -> None:
+    """#3943: a file that cannot be opened is refused by `_lib_consumer_read`
+    itself — a problem of its own entry (``CANNOT_OPEN`` and the system's
+    reason), the other files still read — and never handed to da-read,
+    which would answer it with no answer for the whole batch."""
     a = _write(tmp_path, "a.yml", GOOD)
     missing = str(tmp_path / "missing.yml")
-    for read in (cr.prometheus_rule_files, cr.prometheus_rule_file_results):
-        with pytest.raises(cr.ConsumerReadError) as exc:
-            read([a, missing])
-        assert not isinstance(exc.value, cr.InputRefused)
-        assert any(missing in ln for ln in exc.value.stderr_lines), exc.value.stderr_lines
+    results = cr.prometheus_rule_file_results([missing, a, missing])
+    assert [r.path for r in results] == [missing, a, missing]
+    assert results[1].problem is None and results[1].groups
+    for r in (results[0], results[2]):
+        assert r.problem == f"{cr.CANNOT_OPEN}: No such file or directory", r.problem
+    with pytest.raises(cr.RuleFilesRefused) as exc:
+        cr.prometheus_rule_files([a, missing])
+    assert [r.path for r in exc.value.refused] == [missing]
+    # every file unopenable: no da-read run at all, still per file
+    assert [r.problem is not None for r in cr.prometheus_rule_file_results([missing])] == [True]
 
 
 def test_a_second_document_with_content_is_refused(tmp_path) -> None:

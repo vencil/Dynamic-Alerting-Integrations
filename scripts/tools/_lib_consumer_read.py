@@ -388,6 +388,39 @@ _READING_MANIFEST = "manifest"
 _READING_ANY_SHAPE = "any-shape"
 
 
+#: The fixed reason a file is refused with when Python cannot open or read
+#: it (#3943), followed by ``os.strerror``: every reading here that hands
+#: da-crdecode / da-read a path reads the file's bytes first and never hands
+#: over one it cannot read — those programs answer a file they cannot open
+#: with no answer at all (a tool fault), which would take a whole batch down
+#: for one unreadable file. Their "cannot open" is then only a race, and
+#: stays a tool fault.
+CANNOT_OPEN = "the file cannot be opened"
+
+
+def _unopenable(path: str) -> "str | None":
+    """None when *path* opens and its bytes read to the end; else
+    ``CANNOT_OPEN`` and the system's reason (``os.strerror``) — no other
+    text (ADR-036: no text of the input)."""
+    try:
+        with open(path, "rb") as fh:
+            while fh.read(1 << 20):
+                pass
+    except OSError as e:
+        return f"{CANNOT_OPEN}: {os.strerror(e.errno) if e.errno else type(e).__name__}"
+    return None
+
+
+def _refuse_unopenable(name: str, path: str) -> None:
+    """Raise :class:`InputRefused` for the file *path* (absolute) when it
+    cannot be read (``_unopenable``), named as *name* names a file it
+    refuses (``<name>: <path>: <reason>``); it is then never handed to
+    *name*."""
+    why = _unopenable(path)
+    if why is not None:
+        raise InputRefused(f"{name} refused the input", [f"{name}: {path}: {why}"])
+
+
 def _crdecode(source: "str | None", data: "bytes | None", binary: str | None,
               any_shape: bool) -> list[Any]:
     """One da-crdecode run on the file *source* (or *data* on stdin), with
@@ -397,6 +430,8 @@ def _crdecode(source: "str | None", data: "bytes | None", binary: str | None,
     resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
     # An absolute path never starts with `-`, so it is not read as stdin.
     target = ["-"] if source is None else [os.path.abspath(source)]
+    if source is not None and resolved:   # no binary: its "not found" first
+        _refuse_unopenable(CRDECODE_BINARY_NAME, target[0])
     args = ([_ANY_SHAPE_FLAG] if any_shape else []) + target
     out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
                args, data)
@@ -608,15 +643,17 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
     prometheus``), only the keys the text writes. *source* is the text
     (``str`` or ``bytes``) or the path of the file (``os.PathLike``, e.g. a
     ``pathlib.Path``)."""
+    resolved = da_read_binary(binary)
     if isinstance(source, os.PathLike):
         # An absolute path never starts with `-`, so it is not read as stdin.
         args, data = ["prometheus", os.path.abspath(os.fspath(source))], None
+        if resolved:   # no binary: its "not found" first
+            _refuse_unopenable(DA_READ_BINARY_NAME, args[1])
     elif isinstance(source, (str, bytes)):
         args = ["prometheus", "-"]
         data = source.encode("utf-8") if isinstance(source, str) else source
     else:
         raise TypeError(f"prometheus_config takes text or a path, not {type(source).__name__}")
-    resolved = da_read_binary(binary)
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build", args, data)
     return _one_document(out, "config", "prometheus")
 
@@ -751,12 +788,31 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     """Every rule file of *paths* as Prometheus loads it (``da-read
     prometheus-rules``, one run for all), one :class:`RuleFile` per path in
     the order given — refused ones included, each with its ``problem``.
-    ``RuleFile.path`` is the path as given. For callers that report each
-    refused file themselves; everyone else calls ``prometheus_rule_files``."""
+    ``RuleFile.path`` is the path as given. A file that cannot be read is
+    refused here, never handed to da-read: its ``problem`` is
+    ``CANNOT_OPEN`` and the system's reason (#3943). For callers that
+    report each refused file themselves; everyone else calls
+    ``prometheus_rule_files``."""
     given = [os.fspath(p) for p in paths]
     if not given:
         return []
     resolved = da_read_binary(binary)
+    if resolved:
+        # #3943: a file that cannot be opened is refused here, with its
+        # reason, and never handed to da-read (which answers it with no
+        # answer at all); the others are read in one run.
+        why = {i: _unopenable(os.path.abspath(p)) for i, p in enumerate(given)}
+        if any(why.values()):
+            opened = [p for i, p in enumerate(given) if why[i] is None]
+            read = iter(_rule_results_of(opened, resolved) if opened else [])
+            return [RuleFile(p, None, why[i]) if why[i] is not None else next(read)
+                    for i, p in enumerate(given)]
+    return _rule_results_of(given, resolved)
+
+
+def _rule_results_of(given: "list[str]", resolved: "str | None") -> "list[RuleFile]":
+    """One ``da-read prometheus-rules`` run on *given* (see
+    :func:`prometheus_rule_file_results`)."""
     # Absolute paths never start with `-`, so none is read as stdin.
     absolute = [os.path.abspath(p) for p in given]
     args = ["prometheus-rules", *absolute]
@@ -1233,6 +1289,9 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
        annotation value ``.inf``, say): Prometheus' rule loader decides. A
        file it reads ``groups`` from is a rule file; any other is refused.
 
+    A file that cannot be read is refused before any of these, its reason
+    ``CANNOT_OPEN`` and the system's (#3943).
+
     Refused files — every one, each with its readers' reason — raise
     :class:`RuleFileSourcesRefused`; with *keep_refusals* each is instead a
     :class:`RuleFile` with that ``problem`` and ``unread`` True, for a caller
@@ -1244,10 +1303,20 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
     out: "dict[str, list[RuleFile]]" = {p: [] for p in keys}
     if not keys:
         return out
-    manifests = kubernetes_documents_of(keys, crdecode_binary, keep_refusals=True)
-    not_manifests = [p for p in keys if isinstance(manifests[p], ConsumerReadError)]
+    refused: "dict[str, str]" = {}
+    if resolve_binary(crdecode_binary, CRDECODE_ENV, CRDECODE_BINARY_NAME):
+        # #3943: a file that cannot be read is refused once, with its own
+        # reason, and no reader is asked about it (no binary: its "not
+        # found" comes first, from the reading below).
+        for p in keys:
+            why = _unopenable(os.path.abspath(p))
+            if why is not None:
+                refused[p] = why
+    readable = [p for p in keys if p not in refused]
+    manifests = kubernetes_documents_of(readable, crdecode_binary, keep_refusals=True)
+    not_manifests = [p for p in readable if isinstance(manifests[p], ConsumerReadError)]
     as_yaml = any_yaml_documents_of(not_manifests, crdecode_binary, keep_refusals=True)
-    plain, undecided, refused = [], [], {}
+    plain, undecided = [], []
     for p in not_manifests:
         docs = as_yaml[p]
         if isinstance(docs, ConsumerReadError):
