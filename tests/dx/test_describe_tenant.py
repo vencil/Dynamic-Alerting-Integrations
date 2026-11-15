@@ -950,7 +950,7 @@ class TestCustomAlertsAsTheExporterServes:
         def fail(*a, **kw):
             raise dt.DaGuardError("da-guard served-values exited 1", 1, "boom")
 
-        monkeypatch.setattr(dt, "load_served_tree", fail)
+        monkeypatch.setattr(dt, "load_served_facts", fail)
         code, out, err = self._main(monkeypatch, capsys, conf_d, "ta")
         assert code == 0, err
         assert "custom_alerts" not in json.loads(out)
@@ -992,6 +992,20 @@ class TestCustomAlertsAsTheExporterServes:
         tenant_verify.main()
         err = capsys.readouterr().err
         assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
+
+    def test_a_da_guard_without_the_field_is_a_warn_and_the_field_is_omitted(self, tmp_path, monkeypatch, capsys):
+        """A da-guard older than `--config-facts` (#3918) is named as such, once."""
+        conf_d = _write(tmp_path, self.FILES)
+
+        def stale(*a, **kw):
+            raise dt.DaGuardError("da-guard served-values: this da-guard is older than this tool: "
+                                  "upgrade or rebuild it", 2, "", stale=True)
+
+        monkeypatch.setattr(dt, "load_served_facts", stale)
+        code, out, err = self._main(monkeypatch, capsys, conf_d, "--all")
+        assert code == 0, err
+        assert all("custom_alerts" not in t for t in json.loads(out).values())
+        assert sum("older than this tool" in line for line in err.splitlines()) == 1, err
 
     def test_effective_config_is_an_isolated_copy(self, tmp_path):
         scanner = dt.ConfDScanner(_write(tmp_path, self.FILES))
@@ -1914,3 +1928,46 @@ class TestCustomAlertsAndMergedHash:
         assert "da-guard binary not found" in v.stderr, v.stderr
         # #3558: a caller error carries no document, --json or not.
         assert v.stdout == "", v.stdout
+
+
+# #3918: custom_alerts is read from `served-values --config-facts`, which reads
+# no instant. In 01:00–01:29 tenant tx's two keys give one series, so the whole
+# tree's /metrics cannot be gathered there; the default mode then exits 2, and
+# the field used to be dropped (with a WARN) inside that window only.
+_WINDOW_COLLISION = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "tx.yaml": ("tenants:\n  tx:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+                "    mysql_connection_usage_percent_critical:\n      default: disable\n"
+                "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n"),
+    "tc.yaml": ("tenants:\n  tc:\n    _custom_alerts:\n      - recipe: threshold\n        name: q_high\n"
+                "        metric: q_high_depth\n        op: \">\"\n        window: 5m\n"
+                "        threshold: \"1000:warning\"\n"),
+}
+
+
+def _da_guard_at(tmp_path, at: str) -> str:
+    """A da-guard that runs `served-values` at *at* (but `--config-facts`,
+    which takes no --at), every other subcommand as given."""
+    real = os.environ["DA_GUARD_BINARY"]
+    path = tmp_path / f"da-guard-at-{at.replace(':', '')}"
+    path.write_text(
+        "#!/bin/sh\n"
+        f"real='{real}'\n"
+        'case " $* " in *" --config-facts "*) exec "$real" "$@" ;; esac\n'
+        'case "$1" in\n'
+        f"  served-values) exec \"$real\" \"$@\" --at '{at}' ;;\n"
+        '  *) exec "$real" "$@" ;;\n'
+        "esac\n", encoding="utf-8")
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_custom_alerts_do_not_depend_on_the_time_of_day(tmp_path, monkeypatch, capsys):
+    got = {}
+    for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
+        conf_d = _write(tmp_path / f"conf-{at.replace(':', '')}", _WINDOW_COLLISION)
+        monkeypatch.setenv("DA_GUARD_BINARY", _da_guard_at(tmp_path, at))
+        got[at] = dt.custom_alerts_fields(conf_d)
+    first, second = got.values()
+    assert first == second and first["tc"]["custom_alerts"][0]["status"] == "served", got
+    assert "custom_alerts not shown" not in capsys.readouterr().err

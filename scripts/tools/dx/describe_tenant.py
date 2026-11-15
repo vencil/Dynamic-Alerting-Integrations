@@ -63,7 +63,7 @@ from _lib_tenant_values import (  # noqa: E402
     EffectiveRun,
     ParseFailedError,
     run_effective,
-    load_served_tree,
+    load_served_facts,
     print_load_error,
 )
 
@@ -281,14 +281,18 @@ def custom_alerts_fields(conf_d: Path,
     `_custom_alerts` the exporter takes nothing from: then `custom_alerts`
     is `[]`, so "declared, none served" reads apart from "not declared".
 
-    None, with one WARN line on stderr, when served-values fails. The
-    caller omits what is missing; the exit code does not change.
+    Read from `served-values --config-facts` (#3918): nothing is resolved or
+    gathered, so a part of the day /metrics cannot be gathered in does not
+    hide the field at the instant the command runs. None, with one WARN line
+    on stderr, when served-values fails (a da-guard older than the flag
+    included). The caller omits what is missing; the exit code does not
+    change.
 
     ⛔ Not a `ConfDScanner` method on purpose: `tenant_verify` calls
     `source_info` per tenant, and must not pay a second da-guard run for a
     field it does not read."""
     try:
-        tree = load_served_tree(conf_d, partial=True)
+        tree = load_served_facts(conf_d, partial=True)
     except (DaGuardError, DaGuardNotFoundError, YamlFileError) as exc:
         # YamlFileError: `partial` makes a file the load skips no error, but
         # whatever served-values raises only costs this field (#1654 lint).
