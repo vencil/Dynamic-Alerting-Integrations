@@ -61,7 +61,6 @@ from _lib_python import parse_duration_seconds  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#3462: the one wording of "selected nothing")
 from _lib_label import safe_label  # noqa: E402
@@ -283,19 +282,22 @@ def read_rule_files(files):
     return _lib_consumer_read.rule_files_in(files, keep_refusals=True)
 
 
-def lint_file(filepath, policy, rule_files=None, *, flag=None):
+def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False):
     """Lint a single YAML rule file (or a ConfigMap holding rule files).
     *rule_files* is its reading from ``read_rule_files``; read here when not
     given. Returns (list of LintResult, rule_count).
 
-    *flag*: the declared input the file was selected from
-    (``--rule-pack-dir``): its bytes are read as `_lib_input` reads a
-    selected file — gone or unreadable since the directory was judged is a
-    refusal naming the flag, rc 2 (#3724), not one ERROR among the results."""
+    *selected*: the file was selected from a declared input (`_lib_input`:
+    ``--rule-pack-dir``, named by *flag*, or the scan paths, a positional
+    with no flag to name, #3901): its bytes are read as `_lib_input` reads a
+    selected file — gone or unreadable since the input was judged is a
+    refusal naming it, rc 2 with or without ``--ci`` (#3724), not one ERROR
+    among the results. Content that is not UTF-8 stays this file's ERROR:
+    what is linted is the file's content."""
     results = []
     rule_count = 0
     try:
-        if flag is not None:
+        if selected or flag is not None:
             content = _lib_input.read_bytes(filepath, flag=flag, lang="en").decode("utf-8")
         else:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -509,8 +511,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Lint custom Prometheus rules against platform governance policy."
     )
-    parser.add_argument(
-        "paths", nargs="*",
+    # #3901: the scan targets are a declared input — each a file or a
+    # directory, judged once by `selected` (below): not there, '' (an unset
+    # shell variable: never the current directory), a parent that cannot be
+    # entered, an entry that cannot be chosen are rc 2 naming the path, the
+    # same with and without --ci (#1618: `lint /typo/dir --ci` was a clean
+    # scan). Targets that are there and hold no YAML are a no-op without
+    # --ci and a caller error with it (#3462: EMPTY_ALLOWED, judged below).
+    _lib_input.add_input(
+        parser, "paths", select=_lib_consumer_read.FILES_TO_READ, many=True,
+        empty=_lib_input.EMPTY_ALLOWED,
+        remedy="Do not drop the path to clear this — an absent target is not a clean one.",
         help="YAML file(s) or directory to scan (or --rule-pack-dir instead)"
     )
     # #3755: what --rule-pack-dir selects is declared (`_lib_input`, the
@@ -555,35 +566,6 @@ def main():
     # against the built-in policy instead of yours.
     policy = load_policy(_lib_input.document(args, "policy", lang="en"), args.policy)
 
-    # ⛔ #1618 (D-06): a scan target that does not exist is a caller error,
-    # not a clean scan. `collect_files` simply skipped it, so
-    # `lint /typo/dir --ci` printed "No YAML files found." and exited 0 —
-    # a governance gate that passes on a path nobody scanned. Same answer
-    # with and without `--ci`. A target that EXISTS but holds no YAML is a
-    # no-op without `--ci` (EXIT_OK below) and a caller error with it (#3462).
-    # ⛔ `p == ""` is a separate test, not folded into `exists()`:
-    # `Path('')` is `PosixPath('.')`, so `exists()` is True and `lint ''`
-    # (an unset shell variable) silently linted the CURRENT DIRECTORY and
-    # exited on whatever it found there. '' is supplied and unusable — same
-    # family as a missing target, and `!r` makes it visible as ''.
-    # #3276: every other target is judged by the shared caller-path check —
-    # under a parent the caller cannot enter it is named, not a traceback.
-    # --rule-pack-dir '' is judged by its declaration below (`selected`:
-    # rc 2 naming the flag), never as the current directory.
-    if "" in args.paths:
-        die_caller_error(
-            "scan target(s) not found or empty: ''"
-            "\n  ⛔ Do not drop the path to clear this — an absent target "
-            "is not a clean one, and '' is not the current directory.")
-    if args.rule_pack_dir is None:
-        problems = [p for p in (classify_path(t, "any", lang="en") for t in args.paths)
-                    if p is not None]
-        if problems:
-            die_caller_error(
-                "".join(f"ERROR: {p.message}\n" for p in problems)
-                + "  ⛔ Do not drop the path to clear this — an absent target "
-                  "is not a clean one.", problems[0].reason)
-
     # #3426: which files are linted is a declaration by path — the rule
     # packs of a rule-packs directory (RULE_PACKS, the one declaration), or
     # the targets less `--exclude`. An entry that cannot be chosen (an
@@ -601,7 +583,8 @@ def main():
                      if not _lib_consumer_read.is_platform_pack(
                          _lib_consumer_read.RULE_PACKS.member(f))]
         else:
-            files = collect_files(args.paths, args.exclude)
+            # #3901: the one judgement of the scan targets, and their files.
+            files = _lib_input.selected(args, "paths", lang="en", exclude=args.exclude)
     except _lib_consumer_read.InputRefused as exc:
         label = ("--rule-pack-dir: " if args.rule_pack_dir is not None else "")
         die_caller_error(f"ERROR: {label}{_lib_consumer_read.error_text(exc)}")
@@ -636,7 +619,8 @@ def main():
     for filepath in files:
         results, count = lint_file(
             filepath, policy, readings[filepath],
-            flag="--rule-pack-dir" if args.rule_pack_dir is not None else None)
+            flag="--rule-pack-dir" if args.rule_pack_dir is not None else None,
+            selected=True)
         all_results.extend(results)
         files_checked += 1
         rules_checked += count

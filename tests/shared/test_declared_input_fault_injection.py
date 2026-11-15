@@ -101,7 +101,11 @@ ROWS = ([("D", rid, s, f, spec, argv) for rid, s, f, spec, argv, _r in _T._decla
 #: row ``"<id> [<name>]"`` and must have its own ``LIVE`` entry with an argv
 #: (`test_every_variant_row_has_its_own_argv`) — else it would run the row
 #: it is a variant of a second time.
-VARIANTS = {"deprecate --config-dir": ("subtree",)}
+VARIANTS = {"deprecate --config-dir": ("subtree",),
+            # #3901: a gatherer's value is a file or a directory — the row
+            # G1 hands a directory, and one more handing it a file.
+            "lint paths": ("file",), "onboard --rule-files": ("file",),
+            "silencer-drift-check --rule-source": ("file",)}
 ROWS += [(kind, f"{rid} [{name}]", script, flag, spec, argv)
          for kind, rid, script, flag, spec, argv in list(ROWS) for name in VARIANTS.get(rid, ())]
 
@@ -634,6 +638,28 @@ _SUBTREE_CONFD_MIN = {
     "team/tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"80\"\n",
 }
 
+_RULES = ("groups:\n- name: g\n  rules:\n  - alert: HighCPU\n    expr: up{tenant=\"t\"} == 0\n"
+          "    labels: {severity: warning, tenant: t}\n")
+_RULES_B = ("groups:\n- name: h\n  rules:\n  - alert: LowDisk\n    expr: up{tenant=\"t\"} == 1\n"
+            "    labels: {severity: warning, tenant: t}\n")
+#: A directory of two rule files (one in a subdirectory) against one; one
+#: rule file against one holding no rule.
+_RULE_DIR = {"live": _files({"a.yaml": _RULES, "sub/b.yaml": _RULES_B}),
+             "minimal": _files({"a.yaml": _RULES})}
+_RULE_FILE = {"live": _file(_RULES), "minimal": _file("groups: []\n")}
+_ONBOARD_RULES = ["--rule-files", "{D}", "-o", "{BOX}/out", "--json", "--dry-run"]
+_SILENCER_RULES = ["--silences-file", "{BOX}/silences.json", "--rule-source", "{D}", "--json"]
+
+# ── #3901: a file or a directory per value (gatherers) ──
+LIVE.update({
+    "lint paths": {**_RULE_DIR},
+    "lint paths [file]": {"argv": ["{F}"], **_RULE_FILE},
+    "onboard --rule-files": {"argv": _ONBOARD_RULES, **_RULE_DIR},
+    "onboard --rule-files [file]": {"argv": _ONBOARD_RULES, **_RULE_FILE},
+    "silencer-drift-check --rule-source": {"argv": _SILENCER_RULES, **_RULE_DIR},
+    "silencer-drift-check --rule-source [file]": {"argv": _SILENCER_RULES, **_RULE_FILE},
+})
+
 # ── #3902: the conf.d trees da-guard reads, declared ──
 LIVE.update({
     # One threshold changed between the two trees, against none.
@@ -841,7 +867,10 @@ def crashed(run: Run) -> bool:
 
 def named_refusal(base: Run, got: Run, flag: str, names: "list[str]") -> bool:
     """Oracle (a): rc 2, no crash, and a line the baseline does not have
-    naming *flag* or one of *names* (the input; the file removed)."""
+    naming *flag* or one of *names* (the input; the file removed). A
+    positional (*flag* with no leading ``-``, #3901) has no name a refusal
+    could say — its dest is a plain word (``paths``) any line may hold — so
+    only *names* count for it."""
     if got.rc != 2 or crashed(got):
         return False
     # A refusal answers nothing: no stdout line the baseline lacks (an rc-2
@@ -853,7 +882,7 @@ def named_refusal(base: Run, got: Run, flag: str, names: "list[str]") -> bool:
     # A name counts whole (`{CASE}/in` is not named by `{CASE}/input2`, nor
     # `--dir` by `--dir-x`); a path under the input counts — the first read
     # of a vanished input is of a file under it (a Go reader names that file).
-    named = re.compile("|".join([re.escape(flag) + r"(?![\w-])"]
+    named = re.compile("|".join(([re.escape(flag) + r"(?![\w-])"] if flag.startswith("-") else [])
                                 + [re.escape(n) + r"(?![\w.-])" for n in names]))
     return any(line not in seen and named.search(line)
                for line in (got.stdout + got.stderr).splitlines())
@@ -1065,6 +1094,9 @@ def test_a_refusal_must_name_and_not_crash():
                              "--config-dir", ["x"])
     assert not named_refusal(base, _r(1, "", "ERROR: --config-dir x: not found\n"),
                              "--config-dir", ["x"])
+    # A positional's dest names nothing (#3901): only the path counts.
+    assert not named_refusal(base, _r(2, "", "ERROR: no paths given\n"), "paths", ["x"])
+    assert named_refusal(base, _r(2, "", "ERROR: x: not found\n"), "paths", ["x"])
     # A path under the input names it; a sibling path or another flag does not.
     assert named_refusal(base, _r(2, "", "ERROR: x/b.json: not found\n"), "--d", ["x"])
     assert not named_refusal(base, _r(2, "", "ERROR: x2/b.json: not found\n"), "--d", ["x"])
@@ -1174,3 +1206,49 @@ def test_a_file_under_two_declared_trees_is_the_inner_ones(tmp_path, fresh_decla
             with pytest.raises(InputChanged, match="^--baseline "):
                 refuse()
 
+
+
+# ── #3901: a selected file gone when the Go readers run ──────────────────
+# The gate's file mode fires where PYTHON looks at a file under the input;
+# onboard and silencer-drift-check hand the selected files to da-crdecode /
+# da-read by path and took no look of their own, so a file gone then was the
+# reader's "no such file": one error beside a report made from the rest
+# (rc 2 with a partial document; onboard had printed its phase by then).
+
+_VANISH = ("#!/bin/sh\n[ -e \"$DA_TEST_VICTIM\" ] && rm -f \"$DA_TEST_VICTIM\"\n"
+           "exec \"$DA_TEST_REAL_{name}\" \"$@\"\n")
+
+
+@pytest.mark.usefixtures("da_read_env")
+@pytest.mark.parametrize("script, argv, flag", [
+    # Not --dry-run: onboard had written its plan by the time it said rc 2.
+    ("ops/onboard_platform.py", [a for a in _ONBOARD_RULES if a != "--dry-run"],
+     "--rule-files"),
+    ("ops/silencer_drift_check.py", _SILENCER_RULES, "--rule-source"),
+])
+def test_a_selected_file_gone_under_the_go_readers_is_refused_not_reported(
+        tmp_path, script, argv, flag):
+    rules, box = tmp_path / "rules", tmp_path / "box"
+    _RULE_DIR["live"](rules)
+    box.mkdir()
+    (box / "silences.json").write_text("[]\n", encoding="utf-8")
+    victim = rules / "sub" / "b.yaml"
+    env = dict(os.environ, DA_LANG="en", DA_TEST_VICTIM=str(victim))
+    for name, var in (("READ", "DA_READ_BINARY"), ("CRDECODE", "DA_CRDECODE_BINARY")):
+        wrapper = tmp_path / f"vanish-{name.lower()}"
+        wrapper.write_text(_VANISH.replace("{name}", name), encoding="utf-8")
+        wrapper.chmod(0o755)
+        env[f"DA_TEST_REAL_{name}"] = os.environ[var]
+        env[var] = str(wrapper)
+    args = [a.replace("{D}", str(rules)).replace("{BOX}", str(box)) for a in argv]
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / script), *args],
+                          cwd=tmp_path, env=env, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=300, check=False,
+                          stdin=subprocess.DEVNULL)
+    assert not victim.exists(), "the wrapper never ran: nothing was measured"
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == "", f"a report made without {victim.name}:\n{proc.stdout}"
+    assert f"ERROR: {flag} {victim}: " in proc.stderr, proc.stderr
+    assert not crashed(Run(proc.returncode, proc.stdout, proc.stderr, {}, []))
+    written = sorted(str(p.relative_to(box)) for p in box.rglob("*") if p.is_file())
+    assert written == ["silences.json"], f"written before the refusal: {written}"
