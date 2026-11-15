@@ -21,8 +21,6 @@ commands:
   analyze-gaps:
     "--output": output
   backtest:
-    "--baseline": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
-    "--config-dir": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--git-diff": not_path
     "--lookback": not_path
     "--markdown-output": output
@@ -80,8 +78,7 @@ commands:
     "--prometheus": url
     "--tenant": not_path
   deprecate:
-    "--plane": not_path
-    "--root-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--subtree": not_path
     metrics: not_path
   diagnose:
     "--prometheus": url
@@ -186,7 +183,6 @@ commands:
     "--secret-key": not_path
     "--secret-name": not_path
   offboard:
-    "--config-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     tenant: not_path
   onboard:
     "--da-crdecode-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
@@ -196,7 +192,6 @@ commands:
     "--rule-files": any
     "--tenant-label": not_path
   opa-evaluate:
-    "--config-dir": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--opa-binary": {kind: reader, by: "OPA binary not found", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_missing"}
     "--opa-url": url
     "--policy-package": not_path

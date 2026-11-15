@@ -76,9 +76,9 @@ declaration only.
   the manifest, not something the gate can refuse: no structure tells a path
   from a name, and a vocabulary net (help text mentioning "file") would read
   as a rule while missing whatever it did not spell.
-* The walk reads the parser the tool builds with ``DA_LANG`` unset. Four
+* The walk reads the parser the tool builds with ``DA_LANG`` unset. Three
   tools build a second, Chinese parser (alert-quality, cardinality-forecast,
-  policy-engine, opa-evaluate); a flag added to that one alone is not seen.
+  policy-engine); a flag added to that one alone is not seen.
 """
 from __future__ import annotations
 
@@ -365,18 +365,6 @@ _AM = str(REPO / "try-local" / "alertmanager.yml")
 #: path, so the words are what tells the two apart).
 _GUARD_STAT = 'stat "' + _MISSING + '"'
 READER_SITES = [
-    ("backtest", "--config-dir", "ops/backtest_threshold.py",
-     ["--config-dir", "{M}", "--baseline", _CONF, "--json"], "da-guard served-values: " + _GUARD_STAT),
-    ("backtest", "--baseline", "ops/backtest_threshold.py",
-     ["--config-dir", _CONF, "--baseline", "{M}"], "da-guard served-values: " + _GUARD_STAT),
-    ("deprecate", "--root-dir", "ops/deprecate_rule.py",
-     ["--config-dir", _CONF, "--plane", "subtree", "--root-dir", "{M}", "some_metric"],
-     "da-guard parse-tree: " + _GUARD_STAT),
-    ("offboard", "--config-dir", "ops/offboard_tenant.py", ["tenant-a", "--config-dir", "{M}"],
-     "da-guard parse-tree: " + _GUARD_STAT),
-    ("opa-evaluate", "--config-dir", "ops/policy_opa_bridge.py",
-     ["--config-dir", "{M}", "--opa-url", "http://127.0.0.1:9"],
-     "da-guard served-values: " + _GUARD_STAT),
     ("explain-keys", "--da-guard-binary", "ops/explain_keys.py",
      ["--config-dir", _CONF, "--da-guard-binary", "{M}"],
      f"da-guard binary not found at '{_MISSING}'"),
