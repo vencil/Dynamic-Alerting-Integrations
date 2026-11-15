@@ -238,8 +238,10 @@ function loadFirstDocument(src, schema) {
 // each `---` line starts one, and so does content before the first. A
 // `...` only ends a document — `a: 1\n...\n...\n` is one, though js-yaml's
 // loadAll returns a null document per `...` — so js-yaml's count is not it.
-// A `---` at the start of a line is always a marker (YAML forbids it inside
-// a scalar). Lines break where yaml.v3 breaks them: CR, LF, CRLF, and also
+// A `---` at the start of a line is a marker; one that a scalar would hold
+// (a quoted or plain value broken by NEL / U+2028 / U+2029) is a syntax
+// error to yaml.v3, so the file is refused either way, if for another
+// reason than the message says. Lines break where yaml.v3 breaks them: CR, LF, CRLF, and also
 // NEL (U+0085), U+2028 and U+2029, which js-yaml does not. Content after a
 // `...` with no `---` counts too: yaml.v3 refuses that text (syntax_error),
 // so the file is refused either way. Measured against da-guard parse-tree.
