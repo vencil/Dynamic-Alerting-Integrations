@@ -64,6 +64,7 @@ var findingKinds = map[string]bool{
 	"secret_ref_shared_field_not_allowed": true,
 	"secret_ref_shared_unknown":           true,
 	"secret_ref_unsupported_field":        true,
+	"severity_dedup_excluded":             true,
 	"severity_dedup_invalid":              true,
 	"tenant_file_unreadable":              true,
 	"timing_value_replaced":               true,

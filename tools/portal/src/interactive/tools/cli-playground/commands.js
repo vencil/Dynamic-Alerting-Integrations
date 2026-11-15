@@ -176,7 +176,7 @@ Next steps:
        3 files parsed successfully
 
 [PASS] routes
-       Validation: 2 route(s), 2 receiver(s), 2 inhibit rule(s)
+       Validation: 2 route(s), 2 receiver(s), 1 inhibit rule(s)
        OK: all configs valid
 
 [PASS] profiles

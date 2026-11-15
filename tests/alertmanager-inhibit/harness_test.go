@@ -10,21 +10,26 @@
 // green on all of that — it only validates syntax. Nothing in the repo tested
 // inhibit SEMANTICS, so the bug survived ~2 years.
 //
-// Scope: the two hand-written configs only.
+// Scope: the two hand-written configs, and the generator's dedup rule.
 //   - try-local/alertmanager.yml                     (hand-written)
-//   - k8s/03-monitoring/configmap-alertmanager.yaml  (hand-pasted generator output)
+//   - k8s/03-monitoring/configmap-alertmanager.yaml  (the SOURCE the generator
+//     merges into: Silent Mode / Custom Alert rules, no dedup rule — the merge
+//     refuses a source that holds one, #3899)
+//   - testdata/generated_dedup_inhibit.yaml          (the generator's REAL
+//     severity dedup rule for a fixed dedup_configs, written and drift-checked
+//     by tests/ops/test_generated_dedup_inhibit_fixture.py)
 //
-// The per-tenant dedup rules in the k8s config are emitted by
-// scripts/tools/ops/_grar_routes.py, which is correct by construction and
-// already covered by tests/ops/test_generate_alertmanager_routes.py. This suite
-// covers the checked-in RESULT, which is what Alertmanager actually loads.
+// The dedup rule is emitted by scripts/tools/ops/_grar_routes.py
+// (build_dedup_inhibit_rule): ONE rule for every tenant, with the tenants set
+// to `_severity_dedup: disable` in its target's tenant!~ list. Reading its
+// actual output here means Alertmanager's own matcher — not a re-derivation —
+// judges what the generator writes.
 package aminhibit
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/prometheus/alertmanager/config/common"
@@ -178,16 +183,6 @@ func loadConfigMapAM(t *testing.T, rel, key string) []common.InhibitRule {
 	return parseAM(t, fmt.Sprintf("%s data[%s]", rel, key), body)
 }
 
-// pinnedTenant returns the tenant id a matcher set pins to a literal, if any.
-func pinnedTenant(ms common.Matchers) (string, bool) {
-	for _, m := range ms {
-		if m.Name == "tenant" && m.Type == labels.MatchEqual {
-			return m.Value, true
-		}
-	}
-	return "", false
-}
-
 // sideGatesLabel reports whether this matcher set GUARANTEES `label` is present
 // (non-empty). A missing label reads as "" in Alertmanager, so "guarantees
 // present" == "some matcher on `label` does NOT match the empty string" —
@@ -203,61 +198,14 @@ func sideGatesLabel(ms common.Matchers, label string) bool {
 	return false
 }
 
-// matcherScopedTenants returns the tenant ids pinned by rules that scope
-// themselves via MATCHER PINS rather than via `equal:`, in config order.
-//
-// dev-rules #2 (tenant-agnostic): the assertions must not hardcode tenant ids.
-// The k8s ConfigMap's dedup rules are GENERATED per tenant by
-// scripts/tools/ops/_grar_routes.py, so the ids are deployment data, not a
-// constant — reading them back means regenerating the ConfigMap for a different
-// tenant set keeps the assertions meaningful instead of silently exercising
-// tenants that no longer exist.
-//
-// Rules carrying `tenant` in equal: are SKIPPED. They are tenant-agnostic (Silent
-// Mode, Custom Alert silence) and pin no id worth deriving; including them let an
-// unrelated rule that happens to pin a tenant hijack index [0] and hand the dedup
-// fixtures a tenant whose dedup rule does not exist.
-//
-// Scans BOTH sides deliberately. Reading only source_matchers made the
-// derivation self-defeating: deleting the source-side tenant pin — exactly the
-// isolation break these tests exist to catch — also deleted the id being
-// derived, shrinking the tenant list to one and skipping the cross-tenant case
-// that would have failed. A union means a one-sided deletion still yields both
-// ids, so the mutation is caught rather than hidden.
-func matcherScopedTenants(rules []common.InhibitRule) []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, r := range rules {
-		if slices.Contains(r.Equal, "tenant") {
-			continue
-		}
-		for _, ms := range []common.Matchers{r.SourceMatchers, r.TargetMatchers} {
-			if v, ok := pinnedTenant(ms); ok && !seen[v] {
-				seen[v] = true
-				out = append(out, v)
-			}
+// pinnedTenant returns the tenant id a matcher set pins to a literal, if any.
+func pinnedTenant(ms common.Matchers) (string, bool) {
+	for _, m := range ms {
+		if m.Name == "tenant" && m.Type == labels.MatchEqual {
+			return m.Value, true
 		}
 	}
-	return out
-}
-
-// dedupTenants returns the tenant ids the per-tenant dedup rules pin, and FAILS
-// if there are none.
-//
-// Fail-closed on purpose. A fixture whose tenant matches no rule passes every
-// `want: false` assertion vacuously, so "no tenants found" must be red, not a
-// skip: t.Skipf inside a helper aborts the WHOLE calling test function and still
-// exits 0, which would silently delete this file's coverage the day the
-// reference ConfigMap stops pinning tenants.
-func dedupTenants(t *testing.T, rules []common.InhibitRule) []string {
-	t.Helper()
-	ts := matcherScopedTenants(rules)
-	if len(ts) == 0 {
-		t.Fatalf("no tenant-pinned inhibit rule in the config: every per-tenant assertion " +
-			"here would pass vacuously. If the reference deployment legitimately dropped " +
-			"per-tenant dedup, retarget these tests rather than letting them pass empty.")
-	}
-	return ts
+	return "", false
 }
 
 // check is one assertion: with src firing, is tgt suppressed?

@@ -58,8 +58,8 @@ Go 測試**不在** `tests/`，而是與被測程式碼同目錄：
 | Job (workflow) | 跑什麼 |
 |---------------|--------|
 | `Python Tests` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑在 `Python Tests — run (K/3)` 三個平行分片：`pytest tests/ --shard=K/3`（`tests/_shard.py` 以 nodeid 的 crc32 分配，三片互斥且合起來是整棵樹），跳過 3 個 `@slow` 測試（見下），**不開 coverage**。coverage 在另一組 advisory job 跑：`Python Coverage (K/3)` 同樣分三片加 `--cov`，再由 `Python Coverage` 合併、上傳 `coverage-python` 給 coverage-delta 留言、套 `pyproject.toml` 的 `fail_under = 75`（紅了不擋 merge）。⚠️ **不再受 path gate 影響**：`python` filter 帶 catch-all，實跑腿在每支 PR 都跑（理由與成本量測見 `ci.yml` 該 filter 的註解）。Go / Portal 兩線仍是 path-gated |
-| `Go Tests` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑拆成數條 `go-tests-*` leg，一個 module 一條（權威清單是 `ci.yml` 裡這個 gate 的 `needs:`，本表刻意不複述——舊版寫「三腿」時已經漏掉兩條），同受 `detect-changes` path gate |
-| `Smoke Tests (Chromium)` (ci.yml) | 聚合 gate（恆回報的 required check 名，#1428）；實跑在 `Smoke Tests Run`：`tests/e2e/*.spec.ts`（排除 `@visual` tag），受 `detect-changes` 的 `e2e` path gate |
+| `Go Tests` (ci.yml) | 聚合 gate（恆回報的 required check 名）；實跑拆成數條 `go-tests-*` leg，一個 module 一條（權威清單是 `ci.yml` 裡這個 gate 的 `needs:`，本表刻意不複述——舊版寫「三腿」時已經漏掉兩條），每支 PR 都跑、不設 path gate（[#3756](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3756)）；任一 leg 不是 `success` gate 就紅 |
+| `Smoke Tests (Chromium)` (ci.yml) | 聚合 gate（恆回報的 required check 名，#1428）；實跑在 `Smoke Tests Run`：`tests/e2e/*.spec.ts`（排除 `@visual` tag），每支 PR 都跑 |
 | `Portal Tests` (ci.yml) | `tools/portal/tests/*.test.{ts,tsx}` Vitest 單元測試（ESM Option C；monorepo restructure 後從 tests/portal/ 搬入） |
 | `Nightly Race Detector` (nightly-race.yaml) | Go `-race -count=10 -short`，advisory only（`-short` 讓窮舉矩陣跑縮小版；完整矩陣由 PR CI 的 `-race -count=1` 跑，#2977）。每個 module 依上一晚各 package 耗時分片平行跑，`merge` 合併後只解析一次；module 清單與片數在 `scripts/ops/plan_race_shards.py`（#3541） |
 | `Lint Documentation` (ci.yml) | `make lint-docs`（含 changelog / link / structure check） |

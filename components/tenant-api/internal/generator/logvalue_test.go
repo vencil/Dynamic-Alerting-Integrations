@@ -34,8 +34,8 @@ func TestLogValuer_ErrorTypesLogNoMessage(t *testing.T) {
 		value any
 		want  string
 	}{
-		"UnavailableError": {error(&UnavailableError{Code: CodeValidatorUnavailable, Reason: ReasonDaGuardMissing,
-			Message: "container: " + logCanary}), `"reason":"` + ReasonDaGuardMissing + `"`},
+		"UnavailableError": {error(&UnavailableError{Code: CodeValidatorUnavailable, Reason: ReasonToolFault,
+			Message: "container: " + logCanary}), `"reason":"` + ReasonToolFault + `"`},
 		"UnavailableError unknown reason": {error(&UnavailableError{Code: CodeValidatorUnavailable,
 			Reason: "r " + logCanary, Message: logCanary}), `"reason":"unknown"`},
 		"RejectedError": {error(&RejectedError{Reason: ReasonMemory, Message: logCanary}),

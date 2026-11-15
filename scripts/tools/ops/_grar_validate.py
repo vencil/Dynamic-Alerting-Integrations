@@ -49,6 +49,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
+from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
@@ -248,6 +249,141 @@ def _matchers_gate_label_present(matchers: list[str], label: str) -> bool:
         if not _matcher_matches_labels(m, {label: ""}):
             return True
     return False
+
+
+_MATCHER_NAME_RE = re.compile(r'\s*([a-zA-Z_]\w*)\s*(=~|!~|!=|=)\s*')
+_GO_ESCAPES = {"n": "\n", "t": "\t", "\\": "\\", '"': '"'}
+
+
+def _split_matcher_element(element: str) -> "list[tuple[str, str, str]] | None":
+    """One ``*_matchers`` list element as Alertmanager reads it: one or more
+    ``name op value`` matchers, comma-separated, optionally inside ``{}``,
+    each value quoted (``\\\\`` / ``\\"`` / ``\\n`` escapes) or bare. None
+    when it cannot be read — ``_side_atoms`` passes that on, and
+    ``is_generated_dedup_rule`` then reads the rule as not the generator's
+    (it is kept; Alertmanager's own reading of a base refuses what it cannot
+    parse before this is asked)."""
+    text = element.strip()
+    if text.startswith("{") and text.endswith("}"):
+        text = text[1:-1]
+    out: list[tuple[str, str, str]] = []
+    i = 0
+    while True:
+        while i < len(text) and text[i] in " \t,":
+            i += 1
+        if i >= len(text):
+            return out or None
+        m = _MATCHER_NAME_RE.match(text, i)
+        if not m:
+            return None
+        name, op, i = m.group(1), m.group(2), m.end()
+        if i < len(text) and text[i] == '"':
+            i += 1
+            chars: list[str] = []
+            while True:
+                if i >= len(text):
+                    return None
+                c = text[i]
+                if c == "\\" and i + 1 < len(text):
+                    chars.append(_GO_ESCAPES.get(text[i + 1], "\\" + text[i + 1]))
+                    i += 2
+                    continue
+                if c == '"':
+                    i += 1
+                    break
+                chars.append(c)
+                i += 1
+            value = "".join(chars)
+        else:
+            j = text.find(",", i)
+            j = len(text) if j < 0 else j
+            value, i = text[i:j].strip(), j
+        out.append((name, op, value))
+        rest = text[i:].lstrip(" \t")
+        if rest and not rest.startswith(","):
+            return None
+
+
+def _side_atoms(rule: dict, side: str) -> "list[tuple[str, str, str]] | None":
+    """Every matcher of one side of *rule* as ``(name, op, value)``: the
+    ``*_matchers`` list (an element may hold several) or the legacy
+    ``*_match`` / ``*_match_re`` maps. ``[]`` for a side with no matcher —
+    Alertmanager matches every alert there. None when an element cannot be
+    read."""
+    atoms: list[tuple[str, str, str]] = []
+    matchers = rule.get(f"{side}_matchers")
+    for element in matchers if isinstance(matchers, list) else []:
+        if not isinstance(element, str):
+            return None
+        parsed = _split_matcher_element(element)
+        if parsed is None:
+            return None
+        atoms.extend(parsed)
+    for key, op in ((f"{side}_match", "="), (f"{side}_match_re", "=~")):
+        legacy = rule.get(key)
+        if isinstance(legacy, dict):
+            atoms.extend((str(k), op, str(v)) for k, v in legacy.items())
+    return atoms
+
+
+def _normalised_rule(rule: object) -> "tuple[frozenset, frozenset, frozenset] | None":
+    """*rule* as ``(source atoms, target atoms, equal labels)``, each a set —
+    so spacing, quoting, ``{}``, several matchers in one element, legacy
+    ``*_match`` / ``*_match_re`` maps, order and repeats do not count. None
+    when it is not a mapping or a side cannot be read."""
+    if not isinstance(rule, dict):
+        return None
+    src, tgt = _side_atoms(rule, "source"), _side_atoms(rule, "target")
+    equal = rule.get("equal", [])
+    if src is None or tgt is None or not isinstance(equal, list):
+        return None
+    return (frozenset(src), frozenset(tgt),
+            frozenset(e for e in equal if isinstance(e, str)))
+
+
+def _regex_alternatives_as_literals(value: str) -> list[str]:
+    """The alternatives of an ``a|b`` regex with their escapes removed —
+    the tenant ids a generated exclusion list names. Whether they ARE that
+    list is decided by rebuilding the rule from them and comparing."""
+    return [re.sub(r"\\(.)", r"\1", alt) for alt in value.split("|")]
+
+
+def is_generated_dedup_rule(rule: object) -> bool:
+    """Whether *rule* is a severity dedup rule the route generator itself
+    writes (#3899) — the one definition is the generator, so it is rebuilt
+    and compared, not described:
+
+    * ``_grar_routes.build_dedup_inhibit_rule(excluded)`` for some exclusion
+      list (none: no ``tenant!~`` matcher) — the list is read back from the
+      rule's ``tenant!~`` value and the rule rebuilt from it;
+    * ``_grar_routes.pre3899_dedup_inhibit_rule(t)``, the per-tenant shape
+      the generator wrote before #3899 (v2.9.0), for the tenant it pins.
+
+    Both are compared as ``_normalised_rule`` sets, so a copy that went
+    through Alertmanager's reader (``da-read``: one matcher per element,
+    sorted) or was reformatted by hand is still recognised. Any other rule —
+    an operator's own policy, however broad — is not this: it is not judged
+    here and is kept as written.
+    """
+    from _grar_routes import (  # noqa: PLC0415  (_grar_routes imports this module)
+        build_dedup_inhibit_rule, pre3899_dedup_inhibit_rule)
+
+    got = _normalised_rule(rule)
+    if got is None:
+        return False
+    src, tgt, _eq = got
+    exclusions = [a for a in tgt if a[0] == "tenant" and a[1] == "!~"]
+    if len(exclusions) <= 1:
+        excluded = (_regex_alternatives_as_literals(exclusions[0][2])
+                    if exclusions else [])
+        # An empty member (`tenant!~""`, `tenant!~"ta|"`) is no tenant id:
+        # the generator never lists one, though rebuilding would echo it.
+        if ("" not in excluded
+                and _normalised_rule(build_dedup_inhibit_rule(excluded)) == got):
+            return True
+    pinned = [a[2] for a in src if a[0] == "tenant" and a[1] == "="]
+    return (len(pinned) == 1
+            and _normalised_rule(pre3899_dedup_inhibit_rule(pinned[0])) == got)
 
 
 def find_ungated_equal_label_inhibits(
@@ -805,8 +941,10 @@ def _target_excludes_platform_alerts(rule: dict) -> bool:
       silencing violation message tells operators to write.
     - the target requires ``metric_group``. No shipped platform alert carries
       it (the generator's own rules rely on the same fact, and the repo's CI
-      checks them against the full set), so this covers generated rules and
-      copies of them in a base or cluster config alike, on both render paths.
+      checks them against the full set), so this covers the generated rule
+      and any operator rule gated the same way, on both render paths. (A
+      copy of the dedup rule in a base is refused before this is asked —
+      ``_grar_render.assert_base_has_no_dedup_rule``, #3899.)
     """
     targets = _inhibit_target_matchers(rule) or []
     if _matchers_gate_label_present(targets, "metric_group"):
@@ -1299,7 +1437,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
             parsed, tenant_dirs.get(tenant, ROOT_LEVEL))
         if profile_name not in visible:
             where = origin.get(profile_name)
-            extra = (f" (a profile of that name is defined in {where}, which "
+            extra = (f" (a profile of that name is defined in {shown_file(where)}, which "
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
@@ -1355,8 +1493,8 @@ def check_policy_scope(
             rows.append((name, t))
             msg = (f"  {severity}: domain_policy '{shown_key(name)}' in {source} names "
                    f"tenant '{t}', which lives outside this policy's subtree "
-                   f"{scope}/ (its file is in "
-                   f"{'the conf.d root' if where == ROOT_LEVEL else where + '/'})"
+                   f"{shown_file(scope)}/ (its file is in "
+                   f"{'the conf.d root' if where == ROOT_LEVEL else shown_file(where) + '/'})"
                    f" — a policy below the conf.d root applies only to the "
                    f"tenants in its own subtree, so this entry is NOT enforced")
             if strict:
@@ -1460,7 +1598,7 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
         Finding(  # #2766: the tenant is the subject; several files, so no file
         # #3703: an id two files declare is whatever the author wrote.
         f"  {DUPLICATE_TENANT_PREFIX} tenant '{shown_key(str(tenant))}' is declared in "
-        f"{len(files)} files: {', '.join(files)}. The threshold-exporter (and "
+        f"{len(files)} files: {', '.join(shown_file(f) for f in files)}. The threshold-exporter (and "
         "da-guard) reject the WHOLE config dir in this state, so every tenant "
         "loses alerting, not just this one. Which file owns the tenant is "
         "your decision (removing the wrong one drops its overrides "
@@ -1731,7 +1869,7 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
     out: list[IgnoredKeyWarning] = []
     # The file goes after the path: `_routing_defaults.overrides[0] in
     # _defaults.yaml`, never `… in _defaults.yaml.overrides[0]`.
-    in_file = f" in {file}" if file else ""
+    in_file = f" in {shown_file(file)}" if file else ""
 
     def check(obj: dict, keys: frozenset[str], label: str, path: str,
               in_override: bool = False) -> None:
@@ -2088,7 +2226,7 @@ def unknown_routing_keys(obj: object, *, layer: str, where: str,
     if not isinstance(obj, dict):
         return []
     allowed = TENANT_ROUTING_KEYS if layer == "tenant" else PLATFORM_ROUTING_KEYS
-    in_file = f" in {file}" if file else ""
+    in_file = f" in {shown_file(file)}" if file else ""
     return [
         ignored_key_warning(
             f"  WARN: {where}{in_file}: '{shown_key(key)}' is not a key the route generator reads "
@@ -2456,7 +2594,7 @@ def invalid_tenant_id_text(tenant: object, files: "Sequence[str]" = ()) -> str:
     finding's ``file`` names it: an id that is not printed is found by its
     file and its stand-in. ⚠️ Wording as ``routing_not_mapping_text``.
     """
-    where = f"{files[0]}: " if files else ""
+    where = f"{shown_file(files[0])}: " if files else ""
     return (f"{where}tenant id '{shown_key(str(tenant))}' is not a valid tenant id "
             f"({tenant_id_rule()[1]}) — no route, receiver or inhibit rule is "
             "rendered for it")
@@ -2473,7 +2611,7 @@ def tenant_id_field(tenant: object) -> "str | None":
 
 def routing_defaults_not_mapping_text(fname: str, value: object) -> str:
     """#2341 R5: a ``_routing_defaults`` that is neither a mapping nor null."""
-    return (f"_routing_defaults in {fname} must be a mapping, got "
+    return (f"_routing_defaults in {shown_file(fname)} must be a mapping, got "
             f"{_shape_of(value)} — this level contributes nothing to the "
             "routing of the tenants it reaches")
 

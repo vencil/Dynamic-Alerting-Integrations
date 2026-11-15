@@ -38,16 +38,26 @@ func TestPolicyAvailabilityMetrics(t *testing.T) {
 		t.Errorf("ready generator: %s", got)
 	}
 	for name, body := range map[string]map[string]any{
-		"policy unusable": {"policy": map[string]any{"configured": true, "available": false}, "da_read_available": true, "ready": false},
-		"da-read missing": {"policy": map[string]any{"configured": false, "available": true}, "da_read_available": false, "ready": false},
-		// Ready, but an image older than the key verdict (no
-		// da_guard_available): every write it passes is refused 503.
-		"no key verdict": {"policy": map[string]any{"configured": false, "available": true}, "da_read_available": true, "ready": true},
+		"policy unusable": {"policy": map[string]any{"configured": true, "available": false}, "tool_fault": nil, "ready": false},
+		"tool fault": {"policy": map[string]any{"configured": false, "available": true},
+			"tool_fault": []any{map[string]any{"binary": "da-read", "subcommand": "alertmanager", "reason": "not_found"}},
+			"ready":      false},
+		// Ready, but an image older than the key verdict (neither tool_fault
+		// nor da_guard_available): every write it passes is refused 503.
+		"no key verdict": {"policy": map[string]any{"configured": false, "available": true}, "ready": true},
 	} {
 		fake.SetStatus(func() (int, any) { return 200, body })
 		if got := render(); !strings.Contains(got, "\ntenant_api_policy_available 0\n") {
 			t.Errorf("%s: %s", name, got)
 		}
+	}
+	// An image from the key verdict up to #3862: da_guard_available, no tool_fault.
+	fake.SetStatus(func() (int, any) {
+		return 200, map[string]any{"policy": map[string]any{"configured": false, "available": true},
+			"da_guard_available": true, "ready": true}
+	})
+	if got := render(); !strings.Contains(got, "\ntenant_api_policy_available 1\n") {
+		t.Errorf("an image before #3862: %s", got)
 	}
 	fake.SetStatus(func() (int, any) { return 500, map[string]any{} })
 	if got := render(); !strings.Contains(got, "\ntenant_api_policy_available 0\n") {

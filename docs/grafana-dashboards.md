@@ -74,7 +74,7 @@ threshold-exporter 跑多個副本，平台的 Prometheus 逐 pod 抓取（[#348
 | 3 | Warning/Critical | `count(max without(instance, pod) (user_threshold{severity="warning\|critical"}))` | Critical 20-40% | Critical>50%→檢查 Rule Pack |
 | 4 | Silent Mode | `count(max without(instance, pod) (user_silent_mode)) or vector(0)` | 0 或計畫維護 | 非預期>0→檢查 `_silent_mode` |
 | 5 | Maintenance Mode | `count(max without(instance, pod) (user_state_filter{filter="maintenance"}))` | 0 或計畫維護 | 非預期>0→檢查 `_state_maintenance` |
-| 6 | Dedup Disabled | `count(max without(instance, pod) (user_severity_dedup{mode="disable"}))` | 0 或小部分 | 非預期>0→檢查 `_severity_dedup` |
+| 6 | Dedup Enabled | `count(max without(instance, pod) (user_severity_dedup{mode="enable"})) or vector(0)` | 多數租戶（預設開啟） | 低於預期→檢查 `_severity_dedup`；設 `disable` 的租戶不送這個序列，所以無法從這個指標數出 disable 的租戶 |
 
 ---
 

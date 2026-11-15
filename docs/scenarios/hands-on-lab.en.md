@@ -260,7 +260,7 @@ Expected output (an abridged illustration; the real report has more check rows):
 
 [PASS] routes
        ...
-       Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+       Validation: 5 route(s), 5 receiver(s), 1 inhibit rule(s)
        ...
        OK: all configs valid
 
@@ -319,7 +319,7 @@ Expected output (first run):
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 5 inhibit rules)
+Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 1 inhibit rules)
 ```
 
 stderr also carries two WARN lines, expected in this exercise: no `--base-config` is given, so the config is merged into the built-in placeholder base, whose root receiver `default` and `watchdog-heartbeat` are wired to nothing. For your own Alertmanager pass `--base-config <your own Alertmanager config>` — the source, not the `alertmanager.yml` this tool writes (an output passed as the base is refused, exit 1); see [BYO Alertmanager Integration Guide Step 5](../integration/byo-alertmanager-integration.en.md#step-5-merge-into-alertmanager-configmap). ⚠️ The v2.9.0 image has no `--output-alertmanager` (and `:latest` is that image until the next release); with it, drop `--output-alertmanager` and you get a fragment holding only the tenant routing <!-- image-caveat: v2.9.0 -->
@@ -330,11 +330,11 @@ Second run (`--validate`):
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+Validation: 5 route(s), 5 receiver(s), 1 inhibit rule(s)
 OK: all configs valid
 ```
 
-`.output/alertmanager.yml` is a complete Alertmanager config. `route.routes` starts with the platform's four routes (Watchdog, `component="custom"`, synthetic probe, sentinel), then each tenant gets its own block (`matchers: tenant="…"`); `receivers` holds the base's `default` and the four platform receivers besides the five `tenant-…` ones, and `inhibit_rules` the five tenants' severity dedup rules. Against the Exercise 2 settings:
+`.output/alertmanager.yml` is a complete Alertmanager config. `route.routes` starts with the platform's four routes (Watchdog, `component="custom"`, synthetic probe, sentinel), then each tenant gets its own block (`matchers: tenant="…"`); `receivers` holds the base's `default` and the four platform receivers besides the five `tenant-…` ones, and `inhibit_rules` one severity dedup rule covering all five tenants (none sets `_severity_dedup: disable`, so it has no `tenant!~` exclusion list). Against the Exercise 2 settings:
 
 | Tenant | receiver | group_wait | repeat_interval | From |
 |---|---|---|---|---|

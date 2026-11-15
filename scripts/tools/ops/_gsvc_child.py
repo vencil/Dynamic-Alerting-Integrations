@@ -22,7 +22,18 @@ forked, and never returns. In order:
    cache installed (``_lib_parse_cache``), so an unchanged file is not read
    through ``da-guard parse-tree`` again (ADR-036 step 4: the generator reads
    conf.d from parse-tree; da-guard is on the image's $PATH).
-5. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
+5. When any external program of the run did not run (``_lib_tool_fault``:
+   not there, could not be executed, timed out, ended by a signal, an exit
+   code or output it never gives, older than this tool), the result is
+   ``tool_fault`` with those records — whatever the generator concluded
+   without it, rc 0 included (#3862). One the Go runtime ended for want of
+   memory under the memory limit (``_lib_tool_fault.end_reason``: one of its
+   crash signals, or exit 2 with its own out-of-memory line) while the
+   judgement ran is that write's ``memory`` instead — never ``ran``, whatever the
+   generator concluded without it; a fault in the same judgement wins. In
+   the key verdict that end is the verdict's own ``memory`` (ADR-038
+   decision 5: a verdict not completed, with its reason).
+6. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
    base tree's files as soon as the tree is read, each new parse-cache entry the moment its
    parse finishes, and the result last — so a process the deadline kills
    still hands back every parse it completed. Then ``os._exit``.
@@ -62,6 +73,7 @@ import _lib_key_verdict  # noqa: E402
 import _lib_tenant_values  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
+import _lib_tool_fault  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
     STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
 )
@@ -422,6 +434,13 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         print(f"generator-service: da-guard could not classify the base tree's "
               f"path names: {msg}", file=sys.stderr)
         return {"outcome": "da_guard", "message": msg}
+    except MemoryError:
+        # Names mode ended by a signal, or out of memory, under RLIMIT_DATA
+        # (this process's own allocation too): `_lib_parse_tree` recorded
+        # which (#3862). Answered as the generator's run is: `run_child`
+        # reports a recorded fault (a SIGKILL: `signalled`) as tool_fault
+        # first; otherwise it is this write's memory.
+        return {"outcome": "memory"}
     # #2901 E2: the base tree's files, as soon as they are known — the
     # long-running process pins them even if this process is killed. By the
     # cache's own key (SHA-256 of the path below conf.d and the content,
@@ -485,7 +504,9 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
                   "stored": len(cache.new), "unreadable": cache.rejected_entries},
         "hit_keys": [list(k) for k in cache.hits],
     }
-    if memory or cache.memory_error:
+    # #3862: a program the Go runtime ended under the memory limit gave the
+    # generator nothing: whatever it concluded without it is no verdict.
+    if memory or cache.memory_error or _lib_tool_fault.memory_ends():
         return {"outcome": "memory", **common}
     try:
         with open(findings_path, encoding="utf-8") as fh:
@@ -683,9 +704,16 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         return report("not_completed", reason="memory", tenants=len(tenants),
                       message=" ".join(str(exc).split())[:300] or "MemoryError")
     except _lib_tenant_values.DaGuardError as exc:
+        # The verdict's own reading of key-verdict's document (#3862): a
+        # field of the wrong shape there is da-guard's output, not the tree's.
+        if exc.binary_fault and not exc.fault_judged:
+            _lib_tool_fault.record("da-guard", "key-verdict",
+                                   "stale" if exc.stale else "bad_output")
         # A da-guard ended by a signal under RLIMIT_DATA (GOTRACEBACK=crash:
-        # the Go runtime's own out-of-memory too) is its memory limit.
-        reason = "memory" if (exc.returncode or 0) < 0 else "error"
+        # the Go runtime's own out-of-memory too) is its memory limit; so is
+        # one that exited 2 out of memory before it read GOTRACEBACK
+        # (`memory_end`, #3862).
+        reason = "memory" if (exc.returncode or 0) < 0 or exc.memory_end else "error"
         return report("not_completed", reason=reason, tenants=len(tenants),
                       message=" ".join(str(exc).split())[:300])
     except BaseException as exc:  # noqa: BLE001 — reported as not completed, with its reason
@@ -718,7 +746,7 @@ def _warm(job: ChildJob, tree_dir: str, stream: "_Stream") -> dict:
         pass  # an unusable tree: whatever was parsed has been sent
     finally:
         _lib_parse_cache.install(None)
-    outcome = "memory" if cache.memory_error else "warmed"
+    outcome = "memory" if cache.memory_error or _lib_tool_fault.memory_ends() else "warmed"
     return {"outcome": outcome,
             "cache": {"parses": cache.parses, "hits": len(cache.hits),
                       "stored": len(cache.new), "unreadable": cache.rejected_entries}}
@@ -756,7 +784,16 @@ def run_child(job: ChildJob, result_fd: int) -> None:
             os.dup2(out, fd)
             os.close(out)
         stream = _Stream(result_fd, job.max_transfer)
+        _lib_tool_fault.clear()  # a fork: nothing of the service's own runs
         result = _judge(job, stream)
+        faults = _lib_tool_fault.faults()  # not a memory end: `_judge` answered that
+        if faults:
+            # #3862: a verdict reached without one of its programs is no
+            # verdict — before `ran`, rc 0 included, and before `memory`.
+            result = {"outcome": "tool_fault",
+                      "faults": [f.as_dict() for f in faults],
+                      **{k: result[k] for k in ("validated", "cache", "hit_keys")
+                         if k in result}}
         sys.stdout.flush()
         sys.stderr.flush()
         result["stderr_tail"] = _tail(os.path.join(job.job_dir, "stderr"))

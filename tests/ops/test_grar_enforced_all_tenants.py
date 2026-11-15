@@ -102,13 +102,19 @@ def test_every_recognised_tenant_gets_its_enforced_route(tmp_path):
 
 
 def test_the_enforced_set_is_the_inhibit_set(tmp_path):
-    """The same tenants as the severity-dedup inhibit rules (dedup_configs)."""
-    frag = _render(_tree(tmp_path, _PER_TENANT))
-    inhibited = sorted(
-        m[len('tenant="'):-1] for r in frag["inhibit_rules"]
-        for m in r["source_matchers"] if m.startswith('tenant="'))
-    assert inhibited == _EVERY
-    assert _enforced_names(frag["receivers"]) == [f"platform-enforced-{t}" for t in inhibited]
+    """The same tenants the severity-dedup inhibit rule is judged over
+    (dedup_configs). #3899: that rule names no tenant it covers — one rule,
+    `tenant=~".+"` — only those it excludes; every tenant here is at the
+    default (enable), so none is excluded and the set is dedup_configs."""
+    d = _tree(tmp_path, _PER_TENANT)
+    frag = _render(d)
+    assert sorted(load_tenant_tree(str(d)).dedup_configs) == _EVERY
+    dedup = [r for r in frag["inhibit_rules"]
+             if 'severity="critical"' in r.get("source_matchers", [])]
+    assert len(dedup) == 1, frag["inhibit_rules"]
+    assert 'tenant=~".+"' in dedup[0]["source_matchers"]
+    assert not any(m.startswith("tenant!~") for m in dedup[0]["target_matchers"])
+    assert _enforced_names(frag["receivers"]) == [f"platform-enforced-{t}" for t in _EVERY]
 
 
 def test_a_dropped_invalid_id_gets_none(tmp_path):
@@ -151,11 +157,11 @@ def test_validate_config_routes_row_counts_them(tmp_path):
     assert row["status"] in (vc.PASS, vc.WARN), row
     # One enforced route + receiver per tenant, one tenant route + receiver
     # per routed tenant (t-routed, t-dflt); an unrouted tenant reaches the
-    # root through the merge, not a route of its own. One dedup inhibit
-    # rule each.
+    # root through the merge, not a route of its own. ONE dedup inhibit
+    # rule for all of them (#3899).
     n = len(_EVERY) + 2
     assert (f"Validation: {n} route(s), {n} receiver(s), "
-            f"{len(_EVERY)} inhibit rule(s)") in row["details"], row
+            "1 inhibit rule(s)") in row["details"], row
 
 
 def test_explain_route_trace_tree_and_types_follow(tmp_path):

@@ -193,17 +193,14 @@ def test_precommit_files_patterns_match_every_declared_name_of_a_family_they_wat
 
 
 def _path_lists(node, key=None):
-    """Every list of path globs in a parsed workflow: `paths:` triggers and
-    dorny/paths-filter `filters:` (a YAML string of its own)."""
+    """Every list of path globs in a parsed workflow: the `paths:` triggers.
+
+    (Until #3756 this also read dorny/paths-filter `filters:` blocks; no
+    workflow has one any more, and scripts/ops/workflow_path_filter.py
+    refuses a new one.)"""
     if isinstance(node, dict):
         for k, v in node.items():
-            if k == "filters" and isinstance(v, str):
-                parsed = yaml.safe_load(v)
-                if isinstance(parsed, dict):
-                    for globs in parsed.values():
-                        if isinstance(globs, list):
-                            yield [g for g in globs if isinstance(g, str)]
-            elif k == "paths" and isinstance(v, list):
+            if k == "paths" and isinstance(v, list):
                 yield [g for g in v if isinstance(g, str)]
             else:
                 yield from _path_lists(v, k)
@@ -472,10 +469,6 @@ ALLOWED: "tuple[tuple[str, str, str], ...]" = (
      "--rule-pack-dir help text"),
     ("tests/lint/test_check_configmap_mount_completeness.py", r"configmap-rules-\*",
      "asserts the lint's own message"),
-    ("scripts/ops/workflow_path_filter.py", r"k8s/03-monitoring/configmap-rules-\*\.yml",
-     "RESERVED_PATTERNS: the key is ci.yml's own filter line, quoted verbatim "
-     "(a workflow file this repo's Python cannot feed); the ledger is checked "
-     "against that line both ways (#3756)"),
 )
 
 

@@ -13,8 +13,8 @@ import (
 // same bytes load through the live strict parser. Together they form the
 // two-ended drift tripwire: a change to the generator that isn't mirrored into
 // these fixtures reddens the JS clamp, and a fixture the Go parser would reject
-// reddens here — and because the fixtures live under components/tenant-api/**,
-// a fixture-only regen flips the CI go_changed path filter so this leg runs.
+// reddens here. Both legs run on every PR (#3756), so a fixture-only regen is
+// checked from both ends.
 //
 // A zero-match embed glob is a COMPILE error (unlike os.ReadDir over an emptied
 // dir), so the harness cannot silently go inert by losing its inputs.

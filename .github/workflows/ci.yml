@@ -22,575 +22,20 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # CI-ROI wave 6C: path-scope the critical-path test pillars so a
-  # provably-unrelated PR (docs-only, portal-only) stops paying their
-  # full wall time AND frees their runner slots for the queue. Same
-  # dorny/paths-filter REST-mode pattern as validate.yaml's "Detect
-  # Validate Path Changes" job.
-  # ⚠️ `python` is no longer in that scheme: its filter carries a
-  # catch-all, so that leg runs on every PR (rationale in the filter's
-  # own comment). Only `go`, `portal`, `e2e` and `docs` are still
-  # path-scoped — read the rest of this banner as being about them.
+  # No job in this workflow is path-gated (#3756). Until then a `detect-changes`
+  # job ran dorny/paths-filter and the test legs carried `if:` on its outputs,
+  # so a PR ran only the legs whose filter matched. The filters were hand-kept
+  # lists of what each leg reads, and a file missing from one meant the leg
+  # that would have caught the break was skipped while its required check
+  # reported green. Every PR and every push to main now runs every job.
   #
-  # Required-check safety (the "required check skipped → Expected forever"
-  # trap, see validate.yaml's banner + memory Trap 17): the names
-  # branch protection requires — "Go Tests", "Python Tests", "Portal Tests"
-  # and "Smoke Tests (Chromium)" (#1428) — are ALL reported by always-run
-  # aggregate gate jobs below
-  # (`if: always()`), never by a path-skipped job directly. A skipped leg
-  # counts as PASS only when detect-changes said it was not needed; a leg
-  # that RAN and failed, or a failed/cancelled detect job, fails the gate
-  # (fail-closed). No branch-protection flip is needed: the check names
-  # keep reporting on every PR and every push to main.
-  #
-  # Filter philosophy: CONSERVATIVE — skip only what is provably
-  # unrelated; when in doubt, run. `go` / `portal` / `docs` enumerate the
-  # real-repo-tree paths those suites read (verified by grep, see the
-  # per-filter comments). `python` does not enumerate at all — its inputs
-  # turned out to be unenumerable, not merely under-enumerated, so it is
-  # a catch-all (see its comment). A change to THIS workflow file always
-  # runs everything.
-  detect-changes:
-    name: Detect CI Path Changes
-    runs-on: ubuntu-24.04
-    # pull-requests: read is for dorny/paths-filter@v3 REST-API mode
-    # (same grant + rationale as validate.yaml's detect job).
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      # push events (main) carry no PR file list — treat as "everything
-      # changed" so main always runs the full suite (this also keeps the
-      # coverage-python baseline artifact flowing for coverage-delta).
-      go_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.go }}
-      python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
-      portal_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.portal }}
-      e2e_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.e2e }}
-      docs_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.docs }}
-      schema_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.schema }}
-    steps:
-      # No actions/checkout: REST-API mode queries the changed-file list
-      # via the GitHub API (see validate.yaml's identical note).
-      # Accepted risk (same as validate.yaml's detect job): the REST
-      # changed-files list caps at 3000 entries; a larger PR could
-      # under-report. Isomorphic to the existing validate.yaml gate and
-      # far beyond this repo's PR sizes — not mitigated here.
-      - name: Filter changed paths
-        id: filter
-        if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
-        with:
-          filters: |
-            # Go legs (threshold-exporter / tenant-api / am-inhibit / e2e-bench receiver / bench-filter):
-            #   - components/{threshold-exporter,tenant-api}/** — the two
-            #     module trees (code, go.mod/sum, embedded config/goldens;
-            #     conf.d lives under threshold-exporter/config/**).
-            #   - **/go.mod, **/go.sum — any module manifest, incl.
-            #     tests/alertmanager-inhibit's own module.
-            #   - tests/contract/** — schemathesis runner + fixtures run
-            #     inside the tenant-api leg.
-            #   - tests/alertmanager-inhibit/** — the am-inhibit leg; its
-            #     tests also parse
-            #     k8s/03-monitoring/configmap-alertmanager.yaml and try-local/alertmanager.yml (grep-verified) →
-            #     those trees are in the filter too.
-            #   - rule-packs/** — custom-alerts pack ↔ tenant-api goldens.
-            #   - tests/shared/** — the Go↔Python parity matrices
-            #     (optional_overrides_membership, docs_yaml_split) are ASSERTED
-            #     BY GO TESTS as well as Python ones. Without this entry the
-            #     asymmetry defeats the pin: editing a matrix alone runs the
-            #     Python half (tests/** is in the `python` filter) while the Go
-            #     half never runs, so a matrix edited to match one side ships
-            #     green with the two implementations disagreeing — precisely
-            #     what a parity matrix exists to make impossible.
-            #   - ci_flake_retry.py + flaky-tests.yaml — the retry wrapper
-            #     both Go legs run under.
-            go:
-              - "components/threshold-exporter/**"
-              - "components/tenant-api/**"
-              - "**/go.mod"
-              - "**/go.sum"
-              - "tests/contract/**"
-              - "tests/alertmanager-inhibit/**"
-              #   - tests/oauth2-proxy/** — the oauth2-proxy leg (ADR-027 §9
-              #     item 9). It renders the tenant-api chart with helm (a child
-              #     process go_test_reads.py cannot see; the test also reads
-              #     every chart file itself so Go's test cache sees an edit)
-              #     and reads the ADR's §10 example, so the whole chart, the
-              #     render baseline and that ADR are in the filter too.
-              - "tests/oauth2-proxy/**"
-              - "helm/tenant-api/**"
-              - "tests/helm/tenant_api_render_baseline.yaml"
-              - "docs/adr/027-tenant-api-caller-identity.md"
-              #   - components/da-read/** — the da-read leg (#3206): its own
-              #     module, beside the two component trees above.
-              - "components/da-read/**"
-              #   - tests/pss/** — the Pod Security gate (#1018). It judges every
-              #     pod the charts and k8s/ manifests render, at the version
-              #     pinned by the kind node image, so every chart, every
-              #     manifest and that pin are inputs. Joining `go` (not a
-              #     filter of its own) keeps the `Go Tests` gate's one
-              #     "needed" flag true for every leg it aggregates; the cost
-              #     is that a chart-only edit runs all Go legs.
-              - "tests/pss/**"
-              - "helm/**"
-              - "k8s/**"
-              - "scripts/ops/kind-node-image.env"
-              #     It also judges the lab's run-time pods: manifests in
-              #     scripts/**/*.sh heredocs and the `kubectl run` debug pods
-              #     in docs/internal (they run in namespaces that enforce
-              #     restricted). Cost: an internal-doc edit runs the Go legs.
-              - "scripts/**/*.sh"
-              - "docs/internal/**/*.md"
-              #     ...and the manifests docs/internal/examples hands an operator,
-              #     and the debug commands in each component README. Held by
-              #     tests/pss TestGoFilterCoversWhatThisModuleReads.
-              - "docs/internal/examples/**"
-              - "components/*/README.md"
-              #   - tests/e2e-bench/receiver/** — the receiver leg (#1280).
-              #     `**/go.mod` above already woke the Go legs on a go.mod
-              #     edit; this entry makes an edit to main.go / main_test.go
-              #     wake them too.
-              - "tests/e2e-bench/receiver/**"
-              #   - scripts/tools/ops/*.go — the bench-filter leg (#1873); its
-              #     go.mod is already matched by `**/go.mod`. One `*`, not `**`:
-              #     scripts/tools/ops/bench-canary underneath is its own module,
-              #     which this leg does not run.
-              - "scripts/tools/ops/*.go"
-              #   - scripts/tools/ops/*.py + scripts/tools/*.py — the generator
-              #     container's service (generator_service.py and what it
-              #     imports, #2903): the tenant-api leg runs the REAL service
-              #     (generator_real_test.go, and tests/contract's runner), as a
-              #     child process go_test_reads.py cannot see.
-              - "scripts/tools/ops/*.py"
-              - "scripts/tools/*.py"
-              # The tenant-api handler and exporter pkg/config tests build their
-              # da-guard by running this script (#3425) — a child process, which
-              # go_test_reads.py does not see.
-              - "scripts/ops/go_build.sh"
-              - "tests/shared/**"
-              #   - tests/golden/**, tests/rulepacks/** and tests/dx/fixtures/**
-              #     — same asymmetry as tests/shared/** above, in three sibling
-              #     directories. `config_golden_parity_test.go`,
-              #     `rulepack_contract_test.go` and `custom_alert_test.go`
-              #     (which walks UP from cwd to find them) read these from the
-              #     repo root; their Python ends are covered by `tests/**`. So a
-              #     PR that only regenerated those fixtures ran the Python half
-              #     — which passes by construction — while every Go leg skipped
-              #     and `Go Tests` reported PASS.
-              #     All three were found BY HAND, the third only after the first
-              #     two were "fixed" — and a fourth (helm/tenant-api/values.yaml,
-              #     below) landed later with nobody noticing. Since #1399 each
-              #     Go leg checks this at run time instead: its tests run through
-              #     scripts/ops/go_testlog_exec.sh, and
-              #     scripts/ops/go_test_reads.py fails the leg if a test opened
-              #     a repo file its gate does not cover. What that check cannot see (walked
-              #     directories, reads before m.Run, child processes) is listed
-              #     in its docstring; compile inputs are
-              #     tests/ops/test_go_filter_compile_inputs.py's.
-              - "tests/golden/**"
-              - "tests/rulepacks/**"
-              - "tests/dx/fixtures/**"
-              - "rule-packs/**"
-              #   - **/conf.d/** and components/da-tools/** — the tenant-config
-              #     guards in internal/gitops (TestRealTenantFilesAreNowhereNearTheCap,
-              #     TestCapClearsTheRecipeCeiling) walk the repo for real tenant
-              #     configs. Counted when these entries were added (`b2297bae`):
-              #     every one lived under a conf.d/ directory, and exactly ONE
-              #     fell outside every other entry —
-              #     components/da-tools/app/examples/cardinality-demo/conf.d/over-budget-tenant.yaml
-              #     — which components/da-tools/** alone covered, so **/conf.d/**
-              #     bought no coverage then and is here for the next such file,
-              #     far likelier to land under a conf.d/ than under da-tools.
-              #     Without them the Go leg skips on a PR that only grows that
-              #     file, so the guard never runs (#1722).
-              #     ⛔ NOT GUARDED BY A TEST, deliberately. A test asserting that
-              #     this filter covers what the walk reads was written and then
-              #     REMOVED: it guarded another guard rather than a defect, and
-              #     its own matcher/parser produced three findings in two review
-              #     rounds (a false pass on `!` exclusions, a silent skip on a
-              #     trailing comment, a false alarm on single quotes) — the
-              #     hardening had become the defect source (agent-rulebook D-01).
-              #     The residual cost, stated rather than guarded: add a tenant
-              #     config outside conf.d/ and these entries stop covering it,
-              #     with no red test to say so.
-              - "**/conf.d/**"
-              - "components/da-tools/**"
-              - "k8s/03-monitoring/**"
-              - "try-local/**"
-              #   - helm/tenant-api/values.yaml — TestShippedConfigLiteralsMatchTheCode
-              #     (tenant-api handler) compares the deployed body-size caps
-              #     with the Go defaults; a PR changing only the chart value
-              #     skipped the leg that would catch the drift. Found by
-              #     go_test_reads.py's first measurement (#1399).
-              - "helm/tenant-api/values.yaml"
-              #   - helm/tenant-api/values.schema.json — TestChartSchemaWriteModesMatchTheBinary
-              #     (tenant-api cmd/server) pins its writeBack.mode enum to the
-              #     binary's --write-mode set (#1594).
-              - "helm/tenant-api/values.schema.json"
-              - "scripts/ops/ci_flake_retry.py"
-              - "flaky-tests.yaml"
-              #   - requirements/ci-constraints.txt + mkdocs.yml — the threshold-
-              #     exporter leg pip-installs the docs inventory's renderer at
-              #     those pins, and pkg/config's docs tests run the inventory
-              #     (a child process), which renders docs/ with mkdocs.yml's
-              #     markdown_extensions (#3814).
-              - "requirements/ci-constraints.txt"
-              - "mkdocs.yml"
-              #   - the composite action that installs it (the pip line).
-              - ".github/actions/docs-inventory-python/**"
-              #   - the #1399 read check the Go legs run after their tests,
-              #     and the glob matcher it shares with the static scanners.
-              - "scripts/ops/go_testlog_exec.sh"
-              - "scripts/ops/go_test_reads.py"
-              - "scripts/ops/paths_filter_glob.py"
-              - ".github/workflows/ci.yml"
-            # Python Tests: pytest over tests/ + scripts/tools/ with real-
-            # repo-tree reads well beyond *.py (grep-verified):
-            #   - helm/** — tests/helm/* + tests/shared/test_helm_* render
-            #     the real charts; the audit-metrics gate runs
-            #     helm/federation-gateway/files/audit-metrics.vector.yaml.
-            #   - k8s/** / try-local/** — routing-correctness + manifest
-            #     tests parse the real manifests/compose files.
-            #   - components/** — da-tools app is Python (coverage source),
-            #     conf.d + exporter/tenant-api fixtures are read by tests.
-            #   - rule-packs/** — sync/parity suites read the rule copies.
-            #   - Makefile — test_check_makefile_targets reads the real
-            #     Makefile; docs/glossary*.md — codename-gate tests read
-            #     the real glossary. .pre-commit-config.yaml — hook-
-            #     registration lint tests.
-            #   - .github/workflows/** — several tests scan the REAL
-            #     workflow tree (test_check_workflow_git_push_permissions
-            #     scan_repo, nightly-scan matrix drift, promtool pin
-            #     parity, release-tools entrypoint), so ANY workflow edit
-            #     must run Python Tests.
-            #   - renovate.json — test_renovate_config.py is its only
-            #     offline safety net (customManager regex ↔ pin parity).
-            #   - .devcontainer/** — promtool pin parity compares
-            #     install-promtool.sh against ci.yml/Dockerfile; a
-            #     devcontainer-side-only bump must not skip the guard.
-            #   - .python-version — the Python SSOT; the toolchain pin
-            #     parity test binds every image and the dev container to
-            #     it, so a version-only bump must run it.
-            #   - tools/portal/tests/** — the ONLY non-Python source this
-            #     job's tests read: test_ci_path_filter_coverage SCANS
-            #     that directory to assert every out-of-tree file a portal
-            #     Vitest reads is listed in the `portal` filter below. That
-            #     guard is a pytest, so without this line a PR adding a
-            #     portal Vitest with a new out-of-tree read touches no
-            #     `python` path, skips Python Tests, and the missing
-            #     `portal` entry merges — the guard committing the exact
-            #     omission it exists to catch. Self-enforced: the guard
-            #     asserts its own inputs are covered by THIS filter, so
-            #     tightening this list reds instead of silently disarming it.
-            #     (Caught by CodeRabbit on PR #1229.)
-            python:
-              # ⛔ CATCH-ALL, and the load-bearing entry: it is what makes
-              # `python-tests-run` unskippable. Deleting it reverts to the
-              # state it replaced; `test_python_tests_run_cannot_be_path_skipped`
-              # reds if it goes.
-              #
-              # Why a catch-all rather than enumerating the rest: an
-              # enumeration is only as complete as the scanner deriving it, and
-              # `test_wrapped_path_references` reads the WHOLE tracked tree —
-              # no filter narrower than everything can express its input set
-              # (#1383, #1402). The alternative, running the repo-wide guards
-              # in an ungated job, was turned down for its compute cost and for
-              # the file list it would need kept by hand. It was faster by the
-              # clock, so wall time is not the reason.
-              #
-              # ⚠️ NOT every entry below is pinned by
-              # tests/ops/test_ci_path_filter_coverage.py: deleting some of
-              # them leaves that module green. Being outside
-              # PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES is NOT the criterion —
-              # some entries outside it are still pinned. To learn which,
-              # delete each entry in turn and run the WHOLE module (deleting
-              # none must stay green, deleting every entry must red).
-              # ⛔ No count or list of them is kept here: nothing asserts one,
-              # so it would go stale with the next entry.
-              - "**"
-              - "**/*.py"
-              - "tests/**"
-              - "scripts/**"
-              - "components/**"
-              - "rule-packs/**"
-              - "helm/**"
-              - "k8s/**"
-              - "try-local/**"
-              - "pyproject.toml"
-              #   - .agents/** — tests/dx/test_paths_map.py reads the real
-              #     .agents/paths-map.json (every `read` target must exist and
-              #     name a live heading); tests/dx/test_gen_agent_adapters.py
-              #     re-projects the whole SSOT tree to assert the checked-in
-              #     adapters are in sync. .cursor/** and .github/instructions/**
-              #     are that projection's OUTPUT roots: a hand edit there is
-              #     drift the same in-sync test exists to catch, so a PR touching
-              #     only those files must run it (the pre-commit hook covers the
-              #     local side; this covers the PR side).
-              - ".agents/**"
-              - ".cursor/**"
-              - ".github/instructions/**"
-              # ⛔ The pin SSOT this job INSTALLS FROM, not a file any test
-              # reads. Every `pip install … -c requirements/ci-constraints.txt`
-              # in CI (#1158) resolves versions here, so this file decides the
-              # versions the whole Python suite executes under. Without this
-              # entry — and without the catch-all above, which is what makes
-              # this historical rather than live — a pin bump, touching ONLY
-              # requirements/**, reports python_changed=false, skips this job,
-              # and the aggregate gate reads the skip as PASS (by design, see
-              # the banner). That was #1368. Precisely:
-              # the ungated `lint-rule-packs` job does install these pins and
-              # run pytest, and the full suite runs on the push-to-main after
-              # the merge — so what is missing is the PRE-MERGE signal, and the
-              # "local green, CI first-run red" drift class the constraints
-              # file exists to close lands on main, for everyone, instead of on
-              # the PR that caused it. The usual "no test reads
-              # it, so nothing can break" reasoning does not apply — the file is
-              # not an INPUT to the suite, it is the suite's ENVIRONMENT.
-              # Enforced by tests/ops/test_ci_path_filter_coverage.py
-              # (gated-job step-input half), which asserts that every repo file
-              # a path-gated job EXECUTES or INSTALLS FROM — an interpreter's
-              # script argument, pip's `-c`/`-r` file, or a `./script` run in
-              # command position — would TRIGGER the
-              # condition gating that job. (It evaluates the whole `if:`, not
-              # one filter: `go-tests-threshold-exporter` is gated on
-              # `go || docs`, so either filter matching is enough.)
-              # Deliberately narrower than "every file the
-              # job mentions": prose in an `::error::` string is not a
-              # dependency, and demanding it would only make filters worse.
-              - "requirements/**"
-              - "Makefile"
-              - ".pre-commit-config.yaml"
-              - ".github/custom-rule-policy.yaml"
-              # tests/ops/test_bench_workload_record_trigger.py reads the
-              # workload-closure SSOT to pin bench-workload-record.yaml's
-              # literal trigger against it (#1471).
-              - ".github/bench-reference.yaml"
-              # #3696: the required-check SSOT, read by
-              # tests/ops/test_required_checks_ssot.py and the aggregate-gate contract.
-              - ".github/required-checks.yaml"
-              # tests/shared/test_rule_source_globs_declared_once.py holds
-              # its rule-family globs to the declaration (#3471).
-              - ".github/CODEOWNERS"
-              # tests/dx/test_session_start.py copies and runs it (#2761).
-              - ".claude/hooks/session-start.sh"
-              # tests/ops/test_ci_path_filter_coverage.py derives the `docs`
-              # filter's required coverage from its `hooks:` (#2632).
-              - "mkdocs.yml"
-              # tests/ops/test_generated_ci_artifacts.py scans the unreleased
-              # fragments for `uses:` instructions that fell behind the
-              # platform's action majors (a fragment is current text until
-              # it is assembled into CHANGELOG.md). It enumerates them with
-              # repo_files(), not by a literal path — fragments are deleted at
-              # release — so the path-filter scanner cannot see this read and
-              # does NOT pin this entry; deleting it would leave that module
-              # green.
-              - "changelog.d/**"
-              # ⛔ ALL of docs/, not a hand-picked few. Python tests read
-              # documentation files as CONTRACT inputs (the
-              # for-tenants key-group counts, the ADR planning index, the
-              # alerting-fundamentals cross-links, recommendation-data.json),
-              # and `check_threshold_unit_sanity` walks `docs/**/*.md` looking
-              # for threshold literals in fenced YAML. Its hook is NOT in the
-              # Lint job's named hook list, so Python Tests is its only CI
-              # execution path — gate that on a hand-picked subset and a
-              # docs-only PR skips the RUN leg, and the always-run aggregate
-              # turns that skip into a PASS on the required check. (Not "a
-              # skipped required check satisfies branch protection" — the
-              # required name is the aggregate's and it reports success.)
-              # Same reasoning the `docs` filter below already applies to the
-              # Go leg. Enforced by tests/ops/test_ci_path_filter_coverage.py.
-              - "docs/**"
-              - "flaky-tests.yaml"
-              - "renovate.json"
-              - ".python-version"
-              # tests/ops/test_portal_dist_consumers_build.py requires the
-              # da-portal build context to exclude tools/portal/node_modules
-              # (#3738).
-              - ".dockerignore"
-              - ".devcontainer/**"
-              - ".github/workflows/**"
-              # Local composite actions: test_renovate_config's SHA-pin
-              # guard scans them with the workflows (#3814 added the first).
-              - ".github/actions/**"
-              - "environments/**"
-              - "tools/portal/tests/**"
-              # ⛔ portal SOURCE, not just its tests. #1176's coverage gate is a
-              # deliberate cross-language pair: Vitest proves the shared
-              # renderer emits the caveat, pytest proves each component still
-              # routes through it. With only `tools/portal/tests/**` here, a PR
-              # that edited just the component matched `portal`, missed
-              # `python`, and skipped the half written to catch exactly that —
-              # and the always-run aggregate turned that skip into a PASS on
-              # the required check.
-              - "tools/portal/src/**"
-              # ⛔ The file that DEFINES which files above are Vitests. The
-              # coverage guard hard-codes `tools/portal/tests` as the tree it
-              # scans, and vitest.config.ts's `include` is what makes that true.
-              # Widen the include (add `src/**/*.test.*`, say) and every new
-              # Vitest's out-of-tree reads become permanently invisible — while
-              # the PR making that change matches `portal` but NOT `python`, so
-              # the guard does not even run to notice. Found by blind review;
-              # `test_this_guard_is_not_itself_path_skippable` now lists it, and
-              # `test_scanned_portal_tree_matches_the_vitest_include` pins the
-              # two together so the entry cannot rot into decoration.
-              - "tools/portal/vitest.config.ts"
-              # tests/lint/test_portal_dist_not_tracked.py reads build.mjs's
-              # DIST_DIR to bind its dist path to where the build writes (#3738).
-              - "tools/portal/build.mjs"
-              # tests/lint/test_lint_jsx_syntax.py parses with the transform
-              # esbuild-shared.mjs defines and pins the esbuild version the
-              # lockfile names (#3669).
-              - "tools/portal/esbuild-shared.mjs"
-              - "tools/portal/package-lock.json"
-            # Portal Tests: Vitest + esbuild build verification + bundle-size
-            # budget + the RBAC wizard drift byte-clamp. Runs when portal
-            # source changes (dist is build output, not in git — #3738), AND when the wizard testdata
-            # fixtures change: those fixtures live under components/tenant-api/**
-            # but the byte-clamp that binds them to the JS generator is a Vitest,
-            # so a hand-edited fixture must run THIS leg or the JS end of the
-            # two-ended tripwire is silently skipped. (ci.yml itself is included
-            # so a change to this job's own config re-runs it — same as `go`.)
-            # platform-data.json is the GENERATED source of truth that the
-            # hand-maintained offline fallback in
-            # tools/portal/.../_common/data/rule-packs.js mirrors, and
-            # tests/rule-packs-fallback-drift.test.ts (a Vitest) is the only
-            # gate on that pair. Without this path a rule-pack PR that only
-            # regenerates platform-data.json never runs the gate, and PR #1215
-            # landed a real mariadb-defaults drift that way.
-            # tenant-config.schema.json is the same shape, one gate over: the
-            # *-schema.drift tests (silent-mode, receiver-required,
-            # schema-explorer, template-gallery) bind portal copies to it, and
-            # a schema edit that touches no portal file — the "author forgot"
-            # case — is exactly when no other portal path matches.
-            # ALERT-REFERENCE.md is the third: count-literals-drift.test.ts
-            # reads it (and platform-data.json) to pin the pack/alert counts
-            # the portal advertises, so a doc regen that touches no portal
-            # file must run this leg too.
-            #
-            # INVARIANT (enforced by
-            # tests/ops/test_ci_path_filter_coverage.py, not by this
-            # comment): every out-of-tree file a portal Vitest reads must
-            # be listed here.
-            # ⛔ Keep that filename on ONE line. It used to wrap mid-token
-            # (the break fell inside the identifier, at an underscore), so a
-            # grep for the WHOLE name missed it: during the #1373 rename the
-            # reference survived here, pointing at a file that no longer
-            # existed. CodeRabbit caught it; the sweep had reported clean.
-            # ⛔ Now ENFORCED, so do not treat this comment as the guard:
-            # tests/ops/test_wrapped_path_references.py rejects any reference
-            # split across a line break, anywhere in the tree (#1378). This
-            # note stays only because the rule is easiest to understand where
-            # it was first broken.
-            portal:
-              - "tools/portal/**"
-              - "docs/assets/platform-data.json"
-              # The Config Template Gallery's shipped templates. A Vitest reads
-              # them to assert every counter-example key a one-click-copy
-              # template hands over is annotated (#1176), so editing a template
-              # alone must not skip the Portal leg.
-              - "docs/assets/template-data.json"
-              # Also the receiver-required drift Vitest's (#2033) only source
-              # since #2137: it reads the receiver field contract from this
-              # schema, to which _lib_constants.py (pytest) and pkg/receiverspec
-              # (go test, TestKnown_MatchesSchema) are pinned in their own legs.
-              - "docs/schemas/tenant-config.schema.json"
-              - "rule-packs/threshold-registry.yaml"
-              # rule-packs.test.ts holds every metricClass to this schema's enum.
-              - "docs/schemas/threshold-registry.schema.json"
-              - "rule-packs/ALERT-REFERENCE.md"
-              - "components/tenant-api/internal/rbac/testdata/wizard/**"
-              # The glossary's default cardinality cap is checked against
-              # DefaultMaxMetricsPerTenant here (glossary-facts.test.ts).
-              - "components/threshold-exporter/app/pkg/config/types.go"
-              # ADR-035: tenant-id-rule.test.ts asserts the portal copy's
-              # RegExp on the case table Go and pytest assert too.
-              - "components/threshold-exporter/app/pkg/tenantid/testdata/tenant_id_cases.json"
-              # #2711: parseDuration.test.ts holds the portal's parser to the
-              # verdicts Go writes into this table (pytest holds Python to it).
-              - "tests/shared/am_duration_matrix.json"
-              # #3457: threshold-value-matrix.test.ts holds the RecipeBuilder's
-              # reader of a threshold value to the verdicts Go writes into
-              # this table, and its pattern to the recipe contract's.
-              - "tests/shared/threshold_value_matrix.json"
-              - "components/threshold-exporter/app/pkg/config/recipe_contract.json"
-              # #2833: api-fixture.ts validates every tenant-api response
-              # fixture against these definitions, so a swagger regen alone
-              # must re-run the Portal leg.
-              - "components/tenant-api/docs/swagger.json"
-              # The Deployment Profile Wizard's Vitest resolves every emitted
-              # values key against the target chart's templates (and lists
-              # helm/ to prove each target chart exists), so a chart-only PR
-              # that stops reading a key the wizard emits must not skip it.
-              - "helm/**"
-              # Same test checks each Rule Pack note names a shipped ConfigMap.
-              - "k8s/03-monitoring/configmap-rules-*.yaml"
-              # No `.yml` file is tracked today, so this line matches nothing
-              # and would be refused as a dead entry (#3756). It stays because
-              # the family declares both names: it is a reserved entry, listed
-              # with that reason in RESERVED_PATTERNS
-              # (scripts/ops/workflow_path_filter.py), which is checked both ways.
-              - "k8s/03-monitoring/configmap-rules-*.yml"
-              # ⛔ Same class as `requirements/**` in `python` above, found by
-              # the same mechanical guard: this leg RUNS this script as its
-              # bundle-size gate, and no other job executes it against the real
-              # tree (its only pytest checks the --help contract). A PR that
-              # edits the budget script alone matches `scripts/**` → `python`,
-              # so Python Tests runs — but Portal Tests, the one leg that would
-              # actually execute the edited gate, is skipped, and the skip reads
-              # as PASS. A raised budget or a broken gate merges unexercised.
-              - "scripts/tools/lint/check_portal_bundle_size.py"
-              - ".github/workflows/ci.yml"
-            # e2e: the Playwright smoke leg (#1428). Its server serves the
-            # whole docs/ tree (tests/e2e/package.json `serve:portal`:
-            # serve_threaded.py 8080 ../../docs) and the specs load the portal
-            # pages and the JSON under docs/assets/, so every file the browser
-            # can fetch is an input — not only the bundles. docs/*.md is not:
-            # mkdocs renders it elsewhere and the portal never reads it.
-            e2e:
-              - "tools/portal/**"
-              - "docs/interactive/**"
-              - "docs/assets/**"
-              - "tests/e2e/**"
-              - ".github/workflows/ci.yml"
-            # docs: threshold-exporter's
-            # pkg/config/docs_defaults_sample_test.go (#1327) walks
-            # docs/**/*.md and decodes every documented
-            # `_defaults.yaml` sample through the real ThresholdConfig
-            # loader — so documentation is a Go-test input, and a docs-only
-            # PR (which is exactly how eight unloadable blocks landed) must
-            # not skip that leg. Without this the gate is decorative for the
-            # one change class it guards: go_changed=false → leg skipped →
-            # the aggregate gate reads the skip as PASS.
-            #
-            # Deliberately its own filter rather than adding docs/** to `go`:
-            # that would also drag the tenant-api and am-inhibit legs
-            # (schemathesis included) into every doc typo, which is the exact
-            # CI-ROI 6C waste the banner comment above set out to remove.
-            # Only the threshold-exporter leg consumes docs/.
-            #
-            # #3416: that test takes its samples from the docs' YAML
-            # inventory (it runs the module below with python3, and the
-            # module runs da-guard parse-tree), so the inventory and its
-            # reader's Python side are inputs of the leg too. Reads by a
-            # child process are not in go_test_reads.py's log, so this entry
-            # is kept by hand.
-            docs:
-              - "docs/**"
-              - "scripts/tools/_lib_doc_yaml_inventory.py"
-              - "scripts/tools/_lib_parse_tree.py"
-              - "scripts/tools/_lib_consumer_read.py"
-              - "scripts/tools/_lib_godispatch.py"
-              - "scripts/tools/ops/guard_dispatch.py"
-            # schema: the am-inhibit leg pins the tenant schema's http_config
-            # key sets to the structs Alertmanager decodes into (#2984), so a
-            # schema-only PR must run it. Its own filter for the reason `docs`
-            # is: adding the path to `go` would wake all five Go legs
-            # (tenant-api's schemathesis included), while the only other Go
-            # leg that reads the schema (threshold-exporter, which also pins
-            # the tenant file's top-level key set, #3504 / #3671) already
-            # wakes on `docs`.
-            schema:
-              - "docs/schemas/tenant-config.schema.json"
+  # The names branch protection requires — "Python Tests", "Go Tests",
+  # "Portal Tests", "Smoke Tests (Chromium)" — are still reported by the
+  # aggregate jobs (`if: always()`), which pass only when every leg they
+  # wait for concluded `success`. A leg that is skipped, cancelled or failed
+  # fails its aggregate; nothing turns a skip into a pass.
+  # tests/ops/test_ci_aggregate_gate_contract.py holds both halves: the
+  # aggregates' verdict, and that no path gate is added back.
 
   lint:
     name: Lint
@@ -610,9 +55,7 @@ jobs:
       - name: Fetch the PR base (changelog-format's new-entry cap diffs against origin/$GITHUB_BASE_REF, else origin/main)
         # fetch-depth: 0 does not guarantee an origin/<base> ref; the cap
         # exits 2 rather than silently falling back to HEAD when it is absent.
-        # A plain `run:`, never a step `if:`: docs-ci's copy sits in a
-        # path-gated job, where tests/ops/test_ci_path_filter_coverage.py
-        # refuses computed step conditions.
+        # A plain `run:`, never a step `if:` — see the ⛔ note in the script.
         run: |
           # ⛔ Unconditional, and defaulted: the cap now resolves its base
           # through the repo's ONE resolver (_lint_helpers.resolve_diff_base),
@@ -751,8 +194,8 @@ jobs:
           # It was NOT in this list, and there is no blanket `pre-commit run
           # --all-files` anywhere — so in CI it was only reached transitively:
           # adding a platform alert forces a rule-pack-stats regen, that file is
-          # docs/**/*.md, which flips docs-ci's `docs_changed` filter, which is
-          # what gates the drift-checks job that runs validate_all --only
+          # docs/**/*.md, which matched the path filter docs-ci then had, which
+          # gated the drift-checks job that runs validate_all --only
           # versions. Enforcement resting on an undocumented chain of three
           # unrelated filters silently disappears the day any of them moves.
           pre-commit run version-consistency --all-files
@@ -768,9 +211,9 @@ jobs:
           pre-commit run platform-data-check --all-files
           # Fence hygiene over docs/**. Lives HERE, not in a pytest, because
           # this Lint job has no `if:` and no `needs:` — it runs on every PR
-          # and gives the cheap early signal. (NOT because the `python` filter
-          # is narrow: it carries docs/** and a catch-all, so a pytest would
-          # run too. This is a placement choice, not a coverage necessity.)
+          # and gives the cheap early signal. (A pytest would run too: Python
+          # Tests is not path-gated. This is a placement choice, not a
+          # coverage necessity.)
           pre-commit run md-yaml-fence-check --all-files
           # Schema conformance for documented config examples. Same reasoning as
           # the fence check above (docs-only PRs must not skip it), and it is
@@ -836,12 +279,11 @@ jobs:
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
           # their ONLY CI enforcement point — but their scan surfaces
           # (tools/portal/src/**, docs/** jsx/js/css, dev-rules.md) were
-          # exactly the path classes the detect-changes gate then skipped
-          # Python Tests for. ⚠️ That premise is DEAD — the `python` filter
-          # now carries a catch-all, so those twins run on every PR. Kept
-          # deliberately as the cheaper signal (red in ~10s instead of ~5m,
-          # and this job is ungated), not retired; but do not cite
-          # "docs-only PRs skip Python Tests" as the reason. All four
+          # exactly the path classes a path gate then skipped Python Tests
+          # for. ⚠️ That premise is DEAD — no job here is path-gated any more
+          # (#3756), so those twins run on every PR. Kept deliberately as the
+          # cheaper signal (red in ~10s instead of ~5m), not retired; but do
+          # not cite "docs-only PRs skip Python Tests" as the reason. All four
           # scripts scan their FULL fixed surface on every run — none is
           # diff-only. Same hoisting rationale as design-token-usage above.
           pre-commit run undefined-tokens-check --all-files
@@ -851,10 +293,9 @@ jobs:
           pre-commit run portal-audience-enum-check --all-files
           # Same class again, one layer down: the da-portal image's COPY
           # allowlist vs what the portal actually fetches at runtime. Its
-          # inputs straddle `portal` (tools/portal/**) and `docker`
-          # (components/da-portal/**) filters, and the failure is invisible
-          # to every other job — nothing in CI builds AND renders the image —
-          # so it belongs in this ungated Lint leg, not behind a path filter.
+          # inputs straddle tools/portal/** and components/da-portal/**, and
+          # the failure is invisible to every other job — nothing in CI
+          # builds AND renders the image — so it is named in this Lint leg.
           pre-commit run portal-asset-shipping-check --all-files
           # Same 6C shape, third sweep — these three are named in NO workflow
           # AND their pytest twins do not enforce them either, so they had
@@ -960,8 +401,8 @@ jobs:
           # live pytest twin (tests/lint/test_check_hub_badge_drift.py::
           # TestLiveRepoIsClean, reading docs/interactive/index.html) was
           # enforced only by "Python Tests", which docs-only PRs then
-          # skipped. ⚠️ Same dead premise as the block above — the `python`
-          # filter now has a catch-all; this remains as the cheap/early
+          # skipped. ⚠️ Same dead premise as the block above — Python Tests
+          # is not path-gated; this remains as the cheap/early
           # signal, not the only one. Direct CLI call (stdlib-only, exit
           # 0/1) mirroring the check_retire_drift.py direct-step precedent
           # in Lint Rule Packs.
@@ -1009,8 +450,8 @@ jobs:
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.
     #
-    # Until v2.6.0 this only ran in validate.yaml, which is path-filtered
-    # and was then NOT in the branch-protection required-check list (today's
+    # Until v2.6.0 this only ran in validate.yaml, which was path-filtered
+    # then and NOT in the branch-protection required-check list (today's
     # list: .github/required-checks.yaml). That left a
     # hole: a PR not touching any validate.yaml path could still merge
     # rule-pack YAML via unrelated codepaths (refactors, cross-file moves,
@@ -1543,14 +984,12 @@ jobs:
         run: bash scripts/ops/with_da_crdecode.sh python3 scripts/tools/lint/check_k8s_manifests.py --ci
 
   python-tests-run:
-    # CI-ROI 6C: renamed from the required-check name "Python Tests"
-    # — that name is now reported by the always-run python-tests
-    # gate job below (same pattern as go-tests), so this job can be
-    # path-skipped without ever leaving the required check un-reported.
+    # Not the required check: "Python Tests" is reported by the python-tests
+    # aggregate below, which needs every shard of this job to succeed (the
+    # same pattern as go-tests). A matrix job reports one check per shard,
+    # none of them under the required name.
     name: Python Tests — run (${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.python_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions, same
     # class as the Go split jobs): tests + coverage-artifact upload need
     # nothing beyond repo read.
@@ -1891,8 +1330,8 @@ jobs:
       # blind spot is why the file_cve_report.sh alerting break survived 33
       # nightly failures unnoticed. Run them here (seconds, no deps) so the
       # existing "Python Tests" required check covers them; the shell
-      # scripts they exercise live under scripts/ops/**, already in this job's
-      # path filter. Explicit loop over a glob rather than `find -exec`: a new
+      # scripts they exercise live under scripts/ops/**. Explicit loop over a
+      # glob rather than `find -exec`: a new
       # test file is picked up automatically, but an empty glob fails loudly
       # instead of passing vacuously.
       - name: Run ops shell tests
@@ -1957,17 +1396,14 @@ jobs:
     # comment, and it goes red on --cov-fail-under — visibly, but it backs
     # NO required check (`advisory:` in .github/required-checks.yaml): it is
     # deliberately absent from the python-tests
-    # gate's needs: and ledgered in tests/ops/test_ci_aggregate_gate_contract
-    # (UNWATCHED_PATH_GATED_JOBS). Why a second job rather than --cov on the
+    # gate's needs:. Why a second job rather than --cov on the
     # required leg: the tracer made every xdist worker's collection ~4x
     # slower on this runner (12x in the dev container) and execution +50%,
     # and that sat on the required leg's critical path. The setup steps are
     # a verbatim copy of python-tests-run on purpose — every guard that reads
-    # ci.yml (pinned versions, path filter, dep parity) keeps seeing them.
+    # ci.yml (pinned versions, dep parity) keeps seeing them.
     name: Python Coverage (${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.python_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions, same
     # class as the Go split jobs): tests + coverage-artifact upload need
     # nothing beyond repo read.
@@ -2343,10 +1779,8 @@ jobs:
         # file and leaves it (and every file after it) on disk — this lists
         # them with owner / mode / size so the next failure names its source
         # instead of being re-run blind. Read-only; it never changes the verdict.
-        # `always()` and not `failure()`: a step condition that consults the
-        # run's state is a shape tests/ops/test_ci_path_filter_coverage.py does
-        # not model. On a green run combine has deleted every file, so this
-        # prints 0 and costs nothing.
+        # `always()` and not `failure()`: on a green run combine has deleted
+        # every file, so this prints 0 and costs nothing.
         if: always()
         run: |
           shopt -s nullglob
@@ -2361,18 +1795,16 @@ jobs:
 
   python-coverage-combine:
     # Merges the python-coverage shards into one report. ADVISORY like
-    # python-coverage (ledgered next to it in
-    # tests/ops/test_ci_aggregate_gate_contract.py): it backs no required
+    # python-coverage: it backs no required
     # check (`advisory:` in .github/required-checks.yaml). It owns what used to be the single job's tail: the coverage.xml
     # that coverage-delta.yml turns into the PR comment, and the fail_under
     # floor from pyproject.toml [tool.coverage.report].
     name: Python Coverage
     runs-on: ubuntu-24.04
-    needs: [detect-changes, python-coverage]
+    needs: [python-coverage]
     # `always()` so a shard whose tests failed still gets a combined report
-    # (the shards upload `if: always()` for the same reason); skipped with
-    # the shards when no Python-relevant path changed.
-    if: always() && needs.detect-changes.outputs.python_changed == 'true'
+    # (the shards upload `if: always()` for the same reason).
+    if: always()
     permissions:
       contents: read
     steps:
@@ -2436,17 +1868,14 @@ jobs:
           retention-days: 7
 
   python-tests:
-    # Aggregation gate mirroring go-tests below: keeps reporting the
-    # EXACT branch-protection required-check name "Python Tests"
-    # on every PR/push, whether the run job ran or was path-skipped.
-    # Semantics (CI-ROI 6C):
-    #   - run job succeeded              → PASS
-    #   - run job skipped AND detect-changes said python not needed
-    #                                    → PASS (skip-as-not-needed)
-    #   - run job failed/cancelled, or skipped while detect said needed,
-    #     or detect-changes itself did not succeed
-    #                                    → FAIL (fail-closed: a broken
-    #     detect job must never let tests silently skip to green).
+    # Aggregation gate mirroring go-tests below: reports the EXACT
+    # branch-protection required-check name "Python Tests" on every PR/push.
+    # Semantics (#3756):
+    #   - run job succeeded (every shard)  → PASS
+    #   - anything else — failed, cancelled, skipped, or a result that did
+    #     not resolve                      → FAIL
+    # No result is forgiven: the run job carries no `if:`, so a skip means
+    # something upstream of it broke, never "not needed".
     # ⛔ The name carries no Python version on purpose: the version lives
     # only in .python-version, and a version in a required-check name turns
     # every Python bump into a branch-protection edit (or a PR whose required
@@ -2456,29 +1885,18 @@ jobs:
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, python-tests-run]
+    needs: [python-tests-run]
     # always(): without it a failed/skipped dependency SKIPS this job, and
     # a skipped check would satisfy branch protection unconditionally —
     # the gate must decide pass/fail itself.
     if: always()
     steps:
-      - name: Verify Python test job succeeded or was skipped as not-needed
+      - name: Verify the Python test job succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          PY_CHANGED: ${{ needs.detect-changes.outputs.python_changed }}
           RUN_RESULT: ${{ needs.python-tests-run.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (python_changed=$PY_CHANGED)"
           echo "python-tests-run: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$PY_CHANGED" != "true" ]; then
-            echo "Python tests skipped: no Python-relevant paths changed."
             exit 0
           fi
           echo "::error::Python test job did not succeed (result=$RUN_RESULT)"
@@ -2494,18 +1912,9 @@ jobs:
   go-tests-threshold-exporter:
     name: Go Tests — threshold-exporter
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated — the go-tests aggregate gate below (the
-    # required check) treats this skip as PASS only when detect-changes
-    # said Go was not needed.
-    #
-    # `docs_changed` joins the condition because this leg alone reads
-    # docs/**: pkg/config/docs_defaults_sample_test.go decodes every
-    # documented `_defaults.yaml` sample through the real loader. The
-    # aggregate gate needs no change for this — a leg that RUNS reports
-    # success/failure, and its skipped siblings still satisfy the
-    # "skipped while go_changed!=true" branch.
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true'
+    # Reads docs/** as well as its own module:
+    # pkg/config/docs_defaults_sample_test.go decodes every documented
+    # `_defaults.yaml` sample through the real loader.
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
     # coverage-artifact upload need nothing beyond repo read.
     permissions:
@@ -2563,14 +1972,9 @@ jobs:
         # masked by retry). Pass-through behavior is identical when all
         # tests pass on first try, which is the normal case.
         run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
-            go test ./... -race -count=1 -coverprofile=coverage.out \
-            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+            go test ./... -race -count=1 -coverprofile=coverage.out
 
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-threshold-exporter --logs "$RUNNER_TEMP/go-testlog"
 
       - name: Upload coverage artifact
         if: always()
@@ -2583,12 +1987,10 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). No test of
+    # No test of
     # this leg reads tenant-config.schema.json: the tenant file's top-level key
     # set it once pinned there is the exporter's (config.TenantFileTopLevelKey,
     # #3671), pinned by the threshold-exporter leg.
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
     # swag drift check and schemathesis all run against the local checkout.
     permissions:
@@ -2637,11 +2039,8 @@ jobs:
         # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
         # (not a go.mod dependency). Only cmd/... and internal/... contain testable code.
         run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
-            go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out \
-            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+            go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out
 
       # ADR-027 §9 item 7: the offline scope check over the repo's sample
       # config — the conf.d tree, _rbac.yaml and (absent) _tenant_orgs.yaml
@@ -2650,8 +2049,7 @@ jobs:
       # read) exits 1. A step running
       # the CLI rather than a Go test, so what is checked is the command an
       # operator runs before upgrading, flags and exit code included; a moved
-      # tree exits 2 here instead of skipping. try-local/** is in the `go`
-      # filter above, so a sample-only change wakes this leg.
+      # tree exits 2 here instead of skipping.
       # adr-check: ADR-027/9.7c
       - name: Scope check on the try-local sample config (ADR-027 §7)
         working-directory: components/tenant-api
@@ -2664,14 +2062,8 @@ jobs:
       # real runs are the nightly GitLab CE workflow + scripts/ops/forge_e2e_run.sh.
       - name: Compile-check forge_e2e package (build-tag gated)
         working-directory: components/tenant-api
-        run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test -tags forge_e2e -count=1 ./test/forgee2e/... \
-            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+        run: go test -tags forge_e2e -count=1 ./test/forgee2e/...
 
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-tenant-api --logs "$RUNNER_TEMP/go-testlog"
 
       # TRK-221 (#226): Verify generated OpenAPI spec is in sync
       # with the swag annotations in handler/*. Drift = annotation
@@ -2742,15 +2134,8 @@ jobs:
   go-tests-am-inhibit:
     name: Go Tests — alertmanager inhibit semantics
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). The
-    # go filter includes k8s/03-monitoring/** + try-local/** because this
-    # leg parses both hand-written Alertmanager configs. `schema_changed`
-    # joins the condition because this leg reads the tenant schema and its
-    # `go` gate does not cover it (#2984, the `schema` filter); as with threshold-exporter's
-    # `docs_changed`, the aggregate gate needs no change — a leg that runs
-    # reports success/failure.
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.schema_changed == 'true'
+    # Parses both hand-written Alertmanager configs
+    # (k8s/03-monitoring/**, try-local/**) and reads the tenant schema (#2984).
     # Evaluates the two HAND-WRITTEN Alertmanager configs against Alertmanager's
     # own matcher implementation (#1132: amtool check-config is green on an
     # inhibit rule that silently eats notifications). Pure file parsing — no
@@ -2780,19 +2165,8 @@ jobs:
 
       - name: Run Alertmanager inhibit-semantics tests
         working-directory: tests/alertmanager-inhibit
-        run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test ./... -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+        run: go test ./... -count=1
 
-      - name: Install pyyaml for the read-coverage check
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
-
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-am-inhibit --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-oauth2-proxy:
     name: Go Tests — oauth2-proxy config
@@ -2809,10 +2183,6 @@ jobs:
     #      rendered args and file;
     #   3. reads the same files with tenant-api's parser
     #      (`config check --kind oauth2-proxy`).
-    # Path-gated on `go` like its siblings (that filter carries this
-    # module, the chart templates and the ADR; see its comment).
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
     permissions:
       contents: read
     steps:
@@ -2847,12 +2217,10 @@ jobs:
         env:
           OAUTH2_PROXY_REQUIRE_HELM: "1"
         run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
           export OAUTH2_PROXY_RENDER_OUT="$RUNNER_TEMP/oauth2-proxy-render"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test ./... -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+          go test ./... -count=1
 
-      # image_config_test.sh and go_test_reads.py below both import yaml.
+      # image_config_test.sh below imports yaml.
       - name: Install pyyaml
         run: |
           if ! python3 -c 'import yaml' 2>/dev/null; then
@@ -2877,8 +2245,6 @@ jobs:
             exit 1
           fi
 
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-oauth2-proxy --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-pss:
     name: Go Tests — Pod Security gate
@@ -2888,10 +2254,7 @@ jobs:
     # library — the code the API server's PodSecurity plugin is built from —
     # at the level the chart declares in Chart.yaml (absent = restricted) and
     # the version pinned by scripts/ops/kind-node-image.env. No hand-written
-    # copy of the profile to drift. Path-gated on `go` like its siblings
-    # (that filter carries this module, helm/**, k8s/** and the pin).
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
+    # copy of the profile to drift.
     permissions:
       contents: read
     steps:
@@ -2925,20 +2288,8 @@ jobs:
         working-directory: tests/pss
         env:
           PSS_REQUIRE_HELM: "1"
-        run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test ./... -count=1 -v -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+        run: go test ./... -count=1 -v
 
-      # go_test_reads.py below imports yaml.
-      - name: Install pyyaml
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
-
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-pss --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-da-read:
     name: Go Tests — da-read
@@ -2949,11 +2300,8 @@ jobs:
     # Prometheus' own, and it ships in the da-tools image. It is its own
     # module (components/da-read) so those dependencies stay out of the
     # exporter module, so neither
-    # Go leg above runs it. Path-gated like the other split Go jobs; the `go`
-    # filter carries components/da-read/**. Its tests write their inputs to
+    # Go leg above runs it. Its tests write their inputs to
     # temp dirs and read no repo file.
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
     permissions:
       contents: read
     steps:
@@ -2978,33 +2326,18 @@ jobs:
 
       - name: Run da-read tests
         working-directory: components/da-read
-        run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test ./... -race -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+        run: go test ./... -race -count=1
 
-      - name: Install pyyaml for the read-coverage check
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
-
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-da-read --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-e2e-bench-receiver:
     name: Go Tests — e2e-bench receiver
     runs-on: ubuntu-24.04
     # #1280: the receiver's unit tests had no runner at all — the module is a
     # live service in tests/e2e-bench/docker-compose.yml, `Go Lint` type-checks
-    # its _test.go since #1751, but nothing ever RAN them. Path-gated like the
-    # other split Go jobs; the `go` filter carries tests/e2e-bench/receiver/**
-    # so an edit to main.go or main_test.go wakes this leg (before #1280 only
-    # the go.mod entry did). Stdlib-only module: no go.sum, no module cache.
+    # its _test.go since #1751, but nothing ever RAN them.
+    # Stdlib-only module: no go.sum, no module cache.
     # `-race` because the receiver is an HTTP handler over a ring buffer —
     # the shape the race detector is for; the whole run is ~1s.
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
     permissions:
       contents: read
     steps:
@@ -3018,19 +2351,8 @@ jobs:
 
       - name: Run e2e-bench receiver unit tests
         working-directory: tests/e2e-bench/receiver
-        run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test ./... -race -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+        run: go test ./... -race -count=1
 
-      - name: Install pyyaml for the read-coverage check
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
-
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-e2e-bench-receiver --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests-bench-filter:
     name: Go Tests — bench-filter
@@ -3045,8 +2367,6 @@ jobs:
     # bench_filter_test.go pins that. Stdlib-only module, single
     # goroutine: no go.sum, no module cache, no -race. `./...` here does not
     # descend into the nested bench-canary module.
-    needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
     permissions:
       contents: read
     steps:
@@ -3064,19 +2384,8 @@ jobs:
 
       - name: Run bench-filter unit tests
         working-directory: scripts/tools/ops
-        run: |
-          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
-          mkdir -p "$GO_TESTLOG_DIR"
-          go test ./... -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+        run: go test ./... -count=1
 
-      - name: Install pyyaml for the read-coverage check
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
-
-      - name: Check the tests read nothing this leg's filter misses (#1399)
-        run: python3 scripts/ops/go_test_reads.py --job go-tests-bench-filter --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests:
     # Aggregation gate for the split Go jobs above. The job name is EXACTLY
@@ -3095,22 +2404,17 @@ jobs:
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-oauth2-proxy, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter, go-tests-pss]
+    needs: [go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-oauth2-proxy, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter, go-tests-pss]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
     # when any split job fails.
     if: always()
     steps:
-      - name: Verify all Go test jobs succeeded (or were path-skipped as not-needed)
-        # CI-ROI 6C semantics (mirrors the python-tests gate):
-        #   success                                → PASS
-        #   skipped AND detect said go not needed  → PASS
-        #   anything else (failure/cancelled, or skipped while detect said
-        #   needed, or detect-changes itself not green) → FAIL. A broken
-        #   detect job must never let tests silently skip to green.
+      - name: Verify all Go test jobs succeeded
+        # Mirrors the python-tests gate (#3756):
+        #   every leg success → PASS
+        #   anything else (failure / cancelled / skipped / unresolved) → FAIL
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          GO_CHANGED: ${{ needs.detect-changes.outputs.go_changed }}
           R_TE: ${{ needs.go-tests-threshold-exporter.result }}
           R_TA: ${{ needs.go-tests-tenant-api.result }}
           R_AM: ${{ needs.go-tests-am-inhibit.result }}
@@ -3120,7 +2424,6 @@ jobs:
           R_BF: ${{ needs.go-tests-bench-filter.result }}
           R_PS: ${{ needs.go-tests-pss.result }}
         run: |
-          echo "detect-changes:     $DETECT_RESULT (go_changed=$GO_CHANGED)"
           echo "threshold-exporter: $R_TE"
           echo "tenant-api:         $R_TA"
           echo "am-inhibit:         $R_AM"
@@ -3129,15 +2432,8 @@ jobs:
           echo "e2e-bench receiver: $R_RX"
           echo "bench-filter:       $R_BF"
           echo "pod-security:       $R_PS"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
-            exit 1
-          fi
           for r in "$R_TE" "$R_TA" "$R_AM" "$R_OP" "$R_DR" "$R_RX" "$R_BF" "$R_PS"; do
             if [ "$r" = "success" ]; then
-              continue
-            fi
-            if [ "$r" = "skipped" ] && [ "$GO_CHANGED" != "true" ]; then
               continue
             fi
             echo "::error::a Go test job did not succeed (result=$r)"
@@ -3151,19 +2447,15 @@ jobs:
     # manifest; subsequent PRs (TRK-230b..f) add tools to the manifest as
     # they migrate to ESM.
     #
-    # CI-ROI: path-gated (mirrors the go-tests / python-tests split) so it does
-    # not burn ~1 min on PRs that touch no portal file. The REQUIRED check is
+    # Runs on every PR (#3756). The REQUIRED check is
     # the "Portal Tests" AGGREGATE GATE below (job key `portal-tests`), NOT this
-    # job — a required check matched to a path-gated job would sit permanently
-    # pending whenever it path-skips.
+    # job.
     name: Portal Tests Run
     runs-on: ubuntu-24.04
     # Least-privilege token (CodeQL: workflow-missing-permissions). Checkout +
     # local npm build/test only — no writes, no PR/API access.
     permissions:
       contents: read
-    needs: detect-changes
-    if: needs.detect-changes.outputs.portal_changed == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -3199,11 +2491,9 @@ jobs:
         run: npm run test
 
   portal-tests:
-    # Aggregation gate for the path-gated portal-tests-run job above. The job
+    # Aggregation gate for the portal-tests-run job above. The job
     # name is kept EXACTLY "Portal Tests" — the check-run name that branch
-    # protection matches on — so it ALWAYS reports (even when the run job
-    # path-skips) and CAN be made a required status check without the
-    # permanently-pending deadlock a skipped path-gated required check causes.
+    # protection matches on.
     # Mirrors the go-tests / python-tests aggregation gates. If this name ever
     # changes, update the branch-protection required-checks entry together
     # (owner action). New portal test jobs should join HERE (add to needs +
@@ -3212,36 +2502,21 @@ jobs:
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, portal-tests-run]
+    needs: [portal-tests-run]
     # always(): without it a skipped/failed dependency would SKIP this job, and
     # a skipped check would satisfy branch protection — the gate must run and
     # FAIL, not skip, when the run job did not succeed.
     if: always()
     steps:
-      - name: Verify the portal test job succeeded (or was path-skipped as not-needed)
+      - name: Verify the portal test job succeeded
         # Mirrors the go-tests gate semantics exactly:
-        #   success                                    → PASS
-        #   skipped AND detect said portal not needed  → PASS
-        #   anything else (failure/cancelled, or skipped while detect said
-        #   needed, or detect-changes itself not green) → FAIL. A broken detect
-        #   job must never let the test silently skip to green.
+        #   success → PASS; anything else → FAIL.
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          PORTAL_CHANGED: ${{ needs.detect-changes.outputs.portal_changed }}
           R_PORTAL: ${{ needs.portal-tests-run.result }}
         run: |
-          echo "detect-changes:   $DETECT_RESULT (portal_changed=$PORTAL_CHANGED)"
           echo "portal-tests-run: $R_PORTAL"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped portal test as green"
-            exit 1
-          fi
           if [ "$R_PORTAL" = "success" ]; then
             echo "Portal test gate satisfied."
-            exit 0
-          fi
-          if [ "$R_PORTAL" = "skipped" ] && [ "$PORTAL_CHANGED" != "true" ]; then
-            echo "Portal test gate satisfied (path-skipped as not-needed)."
             exit 0
           fi
           echo "::error::the portal test job did not succeed (result=$R_PORTAL)"
@@ -3249,20 +2524,17 @@ jobs:
 
   smoke-tests-run:
     # Playwright smoke suite against the portal (moved from playwright.yml,
-    # #1428). Path-gated like portal-tests-run; the REQUIRED check is the
+    # #1428). Runs on every PR like portal-tests-run; the REQUIRED check is the
     # "Smoke Tests (Chromium)" AGGREGATE GATE below (job key `smoke-tests`),
     # NOT this job. In playwright.yml the whole workflow was suppressed by a
     # top-level `paths:` filter, so a PR touching no portal file never
     # reported the required check at all and sat permanently pending.
     name: Smoke Tests Run
     runs-on: ubuntu-24.04
-    # contents: read for checkout; pull-requests: write only for the
-    # result comment at the end (as in playwright.yml).
+    # contents: read for checkout. Nothing here writes to the PR: the result
+    # line goes to the step summary (#3756), not to a PR comment.
     permissions:
       contents: read
-      pull-requests: write
-    needs: detect-changes
-    if: needs.detect-changes.outputs.e2e_changed == 'true'
     # TRK-233: workers=4 runs the 192 specs in ~1.5 min; 10 min is ~6x
     # headroom (history in playwright.yml before #1428).
     timeout-minutes: 10
@@ -3301,8 +2573,7 @@ jobs:
         run: npx playwright install chromium
 
       # #3738: the portal server below serves docs/assets/dist/, which is
-      # build output and not in git, so build it from source. tools/portal/** is
-      # already in the `e2e` filter that gates this job. Pinned by
+      # build output and not in git, so build it from source. Pinned by
       # tests/ops/test_portal_dist_consumers_build.py (before the server starts).
       - name: Install portal build dependencies
         working-directory: tools/portal
@@ -3349,8 +2620,7 @@ jobs:
           path: tests/e2e/playwright-report/
           retention-days: 7
 
-      # `always()`, not `failure()` (#1428): tests/ops/test_ci_path_filter_coverage.py
-      # accepts only `always()` as a step condition on a path-gated leg. On a
+      # `always()`, not `failure()` (#1428). On a
       # green run Playwright leaves test-results/ empty, so this uploads
       # nothing (`if-no-files-found: ignore`).
       - name: Upload test videos
@@ -3362,55 +2632,40 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
-      # The event check is in the script, not the `if:` (same guard as above).
-      - name: Comment on PR with results
+      # A line in the step summary, not a PR comment (#3756). This job runs on
+      # every PR now, so a comment was one more per push; and a comment needs
+      # `pull-requests: write`, which a fork PR's token does not have — the
+      # failed API call could redden this leg, and with it the required check.
+      # The verdict is the check itself; this only says where the report is.
+      - name: Note the report in the step summary
         if: always()
-        uses: actions/github-script@v9
-        with:
-          script: |
-            if (context.eventName !== 'pull_request') return;
-            const fs = require('fs');
-            if (fs.existsSync('tests/e2e/playwright-report/index.html')) {
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '✅ Playwright smoke tests completed. [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
-              });
-            }
+        run: |
+          if [ -f tests/e2e/playwright-report/index.html ]; then
+            echo "Playwright smoke run finished; the HTML report is the \`playwright-report\` artifact of this run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Playwright smoke run produced no HTML report (it stopped before the tests ran)." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   smoke-tests:
     # Aggregation gate for smoke-tests-run (#1428). The job name is kept
     # EXACTLY "Smoke Tests (Chromium)" — the check-run name branch protection
-    # requires — so it reports on every PR, path-skip included. Same verdict
-    # table as portal-tests: success → PASS; skipped while detect said not
-    # needed → PASS; anything else, or detect-changes not green → FAIL.
+    # requires — so it reports on every PR. Same verdict
+    # table as portal-tests: success → PASS; anything else → FAIL.
     name: Smoke Tests (Chromium)
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, smoke-tests-run]
+    needs: [smoke-tests-run]
     # always(): a skipped gate would satisfy branch protection.
     if: always()
     steps:
-      - name: Verify the smoke test job succeeded (or was path-skipped as not-needed)
+      - name: Verify the smoke test job succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          E2E_CHANGED: ${{ needs.detect-changes.outputs.e2e_changed }}
           R_SMOKE: ${{ needs.smoke-tests-run.result }}
         run: |
-          echo "detect-changes:  $DETECT_RESULT (e2e_changed=$E2E_CHANGED)"
           echo "smoke-tests-run: $R_SMOKE"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped smoke test as green"
-            exit 1
-          fi
           if [ "$R_SMOKE" = "success" ]; then
             echo "Smoke test gate satisfied."
-            exit 0
-          fi
-          if [ "$R_SMOKE" = "skipped" ] && [ "$E2E_CHANGED" != "true" ]; then
-            echo "Smoke test gate satisfied (path-skipped as not-needed)."
             exit 0
           fi
           echo "::error::the smoke test job did not succeed (result=$R_SMOKE)"

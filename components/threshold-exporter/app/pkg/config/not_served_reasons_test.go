@@ -62,8 +62,7 @@ func TestNotServedReasons_EveryConstant(t *testing.T) {
 
 // TestNotServedReasons_PythonReaderIsThisList: the Python reader's closed
 // sets are NotServedReasons and DeadEntryReasons, read off the imported
-// module (a child process, which go_test_reads.py does not see; the `go`
-// filter of ci.yml carries scripts/tools/*.py, every module it imports).
+// module (a child process).
 func TestNotServedReasons_PythonReaderIsThisList(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {

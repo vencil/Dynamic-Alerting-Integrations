@@ -74,7 +74,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -83,6 +82,7 @@ _TOOLS = _THIS_DIR.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: kubectl's own manifest, read kubectl's way)
 import _lib_io  # noqa: E402
+from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
@@ -385,24 +385,17 @@ def main(argv: list[str] | None = None) -> int:
     # a name holding a space, `(`, `` ` `` or `$( )` reaches kubectl byte for
     # byte instead of being split, evaluated, or fed to `basename` as a second
     # argument (which silently stripped the extension off the key).
-    cmd = [
-        "kubectl", "create", "configmap", args.name,
+    create_args = [
+        "configmap", args.name,
         *[f"--from-file={src}" for src, _p in sources],
         "-n", args.namespace, "--dry-run=client", "-o", "yaml",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace",
-                              timeout=_KUBECTL_TIMEOUT_S)
-    except FileNotFoundError:
-        print("ERROR: `kubectl` not found on PATH. This target builds the "
-              "manifest with `kubectl create configmap --dry-run=client` "
-              "rather than hand-rolling a second YAML generator, so kubectl "
-              "is a hard prerequisite.\n"
-              "       -> install kubectl, or run this step on a runner that "
-              "has it.", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    except subprocess.TimeoutExpired:
+        # #3539: started by _lib_kubectl, the one place that says whether
+        # kubectl ran at all (not on PATH, not startable, out of time).
+        proc = kubectl_run("create", create_args, timeout=_KUBECTL_TIMEOUT_S,
+                           what="`kubectl create configmap`")
+    except KubectlError as exc:
         # ⛔ Say what is ON DISK, not what we wish were. Nothing was written,
         # so a PREVIOUS run's `{args.output}` is still sitting there intact —
         # deliberately (see the write in `main`: a half file is worse than an
@@ -413,8 +406,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"run's manifest, which may be stale"
                 if Path(args.output).exists()
                 else f"no {args.output} was written")
-        print(f"ERROR: `kubectl create configmap` did not finish within "
-              f"{_KUBECTL_TIMEOUT_S}s — nothing was written, so {left}.\n"
+        print(f"ERROR: {exc}\n"
+              f"       This target builds the manifest with `kubectl create "
+              f"configmap --dry-run=client` rather than hand-rolling a second "
+              f"YAML generator, so a kubectl that runs is a hard prerequisite.\n"
+              f"       Nothing was written, so {left}.\n"
               f"       -> do NOT `kubectl apply` that file on the strength "
               f"of this run; re-run this step until it succeeds.",
               file=sys.stderr)
