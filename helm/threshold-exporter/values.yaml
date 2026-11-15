@@ -138,6 +138,11 @@ thresholdConfig:
     # % — Tablespace usage warning（critical 加嚴
     # opt-in：oracle_tablespace_used_percent_critical，registry 建議 95）
     oracle_tablespace_used_percent: 85
+    # ── rabbitmq：RabbitMQ (kbudde/rabbitmq_exporter) ──
+    # % — Node memory warning: resident memory as % of the memory high watermark, fullest node
+    # (#3929: 80 → 90, measured per node)（critical 加嚴
+    # opt-in：rabbitmq_node_mem_percent_critical，registry 建議 95）
+    rabbitmq_node_mem_percent: 90
     # <<< GENERATED:threshold-registry:helm-defaults
     # >>> GENERATED:threshold-registry:helm-unarmed — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
     # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
@@ -178,8 +183,6 @@ thresholdConfig:
     #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
     # ── rabbitmq ──
     #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
-    #   rabbitmq_node_mem_percent 未啟用（值有爭議，#3929）：沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana
-    #     rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
     #   rabbitmq_connections 未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
     #     是候選分母，但它由檔案描述符推得，由 #1320 決定
     #   rabbitmq_consumers 未啟用（依部署而定）：預期的 consumer 數是各部署的拓撲

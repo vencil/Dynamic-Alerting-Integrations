@@ -444,9 +444,9 @@
           "metricClass": "saturation"
         },
         "rabbitmq_node_mem_percent": {
-          "value": 80,
+          "value": 90,
           "unit": "%",
-          "desc": "Node memory usage warning",
+          "desc": "Node memory warning: resident memory as % of the memory high watermark, fullest node (#3929: 80 → 90, measured per node)",
           "metricClass": "saturation"
         },
         "rabbitmq_connections": {
