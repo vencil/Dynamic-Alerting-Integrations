@@ -128,3 +128,97 @@ describe('a second YAML document', () => {
     expect(parseYaml(yaml)).toEqual({ config: { [K]: 80 }, errors: [] });
   });
 });
+
+describe('a schedule the exporter cannot decode (#3974)', () => {
+  beforeEach(() => { (window as any).__t = EN; });
+  const UNDECODABLE = /the exporter cannot decode this schedule .* The exporter refuses the whole file/;
+
+  // The ticket's five, measured with da-guard served-values on main
+  // (parse_failed: the whole tenant file dropped; parse-tree says nothing).
+  const FIVE = [
+    ['{default: [1]}', 'default'], ['{default: 80, overrides: 5}', 'overrides'], ['{default: {a: 1}}', 'default'],
+    ['{default: 70, overrides: [1]}', 'overrides[0]'], ['{default: 70, expires: [1]}', 'expires'],
+  ];
+
+  it.each(FIVE)('%s: Alert Preview shows one error and simulates nothing', (value, field) => {
+    preview(`${K}: ${value}\n`);
+    const errors = screen.getByTestId('parse-errors').textContent;
+    expect(errors).toMatch(UNDECODABLE);
+    expect(errors).toContain(`${K}: the exporter cannot decode this schedule — ${field} `);
+    expect(screen.queryByText(/^No threshold\/Disabled: /)).toBeNull();
+  });
+
+  it.each(FIVE)('%s: YAML Validator lists one error', (value) => {
+    validate(`${K}: ${value}\n`);
+    expect(screen.getAllByText(UNDECODABLE)).toHaveLength(1);
+  });
+
+  it('Routing Trace says so and traces nothing', () => {
+    render(<RoutingTraceTab />);
+    fireEvent.change(screen.getByLabelText('Routing Profile YAML'), { target: { value: `${K}: {default: [1]}\n` } });
+    fireEvent.click(screen.getByText('Trace Alert Path'));
+    expect(screen.getByTestId('trace-parse-errors').textContent).toMatch(UNDECODABLE);
+    expect(screen.queryByText('Alert Fires')).toBeNull();
+  });
+
+  it.each([
+    '{default: 80}', '{default: 70, overrides: [{window: "01:00-02:00", value: 80}]}',
+    '{default: 70, expires: "2030-01-01T00:00:00Z", reason: x}',
+  ])('%s, a legal schedule, is not affected (the control)', (value) => {
+    preview(`${K}: ${value}\n`);
+    expect(screen.queryByTestId('parse-errors')).toBeNull();
+    validate(`${K}: ${value}\n`);
+    expect(screen.queryByText(UNDECODABLE)).toBeNull();
+  });
+
+  // Each row measured with da-guard served-values on main e0e7ee33b: true
+  // where it reports the tenant file in parse_failed. `field` is what the
+  // error names.
+  it.each([
+    [`${K}: {default: 70, reason: {a: 1}}`, 'reason'],
+    [`${K}: {default: 70, overrides: {a: 1}}`, 'overrides'],
+    [`${K}: {default: 70, overrides: "x"}`, 'overrides'],
+    [`${K}: {default: 70, overrides: [{window: [1], value: 80}]}`, 'overrides[0].window'],
+    [`${K}: {default: 70, overrides: [{window: "01:00-02:00", value: {a: 1}}]}`, 'overrides[0].value'],
+    [`${K}: {default: 70, overrides: [~, [1]]}`, 'overrides[1]'],
+    ['_silent_mode: {default: [1]}', 'default'],
+    ['_routing: {default: [1]}', 'default'],
+    ['_state_maintenance: {default: 70, overrides: 5}', 'overrides'],
+    [`${K}_critical: {default: [1]}`, 'default'],
+    [`${K}: {default: 70, <<: {overrides: 5}}`, 'overrides'], // Decode expands the merge
+    [`<<: {${K}: {default: [1]}}`, 'default'], // a merge at the root brings the schedule in
+    [`<<: [{a: 1}, {${K}: {default: [1]}}]`, 'default'], // from a later source of a merge list
+    [`<<: {<<: {${K}: {default: [1]}}}`, 'default'], // through a merge in the merge source
+    ['__proto__: {default: [1]}', 'default'], // the exporter has no unsafe keys: parse_failed
+    ['constructor: {default: 70, overrides: 5}', 'overrides'],
+  ])('%j is refused: %s', (yaml, field) => {
+    const { config, errors } = parseTenantYaml(`${yaml}\n`);
+    expect(config).toEqual({});
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(UNDECODABLE);
+    expect(errors[0]).toContain(`cannot decode this schedule — ${field} `);
+  });
+
+  it.each([
+    `${K}: {default: 70, overrides: [{window: "01:00-02:00", value: 80, extra: [1]}]}`,
+    `${K}: {default: 70, overrides: [~]}`,
+    `${K}: {default: 70, extra: [1]}`,
+    `${K}: {default: 70, overrides: [{window: ~, value: ~}]}`,
+    `${K}: {default: ~}`, `${K}: {default: 70, overrides: ~}`, `${K}: {default: 70, overrides: []}`,
+    `${K}: {default: 70, expires: ~, reason: ~}`,
+    `${K}: {<<: {default: [1]}}`, // no `default` of its own: no schedule (value_unparsed, not parse_failed)
+    `<<: {${K}: {default: 70}}`,
+    // a root merge brings in a value that merges its `default`: not its own,
+    // so no schedule (served-values: value refused, the file served)
+    `<<: {${K}: {<<: {default: [1]}}}`, `<<: [{${K}: {<<: {default: 70, overrides: 5}}}]`,
+    `_x: &m {${K}: {<<: {default: [1]}}}\n<<: *m`,
+    `${K}: {a: [1]}`, `${K}: [[1]]`, // not a schedule either
+  ])('%j is decoded: no error', (yaml) => {
+    expect(parseTenantYaml(`${yaml}\n`).errors).toEqual([]);
+  });
+
+  it('every undecodable key is named, one error each', () => {
+    const { errors } = parseTenantYaml(`a: {default: [1]}\nb: 80\n_c: {default: 70, expires: {x: 1}}\n`);
+    expect(errors.map((e: string) => e.split(':')[0])).toEqual(['a', '_c']);
+  });
+});

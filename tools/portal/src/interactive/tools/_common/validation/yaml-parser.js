@@ -86,6 +86,21 @@ purpose: |
                            the mapping's own keys (`{<<: {default: 70}}` is
                            no schedule). Not modelled: such a value brought
                            in by a merge one level up, or inside a list.
+                           A schedule the exporter cannot decode (#3974) is
+                           an error with config = {} as well: a mapping with
+                           a `default` key of its own, under any top-level
+                           key (`_` keys too), is decoded into fixed fields
+                           (`default` / `expires` / `reason` a single value,
+                           `overrides` a list of mappings whose `window` /
+                           `value` are single values); a field of another
+                           shape fails that decode and the exporter drops the
+                           whole file (served-values parse_failed;
+                           parse-tree does not say so). Other fields, and a
+                           null anywhere, are fine. Not modelled: a `default`
+                           key written as an alias (`{*d : [1]}` with
+                           `&d default`) — yaml.v3 sees the alias, not the
+                           word, so the exporter has no schedule there, and
+                           this check says it refuses the file.
                            ⛔ Hand its config to
                            ../validation/threshold-value.js readThresholdRow
                            (through alert-engine.js); do not hand parseYaml's
@@ -330,6 +345,62 @@ function parseYaml(text) {
   return { config: stripUnsafeKeys(doc), errors: [] };
 }
 
+// A schedule ScheduledValue.UnmarshalYAML cannot decode (#3974), or null.
+// `own` is the value as written (merge keys unexpanded) and decides whether
+// it is a schedule: a `default` key of the mapping's own. `v` is the value
+// with merges expanded, which is what yaml.v3's Decode reads into the
+// struct's fields: `default` / `expires` / `reason` are strings, so a map
+// or a list there fails; `overrides` is []TimeWindowOverride, so it is null
+// or a list whose entries are null or mappings with single-value `window` /
+// `value`. A key the struct does not have is not decoded, whatever it holds.
+// Measured with da-guard served-values on main (parse_failed).
+const isScalarNode = (v) => v === null || typeof v !== 'object';
+function scheduleDecodeError(own, v) {
+  // `v` is the same node as `own`, merged: a mapping whenever `own` is one.
+  if (!isPlainMap(own) || !Object.prototype.hasOwnProperty.call(own, 'default')) return null;
+  for (const field of ['default', 'expires', 'reason']) {
+    if (!isScalarNode(v[field])) return { field, list: false };
+  }
+  const overrides = v.overrides;
+  if (overrides === undefined || overrides === null) return null;
+  if (!Array.isArray(overrides)) return { field: 'overrides', list: true };
+  for (let i = 0; i < overrides.length; i += 1) {
+    const entry = overrides[i];
+    if (entry === null) continue;
+    if (!isPlainMap(entry)) return { field: `overrides[${i}]`, list: false, mapping: true };
+    for (const field of ['window', 'value']) {
+      if (!isScalarNode(entry[field])) return { field: `overrides[${i}].${field}`, list: false };
+    }
+  }
+  return null;
+}
+
+// The value of `key` as written in `map` (merge keys unexpanded), or
+// undefined: an entry of the map's own, else the first source of its merge
+// key (`<<: {…}` or `<<: [{…}, …]`, the earlier source winning) that has
+// one, at any depth of merges. A key brought in by a root merge is thereby
+// judged by its own keys too, as the exporter judges it
+// (`<<: {k: {<<: {default: [1]}}}` is no schedule).
+function writtenValue(map, key) {
+  if (Object.prototype.hasOwnProperty.call(map, key)) return map[key];
+  const merge = map['<<'];
+  for (const source of Array.isArray(merge) ? merge : [merge]) {
+    if (!isPlainMap(source)) continue;
+    const found = writtenValue(source, key);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function scheduleDecodeMessage(key, { field, list, mapping }) {
+  const t = window.__t || ((zh, en) => en);
+  const want = list
+    ? t('要是由 mapping 組成的 list', 'must be a list of mappings')
+    : mapping ? t('要是 mapping', 'must be a mapping') : t('要是單一值，不能是 map 或 list', 'must be a single value, not a map or a list');
+  return t(`${key} 的排程 exporter 解不開：${field} ${want}。exporter 會拒收整個檔，不讀其中任何值；這裡不模擬`,
+    `${key}: the exporter cannot decode this schedule — ${field} ${want}. The exporter refuses the whole file and reads none of it; not simulated here`);
+}
+
 // parseYaml, with the threshold keys (top-level, not `_`-prefixed) read as
 // text. The keys are walked from the text parse, so a threshold key is named
 // as written; a `_` key the typed parse does not have under that name (none
@@ -364,6 +435,15 @@ function parseTenantYaml(text) {
   // threshold value that writes `<<` is handed over as written, `<<` and
   // all, for the reader to judge by its own keys (#3959).
   const unmerged = loadDocument(text, TEXT_SCHEMA_NO_MERGE).doc;
+  const written = (key) => (isPlainMap(unmerged) ? writtenValue(unmerged, key) : undefined);
+  // Every key, `__proto__` and the other UNSAFE_KEYS too: the exporter has
+  // no such keys, and decodes their schedules as any other (measured).
+  const undecodable = Object.keys(doc)
+    .map((key) => [key, scheduleDecodeError(written(key), doc[key])])
+    .filter(([, error]) => error !== null);
+  if (undecodable.length) {
+    return { config: {}, errors: undecodable.map(([key, error]) => scheduleDecodeMessage(key, error)) };
+  }
   const writesMerge = (key) => isPlainMap(unmerged) && isPlainMap(unmerged[key])
     && Object.prototype.hasOwnProperty.call(unmerged[key], '<<');
   const config = {};
