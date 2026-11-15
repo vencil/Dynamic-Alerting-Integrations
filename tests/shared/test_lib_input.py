@@ -816,6 +816,182 @@ def test_dash_is_a_path_unless_declared(tmp_path, monkeypatch):
 
 
 def test_a_directory_is_never_standard_input():
-    with pytest.raises(ValueError, match="stdin= / remedy= are for a decode= input only"):
+    with pytest.raises(ValueError, match="stdin= is for a decode= input only"):
         _lib_input.add_input(argparse.ArgumentParser(), "--d",
                              select=_lib_input.TopLevel("*"), stdin=True)
+
+
+# ── #3901: a file or a directory per value (a gatherer), one value or many ──
+
+import _lib_consumer_read  # noqa: E402
+
+_RULE = "groups: []\n"
+
+
+def _many(argv, **kw):
+    parser = argparse.ArgumentParser()
+    _lib_input.add_input(parser, "paths", select=_lib_consumer_read.FILES_TO_READ, many=True,
+                         **kw)
+    _lib_input.add_input(parser, "--rule-files", select=_lib_consumer_read.FILES_TO_READ,
+                         many=True)
+    _lib_input.add_input(parser, "--one", select=_lib_consumer_read.FILES_TO_READ)
+    parser.add_argument("--ci", action="store_true")
+    return parser.parse_args(argv)
+
+
+def _refusal(args, dest, **kw):
+    with pytest.raises(CallerError) as exc:
+        _lib_input.selected(args, dest, lang="en", **kw)
+    return exc.value
+
+
+def test_many_values_are_gathered_as_they_are_spelled(tmp_path, monkeypatch):
+    """A file as given and a directory walked, the union, each once — and
+    spelled as the caller spelled the value (`./d/a.yaml` stays that: a
+    `Path` round trip dropped the `./`)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "d" / "sub").mkdir(parents=True)
+    (tmp_path / "d" / "a.yaml").write_text(_RULE, encoding="utf-8")
+    (tmp_path / "d" / "sub" / "b.yml").write_text(_RULE, encoding="utf-8")
+    (tmp_path / "one.txt").write_text(_RULE, encoding="utf-8")
+    args = _many(["--ci", "./d", "one.txt", "./d"])
+    assert args.paths == ["./d", "one.txt", "./d"] and ", ".join(args.paths) == "./d, one.txt, ./d"
+    assert _lib_input.selected(args, "paths", lang="en") == [
+        "./d/a.yaml", "./d/sub/b.yml", "one.txt"]
+    assert _lib_input.selected(args, "paths", lang="en", exclude=["b.yml"]) == [
+        "./d/a.yaml", "one.txt"]
+
+
+def test_a_flag_given_twice_adds_up_and_none_given_selects_nothing(tmp_path):
+    a, b = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    for f in (a, b):
+        f.write_text(_RULE, encoding="utf-8")
+    args = _many(["--rule-files", str(a), "--rule-files", str(b), str(a)])
+    assert _lib_input.selected(args, "rule_files", lang="en") == [str(a), str(b)]
+    none = _many([])
+    assert none.paths is None and none.rule_files is None
+    assert _lib_input.selected(none, "paths", lang="en") == []
+    assert _lib_input.spec_of(args, "rule_files").many
+    one = _many(["--one", str(a)])
+    assert one.one == str(a) and _lib_input.selected(one, "one", lang="en") == [str(a)]
+
+
+def test_every_value_is_judged_and_a_positional_names_the_path_alone(tmp_path):
+    """Every problem at once; a flag is named with its path, a positional —
+    the caller typed no name for it — by the path alone."""
+    real = tmp_path / "real.yaml"
+    real.write_text(_RULE, encoding="utf-8")
+    exc = _refusal(_many([str(tmp_path / "nope"), str(real), str(tmp_path / "nope2")]), "paths")
+    assert str(exc) == (f"{tmp_path / 'nope'}: No such file or directory\n"
+                        f"ERROR: {tmp_path / 'nope2'}: No such file or directory")
+    assert exc.reason == "path_not_found"
+    exc = _refusal(_many(["--rule-files", str(tmp_path / "nope")]), "rule_files")
+    assert str(exc) == f"--rule-files {tmp_path / 'nope'}: No such file or directory"
+
+
+@pytest.mark.parametrize("argv, dest, said", [
+    ([""], "paths", "'': an empty value names no file"),
+    (["", ""], "paths", "'': an empty value names no file"),
+    (["--rule-files", ""], "rule_files", "--rule-files '': an empty value names no file"),
+    (["--one", ""], "one", "--one '': an empty value names no file"),
+])
+def test_an_empty_value_names_no_file_and_is_never_the_current_directory(
+        tmp_path, monkeypatch, argv, dest, said):
+    """#3392: '' (an unset shell variable) is refused, once — `Path('')` is
+    `.`, and silencer-drift-check read the current directory for it (rc 0)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.yaml").write_text(_RULE, encoding="utf-8")
+    exc = _refusal(_many(argv), dest)
+    assert (str(exc), exc.reason) == (said, "file_not_found")
+
+
+def test_what_the_selector_cannot_choose_is_named_entry_by_entry(tmp_path):
+    """The gatherer's own refusal, one `<flag> <path>: <why>` line per entry
+    — a dangling link (there: `ls` lists it), `--exclude` leaving nothing."""
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.yaml").write_text(_RULE, encoding="utf-8")
+    symlink_or_skip(tmp_path / "gone.yaml", d / "b.yaml")
+    exc = _refusal(_many(["--rule-files", str(d)]), "rule_files")  # found under the value
+    assert str(exc) == f"--rule-files {d / 'b.yaml'}: cannot be chosen to read: a dangling symlink"
+    assert exc.reason == "input_not_selectable"
+    (d / "b.yaml").unlink()
+    exc = _refusal(_many([str(d)]), "paths", exclude=["*.yaml"])
+    assert str(exc).startswith(f"{d}: --exclude left no file to read")
+
+
+def test_a_dangling_link_given_as_a_value_is_refused_whatever_exclude_says(tmp_path):
+    """`--exclude` leaves out files found UNDER a value; a value the caller
+    gave that is a dangling link is not there to read, and is refused —
+    named with every other path problem (`lint good dangling.yaml --exclude
+    dangling.yaml --ci` was rc 0)."""
+    good = tmp_path / "good.yaml"
+    good.write_text(_RULE, encoding="utf-8")
+    link = tmp_path / "dangling.yaml"
+    symlink_or_skip(tmp_path / "gone.yaml", link)
+    for exclude in ((), ["dangling.yaml"], ["*"]):
+        exc = _refusal(_many([str(good), str(link), str(tmp_path / "nope")]), "paths",
+                       exclude=exclude)
+        assert str(exc) == (f"{link}: a dangling symlink\n"
+                            f"ERROR: {tmp_path / 'nope'}: No such file or directory"), exclude
+        assert exc.reason == "path_not_found"
+
+
+def test_a_link_it_cannot_follow_is_not_called_dangling(tmp_path):
+    """Only ENOENT is a dangling link: a looping one is the path's own
+    problem (`os.path.exists` reads both as "not there")."""
+    a, b = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    symlink_or_skip(b, a)
+    symlink_or_skip(a, b)
+    exc = _refusal(_many([str(a)]), "paths")
+    assert "dangling" not in str(exc) and exc.reason == "path_not_accessible", str(exc)
+
+
+def test_empty_and_remedy_are_the_declaration_s(tmp_path):
+    d = tmp_path / "d"
+    d.mkdir()
+    assert _lib_input.selected(_many([str(d)]), "paths", lang="en") == []
+    refused = _many([str(d)], empty=_lib_input.EMPTY_REFUSED, remedy="Fix the path.")
+    exc = _refusal(refused, "paths")
+    assert exc.reason == "input_empty"
+    # The remedy is about the path given: it follows a path's refusal, not
+    # one of what was found there (nothing selected, --exclude left nothing).
+    assert str(exc).startswith(f"{d}: selects nothing (") and "⛔" not in str(exc)
+    gone = _many([str(tmp_path / "nope")], remedy="Fix the path.")
+    assert str(_refusal(gone, "paths")) == (
+        f"{tmp_path / 'nope'}: No such file or directory\n  ⛔ Fix the path.")
+    assert str(_refusal(_many([""], remedy="Fix the path."), "paths")).endswith(
+        "\n  ⛔ Fix the path.")
+
+
+def test_each_value_is_judged_once(tmp_path, monkeypatch):
+    a = tmp_path / "a.yaml"
+    a.write_text(_RULE, encoding="utf-8")
+    seen = []
+    monkeypatch.setattr(_lib_input, "judged", lambda flag, path: seen.append((flag, str(path))))
+    _lib_input.selected(_many([str(a), str(tmp_path), str(a)]), "paths", lang="en")
+    assert seen == [("paths", str(a)), ("paths", str(tmp_path))]
+
+
+@pytest.mark.parametrize("kw, error", [
+    (dict(flag="paths", select=_lib_consumer_read.FILES_TO_READ), "a positional input"),
+    (dict(flag="--d", select=_lib_input.TopLevel("*"), many=True), "many= is for a gatherer"),
+    (dict(flag="--d", select=_lib_consumer_read.FILES_TO_READ, default="x",
+          absent_default=_lib_input.ABSENT_REFUSED), "takes no default="),
+    (dict(flag="--d", select=_lib_input.TopLevel("*"), remedy="x"), "remedy= is for"),
+])
+def test_a_gatherer_declaration_it_cannot_honour_is_refused(kw, error):
+    flag = kw.pop("flag")
+    with pytest.raises((TypeError, ValueError), match=error):
+        _lib_input.add_input(argparse.ArgumentParser(), flag, **kw)
+
+
+def test_confirm_read_refuses_a_file_gone_since(tmp_path):
+    a, b = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    for f in (a, b):
+        f.write_text(_RULE, encoding="utf-8")
+    _lib_input.confirm_read([str(a), str(b)], flag="--rule-files", lang="en")
+    b.unlink()
+    with pytest.raises(CallerError) as exc:
+        _lib_input.confirm_read([str(a), str(b)], flag="--rule-files", lang="en")
+    assert str(exc.value).startswith(f"--rule-files {b}: ") and exc.value.reason == "file_unreadable"

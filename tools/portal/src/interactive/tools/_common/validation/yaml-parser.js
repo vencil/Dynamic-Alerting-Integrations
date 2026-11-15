@@ -75,9 +75,17 @@ purpose: |
                            Which documents are an error is parseYaml's, run
                            first: a document it refuses is refused here with
                            the same error (so `0x1F: a` beside `31: b` is its
-                           duplicate key, though the exporter has two keys,
-                           and a second document is ignored, though the
-                           exporter refuses a file with one).
+                           duplicate key, though the exporter has two keys).
+                           And, unlike parseYaml, a second document is an
+                           error with config = {} (#3959): the exporter's
+                           parse-tree refuses such a file whole
+                           (multiple_documents); a trailing `---` counts, a
+                           leading `---` and `...` lines do not. A threshold
+                           value that writes a merge key (`<<`) is handed
+                           over unexpanded: the exporter judges a schedule by
+                           the mapping's own keys (`{<<: {default: 70}}` is
+                           no schedule). Not modelled: such a value brought
+                           in by a merge one level up, or inside a list.
                            ⛔ Hand its config to
                            ../validation/threshold-value.js readThresholdRow
                            (through alert-engine.js); do not hand parseYaml's
@@ -122,6 +130,13 @@ const YAML_SCHEMA = CORE_SCHEMA.extend({ implicit: [types.merge] });
 const textScalar = (tag) => new Type(tag, { kind: 'scalar', construct: (data) => data });
 const TEXT_SCHEMA = FAILSAFE_SCHEMA.extend({
   implicit: [types.null, types.merge],
+  explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
+});
+
+// TEXT_SCHEMA without the merge key: `<<` stays a key named '<<'. Only for
+// telling a schedule's own `default` from one a merge brought in (#3959).
+const TEXT_SCHEMA_NO_MERGE = FAILSAFE_SCHEMA.extend({
+  implicit: [types.null],
   explicit: ['int', 'float', 'bool'].map((name) => textScalar(`tag:yaml.org,2002:${name}`)),
 });
 
@@ -219,6 +234,34 @@ function loadFirstDocument(src, schema) {
   return { doc: docs.length ? docs[0] : null, anchorMaps };
 }
 
+// How many documents yaml.v3's decoder reads from a text that parses (#3959):
+// each `---` line starts one, and so does content before the first. A
+// `...` only ends a document — `a: 1\n...\n...\n` is one, though js-yaml's
+// loadAll returns a null document per `...` — so js-yaml's count is not it.
+// A `---` at the start of a line is a marker; one that a scalar would hold
+// (a quoted or plain value broken by NEL / U+2028 / U+2029) is a syntax
+// error to yaml.v3, so the file is refused either way, if for another
+// reason than the message says. Lines break where yaml.v3 breaks them: CR, LF, CRLF, and also
+// NEL (U+0085), U+2028 and U+2029, which js-yaml does not. Content after a
+// `...` with no `---` counts too: yaml.v3 refuses that text (syntax_error),
+// so the file is refused either way. Measured against da-guard parse-tree.
+const DOC_START_RE = /^---(?:[ \t]|$)/;
+const DOC_END_RE = /^\.\.\.(?:[ \t]|$)/;
+function countDocuments(src) {
+  let documents = 0;
+  let content = false;
+  for (const line of src.split(/\r\n|[\r\n\u0085\u2028\u2029]/)) {
+    if (DOC_START_RE.test(line)) { documents += 1; content = true; continue; }
+    const text = line.trim();
+    if (!content && text !== '' && !text.startsWith('#') && !text.startsWith('%') && !DOC_END_RE.test(line)) {
+      documents += 1;
+      content = true;
+    }
+    if (DOC_END_RE.test(line)) content = false;
+  }
+  return documents;
+}
+
 // First object/array that is its own ancestor (a self-referencing alias),
 // or null. Shared, non-cyclic aliases (the same anchor used twice) are fine
 // and each node is expanded once (`done`), so a DAG of shared aliases is
@@ -291,14 +334,38 @@ function parseYaml(text) {
 // text. The keys are walked from the text parse, so a threshold key is named
 // as written; a `_` key the typed parse does not have under that name (none
 // is known) is left out rather than handed over untyped.
+// A second document is an error here (#3959): the exporter's parse-tree
+// refuses the whole file (multiple_documents), so a page that simulated the
+// first document would show alerts for a file that serves nothing. A
+// trailing `---` (empty, a comment, `~`) is a second document; a leading
+// `---` and any number of `...` are not (countDocuments). parseYaml keeps
+// reading the first document: its other callers are not the exporter's
+// reader.
 function parseTenantYaml(text) {
+  const t = window.__t || ((zh, en) => en);
   const typed = parseYaml(text);
   if (typed.errors.length) return typed;
   const { doc, error } = loadDocument(text, TEXT_SCHEMA);
   // Not reachable for a text parseYaml took, as far as is known; were it,
   // the page shows the error instead of thresholds read from a typed value.
   if (error) return { config: {}, errors: [error.message] };
+  if (countDocuments(text) > 1) {
+    return {
+      config: {},
+      errors: [t('這份 YAML 有不只一份文件（---）：exporter 會拒收整個檔，不讀其中任何值；這裡不模擬',
+        'This YAML holds more than one document (---): the exporter refuses the whole file and reads none of it; not simulated here')],
+    };
+  }
   if (!isPlainMap(doc)) return typed;
+  // A mapping is a schedule only by a `default` key of its own: the
+  // exporter (ScheduledValue.UnmarshalYAML) looks at the node's keys before
+  // any merge, so `{<<: {default: 70}}` is an arbitrary mapping it does not
+  // read (value_unparsed). js-yaml has expanded the merge by now, so a
+  // threshold value that writes `<<` is handed over as written, `<<` and
+  // all, for the reader to judge by its own keys (#3959).
+  const unmerged = loadDocument(text, TEXT_SCHEMA_NO_MERGE).doc;
+  const writesMerge = (key) => isPlainMap(unmerged) && isPlainMap(unmerged[key])
+    && Object.prototype.hasOwnProperty.call(unmerged[key], '<<');
   const config = {};
   const memo = new Map();
   for (const key of Object.keys(doc)) {
@@ -307,7 +374,7 @@ function parseTenantYaml(text) {
       if (Object.prototype.hasOwnProperty.call(typed.config, key)) config[key] = typed.config[key];
       continue;
     }
-    config[key] = stripUnsafeKeys(doc[key], memo);
+    config[key] = stripUnsafeKeys(writesMerge(key) ? unmerged[key] : doc[key], memo);
   }
   return { config, errors: [] };
 }

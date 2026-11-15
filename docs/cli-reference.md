@@ -1457,6 +1457,8 @@ da-tools rule-pack-diff --from v1.yaml --to v2.yaml --json
 
 Alertmanager silence 對 v2 rule pack 漂移偵測——吃 `amtool silence query -o json` dump + rule pack source，列出**已沒有任何 v2 alert 命中所有 matchers** 的 silence。取代 [troubleshooting-checklist §1.3.2](integration/troubleshooting-checklist.md) 的手動 `jq + comm` 比對流程（[issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category B）。
 
+`--rule-source` 照給的樣子判定一次（[#3901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3901)）：不存在、進不去、選不到的項目，或沒有任何 YAML，結束碼 `2`、一行點名 `--rule-source` 與路徑。⚠️ **行為變更**：`--rule-source ''` 以前被當成目前目錄（結束碼 0），現在結束碼 `2`；檔案加尾斜線（`rules.yaml/`）以前照讀，現在結束碼 `2`；沒有 YAML 的目錄訊息由 `no YAML files found at <path>` 改為 `--rule-source <path>: selects nothing (…)`；選到的檔在讀取時消失或讀不了，結束碼 `2`、點名該檔、不輸出報告（以前輸出少了該檔的報告），`--rule-pack-dir` 亦同。
+
 **Offline-first 設計**：工具**不**直接連 AM——避免 VPN / Ingress / Auth-proxy 邊界踩雷，可在 CI / GitHub Action 等無 AM 網路連線環境直接跑。
 
 ```bash
@@ -2530,6 +2532,8 @@ docker run --rm \
 
 依平台治理政策（deny-list）檢查租戶自訂的 Prometheus 規則檔。
 
+掃描目標（位置參數）每個各判定一次（[#3901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3901)）：不存在、空字串（不是目前目錄）、本身是懸空連結（不論 `--exclude`）、進不去，或底下有選不到的項目（懸空連結、列不出內容的目錄）時，結束碼 `2`、一行點名路徑，有無 `--ci` 相同。⚠️ **行為變更**：選到的檔在判定之後讀不了或消失，以前是該檔的一筆 ERROR（不帶 `--ci` 時結束碼 0），現在結束碼 `2`、點名該檔；內容不是 UTF-8 或不是合法 YAML 仍是該檔的 ERROR。
+
 **用途**：CI/CD lint 檢查；Tier 3 自訂規則進平台前的護欄（見 [Custom Rule Governance](custom-rule-governance.md) §4）。
 
 **語法**
@@ -2587,6 +2591,8 @@ da-tools lint --rule-pack-dir ./rule-packs --ci
 #### onboard
 
 反向分析既有的 Alertmanager 設定、Prometheus 規則檔與 scrape config，產出遷移用的 CSV、建議片段與 `onboard-hints.json`。三個輸入各自對應一個 phase，至少要給一個；不讀位置參數。
+
+`--rule-files` 的每個值各判定一次（[#3901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3901)）：不存在、空字串、本身是懸空連結（不論 `--exclude`）、進不去、選不到的項目，或全部加起來沒有任何 YAML，結束碼 `2`、一行點名 `--rule-files` 與路徑。⚠️ **行為變更**：選到的檔在讀取時消失或讀不了，結束碼 `2`、點名該檔，整輪不寫任何檔、不印結果（以前照樣寫出輸出，其中 Phase 2 少了該檔）；`--rule-files` 的值本身是懸空連結、又被 `--exclude` 排除時，以前被略過（結束碼 0）。
 
 **用途**：引入現有監控配置；減少手動遷移工作量。
 

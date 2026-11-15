@@ -126,7 +126,19 @@ describe('readThresholdRow ↔ the exporter', () => {
     // The exporter refuses the empty string like any other unreadable text.
     expect(readThresholdRow('')).toEqual({ kind: 'unreadable', raw: '' });
     expect(readThresholdRow(95, 'critical')).toEqual({ kind: 'number', raw: '95', number: 95, severity: 'critical' });
-    for (const v of [{ default: '80' }, ['80'], {}]) expect(readThresholdRow(v)).toEqual({ kind: 'structured' });
+    // A schedule is not simulated; any other map or list is a value the
+    // exporter does not read (value_unparsed, measured with da-guard, #3959).
+    expect(readThresholdRow({ default: '80' })).toEqual({ kind: 'structured' });
+    expect(readThresholdRow(['80'])).toEqual({ kind: 'unreadable', raw: '[80]' });
+    expect(readThresholdRow({})).toEqual({ kind: 'unreadable', raw: '{}' });
+    // A schedule's `default` is read by the key's own tier: on a `_critical`
+    // key the whole value is the number (da-guard: value_unparsed_dropped).
+    expect(readThresholdRow({ default: '80:critical' }, 'critical')).toEqual({ kind: 'unreadable', raw: '80:critical' });
+    expect(readThresholdRow({ default: '80:critical' })).toEqual({ kind: 'structured' });
+    expect(readThresholdRow({ default: '90' }, 'critical')).toEqual({ kind: 'structured' });
+    expect(readThresholdRow({ a: '1' }, 'critical')).toEqual({ kind: 'unreadable', raw: '{a: 1}' });
+    // Flow style, nested and with a null, as the page shows it.
+    expect(readThresholdRow({ a: ['1', { b: null }] })).toEqual({ kind: 'unreadable', raw: '{a: [1, {b: ~}]}' });
     expect(thresholdScalarText({})).toBeNull();
   });
 
@@ -209,15 +221,22 @@ describe('readThresholdRow ↔ the exporter', () => {
     expect(kindsOf('a: |\n  80\nc: |-\n  80:critical\n', 'critical')).toEqual({ a: 'number', c: 'unreadable' });
     expect(kindsOf('src: &x 0x1F\nk: *x\nok: &y 80\nk2: *y\n')).toMatchObject({ k: 'unreadable', k2: 'number' });
     expect(kindsOf('<<: {k: 0x1F, k2: 80}\n')).toEqual({ k: 'unreadable', k2: 'number' });
-    // Only the first document is read. ⚠️ parseYaml's behaviour, kept, and
-    // NOT the exporter's: it refuses a file with a second document.
-    expect(readThresholdRow(parseTenantYaml('k: 80\n---\nk: 0x1F\n').config.k)).toMatchObject({ kind: 'number', number: 80 });
+    // A second document: the exporter refuses the whole file (#3959), so the
+    // page's parse hands over no threshold at all, and says why.
+    const multi = parseTenantYaml('k: 80\n---\nk: 0x1F\n');
+    expect(multi.config).toEqual({});
+    expect(multi.errors).toHaveLength(1);
   });
 
-  it('a scheduled value keeps its texts too, and is still not simulated', () => {
+  it('a scheduled value keeps its texts too; it is not simulated unless the exporter refuses its default', () => {
     const { config } = parseTenantYaml('k: {default: 0x1F, overrides: [{window: "01:00-02:00", value: 0b101}]}\n');
     expect(config.k).toEqual({ default: '0x1F', overrides: [{ window: '01:00-02:00', value: '0b101' }] });
-    expect(readThresholdRow(config.k)).toEqual({ kind: 'structured' });
+    // A default the exporter refuses: the schedule is value_unparsed (#3959).
+    expect(readThresholdRow(config.k)).toEqual({ kind: 'unreadable', raw: '0x1F' });
+    // A readable default: not simulated, a refused override value included
+    // (read only in its window; not modelled).
+    const ok = parseTenantYaml('k: {default: 80, overrides: [{window: "01:00-02:00", value: 0b101}]}\n').config.k;
+    expect(readThresholdRow(ok)).toEqual({ kind: 'structured' });
   });
 
   it('simulateAlerts and validateConfig over the page\'s parse: 0b101 is never a threshold of 5', () => {
@@ -415,7 +434,10 @@ describe('validateConfig ↔ the exporter', () => {
     expect(forKey('1e3').map((i) => i.msg)).toEqual(['Threshold 1000 exceeds 100, verify if correct']);
   });
 
-  it('a scheduled value is not judged', () => {
-    expect(forKey({ default: '1_000' })).toEqual([]);
+  it('a schedule is not judged unless the exporter refuses its default; a map or a list without one is (#3959)', () => {
+    expect(forKey({ default: '80' })).toEqual([]);
+    expect(forKey({ default: '1_000' })).toEqual([{ level: 'error', field: 'k', msg: unreadableThresholdMessage('1_000') }]);
+    expect(forKey({ a: '1' })).toEqual([{ level: 'error', field: 'k', msg: unreadableThresholdMessage('{a: 1}') }]);
+    expect(forKey(['80'])).toEqual([{ level: 'error', field: 'k', msg: unreadableThresholdMessage('[80]') }]);
   });
 });

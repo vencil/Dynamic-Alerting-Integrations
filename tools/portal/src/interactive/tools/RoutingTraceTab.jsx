@@ -22,6 +22,7 @@ function RoutingTraceTab() {
   const [traceMetric, setTraceMetric] = useState('mysql_connection_usage_percent');
   const [traceSeverity, setTraceSeverity] = useState('warning');
   const [result, setResult] = useState(null);
+  const [parseErrors, setParseErrors] = useState([]);
   const { copied, copy } = useCopyToClipboard();
 
   useEffect(() => {
@@ -36,7 +37,11 @@ function RoutingTraceTab() {
     // read `0x1F` as 31, `70:high` as 70 and `1_000` as 1, values the
     // exporter refuses. `_` keys (`_routing` among them) are typed as
     // parseYaml types them, so the routing layers read what they did.
-    const { config } = parseTenantYaml(yaml);
+    // A file the exporter cannot read (a syntax error, a second document,
+    // #3959) is said so, not traced as an empty config.
+    const { config, errors } = parseTenantYaml(yaml);
+    setParseErrors(errors);
+    if (errors.length) { setResult(null); return; }
     const routingResult = resolveRoutingLayers(config);
 
     // Build alert trace. A `_critical` key's whole value is its number
@@ -168,6 +173,12 @@ function RoutingTraceTab() {
       >
         {t('追蹤告警路徑', 'Trace Alert Path')}
       </button>
+
+      {parseErrors.length > 0 && (
+        <div className="mt-4 p-3 rounded-lg border border-red-300 bg-red-50 text-sm text-red-800" data-testid="trace-parse-errors">
+          {parseErrors.map((msg) => <div key={msg}>{msg}</div>)}
+        </div>
+      )}
 
       {result && (
         <div className="mt-4">

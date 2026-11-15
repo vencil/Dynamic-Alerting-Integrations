@@ -1461,6 +1461,8 @@ da-tools rule-pack-diff --from v1.yaml --to v2.yaml --json
 
 Alertmanager silence drift audit against the v2 rule pack — consumes an `amtool silence query -o json` dump + a rule pack source, lists silences whose matchers no longer match **any** alert in the rule source. Replaces the manual `jq + comm` workflow in [troubleshooting-checklist §1.3.2](integration/troubleshooting-checklist.en.md) ([issue #405](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/405) Category B).
 
+`--rule-source` is judged once, as given ([#3901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3901)): one that is not there, cannot be reached, holds an entry that cannot be chosen, or holds no YAML, is exit `2`, one line naming `--rule-source` and the path. ⚠️ **Behaviour change**: `--rule-source ''` used to be read as the current directory (exit 0) and is now exit `2`; a file given with a trailing slash (`rules.yaml/`) used to be read and is now exit `2`; a directory with no YAML says `--rule-source <path>: selects nothing (…)` instead of `no YAML files found at <path>`; a selected file that is gone or unreadable when it is read is exit `2`, naming the file, with no report (it used to print the report without that file) — under `--rule-pack-dir` too.
+
 **Offline-first design**: the tool does NOT connect to AM directly — avoiding VPN / Ingress / Auth-proxy boundary pitfalls. It runs in CI / GitHub Action environments without any AM network connectivity.
 
 ```bash
@@ -2545,6 +2547,8 @@ docker run --rm \
 
 Check tenant-authored Prometheus rule files against the platform governance policy (deny-list).
 
+Each scan target (a positional) is judged once ([#3901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3901)): one that is not there, is an empty string (never the current directory), is a dangling symlink (whatever `--exclude` says), cannot be reached, or holds an entry that cannot be chosen (a dangling symlink, a directory that cannot be listed) is exit `2`, one line naming the path, the same with and without `--ci`. ⚠️ **Behaviour change**: a selected file that cannot be read or is gone after that judgement used to be one ERROR for that file (exit 0 without `--ci`); it is now exit `2`, naming the file. Content that is not UTF-8 or not valid YAML is still that file's ERROR.
+
 **Purpose**: CI/CD lint check; the guard rail for Tier 3 custom rules before they reach the platform (see [Custom Rule Governance](custom-rule-governance.en.md) §4).
 
 **Syntax**
@@ -2602,6 +2606,8 @@ da-tools lint --rule-pack-dir ./rule-packs --ci
 #### onboard
 
 Reverse-analyze an existing Alertmanager config, Prometheus rule files and scrape config, and write migration CSVs, suggested snippets and `onboard-hints.json`. Each of the three inputs drives one phase; at least one is required. No positional arguments are read.
+
+Each value of `--rule-files` is judged once ([#3901](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3901)): one that is not there, is an empty string, is a dangling symlink (whatever `--exclude` says), cannot be reached, holds an entry that cannot be chosen, or all of them together holding no YAML, is exit `2`, one line naming `--rule-files` and the path. ⚠️ **Behaviour change**: a selected file that is gone or unreadable when it is read is exit `2`, naming the file, and the run writes no file and prints no result (it used to write its output, Phase 2 made without that file); a `--rule-files` value that is a dangling symlink left out by `--exclude` used to be skipped (exit 0).
 
 **Purpose**: Incorporate existing monitoring configs; reduce manual migration work.
 

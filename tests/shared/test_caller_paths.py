@@ -1133,10 +1133,17 @@ def _declared_inputs(documents: bool = False
         if g1.is_document(input_spec) != documents:
             continue
         script = found[(command, flag)]
+        # A positional's site has no flag (#3901); a gatherer's row may hand
+        # it a file or a directory — the directory row is the one run here.
+        site = flag if flag.startswith("-") else None
         rows = [(argv, reason) for _id, s, argv, _f, reason in OPS_SITES
-                if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, holder)]
+                if f"ops/{s}" == script and g1._locked_argument(argv) == (site, holder)]
         rows += [(argv, None) for _id, s, argv, _named, _rc in DX_SITES
-                 if s == script and g1._locked_argument(argv) == (flag, holder)]
+                 if s == script and g1._locked_argument(argv) == (site, holder)]
+        if not rows and g1.is_gatherer(input_spec):  # a row handing it {F}: as a directory
+            rows = [([a.replace("{F}", "{D}") for a in argv], reason)
+                    for _id, s, argv, _f, reason in OPS_SITES
+                    if f"ops/{s}" == script and g1._locked_argument(argv) == (site, "F")]
         assert rows, (f"{command} {flag}: declared with add_input, no OPS_SITES / DX_SITES row "
                       f"hands it {{{holder}}} (test_caller_path_manifest names this too)")
         out.append((f"{command} {flag}", script, flag, input_spec, *rows[0]))
@@ -1201,6 +1208,12 @@ def _written(scratch):
     return sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
 
 
+def _named(flag, path):
+    """How a declared input's refusal names *path*: `<flag> <path>`, or the
+    path alone for a positional — the caller typed no name for it (#3901)."""
+    return f"{flag} {path}" if flag.startswith("-") else str(path)
+
+
 def test_a_declared_input_answers_an_empty_directory_as_declared(box, declared_inputs):
     import _lib_input
     root = box[0]
@@ -1219,8 +1232,8 @@ def test_a_declared_input_answers_an_empty_directory_as_declared(box, declared_i
         assert "Traceback" not in out, (rid, out[-3000:])
         if spec.empty == _lib_input.EMPTY_REFUSED:
             assert proc.returncode == 2, (rid, out[-3000:])
-            assert (f"{flag} {empty}" in out
-                    or f"{flag} {os.path.realpath(empty)}" in out), (rid, out[-3000:])
+            assert (_named(flag, empty) in out
+                    or _named(flag, os.path.realpath(empty)) in out), (rid, out[-3000:])
             if reason is not None:
                 assert proc.stdout == "", (rid, proc.stdout)  # #3558: no document
             assert _written(scratch) == [], (rid, f"written: {_written(scratch)}")
@@ -1244,8 +1257,8 @@ def test_a_declared_input_refuses_a_directory_it_cannot_list(box, declared_input
         assert proc.returncode == 2, (rid, out[-3000:])
         _not_read_as_empty(rid, out)
         assert "Traceback" not in out, (rid, out[-3000:])
-        assert (f"{flag} {unlisted}" in out
-                or f"{flag} {os.path.realpath(unlisted)}" in out), (rid, out[-3000:])
+        assert (_named(flag, unlisted) in out
+                or _named(flag, os.path.realpath(unlisted)) in out), (rid, out[-3000:])
         if reason is not None:
             assert proc.stdout == "", (rid, proc.stdout)  # #3558: a caller error carries no document
         assert _written(scratch) == [], (rid, f"written before the input was judged: "
@@ -1266,7 +1279,7 @@ def test_a_declared_input_reads_its_absent_default_as_declared(box, declared_inp
         assert "Traceback" not in out, (rid, out[-3000:])
         if spec.absent_default == _lib_input.ABSENT_REFUSED:
             assert proc.returncode == 2, (rid, out[-3000:])
-            assert f"{flag} {spec.default}" in out, (rid, out[-3000:])
+            assert _named(flag, spec.default) in out, (rid, out[-3000:])
         else:
             assert proc.returncode != 2, (rid, out[-3000:])
         measured += 1
@@ -1288,7 +1301,7 @@ def test_a_declared_input_given_with_nothing_there_is_as_declared(box, declared_
         if spec.missing == _lib_input.ABSENT_REFUSED:
             assert proc.returncode == 2, (rid, out[-3000:])
             _not_read_as_empty(rid, out)
-            assert f"{flag} {gone}" in out, (rid, out[-3000:])
+            assert _named(flag, gone) in out, (rid, out[-3000:])
             if reason is not None:
                 assert proc.stdout == "", (rid, proc.stdout)  # #3558: no document
             assert _written(scratch) == [], (rid, f"written: {_written(scratch)}")
@@ -1381,6 +1394,11 @@ JUDGED_DECLARATIONS = {
     "backtest --config-dir": ("refused", None, "refused"),
     "opa-evaluate --config-dir": ("refused", None, "refused"),
     "offboard --config-dir": ("allowed", "refused", "refused"),
+    # #3901, measured on main as uid 65534: lint without --ci reads targets
+    # holding no YAML as advisory (rc 0, #3462); the other two were rc 2.
+    "lint paths": ("allowed", None, "refused"),
+    "onboard --rule-files": ("refused", None, "refused"),
+    "silencer-drift-check --rule-source": ("refused", None, "refused"),
 }
 
 

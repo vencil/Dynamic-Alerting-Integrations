@@ -38,7 +38,9 @@ purpose: |
     exporter falls back to is not simulated), severity 'unreadable' unless
     its critical tier fires; the `_critical` companion is read whole (no
     `:severity`), and an unreadable one puts its text in
-    `critical_unreadable`. A map or a list (a scheduled value) has no row.
+    `critical_unreadable`. A schedule (a mapping with `default`) has no row;
+    any other map or list, and a schedule whose `default` the exporter
+    refuses, is an unreadable row like a scalar (#3959).
 
   Thresholds (#3919): the exporter reads the TEXT of a threshold scalar. A
     config that comes from YAML must be parseTenantYaml's, whose threshold

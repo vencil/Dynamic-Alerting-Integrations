@@ -136,7 +136,6 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
-from _lib_paths import require_path  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3445: --silences-file is read by the lib)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
@@ -630,9 +629,13 @@ def main(argv: list[str] | None = None) -> "int | Report":
         required=True,
         help="Path to amtool silence dump (amtool silence query -o json output).",
     )
-    ap.add_argument(
-        "--rule-source",
-        default=None,
+    # #3901: a declared input — a rule file or a directory of them, judged
+    # once (`_lib_input.selected`, below): not there, '' (never the current
+    # directory), an entry that cannot be chosen, no YAML at all are rc 2
+    # naming the flag.
+    _lib_input.add_input(
+        ap, "--rule-source", select=_lib_consumer_read.FILES_TO_READ,
+        empty=_lib_input.EMPTY_REFUSED,
         help=(
             "Path to a rule pack YAML file, or a directory containing "
             "rule pack YAML files (scanned recursively for .yaml/.yml). "
@@ -705,7 +708,9 @@ def main(argv: list[str] | None = None) -> "int | Report":
         return EXIT_CALLER_ERROR
     silences_path = Path(args.silences_file)
     by_declaration = args.rule_pack_dir is not None
-    rule_source = Path(args.rule_pack_dir if by_declaration else args.rule_source)
+    # What the report calls the source: the path normalised, as it always was
+    # (`./rules/` is `rules`); the judgement below is of the value as given.
+    rule_source = str(Path(args.rule_pack_dir if by_declaration else args.rule_source))
 
     silences = _lib_input.document(args, "silences_file", lang="en")
 
@@ -721,14 +726,20 @@ def main(argv: list[str] | None = None) -> "int | Report":
                   f"{_lib_consumer_read.error_text(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
     else:
-        require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
+        # #3901: the one judgement of --rule-source, and its files.
+        rule_pack_files = _lib_input.selected(args, "rule_source", lang="en",
+                                              exclude=args.exclude)
 
     try:
-        alerts, errors = load_alerts(rule_source, args.exclude,
-                                     rule_pack_files=rule_pack_files)
+        alerts, errors = load_alerts(Path(rule_source), rule_pack_files=rule_pack_files)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    # #3901: the readers took the files by path — one gone or unreadable
+    # since the judgement is a refusal naming it, never an error beside a
+    # report made from the rest.
+    _lib_input.confirm_read(rule_pack_files, lang="en",
+                            flag="--rule-pack-dir" if by_declaration else "--rule-source")
     if not alerts and errors:
         # No alerts AND errors → caller probably typo'd or pointed at wrong dir.
         # Empty alerts with no errors is legitimate (rule source is empty).
