@@ -10,12 +10,14 @@ One JSON line per event, in the order raised:
 * every filesystem change raised as an audit event: a write-mode ``open`` /
   ``os.open``, ``os.rename`` (``os.replace`` too), ``os.chmod``, ``os.chown``,
   ``os.mkdir``, ``os.link``, ``os.symlink``, ``os.truncate``, ``os.remove``,
-  ``os.rmdir`` — with ``path`` (the destination, for the two-path events),
+  ``os.rmdir`` — with ``path`` (the destination, for the two-path events;
+  a rename is also logged as ``os.rename-from`` with the name it took away),
   ``pid``, and ``stack``: the repo's ``scripts/`` frames that raised it,
   innermost first, as ``<file relative to the repo, symlinks and ``..``
   resolved>:<function>``; ``lines`` holds each frame's line number.
 * ``spawn`` — ``subprocess.Popen`` / ``os.posix_spawn`` / ``os.exec`` /
-  ``os.system``, with the executable. A process that is not Python writes
+  ``os.system``, with the executable, the whole ``argv`` (an ``os.system``
+  command is logged as ``sh -c <command>``) and the directory it starts in. A process that is not Python writes
   where this hook cannot see; the spawn is the only trace of it.
 * ``hook-error`` — the hook itself raised while handling an event. The
   exception never reaches the audited program; this line is what is left of
@@ -69,7 +71,28 @@ _PATH_EVENTS = {
 }
 _SPAWN_EVENTS = {"subprocess.Popen", "os.posix_spawn", "os.exec", "os.system"}
 if _LOG:
-    _fd = os.open(_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    def _open_log():
+        """The log, on a descriptor out of a program's way: one a tool closes
+        in a sweep (`os.closerange(3, 64)`) would lose every later event, and
+        its number, handed out again, would be the tool's own file."""
+        fd = os.open(_LOG, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            import fcntl
+            high = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 700)
+        except (ImportError, OSError):  # no fcntl here, or a descriptor limit below 700
+            return fd
+        os.close(fd)
+        return high
+
+    def _is_the_log(fd):
+        try:
+            st = os.fstat(fd)
+        except OSError:
+            return False
+        return (st.st_dev, st.st_ino) == _log_id
+
+    _fd = _open_log()
+    _log_id = (os.fstat(_fd).st_dev, os.fstat(_fd).st_ino)
     # Per THREAD: the guard is against this hook's own calls re-entering it.
     # One flag for the whole process dropped every event another thread
     # raised while one was being written.
@@ -87,8 +110,8 @@ if _LOG:
                                if real.startswith(_SCRIPTS) else None)
         return _real[filename]
 
-    def _frames(rec):
-        f = sys._getframe(2)
+    def _frames(rec, depth=2):
+        f = sys._getframe(depth)
         stack, lines = [], []
         while f is not None:
             rel = _repo_file(f.f_code.co_filename)
@@ -134,7 +157,13 @@ if _LOG:
             rec["unplaced"] = True
 
     def _emit(rec):
+        """Append one line. The descriptor is checked first — closed, or
+        closed and reused for another file, it is opened again by path — so
+        an event is neither dropped nor written into a file of the program."""
+        global _fd
         rec["pid"] = os.getpid()
+        if not _is_the_log(_fd):
+            _fd = _open_log()
         os.write(_fd, (json.dumps(rec) + "\n").encode())
 
     def _record(event, args):
@@ -154,20 +183,35 @@ if _LOG:
             if fd_at is not None and len(args) > fd_at:
                 dir_fd = args[fd_at]
             if event == "os.rename":
-                rec["src"] = _text(args[0])
+                # The name the rename takes away is a change of its own: a
+                # second line, placed by the same rules as any path.
+                gone = {"ev": "os.rename-from", "path": _text(args[0])}
+                _place(gone, args[2] if len(args) > 2 else None, False)
+                _frames(gone, 3)
+                _emit(gone)
         elif event in _SPAWN_EVENTS:
             exe = args[0]
-            if event == "subprocess.Popen" and len(args) > 1 and args[1]:
+            if event == "os.system":
+                # One string for a shell: logged whole, as the only argument.
+                rec = {"ev": "spawn", "exe": "sh", "argv": ["sh", "-c", _text(exe)]}
+            elif len(args) > 1 and args[1]:
                 argv = args[1] if isinstance(args[1], (list, tuple)) else [args[1]]
                 rec = {"ev": "spawn", "exe": _text(exe) or _text(argv[0]),
-                       "argv": [_text(a) for a in argv[:4]]}
+                       "argv": [_text(a) for a in argv]}
+                if event == "subprocess.Popen" and len(args) > 2 and args[2] is not None:
+                    rec["cwd"] = _text(args[2])
             else:
                 rec = {"ev": "spawn", "exe": _text(exe), "argv": []}
+            if "cwd" not in rec:
+                try:
+                    rec["cwd"] = os.getcwd()
+                except OSError:
+                    pass
         if rec is None:
             return
         if rec["ev"] != "spawn":
             _place(rec, dir_fd, os_open)
-            _frames(rec)
+            _frames(rec, 3)
         _emit(rec)
 
     def _hook(event, args):

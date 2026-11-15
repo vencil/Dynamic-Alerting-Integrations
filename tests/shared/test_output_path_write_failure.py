@@ -137,22 +137,69 @@ cannot see into:
   For a clean operator row every file's MODE is checked too (``Row.mode``):
   who opened a file says nothing about a later ``fchmod``.
 * **child processes.** Every program a control run starts is listed, by row,
-  in ``SPAWNS``. One that is not — a ``cp``, a ``chmod`` — fails the row.
+  in ``SPAWNS``. One that is not — a ``cp``, a ``chmod`` — fails the row, and
+  so does a listed one that starts being handed a path under the output
+  directory on its command line.
 * **the code no control run reaches.** ``UNREACHED_WRITER_CALLS`` lists every
-  writer call in a rowed tool that no control run's stack passed through:
-  the audit says nothing about those, and the list says so by name.
+  writer call in a rowed tool's OWN module (not in the libraries it imports)
+  that no control run's stack passed through on the way to an event under
+  the output path: the audit says nothing about those, and the list says so
+  by name.
 
 Tools that do not write that way YET are on three lists, each exact in both
 directions (``VIA_OLD_NAMES``, ``RAW_UNDER_OUT``, ``VIA_OTHER_CLASS``): they
-record what the control runs logged, they may only shrink, and an entry that
-is no longer true is a failure telling you to remove it.
+record what the control runs logged, and an entry that is no longer true is
+a failure telling you to remove it.
+
+WHAT THIS GATE IS FOR, AND WHAT IT DOES NOT SEE
+-----------------------------------------------
+The threat is the HONEST REGRESSION: a write site the migration missed, one
+put back to a bare write, a new tool that never went through an entry. It is
+not a sandbox against code written to get past it. Everything below was
+measured to pass, each needs writing on purpose, and none of it is to be
+answered with more mechanism here — if one of these matters, it is a
+different control (a review, a sandboxed runner), not another rule in this
+file.
+
+NOT SEEN:
+
+* A child process on ``SPAWNS`` that writes the output itself while its
+  command line does not name the path (it got it on stdin, in the
+  environment, or computed it); and a ``python -I`` / ``-S`` child — it does
+  not load the hook — overwriting a file that is ALREADY there. (A new file
+  from either is caught: the disk is matched against the log.)
+* A write to an existing output file through a symlink or a hard link that
+  sits somewhere else: the event is logged where the link is.
+* A write that raises no audit event (``sqlite3``, ``ctypes``, ``mmap`` of a
+  descriptor opened for reading and writing elsewhere) onto an existing file.
+* ``UNREACHED_WRITER_CALLS`` is keyed (tool, function, writer name) → a
+  count. A second call of the same name on the same LINE as a reached one
+  counts as reached; an unreached call swapped for a bare write, with a
+  same-named call added under ``if False:`` in the same function, leaves the
+  count where it was. And "unreached" means precisely "no event under the
+  output path had a frame on that call's lines" — a call that ran and wrote
+  elsewhere is on the list too.
+* Writer calls in the LIBRARIES a rowed tool imports are not counted at all
+  (today: one each in ``ops/_observed_map_lib.py`` and
+  ``ops/_registry_lib.py``).
+* The structural check compares frame NAMES: that the operator write came
+  through a function called ``_kernel_open_operator_output``, the artifact's
+  through ``_lib_atomic_write``. What those functions do inside —
+  ``O_NOFOLLOW``, the ``fchmod``, the ``fsync`` — is
+  ``test_lib_io_operator_output.py``'s and ``tests/dx/test_atomic_write.py``'s
+  to hold, not this file's.
+* Mode is checked for a CLEAN OPERATOR row only. A clean artifact row is not
+  checked; a row on any of the three lists is not checked at all.
+* "May only shrink" is, mechanically, "must equal what was measured". A
+  change that adds a violation AND its list entry in one go passes every
+  test; it is visible in the diff of this file, and nowhere else.
 
 POPULATION — WHAT THIS TABLE CAN AND CANNOT SEE
 ----------------------------------------------
 ``test_every_flag_named_at_a_writer_has_a_row`` derives, from the tree, the
 (tool, flag) pairs that pass ``flag=`` to one of the WRITER NAMES, in every
-module under ``scripts/`` that imports a module they come from — every
-function ``_lib_io.OUTPUT_ENTRY_POINTS`` lists: the two classes' entries, the
+Python file of the repository that is not a test (``tests/_tree.repo_files``:
+what git tracks) — every function ``_lib_io.OUTPUT_ENTRY_POINTS`` lists: the two classes' entries, the
 old names, ``ensure_dir``, and (#1789) the ``output_write`` context manager
 that wraps a raw sink. A tool that grows an output flag and names it in one
 of those without adding a row goes red. So does a second flag on a tool that
@@ -203,6 +250,7 @@ import pytest
 
 import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.path)
 from _platform_fs import DIR_WRITE_ERROR, has_posix_modes, symlink_or_skip
+from _tree import repo_files
 from _go_refusal import assert_refused  # (#3206)
 
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
@@ -1233,10 +1281,10 @@ def _own_refusal_problem(row: Row, shape: str, out: Path, stderr: str) -> str | 
 
     Held to the contract at the top of this file minus the shared sentence:
     exactly one line with the row's head, and that line names the flag and
-    the path this shape blocks. The path must END there — followed by nothing
-    a path could continue with — so a line about `<out>/da-x.yaml` does not
-    pass for a shape that blocks `<out>` itself (the substring hole
-    `_named_path` describes)."""
+    the path this shape blocks. The path must START and END there — nothing
+    a path could continue with on either side — so a line about
+    `<out>/da-x.yaml`, or about `/elsewhere<out>`, does not pass for a shape
+    that blocks `<out>` itself (the substring hole `_named_path` describes)."""
     lines = [line for line in stderr.splitlines() if line.startswith(row.prefix)]
     if len(lines) != 1:
         return f"expected exactly one {row.prefix!r} line, got {len(lines)}"
@@ -1247,7 +1295,7 @@ def _own_refusal_problem(row: Row, shape: str, out: Path, stderr: str) -> str | 
     if row.flag not in line:
         return f"the refusal does not name {row.flag}"
     blocked = str(_expected_fragment(row, shape, out))
-    if not re.search(re.escape(blocked) + r"(?![\w./\\-])", line):
+    if not re.search(r"(?<![\w./\\-])" + re.escape(blocked) + r"(?![\w./\\-])", line):
         return f"the refusal does not name the blocked path {blocked}"
     return None
 
@@ -1264,7 +1312,9 @@ def _fail(row: Row, proc: subprocess.CompletedProcess, why: str) -> str:
 AUDIT_DIR = Path(__file__).resolve().parent / "_write_audit"
 CLASSES = ("operator", "artifact")
 WRITERS = ("python", "da-guard", "python+da-guard")
-#: Events that put a file's content or name in place (a `mkdir` does neither).
+#: Events that put a file's content or name in place (a `mkdir` does neither;
+#: `os.rename-from` — the name a rename takes AWAY — is an event of its own,
+#: attributed like any other, and puts nothing).
 _FILE_EVENTS = frozenset({"open", "os.rename", "os.link", "os.symlink", "os.truncate"})
 
 
@@ -1369,16 +1419,44 @@ def _under(path: str, scope: Path) -> str | None:
     return None
 
 
+#: How ``SPAWNS`` marks a program that was handed a path under the output
+#: directory on its command line: it can write there, and the audit cannot
+#: see it do so.
+GIVEN_THE_OUTPUT_PATH = " [given the output path]"
+
+
 def _program(argv: tuple[str, ...]) -> str:
-    """How a spawned program is named in ``SPAWNS``: its file name, plus its
-    subcommand when the first argument is one (``da-guard write``, ``git
-    log``); any Python is ``python``."""
+    """How a spawned program is named in ``SPAWNS``: its file name, and
+    nothing else; any Python is ``python``.
+
+    ⛔ Not its subcommand, and not how often. Which `da-guard` subcommands a
+    run makes, and how many spawn events one start raises, is not a property
+    of the tool: CPython starts a child through `os.posix_spawn` where the
+    platform allows it and then raises that event AS WELL as
+    `subprocess.Popen` (seen on CI, Python 3.14: one more "program" per
+    start than on the 3.13 this list was first measured on), and a helper's
+    `-h` probe or a cache decides what else is run. The name of the program
+    is what stays the same everywhere."""
     name = os.path.basename(argv[0])
-    if re.fullmatch(r"python[0-9.]*", name):
-        return "python"
-    if len(argv) > 1 and re.fullmatch(r"[a-z][a-z0-9-]*", argv[1]):
-        return f"{name} {argv[1]}"
-    return name
+    return "python" if re.fullmatch(r"python[0-9.]*", name) else name
+
+
+def _given_the_output_path(event: dict, scope: Path) -> bool:
+    """Whether a spawn's command line names something under *scope*: an
+    argument that is such a path (a relative one is read against the
+    directory the child starts in), or one that contains the directory's
+    name — ``--output=<path>``, a shell command with a redirect in it."""
+    root = os.path.realpath(scope)
+    for arg in map(str, (event.get("argv") or [])[1:]):
+        if root in arg or str(scope) in arg:
+            return True
+        for value in {arg, arg.partition("=")[2]} - {""}:
+            if value.startswith("-") or os.path.isabs(value) or "cwd" not in event:
+                continue
+            placed = _placed({"path": value, "cwd": event["cwd"]})
+            if placed is not None and _under(placed, scope) is not None:
+                return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -1387,13 +1465,15 @@ class Audit:
     logged: bool                              # a log exists at all
     loaded: bool                              # the tool's own process reported in
     sites: dict[str, tuple[tuple[str, str], ...]]   # kind → ((event, relative path), …)
-    spawned: tuple[tuple[str, ...], ...]      # argv head of every process spawned
+    spawned: tuple[tuple[str, ...], ...]      # argv of every process spawned
     unlogged: tuple[str, ...] = ()            # files the run left that no logged write made
     faults: tuple[str, ...] = ()              # events that are wrong in themselves
     # "<caller frame> <old name it called> ×<distinct calling lines>"
     old_name_calls: tuple[str, ...] = ()
     # (file, line) of every frame of every event under the scope
     reached: frozenset[tuple[str, int]] = frozenset()
+    # `_program` of every spawn, marked GIVEN_THE_OUTPUT_PATH where it was
+    programs: tuple[str, ...] = ()
 
 
 def _audit(events: list[dict] | None, scope: Path, tool: Path,
@@ -1412,6 +1492,7 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
     sites: dict[str, list[tuple[str, str]]] = {}
     spawned = []
     faults: list[str] = []
+    programs: set[str] = set()
     old_calls: dict[tuple[str, str], set[int]] = {}
     reached: set[tuple[str, int]] = set()
     for event in events:
@@ -1423,7 +1504,13 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
             continue
         if event["ev"] == "spawn":
             argv = event["argv"] or [event["exe"]]
-            spawned.append((os.path.basename(str(argv[0])), *map(str, argv[1:])))
+            argv = (os.path.basename(str(argv[0])), *map(str, argv[1:]))
+            spawned.append(argv)
+            # `da-guard write` is the one child that is MEANT to write there:
+            # the row says so (`writer=`), and the disk is matched against it.
+            programs.add(_program(argv) + (
+                GIVEN_THE_OUTPUT_PATH if argv[:2] != ("da-guard", "write")
+                and _given_the_output_path(event, scope) else ""))
             continue
         stack = event["stack"]
         lines = event.get("lines") or [0] * len(stack)
@@ -1477,7 +1564,7 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
                  tuple(sorted(made - logged)), tuple(faults),
                  tuple(sorted(f"{caller} {name} ×{len(at)}"
                               for (caller, name), at in old_calls.items())),
-                 frozenset(reached))
+                 frozenset(reached), tuple(sorted(programs)))
 
 
 @dataclass(frozen=True)
@@ -1487,7 +1574,7 @@ class Seen:
     raw: tuple[str, ...]         # "<event> <path under the scope>" of each raw site, sorted
     raw_is_all: bool             # no write under the scope came through any entry
     other_class: str | None      # the OTHER class's entry wrote here
-    spawned: tuple[str, ...] = ()   # the programs the run started (`_program`), sorted
+    spawned: tuple[str, ...] = ()   # the programs the run started (Audit.programs)
 
 
 def _verdict(row: Row, audit: Audit) -> Seen:
@@ -1548,10 +1635,18 @@ def _verdict(row: Row, audit: Audit) -> Seen:
             for event, rel in sites:
                 if event != "os.mkdir":
                     faults.append(f"{event} {rel} under ensure_dir: it makes directories only")
+        elif kind == "legacy" and row.kind == "file" and row.produces is None:
+            # VIA_OLD_NAMES lists the CALL, not the files: a second file out
+            # of the same line is the same entry. For a single-file flag the
+            # one file an old name may write is the flag's value.
+            for event, rel in sites:
+                if rel != row.out_name:
+                    faults.append(f"{event} {rel} through an old name: {row.flag} names "
+                                  f"one file ({row.out_name}), and this is another")
     raw = tuple(sorted(f"{event} {rel}" for event, rel in audit.sites.get("raw", ())))
     through_an_entry = any(sites for kind, sites in audit.sites.items() if kind != "raw")
     return Seen(faults, audit.old_name_calls, raw, bool(raw) and not through_an_entry, other,
-                tuple(sorted({_program(argv) for argv in audit.spawned})))
+                audit.programs)
 
 
 def _is_clean(row: Row) -> bool:
@@ -1590,9 +1685,8 @@ def _mode_faults(row: Row, scope: Path, made: frozenset[str]) -> list[str]:
 # control run under the audit hook logged on this tree. To see what a row
 # logs, make its entry wrong and read the failure, or:
 #   pytest tests/shared/test_output_path_write_failure.py -k control -q
-# Keyed by (tool, flag), except SPAWNS: two rows of one flag reach the write
-# by different paths and start different programs on the way, so that one is
-# keyed by the row's id.
+# Keyed by (tool, flag). SPAWNS, further down, is the one list that is NOT
+# exact both ways; it says why.
 Key = tuple[str, str]
 
 #: Rows whose output is written through an old name (`write_text_secure`,
@@ -1678,116 +1772,52 @@ VIA_OTHER_CLASS: dict[Key, str] = {
 }
 
 
-#: Every program each row's control run starts, by row id (`_program`). A
-#: process that is not Python writes where the audit cannot see, so none may
-#: be started that is not on this list: a `cp` or a `chmod` in a child is a
-#: write this gate would otherwise never hear of. (What the listed ones do to
-#: the output path is held by the log-against-disk match and the mode check.)
-SPAWNS: dict[str, tuple[str, ...]] = {
-    "analyze_rule_pack_gaps[-o/--output]": ("da-guard parse-tree", "da-guard served-values"),
-    "assemble_config_dir[--manifest]": (
-         "da-crdecode",
-         "da-guard",
-         "da-guard effective",
-         "da-guard key-verdict",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "da-guard severity-dedup",
-         "da-guard write",
-         "da-read alertmanager",
-         "da-read prometheus-rules",
-         "python",
-        ),
-    "assemble_config_dir[--output]": (
-         "da-crdecode",
-         "da-guard",
-         "da-guard effective",
-         "da-guard key-verdict",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "da-guard severity-dedup",
-         "da-guard write",
-         "da-read alertmanager",
-         "da-read prometheus-rules",
-         "python",
-        ),
-    "backtest_threshold[--markdown-output]": ("da-guard key-spellings", "da-guard parse-tree", "da-guard served-values"),
-    "backtest_threshold[--markdown-output]-no-changes": ("da-guard parse-tree", "da-guard served-values"),
-    "backtest_threshold[-o/--output]": ("da-guard key-spellings", "da-guard parse-tree", "da-guard served-values"),
-    "backtest_threshold[-o/--output]-no-changes": ("da-guard parse-tree", "da-guard served-values"),
-    "batch_diagnose[-o/--output]": (
-         "da-guard effective",
-         "da-guard key-spellings",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "kubectl get",
-        ),
-    "compile_custom_alerts[--out]": ("da-guard compile-custom-alerts", "da-guard parse-tree"),
-    "config_history[--config-dir]-history-dir": ("da-guard parse-tree",),
-    "config_history[--config-dir]-snapshot-dir": ("da-guard parse-tree",),
-    "config_history[--config-dir]-snapshot-file": ("da-guard parse-tree",),
-    "configmap_assemble[--output]": (
-         "da-crdecode",
-         "da-guard",
-         "da-guard effective",
-         "da-guard key-spellings",
-         "da-guard key-verdict",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "da-guard severity-dedup",
-         "da-read alertmanager",
-         "da-read prometheus-rules",
-         "kubectl create",
-         "python",
-        ),
-    "da_assembler[--config-dir]": ("da-crdecode", "da-guard parse-tree", "da-guard write"),
-    "describe_tenant[-o/--output]": ("da-guard effective", "da-guard parse-tree", "da-guard served-values"),
-    "federation_keygen[--jwks-out]": ("openssl genpkey", "openssl rsa"),
-    "generate_alertmanager_routes[--findings-json]": (
-         "da-crdecode",
-         "da-guard key-verdict",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "da-guard severity-dedup",
-         "da-read alertmanager",
-         "da-read prometheus-rules",
-        ),
-    "generate_alertmanager_routes[--secret-mounts-out]": (
-         "da-crdecode",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "da-guard severity-dedup",
-         "da-read alertmanager",
-         "da-read prometheus-rules",
-        ),
-    "generate_alertmanager_routes[-o/--output]": (
-         "da-crdecode",
-         "da-guard parse-tree",
-         "da-guard served-values",
-         "da-guard severity-dedup",
-         "da-read alertmanager",
-         "da-read prometheus-rules",
-        ),
-    "generate_changelog[-o/--output]": ("git describe", "git log"),
-    "generate_rule_pack_split[--output-dir]": ("da-read prometheus-rules",),
-    "generate_tenant_fixture[-o/--output]-flat": ("da-guard write",),
-    "generate_tenant_fixture[-o/--output]-hierarchical": ("da-guard write",),
-    "generate_tenant_fixture[-o/--output]-synthetic-v2": ("da-guard write",),
-    "generate_tenant_mapping_rules[-o/--output]": ("da-guard parse-tree",),
-    "generate_tenant_metadata[--output]": ("da-guard parse-tree", "da-guard served-values", "git rev-parse"),
-    "init_project[-o/--output-dir]": ("da-guard parse-tree", "da-guard write"),
-    "migrate_conf_d[-o/--output-plan]": ("da-guard parse-tree", "da-guard write", "git"),
-    "migrate_credentials[--manifests-out]": ("da-guard parse-tree", "da-guard severity-dedup", "da-guard write"),
-    "migrate_rule[-o/--output-dir]": ("da-guard write", "da-read prometheus-rules"),
-    "migrate_to_operator[--output-dir]": ("da-crdecode", "da-guard parse-tree", "da-read prometheus-rules"),
-    "onboard_platform[-o/--output-dir]": ("da-crdecode", "da-read alertmanager"),
-    "operator_generate[--output-dir]": ("da-read prometheus-rules",),
-    "run_chaos_soak[--output-dir]": ("da-guard parse-tree",),
-    "run_chaos_soak[--output-dir]-metrics-timeseries.csv": ("da-guard parse-tree",),
-    "run_chaos_soak[--output-dir]-run-config.json": ("da-guard parse-tree",),
-    "run_chaos_soak[--output-dir]-summary.txt": ("da-guard parse-tree",),
-    "scaffold_tenant[-o/--output-dir]": ("da-guard parse-tree", "da-guard write"),
-    "scan_component_health[--output]": ("git log",),
+#: The programs each flag's control runs may start (`_program`: the file
+#: name). A process that is not Python writes where the audit cannot see, so
+#: a run may start none that is not listed: a `cp` or a `chmod` in a child
+#: is a write this gate would otherwise never hear of. One whose command
+#: line names a path under the output directory is a separate entry, marked
+#: GIVEN_THE_OUTPUT_PATH — a listed `git` that gains `--output=<the output>`
+#: is not the listed `git`. (`da-guard write` is not marked: the row's
+#: `writer=` and the log-against-disk match hold it.)
+#:
+#: ⚠️ One direction only: started ⊆ listed. "Listed and not started" is NOT
+#: checked, because it is not the same everywhere — a row of the same flag
+#: that takes another path starts fewer (`backtest --skip-if-unavailable`
+#: starts none), and whether a helper is run at all can hang on a cache. A
+#: stale entry here permits a program the tool no longer needs; it does not
+#: hide a write, which is what the two-directional lists are for.
+SPAWNS: dict[Key, tuple[str, ...]] = {
+    ("../ops/configmap_assemble.py", "--output"): ("da-crdecode", "da-guard", "da-read", "kubectl", "python"),
+    ("dx/compile_custom_alerts.py", "--out"): ("da-guard",),
+    ("dx/describe_tenant.py", "-o/--output"): ("da-guard",),
+    ("dx/generate_changelog.py", "-o/--output"): ("git",),
+    ("dx/generate_tenant_fixture.py", "-o/--output"): ("da-guard",),
+    ("dx/generate_tenant_metadata.py", "--output"): ("da-guard", "git"),
+    ("dx/migrate_conf_d.py", "-o/--output-plan"): ("da-guard", "git"),
+    ("dx/run_chaos_soak.py", "--output-dir"): ("da-guard",),
+    ("dx/scan_component_health.py", "--output"): ("git",),
+    ("ops/analyze_rule_pack_gaps.py", "-o/--output"): ("da-guard",),
+    ("ops/assemble_config_dir.py", "--manifest"): ("da-crdecode", "da-guard", "da-read", "python"),
+    ("ops/assemble_config_dir.py", "--output"): ("da-crdecode", "da-guard", "da-read", "python"),
+    ("ops/backtest_threshold.py", "--markdown-output"): ("da-guard",),
+    ("ops/backtest_threshold.py", "-o/--output"): ("da-guard",),
+    ("ops/batch_diagnose.py", "-o/--output"): ("da-guard", "kubectl"),
+    ("ops/config_history.py", "--config-dir"): ("da-guard [given the output path]",),
+    ("ops/da_assembler.py", "--config-dir"): ("da-crdecode", "da-guard"),
+    ("ops/federation_keygen.py", "--jwks-out"): ("openssl",),
+    ("ops/generate_alertmanager_routes.py", "--findings-json"): ("da-crdecode", "da-guard", "da-read"),
+    ("ops/generate_alertmanager_routes.py", "--secret-mounts-out"): ("da-crdecode", "da-guard", "da-read"),
+    ("ops/generate_alertmanager_routes.py", "-o/--output"): ("da-crdecode", "da-guard", "da-read"),
+    ("ops/generate_rule_pack_split.py", "--output-dir"): ("da-read",),
+    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("da-guard",),
+    ("ops/init_project.py", "-o/--output-dir"): ("da-guard",),
+    ("ops/migrate_credentials.py", "--manifests-out"): ("da-guard",),
+    ("ops/migrate_rule.py", "-o/--output-dir"): ("da-guard", "da-read"),
+    ("ops/migrate_to_operator.py", "--output-dir"): ("da-crdecode", "da-guard", "da-read"),
+    ("ops/onboard_platform.py", "-o/--output-dir"): ("da-crdecode", "da-read"),
+    ("ops/operator_generate.py", "--output-dir"): ("da-read",),
+    ("ops/scaffold_tenant.py", "-o/--output-dir"): ("da-guard",),
 }
 
 
@@ -1809,11 +1839,11 @@ def _list_faults(row: Row, seen: Seen) -> list[str]:
         out.append(f"{key} is declared {row.cls} and the run wrote through the "
                    f"{seen.other_class} entry; VIA_OTHER_CLASS says "
                    f"{VIA_OTHER_CLASS.get(key)}")
-    if seen.spawned != SPAWNS.get(row.id, ()):
-        out.append(f"{row.id} started {seen.spawned}, SPAWNS says "
-                   f"{SPAWNS.get(row.id, ())} — a process that is not Python writes "
-                   "unseen; one the row's write needs is listed, one that is gone "
-                   "comes off")
+    unlisted = sorted(set(seen.spawned) - set(SPAWNS.get(key, ())))
+    if unlisted:
+        out.append(f"{row.id} started {unlisted}, which SPAWNS does not list for {key} "
+                   f"({SPAWNS.get(key, ())}) — a process that is not Python writes "
+                   "unseen; list a program the write needs, and nothing else")
     return out
 
 
@@ -1837,10 +1867,18 @@ _CASES = [pytest.param(row, shape, id=f"{row.id}-{shape}",
           for row in ROWS for shape in row.shapes]
 
 
+#: How many rows may carry `known_defect`. Like `_NO_ROW_CEILING`: the field
+#: turns a red bad-path case into an expected one, so one more is an edit here.
+_KNOWN_DEFECT_CEILING = 1
+
+
 def test_a_known_defect_is_a_strict_xfail_and_nothing_else_is_marked():
     """`Row.known_defect` must stay a claim that can be proved wrong: strict,
     so the day the tool is fixed the case fails until the field is removed.
     A skip, or a lenient xfail, would keep saying "known" for ever."""
+    assert sum(1 for row in ROWS if row.known_defect) == _KNOWN_DEFECT_CEILING, (
+        "a row gained or lost a `known_defect`: the ceiling moves with a reviewed "
+        "edit, and only down unless a ticket says otherwise")
     for case in _CASES:
         row = case.values[0]
         if row.known_defect:
@@ -1914,9 +1952,9 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
         # A derived-output tool: the flag value is an INPUT the fixture just
         # populated, so "something exists there" proves nothing. Name what the
         # run had to produce instead.
-        made = row.produces(out)
-        assert made.is_file() and made.stat().st_size > 0, _fail(
-            row, proc, f"control run did not produce {made}")
+        produced = row.produces(out)
+        assert produced.is_file() and produced.stat().st_size > 0, _fail(
+            row, proc, f"control run did not produce {produced}")
     elif row.kind == "file":
         assert out.is_file() and out.stat().st_size > 0, _fail(
             row, proc, f"control run did not write {out}")
@@ -2185,8 +2223,8 @@ def test_rows_point_at_real_tools_and_fixtures():
         assert (TOOLS_DIR / row.tool).is_file(), row.tool
         assert row.kind in ("file", "dir"), row.id
         assert [r.id for r in ROWS].count(row.id) == 1, (
-            f"{row.id}: two rows share this id — give one a `variant`; SPAWNS and "
-            "the test ids are keyed by it")
+            f"{row.id}: two rows share this id — give one a `variant`: a failure "
+            "names its row by it")
         assert row.cls in CLASSES, row.id
         assert row.writer in WRITERS, row.id
         assert row.wording in ("shared", "own"), row.id
@@ -2232,15 +2270,6 @@ def test_soak_metrics_stub_is_a_working_target():
     assert b"schema=" in _jsc._stub_payload("/rich/metrics")[1]
 
 
-#: Where a CLI can live: anywhere under ``scripts/``. Not a list of
-#: directories — the list was ``scripts/tools``, then ``scripts/tools`` and
-#: ``scripts/ops``, and each time a directory outside it held tools that
-#: named a flag at a writer and had no row (#3107: ``scripts/dx``). What
-#: makes a module part of the population is that it IMPORTS a module the
-#: writers come from (`_writer_modules`), not where it sits. A tool outside
-#: ``scripts/tools`` is named relative to it (``../ops/x.py``), the same
-#: string its ``Row.tool`` carries.
-_CLI_ROOT = REPO_ROOT / "scripts"
 _UNRESOLVED = "<cannot tell which flag: {}>"
 
 
@@ -2256,44 +2285,32 @@ def _writer_names() -> frozenset[str]:
                      for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names)
 
 
-def _writer_modules() -> frozenset[str]:
-    """The modules a writer name can be imported from: the ones that define
-    them (`_lib_io.OUTPUT_ENTRY_POINTS`), and any library that imports one
-    from those and so hands it on (`_lib_python`). Derived, to a fixed point."""
-    import _lib_io
-    modules = {name.split(".")[0] for names in _lib_io.OUTPUT_ENTRY_POINTS.values()
-               for name in names}
-    writers = _writer_names()
-    libraries = {py.stem: ast.parse(py.read_text(encoding="utf-8"))
-                 for py in sorted(TOOLS_DIR.glob("_*.py"))}
-    grew = True
-    while grew:
-        grew = False
-        for stem, tree in libraries.items():
-            if stem not in modules and any(
-                    isinstance(node, ast.ImportFrom) and node.module in modules
-                    and any(alias.name in writers for alias in node.names)
-                    for node in ast.walk(tree)):
-                modules.add(stem)
-                grew = True
-    return frozenset(modules)
-
-
 def _cli_modules() -> list[tuple[str, Path, ast.Module]]:
-    """(name relative to scripts/tools, path, tree) of every module under
-    ``scripts/`` that imports a writer module — libraries included; a caller
-    that wants CLIs only skips the ``_``-prefixed ones."""
-    sources = _writer_modules()
+    """(name relative to scripts/tools, path, tree) of every Python file of
+    the repository that is not a test and not one of the modules the writers
+    are defined in — libraries included; a caller that wants CLIs only skips
+    the ``_``-prefixed ones.
+
+    Every file, wherever it is and whatever it imports (#3107): the scan was
+    ``scripts/tools``, then two directories, then "under ``scripts/`` and
+    importing a writer module", and each narrowing was a place a tool could
+    name a flag at a writer and have no row. What makes a module part of the
+    population is the CALL (a writer name, with ``flag=``), which the callers
+    of this look for. The list is `tests/_tree.repo_files` — what git tracks
+    (and what is new and not ignored), never a walk of the checkout. A tool
+    outside ``scripts/tools`` is named relative to it (``../ops/x.py``), the
+    same string its ``Row.tool`` carries. A file that does not parse fails
+    the scan: it could not be read, which is not "it calls no writer".
+    """
+    import _lib_io
+    own = {TOOLS_DIR / f"{name.split('.')[0]}.py"
+           for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names}
     out = []
-    for py in sorted(_CLI_ROOT.rglob("*.py")):
-        if py.stem in sources and py.parent == TOOLS_DIR:
-            continue  # the writers' own modules
+    for py in sorted(repo_files(".py")):
+        if py in own or py.relative_to(REPO_ROOT).parts[0] == "tests":
+            continue
         tree = ast.parse(py.read_text(encoding="utf-8"), str(py))
-        if any((isinstance(node, ast.ImportFrom) and node.module in sources)
-               or (isinstance(node, ast.Import)
-                   and any(alias.name in sources for alias in node.names))
-               for node in ast.walk(tree)):
-            out.append((Path(os.path.relpath(py, TOOLS_DIR)).as_posix(), py, tree))
+        out.append((Path(os.path.relpath(py, TOOLS_DIR)).as_posix(), py, tree))
     return out
 
 
@@ -2567,7 +2584,8 @@ def test_the_entry_point_list_is_complete():
     assert len(named) == sum(len(v) for v in _lib_io.OUTPUT_ENTRY_POINTS.values()), (
         "a function is listed under two kinds")
     takes_flag: dict[str, ast.FunctionDef] = {}
-    for py in sorted(TOOLS_DIR.glob("_*.py")):
+    for py in sorted(f for f in repo_files(".py")
+                     if f.parent == TOOLS_DIR and f.name.startswith("_")):
         for fn in ast.parse(py.read_text(encoding="utf-8")).body:
             if isinstance(fn, ast.FunctionDef) and "flag" in [
                     a.arg for a in fn.args.args + fn.args.kwonlyargs]:
@@ -2707,8 +2725,8 @@ _MKDIR = ["scripts/tools/_lib_io.py:ensure_dir", "scripts/tools/ops/t.py:main"]
 _RAW = ["scripts/tools/ops/t.py:main"]
 
 
-def _audit_row(cls: str = "operator", **kw) -> Row:
-    return Row("ops/t.py", "--out", "file", cls, lambda c, out: [], reach="synthetic", **kw)
+def _audit_row(cls: str = "operator", kind: str = "file", **kw) -> Row:
+    return Row("ops/t.py", "--out", kind, cls, lambda c, out: [], reach="synthetic", **kw)
 
 
 class _Log:
@@ -2764,7 +2782,7 @@ class TestWriteAuditVerdict:
     def test_an_old_name_is_the_innermost_entry(self, tmp_path):
         """`write_yaml_crd` → `write_text_secure`: legacy, whatever is above."""
         seen = _Log(tmp_path).add("open", "o.yaml", _OLD).add("os.chmod", "o.yaml", _OLD).seen(
-            _audit_row())
+            _audit_row(out_name="o.yaml"))
         assert seen.old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×1",)
         assert not seen.raw and not seen.faults
 
@@ -2773,18 +2791,62 @@ class TestWriteAuditVerdict:
         line, another function, another name — is a second."""
         direct = ["scripts/tools/_lib_io.py:write_text_secure", "scripts/tools/_lib_io.py:"
                   "write_text_or_die", "scripts/tools/ops/t.py:emit"]
-        log = _Log(tmp_path)
+        log, row = _Log(tmp_path), _audit_row(kind="dir")
         for n in range(3):
             log.add("open", f"{n}.yaml", _OLD, lines=[10, 20, 30])
-        assert log.seen(_audit_row()).old_names == (
-            "scripts/tools/ops/t.py:main write_yaml_crd ×1",)
+        assert log.seen(row).old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×1",)
         log.add("open", "extra.yaml", _OLD, lines=[10, 20, 31])
-        assert log.seen(_audit_row()).old_names == (
-            "scripts/tools/ops/t.py:main write_yaml_crd ×2",)
+        assert log.seen(row).old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×2",)
         log.add("open", "report.txt", direct, lines=[10, 5, 40])
-        assert log.seen(_audit_row()).old_names == (
+        assert log.seen(row).old_names == (
             "scripts/tools/ops/t.py:emit write_text_or_die ×1",
             "scripts/tools/ops/t.py:main write_yaml_crd ×2")
+        assert not log.seen(row).faults
+
+    def test_an_old_name_writes_a_file_flags_one_file_and_no_other(self, tmp_path):
+        """The call is what VIA_OLD_NAMES lists, so a second file out of the
+        same line (`; write(out + ".second")`, a loop) is the same entry. A
+        single-file flag has one file; a directory flag has as many as it has."""
+        log = _Log(tmp_path).add("open", "o.json", _OLD).add("os.chmod", "o.json", _OLD)
+        assert not log.seen(_audit_row(out_name="o.json")).faults
+        log.add("open", "o.json.second", _OLD)
+        faults = log.seen(_audit_row(out_name="o.json")).faults
+        assert faults == ["open o.json.second through an old name: --out names one file "
+                          "(o.json), and this is another"]
+        assert not log.seen(_audit_row(kind="dir", out_name="o.json")).faults
+
+    def test_a_rename_out_of_the_output_path_is_a_write_there(self, tmp_path):
+        """The destination is elsewhere, the name taken away is not: moving
+        the output aside and letting the entry write it again leaves a clean
+        file on disk and one raw event."""
+        log = _Log(tmp_path).add("open", "o.json", _OP)
+        log.add("os.rename-from", "o.json", _RAW).add("open", "o.json", _OP)
+        assert log.seen(_audit_row()).raw == ("os.rename-from o.json",)
+
+    def test_a_child_given_the_output_path_is_marked(self, tmp_path):
+        good = tmp_path / "good"
+        good.mkdir()
+
+        def programs(*argv: str, cwd: str | None = None) -> tuple[str, ...]:
+            log = _Log(good).add("open", "o.json", _OP).spawn(*argv)
+            if cwd is not None:
+                log.events[-1]["cwd"] = cwd
+            return log.seen(_audit_row()).spawned
+
+        mark = GIVEN_THE_OUTPUT_PATH
+        assert programs("git", "log", "-1") == ("git",)
+        assert programs("git", "log", f"--output={good}/o.json") == ("git" + mark,)
+        assert programs("openssl", "rsa", "-out", str(good / "o.json")) == ("openssl" + mark,)
+        assert programs("sh", "-c", f"cat /etc/hostname > {good}/o.json") == ("sh" + mark,)
+        assert programs("cp", "a.txt", "o.json", cwd=str(good)) == ("cp" + mark,)
+        assert programs("cp", "a.txt", "good/o.json", cwd=str(tmp_path)) == ("cp" + mark,)
+        assert programs("cp", "a.txt", "--to=good/o.json", cwd=str(tmp_path)) == ("cp" + mark,)
+        # Beside it is not under it, by path component or by name.
+        assert programs("cp", "a.txt", str(tmp_path / "other" / "o.json")) == ("cp",)
+        assert programs("cp", "a.txt", "o.json", cwd=str(tmp_path)) == ("cp",)
+        # The one child that is meant to write there is held by `writer=`.
+        assert programs("da-guard", "write", str(good)) == ("da-guard",)
+        assert programs("da-guard", "parse-tree", str(good)) == ("da-guard" + mark,)
 
     def test_the_operator_entry_must_have_let_the_kernel_open_it(self, tmp_path):
         """`open_operator_output` rewritten as `io.open(path, "w")` still has
@@ -2835,7 +2897,7 @@ class TestWriteAuditVerdict:
         log.spawn("/x/da-guard", "parse-tree", "--json").spawn("/usr/bin/cp", "/etc/hostname")
         log.spawn("/usr/local/bin/python3.13", "-c", "pass").spawn("git", "--no-pager", "log")
         log.spawn("/x/da-guard", "parse-tree")
-        assert log.seen(_audit_row()).spawned == ("cp", "da-guard parse-tree", "git", "python")
+        assert log.seen(_audit_row()).spawned == ("cp", "da-guard", "git", "python")
 
     def test_the_innermost_entry_decides(self, tmp_path):
         """What is asked is who opened the file. Were an old name made a thin
@@ -3120,6 +3182,52 @@ open(os.path.join(sys.argv[1], "after.txt"), "w").close()
         assert ("open", "after.txt") in audit.sites["raw"]
         assert any("the hook failed" in f for f in audit.faults)
 
+    def test_the_log_survives_the_program_closing_its_descriptors(self, tmp_path):
+        """A sweep of the low descriptors must not take the log with it, and
+        a log descriptor that WAS closed and whose number went to a file of
+        the program must not be written to."""
+        events, good, _script = _hooked(tmp_path, """
+import os, sys
+out = sys.argv[1]
+os.closerange(3, 64)
+open(os.path.join(out, "after-sweep.txt"), "w").close()
+os.closerange(3, 4096)
+mine = [open(os.path.join(out, f"mine-{n}.txt"), "w") for n in range(4)]
+open(os.path.join(out, "after-all.txt"), "w").close()
+[f.close() for f in mine]
+""")
+        opened = {os.path.basename(e["path"]) for e in events if e["ev"] == "open"}
+        assert {"after-sweep.txt", "after-all.txt", "mine-3.txt"} <= opened, opened
+        for n in range(4):
+            assert (good / f"mine-{n}.txt").read_text(encoding="utf-8") == "", (
+                "the hook wrote its log into a file of the program")
+
+    def test_a_rename_is_logged_at_both_ends(self, tmp_path):
+        events, good, script = _hooked(tmp_path, """
+import os, sys
+out = sys.argv[1]
+src = os.path.join(out, "o.json")
+open(src, "w").close()
+os.rename(src, os.path.join(os.path.dirname(out), "moved.json"))
+os.chdir(out)
+open("o.json", "w").close()
+os.rename("o.json", "../moved-2.json")
+""")
+        audit = _audit(events, good, script)
+        assert audit.sites["raw"] == (("open", "o.json"), ("os.rename-from", "o.json"))
+        assert not audit.faults
+
+    def test_a_spawn_carries_its_whole_command_line(self, tmp_path):
+        events, good, script = _hooked(tmp_path, """
+import os, subprocess, sys
+out = os.path.join(sys.argv[1], "o.txt")
+subprocess.run([sys.executable, "-c", "pass", "a", "b", "c", "--to=" + out], check=True)
+os.system("true " + out)
+""")
+        audit = _audit(events, good, script)
+        assert audit.programs == ("python" + GIVEN_THE_OUTPUT_PATH,
+                                  "sh" + GIVEN_THE_OUTPUT_PATH)
+
     def test_every_thread_is_logged(self, tmp_path):
         """One guard flag for the whole process dropped the events other
         threads raised while one was being written."""
@@ -3176,7 +3284,7 @@ class TestTheLists:
     def test_an_old_name_call_more_or_fewer_than_listed_is_a_fault(self):
         key = ("ops/migrate_rule.py", "-o/--output-dir")
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
-        calls, started = VIA_OLD_NAMES[key], SPAWNS[row.id]
+        calls, started = VIA_OLD_NAMES[key], SPAWNS[key]
         assert len(calls) > 1
         assert _list_faults(row, Seen([], calls, (), False, None, started)) == []
         assert _list_faults(row, Seen([], calls[1:], (), False, None, started))
@@ -3186,12 +3294,16 @@ class TestTheLists:
         assert more_lines != calls
         assert _list_faults(row, Seen([], more_lines, (), False, None, started))
 
-    def test_a_program_more_or_fewer_than_listed_is_a_fault(self):
+    def test_a_program_that_is_not_listed_is_a_fault_and_one_not_started_is_not(self):
         row = next(r for r in ROWS if r.id == "federation_keygen[--jwks-out]")
-        started = SPAWNS[row.id]
-        assert _list_faults(row, Seen([], (), (), False, None, started)) == []
-        assert _list_faults(row, Seen([], (), (), False, None, (*started, "sh")))
-        assert _list_faults(row, Seen([], (), (), False, None, started[:1]))
+        listed = SPAWNS[(row.tool, row.flag)]
+        assert listed == ("openssl",)
+        assert _list_faults(row, Seen([], (), (), False, None, listed)) == []
+        assert _list_faults(row, Seen([], (), (), False, None, (*listed, "sh")))
+        assert _list_faults(row, Seen([], (), (), False, None,
+                                      ("openssl" + GIVEN_THE_OUTPUT_PATH,)))
+        # One direction only — see SPAWNS for why.
+        assert _list_faults(row, Seen([], (), (), False, None, ())) == []
 
     def test_a_listed_row_that_is_clean_now_must_come_off(self):
         """Each list, on its own first entry: clean ⇒ red."""
@@ -3200,14 +3312,12 @@ class TestTheLists:
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
                       variant="synthetic")
             assert _list_faults(row, self._CLEAN), key
-        spawning = next(r for r in ROWS if r.id in SPAWNS and _is_clean(r))
-        assert len(_list_faults(spawning, self._CLEAN)) == 1
 
     def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self):
         key = ("dx/run_chaos_soak.py", "--output-dir")
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
         how, sites = RAW_UNDER_OUT[key]
-        started = SPAWNS[row.id]
+        started = SPAWNS[key]
         assert _list_faults(row, Seen([], (), sites, how == "all", None, started)) == []
         assert _list_faults(row, Seen([], (), (*sites, "open out/zz.json"), True, None,
                                       started))
@@ -3220,7 +3330,7 @@ class TestTheLists:
                              ("VIA_OTHER_CLASS", VIA_OTHER_CLASS)):
             assert not sorted(set(listed) - rowed), (
                 f"{name} names (tool, flag) no row runs: {sorted(set(listed) - rowed)}")
-        assert not sorted(set(SPAWNS) - {r.id for r in ROWS}), "SPAWNS names a row that is gone"
+        assert not sorted(set(SPAWNS) - rowed), "SPAWNS names a (tool, flag) no row runs"
         assert all(SPAWNS.values()), "an empty SPAWNS entry says nothing: drop it"
         assert not sorted({tool for tool, _f, _n in UNREACHED_WRITER_CALLS}
                           - {r.tool for r in ROWS})
@@ -3273,6 +3383,15 @@ class TestOwnWordedRefusal:
         assert "exactly one" in _own_refusal_problem(row, "target_is_file", out, line * 2)
         assert "exactly one" in _own_refusal_problem(row, "target_is_file", out, "")
 
+    def test_a_longer_path_that_ends_in_the_blocked_one_does_not_pass_for_it(self, tmp_path):
+        row, out = self._case(tmp_path)
+        line = f"ERROR: --output-dir /elsewhere{out} is not a directory\n"
+        assert "blocked path" in _own_refusal_problem(row, "target_is_file", out, line)
+        line = f"ERROR: --output-dir x{out} is not a directory\n"
+        assert "blocked path" in _own_refusal_problem(row, "target_is_file", out, line)
+        quoted = f"ERROR: --output-dir '{out}' is not a directory\n"
+        assert _own_refusal_problem(row, "target_is_file", out, quoted) is None
+
     def test_the_shared_sentence_is_not_an_own_wording(self, tmp_path):
         row, out = self._case(tmp_path)
         line = (f"ERROR: cannot create directory {out}: File exists (errno 17) — "
@@ -3295,7 +3414,8 @@ class TestOwnWordedRefusal:
 #: function no control run of the tool reached under its output path. Exact
 #: both ways. Not counted: the two names that only name the flag
 #: (`output_write`, `check_repo_artifact` — they open nothing, so no event
-#: could carry them), and calls in the libraries a tool imports.
+#: could carry them), and calls in the libraries a tool imports. What a
+#: count cannot tell apart is in the module docstring, under NOT SEEN.
 UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase1_outputs", "ensure_dir_or_die"): 1,
@@ -3382,19 +3502,23 @@ def test_unreached_writer_calls_are_counted_by_line():
 #: handed to another function, wrapped in `functools.partial`, looked up with
 #: `getattr`. The scans above read calls by name, so a write made through
 #: such a value is invisible to them. Each one is listed with what it is —
-#: file · name → why it is there. Exact both ways.
-WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], str] = {
-    ("ops/_registry_lib.py", "write_text_secure"):
-        "handed to `_write_or_stop` as its `write` argument for the generated "
+#: (file, name) → (how many such uses, why they are there). Exact both ways,
+#: the count included: a second use beside a listed one is a new use.
+WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
+    ("lint/check_open_encoding.py", "atomic_write_text"): (
+        1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
+           "pin LF, a name it looks for in other files and never calls."),
+    ("ops/_registry_lib.py", "write_text_secure"): (
+        4, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_text_secure`'s own frame on a stack, so the audit "
-        "attributes it when a row runs it; none does today.",
-    ("ops/generate_rule_pack_split.py", "ensure_dir_or_die"):
-        "a truth test (`if ensure_dir_or_die:`) choosing between it and the "
-        "bare `mkdir` of the import fallback, not a write.",
-    ("ops/generate_rule_pack_split.py", "write_text_or_die"):
-        "a truth test (`if write_text_or_die is None`) on the import fallback, "
-        "not a write.",
+        "attributes it when a row runs it; none does today."),
+    ("ops/generate_rule_pack_split.py", "ensure_dir_or_die"): (
+        1, "a truth test (`if ensure_dir_or_die:`) choosing between it and the "
+        "bare `mkdir` of the import fallback, not a write."),
+    ("ops/generate_rule_pack_split.py", "write_text_or_die"): (
+        1, "a truth test (`if write_text_or_die is None`) on the import fallback, "
+        "not a write."),
 }
 
 
@@ -3427,9 +3551,11 @@ def _writer_names_used_as_values() -> dict[tuple[str, str], int]:
 
 def test_a_writer_name_is_only_ever_called_or_listed():
     found = _writer_names_used_as_values()
-    assert set(found) == set(WRITER_NAMES_USED_AS_VALUES), (
+    listed = {key: count for key, (count, _why) in WRITER_NAMES_USED_AS_VALUES.items()}
+    assert found == listed, (
         "a writer name used as a value (aliased, passed, partial, getattr) — the "
-        "by-name scans cannot follow it; call it by name, or list it:\\n  not listed: "
-        f"{sorted(set(found) - set(WRITER_NAMES_USED_AS_VALUES))}\\n  listed, not found: "
-        f"{sorted(set(WRITER_NAMES_USED_AS_VALUES) - set(found))}")
-    assert all(reason.strip() for reason in WRITER_NAMES_USED_AS_VALUES.values())
+        "by-name scans cannot follow it; call it by name, or list it, with how "
+        "many times:\\n  found, not as listed: "
+        f"{sorted(set(found.items()) - set(listed.items()))}\\n  listed, not as found: "
+        f"{sorted(set(listed.items()) - set(found.items()))}")
+    assert all(why.strip() for _count, why in WRITER_NAMES_USED_AS_VALUES.values())
