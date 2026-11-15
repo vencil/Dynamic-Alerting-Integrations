@@ -145,7 +145,7 @@ EOF
 da-tools generate-routes --config-dir conf.d --output-alertmanager \
   --base-config alertmanager.base.yaml -o alertmanager.yaml
 kubectl create secret generic da-alertmanager-config -n monitoring \
-  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply --server-side -f -
 ```
 
 ### Step 3: 比對生產 vs 影子

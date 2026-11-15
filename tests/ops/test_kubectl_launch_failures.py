@@ -249,8 +249,8 @@ _PART_WAY = [
     ("bench-synth-tenants cleanup", 1, {"data": {}}, ["patch configmap"], ["Removed"]),
     ("generate-alertmanager-routes --apply", 1, {"data": {"alertmanager.yml": _MIN_AM}},
      ["get configmap"], ["updated"]),
-    ("generate-alertmanager-routes --apply", 2, {"data": {"alertmanager.yml": _MIN_AM}},
-     ["get configmap", "create configmap"], ["updated"]),
+    # #3900: --apply makes two kubectl calls (get, a server-side apply); the
+    # row above strikes the second.
 ]
 
 

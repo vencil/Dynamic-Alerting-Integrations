@@ -63,7 +63,7 @@ OPERATOR_ROUTING_REMEDY_EN: Final[str] = (
     "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
     "--base-config <your alertmanager.yaml> -o alertmanager.yaml\n"
     "  kubectl create secret generic <secret> -n <namespace> "
-    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -\n"
+    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply --server-side -f -\n"
     "  then set the Alertmanager's configSecret to <secret> "
     "(kube-prometheus-stack: alertmanager.alertmanagerSpec.configSecret)."
 )
@@ -75,7 +75,7 @@ OPERATOR_ROUTING_REMEDY_ZH: Final[str] = (
     "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
     "--base-config <你的 alertmanager.yaml> -o alertmanager.yaml\n"
     "  kubectl create secret generic <secret> -n <namespace> "
-    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -\n"
+    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply --server-side -f -\n"
     "  再把 Alertmanager 的 configSecret 設為 <secret>"
     "（kube-prometheus-stack：alertmanager.alertmanagerSpec.configSecret）。"
 )

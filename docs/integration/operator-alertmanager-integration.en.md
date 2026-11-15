@@ -76,7 +76,7 @@ When conf.d changes, run it again with the **same** `alertmanager.base.yaml`; ne
 
 ```bash
 kubectl create secret generic da-alertmanager-config -n monitoring \
-  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply --server-side -f -
 ```
 
 - ⛔ **The key must be `alertmanager.yaml`**: the Operator reads only that key. `--from-file=alertmanager.yaml` uses the file name as the key, so name the output file exactly that. Other keys in the Secret are copied into the Secret the Operator generates and mounted under `/etc/alertmanager/config/` as extra files (templates, for example).

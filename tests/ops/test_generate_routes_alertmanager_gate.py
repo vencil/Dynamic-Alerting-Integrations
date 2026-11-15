@@ -268,7 +268,8 @@ def _fake_cluster(monkeypatch, *, curl_rc: int = 0):
     calls: list[list[str]] = []
 
     def fake(argv, *, timeout, stdin_text=None):
-        calls.append(list(argv))
+        # #3900: a manifest handed on stdin is kept beside its argv.
+        calls.append(list(argv) + ([("stdin", stdin_text)] if stdin_text is not None else []))
         if argv[:2] == ["kubectl", "get"]:
             return subprocess.CompletedProcess(argv, 0, stdout=_existing_cm_json(), stderr="")
         if argv[0] == "curl":
@@ -323,13 +324,16 @@ class TestApplyGate:
         assert "CANARY" not in err, err
 
     def test_the_loader_read_the_exact_text_passed_to_kubectl(self, monkeypatch):
+        """#3900: the text the loader judged is the manifest's
+        alertmanager.yml as kubectl reads it — the manifest the server-side
+        apply was handed on stdin."""
         calls = _fake_cluster(monkeypatch)
         seen = _spy_reading(monkeypatch)
         assert self._run_apply_mode() == 0
-        create = next(c for c in calls if c[:2] == ["kubectl", "create"])
-        literal = next(a for a in create if a.startswith("--from-literal=alertmanager.yml="))
+        apply = next(c for c in calls if c[:2] == ["kubectl", "apply"])
+        [manifest] = [a[1] for a in apply if isinstance(a, tuple) and a[0] == "stdin"]
         # earlier readings are the cluster's existing config (the merge source)
-        assert seen[-1] == literal[len("--from-literal=alertmanager.yml="):]
+        assert seen[-1] == render.emitted_alertmanager_yml(manifest)
 
     def test_no_da_read_is_exit_2_and_applies_nothing(self, monkeypatch, tmp_path):
         calls = _fake_cluster(monkeypatch)

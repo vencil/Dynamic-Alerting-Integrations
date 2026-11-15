@@ -16,7 +16,7 @@ Functions:
 
   ConfigMap operations (--apply mode, K8s cluster deploy):
     _read_existing_configmap(...)         → kubectl get + parse
-    _apply_merged_configmap(...)          → kubectl apply via stdin
+    _apply_merged_configmap(...)          → kubectl apply --server-side via stdin
     _reload_alertmanager(namespace)       → curl POST /-/reload (False on failure, #2219)
     apply_to_configmap(...)              → orchestrate read → merge →
                                            alertmanager_check → apply → reload
@@ -67,7 +67,11 @@ from _grar_merge import Finding  # noqa: E402  (#1211: the undelivered-custom-al
 import _lib_input  # noqa: E402  (#3797: --base-config is a declared document)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
 from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
-from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539: the one place kubectl is started)
+from _lib_kubectl import (  # noqa: E402  (#3539: the one place kubectl is started)
+    CONFIGMAP_DATA_LIMIT_BYTES,
+    KubectlError,
+    kubectl_run,
+)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
@@ -427,10 +431,11 @@ AM_CONFIGMAP_KEY = "alertmanager.yml"
 AM_BASE_CONFIGMAP_KEY = "alertmanager.base.yml"
 
 
-def emitted_alertmanager_yml(cm_yaml: str) -> str:
-    """The ``data["alertmanager.yml"]`` string of the ConfigMap *cm_yaml*, as
-    kubectl reads it (``da-crdecode``, ADR-036 §12) — what the cluster will
-    mount, not what this process meant to write.
+def emitted_configmap_data(cm_yaml: str) -> "dict[str, str]":
+    """The ``data`` of the ConfigMap *cm_yaml* as kubectl reads it
+    (``da-crdecode``, ADR-036 §12) — what the cluster will mount and count
+    toward its size limit, not what this process meant to write — holding a
+    string ``alertmanager.yml``.
 
     Raises :class:`ConsumerReadError` when Kubernetes' reading cannot be had
     (no da-crdecode, or it refuses the text) or is not one ConfigMap holding
@@ -441,12 +446,17 @@ def emitted_alertmanager_yml(cm_yaml: str) -> str:
             f"the assembled ConfigMap is {len(docs)} document(s) in Kubernetes' reading, "
             "expected one object")
     data = docs[0].get("data")
-    inner = data.get(AM_CONFIGMAP_KEY) if isinstance(data, dict) else None
-    if not isinstance(inner, str):
+    if not isinstance(data, dict) or not isinstance(data.get(AM_CONFIGMAP_KEY), str):
         raise ConsumerReadError(
             f"the assembled ConfigMap has no string `data.{AM_CONFIGMAP_KEY}` in "
             "Kubernetes' reading")
-    return inner
+    return {str(k): v for k, v in data.items() if isinstance(v, str)}
+
+
+def emitted_alertmanager_yml(cm_yaml: str) -> str:
+    """The ``data["alertmanager.yml"]`` string of the ConfigMap *cm_yaml*, as
+    kubectl reads it (``emitted_configmap_data``)."""
+    return emitted_configmap_data(cm_yaml)[AM_CONFIGMAP_KEY]
 
 
 def alertmanager_reading(text: str, *, show_loader_reason: bool = False) -> dict:
@@ -939,21 +949,11 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     ``data.alertmanager.base.yml`` the source it was rendered from — the same
     pair ``--apply`` keeps, so a ConfigMap deployed through GitOps can be
     ``--apply``-ed later without losing its source (#1211 gap 2)."""
-    configmap = {
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {
-            "name": configmap_name,
-            "namespace": namespace,
-        },
-        "data": {
-            AM_CONFIGMAP_KEY: assemble_alertmanager_yml(
-                base, routes, receivers, inhibit_rules, strict=strict),
-            AM_BASE_CONFIGMAP_KEY: dump_alertmanager_yml(base),
-        },
-    }
-    return yaml.dump(configmap, default_flow_style=False,
-                     allow_unicode=True, sort_keys=False)
+    return configmap_manifest(configmap_name, namespace, {
+        AM_CONFIGMAP_KEY: assemble_alertmanager_yml(
+            base, routes, receivers, inhibit_rules, strict=strict),
+        AM_BASE_CONFIGMAP_KEY: dump_alertmanager_yml(base),
+    })
 
 
 # ============================================================
@@ -1232,7 +1232,7 @@ class AlertmanagerConfigInvariantViolated(ValueError):
 
 def _read_existing_configmap(namespace: str, configmap_name: str, *,
                              show_loader_reason: bool = False
-                             ) -> tuple[dict | None, list[str], str | None]:
+                             ) -> tuple[dict | None, list[str], str | None, dict | None]:
     """Read the SOURCE config ``--apply`` merges into from the cluster's
     Alertmanager ConfigMap (#1211 gap 2, owner decision S): its
     ``alertmanager.base.yml`` key — written by the previous ``--apply`` — or,
@@ -1240,20 +1240,23 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
     ``alertmanager.yml`` (adopted as the source; ``merge_generated`` refuses
     it if it already holds generated routing).
 
-    Returns (config_dict, warnings, source_text) — config_dict is None if
-    the read failed.
+    Returns (config_dict, warnings, source_text, live) — config_dict is None
+    if the read failed; live is the ConfigMap object as kubectl returned it,
+    with its managedFields (#3900: who owns the keys --apply writes, and what
+    else the object holds toward the size limit).
     """
     warnings = []
     try:
         result = kubectl_run(
-            "get", ["configmap", configmap_name, "-n", namespace, "-o", "json"],
+            "get", ["configmap", configmap_name, "-n", namespace, "-o", "json",
+                    "--show-managed-fields"],
             timeout=60, what=f"`kubectl get configmap {configmap_name}`")
     except KubectlError as exc:   # not on PATH, not startable, out of time
         warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {exc}")
-        return None, warnings, None
+        return None, warnings, None, None
     if result.returncode != 0:
         warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}")
-        return None, warnings, None
+        return None, warnings, None, None
 
     # ⛔ This function must not hand the caller a `None` it cannot explain:
     # every failure exit below appends a warning first, and `apply_to_configmap`
@@ -1272,21 +1275,21 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
     except ValueError as exc:
         warnings.append(
             f"ERROR: kubectl returned output that is not JSON: {exc}")
-        return None, warnings, None
+        return None, warnings, None, None
     if not isinstance(cm, dict):
         warnings.append(
             f"ERROR: kubectl returned JSON that is not an object "
             f"({type(cm).__name__}); expected a ConfigMap resource")
-        return None, warnings, None
+        return None, warnings, None, None
     if "data" not in cm:
         warnings.append("ERROR: ConfigMap has no `data` block at all")
-        return None, warnings, None
+        return None, warnings, None, None
     data = cm["data"]
     if not isinstance(data, dict):
         warnings.append(
             f"ERROR: ConfigMap `data` is {type(data).__name__}, expected a "
             f"mapping of keys to strings")
-        return None, warnings, None
+        return None, warnings, None, None
     # ⛔ Membership, not truthiness — the same distinction the two guards above
     # draw for `data`. `data.get(key, "")` collapsed "the cluster has no such
     # key" into "the key is there and empty", and the message named the first:
@@ -1298,7 +1301,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
     key = AM_BASE_CONFIGMAP_KEY if AM_BASE_CONFIGMAP_KEY in data else AM_CONFIGMAP_KEY
     if key not in data:
         warnings.append("ERROR: ConfigMap has no 'alertmanager.yml' key")
-        return None, warnings, None
+        return None, warnings, None, None
     existing_yml = data[key]
     if not isinstance(existing_yml, str):
         # ⛔ The reader below takes text; a non-string value reaching it was
@@ -1312,7 +1315,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
         warnings.append(
             f"ERROR: ConfigMap key '{key}' is "
             f"{type(existing_yml).__name__}, expected a string")
-        return None, warnings, None
+        return None, warnings, None, None
 
     # ADR-036 §12 (#3206): the cluster's config as Alertmanager loads it
     # (da-read alertmanager). A text its loader refuses — not YAML, empty,
@@ -1326,7 +1329,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
             warnings.append(
                 f"ERROR: cannot read ConfigMap key '{key}' the way "
                 f"Alertmanager does: {exc}")
-            return None, warnings, None
+            return None, warnings, None, None
         # ⛔ The parenthetical is a GUESS, so it is gated on evidence: it reads
         # the TEXT — blank, or nothing but comments — which is the thing the
         # sentence claims (`null`, `~`, `---` hold text and are refused too).
@@ -1337,37 +1340,74 @@ def _read_existing_configmap(namespace: str, configmap_name: str, *,
         warnings.append(
             f"ERROR: Alertmanager's config loader refuses ConfigMap key "
             f"'{key}'{hint}: {consumer_read_message(exc)}{_reason_hint(show_loader_reason)}")
-        return None, warnings, None
-    return existing, warnings, existing_yml
+        return None, warnings, None, None
+    return existing, warnings, existing_yml, cm
 
 
-def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str,
-                            source_yml: str | None = None) -> bool:
-    """Apply merged ConfigMap to K8s cluster: the output under
-    ``alertmanager.yml`` and, when given, the source it was rendered from
-    under ``alertmanager.base.yml`` (#1211 gap 2).
+#: The field manager --apply's server-side apply writes as (#3900). Not
+#: `kubectl`: under that name the API server rewrites the client-side
+#: `last-applied-configuration` annotation, and drops it silently once the
+#: object outgrows the annotation limit.
+APPLY_FIELD_MANAGER = "da-generate-routes"
+
+
+def _kubectl_owned(manager: str) -> bool:
+    """Whether a field manager is kubectl itself (any verb — client-side
+    apply, create, edit, patch, replace), its SSA upgrade marker, or this
+    tool: an owner --apply may take a field over from, as the client-side
+    apply it replaces always did. Anything else (a GitOps controller, Helm,
+    an operator) is another tool's (#3900, owner decision B)."""
+    return (manager in ("kubectl", "before-first-apply", APPLY_FIELD_MANAGER)
+            or manager.startswith("kubectl-"))
+
+
+def foreign_owners(live: dict | None, keys: "tuple[str, ...]") -> list[str]:
+    """The field managers of *live* (a ConfigMap with its managedFields) that
+    own one of its ``data`` *keys* and are not kubectl or this tool, sorted.
+    A server-side apply that took those keys over would flip with that tool
+    on its every sync, so --apply refuses instead and names them (#3900)."""
+    out = set()
+    for entry in (live or {}).get("metadata", {}).get("managedFields") or []:
+        if not isinstance(entry, dict):
+            continue
+        manager = str(entry.get("manager") or "")
+        data = ((entry.get("fieldsV1") or {}).get("f:data") or {})
+        if isinstance(data, dict) and any(f"f:{k}" in data for k in keys) \
+                and not _kubectl_owned(manager):
+            out.add(manager or "(unnamed)")
+    return sorted(out)
+
+
+def configmap_data_bytes(data: "dict[str, str]") -> int:
+    """What Kubernetes counts toward a ConfigMap's limit: its values' UTF-8
+    bytes, summed (`ValidateConfigMap`); keys and metadata are not counted."""
+    return sum(len(v.encode("utf-8")) for v in data.values())
+
+
+def configmap_manifest(name: str, namespace: str, data: "dict[str, str]") -> str:
+    """A ConfigMap manifest holding *data*: the one builder of the ConfigMap
+    --output-configmap writes and --apply sends (#3900)."""
+    return yaml.dump({"apiVersion": "v1", "kind": "ConfigMap",
+                      "metadata": {"name": name, "namespace": namespace},
+                      "data": data},
+                     default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def _apply_merged_configmap(manifest: str, namespace: str, configmap_name: str) -> bool:
+    """Server-side apply *manifest* (``configmap_manifest``) as
+    ``APPLY_FIELD_MANAGER``, sent on stdin (#3900): the config is never an
+    argument, so its size meets no argv limit, and no
+    ``last-applied-configuration`` annotation is written. ``--force-conflicts``
+    takes the keys over from kubectl's own managers only — another tool's
+    are refused before this is called (``foreign_owners``).
 
     Returns True if successful, False otherwise.
     """
     try:
-        apply_result = kubectl_run(
-            "create", ["configmap", configmap_name,
-                       f"--from-literal={AM_CONFIGMAP_KEY}={merged_yml}",
-                       *([f"--from-literal={AM_BASE_CONFIGMAP_KEY}={source_yml}"]
-                         if source_yml is not None else []),
-                       "-n", namespace, "--dry-run=client", "-o", "yaml"],
-            timeout=60, what=f"`kubectl create configmap {configmap_name} --dry-run=client`")
-    except KubectlError as exc:   # nothing was sent to the cluster
-        print(f"ERROR: Failed to generate ConfigMap: {exc}", file=sys.stderr)
-        return False
-    if apply_result.returncode != 0:
-        print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}", file=sys.stderr)
-        return False
-
-    try:
-        pipe_result = kubectl_run("apply", ["-f", "-"], timeout=120,
-                                  stdin_text=apply_result.stdout,
-                                  what="`kubectl apply -f -`")
+        pipe_result = kubectl_run(
+            "apply", ["--server-side", f"--field-manager={APPLY_FIELD_MANAGER}",
+                      "--force-conflicts", "-f", "-"],
+            timeout=120, stdin_text=manifest, what="`kubectl apply --server-side -f -`")
     except KubectlError as exc:
         # ⛔ The message says which: a kubectl that could not be started sent
         # nothing; one that did not finish in time may have applied it.
@@ -1462,11 +1502,24 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         nothing was sent to the cluster. #1533.
     """
     # 1. Read existing ConfigMap
-    existing, read_warnings, source_yml = _read_existing_configmap(
+    existing, read_warnings, source_yml, live = _read_existing_configmap(
         namespace, configmap_name, show_loader_reason=show_loader_reason)
     if existing is None:
         for w in read_warnings:
             print(w, file=sys.stderr)
+        return False
+    # #3900 (owner decision B): keys another tool manages (a GitOps
+    # controller, Helm, an operator) are not taken over — that tool would put
+    # them back on its next sync, and the two would flip. Refused before
+    # anything is merged or sent.
+    owners = foreign_owners(live, (AM_CONFIGMAP_KEY, AM_BASE_CONFIGMAP_KEY))
+    if owners:
+        print(f"ERROR: ConfigMap {namespace}/{configmap_name}: its "
+              f"'{AM_CONFIGMAP_KEY}' / '{AM_BASE_CONFIGMAP_KEY}' keys are managed by "
+              f"{', '.join(repr(o) for o in owners)}, not by kubectl or this tool — refusing "
+              "to take them over (nothing was applied). Change the config where that tool "
+              "reads it (e.g. commit --output-configmap's output to its repository), or "
+              "suspend its sync for this object before running --apply.", file=sys.stderr)
         return False
 
     # 2. Merge fragment into existing config. #2506: its `ValueError`s are the
@@ -1493,12 +1546,38 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
                                    strict=strict)
     except ValueError as exc:
         raise AlertmanagerConfigInvariantViolated(str(exc)) from exc
-    merged_yml = dump_output_yml(existing)
+    data = {AM_CONFIGMAP_KEY: dump_output_yml(existing)}
+    if source_yml is not None:
+        data[AM_BASE_CONFIGMAP_KEY] = source_yml
+    manifest = configmap_manifest(configmap_name, namespace, data)
+
+    # #3900: the limit Kubernetes applies to the whole object — what this
+    # tool writes and every other key a server-side apply leaves in place.
+    others = {k: v for k, v in ((live or {}).get("data") or {}).items()
+              if k not in data and isinstance(v, str)}
+    others.update({f"binaryData.{k}": v for k, v in ((live or {}).get("binaryData") or {}).items()
+                   if isinstance(v, str)})
+    total = configmap_data_bytes(data) + configmap_data_bytes(others)
+    if total > CONFIGMAP_DATA_LIMIT_BYTES:
+        print(f"ERROR: ConfigMap {namespace}/{configmap_name} would hold {total} bytes of "
+              f"values ({configmap_data_bytes(data)} written here"
+              + (f", {configmap_data_bytes(others)} in other keys: {', '.join(sorted(others))}"
+                 if others else "")
+              + f"); Kubernetes refuses a ConfigMap over {CONFIGMAP_DATA_LIMIT_BYTES} bytes "
+              "(nothing was applied).", file=sys.stderr)
+        # A verdict on the config (rc 1), as --output-configmap's refusal is.
+        raise AlertmanagerConfigRejected(EXIT_VIOLATION)
 
     # 3. #2219 / #3689: Alertmanager gets the final say BEFORE the cluster is
-    # touched, through the one gate every mode asks. `merged_yml` is the exact
-    # string handed to `--from-literal=alertmanager.yml=` below, i.e. the text
-    # Alertmanager loads.
+    # touched, through the one gate every mode asks — on the text the cluster
+    # will mount: the manifest's `alertmanager.yml` as kubectl reads it.
+    try:
+        merged_yml = emitted_alertmanager_yml(manifest)
+    except ConsumerReadError as exc:
+        print(f"ERROR: cannot read the manifest for {namespace}/{configmap_name} the way "
+              f"kubectl does — refusing to apply it (nothing was applied): {exc}",
+              file=sys.stderr)
+        raise AlertmanagerConfigRejected(EXIT_CALLER_ERROR) from exc
     check = alertmanager_check(
         merged_yml,
         what=f"the merged alertmanager.yml for {namespace}/{configmap_name}",
@@ -1522,7 +1601,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         raise AlertmanagerConfigRejected(EXIT_VIOLATION)
 
     # 4. Apply updated ConfigMap
-    if not _apply_merged_configmap(merged_yml, namespace, configmap_name, source_yml):
+    if not _apply_merged_configmap(manifest, namespace, configmap_name):
         return False
 
     # 5. Reload Alertmanager

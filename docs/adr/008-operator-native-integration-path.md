@@ -60,7 +60,7 @@ da-tools generate-routes --config-dir conf.d --output-alertmanager \
   --base-config alertmanager.yaml -o out.yaml
 # Operator 路徑：放進 configSecret（key 必須是 alertmanager.yaml）
 kubectl create secret generic alertmanager-routing -n monitoring \
-  --from-file=alertmanager.yaml=out.yaml --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=alertmanager.yaml=out.yaml --dry-run=client -o yaml | kubectl apply --server-side -f -
 ```
 
 `out.yaml` 的 `route.routes` 依序送往：`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`、`ops-pager`、`tenant-team-a`。用 `amtool config routes test --config.file=out.yaml` 測去向：

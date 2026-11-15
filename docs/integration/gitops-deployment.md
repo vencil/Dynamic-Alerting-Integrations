@@ -186,7 +186,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
 
 ConfigMap 裡的 `alertmanager.yml` 一律先交給 Alertmanager 自己的設定載入器（`da-read`）；拒收就結束碼 1 且不寫出 `-o`，PATH 上有沒有 `amtool` 不影響結論（#2219、#3689、#3793）。da-tools 映像內含 `da-read`。⚠️ v2.9.0 映像沒有 `da-read` <!-- image-caveat: v2.9.0 -->
 
-產出的 YAML 可直接 `kubectl apply` 或由 ArgoCD/Flux 自動 sync。與方式 A（threshold-config）搭配使用，實現 threshold-exporter 和 Alertmanager 配置的完整 GitOps 閉環。
+產出的 YAML 以 `kubectl apply --server-side` 套用，或由 ArgoCD/Flux 自動 sync（client-side 的 `kubectl apply -f` 會把整個物件存進 `last-applied-configuration` annotation，ConfigMap 一大就撞到 Kubernetes 對 annotation 的上限；超過時產生器會印 WARN。Argo CD 請開 `ServerSideApply=true` sync option）。與方式 A（threshold-config）搭配使用，實現 threshold-exporter 和 Alertmanager 配置的完整 GitOps 閉環。
 
 不提供 `--base-config` 時使用內建預設值。需要自訂 `global`（如 SMTP 設定）、default receiver、或 inhibit_rules 基礎規則時，建議維護一份 `base-alertmanager.yaml` 作為輸入。詳見 [BYO Alertmanager 整合指南 Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap)。⚠️ 這份 base 必須是 Alertmanager 收得下的**完整設定**：要有 `route:` 與它指名的 `receivers:`（`global:`、`inhibit_rules:` 可省略），否則 generator 以 Alertmanager 自己的載入函式讀它時拒收、結束碼 2（#3206）。⚠️ 這份 base 的 root route receiver 要接上真的 integration（非空的 `*_configs`）：沒被子 route 接走的告警（含平台自監控告警）都落到它，空 receiver 等於丟掉；generator 遇到這種 root receiver 會印一行 WARN（#2660），接法見 [§11](byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
 

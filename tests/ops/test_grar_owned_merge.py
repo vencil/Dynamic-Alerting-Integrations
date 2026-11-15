@@ -481,15 +481,31 @@ def test_control_a_wired_watchdog_reports_nothing(tmp_path):
 
 # ── --apply：叢集 ConfigMap 的 alertmanager.base.yml 是來源 ────────────
 
-def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None) -> list[list[str]]:
-    calls: list[list[str]] = []
+class _Calls(list):
+    """Every kubectl argv, in order; ``stdin`` maps a call's index to the
+    manifest it was handed (#3900: --apply sends it on stdin)."""
+    def __init__(self):
+        super().__init__()
+        self.stdin: dict[int, str] = {}
+
+
+def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None,
+                  managers: "list[str] | None" = None) -> _Calls:
+    """A cluster whose ConfigMap holds *am_yml* (and *base_yml*); each of
+    *managers* owns its `data.alertmanager.yml` (managedFields, #3900)."""
+    calls = _Calls()
     data = {"alertmanager.yml": am_yml}
     if base_yml is not None:
         data["alertmanager.base.yml"] = base_yml
+    obj = {"data": data, "metadata": {"managedFields": [
+        {"manager": m, "operation": "Apply", "fieldsV1": {"f:data": {"f:alertmanager.yml": {}}}}
+        for m in managers or []]}}
 
     def fake(argv, *, timeout, stdin_text=None):
+        if stdin_text is not None:
+            calls.stdin[len(calls)] = stdin_text
         calls.append(list(argv))
-        out = json.dumps({"data": data}) if argv[:2] == ["kubectl", "get"] else ""
+        out = json.dumps(obj) if argv[:2] == ["kubectl", "get"] else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
@@ -509,11 +525,11 @@ def _apply(tmp_path, *extra) -> int:
     return 0
 
 
-def _created(calls) -> dict[str, str]:
-    """The keys `kubectl create configmap --from-literal=K=V` was given."""
-    [create] = [c for c in calls if c[:3] == ["kubectl", "create", "configmap"]]
-    lits = [a[len("--from-literal="):] for a in create if a.startswith("--from-literal=")]
-    return dict(lit.split("=", 1) for lit in lits)
+def _created(calls: _Calls) -> dict[str, str]:
+    """The `data` of the manifest `kubectl apply --server-side` was handed on
+    stdin, as kubectl reads it (#3900)."""
+    [i] = [n for n, c in enumerate(calls) if c[:3] == ["kubectl", "apply", "--server-side"]]
+    return render.emitted_configmap_data(calls.stdin[i])
 
 
 def test_apply_adopts_the_cluster_config_as_the_source_then_keeps_it(tmp_path, monkeypatch, capsys):
@@ -942,3 +958,95 @@ def test_apply_refusal_names_the_remedy_apply_can_take(tmp_path, monkeypatch, ca
     _fake_cluster(monkeypatch, _emit_am(tmp_path, conf_d, _base(tmp_path)))
     assert _apply(tmp_path) == 1
     assert "alertmanager.base.yml" in capsys.readouterr().err
+
+
+# ── #3900：server-side apply，不搶別的工具管的欄位 ─────────────────────
+
+def test_apply_sends_the_manifest_on_stdin_as_its_own_field_manager(tmp_path, monkeypatch, capsys):
+    """The manifest goes on stdin to one server-side apply under a fixed field
+    manager: no argument carries the config, so its size meets no argv limit,
+    and no client-side `last-applied-configuration` is written."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=["kubectl-client-side-apply"])
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    writes = [c for c in calls if c[:2] in (["kubectl", "apply"], ["kubectl", "create"])]
+    assert writes == [["kubectl", "apply", "--server-side", "--field-manager=da-generate-routes",
+                       "--force-conflicts", "-f", "-"]], writes
+    assert all(len(a) < 200 for c in calls for a in c), calls
+
+
+@pytest.mark.parametrize("manager", ["argocd-controller", "kustomize-controller", "helm"])
+def test_apply_refuses_keys_another_tool_manages(tmp_path, monkeypatch, capsys, manager):
+    """Owner decision B: a key a GitOps controller (or Helm) manages is not
+    taken over — refused, the manager named, nothing applied."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=["kubectl-client-side-apply", manager])
+    assert _apply(tmp_path) == 2  # the cluster's state, not the config
+    err = capsys.readouterr().err
+    assert f"managed by '{manager}'" in err and "nothing was applied" in err, err[-2000:]
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+def test_apply_refuses_a_configmap_kubernetes_would_refuse(tmp_path, monkeypatch, capsys):
+    """The values this run writes plus every other key the object keeps, over
+    Kubernetes' data limit: refused before anything is sent, naming the bytes."""
+    import _lib_kubectl
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE)
+    big = "x" * _lib_kubectl.CONFIGMAP_DATA_LIMIT_BYTES
+    obj_data = {"alertmanager.yml": _CUSTOMER_BASE, "templates.md": big}
+    real = render.kubectl_run
+
+    def with_big_key(verb, args, **kw):
+        result = real(verb, args, **kw)
+        if verb == "get":
+            obj = json.loads(result.stdout)
+            obj["data"] = obj_data
+            result = subprocess.CompletedProcess(result.args, 0, stdout=json.dumps(obj), stderr="")
+        return result
+
+    monkeypatch.setattr(render, "kubectl_run", with_big_key)
+    assert _apply(tmp_path) == 1  # a verdict on the config, as --output-configmap's
+    err = capsys.readouterr().err
+    assert "templates.md" in err and str(_lib_kubectl.CONFIGMAP_DATA_LIMIT_BYTES) in err, err[-2000:]
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+def _output_configmap(tmp_path, monkeypatch, **limits) -> "tuple[int, str, Path]":
+    """`--output-configmap` in-process with the k8s limits the generator
+    checks against lowered to *limits* (#3900)."""
+    import generate_alertmanager_routes as gar
+    for name, value in limits.items():
+        monkeypatch.setattr(gar, name, value)
+    conf_d = _tree(tmp_path)
+    out = tmp_path / "cm.yaml"
+    try:
+        gar.main(["--config-dir", str(conf_d), "--output-configmap",
+                  "--base-config", str(_base(tmp_path)), "-o", str(out)])
+        code = 0
+    except SystemExit as exc:
+        code = exc.code
+    return code, out
+
+
+def test_output_configmap_over_the_data_limit_is_refused(tmp_path, monkeypatch, capsys):
+    """#3900: values Kubernetes would refuse are not written; the message
+    names the bytes and the limit."""
+    code, out = _output_configmap(tmp_path, monkeypatch, CONFIGMAP_DATA_LIMIT_BYTES=100)
+    err = capsys.readouterr().err
+    assert code == 1 and not out.exists(), err[-2000:]
+    assert "Kubernetes refuses a ConfigMap over 100 bytes" in err and "nothing was written" in err, err
+
+
+def test_output_configmap_over_the_annotation_limit_warns_and_writes(tmp_path, monkeypatch, capsys):
+    """Over the annotation limit only a client-side apply fails: a WARN that
+    names the server-side apply, and the ConfigMap is written."""
+    code, out = _output_configmap(tmp_path, monkeypatch, ANNOTATION_TOTAL_LIMIT_BYTES=100)
+    err = capsys.readouterr().err
+    assert code == 0 and out.exists(), err[-2000:]
+    [warn] = [ln for ln in err.splitlines() if "annotations" in ln]
+    assert warn.startswith("WARN:") and "kubectl apply --server-side" in warn, warn
+
+
+def test_output_configmap_under_both_limits_says_nothing_of_them(tmp_path, monkeypatch, capsys):
+    code, out = _output_configmap(tmp_path, monkeypatch)
+    err = capsys.readouterr().err
+    assert code == 0 and out.exists(), err[-2000:]
+    assert "annotations" not in err and "refuses a ConfigMap" not in err, err

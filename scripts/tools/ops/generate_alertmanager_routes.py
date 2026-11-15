@@ -177,8 +177,11 @@ from _grar_render import (  # noqa: E402
 from _grar_render import watchdog_receiver_findings  # noqa: E402
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, consumer_read_message, emitted_alertmanager_yml,
+    AM_CONFIGMAP_KEY, ConsumerReadError, configmap_data_bytes, consumer_read_message,
+    emitted_configmap_data,
 )
+# #3900: the limits Kubernetes puts on the ConfigMap this run writes.
+from _lib_kubectl import ANNOTATION_TOTAL_LIMIT_BYTES, CONFIGMAP_DATA_LIMIT_BYTES  # noqa: E402
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
 # #2311: the verdict on a generation result (`validate_tree`'s last step).
@@ -250,6 +253,31 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
     print(f"FAIL: the assembled Alertmanager config was refused — {refusing}:"
           f"\n  {safe_label(str(exc))}", file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
+
+
+def _judge_configmap_size(data: "dict[str, str]", manifest: str, target: str) -> None:
+    """#3900: the emitted ConfigMap against the limits Kubernetes applies.
+    Its values (*data*, as kubectl reads them) over the data limit: no API
+    server stores it, so it is refused here (rc 1), naming the bytes. The
+    manifest over the annotation limit: a WARN only — a client-side
+    `kubectl apply` (or a GitOps tool applying client-side) stores the whole
+    object in an annotation and fails there, a server-side apply does not.
+    Measured on the manifest's YAML; the annotation holds the same object as
+    JSON, of the same order. Other keys the target object already holds also
+    count toward the data limit; this offline run cannot see them."""
+    total = configmap_data_bytes(data)
+    if total > CONFIGMAP_DATA_LIMIT_BYTES:
+        print(f"FAIL: the ConfigMap's values total {total} bytes; Kubernetes refuses a "
+              f"ConfigMap over {CONFIGMAP_DATA_LIMIT_BYTES} bytes — refusing to write it to "
+              f"{target} (nothing was written)", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    size = len(manifest.encode("utf-8"))
+    if size > ANNOTATION_TOTAL_LIMIT_BYTES:
+        print(f"WARN: the ConfigMap is {size} bytes, over the {ANNOTATION_TOTAL_LIMIT_BYTES}-byte "
+              "limit Kubernetes puts on an object's annotations: a client-side `kubectl apply -f` "
+              "stores the whole object in `last-applied-configuration` and fails with "
+              "`metadata.annotations: Too long`. Apply it with `kubectl apply --server-side`, or "
+              "in Argo CD with the `ServerSideApply=true` sync option.", file=sys.stderr)
 
 
 def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
@@ -514,12 +542,14 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     # Alertmanager's (da-read).
     if as_configmap:
         try:
-            am_yml = emitted_alertmanager_yml(content)
+            emitted_data = emitted_configmap_data(content)
         except ConsumerReadError as exc:
             print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
                   f"to write it to {target} (nothing was written): "
                   f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        am_yml = emitted_data[AM_CONFIGMAP_KEY]
+        _judge_configmap_size(emitted_data, content, target)
     else:
         am_yml = content
     # #3689: the one gate --validate and --apply ask too, in its one order.
