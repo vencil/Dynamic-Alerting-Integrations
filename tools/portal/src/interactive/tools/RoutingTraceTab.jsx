@@ -46,8 +46,15 @@ function RoutingTraceTab() {
     // exporter's baseRowsSkipKey), and parseTenantYaml types it as parseYaml
     // does, which the reader must not be handed.
     const isKey = !traceMetric.startsWith('_');
-    // A traced `<base>_critical` key is read as one (criticalRowBase).
-    const baseRow = isKey ? readThresholdRow(config[traceMetric], isCriticalKey(traceMetric) ? 'critical' : 'base') : { kind: 'absent' };
+    // A traced `<base>_critical` key is read as one (criticalRowBase), and,
+    // as resolveCriticalRows does after reading it, is not served when its
+    // base is switched off (familyHeadOff); an unreadable value is still
+    // reported as such.
+    const tracedCritical = isCriticalKey(traceMetric);
+    const tracedRow = isKey ? readThresholdRow(config[traceMetric], tracedCritical ? 'critical' : 'base') : { kind: 'absent' };
+    const tracedHeadOff = tracedCritical
+      && readThresholdRow(config[traceMetric.slice(0, -'_critical'.length)]).kind === 'disabled';
+    const baseRow = tracedHeadOff && tracedRow.kind === 'number' ? { kind: 'disabled' } : tracedRow;
     const critRow = isKey ? readThresholdRow(config[`${traceMetric}_critical`], 'critical') : { kind: 'absent' };
     const threshold = baseRow.kind === 'number' ? baseRow.number : null;
     // `70:critical` on the base key is a critical-severity row, not a warning one.
@@ -55,7 +62,7 @@ function RoutingTraceTab() {
     const critThreshold = critRow.kind === 'number' && baseRow.kind !== 'disabled' ? critRow.number : null;
     const hasCritical = critThreshold !== null;
     const unreadable = [
-      baseRow.kind === 'unreadable' && { key: traceMetric, msg: unreadableThresholdMessage(baseRow.raw, isCriticalKey(traceMetric) ? 'critical' : 'base') },
+      baseRow.kind === 'unreadable' && { key: traceMetric, msg: unreadableThresholdMessage(baseRow.raw, tracedCritical ? 'critical' : 'base') },
       critRow.kind === 'unreadable' && { key: `${traceMetric}_critical`, msg: unreadableThresholdMessage(critRow.raw, 'critical') },
     ].filter(Boolean);
 
