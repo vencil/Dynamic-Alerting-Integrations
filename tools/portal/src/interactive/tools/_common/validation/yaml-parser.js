@@ -75,9 +75,12 @@ purpose: |
                            Which documents are an error is parseYaml's, run
                            first: a document it refuses is refused here with
                            the same error (so `0x1F: a` beside `31: b` is its
-                           duplicate key, though the exporter has two keys,
-                           and a second document is ignored, though the
-                           exporter refuses a file with one).
+                           duplicate key, though the exporter has two keys).
+                           And, unlike parseYaml, a second document is an
+                           error with config = {} (#3959): the exporter's
+                           parse-tree refuses such a file whole
+                           (multiple_documents); a trailing `---` counts, a
+                           leading `---` and a lone `...` do not.
                            ⛔ Hand its config to
                            ../validation/threshold-value.js readThresholdRow
                            (through alert-engine.js); do not hand parseYaml's
@@ -204,19 +207,19 @@ function loadDocument(text, schema) {
       : t('anchor 的值包含它自己（自我參照）', 'anchor value contains itself (self-reference)');
     return { doc: undefined, error: { message: reason, line: null, column: null } };
   }
-  return { doc: loaded.doc, error: null };
+  return { doc: loaded.doc, error: null, documents: loaded.documents };
 }
 
-// First document of the stream (null when empty). Any error in any
-// document throws. The listener collects anchor maps so a cycle can be
-// reported by anchor name.
+// First document of the stream (null when empty), and how many documents
+// the stream holds. Any error in any document throws. The listener collects
+// anchor maps so a cycle can be reported by anchor name.
 function loadFirstDocument(src, schema) {
   const anchorMaps = new Set();
   const docs = loadAll(src, null, {
     schema,
     listener(_event, state) { if (state && state.anchorMap) anchorMaps.add(state.anchorMap); },
   });
-  return { doc: docs.length ? docs[0] : null, anchorMaps };
+  return { doc: docs.length ? docs[0] : null, anchorMaps, documents: docs.length };
 }
 
 // First object/array that is its own ancestor (a self-referencing alias),
@@ -291,13 +294,28 @@ function parseYaml(text) {
 // text. The keys are walked from the text parse, so a threshold key is named
 // as written; a `_` key the typed parse does not have under that name (none
 // is known) is left out rather than handed over untyped.
+// A second document is an error here (#3959): the exporter's parse-tree
+// refuses the whole file (multiple_documents), so a page that simulated the
+// first document would show alerts for a file that serves nothing. js-yaml
+// counts documents as yaml.v3's decoder does — a trailing `---` (empty, a
+// comment, `~`) is a second one; a leading `---` and a lone `...` are not
+// (measured against da-guard parse-tree). parseYaml keeps reading the first
+// document: its other callers are not the exporter's reader.
 function parseTenantYaml(text) {
+  const t = window.__t || ((zh, en) => en);
   const typed = parseYaml(text);
   if (typed.errors.length) return typed;
-  const { doc, error } = loadDocument(text, TEXT_SCHEMA);
+  const { doc, error, documents } = loadDocument(text, TEXT_SCHEMA);
   // Not reachable for a text parseYaml took, as far as is known; were it,
   // the page shows the error instead of thresholds read from a typed value.
   if (error) return { config: {}, errors: [error.message] };
+  if (documents > 1) {
+    return {
+      config: {},
+      errors: [t('這份 YAML 有不只一份文件（---）：exporter 會拒收整個檔，不讀其中任何值；這裡不模擬',
+        'This YAML holds more than one document (---): the exporter refuses the whole file and reads none of it; not simulated here')],
+    };
+  }
   if (!isPlainMap(doc)) return typed;
   const config = {};
   const memo = new Map();

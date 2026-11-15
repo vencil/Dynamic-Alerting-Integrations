@@ -46,10 +46,13 @@ purpose: |
       that comes from YAML must be the scalar's text — yaml-parser.js
       parseTenantYaml's config, not parseYaml's (see "Where the text comes
       from" below).
-      'absent' is undefined / null. 'structured' is a map or a list (a
-      scheduled value among them): the simulators model no schedule and say
-      nothing about it. 'unreadable' is a scalar the exporter does not read
-      as this key's threshold — the empty string among them.
+      'absent' is undefined / null. 'structured' is a schedule (a mapping
+      with a `default` key) whose `default` is not refused: the simulators
+      model no schedule and say nothing about it. 'unreadable' is a value
+      the exporter does not read as this key's threshold — a scalar (the
+      empty string among them), any list, any mapping without `default`,
+      and a schedule whose `default` is such a scalar (#3959); for a map or
+      a list, `raw` is the value in flow style (`{a: 1}`, `[80]`).
       tier 'base' is the `value[:severity]` grammar. tier 'critical' is a
       `<base>_critical` key: the exporter reads its WHOLE value as the
       number (resolveCriticalRows), so `95:critical` is unreadable there and
@@ -149,10 +152,38 @@ function isCriticalKey(key) {
   return typeof key === 'string' && key.endsWith('_critical') && !key.startsWith('_');
 }
 
+// A map or a list as text for a sentence: flow style, scalars as written
+// (parseTenantYaml hands them over as text), a null as `~`.
+function structuredText(v) {
+  if (v === null || v === undefined) return '~';
+  if (Array.isArray(v)) return `[${v.map(structuredText).join(', ')}]`;
+  if (typeof v === 'object') return `{${Object.keys(v).map((k) => `${k}: ${structuredText(v[k])}`).join(', ')}}`;
+  return String(v);
+}
+
+// A map or a list (#3959). Only a mapping with a `default` key is a
+// schedule (ScheduledValue.UnmarshalYAML); every other map, and every list,
+// is a value the exporter does not read as a threshold (value_unparsed, the
+// platform default served instead) — so it is 'unreadable', as a scalar it
+// cannot read is. A schedule is not simulated ('structured') unless its
+// `default` is a scalar this reader refuses: the exporter refuses that
+// schedule the same way. Not modelled: a value inside `overrides` (read only
+// in its window), and a non-scalar `default` (the exporter refuses the whole
+// file over it).
+function structuredRow(v, tier) {
+  if (!Object.prototype.hasOwnProperty.call(v, 'default')) { // a list has no `default` either
+    return { kind: 'unreadable', raw: structuredText(v) };
+  }
+  const d = v.default;
+  if (thresholdScalarText(d) === null) return { kind: 'structured' };
+  const inner = readThresholdRow(d, tier);
+  return inner.kind === 'unreadable' ? inner : { kind: 'structured' };
+}
+
 function readThresholdRow(v, tier = 'base') {
   if (v === undefined || v === null) return { kind: 'absent' };
   const raw = thresholdScalarText(v);
-  if (raw === null) return { kind: 'structured' };
+  if (raw === null) return structuredRow(v, tier);
   const severity = tier === 'critical' ? 'critical' : ENUMS.severityDefault;
   // A number from a caller that has no text (a number field, a value built
   // in code): nothing was written to hold to the grammar, and String(1e20)
