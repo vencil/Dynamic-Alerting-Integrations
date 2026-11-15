@@ -259,8 +259,8 @@ describe('readThresholdRow ↔ the exporter', () => {
     // JavaScript number as given (a number field has no text). So the wiring
     // is what keeps `0x1F` out, and this holds it for every page outside
     // _common/ (a module in there that fed the engine would not be seen).
-    // A page that calls readThresholdRow itself (Routing Trace, #3957) is
-    // held as the engine's callers are.
+    // A page that calls readThresholdRow itself (Routing Trace, #3957; the
+    // Config Lint engine, #3964) is held as the engine's callers are.
     const toolsDir = resolve(here, '../src/interactive/tools');
     const pages = readdirSync(toolsDir, { recursive: true, encoding: 'utf8' })
       .filter((f) => /\.[jt]sx?$/.test(f) && !f.includes('_common'))
@@ -293,7 +293,7 @@ describe('readThresholdRow ↔ the exporter', () => {
     const engineUsers = pages.filter(([, src]) => importsFrom(src, 'sim/alert-engine.js').some((n) => engine.includes(n))
       || importsFrom(src, 'validation/threshold-value.js').some((n) => reader.includes(n)));
     expect(engineUsers.map(([f]) => f).sort())
-      .toEqual(['AlertPreviewTab.jsx', 'RoutingTraceTab.jsx', 'YamlValidatorTab.jsx', 'alert-simulator.jsx']);
+      .toEqual(['AlertPreviewTab.jsx', 'RoutingTraceTab.jsx', 'YamlValidatorTab.jsx', 'alert-simulator.jsx', 'config-lint/lint.js']);
     // Only the text-keeping parse (and the duration helper) beside the
     // engine: parseYaml, loadYamlDocument and a namespace import all hand
     // over typed values.
