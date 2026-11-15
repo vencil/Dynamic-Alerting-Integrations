@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 import _lib_consumer_read as cr
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_os_attrs, symlink_or_skip  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("da_read_env")
 
@@ -224,6 +224,7 @@ def test_a_path_that_is_not_a_regular_file_is_refused_unopened(tmp_path, kind) -
     good = tmp_path / "good.yml"
     good.write_text("groups: []\n", encoding="utf-8")
     if kind == "fifo":
+        require_os_attrs("mkfifo")
         path = tmp_path / "fifo.yml"
         os.mkfifo(path)
     elif kind == "device":
