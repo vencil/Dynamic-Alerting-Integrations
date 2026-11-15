@@ -54,11 +54,38 @@ func selectorsRequest(series string, data []byte) (map[string]string, []string, 
 	if err != nil {
 		return nil, nil, err
 	}
-	var exprs []string
-	if err := json.Unmarshal(data, &exprs); err != nil {
+	exprs, err := jsonStrings(data)
+	if err != nil {
 		return nil, nil, fmt.Errorf("standard input is not a JSON array of strings: %w", err)
 	}
 	return want, exprs, nil
+}
+
+// jsonStrings decodes *raw* as a JSON array every element of which is a JSON
+// string; `[]` is an empty list. ⛔ json.Unmarshal into a []string takes a
+// top-level null as no list and a null element as "" (#3943): the first
+// would answer about no expressions, the second hand the parser an empty
+// expression and refuse the input over the caller's framing. Both, and any
+// other non-string element, are an error here — the caller's, never a
+// refusal of the input.
+func jsonStrings(raw []byte) ([]string, error) {
+	var elems []json.RawMessage
+	if err := json.Unmarshal(raw, &elems); err != nil {
+		return nil, err
+	}
+	if elems == nil {
+		return nil, fmt.Errorf("null is not an array")
+	}
+	out := make([]string, len(elems))
+	for i, e := range elems {
+		if len(e) == 0 || e[0] != '"' {
+			return nil, fmt.Errorf("element %d is %s, not a string", i, e)
+		}
+		if err := json.Unmarshal(e, &out[i]); err != nil {
+			return nil, fmt.Errorf("element %d: %w", i, err)
+		}
+	}
+	return out, nil
 }
 
 type selectorHit struct {

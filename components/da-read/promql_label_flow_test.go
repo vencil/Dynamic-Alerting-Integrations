@@ -162,6 +162,12 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 		got.Documents[0][0][0].LHS != "dropped" || got.Documents[0][0][0].Op != "unless" {
 		t.Fatalf("got %s", stdout.String())
 	}
+	// An empty expression list is an answer about no expressions.
+	stdout.Reset()
+	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(`{"expressions": []}`), &stdout, &stderr); rc != exitOK ||
+		stdout.String() != `{"documents":[[]]}`+"\n" {
+		t.Fatalf("empty expressions: rc %d stdout %q", rc, stdout.String())
+	}
 	// An expression or record the parser refuses is the input refused: the
 	// refusal document. An empty <label> or standard input that is not the
 	// request object is the caller's error: no document (#3943).
@@ -174,6 +180,11 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 		{"", `{"expressions": ["up"]}`, false},
 		{"tenant", `["up"]`, false},
 		{"tenant", `{"records": {}}`, false},
+		// json.Unmarshal reads a null element as "": framing, not an
+		// expression the parser refuses.
+		{"tenant", `{"expressions": null}`, false},
+		{"tenant", `{"expressions": [null]}`, false},
+		{"tenant", `{"expressions": ["up", {}]}`, false},
 	} {
 		stdout.Reset()
 		want := ""

@@ -93,7 +93,19 @@ func labelFlowRequestOf(label string, data []byte) (*labelFlowRequest, error) {
 		return nil, fmt.Errorf("label is empty")
 	}
 	var in labelFlowRequest
-	if err := json.Unmarshal(data, &in); err != nil || in.Expressions == nil {
+	var framing struct {
+		Expressions json.RawMessage `json:"expressions"`
+	}
+	err := json.Unmarshal(data, &in)
+	if err == nil {
+		err = json.Unmarshal(data, &framing)
+	}
+	if err == nil {
+		// "expressions" must be an array of strings, not null or holding one
+		// (jsonStrings): json.Unmarshal reads a null element as "".
+		in.Expressions, err = jsonStrings(framing.Expressions)
+	}
+	if err != nil {
 		return nil, fmt.Errorf(`standard input is not {"expressions": [...], "records": {...}, "aliases": [...]}: %v`, err)
 	}
 	return &in, nil

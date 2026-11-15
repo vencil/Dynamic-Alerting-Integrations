@@ -107,6 +107,13 @@ func TestRunPromQLSelectors(t *testing.T) {
 		t.Fatalf("output %s", out.String())
 	}
 
+	// An empty list is an answer about no expressions.
+	var empty bytes.Buffer
+	if rc := run([]string{"promql-selectors", maintenanceSeries, "-"}, strings.NewReader(`[]`), &empty, &errb); rc != exitOK ||
+		empty.String() != `{"documents":[[]]}`+"\n" {
+		t.Fatalf("[]: rc %d stdout %q", rc, empty.String())
+	}
+
 	// An expression the parser refuses is the input refused: the refusal
 	// document. A <series> it does not take, standard input that is not a
 	// JSON array of strings, a file argument are the caller's errors: no
@@ -118,6 +125,11 @@ func TestRunPromQLSelectors(t *testing.T) {
 	}{
 		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up +"]`, true},
 		{[]string{"promql-selectors", maintenanceSeries, "-"}, `{"not": "a list"}`, false},
+		// json.Unmarshal reads a null list as none and a null element as "":
+		// framing, not an expression the parser refuses.
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `null`, false},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `[null]`, false},
+		{[]string{"promql-selectors", maintenanceSeries, "-"}, `["up", 1]`, false},
 		{[]string{"promql-selectors", `{filter="x"}`, "-"}, `["up"]`, false},
 		{[]string{"promql-selectors", `up{a=~"x"}`, "-"}, `["up +"]`, false},
 		{[]string{"promql-selectors", maintenanceSeries, "file.yaml"}, `["up"]`, false},

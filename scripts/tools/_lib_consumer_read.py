@@ -89,6 +89,7 @@ import json
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -408,12 +409,24 @@ _READING_ANY_SHAPE = "any-shape"
 #: of a file Python still reads stays a tool fault.
 CANNOT_OPEN = "the file cannot be opened"
 
+#: The reason a path that is not a regular file is refused with
+#: (``_unopenable``): ``CANNOT_OPEN`` and a fixed cause, never opened.
+NOT_REGULAR = f"{CANNOT_OPEN}: not a regular file"
+
 
 def _unopenable(path: str) -> "str | None":
-    """None when *path* opens and its bytes read to the end; else
-    ``CANNOT_OPEN`` and the system's reason (``os.strerror``) — no other
-    text (ADR-036: no text of the input)."""
+    """None when *path* is a regular file (a symlink to one included) that
+    opens and its bytes read to the end; else ``CANNOT_OPEN`` and the
+    system's reason (``os.strerror``), or ``NOT_REGULAR`` — no other text
+    (ADR-036: no text of the input).
+
+    ⛔ Anything but a regular file is refused before it is opened: opening a
+    FIFO blocks until a writer comes, and a device such as ``/dev/zero``
+    never reads to EOF — neither is under the Go program's timeout, since
+    this read happens before the program runs."""
     try:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return NOT_REGULAR
         with open(path, "rb") as fh:
             while fh.read(1 << 20):
                 pass

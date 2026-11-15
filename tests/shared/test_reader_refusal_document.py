@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,9 @@ def _assert_no_answer(proc: subprocess.CompletedProcess) -> None:
     assert proc.returncode == 2, (proc.returncode, proc.stderr)
     assert proc.stderr.strip()
     assert cr._refusal(proc) is None, proc.stdout
+    # nor the batch document (`answer` beside `files`): a no-answer taken
+    # for prometheus-rules' refusal would turn red here too
+    assert cr._refusal(proc, beside="files") is None, proc.stdout
 
 
 @pytest.mark.parametrize("row", USAGES, ids=[r[0] for r in USAGES])
@@ -136,14 +140,20 @@ def test_a_usage_error_is_no_refusal(row) -> None:
     (["promql-selectors", 'up{filter=~"x"}', "-"], json.dumps(["up +"])),
     # standard input that is not the request object
     (["promql-label-flow", "tenant", "-"], json.dumps(["up +"])),
-], ids=["series-no-metric", "series-regex", "label-flow-framing"])
+    # json.Unmarshal reads null as no list and a null element as "": the
+    # framing, never an expression the parser refuses
+    (["promql-selectors", 'user_state_filter{filter="maintenance"}', "-"], "null"),
+    (["promql-selectors", 'user_state_filter{filter="maintenance"}', "-"], "[null]"),
+    (["promql-label-flow", "tenant", "-"], json.dumps({"expressions": [None]})),
+], ids=["series-no-metric", "series-regex", "label-flow-framing", "selectors-null",
+        "selectors-null-element", "label-flow-null-element"])
 def test_the_callers_argument_is_no_refusal(args, stdin) -> None:
     """The <series> argument and the JSON framing of standard input are the
     caller's: wrong, they are a caller error (no refusal document), even
     when an expression in it would be refused."""
     _assert_no_answer(_run(cr.DA_READ_ENV, args, stdin.encode("utf-8")))
     with pytest.raises(cr.ConsumerReadError) as exc:
-        if args[0] == "promql-selectors":
+        if args[0] == "promql-selectors" and isinstance(json.loads(stdin), list):
             cr.promql_selectors(args[1], json.loads(stdin))
         else:
             cr._run(os.environ[cr.DA_READ_ENV], cr.DA_READ_BINARY_NAME, cr.DA_READ_ENV,
@@ -181,6 +191,60 @@ def test_a_file_that_cannot_be_opened_is_no_answer_of_the_binaries(tmp_path) -> 
     [unread] = found[str(missing)]
     assert unread.unread and unread.problem == f"{cr.CANNOT_OPEN}: No such file or directory"
     assert [r.problem for r in found[str(good)]] == [None]
+
+
+#: Run in a child, so a reading that blocks (opening a FIFO waits for a
+#: writer; /dev/zero never reads to EOF) is a timeout here, not a hung suite.
+_NOT_REGULAR_CHILD = """
+import json, pathlib, sys
+import _lib_consumer_read as cr
+path, good = sys.argv[1], sys.argv[2]
+out = {"unopenable": cr._unopenable(path)}
+try:
+    cr.prometheus_config(pathlib.Path(path))  # a str would be the text
+except cr.InputRefused as e:
+    out["refused"] = e.stderr_lines
+out["rules"] = [r.problem for r in cr.prometheus_rule_file_results([path, good])]
+print(json.dumps(out))
+"""
+
+
+@pytest.mark.parametrize("kind", ["fifo", "device", "symlink-to-regular"])
+def test_a_path_that_is_not_a_regular_file_is_refused_unopened(tmp_path, kind) -> None:
+    """A FIFO or a device is refused with ``NOT_REGULAR`` before it is
+    opened: the read Python does before the Go program runs is under no
+    timeout of the program's. A symlink to a regular file reads as that
+    file."""
+    good = tmp_path / "good.yml"
+    good.write_text("groups: []\n", encoding="utf-8")
+    if kind == "fifo":
+        path = tmp_path / "fifo.yml"
+        os.mkfifo(path)
+    elif kind == "device":
+        path = Path("/dev/zero")
+        if not path.exists():
+            pytest.skip("needs /dev/zero")
+    else:
+        target = tmp_path / "real.yml"
+        target.write_text("groups: []\n", encoding="utf-8")
+        path = tmp_path / "link.yml"
+        path.symlink_to(target)
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join([os.path.dirname(cr.__file__),
+                                          os.environ.get("PYTHONPATH", "")])}
+    try:
+        proc = subprocess.run([sys.executable, "-c", _NOT_REGULAR_CHILD, str(path), str(good)],
+                              capture_output=True, check=False, timeout=30, env=env)
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"reading {kind} {path} blocked: opened before it was judged")
+    assert proc.returncode == 0, proc.stderr
+    got = json.loads(proc.stdout)
+    if kind == "symlink-to-regular":
+        assert got["unopenable"] is None and got["rules"] == [None, None], got
+        return
+    assert got["unopenable"] == cr.NOT_REGULAR == f"{cr.CANNOT_OPEN}: not a regular file"
+    assert got["refused"] == [f"{cr.DA_READ_BINARY_NAME}: {path}: {cr.NOT_REGULAR}"], got
+    assert got["rules"] == [cr.NOT_REGULAR, None], got
 
 
 def test_standard_input_that_cannot_be_read_is_no_refusal(tmp_path) -> None:
