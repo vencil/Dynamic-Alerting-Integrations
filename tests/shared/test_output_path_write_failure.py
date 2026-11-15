@@ -739,7 +739,7 @@ ROWS: list[Row] = [
       lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
       out_name="abbreviations.md",
-      shapes=("parent_is_file",)),
+      shapes=("parent_is_file", "target_is_dir")),
     # A non-default `prefix`. This tool funnels every error through
     # `_emit_error`, which stamps a de-identified error CODE — a documented
     # `--redact` contract (the SME triages by code without a re-run, and under
@@ -1699,7 +1699,6 @@ Key = tuple[str, str]
 #: migration to the two classes (#3107 steps ①–③).
 VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
     ("dx/generate_changelog.py", "-o/--output"): ("scripts/tools/dx/generate_changelog.py:main write_text_or_die ×1",),
-    ("dx/sync_glossary_abbr.py", "--output"): ("scripts/tools/dx/sync_glossary_abbr.py:main write_text_or_die ×1",),
     ("dx/waveform_compile.py", "--out"): ("scripts/tools/dx/waveform_compile.py:_compile_one write_text_or_die ×1",),
     ("dx/waveform_score.py", "--out"): ("scripts/tools/dx/waveform_score.py:main write_text_secure ×1",),
     ("ops/analyze_rule_pack_gaps.py", "-o/--output"): ("scripts/tools/ops/analyze_rule_pack_gaps.py:_main write_json_or_die ×1",),
@@ -2398,7 +2397,7 @@ def _flags_named_at_a_writer() -> dict[str, set[str]]:
     came from argv. See the module docstring for what that cannot see: a raw
     sink never wrapped is not a missing row, it is absent — and so is a write
     whose entry is passed around as a value and called under another name
-    (`_registry_lib` hands `write_text_secure` to `_write_or_stop`). Those
+    (`_registry_lib` hands `write_repo_artifact` to `_write_or_stop`). Those
     pass no flag; the control runs' audit sees them when a row runs them.
     """
     found: dict[str, set[str]] = {}
@@ -2520,22 +2519,55 @@ def test_every_row_is_about_a_flag_its_tool_names_at_a_writer():
     assert not stale, f"row(s) for a flag the tool does not name at a writer: {stale}"
 
 
+#: Modules that call an operator/artifact entry on a path NO FLAG names — a
+#: fixed file of the repository. A row is a flag, so none can be written for
+#: them: they are outside this table's population (the module docstring,
+#: POPULATION), listed so that the file-level test below says which callers
+#: it does not hold rather than pass over them. Exact both ways; an entry
+#: that names a flag at a writer is not one of these.
+ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
+    "lint/check_frontmatter_versions.py":
+        "`--fix` rewrites the docs it has just scanned under the repository's "
+        "own `docs/`; the tool takes no path. A write that fails is held by "
+        "tests/lint/test_check_frontmatter_versions.py "
+        "(test_cli_fix_that_cannot_write_a_doc_is_exit_2).",
+    "ops/_observed_map_lib.py":
+        "`threshold-recommend --generate-observed-map` rewrites the committed "
+        "`metric_observed_map.yaml` beside the library; the flag is a switch, "
+        "not a path. A write that fails is held by "
+        "tests/ops/test_threshold_recommend.py "
+        "(test_generate_observed_map_that_cannot_be_written_is_exit_2).",
+}
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 2
+
+
 def test_every_caller_of_a_two_class_entry_has_a_row():
     """File level, and regardless of ``flag=``: a module under the CLI roots
     — a library too — that CALLS one of `_lib_io`'s operator or artifact
     entries has a row that runs it. The pair-level test above reads ``flag=``
     and skips libraries; a call that names no flag, or sits in a library, is
     still a write through an entry that some control run has to exercise
-    (carried over from the file-level audit this table replaced)."""
+    (carried over from the file-level audit this table replaced). The callers
+    no row can be written for are `ENTRY_CALLERS_WITH_NO_FLAG`."""
     import _lib_io
     entries = {name.split(".")[1] for kind in CLASSES
                for name in _lib_io.OUTPUT_ENTRY_POINTS[kind] if name.startswith("_lib_io.")}
-    callers = {tool for tool, _py, tree in _cli_modules()
+    modules = {tool: tree for tool, _py, tree in _cli_modules()}
+    callers = {tool for tool, tree in modules.items()
                if any(isinstance(node, ast.Call) and _called_name(node) in entries
                       for node in ast.walk(tree))}
     assert callers, "no caller of an operator/artifact entry found — the scan measured nothing"
-    missing = sorted(callers - {r.tool for r in ROWS})
+    rowed = {r.tool for r in ROWS}
+    missing = sorted(callers - rowed - set(ENTRY_CALLERS_WITH_NO_FLAG))
     assert not missing, f"module(s) calling an operator/artifact entry with no row: {missing}"
+    stale = sorted(tool for tool in ENTRY_CALLERS_WITH_NO_FLAG
+                   if tool not in callers or tool in rowed or _flags_at_writers(modules[tool]))
+    assert not stale, (
+        "listed as calling an entry with no flag, and it calls none, has a row, "
+        f"or names a flag at a writer: {stale}")
+    assert all(why.strip() for why in ENTRY_CALLERS_WITH_NO_FLAG.values())
+    assert len(ENTRY_CALLERS_WITH_NO_FLAG) == _ENTRY_CALLERS_WITH_NO_FLAG_CEILING, sorted(
+        ENTRY_CALLERS_WITH_NO_FLAG)
 
 
 def test_the_no_row_list_is_exact_and_not_stale():
@@ -3508,10 +3540,10 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
     ("lint/check_open_encoding.py", "atomic_write_text"): (
         1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
            "pin LF, a name it looks for in other files and never calls."),
-    ("ops/_registry_lib.py", "write_text_secure"): (
+    ("ops/_registry_lib.py", "write_repo_artifact"): (
         4, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
-        "write is `write_text_secure`'s own frame on a stack, so the audit "
+        "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),
     ("ops/generate_rule_pack_split.py", "ensure_dir_or_die"): (
         1, "a truth test (`if ensure_dir_or_die:`) choosing between it and the "

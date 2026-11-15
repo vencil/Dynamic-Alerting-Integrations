@@ -1165,7 +1165,7 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     Returns ({path, packs, keys}, the touched surface paths)."""
     sys.path.insert(0, _THIS_DIR)
     sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-    from _lib_python import write_text_secure  # noqa: E402
+    from _lib_io import write_repo_artifact  # noqa: E402  (#3107: tracked files)
 
     src = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
     doc = committed_registry_doc(src)
@@ -1177,13 +1177,13 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     builtin_path = _repo_path_or_raise(BUILTIN_DEFAULTS_GO_PATH, "the built-in defaults Go table")
     touched = write_planned(planned)
     if check_rule_packs_module(doc) is not None:
-        _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_text_secure)
+        _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_repo_artifact)
         touched.append(RULE_PACKS_MODULE_PATH)
     if check_retired_keys_go(doc, go_path) is not None:
-        _write_or_stop(go_path, go_text, touched, write_text_secure)
+        _write_or_stop(go_path, go_text, touched, write_repo_artifact)
         touched.append(go_path)
     if check_builtin_defaults_go(doc, builtin_path) is not None:
-        _write_or_stop(builtin_path, builtin_text, touched, write_text_secure)
+        _write_or_stop(builtin_path, builtin_text, touched, write_repo_artifact)
         touched.append(builtin_path)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
@@ -3026,7 +3026,7 @@ def write_planned(planned: "list[tuple[str, str, bool]]") -> list[str]:
     Returns the paths."""
     sys.path.insert(0, _THIS_DIR)
     sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-    from _lib_python import write_text_secure  # noqa: E402
+    from _lib_io import write_repo_artifact  # noqa: E402  (#3107: tracked files)
 
     confd_files = [(p, new) for p, new, confd in planned if confd]
     written: "list[str]" = []
@@ -3035,13 +3035,13 @@ def write_planned(planned: "list[tuple[str, str, bool]]") -> list[str]:
         written = [p for p, _new in confd_files]
     for path, new, confd in planned:
         if not confd:
-            _write_or_stop(path, new, written, write_text_secure)
+            _write_or_stop(path, new, written, write_repo_artifact)
             written.append(path)
     return [p for p, _new, _confd in planned]
 
 
 def _write_or_stop(path: str, text: str, written: "list[str]", write: Callable) -> None:
-    """*write* (`write_text_secure`) *text* to *path*; an OSError is
+    """*write* (`write_repo_artifact`) *text* to *path*; an OSError is
     SurfaceWriteStopped naming *path* and every file of *written* (already
     written, not rolled back)."""
     try:

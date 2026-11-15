@@ -1299,8 +1299,22 @@ def check_repo_artifact(path: Any, *, flag: Optional[str] = None) -> str:
     return p
 
 
+def _repo_artifact_mode(path: str) -> int:
+    """The mode a rewritten artifact gets when the caller names none: what
+    git would check it out with. Git tracks one bit of a file's mode, the
+    owner's execute bit, so that bit is kept and nothing else is read — not
+    the other bits of the file being replaced, not the umask: ``0o755`` for
+    an existing file that has ``S_IXUSR``, ``0o644`` for any other and for a
+    new one."""
+    try:
+        executable = bool(os.stat(path).st_mode & stat.S_IXUSR)
+    except OSError:
+        executable = False
+    return 0o755 if executable else 0o644
+
+
 def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
-                        mode: int = 0o644, atomic_only: bool = False) -> None:
+                        mode: Optional[int] = None, atomic_only: bool = False) -> None:
     """Atomically rewrite a committed artifact a regen tool owns.
 
     The ``_atomic_write`` contract, behind two kernel-side preconditions:
@@ -1309,8 +1323,16 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     before any userspace ``realpath`` runs — and an existing target must be
     a regular file. ``-``, devices, FIFOs and sockets are
     refused with :class:`OutputWriteError`.
+
+    *mode* (#3107): the permission bits the file ends up with. Left out, it
+    is :func:`_repo_artifact_mode` — a regen leaves a tracked file the way a
+    checkout made it (``0o644``, or ``0o755`` for an executable one), where
+    the old names made it ``0o600`` behind ``git status``'s back. A caller
+    that passes one (a manifest holding secrets: ``0o600``) gets exactly it.
     """
     p = check_repo_artifact(path, flag=flag)
+    if mode is None:
+        mode = _repo_artifact_mode(p)
     # Imported here: _lib_atomic_write imports this module (OutputWriteError).
     from _lib_atomic_write import atomic_write_text  # noqa: E402  (implementation)
     atomic_write_text(p, content, mode=mode, flag=flag, atomic_only=atomic_only)

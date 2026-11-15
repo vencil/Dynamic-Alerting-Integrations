@@ -288,6 +288,24 @@ class TestLoadFailsClosed:
         L.write_observed_map(out_path=str(out))
         assert L.load_observed_map(str(out)) == L.load_observed_map()
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+    @pytest.mark.parametrize("mode", [0o644, 0o755], ids=oct)
+    def test_generator_leaves_the_map_with_the_mode_it_was_checked_out_with(self, tmp_path, mode):
+        """#3107: the map is a tracked file. Regenerating it used to leave it
+        0600, which `git status` does not show."""
+        out = tmp_path / "metric_observed_map.yaml"
+        out.write_text("keys: {}\n", encoding="utf-8")
+        out.chmod(mode)
+        L.write_observed_map(out_path=str(out))
+        assert L.load_observed_map(str(out)) == L.load_observed_map()
+        assert os.stat(out).st_mode & 0o7777 == mode
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+    def test_generator_makes_a_first_map_0644(self, tmp_path):
+        out = tmp_path / "metric_observed_map.yaml"
+        L.write_observed_map(out_path=str(out))
+        assert os.stat(out).st_mode & 0o7777 == 0o644
+
     def test_generator_refuses_an_unreadable_map(self, tmp_path):
         """YAML 壞掉的 map 可能還有人工 pick：拒絕覆寫，提示修正或刪除。"""
         out = tmp_path / "metric_observed_map.yaml"
