@@ -23,6 +23,7 @@ import pytest
 import yaml
 
 import _lib_key_verdict as kv
+import _lib_tenant_values as tv
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -64,7 +65,7 @@ def _refused(tmp_path: Path, case: dict) -> list[str]:
     why = [kv.finding_line(f, 5) for f in verdict.findings
            if f.severity == kv.ERROR and f.key == case["key"] and f.kind != "value_unread"]
     checks = kv.key_check_lines(verdict)
-    return why + [msg for kind, _, msg in checks if kind == kv.KEY_CHECK_VERSION_LABEL]
+    return why + [kv.key_check_line(t, c) for t, c in checks if c.kind not in tv.KEY_CHECK_RENAMED_KINDS]
 
 
 @pytest.mark.parametrize("case", _cases(), ids=lambda c: c["name"])

@@ -294,29 +294,24 @@ def test_print_load_warnings_prints_one_named_line_per_file(tmp_path, da_guard, 
 
 
 def test_output_without_skipped_is_refused(tmp_path):
-    """舊版 da-guard（JSON 沒有 skipped）：不靜默當成「沒有略過的檔」，而是 raise。"""
-    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
-    fake = tmp_path / "old-da-guard"
-    fake.write_text("#!/bin/sh\necho '{\"schema\": \"da-guard.served-values/v1\", \"at\": \"x\", \"parse_failed\": [], \"tenants\": {}}'\n",
-                    encoding="utf-8")
-    fake.chmod(0o755)
+    """這支工具讀的 schema 卻沒有 skipped：不靜默當成「沒有略過的檔」，而是壞掉的輸出
+    （#3703：較舊的形狀由 schema 指出，不由缺哪個欄位推斷）。"""
+    fake = _old_da_guard(tmp_path, '{"schema": "%s", "at": "x", "parse_failed": [], "tenants": {}}'
+                         % tv.SERVED_VALUES_SCHEMA)
     with pytest.raises(tv.ServedValuesError) as ei:
-        tv.load_served_tree(tmp_path, binary=str(fake))
+        tv.load_served_tree(tmp_path, binary=fake)
     assert "skipped" in str(ei.value)
-    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    assert ei.value.broken and not ei.value.stale, ei.value
 
 
 def test_output_without_unreadable_is_refused(tmp_path):
-    """da-guard 的 JSON 沒有 unreadable（早於該欄位的版本）：不當成「每個檔都讀得到」，而是 raise。"""
-    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
-    fake = tmp_path / "old-da-guard"
-    fake.write_text("#!/bin/sh\necho '{\"schema\": \"da-guard.served-values/v1\", \"at\": \"x\", \"parse_failed\": [], \"skipped\": [], "
-                    "\"tenants\": {}}'\n", encoding="utf-8")
-    fake.chmod(0o755)
+    """這支工具讀的 schema 卻沒有 unreadable：不當成「每個檔都讀得到」，而是壞掉的輸出。"""
+    fake = _old_da_guard(tmp_path, '{"schema": "%s", "at": "x", "parse_failed": [], "skipped": [], '
+                         '"tenants": {}}' % tv.SERVED_VALUES_SCHEMA)
     with pytest.raises(tv.ServedValuesError) as ei:
-        tv.load_served_tree(tmp_path, binary=str(fake))
+        tv.load_served_tree(tmp_path, binary=fake)
     assert "unreadable" in str(ei.value)
-    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    assert ei.value.broken and not ei.value.stale, ei.value
 
 
 def test_unreadable_raises_parse_failed_error_naming_file_and_reason(tmp_path, da_guard):
@@ -554,24 +549,25 @@ def _old_da_guard(tmp_path: Path, doc: str) -> str:
 
 
 def test_output_without_schedules_is_refused(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
-    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    assert ei.value.broken and not ei.value.stale, ei.value
 
 
 def test_output_without_series_is_refused(tmp_path):
-    """#2750：da-guard 的輸出沒有 series → 這支 da-guard 比工具舊，不當成「沒有 series」讀。"""
-    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    """#2750：da-guard 的輸出沒有 series → 不當成「沒有 series」讀；這支工具讀的 schema
+    缺它是壞掉的輸出（#3703：較舊的形狀由 schema 指出）。"""
+    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
+                                   '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "series" in str(ei.value) and ei.value.binary_fault
-    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    assert ei.value.broken and not ei.value.stale, ei.value
 
 
 def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
@@ -585,16 +581,16 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 
 
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
-_WHOLE_SV_HEAD = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
+_WHOLE_SV_HEAD = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
             '"unreadable": [], "aliases": {}, "root_defaults_refused": [], ')
 _WHOLE_SV_TENANT = ('"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, '
-              '"state_filters": {}, "time_boxes": {}, "keys": {}')
+              '"state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []')
 
 
 @pytest.mark.parametrize("load,tenants", [
@@ -627,9 +623,9 @@ def test_a_document_wrong_inside_is_broken_output_and_recorded(tmp_path, load, t
         _lib_tool_fault.clear()
 
 
-_ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
+_ARGV_DOC = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
-             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}}}}')
+             '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": []}}}')
 
 
 @pytest.mark.parametrize("asked", [False, True])
@@ -763,7 +759,7 @@ def test_load_custom_alert_pack_refuses_a_document_not_of_its_shape(tmp_path, fi
 # ── ADR-037：schema 與 state_filters ────────────────────────────────────────
 
 _SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
-_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}, "keys": {}'
+_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, "time_boxes": {}, "keys": {}, "key_checks": []'
 
 
 def _sv_doc(schema: str | None, tenant_extra: str = ', "state_filters": {}') -> str:
@@ -776,7 +772,7 @@ def test_real_da_guard_names_the_schema_this_reader_reads(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: disable\n"})
     proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
                           capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
-    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v1"
+    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v2"
     assert tv.load_served_values(conf_d, binary=da_guard)["t"].state_filters == {}
 
 
@@ -791,14 +787,38 @@ def test_output_without_schema_is_refused_as_older(tmp_path):
 
 
 def test_output_with_an_unknown_schema_is_refused(tmp_path):
-    """認不得的 schema（例如未來的 v2）：raise 並寫出兩個值，不當成舊版、也不照 v1 讀。"""
-    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v2"))
+    """認不得的 schema（例如未來的 v3）：raise 並寫出兩個值，不當成舊版、也不照 v2 讀。"""
+    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v3"))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     msg = str(ei.value)
-    assert "da-guard.served-values/v2" in msg and "da-guard.served-values/v1" in msg
+    assert "da-guard.served-values/v3" in msg and tv.SERVED_VALUES_SCHEMA in msg
     assert "older than this tool" not in msg
     assert ei.value.binary_fault and not ei.value.stale
+
+
+# A literal, not SERVED_VALUES_OLDER_SCHEMAS: emptying that tuple must turn
+# these cells red, not leave nothing to parametrize over.
+@pytest.mark.parametrize("schema", ["da-guard.served-values/v1"])
+@pytest.mark.parametrize("load", [tv.load_served_tree, tv.load_served_schedules])
+def test_output_with_an_older_schema_is_refused_as_older(tmp_path, schema, load):
+    """#3703：較舊的 schema（v1：key_checks 是引用鍵的整句）一律由 schema 本身指出要升級
+    da-guard——stale、不是 broken，訊息寫出兩個值；不逐一辨認舊形狀。文件其餘部分照
+    這支工具讀的形狀寫，證明判定只來自 schema。"""
+    assert tv.SERVED_VALUES_SCHEMA not in tv.SERVED_VALUES_OLDER_SCHEMAS
+    tenant = ', "state_filters": {}' if load is tv.load_served_tree else ''
+    doc = _sv_doc(schema, tenant)
+    if load is tv.load_served_schedules:
+        doc = doc.replace(_SV_TENANT, '"schedules": {}')
+    fake = _old_da_guard(tmp_path, doc)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        load(tmp_path, binary=fake)
+    msg = str(ei.value)
+    assert schema in msg and tv.SERVED_VALUES_SCHEMA in msg
+    assert "older than this tool: upgrade or rebuild it" in msg
+    assert ei.value.stale and not ei.value.broken and ei.value.binary_fault
+    # control: the same document under this reader's schema is read.
+    load(tmp_path, binary=_old_da_guard(tmp_path, doc.replace(schema, tv.SERVED_VALUES_SCHEMA)))
 
 
 def test_control_doc_with_the_schema_is_read(tmp_path):
@@ -818,7 +838,7 @@ def test_control_doc_with_the_schema_is_read(tmp_path):
     ', "state_filters": {"crashloop": {"severity": 1}}',
 ], ids=["missing", "null", "list", "bare-string", "no-severity", "empty-severity", "number"])
 def test_state_filters_not_of_their_shape_are_refused(tmp_path, extra):
-    """帶 v1 schema 卻沒有（或寫壞）state_filters：是壞掉的輸出，不是舊版，也不當成「沒有開啟的 filter」。"""
+    """帶這支工具讀的 schema 卻沒有（或寫壞）state_filters：是壞掉的輸出，不是舊版，也不當成「沒有開啟的 filter」。"""
     fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA, extra))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
@@ -828,7 +848,7 @@ def test_state_filters_not_of_their_shape_are_refused(tmp_path, extra):
 
 def test_schema_refusal_exits_2_through_the_cli_decorator(tmp_path, capsys):
     """讀取端的 CLI 一律經 exit_on_served_values_error：schema 缺少或認不得都是 rc 2、一行 ERROR。"""
-    for schema in (None, "da-guard.served-values/v2"):
+    for schema in (None, "da-guard.served-values/v3", *tv.SERVED_VALUES_OLDER_SCHEMAS):
         fake = _old_da_guard(tmp_path, _sv_doc(schema))
 
         @tv.exit_on_served_values_error
@@ -863,11 +883,11 @@ def test_state_filter_severity_only_change_is_visible(tmp_path, da_guard):
     assert crit["b"].values["_state_crashloop"] is False
 
 
-def test_output_without_time_boxes_is_refused_as_older(tmp_path):
+def test_output_without_time_boxes_is_broken(tmp_path):
     fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA).replace(', "time_boxes": {}', ''))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
-    assert "time_boxes" in str(ei.value) and ei.value.stale
+    assert "time_boxes" in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
 @pytest.mark.parametrize("boxes", ['[]', '{"_silent_mode": {}}', '{"_silent_mode": [{"expires": "", "expired": false}]}',
@@ -888,13 +908,22 @@ def test_real_da_guard_reports_a_silence_time_box(tmp_path, da_guard):
 
 # ── ADR-038 決定 5：keys 與 routing ─────────────────────────────────────────
 
-def test_output_without_keys_is_refused_as_older(tmp_path):
-    """沒有 keys 的文件來自早於 ADR-038 第二步的 da-guard——它還把 `_routing` 放在
-    values 裡：當成舊版拒讀，不靜默讀成「沒有任何鍵」。"""
+def test_output_without_keys_is_broken(tmp_path):
+    """這支工具讀的 schema 卻沒有 keys：壞掉的輸出，不靜默讀成「沒有任何鍵」。"""
     fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA).replace(', "keys": {}', ''))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
-    assert "keys" in str(ei.value) and ei.value.stale
+    assert "keys" in str(ei.value) and ei.value.broken and not ei.value.stale
+
+
+def test_output_without_key_checks_is_broken(tmp_path):
+    """這支工具讀的 schema 卻沒有 key_checks：壞掉的輸出，不靜默讀成 None（#3703）。"""
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA)
+    assert tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc)).tenants["t"].key_checks == ()
+    fake = _old_da_guard(tmp_path, doc.replace(', "key_checks": []', ''))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "key_checks" in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
 @pytest.mark.parametrize("keys", [
@@ -920,17 +949,6 @@ def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
     assert "keys" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
-
-
-def test_a_retired_disable_effect_names_an_older_da_guard(tmp_path):
-    """#3046：`disable: partial` 只有比這支工具舊的 da-guard 會寫；要說「舊」（stale），
-    呼叫端與使用者據此知道要升級 da-guard，不是當成壞掉的輸出。"""
-    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace(
-        '"keys": {}', '"keys": {"k": {"exporter": false, "reason": "disabled", "disable": "partial"}}')
-    with pytest.raises(tv.ServedValuesError) as ei:
-        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
-    assert ei.value.stale and not ei.value.broken, ei.value
-    assert "older than this tool" in str(ei.value)
 
 
 def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_guard):
@@ -971,11 +989,11 @@ def test_real_da_guard_names_a_root_refused_default_the_tenant_does_not_write(tm
                                           tv.RootDefaultRefused("redis_memory", "NaN", "non_finite"))
 
 
-def test_output_without_root_defaults_refused_is_refused_as_older(tmp_path):
+def test_output_without_root_defaults_refused_is_broken(tmp_path):
     doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"root_defaults_refused": [], ', '', 1)
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
-    assert "root_defaults_refused" in str(ei.value) and ei.value.stale
+    assert "root_defaults_refused" in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
 @pytest.mark.parametrize("entries", ['[{"key": "k", "text": "x"}]', '[{"key": "k", "text": "x", "refused": "typo"}]',
@@ -1079,7 +1097,7 @@ def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da
 
 
 def _custom_alerts_doc(entry: str) -> str:
-    return ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
+    return ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
             '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
             '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
             f'"keys": {{}}, "custom_alerts": [{entry}], "custom_alerts_finding": null}}}}}}')
@@ -1104,22 +1122,22 @@ def test_a_custom_alert_entry_not_of_its_shape_is_refused(tmp_path, entry, why):
     assert not ei.value.stale
 
 
-def test_custom_alerts_without_a_finding_are_refused_as_older(tmp_path):
-    """#3234、#3235：沒有 `finding` 的條目來自早於這個欄位的 da-guard——當成舊版拒讀，
-    不靜默讀成「沒有 finding」（那會讓 validate-config 對不送的告警 PASS）。"""
+def test_custom_alerts_without_a_finding_are_broken(tmp_path):
+    """#3234、#3235：沒有 `finding` 的條目不靜默讀成「沒有 finding」（那會讓 validate-config
+    對不送的告警 PASS）；這支工具讀的 schema 缺它是壞掉的輸出。"""
     fake = _old_da_guard(tmp_path, _custom_alerts_doc('{"index": 0, "spec": {}, "status": "rejected"}'))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
-    assert "finding" in str(ei.value) and ei.value.stale
+    assert "finding" in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
-def test_a_tenant_without_custom_alerts_finding_is_refused_as_older(tmp_path):
-    """#3235：tenant 有 `custom_alerts` 卻沒有 `custom_alerts_finding`（舊版 da-guard）。"""
+def test_a_tenant_without_custom_alerts_finding_is_broken(tmp_path):
+    """#3235：tenant 有 `custom_alerts` 卻沒有 `custom_alerts_finding`：壞掉的輸出。"""
     doc = _custom_alerts_doc('{"index": 0, "spec": {}, "status": "rejected", "finding": "custom_alert_rejected"}')
     doc = doc.replace(', "custom_alerts_finding": null', '')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
-    assert "finding" in str(ei.value) and ei.value.stale
+    assert "finding" in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
 @pytest.mark.parametrize("extra", ['"custom_alerts_finding": 1', '"custom_alerts_finding": "custom_alert_rejected"'],
@@ -1174,7 +1192,7 @@ def test_a_subset_document_that_does_not_answer_the_request_is_refused(tmp_path,
     da-guard's (`broken`), never a reading."""
     require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
     doc = json.loads(_sv_doc(tv.SERVED_VALUES_SCHEMA).replace('"t": {', '"t-a": {'))
-    doc["tenants"]["t-a"].update({"keys": {}, "custom_alerts": []})
+    doc["tenants"]["t-a"].update({"keys": {}, "key_checks": [], "custom_alerts": []})
     doc.update({"tenants_requested": ["t-a", "t-b"], "tenants_absent": ["t-b"]}, **change)
     out = tmp_path / "doc.json"
     out.write_text(json.dumps(doc), encoding="utf-8")
@@ -1207,10 +1225,20 @@ def test_a_request_is_sorted_and_deduplicated():
 
 def test_key_checks_of_the_wrong_shape_are_refused_not_read_as_none():
     """served-values' key_checks is the exporter's word: a document of the
-    wrong shape (a field missing, a non-string message) is a broken da-guard,
-    never "no message"."""
-    assert tv._key_checks({"version_labels": ["a"], "renames": []}) == tv.KeyChecks(("a",), ())
-    for bad in ({"version_labels": []}, {"version_labels": [1], "renames": []},
-                {"version_labels": "a", "renames": []}, ["a"]):
-        with pytest.raises((TypeError, KeyError)):
+    wrong shape (a field missing or extra, a kind outside the closed set, a
+    replacement on a `version` label kind) is a broken da-guard, never "no
+    check". The sentences a da-guard older than #3703 wrote are named older
+    by the document's schema, not here: under this reader's schema they are
+    broken output too."""
+    rec = {"kind": "renamed", "key": "mysql_cpu", "head": "mysql_cpu",
+           "replacement_head": "mysql_threads_running", "reason": "r"}
+    assert tv._key_checks([rec]) == (tv.KeyCheck("renamed", "mysql_cpu", "mysql_cpu",
+                                                 "mysql_threads_running", "r"),)
+    assert tv._key_checks([]) == ()
+    for bad in ({"version_labels": []}, ["a"], [dict(rec, kind="typo")], [dict(rec, replacement_head=None)],
+                [dict(rec, kind="version_label_empty")], [dict(rec, extra=1)], [dict(rec, key=1)],
+                [{k: v for k, v in rec.items() if k != "reason"}], "a"):
+        with pytest.raises((TypeError, ValueError)):
             tv._key_checks(bad)
+    with pytest.raises(TypeError):
+        tv._key_checks({"version_labels": ["a"], "renames": []})

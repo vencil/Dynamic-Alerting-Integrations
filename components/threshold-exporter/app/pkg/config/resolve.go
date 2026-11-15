@@ -1604,13 +1604,12 @@ type KeyValidation struct {
 	Errors  []string       // blocking channel: bad expires, version-label violations, an unknown _profile, a reserved value the exporter ignores, ...
 	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
 	Values  []ValueFinding // the Errors entries about a reserved or threshold value, for Ratchet (#3227, #3267)
-	// VersionLabels repeats the Errors entries about a dimensional key's
-	// `version` label (ADR-024 OQ-6), and Renames the Notices about a
-	// retired key spelling (#1231): the two key checks da-guard
-	// served-values hands the CI readers (key_checks), which no longer judge
-	// keys themselves (ADR-038 §11).
-	VersionLabels []string
-	Renames       []string
+	// KeyChecks is, one record each, the Errors entries about a dimensional
+	// key's `version` label (ADR-024 OQ-6) and the Notices about a retired
+	// key spelling (#1231) — each entry is its record's Message: the two key
+	// checks da-guard served-values hands the CI readers (key_checks), which
+	// no longer judge keys themselves (ADR-038 §11).
+	KeyChecks []KeyCheck
 }
 
 // ValidateTenantKeys checks the values and spellings of all tenant config keys
@@ -1645,8 +1644,7 @@ func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
 	v.Errors = append(v.Errors, o.Errors...)
 	v.Notices = append(v.Notices, o.Notices...)
 	v.Values = append(v.Values, o.Values...)
-	v.VersionLabels = append(v.VersionLabels, o.VersionLabels...)
-	v.Renames = append(v.Renames, o.Renames...)
+	v.KeyChecks = append(v.KeyChecks, o.KeyChecks...)
 	return v
 }
 
@@ -1719,15 +1717,15 @@ func (c *ThresholdConfig) tenantLayer(tid string, keys map[string]ScheduledValue
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 	var v KeyValidation
-	// versionLabels / renamed record the entries VersionLabels and Renames
-	// repeat.
-	versionLabels := func(msgs []string) {
-		v.Errors = append(v.Errors, msgs...)
-		v.VersionLabels = append(v.VersionLabels, msgs...)
-	}
-	renamed := func(msg string) {
-		v.Notices = append(v.Notices, msg)
-		v.Renames = append(v.Renames, msg)
+	// keyCheck records c in KeyChecks and its Message in Errors (a `version`
+	// label) or Notices (a retired spelling).
+	keyCheck := func(c KeyCheck) {
+		if c.Kind.IsRenamed() {
+			v.Notices = append(v.Notices, c.Message())
+		} else {
+			v.Errors = append(v.Errors, c.Message())
+		}
+		v.KeyChecks = append(v.KeyChecks, c)
 	}
 	canonDefaults := canonicalizeDefaults(c.Defaults)
 	// The platform surface is TWO sets, not one (#1189 / TRK-337): keys the
@@ -1762,22 +1760,15 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					// Same-map conflict: resolve ignores this entry entirely
 					// (canonical wins), so don't validate it either — the
 					// canonical sibling gets validated on its own turn.
-					renamed(fmt.Sprintf(
-						"NOTICE: tenant=%s: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
-						tenant, key, canonKey, key))
+					keyCheck(newKeyCheck(KeyCheckRenamedShadowed, tenant, key, canonKey, ""))
 					continue
 				}
 				if head, labels := splitKeyHead(canonKey); labels != "" && DimensionBaseRefused(head) {
 					// #3556: the new spelling serves no row either — a
 					// `_critical` tier takes no dimensions — so it is no fix.
-					tier := strings.TrimSuffix(head, criticalSuffix)
-					renamed(fmt.Sprintf(
-						"NOTICE: tenant=%s: key %q was renamed to %q (#1231), but a `_critical` tier takes no dimensions and neither spelling is served (#3556); write it as %s: \"N:critical\", its labels declared for %s under the root `dimensions:`",
-						tenant, key, canonKey, tier+labels, tier))
+					keyCheck(newKeyCheck(KeyCheckRenamedCriticalDimensional, tenant, key, canonKey, ""))
 				} else {
-					renamed(fmt.Sprintf(
-						"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
-						tenant, key, canonKey, canonKey))
+					keyCheck(newKeyCheck(KeyCheckRenamed, tenant, key, canonKey, ""))
 				}
 			}
 
@@ -1906,7 +1897,9 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// check, judged whatever the base.
 			if shape == shapeDimensional {
 				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
-				versionLabels(validateVersionLabel(tenant, canonKey, customLabels, regexLabels))
+				for _, c := range validateVersionLabel(tenant, key, canonKey, customLabels, regexLabels) {
+					keyCheck(c)
+				}
 			}
 		}
 	}
@@ -1940,25 +1933,25 @@ const unknownProfileSentence = "references a profile that is not defined under t
 // validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional
 // `version` label found in a tenant key: a documented charset, no reserved
 // values (empty / literal "default"), Phase-1 component scoping, and exact
-// (non-regex) selectors. It returns warning strings that ride
-// KeyValidation.Errors; the actual consumers are (1) the exporter's
-// config-load log (logConfigStats), (2) the tenant-api write path —
-// gitops/writer.go treats any Errors entry as ErrValidation, so a bad
-// version label is hard-rejected at the write boundary — and (3) the CI
-// Python validator parity path (generate_alertmanager_routes.py --validate).
-// NOTE: da-guard does NOT consume or escalate these (an earlier version of
-// this comment claimed it did).
+// (non-regex) selectors. key is the key as written, canon its canonical
+// spelling, which custom / regex were parsed from. It returns one KeyCheck
+// per violation, whose Message rides KeyValidation.Errors; the actual
+// consumers are (1) the exporter's config-load log (logConfigStats), (2) the
+// tenant-api write path — gitops/writer.go treats any Errors entry as
+// ErrValidation, so a bad version label is hard-rejected at the write
+// boundary — and (3) the CI readers, through da-guard's key_checks
+// (ADR-038 §11), which print the record's structured fields and Reason.
 //
 // The Go side is intentionally observability-grade: the exporter logs these
 // at config load so operators see violations even if a tenant bypasses CI.
-func validateVersionLabel(tenant, key string, custom, regex map[string]string) []string {
+func validateVersionLabel(tenant, key, canon string, custom, regex map[string]string) []KeyCheck {
 	exact, hasExact := custom["version"]
 	pattern, hasRegex := regex["version"]
 	if !hasExact && !hasRegex {
 		return nil // no version label on this key — nothing to validate
 	}
 
-	var w []string
+	var w []KeyCheck
 
 	// Which bases a version label is served on is `dimensions:`'s (#3475):
 	// a version label on an undeclared base is not served (unconsumed), so
@@ -1967,25 +1960,17 @@ func validateVersionLabel(tenant, key string, custom, regex map[string]string) [
 	if hasRegex {
 		// Phase 1 expects exact version="..." selectors; a regex matcher on
 		// version is almost certainly a mistake and defeats per-version join.
-		w = append(w, fmt.Sprintf(
-			"WARN: tenant=%s: regex version matcher %q in key %q — ADR-024 "+
-				"Phase 1 expects an exact version=\"...\" selector", tenant, pattern, key))
+		w = append(w, newKeyCheck(KeyCheckVersionRegex, tenant, key, canon, pattern))
 	}
 
 	if hasExact {
 		switch {
 		case exact == "":
-			w = append(w, fmt.Sprintf(
-				"WARN: tenant=%s: empty version label in key %q (ADR-024 OQ-6 "+
-					"forbids empty — it collides with the unversioned baseline)", tenant, key))
+			w = append(w, newKeyCheck(KeyCheckVersionEmpty, tenant, key, canon, exact))
 		case exact == "default":
-			w = append(w, fmt.Sprintf(
-				"WARN: tenant=%s: literal version=\"default\" in key %q is reserved "+
-					"for the normalize-layer fallback (ADR-024 OQ-6)", tenant, key))
+			w = append(w, newKeyCheck(KeyCheckVersionDefault, tenant, key, canon, exact))
 		case !versionLabelRe.MatchString(exact):
-			w = append(w, fmt.Sprintf(
-				"WARN: tenant=%s: version %q in key %q violates %s "+
-					"(ADR-024 OQ-6; pilot-calibratable)", tenant, exact, key, versionLabelPattern))
+			w = append(w, newKeyCheck(KeyCheckVersionCharset, tenant, key, canon, exact))
 		}
 	}
 
