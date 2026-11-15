@@ -20,7 +20,17 @@ ENV PATH="/opt/venv/bin:$PATH"
 # (tests/shared/test_toolchain_pin_parity.py::test_image_pip_pins_are_the_ci_constraints).
 # Literal, not `-c`: this build context is components/da-tools/app, which the CI
 # and Makefile image builds stub without build.sh, so requirements/ is not in it.
-RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.10.0 && \
+#
+# jsonschema (#2744): validate-config's `json_schema` row needs it; without it
+# the row is WARN "not checked" and the image gives no verdict on the shape of
+# any value. Its whole dependency closure is pinned here, not left to the
+# resolver, so the image carries the versions CI tests. rpds-py is a Rust
+# extension: `--only-binary` makes a missing musllinux wheel fail the build
+# instead of looking for a Rust toolchain this stage does not have.
+RUN pip install --no-cache-dir --only-binary=rpds-py \
+        PyYAML==6.0.3 promql-parser==0.10.0 \
+        jsonschema==4.26.0 jsonschema-specifications==2025.9.1 \
+        referencing==0.37.0 rpds-py==2026.9.1 attrs==26.1.0 && \
     python -m pip uninstall -y pip
 
 # ── Runtime Stage ──────────────────────────────────────────────────
