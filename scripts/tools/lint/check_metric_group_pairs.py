@@ -169,7 +169,7 @@ def group_namespace_errors(by_pack: dict[str, dict[str, list[str]]]) -> list[str
                     "prefix the custom-alert compiler gives its SLO alerts — a tenant's SLO "
                     "alert of that name would share its severity-dedup group. Rename it. (#3692)")
             # The dedup inhibit's target is `severity="warning"` only
-            # (_grar_routes._build_inhibit_rules): an `info` member is never
+            # (_grar_routes.build_dedup_inhibit_rule): an `info` member is never
             # muted, so it does not make a group do anything.
             has_crit = "critical" in severities
             has_base = "warning" in severities

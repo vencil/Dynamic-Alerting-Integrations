@@ -204,7 +204,6 @@
         "docker/login-action",
         "docker/setup-buildx-action",
         "docker/setup-qemu-action",
-        "dorny/paths-filter",
         "marocchino/sticky-pull-request-comment",
         "renovatebot/github-action",
         "sigstore/cosign-installer"

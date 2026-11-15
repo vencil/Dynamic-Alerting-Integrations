@@ -42,7 +42,7 @@ from typing import Any, Iterable, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib_confd  # noqa: E402
-from _lib_validation import shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: keys and values into messages)
+from _lib_validation import shown_file, shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: keys and values into messages; #3703: files)
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
@@ -355,8 +355,9 @@ def finding_line(f: Finding, limit: int) -> str:
             for d in f.dead_entries) + ")"
     # A profile key no tenant binds names none (#3042).
     who = f"tenant(s) {who}" if who else "no tenant"
-    # #1560 ⑤-b: a key is the author's text and may be a URL.
-    return f"{f.file or '?'}: {f.severity}: {f.kind} `{shown_key(f.key)}`{why} — {who}"
+    # #1560 ⑤-b: a key is the author's text and may be a URL; #3703: so is a
+    # conf.d path (`shown_file`).
+    return f"{shown_file(f.file) or '?'}: {f.severity}: {f.kind} `{shown_key(f.key)}`{why} — {who}"
 
 
 def undecidable_line(verdict: TreeVerdict) -> str | None:

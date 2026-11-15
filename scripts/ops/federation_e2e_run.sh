@@ -13,10 +13,17 @@
 # and excluded from the unit-test coverage gate.
 #
 # Steps: 1 driver venv · 2 render chart configs · 3 keypair · 4 empty
-#        revoked set · 5 compose up · 6 pytest · 7 logs-on-fail · 8 down
+#        revoked set · 5 compose pull (retried) + up · 6 pytest ·
+#        7 logs-on-fail · 8 down
+#
+# Exit codes: 0 every scenario passed · 2 a stack's images could not be
+# pulled after retries (no scenario of that stack ran — a registry/network
+# failure, not a test failure) · otherwise pytest's own exit code.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/ops/_compose_pull_retry.sh
+source "$SCRIPT_DIR/_compose_pull_retry.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 E2E_DIR="$REPO_ROOT/tests/federation-e2e"
 RENDERED="$E2E_DIR/rendered"
@@ -185,6 +192,11 @@ chmod 0777 "$RENDERED/audit-log"
 # #1278 D1 (the audit-sidecar image used to, for mtail); --build stays so a
 # `build:` service added later is never run from a stale local image.
 # ---------------------------------------------------------------------------
+# Pull first, with retries: the job is a required check, and an implicit pull
+# inside `up` fails on a registry hiccup exactly as a broken stack would.
+# `|| exit` keeps the function's 2 (set -e would also stop here, but with
+# whatever code the last command had).
+compose_pull_with_retry metrics || exit "$?"
 echo "[fed-e2e] docker compose up (metrics stack)..."
 docker compose up -d --build
 
@@ -215,6 +227,7 @@ docker compose down -v
 # python:alpine (no --build), gateway is the same distroless Envoy.
 # ---------------------------------------------------------------------------
 if [[ "$rc" -eq 0 ]]; then
+    compose_pull_with_retry victorialogs "${VL_COMPOSE[@]}" || exit "$?"
     echo "[fed-e2e] docker compose up (victorialogs stack)..."
     docker compose "${VL_COMPOSE[@]}" up -d
     set +e

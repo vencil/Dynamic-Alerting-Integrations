@@ -41,7 +41,8 @@ BUILD_EXEMPT = frozenset({
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_atomic_write.py",  # #3107: library, not CLI
-    "_lib_kubectl.py",  # #3207/#3210: cluster reader, library not CLI
+    "_lib_kubectl.py",  # #3207/#3210, #3539: kubectl launcher and cluster reader, library not CLI
+    "_lib_engine.py",  # #3611 / #3539: engine locate/run, imported by _lib_kubectl; library not CLI
     "_lib_io.py",
     # #3276 — caller-path judgement (stdlib only) and safe_label, split out
     # of _lib_io so tools without PyYAML can import them. Library, not CLI.
@@ -58,6 +59,8 @@ BUILD_EXEMPT = frozenset({
     # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
     # batchpr / parser dispatcher boilerplate. Library, not CLI.
     "_lib_godispatch.py",
+    # #3862 — the record of a reader binary that did not run. Library, not CLI.
+    "_lib_tool_fault.py",
     # v2.8.0 PR #432 — cross-platform compat helpers (try_utf8_stdout
     # consolidated from 4 callsites). Library, not CLI.
     "_lib_compat.py",

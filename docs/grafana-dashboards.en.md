@@ -74,7 +74,7 @@ threshold-exporter runs several replicas and the platform's Prometheus scrapes e
 | 3 | Warning/Critical | `count(max without(instance, pod) (user_threshold{severity="warning\|critical"}))` | Critical 20-40% | Critical>50%→check Rule Pack |
 | 4 | Silent Mode | `count(max without(instance, pod) (user_silent_mode)) or vector(0)` | 0 or planned maintenance | Unexpected>0→check `_silent_mode` |
 | 5 | Maintenance Mode | `count(max without(instance, pod) (user_state_filter{filter="maintenance"}))` | 0 or planned maintenance | Unexpected>0→check `_state_maintenance` |
-| 6 | Dedup Disabled | `count(max without(instance, pod) (user_severity_dedup{mode="disable"}))` | 0 or few | Unexpected>0→check `_severity_dedup` |
+| 6 | Dedup Enabled | `count(max without(instance, pod) (user_severity_dedup{mode="enable"})) or vector(0)` | Most tenants (on by default) | Lower than expected→check `_severity_dedup`; a tenant set to `disable` sends no series, so disabled tenants cannot be counted from this metric |
 
 ---
 

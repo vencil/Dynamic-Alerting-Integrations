@@ -337,7 +337,7 @@ def test_one_hook_runs_each_jsx_check_in_its_strictest_mode():
     for path in ("tools/portal/src/interactive/tools/x.jsx", "tools/portal/src/a/b.js",
                  "tools/portal/entries/x.entry.jsx", "tools/portal/build.mjs",
                  # Built, not a literal: only matched against the regex,
-                 # never read (the path-filter scanner harvests literals).
+                 # never read.
                  "tools/portal/" + "package.json",
                  "tools/portal/esbuild-shared.mjs", "tools/portal/package-lock.json",
                  "scripts/tools/lint/lint_jsx_syntax.py"):
