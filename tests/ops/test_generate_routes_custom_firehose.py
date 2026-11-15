@@ -255,7 +255,7 @@ def _fake_cluster(monkeypatch, am_yml: str) -> list[list[str]]:
 
     def fake(argv, *, timeout, stdin_text=None):
         calls.append(list(argv))
-        out = json.dumps({"data": {"alertmanager.yml": am_yml}}) \
+        out = json.dumps({"metadata": {"managedFields": []}, "data": {"alertmanager.yml": am_yml}}) \
             if argv[:2] == ["kubectl", "get"] else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
@@ -277,7 +277,7 @@ def test_apply_judges_the_clusters_firehose(tmp_path, monkeypatch, capsys,
                   *(["--strict"] if strict else [])])
     err = capsys.readouterr().err
     assert code == rc, err[-2000:]
-    applied = any(c[:2] == ["kubectl", "apply"] for c in calls)
+    applied = any(c[:2] == ["kubectl", "replace"] for c in calls)
     assert applied is (rc == 0), calls
     found = [ln for ln in err.splitlines() if ln.split(": ", 1)[-1].startswith("tenant 't1'")]
     if base is _BASE_FIREHOSE_WITH_WEBHOOK:

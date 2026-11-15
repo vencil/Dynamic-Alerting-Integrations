@@ -44,7 +44,6 @@ Functions:
 """
 from __future__ import annotations
 
-import base64
 import contextlib
 import copy
 import io
@@ -1405,8 +1404,8 @@ def configmap_binary_bytes(binary: "dict[str, str]") -> int:
     total = 0
     for v in binary.values():
         try:
-            total += len(base64.b64decode(v, validate=True))
-        except (ValueError, TypeError):
+            total += len(_lib_consumer_read.binary_data_bytes(v))
+        except ValueError:  # binascii.Error is one
             total += len(v.encode("utf-8"))
     return total
 
@@ -1596,7 +1595,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     if owners:
         print(f"ERROR: ConfigMap {namespace}/{configmap_name}: its "
               f"'{AM_CONFIGMAP_KEY}' / '{AM_BASE_CONFIGMAP_KEY}' keys are managed by "
-              f"{', '.join(repr(o) for o in owners)}, not by kubectl or this tool — refusing "
+              f"{', '.join(f"'{safe_label(o)}'" for o in owners)}, not by kubectl or this tool — refusing "
               "to take them over (nothing was applied). Change the config where that tool "
               "reads it (e.g. commit --output-configmap's output to its repository), or "
               "suspend its sync for this object before running --apply.", file=sys.stderr)
