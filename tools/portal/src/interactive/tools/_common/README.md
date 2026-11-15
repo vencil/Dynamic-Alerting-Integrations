@@ -70,11 +70,12 @@ import ENUMS from './_common/data/recipe-enums.json';   // JSON imports directly
 ```
 
 A page that hands YAML to `sim/alert-engine.js` (Alert Preview, YAML
-Validator) imports `parseTenantYaml` instead of `parseYaml`: the exporter reads a
-threshold scalar's text, and `parseYaml` has already made `0x1F` the number
-31 (#3919). Every other use keeps `parseYaml` — Routing Trace included,
-which reads a threshold with its own `parseFloat` and is not held to the
-exporter's grammar.
+Validator), or reads a threshold itself with `validation/threshold-value.js`
+`readThresholdRow` (Routing Trace, #3957), imports `parseTenantYaml` instead
+of `parseYaml`: the exporter reads a threshold scalar's text, and `parseYaml`
+has already made `0x1F` the number 31 (#3919). Every other use keeps
+`parseYaml`. `tests/threshold-value-simulator.test.ts` holds this for every
+page outside `_common/`.
 
 Use the symbol like any local binding. esbuild orders chunks so an
 import target always evaluates before its importer — there is nothing to

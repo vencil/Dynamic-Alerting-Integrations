@@ -10,8 +10,9 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // load time: no module in the graph imported portal-shared.jsx, so
 // the producer never ran.
 import { DOMAIN_POLICIES } from './_common/data/routing-profiles.js';
-import { parseYaml } from './_common/validation/yaml-parser.js';
-import { generateSampleYaml, resolveRoutingLayers } from './_common/sim/alert-engine.js';
+import { parseTenantYaml } from './_common/validation/yaml-parser.js';
+import { readThresholdRow } from './_common/validation/threshold-value.js';
+import { generateSampleYaml, resolveRoutingLayers, unreadableThresholdMessage } from './_common/sim/alert-engine.js';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
@@ -30,20 +31,26 @@ function RoutingTraceTab() {
   }, []);
 
   const visualize = useCallback(() => {
-    const { config } = parseYaml(yaml);
+    // parseTenantYaml hands a threshold over as the text that was written,
+    // and readThresholdRow reads it as the exporter does (#3957): parseFloat
+    // read `0x1F` as 31, `70:high` as 70 and `1_000` as 1, values the
+    // exporter refuses. `_` keys (`_routing` among them) are typed as
+    // parseYaml types them, so the routing layers read what they did.
+    const { config } = parseTenantYaml(yaml);
     const routingResult = resolveRoutingLayers(config);
 
-    // Build alert trace
-    // parseYaml keeps YAML types (#2033): an unquoted `0` is the number 0,
-    // a real threshold — so test for a parseable number, not truthiness.
-    const toNum = (v) => {
-      const n = v === undefined || v === null || v === '' ? NaN : parseFloat(v);
-      return isNaN(n) ? null : n;
-    };
-    const threshold = toNum(config[traceMetric]);
-    const critKey = `${traceMetric}_critical`;
-    const critThreshold = toNum(config[critKey]);
+    // Build alert trace. A `_critical` key's whole value is its number
+    // (tier 'critical'): `80:critical` there is no critical tier, so it
+    // inhibits nothing.
+    const baseRow = readThresholdRow(config[traceMetric]);
+    const critRow = readThresholdRow(config[`${traceMetric}_critical`], 'critical');
+    const threshold = baseRow.kind === 'number' ? baseRow.number : null;
+    const critThreshold = critRow.kind === 'number' ? critRow.number : null;
     const hasCritical = critThreshold !== null;
+    const unreadable = [
+      baseRow.kind === 'unreadable' && { key: traceMetric, msg: unreadableThresholdMessage(baseRow.raw) },
+      critRow.kind === 'unreadable' && { key: `${traceMetric}_critical`, msg: unreadableThresholdMessage(critRow.raw, 'critical') },
+    ].filter(Boolean);
 
     // Determine inhibit effect
     const isInhibited = traceSeverity === 'warning' && hasCritical;
@@ -67,6 +74,7 @@ function RoutingTraceTab() {
         criticalThreshold: critThreshold,
         hasCritical,
         isInhibited,
+        unreadable,
         policyViolations,
       },
     });
@@ -165,6 +173,11 @@ function RoutingTraceTab() {
                   {result.trace.hasCritical && <span className="ml-2 text-gray-500">critical: {result.trace.criticalThreshold}</span>}
                 </div>
               )}
+              {result.trace.unreadable.map(({ key, msg }) => (
+                <div key={key} data-testid={`trace-unreadable-${key}`} className="text-red-700 font-sans">
+                  {key}: {msg}
+                </div>
+              ))}
             </div>
           </div>
 
