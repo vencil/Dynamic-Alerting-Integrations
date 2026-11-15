@@ -659,7 +659,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +6, generators +28. Red here means RAISE the floor.
+#     tolerate +7, generators +28. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -713,6 +713,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      the artifact floor went 72 -> 73: the full-l0-l3 probe reads 72 against
 #      it, one-key margin kept, DOWN stays 12. Because the biggest group grew by
 #      the same one, UP is back to +6 — the mirror image of #3778's move.)
+#     (#3929 promoted rabbitmq_node_mem_percent the same way: the exporter's
+#      conf.d `_defaults.yaml` gained it, 19 -> 20, total 85 -> 86, the artifact
+#      floor went 73 -> 74 (the full-l0-l3 probe reads 73 against it, DOWN stays
+#      12), and with the biggest group one larger again UP is +7.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -730,13 +734,14 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     init (-4). The floor follows the biggest group so UP stays +28: 80 -> 76,
 #     and DOWN is 10. D-A A2b then ADDED three keys to the chart (7 -> 10 shipped
 #     defaults; scaffold and init already rendered them), total 86 -> 89: the
-#     floor went 76 -> 79, so UP stays +28 and DOWN stays 10.
+#     floor went 76 -> 79, so UP stays +28 and DOWN stays 10. #3929 added an
+#     eleventh (rabbitmq_node_mem_percent), total 89 -> 90, floor 79 -> 80.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 79
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 73
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 80
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
