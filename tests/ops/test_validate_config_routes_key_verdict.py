@@ -238,18 +238,22 @@ def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
     assert "_profiles.yaml: error: unread `_namespaces` (not_read_in_profile) — no tenant" in _key_lines(r), r
 
 
-def test_the_exporters_key_checks_are_printed_as_it_words_them(tmp_path):
+def test_the_exporters_key_checks_are_printed_from_their_fields(tmp_path):
     """ADR-038 §11: a `version` label the exporter refuses and a retired
-    spelling are the exporter's own lines (da-guard served-values'
-    key_checks); this tool judges no key name itself."""
+    spelling are the exporter's own checks (da-guard served-values'
+    key_checks); this tool judges no key name itself. #3703: the line names
+    the metric and the key's stand-in, never the key as written."""
     r = vc.check_routes(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  container_cpu: 80\n  mysql_threads_running: 30\n",
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"40\"\n"
                      "    container_cpu{version=\"V2!\"}: \"5\"\n"}))
     # The dimensional key's `version` label is undeclared: it is unread too.
     assert r["status"] == vc.FAIL, r
-    assert any('version "V2!"' in d and "tenant=db-a" in d for d in r["details"]), r["details"]
-    assert any('"mysql_cpu" was renamed to "mysql_threads_running"' in d for d in r["details"]), r["details"]
+    assert any("key check version_label_charset: metric container_cpu, key <key:" in d
+               and "tenant=db-a" in d for d in r["details"]), r["details"]
+    assert any("key check renamed: metric mysql_cpu, key mysql_cpu, replacement metric "
+               "mysql_threads_running" in d for d in r["details"]), r["details"]
+    assert not any("V2!" in d for d in r["details"]), r["details"]
 
 
 class TestAPlatformDeclaringNothingIsNotAdvisedAway:

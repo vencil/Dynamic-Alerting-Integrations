@@ -20,8 +20,8 @@
   generator 對它什麼都不說的格子（`_NOT_JUDGED`）逐一列出並寫理由；哪天它
   開始說話，那格會紅，逼人重新分類。
 
-⚠️ 不在這個矩陣裡：key verdict 文件的 `key_checks`（`version` label、已改名
-的鍵）。那兩種訊息是 exporter 的 `KeyValidation` 原句，仍帶鍵名與 label 值。
+key verdict 文件的 `key_checks`（`version` label、已改名的鍵）不在這個矩陣裡：
+它由 `test_key_check_canary_matrix.py` 守，矩陣由 Go 的 key check kind 推導。
 """
 from __future__ import annotations
 

@@ -186,6 +186,13 @@ def run_check(
     if msg:
         errors.append(f"stale-surface: {msg}")
 
+    # 3d. the generated Go table of the default-armed thresholds (#3832), the
+    #     values the readers of conf.d are compiled with.
+    builtin_path = (surface_paths or {}).get(registry_lib.BUILTIN_DEFAULTS_GO_ID)
+    msg = registry_lib.check_builtin_defaults_go(doc, builtin_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+
     # 4. header-prose key membership (F6).
     if prose_files is None:
         # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;

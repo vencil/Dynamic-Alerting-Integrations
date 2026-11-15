@@ -297,8 +297,12 @@ def test_validate_prints_the_exporters_key_checks(tmp_path):
     assert res.returncode == 1, res.stderr
     recs = {r["kind"]: r for r in _key_records(doc)}
     label, renamed = recs.get("key_version_label"), recs.get("key_renamed")
-    assert label and 'version "V2!"' in label["message"], doc
-    assert renamed and '"mysql_cpu" was renamed to "mysql_threads_running"' in renamed["message"], doc
+    assert label and "key check version_label_charset: metric container_cpu, key <key:" in label["message"], doc
+    assert label["field"] == shown_key('container_cpu{version="V2!"}') in label["message"], label
+    assert renamed and ("key check renamed: metric mysql_cpu, key mysql_cpu, replacement metric "
+                        "mysql_threads_running") in renamed["message"], doc
+    assert renamed["field"] == "mysql_cpu", renamed
+    assert "V2!" not in res.stderr + json.dumps(doc), res.stderr
     for r in (label, renamed):
         assert r["blocks"] == "never" and r["tenant"] == "t-a", r
         assert r["message"].strip() in res.stderr, res.stderr
