@@ -64,9 +64,12 @@ describe('form: the op select on an edit with a stored group_by', () => {
   it('offers no == and says why, naming the group_by', () => {
     open(stored);
     expect(opValues()).not.toContain('==');
-    const note = screen.getByTestId('op-eq-group-by');
+    const note = screen.getByTestId('note-op');
     expect(note.textContent).toContain('group_by (["pod"])');
     expect(note.textContent).toContain('does not accept group_by with ==');
+    // read out with the select it explains
+    expect(screen.getByTestId('field-op').getAttribute('aria-describedby')).toBe(note.id);
+    expect(note.id).toBe('note-op');
   });
 
   it('a stored record already holding both shows its == as unavailable and cannot be saved until the op changes', () => {
@@ -86,6 +89,13 @@ describe('form: the op select on an edit with a stored group_by', () => {
     const { group_by: _g, ...noGroupBy } = stored;
     open(noGroupBy);
     expect(opValues()).toContain('==');
-    expect(screen.queryByTestId('op-eq-group-by')).toBeNull();
+    expect(screen.queryByTestId('note-op')).toBeNull();
+    expect(screen.getByTestId('field-op').hasAttribute('aria-describedby')).toBe(false);
+  });
+
+  it('only the op select shows a held value: the other selects are as before', () => {
+    open({ ...stored, for: '7m' });
+    const forSelect = screen.getByTestId('field-for') as HTMLSelectElement;
+    expect(Array.from(forSelect.options).map((o) => o.value)).not.toContain('7m');
   });
 });

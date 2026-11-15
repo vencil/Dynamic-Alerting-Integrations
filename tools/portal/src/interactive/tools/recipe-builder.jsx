@@ -423,18 +423,24 @@ export default function RecipeBuilder(props) {
     + 'focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]';
   const labelClass = 'block text-sm font-medium mb-1';
 
-  // A value the options leave out (a stored op `==` beside a group_by,
-  // #3958) is shown as a disabled option, not hidden behind the first one:
-  // the select says what the record holds, and picking another changes it.
-  const select = (key, label, options, note = null) => (
+  // `opts.held`: a value the options leave out (a stored op `==` beside a
+  // group_by, #3958) is shown as a disabled option, not hidden behind the
+  // first one — the select says what the record holds, and picking another
+  // changes it. `opts.note` is a line under the select it describes.
+  const select = (key, label, options, opts = {}) => (
     <div className="mb-3" key={key}>
       <label className={labelClass}>{label}</label>
       <select className={inputClass} value={f[key]} aria-label={label}
+        aria-describedby={opts.note ? `note-${key}` : undefined}
         data-testid={`field-${key}`} onChange={(e) => set(key, e.target.value)}>
-        {f[key] && !options.includes(f[key]) && <option key={f[key]} value={f[key]} disabled>{f[key]}</option>}
+        {opts.held && f[key] && !options.includes(f[key]) && <option key={f[key]} value={f[key]} disabled>{f[key]}</option>}
         {options.map((o) => <option key={o} value={o}>{o}</option>)}
       </select>
-      {note}
+      {opts.note && (
+        <p id={`note-${key}`} className="text-xs mt-1 text-[color:var(--da-color-muted)]" data-testid={`note-${key}`}>
+          {opts.note}
+        </p>
+      )}
     </div>
   );
 
@@ -458,13 +464,11 @@ export default function RecipeBuilder(props) {
 
   function renderField(field) {
     if (field === 'op') {
-      const note = eqBlockedByGroupBy(recipe, initialValue) && (
-        <p className="text-xs mt-1 text-[color:var(--da-color-muted)]" data-testid="op-eq-group-by">
-          {t(`這筆 recipe 帶 group_by（${JSON.stringify(initialValue.group_by)}），exporter 不接受 group_by 與 == 並用，所以這裡不提供 ==。要用 ==，請先在租戶 YAML 拿掉 group_by。`,
-            `This recipe has a group_by (${JSON.stringify(initialValue.group_by)}), and the exporter does not accept group_by with ==, so == is not offered here. To use ==, remove the group_by in the tenant YAML first.`)}
-        </p>
-      );
-      return select(field, LABELS[field], opOptions(recipe, initialValue), note);
+      const note = eqBlockedByGroupBy(recipe, initialValue)
+        ? t(`這筆 recipe 帶 group_by（${JSON.stringify(initialValue.group_by)}），exporter 不接受 group_by 與 == 並用，所以這裡不提供 ==。要用 ==，請先在租戶 YAML 拿掉 group_by。`,
+          `This recipe has a group_by (${JSON.stringify(initialValue.group_by)}), and the exporter does not accept group_by with ==, so == is not offered here. To use ==, remove the group_by in the tenant YAML first.`)
+        : null;
+      return select(field, LABELS[field], opOptions(recipe, initialValue), { held: true, note });
     }
     if (['severity', 'mode', 'for', 'horizon'].includes(field)) {
       return select(field, LABELS[field], ENUMS[field]);
