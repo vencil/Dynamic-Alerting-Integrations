@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -192,9 +193,18 @@ func TestSeedBuiltinDefaults(t *testing.T) {
 		"root value":        {map[string]float64{k: 7}, 7},
 		"root zero":         {map[string]float64{k: 0}, 0},
 	} {
-		seedBuiltinDefaults(tc.in)
+		seeded := seedBuiltinDefaults(tc.in)
 		if got := tc.in[k]; got != tc.want {
 			t.Errorf("%s: %s = %v, want %v", name, k, got, tc.want)
+		}
+		// #3832: the keys it reports seeding are exactly the ones it gave
+		// the platform's value — FlatBuild.BuiltinSeeded, which da-guard's
+		// builtin_defaults reads as `builtin`.
+		if slices.Contains(seeded, k) != (tc.want == want && name != "root value" && name != "root zero") {
+			t.Errorf("%s: seeded %v, %s listed = %v", name, seeded, k, slices.Contains(seeded, k))
+		}
+		if !slices.IsSorted(seeded) {
+			t.Errorf("%s: seeded %v not sorted", name, seeded)
 		}
 		if len(tc.in) != len(builtinDefaults) && name == "absent" {
 			t.Errorf("%s: %d keys seeded, want %d", name, len(tc.in), len(builtinDefaults))
@@ -243,5 +253,16 @@ func TestMergeTenantWithRootDefaults_BuiltinLayer(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// BuiltinDefaultStates gives no answer without a build (#3832): da-guard
+// writes `builtin_defaults: null` then, never an empty or invented table.
+func TestBuiltinDefaultStates_NoBuildIsNoAnswer(t *testing.T) {
+	if got := (*ScopedTenants)(nil).BuiltinDefaultStates(); got != nil {
+		t.Errorf("nil ScopedTenants: %v, want nil", got)
+	}
+	if got := (&ScopedTenants{}).BuiltinDefaultStates(); got != nil {
+		t.Errorf("no build: %v, want nil", got)
 	}
 }

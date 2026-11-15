@@ -34,7 +34,7 @@ updated_at: 2026-11-15
 | 2026-10-27 | 子目錄 `_defaults.yaml` 不再帶 `_` 開頭的鍵（da-guard 報 error）；租戶這一側把這類鍵寫成 `null` 一律回到平台預設 | 決策 2、4、10 |
 | 2026-10-27 | 閾值在每一層同一種讀法（原文讀成數字）：根目錄 `defaults:` 讀不了的純量只拒收那個鍵、不再丟掉整份檔；最終設定與 `merged_hash` 讀到的與 exporter 相同；根目錄 `defaults:` 裡的保留鍵不傳給任何租戶 | 決策 4、6、10 |
 | 2026-10-28 | 子目錄才寫、根目錄沒宣告的閾值：da-guard 報 error（結束碼 1） | 決策 3 |
-| 2026-11-15 | 平台預設啟用的閾值由讀取端內建，排在根目錄 `_defaults.yaml` 之下：根目錄沒寫、寫 `null` 或寫了讀不了的值，都拿平台值；最終設定與 `merged_hash` 涵蓋它 | 決策 1、2、3、4、7、11 |
+| 2026-11-15 | 平台預設啟用的閾值由讀取端內建，排在根目錄 `_defaults.yaml` 之下：根目錄沒寫、寫 `null` 或寫了讀不了的值，都拿平台值；最終設定與 `merged_hash` 涵蓋它；`validate-config` 印出內建表摘要與每個鍵的處理 | 決策 1、2、3、4、7、11 |
 
 ## 名詞
 
@@ -360,6 +360,8 @@ tenants:
 | 規則包的登錄表比 exporter 新 | 新的預設啟用鍵沒有內建值，告警不響 |
 | exporter 比規則包新 | 新增的鍵多出沒有規則讀的列；重新校準過的值由舊規則照讀 |
 | CI 的 da-guard 或 tenant-api 比部署中的 exporter 新 | 靠內建層的樹或寫入在檢查端通過，exporter 卻不送那些列（[ADR-036](036-single-parser-effective-config.md) §6） |
+
+**摘要與每個鍵的處理在哪裡讀得到**：`da-tools validate-config` 的 `platform_defaults` 列第一行印出 da-tools 帶的內建表摘要，之後每個預設啟用鍵一行，寫出這棵樹怎麼處理它：`builtin`（根目錄沒給值，由內建層給平台值，附 `/metrics` 送這個值的租戶數）或 `overridden`（根目錄給了數字，附那個數與平台值）。答案取自 `da-guard effective` 輸出的 `builtin_defaults`，validate-config 不另讀登錄表。
 
 升級與回退時要注意同一件事：還沒有內建層的舊版讀取端，讀到一棵只放覆寫的樹，那些鍵就沒有值。所以要先把讀取端都升級完，才刪掉根目錄裡與平台相同的數字；要回退到舊版，先把它們放回去。
 

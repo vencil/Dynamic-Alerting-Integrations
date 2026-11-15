@@ -29,7 +29,7 @@ lang: en
 | 2026-10-27 | A subdirectory `_defaults.yaml` no longer carries keys starting with `_` (da-guard reports an error); a tenant-side `null` on such a key always means the platform default | Decisions 2, 4, 10 |
 | 2026-10-27 | A threshold is read one way at every level (its text, as a number): a scalar the exporter cannot read in the root `defaults:` refuses that key alone and no longer drops the whole file; the effective config and `merged_hash` read what the exporter reads; a reserved key in the root `defaults:` reaches no tenant | Decisions 4, 6, 10 |
 | 2026-10-28 | A threshold only a subdirectory writes and the root does not declare: da-guard reports an error (exit 1) | Decision 3 |
-| 2026-11-15 | The thresholds the platform ships armed are built into the readers, below the root `_defaults.yaml`: a key the root does not write, writes as `null` or writes as a value it cannot read gets the platform's value; the effective config and `merged_hash` cover it | Decisions 1, 2, 3, 4, 7, 11 |
+| 2026-11-15 | The thresholds the platform ships armed are built into the readers, below the root `_defaults.yaml`: a key the root does not write, writes as `null` or writes as a value it cannot read gets the platform's value; the effective config and `merged_hash` cover it; `validate-config` prints the built-in digest and what the tree does with each key | Decisions 1, 2, 3, 4, 7, 11 |
 
 ## Terms
 
@@ -355,6 +355,8 @@ tenants:
 | The rule packs' registry is newer than the exporter | A newly armed key has no built-in value; its alert does not fire |
 | The exporter is newer than the rule packs | A newly armed key serves rows no rule reads; a recalibrated value is read by the old rules |
 | CI's da-guard or tenant-api is newer than the running exporter | A tree or a write that relies on the built-in layer passes the check, while the exporter does not serve those rows ([ADR-036](036-single-parser-effective-config.en.md) §6) |
+
+**Where the digest and each key's handling can be read**: the `platform_defaults` row of `da-tools validate-config` prints the built-in digest da-tools holds on its first line, then one line per default-armed key saying what this tree does with it: `builtin` (the root gives it no value, so the built-in layer gives the platform's, with the number of tenants `/metrics` serves that value) or `overridden` (the root gives a number, shown with the platform's value). The answer is `da-guard effective`'s `builtin_defaults`; validate-config reads no registry of its own.
 
 Upgrades and rollbacks have to mind the same thing: an older reader without the built-in layer reads a tree that holds only overrides and finds no value for those keys. So upgrade every reader first, and only then delete the root's numbers that equal the platform's; to roll back to an older version, put them back first.
 
