@@ -71,24 +71,34 @@ def test_rule_files_in_order_as_prometheus_reads_them(tmp_path) -> None:
 def test_a_refused_rule_file_cannot_be_read_as_empty(tmp_path) -> None:
     a = _write(tmp_path, "a.yml", GOOD)
     b = _write(tmp_path, "b.yml", BAD_PROMQL)
-    missing = str(tmp_path / "missing.yml")
     # The default interface raises, carrying every file's result.
     with pytest.raises(cr.RuleFilesRefused) as exc_info:
-        cr.prometheus_rule_files([a, b, missing])
+        cr.prometheus_rule_files([a, b])
     refused = exc_info.value
-    assert [r.path for r in refused.refused] == [b, missing]
-    assert [r.path for r in refused.results] == [a, b, missing]
+    assert [r.path for r in refused.refused] == [b]
+    assert [r.path for r in refused.results] == [a, b]
     assert any(ln.startswith(f"{b}: ") and "parse error" in ln for ln in refused.stderr_lines)
     # The per-file interface returns them; a refused one's contents raise.
-    results = cr.prometheus_rule_file_results([a, b, missing])
+    results = cr.prometheus_rule_file_results([a, b])
     assert results[0].problem is None and results[0].groups
     assert "parse error" in results[1].problem
-    for r in results[1:]:
-        with pytest.raises(cr.RuleFileRefused) as one:
-            r.groups
-        assert one.value.path == r.path
-        with pytest.raises(cr.RuleFileRefused):
-            r.documents
+    with pytest.raises(cr.RuleFileRefused) as one:
+        results[1].groups
+    assert one.value.path == b
+    with pytest.raises(cr.RuleFileRefused):
+        results[1].documents
+
+
+def test_a_rule_file_that_cannot_be_opened_is_no_refusal(tmp_path) -> None:
+    """#3943: da-read cannot open it — no answer about any file (exit 2, no
+    refusal document), never a refused file."""
+    a = _write(tmp_path, "a.yml", GOOD)
+    missing = str(tmp_path / "missing.yml")
+    for read in (cr.prometheus_rule_files, cr.prometheus_rule_file_results):
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            read([a, missing])
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert any(missing in ln for ln in exc.value.stderr_lines), exc.value.stderr_lines
 
 
 def test_a_second_document_with_content_is_refused(tmp_path) -> None:
@@ -97,22 +107,32 @@ def test_a_second_document_with_content_is_refused(tmp_path) -> None:
     assert "YAML document 2 of the file has content" in r.problem
 
 
-@pytest.mark.parametrize("stderr", [
-    "panic: runtime error",          # a Go crash exits 2 too
-    "fatal error: out of memory",
-    "",                              # rc 2 without a reason
+@pytest.mark.parametrize("answer,stderr,refused", [
+    # #3943: the refusal document's `answer` beside `files` is the refusal
+    (', "answer": "refused"', "da-read: a.yml: x", True),
+    (', "answer": "refused"', "", True),
+    # the files JSON without it — an older da-read — is no answer, whatever
+    # stderr holds
+    ("", "da-read: a.yml: x", False),
+    ("", "panic: runtime error", False),
+    ("", "", False),
+    (', "answer": "read"', "da-read: a.yml: x", False),
 ])
-def test_a_rule_file_run_that_is_not_a_refusal_is_not_input_refused(tmp_path, stderr) -> None:
+def test_a_rule_file_refusal_is_the_refusal_document(tmp_path, answer, stderr, refused) -> None:
     """The rule-file batch takes the same judgement of "refused" as every
-    other reading (`_refused`): rc 2 with JSON that refuses a file is still
-    no answer about the file when stderr is a crash or empty."""
+    other reading (`_refusal`): rc 2 with JSON that refuses a file is a
+    refusal only with the refusal document's `answer`."""
     a = _write(tmp_path, "a.yml", GOOD)
     payload = ('{"files": [{"path": "%s", "documents": null, '
-               '"problem": {"message": "x"}}]}' % a)
+               '"problem": {"message": "x"}}]%s}' % (a, answer))
     fake = tmp_path / "fake-da-read"
     say = f"echo '{stderr}' >&2; " if stderr else ""
     fake.write_text(f"#!/bin/sh\necho '{payload}'; {say}exit 2\n", encoding="utf-8")
     fake.chmod(0o755)
+    if refused:
+        [r] = cr.prometheus_rule_file_results([a], binary=str(fake))
+        assert r.problem == "x"
+        return
     with pytest.raises(cr.ConsumerReadError) as exc:
         cr.prometheus_rule_file_results([a], binary=str(fake))
     assert not isinstance(exc.value, cr.InputRefused)

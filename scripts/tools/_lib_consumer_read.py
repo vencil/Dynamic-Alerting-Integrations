@@ -186,34 +186,62 @@ class ConsumerReadError(Exception):
 
 
 class InputRefused(ConsumerReadError):
-    """The binary ran and refused its input (exit 2 with its reason on
-    stderr): the consumer does not read this text. Every other
+    """The binary ran and refused its input: the consumer does not read this
+    text (its reason is in ``stderr_lines``). Every other
     :class:`ConsumerReadError` means the reading could not be had at all —
     a caller that reports a refused input as a finding must not report a
     missing binary that way.
 
-    ⛔ Only :func:`_refused` decides this, so there is one judgement of it:
-    exit 2 (da-crdecode's and da-read's answer to the input; the arguments
-    are ours, so not a usage error) with a reason on stderr that is not a Go
-    runtime crash — a panic also exits 2 with stderr, and is not an answer
-    about the input — nor a usage line (a binary too old for our arguments). Not found, could not run, did not finish, any other exit
-    code, exit 0 without the JSON contract: a plain ConsumerReadError.
+    ⛔ Only :func:`_refusal` decides this, so there is one judgement of it:
+    exit 2 **and** the refusal document on stdout (#3943). da-crdecode and
+    da-read exit 2 for much that is no answer about the input too — a usage
+    error (a binary older than our arguments), a Go panic or fatal error, a
+    file it cannot open, stdin or stdout it cannot read or write — and print
+    no refusal document then; nor does a binary older than this contract.
+    Each of those is a plain ConsumerReadError, as are not found, could not
+    run, did not finish, any other exit code, and exit 0 without the JSON
+    contract.
     """
 
 
-#: A Go runtime crash: the first stderr line of an unrecovered panic or a
-#: fatal runtime error (both exit 2, as a refusal does) — and the usage
-#: line, which a binary older than the arguments we give it prints (exit 2;
-#: an old da-crdecode does not know ``--any-shape``, #3426). None of them is
-#: an answer about the input.
-_GO_CRASH_PREFIXES = ("panic: ", "fatal error: ", "usage: ")
+#: The refusal document (#3943): what da-crdecode and da-read print on
+#: stdout, with exit 2, exactly when they refuse the input — a JSON object
+#: whose ``answer`` is ``"refused"``. ``da-read prometheus-rules`` prints it
+#: beside its ``files``; every other reading prints it alone. It holds
+#: constants only, never text of the input (ADR-036, #3703). The Go side's
+#: copies (``answerRefused`` in components/da-read/main.go and
+#: cmd/da-crdecode/main.go) are held to these by
+#: tests/shared/test_reader_refusal_document.py, which runs both binaries.
+REFUSAL_KEY = "answer"
+REFUSED = "refused"
 
 
-def _refused(returncode: int, lines: list[str]) -> bool:
-    """Whether a run that exited *returncode* with stderr *lines* is the
-    binary refusing its input (see :class:`InputRefused`)."""
-    return (returncode == 2 and bool(lines)
-            and not lines[0].startswith(_GO_CRASH_PREFIXES))
+def _refusal(proc: subprocess.CompletedProcess) -> "dict | None":
+    """The refusal document *proc* printed — the parsed stdout, when it
+    exited 2 and its stdout is a JSON object whose ``answer`` is
+    ``"refused"`` — else None (see :class:`InputRefused`)."""
+    if proc.returncode != 2:
+        return None
+    try:
+        out = json.loads(proc.stdout)
+    except ValueError:  # JSONDecodeError, or stdout that is not UTF-8
+        return None
+    return out if isinstance(out, dict) and out.get(REFUSAL_KEY) == REFUSED else None
+
+
+def _no_answer(name: str, args: "list[str]", proc: subprocess.CompletedProcess,
+               lines: "list[str]") -> ConsumerReadError:
+    """The error for a run of *name* that gave no answer: an exit other than
+    0 without the refusal document. Exit 2 without it is a usage error, a Go
+    crash, an I/O failure or a binary older than the refusal document — the
+    stderr lines say which."""
+    if proc.returncode > 0:  # a signal was recorded by _invoke
+        _fault(name, args, "unexpected_exit")
+    if proc.returncode == 2:
+        return ConsumerReadError(
+            f"{name} exited 2 without a refusal document: no answer about the input "
+            f"(bad arguments, a crash, an I/O error, or an older {name}? rebuild it)", lines)
+    return ConsumerReadError(f"{name} exited {proc.returncode}", lines)
 
 
 def error_text(e: ConsumerReadError) -> str:
@@ -324,17 +352,10 @@ def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str],
 def _run(binary: str | None, name: str, env: str, build_hint: str,
          args: list[str], stdin: bytes | None) -> dict:
     proc, lines = _invoke(binary, name, env, build_hint, args, stdin)
-    if proc.returncode == 2 and lines and lines[0].startswith("usage: "):
-        _fault(name, args, "stale")
-        raise ConsumerReadError(
-            f"{name} printed its usage for the arguments {args[:-1] or args} "
-            f"(an older {name}? rebuild it)", lines)
-    if _refused(proc.returncode, lines):
+    if _refusal(proc) is not None:
         raise InputRefused(f"{name} refused the input", lines)
     if proc.returncode != 0:
-        if proc.returncode > 0:  # a signal was recorded by _invoke
-            _fault(name, args, "unexpected_exit")
-        raise ConsumerReadError(f"{name} exited {proc.returncode}", lines)
+        raise _no_answer(name, args, proc, lines)
     out = _json(proc, name, lines, args)
     docs = out.get("documents") if isinstance(out, dict) else None
     if not isinstance(docs, list):
@@ -726,18 +747,16 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     args = ["prometheus-rules", *absolute]
     proc, lines = _invoke(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                           args, None)
-    # rc 0 is "every file read"; a refusal (`_refused`: rc 2 with a reason on
-    # stderr that is not a Go crash — da-read names each refused file there)
-    # with the JSON on stdout is "a file is refused". Anything else — rc 2
-    # with nothing on stdout (a usage error), a crash, any other rc — is not
-    # an answer about the files.
-    if not proc.stdout.strip() or not (
-            proc.returncode == 0 or _refused(proc.returncode, lines)):
-        if proc.returncode >= 0:  # a signal was recorded by _invoke
-            stale = proc.returncode == 2 and lines and lines[0].startswith("usage: ")
-            _fault(DA_READ_BINARY_NAME, args, "stale" if stale else "unexpected_exit")
-        raise ConsumerReadError(f"{DA_READ_BINARY_NAME} exited {proc.returncode}", lines)
-    out = _json(proc, DA_READ_BINARY_NAME, lines, args)
+    # rc 0 is "every file read"; rc 2 with the refusal document (`_refusal`:
+    # its `answer` beside `files`) is "a file is refused". Anything else — rc
+    # 2 without it (a usage error, a crash, a file it cannot open, an I/O
+    # error, an older da-read), any other rc — is not an answer about the
+    # files.
+    out = _refusal(proc)
+    if out is None:
+        if proc.returncode != 0:
+            raise _no_answer(DA_READ_BINARY_NAME, args, proc, lines)
+        out = _json(proc, DA_READ_BINARY_NAME, lines, args)
     files = out.get("files") if isinstance(out, dict) else None
     if not isinstance(files, list) or len(files) != len(given):
         _fault(DA_READ_BINARY_NAME, args, "stale")

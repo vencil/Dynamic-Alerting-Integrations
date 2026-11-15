@@ -20,7 +20,9 @@
      打它的那次判定什麼也打不到。
 2. 抽法：每種「可精準打在某一格」的故障模式，**每一格各打一次**（全部跑完
    約數秒，不必抽樣）：
-   - ``usage``：rc 2 加 usage 訊息（舊版 binary）⇒ 503，reason ``stale``；
+   - ``usage``：rc 2 加 usage 訊息（舊版 binary）⇒ 503；da-guard 的 reason 是
+     ``stale``（它的 ``-h`` 探測認出舊版），da-read／da-crdecode 的是
+     ``unexpected_exit``（rc 2 卻沒有被拒文件，#3943）；
    - ``sigkill`` ⇒ 503，reason ``signalled``；
    - ``empty``（rc 0、stdout 空白）、``notjson``（rc 0、非 JSON）、
      ``emptyobj``（rc 0、合法 JSON ``{}``）、``nodocs``（rc 0、
@@ -152,7 +154,9 @@ _NOT_A_PROGRAM = b"\x00\x01\x02\x03 not an executable\n"
 #: The reasons a fault mode may be recorded as: which one depends on the
 #: branch of the code that reads that program's output.
 _MODE_REASONS = {
-    "usage": {"stale"},
+    # da-guard's `-h` probe names an old binary; da-read / da-crdecode exit 2
+    # without the refusal document (#3943): `_reasons` narrows by binary.
+    "usage": {"stale", "unexpected_exit"},
     "sigkill": {"signalled"},
     "empty": {"bad_output", "unexpected_exit", "stale"},
     "notjson": {"bad_output"},
@@ -267,6 +271,18 @@ def _subcommand(binary: str, cell: str) -> "str | None":
     return None if binary == "da-crdecode" else cell.split(" ", 1)[0]
 
 
+#: A fault mode whose reason depends on which program reads that output.
+_BINARY_REASONS = {
+    ("usage", "da-guard"): {"stale"},
+    ("usage", "da-read"): {"unexpected_exit"},
+    ("usage", "da-crdecode"): {"unexpected_exit"},
+}
+
+
+def _reasons(fault: str, binary: str) -> "set[str]":
+    return _BINARY_REASONS.get((fault, binary), _MODE_REASONS[fault])
+
+
 def _assert_tool_fault(rig, binary: str, subcommand: "str | None", reasons: "set[str]",
                        where: str) -> None:
     status, doc, st, _ran = rig.judge()
@@ -293,7 +309,7 @@ def test_every_cell_struck_answers_503(rig, cells, fault):
     200 whose verdict was reached without it."""
     for binary, cell in cells:
         rig.ctl.write_text(f"{binary} {cell} {fault}", encoding="utf-8")
-        _assert_tool_fault(rig, binary, _subcommand(binary, cell), _MODE_REASONS[fault],
+        _assert_tool_fault(rig, binary, _subcommand(binary, cell), _reasons(fault, binary),
                            f"{binary} {cell} {fault}")
     rig.assert_recovers()
 
@@ -397,7 +413,7 @@ def test_a_fault_wins_over_a_memory_end(rig, cells):
     rig.ctl.write_text("da-guard served-values sigsegv\nda-read alertmanager usage\n",
                        encoding="utf-8")
     try:
-        _assert_tool_fault(rig, "da-read", "alertmanager", {"stale"}, "both")
+        _assert_tool_fault(rig, "da-read", "alertmanager", {"unexpected_exit"}, "both")
         status, _doc, st, ran = rig.judge()
         assert status == 503 and {("da-guard", "served-values"),
                                   ("da-read", "alertmanager")} <= ran, ran

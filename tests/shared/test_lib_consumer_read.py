@@ -90,13 +90,14 @@ def test_the_other_reading_is_no_answer(tmp_path) -> None:
 
 def test_a_usage_line_is_no_refusal(tmp_path) -> None:
     """An older da-crdecode does not know --any-shape: it prints its usage
-    and exits 2. That is no answer about the input."""
+    and exits 2, with no refusal document. That is no answer about the
+    input (#3943)."""
     old = _fake(tmp_path, "echo 'usage: da-crdecode <file|->' >&2; exit 2")
     with pytest.raises(cr.ConsumerReadError) as exc:
         cr.any_yaml_text_documents("a: 1\n", binary=old)
     assert not isinstance(exc.value, cr.InputRefused)
+    assert "without a refusal document" in str(exc.value)
     assert "older da-crdecode? rebuild it" in str(exc.value)
-    assert "--any-shape" in str(exc.value)
 
 
 def test_files_come_back_in_the_order_given(tmp_path) -> None:
@@ -171,8 +172,12 @@ def _fake(tmp_path, body: str) -> str:
     return str(script)
 
 
-def test_exit_2_with_a_reason_is_input_refused(tmp_path) -> None:
-    fake = _fake(tmp_path, "echo 'da-crdecode: <stdin>: bad' >&2; exit 2")
+#: The refusal document as a fake binary prints it (#3943).
+_REFUSAL = "echo '{\"answer\": \"refused\"}'"
+
+
+def test_exit_2_with_the_refusal_document_is_input_refused(tmp_path) -> None:
+    fake = _fake(tmp_path, f"{_REFUSAL}; echo 'da-crdecode: <stdin>: bad' >&2; exit 2")
     with pytest.raises(cr.InputRefused) as exc:
         cr.kubernetes_text_documents("a: 1\n", binary=fake)
     assert exc.value.stderr_lines == ["da-crdecode: <stdin>: bad"]
@@ -189,6 +194,15 @@ def test_a_real_refusal_is_input_refused() -> None:
     "echo 'panic: runtime error' >&2; echo 'goroutine 1' >&2; exit 2",  # a Go crash
     "echo 'fatal error: out of memory' >&2; exit 2",
     "exit 2",                                                    # no reason given
+    # #3943: exit 2 with a reason but no refusal document — an I/O error, or
+    # a binary older than the document — is no answer about the input
+    "echo 'da-crdecode: <stdin>: bad' >&2; exit 2",
+    "echo 'da-crdecode: writing stdout: broken pipe' >&2; exit 2",
+    # a document that is not the refusal document
+    "echo '{\"answer\": \"read\"}'; echo 'x' >&2; exit 2",
+    "echo '[\"refused\"]'; echo 'x' >&2; exit 2",
+    "echo 'not json'; echo 'x' >&2; exit 2",
+    f"{_REFUSAL}; exit 3",                                       # the document, another rc
     "echo 'not json'; echo 'warn' >&2; exit 0",                  # no JSON contract
 ])
 def test_other_failures_are_not_input_refused(tmp_path, body) -> None:

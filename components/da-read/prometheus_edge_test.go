@@ -28,7 +28,7 @@ func TestPrometheusURLsKeepTheirPassword(t *testing.T) {
 func TestPrometheusLoaderPanicIsARefusal(t *testing.T) {
 	t.Parallel()
 	rc, out, errOut := runPrometheus(t, "alerting:\n  alertmanagers: [~]\n")
-	if rc != exitCallerErr || out != "" ||
+	if rc != exitCallerErr || out != refusedOut ||
 		!strings.Contains(errOut, "Prometheus' config loader panicked on this input") ||
 		strings.Contains(errOut, "goroutine") || strings.Count(errOut, "\n") != 1 {
 		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and one line naming the loader's panic", rc, out, errOut)
@@ -51,7 +51,7 @@ func TestAPanicRefusesOnlyThatFile(t *testing.T) {
 func TestUnreadableLaterDocumentIsDaReadsRefusal(t *testing.T) {
 	t.Parallel()
 	rc, out, errOut := runPrometheus(t, "global: {scrape_interval: 5s}\n---\na: [\n")
-	if rc != exitCallerErr || out != "" ||
+	if rc != exitCallerErr || out != refusedOut ||
 		!strings.Contains(errOut, "YAML document 2 of the file cannot be read") ||
 		strings.Contains(errOut, "refused by Prometheus' config loader") {
 		t.Fatalf("prometheus: rc=%d stdout=%q stderr=%q", rc, out, errOut)
@@ -71,7 +71,7 @@ func TestPrometheusRefusesScrapeConfigFiles(t *testing.T) {
 	t.Parallel()
 	rc, out, errOut := runPrometheus(t, "scrape_config_files: [sc/a.yml]\n"+
 		"scrape_configs:\n- job_name: inline\n  static_configs: [{targets: ['i:1']}]\n")
-	if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "scrape_config_files [sc/a.yml]") ||
+	if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, "scrape_config_files [sc/a.yml]") ||
 		!strings.Contains(errOut, "da-read does not read these files") {
 		t.Fatalf("rc=%d stdout=%q stderr=%q", rc, out, errOut)
 	}
@@ -106,7 +106,7 @@ func TestNullEntriesAreReadAsTheLoaderReadsThem(t *testing.T) {
 		"scrape_configs:\n- job_name: a\n  kubernetes_sd_configs: [~]\n": "empty or null section in kubernetes_sd_configs",
 	} {
 		rc, out, errOut := runPrometheus(t, in)
-		if rc != exitCallerErr || out != "" || !strings.Contains(errOut, wantErr) {
+		if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, wantErr) {
 			t.Errorf("%q: rc=%d stdout=%q stderr=%q; want %q", in, rc, out, errOut, wantErr)
 		}
 	}

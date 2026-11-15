@@ -701,6 +701,11 @@ def platform_alert_identities(
         # Prometheus' rule loader reads it (`da-read prometheus-rules`).
         # A missing binary is not "unreachable": `ConsumerReadError` that is
         # not a refusal propagates, the tool fails rather than degrade.
+        # A ConfigMap that is not there is "unreachable" — said here: the
+        # readers answer a file they cannot open with no answer, not a
+        # refusal (#3943), so it would propagate as a tool fault.
+        if not path.is_file():
+            raise FileNotFoundError(path)
         try:
             rule_files = [rf for rf in _lib_consumer_read.manifest_rule_file_results([path])
                           if rf.kind == "ConfigMap"]
