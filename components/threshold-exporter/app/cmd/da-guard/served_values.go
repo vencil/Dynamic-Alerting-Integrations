@@ -60,7 +60,10 @@ const customAlertsKey = "_custom_alerts"
 // to refuse the tree.
 type servedValuesDoc struct {
 	Schema string `json:"schema"`
-	At     string `json:"at"`
+	// At: the instant the document was read at (--at, default the run's
+	// clock). Absent with --config-facts, which reads no instant (#3918):
+	// the document must not change with the time the run starts at.
+	At string `json:"at,omitempty"`
 	// ParseFailed is LoadDir's parseFailed: the files the exporter's load
 	// skips because they do not decode. Always present ([] when none).
 	ParseFailed []string `json:"parse_failed"`
@@ -81,7 +84,8 @@ type servedValuesDoc struct {
 	// document still comes out, with no tenant and those files here (#2627).
 	Unreadable []skippedFile `json:"unreadable"`
 	// Tenants: map[string]servedTenantValues; with --schedules-only,
-	// map[string]servedTenantDay (#3877).
+	// map[string]servedTenantDay (#3877); with --config-facts,
+	// map[string]servedTenantFacts (#3918).
 	Tenants any `json:"tenants"`
 	// ⛔ No alias table (#3556): Values, Severities, Schedules and Dropped
 	// are keyed by the canonical spelling, and a reader holding a key in a
@@ -645,7 +649,9 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"the document then carries tenants_requested and tenants_absent (requested, not in the tree),\n"+
 			"and whether /metrics can be gathered is judged over the requested tenants only.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules | --schedules-only | --config-facts] [--disable-effects] [--tenant <id> ...]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules | --schedules-only] [--disable-effects] [--tenant <id> ...]\n"+
+			"       %s %s --config-dir <dir> --config-facts [--tenant <id> ...]\n",
+			programName, servedValuesCmd, programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
 			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
@@ -664,7 +670,8 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
 			"     a conf.d path or any output string that is not valid UTF-8, or a Gather failure of the same\n"+
 			"     collectors production /metrics serves (e.g. two keys producing one series) at --at\n"+
-			"     (with --schedules-only such a failure is the segment's error instead)\n"+
+			"     (with --schedules-only such a failure is the segment's error instead; --config-facts\n"+
+			"     gathers nothing, so it never exits 2 for it)\n"+
 			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
 			"     names them in parse_failed / unreadable\n\n"+
 			"Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with\n"+
@@ -801,6 +808,9 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		UnreadKeys:          unreadKeys,
 		RootDefaultsRefused: rootDefaultsRefusedOf(rep),
 		tenantSubset:        subset(requested, present),
+	}
+	if f.configFacts {
+		doc.At = "" // reads no instant (#3918): omitted
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)

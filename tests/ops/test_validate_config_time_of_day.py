@@ -11,7 +11,9 @@ Gather），要整天值的讀者讀 `--schedules-only`（#3918）。
 `$DA_GUARD_BINARY` 換成一支包裝：對 `key-verdict` 與 `served-values` 補上固定的
 `--at`（`--config-facts` 不收 `--at`，原樣轉），其餘原樣轉給真的 da-guard——等於在那個
 時刻執行。⚠️ 主閘門等其他子命令沒有
-`--at`，在這裡跑的是真實時鐘：這支測試量不到它們，只量經包裝的讀取。租戶 id 是 fixture
+`--at`，在這裡跑的是真實時鐘：這支測試量不到它們，只量經包裝的讀取；`--config-facts` 不收
+`--at`，它自身會不會開始讀時刻也量不到（由 Go 端 `servedConfigFacts` 不吃時刻、與一般模式
+逐欄相同的測試守）。租戶 id 是 fixture
 名（CLAUDE.md #9）。
 """
 from __future__ import annotations

@@ -37,14 +37,14 @@ of day cannot change the answer; `at` still decides what has expired. For a
 caller that judges the whole day and reads no value at an instant. The other
 fields, `partial` and `tenants` are `load_served_tree`'s.
 
-`load_served_facts(conf_d, binary=None, partial=False, tenants=None)`
+`load_served_facts(conf_d, binary=None, partial=False)`
 (#3918) returns a `ServedFacts`: `tenants` is each tenant's `TenantFacts`
 (`custom_alerts`, `custom_alerts_error`, `custom_alerts_finding`,
 `metadata`), from `da-guard served-values --config-facts`, which resolves
 and gathers nothing — so the time the run starts at, and a part of the day
 /metrics cannot be gathered in, change nothing. For a caller whose verdict
-must not depend on when it runs. The other fields, `partial` and `tenants`
-are `load_served_tree`'s.
+must not depend on when it runs. The other fields and `partial` are
+`load_served_tree`'s.
 
 `load_severity_dedup(conf_d, binary=None)` (#3621) returns a
 `SeverityDedupTree`: each tenant's `_severity_dedup` mode as the exporter
@@ -1526,7 +1526,6 @@ class ServedFacts(NamedTuple):
     stderr_lines: list[str]
     parse_failed: "tuple[str, ...] | list[str]" = ()
     unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
-    absent: "tuple[str, ...]" = ()
 
 
 def load_served_facts(
@@ -1534,7 +1533,6 @@ def load_served_facts(
     binary: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     partial: bool = False,
-    tenants: "Iterable[str] | None" = None,
 ) -> ServedFacts:
     """Each tenant's fields the exporter reads at no instant (`da-guard
     served-values --config-facts`, #3918): nothing is resolved or gathered,
@@ -1542,15 +1540,13 @@ def load_served_facts(
     cannot be gathered in changes the answer — for a reader whose verdict
     must not depend on when it runs. Same exceptions as `load_served_tree`;
     a da-guard without `--config-facts` is named as older than this tool."""
-    subset, requested = _subset_args(tenants)
-    (facts, skipped, dropped, absent), returncode, stderr = _run_da_guard(
-        SUBCOMMAND, ["--config-facts", *subset], conf_d, binary, timeout, ServedValuesError,
+    (facts, skipped, dropped), returncode, stderr = _run_da_guard(
+        SUBCOMMAND, ["--config-facts"], conf_d, binary, timeout, ServedValuesError,
         schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           ([str(f) for f in doc["parse_failed"]],
-                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
-                          _subset_absent(doc, requested)),
+                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]])),
         reads_unreadable=True, dropped_ok=partial,
         older_schemas=SERVED_VALUES_OLDER_SCHEMAS, fields_added_since=())
     _check_tenant_map(facts, returncode, stderr)
@@ -1570,7 +1566,7 @@ def load_served_facts(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries config facts that are not of their shape ({e})",
                 returncode, stderr, broken=True) from e
-    return ServedFacts(out, skipped, _nonempty_lines(stderr), *dropped, absent)
+    return ServedFacts(out, skipped, _nonempty_lines(stderr), *dropped)
 
 
 def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcommand: str,

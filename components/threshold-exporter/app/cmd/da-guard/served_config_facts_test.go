@@ -9,6 +9,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -126,5 +128,58 @@ func TestServedConfigFacts_RefusesFlagsItWouldNotRead(t *testing.T) {
 		if code != exitCallerErr || stdout != "" || !strings.Contains(stderr, extra[0]+" has nothing to do") {
 			t.Errorf("%v: exit %d, stdout %q, stderr %q; want exit %d naming %s", extra, code, stdout, stderr, exitCallerErr, extra[0])
 		}
+	}
+}
+
+// TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant: --tenant
+// narrows --config-facts as it narrows the default mode (the same tenants,
+// tenants_requested and tenants_absent); the resolver's WARN on a
+// `_metadata` that does not decode is printed once, as the default mode
+// prints it; and the document carries no `at` — it reads no instant.
+func TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant(t *testing.T) {
+	t.Parallel()
+	dir := writeConfD(t, configFactsTree)
+	type subsetDoc struct {
+		Tenants   map[string]json.RawMessage `json:"tenants"`
+		Requested []string                   `json:"tenants_requested"`
+		Absent    []string                   `json:"tenants_absent"`
+	}
+	read := func(args ...string) (subsetDoc, string) {
+		code, stdout, stderr := runOnce(t, append([]string{servedValuesCmd, "--config-dir", dir}, args...)...)
+		mustOK(t, code, stderr)
+		var d subsetDoc
+		if err := json.Unmarshal([]byte(stdout), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d, stderr
+	}
+	facts, _ := read("--config-facts", "--tenant", "tc", "--tenant", "nope")
+	values, _ := read("--at", "2026-11-14T05:00:00Z", "--tenant", "tc", "--tenant", "nope")
+	if !reflect.DeepEqual(keysOf(facts.Tenants), []string{"tc"}) || !reflect.DeepEqual(keysOf(facts.Tenants), keysOf(values.Tenants)) ||
+		!reflect.DeepEqual(facts.Requested, values.Requested) || !reflect.DeepEqual(facts.Absent, []string{"nope"}) ||
+		!reflect.DeepEqual(facts.Absent, values.Absent) {
+		t.Errorf("--config-facts subset %v/%v/%v, default mode %v/%v/%v", keysOf(facts.Tenants), facts.Requested, facts.Absent,
+			keysOf(values.Tenants), values.Requested, values.Absent)
+	}
+
+	// The resolver logs through the process-global logger, which only a child
+	// process's stderr shows (TestServedValuesChildProcess).
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServedValuesChildProcess$")
+	cmd.Env = append(os.Environ(), servedValuesChildEnv+"="+strings.Join(
+		[]string{servedValuesCmd, "--config-dir", dir, "--config-facts"}, "\n"))
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("child: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if n := strings.Count(stderr.String(), "failed to parse _metadata"); n != 1 {
+		t.Errorf("the `_metadata` WARN printed %d times, want once:\n%s", n, stderr.String())
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout.String()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc["at"]; ok {
+		t.Errorf("--config-facts document carries at = %s; it reads no instant", doc["at"])
 	}
 }
