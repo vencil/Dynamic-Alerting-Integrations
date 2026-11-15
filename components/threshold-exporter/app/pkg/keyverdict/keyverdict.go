@@ -162,6 +162,12 @@ const (
 	// tenant's keys from `tenants.<id>` alone, and no other reader reads a
 	// tenant file.
 	ReasonTenantFileTopLevel = "tenant_file_top_level"
+	// ReasonSubtreeDefaultReservedKey (#3881): a key a subtree
+	// `_defaults.yaml` writes that subtree defaults do not carry — a
+	// reserved key, or one no threshold row is made of (#2388, #3341) — so
+	// no reader reads it there, whatever its value or schedule. The name of
+	// da-guard's own finding on the same set (Input.SubtreeReserved).
+	ReasonSubtreeDefaultReservedKey = "subtree_default_reserved_key"
 )
 
 // Disable effects (served-values' keys[].disable).
@@ -255,6 +261,13 @@ type Input struct {
 	// readers ignore, per file and layer (LoadReport.ScheduleProblems),
 	// judged as Values are.
 	Schedules []config.LayerValueProblem
+	// SubtreeReserved (#3881): tenant → key → the subtree `_defaults.yaml`
+	// writes of it that count, as da-guard's subtree_default_reserved_key
+	// reports them (guard.SubtreeReservedReported over
+	// LoadReport.SubtreeReserved — the caller filters, so the two reports
+	// read one set). Only the tenants Served or Effective hold are judged.
+	// nil: none.
+	SubtreeReserved map[string]map[string][]config.SubtreeReservedWrite
 	// TenantFiles (#3671): tenant file (scan key) → its top-level keys as
 	// the file spells them (parse-tree's content), for the tenant files the
 	// caller judges. nil: none judged.
@@ -442,6 +455,7 @@ func Judge(in Input) Tree {
 	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
 	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective, in.Undecidable)...)
 	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
+	findings = append(findings, subtreeReservedFindings(in.SubtreeReserved, tenants)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 		if in.Whole {
@@ -790,6 +804,38 @@ func tenantFileFindings(files map[string][]string) []Finding {
 			out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: key, File: optional(file),
 				Tenants: []string{}, Reason: optional(ReasonTenantFileTopLevel)})
 		}
+	}
+	return out
+}
+
+// subtreeReservedFindings is one unread error per subtree `_defaults.yaml`
+// and key of reserved (Input.SubtreeReserved), on that file, naming the
+// judged tenants that inherit it (#3881). No verdict row carries the key:
+// the effective config leaves it out (#3341), as no tenant's config holds a
+// tenant file's top-level key (tenantFileFindings). An error wherever the
+// subtree file sits, as dead_entry is there (decision 6): the value the file
+// asks for is not in effect for any tenant.
+func subtreeReservedFindings(reserved map[string]map[string][]config.SubtreeReservedWrite,
+	tenants map[string]bool) []Finding {
+	byAt := map[[2]string]map[string]bool{}
+	for tenant, byKey := range reserved {
+		if !tenants[tenant] {
+			continue
+		}
+		for key, writes := range byKey {
+			for _, w := range writes {
+				at := [2]string{w.File, key}
+				if byAt[at] == nil {
+					byAt[at] = map[string]bool{}
+				}
+				byAt[at][tenant] = true
+			}
+		}
+	}
+	out := make([]Finding, 0, len(byAt))
+	for at, who := range byAt {
+		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: at[1], File: optional(at[0]),
+			Tenants: sortedKeys(who), Reason: optional(ReasonSubtreeDefaultReservedKey)})
 	}
 	return out
 }

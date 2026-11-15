@@ -39,33 +39,17 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 		}
 	}
 	sort.Strings(tenants)
-	failed := make(map[string]bool, len(input.ParseFailed))
-	for _, pf := range input.ParseFailed {
-		failed[pf] = true
-	}
-	unwrapped := unwrappedDefaultsFiles(input, failed)
+	reported := SubtreeReservedReported(input.SubtreeReservedKeys, input.DefaultsFiles, input.ParseFailed)
 	var out []Finding
 	for _, id := range tenants {
-		byKey := input.SubtreeReservedKeys[id]
+		byKey := reported[id]
 		keys := make([]string, 0, len(byKey))
 		for k := range byKey {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			// A file the exporter drops (ParseFailed — since ADR-036 step 6,
-			// #3206, every file parse-tree refuses) applies nothing, so it
-			// writes no reserved key: skipped, as checkDefaultsWrapper does.
-			writes := withoutFailed(byKey[k], failed)
-			if len(writes) == 0 {
-				continue
-			}
-			if readElsewhere[k] {
-				writes = writtenInsideDefaults(writes, unwrapped)
-				if len(writes) == 0 {
-					continue
-				}
-			}
+			writes := byKey[k]
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     findingkind.FindingSubtreeDefaultReservedKey,
@@ -78,14 +62,61 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 	return out
 }
 
-// unwrappedDefaultsFiles is the set of input.DefaultsFiles (root-relative
-// names) with no `defaults:` mapping: the defaults merge reads the whole
-// document, so a key in pkg/config's chain view of such a file sits at its
-// TOP level. A file in failed (ParseFailed) is skipped, as checkDefaultsWrapper
-// skips it: the exporter reads none of it.
-func unwrappedDefaultsFiles(input CheckInput, failed map[string]bool) map[string]bool {
+// SubtreeReservedReported is the subtree_default_reserved_key set: of
+// byTenant (pkg/config's chain view, CheckInput.SubtreeReservedKeys /
+// LoadReport.SubtreeReserved), each tenant's keys with the writes that count,
+// a key with none left out; nil when none is left.
+//
+// ⛔ ONE SET FOR BOTH REPORTS (#3881): this check's findings and the shared
+// key verdict's unread `subtree_default_reserved_key` (da-guard key-verdict,
+// and through it `generate-routes --validate`) read it, so a key is never in
+// one and not the other. Two writes do not count:
+//   - one in a file the exporter drops (parseFailed — since ADR-036 step 6,
+//     #3206, every file parse-tree refuses): it applies nothing, so it writes
+//     no reserved key, as checkDefaultsWrapper skips it;
+//   - a TopLevelReadElsewhere key at the top level of a file with no
+//     `defaults:` mapping (writtenInsideDefaults): another reader reads it
+//     there.
+func SubtreeReservedReported(byTenant map[string]map[string][]config.SubtreeReservedWrite,
+	defaultsFiles []config.DefaultsFile, parseFailed []string) map[string]map[string][]config.SubtreeReservedWrite {
+	if len(byTenant) == 0 {
+		return nil
+	}
+	failed := make(map[string]bool, len(parseFailed))
+	for _, pf := range parseFailed {
+		failed[pf] = true
+	}
+	unwrapped := unwrappedDefaultsFiles(defaultsFiles, failed)
+	var out map[string]map[string][]config.SubtreeReservedWrite
+	for id, byKey := range byTenant {
+		for k, writes := range byKey {
+			writes = withoutFailed(writes, failed)
+			if readElsewhere[k] {
+				writes = writtenInsideDefaults(writes, unwrapped)
+			}
+			if len(writes) == 0 {
+				continue
+			}
+			if out == nil {
+				out = map[string]map[string][]config.SubtreeReservedWrite{}
+			}
+			if out[id] == nil {
+				out[id] = map[string][]config.SubtreeReservedWrite{}
+			}
+			out[id][k] = writes
+		}
+	}
+	return out
+}
+
+// unwrappedDefaultsFiles is the set of defaultsFiles (root-relative names)
+// with no `defaults:` mapping: the defaults merge reads the whole document,
+// so a key in pkg/config's chain view of such a file sits at its TOP level.
+// A file in failed (ParseFailed) is skipped, as checkDefaultsWrapper skips
+// it: the exporter reads none of it.
+func unwrappedDefaultsFiles(defaultsFiles []config.DefaultsFile, failed map[string]bool) map[string]bool {
 	out := map[string]bool{}
-	for _, f := range input.DefaultsFiles {
+	for _, f := range defaultsFiles {
 		if failed[f.Name] {
 			continue
 		}

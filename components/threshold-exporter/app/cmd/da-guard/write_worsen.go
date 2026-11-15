@@ -279,11 +279,15 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 
 // judgedBlocks is blocks without the keys the verdict could not judge (see
 // newlyUnread: a writer refuses what it judged, not a tree with no root
-// platform file).
+// platform file), and without its subtree_default_reserved_key unread
+// (#3881): that set is da-guard's own finding of the same name, which the
+// tree-validation rule above already compares (one set,
+// guard.SubtreeReservedReported) and words with each key's own fix — the
+// call names it once.
 func judgedBlocks(blocks []keyverdict.Block) []keyverdict.Block {
 	out := blocks[:0:0]
 	for _, b := range blocks {
-		if b.Kind != keyverdict.Undecidable {
+		if b.Kind != keyverdict.Undecidable && b.Reason != keyverdict.ReasonSubtreeDefaultReservedKey {
 			out = append(out, b)
 		}
 	}
