@@ -7,7 +7,8 @@ f-string 直接插值（`'{val}'`）它抓不到，用字串述詞守「值不�
 在每種位置塞 canary、跑產生器，照行為斷言 canary 不出現。
 
 出口是 `_lib_validation.shown_value`（`receiver_value_repr`、`scalar_text`、
-`value_text` 都經它）。這裡掃 `scripts/tools/_lib_validation.py` 與
+`value_text` 都經它）。這裡掃 `scripts/tools/_lib_validation.py`、產生器經由它們讀
+da-guard 的 `_lib_tenant_values.py` 與 `_lib_key_verdict.py`（#3961），以及
 `scripts/tools/ops/_grar_*.py`，每個 repr 類寫法都必須在下面的白名單裡並附理由；
 白名單裡對不到程式的條目也會轉紅。
 """
@@ -17,7 +18,11 @@ import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+# #3961: the da-guard readers the generator reads through — a message about
+# a document not of its shape reaches its stderr and `--findings-json`.
 FILES = [REPO / "scripts" / "tools" / "_lib_validation.py",
+         REPO / "scripts" / "tools" / "_lib_tenant_values.py",
+         REPO / "scripts" / "tools" / "_lib_key_verdict.py",
          *sorted((REPO / "scripts" / "tools" / "ops").glob("_grar_*.py"))]
 
 _ARGV = "a command-line argument of the tool, not a conf.d value"
@@ -91,6 +96,15 @@ ALLOWED: dict[tuple[str, str, str, str], str] = {
     ("_grar_validate.py", "_refuse_unknown_keys", "!r", "policy_path"): _POLICY,
     ("_grar_validate.py", "generator_version_problem", "!r", "own"):
         "the tool's own version",
+    # #3961: the schema check names both schema ids (#3703: a schema that is
+    # not this reader's is named, so the operator knows which side to
+    # upgrade). `schema` is this reader's constant; `doc['schema']` is the
+    # document's top-level id, which da-guard writes from its own constant
+    # whatever the tree holds — no field of the tree reaches it.
+    ("_lib_tenant_values.py", "_run_da_guard", "!r", "doc['schema']"):
+        "da-guard's schema id (a constant of the binary), never a conf.d value",
+    ("_lib_tenant_values.py", "_run_da_guard", "!r", "schema"):
+        "the schema id this reader reads, a constant of the tool",
 }
 
 

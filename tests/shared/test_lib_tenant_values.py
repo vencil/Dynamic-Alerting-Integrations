@@ -942,6 +942,27 @@ def test_output_without_a_custom_alert_field_is_broken(tmp_path, field):
     assert name in str(ei.value) and ei.value.broken and not ei.value.stale
 
 
+_CANARY = "canary text xyz!"  # not name-like: shown_value says its length, shown_key its stand-in
+
+
+@pytest.mark.parametrize("tenant, change", [
+    ("t", {"severities": {"k": "warning"}, "values": {"k": _CANARY}}),          # _threshold
+    (_CANARY, {"severities": {"k": "warning"}, "values": {"k": "x"}}),          # the tenant id
+    ("t", {"severities": {_CANARY: "warning"}}),                               # KeyError of a tree key
+    ("t", {"custom_alerts": [{"index": 0, "spec": {}, "status": _CANARY, "finding": None}]}),
+    ("t", {"state_filters": {_CANARY: {"severity": 1}}}),
+    ("t", {"time_boxes": {"_silent_mode": [{"expires": _CANARY, "expired": "no"}]}}),
+], ids=["threshold", "tenant-id", "key-error", "custom-alert-status", "state-filter", "time-box"])
+def test_a_broken_document_is_reported_without_what_it_echoes_from_the_tree(tmp_path, tenant, change):
+    """#3961：da-guard 回覆形狀不合時，錯誤訊息（會進產生器的 stderr 與
+    `--findings-json`）只說位置與型別，不原樣帶出文件裡來自 conf.d 的文字。"""
+    doc = json.loads(_sv_doc(tv.SERVED_VALUES_SCHEMA))
+    doc["tenants"] = {tenant: {**doc["tenants"]["t"], **change}}
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, json.dumps(doc)))
+    assert ei.value.broken and _CANARY not in str(ei.value), str(ei.value)
+
+
 @pytest.mark.parametrize("keys", [
     '[]',
     '{"k": {}}',

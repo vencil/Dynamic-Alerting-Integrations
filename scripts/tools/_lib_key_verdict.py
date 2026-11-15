@@ -188,13 +188,13 @@ _DISABLES = frozenset({"effective", "noop"})
 
 def _str(v: Any, what: str) -> str:
     if not isinstance(v, str):
-        raise TypeError(f"{what}: not a string: {v!r}")
+        raise TypeError(f"{what}: not a string: {shown_value(v)}")
     return v
 
 
 def _tuple(v: Any, what: str) -> tuple[str, ...]:
     if not isinstance(v, list):
-        raise TypeError(f"{what}: not a list: {v!r}")
+        raise TypeError(f"{what}: not a list: {shown_value(v)}")
     return tuple(_str(x, what) for x in v)
 
 
@@ -206,35 +206,35 @@ def _optional(v: Any, what: str, allowed: "frozenset[str] | None" = None) -> str
 
 def _one_of(v: Any, what: str, allowed: "frozenset[str]") -> str:
     if v not in allowed:
-        raise ValueError(f"{what}: {v!r} is none of {sorted(allowed)}")
+        raise ValueError(f"{what}: {shown_value(v)} is none of {sorted(allowed)}")
     return v
 
 
 def _bool(v: Any, what: str) -> bool:
     if not isinstance(v, bool):
-        raise TypeError(f"{what}: not a boolean: {v!r}")
+        raise TypeError(f"{what}: not a boolean: {shown_value(v)}")
     return v
 
 
 def _mapping(v: Any, what: str) -> dict:
     if not isinstance(v, dict):
-        raise TypeError(f"{what}: not an object: {v!r}")
+        raise TypeError(f"{what}: not an object: {shown_value(v)}")
     return v
 
 
 def _rows(v: Any, what: str) -> list:
     if not isinstance(v, list) or not all(isinstance(r, dict) for r in v):
-        raise TypeError(f"{what}: not a list of objects: {v!r}")
+        raise TypeError(f"{what}: not a list of objects: {shown_value(v)}")
     return v
 
 
 def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
-    w = f"tenants.{tenant}"
+    w = f"tenants.{shown_key(tenant)}"
     verdict = _one_of(r["verdict"], f"{w}.verdict", _VERDICTS)
     severity = _optional(r["severity"], f"{w}.severity", _SEVERITIES)
     # A read key has no severity; an unread one has one (undecidable: none).
     if (verdict == UNREAD) != (severity is not None):
-        raise ValueError(f"{w}: verdict {verdict!r} with severity {severity!r}")
+        raise ValueError(f"{w}: verdict {shown_value(verdict)} with severity {shown_value(severity)}")
     return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
                       _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
                       severity, _optional(r["reason"], f"{w}.reason"),
@@ -257,7 +257,7 @@ def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":
     any other kind (#3502)."""
     v = f["dead_entries"]
     if (f["kind"] == "dead_entry") != (v is not None):
-        raise ValueError(f"findings: kind {f['kind']!r} with dead_entries {v!r}")
+        raise ValueError(f"findings: kind {shown_value(f['kind'])} with dead_entries {shown_value(v)}")
     out = tv.dead_entries(v, "findings.dead_entries") if v is not None else ()
     if f["kind"] == "dead_entry" and not out:
         raise ValueError("findings: a dead_entry without entries")
@@ -272,10 +272,10 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     module cannot read is not "nothing unread"."""
     tv._subset_absent(doc, requested)
     if not isinstance(doc["undecidable"], bool):
-        raise TypeError(f"undecidable: {doc['undecidable']!r}")
+        raise TypeError(f"undecidable: {shown_value(doc['undecidable'])}")
     blocks = _bool(doc["blocks"], "blocks")
     undecidable_blocks = _bool(doc["undecidable_blocks"], "undecidable_blocks")
-    keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
+    keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{shown_key(t)}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
     # v4 (#3703): records; the sentences of v3 are named by the schema. The
