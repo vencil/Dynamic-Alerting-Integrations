@@ -279,3 +279,7 @@ helm/da-portal/values.yaml
 # #3756: the dorny path gates on the required workflows are retired, and with them
 # invariants 1–3 of this module; invariant 4 and its extraction stay (to 31% of before).
 tests/ops/test_ci_path_filter_coverage.py
+# #3946: the DEBUG-trap probe of `$?` reads and its Landlock confinement are removed
+# (review: not convergent, and it executed the repo's scripts); the helpers that run a
+# whole `run:` step stay (to 32% of before).
+tests/_workflow_steps.py

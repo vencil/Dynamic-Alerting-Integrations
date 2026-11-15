@@ -59,11 +59,16 @@ jobs:
         id: compare
         env:
           GH_TOKEN: ${{ github.token }}
+          # The script's two verdict lines, verbatim (AGREE_LINE / DIFFER_LINE
+          # in scripts/ops/required_checks_drift.py; a test holds them equal).
+          AGREE_LINE: "required checks: .github/required-checks.yaml matches branch protection"
+          DIFFER_LINE: "required checks: .github/required-checks.yaml DIFFERS from branch protection"
         run: |
           set -uo pipefail
           if ! gh api "repos/${GITHUB_REPOSITORY}/branches/main" > "$RUNNER_TEMP/branch.json"; then
             echo "::error::could not read repos/${GITHUB_REPOSITORY}/branches/main — nothing was compared"
             echo "rc=2" >> "$GITHUB_OUTPUT"
+            echo "verdict=nothing" >> "$GITHUB_OUTPUT"
             exit 2
           fi
           # stderr too: an rc-2 reason is printed there, and the summary and the
@@ -79,39 +84,56 @@ jobs:
           python3 -X utf8 scripts/ops/required_checks_drift.py "$RUNNER_TEMP/branch.json" \
             > "$RUNNER_TEMP/drift.txt" 2>&1 || rc=$?
           cat "$RUNNER_TEMP/drift.txt"
+          # ⛔ The verdict is the script's own line, not the exit code alone:
+          # the interpreter exits 1 too when the script cannot start (a failed
+          # import, a syntax error), and that is "nothing was compared", never
+          # "they differ". Anything that is not a verdict line with its
+          # matching exit code is `nothing`, and leaves this step as 2.
+          verdict=nothing
+          if [ "$rc" -eq 0 ] && grep -qxF -- "$AGREE_LINE" "$RUNNER_TEMP/drift.txt"; then
+            verdict=agree
+          elif [ "$rc" -eq 1 ] && grep -qxF -- "$DIFFER_LINE" "$RUNNER_TEMP/drift.txt"; then
+            verdict=differ
+          fi
+          step_rc=$rc
+          if [ "$verdict" = nothing ] && [ "$rc" -le 1 ]; then
+            step_rc=2
+          fi
           {
-            echo "### Required checks vs branch protection (rc=${rc})"
+            echo "### Required checks vs branch protection (${verdict}, rc=${rc})"
             echo
             sed 's/^/- /' "$RUNNER_TEMP/drift.txt"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "rc=${rc}" >> "$GITHUB_OUTPUT"
-          # 0 they agree · 1 they differ · 2 nothing could be compared. The
-          # two failures are different findings and must not share a message.
-          case "$rc" in
-            0) ;;
-            1) echo "::error::.github/required-checks.yaml and branch protection disagree (rc=1) — see the summary" ;;
+          echo "verdict=${verdict}" >> "$GITHUB_OUTPUT"
+          # The two failures are different findings and must not share a message.
+          case "$verdict" in
+            agree) ;;
+            differ) echo "::error::.github/required-checks.yaml and branch protection disagree — see the summary" ;;
             *) echo "::error::required_checks_drift.py compared nothing (rc=${rc}) — see the summary; this says nothing about the file" ;;
           esac
-          exit "$rc"
+          exit "$step_rc"
 
       - name: Open or update the tracking issue (scheduled runs only)
         if: failure() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          # Empty when the compare step never got to report: a step before it
-          # failed, or it was skipped.
+          # Both empty when the compare step never got to report: a step
+          # before it failed, or it was skipped. The verdict is the compare
+          # step's; this step does not read the exit code a second time.
+          COMPARE_VERDICT: ${{ steps.compare.outputs.verdict }}
           COMPARE_RC: ${{ steps.compare.outputs.rc }}
         run: |
           set -euo pipefail
           title="[ci] required checks drift: .github/required-checks.yaml ≠ branch protection"
           # `failure()` is true for ANY failed step, and the title is fixed (it
           # is how the issue is found again) — so the body says first which of
-          # the three this run was. Only rc 1 is a finding about the file.
-          case "$COMPARE_RC" in
-            1) what="The file and branch protection DIFFER (rc=1)." ;;
-            2) what="NOTHING WAS COMPARED (rc=2): branch protection could not be read or understood. This run says nothing about the file." ;;
-            *) what="NO RESULT (rc='${COMPARE_RC}'): the comparison did not report one — a step failed before it could. This run says nothing about the file." ;;
+          # the three this run was. Only `differ` is a finding about the file.
+          case "$COMPARE_VERDICT" in
+            differ) what="The file and branch protection DIFFER." ;;
+            nothing) what="NOTHING WAS COMPARED (rc=${COMPARE_RC}): branch protection could not be read or understood, or the script did not run. This run says nothing about the file." ;;
+            *) what="NO RESULT (verdict='${COMPARE_VERDICT}'): the comparison did not report one — a step failed before it could. This run says nothing about the file." ;;
           esac
           body="$(printf '%s\n\nRun: %s\n\n' "$what" "$RUN_URL"; cat "$RUNNER_TEMP/drift.txt" 2>/dev/null || true)"
           # GitHub's search drops punctuation and matches loosely, so the hit
