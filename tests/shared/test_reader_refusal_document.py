@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 import _lib_consumer_read as cr
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("da_read_env")
 
@@ -233,7 +234,7 @@ def test_a_path_that_is_not_a_regular_file_is_refused_unopened(tmp_path, kind) -
         target = tmp_path / "real.yml"
         target.write_text("groups: []\n", encoding="utf-8")
         path = tmp_path / "link.yml"
-        path.symlink_to(target)
+        symlink_or_skip(target, path)
     env = {**os.environ,
            "PYTHONPATH": os.pathsep.join([os.path.dirname(cr.__file__),
                                           os.environ.get("PYTHONPATH", "")])}
