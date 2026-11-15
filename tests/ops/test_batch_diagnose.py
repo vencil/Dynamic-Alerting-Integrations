@@ -19,7 +19,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 import _lib_kubectl  # noqa: E402
-from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
+from _kubectl_fake import install as install_kubectl  # noqa: E402  (#3349)
 import batch_diagnose as bd  # noqa: E402
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 from _lib_tenant_values import DaGuardError, DaGuardNotFoundError  # noqa: E402
@@ -50,7 +50,7 @@ def mock_run(monkeypatch, da_guard_env):
     `subprocess.run` — the process boundary, with kubectl_get's own reading
     of rc / stdout / stderr under test too."""
     fake = MagicMock()
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(_kubectl_only(fake)))
+    install_kubectl(monkeypatch, _kubectl_only(fake))
     return fake
 
 
@@ -278,7 +278,7 @@ class TestDiscoverTenants:
     def test_kubectl_timeout(self, mock_run):
         """kubectl timeout 是 KubectlError（#3349：以前返回空列表）。"""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="kubectl", timeout=15)
-        with pytest.raises(bd.KubectlError, match="no answer within 15s"):
+        with pytest.raises(bd.KubectlError, match="did not finish within 15s"):
             bd.read_configmap_files()
 
     def test_missing_configmap_is_named(self, mock_run):
@@ -1114,7 +1114,7 @@ def test_a_forbidden_pod_read_makes_the_batch_an_environment_error(monkeypatch):
     forbidden = MagicMock(return_value=MagicMock(
         returncode=1, stdout='{"apiVersion": "v1", "items": [], "kind": "List"}',
         stderr='Error from server (Forbidden): pods is forbidden\n'))
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(forbidden))
+    install_kubectl(monkeypatch, forbidden)
 
     result = bd.run_diagnose_for_tenant("t1", "http://prom:9090", timeout_sec=30)
     assert result.get("_environment_error") is True, result

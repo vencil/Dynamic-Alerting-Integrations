@@ -62,6 +62,7 @@ on:
       - "scripts/tools/_lib_parse_tree.py"              # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_godispatch.py"              # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_consumer_read.py"           # recipe-preview COPY source (#3424, the reader-binary env names)
+      - "scripts/tools/_lib_tool_fault.py"              # recipe-preview COPY source (#3862, where a reader that did not run is recorded)
       - "scripts/tools/ops/guard_dispatch.py"           # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_python.py"                  # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_validation.py"              # recipe-preview COPY source (#3229)

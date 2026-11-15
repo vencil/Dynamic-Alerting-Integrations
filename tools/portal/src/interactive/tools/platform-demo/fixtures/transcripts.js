@@ -238,12 +238,13 @@ inhibit_rules:
 - source_matchers:
   - severity="critical"
   - metric_group=~".+"
-  - tenant="demo-tenant"
+  - tenant=~".+"
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
-  - tenant="demo-tenant"
+  - tenant=~".+"
   equal:
+  - tenant
   - metric_group`,
   },
   baseline: {

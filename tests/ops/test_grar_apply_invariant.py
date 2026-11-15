@@ -22,6 +22,7 @@ import pytest
 import yaml
 
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION
+from _kubectl_fake import run_from_argv as kubectl_from_argv  # noqa: E402  (#3539)
 
 _WATCHDOG_RULE = {"source_matchers": ['severity="critical"'],
                   "target_matchers": ['alertname="Watchdog"']}
@@ -57,6 +58,7 @@ def _run_apply(monkeypatch, tmp_path, config_dir, inhibit_rule):
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
+    monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
     monkeypatch.setenv("PATH", str(tmp_path))          # an empty PATH
     monkeypatch.setattr(sys, "argv", [
         "generate_alertmanager_routes.py", "--config-dir", str(config_dir),

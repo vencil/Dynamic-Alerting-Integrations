@@ -255,7 +255,7 @@ docker run --rm \
 
 [PASS] routes
        ...
-       Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+       Validation: 5 route(s), 5 receiver(s), 1 inhibit rule(s)
        ...
        OK: all configs valid
 
@@ -314,7 +314,7 @@ docker run --rm \
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 5 inhibit rules)
+Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 1 inhibit rules)
 ```
 
 stderr 另有兩行 WARN，在這個練習裡是預期的：本練習沒給 `--base-config`，所以設定合併進內建 placeholder base，它的 root receiver `default` 與 `watchdog-heartbeat` 都沒有接任何通知管道。接你自己的 Alertmanager 時要帶 `--base-config <你自己的 Alertmanager 設定>`——那是來源，不是本工具寫出的 `alertmanager.yml`（產物拿來當 base 會被拒收、結束碼 1），見 [BYO Alertmanager 整合指南 Step 5](../integration/byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap)。⚠️ v2.9.0 映像沒有 `--output-alertmanager`（`:latest` 在下一版發布前仍是它）；用那顆映像時拿掉 `--output-alertmanager`，它輸出的是只含租戶路由的片段 <!-- image-caveat: v2.9.0 -->
@@ -325,11 +325,11 @@ stderr 另有兩行 WARN，在這個練習裡是預期的：本練習沒給 `--b
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+Validation: 5 route(s), 5 receiver(s), 1 inhibit rule(s)
 OK: all configs valid
 ```
 
-產出檔 `.output/alertmanager.yml` 是完整的 Alertmanager 設定。`route.routes` 最前面是平台的 4 條路由（Watchdog、`component="custom"`、synthetic probe、sentinel），之後每個租戶各有一段（`matchers: tenant="…"`）；`receivers` 除了 5 個 `tenant-…` 之外還有 base 的 `default` 與 4 個平台 receiver，`inhibit_rules` 有 5 筆租戶的 severity dedup。對照練習 2 的設定：
+產出檔 `.output/alertmanager.yml` 是完整的 Alertmanager 設定。`route.routes` 最前面是平台的 4 條路由（Watchdog、`component="custom"`、synthetic probe、sentinel），之後每個租戶各有一段（`matchers: tenant="…"`）；`receivers` 除了 5 個 `tenant-…` 之外還有 base 的 `default` 與 4 個平台 receiver，`inhibit_rules` 有一條 severity dedup 規則，涵蓋全部 5 個租戶（沒有租戶設 `_severity_dedup: disable`，所以它沒有 `tenant!~` 排除清單）。對照練習 2 的設定：
 
 | 租戶 | receiver | group_wait | repeat_interval | 來自 |
 |---|---|---|---|---|

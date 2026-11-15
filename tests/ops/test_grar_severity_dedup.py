@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
@@ -91,12 +92,21 @@ def test_modes_are_the_exporters(tmp_path, files, expected):
     assert tree.dedup_configs == expected
 
 
-def test_a_disabled_tenant_gets_no_inhibit_rule(tmp_path):
+def test_a_disabled_tenant_is_excluded_from_the_dedup_rule(tmp_path):
+    """#3899: one rule for every tenant; a disabled tenant is in its
+    target's `tenant!~` list, and only it is named."""
     d = _write(tmp_path, {"_defaults.yaml": _DEFAULTS + "tenants:\n  t-a:\n    _severity_dedup: disable\n"})
     p = _gar(d, "--output-alertmanager", "--dry-run")
     assert p.returncode == 0, p.stderr
-    assert "INFO: t-a: severity_dedup disabled, skipping inhibit rule" in p.stdout + p.stderr
+    assert ("INFO: t-a: severity_dedup disabled, excluded from the severity "
+            "dedup inhibit rule") in p.stdout + p.stderr
     assert "INFO: t-b: severity_dedup disabled" not in p.stdout + p.stderr
+    yml = p.stdout.split("--- DRY RUN: alertmanager.yml ---", 1)[1].rsplit("\n--- ", 1)[0]
+    rules = yaml.safe_load(yml)["inhibit_rules"]
+    dedup = [r for r in rules if 'severity="critical"' in r.get("source_matchers", [])]
+    assert len(dedup) == 1, rules
+    assert dedup[0]["target_matchers"][-1] == 'tenant!~"t-a"'
+    assert dedup[0]["equal"] == ["tenant", "metric_group"]
 
 
 # ── what the exporter does not read refuses the whole tree ──────────────
@@ -254,12 +264,15 @@ def test_a_profile_schedule_is_not_this_readers_either(tmp_path):
     assert tree.field_type_errors == [] and tree.dedup_configs == {"t-a": "enable", "t-b": "enable"}
 
 
-def test_an_unknown_mode_lists_no_inhibit_rule():
+def test_an_unknown_mode_is_excluded_from_the_dedup_rule():
     """None — no mode was read, the tree being refused (its refusal is the
-    run's message) — is not enable: no rule is listed for it (#3621)."""
+    run's message) — is not enable: the tenant is excluded like disable
+    (#3621, #3899), and no INFO line is added for it."""
     from _grar_routes import generate_inhibit_rules
-    rules, _notes = generate_inhibit_rules({"t-a": None, "t-b": "disable", "t-c": "enable"})
-    assert [r["source_matchers"][-1] for r in rules] == ['tenant="t-c"'], rules
+    rules, notes = generate_inhibit_rules({"t-a": None, "t-b": "disable", "t-c": "enable"})
+    assert len(rules) == 1, rules
+    assert rules[0]["target_matchers"][-1] == 'tenant!~"t-a|t-b"', rules
+    assert [n.tenant for n in notes] == ["t-b"]
 
 
 def test_a_null_body_given_a_mapping_by_a_platform_entry_is_compared(tmp_path):

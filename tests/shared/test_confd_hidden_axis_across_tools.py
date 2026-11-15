@@ -310,6 +310,11 @@ KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {}
 
 # Population files that list a directory themselves but get no cell here.
 NOT_A_CELL: dict[str, str] = {
+    "_lib_validation.py":
+        "lists no directory: the call the derivation counts is `walk`, a local "
+        "recursion over a receiver mapping; in the population only through "
+        "`shown_file` / `configmap_key_problem` naming a conf.d path in their "
+        "docstrings (#3703)",
     "ops/migrate_to_operator.py":
         "lists its --source-dir of ConfigMap dumps / rule files (da-guard's "
         "list-only walk; a hidden one is named on stderr, #3446), never a "
