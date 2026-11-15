@@ -187,8 +187,13 @@ def _drive(conf: Path, argv: "list[str]", tag: bool = False) -> Outcome:
     kinds = Counter(f["kind"] for f in records)
     rows = (tuple(json.loads(line)) for line in
             (hits.read_text(encoding="utf-8").splitlines() if hits.exists() else ()))
+    # The work directory is this test's random temp name, the operator's
+    # argument and no author text: taken out of what the canary is searched
+    # in, or a name like `tmpzqx…` reads as a canary printed (seen in CI).
+    here = str(work)
+    raw = raw.replace(here.encode(), b"<WORK>")
     return Outcome(p.returncode, tuple(sorted(kinds.items())),
-                   stdout + stderr + written,
+                   (stdout + stderr + written).replace(here, "<WORK>"),
                    tuple((f["kind"], f["field"], f["tenant"], f["policy"],
                           f["message"].replace(str(conf), "<CONFDIR>"))
                          for f in records), tuple(rows), raw)
