@@ -300,6 +300,7 @@ class TestLoadFailsClosed:
         assert L.load_observed_map(str(out)) == L.load_observed_map()
         assert os.stat(out).st_mode & 0o7777 == mode
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
     def test_generator_makes_a_first_map_0644(self, tmp_path):
         out = tmp_path / "metric_observed_map.yaml"
         L.write_observed_map(out_path=str(out))
