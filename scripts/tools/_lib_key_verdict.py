@@ -310,8 +310,8 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
         extra = ["--at", at, *extra]
     # #3835: every earlier shape of this document (no `blocks`, no `hint`, a
     # `partial` disable, …) was written under v1 or v2 and is named older by
-    # its schema (OLDER_SCHEMAS). Every da-guard that writes v3 writes every
-    # field: a v3 document without one is broken output, never an older
+    # its schema (OLDER_SCHEMAS). Every da-guard that writes SCHEMA writes every
+    # field: a document of that schema without one is broken output, never an older
     # binary — so no field-by-field "added since" reading here.
     verdict, _rc, _stderr = tv._run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, KeyVerdictError, schema=SCHEMA,

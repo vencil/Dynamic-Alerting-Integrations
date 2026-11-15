@@ -448,8 +448,9 @@ class TenantValues(NamedTuple):
     # decodes. Go's verdict — a reader lists it.
     custom_alerts_finding: str | None = None
     # ADR-038 §11: the exporter's own checks on the tenant's keys that a CI
-    # reader prints and no longer judges itself (#3703: records, `KeyCheck`);
-    # None from a da-guard older than the field.
+    # reader prints and no longer judges itself (#3703: records, `KeyCheck`).
+    # `load_served_tree` always sets it — a document without the field is
+    # broken output; None only on a `TenantValues` built by hand.
     key_checks: "tuple[KeyCheck, ...] | None" = None
 
 
@@ -1410,7 +1411,7 @@ def load_served_tree(
                                                       or custom_alerts_error is None):
                 raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
                                  f"with custom_alerts_error {custom_alerts_error!r}")
-            key_checks = None if "key_checks" not in tv else _key_checks(tv["key_checks"])
+            key_checks = _key_checks(tv["key_checks"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
