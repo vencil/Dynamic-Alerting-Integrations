@@ -370,16 +370,22 @@ class TestCheckPass2TrailerStrict:
             args=[], returncode=returncode, stdout=stdout, stderr=stderr,
         )
 
-    def _stub_subprocess(self, monkeypatch, count_result, log_result=None):
+    def _stub_subprocess(self, monkeypatch, count_result, log_result=None,
+                         diff_result=None):
         """Stub pr_preflight.run() (the helper that wraps subprocess.run with
-        uniform timeout / FileNotFoundError handling) with a 2-call sequence.
+        uniform timeout / FileNotFoundError handling) with a call sequence.
 
-        First call = `git rev-list --count`; second = `git log --format=...`.
-        Pass log_result=None to verify the second call wasn't reached
-        (used for the empty-range SKIP path).
+        First call = `git rev-list --count`; second = `git log --format=...`;
+        third = `git diff --name-only` for the doc-only exemption (#3935),
+        reached only when no trailer was found. Pass log_result=None to
+        verify the second call wasn't reached (used for the empty-range
+        SKIP path). Real-git coverage of the exemption lives in
+        test_pass2_doc_only_exemption.py.
         """
         calls = {"i": 0}
         results = [count_result] + ([log_result] if log_result is not None else [])
+        if diff_result is not None:
+            results.append(diff_result)
 
         def fake_run(cmd, *args, **kwargs):
             i = calls["i"]
@@ -408,6 +414,7 @@ class TestCheckPass2TrailerStrict:
             monkeypatch,
             count_result=self._cp(0, "2\n"),
             log_result=self._cp(0, ""),  # empty stdout = no trailers found
+            diff_result=self._cp(0, "scripts/x.py\0docs/a.md\0"),  # not doc-only
         )
         rc = pp.check_pass2_trailer_strict()
         assert rc == 1

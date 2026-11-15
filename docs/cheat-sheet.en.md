@@ -41,7 +41,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `migrate` | Convert traditional Prometheus rules to dynamic format (AST engine) | -o <DIR>, --dry-run, --triage | `da-tools migrate --help` |
 | `validate-config` | One-stop config validation: YAML, schema, routing, policy, version | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
 | `offboard` | Offboard tenant config and related resources | --config-dir <PATH>, --state <PATH>, --execute | `da-tools offboard --help` |
-| `deprecate` | Deprecate metrics: delete their keys from `defaults:` / `optional_overrides:` / tenant files | --config-dir <PATH>, --execute, --plane {root,subtree} | `da-tools deprecate --help` |
+| `deprecate` | Deprecate metrics: delete their keys from `defaults:` / `optional_overrides:` / tenant files | --config-dir <PATH>, --execute, --subtree <DIR> | `da-tools deprecate --help` |
 | `lint` | Check tenant-authored Prometheus rule files against the platform governance policy (deny-list) | --policy <FILE>, --ci | `da-tools lint --help` |
 | `onboard` | Analyze existing Alertmanager/Prometheus config for migration hints | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
 | `analyze-gaps` | Compare custom rules vs Rule Packs for duplicates/gaps | --tenant-config <PATH>, --output <FILE>, --json | `da-tools analyze-gaps --help` |

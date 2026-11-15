@@ -345,15 +345,29 @@ def test_find_config_file_refuses_beside_a_directory_shaped_carrier(
     assert "ERROR: notes.yaml:" in err, err
 
 
-def test_find_config_file_survives_a_config_dir_that_cannot_be_listed(
-        tmp_path):
-    """⛔ The `except OSError` branch. A path that is a FILE raises
-    NotADirectoryError from `iterdir()`; the tool must answer "not found"
-    rather than die with a traceback in the middle of an offboard pre-check."""
+def test_a_config_dir_that_is_a_file_is_refused_by_the_run_naming_the_flag(
+        tmp_path, da_guard_env):
+    """#3902: --config-dir is a declared input, judged once by the run — a
+    path that is a FILE is rc 2, one line naming the flag, never "no such
+    tenant" (rc 1). ⛔ `find_config_rel` / `find_carriers` take no look of
+    their own at the path (their `is_dir()` read a tree gone after the
+    judgement as a tenant with no file): handed such a path as a library,
+    the reader's refusal is what comes out."""
+    import subprocess
     not_a_dir = tmp_path / "conf.d"
     not_a_dir.write_text("i am a file\n", encoding="utf-8")
 
-    assert ot.find_config_file("alpha", str(not_a_dir)) is None
+    proc = subprocess.run(
+        [sys.executable, ot.__file__, "alpha", "--config-dir", str(not_a_dir)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        timeout=120, stdin=subprocess.DEVNULL)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"ERROR: --config-dir {not_a_dir}: " in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr and "Pre-check" not in proc.stdout
+
+    for fn in (ot.find_config_file, ot.find_carriers):
+        with pytest.raises(ot._lib_parse_tree.ParseTreeError):
+            fn("alpha", str(not_a_dir))
 
 
 def test_precheck_explains_a_tenant_whose_carrier_is_unusable(

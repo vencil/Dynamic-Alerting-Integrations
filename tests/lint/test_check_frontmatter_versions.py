@@ -244,6 +244,27 @@ class TestFixDrift:
         content = doc.read_text(encoding="utf-8")
         assert "version: v2.0.0" in content
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+    @pytest.mark.parametrize("mode", [0o644, 0o755], ids=oct)
+    def test_fix_leaves_the_doc_with_the_mode_it_was_checked_out_with(
+            self, tmp_path, monkeypatch, mode):
+        """#3107: a doc is a tracked file. `--fix` used to leave every doc it
+        touched 0600, which `git status` does not show."""
+        monkeypatch.setattr(cfv, "REPO_ROOT", tmp_path)
+        doc = tmp_path / "docs" / "test.md"
+        doc.parent.mkdir(parents=True)
+        doc.write_text("---\ntitle: Test\nversion: v1.0.0\n---\n# Hello\n",
+                       encoding="utf-8")
+        doc.chmod(mode)
+        items = [cfv.DriftItem(
+            file="docs/test.md", line=3,
+            current_version="1.0.0", expected_version="2.0.0",
+            severity="error",
+        )]
+        assert cfv.fix_drift(items, "2.0.0") == 1
+        assert "version: v2.0.0" in doc.read_text(encoding="utf-8")
+        assert os.stat(doc).st_mode & 0o7777 == mode
+
     def test_fix_skips_warnings(self, tmp_path, monkeypatch):
         """只修復 error，跳過 warning（missing version）"""
         monkeypatch.setattr(cfv, "REPO_ROOT", tmp_path)
@@ -381,6 +402,29 @@ class TestCLI:
         monkeypatch.setattr(cfv, "CLAUDE_MD", claude)
 
         assert emit_result(cfv.main(["--json"])) == 0  # Should not exit
+
+    def test_cli_fix_that_cannot_write_a_doc_is_exit_2(self, tmp_path, monkeypatch, capsys):
+        """#1641／#3107：--fix 寫不進文件是 rc 2 加一行 ERROR，不是 traceback。"""
+        import _lib_io
+        docs = tmp_path / "docs"
+        docs.mkdir()
+        doc = docs / "old.md"
+        doc.write_text("---\nversion: v1.0.0\n---\n", encoding="utf-8")
+        monkeypatch.setattr(cfv, "DOCS_DIR", docs)
+        monkeypatch.setattr(cfv, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(cfv, "read_platform_version", lambda: "2.0.0")
+
+        def refused(path, content, **kw):
+            raise _lib_io.OutputWriteError(path, OSError(13, "Permission denied"))
+
+        monkeypatch.setattr(cfv, "write_repo_artifact", refused)
+        with pytest.raises(SystemExit) as exc_info:
+            cfv.main(["--fix"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        lines = captured.err.splitlines()
+        assert len(lines) == 1 and lines[0].startswith(f"ERROR: cannot write {doc}"), captured.err
+        assert doc.read_text(encoding="utf-8") == "---\nversion: v1.0.0\n---\n"
 
     def test_cli_ci_exit_on_error(self, tmp_path, monkeypatch):
         """--ci 有 error 時 exit 1"""

@@ -300,12 +300,20 @@ def test_bad_request_body_is_400(world):
 
 # PATH holds only the stub directory: sleep is called by its full path.
 SLEEP = shutil.which("sleep") or "/bin/sleep"
+MV = shutil.which("mv") or "/bin/mv"
 # What a held `da-read alertmanager` runs (the gate's one reading, once per
 # judgement); every other da-read call goes straight to the real one. Builtins
 # and full paths only: PATH holds just the stub directory.
-_SLOW_READING = f"""echo $$ > "$GSVC_PID_DIR/da-read.pid"
+#
+# #3943: each pid file is written under a temporary name and renamed into
+# place. `echo $$ > f` creates f empty and writes it after, so a reader that
+# polls for f to exist could read "" in between; a rename in the same
+# directory is atomic, so "the file exists" means "its pid is in it".
+_SLOW_READING = f"""echo $$ > "$GSVC_PID_DIR/da-read.pid.tmp"
+{MV} "$GSVC_PID_DIR/da-read.pid.tmp" "$GSVC_PID_DIR/da-read.pid"
 {SLEEP} 60 &
-echo $! > "$GSVC_PID_DIR/grandchild.pid"
+echo $! > "$GSVC_PID_DIR/grandchild.pid.tmp"
+{MV} "$GSVC_PID_DIR/grandchild.pid.tmp" "$GSVC_PID_DIR/grandchild.pid"
 wait
 """
 

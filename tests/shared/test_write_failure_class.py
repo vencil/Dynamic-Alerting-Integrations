@@ -83,7 +83,6 @@ CATCHING_HANDLER_NAMES = frozenset({
 RAW_CALL_LIBRARY_MODULES = frozenset({
     "scripts/tools/_lib_yaml.py",
     "scripts/tools/ops/_registry_lib.py",
-    "scripts/tools/ops/_observed_map_lib.py",
 })
 
 
@@ -251,7 +250,7 @@ def test_library_allowlist_cannot_go_stale():
 # let any `_`-prefixed module be appended). A new shared writer library is a
 # design decision — raise this number in the same diff that adds the
 # `except OutputWriteError` to every tool calling it, and say so.
-_ALLOWLIST_CEILING = 3
+_ALLOWLIST_CEILING = 2
 
 
 def test_library_allowlist_size_is_pinned():

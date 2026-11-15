@@ -9,7 +9,7 @@
 // TestLibraryVersionIsTheChartImage fails when the two differ.
 module github.com/vencil/dynamic-alerting/tests/oauth2-proxy
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/justinas/alice v1.2.0

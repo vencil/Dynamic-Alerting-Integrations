@@ -405,7 +405,9 @@ class InputChanged(BaseException):
     caller gave. ⛔ The reason it derives from ``BaseException``, as
     ``asyncio.CancelledError`` does since Python 3.8 for the same reason:
     catch-alls were swallowing it. :func:`exit_on_crash`, :func:`run` and
-    the module excepthook report it; nothing else should catch it."""
+    the module excepthook report it; nothing else should catch it — but a
+    tool that owes a report on every ending (backtest's not-run `-o`, #3902)
+    may catch it to write that report and then end the run, rc 2."""
 
     reason: str = "input_changed"
 
