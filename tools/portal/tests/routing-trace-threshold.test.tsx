@@ -76,6 +76,16 @@ describe('Routing Trace — a threshold read as the exporter reads it', () => {
       expect(thresholdLine()!.textContent).toBe(shown);
     });
 
+  it('a traced `_critical` key is read as one: its whole value is the number', () => {
+    render(<RoutingTraceTab />);
+    fireEvent.change(screen.getByPlaceholderText(K), { target: { value: `${K}_critical` } });
+    fireEvent.change(screen.getByLabelText('Routing Profile YAML'), { target: { value: `${K}: 70\n${K}_critical: "80:critical"\n` } });
+    fireEvent.click(screen.getByText('Trace Alert Path'));
+    expect(thresholdLine()).toBeNull();
+    expect(screen.getByTestId(`trace-unreadable-${K}_critical`).textContent)
+      .toBe(`${K}_critical: ${unreadableThresholdMessage('80:critical', 'critical')}`);
+  });
+
   it('a `_` key is no threshold, even one written like a number', () => {
     render(<RoutingTraceTab />);
     fireEvent.change(screen.getByPlaceholderText(K), { target: { value: '_foo' } });

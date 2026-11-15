@@ -75,7 +75,9 @@ Validator), or reads a threshold itself with `validation/threshold-value.js`
 of `parseYaml`: the exporter reads a threshold scalar's text, and `parseYaml`
 has already made `0x1F` the number 31 (#3919). Every other use keeps
 `parseYaml`. `tests/threshold-value-simulator.test.ts` holds this for every
-page outside `_common/`.
+page outside `_common/` that imports the engine's simulate/validate functions
+or `readThresholdRow`; a page that reads a threshold some other way is not
+seen by it.
 
 Use the symbol like any local binding. esbuild orders chunks so an
 import target always evaluates before its importer — there is nothing to

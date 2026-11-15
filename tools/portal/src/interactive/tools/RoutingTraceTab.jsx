@@ -11,7 +11,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // the producer never ran.
 import { DOMAIN_POLICIES } from './_common/data/routing-profiles.js';
 import { parseTenantYaml } from './_common/validation/yaml-parser.js';
-import { readThresholdRow } from './_common/validation/threshold-value.js';
+import { readThresholdRow, isCriticalKey } from './_common/validation/threshold-value.js';
 import { generateSampleYaml, resolveRoutingLayers, unreadableThresholdMessage } from './_common/sim/alert-engine.js';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 
@@ -46,7 +46,8 @@ function RoutingTraceTab() {
     // exporter's baseRowsSkipKey), and parseTenantYaml types it as parseYaml
     // does, which the reader must not be handed.
     const isKey = !traceMetric.startsWith('_');
-    const baseRow = isKey ? readThresholdRow(config[traceMetric]) : { kind: 'absent' };
+    // A traced `<base>_critical` key is read as one (criticalRowBase).
+    const baseRow = isKey ? readThresholdRow(config[traceMetric], isCriticalKey(traceMetric) ? 'critical' : 'base') : { kind: 'absent' };
     const critRow = isKey ? readThresholdRow(config[`${traceMetric}_critical`], 'critical') : { kind: 'absent' };
     const threshold = baseRow.kind === 'number' ? baseRow.number : null;
     // `70:critical` on the base key is a critical-severity row, not a warning one.
@@ -54,7 +55,7 @@ function RoutingTraceTab() {
     const critThreshold = critRow.kind === 'number' && baseRow.kind !== 'disabled' ? critRow.number : null;
     const hasCritical = critThreshold !== null;
     const unreadable = [
-      baseRow.kind === 'unreadable' && { key: traceMetric, msg: unreadableThresholdMessage(baseRow.raw) },
+      baseRow.kind === 'unreadable' && { key: traceMetric, msg: unreadableThresholdMessage(baseRow.raw, isCriticalKey(traceMetric) ? 'critical' : 'base') },
       critRow.kind === 'unreadable' && { key: `${traceMetric}_critical`, msg: unreadableThresholdMessage(critRow.raw, 'critical') },
     ].filter(Boolean);
 
