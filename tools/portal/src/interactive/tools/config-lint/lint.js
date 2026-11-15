@@ -479,9 +479,17 @@ function lintConfig(yamlText) {
     // error there is what says those tenants went unchecked.
     const pasted = pastedConfdFile(thresholds);
     thresholds.pasted = pasted;
-    // The lenient parse keeps a quoted key's quotes (`"tenants":`), which the
-    // YAML reading above drops: compare without them.
-    const unquoted = (k) => (/^(["']).*\1$/.test(k) ? k.slice(1, -1) : k);
+    // The lenient parse keeps a quoted key as written (`"tenants":`, with
+    // escapes), which the YAML reading above decodes: compare it decoded. A
+    // double-quoted key's escapes are read as JSON's (a subset of YAML's: an
+    // escape JSON lacks leaves the key as written), a single-quoted key's `''`
+    // is one quote.
+    const unquoted = (k) => {
+      if (/^".*"$/.test(k)) {
+        try { return JSON.parse(k); } catch { return k.slice(1, -1); }
+      }
+      return /^'.*'$/.test(k) ? k.slice(1, -1).replace(/''/g, "'") : k;
+    };
     const isPseudo = (k) => pasted && unquoted(k) === 'tenants';
     const alone = !Object.keys(tenants).some((k) => !k.startsWith('_') && !isPseudo(k) && k !== 'routing_profiles');
     for (const rule of LINT_RULES) {
