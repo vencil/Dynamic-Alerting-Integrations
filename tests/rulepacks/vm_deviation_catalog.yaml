@@ -51,7 +51,10 @@ deviations:
     vm_behavior: >-
       Fires ~10m later than Prometheus after a series is born (new StatefulSet/Deployment,
       kube-state-metrics restart, or a scrape gap > 10m). Verified empirically: promtool
-      fires by 16m, vmalert by ~26m. Steady-state (warm series) is identical on both.
+      fires by 16m, vmalert by ~26m. On warm series vmalert fires and resolves one
+      evaluation interval after Prometheus (degraded 30m..59m45s at 15s: promtool fires
+      45m..59m45s, vmalert-tool v1.146.0 45m15s..1h0m0s), the usual one-hop lag of an
+      alert that reads a recording rule; the gate checks no warm edge.
     prod_impact: >-
       Transient (~25m) blind spot for a freshly-created HA workload that comes up degraded.
       A fully-down cluster is still paged by the critical liveness layer (#875), so the

@@ -1,0 +1,58 @@
+# Percent-rendered annotations with no firing test that asserts them (#978).
+# Managed by scripts/tools/lint/check_percent_render_pinned.py (bidirectional):
+#   * an unpinned (alert, annotation) not listed here -> CI FAIL
+#   * a listed entry that is now pinned / removed     -> CI FAIL (remove it)
+# "Pinned" = some alert_rule_test for the alert has a non-empty exp_alerts whose
+# exp_annotations carries that annotation key. Listing here is tracked debt, not approval.
+# Regenerate after an intentional change:
+#   python3 scripts/tools/lint/check_percent_render_pinned.py --generate
+unpinned:
+  rule-pack-elasticsearch.yaml:
+    ElasticsearchHighDiskUsage:
+    - description
+    - description_zh
+    ElasticsearchHighHeapUsage:
+    - description
+    - description_zh
+  rule-pack-jvm.yaml:
+    JVMMemoryPressure:
+    - description
+    - description_zh
+    JVMMemoryPressureCritical:
+    - description
+    - description_zh
+  rule-pack-kubernetes.yaml:
+    PodContainerHighCPUCritical:
+    - description
+    - description_zh
+    PodContainerHighMemoryCritical:
+    - description
+    - description_zh
+  rule-pack-mariadb.yaml:
+    MariaDBHighConnections:
+    - description
+    - description_zh
+    MariaDBHighConnectionsCritical:
+    - description
+    - description_zh
+  rule-pack-mongodb.yaml:
+    MongoDBConnectionSaturation:
+    - description
+    - description_zh
+  rule-pack-postgresql.yaml:
+    PostgreSQLHighConnections:
+    - description
+    - description_zh
+    PostgreSQLHighConnectionsCritical:
+    - description
+    - description_zh
+    PostgreSQLHighRollbackRatio:
+    - description
+    - description_zh
+  rule-pack-rabbitmq.yaml:
+    RabbitMQHighMemory:
+    - description
+    - description_zh
+    RabbitMQHighMemoryCritical:
+    - description
+    - description_zh

@@ -705,11 +705,11 @@ def test_unread_routing_names_where_each_key_belongs(tmp_path):
 ])
 def test_unread_routing_is_one_finding_printed_as_every_blocking_line(tmp_path, files, field):
     """#2904 review N5a: a `routing_in_unread_location` is ONE finding. Its
-    line is printed once where it is found and, under --validate, once more
-    in the `FAIL: N error(s) found:` list — the shape of every blocking line
-    (a non-mapping override is the control) — never twice in that list,
-    although _unread_routing records it twice (the WARN line and the
-    routing-tree record the parity matrix reads)."""
+    line is printed once — where it is found; the `FAIL: N error(s) found`
+    summary counts it and does not repeat it (#3996) — as every blocking
+    line is (a non-mapping override is the control), although
+    _unread_routing records it twice (the WARN line and the routing-tree
+    record the parity matrix reads)."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "team/t-team.yaml": _tenant("t-team"),
@@ -723,11 +723,10 @@ def test_unread_routing_is_one_finding_printed_as_every_blocking_line(tmp_path, 
              if f["kind"] in ("routing_in_unread_location", "invalid_override_entry")]
     assert sorted((f["kind"], f["field"]) for f in found) == [
         ("invalid_override_entry", "overrides[0]"), ("routing_in_unread_location", field)]
-    stream, _, summary = res.stderr.partition("error(s) found:\n")
-    assert summary, res.stderr
+    assert "error(s) found (listed above)" in res.stderr, res.stderr
     for f in found:
         line = f["message"]
-        assert (stream.count(line), summary.count(line)) == (1, 1), (line, res.stderr)
+        assert res.stderr.count(line) == 1, (line, res.stderr)
     render = _gar("--config-dir", str(d), "--output-alertmanager", "-o", str(tmp_path / "out.yaml"))
     unread = next(f["message"] for f in found if f["kind"] == "routing_in_unread_location")
     assert render.stderr.count(unread) == 1, render.stderr

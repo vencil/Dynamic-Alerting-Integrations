@@ -46,12 +46,13 @@ from _lib_validation import ShapeError, shown_file, shown_key, shown_value  # no
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
-SCHEMA = "da-guard.key-verdict/v4"
+SCHEMA = "da-guard.key-verdict/v5"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: the ERROR layer only; v2: judged at one instant, each row
 #: with what /metrics served then — #3835; v3: `key_checks` as sentences
-#: that quoted the key — #3703).
-OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2", "da-guard.key-verdict/v3")
+#: that quoted the key — #3703; v4: no `gate_kind` — #3996).
+OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2", "da-guard.key-verdict/v3",
+                 "da-guard.key-verdict/v4")
 
 READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
@@ -94,6 +95,11 @@ class Finding(NamedTuple):
     # #3829: a retired threshold key's hint (reason `retired`), naming the key
     # that replaces it; None for any other finding.
     hint: str | None = None
+    # #3996: the kind of da-guard's own (main gate) finding that reports the
+    # same fact, decided in Go where the verdict reads the gate's set; None
+    # when the gate reports nothing of it. A reader that shows the gate's
+    # findings too shows such a finding once.
+    gate_kind: str | None = None
 
 
 class TreeVerdict(NamedTuple):
@@ -184,6 +190,14 @@ _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
 _KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread",
                     "dead_entry", "schedule_unread"})
 _DISABLES = frozenset({"effective", "noop"})
+#: #3996: the da-guard finding kinds a verdict names in `gate_kind` — each
+#: one the gate reports as an error, so a reader that leaves such a finding
+#: out of its own report (validate-config's routes row) loses nothing. A
+#: kind outside it is output this reader cannot read, never a finding
+#: hidden on the gate's behalf (tests/shared/test_key_verdict_kinds_parity
+#: reads the set from the Go verdict's source).
+_GATE_KINDS = frozenset({"subtree_default_reserved_key", "subtree_default_undeliverable",
+                         "root_defaults_reserved_key"})
 
 
 def _str(v: Any, what: str) -> str:
@@ -249,7 +263,7 @@ def _finding(f: dict) -> Finding:
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
                    _optional(f["reason"], "findings.reason"), _bool(f["blocks"], "findings.blocks"),
                    _optional(f["base"], "findings.base"), _finding_dead_entries(f),
-                   _optional(f["hint"], "findings.hint"))
+                   _optional(f["hint"], "findings.hint"), _optional(f["gate_kind"], "findings.gate_kind", _GATE_KINDS))
 
 
 def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":

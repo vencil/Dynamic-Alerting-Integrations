@@ -417,7 +417,7 @@ def test_write_outputs_ast_path():
         assert len(counts) == 4
 
         # Verify recording rules contain tenant label
-        rr_path = os.path.join(tmpdir, "platform-recording-rules.yaml")
+        rr_path = os.path.join(tmpdir, migrate_rule.ARTIFACT_DIR, "platform-recording-rules.yaml")
         with open(rr_path, 'r', encoding='utf-8') as f:
             content = yaml.safe_load(f)
         rules = content["groups"][0]["rules"]
@@ -556,18 +556,18 @@ def test_write_outputs_basic():
         expected_files = [
             f"{migrate_rule.CONFD_DIR}/t1.yaml",
             f"{migrate_rule.CONFD_DIR}/_defaults.yaml",
-            "platform-recording-rules.yaml",
-            "platform-alert-rules.yaml",
+            f"{migrate_rule.ARTIFACT_DIR}/platform-recording-rules.yaml",
+            f"{migrate_rule.ARTIFACT_DIR}/platform-alert-rules.yaml",
             "migration-report.txt",
             "triage-report.csv",
-            "prefix-mapping.yaml",
+            f"{migrate_rule.ARTIFACT_DIR}/prefix-mapping.yaml",
         ]
         for fname in expected_files:
             fpath = os.path.join(tmpdir, fname)
             assert os.path.exists(fpath), f"Missing: {fname}"
 
         # Verify recording rules YAML is parseable
-        with open(os.path.join(tmpdir, "platform-recording-rules.yaml"),
+        with open(os.path.join(tmpdir, migrate_rule.ARTIFACT_DIR, "platform-recording-rules.yaml"),
                    'r', encoding='utf-8') as f:
             content = yaml.safe_load(f)
             assert "groups" in content
@@ -751,7 +751,7 @@ def test_suppress_write_outputs_with_suppression():
     with tempfile.TemporaryDirectory() as tmpdir:
         migrate_rule.write_outputs(results, tmpdir, prefix="custom_",
                                     dictionary={}, tenant="t1")
-        alert_path = os.path.join(tmpdir, "platform-alert-rules.yaml")
+        alert_path = os.path.join(tmpdir, migrate_rule.ARTIFACT_DIR, "platform-alert-rules.yaml")
         with open(alert_path, 'r', encoding='utf-8') as f:
             content = f.read()
 

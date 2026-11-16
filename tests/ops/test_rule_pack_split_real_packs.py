@@ -188,7 +188,7 @@ class TestKubernetesGoldenPreservation:
 
         # ha-replicas: recording on edge, alert on central.
         assert rules_for(edge, "kubernetes-ha-replicas", "record") == [
-            "rule_pack_kubernetes:ha_replicas_degraded:core",
+            "rule_pack_kubernetes:ha_replicas_degraded:by_kind",
         ]
         assert rules_for(central, "kubernetes-ha-replicas", "alert") == [
             "TenantHAReplicasDegraded",
