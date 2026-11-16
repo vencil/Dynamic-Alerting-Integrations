@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(_ROOT, "scripts", "tools", "lint"))
 
 import _lib_tenant_values as tv  # noqa: E402
 import check_retire_drift as crd  # noqa: E402
+from factories import da_guard_at  # noqa: E402  (tests/ on sys.path: conftest)
 
 
 @pytest.fixture(autouse=True)
@@ -308,27 +309,10 @@ _WINDOW_COLLISION = {
 }
 
 
-def _da_guard_at(tmp_path: Path, at: str) -> str:
-    """A da-guard that runs `served-values` at *at* (but `--config-facts`,
-    which takes no --at), every other subcommand as given."""
-    real = os.environ["DA_GUARD_BINARY"]
-    path = tmp_path / f"da-guard-at-{at.replace(':', '')}"
-    path.write_text(
-        "#!/bin/sh\n"
-        f"real='{real}'\n"
-        'case " $* " in *" --config-facts "*) exec "$real" "$@" ;; esac\n'
-        'case "$1" in\n'
-        f"  served-values) exec \"$real\" \"$@\" --at '{at}' ;;\n"
-        '  *) exec "$real" "$@" ;;\n'
-        "esac\n", encoding="utf-8")
-    path.chmod(0o755)
-    return str(path)
-
-
 def test_the_db_types_do_not_depend_on_the_time_of_day(tmp_path: Path, monkeypatch) -> None:
     got = {}
     for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
         root = _write(tmp_path / f"conf-{at.replace(':', '')}", _WINDOW_COLLISION)
-        monkeypatch.setenv("DA_GUARD_BINARY", _da_guard_at(tmp_path, at))
+        monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
         got[at] = crd.conf_d_declared_db_type_tenants(root)
     assert list(got.values()) == [{"alpha": "mariadb"}] * 2, got

@@ -143,12 +143,10 @@ class NotApplicableKey:
 
 @dataclass
 class ForceManualKey:
-    """A key the recommender routed to manual review (``force_manual``): a
-    lower-bound (percentile-lower) guardrail trip (#916 Item A — relaxation,
-    floor would drop; an out-of-ratio-domain current/candidate; too thin a
-    sample), an upper-bound key whose current threshold is 0 (#2997), or a
-    recommender exception on any key. ``delta_pct`` is a miss-rate delta for
-    a lower-bound trip and None otherwise.
+    """A key the recommender routed to manual review (``force_manual``); why
+    is its ``guardrail_reason``, which the recommender alone decides (the
+    causes are listed where it sets them, not here). ``delta_pct`` is a
+    miss-rate delta for a lower-bound trip and None otherwise.
 
     This is the floor-rot CORE signal — a floor drifting toward relaxation must
     never be invisible — so it gets its own manual-review section + summary count,
@@ -343,12 +341,10 @@ def collect_not_applicable(
 def collect_force_manual(
     reports: list["recommend.TenantRecommendation"],
 ) -> list[ForceManualKey]:
-    """Keys the recommender routed to manual review (``force_manual``).
-
-    Mostly lower-bound guardrail trips (#916: relaxation / out-of-domain / thin
-    sample; the floor-rot core signal); also an upper-bound current of 0
-    (#2997) and recommender exceptions (see ``ForceManualKey``). Surfaced as its own manual-review section + count so a floor
-    drifting toward relaxation is never invisible in the governance run.
+    """Keys the recommender routed to manual review (``force_manual``), each
+    with its ``guardrail_reason`` (see ``ForceManualKey``). Surfaced as its
+    own manual-review section + count so a floor drifting toward relaxation
+    is never invisible in the governance run.
     """
     out: list[ForceManualKey] = []
     for report in reports:
