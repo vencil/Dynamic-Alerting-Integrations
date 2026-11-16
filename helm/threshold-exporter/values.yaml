@@ -234,7 +234,6 @@ thresholdConfig:
     # ── clickhouse：ClickHouse (built-in /metrics) ──
     - clickhouse_max_part_count   # count — Max part count per partition
     - clickhouse_replication_queue   # count — Replication queue size
-    - clickhouse_memory_tracking_bytes   # bytes (8GB) — Memory tracking warning
     # <<< GENERATED:threshold-registry:helm-optional
 
   # dimensions 為生成段（#3475，ADR-038 §11）：每個 base 的維度鍵可帶哪些 label 才會送出。

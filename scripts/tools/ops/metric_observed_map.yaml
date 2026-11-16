@@ -40,11 +40,6 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:clickhouse_max_part_count:max
-  clickhouse_memory_tracking_bytes:
-    pack: rule-pack-clickhouse.yaml
-    scope: tenant
-    direction: '>'
-    observed_series: tenant:clickhouse_memory_tracking:max
   clickhouse_queries_rate:
     pack: rule-pack-clickhouse.yaml
     scope: tenant

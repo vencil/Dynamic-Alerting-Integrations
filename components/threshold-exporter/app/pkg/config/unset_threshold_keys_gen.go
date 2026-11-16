@@ -9,7 +9,6 @@ package config
 var unsetThresholdKeys = []unsetThresholdKey{
 	{"clickhouse_active_connections", "clickhouse"},
 	{"clickhouse_max_part_count", "clickhouse"},
-	{"clickhouse_memory_tracking_bytes", "clickhouse"},
 	{"clickhouse_queries_rate", "clickhouse"},
 	{"clickhouse_replication_queue", "clickhouse"},
 	{"db2_bufferpool_hit_ratio", "db2"},

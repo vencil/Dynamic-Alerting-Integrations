@@ -349,8 +349,8 @@
       "category": "database",
       "exporter": "built-in /metrics",
       "configMap": "prometheus-rules-clickhouse",
-      "recordingRules": 12,
-      "alertRules": 8,
+      "recordingRules": 10,
+      "alertRules": 7,
       "required": false,
       "defaults": {
         "clickhouse_queries_rate": {

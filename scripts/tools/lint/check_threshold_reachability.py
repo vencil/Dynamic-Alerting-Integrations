@@ -211,7 +211,6 @@ KNOWN_UNWIRED: dict[str, str] = {
     "db2_tablespace_used_percent": _A_DECLARED,
     "clickhouse_max_part_count": _A_DECLARED,
     "clickhouse_replication_queue": _A_DECLARED,
-    "clickhouse_memory_tracking_bytes": _A_DECLARED,
     # #3778: a healthy running-thread count scales with the host's CPU count,
     # so the platform declares the key and asserts no value (the redis-style
     # "defaults tier, operator-armed" placement served nothing for a tenant

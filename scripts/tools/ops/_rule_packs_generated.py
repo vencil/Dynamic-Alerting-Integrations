@@ -491,12 +491,6 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                         'desc': 'Replication queue '
                                                                                 'size',
                                                                         'metric_class': 'replication'},
-                                       'clickhouse_memory_tracking_bytes': {'value': 8589934592,
-                                                                            'unit': 'bytes (8GB)',
-                                                                            'desc': 'Memory '
-                                                                                    'tracking '
-                                                                                    'warning',
-                                                                            'metric_class': 'capacity'},
                                        'clickhouse_active_connections_critical': {'value': 300,
                                                                                   'unit': 'count',
                                                                                   'desc': 'Active '

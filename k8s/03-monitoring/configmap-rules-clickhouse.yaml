@@ -22,25 +22,21 @@ data:
     \"\\\"}\\n)\\n\"\n  - record: tenant:clickhouse_replication_queue:max\n    expr:\
     \ \"max by(tenant) (\\n  ClickHouseMetrics_ReplicatedSendQueueSize{tenant!=\\\"\
     \\\"}\\n  + ClickHouseMetrics_ReplicatedFetchQueueSize{tenant!=\\\"\\\"}\\n)\\\
-    n\"\n  - record: tenant:clickhouse_memory_tracking:max\n    expr: \"max by(tenant)\
-    \ (\\n  ClickHouseMetrics_MemoryTracking{tenant!=\\\"\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:clickhouse_failed_queries:rate5m\n    expr: \"sum by(tenant) (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\
-    \"\\\"}[5m])\\n)\\n\"\n- name: clickhouse-threshold-normalization\n  rules:\n\
-    \  - record: tenant:alert_threshold:clickhouse_queries_rate\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"queries_rate\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections\n\
+    n\"\n  - record: tenant:clickhouse_failed_queries:rate5m\n    expr: \"sum by(tenant)\
+    \ (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\"\\\"}[5m])\\n)\\\
+    n\"\n- name: clickhouse-threshold-normalization\n  rules:\n  - record: tenant:alert_threshold:clickhouse_queries_rate\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"active_connections\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:alert_threshold:clickhouse_active_connections_critical\n    expr: \"\
-    max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"\
-    active_connections\\\", severity=\\\"critical\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_max_part_count\n\
+    , metric=\\\"queries_rate\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
+    \ tenant:alert_threshold:clickhouse_active_connections\n    expr: \"max by(tenant)\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"active_connections\\\
+    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections_critical\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"max_part_count\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:alert_threshold:clickhouse_replication_queue\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"replication_queue\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_memory_tracking_bytes\n\
+    , metric=\\\"active_connections\\\", severity=\\\"critical\\\"}\\n)\\n\"\n  -\
+    \ record: tenant:alert_threshold:clickhouse_max_part_count\n    expr: \"max by(tenant)\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"max_part_count\\\
+    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_replication_queue\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"memory_tracking_bytes\\\", severity=\\\"warning\\\"}\\n)\\n\"\n"
+    , metric=\\\"replication_queue\\\", severity=\\\"warning\\\"}\\n)\\n\"\n"
   clickhouse-alert.yml: "groups:\n- name: clickhouse-alerts\n  rules:\n  - alert:\
     \ ClickHouseHighQueryRate\n    expr: \"(\\n  tenant:clickhouse_queries:rate5m\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_queries_rate\\\
@@ -141,25 +137,6 @@ data:
     \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
     \ ClickHouse replication queue size exceeds threshold\n      summary_zh: ClickHouse\
     \ 複寫隊列大小超出閾值\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: ClickHouseHighMemoryUsage\n    expr: \"(\\n  tenant:clickhouse_memory_tracking:max\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_memory_tracking_bytes\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Memory\
-    \ tracked: {{ $value | humanize1024 }}B'\n      description_zh: 追蹤的記憶體：{{ $value\
-    \ | humanize1024 }}B\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: ClickHouse memory usage high — resource sizing review'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：ClickHouse 記憶體使用率過高 — 資源大小調整審查'\n      runbook_url: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ ClickHouse memory tracking exceeds threshold\n      summary_zh: ClickHouse 記憶體追蹤超出閾值\n\
-    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: ClickHouseHighFailedQueryRate\n    expr: 'tenant:clickhouse_failed_queries:rate5m\
     \ > 10\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\
