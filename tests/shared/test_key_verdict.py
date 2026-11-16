@@ -508,6 +508,7 @@ def _doc(**over):
     _doc(findings=[dict(_FINDING, blocks=None)]),
     _doc(findings=[dict(_FINDING, hint=1)]),  # #3829: a hint is text or null
     _doc(findings=[dict(_FINDING, gate_kind=1)]),  # #3996: the gate's kind is text or null
+    _doc(findings=[dict(_FINDING, gate_kind="typo")]),  # #3996: one of the gate's kinds the verdict names
     _doc(findings=[{k: v for k, v in _FINDING.items() if k != "gate_kind"}]),  # #3996: always written
     # #3502: a dead_entry carries its entries, no other kind does; a reason
     # outside the closed set is not read as one inside it.

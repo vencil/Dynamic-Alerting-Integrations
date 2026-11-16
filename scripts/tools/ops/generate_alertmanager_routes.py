@@ -2067,10 +2067,10 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
                   + (_policy_errors(schema_warnings) if strict else [])
                   + key_blocks)
         if errors:
-            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
+            # #3996: every one of them is a line printed just above (the
+            # loop) or by the key verdict: counted, not repeated.
+            print(f"FAIL: {len(errors)} error(s) found and nothing to render (listed above)",
                   file=sys.stderr)
-            for e in errors:
-                print(safe_label(e), file=sys.stderr)
             sys.exit(EXIT_VIOLATION)
         if not assembles_file:
             print("No tenants found in config directory.")

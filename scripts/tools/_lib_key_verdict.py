@@ -190,6 +190,14 @@ _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
 _KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread",
                     "dead_entry", "schedule_unread"})
 _DISABLES = frozenset({"effective", "noop"})
+#: #3996: the da-guard finding kinds a verdict names in `gate_kind` — each
+#: one the gate reports as an error, so a reader that leaves such a finding
+#: out of its own report (validate-config's routes row) loses nothing. A
+#: kind outside it is output this reader cannot read, never a finding
+#: hidden on the gate's behalf (tests/shared/test_key_verdict_kinds_parity
+#: reads the set from the Go verdict's source).
+_GATE_KINDS = frozenset({"subtree_default_reserved_key", "subtree_default_undeliverable",
+                         "root_defaults_reserved_key"})
 
 
 def _str(v: Any, what: str) -> str:
@@ -255,7 +263,7 @@ def _finding(f: dict) -> Finding:
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
                    _optional(f["reason"], "findings.reason"), _bool(f["blocks"], "findings.blocks"),
                    _optional(f["base"], "findings.base"), _finding_dead_entries(f),
-                   _optional(f["hint"], "findings.hint"), _optional(f["gate_kind"], "findings.gate_kind"))
+                   _optional(f["hint"], "findings.hint"), _optional(f["gate_kind"], "findings.gate_kind", _GATE_KINDS))
 
 
 def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":

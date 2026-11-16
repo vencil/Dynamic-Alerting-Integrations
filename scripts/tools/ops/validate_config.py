@@ -2643,12 +2643,19 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     # #3387: which scalar the exporter refuses (root_default_refused) and a
     # registered `_` key that reaches no tenant (root_defaults_reserved_key)
     # are da-guard's errors, the `guard_errors` row's — not judged here.
+    # #3996: the latter is da-guard's own set (effective's
+    # root_defaults_reserved), so such a key is reported once, with the
+    # gate's fix; a tree da-guard cannot answer for keeps every `_` key here.
+    try:
+        reserved = set(_effective_tree(config_dir).root_defaults_reserved or ())
+    except (DaGuardError, DaGuardNotFoundError, ParseFailedError):
+        reserved = set()
     dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "
             "(threshold-exporter makes no row of one, #3045) and no other reader reads "
             "`_` keys under `defaults:`; delete it, or drop the `_` to make it a threshold"
             for k in block
             if isinstance(k, str) and k.startswith("_") and not k.startswith("_routing")
-            and k not in dropped]
+            and k not in dropped and k not in reserved]
     if dead:
         return _make_result("root_defaults", WARN, dead)
     return _make_result("root_defaults", PASS, [

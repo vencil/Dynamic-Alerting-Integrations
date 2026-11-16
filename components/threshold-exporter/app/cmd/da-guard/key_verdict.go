@@ -590,11 +590,13 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "Print, as JSON, the shared key verdict (ADR-038): for every key of every tenant whether\n"+
 			"some reader reads it in some part of the UTC day, and the findings a report prints:\n"+
 			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
-			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value}]}, \"findings\":\n"+
-			"[{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks}], \"key_checks\":\n"+
+			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value, gate_kind}]},\n"+
+			"\"findings\": [{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks,\n"+
+			"gate_kind}], \"key_checks\":\n"+
 			"{<tenant>: [{kind, key, head, replacement_head, reason}]}, \"parse_failed\": [<file>],\n"+
 			"\"unreadable\": [{file, reason}]}. A key check's reason is a constant sentence per kind;\n"+
-			"only key and head carry what the tenant's config writes.\n"+
+			"only key and head carry what the tenant's config writes. gate_kind (#3996): the kind of\n"+
+			"da-guard's own finding that reports the same fact, or null.\n"+
 			"Only `expires:` is read at --at; nothing depends on the time of day.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+
