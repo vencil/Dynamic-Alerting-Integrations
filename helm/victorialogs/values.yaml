@@ -18,7 +18,7 @@ replicaCount: 1
 image:
   # renovate: datasource=docker depName=victoriametrics/victoria-logs
   repository: victoriametrics/victoria-logs
-  tag: "v1.53.0"
+  tag: "v1.54.0"
   # Pinned by digest (#902 L2 supply-chain; was #566 T5): the rendered image
   # is `repo:tag@sha256:...`, so kubelet pulls by digest (immutable; an
   # upstream tag swap cannot substitute). Renovate bumps tag + digest together
@@ -28,7 +28,7 @@ image:
   #    digest); set image.digest to the new tag's digest too. Do NOT clear it:
   #    that pulls by tag alone and drops the pin. In-repo, a third-party image
   #    without a digest fails tests/ops/test_thirdparty_images_are_digest_pinned.py.
-  digest: "sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
+  digest: "sha256:ee4e820cac3721f5f5d91641b950c22439593adc4224f9655e5333d5a84c1dfe"
   pullPolicy: IfNotPresent
 
 # HTTP listen port for ingestion + query. VictoriaLogs default is 9428.

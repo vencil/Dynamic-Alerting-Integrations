@@ -239,11 +239,11 @@ jobs:
           - name: vector # helm/vector/values.yaml
             ref: "timberio/vector:0.61.0-distroless-libc@sha256:1a3451978644d5cd4b99a0b28c990791e2f7e1efbea4184122f1c59a56448143"
           - name: victoria-logs # helm/victorialogs/values.yaml
-            ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
+            ref: "victoriametrics/victoria-logs:v1.54.0@sha256:ee4e820cac3721f5f5d91641b950c22439593adc4224f9655e5333d5a84c1dfe"
           - name: vmauth # helm/victorialogs/values.yaml auth.image (#1295)
             ref: "victoriametrics/vmauth:v1.156.0@sha256:e4b739ed468de88906550911c03fee2b0da89785679343a006639b8f471df051"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:c3ed2b61f3c4e410685565ceb3c818197b552832521b39d53eca5d2d9d0dc1e1"
+            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:6c4cb3bfa4b555429dd19541796a6ba6b30c84675b460bd0bd5072f7d5bdae71"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/tenant-api values.yaml
@@ -254,15 +254,15 @@ jobs:
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
             ref: "prometheuscommunity/prom-label-proxy:v0.16.2@sha256:5709cd2e1add82a57bc613fe34f0f6864fdba84d77c13f87e2508fc0eaf71888"
           - name: mariadb # helm/mariadb-instance/values.yaml
-            ref: "mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd"
+            ref: "mariadb:11.8.9@sha256:d36f18d65a0459510b8b0f643b226a6d299e3206486e2b64ff20754a6d291707"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
             ref: "prom/mysqld-exporter:v0.21.0@sha256:afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318"
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
-            ref: "grafana/grafana:12.4.14@sha256:ae509d9ae8c1021ca32ec370a9ca975d40165eda9fccd1e1102d317ff8787cd7"
+            ref: "grafana/grafana:12.4.15@sha256:2894082f6cf7081aefdc1389265c04000812309208c190d75e8c65f7a30e4b7e"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
             ref: "prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
-            ref: "prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b"
+            ref: "prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
             ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0@sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b"
           # Replaced ghcr.io/jimmidyson/configmap-reload (#1243): its last release is
@@ -273,7 +273,7 @@ jobs:
           # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
           # A digest refresh MUST update both or they drift silently.
           - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
-            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.95.1@sha256:39bdbade0c64f7c38bb6d18d6f602b14ad489bc189b709dc9266b49e6647aac1"
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.95.2@sha256:cc74ddedad4ab1c49446971f6d51302ad4303d8660a2018af925c7f62c114304"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
@@ -295,7 +295,7 @@ jobs:
             # inventory", never as clean.
             no_inventory: true
           - name: alpine-git # helm/tenant-api/templates/deployment.yaml (git-clone / git-gc-off init containers, hardcoded in the template)
-            ref: "alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d"
+            ref: "alpine/git:v2.54.1@sha256:2306e2b05ee0ef99f5d25b0779f645b24ae9f91ba187107503592fcdfe78da3a"
           # try-local demo stack ONLY (#1337 ①) — README points prospective customers
           # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/
           # pulls these two, so the extractor cannot see them. The compose file keeps
