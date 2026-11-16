@@ -260,6 +260,35 @@ def query_label_findings(texts: list[str], queries: set[str], where: str) -> lis
     return out
 
 
+_RATE_CALL = re.compile(r"\b(" + "|".join(_RATE_FUNCS) + r")\s*\(")
+
+
+def rate_arguments(expr: str) -> list[tuple[str, str]]:
+    """(function, whole argument text) of every rate-like call in *expr*, the
+    argument found by matching parentheses: rate(x[5m]), rate((x)[5m:]) and
+    rate((sum(x))[5m:]) all yield the expression that is rated. Strings are
+    skipped so a parenthesis inside a label value does not count."""
+    out = []
+    for m in _RATE_CALL.finditer(expr):
+        depth, i, quote = 1, m.end(), None
+        while i < len(expr) and depth:
+            c = expr[i]
+            if quote:
+                if c == "\\" and quote != "`":
+                    i += 1
+                elif c == quote:
+                    quote = None
+            elif c in "\"'`":
+                quote = c
+            elif c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+            i += 1
+        out.append((m.group(1), expr[m.end():i - 1]))
+    return out
+
+
 def _presence_selectors(pack: str) -> list[str]:
     import _lib_exporter_presence  # noqa: PLC0415  (scripts/tools)
     return list(_lib_exporter_presence.pack_presence(pack))
@@ -317,11 +346,9 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
     out += query_label_findings(_presence_selectors(pack), names,
                                 "the presence check (_lib_exporter_presence)")
     gauges = {n for n, s in metrics.items() if (s or {}).get("type") == "gauge"}
-    # The argument may sit in extra parentheses: rate((x)[5m:]) is a subquery.
-    pattern = re.compile(r"\b(" + "|".join(_RATE_FUNCS) + r")\s*\(\s*(?:\(\s*)*([a-zA-Z_:][a-zA-Z0-9_:]*)")
     for expr in exprs:
-        for func, metric in pattern.findall(expr):
-            if metric in gauges:
+        for func, arg in rate_arguments(expr):
+            for metric in sorted(_lib_metric_sources.extract_metrics(arg) & gauges):
                 out.append(f"{rule_pack.name} applies {func}() to gauge {metric}")
     return sorted(set(out))
 

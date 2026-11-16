@@ -216,9 +216,18 @@ def test_backtick_query_selector(tree):
     assert tree(["query_timestamp{query=`x_liveness`} > 0"]) == []
 
 
-def test_rate_of_a_parenthesised_gauge(tree):
-    found = tree(["rate((x_sessions)[5m:]) > 1"])
-    assert any("rate() to gauge x_sessions" in f for f in found), found
+@pytest.mark.parametrize("expr", [
+    "rate((x_sessions)[5m:]) > 1",
+    "rate((sum(x_sessions))[5m:]) > 1",
+    'increase(max by(db) (x_sessions{db=")"})[10m:1m]) > 1',
+])
+def test_rate_of_a_gauge_inside_its_argument(tree, expr):
+    found = tree([expr])
+    assert any("to gauge x_sessions" in f for f in found), found
+
+
+def test_a_gauge_outside_the_rated_argument_is_fine(tree):
+    assert tree(["rate(x_waits_total[5m]) / x_sessions > 1"]) == []
 
 
 def test_query_without_timeout_or_with_a_late_one(tree):
