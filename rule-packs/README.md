@@ -119,7 +119,7 @@ groups:
 - **redis_exporter**: https://github.com/oliver006/redis_exporter
 - **mongodb_exporter**: https://github.com/percona/mongodb_exporter
 - **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter
-- **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter
+- **query-exporter** (Oracle; queries in `exporters/oracle.yaml`): https://github.com/albertodonato/query-exporter
 - **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)
 - **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter

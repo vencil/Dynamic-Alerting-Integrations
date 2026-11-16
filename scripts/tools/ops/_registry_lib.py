@@ -288,6 +288,9 @@ def build_registry_doc(
             "default_on": bool(pack.get("default_on", False)),
             "rule_pack_file": pack["rule_pack_file"],
         }
+        if pack.get("queries"):
+            # query-exporter config that serves the pack's raw metrics (#3833).
+            packs[pack_name]["queries"] = pack["queries"]
         combined: dict[str, tuple[str, dict]] = {}
         for tier in TIERS:
             for key, info in (pack.get(tier) or {}).items():
@@ -818,7 +821,7 @@ def not_chart_armed_keys(doc: dict) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 #: Per-pack fields of scaffold's RULE_PACKS that come from the registry.
-_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file")
+_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file", "queries")
 #: Per-key fields of scaffold's RULE_PACKS that come from the registry.
 _KEY_FIELDS = ("value", "unit", "desc", "metric_class", "dimensions",
                "value_counterexample")
@@ -832,7 +835,7 @@ _RULE_PACKS_MODULE_HEADER = (
     '"""GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.\n'
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
-    "display/exporter/default_on/rule_pack_file and the `defaults` /\n"
+    "display/exporter/default_on/rule_pack_file(/queries) and the `defaults` /\n"
     "`optional_overrides` tiers. Edit the registry, then run\n"
     "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
     "`--ci` (pre-commit, CI) fails while this file is stale.\n"

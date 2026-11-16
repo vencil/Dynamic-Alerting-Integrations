@@ -138,7 +138,7 @@ Edge clusters only need to deploy the corresponding exporter; threshold-exporter
 | MariaDB/MySQL | mysqld_exporter | `mysql_*` |
 | Redis | redis_exporter | `redis_*` |
 | MongoDB | mongodb_exporter | `mongodb_*` |
-| Oracle | oracledb_exporter | `oracledb_*` |
+| Oracle | query-exporter (`rule-packs/exporters/oracle.yaml`) | `oracledb_*`, `query_interval` / `query_timestamp` |
 | DB2 | db2_exporter | `db2_*` |
 | ClickHouse | built-in /metrics | `ClickHouse*` |
 | Kafka | kafka_exporter | `kafka_*` |

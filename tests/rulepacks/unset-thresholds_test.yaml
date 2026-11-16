@@ -477,7 +477,7 @@ tests:
     input_series:
       - series: 'user_threshold_unset{tenant="t-oracle", pack="oracle", key="oracle_pga_allocated_bytes", fix="tenant"}'
         values: '1x160'
-      - series: 'oracledb_up{tenant="t-oracle", job="tenant-exporters"}'
+      - series: 'query_interval{tenant="t-oracle", job="tenant-exporters", query="oracle_liveness"}'
         values: '1x160'
     alert_rule_test:
       - alertname: OracleThresholdNotConfigured

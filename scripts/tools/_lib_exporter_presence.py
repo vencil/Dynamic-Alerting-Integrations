@@ -38,7 +38,12 @@ Why each metric (read from the exporter's own source):
 * postgresql    ``pg_up`` — prometheus-community/postgres_exporter, same shape.
 * redis         ``redis_up`` — oliver006/redis_exporter, same shape.
 * mongodb       ``mongodb_up`` — percona/mongodb_exporter, same shape.
-* oracle        ``oracledb_up`` — iamseth/oracledb_exporter, same shape.
+* oracle        ``query_interval{query="oracle_liveness"}`` — query-exporter
+                running rule-packs/exporters/oracle.yaml (#3833). query-exporter
+                keeps serving while the database is down and reports no 0 (its
+                gauges expire), so presence reads the built-in query_interval of
+                the liveness query: set at start-up, served while the exporter
+                runs, whatever the database's state.
 * db2           ``db2_up`` — the DB2 exporter's up gauge (the DB2 pack reads it).
 * kafka         ``kafka_brokers`` — danielqsj/kafka_exporter: Collect emits it
                 first, unconditionally (kafka_exporter.go, clusterBrokers); the
@@ -99,7 +104,7 @@ EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
     "redis": ("redis_up",),
     "mongodb": ("mongodb_up",),
     "elasticsearch": ("elasticsearch_exporter_build_info",),
-    "oracle": ("oracledb_up",),
+    "oracle": ('query_interval{query="oracle_liveness"}',),
     "db2": ("db2_up",),
     "clickhouse": ("ClickHouseMetrics_TCPConnection",),
     "kafka": ("kafka_brokers",),
@@ -154,6 +159,15 @@ PLATFORM_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("platform")
 _PAD = "  "
 
 
+def selector(metric: str) -> str:
+    """*metric* under the tenant-exporters job. A table entry is a bare name or
+    a selector with its own matchers (query-exporter's built-ins are told apart
+    by their `query` label); the job matcher joins those."""
+    if metric.endswith("}"):
+        return f"{metric[:-1]}, {JOB_SELECTOR}}}"
+    return f"{metric}{{{JOB_SELECTOR}}}"
+
+
 def _indent(text: str, depth: int) -> str:
     return "\n".join(_PAD * depth + line for line in text.split("\n"))
 
@@ -165,7 +179,7 @@ def presence_expr() -> str:
     them all)."""
     terms = []
     for db_type, metrics in EXPORTER_PRESENCE.items():
-        inner = " or ".join(f"{m}{{{JOB_SELECTOR}}}" for m in metrics)
+        inner = " or ".join(selector(m) for m in metrics)
         terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
     return "\nor ".join(terms)
 
@@ -176,7 +190,7 @@ def presence_over_time_expr() -> str:
     its kind as ``db_type``."""
     terms = []
     for db_type, metrics in EXPORTER_PRESENCE.items():
-        inner = " or ".join(f"max_over_time({m}{{{JOB_SELECTOR}}}[{UNDECLARED_LOOKBACK}])"
+        inner = " or ".join(f"max_over_time({selector(m)}[{UNDECLARED_LOOKBACK}])"
                             for m in metrics)
         terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
     return "\nor ".join(terms)
@@ -210,7 +224,7 @@ def unset_notice_expr(pack: str) -> str:
     if not metrics:
         raise ValueError(f"pack {pack!r} reads unset-notice keys but has no presence metric "
                          "(EXPORTER_PRESENCE / APP_PRESENCE)")
-    inner = " or ".join(f"{m}{{{JOB_SELECTOR}}}" for m in metrics)
+    inner = " or ".join(selector(m) for m in metrics)
     return "\n".join([
         "(",
         f'  max without(instance, pod) (user_threshold_unset{{pack="{pack}"}})',

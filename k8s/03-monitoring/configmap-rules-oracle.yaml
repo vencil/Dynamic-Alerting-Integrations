@@ -20,12 +20,11 @@ data:
     \    expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))\n  - record:\
     \ tenant:oracle_process_count:max\n    expr: max by(tenant) (oracledb_process_count)\n\
     \  - record: tenant:oracle_pga_allocated_bytes:max\n    expr: max by(tenant) (oracledb_pga_allocated_bytes)\n\
-    \  - record: tenant:oracle_session_utilization:ratio\n    expr: 'max by(tenant)\
-    \ (oracledb_sessions_active)\n\n      / max by(tenant) (oracledb_resource_limit{resource=\"\
-    sessions\"} > 0)\n\n      '\n- name: oracle-threshold-normalization\n  interval:\
-    \ 15s\n  rules:\n  - record: tenant:alert_threshold:oracle_sessions_active\n \
-    \   expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"sessions_active\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_sessions_active_critical\n\
+    \  - record: tenant:oracle_session_utilization:ratio\n    expr: \"max by(tenant)\
+    \ (\\n  oracledb_sessions_current / (oracledb_sessions_limit > 0)\\n)\\n\"\n-\
+    \ name: oracle-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
+    \ tenant:alert_threshold:oracle_sessions_active\n    expr: max by(tenant) (user_threshold{component=\"\
+    oracle\", metric=\"sessions_active\", severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_sessions_active_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"sessions_active\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:oracle_tablespace_used_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"tablespace_used_percent\"\
@@ -39,19 +38,23 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"pga_allocated_bytes\"\
     , severity=\"warning\"})\n"
   oracle-alert.yml: "groups:\n- name: oracle-alerts\n  rules:\n  - alert: OracleDatabaseDown\n\
-    \    expr: oracledb_up == 0\n    for: 15s\n    labels:\n      maintenance: page\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: oracledb_up=0 for 15s on {{ $labels.instance }}\n      description_zh:\
-    \ oracledb_up=0，持續 15 秒，實例：{{ $labels.instance }}\n      owner: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Oracle instance {{ $labels.instance }} is DOWN\n      summary_zh: Oracle 實例\
-    \ {{ $labels.instance }} 已關閉\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: OracleHighActiveSessions\n    expr: \"(\\n  tenant:oracle_sessions_active:max\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:oracle_sessions_active\\\
+    \    expr: \"max by(tenant, instance) (\\n  time() - query_timestamp{job=\\\"\
+    tenant-exporters\\\", query=\\\"oracle_liveness\\\"} > 60\\n)\\nor\\nmax by(tenant,\
+    \ instance) (\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\"oracle_liveness\\\
+    \"}\\n  unless on(instance)\\n  query_timestamp{job=\\\"tenant-exporters\\\",\
+    \ query=\\\"oracle_liveness\\\"}\\n)\\n\"\n    for: 15s\n    labels:\n      maintenance:\
+    \ page\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: The Oracle liveness query has not succeeded for over 60s on\
+    \ {{ $labels.instance }}\n      description_zh: Oracle 存活查詢超過 60 秒沒有成功，實例：{{ $labels.instance\
+    \ }}\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Oracle instance {{ $labels.instance }} is DOWN\n      summary_zh:\
+    \ Oracle 實例 {{ $labels.instance }} 已關閉\n      tier: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}'\n  - alert: OracleHighActiveSessions\n    expr: \"(\\\
+    n  tenant:oracle_sessions_active:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:oracle_sessions_active\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: oracle_sessions_active\n\
     \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
@@ -213,21 +216,21 @@ data:
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     - name: oracle-unset-thresholds\n  rules:\n  - alert: OracleThresholdNotConfigured\n\
     \    expr: \"(\\n  max without(instance, pod) (user_threshold_unset{pack=\\\"\
-    oracle\\\"})\\n  and on(tenant)\\n  (oracledb_up{job=\\\"tenant-exporters\\\"\
-    })\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} ==\
-    \ 1)\\n\"\n    for: 30m\n    labels:\n      maintenance: mute\n      severity:\
-    \ info\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
-    \ '{{ if eq $labels.fix \"platform\" }}The platform does not declare {{ $labels.key\
-    \ }}, so a tenant value for it is not read and the {{ $labels.pack }} alert that\
-    \ reads it never fires. The platform must add it to the root defaults or optional_overrides;\
-    \ write \"disable\" to end this notice.{{ else }}No threshold is served for {{\
-    \ $labels.key }}, so the {{ $labels.pack }} alert that reads it never fires. Write\
-    \ a threshold to arm it, or \"disable\" to keep it off and end this notice.{{\
-    \ end }}'\n      description_zh: '{{ if eq $labels.fix \"platform\" }}平台沒有宣告 {{\
-    \ $labels.key }}，租戶寫的值不會被讀，{{ $labels.pack }} 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults\
-    \ 或 optional_overrides；寫 \"disable\" 可結束這則提醒。{{ else }}{{ $labels.key }} 沒有送出任何門檻值，{{\
-    \ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。{{ end }}'\n\
-    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    oracle\\\"})\\n  and on(tenant)\\n  (query_interval{query=\\\"oracle_liveness\\\
+    \", job=\\\"tenant-exporters\\\"})\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n\"\n    for: 30m\n    labels:\n      maintenance: mute\n\
+    \      severity: info\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ if eq $labels.fix \"platform\" }}The platform does not\
+    \ declare {{ $labels.key }}, so a tenant value for it is not read and the {{ $labels.pack\
+    \ }} alert that reads it never fires. The platform must add it to the root defaults\
+    \ or optional_overrides; write \"disable\" to end this notice.{{ else }}No threshold\
+    \ is served for {{ $labels.key }}, so the {{ $labels.pack }} alert that reads\
+    \ it never fires. Write a threshold to arm it, or \"disable\" to keep it off and\
+    \ end this notice.{{ end }}'\n      description_zh: '{{ if eq $labels.fix \"platform\"\
+    \ }}平台沒有宣告 {{ $labels.key }}，租戶寫的值不會被讀，{{ $labels.pack }} 讀它的告警因此永遠不會響。要由平台把它加進根層的\
+    \ defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。{{ else }}{{ $labels.key\
+    \ }} 沒有送出任何門檻值，{{ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。{{\
+    \ end }}'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '{{ $labels.key }}: no threshold, so its alert never\
     \ fires (fix: {{ $labels.fix }})'\n      platform_summary_zh: '{{ $labels.key\

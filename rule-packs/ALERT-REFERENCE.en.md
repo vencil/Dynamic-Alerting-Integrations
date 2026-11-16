@@ -200,7 +200,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| OracleDatabaseDown | critical | fires | oracledb_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | oracledb_up |
+| OracleDatabaseDown | critical | fires | The Oracle liveness query has not succeeded for over 60s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | query_timestamp |
 | OracleHighActiveSessions | warning | muted | [tier] {{ $labels.tenant }}: Oracle active sessions elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_sessions_active:max |
 | OracleHighActiveSessionsCritical | critical | muted | [tier] {{ $labels.tenant }}: Oracle active sessions at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_sessions_active:max |
 | OracleTablespaceAlmostFull | warning | muted | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_tablespace_used_percent:max |

@@ -1,0 +1,111 @@
+# query-exporter queries for the Oracle rule pack (#3833).
+#
+# This file is the source of every oracledb_* metric rule-pack-oracle.yaml reads.
+# Run albertodonato/query-exporter at the version pinned in
+# requirements/ci-constraints.txt (query-exporter) with this file plus your own
+# databases file:
+#
+#   query-exporter --config databases.yaml --config rule-packs/exporters/oracle.yaml
+#
+# databases.yaml must define ONE database named `oracle` (the queries below
+# name it), for example:
+#
+#   databases:
+#     oracle:
+#       dsn: oracle+oracledb://monitor:<password>@<host>:1521/?service_name=<SERVICE>
+#
+# One exporter per database: the tenant comes from the scrape (the pod's
+# namespace), so one exporter must not serve two tenants' databases.
+# The monitor user needs SELECT_CATALOG_ROLE (v$ / dba_* views).
+#
+# ⛔ The metric names here are a contract with the rule pack, checked by
+# scripts/tools/lint/check_exporter_queries.py: it derives the exposed names
+# with query-exporter's own code (a counter is exposed as <name>_total) and
+# fails when the pack reads a name this file does not produce, when a gauge
+# has no `expiration` (a gauge keeps its last value while the database is
+# unreachable; expiration drops it), or when the pack rate()s a gauge.
+# A CI job also runs this file against a real Oracle (gvenzl/oracle-free)
+# and compares what it serves with the derived names.
+#
+# Liveness: query-exporter keeps serving when the database is down. It does
+# not report 0; `oracledb_up` expires and query_timestamp{query="oracle_liveness"}
+# stops advancing. OracleDatabaseDown reads that; the platform's presence check
+# reads query_interval{query="oracle_liveness"}, which is served whenever the
+# exporter runs, whatever the database's state.
+metrics:
+  oracledb_up:
+    type: gauge
+    description: 1 while the liveness query succeeds; expires when it stops.
+    expiration: 2m
+  oracledb_sessions_active:
+    type: gauge
+    description: Active user sessions (v$session, status ACTIVE, type USER).
+    expiration: 2m
+  oracledb_sessions_current:
+    type: gauge
+    description: All sessions in v$session, the count the SESSIONS limit applies to.
+    expiration: 2m
+  oracledb_sessions_limit:
+    type: gauge
+    description: The SESSIONS parameter (v$parameter; readable in a PDB, unlike v$resource_limit).
+    expiration: 2m
+  oracledb_process_count:
+    type: gauge
+    description: Rows in v$process.
+    expiration: 2m
+  oracledb_pga_allocated_bytes:
+    type: gauge
+    description: v$pgastat "total PGA allocated", bytes.
+    expiration: 2m
+  oracledb_tablespace_used_percent:
+    type: gauge
+    description: dba_tablespace_usage_metrics.used_percent, 0-100, against the maximum size (autoextend counted).
+    labels: [tablespace, type]
+    expiration: 10m
+  oracledb_wait_time_seconds:
+    type: counter
+    description: v$system_wait_class time waited, seconds, per non-idle wait class (exposed as _total).
+    labels: [wait_class]
+
+queries:
+  oracle_liveness:
+    interval: 15
+    databases: [oracle]
+    metrics: [oracledb_up]
+    sql: SELECT 1 AS oracledb_up FROM dual
+  oracle_sessions:
+    interval: 15
+    databases: [oracle]
+    metrics: [oracledb_sessions_active, oracledb_sessions_current, oracledb_sessions_limit]
+    sql: >-
+      SELECT
+        (SELECT COUNT(*) FROM v$session WHERE status = 'ACTIVE' AND type = 'USER') AS oracledb_sessions_active,
+        (SELECT COUNT(*) FROM v$session) AS oracledb_sessions_current,
+        (SELECT TO_NUMBER(value) FROM v$parameter WHERE name = 'sessions') AS oracledb_sessions_limit
+      FROM dual
+  oracle_process:
+    interval: 15
+    databases: [oracle]
+    metrics: [oracledb_process_count]
+    sql: SELECT COUNT(*) AS oracledb_process_count FROM v$process
+  oracle_pga:
+    interval: 15
+    databases: [oracle]
+    metrics: [oracledb_pga_allocated_bytes]
+    sql: SELECT value AS oracledb_pga_allocated_bytes FROM v$pgastat WHERE name = 'total PGA allocated'
+  oracle_tablespace:
+    interval: 60
+    databases: [oracle]
+    metrics: [oracledb_tablespace_used_percent]
+    sql: >-
+      SELECT m.tablespace_name AS tablespace, t.contents AS type,
+             m.used_percent AS oracledb_tablespace_used_percent
+      FROM dba_tablespace_usage_metrics m
+      JOIN dba_tablespaces t ON t.tablespace_name = m.tablespace_name
+  oracle_wait_time:
+    interval: 15
+    databases: [oracle]
+    metrics: [oracledb_wait_time_seconds]
+    sql: >-
+      SELECT wait_class, time_waited / 100 AS oracledb_wait_time_seconds
+      FROM v$system_wait_class WHERE wait_class <> 'Idle'
