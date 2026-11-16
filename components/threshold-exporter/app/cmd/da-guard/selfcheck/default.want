@@ -1,0 +1,22 @@
+{
+  "config_dir": "{tree}",
+  "source_files": [
+    "team/t1.yaml"
+  ],
+  "undetermined": [
+    {
+      "file": "team/t1.yaml",
+      "field": "tenants.t1._severity_dedup",
+      "reason": "routing_key"
+    }
+  ],
+  "report": {
+    "findings": null,
+    "summary": {
+      "total_tenants": 1,
+      "errors": 0,
+      "warnings": 0,
+      "passed_tenant_count": 1
+    }
+  }
+}

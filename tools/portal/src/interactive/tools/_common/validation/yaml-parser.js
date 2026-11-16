@@ -57,7 +57,8 @@ purpose: |
                            prototype) are dropped at every depth so
                            consumers can assign into it freely. `errors` is
                            a list of strings (syntax errors carry the line).
-    parseTenantYaml(text)  -> { config, errors }, as parseYaml, for a page
+    parseTenantYaml(text, { schedules = true } = {})
+                           -> { config, errors }, as parseYaml, for a page
                            that READS THRESHOLDS from the config (#3919).
                            The exporter reads a threshold scalar's TEXT
                            (ScheduledValue.UnmarshalYAML takes the node's
@@ -87,7 +88,9 @@ purpose: |
                            no schedule). Not modelled: such a value brought
                            in by a merge one level up, or inside a list.
                            A schedule the exporter cannot decode (#3974) is
-                           an error with config = {} as well: a mapping with
+                           an error with config = {} as well (unless
+                           `schedules: false`, for a page whose top level is
+                           not one tenant's keys, #4001): a mapping with
                            a `default` key of its own, under any top-level
                            key (`_` keys too), is decoded into fixed fields
                            (`default` / `expires` / `reason` a single value,
@@ -496,7 +499,7 @@ function scheduleDecodeMessage(key, { field, list, mapping }) {
 // `---` and any number of `...` are not (countDocuments). parseYaml keeps
 // reading the first document: its other callers are not the exporter's
 // reader.
-function parseTenantYaml(text) {
+function parseTenantYaml(text, { schedules = true } = {}) {
   const t = window.__t || ((zh, en) => en);
   const typed = parseYaml(text);
   if (typed.errors.length) return typed;
@@ -529,7 +532,7 @@ function parseTenantYaml(text) {
   const written = (key) => (isPlainMap(marked) ? writtenValue(marked, key, marker.keyOf, index) : doc[key]);
   // Every key, `__proto__` and the other UNSAFE_KEYS too: the exporter has
   // no such keys, and decodes their schedules as any other (measured).
-  const undecodable = Object.keys(doc)
+  const undecodable = !schedules ? [] : Object.keys(doc)
     .map((key) => [key, scheduleDecodeError(written(key), doc[key], marker.keyOf)])
     .filter(([, error]) => error !== null);
   if (undecodable.length) {

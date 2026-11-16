@@ -3,8 +3,8 @@ package main
 // served_config_facts_test.go — served-values --config-facts (#3918): each
 // tenant's fields the exporter reads at no instant, read without resolving
 // or gathering anything. A reader whose verdict must not depend on when it
-// runs (the route generator's custom-alert delivery check, validate-config's
-// unsupplied_defaults, the retire-drift lint) reads them here: the default
+// runs (the route generator's custom-alert delivery check, the retire-drift
+// lint) reads them here: the default
 // mode exits 2 at an instant /metrics cannot be gathered at.
 
 import (

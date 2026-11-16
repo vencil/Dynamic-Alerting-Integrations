@@ -85,6 +85,7 @@ var confdWalkerExclusions = map[string]struct {
 	reason string
 }{
 	"cmd/da-batchpr/main.go · walkFilesDir": {1, "walks the PR payload directory, not conf.d — #1911 ruling ①(a)"},
+	"cmd/da-guard/selfcheck.go · copyTree":  {1, "walks the self-check fixture embedded in the binary (embed.FS) to write a copy of it; the copy is read by the subcommands themselves, through the walker — #3943"},
 }
 
 // dirEnumeratingFuncs are the stdlib package-level entry points that DIRECTLY

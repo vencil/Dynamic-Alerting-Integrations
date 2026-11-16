@@ -1,0 +1,252 @@
+{
+  "schema": "da-guard.key-verdict/v4",
+  "at": "2026-01-01T00:00:00Z",
+  "undecidable": false,
+  "blocks": false,
+  "undecidable_blocks": false,
+  "tenants": {
+    "t1": [
+      {
+        "key": "_custom_alerts",
+        "layer": "tenant",
+        "file": "team/t1.yaml",
+        "read_by": [
+          "custom_alert_compiler",
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": [
+          {
+            "metric": "qd",
+            "name": "q_high",
+            "op": "\u003e",
+            "recipe": "threshold",
+            "threshold": "100",
+            "window": "5m"
+          }
+        ]
+      },
+      {
+        "key": "_severity_dedup",
+        "layer": "tenant",
+        "file": "team/t1.yaml",
+        "read_by": [
+          "exporter",
+          "generator"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "enable"
+      },
+      {
+        "key": "container_cpu",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80
+      },
+      {
+        "key": "container_cpu_throttle",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 25
+      },
+      {
+        "key": "container_memory",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85
+      },
+      {
+        "key": "es_disk_usage_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85
+      },
+      {
+        "key": "es_heap_usage_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85
+      },
+      {
+        "key": "mysql_connection_usage_percent",
+        "layer": "tenant",
+        "file": "team/t1.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "70"
+      },
+      {
+        "key": "mysql_replication_lag",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 30
+      },
+      {
+        "key": "mysql_slave_lag",
+        "layer": "tenant",
+        "file": "team/t1.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": "effective",
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "disable"
+      },
+      {
+        "key": "oracle_tablespace_used_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85
+      },
+      {
+        "key": "pg_connections",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80
+      },
+      {
+        "key": "pg_replication_lag",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 30
+      },
+      {
+        "key": "rabbitmq_node_mem_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 90
+      }
+    ]
+  },
+  "findings": [],
+  "key_checks": {
+    "t1": []
+  },
+  "parse_failed": [],
+  "unreadable": []
+}

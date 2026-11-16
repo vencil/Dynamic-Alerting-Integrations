@@ -278,6 +278,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import os
 import re
 import subprocess
@@ -715,6 +716,36 @@ class ParseFailedError(YamlFileError):
         # load_effective_tree fills these from `document` (None: not judged).
         self.root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = None
         self.root_defaults_reserved: "tuple[str, ...] | None" = None
+        # #3832: effective's builtin_defaults, filled the same way (None: not
+        # judged) — a root platform file that cannot be read withholds the
+        # built-in layer, and only this document says so.
+        self.builtin_defaults: "BuiltinDefaults | None" = None
+
+
+#: The closed set of a built-in key's `state` in effective's
+#: `builtin_defaults` (pkg/config BuiltinState*, #3832). A state outside it
+#: is output this reader cannot read.
+BUILTIN_STATES = frozenset({"builtin", "overridden", "withheld"})
+
+
+class BuiltinDefault(NamedTuple):
+    """One key of effective's `builtin_defaults` (#3832): `value` the
+    platform's, `state` one of BUILTIN_STATES, `root_value` the number the
+    tree's `defaults:` gives the key (`overridden` only, else None),
+    `tenants` how many tenants /metrics serves the platform's value
+    (`builtin` only, else None)."""
+    value: float
+    state: str
+    root_value: float | None
+    tenants: int | None = None
+
+
+class BuiltinDefaults(NamedTuple):
+    """effective's `builtin_defaults` (#3832): the built-in table the
+    da-guard was compiled with — `digest` names it — and, per key, what the
+    exporter's build of the tree does with it."""
+    digest: str
+    keys: "dict[str, BuiltinDefault]"
 
 
 class KeySource(NamedTuple):
@@ -814,6 +845,9 @@ class EffectiveTree(NamedTuple):
     # the registered `_` keys of the root `defaults:`, which reach no tenant
     # (da-guard's root_defaults_reserved_key, #3250), sorted; None as above
     root_defaults_reserved: "tuple[str, ...] | None" = ()
+    # the built-in table and each key's state in this tree (#3832); None
+    # when no build ran (not judged)
+    builtin_defaults: "BuiltinDefaults | None" = None
 
 
 class EffectiveRun(NamedTuple):
@@ -1918,14 +1952,15 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     reads_skipped: bool, tenants: "Iterable[str] | None" = None) -> EffectiveTree:
     subset, requested = _subset_args(tenants)
     try:
-        (got, skipped, absent, root_refused, root_reserved), returncode, stderr = _run_da_guard(
+        (got, skipped, absent, root_refused, root_reserved, builtin), returncode, stderr = _run_da_guard(
             EFFECTIVE_SUBCOMMAND, subset, conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
             read=lambda doc: (doc["tenants"],
                               [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
                               if reads_skipped else [],
                               _subset_absent(doc, requested),
                               doc.get("root_defaults_refused", _MISSING) if reads_skipped else [],
-                              doc.get("root_defaults_reserved", _MISSING) if reads_skipped else []),
+                              doc.get("root_defaults_reserved", _MISSING) if reads_skipped else [],
+                              doc.get("builtin_defaults", _MISSING) if reads_skipped else None),
             reads_unreadable=True)
     except ParseFailedError as exc:
         # The build's root verdicts stand beside the dropped file (#3250);
@@ -1939,11 +1974,17 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     exc.document.get("root_defaults_reserved", _MISSING), 3, "")
             except EffectiveError:
                 pass  # left None: not judged
+            try:
+                exc.builtin_defaults = _builtin_defaults(
+                    exc.document.get("builtin_defaults", _MISSING), 3, "")
+            except EffectiveError:
+                pass  # left None: not judged
         raise
     return EffectiveTree(_effective_tenants(got, returncode, stderr), skipped, absent,
                          _root_defaults_refused(root_refused, returncode, stderr,
                                                 EFFECTIVE_SUBCOMMAND, EffectiveError),
-                         _root_defaults_reserved(root_reserved, returncode, stderr))
+                         _root_defaults_reserved(root_reserved, returncode, stderr),
+                         _builtin_defaults(builtin, returncode, stderr) if reads_skipped else None)
 
 
 #: A field a da-guard document does not carry (an older binary), unlike one it
@@ -1966,6 +2007,50 @@ def _root_defaults_reserved(entries: Any, returncode: int, stderr: str) -> "tupl
         raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: root_defaults_reserved is not of its shape "
                              f"({shown_value(entries)})", returncode, stderr, broken=True)
     return tuple(entries)
+
+
+def _builtin_defaults(doc: Any, returncode: int, stderr: str) -> "BuiltinDefaults | None":
+    """effective's `builtin_defaults` (#3832), checked: None when da-guard
+    wrote null (no build ran: not judged); a da-guard without the field is
+    named as older than this tool. The table is not empty; every key carries
+    a finite `value` and a state from BUILTIN_STATES, `root_value` (finite)
+    exactly on `overridden`, `tenants` (a count) exactly on `builtin`."""
+    if doc is _MISSING:
+        raise EffectiveError(
+            f"da-guard {EFFECTIVE_SUBCOMMAND} exited {returncode} without the expected JSON "
+            "('builtin_defaults') — this da-guard is older than this tool: upgrade or rebuild it",
+            returncode, stderr, stale=True)
+    if doc is None:
+        return None
+    try:
+        digest, keys = doc["digest"], doc["keys"]
+        if not isinstance(digest, str) or not digest or not isinstance(keys, dict) or not keys:
+            raise _ShapeError(f"digest {shown_value(digest)} with keys {shown_value(keys)}")
+
+        def finite(v: Any, what: str) -> float:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise _ShapeError(f"{what} is not a finite number: {shown_value(v)}")
+            return float(v)
+        out: dict[str, BuiltinDefault] = {}
+        for key, e in keys.items():
+            state, root, tenants = e["state"], e.get("root_value"), e.get("tenants")
+            if state not in BUILTIN_STATES:
+                raise _ShapeError(f"key '{shown_key(key)}': state {shown_value(state)} is none of "
+                                  f"{sorted(BUILTIN_STATES)}")
+            if (root is None) == (state == "overridden"):
+                raise _ShapeError(f"key '{shown_key(key)}': state {shown_value(state)} with "
+                                  f"root_value {shown_value(root)}")
+            if (tenants is None) == (state == "builtin") or (tenants is not None and (
+                    isinstance(tenants, bool) or not isinstance(tenants, int) or tenants < 0)):
+                raise _ShapeError(f"key '{shown_key(key)}': state {shown_value(state)} with "
+                                  f"tenants {shown_value(tenants)}")
+            out[str(key)] = BuiltinDefault(finite(e["value"], f"key '{shown_key(key)}' value"), state,
+                                           None if root is None else finite(root, f"key '{shown_key(key)}' root_value"),
+                                           tenants)
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: builtin_defaults is not of its shape "
+                             f"({error_text(e)})", returncode, stderr, broken=True) from e
+    return BuiltinDefaults(digest, out)
 
 
 def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, TenantEffective]:

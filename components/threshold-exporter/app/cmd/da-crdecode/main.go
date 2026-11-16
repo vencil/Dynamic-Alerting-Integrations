@@ -21,6 +21,14 @@
 //	da-crdecode <file>
 //	da-crdecode -              (reads standard input)
 //	da-crdecode --any-shape <file|->
+//	da-crdecode --self-check
+//
+// `--self-check` runs every reading of the dispatch table (`readings`) on a
+// fixture built into the binary and compares the answers with those built
+// in (selfcheck.go): exit 0 and {"self_check":"passed"} on stdout, or exit 1
+// and {"self_check":"failed"}, each failing fixture named on stderr. The
+// generator service is ready only once it passes. The exit codes below are
+// the readings'.
 //
 // Two readings (#3426):
 //
@@ -205,14 +213,31 @@ const stdinName = "<stdin>"
 // anyShapeFlag reads YAML that is not a manifest: no document shape is checked.
 const anyShapeFlag = "--any-shape"
 
+// readings is da-crdecode's dispatch table: the flag that picks each reading
+// ("" — no flag — for the default) to the reading. ⛔ The one list of them:
+// `--self-check` (selfcheck.go) runs its fixtures through run() and fails on
+// a reading here it has no fixture for, so a reading added without one turns
+// the self-check, and its test, red.
+var readings = map[string]string{
+	"":           readingManifest,
+	anyShapeFlag: readingAnyShape,
+}
+
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	anyShape := false
-	if len(args) > 0 && args[0] == anyShapeFlag {
-		anyShape = true
-		args = args[1:]
+	if len(args) > 0 && args[0] == selfCheckFlag {
+		return runSelfCheck(args[1:], stdout, stderr)
 	}
+	mode := ""
+	if len(args) > 0 && args[0] != "" {
+		if _, ok := readings[args[0]]; ok {
+			mode = args[0]
+			args = args[1:]
+		}
+	}
+	anyShape := readings[mode] == readingAnyShape
 	if len(args) != 1 || args[0] == "" || args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprintf(stderr, "usage: %s [%s] <file|->\n", programName, anyShapeFlag)
+		fmt.Fprintf(stderr, "       %s %s\n", programName, selfCheckFlag)
 		fmt.Fprintf(stderr, "Decodes a YAML file as Kubernetes clients do "+
 			"(sigs.k8s.io/yaml.YAMLToJSON, one document after another as `kubectl apply -f` "+
 			"splits them) and prints {\"documents\": [...], \"differs_from_text\": [...]} as JSON. "+
@@ -243,10 +268,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, name, err)
 		return refuse(stdout, stderr)
 	}
-	result := output{Documents: []json.RawMessage{}, DiffersFromText: [][]difference{}, Reading: readingManifest}
-	if anyShape {
-		result.Reading = readingAnyShape
-	}
+	result := output{Documents: []json.RawMessage{}, DiffersFromText: [][]difference{}, Reading: readings[mode]}
 	for _, p := range pieces {
 		source := p.atFileLines()
 		doc, differs, skip, err := decodeDocument(source)
