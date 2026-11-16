@@ -185,6 +185,10 @@ def extract_metrics_from_expr(expr: str) -> Set[str]:
         # `{[`/whitespace, so the regex never captures them; verified across
         # every rule-pack, so they need no listing here.)
         "or", "and",
+        # Modifier keywords: `x offset 90s` and `x > bool 1` put a keyword after
+        # whitespace too (#3833: OracleDatabaseDown's `offset 90s` read as a
+        # metric named `offset` and failed the real-pack split gate).
+        "offset", "bool",
     }
 
     # Match word followed by { or [ or whitespace
