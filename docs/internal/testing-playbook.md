@@ -161,6 +161,7 @@ Kill Pod 後「PDB 保住 1 Pod、alert 不中斷」**沒有自動化覆蓋**；
 - **跨 rule group 的精確 `$value` 斷言會 flake**：alert 讀另一個 group 的 recording rule 時，promtool 同一個 tick 內的 group 求值順序不固定。改用與值無關的斷言；要 end-to-end 的 firing 斷言就寫 `count(ALERTS{alertname="…",alertstate="firing"}) == 1`——裸 `ALERTS{}` 的 label 集合在 vmalert 多一個 `alertgroup`，會打紅 `make rulepack-vmalert-test`。⛔ 別為了修測試把 recording rule 搬進 alert 的 group：那是拿出貨的 rule pack 去解 harness 的問題。
 - **promtool flake 沒有 retry 墊片**：`scripts/ops/ci_flake_retry.py`／`flaky-tests.yaml` 只重試 Go 測試 ⇒ promtool 的 flake 只能根治，不能登記。
 - **數離散事件的規則，回歸測試要含「短命 series」形狀**（多條各自從 0 起算、活不滿整個窗的 series）；驗收法＝把規則還原成 `increase()`，新測試必須轉紅。為什麼不用 `increase()` 見 `rule-packs/rule-pack-kubernetes.yaml` 的 OOM 規則註解。
+- **百分比的渲染方式要和 `$value` 的尺度一致**（#978）：0–1 的比值用 `{{ $value | humanizePercentage }}`，已經是 0–100 的值用 `{{ $value | printf "%.1f" }}%`，同一條告警不要混用。混用的結果是 100% 顯示成「1%」或 85 顯示成「8500%」。尺度從 expr 推不出來（`:ratio` 這種命名會說謊），所以閘門 `check_percent_render_pinned.py` 改要求：凡是用這兩種寫法渲染的 annotation，都要有一個 firing case（`exp_alerts` 非空）在 `exp_annotations` 逐字寫出渲染結果，錯的數字就會出現在 diff 裡。既有的缺口列在 `tests/rulepacks/percent_render_baseline.yaml`。
 - **fire 與 no-fire 兩個 case 的 alertname 要一起改**：規則不存在時 promtool 對 `exp_alerts: []` 也回空 ⇒「空對空」假綠（`tests/dx/fixtures/custom_alerts_promtool/`）。
 
 ## JSX Dependency Loading & Portal Modularization
