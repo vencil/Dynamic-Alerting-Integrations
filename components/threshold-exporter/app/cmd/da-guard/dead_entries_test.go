@@ -76,10 +76,10 @@ func TestDeadEntries_ThroughEveryDocument(t *testing.T) {
 	wantF := []map[string]any{
 		{"severity": "error", "kind": "dead_entry", "key": "redis_memory", "file": "_profiles.yaml",
 			"tenants": []any{"t1"}, "reason": "default_covered", "hint": nil, "base": nil,
-			"dead_entries": []any{deadProfileEntry}, "blocks": true},
+			"dead_entries": []any{deadProfileEntry}, "blocks": true, "gate_kind": nil},
 		{"severity": "error", "kind": "dead_entry", "key": "mysql_connection_usage_percent", "file": "a.yaml",
 			"tenants": []any{"t1"}, "reason": "window_covered", "hint": nil, "base": nil,
-			"dead_entries": []any{deadTenantEntry}, "blocks": true},
+			"dead_entries": []any{deadTenantEntry}, "blocks": true, "gate_kind": nil},
 	}
 	if !reflect.DeepEqual(got, wantF) {
 		t.Errorf("key-verdict dead_entry findings\n got %v\nwant %v", got, wantF)

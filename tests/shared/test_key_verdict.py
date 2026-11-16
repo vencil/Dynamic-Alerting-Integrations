@@ -431,9 +431,10 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
         "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
-        "dead_entries": [], "value": 1}
+        "dead_entries": [], "value": 1, "gate_kind": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True}
+            "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True,
+            "gate_kind": None}
 _CHECK = {"kind": "version_label_empty", "key": 'm{version=""}', "head": "m", "replacement_head": None,
           "reason": "r"}
 _DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
@@ -506,6 +507,9 @@ def _doc(**over):
     _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
     _doc(findings=[dict(_FINDING, hint=1)]),  # #3829: a hint is text or null
+    _doc(findings=[dict(_FINDING, gate_kind=1)]),  # #3996: the gate's kind is text or null
+    _doc(findings=[dict(_FINDING, gate_kind="typo")]),  # #3996: one of the gate's kinds the verdict names
+    _doc(findings=[{k: v for k, v in _FINDING.items() if k != "gate_kind"}]),  # #3996: always written
     # #3502: a dead_entry carries its entries, no other kind does; a reason
     # outside the closed set is not read as one inside it.
     _doc(findings=[dict(_FINDING, kind="dead_entry")]),

@@ -9,7 +9,7 @@ Automates the manual verification steps from the Shadow Monitoring SOP:
 Usage:
   # Pre-flight check (before starting shadow monitoring)
   python3 shadow_verify.py preflight \
-    --mapping migration_output/prefix-mapping.yaml \
+    --mapping migration_output/.migration/prefix-mapping.yaml \
     --prometheus http://localhost:9090
 
   # Runtime health check (during shadow monitoring)
@@ -25,7 +25,7 @@ Usage:
 
   # All checks combined
   python3 shadow_verify.py all \
-    --mapping migration_output/prefix-mapping.yaml \
+    --mapping migration_output/.migration/prefix-mapping.yaml \
     --report-csv validation_output/validation-report.csv \
     --prometheus http://localhost:9090
 """
