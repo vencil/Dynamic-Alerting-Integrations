@@ -116,7 +116,9 @@ type builtinDefaultKey struct {
 	Value float64 `json:"value"`
 	// State: `builtin` (the tree's `defaults:` gives the key no value, so
 	// the built-in layer gives Value), `overridden` (it gives the number in
-	// RootValue) or `withheld` (the root carrier cannot be read: no value).
+	// RootValue), `opted_out` (it writes the key as `disable`, which every
+	// tenant inherits: no value, the key's family off) or `withheld` (the
+	// root carrier cannot be read: no value).
 	State string `json:"state"`
 	// RootValue is the number the tree's `defaults:` gives the key; present
 	// for `overridden` only.

@@ -71,6 +71,15 @@ var (
 	// keeps getting. Field is `<file>:optional_overrides.<key>`.
 	FindingRootOptionalBuiltin = register("root_optional_builtin",
 		"judges a default-armed key the conf.d root lists under optional_overrides without a number")
+	// FindingRootDisableFamilyValue (error, TenantID ""; #3832 decision 3):
+	// the conf.d root carrier's `defaults:` writes a default-armed key as
+	// `disable` (config.RootDisableText) and also gives a value to a key of
+	// its family — `<key>_critical` or a dimensional `<key>{…}`. The
+	// `disable` switches the whole family off for every tenant, so that
+	// value is served to none; the two lines contradict each other. Field is
+	// `<file>:defaults.<family key>`.
+	FindingRootDisableFamilyValue = register("root_disable_family_value",
+		"judges a value the conf.d root defaults give a family its own root disable switches off")
 	// FindingRootDefaultsReservedKey (error, TenantID ""; #3250): a `_` key
 	// under the conf.d root carrier's `defaults:` mapping
 	// (config.RootDefaultsReservedKey; a routing key is the route generator's

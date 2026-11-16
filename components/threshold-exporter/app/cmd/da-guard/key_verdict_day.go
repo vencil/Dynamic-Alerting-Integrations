@@ -179,6 +179,7 @@ func pieceReading(part *config.ThresholdConfig, tenant string, at time.Time,
 	tv.Keys = servedKeys(tv, overrides, undeliverable, at, recordedReasons(part, tenant, at),
 		func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 	addRootRefused(tv, overrides, rootRefused)
+	addRootDisabled(tv, part, tenant)
 	for k, e := range tv.Keys {
 		if e.Reason == keyReasonValueNonFinite || e.Reason == keyReasonValueUnparsed {
 			e.Exporter, e.Reason = true, ""

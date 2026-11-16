@@ -97,6 +97,22 @@ def test_a_number_under_the_root_defaults_is_overridden(tmp_path):
     assert _line(row, _KEYS[2]).startswith(f"builtin `{_KEYS[2]}`"), row
 
 
+def test_a_root_disable_is_opted_out(tmp_path):
+    """根層寫 `disable`（#3832 決策 3）：`opted_out`，不是 `builtin` 也不是 `overridden`；
+    別名 `false` 是讀不了的值，照舊落到內建值。PASS，不影響結束碼。"""
+    off, alias = _KEYS[0], _KEYS[1]
+    tree = _tree(tmp_path, {
+        "_defaults.yaml": f"defaults:\n  {off}: disable\n  {alias}: false\n",
+        "t1.yaml": "tenants:\n  t1: {}\n",
+    })
+    row = vc.check_platform_defaults(tree)
+    assert row["status"] == vc.PASS, row
+    assert _line(row, off) == (f"opted_out `{off}` — `disable` under `defaults:` of the root platform "
+                               "file switches it off for every tenant that gives it no value of its "
+                               f"own; platform value {_fmt(BUILTIN_DEFAULTS[off])}"), row
+    assert _line(row, alias).startswith(f"builtin `{alias}` = "), row
+
+
 @pytest.mark.parametrize("text", ["null", "abc"], ids=["null", "refused"])
 def test_a_root_value_that_gives_nothing_falls_to_builtin(tmp_path, text):
     """根層寫 `null`（等於沒寫）或 exporter 讀不了的值：落到內建值，所以是 `builtin`，

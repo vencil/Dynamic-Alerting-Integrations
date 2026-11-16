@@ -305,6 +305,18 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 			if r.Reason == config.RefusedNonFinite {
 				why = "is not a finite number: an alert compared against NaN or an infinity never fires or always fires"
 			}
+			off := ""
+			if config.IsDisabled(strings.ToLower(strings.TrimSpace(r.Text))) {
+				// #3832 decision 3: the root reads one opt-out word only,
+				// `disable`, and only for a default-armed key.
+				if _, armed := config.BuiltinDefault(r.Key); armed {
+					off = fmt.Sprintf(" The root reads no alias of `disable`: to switch `%s` off for every "+
+						"tenant, write `%s: disable`.", r.Key, r.Key)
+				} else {
+					off = fmt.Sprintf(" `disable` under the root `defaults:` switches off only a key the platform "+
+						"arms by default, and `%s` is not one: the root gives it no value to switch off.", r.Key)
+				}
+			}
 			if v, armed := config.BuiltinDefault(r.Key); armed {
 				// #3832: a default-armed key falls to the built-in value.
 				out = append(out, Finding{
@@ -314,7 +326,7 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 					Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves "+
 						"the platform's built-in value %s for `%s` instead, as if the line were not there. Write a "+
 						"finite number to serve your own value (a root default takes no `:severity`), or delete the "+
-						"line to keep the platform's.", f.Name, r.Key, r.Text, why, formatBuiltin(v), r.Key),
+						"line to keep the platform's.%s", f.Name, r.Key, r.Text, why, formatBuiltin(v), r.Key, off),
 				})
 				continue
 			}
@@ -325,7 +337,7 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 				Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves no "+
 					"default row for `%s`; only a tenant's own value is served, as for an `optional_overrides:` "+
 					"key. Write a finite number (a root default takes no `:severity`), or list `%s` under "+
-					"`optional_overrides:` instead.", f.Name, r.Key, r.Text, why, r.Key, r.Key),
+					"`optional_overrides:` instead.%s", f.Name, r.Key, r.Text, why, r.Key, r.Key, off),
 			})
 		}
 	}
@@ -380,9 +392,69 @@ func checkRootOptionalBuiltin(input CheckInput) []Finding {
 				Field:    f.Name + ":optional_overrides." + k,
 				Message: fmt.Sprintf("%s: `%s` is listed under the conf.d root `optional_overrides:` without a "+
 					"number under `defaults:`. The platform arms `%s` by default: every tenant gets its built-in "+
-					"value %s, and the list does not switch it off. To keep its alert off, write `%s: disable` in "+
-					"a subtree `_defaults.yaml` or in the tenant files; to serve your own value, give it a number "+
-					"under `defaults:`. Then delete the list entry.", f.Name, k, k, formatBuiltin(v), k),
+					"value %s, and the list does not switch it off. To keep its alert off for every tenant, write "+
+					"`%s: disable` under the root `defaults:` (for part of the tree: in a subtree `_defaults.yaml` "+
+					"or the tenant files); to serve your own value, give it a number under `defaults:`. Then "+
+					"delete the list entry.", f.Name, k, k, formatBuiltin(v), k),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
+	return out
+}
+
+// checkRootDisableFamily reports findingkind.FindingRootDisableFamilyValue
+// for each key of the conf.d root carrier's `defaults:` mapping that gives a
+// value (not null) to `<base>_critical` or a dimensional `<base>{…}` while
+// the same mapping writes base as `disable` (config.RootDisableText, #3832
+// decision 3). The `disable` switches base's whole family off for every
+// tenant that does not give base a value of its own, so the root's value of
+// the family key is served to no such tenant: the root contradicts itself.
+// A file in ParseFailed is skipped, as checkRootCriticalKeys does.
+func checkRootDisableFamily(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil || !wrappedInMapping(doc) {
+			continue
+		}
+		defaults, _ := doc["defaults"].(map[string]any)
+		off := map[string]bool{}
+		for k, v := range defaults {
+			if s, ok := v.(string); ok && config.RootDisableText(k, s) {
+				off[k] = true
+			}
+		}
+		if len(off) == 0 {
+			continue
+		}
+		for k, v := range defaults {
+			if v == nil || off[k] {
+				continue
+			}
+			base := strings.TrimSuffix(k, "_critical")
+			if i := strings.Index(k, "{"); i >= 0 {
+				base = k[:i]
+			}
+			if base == k || !off[base] {
+				continue
+			}
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootDisableFamilyValue,
+				Field:    f.Name + ":defaults." + k,
+				Message: fmt.Sprintf("%s: the conf.d root `defaults:` writes `%s: disable`, which switches the whole "+
+					"`%s` family off for every tenant — `%s` included, so its value here is served to no tenant. "+
+					"Delete one of the two lines: the `disable` to serve the family, or `%s` to keep it off. A "+
+					"subtree or tenant that gives `%s` a value gets the family back, and its own `%s` with it.",
+					f.Name, base, base, k, k, base, k),
 			})
 		}
 	}

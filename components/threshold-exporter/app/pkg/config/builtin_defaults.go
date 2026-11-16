@@ -19,6 +19,15 @@ package config
 // every rule that holds for a root-valued key (a subtree or tenant `disable`,
 // a tenant's `<key>_critical` row, the key verdict) holds for it.
 //
+// THE ROOT OPT-OUT (#3832 decision 3). The root `defaults:` may write a key
+// of the table as `disable` (RootDisableText: that word only, no alias, no
+// schedule): the layer gives it nothing, and every tenant inherits the
+// `disable` as it inherits a subtree level's — the key's whole family off
+// (familyHeadOff) until a subtree, a profile or the tenant gives the key a
+// value. In the typed Defaults it is rootDisabledDefault, a NaN no resolver
+// serves a default row for and seedBuiltinDefaults does not replace; in the
+// generic chain it is the text `disable`, which rootRefusedAsBuiltin keeps.
+//
 // Both representations of the defaults take it in, from this file only:
 //
 //   - the typed ThresholdConfig.Defaults (/metrics, served-values, the
@@ -127,12 +136,13 @@ func builtinDefaultsDigestOf(table map[string]float64) string {
 // holds no finite value for gets the platform's value. A value the root
 // decode refused (a NaN, refusedDefault) falls to the built-in value: the
 // refusal is still reported, from the file's bytes (RootDefaultRefusals),
-// and a refused text never leaves an alert off. It returns the keys it gave
+// and a refused text never leaves an alert off. A root `disable`
+// (RootDisabledDefault) is kept: it is the tree's opt-out of the key. It returns the keys it gave
 // the platform's value, sorted (FlatBuild.BuiltinSeeded).
 func seedBuiltinDefaults(d map[string]float64) []string {
 	var seeded []string
 	for k, v := range builtinDefaults {
-		if cur, ok := d[k]; ok && finiteThreshold(cur) {
+		if cur, ok := d[k]; ok && (finiteThreshold(cur) || RootDisabledDefault(cur)) {
 			continue
 		}
 		d[k] = v
@@ -155,6 +165,9 @@ const (
 	// BuiltinStateOverridden: the tree's `defaults:` gives the key a number,
 	// which every tenant inherits in place of the platform's.
 	BuiltinStateOverridden = "overridden"
+	// BuiltinStateOptedOut: the tree's root `defaults:` writes the key as
+	// `disable` (RootDisableText), which every tenant inherits.
+	BuiltinStateOptedOut = "opted_out"
 	// BuiltinStateWithheld: the root carrier cannot be read, so the layer is
 	// withheld and the key has no value at the root (RootBuiltinWithheld).
 	BuiltinStateWithheld = "withheld"
@@ -216,6 +229,8 @@ func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
 					st.Tenants++
 				}
 			}
+		case RootDisabledDefault(b.Config.Defaults[k]):
+			st.State = BuiltinStateOptedOut
 		default:
 			root := b.Config.Defaults[k]
 			st.State, st.Root = BuiltinStateOverridden, &root
@@ -223,6 +238,44 @@ func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
 		out[k] = st
 	}
 	return out
+}
+
+// InheritedRootDisables is, sorted, the built-in keys the root `defaults:`
+// writes as `disable` (RootDisabledDefault, #3832 decision 3) that tenant's
+// merged config does not write under any spelling: the keys the tenant
+// inherits the root's opt-out of. da-guard reads each as a `disable` of
+// the tenant's (served-values keys[], --disable-effects), as it reads one a
+// subtree `_defaults.yaml` hands the tenant.
+func (c *ThresholdConfig) InheritedRootDisables(tenant string) []string {
+	var out []string
+	for k, v := range c.Defaults {
+		if !RootDisabledDefault(v) {
+			continue
+		}
+		written := false
+		for tk := range c.Tenants[tenant] {
+			if canon, _ := CanonicalKeyFor(tk); canon == k {
+				written = true
+				break
+			}
+		}
+		if !written {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// BuiltinDefaultText is the platform's value for built-in key key as a
+// threshold text (the generator's spelling: `80`, `0.5`); "" when the
+// table holds no such key.
+func BuiltinDefaultText(key string) string {
+	v, ok := builtinDefaults[key]
+	if !ok {
+		return ""
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 // builtinChainBase is the built-in layer as a defaults-chain block

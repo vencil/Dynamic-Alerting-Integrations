@@ -92,6 +92,10 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 				perTenant[tenant] = append(perTenant[tenant], k)
 			}
 		}
+		// #3832: a root `disable` of a built-in key the tenant inherits is
+		// the tenant's `disable` as one a subtree level hands it is; taken
+		// away, the tenant gets the built-in value (withoutDisables).
+		perTenant[tenant] = append(perTenant[tenant], cfg.InheritedRootDisables(tenant)...)
 		sort.Strings(perTenant[tenant])
 		if n := len(perTenant[tenant]); n > rounds {
 			rounds = n
@@ -264,7 +268,21 @@ func withoutDisables(cfg *config.ThresholdConfig, set []tenantKey) *config.Thres
 	}
 	for _, tk := range set {
 		sv, ok := cfg.Tenants[tk.tenant][tk.key]
-		if !ok || !config.IsDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
+		if !ok {
+			// #3832: an inherited root `disable` (InheritedRootDisables) is
+			// taken away by giving the tenant the built-in value — what
+			// the tree serves it when the root does not opt out.
+			if v, root := cfg.Defaults[tk.key]; root && config.RootDisabledDefault(v) {
+				m := make(map[string]config.ScheduledValue, len(out.Tenants[tk.tenant])+1)
+				for k, v := range out.Tenants[tk.tenant] {
+					m[k] = v
+				}
+				m[tk.key] = config.ScheduledValue{Default: config.BuiltinDefaultText(tk.key)}
+				out.Tenants[tk.tenant] = m
+			}
+			continue
+		}
+		if !config.IsDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
 			continue
 		}
 		m := make(map[string]config.ScheduledValue, len(out.Tenants[tk.tenant]))
