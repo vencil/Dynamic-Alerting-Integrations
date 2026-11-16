@@ -19,7 +19,8 @@
 - #3903：啟動後 ``--repo`` 不見或 ``.git`` 損毀 ⇒ 判定回 ``git_read`` 並觸發一輪，
   探測失敗、``ready`` 為 false、理由為封閉的 ``repo_unreadable``；放回後下一輪
   通過、ready 回 true。``base_commit`` 不在 repo 裡的 ``git_read`` 也觸發一輪，
-  但探測通過、ready 不變。
+  但探測通過、ready 不變。探測的 git 卡住時服務照常回應 /v1/status，
+  ``--self-check-timeout-seconds`` 到了判 ``repo_unreadable``。
 
 程式用 shim 注入：包住真 binary 的 shell 腳本，控制檔的每一行是「程式 第一個
 參數 故障」，沒點到的呼叫原樣交給真 binary。
@@ -373,6 +374,47 @@ def test_a_base_commit_not_in_the_repo_leaves_ready_alone(rig):
         st = _status(svc)
         assert st["ready"] is True and st["self_check"]["failures"] == [], st
         assert _rounds(svc, "failed") == 0
+
+
+#: A --git that hangs on the --repo judgement once armed; every other run
+#: (the judgement's reads, `--local-env-vars`) is the real git.
+_HANGING_GIT = """#!/bin/sh
+if [ "$4" = "--show-object-format" ] && [ -e '{armed}' ]; then
+  '{sleep}' '{hang}'; exit 0
+fi
+exec '{git}' "$@"
+"""
+
+
+def test_a_hanging_repo_probe_never_holds_the_service(rig):
+    """#3903: the probe runs as a program's self-check does — a process
+    whose exit the loop waits for, not a blocking call. While git hangs on
+    --repo (an NFS mount that stopped answering) the service still answers
+    /v1/status at once; --self-check-timeout-seconds ends the probe:
+    ``repo_unreadable``, and the hanging git's process group with it."""
+    armed = rig.tmp / "probe-armed"
+    git = h.stub(rig.tmp / "gitbin", "git", _HANGING_GIT.format(
+        armed=armed, sleep=SLEEP, hang=rig.hang, git=h.GIT))
+    try:
+        with rig.service("probe-hang", "--git", str(git),
+                         "--self-check-timeout-seconds", "3") as svc:
+            assert _status(svc)["ready"] is True
+            armed.touch()
+            status, doc = svc.validate("0" * 40, timeout=30)
+            assert (status, doc.get("result"), doc.get("reason")) == (200, "rejected", "git_read"), doc
+            _until(lambda: rig.hanging(), "the probe hanging", timeout=10)
+            began = time.monotonic()
+            status, st = svc.call("GET", "/v1/status", timeout=2.0)
+            assert status == 200 and time.monotonic() - began < 1.0, st
+            assert st["self_check"]["running"] is True, st
+            _until(lambda: _status(svc)["self_check"]["state"] == "failed", "the probe timing out")
+            assert _status(svc)["self_check"]["failures"] == [_REPO_FAILURE]
+            armed.unlink()
+            _until(lambda: _status(svc)["ready"], "the probe passing again")
+            _until(lambda: not rig.hanging(), "the hanging git ended", timeout=10)
+    finally:
+        for pid in rig.hanging():
+            os.kill(pid, signal.SIGKILL)
 
 
 def test_the_docs_name_every_self_check_reason():

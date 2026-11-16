@@ -236,7 +236,7 @@ class _FakeService(gs.Service):
         await asyncio.sleep(self.delay)
         return gs.Response(200, {"result": "pass", "rc": 0})
 
-    def _repo_probe(self):
+    async def _repo_probe(self):
         return None  # no --repo here (#3903): the probe is tested on a real one
 
 

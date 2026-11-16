@@ -24,8 +24,9 @@ program a judgement runs — ``da-guard self-check``, ``da-read self-check``,
 ``da-crdecode --self-check``, resolved as the judgement resolves them — has
 passed: each runs every subcommand of its own dispatch table on fixtures
 built into it. Each round first probes --repo (#3903) with the judgement of
---repo that start-up makes (``_object_format``): a --repo git no longer
-reads fails the round. The first round starts once the socket is bound
+--repo that start-up makes (``_repo_judgement``), its git run as a
+self-check's program is: a --repo git no longer reads, or a git that does
+not answer within --self-check-timeout-seconds, fails the round. The first round starts once the socket is bound
 (``pending`` until it ends: not ready); a tool fault of a judgement or a
 warming run makes the service not ready at once and starts a round at once
 too; a judgement's ``git_read`` starts one and leaves ready to it. After a
@@ -331,6 +332,24 @@ class ChildRun:
     status: int
     reader: FrameReader
     received: int  # cache entries admitted into the store
+
+
+@dataclass
+class HeldRun:
+    """How one self-check round's process ended (``Service._run_held``)."""
+
+    rc: int
+    stdout: bytes  # at most _SELF_CHECK_STDOUT_LIMIT + 1 bytes
+    stderr: bytes  # at most _SELF_CHECK_STDERR_LOGGED bytes, for the log
+    timed_out: bool
+
+
+class _ExecFailed(Exception):
+    """A self-check round's process could not be started: its OSError."""
+
+    def __init__(self, error: OSError) -> None:
+        super().__init__(error)
+        self.error = error
 
 
 @dataclass
@@ -1076,7 +1095,7 @@ class Service:
         self.self_check_running = True
         try:
             await self._take_slot()
-            repo_reason = self._repo_probe()
+            repo_reason = await self._repo_probe()
             try:
                 programs = self._self_check_programs()
             except Exception as exc:  # noqa: BLE001 — the round fails, the service stays up
@@ -1102,22 +1121,45 @@ class Service:
             self.tool_fault = None
         return self.self_check_state == "passed" and self.tool_fault is None
 
-    def _repo_probe(self) -> Optional[str]:
-        """#3903: whether git still reads --repo as the service judged it at
-        start — :func:`_object_format`, the one judgement of --repo, under
-        the self-check's limits; None when it does, else
-        ``SELF_CHECK_REPO_REASON``, the detail logged. A judgement's
-        ``git_read`` cannot tell a --repo git no longer reads from a request
-        whose base commit is not in it; this round can.
+    def _new_self_check_dir(self) -> str:
+        """A directory of its own for one self-check run (0700)."""
+        self._self_check_seq += 1
+        work = os.path.join(_jobs_dir(self.s.work_dir), f"selfcheck-{self._self_check_seq}")
+        os.mkdir(work, 0o700)
+        return work
 
-        Run on the loop, as ``start_warming``'s git is (no thread: see the
-        module docstring): a ``rev-parse`` that git's own timeout bounds."""
+    async def _repo_probe(self) -> Optional[str]:
+        """#3903: whether git still reads --repo as the service judged it at
+        start; None when it does, else ``SELF_CHECK_REPO_REASON``, the
+        detail logged. A judgement's ``git_read`` cannot tell a --repo git
+        no longer reads from a request whose base commit is not in it; this
+        round can.
+
+        The one judgement of --repo — :func:`_repo_judgement_command` run,
+        :func:`_repo_judgement` read — run as a program's self-check is
+        (:meth:`_run_held`: off the loop's back, its time limit and its
+        limits). Not read, timed out, or an object format other than the
+        one at start: unreadable."""
         try:
-            fmt = _object_format(self.s.git, self.s.repo,
-                                 preexec_fn=_self_check_limits(self.s.memory_limit_bytes))
-        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            argv, env = _repo_judgement_command(self.s.git, self.s.repo)
+            work = self._new_self_check_dir()
+        except Exception as exc:  # noqa: BLE001 — the probe fails, the service stays up
+            _log(f"self-check: --repo: cannot run git: {exc!r}")
+            return SELF_CHECK_REPO_REASON
+        try:
+            run = await self._run_held(argv, work, env)
+            if run.timed_out:
+                raise RuntimeError(f"--repo: git did not answer within "
+                                   f"{self.s.self_check_timeout_seconds}s")
+            fmt = _repo_judgement(self.s.repo, run.rc, run.stdout, run.stderr)
+        except _ExecFailed as exc:
+            _log(f"self-check: --git: {exc.error.strerror}")
+            return SELF_CHECK_REPO_REASON
+        except Exception as exc:  # noqa: BLE001 — RuntimeError: the judgement's reason
             _log(f"self-check: {exc}")
             return SELF_CHECK_REPO_REASON
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
         if fmt != self.object_format:
             _log(f"self-check: --repo: object format {fmt}, not the {self.object_format} "
                  f"it had at start")
@@ -1130,17 +1172,13 @@ class Service:
         reason (``_gsvc_proto.SELF_CHECK_REASONS``), the detail logged.
 
         Passed is exit 0 with exactly ``SELF_CHECK_PASSED`` on stdout. The
-        process runs in a directory of its own (also its $TMPDIR: da-guard
-        writes its fixture tree there), in a process group of its own that
-        the time limit ends; it is ``wait``-ed for here, never by
-        ``_reap_orphans``. No thread: its exit is a pidfd on this loop."""
+        process runs as :meth:`_run_held` runs one, its directory also its
+        $TMPDIR (da-guard writes its fixture tree there)."""
         if not exe:
             _log(f"self-check: {name}: not found")
             return "not_found"
         try:
-            self._self_check_seq += 1
-            work = os.path.join(_jobs_dir(self.s.work_dir), f"selfcheck-{self._self_check_seq}")
-            os.mkdir(work, 0o700)
+            work = self._new_self_check_dir()
         except OSError as exc:
             _log(f"self-check: {name}: cannot make its directory: {exc!r}")
             return "internal_error"
@@ -1154,6 +1192,39 @@ class Service:
 
     async def _self_check_in(self, name: str, exe: str, args: tuple[str, ...],
                              work: str) -> Optional[str]:
+        try:
+            run = await self._run_held([exe, *args], work, {**os.environ, "TMPDIR": work})
+        except _ExecFailed as exc:
+            reason = _lib_tool_fault.os_error_reason(exc.error, exe)
+            _log(f"self-check: {name}: {reason}: {exc.error.strerror}")
+            return reason
+        rc, stdout = run.rc, run.stdout
+        if run.timed_out:
+            reason = "timed_out"
+        elif rc < 0:
+            reason = "signalled"
+        elif rc == 0:
+            reason = None if stdout == _lib_consumer_read.SELF_CHECK_PASSED else "bad_output"
+        elif rc == 1:
+            reason = "failed" if stdout == _lib_consumer_read.SELF_CHECK_FAILED else "bad_output"
+        else:
+            reason = "unexpected_exit"
+        if reason is not None:
+            _log(f"self-check: {name}: {reason} (exit {rc}): "
+                 + run.stderr.decode("utf-8", "replace"))
+        return reason
+
+    async def _run_held(self, argv: list[str], work: str, env: dict) -> "HeldRun":
+        """Run *argv* for a self-check round — a program's self-check or the
+        --repo probe — and return how it ended; `_ExecFailed` when it could
+        not be started.
+
+        In *work* (its cwd, its stdout and stderr files 0600), in a process
+        group of its own that --self-check-timeout-seconds ends, under the
+        self-check's limits (``_self_check_limits``); ``wait``-ed for here,
+        never by ``_reap_orphans`` (``_held_pids``). No thread and no
+        blocking wait: its exit is a pidfd on this loop, which serves
+        meanwhile."""
         out_path, err_path = os.path.join(work, "stdout"), os.path.join(work, "stderr")
         # 0600 from creation (the work directory is 0700 already): what a
         # self-check prints is the service's to read, nobody else's
@@ -1166,13 +1237,11 @@ class Service:
             raise
         try:
             proc = subprocess.Popen(  # noqa: S603 — the resolved program, no shell
-                [exe, *args], stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True,
+                argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                cwd=work, env=env, start_new_session=True,
                 preexec_fn=_self_check_limits(self.s.memory_limit_bytes))
         except OSError as exc:
-            reason = _lib_tool_fault.os_error_reason(exc, exe)
-            _log(f"self-check: {name}: {reason}: {exc.strerror}")
-            return reason
+            raise _ExecFailed(exc) from exc
         finally:
             os.close(out)
             os.close(err)
@@ -1191,21 +1260,7 @@ class Service:
             stdout = fh.read(_SELF_CHECK_STDOUT_LIMIT + 1)
         with open(err_path, "rb") as fh:
             stderr = fh.read(_SELF_CHECK_STDERR_LOGGED)
-        rc = proc.returncode
-        if timed_out:
-            reason = "timed_out"
-        elif rc < 0:
-            reason = "signalled"
-        elif rc == 0:
-            reason = None if stdout == _lib_consumer_read.SELF_CHECK_PASSED else "bad_output"
-        elif rc == 1:
-            reason = "failed" if stdout == _lib_consumer_read.SELF_CHECK_FAILED else "bad_output"
-        else:
-            reason = "unexpected_exit"
-        if reason is not None:
-            _log(f"self-check: {name}: {reason} (exit {rc}): "
-                 + stderr.decode("utf-8", "replace"))
-        return reason
+        return HeldRun(proc.returncode, stdout, stderr, timed_out)
 
     async def _exited(self, pid: int, timeout: float) -> bool:
         """Whether process *pid* exits within *timeout* seconds."""
@@ -1533,17 +1588,41 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _git_why(proc: subprocess.CompletedProcess) -> str:
+def _git_why(rc: int, stderr: bytes) -> str:
     """A failed git run's reason, on one line: its stderr, else its exit."""
-    why = " ".join(proc.stderr.decode("utf-8", "replace").split())
-    return safe_label(why or f"git exited {proc.returncode}")
+    why = " ".join(stderr.decode("utf-8", "replace").split())
+    return safe_label(why or f"git exited {rc}")
 
 
-def _object_format(git: str, repo: str, *, preexec_fn=None) -> str:
-    """--repo's object format, judging --repo on the way (#3739): git is the
-    reader of --repo, so git judges it, and the refusal names the flag. The
-    self-check's --repo probe (#3903) is this same judgement, under the
-    self-check's limits (*preexec_fn*).
+def _repo_judgement_command(git: str, repo: str) -> tuple[list[str], dict]:
+    """The git run that judges --repo (:func:`_repo_judgement`): its argv
+    and environment. The first call is the first run of --git
+    (``git_env``: its OSError, or ``GitReadError``)."""
+    return ([git, "-C", repo, "rev-parse", "--show-object-format", "--show-prefix"],
+            _gsvc_child.git_env(git))
+
+
+def _object_format(git: str, repo: str) -> str:
+    """--repo's object format, judging --repo on the way (#3739), at start:
+    :func:`_repo_judgement_command` run and :func:`_repo_judgement` read.
+    The self-check's --repo probe (#3903, ``Service._repo_probe``) runs and
+    reads the same two."""
+    shown_git = safe_label(git) if git else "''"  # '' is SUPPLIED, as _lib_paths shows it
+    try:
+        argv, env = _repo_judgement_command(git, repo)  # #3739: --git's own answer
+        proc = subprocess.run(argv, capture_output=True, check=False, timeout=60, env=env)
+    except OSError as exc:
+        # #3415: the first run of --git — name the flag, not a bare errno.
+        raise RuntimeError(f"--git {shown_git}: {exc.strerror}") from exc
+    except _gsvc_child.GitReadError as exc:
+        raise RuntimeError(f"--git {shown_git}: {exc}") from exc
+    return _repo_judgement(repo, proc.returncode, proc.stdout, proc.stderr)
+
+
+def _repo_judgement(repo: str, rc: int, stdout: bytes, stderr: bytes) -> str:
+    """--repo's object format from what :func:`_repo_judgement_command`
+    exited with and printed, or a ``RuntimeError`` naming --repo: git is the
+    reader of --repo, so git judges it, and the refusal names the flag.
 
     * not a repository: git's own reason, after ``--repo <path>:`` — it was
       git's bare ``fatal: not a git repository … .git``, naming neither;
@@ -1556,21 +1635,9 @@ def _object_format(git: str, repo: str, *, preexec_fn=None) -> str:
       has an empty prefix too and is served: it resolves to that same
       repository, whose ``HEAD:<config-subdir>`` is the same conf.d."""
     shown_repo = safe_label(repo) if repo else "''"
-    shown_git = safe_label(git) if git else "''"  # '' is SUPPLIED, as _lib_paths shows it
-    try:
-        env = _gsvc_child.git_env(git)  # the first run of --git (#3739: its own answer)
-        proc = subprocess.run([git, "-C", repo, "rev-parse", "--show-object-format",
-                               "--show-prefix"],
-                              capture_output=True, check=False, timeout=60, env=env,
-                              preexec_fn=preexec_fn)
-    except OSError as exc:
-        # #3415: the first run of --git — name the flag, not a bare errno.
-        raise RuntimeError(f"--git {shown_git}: {exc.strerror}") from exc
-    except _gsvc_child.GitReadError as exc:
-        raise RuntimeError(f"--git {shown_git}: {exc}") from exc
-    if proc.returncode != 0:
-        raise RuntimeError(f"--repo {shown_repo}: {_git_why(proc)}")
-    fmt, _, prefix = proc.stdout.decode("utf-8", "replace").partition("\n")
+    if rc != 0:
+        raise RuntimeError(f"--repo {shown_repo}: {_git_why(rc, stderr)}")
+    fmt, _, prefix = stdout.decode("utf-8", "replace").partition("\n")
     fmt, prefix = fmt.strip(), prefix.strip()
     if prefix:
         raise RuntimeError(f"--repo {shown_repo}: a directory inside a repository "
@@ -1632,7 +1699,7 @@ def _check_config_subdir(git: str, repo: str, sub: str, shown: str) -> None:
         return
     if proc.returncode != 0 or not head:
         raise RuntimeError(f"--repo {safe_label(repo) if repo else repr('')}: "
-                           f"{_git_why(proc)}")
+                           f"{_git_why(proc.returncode, proc.stderr)}")
     if not sub:
         return  # the root is a tree whatever it holds
     try:
