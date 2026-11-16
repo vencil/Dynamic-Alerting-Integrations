@@ -668,6 +668,9 @@ class TestCLI:
         """#3617: every key's query unanswered — no partial answer, no document:
         a CallerError naming the keys (run() makes it rc 2, stdout empty)."""
         from _lib_exitcodes import CallerError
+        # #3990: the platform declares mysql_threads_running, so the exporter
+        # serves the tenant's value (not_served would route it to review).
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_threads_running: 30\n")
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
             "db-a", keys={"mysql_connection_usage_percent": 80, "mysql_threads_running": 50}))
         with patch("threshold_recommend.prometheus_instant",
@@ -701,6 +704,9 @@ class TestCLI:
     def test_a_key_not_measured_makes_the_run_partial_rc2(self, tmp_path, capsys, fmt):
         """#3133：某個 key 的查詢沒得到回答 → 那個 key 沒有量測、報告是 partial、
         rc 2（以前寫成 reason "query error"、rc 0）；量到的 key 照樣報。"""
+        # #3990: the platform declares mysql_threads_running, so the exporter
+        # serves the tenant's value (not_served would route it to review).
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_threads_running: 30\n")
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
             "db-a", keys={"mysql_connection_usage_percent": 80, "mysql_threads_running": 50}))
         rows = _range_result([40 + (i % 7) for i in range(1000)])
@@ -2040,3 +2046,137 @@ class TestUpperBoundFloor2964:
         assert result["status"] == "analyzed"
         assert result["risk"] == "LOW"
         assert result["new_breach_count"] == result["old_breach_count"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# #3990: nothing is read from /metrics at an instant; a value the exporter
+# does not serve goes to manual review
+# ═══════════════════════════════════════════════════════════════════════
+#: 01:00–01:29 the two keys give one series (the whole tree's /metrics cannot
+#: be gathered then); outside it `_critical` is switched off.
+_WINDOW_COLLISION = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+               "    mysql_connection_usage_percent_critical:\n      default: disable\n"
+               "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n",
+}
+
+
+class TestNoInstantRead3990:
+    def test_the_time_of_day_changes_nothing(self, tmp_path, monkeypatch, capsys):
+        """The same tree run inside the window /metrics cannot be gathered
+        in and outside it: one exit code (0), one stdout, one stderr. Before
+        #3990 a served-values read at the run's instant exited 2 inside it.
+        The da-guard is the one `served-values` would run at each instant
+        (`da_guard_at`): a read of it would differ between the two."""
+        from factories import da_guard_at
+        got = {}
+        for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
+            conf_d = tmp_path / at.replace(":", "")
+            conf_d.mkdir()
+            for name, text in _WINDOW_COLLISION.items():
+                write_yaml(str(conf_d), name, text)
+            monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at, ("key-verdict", "served-values")))
+            with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(conf_d), "--dry-run"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    _as_run(tr.main())
+            out, err = capsys.readouterr()
+            got[at] = (exc_info.value.code, out.replace(str(conf_d), "<d>"), err.replace(str(conf_d), "<d>"))
+        inside, outside = got.values()
+        assert not inside[0], inside  # SystemExit(None): exit 0
+        assert inside == outside
+
+    #: (case, the tenant's keys, the key judged, a manual review's reason
+    #: or None for a comparison, the served value it is compared at)
+    _SERVED_CASES = [
+        ("unread-text", 'mysql_connection_usage_percent: "abc"',
+         "mysql_connection_usage_percent", None, 80),
+        ("base-off-ten-minutes",
+         'mysql_threads_running:\n      default: "50"\n      overrides:\n'
+         '        - window: "01:00-01:10"\n          value: disable\n'
+         '    mysql_threads_running_critical: "90"',
+         "mysql_threads_running_critical", None, 90),
+        ("time-boxed", 'pg_replication_lag:\n      default: "40"\n      expires: "2099-01-01T00:00:00Z"',
+         "pg_replication_lag", "time-boxed (expires: 2099-01-01T00:00:00Z)", None),
+        ("schedule", 'mysql_threads_running:\n      default: "50"\n      overrides:\n'
+         '        - window: "01:00-02:00"\n          value: "60"',
+         "mysql_threads_running", "written as a schedule", None),
+        ("other-tier", 'mysql_connection_usage_percent: "70:critical"',
+         "mysql_connection_usage_percent", "served at severity critical, not its tier (warning)", None),
+        ("served-at-no-minute", 'mysql_connection_usage_percent_critical: "90"\n'
+         '    mysql_connection_usage_percent: disable',
+         "mysql_connection_usage_percent_critical", "served at no minute of the UTC day", None),
+        ("never-gathered", 'mysql_connection_usage_percent: "70:critical"\n'
+         '    mysql_connection_usage_percent_critical: "95"',
+         "mysql_connection_usage_percent_critical", "/metrics cannot be gathered 00:00-24:00 UTC", None),
+    ]
+
+    @pytest.mark.parametrize("case,keys,key,manual,served", _SERVED_CASES, ids=[c[0] for c in _SERVED_CASES])
+    def test_a_key_is_compared_at_what_metrics_serves_all_day(self, tmp_path, case, keys, key, manual, served):
+        """#3990: the value compared is the one /metrics serves for the key
+        over the whole day (served-values --schedules-only), never its
+        written text — `"abc"` is compared at the 80 served instead, a
+        `_critical` whose base is off ten minutes at its 90. A key with no
+        single served value of its own tier, a schedule or a time-box goes
+        to manual review naming why, and is never sent to Prometheus."""
+        write_yaml(str(tmp_path), "_defaults.yaml",
+                   "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_threads_running: 30\n"
+                   "  pg_replication_lag: 30\n")
+        write_yaml(str(tmp_path), "ta.yaml", "tenants:\n  ta:\n    " + keys + "\n")
+        sent = []
+
+        def answer(url, promql, **kw):
+            sent.append(promql)
+            return _range_result([40 + (i % 7) for i in range(1000)])
+        with patch("threshold_recommend.prometheus_instant", side_effect=answer):
+            [report] = tr.run_analysis(str(tmp_path), prometheus_url="http://p:9090")
+        rec = {k.key: k for k in report.keys}[key]
+        if manual is None:
+            assert rec.queried and not rec.force_manual and rec.served_value == served, rec
+        else:
+            assert rec.force_manual and not rec.queried and manual in rec.guardrail_reason, rec
+            assert rec.served_value is None, rec
+
+    def test_a_dimensional_key_in_a_retired_spelling_does_not_end_the_run(self, tmp_path):
+        """#3990 review: the schedule of `mysql_cpu{db="a"}` is named by its
+        base's canonical spelling, so the base is asked of key-spellings too
+        — a run of a real tree is never ended by a KeyError."""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_threads_running: 80\n"
+                                                    "dimensions:\n  mysql_threads_running: [db]\n")
+        write_yaml(str(tmp_path), "ta.yaml", 'tenants:\n  ta:\n    mysql_cpu{db="a"}: "5"\n')
+        [report] = tr.run_analysis(str(tmp_path), dry_run=True)
+        assert [k.key for k in report.keys] == ['mysql_cpu{db="a"}'], report.keys
+
+    def test_a_whole_threshold_keeps_whole_recommendations(self, tmp_path):
+        """#3990 review: the served number is a float; a whole one is
+        compared as an int, so `30` is recommended a whole number
+        (`_decimals`), never `47.15`."""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
+        write_yaml(str(tmp_path), "ta.yaml", "tenants:\n  ta:\n    mysql_connection_usage_percent: 30\n")
+        with patch("threshold_recommend.prometheus_instant",
+                   return_value=_range_result([40.37 + (i % 7) * 1.13 for i in range(1000)])):
+            [report] = tr.run_analysis(str(tmp_path), prometheus_url="http://p:9090")
+        [rec] = report.keys
+        assert isinstance(rec.recommended, int) and rec.served_value == 30, rec
+
+    def test_a_value_compared_at_what_is_served_instead_says_so(self, tmp_path):
+        """#3990 review: `"abc"` is compared at the 80 the exporter serves;
+        the reason names that number, which the written text does not show."""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
+        write_yaml(str(tmp_path), "ta.yaml", 'tenants:\n  ta:\n    mysql_connection_usage_percent: "abc"\n')
+        with patch("threshold_recommend.prometheus_instant",
+                   return_value=_range_result([40 + (i % 7) for i in range(1000)])):
+            [report] = tr.run_analysis(str(tmp_path), prometheus_url="http://p:9090")
+        [rec] = report.keys
+        assert rec.current_value == "abc" and "compared at 80, the value /metrics serves" in rec.reason, rec
+
+    def test_the_effective_run_s_stderr_is_printed(self, tmp_path, capsys):
+        """The load's own WARN lines reach stderr from `da-guard effective`
+        (`EffectiveTree.stderr_lines`), as they did from served-values."""
+        write_yaml(str(tmp_path), "_defaults.yaml",
+                   "defaults:\n  mysql_threads_running: 30\noptional_overrides:\n  - kafka_lag\n"
+                   "profiles:\n  gold:\n    kafka_lag: \"5\"\n")
+        write_yaml(str(tmp_path), "ta.yaml", "tenants:\n  ta:\n    _profile: gold\n")
+        tr.run_analysis(str(tmp_path), dry_run=True)
+        err = capsys.readouterr().err
+        assert 'profile "gold" supplies "kafka_lag"' in err, err
