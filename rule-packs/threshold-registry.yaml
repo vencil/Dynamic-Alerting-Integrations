@@ -1159,7 +1159,7 @@ retired_keys:
   clickhouse_memory_tracking_bytes:
     replaced_by: container_memory
     tracking: 1320
-    hint: "ClickHouse's absolute memory bytes alert is retired; on Kubernetes container_memory (percent of the container memory limit, shipped at 85) covers it. The unit changed from bytes to a percentage: do not copy the value."
+    hint: "ClickHouse's absolute memory bytes alert is retired; container_memory (percent of the container memory limit, shipped at 85) covers it only for a pod in a tenant namespace with a memory limit set and the kubernetes pack on. The unit changed from bytes to a percentage: do not copy the value."
   kafka_active_controllers:
     replaced_by: null
     tracking: 3783

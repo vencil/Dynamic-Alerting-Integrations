@@ -7,7 +7,7 @@ package config
 // more: key, the key that replaces it ("" for none), the issue that
 // retired it and the hint. Looked up by retired_threshold_keys.go.
 var retiredThresholdKeys = []retiredThresholdKey{
-	{"clickhouse_memory_tracking_bytes", "container_memory", 1320, "ClickHouse's absolute memory bytes alert is retired; on Kubernetes container_memory (percent of the container memory limit, shipped at 85) covers it. The unit changed from bytes to a percentage: do not copy the value."},
+	{"clickhouse_memory_tracking_bytes", "container_memory", 1320, "ClickHouse's absolute memory bytes alert is retired; container_memory (percent of the container memory limit, shipped at 85) covers it only for a pod in a tenant namespace with a memory limit set and the kubernetes pack on. The unit changed from bytes to a percentage: do not copy the value."},
 	{"kafka_active_controllers", "", 3783, "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"},
 	{"kafka_request_rate", "", 3783, "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"},
 	{"mysql_connections", "mysql_connection_usage_percent", 3778, "The unit changed from an absolute connection count to a percentage of max_connections; convert the value, do not copy it."},

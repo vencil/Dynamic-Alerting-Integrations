@@ -369,8 +369,7 @@
       "metrics": [
         "queries",
         "merges",
-        "replicated_lag",
-        "memory"
+        "replicated_lag"
       ],
       "dependencies": {
         "suggests": [

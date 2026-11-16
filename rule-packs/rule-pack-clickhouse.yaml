@@ -129,7 +129,6 @@ groups:
             user_threshold{component="clickhouse", metric="replication_queue", severity="warning"}
           )
 
-
   # ─────────────────────────────────────────────
   # 3. Alert Rules
   # ─────────────────────────────────────────────
@@ -271,8 +270,12 @@ groups:
       # An absolute-bytes threshold does not carry across deployments, and on
       # Kubernetes the kubernetes pack's container_memory (percent of the
       # container memory limit, shipped at 85) already covers it: ClickHouse sets
-      # its own server limit at 0.9 of the cgroup limit by default, so 85% of
-      # the container is about 94% of what ClickHouse will allow itself.
+      # its own server limit at 0.9 of the cgroup limit by default
+      # (max_server_memory_usage_to_ram_ratio; cgroup-aware from 21.12), so 85%
+      # of the container is about 94% of what ClickHouse will allow itself.
+      # Only where container_memory reads: the kubernetes pack on, the pod in a
+      # tenant (db-*) namespace and a container memory limit set — a limitless
+      # ClickHouse pod has no memory alert.
       # clickhouse_memory_tracking_bytes is in the registry's retired_keys.
       # --- Failed Queries (fixed threshold, no user override) ---
       - alert: ClickHouseHighFailedQueryRate

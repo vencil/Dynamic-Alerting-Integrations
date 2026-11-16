@@ -298,7 +298,7 @@ METRICS_COVERAGE = {
     "elasticsearch": ["heap", "unassigned_shards", "cluster_health", "indexing_rate"],
     "oracle": ["sessions", "tablespace", "wait_events", "redo_log"],
     "db2": ["connections", "bufferpool", "tablespace", "lock_waits"],
-    "clickhouse": ["queries", "merges", "replicated_lag", "memory"],
+    "clickhouse": ["queries", "merges", "replicated_lag"],
     "kafka": ["consumer_lag", "broker_active", "controller", "isr_shrink", "under_replicated"],
     "rabbitmq": ["queue_depth", "consumers", "memory", "disk_free", "connections"],
     "jvm": ["gc_pause", "heap_usage", "thread_pool", "class_loading"],
