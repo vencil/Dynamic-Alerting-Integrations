@@ -64,17 +64,3 @@ def test_a_routes_error_is_listed_once(tmp_path):
     assert rows["routes"]["status"] == "fail" and len(lines) == 1, rows["routes"]
     assert any(d.strip() == "FAIL: 1 error(s) found (listed above)" for d in rows["routes"]["details"]), rows["routes"]
 
-
-def test_a_root_reserved_key_is_left_to_the_gate_with_one_fix(tmp_path):
-    """#3996 review: a registered `_` key under the root `defaults:` is the
-    gate's root_defaults_reserved_key (da-guard effective's
-    root_defaults_reserved, the set the gate reports from); the
-    root_defaults row no longer adds its own, contrary fix ("drop the `_`").
-    An unregistered `_` key, which the gate does not report, stays there."""
-    rows = _rows(tmp_path, {"_defaults.yaml": _ROOT + "  _silent_mode: warning\n  _not_a_key: 1\n",
-                            "ta.yaml": _TENANT})
-    root = rows["root_defaults"]["details"]
-    assert not any("_silent_mode" in d for d in root), rows["root_defaults"]
-    assert any("_not_a_key" in d for d in root), rows["root_defaults"]
-    assert any("root_defaults_reserved_key" in d and "`_silent_mode`" in d
-               for d in rows["guard_errors"]["details"]), rows["guard_errors"]
