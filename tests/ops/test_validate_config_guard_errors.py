@@ -91,8 +91,11 @@ def test_an_undeclared_subtree_key_exits_1_end_to_end(tmp_path, cli_argv, capsys
     # 報的就是這份判決（#3788、#3873）。
     assert [r for r, v in rows.items() if v["status"] == vc.FAIL] == [
         "routes", "guard_errors"], rows
-    assert any("key verdict: " in d and "redis_evicted_keys" in d
-               for d in rows["routes"]["details"]), rows["routes"]
+    # #3996: the verdict on that key is the gate's subtree_default_undeliverable
+    # (gate_kind): reported once, in guard_errors, with the fix.
+    assert not any("redis_evicted_keys" in d for d in rows["routes"]["details"]), rows["routes"]
+    assert any("subtree_default_undeliverable" in d and "redis_evicted_keys" in d
+               for d in rows["guard_errors"]["details"]), rows["guard_errors"]
 
 
 def test_an_undeclared_subtree_key_switched_off_is_not_a_finding(tmp_path):

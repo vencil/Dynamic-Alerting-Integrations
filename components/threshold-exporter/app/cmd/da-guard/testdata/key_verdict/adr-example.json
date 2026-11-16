@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v4",
+  "schema": "da-guard.key-verdict/v5",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -22,7 +22,8 @@
         "dead_entries": [],
         "value": [
           "prod-ns"
-        ]
+        ],
+        "gate_kind": null
       },
       {
         "key": "_routng",
@@ -36,7 +37,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable"
+        "value": "disable",
+        "gate_kind": null
       },
       {
         "key": "container_cpu",
@@ -52,7 +54,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80
+        "value": 80,
+        "gate_kind": null
       },
       {
         "key": "container_cpu_throttle",
@@ -68,7 +71,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 25
+        "value": 25,
+        "gate_kind": null
       },
       {
         "key": "container_memory",
@@ -84,7 +88,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 85
+        "value": 85,
+        "gate_kind": null
       },
       {
         "key": "es_disk_usage_percent",
@@ -100,7 +105,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 85
+        "value": 85,
+        "gate_kind": null
       },
       {
         "key": "es_heap_usage_percent",
@@ -116,7 +122,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 85
+        "value": 85,
+        "gate_kind": null
       },
       {
         "key": "mysql_conections",
@@ -130,7 +137,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "70"
+        "value": "70",
+        "gate_kind": null
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -146,7 +154,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80
+        "value": 80,
+        "gate_kind": null
       },
       {
         "key": "mysql_replication_lag",
@@ -162,7 +171,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 30
+        "value": 30,
+        "gate_kind": null
       },
       {
         "key": "mysql_slave_lag",
@@ -178,7 +188,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 30
+        "value": 30,
+        "gate_kind": null
       },
       {
         "key": "mysql_slave_lagg",
@@ -192,7 +203,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable"
+        "value": "disable",
+        "gate_kind": null
       },
       {
         "key": "oracle_tablespace_used_percent",
@@ -208,7 +220,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 85
+        "value": 85,
+        "gate_kind": null
       },
       {
         "key": "pg_connections",
@@ -224,7 +237,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80
+        "value": 80,
+        "gate_kind": null
       },
       {
         "key": "pg_replication_lag",
@@ -240,7 +254,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 30
+        "value": 30,
+        "gate_kind": null
       },
       {
         "key": "rabbitmq_node_mem_percent",
@@ -256,7 +271,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 90
+        "value": 90,
+        "gate_kind": null
       },
       {
         "key": "redis_memory",
@@ -272,7 +288,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable"
+        "value": "disable",
+        "gate_kind": null
       },
       {
         "key": "redis_memory_critical",
@@ -288,7 +305,8 @@
         "hint": null,
         "switched_off_with": "redis_memory",
         "dead_entries": [],
-        "value": "90"
+        "value": "90",
+        "gate_kind": null
       }
     ]
   },
@@ -304,6 +322,7 @@
       "reason": "unregistered",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": true
     },
@@ -318,6 +337,7 @@
       "reason": "no_row",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": true
     },
@@ -332,6 +352,7 @@
       "reason": "disable_noop",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": false
     },
@@ -346,6 +367,7 @@
       "reason": "base_disabled",
       "hint": null,
       "base": "redis_memory",
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": false
     }
