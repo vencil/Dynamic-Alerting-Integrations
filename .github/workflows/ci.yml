@@ -315,6 +315,8 @@ jobs:
           pre-commit run vmalert-coverage-check --all-files
           # #3833: rule packs read only what their query-exporter config serves.
           pre-commit run exporter-queries-check --all-files
+          # #978: same fixed surface and cost as vmalert-coverage-check above.
+          pre-commit run percent-render-pinned-check --all-files
           pre-commit run threshold-observed-map-drift-check --all-files
           pre-commit run metric-dictionary-check --all-files
           pre-commit run structure-check --all-files
