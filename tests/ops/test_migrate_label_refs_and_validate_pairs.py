@@ -153,9 +153,9 @@ def _mapping_args(path):
 def test_mapping_pairs_point_at_the_real_record_and_keep_rate(tmp_path):
     out = _migrate(tmp_path)
     records = {r["record"] for g in yaml.safe_load(
-        (out / "platform-recording-rules.yaml").read_text(encoding="utf-8"))["groups"]
+        (out / mr.ARTIFACT_DIR / "platform-recording-rules.yaml").read_text(encoding="utf-8"))["groups"]
         for r in g["rules"]}
-    pairs = {p["label"]: p for p in vm.load_mapping_pairs(_mapping_args(out / "prefix-mapping.yaml"))}
+    pairs = {p["label"]: p for p in vm.load_mapping_pairs(_mapping_args(out / mr.ARTIFACT_DIR / "prefix-mapping.yaml"))}
     assert pairs, "prefix-mapping 沒有任何比對組"
     for label, p in pairs.items():
         assert p["new_query"] in records, (label, p["new_query"])
@@ -196,10 +196,10 @@ def test_annotations_and_pairs_under_promtool(tmp_path):
     """annotation 渲染出值；rate 類比對組的新舊兩邊在同一時間點相等。"""
     out = _migrate(tmp_path)
     ev = {p["label"]: p for p in vm.load_mapping_pairs(
-        _mapping_args(out / "prefix-mapping.yaml"))}["custom_redis_evicted_keys_total"]
+        _mapping_args(out / mr.ARTIFACT_DIR / "prefix-mapping.yaml"))}["custom_redis_evicted_keys_total"]
     test = {
-        "rule_files": [str(out / "platform-recording-rules.yaml"),
-                       str(out / "platform-alert-rules.yaml")],
+        "rule_files": [str(out / mr.ARTIFACT_DIR / "platform-recording-rules.yaml"),
+                       str(out / mr.ARTIFACT_DIR / "platform-alert-rules.yaml")],
         "evaluation_interval": "1m",
         "tests": [{
             "interval": "1m",
@@ -256,11 +256,11 @@ def test_golden_entries_get_no_pair(tmp_path, capsys):
          str(_REPO / "tests" / "fixtures" / "legacy-dummy.yml"), "--tenant", "t1", "-o", str(out)],
         capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    mapping = yaml.safe_load((out / "prefix-mapping.yaml").read_text(encoding="utf-8"))
+    mapping = yaml.safe_load((out / mr.ARTIFACT_DIR / "prefix-mapping.yaml").read_text(encoding="utf-8"))
     golden = [k for k, v in mapping.items() if v.get("golden_rule")]
     assert golden, "fixture 應有字典判定改用黃金標準的項"
     assert all("new_query" not in mapping[k] for k in golden)
-    labels = {p["label"] for p in vm.load_mapping_pairs(_mapping_args(out / "prefix-mapping.yaml"))}
+    labels = {p["label"] for p in vm.load_mapping_pairs(_mapping_args(out / mr.ARTIFACT_DIR / "prefix-mapping.yaml"))}
     assert not labels & set(golden)
     err = capsys.readouterr().err
     assert "黃金標準" in err and "old_query" not in err

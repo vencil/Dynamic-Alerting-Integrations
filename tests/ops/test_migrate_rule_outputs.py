@@ -596,9 +596,9 @@ class TestWriteOutputsIsThinWriter:
         mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
         assert (dest / mr.CONFD_DIR / "t1.yaml").read_text(encoding="utf-8") == \
             mr.render_tenant_config(results, "t1")
-        assert (dest / "platform-recording-rules.yaml").read_text(encoding="utf-8") == \
+        assert (dest / mr.ARTIFACT_DIR / "platform-recording-rules.yaml").read_text(encoding="utf-8") == \
             mr.render_recording_rules(results, "custom_")
-        assert (dest / "platform-alert-rules.yaml").read_text(encoding="utf-8") == \
+        assert (dest / mr.ARTIFACT_DIR / "platform-alert-rules.yaml").read_text(encoding="utf-8") == \
             mr.render_alert_rules(results, "custom_")
         assert (dest / "migration-report.txt").read_text(encoding="utf-8") == \
             mr.render_report(results)
@@ -797,7 +797,7 @@ class TestMain:
         cli_argv("migrate_rule.py", str(f), "--tenant", "t1", "-o", str(out_dir), "--no-prefix")
         mr.main()
         # No prefix-mapping.yaml when --no-prefix.
-        assert not (out_dir / "prefix-mapping.yaml").exists()
+        assert not (out_dir / mr.ARTIFACT_DIR / "prefix-mapping.yaml").exists()
 
     def test_no_dictionary_disables_dict_loading(self, monkeypatch, tmp_path, cli_argv):
         # When --no-dictionary, load_metric_dictionary must NOT be called.
@@ -891,7 +891,7 @@ class TestConfdThroughDaGuardWrite:
         assert "stopped part-way" in err and "t1.yaml" in err \
             and "_defaults.yaml" in err and "not rolled back" in err, err
         # nothing after the batch is written either
-        assert not (dest / "platform-alert-rules.yaml").exists()
+        assert not (dest / mr.ARTIFACT_DIR / "platform-alert-rules.yaml").exists()
 
 
 def test_migrated_alerts_carry_the_maintenance_label_and_canonical_tail():
@@ -913,3 +913,48 @@ def test_migrated_alerts_carry_the_maintenance_label_and_canonical_tail():
     assert alert["labels"]["maintenance"] == grd.MUTE
     assert alert["expr"].endswith(grd.MAINTENANCE_TAIL)
     assert grd.clause_count(alert["expr"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# #3997: -o inside a conf.d that is being served
+# ---------------------------------------------------------------------------
+_SERVED_TREE = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "ta.yaml": 'tenants:\n  ta:\n    mysql_connection_usage_percent: "70"\n',
+}
+
+
+@pytest.mark.usefixtures("da_guard_env", "da_read_env", "da_crdecode_env")
+@pytest.mark.parametrize("sub", ["", "newsub"], ids=["-o-is-the-root", "-o-is-a-new-subdirectory"])
+def test_a_run_into_a_served_tree_changes_nothing_it_serves(tmp_path, sub):
+    """#3997: run for real with -o at a served conf.d — the root itself, and
+    a directory under it that does not exist yet (which -o's own check
+    judges as a tree of its own, not knowing the root above). The tree the
+    exporter serves from the root holds the same tenants and passes
+    validate-config as before: no YAML the run writes is read as config."""
+    import subprocess
+    import _lib_tenant_values as tv
+    repo = Path(__file__).resolve().parents[2]
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    for name, text in _SERVED_TREE.items():
+        (root / name).write_text(text, encoding="utf-8")
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     "    expr: app_queue_depth > 5\n    labels: {severity: warning}\n", encoding="utf-8")
+
+    def validate():
+        return subprocess.run([sys.executable, str(repo / "scripts/tools/ops/validate_config.py"),
+                               "--config-dir", str(root)], capture_output=True, text=True,
+                              encoding="utf-8", timeout=300)
+    before = validate()
+    assert before.returncode == 0, before.stdout + before.stderr
+    tenants = set(tv.load_effective(root))
+    run = subprocess.run([sys.executable, str(repo / "scripts/tools/ops/migrate_rule.py"), str(rules),
+                          "-o", str(root / sub), "--tenant", "tb"],
+                         capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert (root / sub / mr.ARTIFACT_DIR / "platform-alert-rules.yaml").is_file()  # it did write
+    after = validate()
+    assert after.returncode == 0, after.stdout + after.stderr
+    assert set(tv.load_effective(root)) == tenants == {"ta"}

@@ -44,11 +44,11 @@ python3 scripts/tools/ops/validate_config.py --config-dir components/threshold-e
 ```bash
 # Automated pre-flight check (rules loaded + mapping + AM interception)
 da-tools shadow-verify preflight \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090
 ```
 
-> Manual alternative: `curl -s http://localhost:9090/api/v1/rules | python3 -c "..."` + `ls -la migration_output/prefix-mapping.yaml`
+> Manual alternative: `curl -s http://localhost:9090/api/v1/rules | python3 -c "..."` + `ls -la migration_output/.migration/prefix-mapping.yaml`
 
 ### 2.3 Alertmanager Interception Configuration
 
@@ -95,7 +95,7 @@ docker run --rm --network=host \
 > **Already cloned the project?** You can also run the Python script directly:
 > ```bash
 > python3 scripts/tools/ops/validate_migration.py \
->   --mapping migration_output/prefix-mapping.yaml \
+>   --mapping migration_output/.migration/prefix-mapping.yaml \
 >   --prometheus http://localhost:9090 \
 >   --watch --interval 300 --rounds 4032
 > ```
@@ -226,7 +226,7 @@ Possible causes: new Recording Rule not yet evaluated (wait 1–2 evaluation int
 curl -s http://localhost:9090/-/healthy
 
 # Confirm prefix-mapping.yaml format is valid
-python3 -c "import yaml; print(yaml.safe_load(open('migration_output/prefix-mapping.yaml')))"
+python3 -c "import yaml; print(yaml.safe_load(open('migration_output/.migration/prefix-mapping.yaml')))"
 
 # Restart K8s Job
 kubectl delete job shadow-monitor -n monitoring
@@ -256,7 +256,7 @@ da-tools shadow-verify convergence \
 
 # Or run all phases at once
 da-tools shadow-verify all \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --report-csv validation_output/validation-report.csv \
   --prometheus http://localhost:9090
 ```
