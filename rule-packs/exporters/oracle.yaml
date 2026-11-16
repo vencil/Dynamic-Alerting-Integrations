@@ -16,6 +16,9 @@
 #
 # One exporter per database: the tenant comes from the scrape (the pod's
 # namespace), so one exporter must not serve two tenants' databases.
+# Keep query-exporter's built-in metrics on (do not set `builtin_metrics: false`):
+# OracleDatabaseDown, OracleQueryStalled and the platform's presence check read
+# query_interval / query_timestamp.
 # The monitor user needs SELECT_CATALOG_ROLE (v$ / dba_* views).
 #
 # ⛔ The metric names here are a contract with the rule pack, checked by
@@ -43,11 +46,17 @@ metrics:
     expiration: 2m
   oracledb_sessions_current:
     type: gauge
-    description: All sessions in v$session, the count the SESSIONS limit applies to.
+    description: >-
+      Sessions counted against the SESSIONS parameter of the container connected to:
+      in a PDB its own sessions (v$session there also lists the CDB's background
+      sessions, con_id 0, which the PDB's limit does not count); in a non-CDB or the
+      CDB root every session of the instance.
     expiration: 2m
   oracledb_sessions_limit:
     type: gauge
-    description: The SESSIONS parameter (v$parameter; readable in a PDB, unlike v$resource_limit).
+    description: >-
+      The SESSIONS parameter of the container connected to (v$parameter; readable
+      in a PDB, unlike v$resource_limit). A PDB cannot see the CDB-wide limit.
     expiration: 2m
   oracledb_process_count:
     type: gauge
@@ -80,7 +89,9 @@ queries:
     sql: >-
       SELECT
         (SELECT COUNT(*) FROM v$session WHERE status = 'ACTIVE' AND type = 'USER') AS oracledb_sessions_active,
-        (SELECT COUNT(*) FROM v$session) AS oracledb_sessions_current,
+        (SELECT COUNT(*) FROM v$session
+          WHERE SYS_CONTEXT('USERENV', 'CON_ID') IN ('0', '1')
+             OR con_id = TO_NUMBER(SYS_CONTEXT('USERENV', 'CON_ID'))) AS oracledb_sessions_current,
         (SELECT TO_NUMBER(value) FROM v$parameter WHERE name = 'sessions') AS oracledb_sessions_limit
       FROM dual
   oracle_process:

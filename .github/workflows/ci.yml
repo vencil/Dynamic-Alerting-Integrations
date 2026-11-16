@@ -892,7 +892,8 @@ jobs:
       - name: "Oracle queries run against a real Oracle and serve the derived names (HARD gate — #3833)"
         run: |
           pip install query-exporter -c requirements/ci-constraints.txt
-          bash scripts/ops/exporter_queries_oracle_runtime.sh
+          # The comparison reads the rule pack the way Prometheus does (da-read).
+          bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_queries_oracle_runtime.sh
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).

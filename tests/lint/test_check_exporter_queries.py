@@ -61,6 +61,7 @@ def tree(tmp_path, monkeypatch):
     monkeypatch.setattr(ceq, "_REPO", tmp_path)
     monkeypatch.setattr(ceq, "_REGISTRY", reg)
     monkeypatch.setattr(ceq, "served_names", lambda path, doc: set(SERVED))
+    monkeypatch.setattr(ceq, "_presence_selectors", lambda pack: [])
 
     def write(exprs, queries=None, records=None):
         (rp / "rule-pack-x.yaml").write_text(_pack(exprs, records), encoding="utf-8")
@@ -139,3 +140,38 @@ def test_shipped_tree_is_clean():
     pytest.importorskip("query_exporter")
     for pack, rule_pack, queries in ceq.bindings():
         assert ceq.findings_for(pack, rule_pack, queries) == [], pack
+
+
+def test_query_label_values_must_name_a_query(tree, monkeypatch):
+    assert tree(['time() - query_timestamp{query="x_liveness"} > 60',
+                 'query_interval{query=~"x_.+"}']) == []
+    found = tree(['query_timestamp{query="x_alive"} > 0'])
+    assert any('query="x_alive"' in f for f in found), found
+    found = tree(['query_interval{query=~"y_.+"}'])
+    assert any('query=~"y_.+"' in f for f in found), found
+    monkeypatch.setattr(ceq, "_presence_selectors", lambda pack: ['query_interval{query="gone"}'])
+    found = tree(["x_up == 0"])
+    assert any("presence check" in f and 'query="gone"' in f for f in found), found
+
+
+def test_compare_served_checks_types_and_the_builtins_the_pack_reads(tree, tmp_path):
+    tree(['changes(query_timestamp{query="x_liveness"}[90s]) == 0'])
+    base = [
+        "# TYPE x_up gauge", 'x_up{database="db"} 1.0',
+        "# TYPE x_sessions gauge", 'x_sessions{database="db"} 3.0',
+        "# TYPE x_waits counter", 'x_waits_total{database="db"} 2.0',
+        'x_waits_created{database="db"} 1.0',
+        'queries_total{database="db",query="x_liveness",status="success"} 2.0',
+        'queries_total{database="db",query="x_main",status="success"} 2.0',
+        'query_timestamp{database="db",query="x_liveness"} 1.0',
+    ]
+    assert ceq.compare_served("x", _scrape(base, tmp_path)) == []
+    no_ts = [line for line in base if not line.startswith("query_timestamp")]
+    found = ceq.compare_served("x", _scrape(no_ts, tmp_path))
+    assert any("reads query_timestamp" in f for f in found), found
+    wrong_q = [line.replace('query="x_liveness"} 1.0', 'query="x_main"} 1.0') for line in base]
+    found = ceq.compare_served("x", _scrape(wrong_q, tmp_path))
+    assert any('query_timestamp{query="x_liveness"}' in f for f in found), found
+    retyped = [line.replace("# TYPE x_sessions gauge", "# TYPE x_sessions counter") for line in base]
+    found = ceq.compare_served("x", _scrape(retyped, tmp_path))
+    assert any("x_sessions is served as counter" in f for f in found), found

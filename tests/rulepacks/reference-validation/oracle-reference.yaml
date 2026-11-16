@@ -4,7 +4,7 @@
 # 獨立於 VM 告警規則轉換而撰寫。每一個參數描述的都是真實的 Oracle 故障
 # 行為，依據為 vendor 文件 + DBA 領域知識 —— 沒有任何一項是從任何告警
 # 門檻反推而來。
-# metric 名稱取自 oracledb_exporter（iamseth）的 exporter catalog。
+# metric 名稱取自 rule-packs/exporters/oracle.yaml（query-exporter 執行的查詢設定，#3833）。
 # =====================================================================
 
 pack:
@@ -18,7 +18,8 @@ signatures:
   # 1) 實例當機／節點失效 —— boolean up->0，持續維持在 down。
   - description: >-
       實例當機或節點失效：exporter 仍然依排程被抓取，但 v$instance 無法
-      連通，因此 oracledb_up 由 1->0 翻轉，並一直維持在 down，直到 DBA
+      連通，因此 liveness 查詢不再成功、query_timestamp 停止前進（query-exporter
+      不會報 0），並一直維持到 DBA
       重啟實例為止。典型的硬性中斷。
     source: vendor-doc
     normal_level: 1
@@ -28,17 +29,19 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: oracledb_up
-    metric_kind: boolean
+    metric: query_timestamp
+    metric_kind: counter
     shape_class: step
     noise_kind: gaussian
     fault_class: instance-down
     labels:
+      job: tenant-exporters
+      query: oracle_liveness
       instance: oracle-ref-01
 
   # 2) 連線池洩漏 —— gauge 緩慢爬升逼近 session 上限。
   - description: >-
-      應用程式連線池洩漏：連線被借出後從未歸還，active session 數穩定
+      應用程式連線池洩漏：連線被借出後從未歸還，session 總數穩定
       攀升，一路朝設定的 session 上限逼近（進入 ORA-00018 "maximum number
       of sessions exceeded" 的範圍）。在連線池被重啟之前不會自行恢復。
     source: vendor-doc
@@ -50,12 +53,10 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: oracledb_sessions_active
+    metric: oracledb_sessions_current
     metric_kind: gauge
     companion_series:
-      - metric: oracledb_resource_limit
-        labels:
-          resource: sessions
+      - metric: oracledb_sessions_limit
         role: denominator
         metric_kind: gauge
         level: 1000

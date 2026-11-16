@@ -25,11 +25,10 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: oracledb_sessions_active
+    metric: oracledb_sessions_current
     metric_kind: gauge
     companion_series:
-      - metric: oracledb_resource_limit
-        labels: {resource: sessions}
+      - metric: oracledb_sessions_limit
         role: denominator
         metric_kind: gauge
         level: 300
@@ -142,15 +141,15 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: oracledb_up
-    metric_kind: boolean
+    metric: query_timestamp
+    metric_kind: counter
     shape_class: step
     fault_class: instance-down
-    labels: {instance: oracle-ref2-01, database: SAMPLE}
+    labels: {job: tenant-exporters, query: oracle_liveness, instance: oracle-ref2-01, database: SAMPLE}
 
   # ── 7. Exporter/monitoring staleness during a session leak (agent dies) ──
   - description: >
-      oracledb_exporter 所在容器在一次 session 數緩慢攀升（尚未達到危險水位）
+      query-exporter 所在容器在一次 session 數緩慢攀升（尚未達到危險水位）
       期間，因所在節點記憶體壓力被 OOMKilled；此後不再有任何新的量測值送達，
       時序資料直接斷尾，而不是數值歸零——這與資料庫本身down是不同的故障模式。
     source: expert-experience

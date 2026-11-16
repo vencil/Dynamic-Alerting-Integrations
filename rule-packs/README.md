@@ -28,12 +28,12 @@ lang: zh
 | Mongodb | rule-pack-mongodb.yaml | 10 | 11 | 21 |
 | Nginx | rule-pack-nginx.yaml | 9 | 7 | 16 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
-| Oracle | rule-pack-oracle.yaml | 13 | 10 | 23 |
+| Oracle | rule-pack-oracle.yaml | 13 | 11 | 24 |
 | Platform | rule-pack-platform.yaml | 0 | 54 | 54 |
 | Postgresql | rule-pack-postgresql.yaml | 8 | 8 | 16 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 16 | 12 | 28 |
 | Redis | rule-pack-redis.yaml | 12 | 10 | 22 |
-| **TOTAL** | | **167** | **196** | **363** |
+| **TOTAL** | | **167** | **197** | **364** |
 
 ## 架構說明
 

@@ -200,7 +200,8 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| OracleDatabaseDown | critical | 照常觸發 | The Oracle liveness query has not succeeded for over 60s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | query_timestamp |
+| OracleDatabaseDown | critical | 照常觸發 | The Oracle liveness query has not succeeded for 90s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | query_timestamp |
+| OracleQueryStalled | warning | 靜音 | [tier] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database ans | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | query_timestamp |
 | OracleHighActiveSessions | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle active sessions elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_sessions_active:max |
 | OracleHighActiveSessionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: Oracle active sessions at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_sessions_active:max |
 | OracleTablespaceAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_tablespace_used_percent:max |

@@ -120,6 +120,9 @@ ALLOWED = {
         (1, "the property-test coverage manifest, this lint's own data"),
     ('scripts/tools/lint/check_tool_registry_jsx_parity.py', 'load_registry'):
         (1, "docs/assets/tool-registry.yaml, the repo's own tool catalogue"),
+    ('scripts/tools/lint/check_exporter_queries.py', 'load_queries'):
+        (1, "rule-packs/exporters/*.yaml, query-exporter's own config (#3833): its only "
+            "consumer is query-exporter, a Python program — no Go reader to ask"),
     ('scripts/tools/lint/check_vmalert_coverage.py', '_load_yaml'):
         (1, "promtool unit-test fixtures under tests/rulepacks (only their alert_rule_test "
             "alertnames are taken, to count coverage; promtool reads them in CI and no da-read "

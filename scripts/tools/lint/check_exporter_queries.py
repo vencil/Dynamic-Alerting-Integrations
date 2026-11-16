@@ -23,8 +23,14 @@ so an upgrade that renames something shows up here. Then, per pack:
     cumulative value, which is what rate() expects);
   * the pack does not rate() / irate() / increase() / delta() a served gauge.
 
-Whether the SQL runs, and serves what is derived, is not a static question: the CI
-job "Exporter queries (Oracle)" runs the Oracle file against gvenzl/oracle-free.
+  * every `query="<name>"` the pack — or the platform's presence check for this
+    pack (_lib_exporter_presence) — matches on names a query in the file, and every
+    `query=~"<re>"` matches at least one (a renamed query would leave those
+    selectors empty: OracleDatabaseDown silent, TenantExporterAbsent paging).
+
+Whether the SQL runs, and serves what is derived, is not a static question: a step
+of CI's Lint Rule Packs job (scripts/ops/exporter_queries_oracle_runtime.sh) runs the
+Oracle file against gvenzl/oracle-free and calls --compare-served.
 
 Usage:
   check_exporter_queries.py          # check (0 ok / 1 finding / 2 cannot run)
@@ -33,8 +39,10 @@ Usage:
   check_exporter_queries.py --pack oracle --compare-served FILE
       # runtime half: FILE is a /metrics scrape of query-exporter running the
       # pack's queries file against a real database. Every query must have run
-      # (queries_total{status="success"}) and none failed, and every derived
-      # name must be served.
+      # (queries_total{status="success"}) and none failed, every name the file's
+      # metrics derive to must be served with the file's type, and every raw
+      # metric the pack reads must be served — query-exporter's built-ins
+      # (query_timestamp, query_interval) with each `query` label it matches on.
 """
 from __future__ import annotations
 
@@ -69,9 +77,13 @@ class CannotRun(Exception):
 
 def bindings() -> list[tuple[str, Path, Path]]:
     """(pack, rule pack file, queries file) for every registry pack with `queries:`."""
+    ops = str(Path(__file__).resolve().parents[1] / "ops")
+    if ops not in sys.path:
+        sys.path.insert(0, ops)
+    import _registry_lib  # noqa: PLC0415  (scripts/tools/ops)
     try:
-        doc = yaml.safe_load(_REGISTRY.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError) as e:
+        doc = _registry_lib.load_registry(str(_REGISTRY)) or {}
+    except (OSError, ValueError, RuntimeError, yaml.YAMLError) as e:
         raise CannotRun(f"cannot read {_REGISTRY}: {e}") from e
     out = []
     for name, meta in sorted((doc.get("packs") or {}).items()):
@@ -152,6 +164,33 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
     return raw, records, exprs
 
 
+_QUERY_EQ = re.compile(r'\bquery\s*=\s*"([^"]*)"')
+_QUERY_RE = re.compile(r'\bquery\s*=~\s*"([^"]*)"')
+
+
+def query_label_findings(texts: list[str], queries: set[str], where: str) -> list[str]:
+    """`query` label matchers in *texts* that name no query of the file."""
+    out = []
+    for text in texts:
+        for name in _QUERY_EQ.findall(text):
+            if name not in queries:
+                out.append(f"{where} matches query=\"{name}\", which the file does not define")
+        for pattern in _QUERY_RE.findall(text):
+            try:
+                rx = re.compile(f"^(?:{pattern})$")
+            except re.error as e:
+                out.append(f"{where}: query=~\"{pattern}\" is not a valid regex: {e}")
+                continue
+            if not any(rx.match(q) for q in queries):
+                out.append(f"{where} matches query=~\"{pattern}\", which no query of the file matches")
+    return out
+
+
+def _presence_selectors(pack: str) -> list[str]:
+    import _lib_exporter_presence  # noqa: PLC0415  (scripts/tools)
+    return list(_lib_exporter_presence.pack_presence(pack))
+
+
 def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
     doc = load_queries(queries)
     rel = queries.relative_to(_REPO)
@@ -169,6 +208,10 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
     raw, _records, exprs = pack_rules(rule_pack)
     for m in sorted(raw - served):
         out.append(f"{rule_pack.name} reads {m}, which {rel} does not serve")
+    names = set(doc.get("queries") or {})
+    out += query_label_findings(exprs, names, rule_pack.name)
+    out += query_label_findings(_presence_selectors(pack), names,
+                                "the presence check (_lib_exporter_presence)")
     gauges = {n for n, s in metrics.items() if (s or {}).get("type") == "gauge"}
     pattern = re.compile(r"\b(" + "|".join(_RATE_FUNCS) + r")\s*\(\s*([a-zA-Z_:][a-zA-Z0-9_:]*)")
     for expr in exprs:
@@ -201,10 +244,12 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
     _pack, _rule_pack, queries = match[0]
     doc = load_queries(queries)
     try:
-        samples = _parse_exposition(scrape.read_text(encoding="utf-8"))
+        text = scrape.read_text(encoding="utf-8")
+        samples = _parse_exposition(text)
     except OSError as e:
         raise CannotRun(f"cannot read {scrape}: {e}") from e
     served = {name for name, _labels, _v in samples}
+    types = dict(re.findall(r"(?m)^# TYPE (\S+) (\S+)$", text))
     out = []
     for q in sorted(doc.get("queries") or {}):
         ok = sum(v for n, lb, v in samples
@@ -222,6 +267,21 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
                 if any(n == m or n.startswith(m + "_") for m in declared)}
     for name in sorted(expected - served):
         out.append(f"{name} is derived from {queries.relative_to(_REPO)} but not served")
+    for name, spec in sorted((doc.get("metrics") or {}).items()):
+        want = (spec or {}).get("type")
+        got = types.get(name)
+        if want and got and got != want:
+            out.append(f"{name} is served as {got}, the file declares {want}")
+    # What the pack itself reads, query-exporter's built-ins included: for those,
+    # a series per `query` label value the pack (or its presence check) names.
+    raw, _records, exprs = pack_rules(_rule_pack)
+    for m in sorted(raw - served):
+        out.append(f"{_rule_pack.name} reads {m}, which the exporter does not serve")
+    named = {n for text in exprs + _presence_selectors(pack) for n in _QUERY_EQ.findall(text)}
+    for m in sorted(raw & {"query_timestamp", "query_interval"}):
+        have = {lb.get("query") for n, lb, _v in samples if n == m}
+        for q in sorted(named - have):
+            out.append(f"{m}{{query=\"{q}\"}} is read by the pack but not served")
     return out
 
 

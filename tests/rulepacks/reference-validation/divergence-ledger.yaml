@@ -43,6 +43,11 @@ pack_level:
 # ---------------------------------------------------------------------
 absent_from_candidate:
   oracle:
+    - alert: OracleQueryStalled
+      reason: >-
+        query-exporter 自身的健康哨兵（#3833）：某支查詢被 exporter 永久停用或從未成功時
+        發出，讀的是 query_timestamp／query_interval 這兩個 exporter 內建指標，不是資料庫
+        的故障訊號；波形庫沒有這種 signature，harness 不建模。
     - alert: OracleThresholdNotConfigured
       reason: >-
         讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的

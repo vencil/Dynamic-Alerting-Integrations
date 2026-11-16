@@ -9,7 +9,8 @@
 # which fails when a query did not succeed or a derived name is not served.
 #
 # Needs: docker, curl, and a python3 with pyyaml + query-exporter installed
-# (CI: `pip install pyyaml query-exporter -c requirements/ci-constraints.txt`).
+# (CI's Lint Rule Packs job has pyyaml and installs query-exporter
+# with `-c requirements/ci-constraints.txt`); da-read for reading the rule pack.
 # Exit: 0 ok / 1 finding / 2 could not run.
 set -euo pipefail
 

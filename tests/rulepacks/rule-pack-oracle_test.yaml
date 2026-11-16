@@ -37,27 +37,29 @@ tests:
     input_series:
       # query-exporter serves no 0 when the database is down: the liveness
       # query's query_timestamp stops advancing (#3833).
-      # db-a: last success at t=0, none after → stale past 60s from 1m15s.
+      # db-a: succeeds every 15s until 1m, then stops → unchanged across 90s
+      # from 2m15s, firing after for: 15s.
       - series: 'query_interval{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="oracle_liveness"}'
-        values: '15x12'
+        values: '15x16'
       - series: 'query_timestamp{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
-        values: '0x12'
-      # db-b: healthy — the timestamp advances with time → no-fire control.
+        values: '0+15x4 60x12'
+      # db-b: healthy — the timestamp advances every sample → no-fire control.
       - series: 'query_interval{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="oracle_liveness"}'
-        values: '15x12'
+        values: '15x16'
       - series: 'query_timestamp{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
-        values: '0+15x12'
+        values: '0+15x16'
       # db-c: the exporter runs but the liveness query never succeeded (no
       # query_timestamp at all) → fires on the second arm.
       - series: 'query_interval{tenant="db-c", instance="qe-c:9560", job="tenant-exporters", query="oracle_liveness"}'
-        values: '15x12'
+        values: '15x16'
 
     alert_rule_test:
-      # db-a: 60s old at 1m is not "over 60s"; db-c is only pending at 0 (for: 15s).
+      # db-c is only pending at 0 (for: 15s).
       - eval_time: 0m
         alertname: OracleDatabaseDown
         exp_alerts: []
-      - eval_time: 1m
+      # 2m: db-a's window (30s, 2m] still holds its last change (45s → 1m).
+      - eval_time: 2m
         alertname: OracleDatabaseDown
         exp_alerts:
           - exp_labels:
@@ -68,13 +70,12 @@ tests:
             exp_annotations:
               summary: "Oracle instance qe-c:9560 is DOWN"
               summary_zh: "Oracle 實例 qe-c:9560 已關閉"
-              description: "The Oracle liveness query has not succeeded for over 60s on qe-c:9560"
-              description_zh: "Oracle 存活查詢超過 60 秒沒有成功，實例：qe-c:9560"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
               runbook_url: ""
               owner: ""
               tier: ""
-      # db-a: stale since 1m15s, firing after for: 15s; db-b never fires.
-      - eval_time: 2m
+      - eval_time: 3m
         alertname: OracleDatabaseDown
         exp_alerts:
           - exp_labels:
@@ -85,8 +86,8 @@ tests:
             exp_annotations:
               summary: "Oracle instance qe-a:9560 is DOWN"
               summary_zh: "Oracle 實例 qe-a:9560 已關閉"
-              description: "The Oracle liveness query has not succeeded for over 60s on qe-a:9560"
-              description_zh: "Oracle 存活查詢超過 60 秒沒有成功，實例：qe-a:9560"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-a:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-a:9560"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -98,11 +99,26 @@ tests:
             exp_annotations:
               summary: "Oracle instance qe-c:9560 is DOWN"
               summary_zh: "Oracle 實例 qe-c:9560 已關閉"
-              description: "The Oracle liveness query has not succeeded for over 60s on qe-c:9560"
-              description_zh: "Oracle 存活查詢超過 60 秒沒有成功，實例：qe-c:9560"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
               runbook_url: ""
               owner: ""
               tier: ""
+
+  # ── OracleDatabaseDown: one sample is not "stopped" (#3833). Through 30s
+  #    federation a restarted exporter's first query_timestamp sample stands
+  #    alone for 30s; without the count_over_time guard changes() reads 0 and
+  #    the alert pages. db-d's series start at 2m, one sample per 30s. ──
+  - interval: 30s
+    input_series:
+      - series: 'query_interval{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '_x4 15x4'
+      - series: 'query_timestamp{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '_x4 100+30x4'
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: OracleDatabaseDown
+        exp_alerts: []
 
   # ── Threshold + ratio alerts: four-tenant scaffold, one shared input set ──
   - interval: 15s
@@ -510,3 +526,143 @@ tests:
               owner: ""
               tier: ""
         # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.1 < 0.85) produce NO alert.
+
+  # ── OracleQueryStalled (#3833): query-exporter drops a query for good on a
+  #    result-shape error. db-q: liveness and oracle_process keep running,
+  #    oracle_sessions stops at 1m → its window (t-5m, t] holds only the
+  #    stopped value from 5m45s, firing after for: 5m at 10m45s on Prometheus;
+  #    MetricsQL's changes() also compares against the sample just before the
+  #    window, so vmalert fires one interval later. Asserted at 10m30s (neither
+  #    fires) and 11m (both fire). db-r: oracle_wait_time is scheduled (query_interval) but
+  #    never succeeded → fires at 5m. db-s: the database is down (liveness
+  #    stops too) → OracleDatabaseDown's case, not this one. db-t: in
+  #    maintenance → muted. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '0+15x48'
+      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_process", database="oracle"}'
+        values: '0+15x48'
+      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_sessions", database="oracle"}'
+        values: '0+15x4 60x44'
+      - series: 'query_timestamp{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '0+15x48'
+      - series: 'query_interval{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="oracle_wait_time"}'
+        values: '15x48'
+      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '0+15x4 60x44'
+      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="oracle_sessions", database="oracle"}'
+        values: '0+15x4 60x44'
+      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '0+15x48'
+      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="oracle_sessions", database="oracle"}'
+        values: '0+15x4 60x44'
+      - series: 'user_state_filter{tenant="db-t", filter="maintenance"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 4m45s
+        alertname: OracleQueryStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: OracleQueryStalled
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-r
+              instance: qe-db-r:9560
+              query: oracle_wait_time
+            exp_annotations:
+              summary: "Oracle query oracle_wait_time stopped on qe-db-r:9560"
+              summary_zh: "qe-db-r:9560 上的 Oracle 查詢 oracle_wait_time 已停止"
+              platform_summary: "[] db-r: query-exporter query oracle_wait_time stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-r：資料庫有回應，但 query-exporter 的查詢 oracle_wait_time 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running oracle_wait_time (or it never succeeded). It drops a query for good on a result-shape error and logs it only at debug level; check the exporter log at debug and the SQL in rule-packs/exporters/oracle.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 oracle_wait_time（或從未成功）。查詢結果欄位不符時，它會永久移除該查詢，而且只在 debug 等級留紀錄；請以 debug 等級查看 exporter 日誌與 rule-packs/exporters/oracle.yaml 的 SQL，再重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 10m30s
+        alertname: OracleQueryStalled
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-r
+              instance: qe-db-r:9560
+              query: oracle_wait_time
+            exp_annotations:
+              summary: "Oracle query oracle_wait_time stopped on qe-db-r:9560"
+              summary_zh: "qe-db-r:9560 上的 Oracle 查詢 oracle_wait_time 已停止"
+              platform_summary: "[] db-r: query-exporter query oracle_wait_time stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-r：資料庫有回應，但 query-exporter 的查詢 oracle_wait_time 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running oracle_wait_time (or it never succeeded). It drops a query for good on a result-shape error and logs it only at debug level; check the exporter log at debug and the SQL in rule-packs/exporters/oracle.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 oracle_wait_time（或從未成功）。查詢結果欄位不符時，它會永久移除該查詢，而且只在 debug 等級留紀錄；請以 debug 等級查看 exporter 日誌與 rule-packs/exporters/oracle.yaml 的 SQL，再重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 11m
+        alertname: OracleQueryStalled
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-q
+              instance: qe-db-q:9560
+              query: oracle_sessions
+            exp_annotations:
+              summary: "Oracle query oracle_sessions stopped on qe-db-q:9560"
+              summary_zh: "qe-db-q:9560 上的 Oracle 查詢 oracle_sessions 已停止"
+              platform_summary: "[] db-q: query-exporter query oracle_sessions stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-q：資料庫有回應，但 query-exporter 的查詢 oracle_sessions 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running oracle_sessions (or it never succeeded). It drops a query for good on a result-shape error and logs it only at debug level; check the exporter log at debug and the SQL in rule-packs/exporters/oracle.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 oracle_sessions（或從未成功）。查詢結果欄位不符時，它會永久移除該查詢，而且只在 debug 等級留紀錄；請以 debug 等級查看 exporter 日誌與 rule-packs/exporters/oracle.yaml 的 SQL，再重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-r
+              instance: qe-db-r:9560
+              query: oracle_wait_time
+            exp_annotations:
+              summary: "Oracle query oracle_wait_time stopped on qe-db-r:9560"
+              summary_zh: "qe-db-r:9560 上的 Oracle 查詢 oracle_wait_time 已停止"
+              platform_summary: "[] db-r: query-exporter query oracle_wait_time stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-r：資料庫有回應，但 query-exporter 的查詢 oracle_wait_time 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running oracle_wait_time (or it never succeeded). It drops a query for good on a result-shape error and logs it only at debug level; check the exporter log at debug and the SQL in rule-packs/exporters/oracle.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 oracle_wait_time（或從未成功）。查詢結果欄位不符時，它會永久移除該查詢，而且只在 debug 等級留紀錄；請以 debug 等級查看 exporter 日誌與 rule-packs/exporters/oracle.yaml 的 SQL，再重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── OracleDatabaseDown after federation (#3833): two clusters' pods can share
+  #    an IP:port. db-u never ran its liveness query; db-v, at the same
+  #    instance, is healthy. Joined on instance alone, db-v's timestamp would
+  #    hide db-u's alert. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-u", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '15x8'
+      - series: 'query_interval{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '15x8'
+      - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '0+15x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: OracleDatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-u
+              instance: 10.244.0.7:9560
+            exp_annotations:
+              summary: "Oracle instance 10.244.0.7:9560 is DOWN"
+              summary_zh: "Oracle 實例 10.244.0.7:9560 已關閉"
+              description: "The Oracle liveness query has not succeeded for 90s on 10.244.0.7:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：10.244.0.7:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""

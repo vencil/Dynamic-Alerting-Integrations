@@ -273,7 +273,8 @@ _FEDERATED_EXPORTER_PREFIXES = (
 # Named one by one, not by a `query_` prefix: the family is the exporter, and
 # the packs tell its instances apart by the `query` label.
 _QUERY_EXPORTER_BUILTINS = frozenset({
-    "query_interval", "query_timestamp", "query_latency",
+    "query_interval", "query_timestamp",
+    "query_latency_bucket", "query_latency_count", "query_latency_sum",
     "queries_total", "database_errors_total",
 })
 
