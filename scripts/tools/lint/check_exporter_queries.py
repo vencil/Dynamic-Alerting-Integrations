@@ -47,7 +47,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 import tempfile
@@ -57,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402  (rule packs as Prometheus reads them)
 import _lib_metric_sources  # noqa: E402
+from _lib_exitcodes import Report  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
 try:
@@ -304,7 +304,7 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
     return out
 
 
-def main() -> int:
+def main() -> "int | Report":
     ap = argparse.ArgumentParser(description=i18n_text(
         "rule pack 讀的原始指標必須由它在 registry 登記的 query-exporter 查詢設定產生；"
         "名稱以 query-exporter 自己的程式推導（#3833）。另查 gauge 有 expiration、"
@@ -344,8 +344,9 @@ def main() -> int:
         return 2
     total = sum(len(v) for v in found.values())
     if args.json:
-        print(json.dumps({"findings": found}, ensure_ascii=False, indent=2))
-    elif total == 0:
+        # #3216: run() encodes the --json document.
+        return Report({"findings": found}, 1 if total else 0)
+    if total == 0:
         print(f"check_exporter_queries: OK — {len(found)} pack(s) read only what their "
               f"query-exporter config serves ({', '.join(found) or 'none bound'}).")
     else:
