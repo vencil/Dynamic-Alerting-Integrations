@@ -82,21 +82,29 @@ def tool_faults_of(result: dict) -> list:
 
 
 #: GET /v1/status ``self_check`` (#3943): the three judgement programs'
-#: self-checks — ``{"state", "failures", "running"}``, each failure
-#: ``{"binary", "reason"}``. Closed sets, no free text (#3961): what a
-#: failing self-check printed goes to the service's own log.
+#: self-checks and the --repo probe (#3903) — ``{"state", "failures",
+#: "running"}``, each failure ``{"binary", "reason"}``. Closed sets, no free
+#: text (#3961): what a failing self-check printed goes to the service's own
+#: log.
 SELF_CHECK_KEYS = frozenset({"state", "failures", "running"})
 SELF_CHECK_FAILURE_KEYS = frozenset({"binary", "reason"})
 #: ``pending``: none has finished yet; ``passed``: the latest passed for all
-#: three; ``failed``: the latest failed for at least one.
+#: of it; ``failed``: the latest failed for at least one.
 SELF_CHECK_STATES = ("pending", "passed", "failed")
 #: Why one program's self-check did not pass: the program-did-not-run
 #: reasons of ``_lib_tool_fault``, ``failed`` (it ran and printed its failed
 #: document: an answer differs from the one built in), and
 #: ``internal_error`` (this service could not run it).
-SELF_CHECK_REASONS = ("not_found", "not_executable", "exec_failed", "timed_out",
-                      "signalled", "unexpected_exit", "bad_output", "failed",
-                      "internal_error")
+SELF_CHECK_PROGRAM_REASONS = ("not_found", "not_executable", "exec_failed", "timed_out",
+                              "signalled", "unexpected_exit", "bad_output", "failed",
+                              "internal_error")
+#: #3903: the --repo probe's failure, ``{"binary": "git", "reason":
+#: "repo_unreadable"}`` — git, the reader of --repo, no longer reads it as
+#: the service judged it at start (``generator_service._object_format``).
+SELF_CHECK_REPO_BINARY = "git"
+SELF_CHECK_REPO_REASON = "repo_unreadable"
+#: Every reason a ``self_check`` failure can carry.
+SELF_CHECK_REASONS = (*SELF_CHECK_PROGRAM_REASONS, SELF_CHECK_REPO_REASON)
 
 
 def self_check_problem(doc: object) -> Optional[str]:
@@ -111,9 +119,14 @@ def self_check_problem(doc: object) -> Optional[str]:
     if not isinstance(failures, list):
         return "failures is not a list"
     for f in failures:
-        if not isinstance(f, dict) or set(f) != SELF_CHECK_FAILURE_KEYS \
-                or f["binary"] not in _lib_tool_fault.BINARIES \
-                or f["reason"] not in SELF_CHECK_REASONS:
+        if not isinstance(f, dict) or set(f) != SELF_CHECK_FAILURE_KEYS:
+            return "a failure outside the closed set"
+        if f["binary"] == SELF_CHECK_REPO_BINARY:
+            ok = f["reason"] == SELF_CHECK_REPO_REASON
+        else:
+            ok = (f["binary"] in _lib_tool_fault.BINARIES
+                  and f["reason"] in SELF_CHECK_PROGRAM_REASONS)
+        if not ok:
             return "a failure outside the closed set"
     if (doc["state"] == "failed") != bool(failures):
         return "failures do not match the state"

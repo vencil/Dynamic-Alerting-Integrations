@@ -16,6 +16,10 @@
 - 判定出現 ``tool_fault`` ⇒ 立刻 not ready；之後就算有跑完全程（``ran``）的判定
   也仍是 false，直到自檢通過才清掉故障。
 - 自檢只影響 ready，不影響判定結果：自檢失敗時判定照樣回 200 ``pass``。
+- #3903：啟動後 ``--repo`` 不見或 ``.git`` 損毀 ⇒ 判定回 ``git_read`` 並觸發一輪，
+  探測失敗、``ready`` 為 false、理由為封閉的 ``repo_unreadable``；放回後下一輪
+  通過、ready 回 true。``base_commit`` 不在 repo 裡的 ``git_read`` 也觸發一輪，
+  但探測通過、ready 不變。
 
 程式用 shim 注入：包住真 binary 的 shell 腳本，控制檔的每一行是「程式 第一個
 參數 故障」，沒點到的呼叫原樣交給真 binary。
@@ -306,3 +310,76 @@ def test_a_self_check_runs_under_the_judgement_memory_limit(rig):
     with rig.service("datalimit") as svc:
         st = _status(svc)
         assert st["self_check"]["state"] == "passed" and st["ready"] is True, st
+
+
+# ── #3903: --repo unreadable at run time ──────────────────────────────────
+
+_REPO_FAILURE = {"binary": _gsvc_proto.SELF_CHECK_REPO_BINARY,
+                 "reason": _gsvc_proto.SELF_CHECK_REPO_REASON}
+
+
+def _break_repo(repo: Path, how: str):
+    """Make git unable to read *repo*; returns what puts it back."""
+    if how == "gone":
+        away = repo.with_name(repo.name + "-away")
+        repo.rename(away)
+        return lambda: away.rename(repo)
+    head = repo / ".git" / "HEAD"
+    old = head.read_bytes()
+    head.write_bytes(b"not a ref\n")
+    return lambda: head.write_bytes(old)
+
+
+def _rounds(svc, result: str) -> float:
+    return svc.metrics()[f'da_generator_self_checks_total{{result="{result}"}}']
+
+
+@pytest.mark.parametrize("how", ["gone", "broken"])
+def test_a_repo_git_no_longer_reads_is_not_ready_until_it_reads_again(rig, how):
+    """#3903: --repo gone (or its ``.git`` broken) after start: the
+    judgement says ``git_read`` and starts a round, whose --repo probe —
+    the start-up judgement of --repo — fails: not ready, the reason the
+    closed ``repo_unreadable``, no path or git message. Put back, the next
+    round passes: ready again."""
+    with rig.service(f"repo-{how}") as svc:
+        assert _status(svc)["ready"] is True
+        restore = _break_repo(rig.repo, how)
+        try:
+            status, doc = svc.validate(rig.commit)
+            assert (status, doc.get("result"), doc.get("reason")) == (200, "rejected", "git_read"), doc
+            _until(lambda: _status(svc)["self_check"]["state"] == "failed", "the probe failing")
+            st = _status(svc)
+            assert st["ready"] is False and st["tool_fault"] is None, st
+            assert st["self_check"]["failures"] == [_REPO_FAILURE], st
+            assert str(rig.repo) not in str(st) and "fatal" not in str(st), st
+        finally:
+            restore()
+        _until(lambda: _status(svc)["ready"], "the probe passing again")
+        assert _status(svc)["self_check"] == {"state": "passed", "failures": [],
+                                              "running": False}
+
+
+def test_a_base_commit_not_in_the_repo_leaves_ready_alone(rig):
+    """#3903: ``git_read`` for a base commit that is not in --repo is the
+    request's doing: the round it starts passes its probe, ready stays."""
+    with rig.service("no-such-commit") as svc:
+        assert _rounds(svc, "passed") == 1
+        status, doc = svc.validate("0" * 40)
+        assert (status, doc.get("result"), doc.get("reason")) == (200, "rejected", "git_read"), doc
+        # not a tool fault: ready while the round it started runs, too
+        st = _status(svc)
+        assert st["ready"] is True and st["tool_fault"] is None, st
+        _until(lambda: _rounds(svc, "passed") == 2, "the round git_read started")
+        st = _status(svc)
+        assert st["ready"] is True and st["self_check"]["failures"] == [], st
+        assert _rounds(svc, "failed") == 0
+
+
+def test_the_docs_name_every_self_check_reason():
+    """The /v1/status docs list the closed reasons by hand: each one in the
+    SSOT (``_gsvc_proto.SELF_CHECK_REASONS``) is there, in both languages."""
+    root = Path(__file__).resolve().parents[2]
+    for doc in ("docs/cli-reference.md", "docs/cli-reference.en.md"):
+        text = (root / doc).read_text(encoding="utf-8")
+        missing = [r for r in _gsvc_proto.SELF_CHECK_REASONS if f"`{r}`" not in text]
+        assert not missing, (doc, missing)

@@ -236,6 +236,9 @@ class _FakeService(gs.Service):
         await asyncio.sleep(self.delay)
         return gs.Response(200, {"result": "pass", "rc": 0})
 
+    def _repo_probe(self):
+        return None  # no --repo here (#3903): the probe is tested on a real one
+
 
 async def _settle() -> None:
     """Let every ready task run up to its next real wait."""
@@ -813,6 +816,77 @@ def test_main_makes_every_reader_binary_absolute_before_anything_else(tmp_path, 
         assert os.environ[name] == str(tmp_path / "bin" / name), name
 
 
+# ── #3903: only a HEAD that is no commit yet starts unchecked ──────────
+
+def _git(repo, *args) -> None:
+    import subprocess
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                    "-c", "commit.gpgsign=false", *args],
+                   check=True, capture_output=True, timeout=60)
+
+
+def _committed_repo(path):
+    path.mkdir()
+    _git(path, "init", "-q")
+    (path / "conf.d").mkdir()
+    (path / "conf.d" / "a.yaml").write_text("x: 1\n", encoding="utf-8")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "t")
+    return path
+
+
+def _break(repo, how: str) -> None:
+    import shutil
+    if how == "gone":
+        shutil.rmtree(repo)
+    else:
+        (repo / ".git" / "HEAD").write_bytes(b"not a ref\n")
+
+
+@pytest.mark.parametrize("how", ["gone", "broken"])
+def test_a_repo_git_cannot_read_after_its_judgement_refuses_to_start(
+        tmp_path, monkeypatch, capsys, how):
+    """--repo judged readable (`_object_format`), then gone or broken before
+    `_check_config_subdir` reads HEAD: refused, naming --repo — not taken
+    for a HEAD that is no commit yet and started."""
+    import os
+    import _lib_consumer_read as cr
+    for name in cr.READER_BINARY_ENVS:  # main pins them: put back afterwards
+        monkeypatch.setenv(name, os.environ.get(name, "x"))
+    repo = _committed_repo(tmp_path / "repo")
+    real = gs._object_format
+
+    def judged_then_broken(git, path, **kw):
+        fmt = real(git, path, **kw)
+        _break(repo, how)
+        return fmt
+    monkeypatch.setattr(gs, "_object_format", judged_then_broken)
+    served = []
+
+    async def no_serve(settings, fmt):  # a start that is not refused returns, never hangs
+        served.append(fmt)
+    monkeypatch.setattr(gs, "serve", no_serve)
+    monkeypatch.setattr(gs, "_become_subreaper", lambda: None)
+    rc = gs.main(["--socket", str(tmp_path / "s.sock"), "--repo", str(repo),
+                  "--config-subdir", "conf.d", "--work-dir", str(tmp_path / "work")])
+    err = capsys.readouterr().err
+    assert rc == gs.EXIT_CALLER_ERROR, err
+    assert f"ERROR: --repo {repo}: " in err, err
+    assert "no HEAD commit" not in err, err
+    assert served == [], err
+
+
+def test_a_repo_with_no_commit_yet_starts_unchecked(tmp_path, capsys):
+    """`git init` and nothing committed: HEAD is no commit yet (`--verify
+    --quiet` exit 1, nothing printed) — said on stderr, not refused."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    assert gs._check_config_subdir("git", str(repo), "conf.d", "'conf.d'") is None
+    err = capsys.readouterr().err
+    assert "has no HEAD commit; --config-subdir 'conf.d' is not checked" in err, err
+
+
 # ── #3943: the self-check decides readiness; only a pass clears a fault ──
 
 _FAULT = [{"binary": "da-read", "subcommand": "prometheus-rules", "reason": "not_found"}]
@@ -897,6 +971,13 @@ def test_a_judgement_that_ran_clears_no_tool_fault():
     ({"state": "failed", "failures": [{"binary": "da-guard", "reason": "it broke"}],
       "running": False}, False),
     ({"state": "passed", "failures": [], "running": False, "message": "x"}, False),
+    # #3903: the --repo probe's failure, and only that pairing
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "repo_unreadable"}],
+      "running": False}, True),
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "not_found"}],
+      "running": False}, False),
+    ({"state": "failed", "failures": [{"binary": "da-read", "reason": "repo_unreadable"}],
+      "running": False}, False),
 ])
 def test_the_self_check_document_is_closed(doc, ok):
     assert (proto.self_check_problem(doc) is None) is ok

@@ -23,9 +23,12 @@ READINESS (#3943). The service is ready only once the self-check of each
 program a judgement runs — ``da-guard self-check``, ``da-read self-check``,
 ``da-crdecode --self-check``, resolved as the judgement resolves them — has
 passed: each runs every subcommand of its own dispatch table on fixtures
-built into it. The first round starts once the socket is bound (``pending``
-until it ends: not ready); a tool fault of a judgement or a warming run
-makes the service not ready at once and starts a round at once too. After a
+built into it. Each round first probes --repo (#3903) with the judgement of
+--repo that start-up makes (``_object_format``): a --repo git no longer
+reads fails the round. The first round starts once the socket is bound
+(``pending`` until it ends: not ready); a tool fault of a judgement or a
+warming run makes the service not ready at once and starts a round at once
+too; a judgement's ``git_read`` starts one and leaves ready to it. After a
 failed round the next comes every ``--self-check-seconds``, or at once when
 a new tool fault comes. Only a passing round clears the fault — a judgement
 that ran may never have reached the program that failed. The self-check
@@ -105,7 +108,8 @@ from _lib_label import safe_label  # noqa: E402  (#3415)
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
-    UNAVAILABLE_REASONS, CacheStore, FrameReader, RequestError, ValidateRequest,
+    SELF_CHECK_REPO_BINARY, SELF_CHECK_REPO_REASON, UNAVAILABLE_REASONS,
+    CacheStore, FrameReader, RequestError, ValidateRequest,
     judgement_seconds, parse_validate_request, tool_fault_message, tool_faults_of,
 )
 from _lib_parse_cache import restricted_loads  # noqa: E402
@@ -967,6 +971,10 @@ class Service:
         if outcome == "memory":
             return _rejected("memory", **common)
         if outcome == "git_read":
+            # #3903: git could not read --repo, or the request's base commit
+            # is not in it — this answer cannot tell which. A self-check
+            # round can (its --repo probe): ready follows that, not this.
+            self._ensure_self_check_loop()
             return _rejected("git_read", **common)
         # `da_guard` (names mode could not classify the base tree's path
         # names) has no reason of its own on the wire (tenant-api's closed
@@ -1060,14 +1068,15 @@ class Service:
             self._start_next()
 
     async def self_check_round(self) -> bool:
-        """Run the three self-checks one after another, alone in the slot
-        (``_take_slot``), and record the round; whether it passed and no
-        tool fault is left. A pass clears the tool fault unless a newer one
-        came while it ran."""
+        """Run the --repo probe and the three self-checks one after another,
+        alone in the slot (``_take_slot``), and record the round; whether it
+        passed and no tool fault is left. A pass clears the tool fault
+        unless a newer one came while it ran."""
         seq = self._fault_seq
         self.self_check_running = True
         try:
             await self._take_slot()
+            repo_reason = self._repo_probe()
             try:
                 programs = self._self_check_programs()
             except Exception as exc:  # noqa: BLE001 — the round fails, the service stays up
@@ -1082,14 +1091,38 @@ class Service:
         finally:
             self.self_check_running = False
             self._free_slot()
-        self.self_check_failures = [{"binary": name, "reason": reason}
-                                    for (name, _exe, _args), reason in zip(programs, reasons)
-                                    if reason is not None]
+        repo = ([] if repo_reason is None
+                else [{"binary": SELF_CHECK_REPO_BINARY, "reason": repo_reason}])
+        self.self_check_failures = repo + [
+            {"binary": name, "reason": reason}
+            for (name, _exe, _args), reason in zip(programs, reasons) if reason is not None]
         self.self_check_state = "failed" if self.self_check_failures else "passed"
         self.metrics.self_checks[self.self_check_state] += 1
         if self.self_check_state == "passed" and self._fault_seq == seq:
             self.tool_fault = None
         return self.self_check_state == "passed" and self.tool_fault is None
+
+    def _repo_probe(self) -> Optional[str]:
+        """#3903: whether git still reads --repo as the service judged it at
+        start — :func:`_object_format`, the one judgement of --repo, under
+        the self-check's limits; None when it does, else
+        ``SELF_CHECK_REPO_REASON``, the detail logged. A judgement's
+        ``git_read`` cannot tell a --repo git no longer reads from a request
+        whose base commit is not in it; this round can.
+
+        Run on the loop, as ``start_warming``'s git is (no thread: see the
+        module docstring): a ``rev-parse`` that git's own timeout bounds."""
+        try:
+            fmt = _object_format(self.s.git, self.s.repo,
+                                 preexec_fn=_self_check_limits(self.s.memory_limit_bytes))
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            _log(f"self-check: {exc}")
+            return SELF_CHECK_REPO_REASON
+        if fmt != self.object_format:
+            _log(f"self-check: --repo: object format {fmt}, not the {self.object_format} "
+                 f"it had at start")
+            return SELF_CHECK_REPO_REASON
+        return None
 
     async def _self_check_one(self, name: str, exe: Optional[str],
                               args: tuple[str, ...]) -> Optional[str]:
@@ -1500,9 +1533,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _object_format(git: str, repo: str) -> str:
+def _git_why(proc: subprocess.CompletedProcess) -> str:
+    """A failed git run's reason, on one line: its stderr, else its exit."""
+    why = " ".join(proc.stderr.decode("utf-8", "replace").split())
+    return safe_label(why or f"git exited {proc.returncode}")
+
+
+def _object_format(git: str, repo: str, *, preexec_fn=None) -> str:
     """--repo's object format, judging --repo on the way (#3739): git is the
-    reader of --repo, so git judges it, and the refusal names the flag.
+    reader of --repo, so git judges it, and the refusal names the flag. The
+    self-check's --repo probe (#3903) is this same judgement, under the
+    self-check's limits (*preexec_fn*).
 
     * not a repository: git's own reason, after ``--repo <path>:`` — it was
       git's bare ``fatal: not a git repository … .git``, naming neither;
@@ -1520,15 +1561,15 @@ def _object_format(git: str, repo: str) -> str:
         env = _gsvc_child.git_env(git)  # the first run of --git (#3739: its own answer)
         proc = subprocess.run([git, "-C", repo, "rev-parse", "--show-object-format",
                                "--show-prefix"],
-                              capture_output=True, check=False, timeout=60, env=env)
+                              capture_output=True, check=False, timeout=60, env=env,
+                              preexec_fn=preexec_fn)
     except OSError as exc:
         # #3415: the first run of --git — name the flag, not a bare errno.
         raise RuntimeError(f"--git {shown_git}: {exc.strerror}") from exc
     except _gsvc_child.GitReadError as exc:
         raise RuntimeError(f"--git {shown_git}: {exc}") from exc
     if proc.returncode != 0:
-        why = " ".join(proc.stderr.decode("utf-8", "replace").split()) or f"git exited {proc.returncode}"
-        raise RuntimeError(f"--repo {shown_repo}: {safe_label(why)}")
+        raise RuntimeError(f"--repo {shown_repo}: {_git_why(proc)}")
     fmt, _, prefix = proc.stdout.decode("utf-8", "replace").partition("\n")
     fmt, prefix = fmt.strip(), prefix.strip()
     if prefix:
@@ -1576,15 +1617,22 @@ def _check_config_subdir(git: str, repo: str, sub: str, shown: str) -> None:
     git keeps no empty directory, so a conf.d whose last tenant was
     offboarded, or one the first write has yet to create, reads the same as
     a misspelt one — and a service that refused it could never take that
-    first write. So does a ``HEAD`` that is no commit yet."""
+    first write. So does a ``HEAD`` that is no commit yet: ``--verify
+    --quiet`` exits 1 with nothing on stdout. #3903: any other failure is
+    git unable to read --repo (gone, or ``.git`` broken, since
+    :func:`_object_format` judged it) — refused, naming the flag, as that
+    judgement refuses."""
     proc = subprocess.run([git, "-C", repo, "rev-parse", "--verify", "--quiet",
                            "HEAD^{commit}"], capture_output=True, check=False, timeout=60,
                           env=_gsvc_child.git_env(git))
     head = proc.stdout.decode("ascii", "replace").strip()
-    if proc.returncode != 0 or not head:
+    if proc.returncode == 1 and not proc.stdout:
         print(f"generator-service: --repo {safe_label(repo)} has no HEAD commit; "
               f"--config-subdir {shown} is not checked", file=sys.stderr, flush=True)
         return
+    if proc.returncode != 0 or not head:
+        raise RuntimeError(f"--repo {safe_label(repo) if repo else repr('')}: "
+                           f"{_git_why(proc)}")
     if not sub:
         return  # the root is a tree whatever it holds
     try:
