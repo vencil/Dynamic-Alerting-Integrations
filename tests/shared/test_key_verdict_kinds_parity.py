@@ -82,3 +82,20 @@ def test_tenant_api_describes_exactly_the_go_kinds():
 def test_tenant_api_key_validation_kinds_are_verdict_kinds():
     src = TENANT_API_GO.read_text(encoding="utf-8")
     assert _tenant_api_map_kinds(src, "keyValidationKinds") <= _go_kinds()
+
+
+FINDINGKIND_GO = (REPO / "components" / "threshold-exporter" / "app" / "internal" / "guard"
+                  / "findingkind" / "kinds.go")
+
+
+def test_the_gate_kinds_are_the_ones_the_go_verdict_names():
+    """#3996: `_lib_key_verdict._GATE_KINDS` is exactly the da-guard finding
+    kinds the Go verdict refers to (every `findingkind.Finding…` it names is
+    a gate_kind it writes), mapped to their registered names — so a new
+    gate_kind is read, and an unknown one refused, never silently hidden."""
+    used = set(re.findall(r"findingkind\.(Finding\w+)", KEYVERDICT_GO.read_text(encoding="utf-8")))
+    assert used, f"no findingkind constant named in {KEYVERDICT_GO}"
+    registered = dict(re.findall(r"^\s*(Finding\w+)\s*=\s*register\(\"([a-z_]+)\"",
+                                 FINDINGKIND_GO.read_text(encoding="utf-8"), re.M))
+    assert used <= set(registered), used - set(registered)
+    assert set(_lib_key_verdict._GATE_KINDS) == {registered[c] for c in used}
