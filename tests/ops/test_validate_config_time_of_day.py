@@ -1,7 +1,7 @@
 """validate-config 與路由產生器經 da-guard 讀樹的結論，與執行時刻無關（#3883、#3835、#3918）。
 
 `routes` 列（`generate-routes --validate`，含共用鍵判決與 custom-alert 送達檢查的每一行）、
-`no_alert` 列、`unsupplied_defaults` 列，以及產生器寫入模式（`--output-configmap
+`no_alert` 列、`platform_defaults` 列，以及產生器寫入模式（`--output-configmap
 --strict`）的結束碼與 findings：同一棵樹在兩個時窗內與時窗外的時刻跑，都要逐行相同——只有
 `expires:` 依執行時刻判。撞名時窗內整棵樹的 /metrics 收集不了，那一刻讀 served-values
 一般模式的讀者會整份失敗；只要不吃時刻欄位的讀者改讀 `--config-facts`（不 resolve、不
@@ -48,8 +48,7 @@ _FILES = {
                "    nodecl_pct:\n      default: disable\n      overrides:\n"
                "        - window: \"01:00-01:59\"\n          value: \"5\"\n"
                "        - window: \"01:10-01:20\"\n          value: \"6\"\n",
-    # 只有 page 模式 custom alert、沒有 `_routing` 的租戶（送達檢查，#1211），帶一個 db_type
-    # （unsupplied_defaults 以它判 mariadb pack 已部署，#3830）。
+    # 只有 page 模式 custom alert、沒有 `_routing` 的租戶（送達檢查，#1211），帶一個 db_type。
     "tc.yaml": "tenants:\n  tc:\n    _metadata:\n      db_type: mariadb\n    _custom_alerts:\n"
                "      - recipe: threshold\n        name: q_high\n        metric: q_high_depth\n"
                "        op: \">\"\n        window: 5m\n        threshold: \"1000:warning\"\n",
@@ -98,10 +97,10 @@ def _rows_at(tmp_path: Path, monkeypatch, at: str) -> dict[str, dict]:
         verdict: list = []
         routes = vc.check_routes(conf_d, verdict_out=verdict)
         no_alert = vc.check_no_alert(conf_d, verdict[0] if verdict else None)
-        unsupplied = vc.check_unsupplied_defaults(conf_d)
+        platform = vc.check_platform_defaults(conf_d)
     finally:
         monkeypatch.setenv("DA_GUARD_BINARY", real)
-    return {"routes": routes, "no_alert": no_alert, "unsupplied_defaults": unsupplied}
+    return {"routes": routes, "no_alert": no_alert, "platform_defaults": platform}
 
 
 def test_the_rows_read_through_da_guard_are_the_same_inside_and_outside_a_window(tmp_path, monkeypatch):
@@ -123,11 +122,11 @@ def test_the_rows_read_through_da_guard_are_the_same_inside_and_outside_a_window
     assert inside["no_alert"]["status"] == vc.WARN, inside["no_alert"]
     assert any(d.startswith("no_alert `clickhouse_queries_rate` (served as critical)")
                for d in inside["no_alert"]["details"]), inside["no_alert"]
-    # tc 的 db_type 在收集不了的那一刻也讀得到：判了，不是「not checked」。
-    assert not inside["unsupplied_defaults"]["details"][0].startswith("not checked"), \
-        inside["unsupplied_defaults"]
-    assert any("db_type of tenant(s) tc" in d for d in inside["unsupplied_defaults"]["details"]), \
-        inside["unsupplied_defaults"]
+    # platform_defaults 讀 effective（內建表與 key_sources，不讀時刻）：收集不了的那一刻也判了，
+    # 不是「not checked」（#3832）。
+    assert inside["platform_defaults"]["status"] == vc.PASS, inside["platform_defaults"]
+    assert inside["platform_defaults"]["details"][0].startswith("built-in table "), \
+        inside["platform_defaults"]
 
 
 def _generate_at(tmp_path: Path, at: str) -> tuple[int, list]:

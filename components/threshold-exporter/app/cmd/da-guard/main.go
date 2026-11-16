@@ -142,6 +142,13 @@
 // layer that write them) and the entries written with a schedule, beside
 // the load's parse_failed / unreadable, for the route generator's static
 // inhibit rules. Same exit codes as served-values.
+//
+// Subcommand `self-check` (#3943, selfcheck.go) runs every subcommand of the
+// dispatch table (`subcommands`) and the default check on a fixture built
+// into the binary and compares the answers with those built in: exit 0 and
+// {"self_check":"passed"} on stdout, or exit 1 and {"self_check":"failed"},
+// each failing fixture named on stderr. The generator service is ready only
+// once it passes.
 package main
 
 import (
@@ -250,6 +257,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "       %s %s < values.json\n", programName, thresholdValuesCmd)
 		fmt.Fprintf(errOut, "       %s %s < keys.json\n", programName, keySpellingsCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, severityDedupCmd)
+		fmt.Fprintf(errOut, "       %s %s\n", programName, selfCheckCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
@@ -303,40 +311,66 @@ func run(args []string, stdout, errOut io.Writer) int {
 // unregistered kind, #2904).
 type checkFunc func(guard.CheckInput) (*guard.GuardReport, error)
 
+// subcommand runs one subcommand on the arguments after its name.
+type subcommand func(args []string, stdin io.Reader, stdout, errOut io.Writer) int
+
+// subcommands is da-guard's dispatch table: every subcommand, by name; with
+// no subcommand named, the arguments are the default check's flags
+// (defaultMode). ⛔ The one list of them: `self-check` (selfcheck.go) runs
+// its fixtures through dispatch() and fails on an entry here, or on the
+// default check, it has no fixture for — so a subcommand added without one
+// turns the self-check, and its test, red.
+var subcommands = map[string]subcommand{
+	servedValuesCmd: func(args []string, _ io.Reader, stdout, errOut io.Writer) int {
+		return runServedValues(args, stdout, errOut)
+	},
+	effectiveCmd: func(args []string, _ io.Reader, stdout, errOut io.Writer) int {
+		return runEffective(args, stdout, errOut)
+	},
+	keyVerdictCmd: func(args []string, _ io.Reader, stdout, errOut io.Writer) int {
+		return runKeyVerdict(args, stdout, errOut)
+	},
+	keyRefsCmd: func(args []string, _ io.Reader, stdout, errOut io.Writer) int {
+		return runKeyRefs(args, stdout, errOut)
+	},
+	parseTreeCmd: runParseTree,
+	compileCustomAlertsCmd: func(args []string, _ io.Reader, stdout, errOut io.Writer) int {
+		return runCompileCustomAlerts(args, stdout, errOut)
+	},
+	writeCmd:           runWriteCmd,
+	thresholdValuesCmd: runThresholdValues,
+	keySpellingsCmd:    runKeySpellings,
+	severityDedupCmd: func(args []string, _ io.Reader, stdout, errOut io.Writer) int {
+		return runSeverityDedup(args, stdout, errOut)
+	},
+}
+
+// defaultMode names the default check (no subcommand) where the self-check
+// lists what it covers.
+const defaultMode = ""
+
 // runWith is run with the guard check passed in.
 func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
-	// run() never touches the process-global `log` (see main, #2444).
-	if len(args) > 0 && args[0] == servedValuesCmd {
-		return runServedValues(args[1:], stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == effectiveCmd {
-		return runEffective(args[1:], stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == keyVerdictCmd {
-		return runKeyVerdict(args[1:], stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == keyRefsCmd {
-		return runKeyRefs(args[1:], stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == parseTreeCmd {
-		return runParseTree(args[1:], os.Stdin, stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == compileCustomAlertsCmd {
-		return runCompileCustomAlerts(args[1:], stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == writeCmd {
-		return runWriteCmd(args[1:], os.Stdin, stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == thresholdValuesCmd {
-		return runThresholdValues(args[1:], os.Stdin, stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == keySpellingsCmd {
-		return runKeySpellings(args[1:], os.Stdin, stdout, errOut)
-	}
-	if len(args) > 0 && args[0] == severityDedupCmd {
-		return runSeverityDedup(args[1:], stdout, errOut)
-	}
+	return dispatch(args, os.Stdin, stdout, errOut, check)
+}
 
+// dispatch runs the subcommand args[0] names, `self-check`, or else the
+// default check.
+func dispatch(args []string, stdin io.Reader, stdout, errOut io.Writer, check checkFunc) int {
+	// run() never touches the process-global `log` (see main, #2444).
+	if len(args) > 0 && args[0] == selfCheckCmd {
+		return runSelfCheck(args[1:], stdout, errOut)
+	}
+	if len(args) > 0 {
+		if cmd, ok := subcommands[args[0]]; ok {
+			return cmd(args[1:], stdin, stdout, errOut)
+		}
+	}
+	return runDefault(args, stdout, errOut, check)
+}
+
+// runDefault is the default check: the arguments are its flags.
+func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	f, err := parseFlags(args, errOut)
 	if errors.Is(err, flag.ErrHelp) {
 		// -h / -help / --help: the flag package already printed fs.Usage

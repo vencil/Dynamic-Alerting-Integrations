@@ -498,3 +498,43 @@ describe('a conf.d tenant file pasted whole (#3998)', () => {
     expect(lintConfig('tenants: [a]\n').findings.map((f: any) => f.ruleId)).not.toContain('confd-tenants-wrapper');
   });
 });
+
+describe('this page does not check schedules: its top level is tenants (#4001)', () => {
+  const R = '  _routing:\n    receiver: x\n';
+  const ids = (yaml: string) => lintConfig(yaml).findings.map((f: any) => [f.ruleId, f.tenant, f.key]);
+
+  it('a tenant key named `default` is not taken for a schedule (the exporter serves these files)', () => {
+    // no file-level schedule error: `default` is an ordinary key, and a list
+    // is no threshold the exporter reads
+    expect(ids(`t1:\n  default: [1]\n${R}`)).toEqual([['threshold-not-read', 't1', 'default']]);
+    // and the thresholds beside it are judged
+    expect(ids(`t1:\n  mysql_connection_usage_percent: 99\n  default: 80\n  overrides: 5\n${R}`))
+      .toEqual([['threshold-too-high', 't1', 'mysql_connection_usage_percent']]);
+  });
+
+  it('a conf.d file whose tenant is named `default` is recognised', () => {
+    expect(ids('tenants:\n  default:\n    x_usage: "70"\n    _routing:\n      receiver: x\n'))
+      .toEqual([['confd-tenants-wrapper', 'tenants', '-']]);
+  });
+
+  it('a threshold written as a schedule the exporter refuses is not checked here (as before #3974)', () => {
+    for (const v of ['{default: [1]}', '{default: 80, overrides: 5}']) {
+      expect(ids(`t1:\n  mysql_connection_usage_percent: ${v}\n${R}`), v).toEqual([]);
+    }
+  });
+
+  it('no row of tenant_file_matrix.json, as a tenant of this page, yields a schedule error', () => {
+    // Each body is one tenant's keys; here it sits under `t1:`. Whatever the
+    // exporter makes of it, this page says nothing about schedules.
+    const matrix = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)),
+      '../../../tests/shared/tenant_file_matrix.json'), 'utf8'));
+    expect(matrix.rows.length).toBeGreaterThan(1000);
+    const wrong: string[] = [];
+    for (const { body } of matrix.rows) {
+      const yaml = `t1:\n${body.replace(/\n$/, '').split('\n').map((l: string) => `  ${l}`).join('\n')}\n`;
+      const said = lintConfig(yaml).findings.filter((f: any) => /cannot decode this schedule/.test(f.message));
+      if (said.length) wrong.push(JSON.stringify(body));
+    }
+    expect(wrong).toEqual([]);
+  });
+});

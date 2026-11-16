@@ -1,0 +1,289 @@
+{
+  "schema": "da-guard.served-values/v2",
+  "at": "2026-01-01T00:00:00Z",
+  "parse_failed": [],
+  "skipped": [],
+  "unreadable": [],
+  "tenants": {
+    "t1": {
+      "values": {
+        "_custom_alerts": [
+          {
+            "labels": {
+              "mode": "page",
+              "name": "q_high",
+              "recipe_id": "threshold__qd__gt__w5m__for1m"
+            },
+            "metric": "qd",
+            "severity": "warning",
+            "value": 100
+          }
+        ],
+        "_metadata": {
+          "db_type": [],
+          "domain": "",
+          "environment": "",
+          "groups": [],
+          "owner": "",
+          "region": "",
+          "runbook_url": "",
+          "tags": [],
+          "tier": ""
+        },
+        "_severity_dedup": "enable",
+        "_silent_mode": [],
+        "container_cpu": 80,
+        "container_cpu_throttle": 25,
+        "container_memory": 85,
+        "es_disk_usage_percent": 85,
+        "es_heap_usage_percent": 85,
+        "mysql_connection_usage_percent": 70,
+        "mysql_replication_lag": 30,
+        "oracle_tablespace_used_percent": 85,
+        "pg_connections": 80,
+        "pg_replication_lag": 30,
+        "rabbitmq_node_mem_percent": 90
+      },
+      "severities": {
+        "container_cpu": "warning",
+        "container_cpu_throttle": "warning",
+        "container_memory": "warning",
+        "es_disk_usage_percent": "warning",
+        "es_heap_usage_percent": "warning",
+        "mysql_connection_usage_percent": "warning",
+        "mysql_replication_lag": "warning",
+        "oracle_tablespace_used_percent": "warning",
+        "pg_connections": "warning",
+        "pg_replication_lag": "warning",
+        "rabbitmq_node_mem_percent": "warning"
+      },
+      "series": {
+        "container_cpu": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "container",
+              "metric": "cpu",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "container_cpu",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "container_cpu_throttle": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "container",
+              "metric": "cpu_throttle",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "container_cpu_throttle",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "container_memory": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "container",
+              "metric": "memory",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "container_memory",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "es_disk_usage_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "es",
+              "metric": "disk_usage_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "es_disk_usage_percent",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "es_heap_usage_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "es",
+              "metric": "heap_usage_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "es_heap_usage_percent",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "mysql_connection_usage_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "mysql",
+              "metric": "connection_usage_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "mysql_connection_usage_percent",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "mysql_replication_lag": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "mysql",
+              "metric": "replication_lag",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "mysql_replication_lag",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "oracle_tablespace_used_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "oracle",
+              "metric": "tablespace_used_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "oracle_tablespace_used_percent",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "pg_connections": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "pg",
+              "metric": "connections",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "pg_connections",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "pg_replication_lag": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "pg",
+              "metric": "replication_lag",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "pg_replication_lag",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "rabbitmq_node_mem_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "rabbitmq",
+              "metric": "node_mem_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "rabbitmq_node_mem_percent",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ]
+      },
+      "unserved": {
+        "mysql_slave_lag": "disable"
+      },
+      "dropped": {},
+      "state_filters": {},
+      "time_boxes": {},
+      "keys": {
+        "_custom_alerts": {
+          "exporter": true,
+          "registered": true,
+          "declared": {
+            "custom_alert_compiler": [
+              "tenant",
+              "platform_tenants",
+              "profile"
+            ]
+          }
+        },
+        "_severity_dedup": {
+          "exporter": true,
+          "registered": true,
+          "declared": {
+            "generator": [
+              "tenant",
+              "platform_tenants"
+            ]
+          }
+        },
+        "mysql_connection_usage_percent": {
+          "exporter": true
+        },
+        "mysql_slave_lag": {
+          "exporter": false,
+          "reason": "disabled"
+        }
+      },
+      "key_checks": [],
+      "custom_alert_rows": 1,
+      "custom_alerts": [
+        {
+          "index": 0,
+          "spec": {
+            "metric": "qd",
+            "name": "q_high",
+            "op": "\u003e",
+            "recipe": "threshold",
+            "threshold": "100",
+            "window": "5m"
+          },
+          "status": "served",
+          "recipe_id": "threshold__qd__gt__w5m__for1m",
+          "severities": [
+            "warning"
+          ],
+          "finding": null
+        }
+      ],
+      "custom_alerts_finding": null
+    }
+  },
+  "unread_keys": [],
+  "root_defaults_refused": []
+}

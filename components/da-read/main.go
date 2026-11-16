@@ -16,6 +16,13 @@
 //	da-read prometheus-rules <file|->...
 //	da-read promql-selectors <series> -
 //	da-read promql-label-flow <label> -
+//	da-read self-check
+//
+// `self-check` runs every subcommand of the dispatch table on a fixture
+// built into the binary and compares the answers with those built in
+// (selfcheck.go): exit 0 and {"self_check":"passed"} on stdout, or exit 1
+// and {"self_check":"failed"}, each failing fixture named on stderr. The
+// generator service is ready only once it passes.
 //
 // When Alertmanager's loader refuses a file, `alertmanager` prints a fixed
 // sentence, not the loader's reason: that text is Alertmanager's own prose
@@ -62,7 +69,7 @@
 // once its outer layer is read the Kubernetes way (da-crdecode); for
 // `prometheus-rules` at most once.
 //
-// Exit codes (every subcommand):
+// Exit codes (every subcommand but self-check, whose are above):
 //
 //	0  every file read; JSON on stdout
 //	2  the input is refused, or da-read could not answer. Only a refusal
@@ -147,6 +154,7 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s prometheus-rules <file|->...\n", programName)
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
 	say(stderr, "       %s promql-label-flow <label> -\n", programName)
+	say(stderr, "       %s %s\n", programName, selfCheckCmd)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
 		"their consumer's own loader and prints the reading as JSON, keeping only the keys "+
 		"the file writes: {\"documents\": [<config>]}, or for prometheus-rules "+
@@ -162,10 +170,26 @@ func usage(stderr io.Writer) int {
 	return exitCallerErr
 }
 
-// readers are the single-file subcommands.
+// readers are the single-file subcommands' readings.
 var readers = map[string]func([]byte) ([]byte, error){
 	"alertmanager": func(d []byte) ([]byte, error) { return readAlertmanager(d, false) },
 	"prometheus":   readPrometheus,
+}
+
+// subcommand runs one subcommand on its operands (the arguments after its
+// name).
+type subcommand func(operands []string, stdin io.Reader, stdout, stderr io.Writer) int
+
+// subcommands is da-read's dispatch table: every subcommand, by name. ⛔ The
+// one list of them: `self-check` (selfcheck.go) runs its fixtures through
+// run() and fails on an entry here it has no fixture for, so a subcommand
+// added without one turns the self-check, and its test, red.
+var subcommands = map[string]subcommand{
+	"alertmanager":      runAlertmanager,
+	"prometheus":        runPrometheusCmd,
+	"prometheus-rules":  runRules,
+	"promql-selectors":  runSelectors,
+	"promql-label-flow": runLabelFlow,
 }
 
 func isFileArg(a string) bool {
@@ -173,6 +197,9 @@ func isFileArg(a string) bool {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == selfCheckCmd {
+		return runSelfCheck(args[1:], stdout, stderr)
+	}
 	if len(args) < 2 {
 		return usage(stderr)
 	}
@@ -181,65 +208,85 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return usage(stderr)
 		}
 	}
-	if args[0] == "prometheus-rules" {
-		return runRules(args[1:], stdin, stdout, stderr)
+	cmd, ok := subcommands[args[0]]
+	if !ok {
+		return usage(stderr)
 	}
-	if args[0] == "promql-label-flow" {
-		if len(args) != 3 || args[2] != "-" {
-			return usage(stderr)
-		}
-		data, err := io.ReadAll(stdin)
-		if err != nil {
-			say(stderr, "%s: %v\n", programName, err)
-			return exitCallerErr
-		}
-		req, err := labelFlowRequestOf(args[1], data)
-		if err != nil {
-			// the caller's argument or framing: no answer about the input
-			say(stderr, "%s: %v\n", programName, err)
-			return exitCallerErr
-		}
-		out, err := readPromQLLabelFlow(args[1], req)
-		if err != nil {
-			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
-			return refuse(stdout, stderr)
-		}
-		return write(stdout, stderr, append(out, '\n'), exitOK)
+	return cmd(args[1:], stdin, stdout, stderr)
+}
+
+// runLabelFlow is `promql-label-flow <label> -`.
+func runLabelFlow(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 2 || operands[1] != "-" {
+		return usage(stderr)
 	}
-	if args[0] == "promql-selectors" {
-		if len(args) != 3 || args[2] != "-" {
-			return usage(stderr)
-		}
-		data, err := io.ReadAll(stdin)
-		if err != nil {
-			say(stderr, "%s: %v\n", programName, err)
-			return exitCallerErr
-		}
-		want, exprs, err := selectorsRequest(args[1], data)
-		if err != nil {
-			// the caller's argument or framing: no answer about the input
-			say(stderr, "%s: %v\n", programName, err)
-			return exitCallerErr
-		}
-		out, err := readPromQLSelectors(want, exprs)
-		if err != nil {
-			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
-			return refuse(stdout, stderr)
-		}
-		return write(stdout, stderr, append(out, '\n'), exitOK)
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
 	}
-	read, ok := readers[args[0]]
-	if args[0] == "alertmanager" && args[1] == showLoaderReasonFlag {
-		if len(args) != 3 {
+	req, err := labelFlowRequestOf(operands[0], data)
+	if err != nil {
+		// the caller's argument or framing: no answer about the input
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLLabelFlow(operands[0], req)
+	if err != nil {
+		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
+		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runSelectors is `promql-selectors <series> -`.
+func runSelectors(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 2 || operands[1] != "-" {
+		return usage(stderr)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	want, exprs, err := selectorsRequest(operands[0], data)
+	if err != nil {
+		// the caller's argument or framing: no answer about the input
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLSelectors(want, exprs)
+	if err != nil {
+		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
+		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runAlertmanager is `alertmanager [--show-loader-reason] <file|->`.
+func runAlertmanager(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	read := readers["alertmanager"]
+	if len(operands) > 0 && operands[0] == showLoaderReasonFlag {
+		if len(operands) != 2 {
 			return usage(stderr)
 		}
 		read = func(d []byte) ([]byte, error) { return readAlertmanager(d, true) }
-		args = []string{args[0], args[2]}
+		operands = operands[1:]
 	}
-	if !ok || len(args) != 2 {
+	return runSingle(read, operands, stdin, stdout, stderr)
+}
+
+// runPrometheusCmd is `prometheus <file|->`.
+func runPrometheusCmd(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runSingle(readers["prometheus"], operands, stdin, stdout, stderr)
+}
+
+// runSingle reads the one file *operands* names with *read*.
+func runSingle(read func([]byte) ([]byte, error), operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 1 {
 		return usage(stderr)
 	}
-	name, data, err := open(args[1], stdin)
+	name, data, err := open(operands[0], stdin)
 	if err != nil {
 		say(stderr, "%s: %v\n", programName, err)
 		return exitCallerErr

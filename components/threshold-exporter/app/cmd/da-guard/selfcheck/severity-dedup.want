@@ -1,0 +1,12 @@
+{
+  "schema": "da-guard.severity-dedup/v1",
+  "tenants": {
+    "t1": {
+      "mode": "enable"
+    }
+  },
+  "problems": [],
+  "schedules": [],
+  "parse_failed": [],
+  "unreadable": []
+}
