@@ -191,3 +191,18 @@ def test_query_label_negative_and_regex_ok():
     assert ceq.query_label_findings(
         ['q{query=~"x_.+", query!="x_liveness"}', 'q{query="x_main"}'],
         {"x_liveness", "x_main"}, "P") == []
+
+
+def test_query_label_regexes_do_not_backtrack():
+    """A long run of backslashes with no closing quote must not hang (py/redos):
+    with the overlapping body this took exponential time."""
+    import time
+    text = 'query="' + "\\" * 40 + 'x' + "\n" + 'label_replace(v, "query", "' + "\\" * 40 + "x"
+    t0 = time.monotonic()
+    ceq.query_label_findings([text], {"x_liveness"}, "P")
+    assert time.monotonic() - t0 < 1.0
+
+
+def test_escaped_quote_inside_query_value():
+    found = ceq.query_label_findings(['q{query="x_\\"gone"}'], {"x_liveness"}, "P")
+    assert any('x_"gone' in f for f in found), found

@@ -165,9 +165,12 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
 
 
 # PromQL strings take " or ' (backticks are raw); label_replace can write `query`.
-_QUERY_EQ = re.compile(r"""\bquery\s*=\s*(["'])((?:\\.|(?!\1).)*)\1""")
-_QUERY_RE = re.compile(r"""\bquery\s*=~\s*(["'])((?:\\.|(?!\1).)*)\1""")
-_QUERY_SET = re.compile(r"""label_replace\s*\(.*?,\s*(["'])query\1\s*,\s*(["'])((?:\\.|(?!\2).)*)\2""",
+# The body is "escape pair, or one char that is neither the quote nor a backslash":
+# letting the second branch take a backslash too makes the two overlap, and a run of
+# backslashes then backtracks exponentially (CodeQL py/redos).
+_QUERY_EQ = re.compile(r"""\bquery\s*=\s*(["'])((?:\\.|(?!\1)[^\\])*)\1""")
+_QUERY_RE = re.compile(r"""\bquery\s*=~\s*(["'])((?:\\.|(?!\1)[^\\])*)\1""")
+_QUERY_SET = re.compile(r"""label_replace\s*\(.*?,\s*(["'])query\1\s*,\s*(["'])((?:\\.|(?!\2)[^\\])*)\2""",
                         re.S)
 
 
