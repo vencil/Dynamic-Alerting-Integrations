@@ -476,7 +476,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 Choose one mode:
 
 1. **Mapping Mode**: `--mapping <file>`
-   Reads the `prefix-mapping.yaml` that `da-tools migrate` writes to its output directory. CSV is not accepted: a CSV file, content that is not valid YAML or a top level that is not a mapping exits 2 with one stderr line naming `--mapping` and the path ([#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445); it used to be a traceback). The file looks like this (taken from a real `migrate` run):
+   Reads the `prefix-mapping.yaml` that `da-tools migrate` writes under `.migration/` in its output directory. CSV is not accepted: a CSV file, content that is not valid YAML or a top level that is not a mapping exits 2 with one stderr line naming `--mapping` and the path ([#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445); it used to be a traceback). The file looks like this (taken from a real `migrate` run):
    ```yaml
    custom_mysql_global_status_threads_connected:
      original_metric: mysql_global_status_threads_connected
@@ -518,9 +518,9 @@ With `--watch --auto-detect-convergence`, `cutover-readiness.json` is additional
 **Examples**
 
 ```bash
-da-tools validate --mapping migration_output/prefix-mapping.yaml
-da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --interval 60 --rounds 1440
-da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
+da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml
+da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --interval 60 --rounds 1440
+da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
 ```
 
 **Exit Codes**
@@ -811,7 +811,7 @@ da-tools shadow-verify <phase> [options]
 **Examples**
 
 ```bash
-da-tools shadow-verify preflight --mapping migration_output/prefix-mapping.yaml
+da-tools shadow-verify preflight --mapping migration_output/.migration/prefix-mapping.yaml
 da-tools shadow-verify runtime --report-csv validation_output/validation-report.csv
 da-tools shadow-verify convergence --report-csv validation_output/validation-report.csv --readiness-json validation_output/cutover-readiness.json
 da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
@@ -2306,12 +2306,12 @@ da-tools migrate <input_file> [options]
 
 **Standard Mode**:
 
-- `migration_output/.conf.d/<tenant>.yaml` — Extracted thresholds, under `tenants.<tenant>` ([#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671): no reader reads a tenant file's top-level key other than `tenants`; the former `tenant-config.yaml` held them flat at the top level). The directory is dot-prefixed on purpose: when `-o` lies inside a served conf.d (pointed at it, or the default `-o` run from inside it), every reader skips a dot-prefixed directory, so the draft tenant is never served; the rule files, mapping and reports still go to the root of `-o`, which turns that tree's schema check red, so do not point `-o` at a served tree. To check the two files, pass `.conf.d/` itself as `--config-dir`
-- `migration_output/platform-recording-rules.yaml` — Recording rules
-- `migration_output/platform-alert-rules.yaml` — Alert rules. The alerts read per-tenant recording rules, so `$labels` only carries `tenant`. A label the original annotations or labels reference is replaced by its value when the original expression pins it to one value with `=` (for example `queue="order-processing"`). Any other label (for example `instance`) is rewritten to `$labels.tenant`; annotations add "（原為 instance，已依租戶聚合）", and a comment above the alert plus the report list the rewritten labels. (The v2.9.0 image does not rewrite them; those references render as empty strings.) <!-- image-caveat: v2.9.0 -->
+- `migration_output/.conf.d/<tenant>.yaml` — Extracted thresholds, under `tenants.<tenant>` ([#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671): no reader reads a tenant file's top-level key other than `tenants`; the former `tenant-config.yaml` held them flat at the top level). The directory is dot-prefixed on purpose: when `-o` lies inside a served conf.d (pointed at it, or the default `-o` run from inside it), every reader skips a dot-prefixed directory, so the draft tenant is never served. The rule files and mapping go to `.migration/` for the same reason ([#3997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3997)): wherever the served root lies above `-o`, they are never read as config. The report and CSV are not YAML; they stay at the root of `-o`, where no reader reads them. To check the two files, pass `.conf.d/` itself as `--config-dir`
+- `migration_output/.migration/platform-recording-rules.yaml` — Recording rules
+- `migration_output/.migration/platform-alert-rules.yaml` — Alert rules. The alerts read per-tenant recording rules, so `$labels` only carries `tenant`. A label the original annotations or labels reference is replaced by its value when the original expression pins it to one value with `=` (for example `queue="order-processing"`). Any other label (for example `instance`) is rewritten to `$labels.tenant`; annotations add "（原為 instance，已依租戶聚合）", and a comment above the alert plus the report list the rewritten labels. (The v2.9.0 image does not rewrite them; those references render as empty strings.) <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — Detailed report
 - `migration_output/triage-report.csv` — Rules requiring manual review
-- `migration_output/prefix-mapping.yaml` — Metric prefix mapping
+- `migration_output/.migration/prefix-mapping.yaml` — Metric prefix mapping
 - `migration_output/.conf.d/_defaults.yaml` — a `defaults:` block to merge into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file; formerly `defaults-snippet.yaml`). threshold-exporter only emits declared keys, so the values in the tenant file have no effect until it is merged. The values come from the original rules; once declared, the warning tier applies to every tenant. A critical tier paired with a warning cannot be declared in defaults: each tenant that wants it sets `<key>_critical` in its own file; a legacy rule with only a critical tier reads the base row, so its value is in the snippet (the v2.9.0 image does not produce this file yet) <!-- image-caveat: v2.9.0 -->
 
 **Triage Mode**:

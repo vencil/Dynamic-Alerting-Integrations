@@ -226,7 +226,7 @@ $DA baseline --tenant db-a --duration 300
 
 # 3. Shadow Monitoring 雙軌比對（auto-convergence）
 docker run --rm --network=host \
-  -v $(pwd)/migration_output/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
+  -v $(pwd)/migration_output/.migration/prefix-mapping.yaml:/data/prefix-mapping.yaml:ro \
   -e PROMETHEUS_URL=$PROM \
   ghcr.io/vencil/da-tools \
   validate --mapping /data/prefix-mapping.yaml --watch --rounds 5
@@ -244,7 +244,7 @@ docker run --rm \
 
 # 產出（--triage 只做分桶分析，不產生規則檔）：
 #   /data/output/triage-report.csv  ← 每條規則的分桶與建議處置，供人工審閱
-# 拿掉 --dry-run --triage 才會在 -o 目錄產生規則三件套與 prefix-mapping.yaml
+# 拿掉 --dry-run --triage 才會在 -o 目錄產生規則三件套與 prefix-mapping.yaml（YAML 在 -o/.migration/）
 ```
 
 ### 5.3 GitOps 完整 ConfigMap 產出
