@@ -116,12 +116,14 @@ def percent_rendered() -> dict[str, dict[str, list[str]]]:
 
 
 def _loads_rule_pack(fixture: Path, data: dict) -> bool:
-    """Whether the fixture's rule_files include a rule pack under rule-packs/.
+    """Whether the fixture's rule_files include a rule pack under rule-packs/
+    (a name _lib_consumer_read.RULE_PACKS declares).
     A fixture that loads some other rule file (a local *.rules.yaml) may hold an
     alert of the same name; its assertions say nothing about the pack's text."""
     for rf in (data.get("rule_files") or []):
         target = (fixture.parent / str(rf)).resolve()
-        if target.parent == _RULE_PACKS.resolve() and target.name.startswith("rule-pack-"):
+        if (target.parent == _RULE_PACKS.resolve()
+                and _lib_consumer_read.RULE_PACKS.member(target) is not None):
             return True
     return False
 
