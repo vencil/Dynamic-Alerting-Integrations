@@ -6,8 +6,11 @@ Pinned contracts
 2. percent-rendered annotation asserted nowhere, not baselined -> fail (headline).
 3. asserted only in a NO-fire case (exp_alerts: []) -> still unpinned -> fail.
 4. a firing case that asserts a DIFFERENT annotation key -> unpinned -> fail.
-5. both renderer shapes are detected: humanizePercentage and a `}}%` suffix;
-   a `%` inside a printf verb alone (no closing `}}%`) is not a percent render.
+5. every renderer shape is detected: humanizePercentage, a `}}%` suffix (ASCII or
+   full-width ％), and a printf format that writes `%%` itself; a printf verb that
+   prints no percent sign (`printf "%.1f" }} bytes`) is not a percent render.
+5b. a fixture that loads some other rule file (not rule-packs/rule-pack-*) does not
+   pin, even with the same alertname.
 6. baseline entry that is now pinned / gone -> fail (stale).
 7. --generate then check -> pass.
 8. the shipped tree is clean (baseline == reality) — this is the test that
@@ -29,6 +32,8 @@ import check_percent_render_pinned as prp  # noqa: E402
 HUMANIZE = '"{{ $value | humanizePercentage }} used"'
 PRINTF_PCT = '"{{ $value | printf \\"%.1f\\" }}% used"'
 NO_PCT = '"{{ $value | printf \\"%.1f\\" }} bytes"'
+PRINTF_DOUBLE = '"{{ $value | printf \\"%.1f%%\\" }} used"'
+FULLWIDTH = '"{{ $value | printf \\"%.1f\\" }}％ 使用"'
 
 
 def _pack(alerts: dict[str, str]) -> str:
@@ -38,13 +43,14 @@ def _pack(alerts: dict[str, str]) -> str:
     return f"groups:\n  - name: g\n    rules:\n{rules}\n"
 
 
-def _fixture(alert: str, *, firing: bool, key: str = "description") -> str:
+def _fixture(alert: str, *, firing: bool, key: str = "description",
+             rule_file: str = "../../rule-packs/rule-pack-x.yaml") -> str:
     if firing:
         exp = (f"        exp_alerts:\n          - exp_labels: {{}}\n"
                f"            exp_annotations:\n              {key}: \"x\"\n")
     else:
         exp = "        exp_alerts: []\n"
-    return ("rule_files: []\ntests:\n  - interval: 1m\n    input_series: []\n"
+    return (f"rule_files: [{rule_file}]\ntests:\n  - interval: 1m\n    input_series: []\n"
             f"    alert_rule_test:\n      - eval_time: 1m\n        alertname: {alert}\n{exp}")
 
 
@@ -96,9 +102,20 @@ def test_other_annotation_key_does_not_pin(tree):
 def test_both_renderer_shapes_detected_and_plain_printf_ignored(tree):
     rp, _ = tree
     (rp / "rule-pack-x.yaml").write_text(
-        _pack({"H": HUMANIZE, "P": PRINTF_PCT, "N": NO_PCT}), encoding="utf-8")
-    assert prp.percent_rendered() == {"rule-pack-x.yaml": {"H": ["description"],
-                                                           "P": ["description"]}}
+        _pack({"H": HUMANIZE, "P": PRINTF_PCT, "N": NO_PCT,
+               "D": PRINTF_DOUBLE, "F": FULLWIDTH}), encoding="utf-8")
+    assert prp.percent_rendered() == {"rule-pack-x.yaml": {
+        "D": ["description"], "F": ["description"],
+        "H": ["description"], "P": ["description"]}}
+
+
+def test_fixture_loading_another_rule_file_does_not_pin(tree):
+    rp, tr = tree
+    (rp / "rule-pack-x.yaml").write_text(_pack({"A": HUMANIZE}), encoding="utf-8")
+    (tr / "local.rules.yaml").write_text(_pack({"A": HUMANIZE}), encoding="utf-8")
+    (tr / "x_test.yaml").write_text(
+        _fixture("A", firing=True, rule_file="local.rules.yaml"), encoding="utf-8")
+    assert prp.check() == 1
 
 
 def test_stale_baseline_entry_fails(tree):

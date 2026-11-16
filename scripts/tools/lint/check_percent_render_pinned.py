@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402  (rule packs as Prometheus reads them)
+from _lib_validation import i18n_text  # noqa: E402
 
 try:
     import yaml
@@ -53,9 +54,11 @@ _RULE_PACKS = _REPO / "rule-packs"
 _TESTS = _REPO / "tests" / "rulepacks"
 _BASELINE = _TESTS / "percent_render_baseline.yaml"
 
-# A percentage is rendered when the template pipes into humanizePercentage, or when
-# an action is closed and immediately followed by a literal "%" ("}}%", "}} %").
-PERCENT_RENDER = re.compile(r"humanizePercentage|\}\}\s*%")
+# A percentage is rendered when the template pipes into humanizePercentage, when an
+# action is closed and immediately followed by a percent sign ("}}%", "}} %", or the
+# full-width "％" a Chinese annotation may use), or when a printf format inside an
+# action writes one itself ("%.1f%%").
+PERCENT_RENDER = re.compile(r"humanizePercentage|\}\}\s*[%％]|\{\{[^}]*%%")
 
 _BASELINE_HEADER = """\
 # Percent-rendered annotations with no firing test that asserts them (#978).
@@ -112,11 +115,26 @@ def percent_rendered() -> dict[str, dict[str, list[str]]]:
     return out
 
 
+def _loads_rule_pack(fixture: Path, data: dict) -> bool:
+    """Whether the fixture's rule_files include a rule pack under rule-packs/.
+    A fixture that loads some other rule file (a local *.rules.yaml) may hold an
+    alert of the same name; its assertions say nothing about the pack's text."""
+    for rf in (data.get("rule_files") or []):
+        target = (fixture.parent / str(rf)).resolve()
+        if target.parent == _RULE_PACKS.resolve() and target.name.startswith("rule-pack-"):
+            return True
+    return False
+
+
 def pinned_annotations() -> dict[str, set[str]]:
-    """{alert: annotation keys asserted by a FIRING case (non-empty exp_alerts)}."""
+    """{alert: annotation keys asserted by a FIRING case (non-empty exp_alerts)}
+    in a fixture that loads a rule pack."""
     out: dict[str, set[str]] = {}
     for f in _fixture_files():
-        for t in (_load_yaml(f).get("tests") or []):
+        data = _load_yaml(f)
+        if not _loads_rule_pack(f, data):
+            continue
+        for t in (data.get("tests") or []):
             for art in (t.get("alert_rule_test") or []):
                 name = art.get("alertname")
                 for exp in (art.get("exp_alerts") or []):
@@ -185,10 +203,21 @@ def check() -> int:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--generate", action="store_true", help="rewrite the baseline from the tree")
-    ap.add_argument("--ci", action="store_true", help="CI mode (exit 1 on a finding)")
-    ap.add_argument("files", nargs="*", help="ignored (pre-commit passes changed files)")
+    ap = argparse.ArgumentParser(description=i18n_text(
+        "以百分比渲染的 annotation（humanizePercentage、}}% 或 printf 的 %%）必須有一個 "
+        "exp_alerts 非空的測試，在 exp_annotations 逐字寫出同一個 key 的渲染結果（#978）。"
+        "既有缺口列在 tests/rulepacks/percent_render_baseline.yaml，雙向比對。",
+        "An annotation that renders a percentage (humanizePercentage, }}% or a printf %%) "
+        "must be asserted under the same key by a test with a non-empty exp_alerts (#978). "
+        "Gaps at introduction are in tests/rulepacks/percent_render_baseline.yaml, "
+        "compared both ways."))
+    ap.add_argument("--generate", action="store_true",
+                    help=i18n_text("依目前的樹重寫 baseline", "rewrite the baseline from the tree"))
+    ap.add_argument("--ci", action="store_true",
+                    help=i18n_text("CI 模式（有發現時 exit 1）", "CI mode (exit 1 on a finding)"))
+    ap.add_argument("files", nargs="*",
+                    help=i18n_text("忽略（pre-commit 傳入的變更檔）",
+                                   "ignored (pre-commit passes changed files)"))
     args = ap.parse_args()
     if not _RULE_PACKS.is_dir() or not _TESTS.is_dir():
         print(f"check_percent_render_pinned: rule-packs/ or tests/rulepacks/ not found under {_REPO}",
