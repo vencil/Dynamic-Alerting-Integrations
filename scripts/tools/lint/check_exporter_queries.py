@@ -47,6 +47,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import codecs
 import re
 import sys
 import tempfile
@@ -193,8 +194,13 @@ def _seconds(value: "int | float | str") -> float:
 
 
 def _unescape(value: str) -> str:
-    """A PromQL double/single-quoted string's value (Go escapes)."""
-    return re.sub(r"\\(.)", r"\1", value)
+    """A PromQL double/single-quoted string's value: Go escapes decoded
+    (\\n, \\", \\x6c, \\u006c, octal), the same set Python's unicode_escape reads.
+    A value it cannot decode keeps the old reading: drop each backslash."""
+    try:
+        return codecs.decode(value, "unicode_escape")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return re.sub(r"\\(.)", r"\1", value)
 
 
 def _str_value(groups: tuple[str, str, str]) -> str:

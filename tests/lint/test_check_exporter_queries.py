@@ -291,3 +291,8 @@ def test_label_replace_reading_query_is_not_a_write():
     found = ceq.query_label_findings(
         ['label_replace(x, "query", "x_gone", "", "")'], {"x_liveness"}, "P")
     assert any("x_gone" in f for f in found), found
+
+
+@pytest.mark.parametrize("value", ["x_\\x6civeness", "x_\\u006civeness", "x_\\154iveness"])
+def test_go_escapes_in_a_query_value_are_decoded(value):
+    assert ceq.query_label_findings([f'q{{query="{value}"}}'], {"x_liveness"}, "P") == []
