@@ -32,6 +32,7 @@ from _platform_fs import symlink_or_skip  # noqa: E402
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
 from _builtin_layer import with_builtin  # noqa: E402  (#3832)
+from factories import da_guard_at  # noqa: E402  (tests/ on sys.path: conftest)
 
 DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
 
@@ -1945,28 +1946,11 @@ _WINDOW_COLLISION = {
 }
 
 
-def _da_guard_at(tmp_path, at: str) -> str:
-    """A da-guard that runs `served-values` at *at* (but `--config-facts`,
-    which takes no --at), every other subcommand as given."""
-    real = os.environ["DA_GUARD_BINARY"]
-    path = tmp_path / f"da-guard-at-{at.replace(':', '')}"
-    path.write_text(
-        "#!/bin/sh\n"
-        f"real='{real}'\n"
-        'case " $* " in *" --config-facts "*) exec "$real" "$@" ;; esac\n'
-        'case "$1" in\n'
-        f"  served-values) exec \"$real\" \"$@\" --at '{at}' ;;\n"
-        '  *) exec "$real" "$@" ;;\n'
-        "esac\n", encoding="utf-8")
-    path.chmod(0o755)
-    return str(path)
-
-
 def test_custom_alerts_do_not_depend_on_the_time_of_day(tmp_path, monkeypatch, capsys):
     got = {}
     for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
         conf_d = _write(tmp_path / f"conf-{at.replace(':', '')}", _WINDOW_COLLISION)
-        monkeypatch.setenv("DA_GUARD_BINARY", _da_guard_at(tmp_path, at))
+        monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
         got[at] = dt.custom_alerts_fields(conf_d)
     first, second = got.values()
     assert first == second and first["tc"]["custom_alerts"][0]["status"] == "served", got
