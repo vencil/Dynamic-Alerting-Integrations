@@ -136,3 +136,29 @@ def test_generate_then_check_passes(tree):
 def test_shipped_tree_is_clean():
     """The real rule packs, fixtures and baseline agree (needs da-read)."""
     assert prp.check() == 0
+
+
+def test_same_alertname_twice_keeps_both_keys(tree):
+    """CodeRabbit #4029: two rules may share an alertname; the second rule's
+    percent-rendered key must not hide the first one's."""
+    rp, tr = tree
+    rules = ("groups:\n  - name: g\n    rules:\n"
+             f"      - alert: A\n        expr: up == 0\n        annotations:\n          description: {HUMANIZE}\n"
+             f"      - alert: A\n        expr: up == 1\n        annotations:\n          summary: {HUMANIZE}\n")
+    (rp / "rule-pack-x.yaml").write_text(rules, encoding="utf-8")
+    (tr / "x_test.yaml").write_text(_fixture("A", firing=True, key="summary"), encoding="utf-8")
+    assert prp.current_unpinned() == {"rule-pack-x.yaml": {"A": ["description"]}}
+
+
+def test_fixture_pins_only_the_packs_it_loads(tree):
+    """CodeRabbit #4029: a fixture loading pack Y plus a local rule file with an
+    alert named like pack X's does not pin pack X's alert."""
+    rp, tr = tree
+    (rp / "rule-pack-x.yaml").write_text(_pack({"A": HUMANIZE}), encoding="utf-8")
+    (rp / "rule-pack-y.yaml").write_text(_pack({"B": NO_PCT}), encoding="utf-8")
+    (tr / "local.rules.yaml").write_text(_pack({"A": HUMANIZE}), encoding="utf-8")
+    fixture = _fixture("A", firing=True, rule_file="../../rule-packs/rule-pack-y.yaml")
+    fixture = fixture.replace("rule_files: [../../rule-packs/rule-pack-y.yaml]",
+                              "rule_files: [../../rule-packs/rule-pack-y.yaml, local.rules.yaml]")
+    (tr / "y_test.yaml").write_text(fixture, encoding="utf-8")
+    assert prp.check() == 1

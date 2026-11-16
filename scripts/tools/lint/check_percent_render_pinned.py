@@ -111,38 +111,42 @@ def percent_rendered() -> dict[str, dict[str, list[str]]]:
                 keys = sorted(k for k, v in (rule.get("annotations") or {}).items()
                               if isinstance(v, str) and PERCENT_RENDER.search(v))
                 if keys:
-                    out.setdefault(pack, {})[alert] = keys
+                    # Two rules may share an alertname: union their keys, never
+                    # let the later one hide the earlier one's.
+                    have = out.setdefault(pack, {}).setdefault(alert, [])
+                    out[pack][alert] = sorted(set(have) | set(keys))
     return out
 
 
-def _loads_rule_pack(fixture: Path, data: dict) -> bool:
-    """Whether the fixture's rule_files include a rule pack under rule-packs/
-    (a name _lib_consumer_read.RULE_PACKS declares).
-    A fixture that loads some other rule file (a local *.rules.yaml) may hold an
-    alert of the same name; its assertions say nothing about the pack's text."""
+def _loaded_rule_packs(fixture: Path, data: dict) -> set[str]:
+    """The rule packs under rule-packs/ (names _lib_consumer_read.RULE_PACKS
+    declares) that the fixture's rule_files load, by file name. A fixture's
+    assertion speaks only for those packs: one that loads pack Y and a local
+    *.rules.yaml with an alert of the same name says nothing about pack X."""
+    out = set()
     for rf in (data.get("rule_files") or []):
         target = (fixture.parent / str(rf)).resolve()
         if (target.parent == _RULE_PACKS.resolve()
                 and _lib_consumer_read.RULE_PACKS.member(target) is not None):
-            return True
-    return False
+            out.add(target.name)
+    return out
 
 
-def pinned_annotations() -> dict[str, set[str]]:
-    """{alert: annotation keys asserted by a FIRING case (non-empty exp_alerts)}
-    in a fixture that loads a rule pack."""
-    out: dict[str, set[str]] = {}
+def pinned_annotations() -> dict[tuple[str, str], set[str]]:
+    """{(pack file, alert): annotation keys asserted by a FIRING case (non-empty
+    exp_alerts)} for every rule pack the fixture loads."""
+    out: dict[tuple[str, str], set[str]] = {}
     for f in _fixture_files():
         data = _load_yaml(f)
-        if not _loads_rule_pack(f, data):
-            continue
+        packs = _loaded_rule_packs(f, data)
         for t in (data.get("tests") or []):
             for art in (t.get("alert_rule_test") or []):
                 name = art.get("alertname")
                 for exp in (art.get("exp_alerts") or []):
                     for key in ((exp or {}).get("exp_annotations") or {}):
                         if name:
-                            out.setdefault(name, set()).add(key)
+                            for pack in packs:
+                                out.setdefault((pack, name), set()).add(key)
     return out
 
 
@@ -151,7 +155,7 @@ def current_unpinned() -> dict[str, dict[str, list[str]]]:
     out: dict[str, dict[str, list[str]]] = {}
     for pack, alerts in sorted(percent_rendered().items()):
         for alert, keys in sorted(alerts.items()):
-            missing = [k for k in keys if k not in pinned.get(alert, set())]
+            missing = [k for k in keys if k not in pinned.get((pack, alert), set())]
             if missing:
                 out.setdefault(pack, {})[alert] = missing
     return out
