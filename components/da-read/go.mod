@@ -30,7 +30,7 @@ go 1.26.11
 // module therefore keeps Go's default and sets no `godebug urlstrictcolons`.
 
 require (
-	github.com/prometheus/alertmanager v0.34.2
+	github.com/prometheus/alertmanager v0.35.0
 	github.com/prometheus/common v0.72.1
 	github.com/prometheus/prometheus v0.316.0
 	go.yaml.in/yaml/v2 v2.4.4

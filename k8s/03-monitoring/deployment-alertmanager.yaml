@@ -33,7 +33,7 @@ spec:
           # generic webhook since v0.26.0 (PR prometheus/alertmanager#3223). The
           # pin below (a current stable release) is well past that floor — keep any
           # future bump ≥ v0.26.0 so the heartbeat secret keeps loading.
-          image: prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b
+          image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -106,7 +106,7 @@ spec:
           # empty-by-default = metrics listener disabled, so the sidecar now opens NO
           # port at all. It also polls every 3m by default (--watch-interval) as a
           # backstop for fsnotify, which configmap-reload had no equivalent of.
-          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.95.1@sha256:39bdbade0c64f7c38bb6d18d6f602b14ad489bc189b709dc9266b49e6647aac1
+          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.95.2@sha256:cc74ddedad4ab1c49446971f6d51302ad4303d8660a2018af925c7f62c114304
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
