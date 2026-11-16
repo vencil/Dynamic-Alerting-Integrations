@@ -1544,12 +1544,14 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
               f"(another --tenant's file is another tenant in the tree, #3671); remove "
               f"it or use another -o — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    # Before the batch: a `-o/.migration` that cannot be made a directory
+    # (a file of that name) ends the run with nothing written, not after the
+    # conf.d files are on disk.
+    artifact_dir = Path(output_dir) / ARTIFACT_DIR
+    ensure_dir_or_die(artifact_dir, flag=_OUTPUT_FLAG)
     _lib_confedit.write_all_or_exit(
         conf_dir, entries, tool="migrate_rule",
         make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))
-
-    artifact_dir = Path(output_dir) / ARTIFACT_DIR
-    ensure_dir_or_die(artifact_dir, flag=_OUTPUT_FLAG)
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(artifact_dir / "platform-recording-rules.yaml")

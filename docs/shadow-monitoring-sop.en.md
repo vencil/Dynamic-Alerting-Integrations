@@ -86,7 +86,7 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/prefix-mapping.yaml \
+  validate --mapping /data/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
 # 300 second interval × 4032 rounds ≈ 14 days
@@ -362,7 +362,7 @@ kubectl apply -f old-recording-rules.yaml
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
   ghcr.io/vencil/da-tools:v2.9.0 \
-  validate --mapping /data/prefix-mapping.yaml \
+  validate --mapping /data/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
 ```

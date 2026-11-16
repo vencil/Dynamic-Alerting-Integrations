@@ -352,7 +352,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 
 # Phase B: deploy shadow rules + continuous comparison (often wrapped as a K8s Job running 1-2 weeks)
 da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
-da-tools validate --mapping /data/prefix-mapping.yaml \
+da-tools validate --mapping /data/migration_output/.migration/prefix-mapping.yaml \
                   --tolerance 0.001 --watch --interval 60 --rounds 1440 \
                   --auto-detect-convergence --stability-window 5
 

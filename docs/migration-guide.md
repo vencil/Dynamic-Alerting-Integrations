@@ -352,7 +352,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 
 # Phase B: 部署 shadow 規則 + 持續比對（可包成 K8s Job 跑 1-2 週）
 da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
-da-tools validate --mapping /data/prefix-mapping.yaml \
+da-tools validate --mapping /data/migration_output/.migration/prefix-mapping.yaml \
                   --tolerance 0.001 --watch --interval 60 --rounds 1440 \
                   --auto-detect-convergence --stability-window 5
 

@@ -890,8 +890,11 @@ class TestConfdThroughDaGuardWrite:
         err = capsys.readouterr().err
         assert "stopped part-way" in err and "t1.yaml" in err \
             and "_defaults.yaml" in err and "not rolled back" in err, err
-        # nothing after the batch is written either
-        assert not (dest / mr.ARTIFACT_DIR / "platform-alert-rules.yaml").exists()
+        # nothing after the batch is written either: no rule pack or mapping
+        # anywhere under -o (the artifact directory holds no file)
+        assert not any(p.is_file() for p in (dest / mr.ARTIFACT_DIR).glob("*")), \
+            sorted(dest.rglob("*"))
+        assert not (dest / "migration-report.txt").exists()
 
 
 def test_migrated_alerts_carry_the_maintenance_label_and_canonical_tail():
@@ -958,3 +961,16 @@ def test_a_run_into_a_served_tree_changes_nothing_it_serves(tmp_path, sub):
     after = validate()
     assert after.returncode == 0, after.stdout + after.stderr
     assert set(tv.load_effective(root)) == tenants == {"ta"}
+
+
+def test_an_artifact_directory_that_cannot_be_made_writes_nothing(tmp_path, capsys):
+    """#3997 review: `-o/.migration` is a file — the run ends with exit 2
+    before the conf.d batch, so no draft is left on disk."""
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / mr.ARTIFACT_DIR).write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        mr.write_outputs([_make_result("A", tenant_config={"custom_a": "1"})],
+                         str(dest), prefix="custom_", dictionary={}, tenant="t1")
+    assert exc.value.code == 2
+    assert not (dest / mr.CONFD_DIR).exists(), sorted(dest.rglob("*"))
