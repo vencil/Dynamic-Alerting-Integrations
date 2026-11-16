@@ -15,7 +15,7 @@ pack:
   readback_signed_off: true
 
 signatures:
-  # 1) 實例當機／節點失效 —— boolean up->0，持續維持在 down。
+  # 1) 實例當機／節點失效 —— liveness 查詢停止成功，query_timestamp 不再前進（counter 速率 1→0）。
   - description: >-
       實例當機或節點失效：exporter 仍然依排程被抓取，但 v$instance 無法
       連通，因此 liveness 查詢不再成功、query_timestamp 停止前進（query-exporter

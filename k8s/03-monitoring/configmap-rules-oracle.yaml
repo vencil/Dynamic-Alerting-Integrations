@@ -40,7 +40,7 @@ data:
   oracle-alert.yml: "groups:\n- name: oracle-alerts\n  rules:\n  - alert: OracleDatabaseDown\n\
     \    expr: \"max by(tenant, instance) (\\n  changes(query_timestamp{job=\\\"tenant-exporters\\\
     \", query=\\\"oracle_liveness\\\"}[90s]) == 0\\n  and\\n  count_over_time(query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s]) > 2\\n)\\nor\\nmax\
+    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s]) > 1\\n)\\nor\\nmax\
     \ by(tenant, instance) (\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\
     \"oracle_liveness\\\"}\\n  unless on(tenant, instance)\\n  query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}\\n)\\n\"\n    for: 15s\n\
@@ -56,28 +56,30 @@ data:
     \ {{ $labels.instance }} 已關閉\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: OracleQueryStalled\n    expr: \"(\\n  max by(tenant, instance, query)\
-    \ (\\n    changes(query_timestamp{job=\\\"tenant-exporters\\\", query=~\\\"oracle_.+\\\
-    \", query!=\\\"oracle_liveness\\\"}[5m]) == 0\\n    and\\n    count_over_time(query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\
-    \"}[5m]) > 2\\n  )\\n  or\\n  max by(tenant, instance, query) (\\n    query_interval{job=\\\
-    \"tenant-exporters\\\", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\
-    \"}\\n    unless on(tenant, instance, query)\\n    query_timestamp{job=\\\"tenant-exporters\\\
-    \", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\"}\\n  )\\n)\\nunless\
-    \ on(tenant, instance)\\nmax by(tenant, instance) (\\n  (\\n    changes(query_timestamp{job=\\\
+    \ (\\n    increase(queries_total{job=\\\"tenant-exporters\\\", query=~\\\"oracle_.+\\\
+    \", query!=\\\"oracle_liveness\\\", status=\\\"success\\\"}[5m]) == 0\\n    and\\\
+    n    count_over_time(queries_total{job=\\\"tenant-exporters\\\", query=~\\\"oracle_.+\\\
+    \", query!=\\\"oracle_liveness\\\", status=\\\"success\\\"}[5m]) > 1\\n  )\\n\
+    \  or\\n  max by(tenant, instance, query) (\\n    query_interval{job=\\\"tenant-exporters\\\
+    \", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\"}\\n    unless on(tenant,\
+    \ instance, query)\\n    queries_total{job=\\\"tenant-exporters\\\", query=~\\\
+    \"oracle_.+\\\", query!=\\\"oracle_liveness\\\", status=\\\"success\\\"}\\n  )\\\
+    n)\\nunless on(tenant, instance)\\nmax by(tenant, instance) (\\n  (\\n    changes(query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[5m]) == 0\\n    and\\n\
     \    count_over_time(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\"\
-    oracle_liveness\\\"}[5m]) > 2\\n  )\\n  or\\n  (query_interval{job=\\\"tenant-exporters\\\
+    oracle_liveness\\\"}[5m]) > 1\\n  )\\n  or\\n  (query_interval{job=\\\"tenant-exporters\\\
     \", query=\\\"oracle_liveness\\\"}\\n   unless on(tenant, instance)\\n   query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"})\\n)\\nunless on(tenant)\\\
     n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
     \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\
     \ }}'\n    annotations:\n      description: query-exporter stopped running {{\
-    \ $labels.query }} (or it never succeeded). It drops a query for good on a result-shape\
-    \ error and logs it only at debug level; check the exporter log at debug and the\
-    \ SQL in rule-packs/exporters/oracle.yaml, then restart the exporter.\n      description_zh:\
-    \ query-exporter 不再執行 {{ $labels.query }}（或從未成功）。查詢結果欄位不符時，它會永久移除該查詢，而且只在 debug\
-    \ 等級留紀錄；請以 debug 等級查看 exporter 日誌與 rule-packs/exporters/oracle.yaml 的 SQL，再重啟\
-    \ exporter。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.query }} (or it never succeeded). When a result does not fit the declared\
+    \ metrics it drops the query for good; the cause is in its log at the default\
+    \ level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL\
+    \ in rule-packs/exporters/oracle.yaml, then restart the exporter.\n      description_zh:\
+    \ query-exporter 不再執行 {{ $labels.query }}（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"\
+    query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/oracle.yaml\
+    \ 的 SQL 後重啟 exporter。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\

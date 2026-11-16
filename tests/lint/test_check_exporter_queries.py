@@ -175,3 +175,19 @@ def test_compare_served_checks_types_and_the_builtins_the_pack_reads(tree, tmp_p
     retyped = [line.replace("# TYPE x_sessions gauge", "# TYPE x_sessions counter") for line in base]
     found = ceq.compare_served("x", _scrape(retyped, tmp_path))
     assert any("x_sessions is served as counter" in f for f in found), found
+
+
+@pytest.mark.parametrize("text, bad", [
+    ("query_timestamp{query='x_gone'}", "x_gone"),                    # single quotes
+    ('query_interval{query=~"x_liveness|x_gone"}', "x_gone"),         # alternation
+    ('label_replace(v, "query", "x_gone", "", "")', "x_gone"),        # written by label_replace
+])
+def test_query_label_spellings(text, bad):
+    found = ceq.query_label_findings([text], {"x_liveness", "x_main"}, "P")
+    assert any(bad in f for f in found), found
+
+
+def test_query_label_negative_and_regex_ok():
+    assert ceq.query_label_findings(
+        ['q{query=~"x_.+", query!="x_liveness"}', 'q{query="x_main"}'],
+        {"x_liveness", "x_main"}, "P") == []

@@ -164,18 +164,36 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
     return raw, records, exprs
 
 
-_QUERY_EQ = re.compile(r'\bquery\s*=\s*"([^"]*)"')
-_QUERY_RE = re.compile(r'\bquery\s*=~\s*"([^"]*)"')
+# PromQL strings take " or ' (backticks are raw); label_replace can write `query`.
+_QUERY_EQ = re.compile(r"""\bquery\s*=\s*(["'])((?:\\.|(?!\1).)*)\1""")
+_QUERY_RE = re.compile(r"""\bquery\s*=~\s*(["'])((?:\\.|(?!\1).)*)\1""")
+_QUERY_SET = re.compile(r"""label_replace\s*\(.*?,\s*(["'])query\1\s*,\s*(["'])((?:\\.|(?!\2).)*)\2""",
+                        re.S)
+
+
+def _unescape(value: str) -> str:
+    """A PromQL double/single-quoted string's value (Go escapes)."""
+    return re.sub(r"\\(.)", r"\1", value)
 
 
 def query_label_findings(texts: list[str], queries: set[str], where: str) -> list[str]:
-    """`query` label matchers in *texts* that name no query of the file."""
+    """`query` label matchers (and label_replace targets) in *texts* that name no
+    query of the file. A regex that is a plain alternation of names is checked name
+    by name, so one existing alternative cannot cover a stale one."""
     out = []
     for text in texts:
-        for name in _QUERY_EQ.findall(text):
+        names = [_unescape(m[1]) for m in _QUERY_EQ.findall(text)]
+        names += [_unescape(m[2]) for m in _QUERY_SET.findall(text)]
+        for name in names:
             if name not in queries:
                 out.append(f"{where} matches query=\"{name}\", which the file does not define")
-        for pattern in _QUERY_RE.findall(text):
+        for _q, raw in _QUERY_RE.findall(text):
+            pattern = _unescape(raw)
+            if re.fullmatch(r"[A-Za-z0-9_]+(\|[A-Za-z0-9_]+)*", pattern):
+                for alt in pattern.split("|"):
+                    if alt not in queries:
+                        out.append(f"{where} matches query=~\"{pattern}\": {alt} is not a query of the file")
+                continue
             try:
                 rx = re.compile(f"^(?:{pattern})$")
             except re.error as e:
@@ -277,7 +295,8 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
     raw, _records, exprs = pack_rules(_rule_pack)
     for m in sorted(raw - served):
         out.append(f"{_rule_pack.name} reads {m}, which the exporter does not serve")
-    named = {n for text in exprs + _presence_selectors(pack) for n in _QUERY_EQ.findall(text)}
+    named = {_unescape(m[1]) for text in exprs + _presence_selectors(pack)
+             for m in _QUERY_EQ.findall(text)}
     for m in sorted(raw & {"query_timestamp", "query_interval"}):
         have = {lb.get("query") for n, lb, _v in samples if n == m}
         for q in sorted(named - have):

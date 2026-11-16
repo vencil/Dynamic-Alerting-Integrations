@@ -128,7 +128,7 @@ signatures:
     min_value: 0
     labels: {instance: oracle-ref2-01, database: SAMPLE}
 
-  # ── 6. Database instance down (boolean up→0, sustained) ─────────────────
+  # ── 6. Database instance down (liveness query_timestamp stops advancing, sustained) ─────────────────
   - description: >
       資料庫實例因未處理的內部錯誤（ORA-00600）觸發 PMON 強制中止實例；
       監控代理本身仍存活並持續嘗試連線，但每次都連線失敗，直到 DBA 完成

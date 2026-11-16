@@ -115,10 +115,13 @@ groups:
       # Session utilization ratio: sessions counted against the SESSIONS parameter
       # of the container the exporter is connected to, over that parameter — all
       # sessions, idle ones included (a leaked pool holds idle sessions), not just
-      # ACTIVE user sessions. In a PDB both sides are the PDB's own (see
-      # rule-packs/exporters/oracle.yaml); the CDB-wide limit is not visible
-      # there. Divided per exporter before the max, so two databases of one
-      # tenant are not mixed (#3833).
+      # ACTIVE user sessions. Connected to a PDB, the numerator is that PDB's
+      # sessions; the denominator is the PDB's own SESSIONS when it sets one,
+      # otherwise the CDB's (inherited), and then the ratio is a lower bound —
+      # the other containers' sessions count against that limit but are not
+      # visible from the PDB. Connect to the CDB root to watch the whole limit.
+      # Divided per exporter before the max, so two databases of one tenant are
+      # not mixed (#3833).
       - record: tenant:oracle_session_utilization:ratio
         expr: |
           max by(tenant) (
@@ -161,9 +164,13 @@ groups:
       # 0: oracledb_up expires and query_timestamp of the liveness query stops
       # advancing (rule-packs/exporters/oracle.yaml, #3833). Down = the
       # liveness query's timestamp did not change across 90s (6 runs at its 15s
-      # interval) with at least 3 samples there — one sample alone (an exporter
-      # that just restarted, seen through 30s federation) is not "stopped" — or
-      # an exporter that serves the query but never ran it successfully.
+      # interval) with at least 2 samples there — one sample alone (an exporter
+      # that just restarted, seen through 30s federation) is not "stopped", and
+      # 3 would let one missed federation scrape resolve a firing page — or an
+      # exporter that serves the query but never ran it successfully. Detection
+      # takes about 90-105s after the last success (iamseth's up==0 for: 15s
+      # took 25-40s): the cost of reading progress instead of a 0 the exporter
+      # never reports.
       # changes() rather than time() - query_timestamp: the exporter's clock
       # does not matter. Joined on (tenant, instance): two clusters' pods can
       # share an IP:port after federation.
@@ -172,7 +179,7 @@ groups:
           max by(tenant, instance) (
             changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) == 0
             and
-            count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) > 2
+            count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) > 1
           )
           or
           max by(tenant, instance) (
@@ -194,25 +201,27 @@ groups:
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
-      # query-exporter removes a query from its schedule for good on some errors
-      # (wrong result columns or row count: db.py FATAL_ERRORS), logging it only at
-      # debug level; its gauges then expire and the threshold alerts on them go
-      # silent. This names such a query while the database itself answers: its
-      # timestamp stopped across 5m (the longest query interval is 60s), or the
-      # exporter serves it and it never succeeded (#3833).
+      # query-exporter removes a query from its schedule for good when its result
+      # does not fit the metrics declared for it (wrong column names or column
+      # count: db.py FATAL_ERRORS); the gauges then expire and the threshold
+      # alerts on them go silent. This names such a query while the database
+      # itself answers: its successful-run count stopped across 5m (the longest
+      # query interval is 60s), or the exporter schedules it and it never
+      # succeeded (#3833). queries_total{status="success"}, not query_timestamp:
+      # a run that returns no rows succeeds without touching query_timestamp.
       - alert: OracleQueryStalled
         expr: |
           (
             max by(tenant, instance, query) (
-              changes(query_timestamp{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness"}[5m]) == 0
+              increase(queries_total{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness", status="success"}[5m]) == 0
               and
-              count_over_time(query_timestamp{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness"}[5m]) > 2
+              count_over_time(queries_total{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness", status="success"}[5m]) > 1
             )
             or
             max by(tenant, instance, query) (
               query_interval{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness"}
               unless on(tenant, instance, query)
-              query_timestamp{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness"}
+              queries_total{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness", status="success"}
             )
           )
           unless on(tenant, instance)
@@ -220,7 +229,7 @@ groups:
             (
               changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[5m]) == 0
               and
-              count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[5m]) > 2
+              count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[5m]) > 1
             )
             or
             (query_interval{job="tenant-exporters", query="oracle_liveness"}
@@ -239,8 +248,8 @@ groups:
           summary_zh: "{{ $labels.instance }} 上的 Oracle 查詢 {{ $labels.query }} 已停止"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database answers — the alerts on its metrics are silent"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：資料庫有回應，但 query-exporter 的查詢 {{ $labels.query }} 已停止 — 讀它指標的告警不會響"
-          description: "query-exporter stopped running {{ $labels.query }} (or it never succeeded). It drops a query for good on a result-shape error and logs it only at debug level; check the exporter log at debug and the SQL in rule-packs/exporters/oracle.yaml, then restart the exporter."
-          description_zh: "query-exporter 不再執行 {{ $labels.query }}（或從未成功）。查詢結果欄位不符時，它會永久移除該查詢，而且只在 debug 等級留紀錄；請以 debug 等級查看 exporter 日誌與 rule-packs/exporters/oracle.yaml 的 SQL，再重啟 exporter。"
+          description: "query-exporter stopped running {{ $labels.query }} (or it never succeeded). When a result does not fit the declared metrics it drops the query for good; the cause is in its log at the default level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/oracle.yaml, then restart the exporter."
+          description_zh: "query-exporter 不再執行 {{ $labels.query }}（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/oracle.yaml 的 SQL 後重啟 exporter。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

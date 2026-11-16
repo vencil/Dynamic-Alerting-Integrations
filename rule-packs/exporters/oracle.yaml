@@ -18,7 +18,7 @@
 # namespace), so one exporter must not serve two tenants' databases.
 # Keep query-exporter's built-in metrics on (do not set `builtin_metrics: false`):
 # OracleDatabaseDown, OracleQueryStalled and the platform's presence check read
-# query_interval / query_timestamp.
+# query_interval / query_timestamp / queries_total.
 # The monitor user needs SELECT_CATALOG_ROLE (v$ / dba_* views).
 #
 # ⛔ The metric names here are a contract with the rule pack, checked by
@@ -55,8 +55,11 @@ metrics:
   oracledb_sessions_limit:
     type: gauge
     description: >-
-      The SESSIONS parameter of the container connected to (v$parameter; readable
-      in a PDB, unlike v$resource_limit). A PDB cannot see the CDB-wide limit.
+      The SESSIONS parameter as the container connected to sees it (v$parameter;
+      readable in a PDB, unlike v$resource_limit): a PDB's own value when it sets
+      one, otherwise the CDB's. In the latter case other containers' sessions count
+      against it too and are not visible from the PDB, so the ratio is a lower bound;
+      connect to the CDB root to watch the whole limit.
     expiration: 2m
   oracledb_process_count:
     type: gauge
