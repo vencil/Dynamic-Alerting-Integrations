@@ -241,6 +241,8 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | RabbitMQLowConsumers | warning | muted | [tier] {{ $labels.tenant }}: RabbitMQ consumer count low  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_consumers:max |
 | RabbitMQHighUnackedMessages | warning | muted | [tier] {{ $labels.tenant }}: unacked messages piling up  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_unacked_messages:max |
 | RabbitMQHighUnackedMessagesCritical | critical | muted | [tier] {{ $labels.tenant }}: critical unacked backlog  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_unacked_messages:max |
+| RabbitMQMemoryAlarm | critical | muted | [tier] {{ $labels.tenant }}: RabbitMQ memory alarm  | Free memory (drain queues, add consumers) or raise vm_memory_high_watermark; a watermark of 0 blocks publishers by design | tenant:rabbitmq_memory_alarm:max |
+| RabbitMQDiskAlarm | critical | muted | [tier] {{ $labels.tenant }}: RabbitMQ disk alarm  | Free disk space on the node (purge or move data, grow the volume); lowering disk_free_limit only narrows the margin before the disk fills | tenant:rabbitmq_disk_alarm:max |
 | RabbitMQThresholdNotConfigured | info | muted | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write "disable" if the alert is not wanted, which also ends the notice | user_threshold_unset |
 
 ---

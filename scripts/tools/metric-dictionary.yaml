@@ -402,6 +402,30 @@ rabbitmq_resident_memory_limit_bytes:
   rule_pack: rabbitmq
   note: "內建 rabbitmq_prometheus 外掛的記憶體 high watermark — ratio 的分母（#3929）"
 
+rabbitmq_node_mem_alarm:
+  maps_to: null
+  golden_rule: RabbitMQMemoryAlarm
+  rule_pack: rabbitmq
+  note: "kbudde 的逐節點 memory alarm（0/1），狀態型告警、不讀閾值（#3973）"
+
+rabbitmq_alarms_memory_used_watermark:
+  maps_to: null
+  golden_rule: RabbitMQMemoryAlarm
+  rule_pack: rabbitmq
+  note: "內建 rabbitmq_prometheus 外掛的本節點 memory alarm（0/1）；要抓 /metrics，/metrics/detailed 不帶、/metrics/per-object 4.2.0 起才帶（#3973）"
+
+rabbitmq_node_disk_free_alarm:
+  maps_to: null
+  golden_rule: RabbitMQDiskAlarm
+  rule_pack: rabbitmq
+  note: "kbudde 的逐節點 free-disk alarm（0/1），狀態型告警、不讀閾值（#3973）"
+
+rabbitmq_alarms_free_disk_space_watermark:
+  maps_to: null
+  golden_rule: RabbitMQDiskAlarm
+  rule_pack: rabbitmq
+  note: "內建 rabbitmq_prometheus 外掛的本節點 free-disk alarm（0/1）；要抓 /metrics，/metrics/detailed 不帶、/metrics/per-object 4.2.0 起才帶（#3973）"
+
 rabbitmq_queue_messages_unacked:
   maps_to: rabbitmq_unacked_messages
   golden_rule: RabbitMQHighUnackedMessages
