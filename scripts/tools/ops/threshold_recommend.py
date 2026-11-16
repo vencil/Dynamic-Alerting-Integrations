@@ -53,7 +53,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -384,8 +384,8 @@ def _decimals(current_value: Any) -> int:
     → 3, ``"1.5e2"`` → 2 (a '.' means the author wrote a decimal), and a
     non-string such as the float ``80.0`` or ``Decimal("1E+3")`` → 2.
     Judged on the value, not on a '.' alone: ``"1e-3"`` has none and is not
-    a whole number. Callers pass a finite value ``written_threshold_number``
-    read (#3457: the exporter's grammar, so no ``1_000``), which ``Decimal``
+    a whole number. Callers pass a finite value the exporter reads: the
+    number /metrics serves (#3990: an int when whole), which ``Decimal``
     accepts too."""
     if isinstance(current_value, int):
         return 0
@@ -943,7 +943,7 @@ def analyze_tenant(
 
     report = TenantRecommendation(tenant=tenant_name, source_file=source_file)
     if spellings is None:
-        spellings = key_spellings(k for k in tenant_config if not is_reserved_key(k))
+        spellings = key_spellings(_spelling_queries(tenant_config))
 
     for key, current_value in sorted(tenant_config.items()):
         src = (key_sources or {}).get(key)
@@ -993,6 +993,17 @@ _INHERITED_REASON = ("inherited — listed only, not queried: change it in the f
 
 
 
+def _spelling_queries(config: dict[str, Any]) -> "Iterator[str]":
+    """The keys `key-spellings` is asked for: every threshold key as
+    written and, for a dimensional one, its base — `_served_name` spells
+    the base alone (#3990)."""
+    for k in config:
+        if not is_reserved_key(k):
+            yield k
+            if "{" in k:
+                yield k.partition("{")[0]
+
+
 def _served_name(key: str, spellings: KeySpellings) -> str:
     """The name served-values keys `key`'s schedule by: the base in the
     exporter's canonical spelling (#1231, asked of da-guard), the dimension
@@ -1020,8 +1031,8 @@ def _served_current(
     instant, and a flat value written back would never expire), more than
     one value or severity over the day, a key served at no minute."""
     if schedule is not None and schedule.expires is not None:
-        return None, (f"time-boxed (expires: {schedule.expires}) — the served value turns at the "
-                      "expiry, and a flat value written back would never expire")
+        return None, (f"time-boxed (expires: {schedule.expires}) — what is served depends on "
+                      "whether it has expired, and a flat value written back would never expire")
     if isinstance(written, (dict, list)):
         return None, ("written as a schedule — a recommendation would be written back as one "
                       "flat value and drop its windows")
@@ -1083,12 +1094,18 @@ def _recommend_key(
     promql = build_metric_query(observed_series, tenant_name, lookback)
 
     compared = current_value
+    served_differs = False
     if served is not None:
-        compared, why = served
-        if compared is None:
+        value, why = served
+        if value is None:
             return KeyRecommendation(key=key, current_value=current_value,
                                      reason=f"manual review: {why}",
                                      force_manual=True, guardrail_reason=why)
+        # The exporter's number; a whole one as an int, so the
+        # recommendation stays whole (`_decimals`). Named in the reason when
+        # it is not spelled as written (`"abc"` served its fallback, `"1e3"`).
+        compared = int(value) if float(value).is_integer() else value
+        served_differs = str(compared) != str(current_value).strip()
 
     if dry_run:
         return KeyRecommendation(
@@ -1103,7 +1120,9 @@ def _recommend_key(
     rec.promql = promql
     rec.queried = True
     if served is not None:
-        rec.current_value, rec.served_value = current_value, compared
+        rec.current_value, rec.served_value = current_value, served[0]
+        if served_differs:
+            rec.reason += f" — compared at {compared}, the value /metrics serves"
     return rec
 
 
@@ -1205,7 +1224,8 @@ def run_analysis(
     what /metrics serves for it over the whole UTC day (`da-guard
     served-values --schedules-only`, `_served_current`, #3990), never to its
     written text, and nothing is read at the run's instant: the time of day
-    the tool runs at changes nothing. A tree whose /metrics cannot be
+    the tool runs at changes nothing (an `expires:` passing between two runs
+    does — the config itself changes then). A tree whose /metrics cannot be
     gathered is not refused here — the main gate does
     (`metrics_not_gatherable`); its keys go to manual review, naming the
     parts of the day.
@@ -1243,8 +1263,8 @@ def run_analysis(
         effective = {tenant_filter: effective[tenant_filter]}
 
     # One `da-guard key-spellings` run for every tenant's keys (#3556).
-    spellings = key_spellings(k for eff in effective.values() for k in eff.effective_config
-                              if not is_reserved_key(k))
+    spellings = key_spellings(k for eff in effective.values()
+                              for k in _spelling_queries(eff.effective_config))
     reports: list[TenantRecommendation] = []
     for tenant_name in sorted(effective):
         eff = effective[tenant_name]
@@ -1441,10 +1461,10 @@ def _skip_comment_body(r: KeyRecommendation) -> tuple[str, str]:
     if r.force_manual:
         detail = r.guardrail_reason or r.reason or "manual review required"
     elif low:
-        # current_value was float-parsed (recommended is not None), so it is
-        # one line already; _one_line guards it anyway. The reason goes
-        # through _one_line here, as on a value line, so a control character
-        # in it reads as `?` rather than vanishing into the space collapse.
+        # current_value is the written text — any scalar, also one the
+        # exporter does not read (compared at the served value, #3990) — so
+        # it goes through _one_line, as the reason does: a control character
+        # reads as `?` rather than vanishing into the space collapse.
         cur = r.current_value if r.current_value is not None else "?"
         detail = (f"recommended {_format_threshold_value(r.recommended)}, was "
                   f"{_one_line(cur)}{_from(r)}, {_delta_str(r)} — "
@@ -1648,13 +1668,11 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         lines.append(f"  {rep.tenant}:")
         for r in sorted(written, key=lambda x: x.key):
             val = _format_threshold_value(r.recommended)
-            # `cur` goes only into the trailing `#` comment. Safe to interpolate
-            # raw: an exportable key has recommended != None, i.e.
-            # recommend_threshold() float-parsed current_value, so it cannot
-            # contain a newline that would break this single-line comment.
+            # `cur` goes only into the trailing `#` comment, through _one_line:
+            # it is the written text, which may be a scalar the exporter does
+            # not read (compared at the served value, #3990), newline and all.
             # (Do NOT copy current_value into the skipped-key comments below —
-            # skipped keys may carry an un-float-parseable / multiline value;
-            # those comments use only the tool-generated reason string.)
+            # those use only the tool-generated reason string.)
             cur = r.current_value if r.current_value is not None else "?"
             delta = _delta_str(r)
             lines.append(

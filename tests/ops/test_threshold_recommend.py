@@ -2137,6 +2137,39 @@ class TestNoInstantRead3990:
             assert rec.force_manual and not rec.queried and manual in rec.guardrail_reason, rec
             assert rec.served_value is None, rec
 
+    def test_a_dimensional_key_in_a_retired_spelling_does_not_end_the_run(self, tmp_path):
+        """#3990 review: the schedule of `mysql_cpu{db="a"}` is named by its
+        base's canonical spelling, so the base is asked of key-spellings too
+        — a run of a real tree is never ended by a KeyError."""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_threads_running: 80\n"
+                                                    "dimensions:\n  mysql_threads_running: [db]\n")
+        write_yaml(str(tmp_path), "ta.yaml", 'tenants:\n  ta:\n    mysql_cpu{db="a"}: "5"\n')
+        [report] = tr.run_analysis(str(tmp_path), dry_run=True)
+        assert [k.key for k in report.keys] == ['mysql_cpu{db="a"}'], report.keys
+
+    def test_a_whole_threshold_keeps_whole_recommendations(self, tmp_path):
+        """#3990 review: the served number is a float; a whole one is
+        compared as an int, so `30` is recommended a whole number
+        (`_decimals`), never `47.15`."""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
+        write_yaml(str(tmp_path), "ta.yaml", "tenants:\n  ta:\n    mysql_connection_usage_percent: 30\n")
+        with patch("threshold_recommend.prometheus_instant",
+                   return_value=_range_result([40.37 + (i % 7) * 1.13 for i in range(1000)])):
+            [report] = tr.run_analysis(str(tmp_path), prometheus_url="http://p:9090")
+        [rec] = report.keys
+        assert isinstance(rec.recommended, int) and rec.served_value == 30, rec
+
+    def test_a_value_compared_at_what_is_served_instead_says_so(self, tmp_path):
+        """#3990 review: `"abc"` is compared at the 80 the exporter serves;
+        the reason names that number, which the written text does not show."""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
+        write_yaml(str(tmp_path), "ta.yaml", 'tenants:\n  ta:\n    mysql_connection_usage_percent: "abc"\n')
+        with patch("threshold_recommend.prometheus_instant",
+                   return_value=_range_result([40 + (i % 7) for i in range(1000)])):
+            [report] = tr.run_analysis(str(tmp_path), prometheus_url="http://p:9090")
+        [rec] = report.keys
+        assert rec.current_value == "abc" and "compared at 80, the value /metrics serves" in rec.reason, rec
+
     def test_the_effective_run_s_stderr_is_printed(self, tmp_path, capsys):
         """The load's own WARN lines reach stderr from `da-guard effective`
         (`EffectiveTree.stderr_lines`), as they did from served-values."""
