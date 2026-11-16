@@ -439,10 +439,13 @@ def _unopenable(path: str) -> "str | None":
     system's reason (``os.strerror``), or ``NOT_REGULAR`` — no other text
     (ADR-036: no text of the input).
 
-    ⛔ The file is judged and read through one fd (``_lib_paths.open_regular``):
-    a FIFO would block an ordinary open until a writer comes, and a device
-    such as ``/dev/zero`` never reads to EOF — neither is under the Go
-    program's timeout, since this read happens before the program runs."""
+    ⛔ Judged and opened by ``_lib_paths.open_regular``: anything but a
+    regular file is refused unopened — a FIFO would block the open until a
+    writer comes, and a device such as ``/dev/zero`` never reads to EOF,
+    neither under the Go program's timeout, since this read happens before
+    the program runs. The fd read is the fd judged. A path replaced by a
+    socket or a device between the stat and the open is reported by the
+    open's errno (``CANNOT_OPEN``), never blocked on."""
     try:
         fd = open_regular(path)
     except NotRegularFile:

@@ -24,6 +24,49 @@ from _platform_fs import require_os_attrs, symlink_or_skip  # noqa: E402
 _DEADLINE = 10.0
 
 
+def make_unix_socket(path: Path) -> Path:
+    """Bind a Unix socket at *path* (closed at once; the node stays)."""
+    import socket
+
+    if not hasattr(socket, "AF_UNIX"):
+        pytest.skip("no Unix sockets here")
+    if len(os.fsencode(path)) >= 100:
+        pytest.skip(f"{path} is too long for a Unix socket address")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.bind(str(path))
+    return path
+
+
+def not_regular_paths(tmp_path: Path) -> "list[Path]":
+    """Paths that stat as something other than a regular file, of each kind
+    this host can make: never to be opened (#4015)."""
+    paths = [tmp_path, make_unix_socket(tmp_path / "n.sock")]
+    if hasattr(os, "mkfifo"):
+        os.mkfifo(tmp_path / "n.fifo")
+        paths.append(tmp_path / "n.fifo")
+    paths += [Path(d) for d in ("/dev/null", "/dev/zero", "/dev/tty", "/dev/ptmx")
+              if os.path.exists(d)]
+    return paths
+
+
+def count_opens(monkeypatch) -> "list[str]":
+    """Record every ``os.open`` (then made as asked) and builtin ``open``."""
+    seen: "list[str]" = []
+    real_os_open, real_open = os.open, open
+
+    def os_open(p, *a, **kw):
+        seen.append(os.fspath(p))
+        return real_os_open(p, *a, **kw)
+
+    def builtin_open(p, *a, **kw):
+        seen.append(os.fspath(p) if not isinstance(p, int) else f"fd {p}")
+        return real_open(p, *a, **kw)
+
+    monkeypatch.setattr(os, "open", os_open)
+    monkeypatch.setattr("builtins.open", builtin_open)
+    return seen
+
+
 def _within(path: Path, call=None) -> "str | None":
     """``_unopenable(path)`` (or *call*) in a thread joined with a deadline.
     A call still blocked at the deadline fails the test; a FIFO it waits on
@@ -121,6 +164,12 @@ def _dev_zero(_tmp_path: Path) -> Path:
     return Path("/dev/zero")
 
 
+def _socket(tmp_path: Path) -> Path:
+    """A bound Unix socket's path: stats as a socket, and an open of it
+    fails (ENXIO) — as root too."""
+    return make_unix_socket(tmp_path / "s.sock")
+
+
 def _missing(tmp_path: Path) -> Path:
     return tmp_path / "absent.yml"
 
@@ -148,6 +197,7 @@ def _no_read_permission(tmp_path: Path) -> Path:
     (_fifo, cr.NOT_REGULAR),
     (_dev_null, cr.NOT_REGULAR),
     (_dev_zero, cr.NOT_REGULAR),
+    (_socket, cr.NOT_REGULAR),
     (_missing, f"{cr.CANNOT_OPEN}: No such file or directory"),
     (_dangling, f"{cr.CANNOT_OPEN}: No such file or directory"),
     (_no_read_permission, f"{cr.CANNOT_OPEN}: Permission denied"),
@@ -169,6 +219,17 @@ def test_an_open_the_system_refuses_is_named_by_its_reason(tmp_path, monkeypatch
     monkeypatch.setattr(os, "open", refuse)
     monkeypatch.setattr("builtins.open", refuse)
     assert _within(path) == f"{cr.CANNOT_OPEN}: Permission denied"
+
+
+def test_what_is_not_a_regular_file_is_never_opened(tmp_path, monkeypatch) -> None:
+    """Judged by its stat, unopened: opening a socket fails (an errno for an
+    answer instead of ``NOT_REGULAR``), ``/dev/ptmx`` allocates a pty,
+    ``/dev/tty`` may become a controlling terminal, a FIFO waits."""
+    paths = not_regular_paths(tmp_path)
+    seen = count_opens(monkeypatch)
+    for p in paths:
+        assert _within(p) == cr.NOT_REGULAR, p
+    assert seen == [], seen
 
 
 @pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd")

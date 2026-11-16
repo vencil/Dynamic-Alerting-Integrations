@@ -57,14 +57,16 @@ _DETAIL = {
 
 
 class NotRegularFile(Exception):
-    """`open_regular`: the path opened, and what it names is not a regular
-    file (a FIFO, a device, a directory). Deliberately no ``OSError``: a
-    caller's ``except OSError`` must not read it as a system error."""
+    """`open_regular`: what the path names is not a regular file (a FIFO, a
+    socket, a device, a directory). Deliberately no ``OSError``: a caller's
+    ``except OSError`` must not read it as a system error."""
 
 
-#: Non-blocking where the platform has it: opening a FIFO then returns at once
-#: instead of waiting for a writer. Close-on-exec: the fd is never inherited.
-_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+#: Non-blocking where the platform has it: a FIFO swapped in after the stat
+#: then opens at once instead of waiting for a writer. No controlling
+#: terminal, and close-on-exec: the fd is never inherited.
+_OPEN_FLAGS = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+               | getattr(os, "O_CLOEXEC", 0))
 
 
 def open_regular(path: Any) -> int:
@@ -72,12 +74,18 @@ def open_regular(path: Any) -> int:
     symlink to one included); the caller closes it.
 
     ⛔ The one place that says what a regular file is and how one is opened
-    (#4015). The fd is judged (``fstat``), not the path: a path that is a
-    regular file when stat'ed and a FIFO when opened is judged as the FIFO,
-    and the open does not block on it, since it is non-blocking until the
-    fd is known to be a regular file.
+    (#4015). Anything but a regular file at the stat is never opened:
+    opening a socket fails, ``/dev/ptmx`` allocates a pty, a FIFO waits for
+    a writer. The fd that is opened is then judged again (``fstat``), so a
+    path replaced by a FIFO after the stat is judged as the FIFO, and the
+    non-blocking open does not wait on it. One window is left: replaced by
+    a socket or a device after the stat, the open's own errno is raised
+    (a caller reports it as cannot-open) — an answer, never a block.
 
-    Raises `NotRegularFile` (the fd is closed) or the open's ``OSError``."""
+    Raises `NotRegularFile` (nothing left open), or the stat's or the
+    open's ``OSError``."""
+    if not stat.S_ISREG(os.stat(path).st_mode):
+        raise NotRegularFile(os.fspath(path))
     fd = os.open(path, _OPEN_FLAGS)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -131,11 +139,9 @@ def classify_path(path: Any, kind: str, *, lang: str,
     if kind == "dir" and not stat.S_ISDIR(st.st_mode):
         return PathProblem("dir_not_found", f"{label}: {detail['not_dir']}", False)
     if kind == "file":
-        if not stat.S_ISREG(st.st_mode):
-            return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         try:
             os.close(open_regular(path))
-        except NotRegularFile:  # replaced since the stat (#4015)
+        except NotRegularFile:  # the one judgement of "regular" (#4015)
             return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         except OSError as exc:
             return PathProblem("file_not_accessible",
