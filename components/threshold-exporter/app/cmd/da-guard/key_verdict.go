@@ -55,12 +55,13 @@ import (
 const keyVerdictCmd = "key-verdict"
 
 // keyVerdictSchema names the document's shape (see servedValuesSchema).
-// v4 (#3703): key_checks, per tenant, a list of structured records
+// v5 (#3996): every key row and finding carries gate_kind — the main gate's
+// finding kind for the same fact, or null. v4 (#3703): key_checks, per tenant, a list of structured records
 // {kind, key, head, replacement_head, reason} instead of
 // {version_labels, renames} sentences that quoted the key. v3 (#3835): judged over the whole day, the per-key `served` (what /metrics
 // served at --at) gone. v2 (#3489 step 2): the whole verdict; v1 carried
 // the ERROR layer only.
-const keyVerdictSchema = "da-guard.key-verdict/v4"
+const keyVerdictSchema = "da-guard.key-verdict/v5"
 
 // keyError is one key the verdict reads as unread at severity ERROR — what
 // `da-guard write` compares before and after a batch.
@@ -261,6 +262,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	// #3881: the subtree_default_reserved_key set, filtered as da-guard's own
 	// finding filters it — one set for both.
 	in.SubtreeReserved = guard.SubtreeReservedReported(rep.SubtreeReserved, rep.DefaultsFiles, rep.ParseFailed)
+	in.Undeliverable = rep.Undeliverable // #3996: subtree_default_undeliverable's set
 	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants, setAsideFiles)
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a

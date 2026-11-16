@@ -167,7 +167,7 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
 		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "hint": nil, "switched_off_with": nil,
-		"dead_entries": []any{}, "value": "70"}
+		"dead_entries": []any{}, "value": "70", "gate_kind": nil}
 	rows := doc["tenants"].(map[string]any)["t1"].([]any)
 	// #3832: t1 also holds every built-in key kvRoot does not write.
 	n := 4
@@ -189,7 +189,8 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 		t.Fatalf("t1's misspelt key %v, want %v", row, misspelt)
 	}
 	finding := map[string]any{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "a.yaml",
-		"tenants": []any{"t1"}, "reason": "no_row", "hint": nil, "base": nil, "dead_entries": nil, "blocks": true}
+		"tenants": []any{"t1"}, "reason": "no_row", "hint": nil, "base": nil, "dead_entries": nil, "blocks": true,
+		"gate_kind": nil}
 	if fs := doc["findings"].([]any); len(fs) != 1 || !reflect.DeepEqual(fs[0], finding) {
 		t.Fatalf("findings %v, want [%v]", fs, finding)
 	}
