@@ -164,19 +164,64 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
     return raw, records, exprs
 
 
-# PromQL strings take " or ' (backticks are raw); label_replace can write `query`.
-# The body is "escape pair, or one char that is neither the quote nor a backslash":
-# letting the second branch take a backslash too makes the two overlap, and a run of
-# backslashes then backtracks exponentially (CodeQL py/redos).
-_QUERY_EQ = re.compile(r"""\bquery\s*=\s*(["'])((?:\\.|(?!\1)[^\\])*)\1""")
-_QUERY_RE = re.compile(r"""\bquery\s*=~\s*(["'])((?:\\.|(?!\1)[^\\])*)\1""")
-_QUERY_SET = re.compile(r"""label_replace\s*\(.*?,\s*(["'])query\1\s*,\s*(["'])((?:\\.|(?!\2)[^\\])*)\2""",
-                        re.S)
+# A PromQL string: "..." or '...' with Go escapes, or `...` raw. Three disjoint
+# alternatives and no backreference: a body branch that could also take a
+# backslash overlaps the escape branch, and a run of backslashes then backtracks
+# exponentially (CodeQL py/redos).
+_STR = r"""(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|`([^`]*)`)"""
+# A `query` label matcher, and a label_replace that writes `query`.
+_QUERY_MATCHER = re.compile(r"\bquery\s*(=~|!~|!=|=)\s*" + _STR)
+_QUERY_SET = re.compile(r"label_replace\s*\(.*?,\s*[\"'`]query[\"'`]\s*,\s*" + _STR, re.S)
+# A selector of a query-exporter built-in that carries one series per query.
+_BUILTIN_SELECTOR = re.compile(r"\b(query_timestamp|query_interval)\s*\{([^}]*)\}")
+
+
+def _seconds(value: "int | float | str") -> float:
+    """A query-exporter duration: a number of seconds, or a number with s/m/h/d."""
+    if isinstance(value, (int, float)):
+        return float(value)
+    m = re.fullmatch(r"\s*([0-9.]+)\s*([smhd]?)\s*", str(value))
+    if not m:
+        return float("nan")
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
 
 
 def _unescape(value: str) -> str:
     """A PromQL double/single-quoted string's value (Go escapes)."""
     return re.sub(r"\\(.)", r"\1", value)
+
+
+def _str_value(groups: tuple[str, str, str]) -> str:
+    dq, sq, raw = groups
+    return _unescape(dq or sq) if (dq or sq) else raw
+
+
+def _query_matchers(text: str) -> list[tuple[str, str]]:
+    """(operator, value) of every `query` matcher in *text*; a label_replace that
+    writes `query` counts as `=` its replacement."""
+    out = [(m.group(1), _str_value(m.groups()[1:4])) for m in _QUERY_MATCHER.finditer(text)]
+    out += [("=", _str_value(m.groups()[0:3])) for m in _QUERY_SET.finditer(text)]
+    return out
+
+
+def selected_queries(block: str, queries: set[str]) -> set[str]:
+    """The queries of the file that every `query` matcher in one selector's label
+    block selects (all of =, !=, =~, !~ apply, as in PromQL)."""
+    keep = set(queries)
+    for op, value in _query_matchers(block):
+        try:
+            rx = re.compile(f"^(?:{value})$")
+        except re.error:
+            return set()
+        if op == "=":
+            keep = {q for q in keep if q == value}
+        elif op == "!=":
+            keep = {q for q in keep if q != value}
+        elif op == "=~":
+            keep = {q for q in keep if rx.match(q)}
+        else:
+            keep = {q for q in keep if not rx.match(q)}
+    return keep
 
 
 def query_label_findings(texts: list[str], queries: set[str], where: str) -> list[str]:
@@ -185,13 +230,14 @@ def query_label_findings(texts: list[str], queries: set[str], where: str) -> lis
     by name, so one existing alternative cannot cover a stale one."""
     out = []
     for text in texts:
-        names = [_unescape(m[1]) for m in _QUERY_EQ.findall(text)]
-        names += [_unescape(m[2]) for m in _QUERY_SET.findall(text)]
-        for name in names:
-            if name not in queries:
-                out.append(f"{where} matches query=\"{name}\", which the file does not define")
-        for _q, raw in _QUERY_RE.findall(text):
-            pattern = _unescape(raw)
+        for op, value in _query_matchers(text):
+            if op == "=":
+                if value not in queries:
+                    out.append(f"{where} matches query=\"{value}\", which the file does not define")
+                continue
+            if op != "=~":
+                continue
+            pattern = value
             if re.fullmatch(r"[A-Za-z0-9_]+(\|[A-Za-z0-9_]+)*", pattern):
                 for alt in pattern.split("|"):
                     if alt not in queries:
@@ -225,6 +271,19 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
         if spec.get("increment"):
             out.append(f"{rel}: {name} sets increment: true — a counter must carry the "
                        "database's own cumulative value")
+    # One connection per database by default (connection-pool size 1, one worker):
+    # a query without a timeout that hangs holds it, the liveness query queues
+    # behind it and the database reads as down. The timeout must also end before
+    # the next run is due.
+    for name, spec in sorted((doc.get("queries") or {}).items()):
+        spec = spec or {}
+        timeout, interval = spec.get("timeout"), spec.get("interval")
+        if not timeout:
+            out.append(f"{rel}: query {name} has no timeout — a hung statement holds "
+                       "the database's only connection and every other query waits")
+        elif interval and _seconds(timeout) >= _seconds(interval):
+            out.append(f"{rel}: query {name} timeout {_seconds(timeout):g}s is not below "
+                       f"its interval {_seconds(interval):g}s")
     served = served_names(queries, doc)
     raw, _records, exprs = pack_rules(rule_pack)
     for m in sorted(raw - served):
@@ -234,7 +293,8 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
     out += query_label_findings(_presence_selectors(pack), names,
                                 "the presence check (_lib_exporter_presence)")
     gauges = {n for n, s in metrics.items() if (s or {}).get("type") == "gauge"}
-    pattern = re.compile(r"\b(" + "|".join(_RATE_FUNCS) + r")\s*\(\s*([a-zA-Z_:][a-zA-Z0-9_:]*)")
+    # The argument may sit in extra parentheses: rate((x)[5m:]) is a subquery.
+    pattern = re.compile(r"\b(" + "|".join(_RATE_FUNCS) + r")\s*\(\s*(?:\(\s*)*([a-zA-Z_:][a-zA-Z0-9_:]*)")
     for expr in exprs:
         for func, metric in pattern.findall(expr):
             if metric in gauges:
@@ -298,12 +358,16 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
     raw, _records, exprs = pack_rules(_rule_pack)
     for m in sorted(raw - served):
         out.append(f"{_rule_pack.name} reads {m}, which the exporter does not serve")
-    named = {_unescape(m[1]) for text in exprs + _presence_selectors(pack)
-             for m in _QUERY_EQ.findall(text)}
-    for m in sorted(raw & {"query_timestamp", "query_interval"}):
-        have = {lb.get("query") for n, lb, _v in samples if n == m}
-        for q in sorted(named - have):
-            out.append(f"{m}{{query=\"{q}\"}} is read by the pack but not served")
+    # Every (built-in, query) pair a selector selects, regex selectors expanded
+    # against the file's queries, must have its own series.
+    names = set(doc.get("queries") or {})
+    wanted: set[tuple[str, str]] = set()
+    for text in exprs + _presence_selectors(pack):
+        for metric, block in _BUILTIN_SELECTOR.findall(text):
+            wanted |= {(metric, q) for q in selected_queries(block, names)}
+    have = {(n, lb.get("query")) for n, lb, _v in samples}
+    for metric, q in sorted(wanted - have):
+        out.append(f"{metric}{{query=\"{q}\"}} is read by the pack but not served")
     return out
 
 

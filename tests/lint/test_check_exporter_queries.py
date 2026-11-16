@@ -35,8 +35,10 @@ QUERIES = {
         "x_waits": {"type": "counter"},
     },
     "queries": {
-        "x_liveness": {"databases": ["db"], "metrics": ["x_up"], "sql": "SELECT 1 AS x_up"},
-        "x_main": {"databases": ["db"], "metrics": ["x_sessions", "x_waits"],
+        "x_liveness": {"interval": 15, "timeout": 10, "databases": ["db"], "metrics": ["x_up"],
+                       "sql": "SELECT 1 AS x_up"},
+        "x_main": {"interval": 15, "timeout": 10, "databases": ["db"],
+                   "metrics": ["x_sessions", "x_waits"],
                    "sql": "SELECT 1 AS x_sessions, 2 AS x_waits"},
     },
 }
@@ -206,3 +208,46 @@ def test_query_label_regexes_do_not_backtrack():
 def test_escaped_quote_inside_query_value():
     found = ceq.query_label_findings(['q{query="x_\\"gone"}'], {"x_liveness"}, "P")
     assert any('x_"gone' in f for f in found), found
+
+
+def test_backtick_query_selector(tree):
+    found = tree(["query_timestamp{query=`x_gone`} > 0"])
+    assert any('query="x_gone"' in f for f in found), found
+    assert tree(["query_timestamp{query=`x_liveness`} > 0"]) == []
+
+
+def test_rate_of_a_parenthesised_gauge(tree):
+    found = tree(["rate((x_sessions)[5m:]) > 1"])
+    assert any("rate() to gauge x_sessions" in f for f in found), found
+
+
+def test_query_without_timeout_or_with_a_late_one(tree):
+    q = yaml.safe_load(yaml.safe_dump(QUERIES))
+    del q["queries"]["x_main"]["timeout"]
+    q["queries"]["x_liveness"]["timeout"] = "15s"
+    found = tree(["x_up == 0"], queries=q)
+    assert any("query x_main has no timeout" in f for f in found), found
+    assert any("query x_liveness timeout 15s is not below its interval 15s" in f
+               for f in found), found
+
+
+def test_compare_served_expands_regex_selectors(tree, tmp_path):
+    tree(['changes(query_timestamp{query=~"x_liveness|x_main"}[90s]) == 0'])
+    base = [
+        'x_up{database="db"} 1.0', 'x_sessions{database="db"} 3.0',
+        'x_waits_total{database="db"} 2.0', 'x_waits_created{database="db"} 1.0',
+        'queries_total{database="db",query="x_liveness",status="success"} 2.0',
+        'queries_total{database="db",query="x_main",status="success"} 2.0',
+        'query_timestamp{database="db",query="x_liveness"} 1.0',
+        'query_timestamp{database="db",query="x_main"} 1.0',
+    ]
+    assert ceq.compare_served("x", _scrape(base, tmp_path)) == []
+    one = [line for line in base if 'query_timestamp{database="db",query="x_main"}' not in line]
+    found = ceq.compare_served("x", _scrape(one, tmp_path))
+    assert any('query_timestamp{query="x_main"}' in f for f in found), found
+
+
+def test_selected_queries_applies_every_matcher():
+    qs = {"x_liveness", "x_main", "x_other"}
+    assert ceq.selected_queries('query=~"x_.+", query!="x_liveness"', qs) == {"x_main", "x_other"}
+    assert ceq.selected_queries("query!~'x_(main|other)'", qs) == {"x_liveness"}

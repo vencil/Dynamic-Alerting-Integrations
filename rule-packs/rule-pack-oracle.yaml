@@ -171,6 +171,10 @@ groups:
       # takes about 90-105s after the last success (iamseth's up==0 for: 15s
       # took 25-40s): the cost of reading progress instead of a 0 the exporter
       # never reports.
+      # The series must also have a sample from 90s ago (`offset 90s`): changes()
+      # sees only the samples there are, so a series that began 30s ago, ran
+      # once and then stopped would otherwise read as 90s without progress and
+      # page 60s early.
       # changes() rather than time() - query_timestamp: the exporter's clock
       # does not matter. Joined on (tenant, instance): two clusters' pods can
       # share an IP:port after federation.
@@ -180,6 +184,8 @@ groups:
             changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) == 0
             and
             count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) > 1
+            and
+            query_timestamp{job="tenant-exporters", query="oracle_liveness"} offset 90s
           )
           or
           max by(tenant, instance) (

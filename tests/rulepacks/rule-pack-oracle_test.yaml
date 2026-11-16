@@ -735,3 +735,40 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
+
+  # ── OracleDatabaseDown on a NEW series: the exporter starts at 1m, the
+  #    liveness query succeeds once (timestamp 60) and never again. changes()
+  #    sees only the samples there are, so without the `offset 90s` sample the
+  #    window (t-90s, t] reads as "no progress" from 1m15s and pages at 1m30s,
+  #    30s after the last success. With it the series must reach back 90s:
+  #    true from 2m30s, firing after for: 15s at 2m45s (105s after the
+  #    success, the same 90-105s as a long-lived series). ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '_x4 15x20'
+      - series: 'query_timestamp{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+        values: '_x4 60x20'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+      - eval_time: 2m45s
+        alertname: OracleDatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-n
+              instance: qe-n:9560
+            exp_annotations:
+              summary: "Oracle instance qe-n:9560 is DOWN"
+              summary_zh: "Oracle 實例 qe-n:9560 已關閉"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-n:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-n:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""

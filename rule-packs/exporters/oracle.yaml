@@ -16,6 +16,16 @@
 #
 # One exporter per database: the tenant comes from the scrape (the pod's
 # namespace), so one exporter must not serve two tenants' databases.
+# RAC: v$session and v$parameter are per instance, so an exporter sees only
+# the instance its DSN reaches. Run one exporter per instance (each DSN pinned
+# to its instance, same tenant namespace); the session ratio is taken per
+# exporter before the max, so a saturated instance is not diluted by the others.
+#
+# Every query has a `timeout` below its interval (checked): with the default
+# connection pool there is ONE connection per database, so a hung statement
+# would hold it, the liveness query would queue behind it and the database
+# would read as down. A query that times out counts as
+# queries_total{status="timeout"}; OracleQueryStalled names it.
 # Keep query-exporter's built-in metrics on (do not set `builtin_metrics: false`):
 # OracleDatabaseDown, OracleQueryStalled and the platform's presence check read
 # query_interval / query_timestamp / queries_total.
@@ -82,11 +92,13 @@ metrics:
 queries:
   oracle_liveness:
     interval: 15
+    timeout: 10
     databases: [oracle]
     metrics: [oracledb_up]
     sql: SELECT 1 AS oracledb_up FROM dual
   oracle_sessions:
     interval: 15
+    timeout: 10
     databases: [oracle]
     metrics: [oracledb_sessions_active, oracledb_sessions_current, oracledb_sessions_limit]
     sql: >-
@@ -99,16 +111,19 @@ queries:
       FROM dual
   oracle_process:
     interval: 15
+    timeout: 10
     databases: [oracle]
     metrics: [oracledb_process_count]
     sql: SELECT COUNT(*) AS oracledb_process_count FROM v$process
   oracle_pga:
     interval: 15
+    timeout: 10
     databases: [oracle]
     metrics: [oracledb_pga_allocated_bytes]
     sql: SELECT value AS oracledb_pga_allocated_bytes FROM v$pgastat WHERE name = 'total PGA allocated'
   oracle_tablespace:
     interval: 60
+    timeout: 20
     databases: [oracle]
     metrics: [oracledb_tablespace_used_percent]
     sql: >-
@@ -118,6 +133,7 @@ queries:
       JOIN dba_tablespaces t ON t.tablespace_name = m.tablespace_name
   oracle_wait_time:
     interval: 15
+    timeout: 10
     databases: [oracle]
     metrics: [oracledb_wait_time_seconds]
     sql: >-

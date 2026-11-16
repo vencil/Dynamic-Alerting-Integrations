@@ -40,7 +40,8 @@ data:
   oracle-alert.yml: "groups:\n- name: oracle-alerts\n  rules:\n  - alert: OracleDatabaseDown\n\
     \    expr: \"max by(tenant, instance) (\\n  changes(query_timestamp{job=\\\"tenant-exporters\\\
     \", query=\\\"oracle_liveness\\\"}[90s]) == 0\\n  and\\n  count_over_time(query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s]) > 1\\n)\\nor\\nmax\
+    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s]) > 1\\n  and\\n  query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"} offset 90s\\n)\\nor\\nmax\
     \ by(tenant, instance) (\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\
     \"oracle_liveness\\\"}\\n  unless on(tenant, instance)\\n  query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}\\n)\\n\"\n    for: 15s\n\
