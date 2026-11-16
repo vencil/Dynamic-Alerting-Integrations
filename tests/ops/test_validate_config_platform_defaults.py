@@ -108,8 +108,9 @@ def test_a_root_disable_is_opted_out(tmp_path):
     row = vc.check_platform_defaults(tree)
     assert row["status"] == vc.PASS, row
     assert _line(row, off) == (f"opted_out `{off}` — `disable` under `defaults:` of the root platform "
-                               "file switches it off for every tenant that gives it no value of its "
-                               f"own; platform value {_fmt(BUILTIN_DEFAULTS[off])}"), row
+                               "file switches it off for every tenant, except where a subdirectory "
+                               "`_defaults.yaml`, a profile or the tenant's own file gives it a value; "
+                               f"platform value {_fmt(BUILTIN_DEFAULTS[off])}"), row
     assert _line(row, alias).startswith(f"builtin `{alias}` = "), row
 
 

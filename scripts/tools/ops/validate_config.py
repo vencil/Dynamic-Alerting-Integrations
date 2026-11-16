@@ -2284,8 +2284,9 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
     * `overridden` — the root `defaults:` gives it a number, every tenant's
       unless it writes its own; noted when the number is the platform's.
     * `opted_out` — the root `defaults:` writes it as `disable`: every
-      tenant inherits the opt-out (the key's whole family off) unless a
-      subtree, a profile or its own file gives the key a value.
+      tenant inherits the opt-out (the key's whole family off), except where
+      a subdirectory `_defaults.yaml`, a profile or its own file gives the
+      key a value.
 
     and the first line names the built-in table by its digest, which is how
     the exporter, tenant-api and da-tools are known to hold the same table.
@@ -2336,8 +2337,9 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
                            f"under `defaults:` of the root platform file; platform value {value}")
         elif entry.state == "opted_out":
             details.append(f"opted_out `{key}` — `disable` under `defaults:` of the root platform "
-                           f"file switches it off for every tenant that gives it no value of its "
-                           f"own; platform value {value}")
+                           f"file switches it off for every tenant, except where a subdirectory "
+                           f"`_defaults.yaml`, a profile or the tenant's own file gives it a value; "
+                           f"platform value {value}")
         else:
             # A build that read the root file withholds nothing (da-guard's
             # contract); a state this row has no sentence for is not guessed at.

@@ -348,3 +348,38 @@ func TestMergeTenantWithRootDefaults_RootDisable(t *testing.T) {
 		t.Errorf("tenant value: rows %v, want warning and critical", got)
 	}
 }
+
+// InheritedRootDisables reads every part of the tenant's day: a time window
+// whose value is no number leaves the family to the root `disable` then,
+// whatever the default reads; a value that is a number all day does not.
+func TestInheritedRootDisables_ReadsEveryPartOfTheDay(t *testing.T) {
+	at := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	window := func(def, in string) ScheduledValue {
+		return ScheduledValue{Default: def, Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: in}}}
+	}
+	for name, tc := range map[string]struct {
+		sv   *ScheduledValue
+		want bool
+	}{
+		"not written":               {nil, true},
+		"number all day":            {&ScheduledValue{Default: "20"}, false},
+		"number, disable window":    {ptr(window("20", "disable")), true},
+		"number, unreadable window": {ptr(window("20", "abc")), true},
+		"disable, number window":    {ptr(window("disable", "20")), true},
+		"number, number window":     {ptr(window("20", "25")), false},
+	} {
+		c := &ThresholdConfig{
+			Defaults: map[string]float64{"pg_connections": rootDisabledDefault()},
+			Tenants:  map[string]map[string]ScheduledValue{"t1": {}},
+		}
+		if tc.sv != nil {
+			c.Tenants["t1"]["pg_connections"] = *tc.sv
+		}
+		got := slices.Contains(c.InheritedRootDisables("t1", at), "pg_connections")
+		if got != tc.want {
+			t.Errorf("%s: listed %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func ptr[T any](v T) *T { return &v }

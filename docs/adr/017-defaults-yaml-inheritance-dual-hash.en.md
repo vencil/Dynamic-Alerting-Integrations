@@ -319,7 +319,7 @@ The threshold registry (`rule-packs/threshold-registry.yaml`, the one source of 
 |:--|:--|
 | The platform's value, following its later recalibrations | Do not write the key |
 | A number of your own for the whole platform (which also pins it: it no longer follows the platform) | `<key>: 70` under the root `defaults:` |
-| No such alert anywhere in the platform | `<key>: "disable"` under the root `defaults:` |
+| No such alert by default across the platform (a subdirectory, a profile or a tenant that gives the key a value turns it back on) | `<key>: "disable"` under the root `defaults:` |
 | No such alert for one subdirectory or one tenant | `<key>: "disable"` in the subdirectory `_defaults.yaml` or the tenant file |
 | A number of its own for one tenant | `<key>: "70"` in the tenant file |
 
@@ -341,7 +341,7 @@ The root's `"disable"` is stricter than a subdirectory's:
 - **Only for a key the built-in layer gives a value**. Any other key is a value the exporter cannot read, as in Decision 4.
 - **The root may not also give a value to the same family**. When the root writes `<key>: "disable"` and also gives `<key>{…}` a value, that value goes off with the base and reaches no tenant that does not give the base a value of its own; when it gives `<key>_critical` a value, that is a threshold of its own at the root (Decision 3), served while the base is off. Either way the root contradicts itself; da-guard reports `root_disable_family_value` and exits 1.
 
-The root's `optional_overrides:` (a list of key names that declares "the platform knows this key but gives it no value") does not touch the built-in layer. When the root lists a default-armed key there without giving it a number, da-guard reports `root_optional_builtin` and exits 1: listing the key does not switch its alert off; to switch it off for the whole tree, write `"disable"` under the root `defaults:`.
+The root's `optional_overrides:` (a list of key names that declares "the platform knows this key but gives it no value") does not touch the built-in layer. When the root lists a default-armed key there while its `defaults:` does not write the key (or writes it `null`), da-guard reports `root_optional_builtin` and exits 1: listing the key does not switch its alert off; to switch it off for the whole tree, write `"disable"` under the root `defaults:`.
 
 Example: `conf.d/_defaults.yaml` writes `defaults: {redis_connected_clients: 1000}` and `conf.d/t1.yaml` writes:
 

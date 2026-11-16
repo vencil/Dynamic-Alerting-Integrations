@@ -324,7 +324,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 |:--|:--|
 | 用平台值，並跟著平台之後的校準 | 不寫這個鍵 |
 | 整個平台用自己的數字（也等於釘住，不跟平台變動） | 根目錄 `defaults:` 寫 `<鍵>: 70` |
-| 整個平台不要這條告警 | 根目錄 `defaults:` 寫 `<鍵>: "disable"` |
+| 整個平台預設不要這條告警（子目錄、profile 或租戶給了值仍會開回） | 根目錄 `defaults:` 寫 `<鍵>: "disable"` |
 | 某一層子目錄或某個租戶不要這條告警 | 子目錄 `_defaults.yaml` 或租戶檔寫 `<鍵>: "disable"` |
 | 某個租戶用自己的數字 | 租戶檔寫 `<鍵>: "70"` |
 
@@ -346,7 +346,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 - **只對內建層給值的鍵有效**。其他鍵照決策 4 是讀不了的值。
 - **根目錄不得同時給同一族的值**。根目錄寫了 `<鍵>: "disable"`，又給 `<鍵>{…}` 值時，那個值跟著基底一起關掉，送不到任何沒自己給基底值的租戶；又給 `<鍵>_critical` 值時，它在根目錄是一個獨立的閾值（決策 3），基底關掉了它照送。兩種都是自相矛盾，da-guard 以 `root_disable_family_value` 報錯，結束碼 1。
 
-根目錄的 `optional_overrides:`（宣告「平台認得這個鍵、但不給值」的鍵名清單）不影響內建層。根目錄沒給數字卻把預設啟用鍵列在裡面時，da-guard 以 `root_optional_builtin` 報錯，結束碼 1：列名關不掉這條告警，要整棵樹關掉就在根目錄 `defaults:` 寫 `"disable"`。
+根目錄的 `optional_overrides:`（宣告「平台認得這個鍵、但不給值」的鍵名清單）不影響內建層。根目錄 `defaults:` 沒寫這個預設啟用鍵（或寫 `null`）卻把它列在裡面時，da-guard 以 `root_optional_builtin` 報錯，結束碼 1：列名關不掉這條告警，要整棵樹關掉就在根目錄 `defaults:` 寫 `"disable"`。
 
 例：`conf.d/_defaults.yaml` 寫 `defaults: {redis_connected_clients: 1000}`，`conf.d/t1.yaml` 寫：
 
