@@ -56,6 +56,40 @@ _DETAIL = {
 }
 
 
+class NotRegularFile(Exception):
+    """`open_regular`: the path opened, and what it names is not a regular
+    file (a FIFO, a device, a directory). Deliberately no ``OSError``: a
+    caller's ``except OSError`` must not read it as a system error."""
+
+
+#: Non-blocking where the platform has it: opening a FIFO then returns at once
+#: instead of waiting for a writer. Close-on-exec: the fd is never inherited.
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+def open_regular(path: Any) -> int:
+    """A blocking read-only fd of *path* when it is a regular file (a
+    symlink to one included); the caller closes it.
+
+    ⛔ The one place that says what a regular file is and how one is opened
+    (#4015). The fd is judged (``fstat``), not the path: a path that is a
+    regular file when stat'ed and a FIFO when opened is judged as the FIFO,
+    and the open does not block on it, since it is non-blocking until the
+    fd is known to be a regular file.
+
+    Raises `NotRegularFile` (the fd is closed) or the open's ``OSError``."""
+    fd = os.open(path, _OPEN_FLAGS)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise NotRegularFile(os.fspath(path))
+        if _OPEN_FLAGS & getattr(os, "O_NONBLOCK", 0):
+            os.set_blocking(fd, True)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def classify_path(path: Any, kind: str, *, lang: str,
                   flag: Optional[str] = None) -> Optional[PathProblem]:
     """None when *path* (given by the caller, via *flag*) is usable as a
@@ -100,7 +134,9 @@ def classify_path(path: Any, kind: str, *, lang: str,
         if not stat.S_ISREG(st.st_mode):
             return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         try:
-            os.close(os.open(path, os.O_RDONLY))
+            os.close(open_regular(path))
+        except NotRegularFile:  # replaced since the stat (#4015)
+            return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         except OSError as exc:
             return PathProblem("file_not_accessible",
                                f"{label}: {detail['inaccessible'](exc)}", False)

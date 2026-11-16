@@ -89,7 +89,6 @@ import json
 import os
 import pathlib
 import shutil
-import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -104,6 +103,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from _lib_input import _list  # noqa: E402  ⛔ the one directory listing (#3446)
+from _lib_paths import NotRegularFile, open_regular  # noqa: E402  (#4015)
 import _lib_tool_fault  # noqa: E402  (#3862: where "this reader did not run" is recorded)
 
 CRDECODE_BINARY_NAME = "da-crdecode"
@@ -439,20 +439,17 @@ def _unopenable(path: str) -> "str | None":
     system's reason (``os.strerror``), or ``NOT_REGULAR`` — no other text
     (ADR-036: no text of the input).
 
-    ⛔ The file is judged and read through one fd, opened non-blocking: a
-    FIFO would block an ordinary open until a writer comes, and a device
+    ⛔ The file is judged and read through one fd (``_lib_paths.open_regular``):
+    a FIFO would block an ordinary open until a writer comes, and a device
     such as ``/dev/zero`` never reads to EOF — neither is under the Go
-    program's timeout, since this read happens before the program runs.
-    ``fstat`` on that fd judges the very file that is read; only a regular
-    file is switched back to blocking and read."""
+    program's timeout, since this read happens before the program runs."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+        fd = open_regular(path)
+    except NotRegularFile:
+        return NOT_REGULAR
     except OSError as e:
         return _cannot_open(e)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return NOT_REGULAR
-        os.set_blocking(fd, True)
         while os.read(fd, 1 << 20):
             pass
     except OSError as e:

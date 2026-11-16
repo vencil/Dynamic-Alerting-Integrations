@@ -588,6 +588,41 @@ def test_a_file_is_a_regular_file(tmp_path):
         os.close(held)
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
+def test_a_file_swapped_to_a_fifo_after_its_stat_does_not_block(tmp_path, monkeypatch):
+    """#4015 fault injection: a regular file at the stat, a FIFO by the
+    open. The fd opened is what is judged (`open_regular`): not a regular
+    file, at once — not an open waiting for a writer. Run under a deadline,
+    so the blocking open is a failure here, not a hung suite."""
+    import threading
+
+    path = tmp_path / "policy.yaml"
+    path.write_text("x", encoding="utf-8")
+    real_stat = os.stat
+
+    def stat_then_swap(p, *a, **kw):
+        st = real_stat(p, *a, **kw)
+        if os.fspath(p) == str(path) and stat.S_ISREG(st.st_mode):
+            os.unlink(path)
+            os.mkfifo(path)
+        return st
+
+    monkeypatch.setattr(os, "stat", stat_then_swap)
+    got: dict = {}
+    t = threading.Thread(daemon=True, target=lambda: got.setdefault(
+        "problem", classify_path(path, "file", lang="en", flag="--policy")))
+    t.start()
+    t.join(10)
+    if t.is_alive():
+        os.close(os.open(path, os.O_WRONLY | os.O_NONBLOCK))  # let the blocked open return
+        t.join(10)
+        pytest.fail("classify_path blocked opening a FIFO it had stat'ed as a regular file")
+    problem = got["problem"]
+    assert problem is not None
+    assert (problem.reason, problem.missing) == ("file_not_found", False)
+    assert problem.message == f"--policy {path}: not a regular file"
+
+
 # #3755: gitops-check refuses through its declaration (`_lib_input`): one
 # `ERROR:` line in either language; the detail is the tool's language.
 @pytest.mark.parametrize("lang, words", [("zh", "ERROR: --dir "), ("en", "ERROR: --dir ")])
