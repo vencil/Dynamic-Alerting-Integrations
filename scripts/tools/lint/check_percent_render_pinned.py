@@ -120,15 +120,18 @@ def percent_rendered() -> dict[str, dict[str, list[str]]]:
 
 def _loaded_rule_packs(fixture: Path, data: dict) -> set[str]:
     """The rule packs under rule-packs/ (names _lib_consumer_read.RULE_PACKS
-    declares) that the fixture's rule_files load, by file name. A fixture's
-    assertion speaks only for those packs: one that loads pack Y and a local
-    *.rules.yaml with an alert of the same name says nothing about pack X."""
+    declares) that the fixture's rule_files load, by file name — or none when it
+    also loads any other rule file. An assertion speaks for the pack only when
+    the pack is all the fixture loads: next to a local *.rules.yaml holding an
+    alert of the same name, the rendered text may be the local rule's (#4029)."""
     out = set()
     for rf in (data.get("rule_files") or []):
         target = (fixture.parent / str(rf)).resolve()
         if (target.parent == _RULE_PACKS.resolve()
                 and _lib_consumer_read.RULE_PACKS.member(target) is not None):
             out.add(target.name)
+        else:
+            return set()
     return out
 
 

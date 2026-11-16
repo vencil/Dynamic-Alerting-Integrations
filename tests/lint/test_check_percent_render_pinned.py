@@ -162,3 +162,16 @@ def test_fixture_pins_only_the_packs_it_loads(tree):
                               "rule_files: [../../rule-packs/rule-pack-y.yaml, local.rules.yaml]")
     (tr / "y_test.yaml").write_text(fixture, encoding="utf-8")
     assert prp.check() == 1
+
+
+def test_fixture_mixing_pack_and_local_rules_pins_nothing(tree):
+    """CodeRabbit #4029 follow-up: a fixture loading pack X and a local rule file
+    that also declares A cannot tell whose A rendered the asserted text."""
+    rp, tr = tree
+    (rp / "rule-pack-x.yaml").write_text(_pack({"A": HUMANIZE}), encoding="utf-8")
+    (tr / "local.rules.yaml").write_text(_pack({"A": HUMANIZE}), encoding="utf-8")
+    fixture = _fixture("A", firing=True).replace(
+        "rule_files: [../../rule-packs/rule-pack-x.yaml]",
+        "rule_files: [../../rule-packs/rule-pack-x.yaml, local.rules.yaml]")
+    (tr / "x_test.yaml").write_text(fixture, encoding="utf-8")
+    assert prp.check() == 1
