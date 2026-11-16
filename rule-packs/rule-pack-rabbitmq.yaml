@@ -115,8 +115,9 @@ groups:
       #     alarm). Upstream: exporter_node.go; the plugin's
       #     prometheus_rabbitmq_alarm_metrics_collector.erl.
       #   - The plugin reports only its own node, while one node's alarm blocks
-      #     publishers cluster-wide: scrape every node, and scrape /metrics or
-      #     /metrics/per-object — /metrics/detailed does not carry these two
+      #     publishers cluster-wide: scrape every node, at /metrics. Only the
+      #     default registry carries these two on every release: /metrics/detailed
+      #     never does, /metrics/per-object only from 4.2.0
       #     (rabbit_prometheus_dispatcher.erl).
       #   - The ratio rule above drops a node whose memory limit reads 0
       #     (vm_memory_high_watermark = 0 blocks every publisher at once): this
