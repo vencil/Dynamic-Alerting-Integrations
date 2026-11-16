@@ -127,7 +127,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶
 工具自動處理：
 
 - **三種輸入情境**：`✅ 完美解析` / `⚠️ 複雜表達式 (含警告方塊)` / `🚨 無法解析 (產出 LLM Prompt)`
-- **三件套輸出**：`.conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`，另附 `.conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值。v2.9.0 映像還沒有 `--tenant` 與 `.conf.d/`，只產出 `tenant-config.yaml`（閾值平鋪在頂層，要自己縮排放進 `tenants.<tenant>`），沒有 defaults 片段 <!-- image-caveat: v2.9.0 -->
+- **三件套輸出**：`.conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`，另附 `.conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值。v2.9.0 映像還沒有 `--tenant` 與 `.conf.d/`，只產出 `tenant-config.yaml`（閾值平鋪在頂層，要自己縮排放進 `tenants.<tenant>`），沒有 defaults 片段 <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
 - **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
 
@@ -352,7 +352,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 
 # Phase B: 部署 shadow 規則 + 持續比對（可包成 K8s Job 跑 1-2 週）
 da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
-da-tools validate --mapping /data/prefix-mapping.yaml \
+da-tools validate --mapping /data/migration_output/.migration/prefix-mapping.yaml \
                   --tolerance 0.001 --watch --interval 60 --rounds 1440 \
                   --auto-detect-convergence --stability-window 5
 

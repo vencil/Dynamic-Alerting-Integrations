@@ -111,7 +111,7 @@ graph LR
 ```bash
 # validate_migration.py 自動偵測收斂並產出 cutover-readiness.json
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
@@ -135,7 +135,7 @@ python3 scripts/tools/ops/validate_migration.py \
 
 ```bash
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch \
   --tolerance 0.01  # 1% 容忍度
@@ -193,14 +193,14 @@ python3 scripts/tools/ops/validate_config.py \
 python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
   --tenant db-a --output-dir migration_output/
 # 產出（migration_output/）：
-#   - platform-recording-rules.yaml、platform-alert-rules.yaml
+#   - .migration/platform-recording-rules.yaml、.migration/platform-alert-rules.yaml
 #     （新規則；alert rule 帶 migration_status: shadow label）
 #   - .conf.d/_defaults.yaml（它的 defaults: 區塊先合併進 conf.d 根的 _defaults.yaml，合併、
 #     不要整份覆蓋；exporter 只發射宣告過的 key。值取自原規則，warning 層對所有租戶生效）
 #   - .conf.d/db-a.yaml（--tenant 給的租戶，閾值寫在 tenants.db-a 底下。warning 層只有要和預設值
 #     不同的租戶才需要；<key>_critical 不能放 defaults，要 critical 的租戶都要寫進自己的
 #     conf.d 檔；只有 critical 的舊規則例外，它改讀 base 列，值已在 _defaults.yaml）
-#   - prefix-mapping.yaml（階段 3 validate_migration 的比對組）
+#   - .migration/prefix-mapping.yaml（階段 3 validate_migration 的比對組）
 #   - migration-report.txt、triage-report.csv（轉換報告）
 # 工具沒有「只轉某些租戶」的選項；某個租戶不要這條告警，在該租戶檔把 key 設成 "disable"。
 # ⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 label、
@@ -224,7 +224,7 @@ kubectl rollout restart deployment alertmanager -n monitoring
 ```bash
 # 3.1 啟動並行驗證
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 7 \
@@ -407,7 +407,7 @@ kubectl patch configmap alertmanager-config -n monitoring \
 ```bash
 # 容忍度提寬至 5%，連續 3 輪無 mismatch 即宣告收斂
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 288 \
   --auto-detect-convergence --stability-window 3 \

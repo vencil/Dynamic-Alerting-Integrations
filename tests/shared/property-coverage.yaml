@@ -125,6 +125,7 @@ modules:
   scripts/tools/_lib_paths.py:
     excluded:
       classify_path: "#3276 os.stat + errno (and a read-only open, for a regular file) on a caller-given path: I/O-bound, table-pinned per kind/case in tests/shared/test_caller_paths.py::test_classify_path and, through every migrated CLI, ::test_a_path_under_a_parent_it_cannot_enter_is_named"
+      open_regular: "#4015 os.open non-blocking + fstat S_ISREG on one fd: I/O-bound, per path kind and the swapped-to-a-FIFO race in tests/shared/test_lib_consumer_read_unopenable.py and tests/shared/test_caller_paths.py::test_a_file_swapped_to_a_fifo_after_its_stat_does_not_block"
       require_path: "#3276 raises CallerError over classify_path; no value computation"
       require_dir: "#3276 require_path for a directory"
       require_file: "#3276 require_path for a file"
