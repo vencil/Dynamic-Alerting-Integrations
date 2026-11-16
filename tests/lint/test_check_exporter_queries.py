@@ -68,7 +68,7 @@ def tree(tmp_path, monkeypatch):
     def write(exprs, queries=None, records=None):
         (rp / "rule-pack-x.yaml").write_text(_pack(exprs, records), encoding="utf-8")
         (rp / "exporters" / "x.yaml").write_text(
-            yaml.safe_dump(queries or QUERIES), encoding="utf-8")
+            yaml.safe_dump(queries or QUERIES, sort_keys=False), encoding="utf-8")
         pack, rule_pack, q = ceq.bindings()[0]
         return ceq.findings_for(pack, rule_pack, q)
     return write
@@ -251,3 +251,34 @@ def test_selected_queries_applies_every_matcher():
     qs = {"x_liveness", "x_main", "x_other"}
     assert ceq.selected_queries('query=~"x_.+", query!="x_liveness"', qs) == {"x_main", "x_other"}
     assert ceq.selected_queries("query!~'x_(main|other)'", qs) == {"x_liveness"}
+
+
+def test_liveness_query_first_and_longest_timeout(tree, monkeypatch):
+    monkeypatch.setattr(ceq, "_presence_selectors",
+                        lambda pack: ['query_interval{query="x_liveness"}'])
+    q = yaml.safe_load(yaml.safe_dump(QUERIES))
+    q["queries"]["x_liveness"]["timeout"] = 12
+    q["queries"]["x_main"]["timeout"] = 8
+    assert tree(["x_up == 0"], queries=q) == []
+    q["queries"]["x_main"]["timeout"] = 12
+    found = tree(["x_up == 0"], queries=q)
+    assert any("timeout 12s does not exceed x_main's 12s" in f for f in found), found
+    q["queries"]["x_main"]["timeout"] = 8
+    q["queries"] = {"x_main": q["queries"]["x_main"], "x_liveness": q["queries"]["x_liveness"]}
+    found = tree(["x_up == 0"], queries=q)
+    assert any("liveness query x_liveness is not the first query" in f for f in found), found
+
+
+def test_brace_inside_a_selector_regex():
+    qs = {"x_liveness", "x_main"}
+    text = 'query_timestamp{query=~"x_l{1}iveness"}'
+    m = ceq._BUILTIN_SELECTOR.search(text)
+    assert ceq.selected_queries(m.group(2), qs) == {"x_liveness"}
+
+
+def test_label_replace_reading_query_is_not_a_write():
+    assert ceq.query_label_findings(
+        ['label_replace(x, "foo", "$1", "query", "(.*)")'], {"x_liveness"}, "P") == []
+    found = ceq.query_label_findings(
+        ['label_replace(x, "query", "x_gone", "", "")'], {"x_liveness"}, "P")
+    assert any("x_gone" in f for f in found), found

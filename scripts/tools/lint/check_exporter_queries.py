@@ -171,9 +171,15 @@ def pack_rules(rule_pack: Path) -> tuple[set[str], set[str], list[str]]:
 _STR = r"""(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|`([^`]*)`)"""
 # A `query` label matcher, and a label_replace that writes `query`.
 _QUERY_MATCHER = re.compile(r"\bquery\s*(=~|!~|!=|=)\s*" + _STR)
-_QUERY_SET = re.compile(r"label_replace\s*\(.*?,\s*[\"'`]query[\"'`]\s*,\s*" + _STR, re.S)
-# A selector of a query-exporter built-in that carries one series per query.
-_BUILTIN_SELECTOR = re.compile(r"\b(query_timestamp|query_interval)\s*\{([^}]*)\}")
+# label_replace(v, dst, replacement, src, regex): `query` must be the DESTINATION,
+# so the four string arguments are matched up to the closing parenthesis — a
+# `query` source label is not a write.
+_QUERY_SET = re.compile(r"label_replace\s*\(.*?,\s*[\"'`]query[\"'`]\s*,\s*" + _STR
+                        + r"\s*,\s*" + _STR + r"\s*,\s*" + _STR + r"\s*\)", re.S)
+# A selector of a query-exporter built-in that carries one series per query. The
+# label block skips quoted strings, so a `}` inside a regex does not end it.
+_BUILTIN_SELECTOR = re.compile(
+    r"\b(query_timestamp|query_interval)\s*\{((?:[^{}\"'`]|" + _STR + r")*)\}")
 
 
 def _seconds(value: "int | float | str") -> float:
@@ -206,7 +212,8 @@ def _query_matchers(text: str) -> list[tuple[str, str]]:
 
 def selected_queries(block: str, queries: set[str]) -> set[str]:
     """The queries of the file that every `query` matcher in one selector's label
-    block selects (all of =, !=, =~, !~ apply, as in PromQL)."""
+    block selects (all of =, !=, =~, !~ apply, as in PromQL). Only this runtime
+    expansion reads the negative matchers; query_label_findings checks = and =~."""
     keep = set(queries)
     for op, value in _query_matchers(block):
         try:
@@ -284,6 +291,23 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
         elif interval and _seconds(timeout) >= _seconds(interval):
             out.append(f"{rel}: query {name} timeout {_seconds(timeout):g}s is not below "
                        f"its interval {_seconds(interval):g}s")
+    # The query the presence check names is the liveness query: each tick queues
+    # the queries in file order and a timeout counts from the queueing, so it
+    # must come first and outwait any other query that still holds the
+    # connection, or a hung query makes a live database read as down.
+    qspecs = doc.get("queries") or {}
+    live = {v for text in _presence_selectors(pack)
+            for op, v in _query_matchers(text) if op == "=" and v in qspecs}
+    for name in sorted(live):
+        if next(iter(qspecs)) != name:
+            out.append(f"{rel}: liveness query {name} is not the first query — a hung "
+                       "query queued before it makes it time out")
+        mine = _seconds((qspecs[name] or {}).get("timeout") or 0)
+        for other, spec in qspecs.items():
+            theirs = (spec or {}).get("timeout")
+            if other != name and theirs and _seconds(theirs) >= mine:
+                out.append(f"{rel}: liveness query {name} timeout {mine:g}s does not "
+                           f"exceed {other}'s {_seconds(theirs):g}s")
     served = served_names(queries, doc)
     raw, _records, exprs = pack_rules(rule_pack)
     for m in sorted(raw - served):
@@ -363,7 +387,8 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
     names = set(doc.get("queries") or {})
     wanted: set[tuple[str, str]] = set()
     for text in exprs + _presence_selectors(pack):
-        for metric, block in _BUILTIN_SELECTOR.findall(text):
+        for m in _BUILTIN_SELECTOR.finditer(text):
+            metric, block = m.group(1), m.group(2)
             wanted |= {(metric, q) for q in selected_queries(block, names)}
     have = {(n, lb.get("query")) for n, lb, _v in samples}
     for metric, q in sorted(wanted - have):
