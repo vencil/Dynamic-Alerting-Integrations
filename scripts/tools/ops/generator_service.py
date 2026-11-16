@@ -1311,17 +1311,17 @@ class Service:
         # No await between the fork and this: _reap_orphans (a SIGCHLD
         # callback on this loop) cannot have collected it.
         self._held_pids.add(proc.pid)
-        try:
-            pidfd = os.pidfd_open(proc.pid)
-        except OSError:
-            _kill_group(proc.pid)
-            proc.wait()  # no pidfd to wait on: killed, so it ends
-            self._held_pids.discard(proc.pid)
-            raise
-        exited = self.loop.create_future()
-        self.loop.add_reader(pidfd, lambda: exited.done() or exited.set_result(None))
+        pidfd = -1
+        watched = False  # its exit is a reader on this loop
         timed_out = False
         try:
+            # inside the try: a pidfd_open or add_reader that fails (EMFILE,
+            # epoll's ENOSPC / ENOMEM) still kills, collects and lets go of
+            # the process below — the caller records the round's reason
+            pidfd = os.pidfd_open(proc.pid)
+            exited = self.loop.create_future()
+            self.loop.add_reader(pidfd, lambda: exited.done() or exited.set_result(None))
+            watched = True
             try:
                 # shielded: the time limit ends the wait, not the future the
                 # kill's end is awaited on below
@@ -1332,11 +1332,18 @@ class Service:
         finally:
             _kill_group(proc.pid)  # #3923: before it is collected
             try:
-                await exited  # the same pidfd: the loop serves until it has ended
+                if watched:
+                    await exited  # the same pidfd: the loop serves until it has ended
             finally:
-                self.loop.remove_reader(pidfd)
-                os.close(pidfd)
-                proc.wait()  # it has ended: this collects it without waiting
+                if watched:
+                    self.loop.remove_reader(pidfd)
+                if pidfd >= 0:
+                    os.close(pidfd)
+                # it has ended: this collects it without waiting. Unwatched
+                # (no pidfd or no reader, a rare failure) it was just
+                # SIGKILLed and is waited for here — long only in an
+                # uninterruptible sleep.
+                proc.wait()
                 self._held_pids.discard(proc.pid)
                 self._reap_orphans()  # what was held back behind it
         with open(out_path, "rb") as fh:

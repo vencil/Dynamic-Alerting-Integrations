@@ -956,6 +956,65 @@ def test_a_probe_failure_of_the_service_s_own_is_no_unreadable_repo(where, errno
     assert asyncio.run(gs.Service._repo_probe(svc)) == want
 
 
+@pytest.mark.parametrize("which", ["program", "probe"])
+def test_a_reader_that_cannot_be_added_leaves_no_process_or_descriptor(
+        tmp_path, monkeypatch, which):
+    """#3903: `_run_held` cannot watch the process's exit — `add_reader`
+    fails (epoll's ENOSPC): the process is still killed and collected, its
+    pidfd closed, its pid let go, and the round's reason is
+    ``internal_error`` — nothing leaks, nothing escapes."""
+    import errno
+    import os
+    import shutil
+    import subprocess
+    import uuid
+    if not hasattr(os, "pidfd_open"):
+        pytest.skip("pidfd_open: Linux only")
+    mark = f"300.{uuid.uuid4().int % 10**9:09d}"  # this test's sleep, by its argument
+    sleep = shutil.which("sleep") or "/bin/sleep"
+    git = tmp_path / "git"  # the probe's git: one that would hang
+    git.write_text(f"#!/bin/sh\nexec '{sleep}' '{mark}'\n", encoding="utf-8")
+    git.chmod(0o755)
+    import _gsvc_child
+    # what start-up's first run of --git would have kept: not asked again
+    monkeypatch.setitem(_gsvc_child._LOCAL_ENV_VARS, str(git), frozenset({"GIT_DIR"}))
+    svc = _FakeService(delay=0)
+    svc.s.work_dir = str(tmp_path / "work")
+    os.makedirs(gs._jobs_dir(svc.s.work_dir))
+    svc.s.memory_limit_bytes = gs.DEFAULT_MEMORY_LIMIT_BYTES
+    svc.s.git, svc.s.repo = str(git), str(tmp_path)
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(*a, **kw):
+        proc = real_popen(*a, **kw)
+        started.append(proc.pid)
+        return proc
+
+    def no_reader(fd, *a):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def fds() -> int:
+        return len(os.listdir("/proc/self/fd"))
+
+    async def main():
+        svc.loop = asyncio.get_running_loop()
+        svc.loop.add_reader = no_reader
+        before = fds()
+        if which == "program":
+            reason = await svc._self_check_one("da-read", sleep, (mark,))
+        else:
+            reason = await gs.Service._repo_probe(svc)
+        return reason, fds() - before
+
+    monkeypatch.setattr(gs.subprocess, "Popen", popen)
+    reason, delta = asyncio.run(main())
+    assert reason == "internal_error"
+    assert delta == 0 and svc._held_pids == set()
+    assert len(started) == 1
+    assert not os.path.exists(f"/proc/{started[0]}"), "the process was not collected"
+
+
 @pytest.mark.parametrize("branch", ["initial", "another"])
 def test_a_branch_with_no_commit_yet_starts_unchecked(tmp_path, monkeypatch, capsys, branch):
     """`git init` and nothing committed — or HEAD switched to a branch with
