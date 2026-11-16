@@ -73,11 +73,14 @@ from _lib_prometheus import QueryError, finite_row_samples, prometheus_instant  
 # (`da-guard effective`); the #1231 spellings from `da-guard key-spellings`.
 from _lib_parse_tree import KeySpellings  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
+    KeySchedule,
     KeySource,
+    NotServedKey,
+    UngatheredPart,
     exit_on_served_values_error,
     key_spellings,
-    load_effective,
-    load_served_tree,
+    load_effective_tree,
+    load_served_schedules,
     print_load_warnings,
 )
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
@@ -240,6 +243,11 @@ class KeyRecommendation:
     source_layer: str = "tenant"
     source_file: str = ""
     canonical_key: str = ""
+    # #3990: the value the recommendation was computed relative to — what
+    # /metrics serves for the key over the whole day (served-values
+    # --schedules-only); `current_value` stays as written. None when the key
+    # was not compared.
+    served_value: Optional[float] = None
 
 
 @dataclass
@@ -884,6 +892,9 @@ def analyze_tenant(
     key_sources: Optional[dict[str, KeySource]] = None,
     spellings: Optional[KeySpellings] = None,
     source_file: str = "",
+    not_served: Optional[dict[str, NotServedKey]] = None,
+    served_day: Optional[dict[str, KeySchedule]] = None,
+    ungathered: "tuple[UngatheredPart, ...]" = (),
 ) -> TenantRecommendation:
     """Analyze one tenant and generate threshold recommendations.
 
@@ -915,6 +926,14 @@ def analyze_tenant(
         spellings: `key_spellings` answers covering this tenant's keys; None
             asks da-guard for them.
         source_file: the tenant's own file, relative to the config dir.
+        not_served: `da-guard effective`'s `not_served` for the tenant:
+            named in the reason of a key served at no minute (#3990).
+        served_day: the tenant's schedules (`load_served_schedules`): a
+            tenant-own key is compared relative to what /metrics serves for
+            it over the whole day (`_served_current`), never to its written
+            text. None compares the written value (a caller without them).
+        ungathered: the parts of the day /metrics cannot be gathered in
+            (`ServedSchedules.ungathered`), named in that reason too.
 
     Returns:
         TenantRecommendation with per-key results.
@@ -941,12 +960,17 @@ def analyze_tenant(
                 source_layer=layer, source_file=src.file if src is not None else "",
                 canonical_key=canonical if canonical != key else ""))
             continue
+        served = None
+        if served_day is not None and not _is_disable_word(current_value):
+            name = _served_name(key, spellings)
+            served = _served_current(name, current_value, served_day.get(name),
+                                     (not_served or {}).get(key), ungathered)
         rec = _recommend_key(
             tenant_name, key, current_value,
             observed_map.get(canonical),
             prometheus_url=prometheus_url, lookback=lookback,
             min_samples=min_samples,
-            dry_run=dry_run,
+            dry_run=dry_run, served=served,
         )
         rec.source_file = src.file if src is not None else source_file
         rec.canonical_key = canonical if canonical != key else ""
@@ -968,6 +992,61 @@ _INHERITED_REASON = ("inherited — listed only, not queried: change it in the f
                      "owns it")
 
 
+
+def _served_name(key: str, spellings: KeySpellings) -> str:
+    """The name served-values keys `key`'s schedule by: the base in the
+    exporter's canonical spelling (#1231, asked of da-guard), the dimension
+    part as written."""
+    base, sep, rest = key.partition("{")
+    return spellings.canonical(base) + sep + rest
+
+
+def _served_current(
+    name: str, written: Any, schedule: Optional[KeySchedule], unserved: Optional[NotServedKey],
+    ungathered: "tuple[UngatheredPart, ...]",
+) -> "tuple[Optional[float], str]":
+    """The value a tenant-own key is compared at, as the exporter serves it
+    over the whole UTC day (`da-guard served-values --schedules-only`,
+    #3990), or why there is none to recommend relative to — (None, why).
+
+    One value: every served part of the day serves the same value at the
+    same severity, the key's own tier (`<key>_critical` critical, else
+    warning; a `"70:critical"` written on a warning key is served at the
+    other tier). A part serving nothing (a base switched off for a while, a
+    part /metrics cannot be gathered in) does not count: the written value
+    is the same there. Not recommended relative to: a value written as a
+    schedule (the patch writes one flat value back, which would drop its
+    windows), one with `expires:` (the served value turns at the expiry
+    instant, and a flat value written back would never expire), more than
+    one value or severity over the day, a key served at no minute."""
+    if schedule is not None and schedule.expires is not None:
+        return None, (f"time-boxed (expires: {schedule.expires}) — the served value turns at the "
+                      "expiry, and a flat value written back would never expire")
+    if isinstance(written, (dict, list)):
+        return None, ("written as a schedule — a recommendation would be written back as one "
+                      "flat value and drop its windows")
+    served = [] if schedule is None else [seg for seg in schedule.segments if seg.value is not None]
+    if not served:
+        why = "served at no minute of the UTC day"
+        if unserved is not None:
+            why += f" ({unserved.reason}, {unserved.file})"
+        if ungathered:
+            why += ("; /metrics cannot be gathered "
+                    + ", ".join(f"{p.start}-{p.end} UTC" for p in ungathered[:3])
+                    + (f" (+{len(ungathered) - 3} more)" if len(ungathered) > 3 else ""))
+        return None, why
+    pairs = sorted({(seg.value, seg.severity) for seg in served}, key=str)
+    if len(pairs) > 1:
+        return None, ("served at more than one value or severity over the day: "
+                      + ", ".join(f"{v:g} {sev}" for v, sev in pairs))
+    value, severity = pairs[0]
+    tier = "critical" if name.partition("{")[0].endswith("_critical") else "warning"
+    if severity != tier:
+        return None, (f"served at severity {severity}, not its tier ({tier}) — the {tier} alert "
+                      "does not compare it")
+    return value, ""
+
+
 def _recommend_key(
     tenant_name: str,
     key: str,
@@ -978,9 +1057,14 @@ def _recommend_key(
     lookback: str,
     min_samples: int,
     dry_run: bool,
+    served: "Optional[tuple[Optional[float], str]]" = None,
 ) -> KeyRecommendation:
     """One key's recommendation (`entry` is its observed-map entry, None when
-    unmapped)."""
+    unmapped). `served` is `_served_current`'s answer (#3990): the value the
+    recommendation is computed relative to — `current_value` stays the
+    written one, for the reader — or why there is none, which routes the
+    key to manual review unqueried. None: `current_value` is compared as
+    written (a switched-off key, which is skipped)."""
     # #719: resolve the observed-workload series this threshold is compared
     # against. fail-loud skip when there is no usable mapping.
     if entry is None:
@@ -998,6 +1082,14 @@ def _recommend_key(
         )
     promql = build_metric_query(observed_series, tenant_name, lookback)
 
+    compared = current_value
+    if served is not None:
+        compared, why = served
+        if compared is None:
+            return KeyRecommendation(key=key, current_value=current_value,
+                                     reason=f"manual review: {why}",
+                                     force_manual=True, guardrail_reason=why)
+
     if dry_run:
         return KeyRecommendation(
             key=key,
@@ -1006,10 +1098,12 @@ def _recommend_key(
             promql=promql,
         )
 
-    rec = _query_key(key, current_value, entry, promql,
+    rec = _query_key(key, compared, entry, promql,
                      prometheus_url=prometheus_url, min_samples=min_samples)
     rec.promql = promql
     rec.queried = True
+    if served is not None:
+        rec.current_value, rec.served_value = current_value, compared
     return rec
 
 
@@ -1105,11 +1199,16 @@ def run_analysis(
     owns each key are `da-guard effective`'s (#2116): the config as tenant-api's
     /effective resolves it, so a key a tenant inherits is seen, and is told
     apart from a key its own file writes. A retired #1231 spelling is put
-    in the canonical one by `da-guard key-spellings` (#3556). `da-guard
-    served-values` runs first: its stderr and the files it serves no tenant
-    from are printed to stderr (`print_load_warnings`). A tree served-values
-    refuses (e.g. the root `defaults:` and a tenant both writing an
-    `X_critical` key, deferred under #2115) therefore fails this tool too.
+    in the canonical one by `da-guard key-spellings` (#3556). The same run's
+    stderr and the files it takes no tenant from are printed to stderr
+    (`print_load_warnings`). Each tenant-own key is compared relative to
+    what /metrics serves for it over the whole UTC day (`da-guard
+    served-values --schedules-only`, `_served_current`, #3990), never to its
+    written text, and nothing is read at the run's instant: the time of day
+    the tool runs at changes nothing. A tree whose /metrics cannot be
+    gathered is not refused here — the main gate does
+    (`metrics_not_gatherable`); its keys go to manual review, naming the
+    parts of the day.
 
     Args:
         config_dir: Path to tenant config directory.
@@ -1123,16 +1222,15 @@ def run_analysis(
         List of TenantRecommendation.
 
     Raises:
-        What `load_effective` / `load_served_tree` raise (da-guard missing,
-        failing, or a file the exporter cannot load): fail-closed.
+        What `load_effective_tree` raises (da-guard missing, failing, or a
+        file the exporter cannot load): fail-closed.
     """
-    # served-values first, for its load warnings. On a file the load cannot
-    # decode, both subcommands' stderr carry the exporter's parse reason
-    # (`da-guard effective` too since #2115), so the order does not decide
-    # which reason is shown.
-    tree = load_served_tree(config_dir)
+    tree = load_effective_tree(config_dir)
     print_load_warnings(tree)
-    effective = load_effective(config_dir)
+    effective = tree.tenants
+    # What /metrics serves over the whole day (#3990): nothing read at the
+    # run's instant but `expires:`, which `_served_current` routes to review.
+    day = load_served_schedules(config_dir)
 
     # Load the observed-map once and share across tenants (#719) — before the
     # tenant filter, so an unusable map is an error even when no tenant
@@ -1159,6 +1257,9 @@ def run_analysis(
             dry_run=dry_run,
             observed_map=observed_map,
             key_sources=eff.key_sources,
+            not_served=eff.not_served,
+            served_day=day.tenants.get(tenant_name, {}),
+            ungathered=day.ungathered,
             spellings=spellings,
             source_file=eff.source_file,
         )

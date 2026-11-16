@@ -392,7 +392,7 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # file is named and the rc is 2, but the cause is the exporter's verdict.
 # #2115 0-B: policy_engine's tenants and policy_opa_bridge's whole tree too
 # (policy_engine's own `_policies` read of `_defaults.yaml` stays Python's).
-# #2116: threshold_recommend reads served-values (then effective) too.
+# #2116: threshold_recommend reads served-values too (#3990: `--schedules-only`).
 # ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
 _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
                     "gen_tenant_mapping mapping", "gen_tenant_mapping tenant"}
@@ -753,7 +753,9 @@ def test_scan_sees_the_known_population():
         # `da-read prometheus-rules`, their manifests by da-crdecode.
         "policy_engine.py", "policy_opa_bridge.py",
         "blind_spot_discovery.py",
-        "threshold_recommend.py",
+        # threshold_recommend.py left with #3990: it reads served-values
+        # through `load_served_schedules` and `da-guard effective`, neither a
+        # root this scan names; its row above pins the refusal.
         # config_diff.py left with ADR-037: it compares what da-guard and the
         # route generator render; its row above pins the refusal.
     }
