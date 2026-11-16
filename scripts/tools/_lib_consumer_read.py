@@ -89,7 +89,6 @@ import json
 import os
 import pathlib
 import shutil
-import stat
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -104,6 +103,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from _lib_input import _list  # noqa: E402  ⛔ the one directory listing (#3446)
+from _lib_paths import NotRegularFile, open_regular  # noqa: E402  (#4015)
 import _lib_tool_fault  # noqa: E402  (#3862: where "this reader did not run" is recorded)
 
 CRDECODE_BINARY_NAME = "da-crdecode"
@@ -439,19 +439,31 @@ def _unopenable(path: str) -> "str | None":
     system's reason (``os.strerror``), or ``NOT_REGULAR`` — no other text
     (ADR-036: no text of the input).
 
-    ⛔ Anything but a regular file is refused before it is opened: opening a
-    FIFO blocks until a writer comes, and a device such as ``/dev/zero``
-    never reads to EOF — neither is under the Go program's timeout, since
-    this read happens before the program runs."""
+    ⛔ Judged and opened by ``_lib_paths.open_regular``: anything but a
+    regular file is refused unopened — a FIFO would block the open until a
+    writer comes, and a device such as ``/dev/zero`` never reads to EOF,
+    neither under the Go program's timeout, since this read happens before
+    the program runs. The fd read is the fd judged. A path replaced by a
+    socket or a device between the stat and the open is reported by the
+    open's errno (``CANNOT_OPEN``), never blocked on."""
     try:
-        if not stat.S_ISREG(os.stat(path).st_mode):
-            return NOT_REGULAR
-        with open(path, "rb") as fh:
-            while fh.read(1 << 20):
-                pass
+        fd = open_regular(path)
+    except NotRegularFile:
+        return NOT_REGULAR
     except OSError as e:
-        return f"{CANNOT_OPEN}: {os.strerror(e.errno) if e.errno else type(e).__name__}"
+        return _cannot_open(e)
+    try:
+        while os.read(fd, 1 << 20):
+            pass
+    except OSError as e:
+        return _cannot_open(e)
+    finally:
+        os.close(fd)
     return None
+
+
+def _cannot_open(e: OSError) -> str:
+    return f"{CANNOT_OPEN}: {os.strerror(e.errno) if e.errno else type(e).__name__}"
 
 
 class _Unopenable(InputRefused):

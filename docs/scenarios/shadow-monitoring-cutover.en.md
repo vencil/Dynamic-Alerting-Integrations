@@ -116,7 +116,7 @@ New and old rules are deemed "behaviorally equivalent" when:
 ```bash
 # validate_migration.py auto-detects and generates cutover-readiness.json
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 5
@@ -140,7 +140,7 @@ Pass `--tolerance` to `validate_migration.py`:
 
 ```bash
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch \
   --tolerance 0.01  # 1% tolerance
@@ -199,7 +199,7 @@ python3 scripts/tools/ops/validate_config.py \
 python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
   --tenant db-a --output-dir migration_output/
 # Output (migration_output/):
-#   - platform-recording-rules.yaml, platform-alert-rules.yaml
+#   - .migration/platform-recording-rules.yaml, .migration/platform-alert-rules.yaml
 #     (new rules; the alert rules carry the migration_status: shadow label)
 #   - .conf.d/_defaults.yaml (merge its defaults: block into the conf.d root _defaults.yaml first,
 #     merging rather than overwriting the whole file; the exporter only emits declared
@@ -209,7 +209,7 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 #     <key>_critical cannot go in defaults, so every tenant that wants the critical tier
 #     writes it into its own conf.d file; a legacy rule that only had a critical tier is
 #     the exception: it reads the base row, already in _defaults.yaml)
-#   - prefix-mapping.yaml (comparison pairs for validate_migration in Phase 3)
+#   - .migration/prefix-mapping.yaml (comparison pairs for validate_migration in Phase 3)
 #   - migration-report.txt, triage-report.csv (conversion reports)
 # There is no "only these tenants" option; to keep a tenant from getting this alert, set
 # the key to "disable" in that tenant's file.
@@ -236,7 +236,7 @@ kubectl rollout restart deployment alertmanager -n monitoring
 ```bash
 # 3.1 Start parallel validation
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032 \
   --auto-detect-convergence --stability-window 7 \
@@ -457,7 +457,7 @@ To accept higher risk and speed up validation:
 ```bash
 # Relax tolerance to 5%, declare convergence at 3 consecutive zero-mismatch rounds
 python3 scripts/tools/ops/validate_migration.py \
-  --mapping migration_output/prefix-mapping.yaml \
+  --mapping migration_output/.migration/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 288 \
   --auto-detect-convergence --stability-window 3 \

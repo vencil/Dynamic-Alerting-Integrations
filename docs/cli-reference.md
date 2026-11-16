@@ -472,7 +472,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 選擇一種模式：
 
 1. **Mapping 模式**：`--mapping <file>`
-   讀 `da-tools migrate` 在輸出目錄產生的 `prefix-mapping.yaml`，不接受 CSV（餵 CSV、或內容不是合法 YAML、頂層不是 mapping 時，結束碼 2，stderr 一行點名 `--mapping` 與路徑，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)；先前是 traceback）。檔案長這樣（實跑 `migrate` 取得）：
+   讀 `da-tools migrate` 在輸出目錄的 `.migration/` 下產生的 `prefix-mapping.yaml`，不接受 CSV（餵 CSV、或內容不是合法 YAML、頂層不是 mapping 時，結束碼 2，stderr 一行點名 `--mapping` 與路徑，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)；先前是 traceback）。檔案長這樣（實跑 `migrate` 取得）：
    ```yaml
    custom_mysql_global_status_threads_connected:
      original_metric: mysql_global_status_threads_connected
@@ -514,9 +514,9 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 **範例**
 
 ```bash
-da-tools validate --mapping migration_output/prefix-mapping.yaml
-da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --interval 60 --rounds 1440
-da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
+da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml
+da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --interval 60 --rounds 1440
+da-tools validate --mapping migration_output/.migration/prefix-mapping.yaml --watch --auto-detect-convergence -o ./validation_output
 ```
 
 **結束碼**
@@ -807,7 +807,7 @@ da-tools shadow-verify <phase> [options]
 **範例**
 
 ```bash
-da-tools shadow-verify preflight --mapping migration_output/prefix-mapping.yaml
+da-tools shadow-verify preflight --mapping migration_output/.migration/prefix-mapping.yaml
 da-tools shadow-verify runtime --report-csv validation_output/validation-report.csv
 da-tools shadow-verify convergence --report-csv validation_output/validation-report.csv --readiness-json validation_output/cutover-readiness.json
 da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
@@ -2291,12 +2291,12 @@ da-tools migrate <input_file> [options]
 
 **標準模式**：
 
-- `migration_output/.conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）。目錄刻意以 `.` 開頭：`-o` 落在服務中的 conf.d 裡（指向它，或在它裡面用預設 `-o`）時，每個讀取端都會略過點開頭的目錄，草稿租戶不會被服務；但規則檔、mapping 與報告仍寫在 `-o` 根，會讓那棵樹的 schema 檢查轉紅，所以 `-o` 不要指向服務中的樹。要驗這兩個檔，把 `.conf.d/` 本身當 `--config-dir`
-- `migration_output/platform-recording-rules.yaml` — Recording rules
-- `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
+- `migration_output/.conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）。目錄刻意以 `.` 開頭：`-o` 落在服務中的 conf.d 裡（指向它，或在它裡面用預設 `-o`）時，每個讀取端都會略過點開頭的目錄，草稿租戶不會被服務。規則檔與 mapping 同理寫在 `.migration/`（[#3997](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3997)），不論服務的根在 `-o` 的哪一層都不會被讀成設定檔；報告與 CSV 不是 YAML，留在 `-o` 根，沒有讀取端讀。要驗這兩個檔，把 `.conf.d/` 本身當 `--config-dir`
+- `migration_output/.migration/platform-recording-rules.yaml` — Recording rules
+- `migration_output/.migration/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
-- `migration_output/prefix-mapping.yaml` — Metric 前綴對應表
+- `migration_output/.migration/prefix-mapping.yaml` — Metric 前綴對應表
 - `migration_output/.conf.d/_defaults.yaml` — 要合併進 conf.d 根 `_defaults.yaml` 的 `defaults:` 區塊（合併，不要整份覆蓋；先前叫 `defaults-snippet.yaml`）。threshold-exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
 
 **Triage 模式**：
