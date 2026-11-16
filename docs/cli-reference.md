@@ -2147,6 +2147,8 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | `--max-result-bytes <BYTES>` | 判定子程序可送回的結果大小上限 | `16777216` |
 | `--max-writes <N>` | 單一請求的寫入筆數上限；超過回 400 | `10000` |
 | `--warm-seconds <SEC>` | 一次預熱的時間上限；有請求進來時預熱立刻結束 | `300.0` |
+| `--self-check-seconds <SEC>` | 三支程式的自檢沒過之後，到下一輪的等待（新的工具故障會立刻跑一輪）；只有通過的自檢讓服務回到就緒 | `30.0` |
+| `--self-check-timeout-seconds <SEC>` | 一支程式自檢的時間上限；超過算失敗（`timed_out`） | `60.0` |
 | `--git <PATH>` | git 執行檔 | `git` |
 | `--da-guard-binary <PATH>` | 用來回報版本的 da-guard | `$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard` |
 
@@ -2155,10 +2157,12 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | 端點 | 回應 |
 |------|------|
 | `POST /v1/validate` | body：`base_commit`（完整 hex commit id）、`writes`（`{path, content_b64}` 或 `{path, delete: true}`，路徑相對 conf.d）、`deadline_ms`（呼叫端剩餘時間）。有判定結果時一律 200：`result` 為 `pass`（產生器結束碼 0）、`findings`（非 0）或 `rejected`（只拒收這一筆，`reason` 為 `deadline`、`memory`、`incomplete`、`git_read`、`busy`；`busy` 也用在同時連線或讀取中、排隊中的 body 總量已滿時，此時 body 不會被讀）；另帶 `rc`、`findings`（產生器 `--findings-json` 的文件）、`validated`（`base_commit`、每個寫入檔的 sha256、部署端 policy 檔的 sha256）；`pass` 時另帶 `key_verdict`（見下方「鍵的判決」）。請求格式錯誤 400，寫入路徑與 base 樹衝突（上層在 base 樹裡是檔案或 symlink、要寫的路徑是目錄）也是 400。容器無法判定時 503：`VALIDATOR_UNAVAILABLE`（`reason`：`tool_fault`——判定要跑的外部程式 da-guard、da-read、da-crdecode 有一支沒跑成，找不到、無法執行、逾時、被訊號終止（因記憶體上限由 Go 執行期自己結束的除外——它的當機訊號，或啟動時就拿不到記憶體、以結束碼 2 加它自己的 out-of-memory 訊息結束——那是 `rejected`／`memory`）、結束碼或輸出不在它的契約內、版本過舊；回應另帶結構化的 `tool_fault`（程式、子指令、原因），不帶路徑或程式的 stderr——、`generator_too_old`、`internal_error`）、`POLICY_UNAVAILABLE`（部署端 policy 檔不可用）。回應不帶自由文字（沒有 `message`、`stderr_tail`，[#3961](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3961)）：細節只寫進服務自己的 log；400、404 等只有 `error`。 |
-| `GET /v1/status` | 部署端 policy 檔是否可用（含 sha256、錯誤、`min_generator_version`）、產生器與 da-guard 版本、最近一次判定的工具故障（`tool_fault`：null，或 `{binary, subcommand, reason}` 的清單；只有下一次跑完全程的判定清掉它，`rejected` 與 400 不清）、`ready`（policy 可用、產生器不過舊、且 `tool_fault` 為 null） |
+| `GET /v1/status` | 部署端 policy 檔是否可用（含 sha256、錯誤、`min_generator_version`）、產生器與 da-guard 版本、三支程式的自檢（`self_check`：`state` 為 `pending`、`passed`、`failed`，`failures` 為 `{binary, reason}` 的清單，`running` 表示有一輪正在跑）、判定或預熱留下的工具故障（`tool_fault`：null，或 `{binary, subcommand, reason}` 的清單；只有通過的自檢清掉它，跑完全程的判定、`rejected` 與 400 都不清）、`ready`（policy 可用、產生器不過舊、自檢最近一次通過，且 `tool_fault` 為 null） |
 | `GET /metrics` | Prometheus 文字格式：快取大小（`pinned` 區分最新 base 樹裡的檔）、最近一次判定的峰值記憶體與子程序記憶體上限、各結果與各拒收原因的計數、佇列長度、版本 |
 
 每次判定在 fork 出的子程序裡做（自成 process group、設 `RLIMIT_DATA`，期限到時整組結束），一次只跑一個，其餘排隊；排隊時間算在期限內。conf.d 檔的解析結果以（檔案內容的 SHA-256, 解析模式）為 key 跨請求快取，同一棵樹只改一個檔時只重新解析那個檔。子程序每解析完一份檔就把結果交回，所以期限到被結束的判定，已完成的解析仍留在快取裡，下一筆接著做。
+
+**自檢與就緒**：服務綁定 socket 之後立刻（第一輪跑完前 `state` 為 `pending`、`ready` 為 false），以判定所用的同一套方式找到 da-guard、da-read、da-crdecode，各跑一次它們內建的自檢（`da-guard self-check`、`da-read self-check`、`da-crdecode --self-check`：用打包在程式裡的樣本把分派表裡的每一個子指令或讀法跑一遍、比對預期輸出）。只有結束碼 0 且標準輸出恰好是 `{"self_check":"passed"}` 才算通過；`failures` 的 `reason` 為 `not_found`、`not_executable`、`exec_failed`、`timed_out`、`signalled`、`unexpected_exit`、`bad_output`、`failed`（程式印出 `{"self_check":"failed"}`：有樣本的答案不符）或 `internal_error`，程式的 stderr 只寫進服務的 log。判定或預熱出現工具故障時立刻未就緒並立刻跑一輪自檢；沒過就每隔 `--self-check-seconds` 再跑（等待中來了新故障就立刻再跑），直到通過才清掉故障。自檢寫的每個檔案上限 1 MiB。自檢一支接一支跑、受與判定相同的記憶體上限（`--memory-limit-bytes`），而且不與判定或預熱同時跑：期間到的請求排隊，最多等一輪自檢。自檢只影響 `ready`，不影響判定結果。`/metrics` 的 `da_generator_self_checks_total{result}`（`passed`、`failed`）計自檢的輪數。
 
 **預熱**：啟動時（`--warm-ref`）以及收到與目前 base 不同的 `base_commit` 之後，服務在請求之外以同樣的子程序讀一次該 commit 的整棵樹，只為了填快取，不給判定、不問 Alertmanager；有自己的期限（`--warm-seconds`）。有請求進來時預熱立刻結束、讓請求先跑，已讀完的部分保留。`/metrics` 的 `da_generator_warm_runs_total{outcome}`（`completed`、`preempted`、`deadline`、`failed`）與 `da_generator_cache_base_coverage_ratio`（最新 base 樹的檔有多少比例已在快取裡；狀態端點同樣回報）可看預熱的狀況。
 

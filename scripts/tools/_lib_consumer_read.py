@@ -135,6 +135,25 @@ READER_BUILD_SOURCES: "dict[str, tuple[str, str, str]]" = {
 }
 
 
+#: Each reader binary's self-check (#3943), keyed by its variable: the
+#: arguments that run it. Each runs every subcommand (da-crdecode: every
+#: reading) of its own dispatch table on a fixture built into it and compares
+#: the answers with those built in. da-crdecode's is a flag, as its
+#: ``--any-shape`` is: a bare word there is a file.
+READER_SELF_CHECK_ARGS: "dict[str, tuple[str, ...]]" = {
+    DA_GUARD_ENV: ("self-check",),
+    DA_READ_ENV: ("self-check",),
+    CRDECODE_ENV: ("--self-check",),
+}
+#: A self-check's whole stdout: exactly the first on exit 0 (passed), the
+#: second on exit 1 (a fixture's answer was not the one built in). The Go
+#: copies are ``selfCheckKey`` / ``selfCheckPassed`` / ``selfCheckFailed``
+#: in each binary's selfcheck.go; tests/shared/test_reader_self_check.py
+#: runs the real binaries against these bytes.
+SELF_CHECK_PASSED = b'{"self_check":"passed"}\n'
+SELF_CHECK_FAILED = b'{"self_check":"failed"}\n'
+
+
 def absolute_reader_binaries(environ: "dict[str, str] | None" = None, *,
                             pin_path_hits: bool = False) -> None:
     """Make each variable of ``READER_BINARY_ENVS`` in *environ* (default:

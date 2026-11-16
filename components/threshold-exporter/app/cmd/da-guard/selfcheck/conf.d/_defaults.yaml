@@ -1,0 +1,3 @@
+defaults:
+  mysql_connection_usage_percent: 80
+  mysql_slave_lag: 30

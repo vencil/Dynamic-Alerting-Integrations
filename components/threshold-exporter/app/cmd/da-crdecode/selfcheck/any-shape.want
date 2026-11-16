@@ -1,0 +1,1 @@
+{"documents":[{"groups":[{"name":"self-check","rules":[{"alert":"A","expr":"up == 0","labels":{"severity":true,"false":15}}]}]}],"differs_from_text":[[{"kind":"keys","path":["groups",0,"rules",0,"labels"],"read_keys":["false"],"written_keys":["n"]}]],"reading":"any-shape"}

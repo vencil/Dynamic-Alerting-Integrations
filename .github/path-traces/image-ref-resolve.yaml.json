@@ -22,6 +22,7 @@
         "scripts/tools/_lib_prometheus.py",
         "scripts/tools/_lib_python.py",
         "scripts/tools/_lib_registry.py",
+        "scripts/tools/_lib_tool_fault.py",
         "scripts/tools/_lib_validation.py",
         "scripts/tools/_lib_write_check.py",
         "scripts/tools/ops/_registry_lib.py",
@@ -34,6 +35,10 @@
           "package": "./cmd/da-crdecode",
           "sources": [
             "components/threshold-exporter/app/cmd/da-crdecode/*.go",
+            "components/threshold-exporter/app/cmd/da-crdecode/selfcheck/any-shape.input",
+            "components/threshold-exporter/app/cmd/da-crdecode/selfcheck/any-shape.want",
+            "components/threshold-exporter/app/cmd/da-crdecode/selfcheck/manifest.input",
+            "components/threshold-exporter/app/cmd/da-crdecode/selfcheck/manifest.want",
             "components/threshold-exporter/app/go.mod",
             "components/threshold-exporter/app/go.sum",
             "components/threshold-exporter/app/third_party/yaml.v3/*.go",
