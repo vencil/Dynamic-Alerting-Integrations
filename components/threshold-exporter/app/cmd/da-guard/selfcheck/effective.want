@@ -92,5 +92,65 @@
     }
   },
   "root_defaults_refused": [],
-  "root_defaults_reserved": []
+  "root_defaults_reserved": [],
+  "builtin_defaults": {
+    "digest": "63343e1d88e9",
+    "keys": {
+      "container_cpu": {
+        "value": 80,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "container_cpu_throttle": {
+        "value": 25,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "container_memory": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "es_disk_usage_percent": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "es_heap_usage_percent": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "mysql_connection_usage_percent": {
+        "value": 80,
+        "state": "overridden",
+        "root_value": 80
+      },
+      "mysql_replication_lag": {
+        "value": 30,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "oracle_tablespace_used_percent": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "pg_connections": {
+        "value": 80,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "pg_replication_lag": {
+        "value": 30,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "rabbitmq_node_mem_percent": {
+        "value": 90,
+        "state": "builtin",
+        "tenants": 1
+      }
+    }
+  }
 }
