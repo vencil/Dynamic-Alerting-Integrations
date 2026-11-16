@@ -234,7 +234,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 | `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 8A |
 | `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 8A |
 | `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 8R + 6A |
-| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 14R + 10A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 16R + 12A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 8A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 7A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 54A |

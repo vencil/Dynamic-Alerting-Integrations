@@ -30,14 +30,14 @@ parent: architecture-and-design.en.md
 | DB2 | `prometheus-rules-db2` | 15 | 11 |
 | ClickHouse | `prometheus-rules-clickhouse` | 12 | 8 |
 | Kafka | `prometheus-rules-kafka` | 8 | 6 |
-| RabbitMQ | `prometheus-rules-rabbitmq` | 14 | 10 |
+| RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
 | JVM | `prometheus-rules-jvm` | 9 | 8 |
 | Nginx | `prometheus-rules-nginx` | 9 | 7 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **165** | **194** (= **359** rules) |
+| **Total** | | **167** | **196** (= **363** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

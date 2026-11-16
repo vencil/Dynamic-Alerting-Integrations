@@ -433,8 +433,8 @@
       "category": "messaging",
       "exporter": "rabbitmq_exporter",
       "configMap": "prometheus-rules-rabbitmq",
-      "recordingRules": 14,
-      "alertRules": 10,
+      "recordingRules": 16,
+      "alertRules": 12,
       "required": false,
       "defaults": {
         "rabbitmq_queue_messages": {

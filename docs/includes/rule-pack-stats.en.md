@@ -17,6 +17,6 @@
 | oracle | oracledb_exporter | 13 | 10 |
 | platform | threshold-exporter self-monitoring | 0 | 54 |
 | postgresql | postgres_exporter | 8 | 8 |
-| rabbitmq | rabbitmq_exporter | 14 | 10 |
+| rabbitmq | rabbitmq_exporter | 16 | 12 |
 | redis | redis_exporter | 12 | 10 |
-| **Total** | | **165** | **194** |
+| **Total** | | **167** | **196** |
