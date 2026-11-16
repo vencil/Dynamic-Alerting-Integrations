@@ -56,6 +56,48 @@ _DETAIL = {
 }
 
 
+class NotRegularFile(Exception):
+    """`open_regular`: what the path names is not a regular file (a FIFO, a
+    socket, a device, a directory). Deliberately no ``OSError``: a caller's
+    ``except OSError`` must not read it as a system error."""
+
+
+#: Non-blocking where the platform has it: a FIFO swapped in after the stat
+#: then opens at once instead of waiting for a writer. No controlling
+#: terminal, and close-on-exec: the fd is never inherited.
+_OPEN_FLAGS = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0)
+               | getattr(os, "O_CLOEXEC", 0))
+
+
+def open_regular(path: Any) -> int:
+    """A blocking read-only fd of *path* when it is a regular file (a
+    symlink to one included); the caller closes it.
+
+    ⛔ The one place that says what a regular file is and how one is opened
+    (#4015). Anything but a regular file at the stat is never opened:
+    opening a socket fails, ``/dev/ptmx`` allocates a pty, a FIFO waits for
+    a writer. The fd that is opened is then judged again (``fstat``), so a
+    path replaced by a FIFO after the stat is judged as the FIFO, and the
+    non-blocking open does not wait on it. One window is left: replaced by
+    a socket or a device after the stat, the open's own errno is raised
+    (a caller reports it as cannot-open) — an answer, never a block.
+
+    Raises `NotRegularFile` (nothing left open), or the stat's or the
+    open's ``OSError``."""
+    if not stat.S_ISREG(os.stat(path).st_mode):
+        raise NotRegularFile(os.fspath(path))
+    fd = os.open(path, _OPEN_FLAGS)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise NotRegularFile(os.fspath(path))
+        if _OPEN_FLAGS & getattr(os, "O_NONBLOCK", 0):
+            os.set_blocking(fd, True)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def classify_path(path: Any, kind: str, *, lang: str,
                   flag: Optional[str] = None) -> Optional[PathProblem]:
     """None when *path* (given by the caller, via *flag*) is usable as a
@@ -97,10 +139,10 @@ def classify_path(path: Any, kind: str, *, lang: str,
     if kind == "dir" and not stat.S_ISDIR(st.st_mode):
         return PathProblem("dir_not_found", f"{label}: {detail['not_dir']}", False)
     if kind == "file":
-        if not stat.S_ISREG(st.st_mode):
-            return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         try:
-            os.close(os.open(path, os.O_RDONLY))
+            os.close(open_regular(path))
+        except NotRegularFile:  # the one judgement of "regular" (#4015)
+            return PathProblem("file_not_found", f"{label}: {detail['not_regular']}", False)
         except OSError as exc:
             return PathProblem("file_not_accessible",
                                f"{label}: {detail['inaccessible'](exc)}", False)
