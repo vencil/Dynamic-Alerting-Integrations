@@ -339,10 +339,16 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     # already printed and recorded) fail the run with the generator's own.
     # A key verdict line carries a tenant's key name: printed as the first
     # print did (safe_label), never raw (#3016 review).
-    errors = list(verdict.errors) + [safe_label(line) for line in key_blocks or []]
+    errors = list(verdict.errors) + list(key_blocks or [])
     if errors:
-        print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
-        for e in errors:
+        # #3996: every error once. The stream lines (a finding recorded
+        # above, and every key verdict line) were printed where found: the
+        # summary counts them and prints only the ones no stream printed
+        # (the inhibit tripwire).
+        unprinted = [e for e in verdict.errors if id(e) not in recorded]
+        print(f"FAIL: {len(errors)} error(s) found" + (":" if unprinted else " (listed above)"),
+              file=sys.stderr)
+        for e in unprinted:
             print(e, file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
     if verdict.assembly_error is not None:
@@ -1558,7 +1564,7 @@ def _not_read_text(exc: BaseException) -> str:
 
 
 def _report_key_verdict(config_dir: str, findings: list[str],
-                        verdict_out: list | None = None) -> list[str]:
+                        verdict_out: list | None = None, *, gate_reported: bool = True) -> list[str]:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
     ADR-038 §5), under ``--validate``, on stderr. *verdict_out*, given,
     receives the verdict, or the exception that kept it from being given
@@ -1597,6 +1603,11 @@ def _report_key_verdict(config_dir: str, findings: list[str],
         verdict_out.append(verdict)
     lines = []
     for f in verdict.findings:
+        if f.gate_kind is not None and not gate_reported:
+            # #3996: da-guard's own gate reports this fact (its finding
+            # kind is f.gate_kind) in the caller's own row, with the fix:
+            # neither printed nor counted here.
+            continue
         level = ("ERROR" if f.blocks else
                  "NOTICE" if f.severity == _lib_key_verdict.NOTICE else "WARN")
         lines.append(Finding(
@@ -1996,6 +2007,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
                        credential_scope: "frozenset[str] | None" = None,
                        key_blocks: "list[str] | None" = None,
                        key_verdicts: "list | None" = None,
+                       gate_reported: bool = True,
                        ) -> tuple[TenantTree, list[dict], list[dict], list[dict], list[str]]:
     """Scan *config_dir*, refuse what every mode refuses, generate:
     ``(tree, routes, receivers, inhibit_rules, all_warnings)``. Exits where
@@ -2037,7 +2049,8 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
     # nothing to render is judged too.
     key_blocks = [] if key_blocks is None else key_blocks
     if validate and key_verdict:
-        key_blocks.extend(_report_key_verdict(config_dir, findings, key_verdicts))
+        key_blocks.extend(_report_key_verdict(config_dir, findings, key_verdicts,
+                                              gate_reported=gate_reported))
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -2054,10 +2067,10 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
                   + (_policy_errors(schema_warnings) if strict else [])
                   + key_blocks)
         if errors:
-            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
+            # #3996: every one of them is a line printed just above (the
+            # loop) or by the key verdict: counted, not repeated.
+            print(f"FAIL: {len(errors)} error(s) found and nothing to render (listed above)",
                   file=sys.stderr)
-            for e in errors:
-                print(safe_label(e), file=sys.stderr)
             sys.exit(EXIT_VIOLATION)
         if not assembles_file:
             print("No tenants found in config directory.")
@@ -2122,7 +2135,8 @@ def validate_tree(config_dir: str, *, strict: bool = False,
                   key_verdict: bool = True,
                   credential_scope: "frozenset[str] | None" = None,
                   findings: list | None = None,
-                  show_loader_reason: bool = False) -> ValidateOutcome:
+                  show_loader_reason: bool = False,
+                  gate_reported: bool = True) -> ValidateOutcome:
     """The whole ``--validate`` judgement of the tree at *config_dir*.
 
     ``generate-routes --validate`` exits with this function's ``exit_code``
@@ -2132,7 +2146,10 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     *show_loader_reason*: the flags; *policy*: the deployment policy the caller
     resolved (``resolve_policy``; None: not given); *key_verdict*,
     *credential_scope*: ``main``'s; *findings*: the list to record into
-    (``--findings-json``).
+    (``--findings-json``); *gate_reported* False (validate-config, whose
+    ``guard_errors`` row reports da-guard's own findings): a key-verdict
+    finding da-guard's gate reports too (``gate_kind``, #3996) is neither
+    printed nor counted.
 
     The caller holds the run's parse-tree session and ``judging()``
     (``_lib_parse_cache``) and has judged *config_dir* as its declared input
@@ -2148,7 +2165,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
             config_dir, findings, policy=resolved, mount_root=mount_root,
             strict=strict, validate=True, assembles_file=False,
             key_verdict=key_verdict, credential_scope=credential_scope,
-            key_blocks=key_blocks, key_verdicts=key_verdicts)
+            key_blocks=key_blocks, key_verdicts=key_verdicts, gate_reported=gate_reported)
         # #1211: a tenant's served page-mode custom alerts with no delivery
         # child under the custom route fall to the firehose receiver, which
         # only a mode that assembles the config it writes knows: --validate

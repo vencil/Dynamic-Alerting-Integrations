@@ -3,15 +3,18 @@
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
 1. 租戶檔                  → migration_output/.conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
-2. 平台 Recording Rule      → migration_output/platform-recording-rules.yaml
-3. 平台動態 Alert Rule      → migration_output/platform-alert-rules.yaml
+2. 平台 Recording Rule      → migration_output/.migration/platform-recording-rules.yaml
+3. 平台動態 Alert Rule      → migration_output/.migration/platform-alert-rules.yaml
 4. 遷移報告                 → migration_output/migration-report.txt
 5. Triage CSV               → migration_output/triage-report.csv
-6. Prefix Mapping           → migration_output/prefix-mapping.yaml
+6. Prefix Mapping           → migration_output/.migration/prefix-mapping.yaml
 7. 根 defaults              → migration_output/.conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
 
 1 與 7 寫在 `-o` 底下自己的 `.conf.d/`（#3671）：那是一棵只有這兩個檔的 conf.d，
-可以整棵驗；2–6 不是 conf.d 檔，留在 `-o`，名稱也就不會與租戶檔相撞。
+可以整棵驗。2、3、6 是 YAML 但不是 conf.d 檔，寫在 `-o/.migration/`（`ARTIFACT_DIR`，
+#3997）：點開頭的目錄，conf.d 的每個讀取端都整棵略過（Go `confdname.IsHidden`），
+所以 `-o` 落在一棵服務中的 conf.d 裡（不論服務的根在哪一層）也不會被當成設定檔讀。
+4、5 不是 YAML，沒有讀取端讀，留在 `-o`。
 
 1 與 7 是 conf.d 內容，由 Go 寫（ADR-036 §2，#3206）：兩個檔的資料（帶型別的值、
 註解）一次交給 `da-guard write`，文字由 Go 產生、整棵樹判一次，兩個檔同進退；
@@ -1084,6 +1087,10 @@ def _dedup_recording_rules(results):
 #: tests/shared/test_writers_confirm_parse_tree.py runs the tool inside a served tree
 #: and asks Go which tenants it serves.
 CONFD_DIR = ".conf.d"
+#: #3997: where the YAML that is not a conf.d file goes (rule packs, prefix
+#: mapping): a dot-directory, which every conf.d reader prunes (Go
+#: `confdname.IsHidden`), wherever the served root is above `-o`.
+ARTIFACT_DIR = ".migration"
 
 #: The root defaults file of that conf.d: what declares the keys the tenant
 #: file writes — scaffold_tenant writes the same pair.
@@ -1515,8 +1522,10 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     `-o/.conf.d`（`CONFD_DIR`，#3671；已存在就整份取代）：那棵樹判一次，兩個檔
     同進退——一個被拒就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的
     `-o` 過共用的 conf.d 拒絕（`_require_output_tree`；點開頭的 `.conf.d/` 不在其中），且 `.conf.d/` 不得有這兩個
-    檔以外的檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack、
-    報表、CSV、prefix mapping 不是 conf.d 檔，在批次之後由本工具照舊寫在 `-o`。
+    檔以外的檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack 與
+    prefix mapping 是 YAML 但不是 conf.d 檔，在批次之後寫進 `-o/.migration/`
+    （`ARTIFACT_DIR`，#3997：點開頭，conf.d 的讀取端不讀）；報表與 CSV 不是 YAML，
+    寫在 `-o`。
     """
     if not is_valid_tenant_id(tenant):
         print(f"ERROR: --tenant {tenant!r} is not a valid tenant id ({tenant_id_rule()[1]}) "
@@ -1535,17 +1544,27 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
               f"(another --tenant's file is another tenant in the tree, #3671); remove "
               f"it or use another -o — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    # Before the batch, without creating anything (a refused batch leaves
+    # no directory behind): a `-o/.migration` that is not a directory ends
+    # the run with nothing written, not after the conf.d files are on disk.
+    artifact_dir = Path(output_dir) / ARTIFACT_DIR
+    if artifact_dir.exists() and not artifact_dir.is_dir():
+        print(f"ERROR: {artifact_dir} is not a directory; the rule packs and the prefix "
+              f"mapping go there (#3997) — remove it or use another -o — nothing was written",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     _lib_confedit.write_all_or_exit(
         conf_dir, entries, tool="migrate_rule",
         make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))
+    ensure_dir_or_die(artifact_dir, flag=_OUTPUT_FLAG)
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
+    recording_rules_path = str(artifact_dir / "platform-recording-rules.yaml")
     write_text_or_die(recording_rules_path, render_recording_rules(results, prefix),
                       flag=_OUTPUT_FLAG)
 
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
-    alert_rules_path = str(Path(output_dir) / "platform-alert-rules.yaml")
+    alert_rules_path = str(artifact_dir / "platform-alert-rules.yaml")
     write_text_or_die(alert_rules_path, render_alert_rules(results, prefix), flag=_OUTPUT_FLAG)
 
     # --- migration-report.txt ---
@@ -1556,7 +1575,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     csv_path = write_triage_csv(results, output_dir, dictionary)
 
     # --- v3: Prefix Mapping ---
-    mapping_path = write_prefix_mapping(results, output_dir, prefix)
+    mapping_path = write_prefix_mapping(results, artifact_dir, prefix)
 
     # 桶計數 (回傳值) — 與 render_report 讀同一份 _buckets，四桶互斥。
     return tuple(len(b) for b in _buckets(results))
@@ -1747,7 +1766,9 @@ def main():
             print(f"[📖] {n_golden} 條建議改用黃金標準 (詳見報告)")
         if n_unparseable:
             print(f"[!] {n_unparseable} 條需人工處理 (LLM Prompt 已寫入報告)")
-        print(f"📁 檔案已輸出至 {args.output_dir}/（conf.d 檔在 {args.output_dir}/{CONFD_DIR}/）")
+        print(f"📁 檔案已輸出至 {args.output_dir}/：conf.d 檔在 {args.output_dir}/{CONFD_DIR}/，"
+              f"rule pack 與 prefix mapping 在 {args.output_dir}/{ARTIFACT_DIR}/"
+              "（點開頭的目錄，conf.d 的讀取端不讀）")
         print(f"⚠️  先把 {DEFAULTS_FILE} 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml"
               "（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。")
         if prefix:

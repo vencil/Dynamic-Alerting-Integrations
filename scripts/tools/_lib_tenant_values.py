@@ -848,6 +848,10 @@ class EffectiveTree(NamedTuple):
     # the built-in table and each key's state in this tree (#3832); None
     # when no build ran (not judged)
     builtin_defaults: "BuiltinDefaults | None" = None
+    # every non-empty line of da-guard effective's stderr, as written (the
+    # exporter load's own WARN lines; nothing is resolved at an instant, so
+    # the time of day changes none of them — #3990), as ServedTree's
+    stderr_lines: "tuple[str, ...] | list[str]" = ()
 
 
 class EffectiveRun(NamedTuple):
@@ -1813,7 +1817,8 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
     return KeySchedule(segments, None if expires is None else str(expires), expired)
 
 
-def print_load_warnings(tree: "ServedTree | ServedFacts | CustomAlertPack", stream: TextIO | None = None) -> None:
+def print_load_warnings(tree: "ServedTree | ServedFacts | EffectiveTree | CustomAlertPack",
+                        stream: TextIO | None = None) -> None:
     """Every non-empty line da-guard wrote to stderr, each behind
     `DA_GUARD_PREFIX`, then one `WARN: <file>: <reason>` line per file the
     load serves no tenant from, in the load's order (#2115 R3). Every line is
@@ -1984,7 +1989,8 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                          _root_defaults_refused(root_refused, returncode, stderr,
                                                 EFFECTIVE_SUBCOMMAND, EffectiveError),
                          _root_defaults_reserved(root_reserved, returncode, stderr),
-                         _builtin_defaults(builtin, returncode, stderr) if reads_skipped else None)
+                         _builtin_defaults(builtin, returncode, stderr) if reads_skipped else None,
+                         _nonempty_lines(stderr))
 
 
 #: A field a da-guard document does not carry (an older binary), unlike one it

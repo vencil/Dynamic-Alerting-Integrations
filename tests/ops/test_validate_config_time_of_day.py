@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import os
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +27,7 @@ from pathlib import Path
 import pytest
 
 import validate_config as vc
+from factories import da_guard_at  # noqa: E402  (tests/ on sys.path: conftest)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env", "da_crdecode_env", "da_read_env")
 
@@ -72,27 +72,10 @@ def _tree(root: Path) -> str:
     return str(root)
 
 
-def _at_wrapper(tmp_path: Path, real: str, at: str) -> str:
-    """A da-guard that runs `key-verdict` / `served-values` at *at*."""
-    path = tmp_path / f"da-guard-at-{at.replace(':', '')}"
-    path.write_text(
-        "#!/bin/sh\n"
-        f"real='{real}'\n"
-        'case " $* " in\n'
-        '  *" --config-facts "*) exec "$real" "$@" ;;\n'
-        "esac\n"
-        'case "$1" in\n'
-        f"  key-verdict|served-values) exec \"$real\" \"$@\" --at '{at}' ;;\n"
-        '  *) exec "$real" "$@" ;;\n'
-        "esac\n", encoding="utf-8")
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return str(path)
-
-
 def _rows_at(tmp_path: Path, monkeypatch, at: str) -> dict[str, dict]:
     real = os.environ["DA_GUARD_BINARY"]
     conf_d = _tree(tmp_path / f"tree-{at.replace(':', '')}")
-    monkeypatch.setenv("DA_GUARD_BINARY", _at_wrapper(tmp_path, real, at))
+    monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at, ("key-verdict", "served-values"), real))
     try:
         verdict: list = []
         routes = vc.check_routes(conf_d, verdict_out=verdict)
@@ -142,7 +125,7 @@ def _generate_at(tmp_path: Path, at: str) -> tuple[int, list]:
          "-o", str(tmp_path / f"cm-{tag}.yaml"), "--base-config", str(base), "--strict",
          "--findings-json", str(findings)],
         capture_output=True, text=True, encoding="utf-8", timeout=300,
-        env={**os.environ, "DA_GUARD_BINARY": _at_wrapper(tmp_path, real, at)})
+        env={**os.environ, "DA_GUARD_BINARY": da_guard_at(tmp_path, at, ("key-verdict", "served-values"), real)})
     recorded = json.loads(findings.read_text(encoding="utf-8")) if findings.exists() else None
     assert recorded is not None, proc.stderr[-2000:]
     # The tree's path differs per run; the findings must not.

@@ -159,15 +159,16 @@ def test_an_error_in_a_tree_with_no_root_platform_file_is_reported_alone(tmp_pat
 
 
 def test_a_key_name_with_a_control_character_is_never_printed_raw(tmp_path):
-    """#3016 review: the FAIL list repeats the blocking key verdict lines —
-    a tenant's key name in them goes through safe_label there too; a key
-    that is not name-like is not printed at all (#1560 ⑤-b: it may be a
-    URL), only its stand-in (#3703)."""
+    """#3016 review: a tenant's key name in a blocking key verdict line goes
+    through safe_label; a key that is not name-like is not printed at all
+    (#1560 ⑤-b: it may be a URL), only its stand-in (#3703). #3996: the line
+    is printed once — the FAIL summary counts it, it does not repeat it."""
     files = dict(THRESHOLDS_ONLY, **{"t-a.yaml": "tenants:\n  t-a:\n    \"mysql_conn\\e[2Jx\": \"1\"\n"})
     res, _ = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr
     shown = f"`{shown_key('mysql_conn' + chr(0x1b) + '[2Jx')}`"  # #3703: its stand-in
-    assert "FAIL:" in res.stderr and shown in res.stderr.split("FAIL:")[1], res.stderr
+    assert res.stderr.count(shown) == 1 and "FAIL: 1 error(s) found (listed above)" in res.stderr, \
+        res.stderr
     assert "mysql_conn" not in res.stderr
     assert "\x1b" not in res.stderr
 
