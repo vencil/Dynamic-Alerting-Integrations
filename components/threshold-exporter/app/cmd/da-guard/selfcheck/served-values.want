@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.served-values/v2",
+  "schema": "da-guard.served-values/v3",
   "at": "2026-01-01T00:00:00Z",
   "parse_failed": [],
   "skipped": [],

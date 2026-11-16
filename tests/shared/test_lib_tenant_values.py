@@ -483,12 +483,53 @@ def test_served_schedules_do_not_depend_on_the_time_of_day(tmp_path, da_guard):
     assert [s[:4] for s in segs] == [("00:00", "01:00", 70.0, "warning"), ("01:00", "03:00", None, None),
                                      ("03:00", "24:00", 70.0, "warning")]
     assert segs[1].error and "HTTP 500" in segs[1].error
+    # #3991: the document names that part once for the tree, with the same text.
+    assert inside.ungathered == outside.ungathered == (tv.UngatheredPart("01:00", "03:00", segs[1].error),)
     # 同一份 Go 讀數：與 --schedules 在 Gather 得起來的時刻給的 schedules 相同。
     full = tv.load_served_tree(conf_d, at="2026-11-14T05:00:00Z", binary=da_guard, schedules=True)
     assert {t: v.schedules for t, v in full.tenants.items()} == outside.tenants
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(conf_d, at="2026-11-14T01:30:00Z", binary=da_guard, schedules=True)
     assert ei.value.returncode == 2 and not ei.value.binary_fault
+
+
+def test_served_schedules_name_a_day_no_key_is_served_in(tmp_path, da_guard):
+    """#3991：整天都 Gather 不起來時沒有任何鍵被送出，也就沒有 segment 能帶 error，
+    租戶的 schedules 是空的；文件層的 `ungathered` 仍寫出整天（00:00–24:00）與原因。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+                    "    mysql_connection_usage_percent_critical: \"95\"\n"),
+    })
+    day = tv.load_served_schedules(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard)
+    assert day.tenants == {"ta": {}}
+    [part] = day.ungathered
+    assert (part.start, part.end) == ("00:00", "24:00") and "HTTP 500" in part.error, day.ungathered
+
+
+@pytest.mark.parametrize("ungathered", [
+    "missing", "null", "{}", '[{"from": "00:00", "to": "24:00"}]', '["00:00-24:00"]',
+], ids=["missing", "null", "object", "no-error", "string"])
+def test_ungathered_not_of_its_shape_is_broken_output_and_recorded(tmp_path, ungathered):
+    """#3991：帶這支工具讀的 schema 卻沒有（或寫壞）`ungathered`：是壞掉的輸出、記成
+    `bad_output`，不是舊版，也不當成「整天都收集得到」。"""
+    import _lib_tool_fault
+    head = _WHOLE_SV_HEAD.replace('"ungathered": [], ', '' if ungathered == "missing"
+                                  else f'"ungathered": {ungathered}, ')
+    fake = _old_da_guard(tmp_path, head + '"tenants": {"t": {"schedules": {}}}}')
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(tv.ServedValuesError) as ei:
+            tv.load_served_schedules(tmp_path, binary=fake)
+        assert ei.value.broken and not ei.value.stale, ei.value
+        assert _lib_tool_fault.records() == [
+            _lib_tool_fault.ToolFault("da-guard", "served-values", "bad_output")]
+    finally:
+        _lib_tool_fault.clear()
+    # control: the same document with a well-formed `ungathered` is read.
+    ok = _WHOLE_SV_HEAD.replace('"ungathered": [], ', '"ungathered": [{"from": "01:00", "to": "03:00", "error": "e"}], ')
+    got = tv.load_served_schedules(tmp_path, binary=_old_da_guard(tmp_path, ok + '"tenants": {"t": {"schedules": {}}}}'))
+    assert got.ungathered == (tv.UngatheredPart("01:00", "03:00", "e"),)
 
 
 def test_served_schedules_judge_expiry_at_the_given_instant(tmp_path, da_guard):
@@ -643,7 +684,7 @@ def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
 
 
 _WHOLE_SV_HEAD = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
-            '"unreadable": [], "aliases": {}, "root_defaults_refused": [], ')
+            '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "ungathered": [], ')
 _WHOLE_SV_TENANT = ('"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, '
               '"state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null')
 
@@ -678,7 +719,7 @@ def test_a_document_wrong_inside_is_broken_output_and_recorded(tmp_path, load, t
         _lib_tool_fault.clear()
 
 
-_ARGV_DOC = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], '
+_ARGV_DOC = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], "ungathered": [], '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
              '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
 
@@ -827,7 +868,7 @@ def test_real_da_guard_names_the_schema_this_reader_reads(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: disable\n"})
     proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
                           capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
-    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v2"
+    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v3"
     assert tv.load_served_values(conf_d, binary=da_guard)["t"].state_filters == {}
 
 
@@ -842,29 +883,30 @@ def test_output_without_schema_is_refused_as_older(tmp_path):
 
 
 def test_output_with_an_unknown_schema_is_refused(tmp_path):
-    """認不得的 schema（例如未來的 v3）：raise 並寫出兩個值，不當成舊版、也不照 v2 讀。"""
-    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v3"))
+    """認不得的 schema（例如未來的 v4）：raise 並寫出兩個值，不當成舊版、也不照 v3 讀。"""
+    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v4"))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     msg = str(ei.value)
-    assert "da-guard.served-values/v3" in msg and tv.SERVED_VALUES_SCHEMA in msg
+    assert "da-guard.served-values/v4" in msg and tv.SERVED_VALUES_SCHEMA in msg
     assert "older than this tool" not in msg
     assert ei.value.binary_fault and not ei.value.stale
 
 
 # A literal, not SERVED_VALUES_OLDER_SCHEMAS: emptying that tuple must turn
 # these cells red, not leave nothing to parametrize over.
-@pytest.mark.parametrize("schema", ["da-guard.served-values/v1"])
+@pytest.mark.parametrize("schema", ["da-guard.served-values/v1", "da-guard.served-values/v2"])
 @pytest.mark.parametrize("load", [tv.load_served_tree, tv.load_served_schedules])
 def test_output_with_an_older_schema_is_refused_as_older(tmp_path, schema, load):
-    """#3703：較舊的 schema（v1：key_checks 是引用鍵的整句）一律由 schema 本身指出要升級
+    """#3703：較舊的 schema（v1：key_checks 是引用鍵的整句；v2：schedules 旁沒有
+    `ungathered`，#3991）一律由 schema 本身指出要升級
     da-guard——stale、不是 broken，訊息寫出兩個值；不逐一辨認舊形狀。文件其餘部分照
     這支工具讀的形狀寫，證明判定只來自 schema。"""
     assert tv.SERVED_VALUES_SCHEMA not in tv.SERVED_VALUES_OLDER_SCHEMAS
     tenant = ', "state_filters": {}' if load is tv.load_served_tree else ''
     doc = _sv_doc(schema, tenant)
     if load is tv.load_served_schedules:
-        doc = doc.replace(_SV_TENANT, '"schedules": {}')
+        doc = doc.replace(_SV_TENANT, '"schedules": {}').replace('"tenants"', '"ungathered": [], "tenants"')
     fake = _old_da_guard(tmp_path, doc)
     with pytest.raises(tv.ServedValuesError) as ei:
         load(tmp_path, binary=fake)
@@ -903,7 +945,7 @@ def test_state_filters_not_of_their_shape_are_refused(tmp_path, extra):
 
 def test_schema_refusal_exits_2_through_the_cli_decorator(tmp_path, capsys):
     """讀取端的 CLI 一律經 exit_on_served_values_error：schema 缺少或認不得都是 rc 2、一行 ERROR。"""
-    for schema in (None, "da-guard.served-values/v3", *tv.SERVED_VALUES_OLDER_SCHEMAS):
+    for schema in (None, "da-guard.served-values/v4", *tv.SERVED_VALUES_OLDER_SCHEMAS):
         fake = _old_da_guard(tmp_path, _sv_doc(schema))
 
         @tv.exit_on_served_values_error
@@ -1350,3 +1392,14 @@ def test_key_checks_of_the_wrong_shape_are_refused_not_read_as_none():
             tv._key_checks(bad)
     with pytest.raises(TypeError):
         tv._key_checks({"version_labels": ["a"], "renames": []})
+
+
+def test_served_schedules_of_a_tree_no_file_of_which_reads_name_the_files(tmp_path, da_guard):
+    """#3991：每個設定檔都讀不到時 da-guard 什麼都沒讀（exit 3），文件仍帶 `ungathered: []`；
+    讀取端照 `unreadable` 點名那些檔，不把文件當成壞掉的輸出。"""
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    symlink_or_skip(tmp_path / "nowhere.yaml", conf_d / "a.yaml")  # a dangling link: unreadable
+    day = tv.load_served_schedules(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, partial=True)
+    assert day.tenants == {} and day.ungathered == ()
+    assert [(u.file, u.reason) for u in day.unreadable] == [("a.yaml", "stat_error")]

@@ -46,8 +46,9 @@ const servedValuesCmd = "served-values"
 // value (and a document without one), so a change to the shape a reader
 // relies on is a new value here (ADR-037), and a reader names an earlier
 // value as a da-guard older than itself. v1 wrote each tenant's key_checks
-// as sentences that quoted the key; v2 writes records (#3703).
-const servedValuesSchema = "da-guard.served-values/v2"
+// as sentences that quoted the key; v2 writes records (#3703); v3 adds
+// `ungathered` beside the schedules (#3991).
+const servedValuesSchema = "da-guard.served-values/v3"
 
 // customAlertsKey is the reserved key whose rows are the tenant's custom
 // alerts; its value is the list of those rows rather than one number.
@@ -87,6 +88,16 @@ type servedValuesDoc struct {
 	// map[string]servedTenantDay (#3877); with --config-facts,
 	// map[string]servedTenantFacts (#3918).
 	Tenants any `json:"tenants"`
+	// Ungathered (#3991), only with --schedules or --schedules-only (absent
+	// otherwise, [] when there is none): every part of the UTC day in which
+	// the exporter's /metrics cannot be gathered at all — its scrape fails
+	// as a whole (HTTP 500), so no tenant is served anything then — in
+	// order, each {from, to, error} (ungatheredPart), adjacent parts with
+	// the same error merged. The schedules' segments carry the same error,
+	// but only on the keys a tenant serves: a tenant serving none there, or
+	// a tree that cannot be gathered all day (every tenant's schedules {}),
+	// is read here. With --tenant, over the requested tenants alone.
+	Ungathered *[]ungatheredPart `json:"ungathered,omitempty"`
 	// ⛔ No alias table (#3556): Values, Severities, Schedules and Dropped
 	// are keyed by the canonical spelling, and a reader holding a key in a
 	// retired spelling asks `key-spellings` for it. The table this field
@@ -663,6 +674,10 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"(unserved, or only dropped) and _custom_alerts have no entry. With --schedules each\n"+
 			"served segment carries its own \"series\" (an `N:critical` window serves another one);\n"+
 			"a segment with a null value or an error has none.\n\n"+
+			"With --schedules or --schedules-only the document also carries \"ungathered\" (#3991):\n"+
+			"every part of the UTC day in which /metrics cannot be gathered at all, [{\"from\", \"to\",\n"+
+			"\"error\"}] in order ([] when none). A segment carries that error only on a key its tenant\n"+
+			"serves; a tenant serving no key then, or a tree never gathered all day, is read here.\n\n"+
 			"Each tenant's \"state_filters\" maps every state filter on for it at --at to the severity\n"+
 			"label of its user_state_filter row ({\"severity\"}); a filter that is off has no entry.\n"+
 			"The document's \"schema\" is "+servedValuesSchema+"; a reader refuses any other value.\n\n")
@@ -746,6 +761,21 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 	if !ok {
 		return exitCallerErr
 	}
+	// What fill returned last, kept for the document (#3991): a run calls
+	// it once at most when it does not fail — servedSchedulesOnly calls it
+	// itself only where the reading at --at, which would have, failed first.
+	// [] until then: a tree whose every file is unreadable reads nothing,
+	// and its document still says so with the field present.
+	var ungathered *[]ungatheredPart
+	if f.schedules || f.schedulesOnly {
+		ungathered = &[]ungatheredPart{}
+	}
+	recorded := func(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
+		expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool) ([]ungatheredPart, error) {
+		parts, err := fill(cfg, at, tenants, expiries, name, instantGathered)
+		ungathered = &parts
+		return parts, err
+	}
 	tenants := map[string]servedTenantValues{}
 	days := map[string]servedTenantDay{}
 	facts := map[string]servedTenantFacts{}
@@ -755,11 +785,11 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		if f.configFacts {
 			facts = servedConfigFacts(sub)
 		} else if f.schedulesOnly {
-			days, err = servedSchedulesOnly(sub, at, rep.Undeliverable, fill, written, refusedTextsOf(rep))
+			days, err = servedSchedulesOnly(sub, at, rep.Undeliverable, recorded, written, refusedTextsOf(rep))
 		} else {
 			var withSchedules scheduleFiller
 			if f.schedules {
-				withSchedules = fill
+				withSchedules = recorded
 			}
 			tenants, err = servedValuesFilled(sub, at, rep.Undeliverable, withSchedules, written, refusedTextsOf(rep), false)
 			if err == nil && f.disableEffects {
@@ -805,6 +835,7 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		Skipped:             skipped,
 		Unreadable:          unreadable,
 		Tenants:             docTenants,
+		Ungathered:          ungathered,
 		UnreadKeys:          unreadKeys,
 		RootDefaultsRefused: rootDefaultsRefusedOf(rep),
 		tenantSubset:        subset(requested, present),
@@ -1001,9 +1032,9 @@ func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 // scheduleFiller fills the Schedules of servedValues' tenants: addSchedules.
 // instantGathered says whether /metrics could be gathered at `at` itself:
 // when it could not (--schedules-only, #3877), tenants hold nothing read at
-// `at` and only Schedules is filled.
+// `at` and only Schedules is filled. It returns the document's Ungathered.
 type scheduleFiller func(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
-	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool) error
+	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool) ([]ungatheredPart, error)
 
 // servedTenantDay is one tenant of the --schedules-only document (#3877):
 // its schedules, as --schedules writes them, and nothing read at --at alone.
@@ -1064,7 +1095,7 @@ func servedSchedulesOnly(cfg *config.ThresholdConfig, at time.Time,
 		}
 		// The expiry reading the collector's scrape made (Hooks.Observe),
 		// resolved again silently: that scrape already wrote its WARN lines.
-		err = fill(cfg, at, tenants, cfg.ResolveThresholdExpiriesAtLogf(at, nil), name, false)
+		_, err = fill(cfg, at, tenants, cfg.ResolveThresholdExpiriesAtLogf(at, nil), name, false)
 	}
 	if err != nil {
 		return nil, err
@@ -1256,7 +1287,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		out[tenant] = tv
 	}
 	if withSchedules != nil {
-		if err := withSchedules(cfg, at, out, res.ThresholdExpiries, name, true); err != nil {
+		if _, err := withSchedules(cfg, at, out, res.ThresholdExpiries, name, true); err != nil {
 			return nil, err
 		}
 	}
