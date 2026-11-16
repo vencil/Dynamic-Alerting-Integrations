@@ -878,7 +878,11 @@ def check_routes(config_dir: str, policy: object = None,
 
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
-        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy)
+        # #3996: the guard_errors row reports da-guard's own findings, with
+        # their fixes: a key verdict on the same fact (gate_kind) is not
+        # reported in this row a second time.
+        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy,
+                                    gate_reported=False)
     details = [ln.rstrip() for ln in printed.getvalue().splitlines() if ln.strip()]
     if verdict_out is not None and outcome.key_verdict is not None:
         verdict_out.append(outcome.key_verdict)
