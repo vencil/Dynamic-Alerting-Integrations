@@ -5,6 +5,7 @@ conftest.py 只保留 sys.path 設定和 pytest fixtures。
 
 Factory functions:
   - ``write_yaml()``: 寫入 YAML 檔案到暫存目錄
+  - ``da_guard_at()``: 在固定時刻執行指定子命令的 da-guard 包裝
   - ``make_receiver()``: 產生 Alertmanager receiver dict
   - ``make_routing_config()``: 產生 routing config dict
   - ``make_tenant_yaml()``: 產生標準 tenant YAML 字串
@@ -26,6 +27,27 @@ import yaml
 
 
 # ── Shared helpers ───────────────────────────────────────────────────
+
+def da_guard_at(tmp_path, at, subcommands=("served-values",), real=None):
+    """A da-guard that runs each of *subcommands* at *at* (`--at` appended;
+    `--config-facts` takes none, so such a call passes as given) and every
+    other subcommand as given — the run as if made at that instant.
+    *real* defaults to `$DA_GUARD_BINARY`. ⚠️ A subcommand with no `--at`
+    still reads the real clock: a test through this measures only the
+    subcommands it names."""
+    real = real or os.environ["DA_GUARD_BINARY"]
+    path = tmp_path / f"da-guard-at-{at.replace(':', '')}"
+    path.write_text(
+        "#!/bin/sh\n"
+        f"real='{real}'\n"
+        'case " $* " in *" --config-facts "*) exec "$real" "$@" ;; esac\n'
+        'case "$1" in\n'
+        f"  {'|'.join(subcommands)}) exec \"$real\" \"$@\" --at '{at}' ;;\n"
+        '  *) exec "$real" "$@" ;;\n'
+        "esac\n", encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return str(path)
+
 
 def write_yaml(tmpdir, filename, content):
     """Write a YAML file into tmpdir with secure permissions.
