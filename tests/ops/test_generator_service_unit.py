@@ -835,32 +835,37 @@ def _committed_repo(path):
     return path
 
 
+#: A commit id no repository holds.
+_MISSING = "0123456789abcdef0123456789abcdef01234567"
+
+
 def _break(repo, how: str) -> None:
+    """Make --repo one git cannot read, each a way #3903 measured."""
     import shutil
+    import subprocess
+    git = repo / ".git"
     if how == "gone":
         shutil.rmtree(repo)
+    elif how == "broken":
+        (git / "HEAD").write_bytes(b"not a ref\n")
+    elif how == "dangling-detached":
+        (git / "HEAD").write_text(_MISSING + "\n", encoding="utf-8")
     else:
-        (repo / ".git" / "HEAD").write_bytes(b"not a ref\n")
+        branch = subprocess.run(["git", "-C", str(repo), "symbolic-ref", "HEAD"], check=True,
+                                capture_output=True, timeout=60).stdout.decode().strip()
+        if how == "dangling-ref":
+            (git / branch).write_text(_MISSING + "\n", encoding="utf-8")
+        else:  # dangling-packed: the branch only in packed-refs, naming nothing
+            _git(repo, "pack-refs", "--all")
+            (git / "packed-refs").write_text(f"{_MISSING} {branch}\n", encoding="utf-8")
 
 
-@pytest.mark.parametrize("how", ["gone", "broken"])
-def test_a_repo_git_cannot_read_after_its_judgement_refuses_to_start(
-        tmp_path, monkeypatch, capsys, how):
-    """--repo judged readable (`_object_format`), then gone or broken before
-    `_check_config_subdir` reads HEAD: refused, naming --repo — not taken
-    for a HEAD that is no commit yet and started."""
+def _main(tmp_path, monkeypatch, repo) -> "tuple[int, list]":
+    """`main` up to serving: what it returns, and what it would serve."""
     import os
     import _lib_consumer_read as cr
     for name in cr.READER_BINARY_ENVS:  # main pins them: put back afterwards
         monkeypatch.setenv(name, os.environ.get(name, "x"))
-    repo = _committed_repo(tmp_path / "repo")
-    real = gs._object_format
-
-    def judged_then_broken(git, path, **kw):
-        fmt = real(git, path, **kw)
-        _break(repo, how)
-        return fmt
-    monkeypatch.setattr(gs, "_object_format", judged_then_broken)
     served = []
 
     async def no_serve(settings, fmt):  # a start that is not refused returns, never hangs
@@ -869,21 +874,102 @@ def test_a_repo_git_cannot_read_after_its_judgement_refuses_to_start(
     monkeypatch.setattr(gs, "_become_subreaper", lambda: None)
     rc = gs.main(["--socket", str(tmp_path / "s.sock"), "--repo", str(repo),
                   "--config-subdir", "conf.d", "--work-dir", str(tmp_path / "work")])
+    return rc, served
+
+
+_UNREADABLE = ["broken", "dangling-ref", "dangling-packed", "dangling-detached"]
+
+
+@pytest.mark.parametrize("how", _UNREADABLE)
+def test_a_head_git_cannot_read_refuses_to_start(tmp_path, monkeypatch, capsys, how):
+    """#3903: HEAD naming a commit git cannot read — through a branch
+    (loose or packed) or detached — is no "commit yet" HEAD: every judgement
+    would be git_read. Refused, naming --repo."""
+    repo = _committed_repo(tmp_path / "repo")
+    _break(repo, how)
+    rc, served = _main(tmp_path, monkeypatch, repo)
     err = capsys.readouterr().err
-    assert rc == gs.EXIT_CALLER_ERROR, err
+    assert rc == gs.EXIT_CALLER_ERROR and served == [], err
     assert f"ERROR: --repo {repo}: " in err, err
     assert "no HEAD commit" not in err, err
-    assert served == [], err
 
 
-def test_a_repo_with_no_commit_yet_starts_unchecked(tmp_path, capsys):
-    """`git init` and nothing committed: HEAD is no commit yet (`--verify
-    --quiet` exit 1, nothing printed) — said on stderr, not refused."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-q")
-    assert gs._check_config_subdir("git", str(repo), "conf.d", "'conf.d'") is None
+@pytest.mark.parametrize("how", ["gone", "broken", "dangling-detached"])
+def test_a_repo_broken_between_the_judgement_s_git_runs_refuses_to_start(
+        tmp_path, monkeypatch, capsys, how):
+    """--repo read as a repository by the judgement's first git, then gone
+    or broken before HEAD is read: refused, naming --repo — never taken for
+    a HEAD with no commit yet."""
+    repo = _committed_repo(tmp_path / "repo")
+    real = gs._repo_judgement
+
+    def broken_after_the_first(git, path):
+        steps = real(git, path)
+        argv = next(steps)
+        answer = yield argv
+        _break(repo, how)
+        return (yield from _resume(steps, answer))
+    monkeypatch.setattr(gs, "_repo_judgement", broken_after_the_first)
+    rc, served = _main(tmp_path, monkeypatch, repo)
     err = capsys.readouterr().err
+    assert rc == gs.EXIT_CALLER_ERROR and served == [], err
+    assert f"ERROR: --repo {repo}: " in err, err
+    assert "no HEAD commit" not in err, err
+
+
+def _resume(steps, answer):
+    """The rest of the generator *steps*, sent *answer* first."""
+    try:
+        argv = steps.send(answer)
+        while True:
+            argv = steps.send((yield argv))
+    except StopIteration as done:
+        return done.value
+
+
+@pytest.mark.parametrize("where,errno_name,want", [
+    ("dir", "EMFILE", "internal_error"),      # this service's own: its work directory
+    ("exec", "EMFILE", "internal_error"),     # … or descriptors at the exec
+    ("exec", "ENOMEM", "internal_error"),
+    ("exec", "ENOENT", "repo_unreadable"),    # the git program itself
+    ("exec", "EACCES", "repo_unreadable"),
+])
+def test_a_probe_failure_of_the_service_s_own_is_no_unreadable_repo(where, errno_name, want):
+    """#3903: the probe says ``repo_unreadable`` only for git — refused,
+    timed out, or the git program gone or not executable; a failure of the
+    service's own (descriptors, memory, its work directory) is
+    ``internal_error``."""
+    import errno
+    err = OSError(getattr(errno, errno_name), errno_name)
+    svc = _FakeService(delay=0)
+
+    def no_dir():
+        raise err
+
+    async def no_exec(argv, work, env):
+        raise gs._ExecFailed(err)
+    if where == "dir":
+        svc._new_self_check_dir = no_dir
+    else:
+        svc._new_self_check_dir = lambda: "/nonexistent-work"
+        svc._run_held = no_exec
+    assert asyncio.run(gs.Service._repo_probe(svc)) == want
+
+
+@pytest.mark.parametrize("branch", ["initial", "another"])
+def test_a_branch_with_no_commit_yet_starts_unchecked(tmp_path, monkeypatch, capsys, branch):
+    """`git init` and nothing committed — or HEAD switched to a branch with
+    no commit yet: HEAD's branch does not exist. Said on stderr, started."""
+    if branch == "initial":
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+    else:
+        repo = _committed_repo(tmp_path / "repo")
+        _git(repo, "symbolic-ref", "HEAD", "refs/heads/not-yet")
+    rc, served = _main(tmp_path, monkeypatch, repo)
+    err = capsys.readouterr().err
+    assert rc == gs.EXIT_OK and served == ["sha1"], err
     assert "has no HEAD commit; --config-subdir 'conf.d' is not checked" in err, err
 
 
@@ -973,6 +1059,8 @@ def test_a_judgement_that_ran_clears_no_tool_fault():
     ({"state": "passed", "failures": [], "running": False, "message": "x"}, False),
     # #3903: the --repo probe's failure, and only that pairing
     ({"state": "failed", "failures": [{"binary": "git", "reason": "repo_unreadable"}],
+      "running": False}, True),
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "internal_error"}],
       "running": False}, True),
     ({"state": "failed", "failures": [{"binary": "git", "reason": "not_found"}],
       "running": False}, False),

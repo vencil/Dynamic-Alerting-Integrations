@@ -98,11 +98,13 @@ SELF_CHECK_STATES = ("pending", "passed", "failed")
 SELF_CHECK_PROGRAM_REASONS = ("not_found", "not_executable", "exec_failed", "timed_out",
                               "signalled", "unexpected_exit", "bad_output", "failed",
                               "internal_error")
-#: #3903: the --repo probe's failure, ``{"binary": "git", "reason":
-#: "repo_unreadable"}`` — git, the reader of --repo, no longer reads it as
-#: the service judged it at start (``generator_service._object_format``).
+#: #3903: the --repo probe's failure, ``{"binary": "git", "reason": …}`` —
+#: ``repo_unreadable``: git, the reader of --repo, no longer reads it as the
+#: service judged it at start (``generator_service._repo_judgement``);
+#: ``internal_error``: this service could not run the probe.
 SELF_CHECK_REPO_BINARY = "git"
 SELF_CHECK_REPO_REASON = "repo_unreadable"
+SELF_CHECK_REPO_REASONS = (SELF_CHECK_REPO_REASON, "internal_error")
 #: Every reason a ``self_check`` failure can carry.
 SELF_CHECK_REASONS = (*SELF_CHECK_PROGRAM_REASONS, SELF_CHECK_REPO_REASON)
 
@@ -122,7 +124,7 @@ def self_check_problem(doc: object) -> Optional[str]:
         if not isinstance(f, dict) or set(f) != SELF_CHECK_FAILURE_KEYS:
             return "a failure outside the closed set"
         if f["binary"] == SELF_CHECK_REPO_BINARY:
-            ok = f["reason"] == SELF_CHECK_REPO_REASON
+            ok = f["reason"] in SELF_CHECK_REPO_REASONS
         else:
             ok = (f["binary"] in _lib_tool_fault.BINARIES
                   and f["reason"] in SELF_CHECK_PROGRAM_REASONS)

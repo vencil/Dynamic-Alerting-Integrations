@@ -115,11 +115,11 @@ class _Rig:
         self.env = {var: str(self.shims / n) for n, var in BINARIES.items()}
 
     def service(self, name: str, *args: str, env: "dict | None" = None,
-                settled: bool = True) -> h.Service:
+                settled: bool = True, prelude: str = "") -> h.Service:
         interval = () if "--self-check-seconds" in args else ("--self-check-seconds", "0.2")
         return h.Service(self.tmp / name, self.repo, bin_dir=self.tmp / f"bin-{name}",
                          args=(*interval, *args), env={**self.env, **(env or {})},
-                         settled=settled)
+                         settled=settled, prelude=prelude)
 
     def hanging(self) -> "list[int]":
         """The pids of `hang`'s sleeps still running."""
@@ -319,34 +319,42 @@ _REPO_FAILURE = {"binary": _gsvc_proto.SELF_CHECK_REPO_BINARY,
                  "reason": _gsvc_proto.SELF_CHECK_REPO_REASON}
 
 
+#: A commit id no repository holds.
+_MISSING = "0123456789abcdef0123456789abcdef01234567"
+
+
 def _break_repo(repo: Path, how: str):
     """Make git unable to read *repo*; returns what puts it back."""
     if how == "gone":
         away = repo.with_name(repo.name + "-away")
         repo.rename(away)
         return lambda: away.rename(repo)
-    head = repo / ".git" / "HEAD"
-    old = head.read_bytes()
-    head.write_bytes(b"not a ref\n")
-    return lambda: head.write_bytes(old)
+    if how == "dangling-ref":  # HEAD's branch names a commit that is not there
+        path = repo / ".git" / h.run_git(repo, "symbolic-ref", "HEAD")
+    else:
+        path = repo / ".git" / "HEAD"
+    old = path.read_bytes()
+    path.write_bytes(b"not a ref\n" if how == "broken" else f"{_MISSING}\n".encode())
+    return lambda: path.write_bytes(old)
 
 
 def _rounds(svc, result: str) -> float:
     return svc.metrics()[f'da_generator_self_checks_total{{result="{result}"}}']
 
 
-@pytest.mark.parametrize("how", ["gone", "broken"])
+@pytest.mark.parametrize("how", ["gone", "broken", "dangling-ref", "dangling-detached"])
 def test_a_repo_git_no_longer_reads_is_not_ready_until_it_reads_again(rig, how):
-    """#3903: --repo gone (or its ``.git`` broken) after start: the
-    judgement says ``git_read`` and starts a round, whose --repo probe —
-    the start-up judgement of --repo — fails: not ready, the reason the
-    closed ``repo_unreadable``, no path or git message. Put back, the next
-    round passes: ready again."""
+    """#3903: after start --repo gone, its ``.git`` broken, or HEAD naming a
+    commit git cannot read (through its branch, or detached): a judgement's
+    ``git_read`` starts a round, whose --repo probe — the start-up
+    judgement of --repo — fails: not ready, the reason the closed
+    ``repo_unreadable``, no path or git message. Put back, the next round
+    passes: ready again."""
     with rig.service(f"repo-{how}") as svc:
         assert _status(svc)["ready"] is True
         restore = _break_repo(rig.repo, how)
         try:
-            status, doc = svc.validate(rig.commit)
+            status, doc = svc.validate("0" * 40)
             assert (status, doc.get("result"), doc.get("reason")) == (200, "rejected", "git_read"), doc
             _until(lambda: _status(svc)["self_check"]["state"] == "failed", "the probe failing")
             st = _status(svc)
@@ -380,32 +388,47 @@ def test_a_base_commit_not_in_the_repo_leaves_ready_alone(rig):
 #: (the judgement's reads, `--local-env-vars`) is the real git.
 _HANGING_GIT = """#!/bin/sh
 if [ "$4" = "--show-object-format" ] && [ -e '{armed}' ]; then
-  '{sleep}' '{hang}'; exit 0
+  exec '{sleep}' '{hang}'
 fi
 exec '{git}' "$@"
 """
+
+#: How long an answer of a loop that is not held may take, at most. A held
+#: loop answers only once the hanging git ends — never, before the test ends
+#: it — so the margin costs no discrimination; it only absorbs a slow host.
+_ANSWER_SECONDS = 5.0
+
+
+def _hanging_git(rig) -> "tuple[Path, Path]":
+    armed = rig.tmp / "probe-armed"
+    git = h.stub(rig.tmp / "gitbin", "git", _HANGING_GIT.format(
+        armed=armed, sleep=SLEEP, hang=rig.hang, git=h.GIT))
+    return git, armed
+
+
+def _answers_at_once(svc) -> dict:
+    began = time.monotonic()
+    status, st = svc.call("GET", "/v1/status", timeout=_ANSWER_SECONDS)
+    assert status == 200 and time.monotonic() - began < _ANSWER_SECONDS, st
+    return st
 
 
 def test_a_hanging_repo_probe_never_holds_the_service(rig):
     """#3903: the probe runs as a program's self-check does — a process
     whose exit the loop waits for, not a blocking call. While git hangs on
     --repo (an NFS mount that stopped answering) the service still answers
-    /v1/status at once; --self-check-timeout-seconds ends the probe:
-    ``repo_unreadable``, and the hanging git's process group with it."""
-    armed = rig.tmp / "probe-armed"
-    git = h.stub(rig.tmp / "gitbin", "git", _HANGING_GIT.format(
-        armed=armed, sleep=SLEEP, hang=rig.hang, git=h.GIT))
+    /v1/status; --self-check-timeout-seconds ends the probe:
+    ``repo_unreadable``, and the hanging git with it."""
+    git, armed = _hanging_git(rig)
     try:
         with rig.service("probe-hang", "--git", str(git),
-                         "--self-check-timeout-seconds", "3") as svc:
+                         "--self-check-timeout-seconds", "8") as svc:
             assert _status(svc)["ready"] is True
             armed.touch()
             status, doc = svc.validate("0" * 40, timeout=30)
             assert (status, doc.get("result"), doc.get("reason")) == (200, "rejected", "git_read"), doc
             _until(lambda: rig.hanging(), "the probe hanging", timeout=10)
-            began = time.monotonic()
-            status, st = svc.call("GET", "/v1/status", timeout=2.0)
-            assert status == 200 and time.monotonic() - began < 1.0, st
+            st = _answers_at_once(svc)
             assert st["self_check"]["running"] is True, st
             _until(lambda: _status(svc)["self_check"]["state"] == "failed", "the probe timing out")
             assert _status(svc)["self_check"]["failures"] == [_REPO_FAILURE]
@@ -417,11 +440,103 @@ def test_a_hanging_repo_probe_never_holds_the_service(rig):
             os.kill(pid, signal.SIGKILL)
 
 
-def test_the_docs_name_every_self_check_reason():
-    """The /v1/status docs list the closed reasons by hand: each one in the
-    SSOT (``_gsvc_proto.SELF_CHECK_REASONS``) is there, in both languages."""
-    root = Path(__file__).resolve().parents[2]
-    for doc in ("docs/cli-reference.md", "docs/cli-reference.en.md"):
-        text = (root / doc).read_text(encoding="utf-8")
-        missing = [r for r in _gsvc_proto.SELF_CHECK_REASONS if f"`{r}`" not in text]
-        assert not missing, (doc, missing)
+#: The service with ``_kill_group`` a no-op: a process the time limit's kill
+#: does not end — as SIGKILL does not end one in an uninterruptible sleep
+#: (git on a hung NFS mount), which no test here can produce.
+_KILL_DOES_NOTHING = "import generator_service as _gs\n_gs._kill_group = lambda pid: None\n"
+
+
+def test_a_probe_the_kill_does_not_end_holds_the_slot_not_the_loop(rig):
+    """#3903: past the time limit the probe's process is killed, then its
+    end awaited on its pidfd — never a blocking wait: while it outlives the
+    kill the service still answers, the round still running. Once it ends,
+    the round records ``repo_unreadable`` (timed out)."""
+    git, armed = _hanging_git(rig)
+    try:
+        with rig.service("probe-unkillable", "--git", str(git),
+                         "--self-check-timeout-seconds", "1",
+                         prelude=_KILL_DOES_NOTHING) as svc:
+            assert _status(svc)["ready"] is True
+            armed.touch()
+            status, doc = svc.validate("0" * 40, timeout=30)
+            assert doc.get("reason") == "git_read", doc
+            _until(lambda: rig.hanging(), "the probe hanging", timeout=10)
+            time.sleep(2.0)  # past the 1 s limit: the kill has been sent
+            st = _answers_at_once(svc)
+            assert st["self_check"]["running"] is True and rig.hanging(), st
+            armed.unlink()
+            for pid in rig.hanging():
+                os.kill(pid, signal.SIGKILL)
+            _until(lambda: _status(svc)["self_check"]["state"] == "failed", "the round ending")
+            assert _status(svc)["self_check"]["failures"] == [_REPO_FAILURE]
+    finally:
+        for pid in rig.hanging():
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_git_reads_ask_for_no_round_within_the_interval(rig):
+    """#3903: a git_read asks for a round no sooner than --self-check-seconds
+    after the latest one: a burst of them right after the first round
+    starts none (here the interval is an hour)."""
+    with rig.service("burst", "--self-check-seconds", "3600") as svc:
+        assert _rounds(svc, "passed") == 1
+        for _ in range(6):
+            status, doc = svc.validate("0" * 40)
+            assert doc.get("reason") == "git_read", doc
+        time.sleep(1.0)
+        st = _status(svc)
+        assert st["self_check"]["running"] is False and st["ready"] is True, st
+        assert (_rounds(svc, "passed"), _rounds(svc, "failed")) == (1, 0)
+
+
+def test_a_burst_of_git_reads_is_one_round(rig):
+    """#3903: the git_reads asked for before a round begins are one ask —
+    one round once the interval is past, not one per request."""
+    with rig.service("coalesce", "--self-check-seconds", "2") as svc:
+        assert _rounds(svc, "passed") == 1
+        for _ in range(6):
+            assert svc.validate("0" * 40)[1].get("reason") == "git_read"
+        _until(lambda: _rounds(svc, "passed") == 2, "the round asked for")
+        time.sleep(3.0)  # more than the interval: a second ask would have run
+        assert (_rounds(svc, "passed"), _rounds(svc, "failed")) == (2, 0)
+
+
+def test_git_reads_never_shorten_the_wait_after_a_failed_round(rig):
+    """#3903: after a failed round the next comes --self-check-seconds later;
+    git_reads meanwhile (every request, while --repo cannot be read) do not
+    wake it."""
+    restore = None
+    with rig.service("no-wake", "--self-check-seconds", "6") as svc:
+        restore = _break_repo(rig.repo, "gone")
+        try:
+            svc.validate("0" * 40)
+            _until(lambda: _rounds(svc, "failed") == 1, "the first failed round", timeout=30)
+            failed_at = time.monotonic()
+            for _ in range(5):
+                assert svc.validate("0" * 40)[1].get("reason") == "git_read"
+            time.sleep(0.5)
+            assert time.monotonic() - failed_at < 5.0  # the check below is inside the wait
+            assert _rounds(svc, "failed") == 1 and not _status(svc)["self_check"]["running"]
+        finally:
+            restore()
+
+
+#: The clause of each cli-reference that lists the self-check's reasons.
+_REASONS_CLAUSE = {
+    "docs/cli-reference.md": r"`failures` 的 `reason` 為 (.*?)，程式的 stderr",
+    "docs/cli-reference.en.md": r"a `failures` entry's `reason` is (.*?), and the program's stderr",
+}
+
+
+@pytest.mark.parametrize("doc", sorted(_REASONS_CLAUSE))
+def test_the_docs_list_exactly_the_self_check_reasons(doc):
+    """The /v1/status docs list the closed reasons by hand, in the
+    self-check paragraph: that list is exactly the SSOT
+    (``_gsvc_proto.SELF_CHECK_REASONS``) — none missing, none extra."""
+    import re
+    text = (Path(__file__).resolve().parents[2] / doc).read_text(encoding="utf-8")
+    m = re.search(_REASONS_CLAUSE[doc], text)
+    assert m, f"{doc}: the reasons clause is not there"
+    clause = re.sub(r"（[^）]*）|\([^)]*\)", "", m.group(1))  # asides name no reason
+    listed = re.findall(r"`([^`]+)`", clause)
+    assert sorted(listed) == sorted(_gsvc_proto.SELF_CHECK_REASONS), (doc, listed)
