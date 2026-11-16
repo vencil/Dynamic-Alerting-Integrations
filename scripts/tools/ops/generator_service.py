@@ -16,8 +16,20 @@ HTTP/1.1 on a Unix socket (no network port) and serves:
   ``min_generator_version``; ``POLICY_UNAVAILABLE``: the deployment
   ``--policy`` file is unusable);
 * ``GET /v1/status`` — policy availability, generator and da-guard versions,
-  the latest judgement's tool fault, readiness;
+  the programs' self-check, the latest tool fault, readiness;
 * ``GET /metrics`` — Prometheus text format.
+
+READINESS (#3943). The service is ready only once the self-check of each
+program a judgement runs — ``da-guard self-check``, ``da-read self-check``,
+``da-crdecode --self-check``, resolved as the judgement resolves them — has
+passed: each runs every subcommand of its own dispatch table on fixtures
+built into it. The first round starts once the socket is bound (``pending``
+until it ends: not ready); a tool fault of a judgement or a warming run
+makes the service not ready at once and starts a round at once too. After a
+failed round the next comes every ``--self-check-seconds``, or at once when
+a new tool fault comes. Only a passing round clears the fault — a judgement
+that ran may never have reached the program that failed. The self-check
+decides readiness only, never a verdict.
 
 Defaults of every limit are in ``--help``; this docstring does not repeat
 them.
@@ -98,6 +110,7 @@ from _gsvc_proto import (  # noqa: E402
 )
 from _lib_parse_cache import restricted_loads  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (absolute_reader_binaries, #3424)
+import _lib_tool_fault  # noqa: E402  (os_error_reason: one reading of a failed exec)
 from _grar_validate import (  # noqa: E402
     PolicyInputError, generator_version_problem, load_policy_document,
 )
@@ -124,6 +137,32 @@ DEFAULT_MAX_RESULT_BYTES = 16 * MiB
 DEFAULT_MAX_CACHE_TRANSFER_BYTES = 64 * MiB
 DEFAULT_WARM_REF = "HEAD"
 DEFAULT_WARM_SECONDS = 300.0
+DEFAULT_SELF_CHECK_SECONDS = 30.0
+DEFAULT_SELF_CHECK_TIMEOUT_SECONDS = 60.0
+#: A self-check's stdout read back: its whole document is far shorter, and
+#: anything longer is not it. Its stderr: the start goes to the log.
+_SELF_CHECK_STDOUT_LIMIT = 4096
+_SELF_CHECK_STDERR_LOGGED = 1024
+#: RLIMIT_FSIZE of a self-check process: its stdout and stderr files (and
+#: da-guard's fixture tree copy) live in --work-dir, and a program that
+#: writes without end must not fill it. Far above what a passing one writes.
+_SELF_CHECK_FILE_LIMIT_BYTES = 1 * MiB
+
+
+def _self_check_limits(memory_limit: int):
+    """The self-check process's limits, set before exec: RLIMIT_DATA
+    *memory_limit* — --memory-limit-bytes, the one a judgement's Go programs
+    run under (inherited from the judgement process), so a self-check fits
+    the container's budget as one of them does — and RLIMIT_FSIZE, so a
+    program that writes without end is stopped (EFBIG, or SIGXFSZ ends it)."""
+    def limit() -> None:
+        import resource
+        resource.setrlimit(resource.RLIMIT_DATA, (memory_limit, memory_limit))
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (_SELF_CHECK_FILE_LIMIT_BYTES, _SELF_CHECK_FILE_LIMIT_BYTES))
+    return limit
+
+
 HEADER_LIMIT_BYTES = 16 * 1024
 #: Descriptors kept free beyond the connection slots: stdio, the listening
 #: socket, the event loop's epoll and self-pipe, a judgement's result pipe
@@ -174,6 +213,8 @@ class Settings:
     max_connections: int
     max_inflight_body_bytes: int
     max_writes: int
+    self_check_seconds: float = DEFAULT_SELF_CHECK_SECONDS
+    self_check_timeout_seconds: float = DEFAULT_SELF_CHECK_TIMEOUT_SECONDS
 
 
 class Response:
@@ -304,6 +345,8 @@ class Metrics:
     rejections: Counter = field(default_factory=Counter)
     unavailable: Counter = field(default_factory=Counter)
     warm_runs: Counter = field(default_factory=Counter)
+    #: #3943: self-check rounds of the three programs, by state.
+    self_checks: Counter = field(default_factory=Counter)
     orphans_reaped: int = 0
     accept_errors: Counter = field(default_factory=Counter)
     peer_rejected: int = 0
@@ -406,10 +449,29 @@ class Service:
         # #3415: the one resolution ($DA_GUARD_BINARY, which main() set from
         # --da-guard-binary): the version reported is the da-guard that judges.
         self.da_guard_version = da_guard_version(None)
-        #: #3862: the latest judgement's tool faults (``_lib_tool_fault``
-        #: records, as dicts), or None when it had none. Not ready while set;
-        #: only the next judgement whose outcome is ``ran`` clears it.
+        #: #3862: the latest tool faults of a judgement or a warming run
+        #: (``_lib_tool_fault`` records, as dicts), or None. Not ready while
+        #: set; only a self-check that passes clears it (#3943) — one that
+        #: started before the latest fault does not (``_fault_seq``).
         self.tool_fault: Optional[list] = None
+        self._fault_seq = 0
+        #: #3943: the latest self-check round of the three programs
+        #: (``_gsvc_proto.SELF_CHECK_STATES``), its failures and whether one
+        #: is running. Not ready until one has passed.
+        self.self_check_state = "pending"
+        self.self_check_failures: list = []
+        self.self_check_running = False
+        self._self_check_task: Optional[asyncio.Task] = None
+        #: Set by a tool fault while the loop waits between rounds: run now.
+        self._self_check_wake = asyncio.Event()
+        #: A self-check round holds (or waits for) the judgement slot; set
+        #: by ``_start_next`` when the slot is free for it.
+        self._self_check_slot = False
+        self._slot_free = asyncio.Event()
+        self._self_check_seq = 0
+        #: Self-check processes not yet collected: ``_reap_orphans`` leaves
+        #: them to their own ``wait``.
+        self._held_pids: set[int] = set()
         self._job_seq = 0
         self.connections = 0
         self.inflight_body_bytes = 0
@@ -605,6 +667,11 @@ class Service:
     def _start_next(self) -> None:
         if self.running is not None or self.warming is not None:
             return
+        if self._self_check_slot:
+            # #3943: a self-check round holds the slot — it runs alone, as a
+            # judgement does (the memory budget, ADR-036 §3); the queue waits.
+            self._slot_free.set()
+            return
         if self.waiting:
             ticket = self.waiting.popleft()
             if ticket.timer is not None:
@@ -726,9 +793,8 @@ class Service:
                      and run.reader.ended and run.reader.result is not None)
             if ended and run.reader.result.get("outcome") == "tool_fault":
                 # #3862: a program the warming run reads with did not run —
-                # not ready. A warming run that ran clears nothing: it runs
-                # parse-tree only, not every program a judgement does.
-                self.tool_fault = tool_faults_of(run.reader.result)
+                # not ready until a self-check passes (#3943).
+                self._note_tool_fault(tool_faults_of(run.reader.result))
             complete = ended and run.reader.result.get("outcome") == "warmed"
             if complete:
                 outcome = "completed"
@@ -878,14 +944,14 @@ class Service:
         if outcome == "tool_fault":
             # #3862: an external program of this judgement did not run, so no
             # verdict was reached — whatever the generator concluded without it.
-            self.tool_fault = tool_faults_of(res)
+            faults = tool_faults_of(res)
+            self._note_tool_fault(faults)
             return _unavailable("VALIDATOR_UNAVAILABLE", "tool_fault",
-                                tool_fault_message(self.tool_fault), tool_fault=self.tool_fault)
+                                tool_fault_message(faults), tool_fault=faults)
         if outcome == "ran":
-            # #3862: the one outcome that shows every program of the
-            # judgement ran. Any other (a bad request, a git read, memory,
-            # the deadline, …) may never have reached them: it clears nothing.
-            self.tool_fault = None
+            # #3943: a judgement that ran clears no tool fault — it may have
+            # ended (content refused early) before the program that failed.
+            # Only a passing self-check does.
             rc = res.get("rc")
             doc = {"result": "pass" if rc == 0 else "findings",
                    "rc": rc, "findings": res.get("findings"), **common}
@@ -908,6 +974,224 @@ class Service:
         if outcome == "da_guard":
             _log("incomplete: da-guard names mode could not classify the base tree's path names")
         return _rejected("incomplete", **common)
+
+    # ── self-check (#3943) ────────────────────────────────────────────────
+
+    def _note_tool_fault(self, faults: list) -> None:
+        """A judgement or warming run whose program did not run: not ready
+        at once, and the self-check runs again until one passes."""
+        self.tool_fault = faults
+        self._fault_seq += 1
+        self._ensure_self_check_loop()
+
+    def _ensure_self_check_loop(self) -> None:
+        """Run a self-check round now: start the loop, or — when it is
+        running — wake it from its wait between rounds."""
+        if self._self_check_task is None or self._self_check_task.done():
+            self._self_check_wake.clear()
+            # the slot is the round's from now, not from when its task first
+            # runs: a judgement or warming run started in between would only
+            # be waited for (or a warming run preempted)
+            self._self_check_slot = True
+            self._self_check_task = self.loop.create_task(self._self_check_loop())
+        else:
+            self._self_check_wake.set()
+
+    async def _self_check_loop(self) -> None:
+        """A self-check round now, then again after each failed one — every
+        --self-check-seconds, or at once when a new tool fault wakes it —
+        until one passes with no tool fault left."""
+        while True:
+            self._self_check_wake.clear()
+            if await self.self_check_round():
+                return
+            try:
+                await asyncio.wait_for(self._self_check_wake.wait(),
+                                       self.s.self_check_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    async def stop_self_check(self) -> None:
+        """End the self-check loop and wait for it: a running self-check's
+        process group is killed and collected (``_self_check_in``)."""
+        task = self._self_check_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @staticmethod
+    def _self_check_programs() -> list[tuple[str, Optional[str], tuple[str, ...]]]:
+        """(name, path or None, arguments) of each program's self-check, the
+        path by the resolution its judgement uses: da-guard's dispatcher,
+        ``_lib_consumer_read.resolve_binary`` for the readers — after
+        ``_pin_readers``, as before a judgement."""
+        import guard_dispatch
+        _pin_readers()
+        out = []
+        for env, (_module, _pkg, name) in _lib_consumer_read.READER_BUILD_SOURCES.items():
+            if env == _lib_consumer_read.DA_GUARD_ENV:
+                exe = guard_dispatch.DISPATCHER.resolve_binary(None)
+            else:
+                exe = _lib_consumer_read.resolve_binary(None, env, name)
+            out.append((name, exe, _lib_consumer_read.READER_SELF_CHECK_ARGS[env]))
+        return sorted(out)
+
+    async def _take_slot(self) -> None:
+        """Hold the one slot judgements and warming runs take: no new one
+        starts (``_start_next``), a warming run is ended, and a running
+        judgement is waited for — so a self-check never overlaps either and
+        the container's memory budget holds (ADR-036 §3). A request that
+        comes meanwhile waits in the queue, its deadline running."""
+        self._self_check_slot = True
+        if self.warming is not None and self.pending_warm is None:
+            self.pending_warm = self.warming  # warmed again after the round
+        self._preempt_warm()
+        while self.running is not None or self.warming is not None:
+            self._slot_free.clear()
+            await self._slot_free.wait()
+
+    def _free_slot(self) -> None:
+        self._self_check_slot = False
+        if self.loop is not None:
+            self._start_next()
+
+    async def self_check_round(self) -> bool:
+        """Run the three self-checks one after another, alone in the slot
+        (``_take_slot``), and record the round; whether it passed and no
+        tool fault is left. A pass clears the tool fault unless a newer one
+        came while it ran."""
+        seq = self._fault_seq
+        self.self_check_running = True
+        try:
+            await self._take_slot()
+            try:
+                programs = self._self_check_programs()
+            except Exception as exc:  # noqa: BLE001 — the round fails, the service stays up
+                _log(f"self-check: cannot resolve the programs: {exc!r}")
+                programs = [(name, None, ()) for name in _lib_tool_fault.BINARIES]
+                reasons = ["internal_error"] * len(programs)
+            else:
+                # one at a time: each is one Go program under the judgement's
+                # memory limit, as a judgement runs one at a time
+                reasons = [await self._self_check_one(name, exe, args)
+                           for name, exe, args in programs]
+        finally:
+            self.self_check_running = False
+            self._free_slot()
+        self.self_check_failures = [{"binary": name, "reason": reason}
+                                    for (name, _exe, _args), reason in zip(programs, reasons)
+                                    if reason is not None]
+        self.self_check_state = "failed" if self.self_check_failures else "passed"
+        self.metrics.self_checks[self.self_check_state] += 1
+        if self.self_check_state == "passed" and self._fault_seq == seq:
+            self.tool_fault = None
+        return self.self_check_state == "passed" and self.tool_fault is None
+
+    async def _self_check_one(self, name: str, exe: Optional[str],
+                              args: tuple[str, ...]) -> Optional[str]:
+        """Run one program's self-check; None when it passed, else its
+        reason (``_gsvc_proto.SELF_CHECK_REASONS``), the detail logged.
+
+        Passed is exit 0 with exactly ``SELF_CHECK_PASSED`` on stdout. The
+        process runs in a directory of its own (also its $TMPDIR: da-guard
+        writes its fixture tree there), in a process group of its own that
+        the time limit ends; it is ``wait``-ed for here, never by
+        ``_reap_orphans``. No thread: its exit is a pidfd on this loop."""
+        if not exe:
+            _log(f"self-check: {name}: not found")
+            return "not_found"
+        try:
+            self._self_check_seq += 1
+            work = os.path.join(_jobs_dir(self.s.work_dir), f"selfcheck-{self._self_check_seq}")
+            os.mkdir(work, 0o700)
+        except OSError as exc:
+            _log(f"self-check: {name}: cannot make its directory: {exc!r}")
+            return "internal_error"
+        try:
+            return await self._self_check_in(name, exe, args, work)
+        except Exception as exc:  # noqa: BLE001 — the self-check fails, the service stays up
+            _log(f"self-check: {name}: {exc!r}")
+            return "internal_error"
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    async def _self_check_in(self, name: str, exe: str, args: tuple[str, ...],
+                             work: str) -> Optional[str]:
+        out_path, err_path = os.path.join(work, "stdout"), os.path.join(work, "stderr")
+        # 0600 from creation (the work directory is 0700 already): what a
+        # self-check prints is the service's to read, nobody else's
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        out = os.open(out_path, flags, 0o600)
+        try:
+            err = os.open(err_path, flags, 0o600)
+        except OSError:
+            os.close(out)
+            raise
+        try:
+            proc = subprocess.Popen(  # noqa: S603 — the resolved program, no shell
+                [exe, *args], stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True,
+                preexec_fn=_self_check_limits(self.s.memory_limit_bytes))
+        except OSError as exc:
+            reason = _lib_tool_fault.os_error_reason(exc, exe)
+            _log(f"self-check: {name}: {reason}: {exc.strerror}")
+            return reason
+        finally:
+            os.close(out)
+            os.close(err)
+        # No await between the fork and this: _reap_orphans (a SIGCHLD
+        # callback on this loop) cannot have collected it.
+        self._held_pids.add(proc.pid)
+        timed_out = False
+        try:
+            timed_out = not await self._exited(proc.pid, self.s.self_check_timeout_seconds)
+        finally:
+            _kill_group(proc.pid)  # #3923: before it is collected
+            proc.wait()
+            self._held_pids.discard(proc.pid)
+            self._reap_orphans()  # what was held back behind it
+        with open(out_path, "rb") as fh:
+            stdout = fh.read(_SELF_CHECK_STDOUT_LIMIT + 1)
+        with open(err_path, "rb") as fh:
+            stderr = fh.read(_SELF_CHECK_STDERR_LOGGED)
+        rc = proc.returncode
+        if timed_out:
+            reason = "timed_out"
+        elif rc < 0:
+            reason = "signalled"
+        elif rc == 0:
+            reason = None if stdout == _lib_consumer_read.SELF_CHECK_PASSED else "bad_output"
+        elif rc == 1:
+            reason = "failed" if stdout == _lib_consumer_read.SELF_CHECK_FAILED else "bad_output"
+        else:
+            reason = "unexpected_exit"
+        if reason is not None:
+            _log(f"self-check: {name}: {reason} (exit {rc}): "
+                 + stderr.decode("utf-8", "replace"))
+        return reason
+
+    async def _exited(self, pid: int, timeout: float) -> bool:
+        """Whether process *pid* exits within *timeout* seconds."""
+        pidfd = os.pidfd_open(pid)
+        done = self.loop.create_future()
+        self.loop.add_reader(pidfd, lambda: done.done() or done.set_result(None))
+        try:
+            await asyncio.wait_for(done, max(0.0, timeout))
+            return True
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            self.loop.remove_reader(pidfd)
+            os.close(pidfd)
+
+    def _self_check_doc(self) -> dict:
+        return {"state": self.self_check_state,
+                "failures": [dict(f) for f in self.self_check_failures],
+                "running": self.self_check_running}
 
     # ── status and metrics ────────────────────────────────────────────────
 
@@ -932,8 +1216,10 @@ class Service:
             "generator_version": self.generator_version,
             "generator_too_old": too_old,
             "da_guard_version": self.da_guard_version,
+            "self_check": self._self_check_doc(),
             "tool_fault": self.tool_fault,
-            "ready": policy.available and too_old is None and self.tool_fault is None,
+            "ready": (policy.available and too_old is None
+                      and self.self_check_state == "passed" and self.tool_fault is None),
             "cache_base_coverage_ratio": self.store.coverage(),
             "warm": {"ref": self.s.warm_ref or None, "commit": self.warm_commit,
                      "error": self.warm_error, "running": self.warming,
@@ -977,6 +1263,11 @@ class Service:
         for outcome in ("completed", "preempted", "deadline", "failed"):
             out.append(f'da_generator_warm_runs_total{{outcome="{outcome}"}} '
                        f"{self.metrics.warm_runs[outcome]}")
+        out += ["# HELP da_generator_self_checks_total Self-check rounds of da-guard, da-read and da-crdecode (readiness), by result.",
+                "# TYPE da_generator_self_checks_total counter"]
+        for result in ("passed", "failed"):
+            out.append(f'da_generator_self_checks_total{{result="{result}"}} '
+                       f"{self.metrics.self_checks[result]}")
         out += ["# HELP da_generator_key_verdicts_total Key verdicts (ADR-038) on writes the generator passed, by outcome: complete, or why not completed.",
                 "# TYPE da_generator_key_verdicts_total counter"]
         for outcome in KEY_VERDICT_OUTCOMES:
@@ -1027,9 +1318,10 @@ class Service:
         Called on SIGCHLD, before each fork and after each run's ``wait4``.
 
         ⛔ Never the running judgement (or warming) process: ``wait4`` in
-        :meth:`_spawn` takes its exit status. So each exited child is looked
-        at first without collecting it (``WNOWAIT``) and collected only when
-        it is not ``child_pid``. #3557: an orphan that ends while another run
+        :meth:`_spawn` takes its exit status — nor a self-check process
+        (``_held_pids``), whose exit :meth:`_self_check_in` reads. So each
+        exited child is looked at first without collecting it (``WNOWAIT``)
+        and collected only when it is neither. #3557: an orphan that ends while another run
         is in progress is collected on its own SIGCHLD, not left a zombie
         until that run ends. When the exited child the kernel reports is the
         running one, the rest wait for that run's end, which its exit has
@@ -1042,7 +1334,8 @@ class Service:
                                  os.WEXITED | os.WNOHANG | os.WNOWAIT)
             except ChildProcessError:
                 break
-            if info is None or info.si_pid == self.child_pid:
+            # #3943: nor a self-check process, which its own wait collects
+            if info is None or info.si_pid == self.child_pid or info.si_pid in self._held_pids:
                 break
             # it has exited (WNOWAIT left it waitable): this does not block
             os.waitpid(info.si_pid, 0)
@@ -1075,6 +1368,10 @@ class Service:
     def shutdown(self) -> None:
         if self.child_pid is not None:
             _kill_group(self.child_pid)
+        for pid in self._held_pids:  # a self-check still running
+            _kill_group(pid)
+        if self._self_check_task is not None:
+            self._self_check_task.cancel()
 
     def start_warming(self) -> None:
         """#2901 E2: resolve --warm-ref and queue a warming run for it. A ref
@@ -1191,6 +1488,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--warm-seconds", type=float, default=DEFAULT_WARM_SECONDS,
                    help="time limit of one warming run; a request arriving ends "
                         "it at once (default: %(default)s)")
+    p.add_argument("--self-check-seconds", type=float, default=DEFAULT_SELF_CHECK_SECONDS,
+                   help="after a failed self-check of da-guard, da-read and "
+                        "da-crdecode, the wait before the next (a new tool fault "
+                        "runs one at once); only a passing one makes the service "
+                        "ready (default: %(default)s)")
+    p.add_argument("--self-check-timeout-seconds", type=float,
+                   default=DEFAULT_SELF_CHECK_TIMEOUT_SECONDS,
+                   help="time limit of one program's self-check; past it the "
+                        "self-check fails (timed_out) (default: %(default)s)")
     return p
 
 
@@ -1322,6 +1628,11 @@ def _check_limits(settings: Settings) -> None:
             f"below --max-body-bytes {settings.max_body_bytes}: a request in "
             f"between could never be admitted; raise the first or lower the "
             f"second")
+    # A self-check every 0 seconds is a busy loop; one with no time never passes.
+    for flag, value in (("--self-check-seconds", settings.self_check_seconds),
+                        ("--self-check-timeout-seconds", settings.self_check_timeout_seconds)):
+        if not value > 0:
+            raise RuntimeError(f"{flag} {value} is not a positive number of seconds")
 
 
 def _ensure_fd_limit(max_connections: int) -> None:
@@ -1377,12 +1688,17 @@ async def serve(settings: Settings, object_format: str) -> None:
           flush=True)
     service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
     service.loop.set_exception_handler(service.loop_exception)
+    # #3943: the programs' self-check, on the path a tool fault's rerun takes
+    # — after the signal handlers, so SIGTERM ends it like anything else.
+    # Until its first round has passed the status says `pending`, not ready.
+    service._ensure_self_check_loop()
     service.start_warming()
     try:
         await stop
     finally:
         server.close()
         service.shutdown()
+        await service.stop_self_check()
         try:
             os.unlink(settings.socket)
         except OSError:

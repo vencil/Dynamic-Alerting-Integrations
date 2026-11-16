@@ -81,6 +81,45 @@ def tool_faults_of(result: dict) -> list:
     return out or [{"binary": "unknown", "subcommand": "", "reason": "unknown"}]
 
 
+#: GET /v1/status ``self_check`` (#3943): the three judgement programs'
+#: self-checks — ``{"state", "failures", "running"}``, each failure
+#: ``{"binary", "reason"}``. Closed sets, no free text (#3961): what a
+#: failing self-check printed goes to the service's own log.
+SELF_CHECK_KEYS = frozenset({"state", "failures", "running"})
+SELF_CHECK_FAILURE_KEYS = frozenset({"binary", "reason"})
+#: ``pending``: none has finished yet; ``passed``: the latest passed for all
+#: three; ``failed``: the latest failed for at least one.
+SELF_CHECK_STATES = ("pending", "passed", "failed")
+#: Why one program's self-check did not pass: the program-did-not-run
+#: reasons of ``_lib_tool_fault``, ``failed`` (it ran and printed its failed
+#: document: an answer differs from the one built in), and
+#: ``internal_error`` (this service could not run it).
+SELF_CHECK_REASONS = ("not_found", "not_executable", "exec_failed", "timed_out",
+                      "signalled", "unexpected_exit", "bad_output", "failed",
+                      "internal_error")
+
+
+def self_check_problem(doc: object) -> Optional[str]:
+    """Why *doc*, a ``self_check`` of GET /v1/status, is not of the closed
+    shape above; None when it is."""
+    import _lib_tool_fault
+    if not isinstance(doc, dict) or set(doc) != SELF_CHECK_KEYS:
+        return "not an object with exactly the self_check keys"
+    if doc["state"] not in SELF_CHECK_STATES or not isinstance(doc["running"], bool):
+        return "a state or running outside the closed set"
+    failures = doc["failures"]
+    if not isinstance(failures, list):
+        return "failures is not a list"
+    for f in failures:
+        if not isinstance(f, dict) or set(f) != SELF_CHECK_FAILURE_KEYS \
+                or f["binary"] not in _lib_tool_fault.BINARIES \
+                or f["reason"] not in SELF_CHECK_REASONS:
+            return "a failure outside the closed set"
+    if (doc["state"] == "failed") != bool(failures):
+        return "failures do not match the state"
+    return None
+
+
 def tool_fault_message(faults: list) -> str:
     """The 503 message for *faults* (`tool_faults_of`)."""
     return TOOL_FAULT_MESSAGE + "; ".join(

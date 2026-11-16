@@ -1,0 +1,1 @@
+{"schema":"da-guard.write/v3","da_guard_version":"{version}","command":"write","status":"written","reason":null,"message":null,"files":[{"path":"team/t1.yaml","kind":"edit","from":null,"status":"written","reason":null,"message":null,"entry":null,"problem":null,"difference":null,"content":null,"warnings":[]}],"worsened":[]}

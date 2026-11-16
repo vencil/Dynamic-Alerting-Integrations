@@ -811,3 +811,133 @@ def test_main_makes_every_reader_binary_absolute_before_anything_else(tmp_path, 
     assert rc == gs.EXIT_CALLER_ERROR
     for name in cr.READER_BINARY_ENVS:
         assert os.environ[name] == str(tmp_path / "bin" / name), name
+
+
+# ── #3943: the self-check decides readiness; only a pass clears a fault ──
+
+_FAULT = [{"binary": "da-read", "subcommand": "prometheus-rules", "reason": "not_found"}]
+_PROGRAMS = [(name, f"/x/{name}", ()) for name in ("da-crdecode", "da-guard", "da-read")]
+
+
+def _gated_self_check(svc: _FakeService, answers: "dict[str, str | None]",
+                      gate: "asyncio.Event | None" = None) -> None:
+    """Each program's self-check answers *answers*[name] (None: passed),
+    after *gate* when given."""
+    async def one(name, exe, args):
+        if gate is not None:
+            await gate.wait()
+        return answers.get(name)
+    svc._self_check_one = one
+    svc._self_check_programs = lambda: list(_PROGRAMS)
+
+
+def test_a_self_check_that_started_before_a_fault_does_not_clear_it():
+    """A pass clears only the faults that came before it began: the round
+    that was running when a judgement's fault came says nothing about it."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        gate = asyncio.Event()
+        _gated_self_check(svc, {}, gate)
+        running = asyncio.ensure_future(svc.self_check_round())
+        await _settle()
+        assert svc.self_check_running is True
+        svc.tool_fault, svc._fault_seq = _FAULT, svc._fault_seq + 1
+        gate.set()
+        assert await running is False
+        assert svc.self_check_state == "passed" and svc.tool_fault == _FAULT
+        assert await svc.self_check_round() is True  # one that began after it
+        assert svc.tool_fault is None
+    asyncio.run(main())
+
+
+def test_a_fault_reruns_the_self_check_until_one_passes():
+    """A tool fault starts the self-check loop at once; a failed round leaves
+    the fault, the next passing round clears it and ends the loop."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.s.self_check_seconds = 0.01
+        svc.loop = asyncio.get_running_loop()
+        answers = {"da-read": "failed"}
+        _gated_self_check(svc, answers)
+        svc._note_tool_fault(_FAULT)
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            if svc.self_check_state == "failed":
+                break
+        assert svc.self_check_failures == [{"binary": "da-read", "reason": "failed"}]
+        assert svc.tool_fault == _FAULT and not svc._self_check_task.done()
+        answers.clear()
+        await asyncio.wait_for(svc._self_check_task, 5)
+        assert svc.self_check_state == "passed" and svc.tool_fault is None
+        assert svc.metrics.self_checks["failed"] >= 1 and svc.metrics.self_checks["passed"] == 1
+        assert proto.self_check_problem(svc._self_check_doc()) is None
+    asyncio.run(main())
+
+
+def test_a_judgement_that_ran_clears_no_tool_fault():
+    """#3943: outcome `ran` may have ended before the program that failed —
+    the verdict is given, the fault stays."""
+    from types import SimpleNamespace
+    svc = _FakeService(delay=0)
+    svc.tool_fault = _FAULT
+    reader = SimpleNamespace(result={"outcome": "ran", "rc": 0, "findings": {}, "cache": {}},
+                             ended=True)
+    resp = svc._verdict(gs.ChildRun(False, 0, reader, 0))
+    assert _doc(resp)["result"] == "pass" and svc.tool_fault == _FAULT
+
+
+@pytest.mark.parametrize("doc,ok", [
+    ({"state": "passed", "failures": [], "running": False}, True),
+    ({"state": "failed", "failures": [{"binary": "da-guard", "reason": "timed_out"}],
+      "running": True}, True),
+    ({"state": "failed", "failures": [], "running": False}, False),
+    ({"state": "passed", "failures": [{"binary": "da-guard", "reason": "failed"}],
+      "running": False}, False),
+    ({"state": "failed", "failures": [{"binary": "da-guard", "reason": "it broke"}],
+      "running": False}, False),
+    ({"state": "passed", "failures": [], "running": False, "message": "x"}, False),
+])
+def test_the_self_check_document_is_closed(doc, ok):
+    assert (proto.self_check_problem(doc) is None) is ok
+
+
+def test_a_self_check_never_overlaps_a_judgement():
+    """ADR-036 §3's memory budget holds one judgement (and its Go program)
+    at a time; a self-check round is one more Go program. It waits for the
+    running judgement, and while it runs no queued request starts — they
+    wait in the queue, then run once it is done."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.gate = asyncio.Event()  # the first judgement runs until released
+        check_gate = asyncio.Event()
+        seen = []
+
+        async def one(name, exe, args):
+            seen.append((name, svc.running is None, list(svc.judged)))
+            await check_gate.wait()
+            return None
+        svc._self_check_one = one
+        svc._self_check_programs = lambda: list(_PROGRAMS)
+        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), svc.loop.time()))
+        await _settle()
+        assert svc.running is not None
+        round_ = asyncio.ensure_future(svc.self_check_round())
+        await _settle()
+        assert seen == [], seen  # waits for the running judgement
+        second = asyncio.create_task(svc.submit(_req("2" * 40, 25000), svc.loop.time()))
+        await _settle()
+        svc.gate.set()
+        assert _doc(await first)["result"] == "pass"
+        await _settle()
+        # the round runs alone: the queued request has not started
+        assert seen == [("da-crdecode", True, ["1" * 40])], seen
+        assert svc.running is None and len(svc.waiting) == 1
+        check_gate.set()
+        assert await round_ is True
+        assert [name for name, _free, _judged in seen] == ["da-crdecode", "da-guard", "da-read"]
+        assert all(free for _name, free, _judged in seen)
+        assert _doc(await second)["result"] == "pass"
+        assert svc.judged == ["1" * 40, "2" * 40]
+    asyncio.run(main())

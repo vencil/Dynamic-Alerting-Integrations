@@ -51,12 +51,15 @@
    第一次執行。後者要另起一個服務（環境變數為空、PATH 上沒有它）。
 3. 每次 503 都斷言 ``VALIDATOR_UNAVAILABLE``／``tool_fault``、訊息與
    ``/v1/status`` 的 ``tool_fault`` 點名那支程式；故障後 ``ready`` 為 false，
-   換回好的 binary 再判一次後回 true。
+   換回好的 binary、自檢通過後回 true（#3943）。打一格時同時讓那支程式的
+   自檢失敗（``Rig.strike``）：自檢若照常通過，故障在讀 ``/v1/status`` 之前就
+   可能被清掉，``ready`` 讀到哪個值取決於時序。
 4. base 樹含 symlink 時，寫出樹的當下就跑 ``parse-tree --names``：那裡
    被 SIGKILL 是 503 ``signalled``，記憶體類結束是 ``rejected``／``memory``，
    不是「判定程序沒給完整結果」（``test_names_mode_of_a_base_tree_with_a_symlink_struck``）。
-5. 清除條件：故障標記只在 outcome ``ran`` 的判定之後清掉；``git_read``、
-   ``bad_request`` 等沒跑過工具的結果不清（``test_only_a_judgement_that_ran_clears``）。
+5. 清除條件：故障標記只由通過的自檢清掉（#3943）；``git_read``、
+   ``bad_request``，以及跑完全程（``ran``）的判定都不清
+   （``test_only_a_self_check_clears``）。
 
 未涵蓋：逾時（``timed_out``）——每打一格要等滿一個程式的時間上限，太慢；
 它的記錄點只由程式碼審閱守。
@@ -71,6 +74,7 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -78,6 +82,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _grar_findings_cases as cases  # noqa: E402
 import _gsvc_harness as h  # noqa: E402
+import _lib_consumer_read  # noqa: E402
 import _lib_tool_fault  # noqa: E402
 from _lib_tenant_values import SERVED_VALUES_SCHEMA as _SERVED_VALUES_SCHEMA  # noqa: E402
 
@@ -86,6 +91,11 @@ pytestmark = pytest.mark.skipif(sys.platform != "linux",
 
 BINARIES = {"da-guard": "DA_GUARD_BINARY", "da-read": "DA_READ_BINARY",
             "da-crdecode": "DA_CRDECODE_BINARY"}
+#: Each program's self-check cell (its first argument, as the shim logs it).
+SELF_CHECK_CELL = {name: _lib_consumer_read.READER_SELF_CHECK_ARGS[var][0]
+                   for name, var in BINARIES.items()}
+#: The faults that are a program's fault (not the judgement's memory).
+_MEMORY_FAULTS = ("sigsegv", "oomexit", "ulimit")
 
 #: The shim. Builtins only: the service's PATH holds just its stub directory.
 #: Its cell is the first argument (an absolute path — a da-crdecode input —
@@ -213,7 +223,8 @@ class _Rig:
         self.writes = [{"path": "beta.yaml", "content_b64": h.b64(body + "# edited\n")},
                        {"path": "alpha.yaml", "delete": True}]
         self.svc = h.Service(tmp / "svc", repo, bin_dir=tmp / "bin",
-                             args=("--max-cache-transfer-bytes", "0"),
+                             args=("--max-cache-transfer-bytes", "0",
+                                   "--self-check-seconds", "0.2"),
                              env={var: str(self.shims / n) for n, var in BINARIES.items()})
 
     def status(self) -> dict:
@@ -234,13 +245,30 @@ class _Rig:
         path.write_bytes(self.good[name])
         path.chmod(0o755)
 
+    def strike(self, text: str) -> None:
+        """Write *text* (lines ``<binary> <cell> <fault>``) to the control
+        file, and for each program a line strikes with a fault of its own
+        (not the judgement's memory) fail its self-check too: the fault then
+        stays until the test clears it (#3943)."""
+        lines = [ln for ln in text.splitlines() if ln]
+        for ln in list(lines):
+            binary = ln.split(" ", 1)[0]
+            if not any(f" {m}" in ln for m in _MEMORY_FAULTS):
+                lines.append(f"{binary} {SELF_CHECK_CELL[binary]} rc7")
+        h.write_atomic(self.ctl, "".join(f"{ln}\n" for ln in lines))
+
     def assert_recovers(self) -> None:
-        self.ctl.write_text("", encoding="utf-8")
+        """Every program as it was: a judgement passes, and a self-check
+        passing makes the service ready again."""
+        h.write_atomic(self.ctl, "")
         for name in BINARIES:
             self.restore(name)
-        status, doc, st, _cells = self.judge()
+        status, doc, _st, _cells = self.judge()
         assert status == 200 and doc["result"] == "pass", doc
-        assert st["tool_fault"] is None and st["ready"] is True, st
+        end = time.monotonic() + 60
+        while not ((st := self.status())["ready"] and st["tool_fault"] is None):
+            assert time.monotonic() < end, st
+            time.sleep(0.05)
 
 
 @pytest.fixture(scope="module")
@@ -306,7 +334,7 @@ def test_every_cell_struck_answers_503(rig, cells, fault):
     """Every recorded cell, struck alone: 503 naming its program — never a
     200 whose verdict was reached without it."""
     for binary, cell in cells:
-        rig.ctl.write_text(f"{binary} {cell} {fault}", encoding="utf-8")
+        rig.strike(f"{binary} {cell} {fault}")
         _assert_tool_fault(rig, binary, _subcommand(binary, cell), _reasons(fault, binary),
                            f"{binary} {cell} {fault}")
     rig.assert_recovers()
@@ -316,7 +344,7 @@ def _assert_memory(rig, where: str) -> None:
     """The judgement under *where*'s fault: that write's memory — never a
     503, and never a verdict (pass / findings) reached without that
     program. The service stays ready."""
-    rig.ctl.write_text(where, encoding="utf-8")
+    h.write_atomic(rig.ctl, where)
     status, doc, st, _ran = rig.judge()
     assert status == 200, (where, doc)
     assert st["ready"] is True and st["tool_fault"] is None, (where, st)
@@ -341,7 +369,7 @@ def test_every_cell_ended_by_the_go_runtime_out_of_memory_is_rejected_as_memory(
     rig.assert_recovers()
     for binary, cell in cells:
         _assert_memory(rig, f"{binary} {cell} {fault}")
-    rig.ctl.write_text("", encoding="utf-8")
+    h.write_atomic(rig.ctl, "")
 
 
 #: RLIMIT_DATA levels (KiB) that end the real programs while their Go
@@ -398,7 +426,7 @@ def test_every_cell_out_of_memory_under_a_small_limit_is_rejected_as_memory(rig,
                 continue
             _assert_memory(rig, f"{binary} {cell} ulimit {kib}")
             struck += 1
-    rig.ctl.write_text("", encoding="utf-8")
+    h.write_atomic(rig.ctl, "")
     assert struck >= 2 * len(cells), (struck, ends)
     rig.assert_recovers()
 
@@ -408,8 +436,7 @@ def test_a_fault_wins_over_a_memory_end(rig, cells):
     tool_fault naming the fault, not memory."""
     # served-values runs before da-read alertmanager, and the generator goes
     # on past its memory end: both are reached in one judgement.
-    rig.ctl.write_text("da-guard served-values sigsegv\nda-read alertmanager usage\n",
-                       encoding="utf-8")
+    rig.strike("da-guard served-values sigsegv\nda-read alertmanager usage\n")
     try:
         _assert_tool_fault(rig, "da-read", "alertmanager", {"unexpected_exit"}, "both")
         status, _doc, st, ran = rig.judge()
@@ -417,7 +444,7 @@ def test_a_fault_wins_over_a_memory_end(rig, cells):
                                   ("da-read", "alertmanager")} <= ran, ran
         assert all(f["reason"] != _lib_tool_fault.MEMORY_END for f in st["tool_fault"]), st
     finally:
-        rig.ctl.write_text("", encoding="utf-8")
+        h.write_atomic(rig.ctl, "")
     rig.assert_recovers()
 
 
@@ -440,12 +467,11 @@ def test_names_mode_of_a_base_tree_with_a_symlink_struck(rig, cells, tmp_path):
     commit = h.run_git(repo, "rev-parse", "HEAD")
     writes = [{"path": "beta.yaml", "content_b64": h.b64(base["beta.yaml"] + "# edited\n")}]
     svc = h.Service(tmp_path / "svc", repo, bin_dir=tmp_path / "bin",
-                    args=("--max-cache-transfer-bytes", "0"),
+                    args=("--max-cache-transfer-bytes", "0", "--self-check-seconds", "0.2"),
                     env={var: str(rig.shims / n) for n, var in BINARIES.items()})
 
     def judge(fault: str) -> "tuple[int, dict, dict]":
-        rig.ctl.write_text(f"da-guard parse-tree --names {fault}" if fault else "",
-                           encoding="utf-8")
+        rig.strike(f"da-guard parse-tree --names {fault}" if fault else "")
         status, doc = svc.validate(commit, writes)
         _s, st = svc.call("GET", "/v1/status")
         return status, doc, st
@@ -462,14 +488,19 @@ def test_names_mode_of_a_base_tree_with_a_symlink_struck(rig, cells, tmp_path):
             assert {(f["binary"], f["subcommand"], f["reason"]) for f in st["tool_fault"]} \
                 == {("da-guard", "parse-tree", reason)}, (fault, st)
             status, doc, st = judge("")
-            assert status == 200 and st["ready"] is True and st["tool_fault"] is None, st
+            assert status == 200, doc
+            end = time.monotonic() + 60
+            while not ((st := svc.call("GET", "/v1/status")[1])["ready"]):
+                assert time.monotonic() < end, st  # a self-check passes: ready again
+                time.sleep(0.05)
+            assert st["tool_fault"] is None, st
         for fault in ("sigsegv", "oomexit"):
             status, doc, st = judge(fault)
             assert status == 200, (fault, doc)
             assert (doc["result"], doc["reason"]) == ("rejected", "memory"), (fault, doc)
             assert st["ready"] is True and st["tool_fault"] is None, (fault, st)
     finally:
-        rig.ctl.write_text("", encoding="utf-8")
+        h.write_atomic(rig.ctl, "")
         svc.stop()
 
 
@@ -514,11 +545,12 @@ def test_every_program_unresolved_answers_503(rig, cells, tmp_path):
             svc.stop()
 
 
-def test_only_a_judgement_that_ran_clears(rig, cells):
-    """The fault mark is cleared only by a judgement whose outcome is `ran`
-    — the one result that shows every program ran. One that never reached
-    them (a base commit git cannot read, a write that cannot be applied)
-    leaves the service not ready while the program is still missing."""
+def test_only_a_self_check_clears(rig, cells):
+    """The fault mark is cleared only by a self-check that passes (#3943).
+    A judgement that never reached the programs (a base commit git cannot
+    read, a write that cannot be applied) leaves the service not ready while
+    the program is still missing — and so does one that ran in full: it may
+    never have reached the program that failed."""
     path = rig.shims / "da-read"
     path.unlink()
     try:
@@ -534,6 +566,15 @@ def test_only_a_judgement_that_ran_clears(rig, cells):
         assert st["ready"] is False and st["tool_fault"], st
         # Still missing: the next judgement that reaches it fails again.
         _assert_tool_fault(rig, "da-read", None, {"not_found"}, "da-read still missing")
+        # There again for judgements, its self-check still failing: a
+        # judgement that ran in full clears nothing.
+        # the self-check made to fail first: restored first, a round could
+        # pass in between and clear the fault this test reads
+        rig.strike(f"da-read {SELF_CHECK_CELL['da-read']} rc7")
+        rig.restore("da-read")
+        status, doc, st, _ran = rig.judge()
+        assert status == 200 and doc["result"] == "pass", doc
+        assert st["ready"] is False and st["tool_fault"], st
     finally:
         rig.restore("da-read")
-    rig.assert_recovers()  # a judgement that ran: ready again
+    rig.assert_recovers()  # a self-check that passes: ready again

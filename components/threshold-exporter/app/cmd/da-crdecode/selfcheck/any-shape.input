@@ -1,0 +1,6 @@
+groups:
+  - name: self-check
+    rules:
+      - alert: A
+        expr: up == 0
+        labels: {severity: y, n: 0o17}

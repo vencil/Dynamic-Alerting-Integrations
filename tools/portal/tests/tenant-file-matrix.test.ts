@@ -54,4 +54,20 @@ describe('parseTenantYaml ↔ the exporter (tenant_file_matrix.json)', () => {
     expect(parseTenantYaml(yaml).errors).toEqual([]);
     expect(Date.now() - started).toBeLessThan(2000);
   });
+
+  it('`schedules: false` leaves the schedule check out, and only it (#4001)', () => {
+    const refused = rows.filter((r) => !r.served && parseTenantYaml(r.body).errors.some((e: string) => /cannot decode this schedule/.test(e)));
+    expect(refused.length).toBeGreaterThan(100);
+    for (const r of refused) {
+      const off = parseTenantYaml(r.body, { schedules: false });
+      expect(off.errors, r.body).toEqual([]);
+    }
+    // the other file-level errors stay: a second document, a syntax error
+    expect(parseTenantYaml('k: 80\n---\nk: 90\n', { schedules: false }).errors).toHaveLength(1);
+    expect(parseTenantYaml('k: [\n', { schedules: false }).errors).toHaveLength(1);
+    // and a body with no schedule error reads the same either way
+    for (const r of rows.filter((x) => x.served).slice(0, 200)) {
+      expect(parseTenantYaml(r.body, { schedules: false }), r.body).toEqual(parseTenantYaml(r.body));
+    }
+  });
 });

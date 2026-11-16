@@ -339,8 +339,8 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 // or written as null (#3832). Such a list entry declares the key without a
 // platform value, which for a default-armed key changes nothing: the built-in
 // layer still gives every tenant the platform's value. A tree that lists the
-// key to keep its alert off (what validate-config's `unsupplied_defaults` row
-// once advised) gets the alert after the upgrade, so the list entry is an
+// key to keep its alert off (what validate-config advised before the built-in
+// layer, #3830) gets the alert after the upgrade, so the list entry is an
 // error, not a no-op. A value the root does write — a number, or one the
 // decode refuses (checkRootDefaultsRefused's) — is not this check's. A file
 // in ParseFailed is skipped, as checkRootCriticalKeys does.

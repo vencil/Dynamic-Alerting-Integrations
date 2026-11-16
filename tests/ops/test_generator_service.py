@@ -962,7 +962,7 @@ _READERS = {"da-guard": "DA_GUARD_BINARY", "da-read": "DA_READ_BINARY",
 
 
 def _relative_path_service(tmp_path, world, on_relative_path: tuple[str, ...],
-                           unset: tuple[str, ...]):
+                           unset: tuple[str, ...], args: tuple[str, ...] = ()):
     """The service started in a directory whose ``rbin/`` is on $PATH as the
     relative entry ``rbin``: the readers of *on_relative_path* are there,
     those of *unset* have no variable, the rest are named by absolute
@@ -978,7 +978,7 @@ def _relative_path_service(tmp_path, world, on_relative_path: tuple[str, ...],
     # The harness puts its own da-guard copy in bin_dir: one that is not on
     # this service's $PATH.
     return h.Service(tmp_path / "s", world["repo"], bin_dir=tmp_path / "unused-bin",
-                     env=env, cwd=cwd), rbin
+                     env=env, cwd=cwd, args=args), rbin
 
 
 @pytest.mark.parametrize("reader", sorted(_READERS))
@@ -999,10 +999,15 @@ def test_a_reader_on_a_relative_path_entry_is_the_one_the_judgement_runs(
 
 
 def test_a_da_read_that_appears_on_path_later_is_found_and_judges(tmp_path, world):
-    """A reader not there at start is looked for again at every check; the
-    check that finds it pins it, so the judgement that follows runs it."""
-    svc, rbin = _relative_path_service(tmp_path, world, (), ("da-read",))
+    """A reader not there at start is looked for again at every judgement and
+    every self-check; the one that finds it pins it, so the judgement that
+    follows runs it. Ready again only once a self-check passes (#3943)."""
+    svc, rbin = _relative_path_service(tmp_path, world, (), ("da-read",),
+                                       args=("--self-check-seconds", "0.2"))
     with svc:
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["self_check"]["failures"] == [{"binary": "da-read", "reason": "not_found"}], st
+        assert st["ready"] is False, st
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 503 and doc["reason"] == "tool_fault", doc
         _s, st = svc.call("GET", "/v1/status")
@@ -1010,8 +1015,9 @@ def test_a_da_read_that_appears_on_path_later_is_found_and_judges(tmp_path, worl
         shutil.copy2(os.environ["DA_READ_BINARY"], rbin / "da-read")
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 200 and doc["result"] == "pass", doc
+        _until(lambda: svc.call("GET", "/v1/status")[1]["ready"], "a self-check that passes")
         _s, st = svc.call("GET", "/v1/status")
-        assert st["tool_fault"] is None and st["ready"] is True, st
+        assert st["tool_fault"] is None and st["self_check"]["state"] == "passed", st
 
 
 def test_ready_without_amtool(world):
@@ -1199,10 +1205,12 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "tool_fault", "ready",
+                       "da_guard_version", "self_check", "tool_fault", "ready",
                        "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
+    assert st["self_check"] == {"state": "passed", "failures": [], "running": False}
+    assert _gsvc_proto.self_check_problem(st["self_check"]) is None
     assert st["ready"] is True and st["tool_fault"] is None
     m = world["svc"].metrics()
     info = [k for k in m if k.startswith("da_generator_build_info")]

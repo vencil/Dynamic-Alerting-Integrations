@@ -1,0 +1,156 @@
+{
+  "schema": "da-guard.effective/v1",
+  "parse_failed": [],
+  "unreadable": [],
+  "skipped": [],
+  "tenants": {
+    "t1": {
+      "tenant_id": "t1",
+      "source_file": "team/t1.yaml",
+      "source_hash": "dbaf121294522b16",
+      "merged_hash": "5bdbaeb8fe7532cf",
+      "defaults_chain": [
+        "_defaults.yaml"
+      ],
+      "effective_config": {
+        "_custom_alerts": [
+          {
+            "metric": "qd",
+            "name": "q_high",
+            "op": "\u003e",
+            "recipe": "threshold",
+            "threshold": "100",
+            "window": "5m"
+          }
+        ],
+        "_severity_dedup": "enable",
+        "container_cpu": 80,
+        "container_cpu_throttle": 25,
+        "container_memory": 85,
+        "es_disk_usage_percent": 85,
+        "es_heap_usage_percent": 85,
+        "mysql_connection_usage_percent": "70",
+        "mysql_replication_lag": 30,
+        "mysql_slave_lag": "disable",
+        "oracle_tablespace_used_percent": 85,
+        "pg_connections": 80,
+        "pg_replication_lag": 30,
+        "rabbitmq_node_mem_percent": 90
+      },
+      "profile": null,
+      "key_sources": {
+        "_custom_alerts": {
+          "layer": "tenant",
+          "file": "team/t1.yaml"
+        },
+        "_severity_dedup": {
+          "layer": "tenant",
+          "file": "team/t1.yaml"
+        },
+        "container_cpu": {
+          "layer": "builtin"
+        },
+        "container_cpu_throttle": {
+          "layer": "builtin"
+        },
+        "container_memory": {
+          "layer": "builtin"
+        },
+        "es_disk_usage_percent": {
+          "layer": "builtin"
+        },
+        "es_heap_usage_percent": {
+          "layer": "builtin"
+        },
+        "mysql_connection_usage_percent": {
+          "layer": "tenant",
+          "file": "team/t1.yaml"
+        },
+        "mysql_replication_lag": {
+          "layer": "builtin"
+        },
+        "mysql_slave_lag": {
+          "layer": "tenant",
+          "file": "team/t1.yaml"
+        },
+        "oracle_tablespace_used_percent": {
+          "layer": "builtin"
+        },
+        "pg_connections": {
+          "layer": "builtin"
+        },
+        "pg_replication_lag": {
+          "layer": "builtin"
+        },
+        "rabbitmq_node_mem_percent": {
+          "layer": "builtin"
+        }
+      },
+      "not_served": {},
+      "dead_entries": {},
+      "chain_parse_failed": []
+    }
+  },
+  "root_defaults_refused": [],
+  "root_defaults_reserved": [],
+  "builtin_defaults": {
+    "digest": "63343e1d88e9",
+    "keys": {
+      "container_cpu": {
+        "value": 80,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "container_cpu_throttle": {
+        "value": 25,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "container_memory": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "es_disk_usage_percent": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "es_heap_usage_percent": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "mysql_connection_usage_percent": {
+        "value": 80,
+        "state": "overridden",
+        "root_value": 80
+      },
+      "mysql_replication_lag": {
+        "value": 30,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "oracle_tablespace_used_percent": {
+        "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "pg_connections": {
+        "value": 80,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "pg_replication_lag": {
+        "value": 30,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "rabbitmq_node_mem_percent": {
+        "value": 90,
+        "state": "builtin",
+        "tenants": 1
+      }
+    }
+  }
+}
