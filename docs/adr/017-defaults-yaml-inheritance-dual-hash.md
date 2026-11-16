@@ -344,7 +344,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 - **只收 `disable` 這個字**（大小寫不拘）。子目錄把 `false`、`off`、`disabled` 也讀成停用；根目錄收這些別名的話，`helm --set …=false` 會靜靜關掉整棵樹的一族。在根目錄它們是讀不了的值：da-guard 以 `root_default_refused` 報錯（結束碼 1），該鍵照送平台值。
 - **不收排程與 `expires:`**。根目錄的值只能是純量；寫成排程的根目錄檔整份讀不了，內建層撤掉（上表）。限時關閉寫在子目錄或租戶檔。
 - **只對內建層給值的鍵有效**。其他鍵照決策 4 是讀不了的值。
-- **根目錄不得同時給同一族的值**。根目錄寫了 `<鍵>: "disable"`，又給 `<鍵>_critical` 或 `<鍵>{…}` 值時，那個值不會送給任何沒自己給基底值的租戶；da-guard 以 `root_disable_family_value` 報錯，結束碼 1。
+- **根目錄不得同時給同一族的值**。根目錄寫了 `<鍵>: "disable"`，又給 `<鍵>{…}` 值時，那個值跟著基底一起關掉，送不到任何沒自己給基底值的租戶；又給 `<鍵>_critical` 值時，它在根目錄是一個獨立的閾值（決策 3），基底關掉了它照送。兩種都是自相矛盾，da-guard 以 `root_disable_family_value` 報錯，結束碼 1。
 
 根目錄的 `optional_overrides:`（宣告「平台認得這個鍵、但不給值」的鍵名清單）不影響內建層。根目錄沒給數字卻把預設啟用鍵列在裡面時，da-guard 以 `root_optional_builtin` 報錯，結束碼 1：列名關不掉這條告警，要整棵樹關掉就在根目錄 `defaults:` 寫 `"disable"`。
 

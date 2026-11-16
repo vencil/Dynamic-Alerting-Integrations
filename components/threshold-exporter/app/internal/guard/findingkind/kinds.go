@@ -74,9 +74,11 @@ var (
 	// FindingRootDisableFamilyValue (error, TenantID ""; #3832 decision 3):
 	// the conf.d root carrier's `defaults:` writes a default-armed key as
 	// `disable` (config.RootDisableText) and also gives a value to a key of
-	// its family — `<key>_critical` or a dimensional `<key>{…}`. The
-	// `disable` switches the whole family off for every tenant, so that
-	// value is served to none; the two lines contradict each other. Field is
+	// its family — `<key>_critical` or a dimensional `<key>{…}`. A root
+	// `<key>{…}` goes off with the base, so its value reaches no tenant
+	// that gives the base no value; a root `<key>_critical` is a threshold
+	// of its own, served while the base is off. Either way the two lines
+	// contradict each other. Field is
 	// `<file>:defaults.<family key>`.
 	FindingRootDisableFamilyValue = register("root_disable_family_value",
 		"judges a value the conf.d root defaults give a family its own root disable switches off")

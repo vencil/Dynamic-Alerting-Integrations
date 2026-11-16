@@ -405,11 +405,13 @@ func checkRootOptionalBuiltin(input CheckInput) []Finding {
 
 // checkRootDisableFamily reports findingkind.FindingRootDisableFamilyValue
 // for each key of the conf.d root carrier's `defaults:` mapping that gives a
-// value (not null) to `<base>_critical` or a dimensional `<base>{…}` while
-// the same mapping writes base as `disable` (config.RootDisableText, #3832
-// decision 3). The `disable` switches base's whole family off for every
-// tenant that does not give base a value of its own, so the root's value of
-// the family key is served to no such tenant: the root contradicts itself.
+// value (not null, not a disable word) to `<base>_critical` or a
+// dimensional `<base>{…}` while the same mapping writes base as `disable`
+// (config.RootDisableText, #3832 decision 3). The root contradicts itself
+// either way: a root `<base>{…}` goes off with its base for every tenant
+// that gives base no value of its own, so its value reaches none of them;
+// a root `<base>_critical` is a threshold of its own
+// (root_defaults_critical_key), served while its base is off.
 // A file in ParseFailed is skipped, as checkRootCriticalKeys does.
 func checkRootDisableFamily(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
@@ -439,22 +441,32 @@ func checkRootDisableFamily(input CheckInput) []Finding {
 			if v == nil || off[k] {
 				continue
 			}
-			base := strings.TrimSuffix(k, "_critical")
+			if text, ok := v.(string); ok && config.IsDisabled(strings.ToLower(strings.TrimSpace(text))) {
+				continue // not a value: root_default_refused names it
+			}
+			base, critical := strings.CutSuffix(k, "_critical")
 			if i := strings.Index(k, "{"); i >= 0 {
-				base = k[:i]
+				base, critical = k[:i], false
 			}
 			if base == k || !off[base] {
 				continue
+			}
+			what := fmt.Sprintf("which switches the `%s` family off for every tenant that gives `%s` no value "+
+				"of its own — `%s` included, so its value here is served to none of them", base, base, k)
+			if critical {
+				// A root `<base>_critical` is a threshold of its own, served
+				// at warning severity whatever its base reads
+				// (root_defaults_critical_key): the opt-out leaves it on.
+				what = fmt.Sprintf("yet `%s` here is a threshold of its own (see root_defaults_critical_key), "+
+					"served to every tenant while `%s` is switched off — the opt-out leaves an alert of the "+
+					"family on", k, base)
 			}
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     findingkind.FindingRootDisableFamilyValue,
 				Field:    f.Name + ":defaults." + k,
-				Message: fmt.Sprintf("%s: the conf.d root `defaults:` writes `%s: disable`, which switches the whole "+
-					"`%s` family off for every tenant — `%s` included, so its value here is served to no tenant. "+
-					"Delete one of the two lines: the `disable` to serve the family, or `%s` to keep it off. A "+
-					"subtree or tenant that gives `%s` a value gets the family back, and its own `%s` with it.",
-					f.Name, base, base, k, k, base, k),
+				Message: fmt.Sprintf("%s: the conf.d root `defaults:` writes `%s: disable`, %s. Delete one of the "+
+					"two lines: the `disable` to serve the family, or `%s` to keep it off.", f.Name, base, what, k),
 			})
 		}
 	}

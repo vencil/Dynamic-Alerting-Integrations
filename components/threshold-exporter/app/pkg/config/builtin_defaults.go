@@ -61,6 +61,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vencil/threshold-exporter/pkg/confdname"
 )
@@ -241,27 +242,35 @@ func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
 }
 
 // InheritedRootDisables is, sorted, the built-in keys the root `defaults:`
-// writes as `disable` (RootDisabledDefault, #3832 decision 3) that tenant's
-// merged config does not write under any spelling: the keys the tenant
-// inherits the root's opt-out of. da-guard reads each as a `disable` of
-// the tenant's (served-values keys[], --disable-effects), as it reads one a
-// subtree `_defaults.yaml` hands the tenant.
-func (c *ThresholdConfig) InheritedRootDisables(tenant string) []string {
+// writes as `disable` (RootDisabledDefault, #3832 decision 3) whose family
+// tenant's merged config leaves to that `disable`: it writes the key under
+// no spelling, or writes a value the base phase does not serve at at — one
+// past its `expires:`, or one whose default is no number it reads (a
+// `disable` of its own included). A tenant whose value is a number it reads
+// has the family back and is not listed. da-guard reads each key listed as
+// a `disable` of the tenant's (served-values keys[], --disable-effects),
+// judged against the built-in value, as it judges a tenant's own `disable`
+// against the platform default.
+func (c *ThresholdConfig) InheritedRootDisables(tenant string, at time.Time) []string {
 	var out []string
 	for k, v := range c.Defaults {
 		if !RootDisabledDefault(v) {
 			continue
 		}
+		var sv ScheduledValue
 		written := false
-		for tk := range c.Tenants[tenant] {
+		for tk, tv := range c.Tenants[tenant] {
 			if canon, _ := CanonicalKeyFor(tk); canon == k {
-				written = true
+				sv, written = tv, true
 				break
 			}
 		}
-		if !written {
-			out = append(out, k)
+		if written && !isThresholdExpired(sv, at) {
+			if _, _, parsed := parseThresholdValue(sv.Default); parsed {
+				continue
+			}
 		}
+		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out

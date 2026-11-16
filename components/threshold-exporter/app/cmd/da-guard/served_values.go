@@ -1284,7 +1284,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
 			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 		addRootRefused(tv, overrides, rootRefused)
-		addRootDisabled(tv, cfg, tenant)
+		addRootDisabled(tv, cfg, tenant, at)
 		out[tenant] = tv
 	}
 	if withSchedules != nil {
@@ -1561,8 +1561,8 @@ func addRootRefused(tv servedTenantValues, overrides map[string]config.Scheduled
 // (config.InheritedRootDisables, #3832 decision 3): read as the `disable`
 // a subtree `_defaults.yaml` hands the tenant is, whose effect
 // --disable-effects decides.
-func addRootDisabled(tv servedTenantValues, cfg *config.ThresholdConfig, tenant string) {
-	for _, k := range cfg.InheritedRootDisables(tenant) {
+func addRootDisabled(tv servedTenantValues, cfg *config.ThresholdConfig, tenant string, at time.Time) {
+	for _, k := range cfg.InheritedRootDisables(tenant, at) {
 		if _, listed := tv.Keys[k]; !listed {
 			tv.Keys[k] = servedKey{Reason: keyReasonDisabled}
 		}

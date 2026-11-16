@@ -249,11 +249,13 @@ func TestRootDisable_AValueOfItsFamilyBesideItIsAnError(t *testing.T) {
 			}
 		})
 	}
-	// Control: a null family value, and a family value beside a number.
+	// Control: a null family value, a disable word (root_default_refused's),
+	// and a family value beside a number.
 	for name, body := range map[string]string{
-		"null critical":  "defaults:\n  pg_replication_lag: disable\n  pg_replication_lag_critical: null\n",
-		"valued base":    "defaults:\n  pg_replication_lag: 30\n  pg_replication_lag{db=\"a\"}: 20\ndimensions:\n  pg_replication_lag: [db]\n",
-		"other disabled": "defaults:\n  container_memory: disable\n  pg_replication_lag{db=\"a\"}: 20\ndimensions:\n  pg_replication_lag: [db]\n",
+		"null critical":    "defaults:\n  pg_replication_lag: disable\n  pg_replication_lag_critical: null\n",
+		"disable critical": "defaults:\n  pg_replication_lag: disable\n  pg_replication_lag_critical: disable\n",
+		"valued base":      "defaults:\n  pg_replication_lag: 30\n  pg_replication_lag{db=\"a\"}: 20\ndimensions:\n  pg_replication_lag: [db]\n",
+		"other disabled":   "defaults:\n  container_memory: disable\n  pg_replication_lag{db=\"a\"}: 20\ndimensions:\n  pg_replication_lag: [db]\n",
 	} {
 		dir := builtinTree(t, map[string]string{"_defaults.yaml": body, "t1.yaml": "tenants:\n  t1: {}\n"})
 		if _, out, _ := runOnce(t, "--config-dir", dir); strings.Contains(out, "root_disable_family_value") {
@@ -292,5 +294,74 @@ func TestRootDisable_ServedValuesKeysNameTheInheritedDisable(t *testing.T) {
 	}
 	if e := keys["pg_replication_lag_critical"]; e.SwitchedOffWith != "pg_replication_lag" {
 		t.Errorf("keys[pg_replication_lag_critical] = %+v, want switched_off_with pg_replication_lag", e)
+	}
+}
+
+// A tenant value of the base that the base phase does not serve — lapsed,
+// unreadable, or the tenant's own `disable` — leaves the family to the root
+// `disable`: the key verdict reads the tenant's `_critical` as switched off
+// with the base (disable_cascade), never the base as a `disable` that
+// switches nothing off, and nothing blocks.
+func TestRootDisable_ATenantValueThatDoesNotApplyLeavesTheFamilyToIt(t *testing.T) {
+	t.Parallel()
+	for name, base := range map[string]string{
+		"own disable":    "disable",
+		"lapsed disable": "\n      default: disable\n      expires: \"2020-01-01T00:00:00Z\"",
+		"lapsed number":  "\n      default: \"50\"\n      expires: \"2020-01-01T00:00:00Z\"",
+		"unreadable":     "abc",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := builtinTree(t, map[string]string{
+				"_defaults.yaml": "defaults:\n  pg_replication_lag: disable\n",
+				"t1.yaml":        "tenants:\n  t1:\n    pg_replication_lag: " + base + "\n    pg_replication_lag_critical: \"60\"\n",
+			})
+			_, stdout, stderr := runOnce(t, keyVerdictCmd, "--config-dir", dir)
+			var doc struct {
+				Blocks   bool `json:"blocks"`
+				Findings []struct {
+					Kind string `json:"kind"`
+					Key  string `json:"key"`
+				} `json:"findings"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+				t.Fatalf("key-verdict: %v\n%s\n%s", err, stdout, stderr)
+			}
+			if doc.Blocks {
+				t.Errorf("blocks:\n%s", stdout)
+			}
+			kinds := map[string]string{}
+			for _, f := range doc.Findings {
+				kinds[f.Key] = f.Kind
+			}
+			if kinds["pg_replication_lag_critical"] != "disable_cascade" || kinds["pg_replication_lag"] == "disable_noop" {
+				t.Errorf("findings %+v, want disable_cascade on the _critical and no disable_noop", doc.Findings)
+			}
+		})
+	}
+	// Control: a number the tenant gives brings the family back — no cascade.
+	dir := builtinTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  pg_replication_lag: disable\n",
+		"t1.yaml":        "tenants:\n  t1:\n    pg_replication_lag: \"50\"\n    pg_replication_lag_critical: \"60\"\n",
+	})
+	if _, stdout, _ := runOnce(t, keyVerdictCmd, "--config-dir", dir); strings.Contains(stdout, "disable_cascade") || strings.Contains(stdout, "disable_noop") {
+		t.Errorf("control: a valued tenant reported:\n%s", stdout)
+	}
+}
+
+// A root `_critical` beside a root disable is served on its own: the error
+// says so instead of claiming it reaches no tenant.
+func TestRootDisable_ARootCriticalBesideItIsServedAndNamed(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  pg_replication_lag: disable\n  pg_replication_lag_critical: 90\n",
+		"t1.yaml":        "tenants:\n  t1: {}\n",
+	}
+	code, doc, dir, stderr := servedWith(t, files, "")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "t1", "pg_replication_lag_critical", 90)
+	_, out, _ := runOnce(t, "--config-dir", dir)
+	if !strings.Contains(out, "served to every tenant while `pg_replication_lag` is switched off") {
+		t.Errorf("root_disable_family_value does not say the root _critical is served:\n%s", out)
 	}
 }
