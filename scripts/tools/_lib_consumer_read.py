@@ -439,19 +439,31 @@ def _unopenable(path: str) -> "str | None":
     system's reason (``os.strerror``), or ``NOT_REGULAR`` — no other text
     (ADR-036: no text of the input).
 
-    ⛔ Anything but a regular file is refused before it is opened: opening a
-    FIFO blocks until a writer comes, and a device such as ``/dev/zero``
-    never reads to EOF — neither is under the Go program's timeout, since
-    this read happens before the program runs."""
+    ⛔ The file is judged and read through one fd, opened non-blocking: a
+    FIFO would block an ordinary open until a writer comes, and a device
+    such as ``/dev/zero`` never reads to EOF — neither is under the Go
+    program's timeout, since this read happens before the program runs.
+    ``fstat`` on that fd judges the very file that is read; only a regular
+    file is switched back to blocking and read."""
     try:
-        if not stat.S_ISREG(os.stat(path).st_mode):
-            return NOT_REGULAR
-        with open(path, "rb") as fh:
-            while fh.read(1 << 20):
-                pass
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
     except OSError as e:
-        return f"{CANNOT_OPEN}: {os.strerror(e.errno) if e.errno else type(e).__name__}"
+        return _cannot_open(e)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return NOT_REGULAR
+        os.set_blocking(fd, True)
+        while os.read(fd, 1 << 20):
+            pass
+    except OSError as e:
+        return _cannot_open(e)
+    finally:
+        os.close(fd)
     return None
+
+
+def _cannot_open(e: OSError) -> str:
+    return f"{CANNOT_OPEN}: {os.strerror(e.errno) if e.errno else type(e).__name__}"
 
 
 class _Unopenable(InputRefused):
