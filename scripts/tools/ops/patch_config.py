@@ -17,7 +17,7 @@ answers is what the patch carries. Everything outside the change — other
 keys, comments, how each scalar is spelled — stays as written; da-guard only
 re-lays the key out (2-space indentation, one space before a trailing
 comment, blank lines may go). A value typed here is written as a number only
-when it is canonical decimal (`50`, `0.5`); anything else as a double-quoted
+when it is canonical decimal (`50`, `0.5`, or a float as `1.0e+22`); anything else as a double-quoted
 string (`"70:critical"`, `"010"`, `"disable"`). A change da-guard refuses
 (it does not hold on the key as written) or cannot take writes nothing —
 exit 2, `--json` reason `write_refused` (a key parse-tree cannot read:

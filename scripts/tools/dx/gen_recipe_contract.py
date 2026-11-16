@@ -21,7 +21,8 @@ every other copy is GENERATED from it:
   - Python : the block between the GENERATED markers in
              scripts/tools/_lib_constants.py (the forecast's longest
              lookback, the pattern of a threshold number, the characters
-             trimmed around one)
+             trimmed around one, and edit_number: the spellings of a number
+             `da-guard write` takes, #3866)
   - Policy : the compiled pack's forecast `max_range_duration` (the longest
              lookback a compiled forecast reads) in
              .github/custom-rule-policy.yaml and its copy in
@@ -408,6 +409,9 @@ def render_constants(c, g):
         f'THRESHOLD_NUMBER_PATTERN: Final[str] = {_py_str(c["patterns"]["thresholdNumber"])}',
         "THRESHOLD_TRIM_CODE_POINTS: Final[frozenset[int]] = frozenset(("
         + ", ".join(f"0x{cp:X}" for cp in sorted(set(g["trim_code_points"]))) + "))",
+        f'EDIT_INT_PATTERN: Final[str] = {_py_str(c["edit_number"]["int"])}',
+        f'EDIT_FLOAT_PATTERN: Final[str] = {_py_str(c["edit_number"]["float"])}',
+        f'EDIT_INT_MAX_LENGTH: Final[int] = {int(c["edit_number"]["int_max_length"])}',
         PY_END,
     ]) + "\n"
 

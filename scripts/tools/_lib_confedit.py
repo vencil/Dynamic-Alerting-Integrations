@@ -49,15 +49,17 @@ contract). Where the value came from decides which:
 
 * `node_value`: a value the tool READ (a parse-tree node) keeps the type it
   was read with — a `!!str` stays a string, an `!!int` an int. An `!!int` /
-  `!!float` whose text is not canonical decimal (`010`, `1e3`), and any
+  `!!float` whose text is not a spelling the edit contract takes (`010`,
+  `1e3`, `1.0e22`), and any
   other tag (`!!timestamp`, …), cannot be sent as read: `ValueError`.
 * `cli_value`: a value the user TYPED is an `int` / `float` only when its
-  text is canonical decimal as the edit contract takes it (`80`, `-1`,
-  `0.5`), otherwise a `str` (`70:critical`, `010`, `1e3`, `disable` — each
+  text is a spelling the edit contract takes (`80`, `-1`, `0.5`,
+  `1.0e+22`), otherwise a `str` (`70:critical`, `010`, `1e3`, `disable` — each
   written double-quoted).
 * `data_value`: a value the tool GENERATED (Python data a new file is made
   of, #3206 step 10c-2) has the type it has in Python — a `str` stays a
-  string, an `int` an int, a `float` a float in canonical decimal; one with
+  string, an `int` an int, a `float` a float (`float_text`: plain decimal,
+  or `1.0e+22` where plain decimal is no threshold number); one with
   no such type (a NaN, an infinite float) is `ValueError`, naming its key.
   Its *head* says which comment goes above which node (#3206 step 10c-3);
   `NewFile` is such a file with its head and foot comments, and its
@@ -66,7 +68,7 @@ contract). Where the value came from decides which:
 * `number_value`: a generated NUMBER that only has to be a number (a
   `defaults:` value, float64 to the exporter): `data_value`, except that an
   `int` past the contract's 18 characters (`1e20` as an int) goes as the
-  float it is to the exporter (`100000000000000000000.0`).
+  float it is to the exporter (`1.0e+20`).
 
 Several files, all or nothing
 -----------------------------
@@ -105,6 +107,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, NoReturn, Optional, Sequence
 
 import _lib_parse_tree
+from _lib_constants import EDIT_FLOAT_PATTERN, EDIT_INT_MAX_LENGTH, EDIT_INT_PATTERN
+from _lib_validation import is_threshold_number_text
 
 #: The one da-guard command every change goes through (edit, create,
 #: replace, move, copy, delete).
@@ -125,11 +129,15 @@ FILE_STATUSES = STATUSES | {NOT_WRITTEN, MAYBE_WRITTEN}
 #: The call's reason when the batch would worsen the tree.
 WORSENS_TREE = "worsens_tree"
 
-#: The edit contract's canonical decimal forms (pkg/confedit value.go): an
-#: `int` of at most 18 digits, a `float` of digits, '.', digits.
-_CANONICAL_INT = re.compile(r"(0|-?[1-9][0-9]*)")
-_CANONICAL_FLOAT = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]+")
-_MAX_INT_DIGITS = 18
+#: The edit contract's spellings of a number (the recipe contract's
+#: edit_number, GENERATED into _lib_constants — the grammar pkg/confedit
+#: value.go reads, #3866): an `int` in canonical decimal of at most
+#: EDIT_INT_MAX_LENGTH characters; a `float` in plain decimal (`0.5`) or the
+#: exponent form `1.0e+22` / `1.5e-25` (a `.` in a one-digit mantissa, a
+#: signed exponent: what YAML 1.1 and 1.2 both read as a float).
+_CANONICAL_INT = re.compile(EDIT_INT_PATTERN)
+_CANONICAL_FLOAT = re.compile(EDIT_FLOAT_PATTERN)
+_MAX_INT_DIGITS = EDIT_INT_MAX_LENGTH
 
 
 class EditError(Exception):
@@ -444,12 +452,44 @@ def is_canonical_int(text: str) -> bool:
 
 
 def is_canonical_float(text: str) -> bool:
-    return _CANONICAL_FLOAT.fullmatch(text) is not None
+    """*text* is a float the edit contract takes: the contract's shape, and a
+    finite float that reads as 0 only when every digit is 0 (`1.0e+999` and
+    `1.0e-400` are refused, as pkg/confedit refuses them, #3866)."""
+    if _CANONICAL_FLOAT.fullmatch(text) is None:
+        return False
+    number = float(text)  # the shape is decimal: float() reads it (±inf past range)
+    if number in (float("inf"), float("-inf")):
+        return False
+    return number != 0 or text.split("e")[0].strip("-0.") == ""
+
+
+def float_text(number: float) -> str:
+    """How the writer spells the finite float *number* (#3866): plain
+    decimal with the digits of its `repr` (`1e-05` → `0.00001`, `2.0` stays
+    `2.0`) when that is a threshold number (`threshold_number`'s grammar,
+    the exporter's); otherwise the exponent form with the same digits, a
+    `.` in a one-digit mantissa and a signed exponent (`1e22` →
+    `1.0e+22`; `0.00012345678901234567`, 21 digits →
+    `1.2345678901234567e-4`), which YAML 1.1 and 1.2 both read as that
+    float and the exporter reads as that number. Either way the text reads
+    back as *number*: the digits are `repr`'s, the shortest that do."""
+    dec = decimal.Decimal(repr(float(number)))
+    text = format(dec, "f")
+    if "." not in text:
+        text += ".0"
+    if is_threshold_number_text(text):
+        return text
+    sign, digits, exponent = dec.as_tuple()
+    shown = "".join(map(str, digits)).rstrip("0") or "0"
+    power = len(digits) - 1 + exponent
+    return (f"{'-' if sign else ''}{shown[0]}.{shown[1:] or '0'}"
+            f"e{'+' if power >= 0 else '-'}{abs(power)}")
 
 
 def cli_value(text: str) -> dict:
-    """A value the user typed: `int` / `float` when *text* is canonical
-    decimal as the edit contract takes it, otherwise `str`."""
+    """A value the user typed: `int` / `float` when *text* is a spelling the
+    edit contract takes (`80`, `0.5`, `1.0e+22`), otherwise `str` (`1e22`,
+    `010`, `70:critical`)."""
     text = str(text)
     if is_canonical_int(text):
         return {"int": text}
@@ -468,9 +508,10 @@ def data_value(obj: Any, _at: "tuple[str, ...]" = (), *,
     """A value the tool GENERATED (Python data), with the type it has: a
     `dict` a mapping in its own key order, a `list` / `tuple` a sequence, a
     `bool` / `None` / `str` as themselves, an `int` an int, a finite `float`
-    a float spelled in canonical decimal (`1e-05` → `0.00001`, `2.0` stays
-    `2.0`). Raises ValueError, naming the key path, for anything else (a
-    NaN / infinite float, an int past the contract's 18 digits, a mapping
+    a float spelled by `float_text` (`1e-05` → `0.00001`, `2.0` stays
+    `2.0`, `1e22` → `1.0e+22`). Raises ValueError, naming the key path,
+    for anything else (a NaN / infinite float, an int past the contract's
+    18 digits, a mapping
     key that is not a `str`, another type): no spelling is guessed for it.
 
     *head*, when given, is asked for every map entry and sequence item —
@@ -511,11 +552,9 @@ def data_value(obj: Any, _at: "tuple[str, ...]" = (), *,
     if isinstance(obj, float):
         if obj != obj or obj in (float("inf"), float("-inf")):
             raise bad(f"the float {obj!r} is not a finite number")
-        text = format(decimal.Decimal(repr(obj)), "f")
-        if "." not in text:
-            text += ".0"
+        text = float_text(obj)
         if not is_canonical_float(text):
-            raise bad(f"the float {obj!r} has no canonical decimal spelling")
+            raise bad(f"the float {obj!r} has no canonical spelling")
         return {"float": text}
     raise bad(f"a {type(obj).__name__} ({obj!r}) has no edit-contract type")
 
@@ -555,7 +594,7 @@ def number_value(number: "int | float", at: "Sequence[str]" = ()) -> dict:
     """A generated number that only has to be a number (a `defaults:` value,
     decoded into float64 by the exporter): `data_value` of it, except an
     `int` longer than the edit contract's 18 characters, which goes as a
-    float (`10**20` → `100000000000000000000.0`) instead of being refused.
+    float (`10**20` → `1.0e+20`) instead of being refused.
     A `bool`, anything else that is not an int / float, an int past float64's
     range, and a NaN / infinite float are ValueError naming *at* (the key path
     the number sits at)."""
@@ -595,7 +634,7 @@ def node_value(node: Any) -> dict:
     if tag == "!!null":
         return {"null": None}
     raise ValueError(f"the value {text!r} ({tag}) cannot be written back as it is "
-                     f"written (the edit takes canonical decimal numbers only); "
+                     f"written (the edit takes canonical numbers only); "
                      f"respell it by hand first")
 
 

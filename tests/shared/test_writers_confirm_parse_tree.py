@@ -460,14 +460,14 @@ def test_da_assembler_defaults_are_numbers_the_exporter_reads(tmp_path):
                                    tmp_path, cli=True)
     assert exc.value.code == 2
     assert not (tmp_path / "ok3").exists()
-    # #3457: a threshold number has at most 20 digits, and the edit contract
-    # writes a float as digits, `.`, digits — so 10**20 (22 digits written)
-    # is a value the exporter does not read, refused the same way.
-    with pytest.raises(SystemExit) as exc:
-        da_assembler.reconcile_one(_cr({"tenant-e": {}}, {"cpu": 10**20}, name="ok4"),
-                                   tmp_path, cli=True)
-    assert exc.value.code == 2
-    assert not (tmp_path / "ok4").exists()
+    # #3866: a threshold number has at most 20 digits; 10**20 in plain
+    # decimal is 22 (#3457 refused it, exit 2), so the writer spells it in
+    # the exponent form, and the exporter serves the number.
+    da_assembler.reconcile_one(_cr({"tenant-e": {}}, {"cpu": 10**20}, name="ok4"),
+                               tmp_path, cli=True)
+    text = (tmp_path / "ok4" / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "cpu: 1.0e+20\n" in text, text
+    assert _served(tmp_path)["tenant-e"]["cpu"] == 1e20
 
 
 def test_da_assembler_refuses_a_tenant_id_and_a_name_before_any_write(tmp_path):
@@ -1598,10 +1598,11 @@ def test_onboard_platform_defaults_suggestion_is_numbers_the_exporter_reads(tmp_
 
 def test_onboard_platform_writes_a_default_past_18_digits_as_a_float(tmp_path):
     # 1e20 is the int 100000000000000000000: past the edit contract's 18
-    # characters, so it goes as the float it is to the exporter (float64).
+    # characters, so it goes as the float it is to the exporter (float64),
+    # in the exponent form: plain decimal would be 22 digits (#3866).
     r, out = _onb_rules(tmp_path, ("Deep", "app_queue_depth > 1e20", "warning"))
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "app_queue_depth: 100000000000000000000.0\n" in (
+    assert "app_queue_depth: 1.0e+20\n" in (
         out / "phase2-rules" / "_defaults-suggestion.yaml").read_text(encoding="utf-8")
 
 
@@ -1806,14 +1807,14 @@ def test_migrate_rule_writes_a_default_past_18_digits_as_a_float(tmp_path):
         out / _MR_CONFD / "_defaults.yaml").read_text(encoding="utf-8")
 
 
-def test_migrate_rule_refuses_a_default_the_exporter_does_not_read(tmp_path):
-    # #3457: 1e20 would be written `100000000000000000000.0`, 22 digits; a
-    # threshold number has at most 20, so the exporter would serve no default
-    # for the key. da-guard write refuses the tree and nothing is written.
+def test_migrate_rule_writes_a_default_past_20_digits_in_the_exponent_form(tmp_path):
+    # #3866: 1e20 in plain decimal is `100000000000000000000.0`, 22 digits,
+    # which the exporter does not read (#3457 refused it, exit 2). It is
+    # written `1.0e+20`, a threshold number, so da-guard write takes the tree.
     r, out = _mr(tmp_path, "1e20")
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert "is not a number the exporter reads" in r.stderr, r.stderr
-    assert not out.exists(), sorted(_bytes(out))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "custom_app_queue_depth: 1.0e+20\n" in (
+        out / _MR_CONFD / "_defaults.yaml").read_text(encoding="utf-8")
 
 
 def test_migrate_rule_without_da_guard_is_exit_2(tmp_path):

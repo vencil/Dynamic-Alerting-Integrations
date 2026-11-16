@@ -478,22 +478,31 @@ def test_cli_extra_defaults_refuses_what_the_exporter_does_not_read(tmp_path, va
     assert not out.exists(), "nothing is written for a refused argument"
 
 
-@pytest.mark.parametrize("value, written_as", [
-    ("1e20", "100000000000000000000.0"), ("1e22", "10000000000000000000000.0"),
-    ("1e-25", "0.0000000000000000000000001"), ("1.2345678901234567e-4", "0.00012345678901234567"),
-    ("99999999999999999999", "100000000000000000000.0")])
-def test_cli_extra_defaults_names_a_value_it_cannot_write(tmp_path, value, written_as):
-    """#3457 review: the exporter reads these (20 digits or fewer, with an
-    exponent), but the file this tool writes spells a number in plain
-    decimal, and that spelling has more than 20 digits. The refusal is at
-    the argument, and names the value, what it would be written as and why —
-    not `would be unread (root_default_refused)` from the write."""
+@pytest.mark.parametrize("value, written_as, number", [
+    ("1e20", "1.0e+20", 1e20), ("1e22", "1.0e+22", 1e22), ("-1e22", "-1.0e+22", -1e22),
+    ("1e-25", "1.0e-25", 1e-25), ("1.2345678901234567e-4", "1.2345678901234567e-4", 1.2345678901234567e-4),
+    ("99999999999999999999", "1.0e+20", 1e20), ("1e300", "1.0e+300", 1e300)])
+def test_cli_extra_defaults_writes_past_20_digits_in_the_exponent_form(tmp_path, value, written_as, number):
+    """#3866: the exporter reads these (20 digits or fewer, with an
+    exponent), and plain decimal would spell them with more than 20 digits.
+    The writer spells them `1.0e+22` (a `.` in the mantissa, a signed
+    exponent: a float to YAML 1.1 as well as 1.2), and the exporter serves
+    the number meant. Before #3866 each of them was exit 2."""
+    import json  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import yaml  # noqa: PLC0415
     r, out = _fixture_cli(tmp_path, value)
-    assert r.returncode == 2, r.stdout + r.stderr
-    assert "Traceback" not in r.stderr, r.stderr
-    for part in (value, f"written to _defaults.yaml as {written_as}", "at most 20 digits", "bench_trigger"):
-        assert part in r.stderr, (part, r.stderr)
-    assert not out.exists()
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (out / "_defaults.yaml").read_text(encoding="utf-8")
+    assert f"  bench_trigger: {written_as}\n" in text, text
+    got = yaml.safe_load(text)["defaults"]["bench_trigger"]
+    assert type(got) is float and got == number, got  # PyYAML (YAML 1.1) reads a float
+    sv = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir", str(out)],
+                        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert sv.returncode == 0, sv.stderr
+    tenants = json.loads(sv.stdout)["tenants"]
+    assert tenants and all(t["values"]["bench_trigger"] == number for t in tenants.values()), tenants
 
 
 def test_cli_extra_defaults_help_says_what_can_be_written():
@@ -507,7 +516,7 @@ def test_cli_extra_defaults_help_says_what_can_be_written():
                        timeout=120)
     text = re.sub(r"\s+", " ", r.stdout)
     assert r.returncode == 0
-    assert "with no exponent" in text and "1e20" in text and "refused" in text, text
+    assert "1e22 1.0e+22" in text and "99999999999999999999 1.0e+20" in text, text
 
 
 def test_cli_extra_defaults_trims_as_the_exporter_trims(tmp_path):
