@@ -2191,7 +2191,7 @@ Each judgement runs in a forked process (its own process group, `RLIMIT_DATA` se
 | Code | Meaning |
 |------|------|
 | 0 | Stopped normally after SIGTERM / SIGINT |
-| 2 | Caller error: `--repo` is not a git repository, the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created, the `RLIMIT_NOFILE` hard limit cannot hold `--max-connections` plus the reserved descriptors, `--max-inflight-body-bytes` below `--max-body-bytes` |
+| 2 | Caller error: `--repo` is not a git repository, or its `HEAD` names no commit git can read — the repository gone or unreadable, a `HEAD` whose commit object is missing; only a branch nothing was committed to yet starts ([#3903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3903): all of these used to start as "no HEAD commit", answer ready, and reject every request `git_read`), the `--socket` path holds a file that is not a socket or cannot be listened on, `--work-dir` cannot be created, the `RLIMIT_NOFILE` hard limit cannot hold `--max-connections` plus the reserved descriptors, `--max-inflight-body-bytes` below `--max-body-bytes` |
 
 ---
 

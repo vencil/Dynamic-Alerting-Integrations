@@ -143,7 +143,7 @@ commands:
     "--memory-limit-bytes": not_path
     "--policy": {kind: reader, by: "read for every judgement: policy_unusable", pinned_by: "tests/ops/test_generator_service.py::test_policy_is_read_for_every_judgement"}
     "--read-timeout-seconds": not_path
-    "--repo": {kind: reader, by: "git, at start (rev-parse --show-object-format --show-prefix, in git_env: no inherited GIT_DIR / GIT_WORK_TREE …): not a repository, or a directory inside one, refuses to start naming --repo; a work tree it cannot list is still a repository git reads (#3739)", pinned_by: "tests/ops/test_generator_service.py::test_a_repo_that_is_no_repository_is_named"}
+    "--repo": {kind: reader, by: "git, at start (rev-parse --show-object-format --show-prefix, in git_env: no inherited GIT_DIR / GIT_WORK_TREE …): not a repository, or a directory inside one, refuses to start naming --repo; a work tree it cannot list is still a repository git reads (#3739); a HEAD that names no commit git can read refuses to start too — only a branch with nothing committed yet starts (#3903)", pinned_by: "tests/ops/test_generator_service.py::test_a_repo_that_is_no_repository_is_named"}
     "--self-check-seconds": not_path
     "--self-check-timeout-seconds": not_path
     "--socket": output

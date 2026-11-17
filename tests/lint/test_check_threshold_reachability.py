@@ -52,7 +52,7 @@ def test_grandfather_list_is_exactly_the_remaining_dead_keys():
     # Scoped by prefix since P1-C added a second info class (not-chart-armed) —
     # counting all infos would silently couple this pin to that ledger's size.
     unwired_infos = [m for m in result["infos"] if m.startswith("known-unwired ")]
-    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 10  # 9 + #3778's mysql_threads_running
+    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 9  # 9 + #3778's mysql_threads_running, - #1320's retired clickhouse_memory_tracking_bytes
     assert all(tag.startswith("A:") for tag in gate.KNOWN_UNWIRED.values())
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 

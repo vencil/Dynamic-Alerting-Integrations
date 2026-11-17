@@ -1101,7 +1101,7 @@ def test_optional_override_list_is_a_yaml_string_array():
 
 
 def test_real_registry_optional_list_is_the_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 10 FLAT keys, never the 44 the
+    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 43 the
     tier holds (both asserted below; #3778 added mysql_threads_running). Most
     of the tier is `_critical` keys;
     listing them would make the shipped list mostly decoration."""
@@ -1109,7 +1109,7 @@ def test_real_registry_optional_list_is_the_flat_keys():
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 44
+    assert len(tier) == 43
     assert shipped == [
         "mysql_threads_running",
         "oracle_wait_time_rate", "oracle_process_count",
@@ -1117,7 +1117,6 @@ def test_real_registry_optional_list_is_the_flat_keys():
         "db2_log_usage_percent", "db2_deadlock_rate",
         "db2_tablespace_used_percent",
         "clickhouse_max_part_count", "clickhouse_replication_queue",
-        "clickhouse_memory_tracking_bytes",
     ]
     assert not [k for k in shipped if k.endswith("_critical")]
 
@@ -1250,8 +1249,8 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
                 f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 44, (
-        f"expected all 44 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 43, (
+        f"expected all 43 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():
