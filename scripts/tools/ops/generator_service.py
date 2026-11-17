@@ -1581,13 +1581,18 @@ def _head_is_unborn(git: str, repo: str, env: dict) -> "tuple[bool, str]":
                 or f"git {what} exited {proc.returncode}")
     ref = subprocess.run([git, "-C", repo, "symbolic-ref", "-q", "HEAD"],
                          capture_output=True, check=False, timeout=60, env=env)
-    name = ref.stdout.decode("utf-8", "replace").strip()
+    # ⛔ The ref's own bytes, less git's one newline: `str.strip()` also takes
+    # a trailing U+00A0, which a branch name may end in — `topic\u00a0`
+    # naming a missing commit was asked about as `topic`, found absent, and
+    # so taken for unborn.
+    name = ref.stdout[:-1] if ref.stdout.endswith(b"\n") else ref.stdout
     if ref.returncode != 0 or not name:
         return False, said(ref, "symbolic-ref")
-    there = subprocess.run([git, "-C", repo, "show-ref", "--verify", "--quiet", name],
+    there = subprocess.run([os.fsencode(git), b"-C", os.fsencode(repo), b"show-ref",
+                            b"--verify", b"--quiet", name],
                            capture_output=True, check=False, timeout=60, env=env)
     if there.returncode == 0:
-        return False, f"{name} is there and names no commit"
+        return False, f"{name.decode('utf-8', 'replace')} is there and names no commit"
     return there.returncode == 1, said(there, "show-ref")
 
 

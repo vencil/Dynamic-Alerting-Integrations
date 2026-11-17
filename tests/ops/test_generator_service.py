@@ -2061,6 +2061,9 @@ def test_a_head_that_is_no_commit_yet_starts(tmp_path, world, unborn):
     ("branch", "bad ref refs/heads/"),          # show-ref: the ref names a missing object
     ("detached", "git symbolic-ref exited 1"),  # no branch to be unborn
     ("blob", " is there and names no commit"),  # the ref names something that is no commit
+    # a branch name ending in U+00A0 (git allows it): asked about by its own
+    # bytes, never by a trimmed spelling that names a branch that is not there
+    ("nbsp", "bad ref refs/heads/"),
 ])
 def test_a_head_naming_a_commit_git_cannot_read_refuses_to_start(tmp_path, world, broken, said):
     """#3903: `rev-parse --verify --quiet HEAD^{commit}` exits 1 with nothing
@@ -2069,6 +2072,8 @@ def test_a_head_naming_a_commit_git_cannot_read_refuses_to_start(tmp_path, world
     commit", the service started and answered ready, and every request was
     rejected/git_read."""
     repo = _repo_with_a_commit(tmp_path / "repo")
+    if broken == "nbsp":
+        h.run_git(repo, "checkout", "-q", "-b", "topic\u00a0")
     if broken == "detached":
         h.run_git(repo, "checkout", "-q", "--detach")
     if broken == "blob":
