@@ -133,7 +133,7 @@ Last reload:   2026-03-12T10:05:30Z
 Config mode:   directory
 Resolve at:    2026-03-12T03:30:00Z (overridden)
 
-Defaults (11 metrics):
+Defaults (12 metrics):
   container_cpu: 80
   container_cpu_throttle: 25
   container_memory: 85
@@ -141,6 +141,7 @@ Defaults (11 metrics):
   es_heap_usage_percent: 85
   mysql_connection_usage_percent: 80
   mysql_replication_lag: 30
+  oracle_process_usage_percent: 85
   oracle_tablespace_used_percent: 85
   pg_connections: 80
   pg_replication_lag: 30
@@ -159,6 +160,7 @@ Resolved thresholds:
   tenant=tenant-a metric=disk_usage_percent value=85 severity=warning component=es
   tenant=tenant-a metric=heap_usage_percent value=85 severity=warning component=es
   tenant=tenant-a metric=replication_lag value=30 severity=warning component=mysql
+  tenant=tenant-a metric=process_usage_percent value=85 severity=warning component=oracle
   tenant=tenant-a metric=tablespace_used_percent value=85 severity=warning component=oracle
   tenant=tenant-a metric=connections value=80 severity=warning component=pg
   tenant=tenant-a metric=replication_lag value=30 severity=warning component=pg

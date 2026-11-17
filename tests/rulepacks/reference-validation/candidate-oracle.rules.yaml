@@ -22,6 +22,12 @@
 # Threshold 0.85 is HARD-CODED in the shipped rule (not user_threshold). The shipped
 # denominator guard `> 0` is reproduced (a zero session limit would otherwise divide
 # to +Inf and over-fire; shipped drops the series instead).
+# OracleHighProcessCount / OracleHighPGAUsage (#1320): the same shape, a share of
+# PROCESSES / PGA_AGGREGATE_LIMIT with the same `> 0` guard; 85 is the shipped
+# default (process) and the registry's reference value (PGA). A signature with no
+# denominator companion has no share, so these alerts cannot fire on it: the PGA
+# fault signatures state no PGA_AGGREGATE_LIMIT and read as MISS — a real limit of
+# the share form (no limit set ⇒ nothing to measure against), not a harness gap.
 groups:
   - name: oracle-ref
     interval: 30s
@@ -43,11 +49,11 @@ groups:
         for: 5m
         labels: {severity: warning}
       - alert: OracleHighProcessCount
-        expr: oracledb_process_count > 300
+        expr: 100 * oracledb_process_count / (oracledb_processes_limit > 0) > 85
         for: 5m
         labels: {severity: warning}
       - alert: OracleHighPGAUsage
-        expr: oracledb_pga_allocated_bytes > 4294967296
+        expr: 100 * oracledb_pga_allocated_bytes / (oracledb_pga_aggregate_limit_bytes > 0) > 85
         for: 10m
         labels: {severity: warning}
       - alert: OracleHighSessionUtilization

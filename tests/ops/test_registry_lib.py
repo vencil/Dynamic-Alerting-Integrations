@@ -604,8 +604,12 @@ def test_real_registry_chart_default_set():
     assert {"es_disk_usage_percent", "es_heap_usage_percent",
             "oracle_tablespace_used_percent"} <= tagged
     assert "rabbitmq_node_mem_percent" in tagged
+    # #1320: the PROCESSES share rests on awesome-prometheus-alerts' 85 (11 -> 12);
+    # the PGA share has no source and stays operator.
+    assert "oracle_process_usage_percent" in tagged
+    assert "oracle_pga_usage_percent" not in tagged
     assert "jvm_memory" not in tagged
-    assert len(tagged) == 11
+    assert len(tagged) == 12
 
 
 def test_every_real_key_states_its_arming():
@@ -903,7 +907,7 @@ def test_shipped_optional_predicate_excludes_critical_and_dimensional():
     resolveDeclaredRows skips the suffix and resolveCriticalRows needs
     defaults[base]. Dimensional tokens are excluded for the same reason
     scaffold_tenant excludes them."""
-    assert lib.is_shipped_optional_key("oracle_process_count")
+    assert lib.is_shipped_optional_key("oracle_pga_usage_percent")
     assert not lib.is_shipped_optional_key("pg_connections_critical")
     assert not lib.is_shipped_optional_key('oracle_tablespace{name="X"}')
 
@@ -1101,19 +1105,19 @@ def test_optional_override_list_is_a_yaml_string_array():
 
 
 def test_real_registry_optional_list_is_the_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 43 the
-    tier holds (both asserted below; #3778 added mysql_threads_running). Most
+    """#1310/#1311 pin: the shipped list is the 8 FLAT keys, never the 42 the
+    tier holds (both asserted below; #3778 added mysql_threads_running, #1320
+    replaced the two absolute Oracle keys with one share and armed the other). Most
     of the tier is `_critical` keys;
     listing them would make the shipped list mostly decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 43
+    assert len(tier) == 42
     assert shipped == [
         "mysql_threads_running",
-        "oracle_wait_time_rate", "oracle_process_count",
-        "oracle_pga_allocated_bytes",
+        "oracle_wait_time_rate", "oracle_pga_usage_percent",
         "db2_log_usage_percent", "db2_deadlock_rate",
         "db2_tablespace_used_percent",
         "clickhouse_max_part_count", "clickhouse_replication_queue",
@@ -1249,8 +1253,8 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
                 f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 43, (
-        f"expected all 43 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 42, (
+        f"expected all 42 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():

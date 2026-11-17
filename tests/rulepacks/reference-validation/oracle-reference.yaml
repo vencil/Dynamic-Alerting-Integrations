@@ -87,6 +87,12 @@ signatures:
     must_detect: true
     metric: oracledb_process_count
     metric_kind: gauge
+    # #1320：PROCESSES 1500。描述說計數逼近上限、出現 ORA-00020，取峰值 1350 之上的上限；不是從告警門檻反推。
+    companion_series:
+      - metric: oracledb_processes_limit
+        role: denominator
+        metric_kind: gauge
+        level: 1500
     shape_class: plateau
     noise_kind: gaussian
     fault_class: parallel-process-exhaustion

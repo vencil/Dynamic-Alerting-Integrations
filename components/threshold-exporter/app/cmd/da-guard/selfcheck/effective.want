@@ -8,7 +8,7 @@
       "tenant_id": "t1",
       "source_file": "team/t1.yaml",
       "source_hash": "dbaf121294522b16",
-      "merged_hash": "5bdbaeb8fe7532cf",
+      "merged_hash": "e6ce8e592fb7fd26",
       "defaults_chain": [
         "_defaults.yaml"
       ],
@@ -32,6 +32,7 @@
         "mysql_connection_usage_percent": "70",
         "mysql_replication_lag": 30,
         "mysql_slave_lag": "disable",
+        "oracle_process_usage_percent": 85,
         "oracle_tablespace_used_percent": 85,
         "pg_connections": 80,
         "pg_replication_lag": 30,
@@ -73,6 +74,9 @@
           "layer": "tenant",
           "file": "team/t1.yaml"
         },
+        "oracle_process_usage_percent": {
+          "layer": "builtin"
+        },
         "oracle_tablespace_used_percent": {
           "layer": "builtin"
         },
@@ -94,7 +98,7 @@
   "root_defaults_refused": [],
   "root_defaults_reserved": [],
   "builtin_defaults": {
-    "digest": "63343e1d88e9",
+    "digest": "522437716e2a",
     "keys": {
       "container_cpu": {
         "value": 80,
@@ -128,6 +132,11 @@
       },
       "mysql_replication_lag": {
         "value": 30,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "oracle_process_usage_percent": {
+        "value": 85,
         "state": "builtin",
         "tenants": 1
       },

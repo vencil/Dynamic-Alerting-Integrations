@@ -430,8 +430,7 @@ class TestGenDefaultsDeclaredList:
     def test_selected_pack_declares_its_flat_optional_keys(self):
         config = yaml.safe_load(ip._gen_defaults_yaml(['oracle'], 'monitoring'))
         assert config['optional_overrides'] == [
-            'oracle_wait_time_rate', 'oracle_process_count',
-            'oracle_pga_allocated_bytes',
+            'oracle_wait_time_rate', 'oracle_pga_usage_percent',
         ]
 
     def test_list_of_strings_never_a_mapping(self):
@@ -757,7 +756,7 @@ class TestGenTenantYamlDeclaredBlock:
         """The number stays visible (it is the only starting point an operator
         has) but never as an endorsement."""
         yaml_str = ip._gen_tenant_yaml('db-a', ['oracle'])
-        assert 'reference start 300 count' in yaml_str
+        assert 'reference start 50 s/s' in yaml_str
         assert 'not an endorsement' in yaml_str
 
     def test_pack_without_declared_keys_gets_no_block(self):

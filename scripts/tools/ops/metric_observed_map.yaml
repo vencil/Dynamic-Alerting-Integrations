@@ -277,16 +277,16 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:nginx_connections_waiting:max
-  oracle_pga_allocated_bytes:
+  oracle_pga_usage_percent:
     pack: rule-pack-oracle.yaml
     scope: tenant
     direction: '>'
-    observed_series: tenant:oracle_pga_allocated_bytes:max
-  oracle_process_count:
+    observed_series: tenant:oracle_pga_usage:percent
+  oracle_process_usage_percent:
     pack: rule-pack-oracle.yaml
     scope: tenant
     direction: '>'
-    observed_series: tenant:oracle_process_count:max
+    observed_series: tenant:oracle_process_usage:percent
   oracle_sessions_active:
     pack: rule-pack-oracle.yaml
     scope: tenant

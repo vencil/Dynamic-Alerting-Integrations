@@ -68,7 +68,7 @@ def _tenant_overlay(d: Path) -> None:
 
 def _optional_override_in_use(d: Path) -> None:
     _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
-         '    mysql_connection_usage_percent: "70"\n    oracle_process_count: "100"\n')
+         '    mysql_connection_usage_percent: "70"\n    oracle_pga_usage_percent: "100"\n')
 
 
 FINANCE = "examples/_routing_profiles.yaml"
@@ -78,7 +78,7 @@ CASES = [
     ("defaults", "defaults", {SERVED}, None,
      lambda d: _sub(d / "_defaults.yaml", "container_memory: 85", "container_memory: 86")),
     ("optional_overrides", "optional_overrides", {SERVED}, _optional_override_in_use,
-     lambda d: _sub(d / "_defaults.yaml", "  - oracle_process_count", "  - oracle_process_countx")),
+     lambda d: _sub(d / "_defaults.yaml", "  - oracle_pga_usage_percent", "  - oracle_pga_usage_percentx")),
     ("dimensions", "dimensions", {SERVED},
      lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
                     '    mysql_connection_usage_percent: "70"\n    container_cpu{version="v2"}: "60"\n'),

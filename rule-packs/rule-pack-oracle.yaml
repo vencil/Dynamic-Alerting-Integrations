@@ -14,6 +14,11 @@
 #       ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #       未啟用（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待 #1320
 #   oracle_tablespace_used_percent: 85   [chart-default]   # % — Tablespace usage warning
+#   oracle_process_usage_percent: 85   [chart-default]
+#       % of PROCESSES — Process usage warning: v$process rows as a share of the PROCESSES
+#       parameter, per exporter, busiest per tenant; 85 = awesome-prometheus-alerts "Oracle DB
+#       processes reaching limit". Replaces the absolute-count key oracle_process_count (#1320: a
+#       unit change is a removal plus an addition, no alias)
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
@@ -25,12 +30,13 @@
 #   oracle_wait_time_rate: 50   # s/s — Wait time rate (5m)
 #       未啟用（尚未量測，#1320）：尚無實測；#1320 在有訊號前維持宣告
 #       未啟用（依部署而定）：正常的等待輪廓因工作負載而異
-#   oracle_process_count: 300   # count — Active processes warning
-#       ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-#       未啟用（待改比值）：#1176 量到例行備份達 560 個 process；可攜的形式是佔 PROCESSES 上限的比例，待 #1320
-#   oracle_pga_allocated_bytes: 4294967296   # bytes (4GB) — PGA allocation warning
-#       ⚠ 參考庫實測反例（#1176）：計畫性 stats-gather 會用到 22 GB PGA —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-#       未啟用（待改比值）：#1176 量到計畫性 stats-gather 用到 22 GB；可攜的形式是佔 PGA_AGGREGATE_LIMIT 的比例，待 #1320
+#   oracle_pga_usage_percent: 85
+#       % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
+#       PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant;
+#       a database with no limit set (0) has no share. Replaces the absolute-bytes key
+#       oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)
+#       未啟用（尚未量測，#1320）：沒有公開的告警規則或 vendor 預設值給出佔 PGA_AGGREGATE_LIMIT 多少比例該警告；85 與 process、session
+#       比例一致，只是起點
 #
 # optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
 # 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
@@ -104,13 +110,32 @@ groups:
       - record: tenant:oracle_wait_time:rate5m
         expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))
 
-      # Process count
-      - record: tenant:oracle_process_count:max
-        expr: max by(tenant) (oracledb_process_count)
+      # Process usage, % of the PROCESSES parameter (#1320). PROCESSES is an
+      # instance-wide limit and counts background processes too, so the
+      # numerator is every row of v$process. Connected to a PDB, v$process shows
+      # only part of the instance and the share is a lower bound; connect to the
+      # CDB root to watch the whole limit. Divided per exporter before the max,
+      # so two databases (or RAC instances) of one tenant are not mixed; a limit
+      # read as 0 drops out of the share instead of dividing to +Inf.
+      - record: tenant:oracle_process_usage:percent
+        expr: |
+          max by(tenant) (
+            100 * oracledb_process_count
+            / (oracledb_processes_limit > 0)
+          )
 
-      # PGA allocated memory (bytes)
-      - record: tenant:oracle_pga_allocated_bytes:max
-        expr: max by(tenant) (oracledb_pga_allocated_bytes)
+      # PGA usage, % of PGA_AGGREGATE_LIMIT (#1320): past the limit Oracle
+      # terminates the sessions holding the most untunable PGA. A limit of 0
+      # means none is set; that database then has no share and the alert on it
+      # stays silent. Connected to a PDB, both sides are what that PDB sees: the
+      # limit is the PDB's own when it sets one, otherwise the CDB's, and then
+      # the share is a lower bound. Divided per exporter before the max.
+      - record: tenant:oracle_pga_usage:percent
+        expr: |
+          max by(tenant) (
+            100 * oracledb_pga_allocated_bytes
+            / (oracledb_pga_aggregate_limit_bytes > 0)
+          )
 
       # Session utilization ratio: sessions counted against the SESSIONS parameter
       # of the container the exporter is connected to, over that parameter — all
@@ -149,11 +174,11 @@ groups:
       - record: tenant:alert_threshold:oracle_wait_time_rate
         expr: max by(tenant) (user_threshold{component="oracle", metric="wait_time_rate", severity="warning"})
 
-      - record: tenant:alert_threshold:oracle_process_count
-        expr: max by(tenant) (user_threshold{component="oracle", metric="process_count", severity="warning"})
+      - record: tenant:alert_threshold:oracle_process_usage_percent
+        expr: max by(tenant) (user_threshold{component="oracle", metric="process_usage_percent", severity="warning"})
 
-      - record: tenant:alert_threshold:oracle_pga_allocated_bytes
-        expr: max by(tenant) (user_threshold{component="oracle", metric="pga_allocated_bytes", severity="warning"})
+      - record: tenant:alert_threshold:oracle_pga_usage_percent
+        expr: max by(tenant) (user_threshold{component="oracle", metric="pga_usage_percent", severity="warning"})
 
   # -------------------------------------------------------
   # Alert Rules: Oracle
@@ -394,9 +419,9 @@ groups:
       - alert: OracleHighProcessCount
         expr: |
           (
-            tenant:oracle_process_count:max
+            tenant:oracle_process_usage:percent
             > on(tenant) group_left
-            tenant:alert_threshold:oracle_process_count
+            tenant:alert_threshold:oracle_process_usage_percent
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -406,12 +431,12 @@ groups:
           maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Oracle high process count on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} 上 Oracle process 數過高"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle process count high — resource review"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle process 數過高 — 資源審查"
-          description: "{{ $value | printf \"%.0f\" }} active processes"
-          description_zh: "{{ $value | printf \"%.0f\" }} 個活動 process"
+          summary: "Oracle processes approaching the PROCESSES limit on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 Oracle process 數逼近 PROCESSES 上限"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle processes near the PROCESSES limit — capacity review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle process 數逼近 PROCESSES 上限 — 容量審查"
+          description: "Processes: {{ $value | printf \"%.1f\" }}% of the PROCESSES limit"
+          description_zh: "Process 數：PROCESSES 上限的 {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -419,9 +444,9 @@ groups:
       - alert: OracleHighPGAUsage
         expr: |
           (
-            tenant:oracle_pga_allocated_bytes:max
+            tenant:oracle_pga_usage:percent
             > on(tenant) group_left
-            tenant:alert_threshold:oracle_pga_allocated_bytes
+            tenant:alert_threshold:oracle_pga_usage_percent
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -431,12 +456,12 @@ groups:
           maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "Oracle high PGA usage on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} 上 Oracle PGA 使用率過高"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle PGA usage high — memory sizing review"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle PGA 使用率過高 — 記憶體大小調整審查"
-          description: "PGA allocated: {{ $value | humanize1024 }}B"
-          description_zh: "配置的 PGA：{{ $value | humanize1024 }}B"
+          summary: "Oracle PGA approaching PGA_AGGREGATE_LIMIT on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 Oracle PGA 逼近 PGA_AGGREGATE_LIMIT"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle PGA near PGA_AGGREGATE_LIMIT — sessions are terminated past it"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle PGA 逼近 PGA_AGGREGATE_LIMIT — 超過時會終止 session"
+          description: "PGA allocated: {{ $value | printf \"%.1f\" }}% of PGA_AGGREGATE_LIMIT"
+          description_zh: "配置的 PGA：PGA_AGGREGATE_LIMIT 的 {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

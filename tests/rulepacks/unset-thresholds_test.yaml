@@ -475,7 +475,7 @@ tests:
 
   - interval: 15s
     input_series:
-      - series: 'user_threshold_unset{tenant="t-oracle", pack="oracle", key="oracle_pga_allocated_bytes", fix="tenant"}'
+      - series: 'user_threshold_unset{tenant="t-oracle", pack="oracle", key="oracle_pga_usage_percent", fix="tenant"}'
         values: '1x160'
       - series: 'query_interval{tenant="t-oracle", job="tenant-exporters", query="oracle_liveness"}'
         values: '1x160'
@@ -486,17 +486,17 @@ tests:
           - exp_labels:
               tenant: t-oracle
               pack: oracle
-              key: oracle_pga_allocated_bytes
+              key: oracle_pga_usage_percent
               fix: tenant
               severity: info
               maintenance: mute
             exp_annotations:
-              summary: "oracle_pga_allocated_bytes has no threshold for t-oracle: the alert on it stays silent"
-              summary_zh: "t-oracle 沒有設定 oracle_pga_allocated_bytes：讀它的告警不會響"
-              platform_summary: "oracle_pga_allocated_bytes: no threshold, so its alert never fires (fix: tenant)"
-              platform_summary_zh: "oracle_pga_allocated_bytes：沒有門檻值，讀它的告警不會響（處理方：tenant）"
-              description: "No threshold is served for oracle_pga_allocated_bytes, so the oracle alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
-              description_zh: "oracle_pga_allocated_bytes 沒有送出任何門檻值，oracle 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
+              summary: "oracle_pga_usage_percent has no threshold for t-oracle: the alert on it stays silent"
+              summary_zh: "t-oracle 沒有設定 oracle_pga_usage_percent：讀它的告警不會響"
+              platform_summary: "oracle_pga_usage_percent: no threshold, so its alert never fires (fix: tenant)"
+              platform_summary_zh: "oracle_pga_usage_percent：沒有門檻值，讀它的告警不會響（處理方：tenant）"
+              description: "No threshold is served for oracle_pga_usage_percent, so the oracle alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
+              description_zh: "oracle_pga_usage_percent 沒有送出任何門檻值，oracle 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
               runbook_url: ""
               owner: ""
               tier: ""

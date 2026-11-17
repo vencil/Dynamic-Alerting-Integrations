@@ -145,8 +145,7 @@ class TestGenerateDefaultsDeclaredList:
     def test_selected_pack_declares_its_flat_optional_keys(self):
         result = generate_defaults(["kubernetes", "oracle"])
         assert result["optional_overrides"] == [
-            "oracle_wait_time_rate", "oracle_process_count",
-            "oracle_pga_allocated_bytes",
+            "oracle_wait_time_rate", "oracle_pga_usage_percent",
         ]
 
     def test_declared_keys_carry_no_value(self):
@@ -177,7 +176,8 @@ class TestGenerateDefaultsDeclaredList:
         db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
         # 42 → 39：#3783 移除 kafka_active_controllers / kafka_request_rate；#3778 把
         # mysql_threads_running 移到宣告層（optional_overrides）。
-        assert len(generate_defaults(db_packs)["defaults"]) == 39
+        # 39 → 40：#1320 oracle_process_usage_percent 預設出貨。
+        assert len(generate_defaults(db_packs)["defaults"]) == 40
 
     def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
         """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、
@@ -1659,17 +1659,18 @@ class TestPromptDefaultsSplitByKeyClass:
         return seen, res["tenants"]["db-c"]
 
     def test_flat_optional_key_empty_input_writes_nothing(self):
-        """oracle：2 個 defaults 全部按 Enter 保留，3 個平鍵一個都不落地；
+        """oracle：3 個 defaults 全部按 Enter 保留，2 個平鍵一個都不落地；
         2 個 `_critical`（#3658）照 `_critical` 那一類的規矩，Enter 採用平台值。"""
         res = _gen_tenant_interactive("db-c", ["oracle"], [
-            "", "",              # defaults: sessions_active / tablespace
-            "", "", "",          # 平鍵 ×3 —— 留空即跳過
+            "", "", "",          # defaults: sessions_active / tablespace / process_usage（#1320）
+            "", "",              # 平鍵 ×2 —— 留空即跳過
             "", "",              # _critical ×2 —— Enter 仍採用平台值
             *self._NEUTRAL_TAIL,
         ])
         assert res == {"tenants": {"db-c": {
             "oracle_sessions_active": "200",
             "oracle_tablespace_used_percent": "85",
+            "oracle_process_usage_percent": "85",
             "oracle_sessions_active_critical": "280",
             "oracle_tablespace_used_percent_critical": "95",
         }}}
@@ -1677,16 +1678,16 @@ class TestPromptDefaultsSplitByKeyClass:
     def test_flat_optional_key_typed_value_is_still_honoured(self):
         """拿掉的是**預設**、不是這一格：租戶真的填了就照樣寫進去。"""
         res = _gen_tenant_interactive("db-c", ["oracle"], [
-            "", "",
-            "60", "", "8589934592",   # wait_time_rate 填 / process_count 跳過 / pga 填
+            "", "", "",
+            "60", "",                 # wait_time_rate 填 / pga_usage 跳過
             "", "",                   # _critical ×2 —— Enter 採用平台值
             *self._NEUTRAL_TAIL,
         ])
         assert res == {"tenants": {"db-c": {
             "oracle_sessions_active": "200",
             "oracle_tablespace_used_percent": "85",
+            "oracle_process_usage_percent": "85",
             "oracle_wait_time_rate": "60",
-            "oracle_pga_allocated_bytes": "8589934592",
             "oracle_sessions_active_critical": "280",
             "oracle_tablespace_used_percent_critical": "95",
         }}}
@@ -1712,21 +1713,21 @@ class TestPromptDefaultsSplitByKeyClass:
             "pg_connections", "pg_replication_lag",
             "pg_connections_critical", "pg_replication_lag_critical",
             "oracle_sessions_active", "oracle_tablespace_used_percent",
+            "oracle_process_usage_percent",
             "oracle_sessions_active_critical",
             "oracle_tablespace_used_percent_critical",
         }, overrides
-        for key in ("oracle_wait_time_rate", "oracle_process_count",
-                    "oracle_pga_allocated_bytes"):
+        for key in ("oracle_wait_time_rate", "oracle_pga_usage_percent"):
             assert key not in overrides
 
     def test_prompt_text_shows_the_number_as_a_reference_not_a_default(self):
         """數字仍要看得見（它是操作者唯一的起點），但不能長得像 Enter 預設。"""
         prompts, _ = self._prompts_for(["oracle"])
-        flat = [p for p in prompts if "oracle_process_count" in p]
+        flat = [p for p in prompts if "oracle_wait_time_rate" in p]
         assert len(flat) == 1, prompts
         assert "無平台預設" in flat[0] and "留空跳過" in flat[0], flat[0]
-        assert "300" in flat[0], "the reference number must still be shown"
-        assert "(300 count)" not in flat[0], (
+        assert "50" in flat[0], "the reference number must still be shown"
+        assert "(50 s/s)" not in flat[0], (
             "still rendered in the Enter-default shape: " + flat[0])
 
         # Exact key, not substring: `oracle_sessions_active_critical` (#3658)
@@ -1904,7 +1905,7 @@ class TestTenantStubDeclaredBlock:
         """數字仍要看得見（它是唯一的起點），但必須標成參考起點而非背書。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             content = _tenant_yaml_for(tmpdir, ["oracle"])
-        assert "參考起點 300 count" in content
+        assert "參考起點 50 s/s" in content
         assert "非背書" in content
 
     def test_pack_without_declared_keys_gets_no_block(self):
