@@ -1773,9 +1773,6 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
     ("ops/backtest_threshold.py", "-o/--output"): ("scripts/tools/ops/backtest_threshold.py:_write_outputs write_text_or_die ×1",),
     ("ops/batch_diagnose.py", "-o/--output"): ("scripts/tools/ops/batch_diagnose.py:main write_json_or_die ×1",),
     ("ops/discover_instance_mappings.py", "-o/--output"): ("scripts/tools/ops/discover_instance_mappings.py:main write_text_or_die ×1",),
-    ("ops/generate_alertmanager_routes.py", "-o/--output"): (
-         "scripts/tools/ops/generate_alertmanager_routes.py:_write_output_or_die write_text_or_die ×1",
-        ),
     ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("scripts/tools/ops/generate_tenant_mapping_rules.py:main write_text_or_die ×1",),
     ("ops/validate_migration.py", "--convergence-output"): ("scripts/tools/ops/validate_migration.py:main write_json_or_die ×1",),
 }

@@ -400,23 +400,35 @@ def test_a_link_to_the_base_config_is_the_base_config(tmp_path, flag, kind):
     assert Path(base).read_text(encoding="utf-8") == _BASE
 
 
-@pytest.mark.parametrize("other", ["--secret-mounts-out", "--findings-json"])
-def test_an_o_that_is_stdout_owns_stdout(tmp_path, other):
+@pytest.mark.parametrize("other", [None, "--secret-mounts-out", "--findings-json"])
+def test_an_o_that_is_stdout_is_refused(tmp_path, other):
+    """#3107 ③a: -o is an artifact, replaced whole — never a stream. An -o
+    that is fd 1 (here a pipe) is refused before the run, with or without
+    another output asking for stdout, and the routes are not printed."""
     d, _ = _out_args(tmp_path)
-    r = _run(tmp_path, d, "--output-alertmanager", "-o", "/dev/stdout", other, "-")
+    extra = [other, "-"] if other else []
+    r = _run(tmp_path, d, "--output-alertmanager", "-o", "/dev/stdout", *extra)
     assert r.returncode == 2, (r.stdout, r.stderr)
-    assert "-o/--output /dev/stdout" in r.stderr and other in r.stderr
+    assert "ERROR: cannot write /dev/stdout: not a regular file — check the value " \
+           "given to -o/--output" in r.stderr, r.stderr
+    assert "to print them to standard output, leave -o out" in r.stderr
     assert "receivers:" not in r.stdout
 
 
-def test_an_o_named_dash_is_a_file_not_stdout(tmp_path):
-    """`-o -` is a file called `-` (the routes writer is not an operator
-    output), so the list may take stdout beside it."""
+def test_an_o_named_dash_is_refused_and_dot_slash_dash_is_a_file(tmp_path):
+    """#3107 ③a: `-o -` exits 2 at parse time (it used to write a file
+    called `-`); `./-` names that file, and the list may take stdout beside
+    it."""
     d, _ = _out_args(tmp_path)
-    r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
-                        "--output-alertmanager", "-o", "-", "--secret-mounts-out", "-"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=300, cwd=tmp_path)
+    argv = [sys.executable, str(_GAR), "--config-dir", str(d), "--output-alertmanager"]
+    r = subprocess.run([*argv, "-o", "-", "--secret-mounts-out", "-"], capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=300, cwd=tmp_path)
+    assert r.returncode == 2, r.stderr
+    assert "error: argument -o/--output: '-' is standard output" in r.stderr, r.stderr
+    assert r.stdout == ""
+    assert not (tmp_path / "-").exists()
+    r = subprocess.run([*argv, "-o", "./-", "--secret-mounts-out", "-"], capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=300, cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["schema"] == MOUNT_LIST_SCHEMA
     assert (tmp_path / "-").is_file()
@@ -439,10 +451,12 @@ def test_devices_collide_with_nothing(tmp_path):
     file): no clash, as before #1560's one judgement."""
     if not os.path.exists("/dev/null") or not stat.S_ISCHR(os.stat("/dev/null").st_mode):
         pytest.skip("no /dev/null character device on this host")
-    d, _ = _out_args(tmp_path)
-    r = _run(tmp_path, d, "--output-alertmanager", "-o", "/dev/null",
+    d, out = _out_args(tmp_path)
+    # #3107 ③a: -o is an artifact, so not a device: the other two may be.
+    r = _run(tmp_path, d, "--output-alertmanager", "-o", str(out),
              "--findings-json", "/dev/null", "--secret-mounts-out", "/dev/null")
     assert r.returncode == 0, (r.stdout, r.stderr)
+    assert out.is_file()
 
 
 @pytest.mark.parametrize("mode", [["--output-alertmanager", "--bogus"],
@@ -484,7 +498,8 @@ def test_dev_null_is_no_stdout_owner_even_when_stdout_is_dev_null(tmp_path):
     policy = tmp_path / "policy.yaml"
     policy.write_text(_POLICY, encoding="utf-8")
     r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "--policy", str(policy),
-                        "--output-alertmanager", "-o", "/dev/null", "--findings-json", "/dev/null"],
+                        "--output-alertmanager", "-o", str(tmp_path / "am.yml"),
+                        "--findings-json", "/dev/null", "--secret-mounts-out", "/dev/null"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                        encoding="utf-8", errors="replace", timeout=300)
     assert r.returncode == 0, r.stderr
