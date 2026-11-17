@@ -122,7 +122,7 @@ da-tools <command> --help
 - ⚠️ **行為變更**：
   - owner 2026-10-21 核可（逐項見 [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：非 root 寫別人的裝置或可寫一般檔 `2` → `0`；唯讀檔、懸空 link、socket、無 reader 的 FIFO `0` → `2`；本來會卡住的寫入改為 `2`；`-` 不再建出名為 `-` 的檔。
   - owner 2026-10-24 核可：`configmap-assemble --output` 為 `-`、裝置、FIFO 時 `0` → `2`，寫出的 manifest 為 `0600`。
-  - 2026-11-15（owner 裁決：這些是 operator 輸出、目錄旗標拒絕 `-`；其餘各項是上面 operator 輸出寫法的結果）：`validate`、`init`、`operator-generate`、`migrate-to-operator`、`rule-pack-split`、`scaffold`、`migrate`、`onboard` 寫進輸出目錄的檔案（conf.d 檔除外，那些由 `da-guard write` 寫）改為 operator 輸出，一律 `0600`。目錄旗標給 `-` 時 `0` → `2`（以前會建出名為 `-` 的目錄）；`rule-pack-split` 的 `validation-report.json` 由 `0644` 改為 `0600`；既有輸出檔屬於別的使用者而可寫時 `2` → `0`（以前內容寫入後 chmod 失敗、後面的檔不寫）；既有輸出檔是 symlink、或屬於別的使用者時，不再把目標改成 `0600`；既有路徑是沒有 reader 的 FIFO 時由卡住改為 `2`。
+  - 2026-11-15（owner 裁決：這些是 operator 輸出、目錄旗標拒絕 `-`；其餘各項是上面 operator 輸出寫法的結果）：`validate`、`init`、`operator-generate`、`migrate-to-operator`、`rule-pack-split`、`scaffold`、`migrate`、`onboard` 寫進輸出目錄的檔案（conf.d 檔除外，那些由 `da-guard write` 寫）改為 operator 輸出，一律 `0600`。兩個例外：`validate` 的 `cutover-readiness.json`（`--convergence-output`）還沒改，symlink 的目標仍會被設成 `0600`；`rule-pack-split` 在沒有 PyYAML 的環境裡（出貨映像不會遇到）`validation-report.json` 仍是 `0644`。目錄旗標給 `-` 時 `0` → `2`（以前會建出名為 `-` 的目錄）；`rule-pack-split` 的 `validation-report.json` 由 `0644` 改為 `0600`；非 root 執行、既有輸出檔屬於別的使用者而可寫時 `2` → `0`（以前內容寫入後 chmod 失敗、後面的檔不寫）；既有輸出檔是 symlink、或屬於別的使用者時，不再把目標改成 `0600`；既有路徑是沒有 reader 的 FIFO 時由卡住改為 `2`；寫入途中出錯（例如磁碟滿）時留下 `0600` 的空檔，以前留下前半段。
 
 ---
 

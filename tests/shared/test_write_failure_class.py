@@ -391,6 +391,9 @@ def test_every_tool_calling_an_allowlisted_writer_can_catch_the_error():
     # migrate_to_operator), and `_lib_yaml` left the allowlist when that
     # function moved to the operator entry; what is left on the allowlist,
     # `_registry_lib._confd_batches`, is called from `_registry_lib` alone.
+    # So this test cannot fail today; it is kept because it is what judges
+    # the call sites of the next library that joins the allowlist (a join
+    # `test_library_allowlist_size_is_pinned` makes a visible decision).
     # The scanner is still held by `test_lib_writer_scanner_controls`. That
     # those two tools turn a failed CRD write into rc 2 + one line is held by
     # their `artifact_is_dir` rows in test_output_path_write_failure.py.

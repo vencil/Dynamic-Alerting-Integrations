@@ -1179,6 +1179,20 @@ class TestAWriteThatFailsExitsTwo:
         assert exc_info.value.code == 2
         self._one_line(capsys, blocked)
 
+    def test_the_phase_3_files_are_0600(self, tmp_path):
+        """#3107: no gate row reaches these two calls, so their mode is held
+        here."""
+        import onboard_platform as op
+        jobs = [{"job_name": "mysql", "has_tenant_mapping": False, "mapping_type": None,
+                 "suggestions": [{"description": "add a tenant label",
+                                  "snippet": {"relabel_configs": []}}]}]
+        report = {"files_written": [], "phases": {}}
+        op._write_phase3_outputs(str(tmp_path), (jobs, {"total_jobs": 1}), report)
+        written = sorted(os.path.basename(p) for p in report["files_written"])
+        assert written == ["mysql-relabel-suggestion.yaml", "scrape-analysis.yaml"]
+        if os.name == "posix":
+            assert {os.stat(p).st_mode & 0o777 for p in report["files_written"]} == {0o600}
+
 
 # ============================================================
 # Phase 3: Scrape Config Analysis
