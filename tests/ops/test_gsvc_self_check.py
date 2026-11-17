@@ -602,9 +602,13 @@ def test_a_burst_of_git_reads_is_one_round(rig):
         for _ in range(6):
             assert svc.validate("0" * 40)[1].get("reason") == "git_read"
         took = time.monotonic() - began
-        if _rounds(svc, "passed") != 1 or took >= interval:
+        if took >= interval:
             pytest.skip(f"the burst took {took:.1f}s, not inside the {interval}s interval: "
                         f"nothing measured")
+        # inside the interval: no round has begun yet — one that has is the
+        # throttle broken, a failure, never a skip
+        st = _status(svc)
+        assert (_rounds(svc, "passed"), st["self_check"]["running"]) == (1, False), st
         _until(lambda: _rounds(svc, "passed") == 2, "the round asked for")
         time.sleep(interval + 1.0)  # a round still asked for would have run by now
         assert (_rounds(svc, "passed"), _rounds(svc, "failed")) == (2, 0)
