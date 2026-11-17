@@ -1292,6 +1292,73 @@ def test_a_child_run_reads_the_tree_its_parent_judged(tmp_path, fresh_declaratio
         and "judged another tree" in got.stderr, (got.returncode, got.stderr[-800:])
 
 
+#: A child run that judges the declared trees named on its command line —
+#: `--a`, and `--b` when given — as a tool does (declared_trees): rc 0, or
+#: rc 2 with the refusal's line.
+_CHILD_JUDGES = """
+import argparse, sys
+sys.path.insert(0, {tools!r})
+import _lib_input, _lib_parse_cache
+from _lib_exitcodes import InputChanged
+p = argparse.ArgumentParser()
+_lib_input.add_input(p, "--a", select=_lib_input.DA_GUARD_LISTS)
+_lib_input.add_input(p, "--b", select=_lib_input.DA_GUARD_LISTS)
+args = p.parse_args(sys.argv[1:])
+try:
+    for dest in ("a", "b"):
+        if getattr(args, dest) is not None:
+            _lib_parse_cache.declared_trees(args, dest, lang="en")
+except InputChanged as exc:
+    print(exc, file=sys.stderr)
+    sys.exit(2)
+"""
+
+
+def _child_judges(*argv: str) -> "subprocess.CompletedProcess":
+    code = _CHILD_JUDGES.format(tools=str(REPO / "scripts" / "tools"))
+    return subprocess.run([sys.executable, "-c", code, *argv], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=300, check=False,
+                          env=dict(os.environ))
+
+
+def _a_tree(root, tenant: str):
+    root.mkdir(parents=True)
+    (root / f"{tenant}.yaml").write_text(f"tenants:\n  {tenant}:\n    mysql_connections: \"80\"\n",
+                                         encoding="utf-8")
+    return root
+
+
+def test_a_child_compares_every_tree_it_judges_with_its_parent(tmp_path, fresh_declarations):
+    """#3965 (CodeRabbit): a child judging two trees compares the second
+    with its parent's judgement as it does the first — its own first
+    judgement does not drop what the parent handed down."""
+    pc = fresh_declarations
+    a, b = _a_tree(tmp_path / "a", "ta"), _a_tree(tmp_path / "b", "tb")
+    for flag, root in (("--a", a), ("--b", b)):
+        pc.record_judgement(root, flag, "en", _identity(root))
+    same = _child_judges("--a", str(a), "--b", str(b))
+    assert same.returncode == 0, same.stderr[-600:]
+    (b / "more.yaml").write_text("tenants:\n  tc: {}\n", encoding="utf-8")
+    got = _child_judges("--a", str(a), "--b", str(b))
+    assert got.returncode == 2 and f"--b {b}" in got.stderr \
+        and "judged another tree" in got.stderr, (got.returncode, got.stderr[-600:])
+
+
+def test_a_child_reaching_a_tree_through_a_retargeted_link_is_refused(tmp_path, fresh_declarations):
+    """#3965 (CodeRabbit): the parent judged the tree through a link; the
+    link retargeted before the child runs leads it to another tree, found by
+    the link's own path and refused."""
+    pc = fresh_declarations
+    first, other = _a_tree(tmp_path / "first", "ta"), _a_tree(tmp_path / "other", "tz")
+    link = tmp_path / "current"
+    symlink_or_skip(first, link)
+    pc.record_judgement(link, "--a", "en", _identity(link))
+    assert _child_judges("--a", str(link)).returncode == 0
+    link.unlink()
+    symlink_or_skip(other, link)
+    got = _child_judges("--a", str(link))
+    assert got.returncode == 2 and "judged another tree" in got.stderr, (got.returncode, got.stderr[-600:])
+
 def test_a_second_run_in_one_process_judges_its_own_tree(tmp_path, fresh_declarations):
     """#3965 review: judgements are process state. A second run of a tool in
     the same process, after an edit between the runs, judges the tree as it

@@ -26,12 +26,18 @@ func configHashField(identity string) *string {
 var betweenWalks func(configDir string)
 
 // sameWalks reports whether two walks of one run read the same tree: first
-// and later are their identities ("" — a walk that claims none — compares
-// with anything). When they differ it says so on errOut: the run's answer
-// would mix two trees, so the caller ends it with exit 2 and no document.
+// and later are their identities. A first walk that claims none ("")
+// compares with anything; once it named one, a later walk that names none
+// failed on a tree the first one walked (the root gone since) and is
+// another tree too. When they differ it says so on errOut: the run's
+// answer would mix two trees, so the caller ends it with exit 2 and no
+// document.
 func sameWalks(first, later string, errOut io.Writer) bool {
-	if first == "" || later == "" || first == later {
+	if first == "" || first == later {
 		return true
+	}
+	if later == "" {
+		later = "none (the walk failed)"
 	}
 	fmt.Fprintf(errOut, "%s: --config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again\n",
 		programName, first, later)

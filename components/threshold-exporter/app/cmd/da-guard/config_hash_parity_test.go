@@ -276,14 +276,43 @@ func TestConfigHash_WriteTakesTheJudgedIdentity(t *testing.T) {
 // document — never an answer mixed from two trees. Not parallel: the hook
 // is package state, and parallel tests start only after these end.
 func TestConfigHash_ATreeChangedBetweenWalksIsNotJudged(t *testing.T) {
+	addFile := func(t *testing.T, dir string) {
+		if err := os.WriteFile(filepath.Join(dir, "b.yaml"),
+			[]byte("tenants:\n  tb:\n    mysql_connections: \"81\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The root gone: the later walk fails, and names no identity.
+	removeRoot := func(t *testing.T, dir string) {
+		if err := os.RemoveAll(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every config file a dangling link: the load's early return (no
+	// readable file), which answers before the effective walk.
+	dangleAll := func(t *testing.T, dir string) {
+		for _, name := range []string{"_defaults.yaml", "a.yaml"} {
+			p := filepath.Join(dir, name)
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(dir, "nowhere"), p); err != nil {
+				t.Skipf("os.Symlink unavailable here (%v)", err)
+			}
+		}
+	}
 	for _, tc := range []struct {
-		name string
-		cmd  string
-		nth  int
+		name   string
+		cmd    string
+		nth    int
+		change func(*testing.T, string)
+		extra  []string
 	}{
-		{"default check: between its first and last walk", "", 1},
-		{"key-verdict: between the facts and the served reading", keyVerdictCmd, 1},
-		{"key-verdict: between the served reading and the effective one", keyVerdictCmd, 2},
+		{"default check: between its first and last walk", "", 1, addFile, nil},
+		{"default check: the root gone before its last walk", "", 1, removeRoot, []string{"--cardinality-limit", "0"}},
+		{"key-verdict: between the facts and the served reading", keyVerdictCmd, 1, addFile, nil},
+		{"key-verdict: every file unreadable after the facts", keyVerdictCmd, 1, dangleAll, nil},
+		{"key-verdict: between the served reading and the effective one", keyVerdictCmd, 2, addFile, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := configHashTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
@@ -292,10 +321,7 @@ func TestConfigHash_ATreeChangedBetweenWalksIsNotJudged(t *testing.T) {
 			betweenWalks = func(string) {
 				calls++
 				if calls == tc.nth {
-					if err := os.WriteFile(filepath.Join(dir, "b.yaml"),
-						[]byte("tenants:\n  tb:\n    mysql_connections: \"81\"\n"), 0o600); err != nil {
-						t.Fatal(err)
-					}
+					tc.change(t, dir)
 				}
 			}
 			t.Cleanup(func() { betweenWalks = nil })
@@ -303,7 +329,7 @@ func TestConfigHash_ATreeChangedBetweenWalksIsNotJudged(t *testing.T) {
 			if tc.cmd != "" {
 				args = append(args, tc.cmd)
 			}
-			args = append(append(args, "--config-dir", dir), walksTheTree[tc.cmd]...)
+			args = append(append(append(args, "--config-dir", dir), walksTheTree[tc.cmd]...), tc.extra...)
 			var out, errOut bytes.Buffer
 			rc := dispatch(args, strings.NewReader(""), &out, &errOut, guard.CheckDefaultsImpact)
 			if calls < tc.nth {

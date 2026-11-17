@@ -184,6 +184,13 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	if len(overlays) == 0 {
 		identity = scan.Composite // before a set-aside re-scan reads another tree
 	}
+	// #3965: the facts' walk (profiles, tenant files) and this one read the
+	// same tree — asked before any return below can answer from this walk.
+	if identity != "" && opts.factsIdentity != "" && opts.factsIdentity != identity {
+		return keyVerdictResult{}, fmt.Errorf(
+			"--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
+			opts.factsIdentity, identity)
+	}
 	if betweenWalks != nil {
 		betweenWalks(dir)
 	}
@@ -259,17 +266,14 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	if err != nil {
 		return unjudged(err)
 	}
-	// #3965: one run, one tree — the facts' walk, the served reading's and
-	// the effective one's read the same bytes, or the verdict would mix two
-	// trees (identity is "" where an overlay or a set-aside made it another).
-	if identity != "" {
-		for _, other := range []string{opts.factsIdentity, tree.TreeIdentity} {
-			if other != "" && other != identity {
-				return keyVerdictResult{}, fmt.Errorf(
-					"--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
-					other, identity)
-			}
-		}
+	// #3965: one run, one tree — the served reading's walk and the effective
+	// one's read the same bytes, or the verdict would mix two trees (identity
+	// is "" where an overlay or a set-aside made it another). An effective
+	// walk naming none failed on the tree the first one walked: another tree.
+	if identity != "" && tree.TreeIdentity != identity {
+		return keyVerdictResult{}, fmt.Errorf(
+			"--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
+			identity, tree.TreeIdentity)
 	}
 	in := keyverdict.Input{
 		Served:    servedForVerdict(served),

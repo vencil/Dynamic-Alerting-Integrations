@@ -867,25 +867,39 @@ def _handed_down() -> "tuple[Optional[int], dict]":
     return None, {}
 
 
+#: The judgements of the run that started this process, as it handed them
+#: down — taken once, when this module is first imported (before this
+#: process hands down judgements of its own over the same variable), so
+#: every tree this process judges is compared with them, the second as the
+#: first (#3965 review).
+_PARENT_PID, _PARENT_TREES = _handed_down()
+if _PARENT_PID == os.getpid():
+    _PARENT_PID, _PARENT_TREES = None, {}
+
+
 def _hand_down(root: "str | os.PathLike[str]", identity: Optional[str]) -> None:
     pid, trees = _handed_down()
     trees = dict(trees) if pid == os.getpid() else {}
-    real = os.path.realpath(root)
-    if identity is None:
-        trees.pop(real, None)
-    else:
-        trees[real] = identity
+    # Every spelling (`_spellings`): the flag's path as given and where it
+    # resolves. A child that reaches the tree through a link retargeted
+    # since finds the judgement by the link's own path.
+    for key in _spellings(root):
+        if identity is None:
+            trees.pop(key, None)
+        else:
+            trees[key] = identity
     os.environ[JUDGED_TREES_ENV] = json.dumps({"pid": os.getpid(), "trees": trees})
 
 
 def _inherited_identity(root: "str | os.PathLike[str]") -> Optional[str]:
     """The identity the run that started this process judged *root* with —
-    None in that run itself, or when it judged no such tree."""
-    pid, trees = _handed_down()
-    if pid is None or pid == os.getpid():
-        return None
-    got = trees.get(os.path.realpath(root))
-    return got if isinstance(got, str) else None
+    looked up by every spelling of *root*; None in that run itself, or when
+    it judged no such tree."""
+    for key in _spellings(root):
+        got = _PARENT_TREES.get(key)
+        if isinstance(got, str):
+            return got
+    return None
 
 
 def forget_judgement(root: "str | os.PathLike[str]") -> None:
