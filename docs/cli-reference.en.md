@@ -370,7 +370,7 @@ None (auto-discover tenants).
 | `--tenants <LIST>` | Comma-separated tenant list; each must be a tenant the ConfigMap declares, else exit 2 (each one named on stderr, stdout empty under `--json`); if omitted, every tenant the ConfigMap declares | (all) |
 | `--workers <N>` | Number of parallel diagnosis threads | `5` |
 | `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)). The deadline reaches every call inside the check: `kubectl` is stopped slightly before it (`min(0.5s, --timeout/4)`), so no process is left behind after the batch ends (not guaranteed with a very short `--timeout`, below about 0.5s, or on a heavily loaded machine), and past the deadline no `kubectl` is started and no Prometheus query is sent ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)) | `60` |
-| `-o, --output <FILE>` | Also write the JSON report to a file; the report still goes to stdout | (none) |
+| `-o, --output <FILE>` | Also write the JSON report to a file; the report still goes to stdout. `-`, an empty value and the file this run's stdout already writes (e.g. `/dev/stdout`) are exit 2 (stdout already carries the report; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | (none) |
 | `--json` | Print only JSON on stdout, no text report | false |
 | `--dry-run` | Only list tenants, don't run checks | false |
 | `--namespace <NS>` | Namespace of the `threshold-config` ConfigMap | `monitoring` |
@@ -508,7 +508,7 @@ Choose one mode:
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
 | `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there. `-` is not a directory and is refused (exit code `2`, [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | `validation_output` |
 | `--stability-window <N>` | Consecutive all-match rounds `--auto-detect-convergence` needs to call it converged | `5` |
-| `--convergence-output <FILE>` | Where the readiness JSON is written (`--watch --auto-detect-convergence`) | `cutover-readiness.json` under `-o/--output-dir` |
+| `--convergence-output <FILE>` | Where the readiness JSON is written (`--watch --auto-detect-convergence`). `-`, an empty value and the file this run's stdout already writes (e.g. `/dev/stdout`) are exit 2 (stdout already carries the progress and summary; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | `cutover-readiness.json` under `-o/--output-dir` |
 
 **Output**
 
@@ -726,9 +726,9 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 | `--new-value <VALUE>` | Single-change mode: the new threshold value (with `--tenant`) | (none) |
 | `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--lookback <DURATION>` | Historical lookback window, `<number><d\|h\|m>` (e.g. `7d` / `24h`). A value that does not match that shape (including a bare `7` or the empty string) ⇒ exit code 2 listing the accepted shape (#1625; it used to be silently treated as `7d`) | `7d` |
-| `-o, --output <FILE>` | Also write the JSON report to a file, the same document `--json` would print on this run (when it is written: see Output below); the text report still goes to stdout | (none) |
+| `-o, --output <FILE>` | Also write the JSON report to a file, the same document `--json` would print on this run (when it is written: see Output below); the text report still goes to stdout. `-`, an empty value and the file this run's stdout already writes (e.g. `/dev/stdout`) are exit 2 (stdout already carries the report; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | (none) |
 | `--json` | Print only JSON on stdout, no text report | false |
-| `--markdown-output <FILE>` | Also write the Markdown report to a file (for PR comments) | (none) |
+| `--markdown-output <FILE>` | Also write the Markdown report to a file (for PR comments). `-`, an empty value and the file this run's stdout already writes (e.g. `/dev/stdout`) are exit 2 (stdout already carries the report; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | (none) |
 | `--skip-if-unavailable` | Only "Prometheus unreachable" becomes exit 0; every other caller error (see the exit-code table below) still exits 2 | false |
 
 **Output**
@@ -2700,7 +2700,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-o, --output <FILE>` | Also write the JSON report to a file | (none) |
+| `-o, --output <FILE>` | Also write the JSON report to a file. `-`, an empty value and the file this run's stdout already writes (e.g. `/dev/stdout`) are exit 2 (stdout already carries the report; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | (none) |
 | `--json` | Print only JSON on stdout | false |
 | `--metric-dictionary <FILE>` | Metric dictionary; exit code 2 if given but the file does not exist | `metric-dictionary.yaml` beside the tool (image) or one level up (`scripts/tools/` in the repo) |
 
@@ -3627,7 +3627,7 @@ da-tools discover-mappings --prometheus <URL> --instance <INST> [--job <JOB>] [-
 | `--prometheus` | Prometheus API URL | (mutually exclusive with --endpoint; with neither given, `$PROMETHEUS_URL`, else `http://localhost:9090` is queried, [#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)) |
 | `--instance` | Instance label in Prometheus | (used with --prometheus) |
 | `--job` | Job label in Prometheus (narrows query) | (optional) |
-| `-o`, `--output` | Output file path (defaults to stdout) | stdout |
+| `-o`, `--output` | Output file path (defaults to stdout). `-`, an empty value and the file this run's stdout already writes are exit 2 (to print to stdout, leave `-o` out, `--json` for JSON; for a file named `-`, pass `./-`); mode `0600`, set only on a regular file the caller owns ([#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)) | stdout |
 | `--json` | Output in JSON format | `false` |
 
 **Examples**

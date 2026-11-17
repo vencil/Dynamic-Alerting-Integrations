@@ -366,7 +366,7 @@ da-tools batch-diagnose [options]
 | `--tenants <LIST>` | 逗號分隔租戶列表，每個都必須是 ConfigMap 宣告的租戶，否則結束碼 2（stderr 逐一點名，`--json` 時 stdout 為空）；不指定則檢查 ConfigMap 的全部租戶 | （全部） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
 | `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)）。期限也傳到檢查裡的每次呼叫：`kubectl` 在期限前稍早（`min(0.5 秒, --timeout/4)`）被終止，不會在整批結束後留下行程（`--timeout` 很短（低於約 0.5 秒）或機器負載高時不保證）；期限已過就不再啟動 `kubectl` 或送出 Prometheus 查詢（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)） | `60` |
-| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案；stdout 照樣印報告 | （無） |
+| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案；stdout 照樣印報告。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印報告；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | （無） |
 | `--json` | stdout 只印 JSON，不印文字報告 | false |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | `threshold-config` ConfigMap 所在的 namespace | `monitoring` |
@@ -504,7 +504,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
 | `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `validation_output` |
 | `--stability-window <N>` | `--auto-detect-convergence` 判定收斂所需的連續全部 match 輪數 | `5` |
-| `--convergence-output <FILE>` | readiness JSON 的寫入路徑（`--watch --auto-detect-convergence`） | `-o/--output-dir` 下的 `cutover-readiness.json` |
+| `--convergence-output <FILE>` | readiness JSON 的寫入路徑（`--watch --auto-detect-convergence`）。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印進度與摘要；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `-o/--output-dir` 下的 `cutover-readiness.json` |
 
 **輸出**
 
@@ -722,9 +722,9 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 | `--new-value <VALUE>` | 單一變更模式：新門檻值（搭配 `--tenant`） | （無） |
 | `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--lookback <DURATION>` | 歷史回測期間，格式為 `<數字><d\|h\|m>`（如 `7d`／`24h`）。不符合格式的值（含裸數字 `7`、空字串）⇒ 結束碼 2 並列出接受的格式（#1625；之前會被靜默當成 `7d`） | `7d` |
-| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案，內容與這次 `--json` 會印的相同（寫入時機見下方「輸出」）；文字報告照樣印到 stdout | （無） |
+| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案，內容與這次 `--json` 會印的相同（寫入時機見下方「輸出」）；文字報告照樣印到 stdout。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印報告；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | （無） |
 | `--json` | stdout 只印 JSON，不印文字報告 | false |
-| `--markdown-output <FILE>` | 另把 Markdown 報告寫到檔案（給 PR 留言用） | （無） |
+| `--markdown-output <FILE>` | 另把 Markdown 報告寫到檔案（給 PR 留言用）。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印報告；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | （無） |
 | `--skip-if-unavailable` | 只有「Prometheus 連不上」改為結束碼 0；其他呼叫端錯誤（見下方結束碼表）仍是 2 | false |
 
 **輸出**
@@ -2685,7 +2685,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案 | （無） |
+| `-o, --output <FILE>` | 另把 JSON 報告寫到檔案。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印報告；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | （無） |
 | `--json` | stdout 只印 JSON | false |
 | `--metric-dictionary <FILE>` | 指標字典；給了但檔案不存在時結束碼 2 | 工具同層的 `metric-dictionary.yaml`（映像），或上一層（repo 的 `scripts/tools/`） |
 
@@ -3610,7 +3610,7 @@ da-tools discover-mappings --prometheus <URL> --instance <INST> [--job <JOB>] [-
 | `--prometheus` | Prometheus API URL | (與 --endpoint 二擇一；兩者都沒給時查 `$PROMETHEUS_URL`，否則 `http://localhost:9090`，[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)) |
 | `--instance` | Prometheus 中的 instance 標籤 | (搭配 --prometheus 使用) |
 | `--job` | Prometheus 中的 job 標籤（縮小查詢範圍） | (選填) |
-| `-o`, `--output` | 輸出檔案路徑（預設 stdout） | stdout |
+| `-o`, `--output` | 輸出檔案路徑（預設 stdout）。`-`、空值與本次 stdout 已在寫的檔是結束碼 `2`（要印到 stdout 就不帶 `-o`，JSON 用 `--json`；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | stdout |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
 **範例**

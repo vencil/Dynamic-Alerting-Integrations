@@ -44,8 +44,9 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     exit_on_yaml_file_error,
     load_yaml_file,
-    write_text_or_die,
 )
+from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 from _lib_io import YamlFileError  # noqa: E402  (#3276)
 from _lib_paths import require_dir  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3445: --metric-dictionary is read by the lib)
@@ -430,7 +431,9 @@ def main() -> None:
     parser.add_argument('--metrics', default=None, help=_h('metrics'))
     parser.add_argument('--format', choices=['yaml', 'configmap'], default='yaml',
                         help=_h('format'))
-    parser.add_argument('-o', '--output', default=None, help=_h('output'))
+    # #3107 ③b: nothing else writes stdout here, so `-` is stdout.
+    parser.add_argument('-o', '--output', default=None, type=operator_file_type(),
+                        help=_h('output'))
     parser.add_argument('--namespace', default='monitoring', help=_h('namespace'))
     parser.add_argument('--dry-run', action='store_true', help=_h('dry_run'))
     parser.add_argument('--validate', action='store_true', help=_h('validate'))
@@ -524,7 +527,7 @@ def main() -> None:
     # Write or print
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
-        write_text_or_die(args.output, output, flag="-o/--output")
+        write_operator_output_or_die(args.output, output, flag="-o/--output")
         print(f"Generated {len(groups)} rule group(s), "
               f"~{card['new_series_estimate']} new series → {args.output}",
               file=sys.stderr)

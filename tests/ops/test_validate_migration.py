@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import textwrap
@@ -673,6 +674,41 @@ class TestMain:
         out = capsys.readouterr().out
         assert "without full convergence" in out
         assert os.path.exists(os.path.join(out_dir, "cutover-readiness.json"))
+
+    @mock.patch("validate_migration.time.sleep")
+    @mock.patch("validate_migration.run_single_comparison")
+    @mock.patch("validate_migration.load_mapping_pairs")
+    def test_partial_convergence_report_goes_to_its_flag(self, mock_load, mock_run, mock_sleep,
+                                                         tmp_path, capsys):
+        """#3107 ③b: the not-converged report's write point (the converged
+        one is the write gate's row) — at --convergence-output, its parent
+        made, the one encoder's JSON with its newline, 0600; an unwritable
+        path names --convergence-output, not -o."""
+        mock_load.return_value = [{"label": "cpu", "old_query": "oq", "new_query": "nq"}]
+        mock_run.return_value = {
+            "label": "cpu", "old_query": "oq", "new_query": "nq", "old_count": 1, "new_count": 1,
+            "diffs": [{"tenant": "db-a", "old_value": 1.0, "new_value": 2.0,
+                       "status": "mismatch", "delta": 1.0}],
+        }
+        conv = tmp_path / "new-dir" / "c.json"
+        argv = ["validate_migration.py", "--mapping", "fake.yaml", "--watch", "--rounds", "2",
+                "--interval", "1", "--auto-detect-convergence", "--stability-window", "2",
+                "-o", str(tmp_path / "out"), "--convergence-output", str(conv)]
+        with mock.patch("sys.argv", argv):
+            vm.main()
+        assert "Partial convergence report" in capsys.readouterr().out
+        text = conv.read_text(encoding="utf-8")
+        assert text.endswith("}\n") and json.loads(text)["ready"] is False
+        if os.name == "posix":
+            assert stat.S_IMODE(conv.stat().st_mode) == 0o600
+        blocker = tmp_path / "a-file"
+        blocker.write_text("x", encoding="utf-8")
+        argv[-1] = str(blocker / "c.json")
+        with mock.patch("sys.argv", argv), pytest.raises(SystemExit) as ei:
+            vm.main()
+        assert ei.value.code == 2
+        err = capsys.readouterr().err
+        assert "check the value given to --convergence-output" in err, err
 
     @mock.patch("validate_migration.time.sleep")
     @mock.patch("validate_migration.run_single_comparison")
