@@ -446,7 +446,7 @@ def _v3(tenant_row: "dict | None" = None, finding: "dict | None" = None, drop: s
     `hint`, a `partial` disable …) under a schema that never lacks them."""
     row = dict(_ROW, **(tenant_row or {}))
     fnd = dict(_FINDING, **(finding or {}))
-    doc = {"schema": kv.SCHEMA, "at": "x", "undecidable": False, "tenants": {"t": [row]},
+    doc = {"schema": kv.SCHEMA, "config_hash": None, "at": "x", "undecidable": False, "tenants": {"t": [row]},
            "findings": [fnd], "key_checks": {"t": []},
            "parse_failed": [], "unreadable": [], "blocks": True, "undecidable_blocks": False}
     for where in (doc, row, fnd):

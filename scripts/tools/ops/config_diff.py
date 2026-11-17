@@ -1761,12 +1761,17 @@ def _run(args):
         args, "new_dir", [e for e in _lib_parse_tree.entries_of(new_doc) if e.config_file],
         wanted="a file da-guard lists as a config file", lang="en")
     # #3724: both sides judged — a side changed after this is refused, naming
-    # its flag, wherever it is read again (the route generator's run of it).
-    for dest, flag, doc in (("old_dir", "--old-dir", old_doc), ("new_dir", "--new-dir", new_doc)):
-        if not _lib_input.absent(args, dest):
-            _lib_parse_cache.record_judgement(
-                getattr(args, dest), flag, "en",
-                [e.path for e in _lib_parse_tree.entries_of(doc) if e.config_file])
+    # its flag, wherever it is read again (the route generator's run of it);
+    # what each side was is its document's walk identity (#3965).
+    sides = [(getattr(args, dest), flag, doc)
+             for dest, flag, doc in (("old_dir", "--old-dir", old_doc), ("new_dir", "--new-dir", new_doc))
+             if not _lib_input.absent(args, dest)]
+    for path, _flag, _doc in sides:
+        _lib_parse_cache.forget_judgement(path)
+    for path, flag, doc in sides:
+        # One directory on both sides: the second walk must read the first's tree.
+        _lib_parse_cache.check_judged(path, doc.get("config_hash"), "da-guard parse-tree")
+        _lib_parse_cache.record_judgement(path, flag, "en", doc.get("config_hash"))
     has = (_has_config_file(old_doc), _has_config_file(new_doc))
     diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections, has=has)
     report = build_report(diff, args.old_dir, args.new_dir, platform=platform)

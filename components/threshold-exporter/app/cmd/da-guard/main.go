@@ -413,6 +413,9 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// the /metrics gather verdict read `expires:` at it.
 	now := time.Now().UTC()
 	scoped, err := config.ScopeEffective(f.configDir, f.scopeDir, now)
+	if betweenWalks != nil {
+		betweenWalks(f.configDir)
+	}
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 		// #2123: a resolve failure that is one file failing the decode (a
@@ -437,8 +440,11 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			}
 			// The evidence is the whole tree's, so the stopped run still lists
 			// it (the exit code stays 3).
-			undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadable),
+			undetermined, last := undeterminedEvidenceOf(f.configDir, rootUnreadable(unreadable),
 				reportedPaths([]string{de.Path}, unreadable), errOut)
+			if !sameWalks(identity, last, errOut) {
+				return exitCallerErr
+			}
 			if werr := writeDecodeStopReport(stdout, errOut, f, identity, de, unreadable, undetermined); werr != nil {
 				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
 				return exitCallerErr
@@ -455,9 +461,6 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s: %v\n", programName, scoped.RootListErr)
 	}
-	undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadableEntries(scoped.Unreadable)),
-		reportedPaths(scoped.ParseFailed, unreadableEntries(scoped.Unreadable)), errOut)
-
 	// #2043: without an explicit --cardinality-limit, predict against the cap
 	// the exporter will actually enforce for this tree, not a constant. The
 	// root carrier is read from --config-dir, never from --scope: the cap is
@@ -485,6 +488,16 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 		}
 		fmt.Fprintf(errOut, "%s: cardinality limit %d from %s (0 = no check; override with --cardinality-limit)\n",
 			programName, limit, source)
+	}
+
+	// The run's last walk (#3965): the route generator's evidence, read
+	// after the root carrier's cap so the two walks bracket that read too.
+	// A tree that changed between the first walk and this one is judged by
+	// no one: exit 2, never a report mixed from two trees.
+	undetermined, last := undeterminedEvidenceOf(f.configDir, rootUnreadable(unreadableEntries(scoped.Unreadable)),
+		reportedPaths(scoped.ParseFailed, unreadableEntries(scoped.Unreadable)), errOut)
+	if !sameWalks(scoped.TreeIdentity, last, errOut) {
+		return exitCallerErr
 	}
 
 	notices := capChangeNotices(f)

@@ -228,6 +228,12 @@ class BinaryMissing(ParseTreeError):
     """No da-guard binary at the explicit path, `$DA_GUARD_BINARY` or `$PATH`."""
 
 
+class TreeRefused(ParseTreeError):
+    """da-guard answered exit 2 about the input — the tree it was asked to
+    walk is not one it walks (a name that is not valid UTF-8, a root it
+    cannot list, …) — not a binary that did not run (#3965)."""
+
+
 class NotThisDocument(ParseTreeError):
     """da-guard answered, but not with the document this reader reads: a
     document of another schema (an older or newer da-guard), or exit 2
@@ -396,6 +402,8 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
             # Exit 2 is its answer about the input (a tree it cannot walk);
             # an exit code it never uses is not an answer at all.
             _fault(sub, "unexpected_exit")
+        if proc.returncode == _EXIT_CALLER_ERR:
+            raise TreeRefused(msg)
         raise ParseTreeError(msg)
     return proc.stdout
 
