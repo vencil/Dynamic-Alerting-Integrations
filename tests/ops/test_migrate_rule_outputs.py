@@ -789,6 +789,15 @@ class TestMain:
         # Output directory exists and contains files.
         assert out_dir.is_dir()
         assert any(out_dir.iterdir())
+        # #3107: every file the Python side writes is an operator output,
+        # 0600; the conf.d files (the tenant's and `.conf.d/`) are
+        # `da-guard write`'s and are not judged here.
+        if os.name == "posix":
+            modes = {p.relative_to(out_dir).as_posix(): os.stat(p).st_mode & 0o777
+                     for p in out_dir.rglob("*")
+                     if p.is_file() and p.name != "t1.yaml" and ".conf.d" not in p.parts}
+            assert len(modes) >= 4, modes
+            assert set(modes.values()) == {0o600}, modes
 
     def test_no_prefix_strips_custom_prefix(self, monkeypatch, tmp_path, cli_argv):
         f = tmp_path / "in.yaml"
@@ -873,6 +882,38 @@ class TestConfdThroughDaGuardWrite:
         err = capsys.readouterr().err
         assert "the alert name" in err and "U+2028" in err and "nothing was written" in err, err
         assert not dest.exists() or not any(dest.iterdir())
+
+    @pytest.mark.parametrize("name", [
+        ".migration/platform-recording-rules.yaml", ".migration/platform-alert-rules.yaml",
+        "migration-report.txt", "triage-report.csv", ".migration/prefix-mapping.yaml"])
+    def test_a_file_that_cannot_be_written_is_exit_2_and_one_line(
+            self, tmp_path, capsys, monkeypatch, name):
+        """#3107: each of the five files after the conf.d batch is written by
+        its own `_or_die` call of the operator entry — rc 2 and the one line
+        naming `-o/--output-dir`, at the call, with the files before it left
+        written.
+
+        The shared conf.d refusal is stepped over here, so that what is under
+        test is the write and nothing in front of it.
+
+        A specific break that reddens one case: swap that call for the
+        raising `write_operator_output` (`OutputWriteError`, not `SystemExit`)."""
+        monkeypatch.setattr(mr, "_require_output_tree", lambda output_dir: None)
+        dest = tmp_path / "out"
+        blocked = dest / name
+        blocked.mkdir(parents=True)
+        results = [_make_result(
+            "Simple", tenant_config={"custom_cpu": "0.9"},
+            alert_rules=[{"alert": "Simple", "expr": "x > 0.9"}],
+            recording_rules=[{"record": "tenant:custom_cpu:max", "expr": "max(x)"}])]
+        with pytest.raises(SystemExit) as exc:
+            mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        lines = [line for line in err.splitlines() if line.startswith("ERROR: ")]
+        assert len(lines) == 1, err
+        assert lines[0].startswith(f"ERROR: cannot write {blocked}: "), lines[0]
+        assert lines[0].endswith("check the value given to -o/--output-dir"), lines[0]
 
     def test_a_write_stopped_part_way_names_the_files(self, tmp_path, capsys, monkeypatch):
         import _lib_confedit

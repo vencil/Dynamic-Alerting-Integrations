@@ -6971,6 +6971,13 @@ class TestStaleFiles:
         out = tmp_path / 'repo'
         assert self._cli(out, *self._FIRST).returncode == 0
         assert self._DROPPED <= self._files(out)
+        # #3107: what the Python side writes is an operator output, 0600;
+        # conf.d/ is `da-guard write`'s and is not judged here.
+        if os.name == 'posix':
+            modes = {rel: os.stat(out / rel).st_mode & 0o777
+                     for rel in self._files(out) if not rel.startswith('conf.d/')}
+            assert len(modes) >= 5, modes
+            assert set(modes.values()) == {0o600}, modes
         run = self._cli(out, *self._SECOND)
         assert run.returncode == 0, run.stderr[-800:]
         assert not (self._DROPPED & self._files(out)), self._files(out)

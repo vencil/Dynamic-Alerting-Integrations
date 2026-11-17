@@ -21,7 +21,7 @@ try:
 except ImportError:  # pragma: no cover - shipped image always has PyYAML
     yaml = None
 
-from _lib_io import write_text_secure
+from _lib_io import write_operator_output
 
 
 def write_yaml_crd(
@@ -57,7 +57,7 @@ def write_yaml_crd(
         # Fallback: minimal YAML serialization
         yaml_str = _dict_to_yaml(crd)
 
-    write_text_secure(str(output_path), yaml_str, flag=flag)
+    write_operator_output(str(output_path), yaml_str, flag=flag)
 
 
 def _dict_to_yaml(obj: Any, indent: int = 0) -> str:

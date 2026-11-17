@@ -50,7 +50,7 @@ try:
 except ImportError:
     yaml = None
 
-from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_python import detect_cli_lang, i18n_text, output_dir_type  # noqa: E402
 from _lib_exitcodes import Report, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
@@ -410,7 +410,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output-dir",
-        type=_output_dir_arg,
+        type=output_dir_type(then=_output_dir_arg),
         default=None,   # #1582：不給就不寫檔（寫入是 opt-in），見 main() 的分派
         help=i18n_text(_HELP["zh"]["output_dir"], _HELP["en"]["output_dir"]),
     )
@@ -704,9 +704,9 @@ def main():
 
     # #1582：stdout 現在是**預設**的產物通道，所以它必須和寫檔通道等價。
     # ⛔ 不等價是量出來的，不是預防性的：在 cp950 主控台上直接跑本檔，PyYAML
-    # 對目標編碼放不下的字元（例如 `≥`）會退成字面 `≥`，而 write_text_secure
+    # 對目標編碼放不下的字元（例如 `≥`）會退成字面 `≥`，而寫檔通道（operator 入口）
     # 寫出的檔是真正的字元 —— 同一次比對 15 份相同、1 份語意不同、rc=0 無聲。
-    # 換行同理：write_text_secure 明文強制 LF，而 print() 在 Windows 會譯成 CRLF。
+    # 換行同理：寫檔通道明文強制 LF，而 print() 在 Windows 會譯成 CRLF。
     # `da-tools` dispatcher 已經做同一件事（entrypoint._configure_std_utf8），
     # 這裡補的是「直接 python 跑本檔」那條 entrypoint docstring 自承支援的路徑。
     try:

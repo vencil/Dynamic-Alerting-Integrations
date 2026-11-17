@@ -48,7 +48,9 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import read_shipped_da_tools_version, try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
+from _lib_python import (  # noqa: E402
+    detect_cli_lang, ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
+)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
@@ -3619,7 +3621,7 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
     write path means a future generator cannot reintroduce it.
     """
     _ensure_dir(str(Path(path).parent))
-    write_text_or_die(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
+    write_operator_output_or_die(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
     created_files.append(path)
 
 
@@ -5465,7 +5467,7 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
     # ⚠️ `.exists()` FOLLOWS symlinks and answers False for a dangling one, so
     # this predicate needs `is_symlink()` beside it — otherwise a
     # `.da-init.yaml -> /tmp/elsewhere.yaml` whose target does not exist falls
-    # through both branches and `write_text_secure` follows the link, planting
+    # through both branches and the writer follows the link, planting
     # the marker OUTSIDE `--output-dir` while the run reports success. The
     # sibling guard in `_classify_root_file` already spells this out; this one
     # named the case in its own docstring and then did not test for it.
@@ -5959,7 +5961,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--rule-packs', default=None, help=_h('rule_packs'))
     parser.add_argument('--deploy', choices=['kustomize', 'helm'],
                         default=None, help=_h('deploy'))
-    parser.add_argument('-o', '--output-dir', default='.', help=_h('output_dir'))
+    parser.add_argument('-o', '--output-dir', default='.', type=output_dir_type(),
+                        help=_h('output_dir'))
     parser.add_argument('--non-interactive', action='store_true',
                         help=_h('non_interactive'))
     # ⛔ The help text used to say only ".da-init.yaml", which is the marker

@@ -34,7 +34,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
-    detect_cli_lang, ensure_dir_or_die, write_text_or_die,
+    detect_cli_lang, ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
     DOCS_INSTALL_URL, DOCS_SITE_BASE,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
@@ -966,7 +966,7 @@ def _perform_writes(out: Path, confd: list, writes: list) -> None:
     for f in confd:
         print(f"  📄 {out / f.rel}")
     for path, content in writes:
-        write_text_or_die(path, content, flag=_OUTPUT_FLAG)
+        write_operator_output_or_die(path, content, flag=_OUTPUT_FLAG)
         print(f"  📄 {path}")
 
 
@@ -1320,7 +1320,8 @@ def main() -> None:
     )
     parser.add_argument("--tenant", help=_h('tenant'))
     parser.add_argument("--db", help=_h('db'))
-    parser.add_argument("-o", "--output-dir", default="scaffold_output", help=_h('output_dir'))
+    parser.add_argument("-o", "--output-dir", default="scaffold_output", type=output_dir_type(),
+                        help=_h('output_dir'))
     parser.add_argument("--catalog", action="store_true", help=_h('catalog'))
     parser.add_argument("--non-interactive", action="store_true", help=_h('non_interactive'))
     parser.add_argument("--namespaces", help=_h('namespaces'))

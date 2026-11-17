@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import ensure_dir_or_die, write_text_or_die, write_json_or_die, add_prometheus_arg, prometheus_url, non_negative_seconds  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_operator_output_or_die, write_json_or_die, output_dir_type, add_prometheus_arg, prometheus_url, non_negative_seconds  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
 from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT  # noqa: E402  (#3662)
@@ -298,8 +298,9 @@ def write_csv_report(all_results, output_dir):
     # output is byte-identical on every host.
     # ⚠️ HISTORY: this used to compensate for write_text_secure translating
     # \n → \r\n on Windows (default '\r\n' would have landed as '\r\r\n', i.e.
-    # phantom blank rows under universal-newline reading). write_text_secure
-    # now pins newline="\n" itself, so NO translation happens any more and this
+    # phantom blank rows under universal-newline reading). The writer (the
+    # operator entry since #3107) pins newline="\n" itself, so NO translation
+    # happens any more and this
     # file is LF on every platform — previously it was CRLF on Windows and LF
     # on Linux. Do NOT "restore" the old reasoning: that translation is gone.
     # #3662: the header, the row keys and the timestamp format are
@@ -325,7 +326,7 @@ def write_csv_report(all_results, output_dir):
                 "Status": d["status"],
                 "Timestamp": ts,
             })
-    write_text_or_die(csv_path, "\ufeff" + buf.getvalue(), flag="-o/--output-dir")
+    write_operator_output_or_die(csv_path, "\ufeff" + buf.getvalue(), flag="-o/--output-dir")
     return csv_path
 
 
@@ -465,7 +466,7 @@ def main():
                        help_text="Prometheus Query API URL "
                                  "(預設: $PROMETHEUS_URL，否則 http://localhost:9090; "
                                  "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
-    parser.add_argument("-o", "--output-dir", default="validation_output",
+    parser.add_argument("-o", "--output-dir", default="validation_output", type=output_dir_type(),
                         help="輸出目錄 (預設: validation_output)")
     parser.add_argument("--tolerance", type=_tolerance, default=0.001,
                         help="數值誤差容忍度 (預設: 0.001 = 0.1%%)")

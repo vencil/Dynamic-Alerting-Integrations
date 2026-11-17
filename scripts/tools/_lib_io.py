@@ -1557,10 +1557,11 @@ def write_onboard_hints(
         Absolute path to the written file.
 
     Raises:
-        OutputWriteError: see :func:`write_json_secure` (#1641).
+        OutputWriteError: see :func:`open_operator_output` (#1641, #3107).
     """
     path = str(Path(output_dir) / ONBOARD_HINTS_FILENAME)
-    write_json_secure(path, hints, flag=flag)
+    with open_operator_output(path, flag=flag) as fh:
+        json.dump(hints, fh, indent=2, ensure_ascii=False)
     return path
 
 
