@@ -589,13 +589,24 @@ def test_git_reads_ask_for_no_round_within_the_interval(rig):
 
 def test_a_burst_of_git_reads_is_one_round(rig):
     """The git_reads asked for before a round begins are one ask — one round
-    once the interval is past, not one per request."""
-    with rig.service("coalesce", "--self-check-seconds", "2") as svc:
+    once the interval is past, not one per request — and once it has run,
+    nothing is left asked for: no round follows a whole interval later.
+
+    The burst must end inside the interval (6 s) for "one round" to be the
+    right count: one that outlasts it — a host slow enough that six refusals
+    take 6 s — measures nothing and is skipped, not failed."""
+    interval = 6.0
+    with rig.service("coalesce", "--self-check-seconds", str(interval)) as svc:
         assert _rounds(svc, "passed") == 1
+        began = time.monotonic()  # the first round ended before this
         for _ in range(6):
             assert svc.validate("0" * 40)[1].get("reason") == "git_read"
+        took = time.monotonic() - began
+        if _rounds(svc, "passed") != 1 or took >= interval:
+            pytest.skip(f"the burst took {took:.1f}s, not inside the {interval}s interval: "
+                        f"nothing measured")
         _until(lambda: _rounds(svc, "passed") == 2, "the round asked for")
-        time.sleep(3.0)  # more than the interval: a second ask would have run
+        time.sleep(interval + 1.0)  # a round still asked for would have run by now
         assert (_rounds(svc, "passed"), _rounds(svc, "failed")) == (2, 0)
 
 

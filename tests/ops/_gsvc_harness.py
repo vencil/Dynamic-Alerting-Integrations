@@ -40,20 +40,28 @@ LONG_JUDGEMENT_SECONDS = 600.0
 LONG_DEADLINE_MS = int((LONG_JUDGEMENT_SECONDS + 5.0) * 1000)
 
 
-#: Inherited variables that point git at another repository than the one a
-#: test names with ``-C`` (a git hook running pytest sets GIT_DIR and
-#: GIT_INDEX_FILE): a test's git must not read or write that one. The
-#: ``GIT_CONFIG_GLOBAL`` / ``GIT_CONFIG_NOSYSTEM`` the session sets
-#: (tests/conftest.py, #3896) are kept.
-REPO_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
-                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                      "GIT_NAMESPACE")
+def repo_location_vars() -> frozenset:
+    """The inherited variables that point git at another repository than
+    the one a test names with ``-C`` (a git hook running pytest sets GIT_DIR
+    and GIT_INDEX_FILE): git's own answer, ``git rev-parse
+    --local-env-vars``, asked once per process the way the service asks it
+    (``_gsvc_child.git_env``, #3739) — never a list kept here. The
+    ``GIT_CONFIG*`` carriers stay, as in the service: the session's
+    ``GIT_CONFIG_GLOBAL`` / ``GIT_CONFIG_NOSYSTEM`` (tests/conftest.py,
+    #3896) are kept. A git that cannot answer fails the test."""
+    for path in (str(TOOLS), str(OPS)):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    import _gsvc_child
+    _gsvc_child.git_env(GIT)  # asks git, once; raises when it cannot answer
+    return _gsvc_child._LOCAL_ENV_VARS[GIT]
 
 
 def git_env(**extra: str) -> dict:
     """The environment of a test's git: the inherited one less
-    ``REPO_LOCATION_VARS``, plus *extra*."""
-    env = {k: v for k, v in os.environ.items() if k not in REPO_LOCATION_VARS}
+    ``repo_location_vars()``, plus *extra*."""
+    drop = repo_location_vars()
+    env = {k: v for k, v in os.environ.items() if k not in drop}
     env.update(extra)
     return env
 

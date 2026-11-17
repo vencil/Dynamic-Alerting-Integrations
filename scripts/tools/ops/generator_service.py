@@ -1044,8 +1044,9 @@ class Service:
         self._git_read_pending = True
         if self._self_check_task is None or self._self_check_task.done():
             self._schedule_git_read()
-        # else: the running loop's next round answers the ask, or the loop
-        # schedules it when it ends (`_self_check_loop`)
+        # else: the running loop's next round answers the ask. It clears the
+        # ask once it holds the slot, and no judgement ends while it holds
+        # it, with no await in between: no ask is left when the loop ends.
 
     def _schedule_git_read(self) -> None:
         if self._git_read_timer is not None:
@@ -1088,8 +1089,6 @@ class Service:
         while True:
             self._self_check_wake.clear()
             if await self.self_check_round():
-                if self._git_read_pending:  # asked for after the round took its slot
-                    self._schedule_git_read()
                 return
             try:
                 await asyncio.wait_for(self._self_check_wake.wait(),

@@ -982,15 +982,23 @@ def test_a_test_s_git_ignores_an_inherited_repository(tmp_path, monkeypatch):
     GIT_INDEX_FILE / …; the tests' git helpers must commit into the
     repository the test names, not that one — and keep the session's
     GIT_CONFIG_GLOBAL / GIT_CONFIG_NOSYSTEM (#3896)."""
+    import os
     h = _harness()
     other = tmp_path / "other"
     other.mkdir()
-    for name in h.REPO_LOCATION_VARS:
+    # git 2.43's `rev-parse --local-env-vars`, less the GIT_CONFIG* carriers;
+    # the last six are the ones a list kept by hand had missed
+    inherited = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                 "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_GRAFT_FILE", "GIT_IMPLICIT_WORK_TREE", "GIT_NO_REPLACE_OBJECTS",
+                 "GIT_PREFIX", "GIT_REPLACE_REF_BASE", "GIT_SHALLOW_FILE")
+    for name in inherited:
         monkeypatch.setenv(name, str(other / name.lower()))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     env = h.git_env()
-    assert not set(h.REPO_LOCATION_VARS) & set(env)
+    assert sorted(set(inherited) & set(env)) == []
     assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert env.get("GIT_CONFIG_GLOBAL") == os.environ.get("GIT_CONFIG_GLOBAL")
     repo = h.init_repo(tmp_path / "repo")
     commit = h.commit_tree(repo, {"t.yaml": "x: 1\n"})
     assert len(commit) == 40 and (repo / ".git" / "objects").is_dir()
@@ -1285,6 +1293,27 @@ def test_a_burst_of_git_reads_is_one_timer():
         await asyncio.sleep(0.4)
         return started
     assert len(asyncio.run(main())) == 1
+
+
+def test_a_round_that_ran_answers_the_git_reads_asked_before_it():
+    """A round asked for by git_read and not begun yet — a tool fault's
+    round runs first: that round's probe answers the ask (it clears it once
+    it holds the slot). When the timer is due nothing is left asked for: no
+    second round."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.s.self_check_seconds = 0.3
+        _gated_self_check(svc, {})
+        started: list = []
+        svc._last_round_end = svc.loop.time()
+        svc._note_git_read()
+        svc._ensure_self_check_loop = lambda: started.append(svc.loop.time())
+        assert await svc.self_check_round() is True  # the tool fault's round
+        await asyncio.sleep(1.0)  # past the timer, and past its reschedule
+        return started, svc._git_read_pending
+    started, pending = asyncio.run(main())
+    assert (started, pending) == ([], False)
 
 
 def test_a_git_read_marks_nothing_and_shutdown_cancels_its_timer():
