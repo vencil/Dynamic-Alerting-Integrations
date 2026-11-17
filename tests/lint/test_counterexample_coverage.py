@@ -186,6 +186,12 @@ def _generated_surface_faces(doc) -> dict:
     """
     faces = {}
     for spec in registry_lib.surface_specs(doc):
+        # #3831: the platform pack's digest recording rule names no key — it
+        # carries the built-in table's digest, not a threshold — so it is no
+        # face of the counter-examples (its freshness is `--ci`'s, like every
+        # surface's).
+        if spec["id"] == registry_lib.PLATFORM_DIGEST_SURFACE_ID:
+            continue
         body = "\n".join(spec["body"])
         rel = os.path.relpath(spec["path"], REPO_ROOT).replace(os.sep, "/")
         faces[f"generated:{spec['id']} ({rel})"] = (_presented_keys(doc, body), body)

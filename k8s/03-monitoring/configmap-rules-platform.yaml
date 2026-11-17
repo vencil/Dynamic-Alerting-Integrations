@@ -912,4 +912,37 @@ data:
     \ stop is worse than fail-available 0:0 for\n\n        your environment. See platform-log-aggregation-runbook\
     \ §8.9.3.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector projection-gate init-container is stuck (crash loop / image\
-    \ pull) — DaemonSet rollout wedged in {{ $labels.namespace }}\n"
+    \ pull) — DaemonSet rollout wedged in {{ $labels.namespace }}\n- name: builtin-defaults-alignment\n\
+    \  rules:\n  - record: rule_pack_builtin_defaults_info\n    expr: vector(1)\n\
+    \    labels:\n      rulepack_digest: 63343e1d88e9\n  - alert: BuiltinDefaultsDigestMismatch\n\
+    \    expr: \"(\\n  (\\n    max by (job, instance, digest) (da_config_builtin_defaults_info{job=\\\
+    \"threshold-exporter\\\"})\\n    or max by (job, instance, digest) (tenant_api_builtin_defaults_info{job=\\\
+    \"tenant-api\\\"})\\n    or on (job, instance)\\n    label_replace(max by (job,\
+    \ instance) (up{job=\\\"threshold-exporter\\\"} == 1), \\\"digest\\\", \\\"none\\\
+    \", \\\"\\\", \\\"\\\")\\n    or on (job, instance)\\n    label_replace(max by\
+    \ (job, instance) (up{job=\\\"tenant-api\\\"} == 1), \\\"digest\\\", \\\"none\\\
+    \", \\\"\\\", \\\"\\\")\\n  )\\n  unless on (digest)\\n  label_replace(rule_pack_builtin_defaults_info,\
+    \ \\\"digest\\\", \\\"$1\\\", \\\"rulepack_digest\\\", \\\"(.*)\\\")\\n)\\n* on\
+    \ () group_left (rulepack_digest) rule_pack_builtin_defaults_info\\n\"\n    for:\
+    \ 30m\n    labels:\n      alert_source: platform\n      severity: warning\n  \
+    \  annotations:\n      description: '{{ $labels.job }} ({{ $labels.instance }})\
+    \ is compiled with the\n\n        built-in defaults table {{ $labels.digest }};\
+    \ the platform rule\n\n        pack was generated from the threshold registry\
+    \ whose table is\n\n        {{ $labels.rulepack_digest }}. digest=\"none\" means\
+    \ the component\n\n        serves no digest series: a release older than the\n\
+    \n        built-in layer, which gives no default-armed threshold a value\n\n \
+    \       unless conf.d writes it.\n\n        Which side is newer decides what goes\
+    \ wrong (#3832 decision 5):\n\n        rule packs newer than the threshold-exporter\
+    \ — a newly\n\n        default-armed threshold has no value, so its alert never\
+    \ fires;\n\n        threshold-exporter newer than the rule packs — it serves rows\
+    \ no\n\n        rule reads, and recalibrated values are read by the old rules;\n\
+    \n        tenant-api newer than the threshold-exporter — a write that relies\n\
+    \n        on the built-in layer passes tenant-api''s check while the\n\n     \
+    \   exporter serves no row for it.\n\n        Upgrade the threshold-exporter,\
+    \ tenant-api and the rule packs\n\n        until every digest is the same; `da-guard\
+    \ effective` (da-tools)\n\n        prints the digest of the table it was built\
+    \ with. Do not remove\n\n        the copies of the platform values from conf.d\
+    \ (the migration\n\n        command) while this fires.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \      summary: '{{ $labels.job }} built-in defaults table {{ $labels.digest }}\
+    \ differs from the platform rule pack''s {{ $labels.rulepack_digest }}'\n"

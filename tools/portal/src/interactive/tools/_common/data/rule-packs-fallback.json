@@ -642,8 +642,8 @@
       "category": "infrastructure",
       "exporter": "threshold-exporter",
       "configMap": "prometheus-rules-platform",
-      "recordingRules": 0,
-      "alertRules": 54,
+      "recordingRules": 1,
+      "alertRules": 55,
       "required": true,
       "defaults": {},
       "metrics": [

@@ -270,6 +270,14 @@ def run_check(
     if msg:
         errors.append(f"stale-surface: {msg}")
 
+    # 3g. the pack digest the promtool test of BuiltinDefaultsDigestMismatch
+    #     expects (#3831): the platform pack's recording rule carries the
+    #     table's digest (a surface above), and the test feeds it back.
+    digest_test_path = (surface_paths or {}).get(registry_lib.PLATFORM_DIGEST_TEST_ID)
+    msg = registry_lib.check_platform_digest_test(doc, digest_test_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+
     # 4. header-prose key membership (F6).
     if prose_files is None:
         # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;

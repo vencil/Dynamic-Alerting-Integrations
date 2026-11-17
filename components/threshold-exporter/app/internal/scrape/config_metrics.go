@@ -84,11 +84,21 @@ type ConfigMetrics struct {
 	// series keeps its one label (alert rules and patch-config key it by
 	// file_basename alone).
 	ParseRefused *prometheus.CounterVec
+	// #3831 (#3832 decision 8): the built-in defaults table this binary was
+	// compiled with, as an info series carrying its digest — the one the
+	// platform rule pack's BuiltinDefaultsDigestMismatch compares with the
+	// digest of the registry the pack was generated from. Set once, here.
+	BuiltinDefaultsInfo *prometheus.GaugeVec
+	// #3831: per built-in key, which of config.BuiltinStates() the committed
+	// config gives it — one series per (key, state), 1 for the key's state
+	// and 0 for the others. Re-Set on every config commit; no series until
+	// the first commit. No tenant label.
+	BuiltinDefaultState *prometheus.GaugeVec
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
 func NewConfigMetrics() *ConfigMetrics {
-	return &ConfigMetrics{
+	s := &ConfigMetrics{
 		ScanDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "da_config_scan_duration_seconds",
 			Help: "Duration of one conf.d tree scan (v2.7.0, ADR-016). Observed once per conf.d tree scan (both planes, every watch tick and load).",
@@ -207,7 +217,17 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_profile_routing_keys",
 			Help: "Number of routing-layer keys (`_severity_dedup`, and every key starting with `_routing`) written in the threshold profiles (`profiles:`) of the committed config, counted per (file, profile, key); the exporter does not fill them into any tenant. Why, and where they belong: da-guard's routing_in_unread_location (docs/cli-reference.md#guard). State-coded: re-Set on every config commit, so it returns to 0 once the profiles no longer write them. The accompanying ERROR (once per commit) names file, profile and key. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}),
+		BuiltinDefaultsInfo: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_config_builtin_defaults_info",
+			Help: "The built-in defaults table this binary was compiled with (#3832): the default-armed thresholds and their platform values, which every reader of conf.d lays under the root _defaults.yaml. Info metric, always 1; the label digest names the table (the first 12 hex digits of its SHA-256; `da-guard effective` prints the same digest under builtin_defaults.digest). tenant-api serves its own as tenant_api_builtin_defaults_info. The platform rule pack carries the digest of the threshold registry it was generated from and fires BuiltinDefaultsDigestMismatch while a component's digest differs from it, or the threshold-exporter serves no such series (a release older than the built-in layer).",
+		}, []string{"digest"}),
+		BuiltinDefaultState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_config_builtin_default_state",
+			Help: "Per default-armed threshold of the built-in table (#3831, #3832 decision 8), what the committed config does with it: one series per (key, state), 1 for the key's state and 0 for the others. state is a closed set: builtin (the root _defaults.yaml gives the key no value, so the built-in layer gives the platform's), overridden (the root defaults: gives it a number every tenant inherits), opted_out (the root defaults: writes it as \"disable\", which every tenant inherits) or withheld (the root _defaults.yaml cannot be read, so the built-in layer is withheld and the key has no value at the root; ConfigDefaultsUnusable fires for that). A subdirectory _defaults.yaml or a tenant file may still override or disable the key below the root; `da-guard effective` names those. No tenant label. Re-Set on every config commit; no series before the first commit. Informational — no PrometheusRule ships for it.",
+		}, []string{"key", "state"}),
 	}
+	s.BuiltinDefaultsInfo.WithLabelValues(config.BuiltinDefaultsDigest()).Set(1)
+	return s
 }
 
 // Collectors is the set in the exporter's registration order.
@@ -235,5 +255,7 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.MetadataStringForm,
 		s.ProfileRoutingKeys,
 		s.ParseRefused,
+		s.BuiltinDefaultsInfo,
+		s.BuiltinDefaultState,
 	}
 }

@@ -1,0 +1,179 @@
+# promtool behavioural test for BuiltinDefaultsDigestMismatch (#3831, #3832
+# decision 5 / 8). The platform pack's recording rule
+# rule_pack_builtin_defaults_info{rulepack_digest} carries the digest of the
+# built-in defaults table of the registry the pack was generated from; the
+# threshold-exporter (da_config_builtin_defaults_info{digest}) and tenant-api
+# (tenant_api_builtin_defaults_info{digest}) serve the digest of the table
+# they were compiled with.
+#
+# ⚠️ The digest below is the CURRENT table's: `check_threshold_registry.py
+# --regen` rewrites every `rulepack_digest: "<digest>"` of this file (and the
+# same digest elsewhere in it) when the table changes, and `--ci` fails while
+# it is stale. Any other 12-hex digest here is a made-up component digest.
+#
+# Contract:
+#   1) every component on the pack's digest fires nothing;
+#   2) a threshold-exporter on another digest fires after `for: 30m`, its
+#      labels naming both digests;
+#   3) a threshold-exporter that serves no digest series (a release
+#      older than the built-in layer) fires with digest="none";
+#   4) a tenant-api on another digest fires for tenant-api alone;
+#   5) a mismatch shorter than `for: 30m` (a rolling upgrade) fires nothing;
+#   6) one replica behind of two fires for that replica only;
+#   7) a component that is down or not scraped is not judged here.
+# Run: promtool test rules tests/rulepacks/platform-builtin-defaults-digest_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) aligned: nothing fires, long past `for:`.
+  - interval: 1m
+    name: aligned-components-fire-nothing
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="63343e1d88e9"}'
+        values: '1x60'
+      - series: 'up{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x60'
+      - series: 'tenant_api_builtin_defaults_info{job="tenant-api", instance="10.0.0.2:8080", digest="63343e1d88e9"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: BuiltinDefaultsDigestMismatch
+        exp_alerts: []
+
+  # 2) the exporter is on another table: pending until 30m, then firing.
+  - interval: 1m
+    name: exporter-on-another-digest-fires
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="0123456789ab"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: BuiltinDefaultsDigestMismatch
+        exp_alerts: []
+      - eval_time: 31m
+        alertname: BuiltinDefaultsDigestMismatch
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: threshold-exporter
+              instance: "10.0.0.1:8080"
+              digest: "0123456789ab"
+              rulepack_digest: "63343e1d88e9"
+            exp_annotations:
+              summary: "threshold-exporter built-in defaults table 0123456789ab differs from the platform rule pack's 63343e1d88e9"
+              description: |
+                threshold-exporter (10.0.0.1:8080) is compiled with the
+                built-in defaults table 0123456789ab; the platform rule
+                pack was generated from the threshold registry whose table is
+                63343e1d88e9. digest="none" means the component
+                serves no digest series: a release older than the
+                built-in layer, which gives no default-armed threshold a value
+                unless conf.d writes it.
+                Which side is newer decides what goes wrong (#3832 decision 5):
+                rule packs newer than the threshold-exporter — a newly
+                default-armed threshold has no value, so its alert never fires;
+                threshold-exporter newer than the rule packs — it serves rows no
+                rule reads, and recalibrated values are read by the old rules;
+                tenant-api newer than the threshold-exporter — a write that relies
+                on the built-in layer passes tenant-api's check while the
+                exporter serves no row for it.
+                Upgrade the threshold-exporter, tenant-api and the rule packs
+                until every digest is the same; `da-guard effective` (da-tools)
+                prints the digest of the table it was built with. Do not remove
+                the copies of the platform values from conf.d (the migration
+                command) while this fires.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
+
+  # 3) an exporter older than the built-in layer serves no info series.
+  - interval: 1m
+    name: exporter-without-digest-fires-as-none
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: BuiltinDefaultsDigestMismatch
+        exp_alerts: []
+    promql_expr_test:
+      - expr: count by (job, instance, digest, rulepack_digest) (ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="firing"})
+        eval_time: 31m
+        exp_samples:
+          - labels: '{job="threshold-exporter", instance="10.0.0.1:8080", digest="none", rulepack_digest="63343e1d88e9"}'
+            value: 1
+
+  # 4) the exporter is aligned, tenant-api is not: tenant-api alone fires.
+  - interval: 1m
+    name: tenant-api-on-another-digest-fires-alone
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="63343e1d88e9"}'
+        values: '1x60'
+      - series: 'up{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x60'
+      - series: 'tenant_api_builtin_defaults_info{job="tenant-api", instance="10.0.0.2:8080", digest="ba9876543210"}'
+        values: '1x60'
+    promql_expr_test:
+      - expr: count by (job, instance, digest, rulepack_digest) (ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="firing"})
+        eval_time: 31m
+        exp_samples:
+          - labels: '{job="tenant-api", instance="10.0.0.2:8080", digest="ba9876543210", rulepack_digest="63343e1d88e9"}'
+            value: 1
+
+  # 5) a mismatch for 20 minutes (one component upgraded before the other),
+  #    then aligned: never fires.
+  - interval: 1m
+    name: rolling-upgrade-shorter-than-for-fires-nothing
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="0123456789ab"}'
+        values: '1x20 _x40'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="63343e1d88e9"}'
+        values: '_x20 1x40'
+    promql_expr_test:
+      - expr: count(ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="firing"})
+        eval_time: 60m
+        exp_samples: []
+      - expr: count(ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="pending"})
+        eval_time: 10m
+        exp_samples:
+          - labels: '{}'
+            value: 1
+
+  # 6) two replicas, one still on the old release: that replica alone fires.
+  - interval: 1m
+    name: one-replica-behind-fires-for-that-replica
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="63343e1d88e9"}'
+        values: '1x60'
+      - series: 'up{job="threshold-exporter", instance="10.0.0.3:8080"}'
+        values: '1x60'
+    promql_expr_test:
+      - expr: count by (instance, digest) (ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="firing"})
+        eval_time: 31m
+        exp_samples:
+          - labels: '{instance="10.0.0.3:8080", digest="none"}'
+            value: 1
+
+  # 7) down (up == 0) or not scraped at all: not this alert's call
+  #    (ThresholdExporterDown / ThresholdExporterAbsent).
+  - interval: 1m
+    name: down-or-unscraped-component-is-not-judged
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: BuiltinDefaultsDigestMismatch
+        exp_alerts: []

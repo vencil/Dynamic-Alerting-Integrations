@@ -2749,3 +2749,85 @@ groups:
             mode if a hard rollout stop is worse than fail-available 0:0 for
             your environment. See platform-log-aggregation-runbook §8.9.3.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+
+  # ============================================================
+  # Built-in defaults alignment (#3831, #3832 decision 5 / 8)
+  # The readers of conf.d (threshold-exporter, tenant-api, da-guard) are
+  # compiled with a built-in table of the default-armed thresholds and their
+  # platform values, generated from rule-packs/threshold-registry.yaml. The
+  # rule packs are generated from that registry too. Components and packs
+  # ship on separate release lines, so the table a running component holds
+  # can differ from the one the packs were written against — and no
+  # component reports an error when it does. The digest names the table
+  # (the first 12 hex digits of its SHA-256, `da-guard effective`'s
+  # builtin_defaults.digest): equal digests are the alignment, not equal
+  # version numbers.
+  #
+  # The recording rule below is the digest of the registry THIS pack was
+  # generated from (`check_threshold_registry.py --regen` writes it; `--ci`
+  # fails while it is stale). The alert compares it with the digest the
+  # threshold-exporter (da_config_builtin_defaults_info{digest}) and
+  # tenant-api (tenant_api_builtin_defaults_info{digest}) serve.
+  #
+  # ⚠️ Only a deployment that loads this platform pack has the alert. The
+  # threshold-exporter Helm chart ships no rule pack.
+  # promtool: tests/rulepacks/platform-builtin-defaults-digest_test.yaml
+  # ============================================================
+  - name: builtin-defaults-alignment
+    rules:
+      # >>> GENERATED:threshold-registry:platform-builtin-digest — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+      - record: rule_pack_builtin_defaults_info
+        expr: vector(1)
+        labels:
+          rulepack_digest: "63343e1d88e9"
+      # <<< GENERATED:threshold-registry:platform-builtin-digest
+      # A threshold-exporter that serves no digest series is a
+      # release older than the built-in layer (#3832): it has no built-in
+      # value at all, so it counts as a mismatch (digest="none"). The same
+      # holds for a scraped tenant-api. A component that is not scraped
+      # (up absent) is not judged here; ThresholdExporterAbsent covers the
+      # exporter. for: 30m leaves room for a rolling upgrade of the
+      # components one after another (#3832 decision 9, step 3).
+      - alert: BuiltinDefaultsDigestMismatch
+        expr: |
+          (
+            (
+              max by (job, instance, digest) (da_config_builtin_defaults_info{job="threshold-exporter"})
+              or max by (job, instance, digest) (tenant_api_builtin_defaults_info{job="tenant-api"})
+              or on (job, instance)
+              label_replace(max by (job, instance) (up{job="threshold-exporter"} == 1), "digest", "none", "", "")
+              or on (job, instance)
+              label_replace(max by (job, instance) (up{job="tenant-api"} == 1), "digest", "none", "", "")
+            )
+            unless on (digest)
+            label_replace(rule_pack_builtin_defaults_info, "digest", "$1", "rulepack_digest", "(.*)")
+          )
+          * on () group_left (rulepack_digest) rule_pack_builtin_defaults_info
+        for: 30m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "{{ $labels.job }} built-in defaults table {{ $labels.digest }} differs from the platform rule pack's {{ $labels.rulepack_digest }}"
+          description: |
+            {{ $labels.job }} ({{ $labels.instance }}) is compiled with the
+            built-in defaults table {{ $labels.digest }}; the platform rule
+            pack was generated from the threshold registry whose table is
+            {{ $labels.rulepack_digest }}. digest="none" means the component
+            serves no digest series: a release older than the
+            built-in layer, which gives no default-armed threshold a value
+            unless conf.d writes it.
+            Which side is newer decides what goes wrong (#3832 decision 5):
+            rule packs newer than the threshold-exporter — a newly
+            default-armed threshold has no value, so its alert never fires;
+            threshold-exporter newer than the rule packs — it serves rows no
+            rule reads, and recalibrated values are read by the old rules;
+            tenant-api newer than the threshold-exporter — a write that relies
+            on the built-in layer passes tenant-api's check while the
+            exporter serves no row for it.
+            Upgrade the threshold-exporter, tenant-api and the rule packs
+            until every digest is the same; `da-guard effective` (da-tools)
+            prints the digest of the table it was built with. Do not remove
+            the copies of the platform values from conf.d (the migration
+            command) while this fires.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"

@@ -171,6 +171,16 @@ type debouncerState struct {
 	fired          uint64          // count of fires; read via DebounceFiredCount()
 }
 
+// builtinCommit is what one load did with the built-in defaults layer
+// (#3832): the keys it gave the platform's value (config.SeedBuiltinDefaults'
+// answer, FlatBuild.BuiltinSeeded) and whether the layer was withheld
+// (TreeScan.RootBuiltinWithheld). commitConfig turns it into
+// da_config_builtin_default_state (#3831) through config.BuiltinStatesOf.
+type builtinCommit struct {
+	seeded   []string
+	withheld bool
+}
+
 // ConfigManager handles loading and hot-reloading the config.
 // Supports two modes:
 //   - Single-file mode (legacy): reads one YAML file
@@ -187,6 +197,12 @@ type ConfigManager struct {
 	loaded     bool
 	lastReload time.Time
 	lastHash   string // SHA-256 composite hash for change detection
+
+	// builtin is what the committed config did with the built-in layer
+	// (#3831): installed with m.config in installConfig's lock window, and
+	// read by the tenant-only patch of the flat incremental reload, whose
+	// Defaults are the previous commit's.
+	builtin builtinCommit
 
 	// Config info metric state (v2.3.0)
 	configSource string // "configmap", "operator", or "git-sync"
@@ -503,7 +519,7 @@ func (m *ConfigManager) Mode() string {
 //
 // logHeader is the human-readable banner inserted into the
 // "Config loaded (...)" log line.
-func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan *flatScanState, logHeader string) {
+func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan *flatScanState, builtin builtinCommit, logHeader string) {
 	// Detect config source mode and git commit (v2.3.0). Refreshed on
 	// every commit because git-sync may rotate .git-revision between
 	// reloads. Done BEFORE the lock so the .git-revision disk read never
@@ -513,7 +529,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	configSource, gitCommit := m.detectConfigSource()
 
 	hierTenantSources, unreachableInherited, afterUnlock := m.installConfig(
-		cfg, hash, flatScan, configSource, gitCommit)
+		cfg, hash, flatScan, builtin, configSource, gitCommit)
 	if afterUnlock != nil {
 		// Test-only seam, and it must stay the FIRST statement after the
 		// swap: it exists so a test can mutate the live hierarchy in the
@@ -542,6 +558,9 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// #2914: routing-layer keys in a threshold profile, which the expansion
 	// ignores.
 	publishProfileRoutingKeys(m.getMetrics(), m.getLogger(), profileRoutingKeysOf(cfg, flatScan, m.path))
+	// #3831: what this config does with each built-in key, by the one
+	// derivation `da-guard effective` reports too (config.BuiltinStatesOf).
+	m.getMetrics().SetBuiltinDefaultStates(config.BuiltinStatesOf(cfg, builtin.seeded, builtin.withheld))
 	if flatScan != nil {
 		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
 		// #2592: the `_defaults` files this commit could not parse — state,
@@ -595,12 +614,13 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 // like tidying. `TestDivergenceAudit_SnapshotIsTakenInsideTheLockWindow`
 // covers the remaining shape (a re-read placed after the swap).
 func (m *ConfigManager) installConfig(
-	cfg *ThresholdConfig, hash string, flatScan *flatScanState,
+	cfg *ThresholdConfig, hash string, flatScan *flatScanState, builtin builtinCommit,
 	configSource, gitCommit string,
 ) (hierTenantSources map[string]string, unreachable map[string][]string, afterUnlock func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.config = cfg
+	m.builtin = builtin
 	m.loaded = true
 	m.lastReload = time.Now()
 	m.lastHash = hash
@@ -659,7 +679,7 @@ func (m *ConfigManager) Load() error {
 	// #3832: the single file is the root carrier, read and parsed (an
 	// error returned above), so the built-in layer goes under its values —
 	// after the shape, which is the file's as written.
-	config.SeedBuiltinDefaults(cfg.Defaults)
+	seeded := config.SeedBuiltinDefaults(cfg.Defaults)
 
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
@@ -667,7 +687,7 @@ func (m *ConfigManager) Load() error {
 	// applies no boundary rules, so it is logged here.
 	config.WarnRefusedDimensionBases(m.path, cfg.Dimensions, m.getLogger())
 
-	m.commitConfig(&cfg, hash, nil, fmt.Sprintf("Config loaded (%s)", m.Mode()))
+	m.commitConfig(&cfg, hash, nil, builtinCommit{seeded: seeded}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	m.getMetrics().SetConfigShape(shape)
 	return nil
 }
@@ -1048,7 +1068,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// branch decision and the patch itself — the branch test used to read
 	// m.config outside the lock, and each consumer took its own read.
 	m.mu.RLock()
-	prev := m.config
+	prev, prevBuiltin := m.config, m.builtin
 	m.mu.RUnlock()
 	// #3832: this tree has no root carrier, so its merged Defaults are the
 	// built-in layer exactly, or nothing while a root carrier the walk
@@ -1058,16 +1078,21 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil &&
 		(len(prev.Defaults) == 0) == withhold
 	reportPlatformOrphans(newConfigs, exists, m.getLogger())
+	builtin := builtinCommit{withheld: withhold}
 	if patchBranch {
 		// Incremental patch: copy existing merged config, patch only affected
 		// tenants. Avoids the O(N) merge for the common "1 tenant file changed"
 		// case. prev is the snapshot above; patchTenants is otherwise pure.
 		merged = patchTenants(prev, newConfigs, oldConfigs, changed, added, removed, exists)
+		// The patch keeps prev's Defaults, so it keeps what the built-in
+		// layer did to them (the branch is taken only while withhold is
+		// what it was for prev).
+		builtin = prevBuiltin
 	} else {
 		// Full rebuild: _defaults or _profiles changed, must re-merge everything
 		merged = mergePartialConfigs(newConfigs, exists)
 		if !withhold {
-			config.SeedBuiltinDefaults(merged.Defaults)
+			builtin.seeded = config.SeedBuiltinDefaults(merged.Defaults)
 		}
 	}
 	// ⛔ BOTH BRANCHES, NOT JUST THE REBUILD. `ApplyProfiles` used to sit inside
@@ -1098,7 +1123,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		tree:        scan,
 		parseFailed: incrementalParseFailed(scan, oldParseFailed, reparse, reparseFailed),
 		rejected:    rejected,
-	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
+	}, builtin, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
 }
 
@@ -1674,7 +1699,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		tree:        scan,
 		parseFailed: built.ParseFailed,
 		rejected:    rejectedShown,
-	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
+	}, builtinCommit{seeded: built.BuiltinSeeded, withheld: built.BuiltinWithheld}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }
 

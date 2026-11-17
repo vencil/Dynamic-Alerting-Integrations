@@ -1146,6 +1146,49 @@ def check_unset_keys_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
     return None
 
 
+PLATFORM_DIGEST_TEST_PATH = _in_repo(
+    "tests", "rulepacks", "platform-builtin-defaults-digest_test.yaml")
+PLATFORM_DIGEST_TEST_ID = "platform-builtin-digest-test"
+_RULEPACK_DIGEST_RE = re.compile(r'rulepack_digest: "([0-9a-f]{12})"')
+
+
+def _platform_digest_test_digests(text: str) -> set[str]:
+    """The pack digests the promtool test of BuiltinDefaultsDigestMismatch
+    expects: every ``rulepack_digest: "<digest>"`` it writes."""
+    return set(_RULEPACK_DIGEST_RE.findall(text))
+
+
+def render_platform_digest_test(doc: dict, text: str) -> str:
+    """*text* (that promtool test) with the pack digest it expects replaced,
+    everywhere in it, by the built-in table's digest of *doc* (#3831). The
+    test feeds a component that is aligned with the pack the pack's own
+    digest, so the digest appears in input series and annotations too; a
+    made-up component digest differs from it and is left alone."""
+    digest = builtin_defaults_digest(builtin_defaults(doc))
+    for old in _platform_digest_test_digests(text):
+        if old != digest:
+            text = text.replace(old, digest)
+    return text
+
+
+def check_platform_digest_test(doc: dict, path: Optional[str] = None) -> Optional[str]:
+    """None when the promtool test of BuiltinDefaultsDigestMismatch expects
+    the built-in table's digest of *doc*, else what is wrong with it."""
+    p = path or PLATFORM_DIGEST_TEST_PATH
+    if p is None or not os.path.isfile(p):
+        return f"{p} (surface {PLATFORM_DIGEST_TEST_ID!r}) does not exist"
+    with open(p, encoding="utf-8") as fh:
+        text = fh.read()
+    digest = builtin_defaults_digest(builtin_defaults(doc))
+    found = _platform_digest_test_digests(text)
+    if found != {digest}:
+        return (f"{p} (surface {PLATFORM_DIGEST_TEST_ID!r}) expects the rule "
+                f"pack digest {', '.join(sorted(found)) or 'nowhere'}, the "
+                f"registry's built-in table is {digest} — run "
+                "check_threshold_registry.py --regen")
+    return None
+
+
 def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     """``--regen``: every generated surface from the committed registry.
 
@@ -1156,8 +1199,9 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     all before anything is written. Only then are the changed surfaces
     written (the conf.d ones first, through ``da-guard write``) and the
     generated RULE_PACKS module, the retired-keys Go table (#3829) and the
-    built-in defaults Go table (#3832) and the unset-threshold keys Go table
-    (#1200 D-A A3) last; a refusal (ConfdWriteRefused,
+    built-in defaults Go table (#3832), the unset-threshold keys Go table
+    (#1200 D-A A3) and the pack digest the promtool test of
+    BuiltinDefaultsDigestMismatch expects (#3831) last; a refusal (ConfdWriteRefused,
     ValueError, `_lib_parse_tree.ParseTreeError`) leaves every file as it
     was; a write that stops part-way is SurfaceWriteStopped
     (ConfdWriteStopped for a conf.d batch), naming the files already
@@ -1177,6 +1221,10 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     builtin_path = _repo_path_or_raise(BUILTIN_DEFAULTS_GO_PATH, "the built-in defaults Go table")
     unset_text = render_unset_keys_go(doc)
     unset_path = _repo_path_or_raise(UNSET_KEYS_GO_PATH, "the unset-threshold keys Go table")
+    digest_test_path = _repo_path_or_raise(
+        PLATFORM_DIGEST_TEST_PATH, "the promtool test of BuiltinDefaultsDigestMismatch")
+    with open(digest_test_path, encoding="utf-8") as fh:
+        digest_test_text = render_platform_digest_test(doc, fh.read())
     touched = write_planned(planned)
     if check_rule_packs_module(doc) is not None:
         _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_repo_artifact)
@@ -1190,6 +1238,9 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     if check_unset_keys_go(doc, unset_path) is not None:
         _write_or_stop(unset_path, unset_text, touched, write_repo_artifact)
         touched.append(unset_path)
+    if check_platform_digest_test(doc, digest_test_path) is not None:
+        _write_or_stop(digest_test_path, digest_test_text, touched, write_repo_artifact)
+        touched.append(digest_test_path)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
@@ -1965,6 +2016,30 @@ def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     carried are reproduced mechanically.
     """
     return _render_defaults_lines(doc, indent, _chart_default_keep)
+
+
+#: The platform pack's recording rule that carries the digest of the built-in
+#: table the packs were generated from (#3831, #3832 decision 5); the alert
+#: BuiltinDefaultsDigestMismatch beside it compares it with the digest the
+#: threshold-exporter and tenant-api serve.
+PLATFORM_DIGEST_RECORD = "rule_pack_builtin_defaults_info"
+PLATFORM_DIGEST_SURFACE_ID = "platform-builtin-digest"
+
+
+def render_platform_digest_lines(doc: dict, indent: int) -> list[str]:
+    """The platform pack's digest recording rule (#3831): one series,
+    ``rule_pack_builtin_defaults_info{rulepack_digest="<digest>"} 1``, whose
+    digest is the built-in table's of *doc* (``builtin_defaults_digest``) —
+    the same digest the components are compiled with when they are built
+    from the same registry."""
+    pad = " " * indent
+    digest = builtin_defaults_digest(builtin_defaults(doc))
+    return [
+        f"{pad}- record: {PLATFORM_DIGEST_RECORD}",
+        f"{pad}  expr: vector(1)",
+        f"{pad}  labels:",
+        f'{pad}    rulepack_digest: "{digest}"',
+    ]
 
 
 def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
@@ -2752,6 +2827,16 @@ def surface_specs(doc: dict) -> list[dict]:
             "confd": _confd_dimensions(doc),
         },
     ]
+    # #3831: the platform pack carries the built-in table's digest as a
+    # recording rule (a Prometheus rule file, like the pack headers below).
+    rule_packs = _lib_consumer_read.RULE_PACKS
+    specs.append({
+        "id": PLATFORM_DIGEST_SURFACE_ID,
+        "path": os.path.join(root, rule_packs.directory, rule_packs.file_name("platform")),
+        "indent": " " * 6,
+        "body": render_platform_digest_lines(doc, 6),
+        "rule_file": True,
+    })
     grouped = keys_by_pack(doc)
     for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
         if not grouped.get(pack_name):

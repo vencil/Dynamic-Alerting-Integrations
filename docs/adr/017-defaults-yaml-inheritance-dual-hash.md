@@ -366,7 +366,7 @@ tenants:
 
 **改動內建表是 breaking change。** 改值、新增或移除預設啟用鍵，都會在客戶的 repo 沒有任何 diff 的情況下改變告警行為。所以 `check_threshold_registry.py --ci` 要求新表的摘要出現在一份標 `⚠️ breaking` 的 `changelog.d/` 片段裡（或已發布的 `CHANGELOG.md`），摘要變了，舊片段就不算數。
 
-**以摘要對齊，不以版號。** exporter、da-tools（內含 da-guard）、tenant-api 各有自己的發布線與版號，規則包沒有自己的發布線，「同一版」沒有可以比對的東西；兩個元件的內建表摘要相同，就是對齊。元件之間的落差依方向有不同後果，都不會報錯：
+**以摘要對齊，不以版號。** exporter、da-tools（內含 da-guard）、tenant-api 各有自己的發布線與版號，規則包沒有自己的發布線，「同一版」沒有可以比對的東西；兩個元件的內建表摘要相同，就是對齊。元件之間的落差依方向有不同後果，都不會報錯（偵測見下方的執行期訊號）：
 
 | 落差 | 結果 |
 |:--|:--|
@@ -375,6 +375,8 @@ tenants:
 | CI 的 da-guard 或 tenant-api 比部署中的 exporter 新 | 靠內建層的樹或寫入在檢查端通過，exporter 卻不送那些列（[ADR-036](036-single-parser-effective-config.md) §6） |
 
 **摘要與每個鍵的處理在哪裡讀得到**：`da-tools validate-config` 的 `platform_defaults` 列第一行印出 da-tools 帶的內建表摘要，之後每個預設啟用鍵一行，寫出這棵樹怎麼處理它：`builtin`（根目錄沒給值，由內建層給平台值，附 `/metrics` 送這個值的租戶數）、`overridden`（根目錄給了數字，附那個數與平台值）或 `opted_out`（根目錄寫了 `"disable"`）。答案取自 `da-guard effective` 輸出的 `builtin_defaults`，validate-config 不另讀登錄表。
+
+**執行中的元件送出的訊號**：exporter 送 `da_config_builtin_defaults_info{digest}`（它編譯進去的表的摘要），以及每個預設啟用鍵的 `da_config_builtin_default_state{key,state}`，不帶租戶標籤；`state` 除了上面三種，還有 `withheld`（根目錄 `_defaults.yaml` 讀不了，內建層撤掉）。每個鍵的狀態與 `da-guard effective` 的 `builtin_defaults` 出自同一個推導。tenant-api 送 `tenant_api_builtin_defaults_info{digest}`。平台規則包帶一條記錄規則 `rule_pack_builtin_defaults_info{rulepack_digest}`，是生成它的那份登錄表的摘要（`--regen` 寫入，`--ci` 在它過期時失敗），並出貨告警 `BuiltinDefaultsDigestMismatch`：被 scrape 的 exporter 或 tenant-api 的摘要與它不同、或沒送摘要（內建層之前的版本，標為 `digest="none"`），持續 30 分鐘就觸發。告警的 label 寫出兩邊的摘要，description 依上表說明哪一邊較新會怎樣。⚠️ 這條告警只隨平台規則包出貨：threshold-exporter 的 Helm chart 不出貨規則包，沒有部署平台規則包的環境沒有這條告警，要自己比對這兩個指標與 `da-guard effective` 的摘要。
 
 升級與回退時要注意同一件事：還沒有內建層的舊版讀取端，讀到一棵只放覆寫的樹，那些鍵就沒有值。所以要先把讀取端都升級完，才刪掉根目錄裡與平台相同的數字；要回退到舊版，先把它們放回去。
 
