@@ -70,9 +70,9 @@ da-tools onboard \
 
 `--rule-files` 收一個或多個路徑（檔或目錄，目錄遞迴取其中的 `*.yaml`／`*.yml`），規則檔散在多處時全部列出即可。它不展開 glob：要用萬用字元就不加引號、交給 shell 展開；加了引號的 `'rules.d/*.yaml'` 會被當成一個不存在的路徑，rc=2。在 Kubernetes Job 裡跑時 `args` 不經過 shell，直接給目錄。⚠️ v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔。 <!-- image-caveat: v2.9.0 -->
 
-**預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出目錄 `rule-audit/phase2-rules/`：
-- `migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
-- `_defaults-suggestion.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
+**預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出：
+- `rule-audit/phase2-rules/migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
+- `rule-audit/.conf.d/_defaults.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
 
 依 `status` 排遷移順序：`perfect` 先遷，`complex` 逐條人工確認，`unparseable` 留到最後或保留原規則。
 
@@ -491,9 +491,9 @@ da-tools scaffold \
   --db mariadb \
   --non-interactive \
   --output-dir scaffold_output
-# 只搬租戶檔：scaffold 每次都會重新產生 _defaults.yaml，
-# 直接指到 conf.d 會把步驟 1.2 調過的平台預設值蓋掉
-cp scaffold_output/mariadb-prod.yaml conf.d/
+# 產物在 scaffold_output/.conf.d/（草稿，不會被服務）；只搬租戶檔，
+# _defaults.yaml 是範本，不要蓋掉步驟 1.2 調過的平台預設值
+cp scaffold_output/.conf.d/mariadb-prod.yaml conf.d/
 
 # 編輯閾值
 # 把新租戶（與 chart 出貨沒有的 defaults）加進同一份 values，

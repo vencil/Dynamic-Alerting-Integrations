@@ -177,10 +177,11 @@ python3 scripts/tools/ops/onboard_platform.py \
 # Output (migration_input/):
 #   - onboard-hints.json (tenant list, routing hints, DB types; written only when
 #     the Alertmanager config has tenant routes)
-#   - phase1-routing/: routing summary per tenant route, plus a <tenant>.yaml snippet
+#   - phase1-routing/routing-summary.csv: routing summary per tenant route
+#   - .conf.d/<tenant>.yaml: a routing snippet (a draft, never served)
 #   - phase2-rules/migration-plan.csv (per old alert rule: metric, threshold, suggested
 #     aggregation, and status: perfect converts directly / complex needs a human check / unparseable)
-#   - phase2-rules/_defaults-suggestion.yaml (platform defaults inferred from the old
+#   - .conf.d/_defaults.yaml (platform defaults inferred from the old
 #     thresholds; includes complex rules' thresholds — check each before merging)
 
 # 1.3 Verify environment readiness

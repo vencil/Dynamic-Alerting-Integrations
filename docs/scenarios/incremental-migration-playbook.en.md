@@ -70,9 +70,9 @@ da-tools onboard \
 
 `--rule-files` takes one or more paths (files or directories; a directory is walked recursively for `*.yaml` / `*.yml`), so rule files in several places can all be listed. It expands no glob: for a wildcard leave it unquoted and let the shell expand it; a quoted `'rules.d/*.yaml'` is taken as one path that is not there, rc=2. In a Kubernetes Job the `args` do not go through a shell, so give a directory. ⚠️ The v2.9.0 image still takes the value as one glob and one value only, and a directory selects no file there (a WARN, exit code 1); on that image give a quoted glob (`'rules/*.yaml'`) or a single file. <!-- image-caveat: v2.9.0 -->
 
-**Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and the directory `rule-audit/phase2-rules/` is written:
-- `migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
-- `_defaults-suggestion.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
+**Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and these are written:
+- `rule-audit/phase2-rules/migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
+- `rule-audit/.conf.d/_defaults.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
 
 Order the migration by `status`: `perfect` first, `complex` checked one by one, `unparseable` last or kept as original rules.
 
@@ -493,9 +493,10 @@ da-tools scaffold \
   --db mariadb \
   --non-interactive \
   --output-dir scaffold_output
-# Move only the tenant file: scaffold regenerates _defaults.yaml on every run,
-# so pointing it at conf.d would overwrite the platform defaults tuned in Step 1.2
-cp scaffold_output/mariadb-prod.yaml conf.d/
+# The outputs are in scaffold_output/.conf.d/ (a draft, never served); move only
+# the tenant file — _defaults.yaml is a template, do not overwrite the platform
+# defaults tuned in Step 1.2
+cp scaffold_output/.conf.d/mariadb-prod.yaml conf.d/
 
 # Edit thresholds
 # Add the new tenant (and any defaults the chart does not ship) to the same

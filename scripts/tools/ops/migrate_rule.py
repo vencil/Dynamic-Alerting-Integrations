@@ -64,6 +64,7 @@ from _lib_python import (  # noqa: E402
 from _lib_io import find_metric_dictionary  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
+import _lib_write_check  # noqa: E402  (the draft conf.d's name and layout check, #4014)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -1075,21 +1076,12 @@ def _dedup_recording_rules(results):
     return deduplicated_rules
 
 
-#: The conf.d this tool writes, under `-o` (#3671): a tree of its own, so
-#: its two files are judged as a conf.d root holds them and the other
-#: outputs (rule packs, reports) — no conf.d files — never share a name with
-#: the tenant file.
-#:
-#: ⛔ Dot-prefixed on purpose: the files are a draft (the `_defaults.yaml` is
-#: a fragment to merge by hand), and `-o` may lie inside a served conf.d —
-#: `-o` pointed at it, or the relative default run from inside it. Every
-#: reader prunes a `.`-prefixed directory whole (Go's `confdname.IsHidden`,
-#: shared by the exporter's walker and `da-guard parse-tree`), so the draft
-#: tenant is never served wherever `-o` lands, while the tree passed as a
-#: `--config-dir` root of its own is judged whole. No path is guessed here;
-#: tests/shared/test_writers_confirm_parse_tree.py runs the tool inside a served tree
-#: and asks Go which tenants it serves.
-CONFD_DIR = ".conf.d"
+#: The conf.d this tool writes, under `-o` (#3671): the draft conf.d every
+#: one-shot writer shares (`_lib_write_check.DRAFT_CONFD_DIR`, #4014 — why it
+#: is dot-prefixed is said there, once). A tree of its own, so its two files
+#: are judged as a conf.d root holds them and the other outputs (rule packs,
+#: reports) never share a name with the tenant file.
+CONFD_DIR = _lib_write_check.DRAFT_CONFD_DIR
 #: #3997: where the YAML that is not a conf.d file goes (rule packs, prefix
 #: mapping): a dot-directory, which every conf.d reader prunes (Go
 #: `confdname.IsHidden`), wherever the served root is above `-o`.
@@ -1498,20 +1490,6 @@ def _require_output_tree(output_dir):
         sys.exit(EXIT_CALLER_ERROR)
 
 
-def other_confd_files(conf_dir, mine):
-    """The config files of the conf.d at *conf_dir* other than *mine* (the
-    paths this run writes), as relative paths in walk order; [] when it is not
-    there (#3671). The tree as the exporter's walk sees it (da-guard's
-    list-only walk): a hidden or non-config name is read by no reader, so it
-    adds no tenant and is not listed."""
-    conf_dir = Path(conf_dir)
-    if not conf_dir.is_dir():
-        return []
-    import _lib_parse_tree  # noqa: PLC0415
-    return [e.path for e in _lib_parse_tree.list_tree(conf_dir).config_files()
-            if e.path not in mine]
-
-
 def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, tenant):
     """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
 
@@ -1541,21 +1519,17 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     except ValueError as exc:
         print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    other = other_confd_files(conf_dir, {e["path"] for e in entries})
-    if other:
-        print(f"ERROR: {conf_dir} holds {', '.join(other)}, which this run does not write "
-              f"(another --tenant's file is another tenant in the tree, #3671); remove "
-              f"it or use another -o — nothing was written", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
     # Before the batch, without creating anything (a refused batch leaves
-    # no directory behind): a `-o/.migration` that is not a directory ends
-    # the run with nothing written, not after the conf.d files are on disk.
-    artifact_dir = Path(output_dir) / ARTIFACT_DIR
-    if artifact_dir.exists() and not artifact_dir.is_dir():
-        print(f"ERROR: {artifact_dir} is not a directory; the rule packs and the prefix "
-              f"mapping go there (#3997) — remove it or use another -o — nothing was written",
-              file=sys.stderr)
+    # no directory behind): the draft holds no other run's tenant, and a
+    # `-o/.migration` that is not a directory ends the run with nothing
+    # written, not after the conf.d files are on disk (#3997).
+    refusal = _lib_write_check.refuse_draft_layout(
+        output_dir, [e["path"] for e in entries], artifact_dirs=(ARTIFACT_DIR,),
+        why="another --tenant's file is another tenant in the tree, #3671")
+    if refusal:
+        print(f"ERROR: {refusal} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    artifact_dir = Path(output_dir) / ARTIFACT_DIR
     _lib_confedit.write_all_or_exit(
         conf_dir, entries, tool="migrate_rule",
         make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))

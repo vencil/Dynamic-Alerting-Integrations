@@ -10,7 +10,7 @@ purpose: |
   output is not localised still print Chinese), mechanically transcribed:
   a `\r`-redrawn progress line keeps only its last frame. `sample` is
   the file the command wrote. One continuous session: scaffold's
-  demo-out/_defaults.yaml + demo-tenant.yaml were copied into conf.d/,
+  demo-out/.conf.d/_defaults.yaml + demo-tenant.yaml were copied into conf.d/,
   which validate-config and generate-routes read; migrate ran on
   tests/fixtures/legacy-dummy.yml saved as legacy_rules.yaml; baseline
   ran against a local stub Prometheus, so its numbers are synthetic.
@@ -38,8 +38,8 @@ const DEMO_TRANSCRIPTS = {
       '⚙️  生成 demo-tenant config (DBs: kubernetes, mariadb, redis)...',
       '',
       '📁 輸出至 demo-out/',
-      '  📄 demo-out/_defaults.yaml',
-      '  📄 demo-out/demo-tenant.yaml',
+      '  📄 demo-out/.conf.d/_defaults.yaml',
+      '  📄 demo-out/.conf.d/demo-tenant.yaml',
       '  📄 demo-out/scaffold-report.txt',
       '',
       '✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)',
