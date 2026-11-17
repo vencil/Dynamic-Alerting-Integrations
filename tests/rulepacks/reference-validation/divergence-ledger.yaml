@@ -121,12 +121,12 @@ alert_divergence:
       shipped_evidence: "tenant:node_owner:info"
     - alert: ContainerCrashLoop
       field: predicate_structure
-      divergence: 重啟那一臂的 OOM 排除（unless on(namespace,pod,container) OOM 事件 > 0）、計數倒退守衛與 state filter gate 未重現
+      divergence: 重啟那一臂的計數倒退守衛、state filter gate 與 keep_firing_for 未重現
       reason: >-
-        波形庫沒有 container_oom_events_total、計數重置與 user_state_filter series；
-        對現有 restart signature 這三項都不改變 fire/no-fire。觸發重審：波形庫新增
-        OOM 事件或計數重置的 signature 時（#1177）。
-      shipped_evidence: "(tenant:container_oom_events_1h:by_container > 0)"
+        波形庫沒有計數重置與 user_state_filter series；keep_firing_for 只延長已觸發的
+        告警，不改變 signature 是否被接到。觸發重審：波形庫新增計數重置的 signature，
+        或開始量測告警解除時間時（#1177）。
+      shipped_evidence: "keep_firing_for: 10m"
 
 # ---------------------------------------------------------------------
 # Record/alert 層 selector 內聯到 base metric（fire/no-fire 等價）

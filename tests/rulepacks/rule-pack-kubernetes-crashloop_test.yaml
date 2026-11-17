@@ -2,7 +2,8 @@
 # crash-looping containers, from two arms joined per container:
 #   waiting  tenant:container_crashloop_waiting:by_container (CrashLoopBackOff now)
 #   restart  tenant:container_restart_loop:by_container (>=3 restarts in 1h, one
-#            within 20m, no OOM kill in the hour)
+#            within 20m; OOM restarts count too)
+# keep_firing_for: 10m bridges the arms' gaps; it resolves ~30m after the last restart.
 # Run: promtool test rules tests/rulepacks/rule-pack-kubernetes-crashloop_test.yaml
 rule_files:
   - ../../rule-packs/rule-pack-kubernetes.yaml
@@ -11,15 +12,16 @@ evaluation_interval: 15s
 
 tests:
   # ── Restart arm, 1m samples. Restarts at 10/12/14/16/18m unless noted;
-  #    asserted at 25m (last restart inside the 20m recency window) and at 45m
-  #    (27m after it: resolved — the tail after a fix is bounded).
+  #    asserted at 25m (last restart inside the 20m recency window) and at 55m
+  #    (37m after it: resolved — 20m recency + 10m keep_firing_for).
   #   db-a  5 restarts, counter starts at 7       -> fires (exact max-min, not 12)
   #   db-b  2 restarts                            -> silent (the >=3 bar)
-  #   db-c  5 restarts, OOM kill on the container -> silent (left to the OOM alerts)
+  #   db-c  5 restarts, one an OOM kill          -> fires (an OOM does not hide the
+  #                                                  other restarts for an hour)
   #   db-d  5 restarts, crashloop filter off      -> silent
   #   db-e  5 restarts, maintenance               -> silent
   #   db-f  2 restarts seen by TWO KSM replicas   -> silent (not summed into 4)
-  #   db-g  OOM on the sidecar, 4 restarts on app -> fires (exclusion is per container)
+  #   db-g  OOM on the sidecar, 4 restarts on app -> fires
   #   db-h  pod recreated under the same name,    -> fires (2 + 2 across two uids)
   #         2 restarts in each uid
   #   db-i  counter drops 12 -> 0, then 1 restart -> silent (counts 1, not 12) ──
@@ -87,11 +89,25 @@ tests:
               summary_zh: "db-a 偵測到容器崩潰迴圈"
               platform_summary: "[gold] db-a: crash loop detected — check deployment and image health"
               platform_summary_zh: "[gold] db-a: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: "http://rb/a"
               owner: "team-a"
               tier: "gold"
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-c
+            exp_annotations:
+              summary: "Container crash loop detected in db-c"
+              summary_zh: "db-c 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-c: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-c: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
           - exp_labels:
               maintenance: mute
               severity: critical
@@ -101,8 +117,8 @@ tests:
               summary_zh: "db-g 偵測到容器崩潰迴圈"
               platform_summary: "[] db-g: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-g: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -115,12 +131,12 @@ tests:
               summary_zh: "db-h 偵測到容器崩潰迴圈"
               platform_summary: "[] db-h: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-h: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
-      - eval_time: 45m
+      - eval_time: 55m
         alertname: ContainerCrashLoop
         exp_alerts: []
 
@@ -128,7 +144,8 @@ tests:
   #    KSM every 15s, pod deleted at 30m). The waiting arm drops each time a
   #    sample sees the container Running — the old alert resolved at 5m30s and
   #    20m45s and re-fired ~45s later. With the restart arm it fires through the
-  #    loop, and resolves within 20m (+ the 60s record) of the last restart. ──
+  #    loop, and resolves ~30m after the last restart (20m recency + 10m
+  #    keep_firing_for). ──
   - interval: 15s
     input_series:
       - series: 'kube_pod_container_status_waiting_reason{namespace="db-k", pod="p", uid="u-k", container="app", reason="CrashLoopBackOff"}'
@@ -150,8 +167,8 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -167,8 +184,8 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -184,8 +201,8 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -201,8 +218,8 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -218,8 +235,8 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -235,8 +252,8 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -252,12 +269,12 @@ tests:
               summary_zh: "db-k 偵測到容器崩潰迴圈"
               platform_summary: "[] db-k: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-k: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
-      - eval_time: 55m
+      - eval_time: 70m
         alertname: ContainerCrashLoop
         exp_alerts: []
 
@@ -283,8 +300,8 @@ tests:
               summary_zh: "db-l 偵測到容器崩潰迴圈"
               platform_summary: "[] db-l: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-l: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -311,8 +328,8 @@ tests:
               summary_zh: "db-m 偵測到容器崩潰迴圈"
               platform_summary: "[] db-m: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-m: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -339,8 +356,8 @@ tests:
               summary_zh: "db-o 偵測到容器崩潰迴圈"
               platform_summary: "[] db-o: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-o: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -367,8 +384,222 @@ tests:
               summary_zh: "db-p 偵測到容器崩潰迴圈"
               platform_summary: "[] db-p: crash loop detected — check deployment and image health"
               platform_summary_zh: "[] db-p: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── db-q (#1177 review F2): a fast loop (22s runs, 4 crashes) seen through a
+  #    30s KSM scrape. Early on the waiting arm drops while the 60s restart arm
+  #    has not yet counted three; without keep_firing_for vmalert resolves at
+  #    90s and re-fires at 150s (the parity gate runs this file on vmalert-tool).
+  - interval: 30s
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="db-q", pod="p", uid="u-db-q", container="app", reason="CrashLoopBackOff"}'
+        values: 'stale 1 1 stale 1 stale 1 1 stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
+      - series: 'kube_pod_container_status_restarts_total{namespace="db-q", pod="p", uid="u-db-q", container="app"}'
+        values: '0 0 1 2 2 3 3 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'user_state_filter{tenant="db-q", filter="container_crashloop"}'
+        values: '1x80'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-q
+            exp_annotations:
+              summary: "Container crash loop detected in db-q"
+              summary_zh: "db-q 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-q: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-q: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 2m30s
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-q
+            exp_annotations:
+              summary: "Container crash loop detected in db-q"
+              summary_zh: "db-q 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-q: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-q: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 5m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-q
+            exp_annotations:
+              summary: "Container crash loop detected in db-q"
+              summary_zh: "db-q 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-q: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-q: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 10m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-q
+            exp_annotations:
+              summary: "Container crash loop detected in db-q"
+              summary_zh: "db-q 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-q: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-q: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 20m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-q
+            exp_annotations:
+              summary: "Container crash loop detected in db-q"
+              summary_zh: "db-q 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-q: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-q: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── db-r (#1177 review F1): a slow loop, one crash every ~22 minutes. ">=3 in
+  #    the hour" holds for only part of each cycle; without keep_firing_for it
+  #    resolved at 81m45s and re-fired at 88m30s (vmalert-tool).
+  - interval: 15s
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="db-r", pod="p", uid="u-db-r", container="app", reason="CrashLoopBackOff"}'
+        values: 'stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
+      - series: 'kube_pod_container_status_restarts_total{namespace="db-r", pod="p", uid="u-db-r", container="app"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 7 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8'
+      - series: 'user_state_filter{tenant="db-r", filter="container_crashloop"}'
+        values: '1x720'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-r
+            exp_annotations:
+              summary: "Container crash loop detected in db-r"
+              summary_zh: "db-r 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-r: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-r: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 85m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-r
+            exp_annotations:
+              summary: "Container crash loop detected in db-r"
+              summary_zh: "db-r 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-r: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-r: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 95m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-r
+            exp_annotations:
+              summary: "Container crash loop detected in db-r"
+              summary_zh: "db-r 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-r: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-r: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 110m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-r
+            exp_annotations:
+              summary: "Container crash loop detected in db-r"
+              summary_zh: "db-r 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-r: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-r: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 130m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-r
+            exp_annotations:
+              summary: "Container crash loop detected in db-r"
+              summary_zh: "db-r 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-r: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-r: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 150m
+        alertname: ContainerCrashLoop
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: critical
+              tenant: db-r
+            exp_annotations:
+              summary: "Container crash loop detected in db-r"
+              summary_zh: "db-r 偵測到容器崩潰迴圈"
+              platform_summary: "[] db-r: crash loop detected — check deployment and image health"
+              platform_summary_zh: "[] db-r: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+              description: "1 container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+              description_zh: "1 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
               runbook_url: ""
               owner: ""
               tier: ""

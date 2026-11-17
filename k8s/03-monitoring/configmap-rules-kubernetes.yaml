@@ -78,9 +78,8 @@ data:
     \"db-.+\\\"}[1h]) > 0\\n        )\\n      )\\n    ) >= 3\\n  )\\n  and on(namespace,\
     \ pod, container)\\n  (max by(namespace, pod, container) (changes(kube_pod_container_status_restarts_total{namespace=~\\\
     \"db-.+\\\"}[20m])) > 0),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\
-    \"(.*)\\\"\\n)\\nunless on(namespace, pod, container)\\n(tenant:container_oom_events_1h:by_container\
-    \ > 0)\\n\"\n- name: kubernetes-state-matching\n  interval: 15s\n  rules:\n  -\
-    \ record: tenant:container_waiting_reason:count\n    expr: \"label_replace(\\\
+    \"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n  interval: 15s\n  rules:\n\
+    \  - record: tenant:container_waiting_reason:count\n    expr: \"label_replace(\\\
     n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
     \"db-.+\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
     (.*)\\\"\\n)\\n\"\n  - record: tenant:container_crashloop_waiting:by_container\n\
@@ -331,14 +330,14 @@ data:
     \ container)\\n    tenant:container_restart_loop:by_container\\n  )\\n  * on(tenant)\
     \ group_left\\n  max by(tenant) (user_state_filter{filter=\\\"container_crashloop\\\
     \"})\\n) > 0\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n      severity:\
-    \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
-    \ '{{ $value }} container(s) crash-looping: in CrashLoopBackOff now, or restarted\
-    \ >=3 times in the last hour (once within 20m, no OOM kill) — per container in\
-    \ tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container'\n\
+    \"} == 1)\\n\"\n    for: 30s\n    keep_firing_for: 10m\n    labels:\n      maintenance:\
+    \ mute\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value }} container(s) crash-looping: in CrashLoopBackOff\
+    \ now, or restarted >=3 times in the last hour (once within 20m) — per container\
+    \ in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container'\n\
     \      description_zh: '{{ $value }} 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟\
-    \ >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container\
-    \ 與 tenant:container_restart_loop:by_container'\n      owner: '{{ with query (printf\
+    \ >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與\
+    \ tenant:container_restart_loop:by_container'\n      owner: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\

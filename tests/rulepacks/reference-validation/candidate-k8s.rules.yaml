@@ -46,7 +46,7 @@ groups:
       # filter (tenant:container_waiting_reason:count{reason=...}) — fire/no-fire
       # equivalent; declared in divergence-ledger.yaml `inlined_matchers`.
       # Both shipped arms: CrashLoopBackOff now, or >=3 restarts in 1h with one in
-      # the last 20m. The OOM exclusion and the counter-reset guard are not
+      # the last 20m. The counter-reset guard and keep_firing_for are not
       # reproduced — declared in divergence-ledger.yaml.
       - alert: ContainerCrashLoop
         expr: kube_pod_container_status_waiting_reason{namespace=~"db-.+", reason="CrashLoopBackOff"} > 0 or (max_over_time(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[1h]) - min_over_time(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[1h]) >= 3 and changes(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[20m]) > 0)

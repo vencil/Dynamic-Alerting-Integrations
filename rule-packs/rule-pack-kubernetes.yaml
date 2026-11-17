@@ -309,10 +309,11 @@ groups:
   # resolved and re-fired between restarts. This arm holds through those gaps.
   # A container is in a restart loop when it restarted >=3 times in the rolling
   # hour (one restart is a reboot or a one-off crash; three is not converging),
-  # once within the last 20 minutes (so the alert resolves within 20m of the
-  # fix: the kubelet's back-off caps at 5m, and a loop slow enough to restart
-  # less often than every 20m is under three an hour anyway), and no OOM kill in
-  # the hour (the OOM alerts name that cause).
+  # once within the last 20 minutes (the kubelet's back-off caps at 5m, and a
+  # loop slow enough to restart
+  # less often than every 20m is under three an hour anyway). OOM restarts count
+  # too: the waiting arm already fires for an OOM crash loop, and excluding a
+  # container with any OOM kill would hide an hour of other restarts after one.
   # The hour's count is the exact max-min, like the OOM record (increase()
   # extrapolates: the platform pack measured `> 3` firing on 3 restarts once
   # the counter started above 0). The inner max by(..., uid) collapses duplicate
@@ -350,8 +351,6 @@ groups:
             (max by(namespace, pod, container) (changes(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[20m])) > 0),
             "tenant", "$1", "namespace", "(.*)"
           )
-          unless on(namespace, pod, container)
-          (tenant:container_oom_events_1h:by_container > 0)
 
   # -------------------------------------------------------
   # Normalization: Pod state matching (kube-state-metrics)
@@ -872,6 +871,14 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
         for: 30s
+        # The two arms are evaluated in separate groups (15s / 60s): early in a
+        # loop the waiting arm drops while the restart arm has not yet counted
+        # three, and a loop of ~20-23 min period meets ">=3 in the hour" for only
+        # part of each cycle. 10m bridges both (measured on promtool and
+        # vmalert-tool), so the alert resolves ~30m after the last restart
+        # rather than ~20m. Known residual: a loop of ~23-30 min period sits on
+        # the 2-3/h boundary and still resolves and re-fires once per cycle.
+        keep_firing_for: 10m
         labels:
           severity: critical
           maintenance: mute
@@ -881,8 +888,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} 偵測到容器崩潰迴圈"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: crash loop detected — check deployment and image health"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
-          description: "{{ $value }} container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m, no OOM kill) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
-          description_zh: "{{ $value }} 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟、非 OOM）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
+          description: "{{ $value }} container(s) crash-looping: in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within 20m) — per container in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container"
+          description_zh: "{{ $value }} 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與 tenant:container_restart_loop:by_container"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
