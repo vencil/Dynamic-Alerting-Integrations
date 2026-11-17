@@ -2150,16 +2150,17 @@ class TestOutputPreflight:
         finally:
             d.chmod(0o700)
 
-    def test_a_regular_file_someone_else_owns_is_unwritable(self, tmp_path, monkeypatch):
-        """The secure writer's chmod 0600 fails on a file another user owns
-        (EPERM) after writing it: judged unwritable up front (#3105)."""
+    def test_a_writable_file_someone_else_owns_is_writable(self, tmp_path, monkeypatch):
+        """#3107 ③b: the operator entry sets 0600 only on a file this euid
+        owns, so a file another user owns that we may write is written —
+        no chmod fails after it (the old writer's EPERM, #3105, is gone),
+        and the preflight no longer refuses it."""
         target = tmp_path / "r.json"
         target.write_text("old", encoding="utf-8")
         target.chmod(0o666)
         owner = target.stat().st_uid
         monkeypatch.setattr(bt.os, "geteuid", lambda: owner + 1)
-        exc = bt._unwritable_output(str(target), "-o/--output")
-        assert exc is not None and exc.errno == errno.EPERM
+        assert bt._unwritable_output(str(target), "-o/--output") is None
 
     def test_a_device_is_not_judged_by_its_owner(self, tmp_path, monkeypatch):
         """`-o /dev/null`: the writer does not chmod a device (#3105), so who

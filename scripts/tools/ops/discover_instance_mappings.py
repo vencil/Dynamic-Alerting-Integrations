@@ -47,7 +47,6 @@ from _lib_python import (  # noqa: E402
     detect_cli_lang,
     prometheus_url,
     url_type,
-    write_text_or_die,
 )
 # #3133: series / label values are read by the lib; a query not answered
 # raises QueryError (exit 2) — it used to be skipped, and the run reported
@@ -55,6 +54,8 @@ from _lib_python import (  # noqa: E402
 from _lib_prometheus import prometheus_label_values, prometheus_series  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json)
+from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 
 _LANG = detect_cli_lang()
 
@@ -317,7 +318,11 @@ def main(argv: list[str] | None = None) -> "int | Report":
     add_prometheus_arg(group, help_text=_h("prometheus"))
     parser.add_argument("--instance", help=_h("instance"))
     parser.add_argument("--job", help=_h("job"))
-    parser.add_argument("-o", "--output", help=_h("output"))
+    # #3107 ③b: without -o the draft (or --json) owns stdout, so `-` is refused.
+    parser.add_argument("-o", "--output", help=_h("output"),
+                        type=operator_file_type(
+                            stdout="this tool prints the draft there when -o "
+                                   "is left out (--json prints the JSON document)"))
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
@@ -431,8 +436,9 @@ def main(argv: list[str] | None = None) -> "int | Report":
 
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
-        write_text_or_die(args.output, encode_json(draft) if args.json else output,
-                          flag="-o/--output")
+        write_operator_output_or_die(args.output,
+                                     encode_json(draft) if args.json else output,
+                                     flag="-o/--output")
         saved_msg = "已儲存" if lang == "zh" else "Saved to"
         print(f"\n{saved_msg}: {args.output}", file=sys.stderr)
 

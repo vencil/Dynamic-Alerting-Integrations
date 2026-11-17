@@ -340,6 +340,49 @@ def artifact_file_type(*, then: Any = None) -> ArtifactFileArg:
     return ArtifactFileArg(then)
 
 
+class OperatorFileArg:
+    """An argparse ``type=`` made by :func:`operator_file_type` (#3107 ③b).
+
+    The flag names one file the operator asked for, written in place by the
+    kernel (``_lib_io.write_operator_output``), where ``-`` is standard
+    output. Refused at parse time (rc 2, argparse's ``argument --flag: ...``
+    line):
+
+    * ``""`` — names no file (an unset variable), and a tool that reads a
+      falsy value as "not given" would write nothing and exit 0;
+    * ``-`` when *stdout* is given: this tool's standard output already has
+      an owner (its report, ``--json``), so a second document there could
+      not be told apart from the first (owner 2026-11-15). *stdout* says who
+      owns it and where to get the document instead.
+    """
+
+    def __init__(self, stdout: Optional[str], then: Any = None) -> None:
+        self.stdout = stdout
+        self.then = then
+        self.__name__ = "output_file"
+
+    def __call__(self, value: str) -> Any:
+        if value == "":
+            raise argparse.ArgumentTypeError(
+                "an empty value names no file (an unset variable?); pass the "
+                "path of the file to write")
+        if value == "-" and self.stdout is not None:
+            raise argparse.ArgumentTypeError(
+                f"'-' is standard output, and {self.stdout} (to write a file "
+                f"called -, pass ./-)")
+        return self.then(value) if self.then is not None else value
+
+
+def operator_file_type(*, stdout: Optional[str] = None,
+                       then: Any = None) -> OperatorFileArg:
+    """argparse ``type=`` for a flag that names ONE operator output file
+    (#3107 ③b): ``""`` always, and ``-`` when *stdout* names the tool's other
+    owner of standard output, exit 2 (CALLER_ERROR) at parse time, named by
+    argparse. Without *stdout*, ``-`` passes: the operator entry writes it
+    to standard output. *then* as in :func:`output_dir_type`."""
+    return OperatorFileArg(stdout, then)
+
+
 def format_duration(seconds: int) -> str:
     """Format seconds back to a Prometheus-compatible duration string.
 

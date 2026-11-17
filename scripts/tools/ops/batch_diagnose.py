@@ -53,10 +53,11 @@ from diagnose import CommandTimeoutError, DEADLINE_GRACE_S  # noqa: E402  (#2968
 from diagnose import deadline as diagnose_deadline  # noqa: E402  (#2968)
 from _lib_python import (  # noqa: E402
     add_prometheus_arg, prometheus_url, positive_int, positive_seconds,
-    write_json_or_die,
 )
+from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, encode_json)
 from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
 import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9: Go classes the key names)
@@ -429,6 +430,9 @@ def main():
     )
     parser.add_argument(
         "--output", "-o",
+        # #3107 ③b: the report (or --json) owns stdout, so `-` is refused.
+        type=operator_file_type(stdout="this tool prints its report there "
+                                       "(--json prints this JSON document)"),
         help="Write JSON report to file",
     )
     parser.add_argument(
@@ -528,7 +532,10 @@ def main():
         # Under --json it is written before the document goes out (#3216):
         # an unwritable -o is then rc 2 with stdout empty, not a document
         # beside rc 2.
-        write_json_or_die(args.output, report, flag="-o/--output")
+        # #3107 ③b: the operator entry (0600, kernel open) and the one
+        # encoder — byte for byte what --json prints.
+        write_operator_output_or_die(args.output, encode_json(report) + "\n",
+                                     flag="-o/--output")
         if not args.json:
             print(f"\nJSON report written to: {args.output}")
 

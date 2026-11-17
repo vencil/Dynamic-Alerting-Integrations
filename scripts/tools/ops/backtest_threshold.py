@@ -41,7 +41,6 @@ import json
 import math
 import os
 import re
-import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,7 +56,9 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_prometheus import http_get_json  # noqa: E402  (#3133: the reachability probe; not a query)
-from _lib_python import prometheus_range, QueryError, write_text_or_die, add_prometheus_arg, prometheus_url  # noqa: E402
+from _lib_python import prometheus_range, QueryError, add_prometheus_arg, prometheus_url  # noqa: E402
+from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 from _lib_prometheus import sample_value  # noqa: E402  (#3213 the one sample reading)
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -1451,22 +1452,16 @@ def _unwritable_output(path, flag):
     `write_*_or_die` still answers that. An existing path that is not a
     directory is not required to be a regular file (`-o /dev/null`).
 
-    The same judgement the secure writer makes (#3105): a symlink is
-    followed to where it ends (a dangling one is judged by its target's
-    parent), and an existing regular file someone else owns is unwritable —
-    the writer's `chmod 0600` would fail on it (EPERM) after writing."""
+    The operator entry's judgement (#3107 ③b): a symlink is followed to
+    where it ends (a dangling one is judged by its target's parent). An
+    existing file someone else owns and we may write is writable: the entry
+    sets 0600 only on a file this euid owns, so no chmod fails after the
+    write (the old writer's EPERM, which this used to predict, is gone)."""
     p = Path(os.path.realpath(path))
     if p.is_dir():
         code = errno.EISDIR
     elif p.exists():
-        st = p.stat()
-        if not os.access(p, os.W_OK):
-            code = errno.EACCES
-        elif (stat.S_ISREG(st.st_mode) and hasattr(os, "geteuid")
-              and os.geteuid() != 0 and st.st_uid != os.geteuid()):
-            code = errno.EPERM
-        else:
-            code = None
+        code = None if os.access(p, os.W_OK) else errno.EACCES
     elif not p.parent.exists():
         code = errno.ENOENT
     elif not p.parent.is_dir():
@@ -1536,13 +1531,14 @@ def _write_outputs(args, report, markdown, recipe_tenants):
             if not args.json:
                 raise
             return
-        write_text_or_die(args.output, text, flag="-o/--output")
+        write_operator_output_or_die(args.output, text, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")
     if args.markdown_output:
         if recipe_tenants:
             markdown += "\n\n" + custom_alert_markdown(recipe_tenants)
-        write_text_or_die(args.markdown_output, markdown, flag="--markdown-output")
+        write_operator_output_or_die(args.markdown_output, markdown,
+                                     flag="--markdown-output")
         if not args.json:
             print(f"  Markdown report: {args.markdown_output}")
 
@@ -1658,6 +1654,9 @@ def _main():
     )
     parser.add_argument(
         "--output", "-o",
+        # #3107 ③b: the report (or --json) owns stdout, so `-` is refused.
+        type=operator_file_type(stdout="this tool prints its report there "
+                                       "(--json prints this JSON document)"),
         help="Write JSON report to file",
     )
     parser.add_argument(
@@ -1666,6 +1665,7 @@ def _main():
     )
     parser.add_argument(
         "--markdown-output",
+        type=operator_file_type(stdout="this tool prints its report there"),
         help="Write Markdown report to file (for PR comments)",
     )
     args = parser.parse_args()

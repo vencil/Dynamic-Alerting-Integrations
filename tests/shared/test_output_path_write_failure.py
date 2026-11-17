@@ -1768,13 +1768,6 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
     ("dx/generate_changelog.py", "-o/--output"): ("scripts/tools/dx/generate_changelog.py:main write_text_or_die ×1",),
     ("dx/waveform_compile.py", "--out"): ("scripts/tools/dx/waveform_compile.py:_compile_one write_text_or_die ×1",),
     ("dx/waveform_score.py", "--out"): ("scripts/tools/dx/waveform_score.py:main write_text_secure ×1",),
-    ("ops/analyze_rule_pack_gaps.py", "-o/--output"): ("scripts/tools/ops/analyze_rule_pack_gaps.py:_main write_json_or_die ×1",),
-    ("ops/backtest_threshold.py", "--markdown-output"): ("scripts/tools/ops/backtest_threshold.py:_write_outputs write_text_or_die ×1",),
-    ("ops/backtest_threshold.py", "-o/--output"): ("scripts/tools/ops/backtest_threshold.py:_write_outputs write_text_or_die ×1",),
-    ("ops/batch_diagnose.py", "-o/--output"): ("scripts/tools/ops/batch_diagnose.py:main write_json_or_die ×1",),
-    ("ops/discover_instance_mappings.py", "-o/--output"): ("scripts/tools/ops/discover_instance_mappings.py:main write_text_or_die ×1",),
-    ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("scripts/tools/ops/generate_tenant_mapping_rules.py:main write_text_or_die ×1",),
-    ("ops/validate_migration.py", "--convergence-output"): ("scripts/tools/ops/validate_migration.py:main write_json_or_die ×1",),
 }
 
 #: Rows with a write under the output path that came through NO entry: each
@@ -3509,7 +3502,7 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("ops/onboard_platform.py", "write_outputs", "write_onboard_hints"): 1,
     ("ops/operator_generate.py", "write_crds", "write_yaml_crd"): 1,
     ("ops/validate_migration.py", "main", "ensure_dir_or_die"): 1,
-    ("ops/validate_migration.py", "main", "write_json_or_die"): 1,
+    ("ops/validate_migration.py", "main", "write_operator_output_or_die"): 1,
 }
 
 
