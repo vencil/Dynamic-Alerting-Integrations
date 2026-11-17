@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -61,6 +62,13 @@ func chmodRestore(t *testing.T, p string, mode, restore fs.FileMode) {
 // root tenant-b.yaml; hier=false is two flat tenant files.
 func newUnusableTreeManager(t *testing.T, hier bool) (*ConfigManager, *configMetrics, string) {
 	t.Helper()
+	return newUnusableTreeManagerWithDebounce(t, hier, 0)
+}
+
+// newUnusableTreeManagerWithDebounce is newUnusableTreeManager with the
+// reload debounce window `debounce`: a tick that sees a change only arms it.
+func newUnusableTreeManagerWithDebounce(t *testing.T, hier bool, debounce time.Duration) (*ConfigManager, *configMetrics, string) {
+	t.Helper()
 	dir := t.TempDir()
 	if hier {
 		writeHierarchicalFixture(t, dir, "90")
@@ -70,7 +78,7 @@ func newUnusableTreeManager(t *testing.T, hier bool) (*ConfigManager, *configMet
 		writeTestYAML(t, filepath.Join(dir, "tenant-b.yaml"), "tenants:\n  tenant-b:\n    mysql_connections: \"21\"\n")
 	}
 	fresh, _ := freshMetrics(t)
-	m := NewConfigManagerWithDebounce(dir, 0)
+	m := NewConfigManagerWithDebounce(dir, debounce)
 	t.Cleanup(m.Close)
 	m.SetMetrics(fresh)
 	m.SetLogger(log.New(io.Discard, "", 0))
@@ -490,19 +498,24 @@ func TestUnusableTreeSetters_NilReceiver(t *testing.T) {
 	}
 }
 
-// Review F1: a dropped (unreadable) file is in no TreeScan map, so it is not
-// a change-detection input — adding or deleting one schedules no reload and
-// no commit. The `unreadable` half of defaults_unusable must therefore follow
-// the walk, in both directions:
+// Review F1: the `unreadable` half of defaults_unusable follows the walk,
+// not the commit, in both directions:
 //   - removed: a dangling root `_defaults.yaml` link is deleted; the gauge
-//     must drop to 0 on the next tick although nothing reloads;
+//     must drop to 0 on the next tick although nothing has reloaded;
 //   - added: a dangling `_defaults.yaml` appears beside a flat tree that does
-//     not otherwise move; the gauge must rise to 1 although nothing reloads.
+//     not otherwise move; the gauge must rise to 1 although nothing has
+//     reloaded.
+//
+// Since #4042 an unreadable entry is in the walk's identity, so adding or
+// deleting one does schedule a reload — and until it runs (the debounce
+// window; with -scan-debounce past -reload-interval each tick re-arms it and
+// it never runs) the gauge has only the walk to follow. An hour's debounce
+// holds the reload off for the length of the test.
 func TestDefaultsUnusableGauge_UnreadableFollowsTheWalkNotTheCommit(t *testing.T) {
 	t.Parallel()
 	t.Run("removed", func(t *testing.T) {
 		t.Parallel()
-		m, fresh, dir := newUnusableTreeManager(t, true)
+		m, fresh, dir := newUnusableTreeManagerWithDebounce(t, true, time.Hour)
 		p := filepath.Join(dir, "_defaults.yaml")
 		if err := os.Remove(p); err != nil {
 			t.Fatal(err)
@@ -522,7 +535,7 @@ func TestDefaultsUnusableGauge_UnreadableFollowsTheWalkNotTheCommit(t *testing.T
 			m.tickOnce()
 		}
 		if m.LastReload() != lastReload {
-			t.Fatal("precondition broken: removing the dropped link committed a reload; the shape needs none")
+			t.Fatal("precondition broken: removing the dropped link committed a reload inside the debounce window")
 		}
 		if got := defaultsUnusableGauge(fresh, DefaultsUnusableReasonUnreadable); got != 0 {
 			t.Errorf("defaults_unusable{unreadable} = %v after the link was removed, want 0 (stale critical alert)", got)
@@ -530,7 +543,7 @@ func TestDefaultsUnusableGauge_UnreadableFollowsTheWalkNotTheCommit(t *testing.T
 	})
 	t.Run("added", func(t *testing.T) {
 		t.Parallel()
-		m, fresh, dir := newUnusableTreeManager(t, false)
+		m, fresh, dir := newUnusableTreeManagerWithDebounce(t, false, time.Hour)
 		lastReload := m.LastReload()
 		if err := os.Symlink(filepath.Join(dir, "gone.yaml"), filepath.Join(dir, "_defaults.yaml")); err != nil {
 			t.Fatal(err)
@@ -539,7 +552,7 @@ func TestDefaultsUnusableGauge_UnreadableFollowsTheWalkNotTheCommit(t *testing.T
 			m.tickOnce()
 		}
 		if m.LastReload() != lastReload {
-			t.Fatal("precondition broken: adding a dangling link committed a reload; the shape needs none")
+			t.Fatal("precondition broken: adding a dangling link committed a reload inside the debounce window")
 		}
 		if got := defaultsUnusableGauge(fresh, DefaultsUnusableReasonUnreadable); got != 1 {
 			t.Errorf("defaults_unusable{unreadable} = %v with a dangling _defaults.yaml, want 1", got)

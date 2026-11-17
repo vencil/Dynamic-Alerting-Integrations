@@ -58,12 +58,13 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 # test backward-compat, and `test_grar_facade_reexports` pins that set. These
 # two are USED, not re-exported.
 from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
-    OutputWriteError, safe_label, write_text_or_die,
+    OutputWriteError, safe_label,
 )
 # #2766: the --findings-json temp-file write. Module form, because the bare
 # name is already a `_lib_python` re-export in the F401 block below.
 import _lib_io  # noqa: E402
 from _lib_validation import key_segment  # noqa: E402  (#1560 ⑤-b: keys into findings)
+from _lib_validation import artifact_file_type  # noqa: E402  (#3107 ③a: -o refuses `-`)
 from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_compat import read_shipped_da_tools_version  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
@@ -366,54 +367,27 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
 def _write_output_or_die(output: str, content: str) -> None:
     """Write *content* to the operator-supplied ``-o`` path, or exit 2.
 
-    A bare ``write_text_secure`` lets OSError escape as a traceback at rc=1,
-    and rc=1 in this repo is EXIT_VIOLATION — "your CONFIG is wrong" — for what
-    is a mistyped path.
+    #3107 ③a (owner 2026-11-15): ``-o`` is an ARTIFACT — the routes file is
+    a config Alertmanager (or a ``kubectl apply``) loads, so a reader must
+    never see half of it. ``write_repo_artifact`` with ``atomic_only``
+    replaces it whole (tmp + rename in its directory, never the in-place
+    fallback) and leaves it ``0o600`` (it can carry receiver credentials),
+    as ``configmap_assemble --output`` does. ``-`` is refused at parse time
+    (``artifact_file_type``); a device, a FIFO or the file this process's
+    stdout already is, before the run (``refuse_clashing_outputs``). ⚠️ A
+    target swapped for a FIFO between that check and this write is NOT
+    refused here: ``atomic_write_text`` writes a non-regular file in place
+    even with ``atomic_only`` (#4047).
 
-    #1789: the rc was already 2 here, but the message was hand-written and
-    said the WRONG thing — it printed two lines, and because the flag was
-    never declared at the writer, ``OutputWriteError`` filled in "internal
-    output path, this is a bug or an unwritable workspace" for a path the
-    operator had typed on the command line (measured). Declaring
-    ``flag="-o/--output"`` and going through the SHARED writer makes it the
-    same single line every other tool in the batch prints, and puts this tool
-    into the population of ``tests/shared/test_output_path_write_failure.py``
-    — which is what a hand-written message here could never join.
-
-    ⚠️ ``write_text_or_die`` rather than ``write_text_secure`` + a local
-    ``except OutputWriteError: _die_on_write_error(...)``. They do the same
-    two things in the same order — that helper IS that pair — and this spells
-    it with the PUBLIC name instead of reaching past the underscore into
-    ``_lib_io``'s internals.
-
-    ⚠️ The exit still happens HERE rather than at a
-    ``@exit_on_output_write_error`` on ``main``. Measured: with nothing at
-    this call site, ``test_write_failure_class`` goes red on this line — its
-    tree-wide rule is that every ``write_text_secure`` call in a tool module
-    is closed where it is written, read LEXICALLY (it stops at a ``def``), so
-    a decorator four frames up does not answer for it. ``write_text_or_die``
-    satisfies that rule by BEING the closed writer. The decorator is for
-    tools whose write sites are raw and scattered.
-
-    ⚠️ The old text's *label* ("the ConfigMap" / "the routing fragment") is
-    gone: both call sites write to the same ``-o`` value and the path is in
-    the line, so the label distinguished nothing an operator has to act on.
-    What replaced the coverage it carried is
-    ``test_control_each_writer_mode_writes_its_own_artefact`` in
-    tests/ops/test_generate_routes_orchestration.py, which checks the CONTENT
-    each mode puts at ``-o``.
-
-    ⛔ STILL NOT THE WHOLE CLASS, and the caveat this docstring has carried
-    since #1641 stands. #1789 closed a NAMED BATCH of tools, not every writer
-    under ``scripts/**``; what is guarded tree-wide is the secure-writer
-    population (``tests/shared/test_write_failure_class.py``), while the raw
-    sinks are pinned only for the files that ticket touched. Do not read this
-    helper, or a green run of either gate, as the class having been handled
-    everywhere — and do not quote a count from here: it was wrong once
-    already, because a change like this one moved it.
+    A failed write is rc 2 with the one ``ERROR: cannot write <path>: ... —
+    check the value given to -o/--output`` line, nothing on stdout; the
+    previous file, if any, is left whole.
     """
-    write_text_or_die(output, content, flag="-o/--output",
-                      exit_code=EXIT_CALLER_ERROR)
+    try:
+        _lib_io.write_repo_artifact(output, content, flag="-o/--output", mode=0o600,
+                                    atomic_only=True)
+    except OutputWriteError as exc:
+        die_caller_error(f"ERROR: {safe_label(str(exc))}", reason="output_unwritable")
 
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
@@ -1148,9 +1122,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
                          empty=_lib_input.EMPTY_ALLOWED, required=True,
                          help="Directory containing tenant YAML configs (conf.d/)")
-    parser.add_argument("-o", "--output", default=None,
-                        help="Output file path for --output-configmap / "
-                             "--output-alertmanager (default: stdout)")
+    parser.add_argument("-o", "--output", default=None, type=artifact_file_type(),
+                        help="Output file for --output-configmap / "
+                             "--output-alertmanager, replaced whole (0600); "
+                             "a regular file, not - or a device (default: "
+                             "stdout)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview output without writing file")
     parser.add_argument("--validate", action="store_true",
@@ -1744,13 +1720,13 @@ def output_destinations(args: argparse.Namespace) -> tuple[list[tuple[str, str]]
     without ``--dry-run``, ``--findings-json`` (every mode, every exit),
     ``--secret-mounts-out`` where it is read. *stdout*: the owners of
     standard output — the routes output when an output mode prints it (no
-    ``-o``, or an ``-o`` that is the file / pipe fd 1 already is), and each
-    operator output given ``-`` or fd 1's file (``targets_stdout``). A flag
-    the mode never reads is not a destination: ``_flags_this_mode_never_reads``
-    refuses it by name.
+    ``-o``), and each operator output given ``-`` or fd 1's file
+    (``targets_stdout``). A flag the mode never reads is not a destination:
+    ``_flags_this_mode_never_reads`` refuses it by name.
 
-    ⛔ ``-o -`` is a file named ``-`` (the routes writer is not an operator
-    output), so it is a file here, never stdout.
+    ⛔ ``-o`` is always a FILE here (#3107 ③a): it is an artifact, so ``-``
+    is refused at parse time and an ``-o`` that is fd 1 (or any other
+    non-regular file) by ``refuse_unwritable_artifact`` before this runs.
     """
     assembles = ((args.output_alertmanager or args.output_configmap)
                  and not args.validate)
@@ -1759,8 +1735,6 @@ def output_destinations(args: argparse.Namespace) -> tuple[list[tuple[str, str]]
     if assembles and not args.dry_run:
         if args.output is None:
             stdout.append(ROUTES_ON_STDOUT)
-        elif args.output != _lib_io.STDOUT_PATH and _lib_io.targets_stdout(args.output):
-            stdout.append(f"-o/--output {args.output}")
         else:
             files.append(("-o/--output", args.output))
     elif args.output is None and args.findings_json is not None:
@@ -1817,13 +1791,37 @@ def refuse_clashing_outputs(args: argparse.Namespace) -> bool:
     ``output_clashes`` entry. Returns whether an operator output owns
     stdout (the caller moves its own receipts to stderr); the stdout owners
     are claimed (``_lib_io.claim_stdout``)."""
+    refuse_unwritable_artifact(args)
     clashes = output_clashes(args)
     if clashes:
         die_caller_error("ERROR: " + "\nERROR: ".join(line for _, line in clashes))
     _, stdout = output_destinations(args)
     for owner in stdout:
         _lib_io.claim_stdout(owner)
-    return any(owner != ROUTES_ON_STDOUT and not owner.startswith("-o/") for owner in stdout)
+    return any(owner != ROUTES_ON_STDOUT for owner in stdout)
+
+
+def refuse_unwritable_artifact(args: argparse.Namespace) -> None:
+    """Refuse (rc 2, before the run) an ``-o`` the artifact write would
+    refuse anyway (#3107 ③a): a device, a FIFO, a directory, the file this
+    process's stdout already is (``_lib_io.check_repo_artifact``). Checked
+    here so a pipe or a FIFO with no reader is answered before the tree is
+    read, not after. The write re-checks a std stream and ``-``, not a FIFO
+    swapped in meanwhile (#4047).
+    Only in a mode that writes ``-o`` — the others refuse the flag by name
+    (``_flags_this_mode_never_reads``)."""
+    writes_o = ((args.output_alertmanager or args.output_configmap)
+                and not args.validate and not args.dry_run and args.output is not None)
+    if not writes_o:
+        return
+    try:
+        _lib_io.check_repo_artifact(args.output, flag="-o/--output")
+    except OutputWriteError as exc:
+        hint = ""
+        if _lib_io.targets_stdout(args.output):
+            hint = ("\n  -o names a file the routes replace whole; to print them "
+                    "to standard output, leave -o out.")
+        die_caller_error(f"ERROR: {safe_label(str(exc))}{hint}", reason="output_unwritable")
 
 
 #: #1560: the flags whose value names a file on THIS host (argparse dest →
@@ -1834,8 +1832,10 @@ def refuse_clashing_outputs(args: argparse.Namespace) -> bool:
 #: opened here); the rest of the flags name no path.
 FINDINGS_MUST_NOT_REPLACE = {"output": "-o/--output", "mount_list_out": "--secret-mounts-out",
                              "base_config": "--base-config", "policy": "--policy"}
-#: Of those, the operator outputs, for which `-` is stdout, not a file.
-_STDOUT_DASH_FLAGS = frozenset({"--secret-mounts-out"})
+#: Of those, the flags for which `-` names no file: an operator output's `-`
+#: is stdout; `-o -` is refused at parse time (#3107 ③a) and writes nothing,
+#: so a `--findings-json ./-` beside it takes no file of its.
+_STDOUT_DASH_FLAGS = frozenset({"--secret-mounts-out", "-o/--output"})
 
 
 def findings_path_taken_by(findings: str | None, early: argparse.Namespace,

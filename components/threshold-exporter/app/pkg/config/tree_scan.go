@@ -275,8 +275,8 @@ type NotFile struct {
 type TreeScan struct {
 	AbsRoot   string
 	Files     map[string]*TreeFile // RelKey → file
-	Keys      []string             // RelKeys sorted; the composite-hash order
-	Composite string               // SHA-256 over the per-file hashes in `Keys` order
+	Keys      []string             // RelKeys sorted; treeIdentity's file order
+	Composite string               // the walk's identity: treeIdentity
 
 	// Partials is RelKey → the file's decoded ThresholdConfig, for every
 	// file THIS scan parsed successfully (#1957). The walker decides a
@@ -1166,8 +1166,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		}
 	}
 
-	// Composite: hash-of-hashes in sorted key order, the flat plane's
-	// change-detection identity since v2.1.0.
+	// Composite (treeIdentity) is taken over these, once they are sorted.
 	sort.Strings(scan.Keys)
 	if len(unreadable) > 0 {
 		sort.Slice(unreadable, func(i, j int) bool { return unreadable[i].RelKey < unreadable[j].RelKey })
@@ -1182,16 +1181,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		sort.Strings(dirs)
 		scan.Dirs = dirs
 	}
-	// One buffer for every per-file hash (#1939): `Write([]byte(h))` made a
-	// fresh copy per file, because Write is an interface call the conversion
-	// escapes through — 1000 allocations per tick on a 1000-file tree.
-	compositeHasher := sha256.New()
-	var hashBuf []byte
-	for _, k := range scan.Keys {
-		hashBuf = append(hashBuf[:0], scan.Files[k].Hash...)
-		compositeHasher.Write(hashBuf)
-	}
-	scan.Composite = fmt.Sprintf("%x", compositeHasher.Sum(nil))
+	scan.Composite = treeIdentity(scan)
 
 	// Tenant attribution + cross-file duplicate detection (#127 guardrail:
 	// silently preferring one file would mask config drift).
@@ -1464,6 +1454,52 @@ func overlayCheck(absRoot, rel string, listed, mkdirs bool, unreadable []Unreada
 		}
 	}
 	return missing, nil
+}
+
+// treeIdentity is the walk's identity (TreeScan.Composite, #4042): the
+// SHA-256 of one record per thing the walk saw that an answer read from the
+// tree can depend on, in this order —
+//
+//	f\x00<key>\x00<the file's SHA-256 hex>\n   every kept file, Keys order
+//	u\x00<key>\n                                every Unreadable entry, by key
+//	n\x00<key>\x00<reason>\n                    every NotFile, by key
+//
+// The key is in the record: a file renamed into another class
+// (`db.yaml` → `_db.yaml`) or moved into a subdirectory changes what is served
+// and, until #4042, left the hash of hashes alone. An Unreadable record
+// names the path only, not why: a reason that flaps between stat and read
+// failures on a flaky filesystem would otherwise reload on every flip, and
+// the entry is dropped from what is served either way. Directories (Dirs)
+// are not in it: an empty directory changes no answer.
+//
+// ⛔ THE ONE DEFINITION. The exporter's config_hash (/api/v1/config/identity),
+// its flat- and hierarchical-mode change detection, and `da-guard parse-tree`
+// (whose config_hash patch-config takes as what a pod serving a ConfigMap
+// reports) all read this value; nothing re-implements it.
+// tests/shared/config_identity_golden.json pins it against values computed
+// without this code.
+//
+// Meaningful only for a walk that read every kept file (Hash set): not for
+// ScanDirTreeNames (`parse-tree --list-only`), and over an overlay it is the
+// identity of the tree the overlay describes, not of the one on disk.
+func treeIdentity(scan *TreeScan) string {
+	h := sha256.New()
+	// One buffer for every record (#1939): `Write([]byte(s))` made a fresh
+	// copy per file — 1000 allocations per tick on a 1000-file tree.
+	var buf []byte
+	for _, k := range scan.Keys {
+		buf = append(append(append(append(buf[:0], 'f', 0), k...), 0), scan.Files[k].Hash...)
+		h.Write(append(buf, '\n'))
+	}
+	for _, u := range scan.Unreadable {
+		buf = append(append(buf[:0], 'u', 0), u.RelKey...)
+		h.Write(append(buf, '\n'))
+	}
+	for _, n := range scan.NotFiles {
+		buf = append(append(append(append(buf[:0], 'n', 0), n.RelKey...), 0), n.Reason...)
+		h.Write(append(buf, '\n'))
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // walkOrderLess reports whether WalkDir visits root-relative file a before b.

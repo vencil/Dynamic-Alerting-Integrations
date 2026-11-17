@@ -160,7 +160,7 @@ Phase 1: Mtime Guard — Quick Filtering
   ├─ stat() each file for mtime + size
   ├─ If (mtime+size unchanged) AND (file age > 2s) → reuse cached SHA-256
   ├─ Else → read file + compute SHA-256
-  └─ Combine all per-file hashes → composite hash
+  └─ One record per file (path + hash), unreadable entry and non-file config name → composite hash (the walk's identity)
      └─ composite hash == previous → return immediately (zero cost)
 
 Phase 2: Per-File Hash Diff
