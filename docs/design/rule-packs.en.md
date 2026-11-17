@@ -33,11 +33,11 @@ parent: architecture-and-design.en.md
 | RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
 | JVM | `prometheus-rules-jvm` | 9 | 8 |
 | Nginx | `prometheus-rules-nginx` | 9 | 7 |
-| Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
+| Kubernetes | `prometheus-rules-kubernetes` | 32 | 14 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **167** | **197** (= **364** rules) |
+| **Total** | | **169** | **197** (= **366** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

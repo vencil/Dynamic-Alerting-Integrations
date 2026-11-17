@@ -39,7 +39,6 @@ uncovered:
   - KafkaHighConsumerLagCritical
   - KafkaLowBrokerCount
   rule-pack-kubernetes.yaml:
-  - ContainerCrashLoop
   - ContainerImagePullFailure
   rule-pack-mariadb.yaml:
   - MariaDBHighAbortedConnections

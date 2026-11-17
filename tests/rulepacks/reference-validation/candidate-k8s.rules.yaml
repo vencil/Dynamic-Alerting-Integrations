@@ -42,11 +42,14 @@ groups:
         expr: rate(container_cpu_cfs_throttled_periods_total{namespace=~"db-.+", container!="", container!="POD"}[5m]) / (rate(container_cpu_cfs_periods_total{namespace=~"db-.+", container!="", container!="POD"}[5m]) > 0) * 100 > 25
         for: 15m
         labels: {severity: warning}
-      # reason matchers inlined from the shipped record/alert-level filter
-      # (tenant:container_waiting_reason:count{reason=...}) — fire/no-fire equivalent;
-      # declared in divergence-ledger.yaml `inlined_matchers`.
+      # ImagePullFailure's reason matcher is inlined from the shipped alert-level
+      # filter (tenant:container_waiting_reason:count{reason=...}) — fire/no-fire
+      # equivalent; declared in divergence-ledger.yaml `inlined_matchers`.
+      # Both shipped arms: CrashLoopBackOff now, or >=3 restarts in 1h with one in
+      # the last 20m. The OOM exclusion and the counter-reset guard are not
+      # reproduced — declared in divergence-ledger.yaml.
       - alert: ContainerCrashLoop
-        expr: kube_pod_container_status_waiting_reason{namespace=~"db-.+", reason="CrashLoopBackOff"} > 0
+        expr: kube_pod_container_status_waiting_reason{namespace=~"db-.+", reason="CrashLoopBackOff"} > 0 or (max_over_time(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[1h]) - min_over_time(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[1h]) >= 3 and changes(kube_pod_container_status_restarts_total{namespace=~"db-.+"}[20m]) > 0)
         for: 30s
         labels: {severity: critical}
       - alert: ContainerImagePullFailure
