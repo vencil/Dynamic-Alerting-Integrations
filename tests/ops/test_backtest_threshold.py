@@ -3179,10 +3179,15 @@ class TestUnserializableDocument:
         assert "changes[0].impact_pct" in res.stderr
         assert written == "stale\n"
 
-    def test_text_mode_is_a_crash_and_writes_no_o(self, tmp_path):
+    def test_text_mode_names_o_with_the_crash_code_and_writes_no_o(self, tmp_path):
+        """#3107 ③b: `json_file_text` ends it as --json's run() would — the
+        crash code, one line naming -o and where in the document — not a
+        traceback."""
         res, written = self._run(tmp_path)
         assert res.returncode == _crash_code(), res.stderr
-        assert "OutputNotSerializable" in res.stderr and "changes[0].impact_pct" in res.stderr
+        assert ("ERROR: the -o/--output document cannot be written as JSON: "
+                "changes[0].impact_pct") in res.stderr, res.stderr
+        assert "Traceback" not in res.stderr
         assert "{" not in res.stdout
         assert written == "stale\n"
 
