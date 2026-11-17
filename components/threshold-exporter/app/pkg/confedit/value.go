@@ -25,13 +25,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
@@ -46,17 +47,31 @@ const (
 	TypeSeq   = "seq"
 )
 
-// An !!int or !!float the writer writes is in canonical decimal form, so
-// that its value is its text: `010`, `0x1F`, `1e3`, `+1` and `-0` are not
-// accepted (a caller that means such text as a string sends {"str": ...}).
+// An !!int or !!float the writer writes is spelled so that its value is its
+// text, and a YAML 1.1 reader reads it as a 1.2 one does: `010`, `0x1F`,
+// `1e3`, `1.0e22`, `+1` and `-0` are not accepted (a caller that means such
+// text as a string sends {"str": ...}). The grammar is the contract's
+// edit_number (pkg/config recipe_contract.json, #3866): an int is canonical
+// decimal of at most config.EditIntMaxLength characters (inside int64, where
+// yaml.v3 reads it as an integer); a float is plain decimal (`0.5`) or the
+// exponent form `1.0e+22` / `1.5e-25`.
 var (
-	canonicalInt   = regexp.MustCompile(`^(0|-?[1-9][0-9]*)$`)
-	canonicalFloat = regexp.MustCompile(`^-?(0|[1-9][0-9]*)\.[0-9]+$`)
+	canonicalInt   = config.EditIntRe
+	canonicalFloat = config.EditFloatRe
+	maxIntDigits   = config.EditIntMaxLength
 )
 
-// maxIntDigits keeps an !!int inside int64, where yaml.v3 reads it as an
-// integer (a longer one it reads otherwise).
-const maxIntDigits = 18
+// floatIsItsText: the canonical float text reads as a finite float64, and
+// as 0 only when every digit of it is 0 — so `1.0e+999` (no finite number)
+// and `1.0e-400` (written nonzero, read as 0) are refused (#3866).
+func floatIsItsText(text string) bool {
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		return false
+	}
+	mantissa, _, _ := strings.Cut(text, "e")
+	return f != 0 || strings.Trim(mantissa, "-0.") == ""
+}
 
 // Value is one value to write; the zero Value is not valid.
 type Value struct {
@@ -171,7 +186,10 @@ func (v *Value) UnmarshalJSON(b []byte) error {
 				return fmt.Errorf("int %q is not a canonical decimal integer of at most %d digits (send other text as \"str\")", v.Text, maxIntDigits)
 			}
 			if t == TypeFloat && !canonicalFloat.MatchString(v.Text) {
-				return fmt.Errorf("float %q is not canonical decimal (digits, '.', digits; send other text as \"str\")", v.Text)
+				return fmt.Errorf("float %q is not canonical (digits, '.', digits, or d.ddde+N / d.ddde-N; send other text as \"str\")", v.Text)
+			}
+			if t == TypeFloat && !floatIsItsText(v.Text) {
+				return fmt.Errorf("float %q is not a finite float64, or reads as 0 though it is not zero (send other text as \"str\")", v.Text)
 			}
 		case TypeBool:
 			if err := json.Unmarshal(raw, &v.Bool); err != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
