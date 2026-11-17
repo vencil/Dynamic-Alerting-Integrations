@@ -210,8 +210,20 @@ type undeterminedItem struct {
 // exporter's own walk already named the root as unreadable and printed that
 // same reason, and stderr names the root and its reason once (exit 3, #2627).
 func undeterminedEvidence(configDir string, rootReported bool, reported map[string]bool, errOut io.Writer) []undeterminedItem {
-	out := []undeterminedItem{}
+	items, _ := undeterminedEvidenceOf(configDir, rootReported, reported, errOut)
+	return items
+}
+
+// undeterminedEvidenceOf is undeterminedEvidence and the identity of the
+// walk it read ("" when the walk failed) — the default check's last walk,
+// compared with its first (#3965, sameWalks).
+func undeterminedEvidenceOf(configDir string, rootReported bool, reported map[string]bool,
+	errOut io.Writer) (out []undeterminedItem, identity string) {
+	out = []undeterminedItem{}
 	scan, err := config.ScanDirTreeFiles(configDir, log.New(io.Discard, "", 0))
+	if err == nil {
+		identity = scan.Composite
+	}
 	var doc *parseTreeDoc
 	if err == nil {
 		doc, err = parseTreeOf(scan)
@@ -221,11 +233,11 @@ func undeterminedEvidence(configDir string, rootReported bool, reported map[stri
 			fmt.Fprintf(errOut, "%s: cannot read the tree as the route generator does: %v\n", programName, err)
 		}
 		if reported["."] {
-			return out
+			return out, identity
 		}
-		return append(out, undeterminedItem{File: ".", Field: string(parsetree.KindReadFailure), Reason: undeterminedUnreadableOutsideRun})
+		return append(out, undeterminedItem{File: ".", Field: string(parsetree.KindReadFailure), Reason: undeterminedUnreadableOutsideRun}), identity
 	}
-	return append(out, undeterminedFromParseTree(doc, reported)...)
+	return append(out, undeterminedFromParseTree(doc, reported)...), identity
 }
 
 // undeterminedFromParseTree is undeterminedEvidence over one parse-tree

@@ -98,6 +98,12 @@ type parseTreeIndex struct {
 // parseTreeDoc is the tree- and file-mode document: the index plus content.
 type parseTreeDoc struct {
 	parseTreeIndex
+	// ConfigHash (#4042): tree mode, the walk's identity — the value the
+	// exporter reports as config_hash in /api/v1/config/identity for this
+	// tree (pkg/config treeIdentity, the one definition). null in file mode:
+	// that document is the tree as it would be with --path written. List and
+	// names mode, which read no byte, write the index alone.
+	ConfigHash *string `json:"config_hash"`
 	// Files: each readable file some reader reads (and, in file mode, the
 	// text of --path whoever reads it) — parsetree.Content. A config entry
 	// with readers is in Files exactly when it has no Problem.
@@ -267,7 +273,10 @@ func parseParseTreeFlags(args []string, errOut io.Writer) (*parseTreeFlags, erro
 			"   \"defaults_carriers\": {<dir>: <path>},  the one _defaults file each directory's chain reads\n"+
 			"   \"entries\": [<entry>],                  one per path (below)\n"+
 			"   \"files\": {<path>: <content>},          tree and file mode only\n"+
-			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}}}  tree and file mode only\n"+
+			"   \"rendered_by\": {<path>: {<key>: [\"exporter\"|\"generator\"]}},  tree and file mode only\n"+
+			"   \"config_hash\": <64 hex>|null}         tree and file mode only: in tree mode what the\n"+
+			"                                         exporter reports as config_hash for this tree\n"+
+			"                                         (/api/v1/config/identity); null in file mode\n"+
 			"<entry> holds every field, null where it has no value:\n"+
 			"  {\"path\", \"depth\", \"class\", \"tenant_named\", \"defaults_document\",\n"+
 			"   \"config_extension\", \"readers\",\n"+
@@ -462,6 +471,7 @@ func runParseTree(args []string, stdin io.Reader, stdout, errOut io.Writer) int 
 	var doc *parseTreeDoc
 	if f.path == "" {
 		if doc, err = parseTreeOf(scan); err == nil {
+			doc.ConfigHash = &scan.Composite
 			err = setVerdicts(doc.Entries, treeDropped(scan))
 		}
 	} else {

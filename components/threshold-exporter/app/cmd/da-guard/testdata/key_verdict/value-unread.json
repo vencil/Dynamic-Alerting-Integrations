@@ -1,5 +1,6 @@
 {
   "schema": "da-guard.key-verdict/v5",
+  "config_hash": "49d05211504f1437838a380ee1060d3e8b29350464953a0b1faba84cd5b66253",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,

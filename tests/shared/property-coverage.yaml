@@ -60,6 +60,8 @@ modules:
       url_type: "#3528 constructor of the UrlArg argparse type; run per flag by tests/shared/test_caller_path_manifest.py::test_a_url_flag_refuses_an_unusable_value_by_name"
       url_list_type: "#3528 constructor of the separator-list UrlArg; run by the same gate (federation-check --edge-urls)"
       output_dir_type: "#3107 constructor of the OutputDirArg argparse type (refuses `-` for a directory flag); every case pinned by example, and run per declaring tool, by tests/shared/test_output_dir_flag.py"
+      operator_file_type: "#3107 ③b constructor of the OperatorFileArg argparse type (refuses an empty value, and `-` where the tool's stdout has another owner); every case pinned by example, and run per declaring tool, by tests/shared/test_operator_file_flag.py"
+      artifact_file_type: "#3107 ③a constructor of the ArtifactFileArg argparse type (refuses `-` for a flag naming a file replaced whole); every case pinned by example, and run per declaring tool, by tests/shared/test_artifact_file_flag.py"
       UrlArg._one: "#3528 url_problem → ArgumentTypeError; run by the same gate"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"

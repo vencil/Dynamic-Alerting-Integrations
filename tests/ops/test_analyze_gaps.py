@@ -582,3 +582,31 @@ class TestPrintReport:
         ag.print_report(results)
         out = capsys.readouterr().out
         assert "can be replaced" in out
+
+
+# The real crash code (2): an unencodable document ends the run with the
+# crash code, as run() ends --json's (`_write_report`).
+@pytest.mark.real_crash_exit_code
+@pytest.mark.parametrize("as_json", [True, False], ids=["json", "text"])
+def test_a_report_json_cannot_carry_is_one_named_line_and_no_file(tmp_path, as_json):
+    """#3107 ③b: a conf.d `.nan` reaches the report as a float JSON has no
+    spelling for. `-o` goes through the one encoder (`json_file_text`): no
+    file that is not JSON, no traceback — under --json run() names the
+    document, without it the line names -o; the same exit code either way."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    conf = tmp_path / "t.yaml"
+    conf.write_text("tenants:\n  t1:\n    custom_mysql_threads: .nan\n", encoding="utf-8")
+    out = tmp_path / "o.json"
+    tool = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops" / "analyze_rule_pack_gaps.py"
+    argv = [sys.executable, str(tool), "--tenant-config", str(conf), "-o", str(out)]
+    if as_json:
+        argv.append("--json")
+    r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=120, cwd=tmp_path)
+    named = "--json" if as_json else "-o/--output"
+    assert r.returncode == 2, r.stderr
+    assert f"ERROR: the {named} document cannot be written as JSON: " in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr and "internal error" not in r.stderr, r.stderr
+    assert not out.exists()

@@ -69,6 +69,7 @@ Tenant ids are fixture names (CLAUDE.md #9).
 from __future__ import annotations
 
 import json
+import re
 import os
 import stat
 import subprocess
@@ -1005,11 +1006,15 @@ def test_offboard_tenant_refuses_a_file_given_another_tenant_after_the_precheck(
         tmp_path, monkeypatch, capsys):
     # #3206 (CodeRabbit on #3363): the pre-check's dry run and --execute's
     # write are two da-guard runs. A file that gains a declaration of
-    # tenant-b between them must not be deleted: each delete carries
-    # `tenants: [tenant-a]`, which da-guard judges on the bytes it reads for
-    # the real write — declares_mismatch, rc 2, the file named, both files
-    # kept. Real da-guard both times; only the edit in between is the hook.
+    # tenant-b between them must not be deleted. Since #3965 the write carries
+    # the identity --config-dir was judged with: the tree changed since, so
+    # da-guard refuses the batch before reading any file (tree_changed) and
+    # the run ends in the flag's refusal — rc 2, both files kept. (Per file,
+    # each delete's `tenants: [tenant-a]` would also have refused it:
+    # declares_mismatch.) Real da-guard both times; only the edit in between
+    # is the hook.
     import _lib_confedit
+    from _lib_exitcodes import InputChanged
     import offboard_tenant as ot
     root = _tree(tmp_path / "conf.d", {"tenant-a.yaml": "tenants:\n  tenant-a: {}\n",
                                        "team-eu/tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
@@ -1026,13 +1031,11 @@ def test_offboard_tenant_refuses_a_file_given_another_tenant_after_the_precheck(
     monkeypatch.setattr(_lib_confedit, "write_all", hooked)
     monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", "tenant-a", "--config-dir", str(root),
                                       "--execute", "--skip-state-check"])
-    with pytest.raises(SystemExit) as exc:
-        ot.main()
-    assert exc.value.code == 2
+    with pytest.raises(InputChanged, match=f"^--config-dir {re.escape(str(root))}: 判定之後已變動") as exc:
+        ot.main()  # rc 2 once `_lib_exitcodes.run` ends the process with it
     assert len(calls) == 2 and calls[0] == calls[1], calls  # the dry run is the same batch
-    out = capsys.readouterr()
-    assert "offboard_tenant: ERROR: team-eu/tenant-a.yaml: declares_mismatch:" in out.err, out.err
-    assert "tenant-b" in out.err and "已刪除" not in out.out, out.err
+    assert "tree_changed" in str(exc.value), str(exc.value)
+    assert "已刪除" not in capsys.readouterr().out
     assert sorted(_bytes(root)) == ["team-eu/tenant-a.yaml", "tenant-a.yaml"]
 
 

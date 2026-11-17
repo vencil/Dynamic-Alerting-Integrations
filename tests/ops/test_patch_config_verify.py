@@ -1138,33 +1138,29 @@ class TestRollbackAccounting:
 
 # ── 寫入前就把寫後驗證要用的鍵分類好（#3206）─────────────────────────
 
-@pytest.mark.parametrize("tenant, answered", [
-    # The calls a run makes, measured: `find_defaults_key` (all keys), for a
-    # tenant with no key yet `is_carrier_candidate` (the new key), then the
-    # pre-write classification, then `config_hash` after the write.
-    pytest.param("t-a", 1, id="existing-key"),
-    pytest.param("t-c", 2, id="new-key"),
-])
-def test_a_da_guard_failing_before_the_write_writes_nothing(tenant, answered, capsys):
-    """da-guard answers the first *answered* names calls and fails the next:
-    that next one is the classification made BEFORE the write, so the run
-    ends with 2 and nothing written. Without it, the failing call is the
-    verification after the write, with the ConfigMap already changed."""
+@pytest.mark.parametrize("tenant", [pytest.param("t-a", id="existing-key"),
+                                    pytest.param("t-c", id="new-key")])
+def test_a_da_guard_failing_before_the_write_writes_nothing(tenant, capsys):
+    """The config_hash each pod must come to report is da-guard's (#4042:
+    `parse-tree` over the ConfigMap as the write leaves it). A da-guard that
+    cannot answer it ends the run with 2 and nothing written — the hash is
+    taken BEFORE the patch. Taken after it, the failure would come with the
+    ConfigMap already changed."""
     import _lib_parse_tree
-    real = _lib_parse_tree.classify_names
-    calls = []
+    real = _lib_parse_tree.load
+    identity_runs = []
 
-    def flaky(names, *args, **kwargs):
-        calls.append(sorted(names))
-        if len(calls) > answered:
+    def flaky(root, *args, **kwargs):
+        if Path(root).name.startswith("patch-config-identity-"):
+            identity_runs.append(root)
             raise _lib_parse_tree.ParseTreeError("da-guard stopped answering (test)")
-        return real(names, *args, **kwargs)
+        return real(root, *args, **kwargs)
 
     c = FakeCluster(_multi())
     before = dict(c.data)
-    with mock.patch.object(_lib_parse_tree, "classify_names", flaky):
+    with mock.patch.object(_lib_parse_tree, "load", flaky):
         code = _run(c, tenant, "mysql_connection_usage_percent", "65")
     assert code == 2
+    assert identity_runs, "the run never asked da-guard for the config_hash"
     assert c.patches == [] and c.data == before, "written before da-guard failed"
-    assert len(calls) == answered + 1
     assert "da-guard stopped answering" in capsys.readouterr().err

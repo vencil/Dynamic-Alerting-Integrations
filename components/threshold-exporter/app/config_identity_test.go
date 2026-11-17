@@ -34,9 +34,11 @@ import (
 )
 
 // compositeOf is the directory-mode config_hash of a tree holding exactly
-// `files` (root-relative slash key → content): SHA-256 over the per-file
-// SHA-256 hex digests in sorted key order. Every key must be one the walker
-// keeps; the tests below only write such keys.
+// `files` (root-relative slash key → content): SHA-256 over one record
+// `f\x00<key>\x00<SHA-256 hex of the content>\n` per file in sorted key order
+// (pkg/config treeIdentity, written here without it). Every key must be one
+// the walker keeps and the tree must hold nothing unreadable and no NotFile;
+// the tests below only write such trees.
 func compositeOf(files map[string]string) string {
 	keys := make([]string, 0, len(files))
 	for k := range files {
@@ -45,7 +47,7 @@ func compositeOf(files map[string]string) string {
 	sort.Strings(keys)
 	h := sha256.New()
 	for _, k := range keys {
-		fmt.Fprintf(h, "%x", sha256.Sum256([]byte(files[k])))
+		fmt.Fprintf(h, "f\x00%s\x00%x\n", k, sha256.Sum256([]byte(files[k])))
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
@@ -266,6 +268,48 @@ func TestConfigIdentity_Hierarchical(t *testing.T) {
 	wantIdentity(t, m, tr, "_defaults.yaml")
 }
 
+// #4042: in hierarchical mode a tick decided "changed" from the files alone,
+// so an entry that became unreadable — no file added, removed or rewritten —
+// was never reloaded and config_hash stayed on the tree before it, while a
+// fresh walk of the same tree gave another identity.
+func TestConfigIdentity_HierarchicalFollowsAnUnreadableEntry(t *testing.T) {
+	t.Parallel()
+	tr := newIdentityTree(t)
+	tr.put("_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+	tr.put("t-a.yaml", tenantDoc("t-a", "70"))
+	m, _ := identityManager(t, tr.dir)
+	if err := m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	tr.put("t-b.yaml", tenantDoc("t-b", "60"))
+	if _, _, err := m.diffAndReload(); err != nil {
+		t.Fatal(err)
+	}
+	if !m.hierarchy.enabled {
+		t.Fatal("the tree never went hierarchical; the path under test did not run")
+	}
+	if err := os.Symlink(filepath.Join(tr.dir, "nowhere.yaml"), filepath.Join(tr.dir, "t-c.yaml")); err != nil {
+		t.Skipf("os.Symlink unavailable here (%v)", err)
+	}
+	changed, _, err := m.detectChange()
+	if err != nil || !changed {
+		t.Fatalf("detectChange = %v, %v: a dangling link appeared and the tick saw no change", changed, err)
+	}
+	if _, _, err := m.diffAndReload(); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := scanDirTree(tr.dir, nil, nil, log.New(&bytes.Buffer{}, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Identity().ConfigHash; got != scan.Composite {
+		t.Errorf("config_hash = %s after the reload, a fresh walk gives %s", got, scan.Composite)
+	}
+	if changed, _, err := m.detectChange(); err != nil || changed {
+		t.Errorf("after the reload, detectChange = %v, %v: the next tick would reload again", changed, err)
+	}
+}
+
 // A `_` file the incremental path rejects is named on the commit that
 // rejected it (full-rebuild branch), STILL named on a later tenant-only
 // commit that does not re-read it (patch branch: the carry), and cleared
@@ -345,11 +389,15 @@ func TestConfigIdentity_SingleFile(t *testing.T) {
 
 // configIdentityGolden is tests/shared/config_identity_golden.json.
 type configIdentityGolden struct {
-	Data                   map[string]string `json:"data"`
-	ExpectedScannedKeys    []string          `json:"expected_scanned_keys"`
-	ExpectedDirectoryHash  string            `json:"expected_directory_hash"`
-	SingleFileKey          string            `json:"single_file_key"`
-	ExpectedSingleFileHash string            `json:"expected_single_file_hash"`
+	Data                  map[string]string `json:"data"`
+	ExpectedScannedKeys   []string          `json:"expected_scanned_keys"`
+	ExpectedDirectoryHash string            `json:"expected_directory_hash"`
+	Rename                struct {
+		From, To              string
+		ExpectedDirectoryHash string `json:"expected_directory_hash"`
+	} `json:"rename"`
+	SingleFileKey          string `json:"single_file_key"`
+	ExpectedSingleFileHash string `json:"expected_single_file_hash"`
 }
 
 // The cross-language golden: the exporter, loading a ConfigMap-shaped tree
@@ -388,6 +436,28 @@ func TestConfigIdentity_CrossLanguageGolden(t *testing.T) {
 	}
 	if got := m.Identity(); got.ConfigHash != g.ExpectedDirectoryHash || len(got.ParseFailed) != 0 {
 		t.Errorf("directory identity = %+v, want config_hash %s and nothing failed", got, g.ExpectedDirectoryHash)
+	}
+
+	// #4042: the key is in the identity — the same bytes under a key of
+	// another class (a tenant file renamed into a platform one) is another.
+	if g.Rename.From == "" || g.Rename.ExpectedDirectoryHash == g.ExpectedDirectoryHash {
+		t.Fatalf("golden rename case gutted: %+v", g.Rename)
+	}
+	renamed := t.TempDir()
+	for k, v := range g.Data {
+		if k == g.Rename.From {
+			k = g.Rename.To
+		}
+		if err := os.WriteFile(filepath.Join(renamed, k), []byte(v), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mr, _ := identityManager(t, renamed)
+	if err := mr.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := mr.Identity().ConfigHash; got != g.Rename.ExpectedDirectoryHash {
+		t.Errorf("renamed directory config_hash = %s, want %s", got, g.Rename.ExpectedDirectoryHash)
 	}
 
 	single, _ := identityManager(t, filepath.Join(dir, g.SingleFileKey))

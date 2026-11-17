@@ -198,7 +198,7 @@ curl -s http://localhost:8080/api/v1/config/identity
 | `loaded` | 是否已安裝過設定 |
 | `mode` | `directory`（`-config-dir`）或 `single-file`（`-config`） |
 | `last_reload` | 安裝時間，UTC、RFC 3339 含奈秒；未載入時為 `""` |
-| `config_hash` | directory 模式：conf.d 裡 exporter 會讀的檔案（非 `.` 開頭、副檔名 `.yaml`／`.yml` 不分大小寫），依相對路徑排序後各自 SHA-256，hex 串接後再 SHA-256；single-file 模式：該檔位元組的 SHA-256 |
+| `config_hash` | directory 模式：exporter 這次走樹看到什麼的身分——它讀的每個檔（相對路徑與內容的 SHA-256）、讀不到的每個項目（路徑）、名稱像設定檔卻不是檔案的每個項目（路徑與種類），各成一筆紀錄依序再 SHA-256（定義只有一份：`pkg/config` 的 `treeIdentity`；`da-guard parse-tree` 回報同一個值）。檔名在裡面：改名或搬目錄就是另一個值。single-file 模式：該檔位元組的 SHA-256 |
 | `parse_failed` | 這一版掃描中位元組無法 parse 的檔案（相對路徑、已排序）：這些位元組**沒有**被採用，該檔宣告的租戶也不在這一版裡，除非另一個可解析的檔也宣告它（任何載入路徑皆同，[#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)）；一律是陣列。single-file 模式恆為空（無法 parse 的單檔不會被安裝） |
 
 ⚠️ `da_config_parse_failure_total` 回答的是另一個問題：它在每次掃描到壞檔時都會累加，與有沒有安裝新版無關，所以不能拿來判斷「目前這一版有沒有排除某個檔」。
