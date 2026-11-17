@@ -172,6 +172,7 @@ func (w *writer) commit(files []*writeFile) int {
 	w.res.Status = writeStatusUnchanged
 	if len(todo) > 0 {
 		w.res.Status = writeStatusWritten
+		w.res.ConfigHash = configHashField(w.written) // the tree this write left (#3965)
 	}
 	return w.finish(exitOK)
 }
@@ -192,6 +193,7 @@ func (w *writer) stopped(reason string) int {
 	}
 	switch {
 	case len(written)+len(maybe) > 0:
+		w.res.ConfigHash = nil // part of the batch is in place: no identity known (#3965)
 		msg := fmt.Sprintf("the write stopped after %d file(s) were put in place (%d may be); they stay: "+
 			"written %q, maybe written %q", len(written), len(maybe), written, maybe)
 		fmt.Fprintf(w.errOut, "%s %s: %s\n", programName, w.cmd, msg)

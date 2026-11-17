@@ -647,6 +647,8 @@ def _check(doc: dict) -> None:
     files = doc.get("files")
     if not isinstance(files, list):
         raise ValueError("no files list")
+    if "config_hash" not in doc:  # #3965: every write names the tree it walked or left
+        raise ValueError("no config_hash — this da-guard is older than this tool; upgrade or rebuild it")
     for f in files:
         if not isinstance(f, dict) or f.get("status") not in FILE_STATUSES:
             raise ValueError(f"a file result {f!r} with no status of {sorted(FILE_STATUSES)}")
@@ -664,10 +666,24 @@ def _run(command: str, root: "Path | str", files: "list[dict]", dry_run: bool,
     args = [command, "--config-dir", str(root), "--input", "-", "--json"]
     if dry_run:
         args.append("--dry-run")
-    raw = json.dumps({"files": files}).encode("utf-8")
+    import _lib_parse_cache  # lazy: it imports modules that import this one
+    # #3965: a tree a declared input named is written only as it was judged
+    # (da-guard refuses another before anything is written: tree_changed),
+    # and the tree a write leaves is what every later read of it is
+    # compared with.
+    if _lib_parse_cache.held_below(root):
+        raise ValueError(f"{root}: a directory below a declared conf.d is written through the "
+                         "tree's root (its judged identity is the root's)")
+    expect = _lib_parse_cache.judged_identity(root)
+    body: dict = {"files": files}
+    if expect is not None:
+        body["expect_config_hash"] = expect
+    raw = json.dumps(body).encode("utf-8")
     doc = _lib_parse_tree._run(args, binary, timeout, stdin=raw, check=_check,
                                what=command, schema=SCHEMA,
                                accept=frozenset({0, 1, 2}))
+    if doc["status"] == WRITTEN:
+        _lib_parse_cache.adopt_identity(root, doc["config_hash"])
     # da-guard answers each path cleaned ('/'); sent clean, it is the same.
     answered = [f.get("path") for f in doc["files"]]
     if doc["files"] and answered != [posixpath.normpath(str(f["path"])) for f in files]:

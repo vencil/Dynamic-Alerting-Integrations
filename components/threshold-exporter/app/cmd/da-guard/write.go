@@ -186,6 +186,10 @@ const (
 	// (also a move's).
 	writeReasonBadSource     = "bad_source"
 	writeReasonSourceMissing = "source_missing"
+	// writeReasonTreeChanged (#3965): the input's expect_config_hash is not
+	// the identity of the tree this call walks — the caller judged another
+	// tree; nothing is written.
+	writeReasonTreeChanged = "tree_changed"
 )
 
 // writeResult is the --json document, one per call, on every path.
@@ -204,6 +208,11 @@ type writeResult struct {
 	// have now, outside the batch's own entries (write_worsen.go; reason
 	// worsens_tree); [] when nothing.
 	Worsened []writeWorsened `json:"worsened"`
+	// ConfigHash (#3965): the identity of the tree on disk when the call
+	// ended (configHashField): the tree it walked when nothing was written
+	// (dry_run, unchanged, a refusal), the tree it left when it wrote; null
+	// when the call stopped before its walk or part-way through a write.
+	ConfigHash *string `json:"config_hash"`
 }
 
 // writeFileResult is one file's result.
@@ -284,6 +293,11 @@ type fileInput struct {
 
 type writeInput struct {
 	Files []fileInput `json:"files"`
+	// ExpectConfigHash (#3965): the identity of the tree the caller judged
+	// (parse-tree's config_hash). The call writes only to that tree: one
+	// whose walk is another is refused (writeReasonTreeChanged) before any
+	// judgement or write — the precondition, not a check after the fact.
+	ExpectConfigHash *string `json:"expect_config_hash"`
 }
 
 // writeFile is one file of the call, from its input to its write.
@@ -513,6 +527,11 @@ type writer struct {
 	// read reads edit's original (readRegular when nil); a test swaps it to
 	// see the path change between the open and the judge.
 	read func(abs string) ([]byte, os.FileInfo, bool, error)
+	// expect: the input's expect_config_hash (nil: none given). written:
+	// the identity of the tree with the batch written, set once judged —
+	// what the call leaves when every file is put in place (#3965).
+	expect  *string
+	written string
 }
 
 // ownerWarning gives the written file the original's owner and group with
@@ -662,6 +681,12 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 	if p := nonUTF8Path(scan); p != "" {
 		return w.callerError(writeReasonBadPath, "%v", nonUTF8Error(p))
 	}
+	w.res.ConfigHash = configHashField(scan.Composite)
+	if w.expect != nil && *w.expect != scan.Composite {
+		return w.callerError(writeReasonTreeChanged,
+			"--config-dir is not the tree the caller judged (its walk identity is %s, expect_config_hash %s); nothing was written",
+			scan.Composite, *w.expect)
+	}
 	for _, wf := range files {
 		wf.abs = filepath.Join(scan.AbsRoot, filepath.FromSlash(wf.rel))
 		wf.pending = true
@@ -684,6 +709,9 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 	after, afterDoc, overlays, code, ok := w.judgeTree(scan, files)
 	if !ok {
 		return code
+	}
+	if after != nil {
+		w.written = after.Composite
 	}
 	if code, stop := w.concludeJudgement(files); stop {
 		return code
@@ -728,6 +756,7 @@ func (w *writer) takeInput(raw []byte) ([]*writeFile, int, bool) {
 	if err := decodeStrict(raw, &in); err != nil {
 		return bad("%v", err)
 	}
+	w.expect = in.ExpectConfigHash
 	if len(in.Files) == 0 {
 		return bad("\"files\" is required: a list of at least one file")
 	}

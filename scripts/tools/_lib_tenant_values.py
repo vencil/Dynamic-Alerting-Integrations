@@ -1224,6 +1224,12 @@ def _run_da_guard(
         got = read(doc)
         unreadable = ([UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]
                       if reads_unreadable else [])
+        # #3965: every walk document names what it read; one without the
+        # field is a da-guard older than this tool (`stale` below). Asked
+        # last: a document wrong elsewhere is named for that first.
+        config_hash = doc["config_hash"]
+        if config_hash is not None and not isinstance(config_hash, str):
+            raise _ShapeError(f"config_hash is a {type(config_hash).__name__}, not a string")
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
         # A field every da-guard of this tool's version writes, or a schema the
         # caller names as an older version of its document, is a da-guard
@@ -1234,6 +1240,7 @@ def _run_da_guard(
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
                  if isinstance(e, _OlderSchema)
                  or (isinstance(e, KeyError) and (e.args in fields_added_since
+                                                  or e.args == ("config_hash",)
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
@@ -1243,6 +1250,11 @@ def _run_da_guard(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({error_text(e)}){stale}",
             proc.returncode, stderr, stale=bool(stale), broken=not stale) from e
 
+    # #3965: a walk of a judged tree that read another tree is the flag's
+    # refusal, whatever the exit code — never an answer from other input. An
+    # overlaid run claims no identity (null): it is the caller's draft.
+    if "--overlay" not in extra:
+        _lib_parse_cache.check_judged(conf_d, config_hash, f"da-guard {subcommand}")
     if (parse_failed or unreadable) and not dropped_ok:
         clauses = []
         if parse_failed:
@@ -2344,6 +2356,10 @@ class GuardReportError(DaGuardError):
     """da-guard's check (no subcommand) failed."""
 
 
+#: A guard report with no config_hash field (a da-guard older than #3965).
+_NO_CONFIG_HASH = object()
+
+
 def _guard_finding(f: Any) -> GuardFinding:
     if not isinstance(f, dict):
         raise _ShapeError(f"a finding that is not an object: {shown_value(f)}")
@@ -2395,6 +2411,11 @@ def load_guard_report(
             raise GuardReportError(
                 f"da-guard exited {rc}, and this da-guard does not accept --config-dir with "
                 "--format json — it is older than this tool: upgrade or rebuild it", rc, stderr, stale=True)
+        # #3965: on a judged tree, exit 2 is that tree changed (the walks of
+        # the run disagreed, or it is refusable now) unless it is as judged.
+        import _lib_parse_cache  # lazy, as in _run_da_guard
+        _lib_parse_cache.refuse_changed(
+            conf_d, (_nonempty_lines(stderr) or [f"da-guard exited {rc}"])[0])
         raise GuardReportError(f"da-guard exited {rc}", rc, stderr)
     if rc < 0:
         raise GuardReportError(f"da-guard exited {rc}", rc, stderr)
@@ -2415,6 +2436,11 @@ def load_guard_report(
         unreadable = [UnreadableFile(str(e["file"]), str(e["reason"]))
                       for e in (doc.get("unreadable") or [])]
         undetermined = len(doc["undetermined"])
+        # #3965: what the check's walk read; its absence is asked after the
+        # rest (below), so a document wrong elsewhere is named for that.
+        config_hash = doc.get("config_hash", _NO_CONFIG_HASH)
+        if config_hash not in (None, _NO_CONFIG_HASH) and not isinstance(config_hash, str):
+            raise _ShapeError(f"config_hash is a {type(config_hash).__name__}, not a string")
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
         raise GuardReportError(f"da-guard exited {rc} without the expected JSON ({error_text(e)})",
                                rc, stderr, broken=True) from e
@@ -2430,4 +2456,10 @@ def load_guard_report(
     if contradiction:
         raise GuardReportError(f"da-guard answered {contradiction}: this binary does not run as "
                                "da-guard does", rc, stderr, broken=True)
+    if config_hash is _NO_CONFIG_HASH:
+        raise GuardReportError(f"da-guard exited {rc} without the expected JSON (no config_hash) "
+                               "— this da-guard is older than this tool: upgrade or rebuild it",
+                               rc, stderr, stale=True)
+    import _lib_parse_cache  # lazy, as in _run_da_guard
+    _lib_parse_cache.check_judged(conf_d, config_hash, "da-guard")  # #3965
     return GuardReport(findings, rc, parse_failed, unreadable, undetermined, _nonempty_lines(stderr))

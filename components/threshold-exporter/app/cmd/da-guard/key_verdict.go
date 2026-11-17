@@ -164,6 +164,9 @@ type keyVerdictOpts struct {
 	// tenantFiles: tenantFileKeysOf the same document — each tenant file's
 	// top-level keys (#3671); nil: not judged.
 	tenantFiles map[string][]string
+	// factsIdentity: the identity of the walk profiles / tenantFiles came
+	// from ("": none taken), compared with the verdict's own walks (#3965).
+	factsIdentity string
 }
 
 // keyVerdictOf is the verdict on the tree at dir as opts makes it read,
@@ -180,6 +183,16 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	identity := ""
 	if len(overlays) == 0 {
 		identity = scan.Composite // before a set-aside re-scan reads another tree
+	}
+	// #3965: the facts' walk (profiles, tenant files) and this one read the
+	// same tree — asked before any return below can answer from this walk.
+	if identity != "" && opts.factsIdentity != "" && opts.factsIdentity != identity {
+		return keyVerdictResult{}, fmt.Errorf(
+			"--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
+			opts.factsIdentity, identity)
+	}
+	if betweenWalks != nil {
+		betweenWalks(dir)
 	}
 	var setAside, setAsideFiles map[string]bool
 	if scan.Conflict != nil && opts.scan.SkipDuplicated {
@@ -252,6 +265,15 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	tree, err := config.EffectiveTreeWith(dir, discard, effOpts, at)
 	if err != nil {
 		return unjudged(err)
+	}
+	// #3965: one run, one tree — the served reading's walk and the effective
+	// one's read the same bytes, or the verdict would mix two trees (identity
+	// is "" where an overlay or a set-aside made it another). An effective
+	// walk naming none failed on the tree the first one walked: another tree.
+	if identity != "" && tree.TreeIdentity != identity {
+		return keyVerdictResult{}, fmt.Errorf(
+			"--config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again",
+			identity, tree.TreeIdentity)
 	}
 	in := keyverdict.Input{
 		Served:    servedForVerdict(served),
@@ -582,7 +604,7 @@ func treeFacts(dir string) (keyVerdictOpts, error) {
 		return keyVerdictOpts{}, err
 	}
 	return keyVerdictOpts{profiles: rootProfilesOf(doc),
-		tenantFiles: tenantFileKeysOf(doc)}, nil
+		tenantFiles: tenantFileKeysOf(doc), factsIdentity: list.Composite}, nil
 }
 
 // runKeyVerdict is `da-guard key-verdict --config-dir <dir> [--at <RFC3339>]
@@ -647,6 +669,9 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 	opts, err := treeFacts(*configDir)
+	if betweenWalks != nil {
+		betweenWalks(*configDir)
+	}
 	if err != nil {
 		return fail(err)
 	}
