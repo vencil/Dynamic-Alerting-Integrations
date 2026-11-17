@@ -256,6 +256,8 @@ tenants:
 
 在 CI / pre-commit 階段攔 schema / cardinality / 冗餘 override 問題，不讓壞改動進到線上。
 
+走過 `--config-dir` 的每份 JSON 文件都帶 `config_hash`：這次 walk 讀到的樹的身分，與 `/api/v1/config/identity` 回報的同一個值（[#3965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3965)；適用範圍見 [cli-reference §guard](../../docs/cli-reference.md#guard)）。
+
 ⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（ADR-036 §9）起不再判路由與 domain policy：樹上有路由鍵、`_domain_policy`、`_routing_profiles`、產生器讀不了的檔等只能由 route generator 判的內容時，報告列為「未判定」（JSON 的 `undetermined`）並回 **exit 4**（優先序 3 > 1 > 4 > 0）；判定交給 `da-tools generate-routes --config-dir <conf.d> --validate --strict`（da-guard 的提示會帶入這次的 `--config-dir`），CI 裡兩步一起跑。Go 端的路由檢查（`app/pkg/routingpolicy` 與 `internal/guard` 的路由部分）已在 ADR-036 步驟 3（[#2905](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2905)）刪除；產生器會整份拒收、exporter 卻照讀的檔（例如重複鍵）也只列為未判定證據、回 exit 4，不再是 exit 3。exit code 與證據格式見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 
 ```bash

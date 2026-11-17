@@ -40,9 +40,35 @@ LONG_JUDGEMENT_SECONDS = 600.0
 LONG_DEADLINE_MS = int((LONG_JUDGEMENT_SECONDS + 5.0) * 1000)
 
 
+def repo_location_vars() -> frozenset:
+    """The inherited variables that point git at another repository than
+    the one a test names with ``-C`` (a git hook running pytest sets GIT_DIR
+    and GIT_INDEX_FILE): git's own answer, ``git rev-parse
+    --local-env-vars``, asked once per process the way the service asks it
+    (``_gsvc_child.git_env``, #3739) — never a list kept here. The
+    ``GIT_CONFIG*`` carriers stay, as in the service: the session's
+    ``GIT_CONFIG_GLOBAL`` / ``GIT_CONFIG_NOSYSTEM`` (tests/conftest.py,
+    #3896) are kept. A git that cannot answer fails the test."""
+    for path in (str(TOOLS), str(OPS)):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+    import _gsvc_child
+    _gsvc_child.git_env(GIT)  # asks git, once; raises when it cannot answer
+    return _gsvc_child._LOCAL_ENV_VARS[GIT]
+
+
+def git_env(**extra: str) -> dict:
+    """The environment of a test's git: the inherited one less
+    ``repo_location_vars()``, plus *extra*."""
+    drop = repo_location_vars()
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env.update(extra)
+    return env
+
+
 def run_git(repo: Path, *args: str, stdin: Optional[bytes] = None) -> str:
-    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
-               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+    env = git_env(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                  GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
     return subprocess.run([GIT, "-C", str(repo), *args], input=stdin, env=env,
                           capture_output=True, check=True, timeout=120).stdout.decode().strip()
 

@@ -2123,7 +2123,8 @@ func (m *ConfigManager) tickOnce() {
 //     da_config_reload_trigger_total{reason="source"}.
 //   - Hierarchical: per-file hash against the installed hierarchy plane's
 //     (absolute keys); any file added/removed/changed constitutes a
-//     change. Returns reason=forced; diffAndReload will categorize the
+//     change, and so does a composite that moved without one (an entry
+//     that became unreadable, a NotFile: #4042). Returns reason=forced; diffAndReload will categorize the
 //     actual reason via its per-tenant hash compare.
 //
 // In both, a duplicate tenant (TreeScan.Conflict) is a scan error.
@@ -2171,7 +2172,11 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 		if err != nil {
 			return false, "", fmt.Errorf("hierarchical scan: %w", err)
 		}
-		changed := len(scan.Files) != len(priorHierHashes)
+		// #4042: the walk's identity too, not only the files — an entry
+		// that became unreadable, or a NotFile, changes it with no file
+		// added, removed or rewritten, and config_hash (lastHash) must
+		// follow the tree in this mode as it does in flat mode.
+		changed := len(scan.Files) != len(priorHierHashes) || scan.Composite != prevHash
 		if !changed {
 			for _, f := range scan.Files {
 				if priorHierHashes[f.AbsPath] != f.Hash {

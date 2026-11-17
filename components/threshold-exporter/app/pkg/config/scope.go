@@ -67,6 +67,11 @@ import (
 // that wants stable output (the guard library doesn't require it
 // — it sorts internally — but CLI rendering does).
 type ScopedTenants struct {
+	// TreeIdentity is the walk's identity (TreeScan.Composite, #3965), as
+	// LoadReport.TreeIdentity: "" when no walk ran (a root that cannot be
+	// stat'd) and when an overlay made the walk read a tree that is not
+	// the one on disk (`effective --overlay`) — no identity is claimed then.
+	TreeIdentity string
 	// Tenants in alphabetical order by tenant ID. Empty when no
 	// tenants live under the requested scope (NOT an error — the
 	// caller decides whether that's expected).
@@ -330,7 +335,7 @@ func EffectiveTreeWith(configDir string, logger *log.Logger, opts ScanOptions, n
 // attribution on, an empty tree refused). logger takes the walk's and the
 // build's log lines (EffectiveTreeLogged); nil discards them. now is the
 // instant NotServed reads `expires:` at (the caller's clock, #3368).
-func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger, opts ScanOptions, now time.Time) (*ScopedTenants, error) {
+func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger, opts ScanOptions, now time.Time) (st *ScopedTenants, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
@@ -364,6 +369,13 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logg
 	rootWarn.release(rootListReported(scan, err))
 	if err != nil {
 		return nil, err
+	}
+	if opts.Overlay == nil && len(opts.Overlays) == 0 {
+		defer func() { // every return from here on (#3965)
+			if st != nil {
+				st.TreeIdentity = scan.Composite
+			}
+		}()
 	}
 	absRoot = scan.AbsRoot
 	// ⛔ A root the walk cannot list is not an empty tree (#2588). The walker

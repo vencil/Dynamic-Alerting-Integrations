@@ -296,7 +296,7 @@ def test_print_load_warnings_prints_one_named_line_per_file(tmp_path, da_guard, 
 def test_output_without_skipped_is_refused(tmp_path):
     """這支工具讀的 schema 卻沒有 skipped：不靜默當成「沒有略過的檔」，而是壞掉的輸出
     （#3703：較舊的形狀由 schema 指出，不由缺哪個欄位推斷）。"""
-    fake = _old_da_guard(tmp_path, '{"schema": "%s", "at": "x", "parse_failed": [], "tenants": {}}'
+    fake = _old_da_guard(tmp_path, '{"schema": "%s", "config_hash": null, "at": "x", "parse_failed": [], "tenants": {}}'
                          % tv.SERVED_VALUES_SCHEMA)
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
@@ -306,7 +306,7 @@ def test_output_without_skipped_is_refused(tmp_path):
 
 def test_output_without_unreadable_is_refused(tmp_path):
     """這支工具讀的 schema 卻沒有 unreadable：不當成「每個檔都讀得到」，而是壞掉的輸出。"""
-    fake = _old_da_guard(tmp_path, '{"schema": "%s", "at": "x", "parse_failed": [], "skipped": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "%s", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], '
                          '"tenants": {}}' % tv.SERVED_VALUES_SCHEMA)
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
@@ -645,7 +645,7 @@ def _old_da_guard(tmp_path: Path, doc: str) -> str:
 
 
 def test_output_without_schedules_is_refused(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
@@ -657,7 +657,7 @@ def test_output_without_schedules_is_refused(tmp_path):
 def test_output_without_series_is_refused(tmp_path):
     """#2750：da-guard 的輸出沒有 series → 不當成「沒有 series」讀；這支工具讀的 schema
     缺它是壞掉的輸出（#3703：較舊的形狀由 schema 指出）。"""
-    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
@@ -677,13 +677,13 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 
 
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
-_WHOLE_SV_HEAD = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
+_WHOLE_SV_HEAD = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], '
             '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "ungathered": [], ')
 _WHOLE_SV_TENANT = ('"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}, '
               '"state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null')
@@ -719,7 +719,7 @@ def test_a_document_wrong_inside_is_broken_output_and_recorded(tmp_path, load, t
         _lib_tool_fault.clear()
 
 
-_ARGV_DOC = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], "ungathered": [], '
+_ARGV_DOC = ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, "root_defaults_refused": [], "ungathered": [], '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
              '"dropped": {}, "schedules": {}, "state_filters": {}, "time_boxes": {}, "keys": {}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [], "custom_alerts_finding": null}}}')
 
@@ -831,7 +831,7 @@ def _fake_pack_binary(tmp_path, doc: dict):
     return str(fake)
 
 
-_PACK_DOC = {"schema": tv.CUSTOM_ALERT_PACK_SCHEMA, "groups": [], "shapes": 0, "not_compiled": [],
+_PACK_DOC = {"schema": tv.CUSTOM_ALERT_PACK_SCHEMA, "config_hash": None, "groups": [], "shapes": 0, "not_compiled": [],
              "block_errors": {}, "lifecycle": [], "parse_failed": [], "skipped": [], "unreadable": []}
 
 
@@ -859,7 +859,7 @@ _SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dro
 
 
 def _sv_doc(schema: str | None, tenant_extra: str = ', "state_filters": {}') -> str:
-    head = _SV_HEAD if schema is None else _SV_HEAD.replace('{', '{"schema": "%s", ' % schema, 1)
+    head = _SV_HEAD if schema is None else _SV_HEAD.replace('{', '{"schema": "%s", "config_hash": null, ' % schema, 1)
     return head + '"tenants": {"t": {' + _SV_TENANT + tenant_extra + '}}}'
 
 
@@ -1247,7 +1247,7 @@ def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da
 
 
 def _custom_alerts_doc(entry: str) -> str:
-    return ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "at": "x", "parse_failed": [], "skipped": [], '
+    return ('{"schema": "' + tv.SERVED_VALUES_SCHEMA + '", "config_hash": null, "at": "x", "parse_failed": [], "skipped": [], '
             '"unreadable": [], "aliases": {}, "root_defaults_refused": [], "tenants": {"t": {"values": {}, "severities": {}, '
             '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}, "time_boxes": {}, '
             f'"keys": {{}}, "key_checks": [], "custom_alert_rows": 0, "custom_alerts": [{entry}], '

@@ -145,8 +145,8 @@ func checkMemberNames(raw []byte) error {
 		return err
 	}
 	for k := range top {
-		if k != "files" {
-			return fmt.Errorf("unknown member %q", k)
+		if k != "files" && k != "expect_config_hash" {
+			return fmt.Errorf("unknown member %q (files, expect_config_hash)", k)
 		}
 	}
 	var files []json.RawMessage

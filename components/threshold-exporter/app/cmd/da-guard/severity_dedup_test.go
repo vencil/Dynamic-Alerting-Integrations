@@ -275,7 +275,7 @@ func TestSeverityDedup_WireNames(t *testing.T) {
 		sort.Strings(ks)
 		return ks
 	}
-	if got, want := keys(raw), []string{"parse_failed", "problems", "schedules", "schema", "tenants", "unreadable"}; !reflect.DeepEqual(got, want) {
+	if got, want := keys(raw), []string{"config_hash", "parse_failed", "problems", "schedules", "schema", "tenants", "unreadable"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("top-level keys %v, want %v", got, want)
 	}
 	for _, k := range []string{"parse_failed", "unreadable"} {

@@ -486,7 +486,7 @@ def _doc(**tenant_over) -> dict:
               "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}, "not_served": {},
               "dead_entries": {}}
     tenant.update(tenant_over)
-    return {"schema": tv.EFFECTIVE_SCHEMA, "parse_failed": [], "unreadable": [], "tenants": {"t": tenant}}
+    return {"schema": tv.EFFECTIVE_SCHEMA, "config_hash": None, "parse_failed": [], "unreadable": [], "tenants": {"t": tenant}}
 
 
 def test_fake_binary_baseline_reads(tmp_path):
