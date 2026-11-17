@@ -10,6 +10,12 @@
 #
 # NOT covered here (deliberate — surfaces as MISS/FN in the report = coverage gaps):
 #   - oracledb_activity_parse_count_total  → no shipped alert (exported-but-unalerted probe)
+#   - oracledb_pga_allocated_bytes fault signatures (pga-bloat-exporter-starved,
+#     pga-runaway-query) → their descriptions state no PGA_AGGREGATE_LIMIT, so no
+#     denominator companion and no share: OracleHighPGAUsage cannot fire on them
+#     (#1320 share form; with no limit set there is nothing to measure against).
+#     Re-review when a signature states the limit, or when #4044 adds a signal
+#     for a database with no limit.
 #
 # OracleHighSessionUtilization (ratio): the companion oracledb_sessions_limit inherits
 # the injection identity labels, so the division matches one-to-one and keeps the
@@ -25,9 +31,7 @@
 # OracleHighProcessCount / OracleHighPGAUsage (#1320): the same shape, a share of
 # PROCESSES / PGA_AGGREGATE_LIMIT with the same `> 0` guard; 85 is the shipped
 # default (process) and the registry's reference value (PGA). A signature with no
-# denominator companion has no share, so these alerts cannot fire on it: the PGA
-# fault signatures state no PGA_AGGREGATE_LIMIT and read as MISS — a real limit of
-# the share form (no limit set ⇒ nothing to measure against), not a harness gap.
+# denominator companion has no share (see NOT covered above).
 groups:
   - name: oracle-ref
     interval: 30s
