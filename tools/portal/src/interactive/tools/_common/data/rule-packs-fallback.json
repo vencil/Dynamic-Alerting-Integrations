@@ -576,7 +576,7 @@
       "category": "infrastructure",
       "exporter": "cAdvisor + kube-state-metrics",
       "configMap": "prometheus-rules-kubernetes",
-      "recordingRules": 30,
+      "recordingRules": 32,
       "alertRules": 14,
       "required": false,
       "defaults": {

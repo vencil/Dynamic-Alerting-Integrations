@@ -119,6 +119,14 @@ alert_divergence:
         節點歸屬是租戶 plumbing（需要 kube_pod_info fixture，波形庫未注入）；
         對單節點 library signature 而言 fire/no-fire 等價。
       shipped_evidence: "tenant:node_owner:info"
+    - alert: ContainerCrashLoop
+      field: predicate_structure
+      divergence: 重啟那一臂的計數倒退守衛、state filter gate 與 keep_firing_for 未重現
+      reason: >-
+        波形庫沒有計數重置與 user_state_filter series；keep_firing_for 只延長已觸發的
+        告警，不改變 signature 是否被接到。觸發重審：波形庫新增計數重置的 signature，
+        或開始量測告警解除時間時（#1177）。
+      shipped_evidence: "keep_firing_for: 10m"
 
 # ---------------------------------------------------------------------
 # Record/alert 層 selector 內聯到 base metric（fire/no-fire 等價）
@@ -126,11 +134,7 @@ alert_divergence:
 # ---------------------------------------------------------------------
 inlined_matchers:
   kubernetes:
-    - alert: ContainerCrashLoop
-      metric: kube_pod_container_status_waiting_reason
-      matcher: reason="CrashLoopBackOff"
-      note: 出貨在 record 之上的 alert 層過濾（tenant:container_waiting_reason:count{reason=…}）；內聯至 base metric。
     - alert: ContainerImagePullFailure
       metric: kube_pod_container_status_waiting_reason
       matcher: reason=~"ImagePullBackOff|InvalidImageName"
-      note: 同上——alert 層 reason regex 內聯；regex 值鎖定出貨原文（出貨改 regex 時 gate 會咬）。
+      note: 出貨在 record 之上的 alert 層過濾（tenant:container_waiting_reason:count{reason=…}）；內聯至 base metric，regex 值鎖定出貨原文（出貨改 regex 時 gate 會咬）。

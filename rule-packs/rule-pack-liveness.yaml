@@ -77,8 +77,9 @@
 # up==1 一次，unless 左手邊被那一瞬間清掉、for: 計時器 reset，於是 90% 時間死
 # 的 exporter 永不觸發 Rule A。這個盲區【刻意】不在 liveness pack 補:
 #   詐屍 flap 由 ContainerCrashLoop (rule-pack-kubernetes.yaml) 覆蓋。它讀 kubelet
-#   的 kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} —— 這個
-#   waiting-reason 在 backoff 退避期間【穩定為 1】(不像 up 那樣 flap)，for:30s，
+#   的 kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}，外加
+#   「一小時內重啟 >=3 次」的重啟計數 (#1177)：waiting-reason 在容器短暫 Running
+#   時會消失，靠重啟計數與 keep_firing_for 撐過這些空檔，for:30s，
 #   且 container_crashloop 在 _defaults.yaml state_filters 中【預設啟用】，所以
 #   絕大多數租戶免額外設定就被覆蓋。兩條規則互補:「死透」走 liveness、「半死」走
 #   ContainerCrashLoop，刻意不在 Rule A 疊邏輯 (會把穩定的 anti-join 弄成 flappy)。

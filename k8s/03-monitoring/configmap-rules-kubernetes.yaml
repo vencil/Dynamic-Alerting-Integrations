@@ -67,13 +67,27 @@ data:
     n  sum by(namespace, pod, container) (\\n    max_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n    -\\n    min_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n  ),\\n  \\\"\
-    tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n\
-    \  interval: 15s\n  rules:\n  - record: tenant:container_waiting_reason:count\n\
-    \    expr: \"label_replace(\\n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
+    tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-restart-normalization\n\
+    \  interval: 1m\n  rules:\n  - record: tenant:container_restart_loop:by_container\n\
+    \    expr: \"label_replace(\\n  (\\n    sum by(namespace, pod, container) (\\\
+    n      max by(namespace, pod, uid, container) (\\n        (\\n          max_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
+    \"db-.+\\\"}[1h])\\n          -\\n          min_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
+    \"db-.+\\\"}[1h])\\n          unless\\n          resets(kube_pod_container_status_restarts_total{namespace=~\\\
+    \"db-.+\\\"}[1h]) > 0\\n        )\\n        or\\n        (\\n          last_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
+    \"db-.+\\\"}[1h])\\n          and\\n          resets(kube_pod_container_status_restarts_total{namespace=~\\\
+    \"db-.+\\\"}[1h]) > 0\\n        )\\n      )\\n    ) >= 3\\n  )\\n  and on(namespace,\
+    \ pod, container)\\n  (max by(namespace, pod, container) (changes(kube_pod_container_status_restarts_total{namespace=~\\\
+    \"db-.+\\\"}[20m])) > 0),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\
+    \"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n  interval: 15s\n  rules:\n\
+    \  - record: tenant:container_waiting_reason:count\n    expr: \"label_replace(\\\
+    n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
     \"db-.+\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
-    (.*)\\\"\\n)\\n\"\n- name: kubernetes-threshold-normalization\n  interval: 15s\n\
-    \  rules:\n  - record: tenant_version:alert_threshold:container_cpu\n    expr:\
-    \ \"label_replace(\\n  max by(tenant, version, severity) (\\n    user_threshold{component=\\\
+    (.*)\\\"\\n)\\n\"\n  - record: tenant:container_crashloop_waiting:by_container\n\
+    \    expr: \"label_replace(\\n  max by(namespace, pod, container) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
+    \"db-.+\\\", reason=\\\"CrashLoopBackOff\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\
+    \"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant_version:alert_threshold:container_cpu\n\
+    \    expr: \"label_replace(\\n  max by(tenant, version, severity) (\\n    user_threshold{component=\\\
     \"container\\\", metric=\\\"cpu\\\"}\\n  ),\\n  \\\"version\\\", \\\"default\\\
     \", \\\"version\\\", \\\"^$\\\"\\n)\\n\"\n  - record: tenant_version:pod_weakest_cpu_percent:vlabeled\n\
     \    expr: \"label_replace(\\n  max by(tenant, version) (tenant:pod_weakest_cpu_percent:max),\\\
@@ -311,18 +325,24 @@ data:
     \    summary_zh: '{{ $labels.tenant }} 反覆遭 OOM 終止達臨界'\n      tier: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
     \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n- name: kubernetes-pod-state-alerts\n\
-    \  rules:\n  - alert: ContainerCrashLoop\n    expr: \"(\\n  (\\n    tenant:container_waiting_reason:count{reason=\\\
-    \"CrashLoopBackOff\\\"}\\n    * on(tenant) group_left\\n    max by(tenant) (user_state_filter{filter=\\\
-    \"container_crashloop\\\"})\\n  ) > 0\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: '{{ $value }} container(s) in CrashLoopBackOff state'\n  \
-    \    description_zh: '{{ $value }} 個容器處於 CrashLoopBackOff 狀態'\n      owner: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: crash loop detected — check deployment and image health'\n      platform_summary_zh:\
+    \  rules:\n  - alert: ContainerCrashLoop\n    expr: \"(\\n  count by(tenant) (\\\
+    n    tenant:container_crashloop_waiting:by_container\\n    or on(namespace, pod,\
+    \ container)\\n    tenant:container_restart_loop:by_container\\n  )\\n  * on(tenant)\
+    \ group_left\\n  max by(tenant) (user_state_filter{filter=\\\"container_crashloop\\\
+    \"})\\n) > 0\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n\"\n    for: 30s\n    keep_firing_for: 10m\n    labels:\n      maintenance:\
+    \ mute\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value }} container(s) crash-looping: in CrashLoopBackOff\
+    \ now, or restarted >=3 times in the last hour (once within 20m) — per container\
+    \ in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container'\n\
+    \      description_zh: '{{ $value }} 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟\
+    \ >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與\
+    \ tenant:container_restart_loop:by_container'\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ crash loop detected — check deployment and image health'\n      platform_summary_zh:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
     \ }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態'\n      runbook_url: '{{ with query (printf `topk(1,\

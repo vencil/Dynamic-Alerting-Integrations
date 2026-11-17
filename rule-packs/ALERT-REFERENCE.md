@@ -108,7 +108,7 @@ lang: zh
 | PodContainerCPUThrottledCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: CFS throttling CRITICAL  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:pod_cpu_throttled_critical:core |
 | ContainerOOMKilled | warning | 靜音 | [tier] {{ $labels.tenant }}: kernel OOM-killed a container in the last hour  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:container_oom_killed_warning:core |
 | ContainerOOMKilledCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: >=3 OOM kills on one container within 1h  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:container_oom_killed_critical:core |
-| ContainerCrashLoop | critical | 靜音 | [tier] {{ $labels.tenant }}: crash loop detected  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
+| ContainerCrashLoop | critical | 靜音 | [tier] {{ $labels.tenant }}: crash loop detected  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_crashloop_waiting:by_container |
 | ContainerImagePullFailure | warning | 靜音 | [tier] {{ $labels.tenant }}: image pull failing  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
 | VersionAwareThresholdInert | warning | 照常觸發 | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
 | CustomRecipeDiskInert | warning | 靜音 | [SRE] {{ $labels.tenant }} disk recipe inert  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
