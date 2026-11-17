@@ -770,6 +770,14 @@ def check_shape(doc: dict) -> None:
                 stack.extend(v.values())
             else:
                 raise ShapeError(f"files['{shown_file(f)}'] holds a value of the wrong shape: {shown_value(v)}")
+    # #4042: tree mode carries the walk's identity (what the exporter reports
+    # as config_hash for this tree); file mode, the tree as it would be, none.
+    if "config_hash" not in doc:
+        raise ShapeError(f"no 'config_hash' — {_OLDER}")
+    want_hash = doc["mode"] == "tree"
+    if (isinstance(doc["config_hash"], str) and len(doc["config_hash"]) == 64) != want_hash \
+            or (not want_hash and doc["config_hash"] is not None):
+        raise ShapeError(f"config_hash {shown_value(doc['config_hash'])} in {doc['mode']} mode")
     for f, keys in doc["rendered_by"].items():
         if not (isinstance(keys, dict) and all(
                 isinstance(rs, list) and all(isinstance(r, str) for r in rs) for rs in keys.values())):
@@ -933,6 +941,10 @@ class Tree:
     defaults_carriers: Optional[Mapping[str, str]] = None
     entries: "tuple[Entry, ...]" = ()
     da_guard_version: Optional[str] = None
+    #: Tree mode: the walk's identity — what the exporter reports as
+    #: config_hash in /api/v1/config/identity for this tree (#4042). None
+    #: in file mode.
+    config_hash: Optional[str] = None
 
     def node(self, rel: str) -> Any:
         """File `rel`'s content as parse-tree's tagged nodes (shared with this
@@ -974,6 +986,7 @@ def tree_of(doc: dict) -> Tree:
         defaults_carriers=MappingProxyType(dict(doc["defaults_carriers"])),
         entries=entries,
         da_guard_version=doc["da_guard_version"],
+        config_hash=doc["config_hash"],
     )
 
 

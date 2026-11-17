@@ -1,10 +1,11 @@
 {
   "_comment": [
-    "Cross-language golden for the exporter config identity (#2069).",
+    "Cross-language golden for the exporter config identity (#2069, #4042).",
     "data is a ConfigMap data map: kubelet writes each value as the UTF-8 bytes of a file named by its key.",
-    "expected_directory_hash: SHA-256 of the per-file SHA-256 hex digests of the kept keys, concatenated in byte-sorted key order; kept = not dot-prefixed and a .yaml/.yml extension in any case.",
-    "Computed with sha256sum over the materialised files, not with either implementation.",
-    "Readers: components/threshold-exporter/app/config_identity_test.go, tests/ops/test_patch_config_identity.py."
+    "expected_directory_hash: SHA-256 over one record per kept key in byte-sorted key order, each `f`, NUL, the key, NUL, the SHA-256 hex digest of its bytes, newline (pkg/config treeIdentity; a ConfigMap yields no unreadable or NotFile record); kept = not dot-prefixed and a .yaml/.yml extension in any case.",
+    "rename: the same data with key `from` renamed to `to` (a tenant file renamed into a platform one): the identity must move, since the key is in it.",
+    "Computed with printf and sha256sum over the materialised files, not with any implementation.",
+    "Readers: components/threshold-exporter/app/config_identity_test.go, tests/ops/test_patch_config_identity.py (through da-guard parse-tree)."
   ],
   "schema": 1,
   "data": {
@@ -29,7 +30,12 @@
     "t-b.yml",
     "t-c.YAML"
   ],
-  "expected_directory_hash": "cfc01496171b678f3d76cc3c1d5f52b2b30f3ef304bb20370ecda11782884383",
+  "expected_directory_hash": "60b453080e2ceb23943f3fcff059283f9874a60216e5ef6ebbedfb28cd780fc8",
+  "rename": {
+    "from": "t-a.yaml",
+    "to": "_t-a.yaml",
+    "expected_directory_hash": "a748eb21b67615f8bed542edfd96abb64f4921f348edd4aa87e32545daeec870"
+  },
   "single_file_key": "config.yaml",
   "expected_single_file_hash": "94c619c1ccf819cd44143c0be7550611cb1858f47d511bb197f072cdf2d3e1cb"
 }

@@ -93,6 +93,7 @@ def _tree_doc(entries, carriers=None):
     doc["files"] = {e["path"]: {} for e in entries
                     if e["role"] == "config" and e["readers"] and e["problem"] is None}
     doc["rendered_by"] = {}
+    doc["config_hash"] = "0" * 64  # #4042: tree mode names the walk's identity
     return doc
 
 
@@ -973,7 +974,8 @@ def test_deprecate_rule_takes_go_s_class_not_the_name(tmp_path, monkeypatch) -> 
     # that knew only `platform` would clear `z.yaml` as a tenant file.
     defaults = _entry("z.yaml", cls="defaults")
     doc = {**_list_doc([tenant, platform, defaults], mode="tree"),
-           "files": {"_x.yaml": body, "y.yaml": body, "z.yaml": body}, "rendered_by": {}}
+           "files": {"_x.yaml": body, "y.yaml": body, "z.yaml": body}, "rendered_by": {},
+           "config_hash": "0" * 64}
     monkeypatch.setenv("DA_GUARD_BINARY", _emit(tmp_path, doc))
     import deprecate_rule as dr
     with _lib_parse_cache.session():

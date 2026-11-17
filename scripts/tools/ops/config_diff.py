@@ -31,6 +31,7 @@ Usage:
       --at 2026-10-10T03:00:00Z --format json
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -176,11 +177,14 @@ SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
 
 #: The document of a side with no config (a first import): a tree-mode
 #: document of the shape `_lib_parse_tree.check_shape` accepts — its version
-#: says what it is, as no da-guard wrote it (#3206).
+#: says what it is, as no da-guard wrote it (#3206). Its config_hash is the
+#: walk identity of a tree with nothing in it: no record, so SHA-256 of no
+#: bytes (#4042, pkg/config treeIdentity).
 _EMPTY_TREE = {"schema": _lib_parse_tree.SCHEMA,
                "da_guard_version": "none (empty-tree placeholder: no da-guard ran)",
                "mode": "tree", "entries": [], "files": {},
-               "defaults_carriers": {}, "rendered_by": {}}
+               "defaults_carriers": {}, "rendered_by": {},
+               "config_hash": hashlib.sha256(b"").hexdigest()}
 
 
 def _canonical(node, *, by_text=False):
