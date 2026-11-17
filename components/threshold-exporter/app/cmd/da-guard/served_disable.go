@@ -41,6 +41,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,6 +90,14 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 	for tenant, overrides := range cfg.Tenants {
 		for k, sv := range overrides {
 			if switchedOff(sv) && !registeredReserved(k) {
+				perTenant[tenant] = append(perTenant[tenant], k)
+			}
+		}
+		// #3832: a root `disable` of a built-in key the tenant inherits is
+		// the tenant's `disable` as one a subtree level hands it is; taken
+		// away, the tenant gets the built-in value (withoutDisables).
+		for _, k := range cfg.InheritedRootDisables(tenant, at) {
+			if !slices.Contains(perTenant[tenant], k) {
 				perTenant[tenant] = append(perTenant[tenant], k)
 			}
 		}
@@ -263,6 +272,24 @@ func withoutDisables(cfg *config.ThresholdConfig, set []tenantKey) *config.Thres
 		out.Tenants[t] = m
 	}
 	for _, tk := range set {
+		// #3832: a key the root `disable`s (InheritedRootDisables) is taken
+		// away by giving the tenant the built-in value — what the tree serves
+		// it when the root does not opt out — whatever the tenant writes for
+		// it (nothing, a lapsed or unreadable value, its own `disable`): a
+		// `disable` is judged against the platform default (see the top of
+		// this file), and deleting the tenant's value would only fall back
+		// to the root's.
+		if v, root := cfg.Defaults[tk.key]; root && config.RootDisabledDefault(v) {
+			m := make(map[string]config.ScheduledValue, len(out.Tenants[tk.tenant])+1)
+			for k, v := range out.Tenants[tk.tenant] {
+				if ck, _ := config.CanonicalKeyFor(k); ck != tk.key {
+					m[k] = v
+				}
+			}
+			m[tk.key] = config.ScheduledValue{Default: config.BuiltinDefaultText(tk.key)}
+			out.Tenants[tk.tenant] = m
+			continue
+		}
 		sv, ok := cfg.Tenants[tk.tenant][tk.key]
 		if !ok || !config.IsDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
 			continue
