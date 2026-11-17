@@ -1050,9 +1050,16 @@ class Service:
 
     def _git_read_due(self) -> None:
         self._git_read_timer = None
-        if self._git_read_pending and (self._self_check_task is None
-                                       or self._self_check_task.done()):
-            self._ensure_self_check_loop()
+        if not self._git_read_pending or not (self._self_check_task is None
+                                              or self._self_check_task.done()):
+            return
+        # a round that ended after the timer was set (a tool fault's) moved
+        # the earliest start: wait the rest, measured from that round
+        if (self._last_round_end is not None
+                and self.loop.time() < self._last_round_end + self.s.self_check_seconds):
+            self._schedule_git_read()
+            return
+        self._ensure_self_check_loop()
 
     def _ensure_self_check_loop(self) -> None:
         """Run a self-check round now: start the loop, or — when it is
@@ -1199,7 +1206,8 @@ class Service:
             while True:
                 work = self._new_self_check_dir()
                 try:
-                    run = await self._run_held(argv, work, env)
+                    run = await self._run_held(argv, work, env, timeout_failure={
+                        "binary": SELF_CHECK_REPO_BINARY, "reason": SELF_CHECK_REPO_REASON})
                 finally:
                     shutil.rmtree(work, ignore_errors=True)
                 if run.timed_out:
@@ -1254,7 +1262,8 @@ class Service:
     async def _self_check_in(self, name: str, exe: str, args: tuple[str, ...],
                              work: str) -> Optional[str]:
         try:
-            run = await self._run_held([exe, *args], work, {**os.environ, "TMPDIR": work})
+            run = await self._run_held([exe, *args], work, {**os.environ, "TMPDIR": work},
+                                       timeout_failure={"binary": name, "reason": "timed_out"})
         except _ExecFailed as exc:
             reason = _lib_tool_fault.os_error_reason(exc.error, exe)
             _log(f"self-check: {name}: {reason}: {exc.error.strerror}")
@@ -1275,10 +1284,23 @@ class Service:
                  + run.stderr.decode("utf-8", "replace"))
         return reason
 
-    async def _run_held(self, argv: list[str], work: str, env: dict) -> "HeldRun":
+    def _fail_round_now(self, failure: dict) -> None:
+        """#3903: a step of the running round timed out — the round has
+        failed, said at once: ``failed`` with *failure* (the reason the step
+        records when the round ends, so the round's own record agrees) and
+        so not ready, while the killed process is still being collected and
+        holds the slot. Neither the tool fault nor ``_fault_seq`` is
+        touched, nor the metric: the round is counted when it ends."""
+        self.self_check_state = "failed"
+        self.self_check_failures = [dict(failure)]
+
+    async def _run_held(self, argv: list[str], work: str, env: dict,
+                        timeout_failure: Optional[dict] = None) -> "HeldRun":
         """Run *argv* for a self-check round — a program's self-check or the
         --repo probe — and return how it ended; `_ExecFailed` when it could
-        not be started.
+        not be started. Past the time limit the round fails at once with
+        *timeout_failure* (``_fail_round_now``), before the process is
+        collected.
 
         In *work* (its cwd, its stdout and stderr files 0600), in a process
         group of its own that --self-check-timeout-seconds ends, under the
@@ -1329,6 +1351,8 @@ class Service:
                                        max(0.0, self.s.self_check_timeout_seconds))
             except asyncio.TimeoutError:
                 timed_out = True
+                if timeout_failure is not None:
+                    self._fail_round_now(timeout_failure)
         finally:
             _kill_group(proc.pid)  # #3923: before it is collected
             try:
@@ -1661,8 +1685,10 @@ def _build_parser() -> argparse.ArgumentParser:
                         "ready (default: %(default)s)")
     p.add_argument("--self-check-timeout-seconds", type=float,
                    default=DEFAULT_SELF_CHECK_TIMEOUT_SECONDS,
-                   help="time limit of one program's self-check; past it the "
-                        "self-check fails (timed_out) (default: %(default)s)")
+                   help="time limit of one program's self-check, or of one git "
+                        "run of the --repo probe; the moment it is past the round "
+                        "fails (timed_out; repo_unreadable for the probe) "
+                        "(default: %(default)s)")
     return p
 
 

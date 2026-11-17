@@ -449,8 +449,10 @@ _KILL_DOES_NOTHING = "import generator_service as _gs\n_gs._kill_group = lambda 
 def test_a_probe_the_kill_does_not_end_holds_the_slot_not_the_loop(rig):
     """#3903: past the time limit the probe's process is killed, then its
     end awaited on its pidfd — never a blocking wait: while it outlives the
-    kill the service still answers, the round still running. Once it ends,
-    the round records ``repo_unreadable`` (timed out)."""
+    kill the service still answers, the round still running. The round has
+    failed the moment the limit passed — not ready, ``repo_unreadable`` —
+    not once the process is collected; and once it is, the round's record
+    says the same."""
     git, armed = _hanging_git(rig)
     try:
         with rig.service("probe-unkillable", "--git", str(git),
@@ -463,13 +465,42 @@ def test_a_probe_the_kill_does_not_end_holds_the_slot_not_the_loop(rig):
             _until(lambda: rig.hanging(), "the probe hanging", timeout=10)
             time.sleep(2.0)  # past the 1 s limit: the kill has been sent
             st = _answers_at_once(svc)
-            assert st["self_check"]["running"] is True and rig.hanging(), st
+            assert st["self_check"] == {"state": "failed", "failures": [_REPO_FAILURE],
+                                        "running": True}, st
+            assert st["ready"] is False and rig.hanging(), st
             armed.unlink()
             for pid in rig.hanging():
                 os.kill(pid, signal.SIGKILL)
-            _until(lambda: _status(svc)["self_check"]["state"] == "failed", "the round ending")
+            _until(lambda: not _status(svc)["self_check"]["running"], "the round ending")
             assert _status(svc)["self_check"]["failures"] == [_REPO_FAILURE]
+            assert _status(svc)["self_check"]["state"] == "failed"
     finally:
+        for pid in rig.hanging():
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_a_program_the_kill_does_not_end_fails_the_round_at_its_time_limit(rig):
+    """#3903: as the probe — a program's self-check past its limit fails the
+    round at once (``timed_out``, not ready, still running) while its
+    process outlives the kill; the round's record, once it is collected,
+    says the same."""
+    rig.strike(f"da-read {SELF_CHECK_ARG['da-read']} hang")
+    svc = rig.service("program-unkillable", "--self-check-timeout-seconds", "1",
+                      settled=False, prelude=_KILL_DOES_NOTHING)
+    want = [{"binary": "da-read", "reason": "timed_out"}]
+    try:
+        _until(lambda: rig.hanging(), "the self-check hanging", timeout=30)
+        time.sleep(2.0)  # past the 1 s limit: the kill has been sent
+        st = _answers_at_once(svc)
+        assert st["self_check"] == {"state": "failed", "failures": want, "running": True}, st
+        assert st["ready"] is False and rig.hanging(), st
+        rig.strike()
+        for pid in rig.hanging():
+            os.kill(pid, signal.SIGKILL)
+        _until(lambda: _status(svc)["ready"], "a later round passing")
+        assert _rounds(svc, "failed") >= 1  # the timed-out round, counted when it ended
+    finally:
+        svc.stop()
         for pid in rig.hanging():
             os.kill(pid, signal.SIGKILL)
 

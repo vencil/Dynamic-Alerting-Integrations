@@ -946,7 +946,7 @@ def test_a_probe_failure_of_the_service_s_own_is_no_unreadable_repo(where, errno
     def no_dir():
         raise err
 
-    async def no_exec(argv, work, env):
+    async def no_exec(argv, work, env, **_kw):
         raise gs._ExecFailed(err)
     if where == "dir":
         svc._new_self_check_dir = no_dir
@@ -1013,6 +1013,35 @@ def test_a_reader_that_cannot_be_added_leaves_no_process_or_descriptor(
     assert delta == 0 and svc._held_pids == set()
     assert len(started) == 1
     assert not os.path.exists(f"/proc/{started[0]}"), "the process was not collected"
+
+
+def test_a_round_ending_after_a_git_read_was_scheduled_moves_its_start():
+    """#3903: a git_read's round starts --self-check-seconds after the
+    LATEST round ended, measured when its timer is due — not only when it
+    was set. Interval 1.0: a round ends at 0 and the ask is set for 1.0;
+    a tool fault's round ends at 0.4; the asked-for round starts at 1.4,
+    not at 1.0 (0.6 after that round)."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.s.self_check_seconds = 1.0
+        started: list = []
+        svc._ensure_self_check_loop = lambda: started.append(svc.loop.time())
+        t0 = svc.loop.time()
+        svc._last_round_end = t0
+        svc._note_git_read()
+        await asyncio.sleep(0.4)
+        svc._last_round_end = svc.loop.time()  # the tool fault's round ends
+        later_end = svc._last_round_end
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if started:
+                break
+        await asyncio.sleep(0.5)
+        return started, later_end
+    started, later_end = asyncio.run(main())
+    assert len(started) == 1, started
+    assert started[0] >= later_end + 1.0 - 0.01, (started[0] - later_end)
 
 
 @pytest.mark.parametrize("branch", ["initial", "another"])
