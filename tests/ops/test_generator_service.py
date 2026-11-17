@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -2026,6 +2027,115 @@ def test_a_repo_that_is_no_repository_is_named(tmp_path, world):
     log = svc.log.read_text(encoding="utf-8")
     assert f"ERROR: --repo {plain}: fatal: not a git repository" in log, log
     svc.stop()
+
+
+def _repo_with_a_commit(path):
+    repo = h.init_repo(path)
+    h.commit_tree(repo, {"t.yaml": "tenants:\n  t: {}\n"})
+    return repo
+
+
+def _drop_objects(repo):
+    for obj in (repo / ".git" / "objects").rglob("*"):
+        if obj.is_file():
+            obj.unlink()
+
+
+@pytest.mark.parametrize("unborn", ["init", "orphan"])
+def test_a_head_that_is_no_commit_yet_starts(tmp_path, world, unborn):
+    """A branch nothing was committed to — `git init`, or `checkout
+    --orphan` in a repository that has commits — is no commit YET: the
+    service starts (it could never take the first write otherwise) and says
+    --config-subdir is not checked."""
+    if unborn == "init":
+        repo = h.init_repo(tmp_path / "repo")
+    else:
+        repo = _repo_with_a_commit(tmp_path / "repo")
+        h.run_git(repo, "checkout", "-q", "--orphan", "fresh")
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"], settled=False) as svc:
+        assert svc.call("GET", "/v1/status")[0] == 200
+        assert "has no HEAD commit; --config-subdir" in svc.log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("broken, said", [
+    ("branch", "bad ref refs/heads/"),          # show-ref: the ref names a missing object
+    ("detached", "git symbolic-ref exited 1"),  # no branch to be unborn
+    ("blob", " is there and names no commit"),  # the ref names something that is no commit
+    # a branch name ending in U+00A0 (git allows it): asked about by its own
+    # bytes, never by a trimmed spelling that names a branch that is not there
+    ("nbsp", "bad ref refs/heads/"),
+])
+def test_a_head_naming_a_commit_git_cannot_read_refuses_to_start(tmp_path, world, broken, said):
+    """#3903: `rev-parse --verify --quiet HEAD^{commit}` exits 1 with nothing
+    on stderr for an unborn branch AND for a HEAD whose commit object is
+    gone. The second is a repository git cannot read: read as "no HEAD
+    commit", the service started and answered ready, and every request was
+    rejected/git_read."""
+    repo = _repo_with_a_commit(tmp_path / "repo")
+    if broken == "nbsp":
+        h.run_git(repo, "checkout", "-q", "-b", "topic\u00a0")
+    if broken == "detached":
+        h.run_git(repo, "checkout", "-q", "--detach")
+    if broken == "blob":
+        blob = h.run_git(repo, "hash-object", "-w", "--stdin", stdin=b"x\n").strip()
+        ref = h.run_git(repo, "symbolic-ref", "HEAD").strip()
+        # written as a file: `git update-ref` refuses to point a branch at a blob
+        (repo / ".git" / ref).write_text(blob + "\n", encoding="ascii")
+    else:
+        _drop_objects(repo)
+    svc = h.Service(tmp_path / "s", repo, bin_dir=world["bin"], wait=False)
+    assert svc.proc.wait(60) == 2
+    log = svc.log.read_text(encoding="utf-8")
+    assert f"ERROR: --repo {repo}: HEAD names no commit git can read (" in log, log
+    assert said in log, log  # git's own reason, not a bare exit code
+    assert "has no HEAD commit" not in log, log
+    svc.stop()
+
+
+def test_a_repo_gone_after_it_was_judged_refuses_to_start(tmp_path, world):
+    """#3903 (the fault injection that found it): --repo is judged by the
+    first git run (`_object_format`); gone by the next — here the `git`
+    given removes `.git` when it is asked to verify HEAD — it is a
+    repository git cannot read, named, never "no HEAD commit"."""
+    repo = _repo_with_a_commit(tmp_path / "repo")
+    git = tmp_path / "git-vanish"
+    git.write_text(
+        "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --verify ] && "
+        # an absolute `mv`: the service's PATH holds its bin directory only
+        f"{shutil.which('mv')} {shlex.quote(str(repo / '.git'))} "
+        f"{shlex.quote(str(repo / '.gone'))}; done\nexec {h.GIT} \"$@\"\n",
+        encoding="utf-8")
+    git.chmod(0o755)
+    svc = h.Service(tmp_path / "s", repo, bin_dir=world["bin"], wait=False,
+                    args=("--git", str(git)))
+    assert svc.proc.wait(60) == 2
+    log = svc.log.read_text(encoding="utf-8")
+    assert not (repo / ".git").exists(), "the wrapper never ran: nothing was measured"
+    assert (f"ERROR: --repo {repo}: HEAD names no commit git can read "
+            "(fatal: not a git repository") in log, log
+    svc.stop()
+
+
+def test_the_first_commit_landing_during_the_check_still_starts(tmp_path, world):
+    """HEAD unborn when `rev-parse` looked, a commit by the time `show-ref`
+    does (the first write landed in between): not "a HEAD git cannot read" —
+    HEAD is resolved once more, and the service starts on that commit."""
+    repo = h.init_repo(tmp_path / "repo")
+    (repo / "conf.d").mkdir()
+    (repo / "conf.d" / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    h.run_git(repo, "add", "-A")
+    git = tmp_path / "git-first-commit"
+    git.write_text(
+        "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = show-ref ] && "
+        f"{h.GIT} -C {shlex.quote(str(repo))} -c user.name=t -c user.email=t@example.com "
+        f"commit -q -m first; done\nexec {h.GIT} \"$@\"\n", encoding="utf-8")
+    git.chmod(0o755)
+    with h.Service(tmp_path / "s", repo, bin_dir=world["bin"], settled=False,
+                   args=("--git", str(git))) as svc:
+        assert svc.call("GET", "/v1/status")[0] == 200
+        log = svc.log.read_text(encoding="utf-8")
+        assert "has no HEAD commit" not in log and "names no commit" not in log, log
+    assert h.run_git(repo, "rev-list", "--count", "HEAD").strip() == "1"
 
 
 def test_a_bare_repository_is_a_root(tmp_path, world):
