@@ -7,6 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/parsetree"
 )
 
@@ -253,10 +254,47 @@ func TestValue_RefusesAmbiguousInput(t *testing.T) {
 		`{"null": 0}`, `{"map": {"a": {"str": "1"}}}`, `{"map": [["a", {"str": "1"}], ["a", {"str": "2"}]]}`,
 		`{"map": [["<<", {"str": "1"}]]}`, `{"map": [["a"]]}`, `{"seq": {"str": "a"}}`, `{"date": "2001-01-01"}`,
 		`{"int": "1234567890123456789"}`,
+		// #3866: exponent spellings YAML 1.1 reads as strings, or not normalized.
+		`{"float": "1e22"}`, `{"float": "1.0e22"}`, `{"float": "1.0E+22"}`, `{"float": "10.0e+2"}`,
+		`{"float": "0.5e+1"}`, `{"float": "1.0e+05"}`, `{"float": "+1.0e+22"}`, `{"float": "1.e+22"}`,
+		`{"float": "1.50e+3"}`, `{"float": "-1.0e-0"}`,
+		// The number is its text: not finite, or nonzero text read as 0.
+		`{"float": "1.0e+999"}`, `{"float": "1.0e-400"}`, `{"float": "1` + strings.Repeat("0", 400) + `.0"}`,
+		`{"float": "0.` + strings.Repeat("0", 400) + `1"}`,
 	} {
 		var v Value
 		if err := json.Unmarshal([]byte(in), &v); err == nil {
 			t.Errorf("%s: accepted", in)
+		}
+	}
+}
+
+// TestValue_ExponentFloatIsWrittenAsItsNumber (#3866): a float in the
+// exponent form is taken, written as it is, and read back by parse-tree as
+// the !!float it is — so a number past 20 digits in plain decimal can be
+// written in a form the exporter reads.
+func TestValue_ExponentFloatIsWrittenAsItsNumber(t *testing.T) {
+	for _, text := range []string{"1.0e+22", "-1.5e-25", "1.2345678901234567e-4", "5.0e-324", "1.0e+0", "-0.0", "0.000"} {
+		var v Value
+		if err := json.Unmarshal([]byte(`{"map": [["k", {"float": "`+text+`"}]]}`), &v); err != nil {
+			t.Fatalf("%s: refused: %v", text, err)
+		}
+		out, err := Encode(NewDoc(v.Node(false)).Node())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := "k: " + text + "\n"; string(out) != want {
+			t.Errorf("%s: written %q, want %q", text, out, want)
+		}
+		got, bad := parsetree.Parse(out)
+		if bad != nil {
+			t.Fatalf("%s: written text does not read: %v", text, bad)
+		}
+		if p, w, g, ok := ContentDifference(v.Content(), got); !ok {
+			t.Errorf("%s: Content and parse-tree differ at %v: want %v, got %v", text, p, w, g)
+		}
+		if sc, ok := got["k"].(parsetree.Scalar); !ok || sc.Tag != "!!float" {
+			t.Errorf("%s: read back as %#v, want a !!float", text, got["k"])
 		}
 	}
 }
@@ -285,5 +323,14 @@ func TestContentEdits(t *testing.T) {
 	}
 	if p, _, _, ok := ContentDifference(map[string]any{"a": map[string]any{"b": "1"}}, map[string]any{"a": map[string]any{"b": "2"}}); ok || strings.Join(p, ".") != "a.b" {
 		t.Fatalf("difference path = %v, ok = %v", p, ok)
+	}
+}
+
+// TestValue_NumberGrammarIsTheContracts (#3866): the writer reads the one
+// grammar of a number it takes from the contract (pkg/config edit_number),
+// whose Python copy is generated — not a regexp of its own that would drift.
+func TestValue_NumberGrammarIsTheContracts(t *testing.T) {
+	if canonicalInt != config.EditIntRe || canonicalFloat != config.EditFloatRe || maxIntDigits != config.EditIntMaxLength {
+		t.Fatal("pkg/confedit's number grammar is not the contract's edit_number")
 	}
 }
