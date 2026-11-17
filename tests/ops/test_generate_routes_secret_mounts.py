@@ -434,6 +434,19 @@ def test_an_o_named_dash_is_refused_and_dot_slash_dash_is_a_file(tmp_path):
     assert (tmp_path / "-").is_file()
 
 
+def test_a_refused_dash_o_takes_no_file_from_the_findings(tmp_path):
+    """#3107 ③a: `-o -` writes nothing (parse-time rc 2), so the findings
+    document, written on every exit, may still go to the file `./-`."""
+    d, _ = _out_args(tmp_path)
+    r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
+                        "--output-alertmanager", "-o", "-", "--findings-json", "./-"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=300, cwd=tmp_path)
+    assert r.returncode == 2, r.stderr
+    assert "names the same file as" not in r.stderr, r.stderr
+    assert json.loads((tmp_path / "-").read_text(encoding="utf-8"))["exit_code"] == 2
+
+
 def test_the_base_configs_templates_reach_the_list_through_the_cli(tmp_path):
     d = _tree(tmp_path, {"t-a": _PLAIN})
     base = tmp_path / "base.yml"

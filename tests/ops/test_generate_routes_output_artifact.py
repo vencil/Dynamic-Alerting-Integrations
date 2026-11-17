@@ -30,12 +30,19 @@ posix_only = pytest.mark.skipif(os.name != "posix", reason="POSIX modes / links"
 
 
 def _run(o: str, *, cwd: Path, stdout=subprocess.PIPE, preexec=None,
-         timeout: int = 300) -> subprocess.CompletedProcess:
+         timeout: int = 300, mode: str = "--output-alertmanager",
+         unmeasured: bool = False) -> subprocess.CompletedProcess:
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    if unmeasured:
+        # A child under RLIMIT_FSIZE cannot save pytest-cov's data either: its
+        # atexit traceback would land in the stderr asserted on (and leave a
+        # corrupt .coverage.* behind). Not measured, then.
+        env = {k: v for k, v in env.items()
+               if not k.startswith(("COV_CORE_", "COVERAGE_"))}
     return subprocess.run(
-        [sys.executable, str(_GAR), "--config-dir", str(SEED), "--output-alertmanager",
-         "-o", o],
+        [sys.executable, str(_GAR), "--config-dir", str(SEED), mode, "-o", o],
         stdout=stdout, stderr=subprocess.PIPE, cwd=cwd, timeout=timeout,
-        preexec_fn=preexec, env={**os.environ, "PYTHONUTF8": "1"})
+        preexec_fn=preexec, env=env)
 
 
 def _err(r: subprocess.CompletedProcess) -> str:
@@ -76,7 +83,7 @@ def test_a_failed_write_leaves_the_old_file_whole(tmp_path):
         signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
         resource.setrlimit(resource.RLIMIT_FSIZE, (64, 64))
 
-    r = _run(str(out), cwd=tmp_path, preexec=limit)
+    r = _run(str(out), cwd=tmp_path, preexec=limit, unmeasured=True)
     err = _err(r)
     assert r.returncode == 2, err
     assert f"ERROR: cannot write {out}: " in err and "check the value given to -o/--output" in err
@@ -100,10 +107,12 @@ def test_an_o_that_is_this_runs_stdout_is_refused_and_kept(tmp_path):
 
 
 @posix_only
+@pytest.mark.parametrize("mode", ["--output-alertmanager", "--output-configmap"])
 @pytest.mark.parametrize("kind", ["fifo", "devnull", "dir"])
-def test_a_target_that_is_not_a_regular_file_is_refused_before_the_run(tmp_path, kind):
+def test_a_target_that_is_not_a_regular_file_is_refused_before_the_run(tmp_path, kind, mode):
     """A FIFO with no reader used to block forever; `/dev/null` was rc 0;
-    a directory was refused only after the render."""
+    a directory was refused only after the render. Both modes that write -o.
+    The "leave -o out" hint is for an -o that is stdout only."""
     if kind == "fifo":
         target = tmp_path / "fifo"
         os.mkfifo(target)
@@ -114,11 +123,12 @@ def test_a_target_that_is_not_a_regular_file_is_refused_before_the_run(tmp_path,
     else:
         target = tmp_path / "adir"
         target.mkdir()
-    r = _run(str(target), cwd=tmp_path, timeout=120)
+    r = _run(str(target), cwd=tmp_path, timeout=120, mode=mode)
     err = _err(r)
     assert r.returncode == 2, err
     assert f"ERROR: cannot write {target}: not a regular file — check the value " \
            "given to -o/--output" in err
+    assert "leave -o out" not in err
     # Before the run: nothing about the tree was printed.
     assert b"Config files" not in r.stdout and "accepted the alertmanager.yml" not in err
 
@@ -144,3 +154,22 @@ def test_a_symlink_is_written_through_and_a_hard_link_is_detached(tmp_path):
     assert r.returncode == 0, _err(r)
     assert "route:" in hl.read_text(encoding="utf-8")
     assert other.read_text(encoding="utf-8") == OLD
+
+
+@posix_only
+def test_a_control_character_in_the_path_is_escaped_in_the_error(tmp_path):
+    """The path is operator argv: the ERROR line escapes it (#1538) on the
+    write's failure path, not only the pre-check's."""
+    resource = pytest.importorskip("resource")
+    import signal
+    out = tmp_path / "a\x1b[31mX.yml"
+
+    def limit():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64, 64))
+
+    r = _run(str(out), cwd=tmp_path, preexec=limit, unmeasured=True)
+    err = _err(r)
+    assert r.returncode == 2, err
+    assert "ERROR: cannot write" in err
+    assert "\x1b" not in err, "a raw ESC reached the terminal"

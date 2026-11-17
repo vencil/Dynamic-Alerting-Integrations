@@ -1829,8 +1829,10 @@ def refuse_unwritable_artifact(args: argparse.Namespace) -> None:
 #: opened here); the rest of the flags name no path.
 FINDINGS_MUST_NOT_REPLACE = {"output": "-o/--output", "mount_list_out": "--secret-mounts-out",
                              "base_config": "--base-config", "policy": "--policy"}
-#: Of those, the operator outputs, for which `-` is stdout, not a file.
-_STDOUT_DASH_FLAGS = frozenset({"--secret-mounts-out"})
+#: Of those, the flags for which `-` names no file: an operator output's `-`
+#: is stdout; `-o -` is refused at parse time (#3107 ③a) and writes nothing,
+#: so a `--findings-json ./-` beside it takes no file of its.
+_STDOUT_DASH_FLAGS = frozenset({"--secret-mounts-out", "-o/--output"})
 
 
 def findings_path_taken_by(findings: str | None, early: argparse.Namespace,
