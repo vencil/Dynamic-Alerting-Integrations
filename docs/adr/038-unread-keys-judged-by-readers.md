@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-15
+updated_at: 2026-11-16
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -73,6 +73,8 @@ updated_at: 2026-11-15
 2026-11-15 修訂：子目錄 `_defaults.yaml` 的 defaults 寫了 exporter 不套用的保留鍵，判決報 `unread`、原因 `subtree_default_reserved_key`，與 da-guard 同名 finding 讀同一份集合（決定 10）。
 
 2026-11-15 修訂：平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11）。沒讀到任何根平台檔的樹不再無從判斷，租戶寫的閾值鍵照常判；租戶寫預設啟用的鍵，即使根目錄沒寫，也判為有讀；這些鍵的 `disable` 過期即失效（決定 4、7、8）。
+
+2026-11-16 修訂：`disable` 可以寫在根目錄 `defaults:`（只限內建層給值的鍵），每個租戶繼承，連帶與判定規則與子目錄的 `disable` 相同（決定 8）。
 
 ## 摘要
 
@@ -381,7 +383,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 ### 8. `disable` 關掉什麼、有沒有作用
 
-閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值或由內建層給值（ADR-017 決策 11）的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
+閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值或由內建層給值（ADR-017 決策 11）的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。內建層給值的鍵也可以在根目錄 `defaults:` 寫 `disable`：每個租戶都繼承它，與子目錄 `_defaults.yaml` 寫的 `disable` 同樣連帶、同樣判為有讀，子目錄、profile 或租戶給了值的範圍整族回來；租戶自己的 `disable` 過期後落回這個繼承來的 `disable`（根目錄 `disable` 的限制見 ADR-017 決策 11）。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
 
 只想留 critical 那一級，寫 `X: "90:critical"`，並刪掉 `X_critical`：它送出的 series 與舊的 `X: disable` 加 `X_critical: 90` 相同，兩者並存則會送出同一條 series 兩次，整份 `/metrics` 失敗。只想停 critical 那一級，寫 `X_critical: disable`。
 

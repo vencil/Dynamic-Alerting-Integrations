@@ -1284,6 +1284,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
 			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 		addRootRefused(tv, overrides, rootRefused)
+		addRootDisabled(tv, cfg, tenant, at)
 		out[tenant] = tv
 	}
 	if withSchedules != nil {
@@ -1552,6 +1553,19 @@ func addRootRefused(tv servedTenantValues, overrides map[string]config.Scheduled
 		// Keyed by the canonical spelling, as tv.Values is: a root that still
 		// writes a retired alias (mysql_cpu) names the key readers know.
 		tv.Keys[canon] = servedKey{Reason: keyReasonRootDefaultRefused, Refused: reason}
+	}
+}
+
+// addRootDisabled gives tv.Keys an entry, reason disabled, for every root
+// `disable` of a built-in key the tenant inherits
+// (config.InheritedRootDisables, #3832 decision 3): read as the `disable`
+// a subtree `_defaults.yaml` hands the tenant is, whose effect
+// --disable-effects decides.
+func addRootDisabled(tv servedTenantValues, cfg *config.ThresholdConfig, tenant string, at time.Time) {
+	for _, k := range cfg.InheritedRootDisables(tenant, at) {
+		if _, listed := tv.Keys[k]; !listed {
+			tv.Keys[k] = servedKey{Reason: keyReasonDisabled}
+		}
 	}
 }
 

@@ -874,7 +874,7 @@ func refusedRootThresholds(block map[string]any) map[string]bool {
 		switch x := v.(type) {
 		case string:
 			_, ok := thresholdTextNumber(x)
-			refused = !ok
+			refused = !ok && !RootDisableText(k, x)
 		case float64:
 			refused = !finiteThreshold(x)
 		}
