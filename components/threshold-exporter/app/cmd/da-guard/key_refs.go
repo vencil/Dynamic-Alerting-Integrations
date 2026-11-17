@@ -35,6 +35,8 @@ const keyRefsSchema = "da-guard.key-refs/v1"
 // back (see servedValuesDoc).
 type keyRefsDoc struct {
 	Schema string `json:"schema"`
+	// ConfigHash: the identity of the walk this document read (configHashField).
+	ConfigHash *string `json:"config_hash"`
 	// ParseFailed: the files the exporter's load skips because they do not
 	// decode — served-values' parse_failed, read off the same load. A root
 	// `_defaults.yaml` here means the exporter drops the whole carrier.
@@ -131,7 +133,7 @@ func runKeyRefs(args []string, stdout, errOut io.Writer) int {
 	if rep.Load.RootListErr != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, keyRefsCmd, rep.Load.RootListErr)
 	}
-	doc := keyRefsDoc{Schema: keyRefsSchema, ParseFailed: rep.Load.ParseFailed,
+	doc := keyRefsDoc{Schema: keyRefsSchema, ConfigHash: configHashField(rep.Load.TreeIdentity), ParseFailed: rep.Load.ParseFailed,
 		Unreadable: unreadableEntries(rep.Load.Unreadable), Unscanned: []skippedFile{}, Refs: rep.Refs}
 	if doc.ParseFailed == nil {
 		doc.ParseFailed = []string{}
