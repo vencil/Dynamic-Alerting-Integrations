@@ -40,9 +40,27 @@ LONG_JUDGEMENT_SECONDS = 600.0
 LONG_DEADLINE_MS = int((LONG_JUDGEMENT_SECONDS + 5.0) * 1000)
 
 
+#: Inherited variables that point git at another repository than the one a
+#: test names with ``-C`` (a git hook running pytest sets GIT_DIR and
+#: GIT_INDEX_FILE): a test's git must not read or write that one. The
+#: ``GIT_CONFIG_GLOBAL`` / ``GIT_CONFIG_NOSYSTEM`` the session sets
+#: (tests/conftest.py, #3896) are kept.
+REPO_LOCATION_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                      "GIT_NAMESPACE")
+
+
+def git_env(**extra: str) -> dict:
+    """The environment of a test's git: the inherited one less
+    ``REPO_LOCATION_VARS``, plus *extra*."""
+    env = {k: v for k, v in os.environ.items() if k not in REPO_LOCATION_VARS}
+    env.update(extra)
+    return env
+
+
 def run_git(repo: Path, *args: str, stdin: Optional[bytes] = None) -> str:
-    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
-               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+    env = git_env(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                  GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
     return subprocess.run([GIT, "-C", str(repo), *args], input=stdin, env=env,
                           capture_output=True, check=True, timeout=120).stdout.decode().strip()
 

@@ -236,6 +236,9 @@ class _FakeService(gs.Service):
         await asyncio.sleep(self.delay)
         return gs.Response(200, {"result": "pass", "rc": 0})
 
+    async def _repo_probe(self):
+        return None  # no --repo here (#4035): the probe is tested on a real one
+
 
 async def _settle() -> None:
     """Let every ready task run up to its next real wait."""
@@ -941,3 +944,446 @@ def test_a_self_check_never_overlaps_a_judgement():
         assert _doc(await second)["result"] == "pass"
         assert svc.judged == ["1" * 40, "2" * 40]
     asyncio.run(main())
+
+
+# ── #4035: the --repo probe, `_run_held`, git_read's throttle ────────────
+
+def _harness():
+    import sys
+    from pathlib import Path
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import _gsvc_harness
+    return _gsvc_harness
+
+
+def _git(repo, *args) -> None:
+    """git in *repo*, inherited repository variables dropped (the harness's
+    `git_env`: a git hook running pytest sets GIT_DIR)."""
+    import subprocess
+    h = _harness()
+    subprocess.run([h.GIT, "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com",
+                    *args], check=True, capture_output=True, timeout=60, env=h.git_env())
+
+
+def _committed_repo(path):
+    path.mkdir()
+    _git(path, "init", "-q")
+    (path / "conf.d").mkdir()
+    (path / "conf.d" / "a.yaml").write_text("x: 1\n", encoding="utf-8")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "t")
+    return path
+
+
+def test_a_test_s_git_ignores_an_inherited_repository(tmp_path, monkeypatch):
+    """CodeRabbit (#4023): a git hook that runs pytest exports GIT_DIR /
+    GIT_INDEX_FILE / …; the tests' git helpers must commit into the
+    repository the test names, not that one — and keep the session's
+    GIT_CONFIG_GLOBAL / GIT_CONFIG_NOSYSTEM (#3896)."""
+    h = _harness()
+    other = tmp_path / "other"
+    other.mkdir()
+    for name in h.REPO_LOCATION_VARS:
+        monkeypatch.setenv(name, str(other / name.lower()))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    env = h.git_env()
+    assert not set(h.REPO_LOCATION_VARS) & set(env)
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    repo = h.init_repo(tmp_path / "repo")
+    commit = h.commit_tree(repo, {"t.yaml": "x: 1\n"})
+    assert len(commit) == 40 and (repo / ".git" / "objects").is_dir()
+    _committed_repo(tmp_path / "unit")  # the unit tests' own helper too
+    assert list(other.iterdir()) == []
+
+
+def _probing_service(tmp_path, repo, fmt: str = "sha1") -> "_FakeService":
+    """A service whose `_repo_probe` is the real one, on *repo*."""
+    import os
+    svc = _FakeService(delay=0)
+    svc.object_format = fmt
+    svc.s.work_dir = str(tmp_path / "work")
+    os.makedirs(gs._jobs_dir(svc.s.work_dir), exist_ok=True)
+    svc.s.memory_limit_bytes = gs.DEFAULT_MEMORY_LIMIT_BYTES
+    svc.s.self_check_timeout_seconds = 60.0
+    svc.s.git, svc.s.repo = _harness().GIT, str(repo)
+    return svc
+
+
+def _probe(svc) -> "str | None":
+    async def main():
+        svc.loop = asyncio.get_running_loop()
+        return await gs.Service._repo_probe(svc)
+    return asyncio.run(main())
+
+
+@pytest.mark.parametrize("how,fmt,want", [
+    ("committed", "sha1", None),
+    ("unborn", "sha1", None),                  # no commit yet reads as it did at start
+    ("committed", "sha256", "repo_unreadable"),  # not the object format it had at start
+    ("dangling-detached", "sha1", "repo_unreadable"),
+    ("dangling-ref", "sha1", "repo_unreadable"),
+    ("gone", "sha1", "repo_unreadable"),
+])
+def test_the_probe_is_start_up_s_judgement_of_the_repo(tmp_path, how, fmt, want):
+    """The probe runs `_repo_judgement` through `_run_held`: what start-up
+    serves it passes — a branch with no commit yet too — and what start-up
+    refuses, or a repository whose object format is not the one served,
+    is ``repo_unreadable``."""
+    import shutil
+    if how == "unborn":
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+    else:
+        repo = _committed_repo(tmp_path / "repo")
+    if how == "dangling-detached":
+        (repo / ".git" / "HEAD").write_text("0123456789abcdef0123456789abcdef01234567\n",
+                                            encoding="utf-8")
+    elif how == "dangling-ref":
+        branch = (repo / ".git" / "HEAD").read_text(encoding="utf-8").split(": ")[1].strip()
+        (repo / ".git" / branch).write_text("0123456789abcdef0123456789abcdef01234567\n",
+                                            encoding="utf-8")
+    elif how == "gone":
+        shutil.rmtree(repo)
+    svc = _probing_service(tmp_path, repo, fmt)
+    assert _probe(svc) == want
+    assert svc._held_pids == set()
+
+
+@pytest.mark.parametrize("where,errno_name,want", [
+    ("dir", "EMFILE", "internal_error"),       # this service's own: its work directory
+    ("exec", "EMFILE", "internal_error"),      # … or descriptors at the exec
+    ("exec", "ENOMEM", "internal_error"),
+    ("exec", "EAGAIN", "internal_error"),
+    ("exec", "ENOENT", "repo_unreadable"),     # the git program itself
+    ("exec", "EACCES", "repo_unreadable"),
+    ("exec", "EPERM", "repo_unreadable"),
+    ("exec", "ENOEXEC", "repo_unreadable"),
+    ("held", "EMFILE", "internal_error"),      # a pidfd or a reader that failed
+])
+def test_a_probe_failure_of_the_service_s_own_is_no_unreadable_repo(where, errno_name, want):
+    """The probe says ``repo_unreadable`` only for git — refused, timed out,
+    or the git program gone, not executable or not a program; a failure of
+    the service's own (descriptors, memory, its work directory, a pidfd)
+    is ``internal_error``."""
+    import errno
+    err = OSError(getattr(errno, errno_name), errno_name)
+    svc = _FakeService(delay=0)
+
+    def no_dir():
+        raise err
+
+    async def no_exec(argv, work, env, **_kw):
+        raise gs._ExecFailed(err)
+
+    async def no_pidfd(argv, work, env, **_kw):
+        raise err
+    if where == "dir":
+        svc._new_self_check_dir = no_dir
+    else:
+        svc._new_self_check_dir = lambda: "/nonexistent-work"
+        svc._run_held = no_exec if where == "exec" else no_pidfd
+    assert asyncio.run(gs.Service._repo_probe(svc)) == want
+
+
+def _sleep_mark() -> "tuple[str, str]":
+    import shutil
+    import uuid
+    return (shutil.which("sleep") or "/bin/sleep",
+            f"300.{uuid.uuid4().int % 10**9:09d}")  # this test's sleep, by its argument
+
+
+@pytest.mark.parametrize("which", ["program", "probe"])
+def test_a_reader_that_cannot_be_added_leaves_no_process_or_descriptor(
+        tmp_path, monkeypatch, which):
+    """`_run_held` cannot watch the process's exit — `add_reader` fails
+    (epoll's ENOSPC): the process is still killed and collected, its pidfd
+    closed, its pid let go, and the reason is ``internal_error`` — nothing
+    leaks, nothing escapes."""
+    import errno
+    import os
+    import subprocess
+    import _gsvc_child
+    if not hasattr(os, "pidfd_open"):
+        pytest.skip("pidfd_open: Linux only")
+    sleep, mark = _sleep_mark()
+    git = tmp_path / "git"  # the probe's git: one that would hang
+    git.write_text(f"#!/bin/sh\nexec '{sleep}' '{mark}'\n", encoding="utf-8")
+    git.chmod(0o755)
+    # what start-up's first run of --git would have kept: not asked again
+    monkeypatch.setitem(_gsvc_child._LOCAL_ENV_VARS, str(git), frozenset({"GIT_DIR"}))
+    svc = _probing_service(tmp_path, tmp_path)
+    svc.s.git = str(git)
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(*a, **kw):
+        proc = real_popen(*a, **kw)
+        started.append(proc.pid)
+        return proc
+
+    def no_reader(fd, *a):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    def fds() -> int:
+        return len(os.listdir("/proc/self/fd"))
+
+    async def main():
+        svc.loop = asyncio.get_running_loop()
+        svc.loop.add_reader = no_reader
+        before = fds()
+        if which == "program":
+            reason = await svc._self_check_one("da-read", sleep, (mark,))
+        else:
+            reason = await gs.Service._repo_probe(svc)
+        return reason, fds() - before
+
+    monkeypatch.setattr(gs.subprocess, "Popen", popen)
+    reason, delta = asyncio.run(main())
+    assert reason == "internal_error"
+    assert delta == 0 and svc._held_pids == set()
+    assert len(started) == 1
+    assert not os.path.exists(f"/proc/{started[0]}"), "the process was not collected"
+
+
+def test_an_unwatched_process_the_kill_does_not_end_never_blocks_the_loop(
+        tmp_path, monkeypatch):
+    """CodeRabbit (#4023): no reader on the pidfd AND a kill that does not
+    end the process (`_kill_group` a no-op): `_run_held` polls for its end —
+    the loop keeps running (a ticker never misses a beat by the process's
+    lifetime), and its pid stays held until it is collected. A blocking
+    `proc.wait()` there holds the loop the whole 1.5 s."""
+    import errno
+    import os
+    if not hasattr(os, "pidfd_open"):
+        pytest.skip("pidfd_open: Linux only")
+    sleep, _mark = _sleep_mark()
+    svc = _probing_service(tmp_path, tmp_path)
+    monkeypatch.setattr(gs, "_kill_group", lambda pid: None)
+
+    def no_reader(fd, *a):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    async def main():
+        svc.loop = asyncio.get_running_loop()
+        svc.loop.add_reader = no_reader
+        gaps, held = [], []
+        done = asyncio.Event()
+
+        async def ticker():
+            last = svc.loop.time()
+            while not done.is_set():
+                await asyncio.sleep(0.02)
+                now = svc.loop.time()
+                gaps.append(now - last)
+                held.append(bool(svc._held_pids))
+                last = now
+        tick = asyncio.ensure_future(ticker())
+        began = svc.loop.time()
+        work = svc._new_self_check_dir()
+        with pytest.raises(OSError):
+            await svc._run_held([sleep, "1.5"], work, dict(os.environ))
+        took = svc.loop.time() - began
+        done.set()
+        await tick
+        return took, gaps, held
+
+    took, gaps, held = asyncio.run(main())
+    assert took >= 1.4, took  # it ran its course: the kill did nothing
+    assert max(gaps) < 0.5, max(gaps)
+    assert sum(held) >= 10, held  # held while it ran
+    assert svc._held_pids == set()
+
+
+def test_a_step_past_its_time_limit_fails_the_round_that_moment(tmp_path, monkeypatch):
+    """Past --self-check-timeout-seconds the round is ``failed`` with that
+    step's reason while the killed process is still being collected: no
+    tool fault, no ``_fault_seq``, no round counted yet."""
+    import os
+    if not hasattr(os, "pidfd_open"):
+        pytest.skip("pidfd_open: Linux only")
+    sleep, _mark = _sleep_mark()
+    svc = _probing_service(tmp_path, tmp_path)
+    svc.s.self_check_timeout_seconds = 0.2
+    svc.self_check_state = "passed"
+    monkeypatch.setattr(gs, "_kill_group", lambda pid: None)  # it outlives the kill
+    failure = {"binary": "git", "reason": "repo_unreadable"}
+
+    async def main():
+        svc.loop = asyncio.get_running_loop()
+        work = svc._new_self_check_dir()
+        run = asyncio.ensure_future(svc._run_held([sleep, "1.2"], work, dict(os.environ),
+                                                  timeout_failure=failure))
+        await asyncio.sleep(0.6)
+        seen = (svc.self_check_state, list(svc.self_check_failures), bool(svc._held_pids),
+                run.done(), svc.tool_fault, svc._fault_seq, dict(svc.metrics.self_checks))
+        return seen, await run
+
+    seen, run = asyncio.run(main())
+    assert seen == ("failed", [failure], True, False, None, 0, {}), seen
+    assert run.timed_out is True
+
+
+def test_a_round_ending_after_a_git_read_was_scheduled_moves_its_start():
+    """A git_read's round starts --self-check-seconds after the LATEST round
+    ended, measured when its timer is due — not only when it was set.
+    Interval 1.0: a round ends at 0 and the ask is set for 1.0; a tool
+    fault's round ends at 0.4; the asked-for round starts at 1.4, not at
+    1.0."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.s.self_check_seconds = 1.0
+        started: list = []
+        svc._ensure_self_check_loop = lambda: started.append(svc.loop.time())
+        svc._last_round_end = svc.loop.time()
+        svc._note_git_read()
+        await asyncio.sleep(0.4)
+        svc._last_round_end = svc.loop.time()  # the tool fault's round ends
+        later_end = svc._last_round_end
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if started:
+                break
+        await asyncio.sleep(0.5)
+        return started, later_end
+    started, later_end = asyncio.run(main())
+    assert len(started) == 1, started
+    assert started[0] >= later_end + 1.0 - 0.01, (started[0] - later_end)
+
+
+def test_a_git_read_s_timer_is_set_for_the_interval_after_the_latest_round():
+    """The timer is set --self-check-seconds after the latest round ended —
+    not at once, to be put off again and again when it is due (a timer due
+    at once that only reschedules itself spins the loop)."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.s.self_check_seconds = 30.0
+        svc._last_round_end = svc.loop.time()
+        svc._note_git_read()
+        when = svc._git_read_timer.when()
+        svc.shutdown()
+        return when - svc._last_round_end
+    assert asyncio.run(main()) == pytest.approx(30.0, abs=0.5)
+
+
+def test_a_burst_of_git_reads_is_one_timer():
+    """The asks before a round begins are one: one timer, one round — and
+    the one timer is the one shutdown cancels."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.s.self_check_seconds = 0.1
+        started: list = []
+        svc._ensure_self_check_loop = lambda: started.append(svc.loop.time())
+        svc._last_round_end = svc.loop.time()
+        for _ in range(5):
+            svc._note_git_read()
+        await asyncio.sleep(0.4)
+        return started
+    assert len(asyncio.run(main())) == 1
+
+
+def test_a_git_read_marks_nothing_and_shutdown_cancels_its_timer():
+    """A git_read sets only the ask — no tool fault, no failed state, ready
+    untouched — and its timer goes with shutdown: no round starts after."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.s.self_check_seconds = 0.2
+        svc.self_check_state = "passed"
+        started: list = []
+        svc._ensure_self_check_loop = lambda: started.append(svc.loop.time())
+        svc._last_round_end = svc.loop.time()
+        svc._note_git_read()
+        marked = (svc._git_read_pending, svc.tool_fault, svc._fault_seq, svc.self_check_state)
+        timer = svc._git_read_timer
+        svc.shutdown()
+        await asyncio.sleep(0.5)
+        return marked, timer, svc._git_read_timer, started
+    marked, timer, after, started = asyncio.run(main())
+    assert marked == (True, None, 0, "passed")
+    assert timer is not None and timer.cancelled() and after is None
+    assert started == []
+
+
+@pytest.mark.parametrize("doc,ok", [
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "repo_unreadable"}],
+      "running": False}, True),
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "internal_error"}],
+      "running": True}, True),
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "not_found"}],
+      "running": False}, False),
+    ({"state": "failed", "failures": [{"binary": "git", "reason": "timed_out"}],
+      "running": False}, False),
+    ({"state": "failed", "failures": [{"binary": "da-read", "reason": "repo_unreadable"}],
+      "running": False}, False),
+    ({"state": "failed", "failures": [{"binary": "sh", "reason": "internal_error"}],
+      "running": False}, False),
+])
+def test_a_self_check_failure_pairs_its_binary_with_its_reasons(doc, ok):
+    """``repo_unreadable`` for git only, a program's reasons for a program
+    only; the union is SELF_CHECK_REASONS, each once."""
+    assert (proto.self_check_problem(doc) is None) is ok
+    assert set(proto.SELF_CHECK_REASONS) == (set(proto.SELF_CHECK_PROGRAM_REASONS)
+                                             | set(proto.SELF_CHECK_GIT_REASONS))
+    assert len(proto.SELF_CHECK_REASONS) == len(set(proto.SELF_CHECK_REASONS))
+
+
+# ── #4035: start-up drives the same judgement ────────────────────────────
+
+def _main(tmp_path, monkeypatch, repo) -> "tuple[int, list]":
+    """`main` up to serving: what it returns, and what it would serve."""
+    import os
+    import _lib_consumer_read as cr
+    for name in cr.READER_BINARY_ENVS:  # main pins them: put back afterwards
+        monkeypatch.setenv(name, os.environ.get(name, "x"))
+    served = []
+
+    async def no_serve(settings, fmt):  # a start that is not refused returns, never hangs
+        served.append(fmt)
+    monkeypatch.setattr(gs, "serve", no_serve)
+    monkeypatch.setattr(gs, "_become_subreaper", lambda: None)
+    rc = gs.main(["--socket", str(tmp_path / "s.sock"), "--repo", str(repo),
+                  "--git", _harness().GIT, "--config-subdir", "conf.d",
+                  "--work-dir", str(tmp_path / "work")])
+    return rc, served
+
+
+def test_start_up_runs_each_step_of_the_judgement_once(tmp_path, monkeypatch, capsys):
+    """Start-up drives `_repo_judgement`: every argv it yields runs once, in
+    order, and `_check_config_subdir` runs no git of its own to find HEAD —
+    it is handed the commit the judgement found."""
+    import subprocess
+    repo = _committed_repo(tmp_path / "repo")
+    real = subprocess.run
+    ran = []
+
+    def run(argv, *a, **kw):
+        ran.append([x if isinstance(x, str) else x.decode() for x in argv[3:]])
+        return real(argv, *a, **kw)
+    monkeypatch.setattr(gs.subprocess, "run", run)
+    rc, served = _main(tmp_path, monkeypatch, repo)
+    assert rc == gs.EXIT_OK and served == ["sha1"], capsys.readouterr().err
+    heads = [r for r in ran if "HEAD^{commit}" in r]
+    assert heads == [["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]], ran
+
+
+@pytest.mark.parametrize("branch", ["initial", "another"])
+def test_a_branch_with_no_commit_yet_starts_unchecked(tmp_path, monkeypatch, capsys, branch):
+    """`git init` and nothing committed — or HEAD switched to a branch with
+    no commit yet: said on stderr, started."""
+    if branch == "initial":
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+    else:
+        repo = _committed_repo(tmp_path / "repo")
+        _git(repo, "symbolic-ref", "HEAD", "refs/heads/not-yet")
+    rc, served = _main(tmp_path, monkeypatch, repo)
+    err = capsys.readouterr().err
+    assert rc == gs.EXIT_OK and served == ["sha1"], err
+    assert "has no HEAD commit; --config-subdir 'conf.d' is not checked" in err, err
