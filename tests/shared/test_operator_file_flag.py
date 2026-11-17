@@ -160,6 +160,8 @@ def test_dash_is_standard_output_where_nothing_else_writes_it(tool, flag, tmp_pa
     proc, cwd = _run(tool, flag, "-", tmp_path, stub_url)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert proc.stdout.strip(), "the document did not reach stdout"
+    # The tool's receipts stay on stderr: stdout is the document alone.
+    assert "Written to" not in proc.stdout and "Generated " not in proc.stdout, proc.stdout[-400:]
     assert list(cwd.iterdir()) == [], "a file called - was made"
 
 
