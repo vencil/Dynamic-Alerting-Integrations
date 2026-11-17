@@ -1124,6 +1124,62 @@ class TestWriteMigrationCsv:
         assert rows[0]["alert_name"] == "HighCPU"
 
 
+class TestAWriteThatFailsExitsTwo:
+    """#3107: the phase files are written by `_or_die` calls of
+    the operator entry — a path that cannot be written ends the run at rc 2
+    with the one line naming `-o/--output-dir`, at the call. No row of
+    tests/shared/test_output_path_write_failure.py reaches the Phase 2 and
+    Phase 3 calls (they are on its `UNREACHED_WRITER_CALLS`), so they are
+    driven here.
+
+    A specific break that reddens each: swap that call for the raising
+    `write_operator_output` — the test then sees `OutputWriteError`, not
+    `SystemExit`."""
+
+    @staticmethod
+    def _one_line(capsys, blocked):
+        err = capsys.readouterr().err
+        lines = [line for line in err.splitlines() if line.startswith("ERROR: ")]
+        assert len(lines) == 1, err
+        assert lines[0].startswith(f"ERROR: cannot write {blocked}: "), lines[0]
+        assert lines[0].endswith("check the value given to -o/--output-dir"), lines[0]
+
+    def test_the_migration_plan_csv(self, tmp_path, capsys):
+        blocked = tmp_path / "migration-plan.csv"
+        blocked.mkdir()
+        with pytest.raises(SystemExit) as exc_info:
+            write_migration_csv([], str(blocked))
+        assert exc_info.value.code == 2
+        self._one_line(capsys, blocked)
+
+    def test_the_phase_1_summary(self, tmp_path, capsys):
+        """A row does reach this call, but from the command line `main()`'s
+        handler for the hints file would catch a raising form too: in
+        process is where the call's own exit shows."""
+        import onboard_platform as op
+        blocked = tmp_path / "phase1-routing" / "routing-summary.csv"
+        blocked.mkdir(parents=True)
+        report = {"files_written": [], "phases": {}}
+        with pytest.raises(SystemExit) as exc_info:
+            op._write_phase1_outputs(str(tmp_path), ({}, {}), report, confd=[])
+        assert exc_info.value.code == 2
+        self._one_line(capsys, blocked)
+
+    @pytest.mark.parametrize("name", ["mysql-relabel-suggestion.yaml", "scrape-analysis.yaml"])
+    def test_a_phase_3_file(self, tmp_path, capsys, name):
+        import onboard_platform as op
+        blocked = tmp_path / "phase3-scrape" / name
+        blocked.mkdir(parents=True)
+        jobs = [{"job_name": "mysql", "has_tenant_mapping": False, "mapping_type": None,
+                 "suggestions": [{"description": "add a tenant label",
+                                  "snippet": {"relabel_configs": []}}]}]
+        report = {"files_written": [], "phases": {}}
+        with pytest.raises(SystemExit) as exc_info:
+            op._write_phase3_outputs(str(tmp_path), (jobs, {"total_jobs": 1}), report)
+        assert exc_info.value.code == 2
+        self._one_line(capsys, blocked)
+
+
 # ============================================================
 # Phase 3: Scrape Config Analysis
 # ============================================================
@@ -1431,6 +1487,29 @@ class TestInvalidTenantIdFromAlertmanager:
                                      self._am(tmp_path, ["db-a"]), "-o", str(out)])
         assert rc == 0
         assert (out / "phase1-routing" / "db-a.yaml").exists()
+
+    def test_an_unwritable_hints_file_is_rc_2_and_one_line(self, tmp_path, monkeypatch, capsys):
+        """#3107: `onboard-hints.json` is written by the library writer, which
+        RAISES `OutputWriteError`; `main()`'s handler around `write_outputs`
+        is what turns that into rc 2 and one line naming the flag (every
+        other file here is written by an `_or_die` call, which exits on its
+        own). The hints file is the last thing written, so a directory in
+        its place is reached with everything before it done.
+
+        A specific break that reddens this: remove that `except
+        OutputWriteError` — the run then ends in a traceback."""
+        out = tmp_path / "out"
+        hints = out / "onboard-hints.json"
+        hints.mkdir(parents=True)
+        rc = self._run(monkeypatch, ["--alertmanager-config", self._am(tmp_path, ["t1"]),
+                                     "-o", str(out)])
+        assert rc == 2
+        err = capsys.readouterr().err
+        errors = [line for line in err.splitlines() if line.startswith("ERROR: ")]
+        assert len(errors) == 1, err
+        assert errors[0].startswith(f"ERROR: cannot write {hints}: "), errors[0]
+        assert errors[0].endswith("check the value given to -o/--output-dir"), errors[0]
+        assert "Traceback" not in err
 
 
 class TestConfdThroughDaGuardWrite:

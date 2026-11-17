@@ -874,6 +874,39 @@ class TestConfdThroughDaGuardWrite:
         assert "the alert name" in err and "U+2028" in err and "nothing was written" in err, err
         assert not dest.exists() or not any(dest.iterdir())
 
+    @pytest.mark.parametrize("name", [
+        "platform-recording-rules.yaml", "platform-alert-rules.yaml", "migration-report.txt",
+        "triage-report.csv", "prefix-mapping.yaml"])
+    def test_a_file_that_cannot_be_written_is_exit_2_and_one_line(
+            self, tmp_path, capsys, monkeypatch, name):
+        """#3107: each of the five files after the conf.d batch is written by
+        its own `_or_die` call of the operator entry — rc 2 and the one line
+        naming `-o/--output-dir`, at the call, with the files before it left
+        written.
+
+        The shared conf.d refusal is stepped over here: from the command line
+        a directory named `*.yaml` in `-o` is refused by it first (rc 2, in
+        its words), so three of the five calls cannot be reached that way.
+
+        A specific break that reddens one case: swap that call for the
+        raising `write_operator_output` (`OutputWriteError`, not `SystemExit`)."""
+        monkeypatch.setattr(mr, "_require_output_tree", lambda output_dir: None)
+        dest = tmp_path / "out"
+        blocked = dest / name
+        blocked.mkdir(parents=True)
+        results = [_make_result(
+            "Simple", tenant_config={"custom_cpu": "0.9"},
+            alert_rules=[{"alert": "Simple", "expr": "x > 0.9"}],
+            recording_rules=[{"record": "tenant:custom_cpu:max", "expr": "max(x)"}])]
+        with pytest.raises(SystemExit) as exc:
+            mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        lines = [line for line in err.splitlines() if line.startswith("ERROR: ")]
+        assert len(lines) == 1, err
+        assert lines[0].startswith(f"ERROR: cannot write {blocked}: "), lines[0]
+        assert lines[0].endswith("check the value given to -o/--output-dir"), lines[0]
+
     def test_a_write_stopped_part_way_names_the_files(self, tmp_path, capsys, monkeypatch):
         import _lib_confedit
 

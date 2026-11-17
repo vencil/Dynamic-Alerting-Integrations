@@ -67,7 +67,7 @@ class TestSafeWrite:
         """#1789: `_safe_write`'s `else: Path(path).write_text(...)` arm was
         deleted, and this pins the REASON rather than the deletion.
 
-        The arm ran only when `write_text_or_die` was None, i.e. when the
+        The arm ran only when the shared writer was missing, i.e. when the
         `from _lib_python import ...` at the top raised ImportError — which
         means PyYAML is missing, because the only non-stdlib thing behind
         that facade is `_lib_io`'s bare `import yaml`. PyYAML missing also
@@ -104,7 +104,7 @@ class TestSafeWrite:
             called["flag"] = flag
             Path(path).write_text(content, encoding="utf-8")
 
-        monkeypatch.setattr(grps, "write_text_or_die", fake_writer)
+        monkeypatch.setattr(grps, "write_operator_output_or_die", fake_writer)
         f = tmp_path / "out.yaml"
         grps._safe_write(str(f), "groups: []\n")
         assert called["path"] == str(f)
@@ -778,9 +778,9 @@ class TestMain:
         assert "foo" in out
 
     def test_safe_write_without_the_shared_writer_says_so(self, monkeypatch, tmp_path):
-        """#1789 F9: `write_text_or_die` is None when the `_lib_python` import
-        block failed. Calling it anyway is `TypeError: 'NoneType' object is
-        not callable` — a traceback that names neither the cause nor the fix.
+        """#1789 F9: the shared writers are missing (`_SHARED_WRITERS` false)
+        when the `_lib_python` import block failed. Calling one anyway is a
+        `NameError` — a traceback that names neither the cause nor the fix.
 
         The reachability argument in `_safe_write`'s docstring says this
         cannot happen (a missing PyYAML kills `load_rule_pack` first). This
@@ -788,9 +788,10 @@ class TestMain:
         arrives as a sentence instead of as a type error.
 
         A specific break that reddens this: delete the
-        `if write_text_or_die is None: raise RuntimeError(...)` guard.
+        `if not _SHARED_WRITERS: raise RuntimeError(...)` guard.
         """
-        monkeypatch.setattr(grps, "write_text_or_die", None)
+        monkeypatch.setattr(grps, "_SHARED_WRITERS", False)
+        monkeypatch.delattr(grps, "write_operator_output_or_die")
         with pytest.raises(RuntimeError, match="shared writer unavailable"):
             grps._safe_write(str(tmp_path / "x.yaml"), "content\n")
 

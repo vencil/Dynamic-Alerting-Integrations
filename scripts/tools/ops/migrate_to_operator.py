@@ -49,8 +49,8 @@ try:
 except ImportError:
     yaml = None
 
-from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
-from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
+from _lib_python import detect_cli_lang, i18n_text, output_dir_type  # noqa: E402
+from _lib_io import OutputWriteError, ensure_dir, write_operator_output  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, die_caller_error, encode_json)
@@ -847,7 +847,7 @@ def main():
     )
     parser.add_argument(
         "--output-dir",
-        type=_output_dir_arg,
+        type=output_dir_type(then=_output_dir_arg),
         default=None,   # #1582：不給就不寫檔（寫入是 opt-in），見 main() 的寫入閘
         help=i18n_text(_HELP["zh"]["output_dir"], _HELP["en"]["output_dir"]),
     )
@@ -983,7 +983,7 @@ def main():
 
             # Write checklist
             checklist_path = output_dir / "MIGRATION-CHECKLIST.md"
-            write_text_secure(str(checklist_path), checklist, flag="--output-dir")
+            write_operator_output(str(checklist_path), checklist, flag="--output-dir")
             print(f"Generated: {safe_label(checklist_path)}", file=sys.stderr)
         except OutputWriteError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)

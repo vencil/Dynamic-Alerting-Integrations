@@ -59,6 +59,7 @@ modules:
       url_problem: "#3528 the one URL judgement; scheme dispatch property-tested through its wrapper _lib_prometheus._validate_url_scheme (tests/shared/test_property_tools.py), every unusable shape run through every URL flag's parser by tests/shared/test_caller_path_manifest.py"
       url_type: "#3528 constructor of the UrlArg argparse type; run per flag by tests/shared/test_caller_path_manifest.py::test_a_url_flag_refuses_an_unusable_value_by_name"
       url_list_type: "#3528 constructor of the separator-list UrlArg; run by the same gate (federation-check --edge-urls)"
+      output_dir_type: "#3107 constructor of the OutputDirArg argparse type (refuses `-` for a directory flag); every case pinned by example, and run per declaring tool, by tests/shared/test_output_dir_flag.py"
       UrlArg._one: "#3528 url_problem → ArgumentTypeError; run by the same gate"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
@@ -137,7 +138,7 @@ modules:
     excluded:
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
       write_json_secure: "Side-effecting I/O; same SAST guarantee as write_text_secure"
-      write_onboard_hints: "Thin wrapper over write_json_secure"
+      write_onboard_hints: "json.dump through open_operator_output (#3107); the entry, the bytes and the mode pinned by tests/shared/test_write_failure_class.py::TestLibraryPassthrough"
       write_text_or_die: "Side-effecting I/O + sys.exit wrapper over write_text_secure (#1641); contract pinned by tests/shared/test_write_failure_class.py"
       write_json_or_die: "Side-effecting I/O + sys.exit wrapper over write_json_secure (#1641); same gate"
       ensure_dir: "Side-effecting I/O (mkdir -p) raising OutputWriteError (#1641); same gate"
@@ -208,7 +209,7 @@ modules:
 
   scripts/tools/_lib_yaml.py:
     excluded:
-      write_yaml_crd: "Side-effecting I/O (writes YAML to disk via write_text_secure); same SAST-guard rationale as _lib_io.write_text_secure/write_json_secure"
+      write_yaml_crd: "Side-effecting I/O (writes YAML to disk via write_operator_output, #3107); the entry is held by the write audit of tests/shared/test_output_path_write_failure.py (operator_generate, migrate_to_operator rows)"
       _dict_to_yaml: "Pure minimal-YAML fallback emitter; byte-output locked by golden characterization tests in tests/ops/test_lib_yaml.py (nested/list/bool/quote/unicode/empty-container cases)"
 
   scripts/tools/_lib_prometheus.py:

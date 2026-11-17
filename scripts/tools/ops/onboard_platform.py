@@ -68,7 +68,8 @@ from _lib_python import (  # noqa: E402
     write_onboard_hints,
     OutputWriteError,
     ensure_dir_or_die,
-    write_text_or_die,
+    output_dir_type,
+    write_operator_output_or_die,
     RECEIVER_TYPES,
     METRIC_PREFIX_DB_MAP,
 )
@@ -1091,7 +1092,7 @@ def write_migration_csv(candidates, output_path):
         if row.get("dict_match"):
             row["dict_match"] = row["dict_match"].get("maps_to", "")
         writer.writerow(row)
-    write_text_or_die(output_path, buf.getvalue(), flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(output_path, buf.getvalue(), flag=_OUTPUT_FLAG)
 
 
 # ============================================================
@@ -1405,7 +1406,7 @@ def _write_phase1_outputs(output_dir, phase1_results, report, confd=None):
             r.get("repeat_interval", ""),
             dedup_info.get(tenant, "unknown"),
         ])
-    write_text_or_die(csv_path, buf.getvalue(), flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(csv_path, buf.getvalue(), flag=_OUTPUT_FLAG)
     report["files_written"].append(csv_path)
 
     report["phases"]["phase1"] = {
@@ -1479,7 +1480,7 @@ def _write_phase3_outputs(output_dir, phase3_results, report):
             buf.write(yaml.dump(suggestion["snippet"], default_flow_style=False,
                                 allow_unicode=True, sort_keys=False))
             buf.write("\n")
-        write_text_or_die(fpath, buf.getvalue(), flag=_OUTPUT_FLAG)
+        write_operator_output_or_die(fpath, buf.getvalue(), flag=_OUTPUT_FLAG)
         report["files_written"].append(fpath)
 
     # Summary
@@ -1499,7 +1500,7 @@ def _write_phase3_outputs(output_dir, phase3_results, report):
             ],
         }, default_flow_style=False, allow_unicode=True, sort_keys=False)
     )
-    write_text_or_die(summary_path, summary_content, flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(summary_path, summary_content, flag=_OUTPUT_FLAG)
     report["files_written"].append(summary_path)
 
     report["phases"]["phase3"] = {
@@ -1665,7 +1666,7 @@ def main():
                              "(default: $DA_READ_BINARY, else PATH)")
     parser.add_argument("--tenant-label", default=DEFAULT_TENANT_LABEL,
                         help=f"Custom tenant label name (default: {DEFAULT_TENANT_LABEL})")
-    parser.add_argument("-o", "--output-dir", default="onboard_output",
+    parser.add_argument("-o", "--output-dir", default="onboard_output", type=output_dir_type(),
                         help="Output directory (default: onboard_output)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview analysis without writing files")

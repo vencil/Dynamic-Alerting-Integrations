@@ -122,6 +122,7 @@ da-tools <command> --help
 - ⚠️ **行為變更**：
   - owner 2026-10-21 核可（逐項見 [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：非 root 寫別人的裝置或可寫一般檔 `2` → `0`；唯讀檔、懸空 link、socket、無 reader 的 FIFO `0` → `2`；本來會卡住的寫入改為 `2`；`-` 不再建出名為 `-` 的檔。
   - owner 2026-10-24 核可：`configmap-assemble --output` 為 `-`、裝置、FIFO 時 `0` → `2`，寫出的 manifest 為 `0600`。
+  - 2026-11-15（owner 裁決：這些是 operator 輸出、目錄旗標拒絕 `-`；其餘各項是上面 operator 輸出寫法的結果）：`validate`、`init`、`operator-generate`、`migrate-to-operator`、`rule-pack-split`、`scaffold`、`migrate`、`onboard` 寫進輸出目錄的檔案（conf.d 檔除外，那些由 `da-guard write` 寫）改為 operator 輸出，一律 `0600`。目錄旗標給 `-` 時 `0` → `2`（以前會建出名為 `-` 的目錄）；`rule-pack-split` 的 `validation-report.json` 由 `0644` 改為 `0600`；既有輸出檔屬於別的使用者而可寫時 `2` → `0`（以前內容寫入後 chmod 失敗、後面的檔不寫）；既有輸出檔是 symlink、或屬於別的使用者時，不再把目標改成 `0600`；既有路徑是沒有 reader 的 FIFO 時由卡住改為 `2`。
 
 ---
 
@@ -501,7 +502,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
 | `--tolerance <RATIO>` | 容許誤差**比值**（不是百分比）：`0.01` = 1%。必須是 ≥ 0 的有限數，`inf`、`nan`、負值回 2 | `0.001` |
 | `--auto-detect-convergence` | 自動偵測收斂並產出 readiness JSON | false |
-| `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡 | `validation_output` |
+| `-o, --output-dir <DIR>` | 輸出目錄；`validation-report.csv`（與 watch 模式的 `cutover-readiness.json`）寫在這裡。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `validation_output` |
 | `--stability-window <N>` | `--auto-detect-convergence` 判定收斂所需的連續全部 match 輪數 | `5` |
 | `--convergence-output <FILE>` | readiness JSON 的寫入路徑（`--watch --auto-detect-convergence`） | `-o/--output-dir` 下的 `cutover-readiness.json` |
 
@@ -1292,7 +1293,7 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
 | `--dry-run` | 顯示會產生的檔案但不寫入，並標出每個既有檔是否為 init 產生、產生後是否被改過（依 `.da-init.yaml` 的檔案清冊）。不需 `--force`，已初始化的目錄也可直接跑 | — |
 | `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ 自有檔若還宣告了這次沒要求的租戶，`--force` 同樣拒絕（見上方）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：可能已由你其他檔案宣告的租戶／其他拼法的 defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明）；init 上次產生後被改過的檔會在摘要逐一點名。init 先前產生、這次設定不再產生的檔（拿掉的租戶、CI 或部署方式），未改過就刪除，改過則保留並點名；`--dry-run` 會先列出。⚠️ **沒有 `.da-init.yaml` 時**，init 不擁有任何檔：要寫的路徑上已經有檔（例如手寫的 `conf.d/_defaults.yaml`）就拒絕、rc 1、不寫入任何檔案，要覆寫須加 `--force`；刪掉 `.da-init.yaml` 繞不過這道檢查 | — |
-| `-o, --output-dir <DIR>` | 輸出根目錄 | `.`（目前目錄） |
+| `-o, --output-dir <DIR>` | 輸出根目錄。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `.`（目前目錄） |
 | `--namespace <NS>` | Kubernetes 監控 namespace | `monitoring` |
 | `--da-tools-image <IMAGE>` | 產生的 CI pipeline 與 pre-commit 設定使用的 da-tools 映像；給空字串結束碼 2 | 執行這次 init 的 da-tools 版本的映像 |
 | `--config-source <SOURCE>` | 配置來源：只支援 `configmap`；`git`（GitOps Native Mode）暫不支援，給了結束碼 2（[#1349](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1349)） | `configmap` |
@@ -1553,7 +1554,7 @@ da-tools operator-generate [options]
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，任何東西產出之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前印 WARNING 後照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。目錄裡一個 rule pack 都沒有（空目錄、只有 `threshold-registry.yaml`）、或無法列出內容 ⇒ 同樣 exit `2`；沒給旗標時的預設 `rule-packs` 一樣判定（⚠️ **行為變更**，先前產出 0 個 PrometheusRule、rc 0，[#3462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3462)）。只判定所選 `--components` 會讀的目錄。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）也輸出，但去掉 kube-prometheus-stack 沒有其指標來源的 rule：由 `_lib_metric_sources.operator_split` 依 scrape 閘門的 metric family 表推導，去掉的每條在 stderr 印一行 `NOTE:` 並列在該 PrometheusRule 的 `dynamic-alerting.io/operator-excluded-rules` annotation（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)；目前是哪幾條見 [Operator Prometheus 整合指南](integration/operator-prometheus-integration.md)）。 | `rule-packs` |
 | `--config-dir <DIR>` | ⛔ 不再使用：本工具不讀 conf.d。給了就結束碼 2（見上方），路由改用 `generate-routes --config-dir` | — |
-| `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
+| `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--api-version <VER>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
 | `--components <COMP>` | 要生成的元件：`all`（= `rules` + `servicemonitor`）/ `rules` / `servicemonitor`。`alertmanager` 結束碼 2（見上方） | `all` |
@@ -1612,7 +1613,7 @@ da-tools migrate-to-operator [options]
 |------|------|--------|
 | `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；已經是 PrometheusRule 的物件不轉換、不算錯誤（結束碼不受影響），stderr 以一行 `NOTE:` 與 checklist 的「已是 PrometheusRule CRD（不需遷移）」段點名（`--json` 的 `already_crd`）；`kind: List`（`kubectl get cm -o yaml` 的輸出）照 kubectl 展開成它的 items 逐一讀，item 必須是帶 `apiVersion` 與 `kind` 的物件、不能再是 List；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；兩種讀法都讀不了的檔（例如 annotation 值是 `.inf`）交給 Prometheus 的 rule loader（`da-read prometheus-rules`）判，讀得出 `groups` 就當 rule file；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、kubectl 不會套用的 List item）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。rule file 被 Prometheus 的 rule loader 拒收，或找不到 `da-crdecode`／`da-read` 時，同樣在寫任何檔之前以結束碼 `2` 停下，stderr 附原因（`--json` 時 stdout 為空）。⚠️ 先前這些情況只印 WARNING（或記進 `issues`／`errors`）並照常寫出其餘 CRD、結束碼 0。不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，分析與寫檔之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前列進 `issues` 後照樣寫出 checklist 與 CRD、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。存在卻無法列出內容（da-guard 的走訪把根目錄標為 `unlistable_dir`，例如權限 `0311`）⇒ exit `2`（`--json` 時 stdout 為空；⚠️ 先前只印一行 `WARNING:`、以 0 個來源檔產出遷移、rc 0，[#3446](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3446)）。判定時存在、讀取前才被刪掉 ⇒ exit `2`、什麼都不寫（先前記進 `issues`、照樣寫出 checklist、rc 0，[#3721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3721)）。頂層沒有任何 da-guard 列為 config 檔的檔（空目錄、只有 `notes.txt`、檔案都在子目錄裡）⇒ exit `2`、什麼都不寫（⚠️ **行為變更**，先前以 0 個來源檔產出 checklist 與 CRD、rc 0，[#3462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3462)） | （必填） |
 | `--config-dir <DIR>` | ⛔ 不再使用：本工具不讀 conf.d。給了就結束碼 2（見上方） | — |
-| `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
+| `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
 | `--receiver-template <TYPE>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
 | `--secret-name <NAME>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
@@ -1872,7 +1873,7 @@ da-tools rule-pack-split [--rule-packs-dir <dir>] [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不算在內：它是平台自監控，不屬於租戶 rule 的 edge／central 切分（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。 | `rule-packs/` |
-| `--output-dir <DIR>` | 輸出目錄 | `split-output/` |
+| `--output-dir <DIR>` | 輸出目錄。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `split-output/` |
 | `--operator` | 改輸出 PrometheusRule CRD YAML | false |
 | `--namespace <NS>` | CRD 的 namespace | `monitoring` |
 | `--gitops` | GitOps 模式（key 排序、輸出可重現） | false |
@@ -2195,7 +2196,7 @@ da-tools scaffold [options]
 | `--tenant <NAME>` | Tenant ID | （互動詢問） |
 | `--db <LIST>` | 逗號分隔 DB 類型清單 | （互動詢問） |
 | `--namespaces <LIST>` | 逗號分隔 K8s namespace 清單 | （互動詢問） |
-| `-o, --output-dir <DIR>` | 輸出目錄 | `scaffold_output` |
+| `-o, --output-dir <DIR>` | 輸出目錄。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `scaffold_output` |
 | `--catalog` | 列出支援的 exporter 後結束 | false |
 | `--from-onboard <FILE>` | 讀 `onboard-hints.json`，依 onboard 結果為每個租戶產生配置 | （無） |
 | `--profile <NAME>` | 租戶 YAML 引用這個 profile（`_profile`），只寫明確覆寫的值 | （無） |
@@ -2271,7 +2272,7 @@ da-tools migrate <input_file> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `-o, --output-dir <DIR>` | 輸出目錄 | `./migration_output/` |
+| `-o, --output-dir <DIR>` | 輸出目錄。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `./migration_output/` |
 | `--tenant <ID>` | 租戶 id（ADR-035）：租戶檔的檔名與 `tenants:` 底下的 key。標準模式必填，`--dry-run`、`--triage` 不需要 | — |
 | `--dry-run` | 僅顯示報告，不產生檔案 | false |
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
@@ -2608,7 +2609,7 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files <PATH>...] \
 | `--exclude <GLOB>` | Phase 2：排除 `--rule-files` 選到的檔（可重複；不讀）。語意與 [`lint`](#lint) 的 `--exclude` 相同：不含 `/` 比對檔名，含 `/` 比對相對於給的目錄的路徑；⚠️ 直接給的檔（包括 shell 展開出來的）比對的是**給的整條路徑**，所以 `--rule-files rules/*.yaml rules/recipes/*.yaml`（由 shell 展開）要排除 `rules/recipes/` 底下的檔得寫 `--exclude '*/recipes/*'`（`recipes/*` 配不到 `rules/recipes/a.yaml`）；給目錄時（`--rule-files rules/`）才比對相對於它的路徑，`--exclude 'recipes/*'` 即可。`fnmatch.fnmatchcase` | — |
 | `--scrape-config <FILE>` | Phase 3：Prometheus 設定（`prometheus.yml`）。可以是設定檔本身，或 ConfigMap YAML（鍵名必須是 `prometheus.yml`）。讀法同 Phase 1：外層以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Prometheus 自己的載入函式（`da-read prometheus`，已註冊全部服務探索）讀，只取原文寫了的鍵、值是 Prometheus 的讀法（例如 relabel 的 `action: Keep` 是 `keep`）；Prometheus 拒收的設定（不認得的鍵、重複的 `job_name`、壞掉的 regex）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
 | `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
-| `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄） | `onboard_output` |
+| `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄）。`-` 不是目錄，會被拒絕（結束碼 `2`，[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | `onboard_output` |
 | `--dry-run` | 只分析、不寫檔，印出各 phase 摘要 | false |
 | `--json` | stdout 改印一份 JSON 報告（CI 用）；各 phase 的檔照寫，但不寫 `onboard-hints.json` | false |
 

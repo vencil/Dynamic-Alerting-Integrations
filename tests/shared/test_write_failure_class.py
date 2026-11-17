@@ -81,7 +81,6 @@ CATCHING_HANDLER_NAMES = frozenset({
 # ``test_library_allowlist_cannot_go_stale``: an entry that stops existing or
 # stops holding a raw call must be REMOVED here, so the list only shrinks.
 RAW_CALL_LIBRARY_MODULES = frozenset({
-    "scripts/tools/_lib_yaml.py",
     "scripts/tools/ops/_registry_lib.py",
 })
 
@@ -220,8 +219,11 @@ class TestScannerControls:
 # ═══════════════════════════════════════════════════════════════════════════
 def test_population_is_not_vacuous():
     calls = scan_tree()
-    assert len(calls) >= 4, (
-        "fewer than 4 secure-writer calls under scripts/tools — the scan root "
+    # #3107 moves these calls to the operator / artifact entries, so the
+    # floor follows the tree down (it was 4): what is left is measured, and a
+    # scan that finds fewer has drifted.
+    assert len(calls) >= 3, (
+        "fewer than 3 secure-writer calls under scripts/tools — the scan root "
         "or the writer names have drifted; this gate would pass vacuously")
 
 
@@ -250,7 +252,7 @@ def test_library_allowlist_cannot_go_stale():
 # let any `_`-prefixed module be appended). A new shared writer library is a
 # design decision — raise this number in the same diff that adds the
 # `except OutputWriteError` to every tool calling it, and say so.
-_ALLOWLIST_CEILING = 2
+_ALLOWLIST_CEILING = 1  # #3107: _lib_yaml.write_yaml_crd went to the operator entry
 
 
 def test_library_allowlist_size_is_pinned():
@@ -384,7 +386,14 @@ def test_every_tool_calling_an_allowlisted_writer_can_catch_the_error():
     writers_by_stem = {Path(rel).stem: _writing_functions(rel) for rel in RAW_CALL_LIBRARY_MODULES}
     assert all(writers_by_stem.values()), writers_by_stem  # each allowlisted lib really writes
     sites = _lib_writer_sites(writers_by_stem)
-    assert sites, "no tool calls an allowlisted writer — the allowlist is dead"
+    # ⚠️ #3107: this population is EMPTY now, and is not asserted non-empty.
+    # The tool call sites it held were `write_yaml_crd`'s (operator_generate,
+    # migrate_to_operator), and `_lib_yaml` left the allowlist when that
+    # function moved to the operator entry; what is left on the allowlist,
+    # `_registry_lib._confd_batches`, is called from `_registry_lib` alone.
+    # The scanner is still held by `test_lib_writer_scanner_controls`. That
+    # those two tools turn a failed CRD write into rc 2 + one line is held by
+    # their `artifact_is_dir` rows in test_output_path_write_failure.py.
     unguarded = [f"{f.relative_to(REPO_ROOT).as_posix()}:{line}"
                  for f, rows in sites.items() for line, guarded in rows if not guarded]
     assert not unguarded, (
@@ -595,9 +604,45 @@ class TestLibraryPassthrough:
                                         flag="-o/--output-dir")
         assert ei.value.flag == "-o/--output-dir"
 
+    def test_write_onboard_hints_writes_through_the_operator_entry(self, tmp_path, monkeypatch):
+        """#3107: the hints file is opened by the operator entry's kernel
+        open (not by an old name), holds `json.dump(indent=2,
+        ensure_ascii=False)` with no trailing newline, and is 0600."""
+        opened = []
+        real = _lib_io._kernel_open_operator_output
+
+        def spy(path, *args, **kwargs):
+            opened.append(path)
+            return real(path, *args, **kwargs)
+        monkeypatch.setattr(_lib_io, "_kernel_open_operator_output", spy)
+        hints = {"tenants": ["alpha"], "db_types": {"alpha": ["mariadb"]}, "note": "閾值"}
+        path = _lib_io.write_onboard_hints(str(tmp_path), hints, flag="-o/--output-dir")
+        assert opened == [path]
+        assert Path(path).read_bytes() == json.dumps(
+            hints, indent=2, ensure_ascii=False).encode("utf-8")
+        if os.name == "posix":
+            assert os.stat(path).st_mode & 0o777 == 0o600
+
+    def test_write_yaml_crd_writes_through_the_operator_entry(self, tmp_path, monkeypatch):
+        opened = []
+        real = _lib_io._kernel_open_operator_output
+
+        def spy(path, *args, **kwargs):
+            opened.append(path)
+            return real(path, *args, **kwargs)
+        monkeypatch.setattr(_lib_io, "_kernel_open_operator_output", spy)
+        out = tmp_path / "crd.yaml"
+        _lib_yaml.write_yaml_crd(out, {"kind": "PrometheusRule", "b": 1, "a": "閾值"},
+                                 flag="--output-dir")
+        assert opened == [str(out)]
+        assert out.read_bytes() == "kind: PrometheusRule\nb: 1\na: 閾值\n".encode("utf-8")
+        if os.name == "posix":
+            assert os.stat(out).st_mode & 0o777 == 0o600
+
     def test_facade_re_exports_the_new_names(self):
         for name in ("OutputWriteError", "write_text_or_die", "write_json_or_die",
-                     "ensure_dir", "ensure_dir_or_die"):
+                     "ensure_dir", "ensure_dir_or_die", "write_operator_output",
+                     "write_operator_output_or_die", "open_operator_output"):
             assert getattr(_lib_python, name) is getattr(_lib_io, name), name
 
 
