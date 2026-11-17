@@ -58,7 +58,9 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
+from _lib_python import (  # noqa: E402
+    ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
+)
 from _lib_io import find_metric_dictionary  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
@@ -947,8 +949,9 @@ def write_triage_csv(results, output_dir, dictionary):
     # output is byte-identical on every host.
     # ⚠️ HISTORY: this used to compensate for write_text_secure translating
     # \n → \r\n on Windows (default '\r\n' would have landed as '\r\r\n', i.e.
-    # phantom blank rows under universal-newline reading). write_text_secure
-    # now pins newline="\n" itself, so NO translation happens any more and this
+    # phantom blank rows under universal-newline reading). The writer (the
+    # operator entry since #3107) pins newline="\n" itself, so NO translation
+    # happens any more and this
     # file is LF on every platform — previously it was CRLF on Windows and LF
     # on Linux. Excel parses LF-only CSV fine (BOM below is what it keys on).
     # Do NOT "restore" the old comment's reasoning: the translation it
@@ -996,7 +999,7 @@ def write_triage_csv(results, output_dir, dictionary):
             r.original_expr[:200],  # Truncate long exprs
         ])
     # CSV with BOM for Excel compatibility
-    write_text_or_die(csv_path, "\ufeff" + buf.getvalue(), flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(csv_path, "\ufeff" + buf.getvalue(), flag=_OUTPUT_FLAG)
     return csv_path
 
 
@@ -1044,7 +1047,7 @@ def write_prefix_mapping(results, output_dir, prefix):
         + yaml.safe_dump(mapping, default_flow_style=False,
                          allow_unicode=True, sort_keys=False)
     )
-    write_text_or_die(mapping_path, mapping_content, flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(mapping_path, mapping_content, flag=_OUTPUT_FLAG)
     return mapping_path
 
 
@@ -1560,16 +1563,17 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(artifact_dir / "platform-recording-rules.yaml")
-    write_text_or_die(recording_rules_path, render_recording_rules(results, prefix),
-                      flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(recording_rules_path,
+                                 render_recording_rules(results, prefix), flag=_OUTPUT_FLAG)
 
     # --- platform-alert-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     alert_rules_path = str(artifact_dir / "platform-alert-rules.yaml")
-    write_text_or_die(alert_rules_path, render_alert_rules(results, prefix), flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(alert_rules_path, render_alert_rules(results, prefix),
+                                 flag=_OUTPUT_FLAG)
 
     # --- migration-report.txt ---
     report_path = str(Path(output_dir) / "migration-report.txt")
-    write_text_or_die(report_path, render_report(results), flag=_OUTPUT_FLAG)
+    write_operator_output_or_die(report_path, render_report(results), flag=_OUTPUT_FLAG)
 
     # --- v3: Triage CSV ---
     csv_path = write_triage_csv(results, output_dir, dictionary)
@@ -1657,7 +1661,7 @@ def main():
         description="傳統 Prometheus 警報規則遷移輔助工具 (v4 AST) — 自動轉換為動態多租戶三件套"
     )
     parser.add_argument("input_file", help="傳統 Prometheus alert rules YAML 檔案")
-    parser.add_argument("-o", "--output-dir", default="migration_output",
+    parser.add_argument("-o", "--output-dir", default="migration_output", type=output_dir_type(),
                         help="輸出目錄 (預設: migration_output)")
     parser.add_argument("--tenant",
                         help="租戶 id：寫出 <tenant>.yaml（tenants.<tenant> 底下）。"

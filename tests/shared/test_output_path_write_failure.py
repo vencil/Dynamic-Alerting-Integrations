@@ -989,30 +989,64 @@ ROWS: list[Row] = [
       reach="non-interactive flags only",
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
       shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
+    # #3107: the two mkdir shapes above die at `ensure_dir_or_die`, so they
+    # say nothing about the WRITE (`_write_file`, the one call every file of
+    # the scaffold goes through). A directory where a file goes is only
+    # reached with `--force`: without it init refuses a path that is already
+    # occupied in a pre-check of its own (rc 1).
+    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+      lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
+                      "--rule-packs", "mariadb", "--force"],
+      reach="the same flags with --force, so an occupied path is written over",
+      shapes=("artifact_is_dir",), artifact=".pre-commit-config.da.yaml",
+      variant="force", writer="python+da-guard"),
     R("ops/migrate_rule.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "-o", str(out)],
       reach="tmp legacy Prometheus rules file",
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
-      shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
+      # #3107: `artifact_is_dir` reaches one of the five writes after the
+      # mkdirs — the report. All five calls are driven one by one, in
+      # process, by tests/ops/test_migrate_rule_outputs.py.
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
+      artifact="migration-report.txt", writer="python+da-guard"),
     R("ops/migrate_to_operator.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
       reach="in-repo k8s/03-monitoring",
-      shapes=("parent_is_file", "target_is_file")),
+      # #3107: `artifact_is_dir` gets past the mkdir to the checklist write
+      # (the last file); the CRD write before it has the row below.
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
+      artifact="MIGRATION-CHECKLIST.md"),
+    # The CRD files go through the library writer `_lib_yaml.write_yaml_crd`,
+    # which raises; `main()`'s handler makes it rc 2. One of the CRDs the
+    # in-repo ConfigMaps turn into is the artefact.
+    R("ops/migrate_to_operator.py", "--output-dir", "dir", "operator",
+      lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
+      reach="same; a CRD file is blocked so the run dies in write_yaml_crd",
+      shapes=("artifact_is_dir",), variant="crd",
+      artifact="da-rule-pack-prometheus-rules-mariadb.yaml"),
     R("ops/onboard_platform.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--alertmanager-config", str(_jsc.ALERTMANAGER_YML), "-o", str(out)],
       reach="in-repo try-local alertmanager.yml",
-      shapes=("parent_is_file", "target_is_file")),
+      # #3107: `artifact_is_dir` gets past the mkdirs to the one write this
+      # argv reaches (Phase 1's summary). The Phase 2 / Phase 3 writes and the
+      # hints file are driven by tests/ops/test_onboard_platform.py.
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
+      artifact="phase1-routing/routing-summary.csv"),
     R("ops/scaffold_tenant.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--tenant", "alpha", "--db", "mariadb", "--non-interactive",
                       "-o", str(out)],
       reach="non-interactive flags only",
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
-      shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
+      # #3107: `artifact_is_dir` reaches the report write behind the batch.
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
+      artifact="scaffold-report.txt", writer="python+da-guard"),
     R("ops/validate_migration.py", "-o/--output-dir", "dir", "operator",
       lambda c, out: ["--old", "up", "--new", "up", "--prometheus", c.stub + "/rich",
                       "-o", str(out)],
       reach="local Prometheus stub (/rich: identical vectors ⇒ match)",
-      shapes=("parent_is_file", "target_is_file")),
+      # #3107: `artifact_is_dir` gets past the mkdir to the CSV write.
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
+      artifact="validation-report.csv"),
     R("ops/generate_rule_pack_split.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--rule-packs-dir", _one_rule_pack_dir(c.tmp), "--output-dir", str(out)],
       reach="tmp rule-packs dir holding a copy of rule-pack-mariadb.yaml",
@@ -1024,10 +1058,22 @@ ROWS: list[Row] = [
       # that wrapper deleted.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="validation-report.json"),
+    # #3107: and the split files themselves (`_safe_write`, an `_or_die` call
+    # inside the per-pack `try … except Exception`): the edge file is written
+    # first, so a directory in its place is that call's failure.
+    R("ops/generate_rule_pack_split.py", "--output-dir", "dir", "operator",
+      lambda c, out: ["--rule-packs-dir", _one_rule_pack_dir(c.tmp), "--output-dir", str(out)],
+      reach="same; the pack's edge file is blocked so the run dies in _safe_write",
+      shapes=("artifact_is_dir",), variant="split-file",
+      artifact="edge-rules/rule-pack-mariadb.yaml"),
     R("ops/operator_generate.py", "--output-dir", "dir", "operator",
       lambda c, out: ["--rule-packs-dir", str(_jsc.RULE_PACKS), "--output-dir", str(out)],
       reach="in-repo rule-packs",
-      shapes=("parent_is_file", "target_is_file")),
+      # #3107: `artifact_is_dir` gets past the mkdir into the library writer
+      # `_lib_yaml.write_yaml_crd`, which raises; `main()`'s handler around
+      # `write_crds` is what makes that rc 2.
+      shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
+      artifact="da-rule-pack-mariadb.yaml"),
     # ── scripts/ops (outside scripts/tools; `tool` is relative to it) ──────
     R("../ops/configmap_assemble.py", "--output", "file", "artifact",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
@@ -1730,23 +1776,8 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
     ("ops/generate_alertmanager_routes.py", "-o/--output"): (
          "scripts/tools/ops/generate_alertmanager_routes.py:_write_output_or_die write_text_or_die ×1",
         ),
-    ("ops/generate_rule_pack_split.py", "--output-dir"): ("scripts/tools/ops/generate_rule_pack_split.py:_safe_write write_text_or_die ×1",),
     ("ops/generate_tenant_mapping_rules.py", "-o/--output"): ("scripts/tools/ops/generate_tenant_mapping_rules.py:main write_text_or_die ×1",),
-    ("ops/init_project.py", "-o/--output-dir"): ("scripts/tools/ops/init_project.py:_write_file write_text_or_die ×1",),
-    ("ops/migrate_rule.py", "-o/--output-dir"): (
-         "scripts/tools/ops/migrate_rule.py:write_outputs write_text_or_die ×3",
-         "scripts/tools/ops/migrate_rule.py:write_prefix_mapping write_text_or_die ×1",
-         "scripts/tools/ops/migrate_rule.py:write_triage_csv write_text_or_die ×1",
-        ),
-    ("ops/migrate_to_operator.py", "--output-dir"): (
-         "scripts/tools/ops/migrate_to_operator.py:main write_text_secure ×1",
-         "scripts/tools/ops/migrate_to_operator.py:main write_yaml_crd ×1",
-        ),
-    ("ops/onboard_platform.py", "-o/--output-dir"): ("scripts/tools/ops/onboard_platform.py:_write_phase1_outputs write_text_or_die ×1",),
-    ("ops/operator_generate.py", "--output-dir"): ("scripts/tools/ops/operator_generate.py:write_crds write_yaml_crd ×2",),
-    ("ops/scaffold_tenant.py", "-o/--output-dir"): ("scripts/tools/ops/scaffold_tenant.py:_perform_writes write_text_or_die ×1",),
     ("ops/validate_migration.py", "--convergence-output"): ("scripts/tools/ops/validate_migration.py:main write_json_or_die ×1",),
-    ("ops/validate_migration.py", "-o/--output-dir"): ("scripts/tools/ops/validate_migration.py:write_csv_report write_text_or_die ×1",),
 }
 
 #: Rows with a write under the output path that came through NO entry: each
@@ -1775,8 +1806,6 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
         "some", ("open .da-history/history.json", "os.mkdir .da-history",
                  "os.mkdir .da-history/snap-1")),
     ("ops/da_assembler.py", "--config-dir"): ("all", ("os.mkdir out",)),
-    ("ops/generate_rule_pack_split.py", "--output-dir"): (
-        "some", ("open out/validation-report.json",)),
     ("ops/migrate_credentials.py", "--manifests-out"): ("some", ("os.mkdir secrets",)),
     ("ops/state_reconcile.py", "--manifest-path"): ("some", ("os.mkdir .",)),
 }
@@ -3334,11 +3363,15 @@ class TestTheLists:
         assert len(_list_faults(row, Seen([], (), (), False, "artifact"))) == 1
         assert len(_list_faults(row, Seen([], (), (), False, None, ("cp",)))) == 1
 
-    def test_an_old_name_call_more_or_fewer_than_listed_is_a_fault(self):
-        key = ("ops/migrate_rule.py", "-o/--output-dir")
+    def test_an_old_name_call_more_or_fewer_than_listed_is_a_fault(self, monkeypatch):
+        # A hand-made entry: no row left on the list has more than one call
+        # (#3107 batch 2 took `migrate_rule`, the one this used to read, off it).
+        key = ("ops/synthetic.py", "-o/--output-dir")
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
-        calls, started = VIA_OLD_NAMES[key], SPAWNS[key]
-        assert len(calls) > 1
+        calls = ("scripts/tools/ops/synthetic.py:write_outputs write_text_or_die ×3",
+                 "scripts/tools/ops/synthetic.py:write_csv write_text_or_die ×1")
+        monkeypatch.setitem(VIA_OLD_NAMES, key, calls)
+        started = ()
         assert _list_faults(row, Seen([], calls, (), False, None, started)) == []
         assert _list_faults(row, Seen([], calls[1:], (), False, None, started))
         assert _list_faults(row, Seen([], (*calls, "x.py:f write_text_secure ×1"), (), False,
@@ -3474,8 +3507,8 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("ops/onboard_platform.py", "_write_phase1_outputs", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 2,
     ("ops/onboard_platform.py", "_write_phase3_outputs", "ensure_dir_or_die"): 1,
-    ("ops/onboard_platform.py", "_write_phase3_outputs", "write_text_or_die"): 2,
-    ("ops/onboard_platform.py", "write_migration_csv", "write_text_or_die"): 1,
+    ("ops/onboard_platform.py", "_write_phase3_outputs", "write_operator_output_or_die"): 2,
+    ("ops/onboard_platform.py", "write_migration_csv", "write_operator_output_or_die"): 1,
     ("ops/onboard_platform.py", "write_outputs", "write_onboard_hints"): 1,
     ("ops/operator_generate.py", "write_crds", "write_yaml_crd"): 1,
     ("ops/validate_migration.py", "main", "ensure_dir_or_die"): 1,
@@ -3569,9 +3602,6 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
     ("ops/generate_rule_pack_split.py", "ensure_dir_or_die"): (
         1, "a truth test (`if ensure_dir_or_die:`) choosing between it and the "
         "bare `mkdir` of the import fallback, not a write."),
-    ("ops/generate_rule_pack_split.py", "write_text_or_die"): (
-        1, "a truth test (`if write_text_or_die is None`) on the import fallback, "
-        "not a write."),
 }
 
 

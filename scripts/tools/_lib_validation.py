@@ -267,6 +267,39 @@ def url_list_type(*, empty: str, separator: str = ",") -> UrlArg:
     return UrlArg(empty, separator)
 
 
+class OutputDirArg:
+    """An argparse ``type=`` made by :func:`output_dir_type` (#3107).
+
+    The flag names a directory the tool writes its files into, so ``-`` —
+    standard output for a single-file output flag — names nothing here. It
+    is refused at parse time (rc 2, argparse's ``argument --flag: ...``
+    line) instead of becoming a directory called ``-``. Nothing else is
+    judged: whether the directory can be made is the write's to say.
+    """
+
+    def __init__(self, then: Any = None) -> None:
+        self.then = then
+        self.__name__ = "output_dir"
+
+    def __call__(self, value: str) -> Any:
+        if value == "-":
+            raise argparse.ArgumentTypeError(
+                "'-' is standard output, and this flag takes a directory "
+                "(to write into a directory of that name, pass ./-)")
+        return self.then(value) if self.then is not None else value
+
+
+def output_dir_type(*, then: Any = None) -> OutputDirArg:
+    """argparse ``type=`` for a flag that names an output DIRECTORY (#3107):
+    the value ``-`` exits 2 (CALLER_ERROR) at parse time, named by argparse.
+
+    *then*: the tool's own ``type=`` for the flag, applied to any other
+    value (``operator-generate``'s refuses an empty string and returns a
+    ``Path``); without one the value stays the string given.
+    """
+    return OutputDirArg(then)
+
+
 def format_duration(seconds: int) -> str:
     """Format seconds back to a Prometheus-compatible duration string.
 
