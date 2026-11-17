@@ -51,9 +51,11 @@ func TestSimulateHandler_NonFiniteFloat_ReadableWithPythonHash(t *testing.T) {
 	if got := ov["match"].(map[string]any)["severity"]; got != "Infinity" {
 		t.Errorf("severity = %#v, want \"Infinity\"", got)
 	}
-	// sha256 of describe_tenant.py's json.dumps of the same tenant body,
-	// first 16 hex (same fixture as pkg/config's RoutingOverrideInf test).
-	if resp.MergedHash != "b35b4f8f5c95253c" {
-		t.Errorf("merged_hash = %q, want Python's b35b4f8f5c95253c", resp.MergedHash)
+	// sha256 of Python's json.dumps(sort_keys=True, separators=(",", ":"),
+	// ensure_ascii=False) of the same tenant body with the built-in table
+	// (#3832) laid under it, first 16 hex (same fixture as pkg/config's
+	// RoutingOverrideInf test).
+	if resp.MergedHash != "e76ea1620d94b760" {
+		t.Errorf("merged_hash = %q, want Python's e76ea1620d94b760", resp.MergedHash)
 	}
 }

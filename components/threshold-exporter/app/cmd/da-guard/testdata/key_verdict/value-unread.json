@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v4",
+  "schema": "da-guard.key-verdict/v5",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -20,7 +20,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": null
+        "value": null,
+        "gate_kind": null
       },
       {
         "key": "_profile",
@@ -36,7 +37,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "gold"
+        "value": "gold",
+        "gate_kind": null
       },
       {
         "key": "_severity_dedup",
@@ -53,7 +55,8 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "maybe"
+        "value": "maybe",
+        "gate_kind": null
       },
       {
         "key": "_silent_mode",
@@ -69,7 +72,93 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "purple"
+        "value": "purple",
+        "gate_kind": null
+      },
+      {
+        "key": "container_cpu",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80,
+        "gate_kind": null
+      },
+      {
+        "key": "container_cpu_throttle",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 25,
+        "gate_kind": null
+      },
+      {
+        "key": "container_memory",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
+      },
+      {
+        "key": "es_disk_usage_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
+      },
+      {
+        "key": "es_heap_usage_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -85,7 +174,93 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80
+        "value": 80,
+        "gate_kind": null
+      },
+      {
+        "key": "mysql_replication_lag",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 30,
+        "gate_kind": null
+      },
+      {
+        "key": "oracle_tablespace_used_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
+      },
+      {
+        "key": "pg_connections",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80,
+        "gate_kind": null
+      },
+      {
+        "key": "pg_replication_lag",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 30,
+        "gate_kind": null
+      },
+      {
+        "key": "rabbitmq_node_mem_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 90,
+        "gate_kind": null
       }
     ],
     "tb": [
@@ -103,7 +278,93 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "silver"
+        "value": "silver",
+        "gate_kind": null
+      },
+      {
+        "key": "container_cpu",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80,
+        "gate_kind": null
+      },
+      {
+        "key": "container_cpu_throttle",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 25,
+        "gate_kind": null
+      },
+      {
+        "key": "container_memory",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
+      },
+      {
+        "key": "es_disk_usage_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
+      },
+      {
+        "key": "es_heap_usage_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -119,7 +380,93 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80
+        "value": 80,
+        "gate_kind": null
+      },
+      {
+        "key": "mysql_replication_lag",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 30,
+        "gate_kind": null
+      },
+      {
+        "key": "oracle_tablespace_used_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 85,
+        "gate_kind": null
+      },
+      {
+        "key": "pg_connections",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80,
+        "gate_kind": null
+      },
+      {
+        "key": "pg_replication_lag",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 30,
+        "gate_kind": null
+      },
+      {
+        "key": "rabbitmq_node_mem_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 90,
+        "gate_kind": null
       }
     ]
   },
@@ -135,6 +482,7 @@
       "reason": "unknown severity_dedup value (valid: enable, disable)",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": true
     },
@@ -149,6 +497,7 @@
       "reason": "references a profile that is not defined under the root profiles:",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": true
     },
@@ -163,6 +512,7 @@
       "reason": "unknown silent mode (valid: warning, critical, all, disable)",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": false
     },
@@ -177,6 +527,7 @@
       "reason": "1 unknown field(s) (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
       "hint": null,
       "base": null,
+      "gate_kind": null,
       "dead_entries": null,
       "blocks": false
     }

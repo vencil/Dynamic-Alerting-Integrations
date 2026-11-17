@@ -61,6 +61,23 @@ def _make_cr(name="db-a", namespace="db-a", tenants=None):
     }
 
 
+def _declare(config_dir, *keys, profiles=()):
+    """#3832：在 config_dir 根層寫一份 `_defaults.yaml`，在 `defaults:` 給夾具
+    會寫的鍵一個平台值（並宣告 profile）。沒有根層檔的樹不再無從判斷：沒有任何
+    一層宣告的鍵會被判 unread，da-guard write 因而拒寫；這裡驗的是渲染與寫入，
+    不是鍵判決，所以讓夾具的鍵有讀取端。給平台值（而非只列進
+    `optional_overrides:`），夾具裡非數字的值才照舊有值可落回、不被當成送不出
+    的值擋下。"""
+    import json as _json
+    lines = ["defaults:\n"] + [f"  {_json.dumps(k)}: 1\n" for k in keys]
+    if not keys:
+        lines = ["defaults: {}\n"]
+    if profiles:
+        lines.append("profiles:\n")
+        lines.extend(f"  {_json.dumps(p)}: {{}}\n" for p in profiles)
+    (config_dir / "_defaults.yaml").write_text("".join(lines), encoding="utf-8")
+
+
 class TestRenderCrFiles:
     """render_cr_files() 測試（#3671：每個 CR 一個目錄）。"""
 
@@ -1014,6 +1031,7 @@ class TestRenderCrFile:
                            encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
+        _declare(out_dir, "m")  # #3832
         assert render_cr_file(cr_path, out_dir) == 0
         text = (out_dir / "ok" / "ok.yaml").read_text(encoding="utf-8")
         # Two header lines and the blank line Go sets the document off by.
@@ -1044,11 +1062,6 @@ def _tagged_int(n):
 _REFUSED = [
     ("defaults-list", "  defaults: {cpu: [1]}\n"),
     ("defaults-map", "  defaults: {cpu: {a: 1}}\n"),
-    # #3457: a threshold number has at most 20 digits. 2^64-1 is past the edit
-    # contract's 18-character int, so it is written as the float it rounds
-    # to, `18446744073709551616.0` — 21 digits, which the exporter does not
-    # read. (`defaults-min-int64` below, 19 digits and `.0`, is still read.)
-    ("defaults-max-uint64", "  defaults: {cpu: 0xFFFFFFFFFFFFFFFF}\n"),
 ]
 
 #: (id, spec body below `_T1`) a scalar `defaults` value the exporter does
@@ -1101,6 +1114,11 @@ _READ_NUMBERS = [
     ("defaults-negative", "  defaults: {cpu: -5}\n"),
     ("defaults-leading-dot", "  defaults: {cpu: .5}\n"),
     ("defaults-exponent", "  defaults: {cpu: 1e3}\n"),
+    # 2^64-1 is past the edit contract's 18-character int, so it is written
+    # as the float it rounds to. In plain decimal that is 21 digits, which
+    # the exporter does not read (#3457 refused it); since #3866 it is written
+    # `1.8446744073709552e+19`, which it does.
+    ("defaults-max-uint64", "  defaults: {cpu: 0xFFFFFFFFFFFFFFFF}\n"),
     ("defaults-underscore", "  defaults: {cpu: 1_000}\n"),
     ("defaults-hex", "  defaults: {cpu: 0x10}\n"),
     ("defaults-signed-hex", "  defaults: {cpu: +0x10}\n"),
@@ -1559,7 +1577,7 @@ class TestRenderCrNameFormat:
 
     _SPEC = "spec:\n  tenants:\n    t1: {}\n"
 
-    def _render_text(self, tmp_path, text, spec=None):
+    def _render_text(self, tmp_path, text, spec=None, declare=()):
         """整份 CR 文字 → (rc, 輸出位元組或 None)。*spec* 預設 `_SPEC`。"""
         tmp_path.mkdir(parents=True, exist_ok=True)
         cr_path = tmp_path / "cr.yaml"
@@ -1568,9 +1586,12 @@ class TestRenderCrNameFormat:
             + (self._SPEC if spec is None else spec), encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
+        if declare:
+            _declare(out_dir, *declare)  # #3832
         rc = render_cr_file(cr_path, out_dir)
         out = out_dir / "ok" / "ok.yaml"
-        files = sorted(p for p in out_dir.rglob("*") if p.is_file())
+        files = sorted(p for p in out_dir.rglob("*")
+                       if p.is_file() and p.name != "_defaults.yaml")
         assert files in ([], [out]), files
         return rc, (out.read_bytes() if files else None)
 
@@ -1833,7 +1854,8 @@ class TestRenderCrNameFormat:
         """對照組：加引號的 `"null":`／`"~":` 是字串鍵，K8s 接受，照常 rc 0。"""
         rc, got = self._render_text(
             tmp_path, "metadata: {name: ok}\n",
-            "spec:\n  tenants:\n    t1: {\"null\": \"1\", \"~\": \"2\"}\n")
+            "spec:\n  tenants:\n    t1: {\"null\": \"1\", \"~\": \"2\"}\n",
+            declare=("null", "~"))
         assert rc == 0
         assert got is not None
 
@@ -1944,11 +1966,13 @@ class TestRenderCrDecoder:
            "metadata: {name: ok}\nspec:\n  tenants:\n    t1: {}\n")
 
     @staticmethod
-    def _write(tmp_path, text):
+    def _write(tmp_path, text, declare=(), profiles=()):
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(text, encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
+        if declare or profiles:
+            _declare(out_dir, *declare, profiles=profiles)  # #3832
         return cr_path, out_dir
 
     @staticmethod
@@ -2089,7 +2113,7 @@ class TestRenderCrDecoder:
         `1`。先前本工具以 PyYAML 讀原文時讀不了（rc 2「cannot read it as
         written」）；比對移到 da-crdecode 之後照 Kubernetes 的讀法 render。"""
         cr_path, out_dir = self._write(
-            tmp_path, self._CR.replace("    t1: {}\n", "    t1: {cpu: !foo '1'}\n"))
+            tmp_path, self._CR.replace("    t1: {}\n", "    t1: {cpu: !foo '1'}\n"), declare=("cpu",))
         assert render_cr_file(cr_path, out_dir) == 0
         assert 'cpu: "1"' in (out_dir / "ok" / "ok.yaml").read_text(encoding="utf-8")
 
@@ -2143,7 +2167,8 @@ class TestRenderCrDecoder:
         """對照組：加了引號、一般字、null 的 `_profile` 照常 render。"""
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace("    t1: {}\n",
-                                       f"    t1: {{_profile: {written}}}\n"))
+                                       f"    t1: {{_profile: {written}}}\n"),
+            profiles=("010", "gold"))
         assert render_cr_file(cr_path, out_dir) == 0
         assert line in (out_dir / "ok" / "ok.yaml").read_text(encoding="utf-8")
 
@@ -2172,13 +2197,17 @@ class TestRenderCrDecoder:
     @pytest.mark.parametrize("tenant, line", [
         pytest.param("{'010': '1'}", '"010": "1"', id="quoted-010"),
         pytest.param("{a: '1', a: '2'}", 'a: "2"', id="same-text-twice"),
-        pytest.param("{a: [{b: '1'}]}", '- b: "1"', id="list-of-maps"),
+        # #3832: a list is no threshold value; under `_routing` (judged by
+        # the route generator, not the threshold value check) the shape is
+        # rendered the same.
+        pytest.param("{_routing: {a: [{b: '1'}]}}", '- b: "1"', id="list-of-maps"),
     ])
     def test_inner_key_read_the_same_renders(self, tenant, line, tmp_path):
         """對照組：加引號的鍵、同字重複鍵（後者勝，維持先前行為）、list
         裡的 mapping 照常 render。"""
         cr_path, out_dir = self._write(
-            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {tenant}\n"))
+            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {tenant}\n"),
+            declare=("010", "a"))
         assert render_cr_file(cr_path, out_dir) == 0
         assert line in (out_dir / "ok" / "ok.yaml").read_text(encoding="utf-8")
 
@@ -2193,19 +2222,23 @@ class TestRenderCrDecoder:
         拒收（rc 2）；原文比對移到 da-crdecode（yaml.v3 的節點）之後，兩邊
         結構相同，照常 render。"""
         cr_path, out_dir = self._write(
-            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {{x: {value}}}\n"))
+            # #3832: a list of mappings is no threshold value; `_routing`
+            # carries the shape without the threshold value check.
+            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {{_routing: {{x: {value}}}}}\n"))
         assert render_cr_file(cr_path, out_dir) == 0
         assert line in (out_dir / "ok" / "ok.yaml").read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("old, new, file, line", [
+        # #3832: the merged mappings sit under `_routing`, which carries a
+        # mapping without the threshold value check.
         pytest.param("    t1: {}\n",
-                     "    t1: {x: {a: '1'}, <<: {x: {b: '1'}}}\n",
+                     "    t1: {_routing: {x: {a: '1'}, <<: {x: {b: '1'}}}}\n",
                      "ok/ok.yaml", 'b: "1"', id="merge-overrides-a-mapping"),
         pytest.param("metadata: {name: ok}",
                      "metadata: {name: ok, <<: {name: other}}",
                      "other/other.yaml", "tenants:", id="merge-overrides-the-name"),
         pytest.param("    t1: {}\n",
-                     "    t1: {<<: {x: {b: '1'}}, x: {a: '1'}}\n",
+                     "    t1: {_routing: {<<: {x: {b: '1'}}, x: {a: '1'}}}\n",
                      "ok/ok.yaml", 'a: "1"', id="explicit-key-after-merge"),
     ])
     def test_merges_render_as_kubernetes_applies_them(
@@ -2296,7 +2329,7 @@ class TestRenderCrDecoder:
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace(
                 "    t1: {}\n",
-                "    zz: {b: '1', a: '2'}\n    aa: {cpu: '1'}\n"))
+                "    zz: {b: '1', a: '2'}\n    aa: {cpu: '1'}\n"), declare=("a", "b", "cpu"))
         assert render_cr_file(cr_path, out_dir) == 0
         body = (out_dir / "ok" / "ok.yaml").read_text(encoding="utf-8")
         assert body.split("\n", 3)[3] == (
@@ -3067,8 +3100,9 @@ class TestControllerWritesThroughDaGuard:
         """租戶 id 以 ADR-035 驗（`_lib_validation.is_valid_tenant_id`）：不合格的
         CR 不寫、status Error 點名該 id；同一週期的下一個 CR 照寫。da-guard write
         本身不擋不合法的租戶 id（實測照寫），所以這一步在本工具。"""
-        bad = _make_cr(name="bad", namespace="ns", tenants={"Bad_Id": {"cpu": "1"}})
-        good = _make_cr(name="good", namespace="ns", tenants={"t-one": {"cpu": "1"}})
+        # #3832: a default-armed key, read in a tree with no root file too.
+        bad = _make_cr(name="bad", namespace="ns", tenants={"Bad_Id": {"container_cpu": "1"}})
+        good = _make_cr(name="good", namespace="ns", tenants={"t-one": {"container_cpu": "1"}})
         api = _listing_api([bad, good])
         assert run_once(api, tmp_path) == 0
         assert sorted(p.name for p in tmp_path.iterdir()) == ["good"]
@@ -3100,7 +3134,8 @@ class TestControllerWritesThroughDaGuard:
 
     def test_the_status_hash_is_the_written_files(self, tmp_path):
         api = mock.MagicMock()
-        cr = _make_cr(name="ok", namespace="ns", tenants={"t-one": {"cpu": "1"}})
+        # #3832: a default-armed key, read in a tree with no root file too.
+        cr = _make_cr(name="ok", namespace="ns", tenants={"t-one": {"container_cpu": "1"}})
         reconcile_one(cr, tmp_path, api=api)
         reconcile_one(cr, tmp_path, api=api)  # unchanged: the same hash
         raw = (tmp_path / "ok" / "ok.yaml").read_bytes()
@@ -3152,9 +3187,10 @@ class TestControllerWritesThroughDaGuard:
         da-guard 以 duplicate_tenant 拒寫、status Error；cra 改成 t2 釋出 t1 後，
         crb 沒有自己的事件就不會重判——仍是 Error、crb.yaml 不存在。被拒的 CR 只在
         它自己下一個事件、重啟或 `--once` 時重判；週期重判是 #3318 的範圍。"""
-        cra = _make_cr(name="cra", namespace="ns", tenants={"t1": {"cpu": "1"}})
-        crb = _make_cr(name="crb", namespace="ns", tenants={"t1": {"cpu": "2"}})
-        cra2 = _make_cr(name="cra", namespace="ns", tenants={"t2": {"cpu": "1"}})
+        # #3832: a default-armed key, read in a tree with no root file too.
+        cra = _make_cr(name="cra", namespace="ns", tenants={"t1": {"container_cpu": "1"}})
+        crb = _make_cr(name="crb", namespace="ns", tenants={"t1": {"container_cpu": "2"}})
+        cra2 = _make_cr(name="cra", namespace="ns", tenants={"t2": {"container_cpu": "1"}})
         _watch_once(monkeypatch, [{"type": "ADDED", "object": cra},
                                   {"type": "MODIFIED", "object": crb},
                                   {"type": "MODIFIED", "object": cra2}])
@@ -3179,10 +3215,15 @@ class TestTenantNumbersAreFloat64:
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
             "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n  tenants:\n"
-            "    t1: {h: 12345678901234567890, si: 80, bo: true, qs: '80', nu: null}\n",
+            "    t1: {_routing: {h: 12345678901234567890, bo: true}, si: 80, qs: '80', nu: null}\n",
             encoding="utf-8")
         out = tmp_path / "out"
         out.mkdir()
+        # #3832: the thresholds get a root value to be read; a bool, and an
+        # int past 18 digits (written as an exponent float the threshold
+        # reader refuses), are no threshold values, so they sit under
+        # `_routing`, which the threshold value check does not judge.
+        _declare(out, "si", "qs", "nu")
         assert render_cr_file(cr_path, out) == 0
         text = (out / "ok" / "ok.yaml").read_text(encoding="utf-8")
         want = _lib_confedit.data_value(float(12345678901234567890))["float"]

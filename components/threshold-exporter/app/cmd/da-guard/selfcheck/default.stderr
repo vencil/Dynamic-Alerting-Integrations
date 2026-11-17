@@ -1,0 +1,2 @@
+da-guard: cardinality limit 500 from {tree}/_defaults.yaml (0 = no check; override with --cardinality-limit)
+da-guard: routing and domain policy not judged: 1 item(s) only the route generator judges — run `da-tools generate-routes --config-dir {tree} --validate --strict` — da-guard no longer judges routing or domain policy (ADR-036 §9) (exit 4)

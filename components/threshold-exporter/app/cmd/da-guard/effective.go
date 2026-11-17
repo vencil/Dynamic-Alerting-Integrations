@@ -83,10 +83,72 @@ type effectiveDoc struct {
 	// (root_defaults_reserved). Always present: [] when none, null as for
 	// RootDefaultsRefused.
 	RootDefaultsReserved []string `json:"root_defaults_reserved"`
+	// BuiltinDefaults: the built-in table this binary was compiled with
+	// (#3832) and what the exporter's build of this tree does with each key
+	// of it (config.ScopedTenants.BuiltinDefaultStates) — the tree-level
+	// answer beneath each tenant's key_sources, which says per tenant whether
+	// the value it gets is the built-in one (`layer: builtin`). Present on
+	// exit 3 too: a root carrier that cannot be read withholds the layer
+	// (every key `withheld`), and the reader says so rather than "not
+	// checked". null when no build ran (the resolve stopped on a file it
+	// cannot decode, or the root cannot be listed). Added without a schema
+	// bump, as root_defaults_refused was: a reader that needs it names a
+	// document without it as a da-guard older than itself.
+	BuiltinDefaults *builtinDefaultsDoc `json:"builtin_defaults"`
 	// tenants_requested / tenants_absent, with --tenant only
 	// (tenant_subset.go): Tenants then holds those of the requested
 	// tenants the tree has.
 	tenantSubset
+}
+
+// builtinDefaultsDoc is effectiveDoc.BuiltinDefaults.
+type builtinDefaultsDoc struct {
+	// Digest names the table (config.BuiltinDefaultsDigest): two components
+	// hold the same table when their digests are equal.
+	Digest string `json:"digest"`
+	// Keys: every key of the table, always all of them.
+	Keys map[string]builtinDefaultKey `json:"keys"`
+}
+
+// builtinDefaultKey is one key of builtinDefaultsDoc.Keys.
+type builtinDefaultKey struct {
+	// Value is the platform's value.
+	Value float64 `json:"value"`
+	// State: `builtin` (the tree's `defaults:` gives the key no value, so
+	// the built-in layer gives Value), `overridden` (it gives the number in
+	// RootValue), `opted_out` (it writes the key as `disable`, which every
+	// tenant inherits: no value, the key's family off) or `withheld` (the
+	// root carrier cannot be read: no value).
+	State string `json:"state"`
+	// RootValue is the number the tree's `defaults:` gives the key; present
+	// for `overridden` only.
+	RootValue *float64 `json:"root_value,omitempty"`
+	// Tenants: for `builtin`, how many tenants of the tree /metrics serves
+	// the platform's value for the key — those that write no value of their
+	// own and those whose value falls back (read at the tenant value's
+	// default, not its time windows or `expires:`); present for `builtin`
+	// only.
+	Tenants *int `json:"tenants,omitempty"`
+}
+
+// builtinDefaultsOf is the document's builtin_defaults for tree; nil when
+// no build ran.
+func builtinDefaultsOf(tree *config.ScopedTenants) *builtinDefaultsDoc {
+	states := tree.BuiltinDefaultStates()
+	if states == nil {
+		return nil
+	}
+	doc := &builtinDefaultsDoc{Digest: config.BuiltinDefaultsDigest(),
+		Keys: make(map[string]builtinDefaultKey, len(states))}
+	for k, st := range states {
+		e := builtinDefaultKey{Value: st.Value, State: st.State, RootValue: st.Root}
+		if st.State == config.BuiltinStateBuiltin {
+			n := st.Tenants
+			e.Tenants = &n
+		}
+		doc.Keys[k] = e
+	}
+	return doc
 }
 
 // effectiveTenant is one tenant: the /effective body (the embedded
@@ -240,6 +302,9 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		// Set on success and on a DecodeError stop alike (#2588): a run
 		// stopped by one undecodable file still names the unreadable ones.
 		doc.Unreadable = unreadableEntries(tree.Unreadable)
+	}
+	if err == nil {
+		doc.BuiltinDefaults = builtinDefaultsOf(tree)
 	}
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, err)

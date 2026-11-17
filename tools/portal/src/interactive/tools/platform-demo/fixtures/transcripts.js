@@ -74,7 +74,7 @@ tenants:
       '[🔗] Auto-Suppression: 1 組 warning↔critical 配對完成',
       '[✓] 成功轉換 3 條規則 (✅ 2 完美, ⚠️ 1 已猜測)',
       '[!] 1 條需人工處理 (LLM Prompt 已寫入報告)',
-      '📁 檔案已輸出至 migration_output/（conf.d 檔在 migration_output/.conf.d/）',
+      '📁 檔案已輸出至 migration_output/：conf.d 檔在 migration_output/.conf.d/，rule pack 與 prefix mapping 在 migration_output/.migration/（點開頭的目錄，conf.d 的讀取端不讀）',
       '⚠️  先把 _defaults.yaml 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。',
       '🏷️  前綴: custom_ (Prefix Mapping 已輸出)',
     ],

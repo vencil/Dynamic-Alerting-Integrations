@@ -30,6 +30,9 @@ import describe_tenant as dt  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
+sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
+from _builtin_layer import with_builtin  # noqa: E402  (#3832)
+from factories import da_guard_at  # noqa: E402  (tests/ on sys.path: conftest)
 
 DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
 
@@ -114,7 +117,8 @@ class TestConfDScanner:
         scanner = dt.ConfDScanner(conf_d)
         assert "acme-prod" in scanner.tenants
         assert scanner.tenants["acme-prod"].defaults_chain == ["_defaults.yaml", "acme/_defaults.yaml"]
-        assert scanner.effective_config("acme-prod") == {"timeout": 20, "retries": 2, "replicas": 3}
+        # #3832: the built-in layer is under every effective config.
+        assert scanner.effective_config("acme-prod") == with_builtin({"timeout": 20, "retries": 2, "replicas": 3})
 
     def test_scanner_effective_config_with_defaults(self, tmp_path):
         conf_d = tmp_path / "conf.d"
@@ -456,7 +460,8 @@ class TestDuplicateDeclaration:
         assert dt.ConfDScanner(conf_d).duplicates == {}
         r = self._run(conf_d, "acme")
         assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
+        # #3832: the built-in layer is under every effective config.
+        assert json.loads(r.stdout)["effective_config"] == with_builtin({"cpu_pct": 70})
 
     def test_a_file_the_exporter_drops_declares_nothing(self, tmp_path):
         """`zbad.yaml` also declares `other: 5` — a scalar tenant body, which
@@ -946,7 +951,7 @@ class TestCustomAlertsAsTheExporterServes:
         def fail(*a, **kw):
             raise dt.DaGuardError("da-guard served-values exited 1", 1, "boom")
 
-        monkeypatch.setattr(dt, "load_served_tree", fail)
+        monkeypatch.setattr(dt, "load_served_facts", fail)
         code, out, err = self._main(monkeypatch, capsys, conf_d, "ta")
         assert code == 0, err
         assert "custom_alerts" not in json.loads(out)
@@ -990,15 +995,14 @@ class TestCustomAlertsAsTheExporterServes:
         assert sum("team/_defaults.yml is ignored on every plane" in line for line in err.splitlines()) == 1, err
 
     def test_a_da_guard_without_the_field_is_a_warn_and_the_field_is_omitted(self, tmp_path, monkeypatch, capsys):
+        """A da-guard older than `--config-facts` (#3918) is named as such, once."""
         conf_d = _write(tmp_path, self.FILES)
-        real = dt.load_served_tree
 
         def stale(*a, **kw):
-            tree = real(*a, **kw)
-            return tree._replace(tenants={t: v._replace(custom_alerts=None, custom_alerts_error=None)
-                                          for t, v in tree.tenants.items()})
+            raise dt.DaGuardError("da-guard served-values: this da-guard is older than this tool: "
+                                  "upgrade or rebuild it", 2, "", stale=True)
 
-        monkeypatch.setattr(dt, "load_served_tree", stale)
+        monkeypatch.setattr(dt, "load_served_facts", stale)
         code, out, err = self._main(monkeypatch, capsys, conf_d, "--all")
         assert code == 0, err
         assert all("custom_alerts" not in t for t in json.loads(out).values())
@@ -1128,7 +1132,8 @@ class TestPlatformOverlayCLI:
         tx = self._run("tx", "--conf-d", str(conf_d))
         assert tx.returncode == 0, tx.stderr
         out = json.loads(tx.stdout)
-        assert out["effective_config"] == {"mysql_connections": "60"}
+        # #3832: the built-in layer is under every effective config.
+        assert out["effective_config"] == with_builtin({"mysql_connections": "60"})
         assert out["platform_overlay"] == [{"file": "_defaults.yaml", "keys": ["mysql_connections"]}]
         ty = self._run("ty", "--conf-d", str(conf_d))
         assert ty.returncode == 0, ty.stderr
@@ -1212,7 +1217,8 @@ class TestProfileOverlayCLI:
         tx = self._run("tx", "--conf-d", str(conf_d))
         assert tx.returncode == 0, tx.stderr
         out = json.loads(tx.stdout)
-        assert out["effective_config"] == {"_profile": "std", "mysql_connections": 60}
+        # #3832: the built-in layer is under every effective config.
+        assert out["effective_config"] == with_builtin({"_profile": "std", "mysql_connections": 60})
         assert out["profile_overlay"] == [
             {"profile": "std", "file": "_profiles.yaml", "keys": ["mysql_connections"]}]
         ty = self._run("ty", "--conf-d", str(conf_d))
@@ -1500,8 +1506,13 @@ DEFAULTS_SHAPES = {
     'document-scalar': b'hello\n',
     'document-false': b'false\n',
 }
+# #3832: a carrier the exporter reads gets the built-in layer under it, so
+# its hash moved (control 664e2553… → 4fb74de7…, `defaults: ~`
+# dc8202df… → 4a2020f6…, the tagged bools 1ec35adf… / 6212cbcf… →
+# 10df64d4… / 409d2d72…). A carrier the exporter drops withholds the layer
+# too, so those rows keep dc8202df….
 DEFAULTS_DOCUMENTS = {
-    'control': ('defaults:\n  mysql_connections: 80\n', '664e2553d242d345'),
+    'control': ('defaults:\n  mysql_connections: 80\n', '4fb74de74e74a125'),
     # The multi-document rows, and the `!!binary` one below, hashed the first
     # document (664e2553…) until ADR-036 step 6 (#3206): parse-tree refuses
     # them (multiple_documents, tag_not_allowed), the exporter drops the
@@ -1510,13 +1521,13 @@ DEFAULTS_DOCUMENTS = {
     'multi-doc-later-unparseable': ('defaults:\n  mysql_connections: 80\n---\n: : [\n', 'dc8202dfc4683b17'),
     'multi-doc-later-bad-shape': ('defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n', 'dc8202dfc4683b17'),
     'multi-doc-empty-first': ('---\n---\ndefaults:\n  mysql_connections: 80\n', 'dc8202dfc4683b17'),
-    'defaults-null': ('defaults: ~\n', 'dc8202dfc4683b17'),
-    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '664e2553d242d345'),
+    'defaults-null': ('defaults: ~\n', '4a2020f6754295a7'),
+    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '4fb74de74e74a125'),
     # #3250: a threshold YAML types as a bool is its text in the merge (the
     # exporter reads the text and refuses it), so the two spellings, one
     # hash before, are two now.
-    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '1ec35adf03530953'),
-    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '6212cbcfd717bd09'),
+    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '10df64d4dab4d8b6'),
+    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '409d2d72fcb9b56b'),
     'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', 'dc8202dfc4683b17'),
 }
 NOT_A_MAPPING = {'list': '- 1\n- 2\n', 'scalar': 'hello\n', 'false': 'false\n'}
@@ -1635,7 +1646,7 @@ class TestShowsGoValuesVerbatim:
     def test_a_subdirectory_defaults_not_a_mapping_is_served_as_go_serves_it(self, tmp_path):
         """In a sub-directory the exporter serves `defaults: [1]` beside
         `mysql_connections: 81` (both planes take the whole document;
-        merged_hash cef3dbb6…). This tool used to refuse it (rc 2, "an
+        merged_hash d4033b70…, cef3dbb6… before the built-in layer, #3832). This tool used to refuse it (rc 2, "an
         unsupported shape"); it now shows Go's answer."""
         conf_d = _write(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
                                    "team/_defaults.yaml": "defaults: [1]\nmysql_connections: 81\n",
@@ -1645,7 +1656,7 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert out["effective_config"]["mysql_connections"] == 81
-        assert out["merged_hash"].startswith("cef3dbb6"), out["merged_hash"]
+        assert out["merged_hash"].startswith("d4033b70"), out["merged_hash"]
 
     @pytest.mark.parametrize("files", [
         {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      at: 2026-12-31T10:20:30+08:00\n"},
@@ -1683,8 +1694,9 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = yaml.safe_load(res.stdout) if fmt == "yaml" else json.loads(res.stdout)
         assert set(out) == {"010", "8"}, out
-        assert out["010"]["effective_config"] == {"mysql_connections": 10}
-        assert out["8"]["effective_config"] == {"mysql_connections": 8}
+        # #3832: the built-in layer is under every effective config.
+        assert out["010"]["effective_config"] == with_builtin({"mysql_connections": 10})
+        assert out["8"]["effective_config"] == with_builtin({"mysql_connections": 8})
 
 
 class TestTreesGoDoesNotResolve:
@@ -1750,8 +1762,9 @@ class TestTreesGoDoesNotResolve:
         res = self._run("--all", "--conf-d", str(conf_d))
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
-        assert out["tr"]["effective_config"] == {"mysql_connections": 10}
-        assert out["ts"]["effective_config"] == {"mysql_connections": 50}
+        # #3832: the built-in layer is under every effective config.
+        assert out["tr"]["effective_config"] == with_builtin({"mysql_connections": 10})
+        assert out["ts"]["effective_config"] == with_builtin({"mysql_connections": 50})
         assert "skips or cannot read" not in res.stderr
 
     def test_control_unparseable_tenant_file_refuses_too(self, tmp_path):
@@ -1916,3 +1929,29 @@ class TestCustomAlertsAndMergedHash:
         assert "da-guard binary not found" in v.stderr, v.stderr
         # #3558: a caller error carries no document, --json or not.
         assert v.stdout == "", v.stdout
+
+
+# #3918: custom_alerts is read from `served-values --config-facts`, which reads
+# no instant. In 01:00–01:29 tenant tx's two keys give one series, so the whole
+# tree's /metrics cannot be gathered there; the default mode then exits 2, and
+# the field used to be dropped (with a WARN) inside that window only.
+_WINDOW_COLLISION = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "tx.yaml": ("tenants:\n  tx:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+                "    mysql_connection_usage_percent_critical:\n      default: disable\n"
+                "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n"),
+    "tc.yaml": ("tenants:\n  tc:\n    _custom_alerts:\n      - recipe: threshold\n        name: q_high\n"
+                "        metric: q_high_depth\n        op: \">\"\n        window: 5m\n"
+                "        threshold: \"1000:warning\"\n"),
+}
+
+
+def test_custom_alerts_do_not_depend_on_the_time_of_day(tmp_path, monkeypatch, capsys):
+    got = {}
+    for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
+        conf_d = _write(tmp_path / f"conf-{at.replace(':', '')}", _WINDOW_COLLISION)
+        monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
+        got[at] = dt.custom_alerts_fields(conf_d)
+    first, second = got.values()
+    assert first == second and first["tc"]["custom_alerts"][0]["status"] == "served", got
+    assert "custom_alerts not shown" not in capsys.readouterr().err

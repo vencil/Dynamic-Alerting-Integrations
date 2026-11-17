@@ -54,6 +54,17 @@ DOCS_INSTALL_URL: Final[str] = (
 # renderer: the Prometheus Operator puts AlertmanagerConfig routes first with
 # `continue: true` and a namespace matcher, so the platform routes could never
 # come first. Callers print it through `i18n_text(ZH, EN)`.
+
+#: The one command that creates or updates the Alertmanager's configSecret
+#: from a rendered alertmanager.yaml (#3900: server-side, so a large config
+#: meets no last-applied annotation limit; --force-conflicts keeps the
+#: overwrite the client-side apply it replaces always did, also of a Secret
+#: first made by `kubectl create`). Every remedy and checklist that
+#: teaches it reads it from here.
+OPERATOR_CONFIG_APPLY_COMMAND: Final[str] = (
+    "kubectl create secret generic <secret> -n <namespace> --from-file=alertmanager.yaml "
+    "--dry-run=client -o yaml | kubectl apply --server-side --force-conflicts -f -")
+
 OPERATOR_ROUTING_REMEDY_EN: Final[str] = (
     "Alertmanager routing is no longer generated as AlertmanagerConfig CRDs (#3572): "
     "the Prometheus Operator puts their routes first with continue: true and a "
@@ -62,8 +73,7 @@ OPERATOR_ROUTING_REMEDY_EN: Final[str] = (
     "generator and give it to the Alertmanager as its configSecret:\n"
     "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
     "--base-config <your alertmanager.yaml> -o alertmanager.yaml\n"
-    "  kubectl create secret generic <secret> -n <namespace> "
-    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -\n"
+    "  " + OPERATOR_CONFIG_APPLY_COMMAND + "\n"
     "  then set the Alertmanager's configSecret to <secret> "
     "(kube-prometheus-stack: alertmanager.alertmanagerSpec.configSecret)."
 )
@@ -74,8 +84,7 @@ OPERATOR_ROUTING_REMEDY_ZH: Final[str] = (
     "產出 alertmanager.yaml，交給 Alertmanager 當作它的 configSecret：\n"
     "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
     "--base-config <你的 alertmanager.yaml> -o alertmanager.yaml\n"
-    "  kubectl create secret generic <secret> -n <namespace> "
-    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -\n"
+    "  " + OPERATOR_CONFIG_APPLY_COMMAND + "\n"
     "  再把 Alertmanager 的 configSecret 設為 <secret>"
     "（kube-prometheus-stack：alertmanager.alertmanagerSpec.configSecret）。"
 )
@@ -185,6 +194,9 @@ RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...
 FORECAST_MAX_LOOKBACK: Final[str] = "96h"
 THRESHOLD_NUMBER_PATTERN: Final[str] = "^(?:\\+|-)?(?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:\\.)?|\\.[0-9]{0,1})?|\\.[0-9]{0,2})?|\\.[0-9]{0,3})?|\\.[0-9]{0,4})?|\\.[0-9]{0,5})?|\\.[0-9]{0,6})?|\\.[0-9]{0,7})?|\\.[0-9]{0,8})?|\\.[0-9]{0,9})?|\\.[0-9]{0,10})?|\\.[0-9]{0,11})?|\\.[0-9]{0,12})?|\\.[0-9]{0,13})?|\\.[0-9]{0,14})?|\\.[0-9]{0,15})?|\\.[0-9]{0,16})?|\\.[0-9]{0,17})?|\\.[0-9]{0,18})?|\\.[0-9]{0,19})?|\\.[0-9]{1,20})(?:[eE](?:\\+|-)?[0-9]+)?$"
 THRESHOLD_TRIM_CODE_POINTS: Final[frozenset[int]] = frozenset((0x9, 0xA, 0xB, 0xC, 0xD, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000))
+EDIT_INT_PATTERN: Final[str] = "^(?:0|-?[1-9][0-9]*)$"
+EDIT_FLOAT_PATTERN: Final[str] = "^-?(?:(?:0|[1-9][0-9]*)\\.[0-9]+|[1-9]\\.(?:0|[0-9]*[1-9])e(?:\\+0|[+-][1-9][0-9]*))$"
+EDIT_INT_MAX_LENGTH: Final[int] = 18
 # END GENERATED recipe contract
 
 # ============================================================

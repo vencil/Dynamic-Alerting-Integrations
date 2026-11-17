@@ -162,8 +162,53 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 		got.Documents[0][0][0].LHS != "dropped" || got.Documents[0][0][0].Op != "unless" {
 		t.Fatalf("got %s", stdout.String())
 	}
-	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(`{"expressions": ["up +"]}`), &stdout, &stderr); rc != exitCallerErr {
-		t.Fatalf("an expression the parser refuses: rc %d, want %d", rc, exitCallerErr)
+	// An empty expression list is an answer about no expressions.
+	stdout.Reset()
+	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(`{"expressions": []}`), &stdout, &stderr); rc != exitOK ||
+		stdout.String() != `{"documents":[[]]}`+"\n" {
+		t.Fatalf("empty expressions: rc %d stdout %q", rc, stdout.String())
+	}
+	// Records with string exprs, string aliases: read as before; a null
+	// label value is "" (Prometheus' reading of `labels: {x: ~}`).
+	stdout.Reset()
+	ok := `{"expressions": ["r"], "records": {"r": [{"expr": "up", "labels": {"tenant": null}}]}, "aliases": ["namespace"]}`
+	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(ok), &stdout, &stderr); rc != exitOK ||
+		stdout.String() != `{"documents":[[[]]]}`+"\n" {
+		t.Fatalf("records and aliases: rc %d stdout %q stderr %s", rc, stdout.String(), stderr.String())
+	}
+	// An expression or record the parser refuses is the input refused: the
+	// refusal document. An empty <label> or standard input that is not the
+	// request object is the caller's error: no document (#3943).
+	for _, bad := range []struct {
+		label, in string
+		refused   bool
+	}{
+		{"tenant", `{"expressions": ["up +"]}`, true},
+		{"tenant", `{"expressions": [], "records": {"r": [{"expr": "up +"}]}}`, true},
+		{"", `{"expressions": ["up"]}`, false},
+		{"tenant", `["up"]`, false},
+		{"tenant", `{"records": {}}`, false},
+		// json.Unmarshal reads a null element as "": framing, not an
+		// expression the parser refuses.
+		{"tenant", `{"expressions": null}`, false},
+		{"tenant", `{"expressions": [null]}`, false},
+		{"tenant", `{"expressions": ["up", {}]}`, false},
+		// the same for a record's "expr" and an alias: null is framing,
+		// not an expression the parser refuses or an alias passed unseen
+		{"tenant", `{"expressions": ["up"], "records": {"r": [{"expr": null}]}}`, false},
+		{"tenant", `{"expressions": ["up"], "records": {"r": [null]}}`, false},
+		{"tenant", `{"expressions": ["up"], "aliases": ["namespace", null]}`, false},
+		{"tenant", `{"expressions": ["up"], "aliases": null}`, false},
+	} {
+		stdout.Reset()
+		want := ""
+		if bad.refused {
+			want = refusedOut
+		}
+		if rc := run([]string{"promql-label-flow", bad.label, "-"}, strings.NewReader(bad.in), &stdout, &stderr); rc != exitCallerErr ||
+			stdout.String() != want {
+			t.Errorf("label %q, %s: rc %d stdout %q, want rc %d stdout %q", bad.label, bad.in, rc, stdout.String(), exitCallerErr, want)
+		}
 	}
 }
 

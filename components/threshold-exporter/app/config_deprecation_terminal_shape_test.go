@@ -245,7 +245,8 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 			cfg := mgr.GetConfig()
 
 			got := map[string]bool{}
-			for _, r := range cfg.ResolveAt(fixedNow) {
+			// The built-in layer's rows (#3832) are not this test's.
+			for _, r := range dropBuiltinRows(cfg.ResolveAt(fixedNow)) {
 				got[r.Component+"_"+r.Metric] = true
 			}
 			if len(got) != len(a.wantMetrics) {

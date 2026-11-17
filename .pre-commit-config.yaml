@@ -1738,12 +1738,14 @@ repos:
         # on all THREE surfaces that ship it — the two runtime ones (#1310)
         # plus the try-local seed, #1176 / the Go retired_keys table, #3829 /
         # the Go built-in defaults table, #3832)
+        # + the built-in table's digest named by a `⚠️ breaking` changelog
+        # fragment or CHANGELOG.md (#3832: changing it is breaking)
         # + header-prose key membership (F6).
         # Fix: edit the registry, then `check_threshold_registry.py --regen`
         # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
-        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults)_gen\.go)$
+        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/(retired_threshold_keys|builtin_defaults)_gen\.go|changelog\.d/.*\.md|CHANGELOG\.md)$
 
       - id: threshold-unit-sanity-check
         name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"
@@ -1911,6 +1913,20 @@ repos:
         # narrower than what the gate reads means edits that never run it.
         files: ^(\.devcontainer/devcontainer\.json|\.github/workflows/ci\.yml|scripts/tools/lint/check_devcontainer_dep_parity\.py)$
 
+      - id: exporter-queries-check
+        name: rule packs read only what their query-exporter config serves (#3833)
+        # Packs whose registry entry names `queries:` (rule-packs/exporters/*.yaml).
+        # Served names are derived with query-exporter's own code (pinned as in
+        # requirements/ci-constraints.txt); also: every gauge has an expiration,
+        # no increment: true, no rate() of a gauge. Rule packs are read the way
+        # Prometheus reads them (da-read). The runtime half (a real Oracle) is a
+        # step of CI's Lint Rule Packs.
+        entry: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_exporter_queries.py --ci
+        language: python
+        additional_dependencies: ['pyyaml', 'query-exporter==5.2.3']
+        pass_filenames: false
+        files: (?:^(rule-packs/(rule-pack-.*|threshold-registry|exporters/.*)\.ya?ml|scripts/tools/lint/check_exporter_queries\.py|scripts/tools/_lib_metric_sources\.py|requirements/ci-constraints\.txt)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+
       - id: vmalert-coverage-check
         name: rule-pack alert firing-coverage baseline (#947 gate A/replay gap guard)
         # #3206 (ADR-036 §12): rule files are read the way Prometheus' rule
@@ -1928,6 +1944,19 @@ repos:
         # / is removed also fails (baseline == reality). Fix: add an alert_rule_test, or
         # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
         files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+
+      - id: percent-render-pinned-check
+        name: rule-pack percent-rendered annotations pinned by a firing test (#978)
+        # An annotation that renders a percentage (humanizePercentage, or a
+        # `}}%` suffix) must be asserted under the same key in a FIRING case
+        # (non-empty exp_alerts), so a scale/renderer mix-up ("1%", "8500%")
+        # shows in the fixture diff. Bidirectional baseline for the gap at
+        # introduction. Read like vmalert-coverage-check (da-read / da-crdecode).
+        entry: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_percent_render_pinned.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|percent_render_baseline\.yaml)|scripts/tools/lint/check_percent_render_pinned\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: rulepack-derived-check
         name: "rule-pack maintenance label → clause (every tenant alert's `maintenance: mute|page` decides its PromQL clause; #3309)"

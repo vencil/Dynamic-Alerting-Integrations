@@ -853,9 +853,12 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			// The cap leaves room for the built-in rows (#3832): at 5 they
+			// took it, the colliding rows were cut and nothing collided.
 			code, doc, _, stderr := served(t, map[string]string{
-				"_defaults.yaml": defaultsOnly + "max_metrics_per_tenant: 5\noptional_overrides:\n  - redis_queue_length\n",
-				"tenant-a.yaml":  "tenants:\n  tenant-a:\n" + tenant,
+				"_defaults.yaml": defaultsOnly + fmt.Sprintf("max_metrics_per_tenant: %d\n", 5+len(config.BuiltinDefaults())) +
+					"optional_overrides:\n  - redis_queue_length\n",
+				"tenant-a.yaml": "tenants:\n  tenant-a:\n" + tenant,
 			}, "")
 			if code != exitCallerErr {
 				t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
@@ -1358,8 +1361,8 @@ func TestServedValues_SchemaIsNamed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{"t.yaml": "tenants:\n  t:\n    x: 1\n"}, "")
 	mustOK(t, code, stderr)
-	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v2" {
-		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v2")
+	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v3" {
+		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v3")
 	}
 }
 

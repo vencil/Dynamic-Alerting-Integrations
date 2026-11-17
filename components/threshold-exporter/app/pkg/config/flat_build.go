@@ -138,6 +138,16 @@ type FlatBuild struct {
 	// `defaults:` was never decoded — RootDefaultsRefused and the root's
 	// reserved keys are no verdict then, not "none" (#3250 review N1).
 	RootDefaultsUnjudged bool
+	// BuiltinSeeded is the built-in keys this build gave the platform's
+	// value (seedBuiltinDefaults' answer): the merged `defaults:` holds no
+	// finite value for them — not written, written as null, or refused —
+	// sorted. A built-in key not listed takes the value `defaults:` gives
+	// (Config.Defaults). nil when BuiltinWithheld (#3832).
+	BuiltinSeeded []string
+	// BuiltinWithheld: the root carrier exists but this build could not read
+	// it (unreadable on the walk, or dropped whole), so the built-in layer is
+	// withheld and no built-in key has a value (builtin_defaults.go, #3832).
+	BuiltinWithheld bool
 	// RejectedChainValues is, per subtree defaults file of some tenant's
 	// chain (root-relative slash path), the keys whose value
 	// applySubtreeDefaults refuses as not threshold-shaped, so a tenant under
@@ -282,6 +292,16 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	exists := tenantExistenceFor(fileConfigs, scan)
 	reportPlatformOrphans(fileConfigs, exists, logger)
 	merged := mergePartialConfigs(fileConfigs, exists)
+	// #3832: the built-in layer, under the root carrier's values — withheld
+	// when the root carrier exists but cannot be read (builtin_defaults.go).
+	rootDropped := rootCarrier != "" && slices.Contains(parseFailed, rootCarrier)
+	// (rootDropped is RootBuiltinWithheld's DropsConfFile half, already
+	// known here without decoding the carrier again.)
+	withheld := rootDropped || scan.RootDefaultsUnreadable()
+	var seeded []string
+	if !withheld {
+		seeded = seedBuiltinDefaults(merged.Defaults)
+	}
 	// #2513: the profile WARNs go to the caller's logger like every other
 	// line of this build, not to the process-global log. The exporter passes
 	// log.Default() (same output as ApplyProfiles' log.Printf); LoadDir with a
@@ -302,6 +322,8 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		RootDefaultsUnread:   rootUnread,
 		RootDefaultsRefused:  rootRefused,
 		RootDefaultsUnjudged: rootCarrier != "" && slices.Contains(parseFailed, rootCarrier),
+		BuiltinSeeded:        seeded,
+		BuiltinWithheld:      withheld,
 		RejectedChainValues:  rejected.byFile,
 		rejectedTenantSets:   rejected.tenantSets,
 		respelledChain:       respelledChainFiles(in.ParsedDefaults),

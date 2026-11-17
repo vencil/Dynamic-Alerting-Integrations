@@ -51,7 +51,7 @@ PACK_META = {
     "redis": ("Redis", "redis_exporter"),
     "mongodb": ("MongoDB", "mongodb_exporter"),
     "elasticsearch": ("Elasticsearch", "elasticsearch_exporter"),
-    "oracle": ("Oracle", "oracledb_exporter"),
+    "oracle": ("Oracle", "query-exporter"),
     "db2": ("DB2", "db2_exporter"),
     "clickhouse": ("ClickHouse", "built-in /metrics"),
     "kafka": ("Kafka", "kafka_exporter"),

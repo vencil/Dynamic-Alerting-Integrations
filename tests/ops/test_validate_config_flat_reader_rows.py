@@ -43,7 +43,7 @@ def _as_run(result):
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
-# Every armed key of the pack (#3830): `unsupplied_defaults` WARNs on a root file with one alone.
+# The root platform file: two keys a shipped alert compares.
 _DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_replication_lag: 30\n"
 _GOOD_TENANT = (
     "tenants:\n"

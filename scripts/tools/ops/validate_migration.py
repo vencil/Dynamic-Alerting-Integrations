@@ -14,19 +14,19 @@
 
   # 批次比對: 使用 prefix-mapping.yaml
   python3 validate_migration.py \\
-    --mapping migration_output/prefix-mapping.yaml \\
+    --mapping migration_output/.migration/prefix-mapping.yaml \\
     --prometheus http://prometheus.monitoring.svc.cluster.local:9090
 
   # 持續監控模式 (每 60 秒比對一次，運行 N 輪)
   python3 validate_migration.py \\
-    --mapping migration_output/prefix-mapping.yaml \\
+    --mapping migration_output/.migration/prefix-mapping.yaml \\
     --prometheus http://prometheus.monitoring.svc.cluster.local:9090 \\
     --watch --interval 60 --rounds 1440
 
   # 本地開發 (透過 port-forward)
   kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
   python3 validate_migration.py \\
-    --mapping migration_output/prefix-mapping.yaml \\
+    --mapping migration_output/.migration/prefix-mapping.yaml \\
     --prometheus http://localhost:9090
 
   # 叢集內執行 (包裝為 K8s Job，適合長期 Shadow Monitoring)

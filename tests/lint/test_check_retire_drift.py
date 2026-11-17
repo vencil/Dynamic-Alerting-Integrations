@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(_ROOT, "scripts", "tools", "lint"))
 
 import _lib_tenant_values as tv  # noqa: E402
 import check_retire_drift as crd  # noqa: E402
+from factories import da_guard_at  # noqa: E402  (tests/ on sys.path: conftest)
 
 
 @pytest.fixture(autouse=True)
@@ -293,3 +294,25 @@ def test_no_da_crdecode_is_an_error_not_an_empty_set(tmp_path: Path, monkeypatch
     f.write_text(_ns("db-a", "db-a"), encoding="utf-8")
     with pytest.raises(crd.NamespacesFileError, match="da-crdecode was not found"):
         crd.namespace_declared_targets(f)
+
+
+# #3918: the db_type is read from `served-values --config-facts`, which reads
+# no instant. In 01:00–01:29 the tenant's two keys give one series, so the
+# whole tree's /metrics cannot be gathered there; the default mode then
+# exits 2, and this gate used to fail (rc 2) inside that window only.
+_WINDOW_COLLISION = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "alpha.yaml": ("tenants:\n  alpha:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+                   "    mysql_connection_usage_percent_critical:\n      default: disable\n"
+                   "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n"
+                   "    _metadata:\n      db_type: mariadb\n"),
+}
+
+
+def test_the_db_types_do_not_depend_on_the_time_of_day(tmp_path: Path, monkeypatch) -> None:
+    got = {}
+    for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
+        root = _write(tmp_path / f"conf-{at.replace(':', '')}", _WINDOW_COLLISION)
+        monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
+        got[at] = crd.conf_d_declared_db_type_tenants(root)
+    assert list(got.values()) == [{"alpha": "mariadb"}] * 2, got

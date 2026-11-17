@@ -25,6 +25,9 @@ from pathlib import Path
 import pytest
 
 import _lib_tenant_values as tv
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
 import policy_engine as pe
 import policy_opa_bridge as pob
 import validate_config as vc
@@ -168,6 +171,8 @@ def test_retired_spelling_in_tenant_or_rule_is_compared(spelling, tmp_path, caps
     assert row["status"] == vc.FAIL and sum(d.startswith("[ERROR]") for d in row["details"]) == 3, row
     assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     served = json.loads(capsys.readouterr().out)["served"]["tenant-a"]
+    # #3832: the built-in layer's rows are served too; this test's are the two.
+    served = {k: v for k, v in served.items() if k not in BUILTIN_DEFAULTS}
     assert served == {"mysql_threads_running": 500.0, "mysql_threads_running_critical": 900.0}
 
 
@@ -436,7 +441,8 @@ def test_root_only_keys_are_not_the_tenants_reserved_keys(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["violations"] == []
     assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     tenants = json.loads(capsys.readouterr().out)["tenants"]
-    assert set(tenants["tenant-a"]) == {"mysql_connections"}, tenants
+    # #3832: the built-in layer's keys are the tenant's too; neither `_` key is.
+    assert set(tenants["tenant-a"]) == {"mysql_connections"} | set(BUILTIN_DEFAULTS), tenants
 
 
 def test_policies_lookup_does_not_call_evaluated_tenants_skipped(tmp_path):

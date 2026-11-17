@@ -167,6 +167,12 @@ class TestExtractMetricsFromExpr:
         assert "or" not in metrics
         assert "and" not in metrics
 
+    def test_modifier_keywords_filtered(self):
+        # #3833: `offset` and `bool` follow whitespace like a metric would.
+        expr = "metric_a offset 90s \n and metric_b > bool 1 "
+        metrics = grps.extract_metrics_from_expr(expr)
+        assert metrics == {"metric_a", "metric_b"}
+
     def test_promql_functions_not_captured(self):
         # Functions are always written `fn(` (followed by `(`), so the regex
         # never captures them — they need no builtin listing.

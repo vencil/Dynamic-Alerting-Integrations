@@ -44,6 +44,9 @@ func capTree(capLine string, n int) map[string]string {
 
 func TestMergeTenantHonoursRootMaxMetricsPerTenant(t *testing.T) {
 	t.Parallel()
+	// #3832: every tenant also gets one row per built-in key (below a cap
+	// that does not cut).
+	nb := len(builtinDefaults)
 	for _, tc := range []struct {
 		name     string
 		files    map[string]string
@@ -52,29 +55,29 @@ func TestMergeTenantHonoursRootMaxMetricsPerTenant(t *testing.T) {
 		// The issue's direction: GET listed rows /metrics had cut.
 		{"cap below key count", capTree("max_metrics_per_tenant: 2", 4), 2},
 		// The reverse: GET cut at 500 while /metrics served all 510.
-		{"cap above built-in 500", capTree("max_metrics_per_tenant: 1000", 510), 510},
+		{"cap above built-in 500", capTree("max_metrics_per_tenant: 1000", 510), 510 + nb},
 		// A negative cap disables truncation on /metrics.
-		{"negative cap is no limit", capTree("max_metrics_per_tenant: -1", 510), 510},
+		{"negative cap is no limit", capTree("max_metrics_per_tenant: -1", 510), 510 + nb},
 		// Controls: no cap → built-in 500, both sides.
-		{"no cap, few keys", capTree("", 4), 4},
+		{"no cap, few keys", capTree("", 4), 4 + nb},
 		{"no cap, above 500", capTree("", 510), 500},
 		// Only the ROOT carrier sets it (#2028): a tenant file's own cap is
 		// ignored by /metrics and must be by GET too.
 		{"tenant file cap ignored", map[string]string{
 			"_defaults.yaml": "defaults:\n  m1_x: 1\n  m2_x: 1\n  m3_x: 1\n",
 			"tx.yaml":        "max_metrics_per_tenant: 1\ntenants:\n  tx:\n    m1_x: \"2\"\n",
-		}, 3},
+		}, 3 + nb},
 		// Nor does a nested carrier, nor a non-carrier root platform file.
 		{"nested carrier cap ignored", map[string]string{
 			"_defaults.yaml":     "defaults:\n  m1_x: 1\n  m2_x: 1\n  m3_x: 1\n",
 			"sub/_defaults.yaml": "max_metrics_per_tenant: 1\n",
 			"tx.yaml":            "tenants:\n  tx:\n    m1_x: \"2\"\n",
-		}, 3},
+		}, 3 + nb},
 		{"root platform file cap ignored", map[string]string{
 			"_defaults.yaml": "defaults:\n  m1_x: 1\n  m2_x: 1\n  m3_x: 1\n",
 			"_platform.yaml": "max_metrics_per_tenant: 1\n",
 			"tx.yaml":        "tenants:\n  tx:\n    m1_x: \"2\"\n",
-		}, 3},
+		}, 3 + nb},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

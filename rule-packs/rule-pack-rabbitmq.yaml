@@ -104,6 +104,42 @@ groups:
               "mem_source", "plugin", "", "")
           )
 
+      # Resource alarms (#3973): 1 while any node of the tenant has its memory
+      # (or free-disk) alarm in effect — RabbitMQ then blocks every publisher.
+      # A state, not a threshold: no tenant key reads it.
+      #   - Both exporters the pack supports: kbudde/rabbitmq_exporter
+      #     (rabbitmq_node_mem_alarm / rabbitmq_node_disk_free_alarm, one series
+      #     per node with cluster / node / self) and the built-in
+      #     rabbitmq_prometheus plugin (rabbitmq_alarms_memory_used_watermark /
+      #     rabbitmq_alarms_free_disk_space_watermark, the scraped node's own
+      #     alarm). Upstream: exporter_node.go; the plugin's
+      #     prometheus_rabbitmq_alarm_metrics_collector.erl.
+      #   - The plugin reports only its own node, while one node's alarm blocks
+      #     publishers cluster-wide: scrape every node, at /metrics. Only the
+      #     default registry carries these two on every release: /metrics/detailed
+      #     never does, /metrics/per-object only from 4.2.0
+      #     (rabbit_prometheus_dispatcher.erl).
+      #   - The ratio rule above drops a node whose memory limit reads 0
+      #     (vm_memory_high_watermark = 0 blocks every publisher at once): this
+      #     is the signal that still fires for it.
+      #   - Each side is tagged before `or`, as above, so a 0 from one exporter
+      #     cannot hide a 1 from the other.
+      - record: tenant:rabbitmq_memory_alarm:max
+        expr: |
+          max by(tenant) (
+            label_replace(rabbitmq_node_mem_alarm, "alarm_source", "exporter", "", "")
+            or
+            label_replace(rabbitmq_alarms_memory_used_watermark, "alarm_source", "plugin", "", "")
+          )
+
+      - record: tenant:rabbitmq_disk_alarm:max
+        expr: |
+          max by(tenant) (
+            label_replace(rabbitmq_node_disk_free_alarm, "alarm_source", "exporter", "", "")
+            or
+            label_replace(rabbitmq_alarms_free_disk_space_watermark, "alarm_source", "plugin", "", "")
+          )
+
       # Unacknowledged messages (typically indicates consumer slowness)
       - record: tenant:rabbitmq_unacked_messages:max
         expr: max by(tenant) (rabbitmq_queue_messages_unacked)
@@ -384,6 +420,95 @@ groups:
           description: "{{ $value | printf \"%.0f\" }} messages awaiting acknowledgment (critical threshold exceeded)"
           description_zh: "{{ $value | printf \"%.0f\" }} 個訊息等待確認 (超過嚴重閾值)"
 
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Memory alarm in effect (#3973): RabbitMQ blocks every publisher until it
+      # clears. 1m as upstream (awesome-prometheus-alerts, critical, for: 1m).
+      - alert: RabbitMQMemoryAlarm
+        expr: |
+          (tenant:rabbitmq_memory_alarm:max > 0)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+          maintenance: mute
+          # The alarm is memory past the watermark: the same group as
+          # RabbitMQHighMemory, so severity dedup holds back that warning while
+          # this critical fires.
+          metric_group: "rabbitmq_node_mem_percent"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "RabbitMQ memory alarm on {{ $labels.tenant }}: publishers are blocked"
+          summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 記憶體告警已觸發：所有 publisher 被擋住"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: RabbitMQ memory alarm — publishers blocked"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: RabbitMQ 記憶體告警 — publisher 被擋住"
+          description: "A node of this tenant has its memory alarm in effect, so RabbitMQ blocks every connection that publishes. Free memory (drain queues, add consumers) or raise vm_memory_high_watermark; a watermark of 0 blocks publishers by design."
+          description_zh: "這個租戶有節點的記憶體告警生效中，RabbitMQ 會擋住所有發佈訊息的連線。請釋放記憶體（消化佇列、增加 consumer）或調高 vm_memory_high_watermark；watermark 設為 0 時本來就會擋住所有 publisher。"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Disk alarm in effect (#3973): RabbitMQ blocks every publisher until it
+      # clears. 1m as upstream (awesome-prometheus-alerts, critical, for: 1m).
+      - alert: RabbitMQDiskAlarm
+        expr: |
+          (tenant:rabbitmq_disk_alarm:max > 0)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 1m
+        labels:
+          severity: critical
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "RabbitMQ disk alarm on {{ $labels.tenant }}: publishers are blocked"
+          summary_zh: "{{ $labels.tenant }} 的 RabbitMQ 磁碟告警已觸發：所有 publisher 被擋住"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: RabbitMQ disk alarm — publishers blocked"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: RabbitMQ 磁碟告警 — publisher 被擋住"
+          description: "A node of this tenant has its disk alarm in effect, so RabbitMQ blocks every connection that publishes. Free disk space on the node (purge or move data, grow the volume); lowering disk_free_limit only narrows the margin before the disk fills."
+          description_zh: "這個租戶有節點的磁碟告警生效中，RabbitMQ 會擋住所有發佈訊息的連線。請釋放該節點的磁碟空間（清除或搬移資料、擴充磁碟）；調低 disk_free_limit 只會縮小磁碟寫滿前的安全邊際。"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+  # -------------------------------------------------------
+  # Unconfigured thresholds (#1200 D-A A3, #1175)
+  # -------------------------------------------------------
+  # The platform ships no value for some keys this pack reads; until the
+  # tenant (or the platform's conf.d) writes one, the alert comparing against
+  # it never fires. threshold-exporter serves user_threshold_unset{tenant,
+  # pack, key, fix} for each such key that serves no threshold and is not
+  # disabled, for tenants whose state filter unset_thresholds is on (off by
+  # default); this names them for a tenant whose rabbitmq exporter is answering.
+  # The expr is generated from scripts/tools/_lib_exporter_presence.py —
+  # run `python3 scripts/tools/_lib_exporter_presence.py --write`, do not
+  # edit it by hand.
+  - name: rabbitmq-unset-thresholds
+    rules:
+      - alert: RabbitMQThresholdNotConfigured
+        expr: |
+          (
+            max without(instance, pod) (user_threshold_unset{pack="rabbitmq"})
+            and on(tenant)
+            (rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"})
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 30m
+        labels:
+          severity: info
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "{{ $labels.key }} has no threshold for {{ $labels.tenant }}: the alert on it stays silent"
+          summary_zh: "{{ $labels.tenant }} 沒有設定 {{ $labels.key }}：讀它的告警不會響"
+          platform_summary: "{{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }})"
+          platform_summary_zh: "{{ $labels.key }}：沒有門檻值，讀它的告警不會響（處理方：{{ $labels.fix }}）"
+          description: "{{ if eq $labels.fix \"platform\" }}The platform does not declare {{ $labels.key }}, so a tenant value for it is not read and the {{ $labels.pack }} alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice.{{ else }}No threshold is served for {{ $labels.key }}, so the {{ $labels.pack }} alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice.{{ end }}"
+          description_zh: "{{ if eq $labels.fix \"platform\" }}平台沒有宣告 {{ $labels.key }}，租戶寫的值不會被讀，{{ $labels.pack }} 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。{{ else }}{{ $labels.key }} 沒有送出任何門檻值，{{ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。{{ end }}"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

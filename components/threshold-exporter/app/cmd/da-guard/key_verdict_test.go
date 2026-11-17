@@ -37,7 +37,7 @@ func verdictErrors(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := keyVerdictOf(root, keyVerdictOpts{rootPlatform: hasRootPlatformFile(doc), profiles: rootProfilesOf(doc)},
+	res, err := keyVerdictOf(root, keyVerdictOpts{profiles: rootProfilesOf(doc)},
 		time.Now().UTC())
 	if err != nil || !res.judged {
 		t.Fatalf("not judged: %v %v", err, res.why)
@@ -98,9 +98,12 @@ func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 					"  - {name: p, target: mysql_connection_usage_percent, operator: lte, value: 100, when: {target: owner_tag, operator: required}}\n",
 				"a.yaml": tenant(a, "    owner_tag: x\n")},
 			[]string{}},
-		{"no root platform file: threshold keys are undecidable, reserved keys judged",
+		// #3832: the built-in layer is the platform surface of a tree with no
+		// root platform file, so its threshold keys are judged too (ADR-038
+		// decision 7), no longer undecidable.
+		{"no root platform file: threshold keys judged against the built-in layer",
 			map[string]string{"a.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n")},
-			[]string{a + " _routng unregistered a.yaml"}},
+			[]string{a + " _routng unregistered a.yaml", a + " mysql_conections no_row a.yaml"}},
 		{"a key from a platform file or a profile is an error too (#3394)",
 			map[string]string{"_defaults.yaml": kvRoot,
 				"_platform.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n"),
@@ -164,16 +167,30 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
 		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "hint": nil, "switched_off_with": nil,
-		"dead_entries": []any{}, "value": "70"}
+		"dead_entries": []any{}, "value": "70", "gate_kind": nil}
 	rows := doc["tenants"].(map[string]any)["t1"].([]any)
-	if got := fmt.Sprintf("%d %v", len(rows), rows[0].(map[string]any)["key"]); got != "4 mysql_conections" {
-		t.Fatalf("t1's keys: %s", got)
+	// #3832: t1 also holds every built-in key kvRoot does not write.
+	n := 4
+	for k := range config.BuiltinDefaults() {
+		if !strings.Contains(kvRoot, "  "+k+":") {
+			n++
+		}
 	}
-	if !reflect.DeepEqual(rows[0], misspelt) {
-		t.Fatalf("t1's misspelt key %v, want %v", rows[0], misspelt)
+	var row any
+	for _, r := range rows {
+		if r.(map[string]any)["key"] == "mysql_conections" {
+			row = r
+		}
+	}
+	if len(rows) != n || row == nil {
+		t.Fatalf("t1's keys: %d rows (want %d), misspelt key found %v", len(rows), n, row != nil)
+	}
+	if !reflect.DeepEqual(row, misspelt) {
+		t.Fatalf("t1's misspelt key %v, want %v", row, misspelt)
 	}
 	finding := map[string]any{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "a.yaml",
-		"tenants": []any{"t1"}, "reason": "no_row", "hint": nil, "base": nil, "dead_entries": nil, "blocks": true}
+		"tenants": []any{"t1"}, "reason": "no_row", "hint": nil, "base": nil, "dead_entries": nil, "blocks": true,
+		"gate_kind": nil}
 	if fs := doc["findings"].([]any); len(fs) != 1 || !reflect.DeepEqual(fs[0], finding) {
 		t.Fatalf("findings %v, want [%v]", fs, finding)
 	}

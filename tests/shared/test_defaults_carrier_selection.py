@@ -44,6 +44,14 @@ def _describe(conf_d: Path, tenant: str) -> subprocess.CompletedProcess:
         capture_output=True, text=True, encoding="utf-8", timeout=120)
 
 
+def _without_builtin(effective: dict) -> dict:
+    """effective minus the built-in layer's keys (#3832): the platform's
+    default-armed thresholds, in every tenant's effective config."""
+    import _registry_lib
+    builtin = set(_registry_lib.builtin_defaults(_registry_lib.load_registry()))
+    return {k: v for k, v in effective.items() if k not in builtin}
+
+
 def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     """#1674 measurement B, Python leg: the chain was
     ['_defaults.yml', '_defaults.yaml'] and the effective config merged both
@@ -58,7 +66,7 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["defaults_chain"] == ["_defaults.yaml"]
-    assert out["effective_config"] == {"cpu_pct": 50, "disk_pct": 4}
+    assert _without_builtin(out["effective_config"]) == {"cpu_pct": 50, "disk_pct": 4}  # #3832
     # Since #2906 describe_tenant has no carrier selection of its own: the
     # warning is parse-tree's `not_read` verdict on the carrier no plane
     # reads (#3147; said by describe_tenant itself since #3230 removed the
@@ -89,7 +97,7 @@ def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["defaults_chain"] == ["_defaults.yaml"]
-    assert out["effective_config"] == {"cpu_pct": 50}
+    assert _without_builtin(out["effective_config"]) == {"cpu_pct": 50}  # #3832
 
 
 def test_describe_tenant_refuses_a_tree_with_a_dangling_carrier(tmp_path: Path) -> None:

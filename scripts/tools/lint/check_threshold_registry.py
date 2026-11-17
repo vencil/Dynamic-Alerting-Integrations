@@ -112,6 +112,64 @@ def _state_filter_names() -> set[str]:
     }
 
 
+#: Where a change to the built-in table is announced (#3832): the unreleased
+#: changelog fragments, and the released CHANGELOG they are assembled into.
+CHANGELOG_FRAGMENTS_DIR = os.path.join(PROJECT_ROOT, "changelog.d")
+CHANGELOG_PATH = os.path.join(PROJECT_ROOT, "CHANGELOG.md")
+
+#: The marker a breaking changelog fragment carries (changelog.d/README.md).
+BREAKING_MARKER = "⚠️ breaking"
+
+
+def _changelog_tool():
+    """scripts/tools/dx/generate_changelog.py, imported on first use."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_generate_changelog_for_registry",
+        os.path.join(_THIS_DIR, "..", "dx", "generate_changelog.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def check_builtin_digest_announced(
+        doc: dict,
+        fragments_dir: str | None = None,
+        changelog_path: str | None = None) -> str | None:
+    """None when the digest of *doc*'s built-in table is announced, else why not.
+
+    A change to the built-in table — a value, a key armed or disarmed —
+    changes what every reader of conf.d serves with no diff in the
+    deployer's repo, so it is BREAKING (#3832, decision 5). Announced means:
+    a changelog fragment under *fragments_dir* (a directory named
+    ``changelog.d``, as the changelog tool lists it; not its README) carrying
+    BREAKING_MARKER names the table's digest, or the released CHANGELOG at
+    *changelog_path* names it (a fragment's text is assembled there at
+    release, the digest with it). The digest binds the announcement to the
+    exact table: the next change moves it, and the fragment naming the old
+    one no longer counts."""
+    digest = registry_lib.builtin_defaults_digest(registry_lib.builtin_defaults(doc))
+    fdir = fragments_dir or CHANGELOG_FRAGMENTS_DIR
+    if fdir and os.path.isdir(fdir):
+        # The fragments as the changelog tool itself enumerates them
+        # (generate_changelog.fragment_paths: the directory's `*.md`, its
+        # README excluded) — this module lists no directory of its own.
+        from pathlib import Path
+        for path in _changelog_tool().fragment_paths(Path(fdir).parent):
+            text = path.read_text(encoding="utf-8")
+            if digest in text and BREAKING_MARKER in text.lower():
+                return None
+    cpath = changelog_path or CHANGELOG_PATH
+    if cpath and os.path.isfile(cpath):
+        with open(cpath, encoding="utf-8") as fh:
+            if digest in fh.read():
+                return None
+    return (f"the built-in defaults table (digest {digest}) is announced nowhere: "
+            f"a change to it is breaking, so a changelog.d/ fragment marked "
+            f"`{BREAKING_MARKER}` must name the digest {digest} (the released "
+            "CHANGELOG.md naming it counts too)")
+
+
 def run_check(
     registry_path: str | None = None,
     schema_path: str | None = None,
@@ -119,6 +177,7 @@ def run_check(
     surface_paths: dict[str, str] | None = None,
     prose_files: list[str] | None = None,
     extra_allowed: set[str] | None = None,
+    changelog_paths: tuple[str, str] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors}. Inputs default to the real artifacts; hermetic tests
     inject synthetic docs/packs/paths to exercise each branch.
@@ -129,6 +188,9 @@ def run_check(
       every rule-packs/rule-pack-*.yaml).
     - ``extra_allowed``: membership-universe extras (defaults to KNOWN_UNWIRED
       + scaffold state-filter names).
+    - ``changelog_paths``: (fragments dir, CHANGELOG path) the built-in
+      table's digest must be announced in (defaults to changelog.d/ and
+      CHANGELOG.md).
     """
     errors: list[str] = []
 
@@ -190,6 +252,21 @@ def run_check(
     #     values the readers of conf.d are compiled with.
     builtin_path = (surface_paths or {}).get(registry_lib.BUILTIN_DEFAULTS_GO_ID)
     msg = registry_lib.check_builtin_defaults_go(doc, builtin_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+
+    # 3e. a change to the built-in table is breaking (#3832): its digest is
+    #     named by a `⚠️ breaking` changelog fragment or the released
+    #     CHANGELOG.
+    msg = check_builtin_digest_announced(
+        doc, *(changelog_paths or (None, None)))
+    if msg:
+        errors.append(f"unannounced: {msg}")
+
+    # 3f. the generated Go table of the operator-supplied keys (#1200 D-A A3),
+    #     the keys the exporter judges unset per tenant.
+    unset_path = (surface_paths or {}).get(registry_lib.UNSET_KEYS_GO_ID)
+    msg = registry_lib.check_unset_keys_go(doc, unset_path)
     if msg:
         errors.append(f"stale-surface: {msg}")
 

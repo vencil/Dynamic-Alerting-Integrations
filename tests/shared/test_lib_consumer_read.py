@@ -90,13 +90,14 @@ def test_the_other_reading_is_no_answer(tmp_path) -> None:
 
 def test_a_usage_line_is_no_refusal(tmp_path) -> None:
     """An older da-crdecode does not know --any-shape: it prints its usage
-    and exits 2. That is no answer about the input."""
+    and exits 2, with no refusal document. That is no answer about the
+    input (#3943)."""
     old = _fake(tmp_path, "echo 'usage: da-crdecode <file|->' >&2; exit 2")
     with pytest.raises(cr.ConsumerReadError) as exc:
         cr.any_yaml_text_documents("a: 1\n", binary=old)
     assert not isinstance(exc.value, cr.InputRefused)
+    assert "without a refusal document" in str(exc.value)
     assert "older da-crdecode? rebuild it" in str(exc.value)
-    assert "--any-shape" in str(exc.value)
 
 
 def test_files_come_back_in_the_order_given(tmp_path) -> None:
@@ -171,8 +172,12 @@ def _fake(tmp_path, body: str) -> str:
     return str(script)
 
 
-def test_exit_2_with_a_reason_is_input_refused(tmp_path) -> None:
-    fake = _fake(tmp_path, "echo 'da-crdecode: <stdin>: bad' >&2; exit 2")
+#: The refusal document as a fake binary prints it (#3943).
+_REFUSAL = "echo '{\"answer\": \"refused\"}'"
+
+
+def test_exit_2_with_the_refusal_document_is_input_refused(tmp_path) -> None:
+    fake = _fake(tmp_path, f"{_REFUSAL}; echo 'da-crdecode: <stdin>: bad' >&2; exit 2")
     with pytest.raises(cr.InputRefused) as exc:
         cr.kubernetes_text_documents("a: 1\n", binary=fake)
     assert exc.value.stderr_lines == ["da-crdecode: <stdin>: bad"]
@@ -189,6 +194,15 @@ def test_a_real_refusal_is_input_refused() -> None:
     "echo 'panic: runtime error' >&2; echo 'goroutine 1' >&2; exit 2",  # a Go crash
     "echo 'fatal error: out of memory' >&2; exit 2",
     "exit 2",                                                    # no reason given
+    # #3943: exit 2 with a reason but no refusal document — an I/O error, or
+    # a binary older than the document — is no answer about the input
+    "echo 'da-crdecode: <stdin>: bad' >&2; exit 2",
+    "echo 'da-crdecode: writing stdout: broken pipe' >&2; exit 2",
+    # a document that is not the refusal document
+    "echo '{\"answer\": \"read\"}'; echo 'x' >&2; exit 2",
+    "echo '[\"refused\"]'; echo 'x' >&2; exit 2",
+    "echo 'not json'; echo 'x' >&2; exit 2",
+    f"{_REFUSAL}; exit 3",                                       # the document, another rc
     "echo 'not json'; echo 'warn' >&2; exit 0",                  # no JSON contract
 ])
 def test_other_failures_are_not_input_refused(tmp_path, body) -> None:
@@ -196,6 +210,32 @@ def test_other_failures_are_not_input_refused(tmp_path, body) -> None:
     with pytest.raises(cr.ConsumerReadError) as exc:
         cr.kubernetes_text_documents("a: 1\n", binary=fake)
     assert not isinstance(exc.value, cr.InputRefused)
+
+
+@pytest.mark.parametrize("stdout,reason", [
+    # exactly the document, nothing beside it, or it is not the document
+    ('{"answer": "refused", "files": []}', "bad_output"),
+    ('{"answer": "refused", "reason": "x"}', "bad_output"),
+    ('{"answer": "refused"} {"answer": "refused"}', "bad_output"),
+    ('not json', "bad_output"),
+    ("", "unexpected_exit"),
+])
+def test_exit_2_with_anything_but_the_document_is_no_refusal(tmp_path, stdout, reason) -> None:
+    """#3943: a single-input reading's refusal is stdout exactly
+    {"answer": "refused"}. Anything else printed with exit 2 is output that
+    is not the document (`bad_output`); nothing printed is no answer
+    (`unexpected_exit`)."""
+    import _lib_tool_fault
+    say = f"printf '%s\\n' '{stdout}'; " if stdout else ""
+    fake = _fake(tmp_path, f"{say}echo 'da-crdecode: <stdin>: x' >&2; exit 2")
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.kubernetes_text_documents("a: 1\n", binary=fake)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert [f.reason for f in _lib_tool_fault.records()] == [reason]
+    finally:
+        _lib_tool_fault.clear()
 
 
 def test_a_run_that_does_not_finish_is_not_input_refused(tmp_path, monkeypatch) -> None:
@@ -254,3 +294,58 @@ def test_a_subdirectory_that_cannot_be_listed_is_named_not_skipped(tmp_path, mon
     with pytest.raises(cr.SourcesUnlisted) as exc:
         cr.files_to_read([str(tmp_path)])
     assert (str(locked), "cannot list this directory: Permission denied") in exc.value.files
+
+
+# --- #3943: Python's open is the authority; da-crdecode's "cannot open" only
+# sends `_lib_consumer_read` to ask Python again ---------------------------
+
+def _cannot_open(tmp_path, *, remove: bool) -> str:
+    """A da-crdecode that says it cannot open its file (exit 2, no refusal
+    document) — after removing it first, when *remove*."""
+    rm = 'rm -f "$f"; ' if remove else ""
+    return _fake(tmp_path, 'for a; do f="$a"; done; ' + rm
+                 + 'echo "da-crdecode: open $f: no such file or directory" >&2; exit 2')
+
+
+def test_cannot_open_of_a_file_python_still_reads_is_a_tool_fault(tmp_path) -> None:
+    """The file is there: da-crdecode's "cannot open" is no answer about it
+    (a tool fault, recorded once per run), never a refusal of the file."""
+    import _lib_tool_fault
+    p = tmp_path / "a.yaml"
+    p.write_text("kind: A\n", encoding="utf-8")
+    fake = _cannot_open(tmp_path, remove=False)
+    _lib_tool_fault.clear()
+    try:
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.kubernetes_documents(str(p), binary=fake)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert "without a refusal document" in str(exc.value)
+        with pytest.raises(cr.ConsumerReadError) as exc:
+            cr.any_yaml_documents_of([p], binary=fake, keep_refusals=True)
+        assert not isinstance(exc.value, cr.InputRefused)
+        assert [f.reason for f in _lib_tool_fault.records()] == ["unexpected_exit"] * 2
+    finally:
+        _lib_tool_fault.clear()
+    assert p.exists()
+
+
+def test_a_file_gone_under_da_crdecode_is_refused_not_a_fault(tmp_path) -> None:
+    """The file went between Python's read and da-crdecode's open (a race):
+    Python, asked again, cannot read it — refused with `CANNOT_OPEN`, as one
+    gone before, and no tool fault is recorded."""
+    import _lib_tool_fault
+    _lib_tool_fault.clear()
+    try:
+        p = tmp_path / "a.yaml"
+        p.write_text("kind: A\n", encoding="utf-8")
+        with pytest.raises(cr.InputRefused) as exc:
+            cr.kubernetes_documents(str(p), binary=_cannot_open(tmp_path, remove=True))
+        assert exc.value.stderr_lines == [
+            f"da-crdecode: {p}: {cr.CANNOT_OPEN}: No such file or directory"]
+        p.write_text("kind: A\n", encoding="utf-8")
+        got = cr.kubernetes_documents_of([p], binary=_cannot_open(tmp_path, remove=True),
+                                         keep_refusals=True)
+        assert isinstance(got[str(p)], cr.InputRefused)
+        assert _lib_tool_fault.records() == []
+    finally:
+        _lib_tool_fault.clear()

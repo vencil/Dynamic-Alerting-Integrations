@@ -28,6 +28,7 @@ lang: zh
 | ClickHouseReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse replication queue high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:clickhouse_replication_queue:max |
 | ClickHouseHighMemoryUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse memory usage high  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | tenant:clickhouse_memory_tracking:max |
 | ClickHouseHighFailedQueryRate | warning | 靜音 | Failed query rate: {{ $value \| printf "%.1f" }} queries/sec | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:clickhouse_failed_queries:rate5m |
+| ClickHouseThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -45,6 +46,7 @@ lang: zh
 | DB2HighLockWaitTime | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 lock wait time high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_lock_wait_time:rate5m |
 | DB2HighLockWaitTimeCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: DB2 lock waits at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_lock_wait_time:rate5m |
 | DB2HighSortOverflow | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 sort overflow ratio high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_sort_overflow_ratio:avg |
+| DB2ThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -63,6 +65,7 @@ lang: zh
 | ElasticsearchUnassignedShards | warning | 靜音 | [tier] {{ $labels.tenant }}: ES unassigned shards  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:es_unassigned_shards:count |
 | ElasticsearchPendingTasks | warning | 靜音 | [tier] {{ $labels.tenant }}: ES pending cluster tasks  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:es_pending_tasks:max |
 | ElasticsearchPendingTasksCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: ES master task backlog at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:es_pending_tasks:max |
+| ElasticsearchThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -77,6 +80,7 @@ lang: zh
 | JVMThreadPoolExhaustion | warning | 靜音 | [tier] {{ $labels.tenant }}: thread pool saturation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_threads:current |
 | JVMThreadPoolExhaustionCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical thread exhaustion  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_threads:current |
 | JVMPerformanceDegraded | critical | 靜音 | [tier] {{ $labels.tenant }}: multi-signal JVM degradation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:jvm_gc_pause:rate5m |
+| JVMThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -89,6 +93,7 @@ lang: zh
 | KafkaUnderReplicatedPartitions | warning | 靜音 | [tier] {{ $labels.tenant }}: under-replicated partitions  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:sum |
 | KafkaUnderReplicatedPartitionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical under-replication  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:sum |
 | KafkaLowBrokerCount | warning | 靜音 | [tier] {{ $labels.tenant }}: broker count below minimum  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_broker_count:max |
+| KafkaThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -109,7 +114,7 @@ lang: zh
 | VersionAwareThresholdInert | warning | 照常觸發 | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
 | CustomRecipeDiskInert | warning | 靜音 | [SRE] {{ $labels.tenant }} disk recipe inert  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
 | NodeNotReady | warning | 靜音 | [tier] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:node_not_ready:core |
-| TenantHAReplicasDegraded | warning | 靜音 | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:ha_replicas_degraded:core |
+| TenantHAReplicasDegraded | warning | 靜音 | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:ha_replicas_degraded:by_kind |
 
 ---
 
@@ -144,6 +149,7 @@ lang: zh
 | MariaDBRecentRestart | info | 靜音 | Uptime is only {{ $value }}s (< 5 min) | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | mysql_global_status_uptime |
 | MariaDBHighSlowQueries | warning | 靜音 | [tier] {{ $labels.tenant }}: slow query rate elevated  | 檢查慢查詢日誌，找出優化候選；考慮調整相關參數 | tenant:mysql_slow_queries:rate5m |
 | MariaDBHighAbortedConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: aborted connection rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_aborted_connections:rate5m |
+| MariaDBThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -161,6 +167,7 @@ lang: zh
 | MongoDBHighOperations | warning | 靜音 | [tier] {{ $labels.tenant }}: MongoDB operation rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mongodb_opcounters:rate5m |
 | MongoDBHighPageFaults | warning | 靜音 | [tier] {{ $labels.tenant }}: MongoDB page fault rate high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mongodb_page_faults:rate5m |
 | MongoDBConnectionSaturation | warning | 靜音 | [tier] {{ $labels.tenant }}: MongoDB connection pool near saturation  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mongodb_connection_usage:ratio |
+| MongoDBThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -174,6 +181,7 @@ lang: zh
 | NginxRequestRateSpikeCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical request rate  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:nginx_requests:rate5m |
 | NginxConnectionBacklog | warning | 靜音 | [tier] {{ $labels.tenant }}: connection backlog building  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:nginx_connections_waiting:max |
 | NginxConnectionBacklogCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical connection backlog  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:nginx_connections_waiting:max |
+| NginxThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -192,7 +200,8 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| OracleDatabaseDown | critical | 照常觸發 | oracledb_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | oracledb_up |
+| OracleDatabaseDown | critical | 照常觸發 | The Oracle liveness query has not succeeded for 90s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | query_timestamp |
+| OracleQueryStalled | warning | 靜音 | [tier] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database ans | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | queries_total |
 | OracleHighActiveSessions | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle active sessions elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_sessions_active:max |
 | OracleHighActiveSessionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: Oracle active sessions at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_sessions_active:max |
 | OracleTablespaceAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_tablespace_used_percent:max |
@@ -201,6 +210,7 @@ lang: zh
 | OracleHighProcessCount | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle process count high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_process_count:max |
 | OracleHighPGAUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle PGA usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_pga_allocated_bytes:max |
 | OracleHighSessionUtilization | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle session limit approaching  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_session_utilization:ratio |
+| OracleThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -232,6 +242,9 @@ lang: zh
 | RabbitMQLowConsumers | warning | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ consumer count low  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_consumers:max |
 | RabbitMQHighUnackedMessages | warning | 靜音 | [tier] {{ $labels.tenant }}: unacked messages piling up  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_unacked_messages:max |
 | RabbitMQHighUnackedMessagesCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical unacked backlog  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_unacked_messages:max |
+| RabbitMQMemoryAlarm | critical | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ memory alarm  | 釋放記憶體（消化佇列、增加 consumer）或調高 vm_memory_high_watermark；watermark 為 0 時本來就會擋住所有 publisher | tenant:rabbitmq_memory_alarm:max |
+| RabbitMQDiskAlarm | critical | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ disk alarm  | 釋放該節點的磁碟空間（清除或搬移資料、擴充磁碟）；調低 disk_free_limit 只會縮小磁碟寫滿前的安全邊際 | tenant:rabbitmq_disk_alarm:max |
+| RabbitMQThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---
 
@@ -248,5 +261,6 @@ lang: zh
 | RedisReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: Redis replication lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:redis_replication_lag:max |
 | RedisReplicationLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: Redis replica far behind  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:redis_replication_lag:max |
 | RedisLowHitRatio | warning | 靜音 | [tier] {{ $labels.tenant }}: low cache hit ratio  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:redis_keyspace_hit_ratio:avg |
+| RedisThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
 ---

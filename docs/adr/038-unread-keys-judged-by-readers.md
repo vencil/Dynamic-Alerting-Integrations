@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-15
+updated_at: 2026-11-16
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -71,6 +71,10 @@ updated_at: 2026-11-15
 2026-11-14 修訂：`key_checks` 改成每項檢查一筆結構化記錄（種類、作者寫的鍵與它的指標名、改名時替代的指標名、每種一句不帶作者文字的說明），產生器與 validate-config 依這些欄位以固定句型印出，不再原樣印 Go 寫好、引用整個鍵與 label 值的句子；判決文件升為 `da-guard.key-verdict/v4`、served-values 文件升為 `da-guard.served-values/v2`（決定 11）。
 
 2026-11-15 修訂：子目錄 `_defaults.yaml` 的 defaults 寫了 exporter 不套用的保留鍵，判決報 `unread`、原因 `subtree_default_reserved_key`，與 da-guard 同名 finding 讀同一份集合（決定 10）。
+
+2026-11-15 修訂：平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11）。沒讀到任何根平台檔的樹不再無從判斷，租戶寫的閾值鍵照常判；租戶寫預設啟用的鍵，即使根目錄沒寫，也判為有讀；這些鍵的 `disable` 過期即失效（決定 4、7、8）。
+
+2026-11-16 修訂：`disable` 可以寫在根目錄 `defaults:`（只限內建層給值的鍵），每個租戶繼承，連帶與判定規則與子目錄的 `disable` 相同（決定 8）。
 
 ## 摘要
 
@@ -266,7 +270,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 |---|---|---|
 | `read` | 至少一個讀取端讀它；登記為 `annotation` 的鍵也算 | — |
 | `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`）；閾值 registry `retired_keys:` 登記的退役閾值鍵也是（原因 `retired`），即使 exporter 仍為它送出一列——部署方根 `defaults:` 寫的也算；finding 的 `hint` 點名替代鍵 | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
-| `undecidable` | 沒有讀到任何根平台檔，租戶寫的閾值鍵在 exporter 那半無從判斷；保留鍵照常判（見決定 7） | 判決輸出回 rc 2 |
+| `undecidable` | 不再出現：沒讀到任何根平台檔的樹，閾值鍵照常判（見決定 7）。判決文件保留 `undecidable` 欄位，恆為 false | — |
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 
@@ -310,7 +314,7 @@ profiles:
 - 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。判全天（決定 1）讓判決的工作量隨每個租戶的時窗數成長，帶著時窗的租戶越多，越可能在期限內判不完；判不完時這筆寫入以可重試的錯誤不收，不會被當成 finding 擋下，也不會照收。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
   - 被寫入的檔裡、屬於寫入對象租戶、判決說會擋（`blocks`）的 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
-  - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；今天 Go 對這種樹的閾值鍵也會擋。
+  - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；da-guard 已不再給出這個結果（決定 7）。
   - 擋不擋讀判決的 `blocks`，tenant-api 與容器都不依等級另判；容器原樣轉送每筆 finding 的 `blocks`，判不了的閾值鍵讀判決的 `undecidable_blocks`。finding 不帶 `blocks`（映像早於 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）與沒有回判決同樣是容器太舊，回 503。
   - 找不到或無法執行 da-guard，或容器沒有回判決（映像早於這一步），依 ADR-036 §3 是容器不可用，回 503；與找不到 da-read 相同，每次判定前先確認 da-guard，所以長期缺 da-guard 會出現在容器可用性的告警上，不會變成一筆筆的拒收。
   - 其餘的 finding 放進寫入回應的 `warnings`。
@@ -369,7 +373,7 @@ tenants:
 
 exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，而不是 conf.d 裡有沒有某個檔：
 
-- **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：租戶寫的閾值鍵標 `undecidable`。保留鍵照常判。整棵樹的 CI 擋下，因為沒判的鍵不能當成判過、沒問題；要驗，就驗組好的整棵樹。tenant-api 對判不了的寫入同樣不收。
+- **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：照常判。平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），不靠根平台檔，所以租戶寫這些鍵判為有讀，其他閾值鍵沒有任何一層宣告，判為 `unread`（原因 `no_row`）。例：沒有根檔的樹，租戶 `t1` 寫 `pg_connections: "70"` 與 `redis_connected_clients: "5"`，前者 `read`、後者 `unread`。分片樹裡判為 `unread` 的鍵，組好整棵樹之後可能有根檔宣告它；要驗，就驗組好的整棵樹。
 - **有讀到根平台檔，但沒有宣告任何閾值**（例如只有 profiles、只有子目錄的 `_defaults.yaml`）：這是可以判定的錯誤，照現有的精確 finding 報（例如「子目錄的 defaults 送不到 exporter」），不降級成無從判斷。
 - **只有路由設定的樹**：沒有閾值鍵，也就沒有判不了的鍵，rc 0。
 
@@ -379,7 +383,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 ### 8. `disable` 關掉什麼、有沒有作用
 
-閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
+閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值或由內建層給值（ADR-017 決策 11）的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。內建層給值的鍵也可以在根目錄 `defaults:` 寫 `disable`：每個租戶都繼承它，與子目錄 `_defaults.yaml` 寫的 `disable` 同樣連帶、同樣判為有讀，子目錄、profile 或租戶給了值的範圍整族回來；租戶自己的 `disable` 過期後落回這個繼承來的 `disable`（根目錄 `disable` 的限制見 ADR-017 決策 11）。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
 
 只想留 critical 那一級，寫 `X: "90:critical"`，並刪掉 `X_critical`：它送出的 series 與舊的 `X: disable` 加 `X_critical: 90` 相同，兩者並存則會送出同一條 series 兩次，整份 `/metrics` 失敗。只想停 critical 那一級，寫 `X_critical: disable`。
 
@@ -454,7 +458,7 @@ _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode (valid:
 
 - 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
-- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate`。`key_checks` 每項檢查一筆記錄：檢查的種類（封閉集合）、作者寫的整個鍵、它的指標名、改名時替代的指標名，以及每個種類一句固定的說明；只有鍵與指標名帶作者寫的字。讀取端以固定句型組出那一行，鍵與指標名照 Python 唯一的鍵顯示規則出去：名稱形的照印，其餘（帶 label 的鍵一定是）印成 `<key:xxxxxx>` 摘要替身，所以鍵與 label 值的原文不會進產生器的輸出。exporter 的載入 log 與 tenant-api 仍用同一筆記錄產生的完整句子。帶 `key_checks` 的兩份文件以 `schema` 欄位標示形狀（served-values 為 `da-guard.served-values/v2`，判決為 `da-guard.key-verdict/v4`）：讀取端遇到較早的版本，就說 da-guard 比工具舊、要升級或重建；遇到不認得的版本（可能比工具新），只說 schema 不合，不說較舊。版本只看這個欄位，不從個別欄位的形狀推斷，所以舊文件的句子形狀出現在新版本的文件裡，算壞掉的輸出。例：租戶 `ta` 寫 `container_cpu{version="V2!"}: "5"`，產生器 `--validate` 印出 ``WARN: tenant=ta: key check version_label_charset: metric container_cpu, key <key:8c0e11> — the `version` label violates ^[a-z0-9][a-z0-9._-]*$ (ADR-024 OQ-6; pilot-calibratable)``；改名類的那一行是 NOTICE，另帶 `replacement metric <新指標名>`。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
+- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate`。`key_checks` 每項檢查一筆記錄：檢查的種類（封閉集合）、作者寫的整個鍵、它的指標名、改名時替代的指標名，以及每個種類一句固定的說明；只有鍵與指標名帶作者寫的字。讀取端以固定句型組出那一行，鍵與指標名照 Python 唯一的鍵顯示規則出去：名稱形的照印，其餘（帶 label 的鍵一定是）印成 `<key:xxxxxx>` 摘要替身，所以鍵與 label 值的原文不會進產生器的輸出。exporter 的載入 log 與 tenant-api 仍用同一筆記錄產生的完整句子。帶 `key_checks` 的兩份文件以 `schema` 欄位標示形狀：讀取端遇到較早的版本，就說 da-guard 比工具舊、要升級或重建；遇到不認得的版本（可能比工具新），只說 schema 不合，不說較舊。版本只看這個欄位，不從個別欄位的形狀推斷，所以舊文件的句子形狀出現在新版本的文件裡，算壞掉的輸出。例：租戶 `ta` 寫 `container_cpu{version="V2!"}: "5"`，產生器 `--validate` 印出 ``WARN: tenant=ta: key check version_label_charset: metric container_cpu, key <key:8c0e11> — the `version` label violates ^[a-z0-9][a-z0-9._-]*$ (ADR-024 OQ-6; pilot-calibratable)``；改名類的那一行是 NOTICE，另帶 `replacement metric <新指標名>`。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
 - 維度鍵（`<base>{…}`）只有在它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時，exporter 才送出；不論它寫在租戶檔、profile、子目錄還是根 `defaults:`。比對的是那一列送出的 label 名稱：regex 選擇器送出 `<label>_re`（`version=~"v3.*"` 送出 `version_re`），要宣告的是 `version_re`，宣告 `version` 不涵蓋它。base 不能是 `<key>_critical`（新舊拼法皆然）：`<key>_critical` 是 `<key>` 的 critical 層的名字，不是 base，所以這種宣告不宣告任何東西（根 `defaults:` 只給 `<key>_critical`、沒給 `<key>` 時它會被當成自己的 base 送出，那本身就是 da-guard 報 `root_defaults_critical_key` 的設定錯誤；它的維度版同樣不送，刻意比那個 warning 嚴），`<key>_critical{…}` 沒有列，da-guard 對根檔報 `root_dimensions_critical_base`（error）；每個維度的 critical 門檻寫成 `<key>{label="v"}: "N:critical"`。其他維度鍵沒有列，判決讀成 `unread`（`no_row`）；兩個例外同樣沒有列：值寫 `disable` 的依決定 8 報 `disable_noop`，Policy-as-Code 規則指名的讀成 `read`（`policy_engine` 讀它）。理由是出貨的規則包以 `max by(…)` 合成門檻，只保留它分組的 label（多數只有 `tenant`）；不在分組裡的 label 無法成為獨立維度，值會併進同一組的門檻，寫了也不會依維度生效。出貨的 `dimensions:` 來自門檻登錄表（`rule-packs/threshold-registry.yaml`）每個 key 的 `dimensions`：`--regen` 由它重生出貨的宣告與 `scaffold_tenant.RULE_PACKS`，`da-tools init` 與 `scaffold_tenant` 讀的是後者；測試兩個方向對照登錄表與規則包的分組，目前是 `container_cpu`、`container_memory` 的 `version`。自訂規則若依某個 label 讀，平台在 `dimensions:` 加上該 base 與 label。例：
 
   ```yaml

@@ -42,6 +42,8 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkDefaultsWrapper(input)...)
 	findings = append(findings, checkRootCriticalKeys(input)...)
 	findings = append(findings, checkRootDefaultsRefused(input)...)
+	findings = append(findings, checkRootOptionalBuiltin(input)...)
+	findings = append(findings, checkRootDisableFamily(input)...)
 	findings = append(findings, checkRootReservedKeys(input)...)
 	findings = append(findings, checkRootDimensionsCriticalBase(input)...)
 	findings = append(findings, checkSubtreeUndeliverable(input)...)

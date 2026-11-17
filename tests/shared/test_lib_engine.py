@@ -486,7 +486,7 @@ def test_every_kubectl_verb_shares_the_one_proof():
     (`_lib_kubectl`); the proof only refuses a run that has none."""
     import subprocess as sp
     verbs = sorted(sub for engine, sub in E.PROOFS if engine == "kubectl")
-    assert verbs == ["apply", "create", "delete", "get", "label", "logs", "patch"]
+    assert verbs == ["apply", "create", "delete", "get", "label", "logs", "patch", "replace"]
     for verb in verbs:
         proof = E.PROOFS[("kubectl", verb)]
         done = sp.CompletedProcess(["kubectl", verb], 1, "", "refused")

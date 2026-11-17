@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/vencil/threshold-exporter/pkg/confdname"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -123,6 +124,13 @@ func effectiveScanView(scan *TreeScan, tenantID, tenantFile string) (*TreeScan, 
 	for abs := range scan.Defaults {
 		if chainDirs[filepath.Dir(abs)] {
 			view.Defaults[abs] = true
+		}
+	}
+	// #3832: a root carrier the walk could not read withholds the built-in
+	// layer (TreeScan.RootDefaultsUnreadable); the view keeps that record.
+	for _, u := range scan.Unreadable {
+		if !strings.Contains(u.RelKey, "/") && confdname.IsDefaults(u.RelKey) {
+			view.Unreadable = append(view.Unreadable, u)
 		}
 	}
 	tenantKey := ""

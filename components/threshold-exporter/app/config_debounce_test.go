@@ -715,7 +715,7 @@ func TestDebounceWindow_ServedAndCommittedStateLagDiskUntilFire(t *testing.T) {
 	}
 
 	// Inside the window: nothing is committed, so nothing served moves.
-	if got, ok := seriesFor(t, m, "tenant-a", "connections"); !ok || got != 21 {
+	if got, ok := seriesFor(t, m, "tenant-a", "mysql_connections"); !ok || got != 21 {
 		t.Errorf("in window: /metrics = %v (present=%v), want the committed 21", got, ok)
 	}
 	if in, _ := committedTenantState(m, "tenant-a"); in.MergedHash != before.MergedHash {
@@ -725,10 +725,10 @@ func TestDebounceWindow_ServedAndCommittedStateLagDiskUntilFire(t *testing.T) {
 	// Must-trigger: the window fires, the commit moves both.
 	fc.Advance(61 * time.Second)
 	if !waitFor(t, 5*time.Second, func() bool {
-		got, ok := seriesFor(t, m, "tenant-a", "connections")
+		got, ok := seriesFor(t, m, "tenant-a", "mysql_connections")
 		return ok && got == 23
 	}) {
-		got, ok := seriesFor(t, m, "tenant-a", "connections")
+		got, ok := seriesFor(t, m, "tenant-a", "mysql_connections")
 		t.Fatalf("after fire: /metrics = %v (present=%v), want 23 (fired=%d)", got, ok, m.DebounceFiredCount())
 	}
 	if after, _ := committedTenantState(m, "tenant-a"); after.MergedHash != disk.MergedHash {

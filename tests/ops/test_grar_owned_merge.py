@@ -32,6 +32,7 @@ PATH 上的 `amtool` 優先，否則用 docker 跑部署 manifest 的 alertmanag
 """
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -481,15 +482,45 @@ def test_control_a_wired_watchdog_reports_nothing(tmp_path):
 
 # ── --apply：叢集 ConfigMap 的 alertmanager.base.yml 是來源 ────────────
 
-def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None) -> list[list[str]]:
-    calls: list[list[str]] = []
+class _Calls(list):
+    """Every kubectl argv, in order; ``stdin`` maps a call's index to the
+    manifest it was handed (#3900: --apply sends it on stdin)."""
+    def __init__(self):
+        super().__init__()
+        self.stdin: dict[int, str] = {}
+
+
+_NO_MANAGED_FIELDS = object()
+
+
+def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None,
+                  managers: "list | object" = (), *, operation: str = "Apply",
+                  key: str = "alertmanager.yml", extra: "dict | None" = None) -> _Calls:
+    """A cluster whose ConfigMap holds *am_yml* (and *base_yml*); each of
+    *managers* owns its `data.<key>` by *operation* (managedFields, #3900);
+    `_NO_MANAGED_FIELDS`: the object carries none. *extra* is merged into
+    the object (labels, other keys, a resourceVersion…)."""
+    calls = _Calls()
     data = {"alertmanager.yml": am_yml}
     if base_yml is not None:
         data["alertmanager.base.yml"] = base_yml
+    obj = {"apiVersion": "v1", "kind": "ConfigMap",
+           "metadata": {"name": "alertmanager-config", "namespace": "monitoring"}, "data": data}
+    if managers is not _NO_MANAGED_FIELDS:
+        obj["metadata"]["managedFields"] = [
+            {"manager": m, "operation": operation, "fieldsV1": {"f:data": {f"f:{key}": {}}}}
+            for m in managers]
+    for k, v in (extra or {}).items():
+        if isinstance(v, dict) and isinstance(obj.get(k), dict):
+            obj[k] = {**obj[k], **v}
+        else:
+            obj[k] = v
 
     def fake(argv, *, timeout, stdin_text=None):
+        if stdin_text is not None:
+            calls.stdin[len(calls)] = stdin_text
         calls.append(list(argv))
-        out = json.dumps({"data": data}) if argv[:2] == ["kubectl", "get"] else ""
+        out = json.dumps(obj) if argv[:2] == ["kubectl", "get"] else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
@@ -509,11 +540,16 @@ def _apply(tmp_path, *extra) -> int:
     return 0
 
 
-def _created(calls) -> dict[str, str]:
-    """The keys `kubectl create configmap --from-literal=K=V` was given."""
-    [create] = [c for c in calls if c[:3] == ["kubectl", "create", "configmap"]]
-    lits = [a[len("--from-literal="):] for a in create if a.startswith("--from-literal=")]
-    return dict(lit.split("=", 1) for lit in lits)
+def _replaced(calls: _Calls) -> dict:
+    """The object `kubectl replace -f -` was handed on stdin (#3900)."""
+    [i] = [n for n, c in enumerate(calls) if c[:2] == ["kubectl", "replace"]]
+    return yaml.safe_load(calls.stdin[i])
+
+
+def _created(calls: _Calls) -> dict[str, str]:
+    """The `data` of that object, as kubectl reads it."""
+    [i] = [n for n, c in enumerate(calls) if c[:2] == ["kubectl", "replace"]]
+    return render.emitted_configmap_data(calls.stdin[i])
 
 
 def test_apply_adopts_the_cluster_config_as_the_source_then_keeps_it(tmp_path, monkeypatch, capsys):
@@ -549,7 +585,7 @@ def test_apply_refuses_a_cluster_config_that_is_already_an_output(tmp_path, monk
     calls = _fake_cluster(monkeypatch, generated)
     assert _apply(tmp_path) == 1
     assert "not an earlier output of this tool" in capsys.readouterr().err
-    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
 
 
 @pytest.mark.parametrize("base,strict,rc,level", [
@@ -563,7 +599,7 @@ def test_apply_judges_the_clusters_watchdog_receiver(tmp_path, monkeypatch, caps
     code = _apply(tmp_path, *(["--strict"] if strict else []))
     err = capsys.readouterr().err
     assert code == rc, err[-3000:]
-    applied = [c for c in calls if c[:2] == ["kubectl", "apply"]]
+    applied = [c for c in calls if c[:2] == ["kubectl", "replace"]]
     assert bool(applied) is (rc == 0), calls
     lines = [ln for ln in err.splitlines()
              if "watchdog-heartbeat" in ln and "integration" in ln]
@@ -644,7 +680,7 @@ def test_control_apply_keeps_refusing_an_empty_tree(tmp_path, monkeypatch, capsy
     with pytest.raises(SystemExit) as exc:
         gar.main(["--config-dir", str(d), "--apply", "--yes"])
     assert exc.value.code == 0
-    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
 
 
 def test_a_base_that_carries_the_platform_routes_gets_each_once(tmp_path):
@@ -794,7 +830,7 @@ def test_apply_refuses_a_cluster_source_with_a_dedup_rule(tmp_path, monkeypatch,
     assert "the source in ConfigMap monitoring/alertmanager-config" in err, err[-3000:]
     assert "delete those rules from the source under the ConfigMap's " \
            "'alertmanager.base.yml' key" in err, err[-3000:]
-    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
 
 
 def test_an_operators_own_broader_policy_in_the_base_is_kept(tmp_path):
@@ -848,7 +884,7 @@ def test_apply_refuses_to_adopt_a_routeless_output(tmp_path, monkeypatch, capsys
     calls = _fake_cluster(monkeypatch, _emit_am(tmp_path, conf_d, _base(tmp_path)))
     assert _apply(tmp_path) == 1
     assert "is an output of da-tools generate-routes" in capsys.readouterr().err
-    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
 
 
 def test_apply_refuses_an_output_written_into_the_base_key(tmp_path, monkeypatch, capsys):
@@ -857,7 +893,7 @@ def test_apply_refuses_an_output_written_into_the_base_key(tmp_path, monkeypatch
     calls = _fake_cluster(monkeypatch, generated, base_yml=generated)
     assert _apply(tmp_path) == 1
     assert "is an output of da-tools generate-routes" in capsys.readouterr().err
-    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
 
 
 @pytest.mark.parametrize("name", ["platform-enforced", "platform-enforcedX",
@@ -942,3 +978,169 @@ def test_apply_refusal_names_the_remedy_apply_can_take(tmp_path, monkeypatch, ca
     _fake_cluster(monkeypatch, _emit_am(tmp_path, conf_d, _base(tmp_path)))
     assert _apply(tmp_path) == 1
     assert "alertmanager.base.yml" in capsys.readouterr().err
+
+
+# ── #3900：經 stdin 換掉兩個 key，不搶別的工具管的欄位 ──────────────────
+
+def test_apply_sends_the_object_on_stdin_to_kubectl_replace(tmp_path, monkeypatch, capsys):
+    """The cluster's object, with the two keys replaced, goes on stdin to one
+    `kubectl replace`: no argument carries the config (its size meets no argv
+    limit), and no client-side `last-applied-configuration` is written."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=["kubectl-client-side-apply"])
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    writes = [c for c in calls if c[:2] in (["kubectl", "apply"], ["kubectl", "create"],
+                                            ["kubectl", "replace"])]
+    assert writes == [["kubectl", "replace", "--field-manager=da-generate-routes", "-f", "-"]], writes
+    assert all(len(a) < 200 for c in calls for a in c), calls
+
+
+def test_apply_keeps_everything_but_the_two_keys(tmp_path, monkeypatch, capsys):
+    """An object a client-side `kubectl apply` wrote before (labels, another
+    annotation, another key such as a notification template): all of it
+    stays; the resourceVersion is sent back, so a ConfigMap changed since it
+    was read is refused by the API server rather than overwritten. Its
+    last-applied annotation does not: `kubectl replace` would rewrite it with
+    the whole object (the annotation limit again)."""
+    extra = {"metadata": {"labels": {"app": "alertmanager"}, "resourceVersion": "4711",
+                          "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}",
+                                          "team": "sre"}},
+             "data": {"alertmanager.yml": _CUSTOMER_BASE, "custom.tmpl": "{{ define \"x\" }}{{ end }}"},
+             "binaryData": {"logo.png": "iVBORw0K"}}
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=["kubectl-client-side-apply"], extra=extra)
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    body = _replaced(calls)
+    assert body["metadata"]["labels"] == {"app": "alertmanager"}
+    assert body["metadata"]["resourceVersion"] == "4711"
+    assert body["metadata"]["annotations"] == {"team": "sre"}
+    assert "managedFields" not in body["metadata"]
+    assert body["data"]["custom.tmpl"] == extra["data"]["custom.tmpl"]
+    assert body["binaryData"] == {"logo.png": "iVBORw0K"}
+    assert body["data"]["alertmanager.base.yml"] == _CUSTOMER_BASE
+    assert "tenant-t-routed" in {r["name"] for r in
+                                 render.alertmanager_reading(body["data"]["alertmanager.yml"])["receivers"]}
+
+
+@pytest.mark.parametrize("operation", ["Apply", "Update"])
+@pytest.mark.parametrize("key", ["alertmanager.yml", "alertmanager.base.yml"])
+@pytest.mark.parametrize("manager", ["argocd-controller", "kustomize-controller", "helm",
+                                     "kubectl-argo-rollouts"])
+def test_apply_refuses_keys_another_tool_manages(tmp_path, monkeypatch, capsys, manager, key, operation):
+    """Owner decision B: a key another tool manages — a GitOps controller,
+    Helm, a kubectl plugin that sets no field manager — by any operation, is
+    not taken over: refused, the manager named, nothing applied."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, base_yml=_CUSTOMER_BASE,
+                          managers=["kubectl-client-side-apply", manager], key=key, operation=operation)
+    assert _apply(tmp_path) == 2  # the cluster's state, not the config
+    err = capsys.readouterr().err
+    assert f"managed by '{manager}'" in err and "nothing was applied" in err, err[-2000:]
+    assert not [c for c in calls if c[:2] in (["kubectl", "apply"], ["kubectl", "replace"])], calls
+
+
+@pytest.mark.parametrize("manager", ["kubectl", "kubectl-edit", "before-first-apply", "da-generate-routes"])
+def test_apply_takes_over_from_kubectl_itself(tmp_path, monkeypatch, capsys, manager):
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=[manager], operation="Update")
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    assert [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
+
+
+def test_apply_refuses_when_who_manages_the_keys_cannot_be_told(tmp_path, monkeypatch, capsys):
+    """No managedFields in kubectl's answer (a kubectl that strips them):
+    unknown is no "nobody else" — refused, nothing applied."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=_NO_MANAGED_FIELDS)
+    assert _apply(tmp_path) == 2
+    assert "returned no managedFields" in capsys.readouterr().err
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
+    [get] = [c for c in calls if c[:2] == ["kubectl", "get"]]
+    assert "--show-managed-fields" in get, get
+
+
+@pytest.mark.parametrize("other", [
+    {"data": {"templates.md": "é" * (520 * 1024)}},  # 1 040 KiB of UTF-8, 520 Ki characters
+    {"binaryData": {"blob.bin": base64.b64encode(b"x" * (1024 * 1024)).decode()}},
+], ids=["multibyte-data", "binary-data"])
+def test_apply_refuses_a_configmap_kubernetes_would_refuse(tmp_path, monkeypatch, capsys, other):
+    """The values this run writes plus every other key the object keeps, as
+    Kubernetes counts them (UTF-8 bytes; binaryData decoded), over its limit:
+    refused before anything is sent, naming the bytes."""
+    import _lib_kubectl
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, managers=[], extra=other)
+    assert _apply(tmp_path) == 1  # a verdict on the config, as --output-configmap's
+    err = capsys.readouterr().err
+    assert str(_lib_kubectl.CONFIGMAP_DATA_LIMIT_BYTES) in err and "nothing was applied" in err, err[-2000:]
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
+
+
+@pytest.mark.parametrize("text", ["route: {}\n# \x80 \x9f C1\n", "route: {}\n# 告警 🚨\n",
+                                  "route: {}\n# tab\there\n"],
+                         ids=["c1", "cjk-emoji", "tab"])
+def test_the_replaced_object_reads_back_as_written(text):
+    """What the gate reads back (Kubernetes' reading of the body) is what was
+    written: the body is YAML, the reading kubectl applies to it."""
+    body = render.replaced_configmap({"metadata": {"name": "c"}}, {"alertmanager.yml": text}, "c", "ns")
+    assert render.emitted_configmap_data(body)["alertmanager.yml"] == text
+
+
+def test_apply_refuses_an_immutable_configmap(tmp_path, monkeypatch, capsys):
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE, extra={"immutable": True})
+    assert _apply(tmp_path) == 2
+    assert "is immutable" in capsys.readouterr().err
+    assert not [c for c in calls if c[:2] == ["kubectl", "replace"]], calls
+
+
+def test_a_failed_replace_says_to_run_apply_again(monkeypatch, capsys):
+    """A refused replace (the ConfigMap changed since it was read, say):
+    False, kubectl's words, and how to go on."""
+    def kubectl_run(verb, args, **kw):
+        return subprocess.CompletedProcess([verb, *args], 1, "", "the object has been modified")
+    monkeypatch.setattr(render, "kubectl_run", kubectl_run)
+    assert render._apply_merged_configmap("kind: ConfigMap\n", "monitoring", "c") is False
+    err = capsys.readouterr().err
+    assert "the object has been modified" in err and "run --apply again" in err, err
+
+
+def test_binary_data_counts_decoded_bytes():
+    """A base64 value counts as what it decodes to — 4/3 of it is not."""
+    assert render.configmap_binary_bytes({"b": base64.b64encode(b"x" * 300).decode()}) == 300
+
+
+def _output_configmap(tmp_path, monkeypatch, **limits) -> "tuple[int, str, Path]":
+    """`--output-configmap` in-process with the k8s limits the generator
+    checks against lowered to *limits* (#3900)."""
+    import generate_alertmanager_routes as gar
+    for name, value in limits.items():
+        monkeypatch.setattr(gar, name, value)
+    conf_d = _tree(tmp_path)
+    out = tmp_path / "cm.yaml"
+    try:
+        gar.main(["--config-dir", str(conf_d), "--output-configmap",
+                  "--base-config", str(_base(tmp_path)), "-o", str(out)])
+        code = 0
+    except SystemExit as exc:
+        code = exc.code
+    return code, out
+
+
+def test_output_configmap_over_the_data_limit_is_refused(tmp_path, monkeypatch, capsys):
+    """#3900: values Kubernetes would refuse are not written; the message
+    names the bytes and the limit."""
+    code, out = _output_configmap(tmp_path, monkeypatch, CONFIGMAP_DATA_LIMIT_BYTES=100)
+    err = capsys.readouterr().err
+    assert code == 1 and not out.exists(), err[-2000:]
+    assert "Kubernetes refuses a ConfigMap over 100 bytes" in err and "nothing was written" in err, err
+
+
+def test_output_configmap_over_the_annotation_limit_warns_and_writes(tmp_path, monkeypatch, capsys):
+    """Over the annotation limit only a client-side apply fails: a WARN that
+    names the server-side apply, and the ConfigMap is written."""
+    code, out = _output_configmap(tmp_path, monkeypatch, ANNOTATION_TOTAL_LIMIT_BYTES=100)
+    err = capsys.readouterr().err
+    assert code == 0 and out.exists(), err[-2000:]
+    [warn] = [ln for ln in err.splitlines() if "annotations" in ln]
+    assert warn.startswith("WARN:") and "kubectl apply --server-side" in warn, warn
+
+
+def test_output_configmap_under_both_limits_says_nothing_of_them(tmp_path, monkeypatch, capsys):
+    code, out = _output_configmap(tmp_path, monkeypatch)
+    err = capsys.readouterr().err
+    assert code == 0 and out.exists(), err[-2000:]
+    assert "annotations" not in err and "refuses a ConfigMap" not in err, err

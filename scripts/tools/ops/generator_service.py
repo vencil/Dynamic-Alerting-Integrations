@@ -16,8 +16,20 @@ HTTP/1.1 on a Unix socket (no network port) and serves:
   ``min_generator_version``; ``POLICY_UNAVAILABLE``: the deployment
   ``--policy`` file is unusable);
 * ``GET /v1/status`` — policy availability, generator and da-guard versions,
-  the latest judgement's tool fault, readiness;
+  the programs' self-check, the latest tool fault, readiness;
 * ``GET /metrics`` — Prometheus text format.
+
+READINESS (#3943). The service is ready only once the self-check of each
+program a judgement runs — ``da-guard self-check``, ``da-read self-check``,
+``da-crdecode --self-check``, resolved as the judgement resolves them — has
+passed: each runs every subcommand of its own dispatch table on fixtures
+built into it. The first round starts once the socket is bound (``pending``
+until it ends: not ready); a tool fault of a judgement or a warming run
+makes the service not ready at once and starts a round at once too. After a
+failed round the next comes every ``--self-check-seconds``, or at once when
+a new tool fault comes. Only a passing round clears the fault — a judgement
+that ran may never have reached the program that failed. The self-check
+decides readiness only, never a verdict.
 
 Defaults of every limit are in ``--help``; this docstring does not repeat
 them.
@@ -98,6 +110,7 @@ from _gsvc_proto import (  # noqa: E402
 )
 from _lib_parse_cache import restricted_loads  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (absolute_reader_binaries, #3424)
+import _lib_tool_fault  # noqa: E402  (os_error_reason: one reading of a failed exec)
 from _grar_validate import (  # noqa: E402
     PolicyInputError, generator_version_problem, load_policy_document,
 )
@@ -124,6 +137,32 @@ DEFAULT_MAX_RESULT_BYTES = 16 * MiB
 DEFAULT_MAX_CACHE_TRANSFER_BYTES = 64 * MiB
 DEFAULT_WARM_REF = "HEAD"
 DEFAULT_WARM_SECONDS = 300.0
+DEFAULT_SELF_CHECK_SECONDS = 30.0
+DEFAULT_SELF_CHECK_TIMEOUT_SECONDS = 60.0
+#: A self-check's stdout read back: its whole document is far shorter, and
+#: anything longer is not it. Its stderr: the start goes to the log.
+_SELF_CHECK_STDOUT_LIMIT = 4096
+_SELF_CHECK_STDERR_LOGGED = 1024
+#: RLIMIT_FSIZE of a self-check process: its stdout and stderr files (and
+#: da-guard's fixture tree copy) live in --work-dir, and a program that
+#: writes without end must not fill it. Far above what a passing one writes.
+_SELF_CHECK_FILE_LIMIT_BYTES = 1 * MiB
+
+
+def _self_check_limits(memory_limit: int):
+    """The self-check process's limits, set before exec: RLIMIT_DATA
+    *memory_limit* — --memory-limit-bytes, the one a judgement's Go programs
+    run under (inherited from the judgement process), so a self-check fits
+    the container's budget as one of them does — and RLIMIT_FSIZE, so a
+    program that writes without end is stopped (EFBIG, or SIGXFSZ ends it)."""
+    def limit() -> None:
+        import resource
+        resource.setrlimit(resource.RLIMIT_DATA, (memory_limit, memory_limit))
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (_SELF_CHECK_FILE_LIMIT_BYTES, _SELF_CHECK_FILE_LIMIT_BYTES))
+    return limit
+
+
 HEADER_LIMIT_BYTES = 16 * 1024
 #: Descriptors kept free beyond the connection slots: stdio, the listening
 #: socket, the event loop's epoll and self-pipe, a judgement's result pipe
@@ -174,6 +213,8 @@ class Settings:
     max_connections: int
     max_inflight_body_bytes: int
     max_writes: int
+    self_check_seconds: float = DEFAULT_SELF_CHECK_SECONDS
+    self_check_timeout_seconds: float = DEFAULT_SELF_CHECK_TIMEOUT_SECONDS
 
 
 class Response:
@@ -189,7 +230,9 @@ class Response:
     def body(self) -> bytes:
         if self.text is not None:
             return self.text.encode("utf-8")
-        return (json.dumps(self.doc, ensure_ascii=False) + "\n").encode("utf-8")
+        # ASCII (#3961): any value — a lone surrogate included — encodes, so
+        # an answer is never lost to its own encoding.
+        return (json.dumps(self.doc) + "\n").encode("ascii")
 
     @property
     def ctype(self) -> str:
@@ -238,16 +281,32 @@ def _parse_head(head: bytes) -> tuple[str, str, dict[str, list[str]]]:
     return method, target, headers
 
 
-def _rejected(reason: str, message: str, **extra) -> Response:
-    doc = {"result": "rejected", "reason": reason, "message": message,
-           "rc": None, "findings": None, "stderr_tail": "", "validated": None}
+# #3961: an answer to /v1/validate carries no free text — only a closed
+# `error` / `reason` and the structured fields. What the service knows
+# beyond the reason goes to its own stderr (`_log`), not to tenant-api:
+# tenant-api renders every message from the reason.
+def _rejected(reason: str, **extra) -> Response:
+    doc = {"result": "rejected", "reason": reason, "rc": None, "findings": None,
+           "validated": None}
     doc.update(extra)
     return Response(200, doc)
 
 
-def _unavailable(error: str, reason: str, message: str) -> Response:
-    return Response(503, {"error": error, "reason": reason, "message": message},
-                    headers={"Retry-After": "5"})
+def _unavailable(error: str, reason: str, detail: str, **extra) -> Response:
+    _log(f"{error} ({reason}): {detail}")
+    return Response(503, {"error": error, "reason": reason, **extra}, headers={"Retry-After": "5"})
+
+
+def _error(status: int, error: str, **headers: str) -> Response:
+    """A non-200 answer to a request the service does not take: its closed
+    `error` only."""
+    return Response(status, {"error": error}, headers=headers or None)
+
+
+def _log(line: str) -> None:
+    # One line whatever it holds (#3961): a request's own text (an unknown
+    # field's name) must not forge a log line — `safe_label`, the one exit.
+    print(f"generator-service: {safe_label(line)}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -286,6 +345,8 @@ class Metrics:
     rejections: Counter = field(default_factory=Counter)
     unavailable: Counter = field(default_factory=Counter)
     warm_runs: Counter = field(default_factory=Counter)
+    #: #3943: self-check rounds of the three programs, by state.
+    self_checks: Counter = field(default_factory=Counter)
     orphans_reaped: int = 0
     accept_errors: Counter = field(default_factory=Counter)
     peer_rejected: int = 0
@@ -388,10 +449,29 @@ class Service:
         # #3415: the one resolution ($DA_GUARD_BINARY, which main() set from
         # --da-guard-binary): the version reported is the da-guard that judges.
         self.da_guard_version = da_guard_version(None)
-        #: #3862: the latest judgement's tool faults (``_lib_tool_fault``
-        #: records, as dicts), or None when it had none. Not ready while set;
-        #: only the next judgement whose outcome is ``ran`` clears it.
+        #: #3862: the latest tool faults of a judgement or a warming run
+        #: (``_lib_tool_fault`` records, as dicts), or None. Not ready while
+        #: set; only a self-check that passes clears it (#3943) — one that
+        #: started before the latest fault does not (``_fault_seq``).
         self.tool_fault: Optional[list] = None
+        self._fault_seq = 0
+        #: #3943: the latest self-check round of the three programs
+        #: (``_gsvc_proto.SELF_CHECK_STATES``), its failures and whether one
+        #: is running. Not ready until one has passed.
+        self.self_check_state = "pending"
+        self.self_check_failures: list = []
+        self.self_check_running = False
+        self._self_check_task: Optional[asyncio.Task] = None
+        #: Set by a tool fault while the loop waits between rounds: run now.
+        self._self_check_wake = asyncio.Event()
+        #: A self-check round holds (or waits for) the judgement slot; set
+        #: by ``_start_next`` when the slot is free for it.
+        self._self_check_slot = False
+        self._slot_free = asyncio.Event()
+        self._self_check_seq = 0
+        #: Self-check processes not yet collected: ``_reap_orphans`` leaves
+        #: them to their own ``wait``.
+        self._held_pids: set[int] = set()
         self._job_seq = 0
         self.connections = 0
         self.inflight_body_bytes = 0
@@ -442,8 +522,7 @@ class Service:
                                        _SLOT_FULL_READ_SECONDS)
             except (asyncio.TimeoutError, ConnectionError, OSError):
                 pass
-            await self._send(reader, writer, self._count(_rejected(
-                "busy", "too many open connections; retry")))
+            await self._send(reader, writer, self._count(_rejected("busy")))
             return
         self.connections += 1
         try:
@@ -493,8 +572,7 @@ class Service:
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout)
         except asyncio.LimitOverrunError:
-            return Response(431, {"error": "BAD_REQUEST",
-                                  "message": "request header too large"})
+            return _error(431, "BAD_REQUEST")
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
             return None
         # #2901 O6: the request's clock starts here — reading the body is
@@ -503,43 +581,33 @@ class Service:
         try:
             method, target, headers = _parse_head(head)
         except Exception:  # noqa: BLE001 — #2901 O1: any bad header is a 400
-            return Response(400, {"error": "BAD_REQUEST",
-                                  "message": "malformed request line or header"})
+            return _error(400, "BAD_REQUEST")
 
         routes = {"/v1/validate": "POST", "/v1/status": "GET", "/metrics": "GET"}
         if target not in routes:
-            return Response(404, {"error": "NOT_FOUND", "message": target})
+            return _error(404, "NOT_FOUND")
         if method != routes[target]:
-            return Response(405, {"error": "METHOD_NOT_ALLOWED",
-                                  "message": f"{target} takes {routes[target]}"},
-                            headers={"Allow": routes[target]})
+            return _error(405, "METHOD_NOT_ALLOWED", Allow=routes[target])
         if "transfer-encoding" in headers:
-            return Response(411, {"error": "LENGTH_REQUIRED",
-                                  "message": "Transfer-Encoding is not supported; "
-                                             "send Content-Length"})
+            return _error(411, "LENGTH_REQUIRED")
         if method == "GET":
             return self._status() if target == "/v1/status" else self._metrics()
 
         lengths = headers.get("content-length")
         if not lengths:
-            return Response(411, {"error": "LENGTH_REQUIRED",
-                                  "message": "Content-Length is required"})
+            return _error(411, "LENGTH_REQUIRED")
         if len(lengths) != 1 or not _CONTENT_LENGTH.fullmatch(lengths[0]):
-            return Response(400, {"error": "BAD_REQUEST",
-                                  "message": "invalid Content-Length"})
+            return _error(400, "BAD_REQUEST")
         length = int(lengths[0])
         if length > self.s.max_body_bytes:
-            resp = Response(413, {"error": "PAYLOAD_TOO_LARGE",
-                                  "message": f"body is {length} bytes; the limit "
-                                             f"is {self.s.max_body_bytes}"})
+            resp = _error(413, "PAYLOAD_TOO_LARGE")
             resp.unread_body = True
             return resp
         # #2901 R1, admission (b): the body's bytes are reserved against the
         # in-flight budget BEFORE they are read, and given back when this
         # request is answered. Over budget: busy, body never read.
         if self.inflight_body_bytes + length > self.s.max_inflight_body_bytes:
-            resp = self._count(_rejected(
-                "busy", "too many request bytes in flight; retry"))
+            resp = self._count(_rejected("busy"))
             resp.unread_body = True
             return resp
         self.inflight_body_bytes += length
@@ -553,7 +621,8 @@ class Service:
                 request = parse_validate_request(body, self.object_format,
                                                  self.s.max_writes)
             except RequestError as exc:
-                return Response(400, {"error": "BAD_REQUEST", "message": str(exc)})
+                _log(f"bad request: {exc}")  # a place and a constant, never a path (#3961)
+                return _error(400, "BAD_REQUEST")
             del body
             return await self.submit(request, received)
         finally:
@@ -565,11 +634,9 @@ class Service:
         budget = judgement_seconds(request.deadline_ms, self.s.max_judgement_seconds,
                                    self.s.deadline_reserve_seconds)
         if budget <= 0:
-            return self._count(_rejected(
-                "deadline", "deadline_ms leaves no time to judge"))
+            return self._count(_rejected("deadline"))
         if len(self.waiting) >= self.s.max_queue:
-            return self._count(_rejected(
-                "busy", "too many judgements are waiting; retry"))
+            return self._count(_rejected("busy"))
         ticket = Ticket(request, received + budget, self.loop.create_future(),
                         received=received)
         self.waiting.append(ticket)
@@ -584,8 +651,7 @@ class Service:
         if ticket in self.waiting:
             self.waiting.remove(ticket)
             if not ticket.future.done():
-                ticket.future.set_result(_rejected(
-                    "deadline", "the deadline passed while queued"))
+                ticket.future.set_result(_rejected("deadline"))
 
     def _preempt_warm(self) -> None:
         """End the warming run for a request. #2901 R2: the flag is set even
@@ -600,6 +666,11 @@ class Service:
 
     def _start_next(self) -> None:
         if self.running is not None or self.warming is not None:
+            return
+        if self._self_check_slot:
+            # #3943: a self-check round holds the slot — it runs alone, as a
+            # judgement does (the memory budget, ADR-036 §3); the queue waits.
+            self._slot_free.set()
             return
         if self.waiting:
             ticket = self.waiting.popleft()
@@ -662,7 +733,7 @@ class Service:
     async def _judge(self, ticket: Ticket) -> Response:
         remaining = ticket.deadline_at - self.loop.time()
         if remaining <= 0:
-            return _rejected("deadline", "the deadline passed while queued")
+            return _rejected("deadline")
         # Whether its programs run is the judgement's own answer (#3862):
         # no probe here. Only the readers' paths are pinned before it.
         _pin_readers()
@@ -687,8 +758,8 @@ class Service:
                     raise
                 # #2901 R1: out of descriptors, processes or memory to fork
                 # with is load, not a broken container — reject this write.
-                return _rejected("busy", f"cannot start a judgement "
-                                         f"({errno.errorcode.get(exc.errno, exc.errno)}); retry")
+                _log(f"cannot start a judgement ({errno.errorcode.get(exc.errno, exc.errno)})")
+                return _rejected("busy")
             # ADR-038 §5: how much of its time budget the judgement used,
             # queue included — only when the judgement process ran.
             if ticket.deadline_at > ticket.received:
@@ -722,9 +793,8 @@ class Service:
                      and run.reader.ended and run.reader.result is not None)
             if ended and run.reader.result.get("outcome") == "tool_fault":
                 # #3862: a program the warming run reads with did not run —
-                # not ready. A warming run that ran clears nothing: it runs
-                # parse-tree only, not every program a judgement does.
-                self.tool_fault = tool_faults_of(run.reader.result)
+                # not ready until a self-check passes (#3943).
+                self._note_tool_fault(tool_faults_of(run.reader.result))
             complete = ended and run.reader.result.get("outcome") == "warmed"
             if complete:
                 outcome = "completed"
@@ -859,33 +929,29 @@ class Service:
     def _verdict(self, run: ChildRun) -> Response:
         received = {"received": run.received}
         if run.timed_out:
-            return _rejected("deadline", "the deadline passed while judging",
-                             cache=received)
+            return _rejected("deadline", cache=received)
         if os.WIFSIGNALED(run.status) or os.WEXITSTATUS(run.status) != 0:
-            return _rejected("incomplete", "the judgement process ended without "
-                             "a complete result", cache=received)
+            return _rejected("incomplete", cache=received)
         res = run.reader.result
         if res is None or not run.reader.ended:
-            return _rejected("incomplete", "the judgement process ended without "
-                             "a complete result", cache=received)
+            return _rejected("incomplete", cache=received)
         self.store.touch(tuple(k) for k in res.get("hit_keys", [])
                          if isinstance(k, list) and len(k) == 2)
         outcome = res.get("outcome")
         cache = res.get("cache")
         cache = {**cache, **received} if isinstance(cache, dict) else received
-        common = {"stderr_tail": res.get("stderr_tail", ""),
-                  "validated": res.get("validated"), "cache": cache}
+        common = {"validated": res.get("validated"), "cache": cache}
         if outcome == "tool_fault":
             # #3862: an external program of this judgement did not run, so no
             # verdict was reached — whatever the generator concluded without it.
-            self.tool_fault = tool_faults_of(res)
+            faults = tool_faults_of(res)
+            self._note_tool_fault(faults)
             return _unavailable("VALIDATOR_UNAVAILABLE", "tool_fault",
-                                tool_fault_message(self.tool_fault))
+                                tool_fault_message(faults), tool_fault=faults)
         if outcome == "ran":
-            # #3862: the one outcome that shows every program of the
-            # judgement ran. Any other (a bad request, a git read, memory,
-            # the deadline, …) may never have reached them: it clears nothing.
-            self.tool_fault = None
+            # #3943: a judgement that ran clears no tool fault — it may have
+            # ended (content refused early) before the program that failed.
+            # Only a passing self-check does.
             rc = res.get("rc")
             doc = {"result": "pass" if rc == 0 else "findings",
                    "rc": rc, "findings": res.get("findings"), **common}
@@ -897,23 +963,235 @@ class Service:
                 self.metrics.key_verdict_seconds = float(kv.get("seconds") or 0.0)
             return Response(200, doc)
         if outcome == "bad_request":
-            return Response(400, {"error": "BAD_REQUEST",
-                                  "message": res.get("message", "")})
+            return _error(400, "BAD_REQUEST")
         if outcome == "memory":
-            return _rejected("memory", "the judgement ran out of memory "
-                             "(RLIMIT_DATA)", **common)
+            return _rejected("memory", **common)
         if outcome == "git_read":
-            return _rejected("git_read", "reading the base commit from git "
-                             "failed twice", **common)
+            return _rejected("git_read", **common)
+        # `da_guard` (names mode could not classify the base tree's path
+        # names) has no reason of its own on the wire (tenant-api's closed
+        # list): no verdict was reached, like any other incomplete judgement.
         if outcome == "da_guard":
-            # No reason of its own on the wire (tenant-api's closed list):
-            # no verdict was reached, like any other incomplete judgement;
-            # the message says which step failed.
-            return _rejected("incomplete", "da-guard parse-tree could not classify the "
-                             "base tree's path names: " + str(res.get("message", "")),
-                             **common)
-        return _rejected("incomplete", "the judgement process sent no "
-                         "complete result", **common)
+            _log("incomplete: da-guard names mode could not classify the base tree's path names")
+        return _rejected("incomplete", **common)
+
+    # ── self-check (#3943) ────────────────────────────────────────────────
+
+    def _note_tool_fault(self, faults: list) -> None:
+        """A judgement or warming run whose program did not run: not ready
+        at once, and the self-check runs again until one passes."""
+        self.tool_fault = faults
+        self._fault_seq += 1
+        self._ensure_self_check_loop()
+
+    def _ensure_self_check_loop(self) -> None:
+        """Run a self-check round now: start the loop, or — when it is
+        running — wake it from its wait between rounds."""
+        if self._self_check_task is None or self._self_check_task.done():
+            self._self_check_wake.clear()
+            # the slot is the round's from now, not from when its task first
+            # runs: a judgement or warming run started in between would only
+            # be waited for (or a warming run preempted)
+            self._self_check_slot = True
+            self._self_check_task = self.loop.create_task(self._self_check_loop())
+        else:
+            self._self_check_wake.set()
+
+    async def _self_check_loop(self) -> None:
+        """A self-check round now, then again after each failed one — every
+        --self-check-seconds, or at once when a new tool fault wakes it —
+        until one passes with no tool fault left."""
+        while True:
+            self._self_check_wake.clear()
+            if await self.self_check_round():
+                return
+            try:
+                await asyncio.wait_for(self._self_check_wake.wait(),
+                                       self.s.self_check_seconds)
+            except asyncio.TimeoutError:
+                pass
+
+    async def stop_self_check(self) -> None:
+        """End the self-check loop and wait for it: a running self-check's
+        process group is killed and collected (``_self_check_in``)."""
+        task = self._self_check_task
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @staticmethod
+    def _self_check_programs() -> list[tuple[str, Optional[str], tuple[str, ...]]]:
+        """(name, path or None, arguments) of each program's self-check, the
+        path by the resolution its judgement uses: da-guard's dispatcher,
+        ``_lib_consumer_read.resolve_binary`` for the readers — after
+        ``_pin_readers``, as before a judgement."""
+        import guard_dispatch
+        _pin_readers()
+        out = []
+        for env, (_module, _pkg, name) in _lib_consumer_read.READER_BUILD_SOURCES.items():
+            if env == _lib_consumer_read.DA_GUARD_ENV:
+                exe = guard_dispatch.DISPATCHER.resolve_binary(None)
+            else:
+                exe = _lib_consumer_read.resolve_binary(None, env, name)
+            out.append((name, exe, _lib_consumer_read.READER_SELF_CHECK_ARGS[env]))
+        return sorted(out)
+
+    async def _take_slot(self) -> None:
+        """Hold the one slot judgements and warming runs take: no new one
+        starts (``_start_next``), a warming run is ended, and a running
+        judgement is waited for — so a self-check never overlaps either and
+        the container's memory budget holds (ADR-036 §3). A request that
+        comes meanwhile waits in the queue, its deadline running."""
+        self._self_check_slot = True
+        if self.warming is not None and self.pending_warm is None:
+            self.pending_warm = self.warming  # warmed again after the round
+        self._preempt_warm()
+        while self.running is not None or self.warming is not None:
+            self._slot_free.clear()
+            await self._slot_free.wait()
+
+    def _free_slot(self) -> None:
+        self._self_check_slot = False
+        if self.loop is not None:
+            self._start_next()
+
+    async def self_check_round(self) -> bool:
+        """Run the three self-checks one after another, alone in the slot
+        (``_take_slot``), and record the round; whether it passed and no
+        tool fault is left. A pass clears the tool fault unless a newer one
+        came while it ran."""
+        seq = self._fault_seq
+        self.self_check_running = True
+        try:
+            await self._take_slot()
+            try:
+                programs = self._self_check_programs()
+            except Exception as exc:  # noqa: BLE001 — the round fails, the service stays up
+                _log(f"self-check: cannot resolve the programs: {exc!r}")
+                programs = [(name, None, ()) for name in _lib_tool_fault.BINARIES]
+                reasons = ["internal_error"] * len(programs)
+            else:
+                # one at a time: each is one Go program under the judgement's
+                # memory limit, as a judgement runs one at a time
+                reasons = [await self._self_check_one(name, exe, args)
+                           for name, exe, args in programs]
+        finally:
+            self.self_check_running = False
+            self._free_slot()
+        self.self_check_failures = [{"binary": name, "reason": reason}
+                                    for (name, _exe, _args), reason in zip(programs, reasons)
+                                    if reason is not None]
+        self.self_check_state = "failed" if self.self_check_failures else "passed"
+        self.metrics.self_checks[self.self_check_state] += 1
+        if self.self_check_state == "passed" and self._fault_seq == seq:
+            self.tool_fault = None
+        return self.self_check_state == "passed" and self.tool_fault is None
+
+    async def _self_check_one(self, name: str, exe: Optional[str],
+                              args: tuple[str, ...]) -> Optional[str]:
+        """Run one program's self-check; None when it passed, else its
+        reason (``_gsvc_proto.SELF_CHECK_REASONS``), the detail logged.
+
+        Passed is exit 0 with exactly ``SELF_CHECK_PASSED`` on stdout. The
+        process runs in a directory of its own (also its $TMPDIR: da-guard
+        writes its fixture tree there), in a process group of its own that
+        the time limit ends; it is ``wait``-ed for here, never by
+        ``_reap_orphans``. No thread: its exit is a pidfd on this loop."""
+        if not exe:
+            _log(f"self-check: {name}: not found")
+            return "not_found"
+        try:
+            self._self_check_seq += 1
+            work = os.path.join(_jobs_dir(self.s.work_dir), f"selfcheck-{self._self_check_seq}")
+            os.mkdir(work, 0o700)
+        except OSError as exc:
+            _log(f"self-check: {name}: cannot make its directory: {exc!r}")
+            return "internal_error"
+        try:
+            return await self._self_check_in(name, exe, args, work)
+        except Exception as exc:  # noqa: BLE001 — the self-check fails, the service stays up
+            _log(f"self-check: {name}: {exc!r}")
+            return "internal_error"
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    async def _self_check_in(self, name: str, exe: str, args: tuple[str, ...],
+                             work: str) -> Optional[str]:
+        out_path, err_path = os.path.join(work, "stdout"), os.path.join(work, "stderr")
+        # 0600 from creation (the work directory is 0700 already): what a
+        # self-check prints is the service's to read, nobody else's
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+        out = os.open(out_path, flags, 0o600)
+        try:
+            err = os.open(err_path, flags, 0o600)
+        except OSError:
+            os.close(out)
+            raise
+        try:
+            proc = subprocess.Popen(  # noqa: S603 — the resolved program, no shell
+                [exe, *args], stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                cwd=work, env={**os.environ, "TMPDIR": work}, start_new_session=True,
+                preexec_fn=_self_check_limits(self.s.memory_limit_bytes))
+        except OSError as exc:
+            reason = _lib_tool_fault.os_error_reason(exc, exe)
+            _log(f"self-check: {name}: {reason}: {exc.strerror}")
+            return reason
+        finally:
+            os.close(out)
+            os.close(err)
+        # No await between the fork and this: _reap_orphans (a SIGCHLD
+        # callback on this loop) cannot have collected it.
+        self._held_pids.add(proc.pid)
+        timed_out = False
+        try:
+            timed_out = not await self._exited(proc.pid, self.s.self_check_timeout_seconds)
+        finally:
+            _kill_group(proc.pid)  # #3923: before it is collected
+            proc.wait()
+            self._held_pids.discard(proc.pid)
+            self._reap_orphans()  # what was held back behind it
+        with open(out_path, "rb") as fh:
+            stdout = fh.read(_SELF_CHECK_STDOUT_LIMIT + 1)
+        with open(err_path, "rb") as fh:
+            stderr = fh.read(_SELF_CHECK_STDERR_LOGGED)
+        rc = proc.returncode
+        if timed_out:
+            reason = "timed_out"
+        elif rc < 0:
+            reason = "signalled"
+        elif rc == 0:
+            reason = None if stdout == _lib_consumer_read.SELF_CHECK_PASSED else "bad_output"
+        elif rc == 1:
+            reason = "failed" if stdout == _lib_consumer_read.SELF_CHECK_FAILED else "bad_output"
+        else:
+            reason = "unexpected_exit"
+        if reason is not None:
+            _log(f"self-check: {name}: {reason} (exit {rc}): "
+                 + stderr.decode("utf-8", "replace"))
+        return reason
+
+    async def _exited(self, pid: int, timeout: float) -> bool:
+        """Whether process *pid* exits within *timeout* seconds."""
+        pidfd = os.pidfd_open(pid)
+        done = self.loop.create_future()
+        self.loop.add_reader(pidfd, lambda: done.done() or done.set_result(None))
+        try:
+            await asyncio.wait_for(done, max(0.0, timeout))
+            return True
+        except asyncio.TimeoutError:
+            return False
+        finally:
+            self.loop.remove_reader(pidfd)
+            os.close(pidfd)
+
+    def _self_check_doc(self) -> dict:
+        return {"state": self.self_check_state,
+                "failures": [dict(f) for f in self.self_check_failures],
+                "running": self.self_check_running}
 
     # ── status and metrics ────────────────────────────────────────────────
 
@@ -938,8 +1216,10 @@ class Service:
             "generator_version": self.generator_version,
             "generator_too_old": too_old,
             "da_guard_version": self.da_guard_version,
+            "self_check": self._self_check_doc(),
             "tool_fault": self.tool_fault,
-            "ready": policy.available and too_old is None and self.tool_fault is None,
+            "ready": (policy.available and too_old is None
+                      and self.self_check_state == "passed" and self.tool_fault is None),
             "cache_base_coverage_ratio": self.store.coverage(),
             "warm": {"ref": self.s.warm_ref or None, "commit": self.warm_commit,
                      "error": self.warm_error, "running": self.warming,
@@ -983,6 +1263,11 @@ class Service:
         for outcome in ("completed", "preempted", "deadline", "failed"):
             out.append(f'da_generator_warm_runs_total{{outcome="{outcome}"}} '
                        f"{self.metrics.warm_runs[outcome]}")
+        out += ["# HELP da_generator_self_checks_total Self-check rounds of da-guard, da-read and da-crdecode (readiness), by result.",
+                "# TYPE da_generator_self_checks_total counter"]
+        for result in ("passed", "failed"):
+            out.append(f'da_generator_self_checks_total{{result="{result}"}} '
+                       f"{self.metrics.self_checks[result]}")
         out += ["# HELP da_generator_key_verdicts_total Key verdicts (ADR-038) on writes the generator passed, by outcome: complete, or why not completed.",
                 "# TYPE da_generator_key_verdicts_total counter"]
         for outcome in KEY_VERDICT_OUTCOMES:
@@ -1033,9 +1318,10 @@ class Service:
         Called on SIGCHLD, before each fork and after each run's ``wait4``.
 
         ⛔ Never the running judgement (or warming) process: ``wait4`` in
-        :meth:`_spawn` takes its exit status. So each exited child is looked
-        at first without collecting it (``WNOWAIT``) and collected only when
-        it is not ``child_pid``. #3557: an orphan that ends while another run
+        :meth:`_spawn` takes its exit status — nor a self-check process
+        (``_held_pids``), whose exit :meth:`_self_check_in` reads. So each
+        exited child is looked at first without collecting it (``WNOWAIT``)
+        and collected only when it is neither. #3557: an orphan that ends while another run
         is in progress is collected on its own SIGCHLD, not left a zombie
         until that run ends. When the exited child the kernel reports is the
         running one, the rest wait for that run's end, which its exit has
@@ -1048,7 +1334,8 @@ class Service:
                                  os.WEXITED | os.WNOHANG | os.WNOWAIT)
             except ChildProcessError:
                 break
-            if info is None or info.si_pid == self.child_pid:
+            # #3943: nor a self-check process, which its own wait collects
+            if info is None or info.si_pid == self.child_pid or info.si_pid in self._held_pids:
                 break
             # it has exited (WNOWAIT left it waitable): this does not block
             os.waitpid(info.si_pid, 0)
@@ -1081,6 +1368,10 @@ class Service:
     def shutdown(self) -> None:
         if self.child_pid is not None:
             _kill_group(self.child_pid)
+        for pid in self._held_pids:  # a self-check still running
+            _kill_group(pid)
+        if self._self_check_task is not None:
+            self._self_check_task.cancel()
 
     def start_warming(self) -> None:
         """#2901 E2: resolve --warm-ref and queue a warming run for it. A ref
@@ -1197,6 +1488,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--warm-seconds", type=float, default=DEFAULT_WARM_SECONDS,
                    help="time limit of one warming run; a request arriving ends "
                         "it at once (default: %(default)s)")
+    p.add_argument("--self-check-seconds", type=float, default=DEFAULT_SELF_CHECK_SECONDS,
+                   help="after a failed self-check of da-guard, da-read and "
+                        "da-crdecode, the wait before the next (a new tool fault "
+                        "runs one at once); only a passing one makes the service "
+                        "ready (default: %(default)s)")
+    p.add_argument("--self-check-timeout-seconds", type=float,
+                   default=DEFAULT_SELF_CHECK_TIMEOUT_SECONDS,
+                   help="time limit of one program's self-check; past it the "
+                        "self-check fails (timed_out) (default: %(default)s)")
     return p
 
 
@@ -1328,6 +1628,11 @@ def _check_limits(settings: Settings) -> None:
             f"below --max-body-bytes {settings.max_body_bytes}: a request in "
             f"between could never be admitted; raise the first or lower the "
             f"second")
+    # A self-check every 0 seconds is a busy loop; one with no time never passes.
+    for flag, value in (("--self-check-seconds", settings.self_check_seconds),
+                        ("--self-check-timeout-seconds", settings.self_check_timeout_seconds)):
+        if not value > 0:
+            raise RuntimeError(f"{flag} {value} is not a positive number of seconds")
 
 
 def _ensure_fd_limit(max_connections: int) -> None:
@@ -1383,12 +1688,17 @@ async def serve(settings: Settings, object_format: str) -> None:
           flush=True)
     service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
     service.loop.set_exception_handler(service.loop_exception)
+    # #3943: the programs' self-check, on the path a tool fault's rerun takes
+    # — after the signal handlers, so SIGTERM ends it like anything else.
+    # Until its first round has passed the status says `pending`, not ready.
+    service._ensure_self_check_loop()
     service.start_warming()
     try:
         await stop
     finally:
         server.close()
         service.shutdown()
+        await service.stop_self_check()
         try:
             os.unlink(settings.socket)
         except OSError:

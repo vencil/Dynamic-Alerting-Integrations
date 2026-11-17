@@ -288,6 +288,9 @@ def build_registry_doc(
             "default_on": bool(pack.get("default_on", False)),
             "rule_pack_file": pack["rule_pack_file"],
         }
+        if pack.get("queries"):
+            # query-exporter config that serves the pack's raw metrics (#3833).
+            packs[pack_name]["queries"] = pack["queries"]
         combined: dict[str, tuple[str, dict]] = {}
         for tier in TIERS:
             for key, info in (pack.get(tier) or {}).items():
@@ -818,7 +821,7 @@ def not_chart_armed_keys(doc: dict) -> frozenset[str]:
 # ---------------------------------------------------------------------------
 
 #: Per-pack fields of scaffold's RULE_PACKS that come from the registry.
-_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file")
+_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file", "queries")
 #: Per-key fields of scaffold's RULE_PACKS that come from the registry.
 _KEY_FIELDS = ("value", "unit", "desc", "metric_class", "dimensions",
                "value_counterexample")
@@ -832,7 +835,7 @@ _RULE_PACKS_MODULE_HEADER = (
     '"""GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.\n'
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
-    "display/exporter/default_on/rule_pack_file and the `defaults` /\n"
+    "display/exporter/default_on/rule_pack_file(/queries) and the `defaults` /\n"
     "`optional_overrides` tiers. Edit the registry, then run\n"
     "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
     "`--ci` (pre-commit, CI) fails while this file is stale.\n"
@@ -906,62 +909,7 @@ def render_rule_packs_module(doc: dict) -> str:
 
     body = pprint.pformat(project_rule_packs(doc), indent=1, width=100,
                           sort_dicts=False)
-    armed = pprint.pformat(default_armed_by_pack(doc), indent=1, width=100,
-                           sort_dicts=False)
-    return (_RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
-            + _DEFAULT_ARMED_COMMENT + "DEFAULT_ARMED_KEYS = " + armed + "\n"
-            + _RETIRED_PACKS_COMMENT + "RETIRED_KEY_PACKS = "
-            + pprint.pformat(retired_key_packs(doc), indent=1, width=100, sort_dicts=False)
-            + "\n")
-
-
-#: Above the second generated constant (#3830).
-_RETIRED_PACKS_COMMENT = (
-    "\n# Retired threshold key -> the pack of the key that replaces it (a key\n"
-    "# retired with no replacement is absent; `<old>_critical` follows its\n"
-    "# base). A tree still carrying the old key deploys that pack (#3830).\n")
-
-
-def retired_key_packs(doc: dict) -> dict[str, str]:
-    """Each `retired_keys` entry that names a replacement → the pack of that
-    replacement — DERIVED, never authored. `<old>_critical` is not listed:
-    it follows its base, as the retirement itself does."""
-    keys = registry_keys(doc)
-    return {old: keys[entry["replaced_by"]]["pack"]
-            for old, entry in (doc.get("retired_keys") or {}).items()
-            if entry.get("replaced_by") in keys}
-
-
-#: Above the generated constant: RULE_PACKS has no arming field, and the
-#: da-tools image carries this module but not the registry YAML (#3830).
-_DEFAULT_ARMED_COMMENT = (
-    "\n# Per pack, the keys the registry ships armed (`arming: default`), in\n"
-    "# registry order; a pack with none is absent. What validate-config's\n"
-    "# `unsupplied_defaults` row reads where no repo tree is (#3830).\n")
-
-
-def default_armed_by_pack(doc: dict) -> dict[str, list[str]]:
-    """Per pack, the keys *doc* ships armed (`is_chart_armed`), in registry
-    order — DERIVED, never authored. A pack with none is absent."""
-    out: dict[str, list[str]] = {}
-    for key, entry in registry_keys(doc).items():
-        if is_chart_armed(entry):
-            out.setdefault(entry["pack"], []).append(key)
-    return out
-
-
-def packaged_default_armed() -> dict[str, tuple[str, ...]]:
-    """`default_armed_by_pack` as the generated module carries it: for a
-    reader that runs where no repo tree is (the da-tools image)."""
-    import runpy  # noqa: PLC0415  (a data module)
-    armed = runpy.run_path(RULE_PACKS_MODULE_PATH)["DEFAULT_ARMED_KEYS"]
-    return {pack: tuple(keys) for pack, keys in armed.items()}
-
-
-def packaged_retired_key_packs() -> dict[str, str]:
-    """`retired_key_packs` as the generated module carries it."""
-    import runpy  # noqa: PLC0415  (a data module)
-    return dict(runpy.run_path(RULE_PACKS_MODULE_PATH)["RETIRED_KEY_PACKS"])
+    return _RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
 
 
 def packaged_registry_doc() -> dict:
@@ -1147,6 +1095,57 @@ def check_builtin_defaults_go(doc: dict, path: Optional[str] = None) -> Optional
     return None
 
 
+#: The Go table of the operator-supplied threshold keys and their packs
+#: (#1200 D-A A3): pkg/config/unset_thresholds.go judges, per tenant, which of
+#: them nothing writes, and the exporter serves that as user_threshold_unset.
+UNSET_KEYS_GO_PATH = _in_repo(
+    "components", "threshold-exporter", "app", "pkg", "config",
+    "unset_threshold_keys_gen.go")
+UNSET_KEYS_GO_ID = "unset-threshold-keys-go"
+
+
+def unset_notice_keys(doc: dict) -> dict[str, str]:
+    """Every key the platform does not ship a value for -> its pack: the
+    operator-supplied keys of both tiers (`arming: operator`). A `_critical`
+    key is not one: the schema gives it no arming (it follows its base)."""
+    out: dict[str, str] = {}
+    for key, entry in (doc.get("keys") or {}).items():
+        if isinstance(entry, dict) and entry.get("arming") == ARMING_OFF:
+            out[str(key)] = str(entry.get("pack") or "")
+    return out
+
+
+def render_unset_keys_go(doc: dict) -> str:
+    """The exact text of the generated Go table for *doc*'s operator keys,
+    one `{key, pack}` entry a line, sorted by key."""
+    table = unset_notice_keys(doc)
+    entries = "".join(
+        f"\t{{{_go_str(k)}, {_go_str(table[k])}}},\n" for k in sorted(table))
+    return (
+        "// Code generated by scripts/tools/lint/check_threshold_registry.py --regen; DO NOT EDIT.\n"
+        "// Source: rule-packs/threshold-registry.yaml, the keys with `arming: operator` (#1200 D-A A3).\n"
+        "\n"
+        "package config\n"
+        "\n"
+        "// unsetThresholdKeys are the threshold keys the platform does not ship a\n"
+        "// value for, each with the pack whose rules read it. Read through\n"
+        "// unset_thresholds.go.\n"
+        "var unsetThresholdKeys = []unsetThresholdKey{"
+        + (f"\n{entries}" if entries else "") + "}\n")
+
+
+def check_unset_keys_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
+    """None when the generated Go table is fresh, else what is wrong with it."""
+    p = path or UNSET_KEYS_GO_PATH
+    if p is None or not os.path.isfile(p):
+        return f"{p} (surface {UNSET_KEYS_GO_ID!r}) does not exist"
+    with open(p, encoding="utf-8") as fh:
+        if fh.read() != render_unset_keys_go(doc):
+            return (f"{p} (surface {UNSET_KEYS_GO_ID!r}) is not what the "
+                    "registry generates")
+    return None
+
+
 def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     """``--regen``: every generated surface from the committed registry.
 
@@ -1157,7 +1156,8 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     all before anything is written. Only then are the changed surfaces
     written (the conf.d ones first, through ``da-guard write``) and the
     generated RULE_PACKS module, the retired-keys Go table (#3829) and the
-    built-in defaults Go table (#3832) last; a refusal (ConfdWriteRefused,
+    built-in defaults Go table (#3832) and the unset-threshold keys Go table
+    (#1200 D-A A3) last; a refusal (ConfdWriteRefused,
     ValueError, `_lib_parse_tree.ParseTreeError`) leaves every file as it
     was; a write that stops part-way is SurfaceWriteStopped
     (ConfdWriteStopped for a conf.d batch), naming the files already
@@ -1175,6 +1175,8 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     go_path = _repo_path_or_raise(RETIRED_KEYS_GO_PATH, "the retired-keys Go table")
     builtin_text = render_builtin_defaults_go(doc)
     builtin_path = _repo_path_or_raise(BUILTIN_DEFAULTS_GO_PATH, "the built-in defaults Go table")
+    unset_text = render_unset_keys_go(doc)
+    unset_path = _repo_path_or_raise(UNSET_KEYS_GO_PATH, "the unset-threshold keys Go table")
     touched = write_planned(planned)
     if check_rule_packs_module(doc) is not None:
         _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_repo_artifact)
@@ -1185,6 +1187,9 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     if check_builtin_defaults_go(doc, builtin_path) is not None:
         _write_or_stop(builtin_path, builtin_text, touched, write_repo_artifact)
         touched.append(builtin_path)
+    if check_unset_keys_go(doc, unset_path) is not None:
+        _write_or_stop(unset_path, unset_text, touched, write_repo_artifact)
+        touched.append(unset_path)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
@@ -2278,7 +2283,8 @@ _TENANT_STUB_PROSE = {
         "#",
         "# 平台「認得」下列 key：你在上面 tenants: 底下自己填值就會生效，不必再找",
         "# operator 開通。但平台刻意不給它們預設值 ⇒ 不填＝沒有值＝不產生 series，",
-        "# 不會有告警，也不會有任何錯誤訊息。那是設計，不是漏掉的預設——所以本檔開頭",
+        "# 不會有告警，預設也不會有錯誤訊息（要提醒：寫 _state_unset_thresholds: enable）。",
+        "# 那是設計，不是漏掉的預設——所以本檔開頭",
         "# 的三態在這一格只有兩態：填值，或靜默（沒有「省略＝用預設」可用）。",
         "# ⚠️ 下列數字是「參考起點」不是背書：這種閾值只有你自己的 baseline 校準得",
         "#    出來。平台自家的盲寫參考庫（ADR-030）已經對其中一些值量到反例，逐條",
@@ -2292,7 +2298,8 @@ _TENANT_STUB_PROSE = {
         "# The platform RECOGNISES these keys: set one under `tenants:` above and",
         "# it takes effect — no operator action needed. But the platform ships no",
         "# default for them, so leaving one out means NO value at all: no series,",
-        "# no alert, and no error message either. That silence is the design, not",
+        "# no alert, and by default no error message either (for a notice, write",
+        "# _state_unset_thresholds: enable). That silence is the design, not",
         "# a missing default — the three-state rule at the top of this file has",
         "# only two states here: set a value, or stay silent.",
         "# WARNING: the numbers below are a STARTING REFERENCE, not an endorsement",

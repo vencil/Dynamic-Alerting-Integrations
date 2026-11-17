@@ -259,6 +259,14 @@ def _text(path):
         return f.read()
 
 
+def _without_builtin(values):
+    """values minus the keys of the built-in layer (#3832): the platform's
+    default-armed thresholds, which /metrics serves for every tenant."""
+    import _registry_lib
+    builtin = set(_registry_lib.builtin_defaults(_registry_lib.load_registry()))
+    return {k: v for k, v in values.items() if k not in builtin}
+
+
 class TestLoadTenantConfigs:
     """load_tenant_configs() 配置載入。"""
 
@@ -281,7 +289,8 @@ class TestLoadTenantConfigs:
         write_yaml(config_dir, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert len(configs) == 1
-        assert configs["db-a"] == {"mysql_connections": 50.0}
+        # #3832: /metrics also serves the built-in layer's rows.
+        assert _without_builtin(configs["db-a"]) == {"mysql_connections": 50.0}
 
     def test_load_directory_flat_file_is_not_a_tenant(self, config_dir, da_guard_env, capsys):
         """平面格式檔（無 `tenants:`）：exporter 不當租戶，具名 WARN（R3）。
@@ -290,7 +299,8 @@ class TestLoadTenantConfigs:
         write_yaml(config_dir, "db-a.yaml", "custom_mysql_uptime: 50\n")
         write_yaml(config_dir, "db-b.yaml", "tenants:\n  db-b:\n    custom_mysql_uptime: 7\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
-        assert configs == {"db-b": {"custom_mysql_uptime": 7.0}}
+        # #3832: /metrics also serves the built-in layer's rows.
+        assert {t: _without_builtin(v) for t, v in configs.items()} == {"db-b": {"custom_mysql_uptime": 7.0}}
         assert "WARN: db-a.yaml: declares no tenant" in capsys.readouterr().err
 
     def test_no_args_returns_empty(self):

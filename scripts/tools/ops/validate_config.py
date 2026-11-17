@@ -220,10 +220,10 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
     ParseFailedError,
+    UngatheredPart,
     load_effective_tree,
     load_guard_report,
     load_served_schedules,
-    load_served_tree,
     print_load_error,
 )
 from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
@@ -878,7 +878,11 @@ def check_routes(config_dir: str, policy: object = None,
 
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
-        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy)
+        # #3996: the guard_errors row reports da-guard's own findings, with
+        # their fixes: a key verdict on the same fact (gate_kind) is not
+        # reported in this row a second time.
+        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy,
+                                    gate_reported=False)
     details = [ln.rstrip() for ln in printed.getvalue().splitlines() if ln.strip()]
     if verdict_out is not None and outcome.key_verdict is not None:
         verdict_out.append(outcome.key_verdict)
@@ -2113,6 +2117,34 @@ _NO_ALERT_NOT_CHECKED_HINT = (
     "working da-guard) and run again. Never blocks (#3591).")
 
 
+def _ungathered_reading(parts: "tuple[UngatheredPart, ...]") -> tuple[bool, list[str]]:
+    """What a reader of the whole day (`load_served_schedules`) says of the
+    parts of it /metrics cannot be gathered in (#3991): whether they cover
+    the whole day — nothing was served at any minute, so nothing was judged
+    and the row is "not checked", never a PASS — and otherwise the line
+    naming them as not judged ([] when there is none). Read off the
+    document's `ungathered`, not off the keys' segments: a segment exists
+    only where its tenant serves the key."""
+    covered = 0
+    for p in parts:
+        if _hhmm(p.start) != covered:
+            break
+        covered = _hhmm(p.end)
+    if covered >= _MINUTES_PER_DAY:
+        return True, []
+    if not parts:
+        return False, []
+    spans = [f"{p.start}-{p.end} UTC" for p in parts]
+    more = f" (+{len(spans) - WARN_LIMIT} more)" if len(spans) > WARN_LIMIT else ""
+    return False, [f"not judged where /metrics cannot be gathered (nothing is served): "
+                   f"{', '.join(spans[:WARN_LIMIT])}{more}"]
+
+
+_MINUTES_PER_DAY = 24 * 60
+_ALL_DAY_UNGATHERED = ("the exporter's /metrics cannot be gathered at any minute of the day, so "
+                       "nothing is served to judge — the guard_errors row names why")
+
+
 def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = None,
                    judge: bool = True) -> dict[str, object]:
     """Threshold keys /metrics serves that no shipped alert compares (ADR-038
@@ -2127,8 +2159,9 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     `--schedules-only` (#3883). Nothing here is read at one instant: the
     time of day the check runs at changes nothing — `expires:` alone is read
     at the run's clock, as the verdict reads it. A part of the day /metrics
-    cannot be gathered in serves nothing, so no severity is read there.
-    Whether an alert compares a key is the observed-map's
+    cannot be gathered in serves nothing, so no severity is read there: it
+    is named as not judged, and a day with no part that gathers is not
+    checked (#3991). Whether an alert compares a key is the observed-map's
     answer (`_observed_map_lib.lookup`), asked for the key in the exporter's
     canonical spelling (asked of da-guard), the dimension part dropped — and
     for a key served at critical by its value (`"95:critical"`), for its
@@ -2159,7 +2192,8 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         if verdict.undecidable:
             return not_checked("no root platform file was read, so the threshold keys were not judged")
         observed = _observed_map_lib.load_observed_map()
-        days = load_served_schedules(config_dir, partial=True).tenants
+        schedules = load_served_schedules(config_dir, partial=True)
+        days = schedules.tenants
         # #3883: (tenant, key) -> every severity /metrics serves the key at,
         # in any part of the day (the key verdict carries no value read at
         # one instant since #3835).
@@ -2182,6 +2216,9 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
             YamlFileError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+    all_day, note = _ungathered_reading(schedules.ungathered)
+    if all_day:
+        return not_checked(_ALL_DAY_UNGATHERED)
     # ONE LINE PER KEY (#3591): what is judged is the key — no shipped alert
     # compares it, whatever file writes it — so the line is the key's in the
     # exporter's canonical spelling, the dimension part dropped (the lookup's
@@ -2205,7 +2242,7 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     if not found:
         return _make_result("no_alert", PASS, [
             f"{len(served)} served key row(s): every one is compared by a shipped alert "
-            "(or deferred by the observed-map)"])
+            "(or deferred by the observed-map)", *note])
 
     def capped(names: "set[str]") -> str:
         ordered = sorted(names)
@@ -2216,156 +2253,106 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         tier = " (served as critical)" if promoted else ""
         details.append(f"no_alert `{key}`{tier} — served, but no shipped alert compares it "
                        f"— file(s) {capped(files)} — tenant(s) {capped(tenants)}")
-    return _make_result("no_alert", WARN, details)
+    return _make_result("no_alert", WARN, details + note)
 
 
-_UNSUPPLIED_DEFAULTS_HINT = (
-    "Each line is a threshold the platform ships switched on that the root "
-    "platform file of this tree does not carry, so the alert comparing it "
-    "stays silent for every tenant. Add the key under `defaults:` (the line "
-    "gives the platform's value), or, to leave it off on purpose, list it "
-    "under `optional_overrides:` (a tenant can still set it there). A pack "
-    "counts as deployed when the root platform file gives any of its keys a "
-    "value under `defaults:` or a tenant declares it in `_metadata.db_type`. Judged against the "
-    "registry this tool was built with: a rule pack older than the tool may "
-    "not read the key yet. Never blocks (#3830).")
+_PLATFORM_DEFAULTS_HINT = (
+    "Fix what the line above names (a working, current da-guard; files the "
+    "exporter's load can read) and run again. Never blocks (#3832).")
 
 
-_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT = (
-    "Nothing was judged, so no default is known to be supplied: fix what the "
-    "line above names (a working, current da-guard; a root platform file "
-    "that reads) and run again. Never blocks (#3830).")
+_PLATFORM_DEFAULTS_WITHHELD_HINT = (
+    "Make the root platform file (_defaults.yaml) read again (the rows above name what is "
+    "wrong with it): while it does not, no tenant gets a platform default "
+    "row, built-in or written, because the file may hold the overrides and "
+    "opt-outs of those defaults. Never blocks (#3832).")
 
 
-def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
-    """Thresholds the platform ships armed that this tree does not supply
-    (#3830): a key the registry marks `arming: default`, of a pack this tree
-    deploys, that the root platform file neither sets under `defaults:` nor
-    lists under `optional_overrides:`. `da-tools init` copies the platform
-    defaults into the customer's tree, so a default added or replaced later
-    (#3778's `mysql_connection_usage_percent`) never reaches it, and the
-    alert comparing it is silent with no row saying so.
+def check_platform_defaults(config_dir: str) -> dict[str, object]:
+    """What this tree does with each threshold the platform ships armed
+    (#3832 decision 8): the readers of conf.d carry those keys and the
+    platform's values built in, beneath the root `_defaults.yaml`, so a key
+    the tree does not write is served at the platform's value. Each key is
+    one line:
 
-    Which keys ship armed is the registry's answer, as the generated module
-    carries it (`_registry_lib.packaged_default_armed`): no list is kept
-    here.
+    * `builtin` — the root `defaults:` gives it no value (not written,
+      written as null, or a value the root decode refuses): the built-in
+      layer gives the platform's, to the number of tenants da-guard counts
+      as served it (those with no value of their own, and those whose value
+      falls back to the default; the others set a number or `disable` in a
+      subtree, a profile or their own file);
+    * `overridden` — the root `defaults:` gives it a number, every tenant's
+      unless it writes its own; noted when the number is the platform's.
+    * `opted_out` — the root `defaults:` writes it as `disable`: every
+      tenant inherits the opt-out (the key's whole family off), except where
+      a subdirectory `_defaults.yaml`, a profile or its own file gives the
+      key a value.
 
-    A pack is deployed when either holds — no deployment inventory exists:
+    and the first line names the built-in table by its digest, which is how
+    the exporter, tenant-api and da-tools are known to hold the same table.
 
-    * the root platform file gives one of its keys a value under
-      `defaults:`, in any #1231 spelling (the exporter's rule, asked of
-      da-guard), or a retired key whose replacement is one of its keys
-      (#3829; the old key shows the pack, it does not supply the new one).
-      A key merely LISTED under `optional_overrides:` shows nothing: that
-      list is shipped whole, every pack's declared keys at once (the chart's
-      values, the try-local seed), so it says what the platform recognises,
-      not what this deployment runs. A tenant's or a profile's key adds
-      nothing: one the root file does not declare is already
-      `unread (no_row)`.
-    * a tenant's `_metadata.db_type`, as /metrics serves it (served-values:
-      a root platform file's `tenants:` entry counts), names it.
+    Every answer is the reader's own, from one `da-guard effective` run
+    (its `builtin_defaults`): this tool reads no registry and works out
+    nothing itself.
 
-    The root platform file is the one parse-tree says the root's chain
-    selects (`_defaults.yaml` / `_defaults.yml`): a key only a subtree
-    carrier declares reaches no tenant (#1976). A tree with no root platform
-    file supplies nothing: a pack a `db_type` shows deployed is named whole.
-
-    Advisory only: WARN or PASS, never FAIL — the registry read is this
-    tool's, and the rule packs a deployment runs are another release line.
-    A root file that does not read, a served reading or spelling answer that
-    cannot be had, and a file the exporter's load drops (a tenant file: its
-    tenants' `db_type` is not served; the root file: nothing in it is
-    supplied) are each a WARN saying nothing was checked.
+    An explanation, not a finding: a tree that does not write a default-armed
+    key is the normal state, so the row is PASS. WARN only when it cannot
+    say: the root `_defaults.yaml` does not read, so the built-in layer is
+    withheld (the line says so); another file the exporter's load drops
+    (its tenants are not counted); or a da-guard that cannot answer.
     """
-    import _registry_lib  # ops/: the registry as the generated module carries it
-
     def not_checked(why: str) -> dict[str, object]:
-        return _make_result("unsupplied_defaults", WARN, [
-            f"not checked: whether every default-armed threshold is supplied was not judged ({why})"],
-            hint=_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT)
-    # This tool's own data: a failure here is a defect, not a "not checked".
-    registry = _registry_lib.registry_keys(_registry_lib.packaged_registry_doc())
-    armed = _registry_lib.packaged_default_armed()
-    retired = _registry_lib.packaged_retired_key_packs()
+        return _make_result("platform_defaults", WARN, [
+            f"not checked: what this tree does with the platform's default-armed thresholds "
+            f"was not judged ({why})"], hint=_PLATFORM_DEFAULTS_HINT)
     try:
-        carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
-        raw = load_confd_file(config_dir, str(carrier), default={}) if carrier is not None else {}
-        block = raw.get("defaults") if isinstance(raw, dict) else None
-        listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
-        # A key written as null is not declared at all: the exporter drops it
-        # from `defaults:` before anything reads it (dropNullThresholds), so
-        # it is neither evidence of its pack nor a supplied value.
-        valued = {str(k).partition("{")[0]
-                  for k, v in (block.items() if isinstance(block, dict) else ())
-                  if v is not None}
-        written = sorted(
-            valued | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
-        spell = tv_key_spellings(written)
-        served = load_served_tree(config_dir, partial=True)
-    except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ParseTreeError,
-            *_INPUT_ERRORS) as exc:
-        return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
-    dropped = [*served.parse_failed, *(u.file for u in served.unreadable)]
-    if dropped:
-        # A tenant of a dropped file is not served, so its db_type is not
-        # read — a PASS would read as "every tenant checked".
+        tree = _effective_tree(config_dir)
+    except ParseFailedError as exc:
+        builtin = exc.builtin_defaults
+        if builtin is not None and builtin.keys and all(
+                k.state == "withheld" for k in builtin.keys.values()):
+            return _make_result("platform_defaults", WARN, [
+                f"withheld: the root platform file does not read, so none of the "
+                f"{len(builtin.keys)} default-armed threshold(s) of the built-in table "
+                f"{builtin.digest} is served to any tenant"], hint=_PLATFORM_DEFAULTS_WITHHELD_HINT)
+        dropped = [*exc.parse_failed, *(u.file for u in exc.unreadable)]
         return not_checked(f"the exporter's load drops {', '.join(sorted(dropped))}; "
-                           "their tenants are not served")
-    where = carrier.name if carrier is not None else None
-    supplied = {spell.canonical(k): k for k in written}
+                           "their tenants are not counted")
+    except (DaGuardError, DaGuardNotFoundError, OSError, *_INPUT_ERRORS) as exc:
+        return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+    builtin = tree.builtin_defaults
+    if builtin is None:
+        return not_checked("da-guard ran no build of this tree")
+    total = len(tree.tenants)
+    details = [f"built-in table {builtin.digest}: {len(builtin.keys)} default-armed threshold(s), "
+               f"{total} tenant(s)"]
+    for key, entry in sorted(builtin.keys.items()):
+        value = _fmt_threshold(entry.value)
+        if entry.state == "builtin":
+            details.append(f"builtin `{key}` = {value} — the root platform file does not give it a "
+                           f"value; the built-in layer serves {entry.tenants} of {total} tenant(s)")
+        elif entry.state == "overridden":
+            same = " (the platform's value)" if entry.root_value == entry.value else ""
+            details.append(f"overridden `{key}` = {_fmt_threshold(entry.root_value)}{same} — set "
+                           f"under `defaults:` of the root platform file; platform value {value}")
+        elif entry.state == "opted_out":
+            details.append(f"opted_out `{key}` — `disable` under `defaults:` of the root platform "
+                           f"file switches it off for every tenant, except where a subdirectory "
+                           f"`_defaults.yaml`, a profile or the tenant's own file gives it a value; "
+                           f"platform value {value}")
+        else:
+            # A build that read the root file withholds nothing (da-guard's
+            # contract); a state this row has no sentence for is not guessed at.
+            return not_checked(f"da-guard gives `{key}` the state {entry.state!r} on a tree whose "
+                               "root platform file reads")
+    return _make_result("platform_defaults", PASS, details)
 
-    def pack_of(canonical: str) -> "str | None":
-        """The pack a root-file key shows deployed: its own, or — for a
-        retired key (and its `_critical`) — the pack of its replacement."""
-        if canonical in registry:
-            return registry[canonical]["pack"]
-        base = canonical[:-len("_critical")] if canonical.endswith("_critical") else canonical
-        return retired.get(base)
-    # pack -> what shows it is deployed: (root keys as written, tenants)
-    seen: dict[str, tuple[set[str], set[str]]] = {}
-    # Each valued key on its own spelling: two spellings of one key (a retired
-    # alias under `defaults:`, its canonical name in the listed-only
-    # `optional_overrides:`) must not let the listed one stand in for the
-    # valued one.
-    for as_written in sorted(valued):
-        pack = pack_of(spell.canonical(as_written))
-        if pack in armed:
-            seen.setdefault(pack, (set(), set()))[0].add(as_written)
-    for tenant, tv in served.tenants.items():
-        meta = tv.values.get("_metadata")
-        kinds = meta.get("db_type") if isinstance(meta, dict) else None
-        for kind in ([kinds] if isinstance(kinds, str) else kinds if isinstance(kinds, list) else []):
-            if isinstance(kind, str) and kind in armed:
-                seen.setdefault(kind, (set(), set()))[1].add(tenant)
-    judged = [(pack, key) for pack in sorted(seen) for key in armed[pack]]
-    missing = [(pack, key) for pack, key in judged if key not in supplied]
-    if not missing:
-        if where is None:
-            return _make_result("unsupplied_defaults", PASS, [
-                "no root _defaults.yaml, and no tenant declares a db_type whose pack ships "
-                "an armed threshold — nothing to check"])
-        return _make_result("unsupplied_defaults", PASS, [
-            f"{len(judged)} default-armed threshold(s) of {len(seen)} deployed pack(s): "
-            f"each is set or listed in {where}"])
 
-    def capped(names: "set[str]") -> str:
-        ordered = sorted(names)
-        return ", ".join(ordered[:WARN_LIMIT]) + (
-            f" (+{len(ordered) - WARN_LIMIT} more)" if len(ordered) > WARN_LIMIT else "")
-    details = []
-    for pack, key in missing:
-        keys, tenants = seen[pack]
-        why = "; ".join(
-            ([f"{where} sets {capped(keys)}"] if keys else [])
-            + ([f"db_type of tenant(s) {capped(tenants)}"] if tenants else []))
-        entry = registry[key]
-        value = f"{entry['value']} {entry.get('unit', '')}".rstrip()
-        lacks = (f"{where} neither sets it under `defaults:` nor lists it under "
-                 "`optional_overrides:`" if where is not None
-                 else "this tree has no root _defaults.yaml to set it in")
-        details.append(f"unsupplied `{key}` — the {pack} pack ships it armed (platform value "
-                       f"{value}), but {lacks} — {pack} is deployed here: {why}")
-    return _make_result("unsupplied_defaults", WARN, details)
+def _fmt_threshold(v: "float | None") -> str:
+    """A threshold as a person writes it: `80`, not `80.0`."""
+    if v is None:
+        return "?"
+    return str(int(v)) if v.is_integer() else repr(v)
 
 
 _TIER_INVERSION_HINT = (
@@ -2420,7 +2407,8 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
     or one whose files the exporter's load drops (the dropped files' tenants
     are not served, so not judged), is a WARN saying it was not checked. A
     part of the day /metrics cannot be gathered in (nothing is served then)
-    is named as not judged — wherever in the day the check runs.
+    is named as not judged — wherever in the day the check runs — and a day
+    with no part that gathers is not checked (#3991).
 
     `at` (RFC3339; None = now) is the instant time-boxes (`expires:`) are
     judged at; its time of day changes nothing.
@@ -2443,9 +2431,13 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
         # a PASS would read as "every tenant checked".
         return not_checked(f"the exporter's load drops {', '.join(sorted(dropped))}; "
                            "their tenants are not served")
+    # A part of the day /metrics cannot be gathered in serves nothing, so
+    # nothing is inverted there — but it was not judged either (#3691).
+    all_day, note = _ungathered_reading(tree.ungathered)
+    if all_day:
+        return not_checked(_ALL_DAY_UNGATHERED)
 
     found: list[str] = []
-    ungathered: list[str] = []
     pairs = 0
     for tenant, days in sorted(tree.tenants.items()):
         # metric_key -> severity -> [(start, end, value)]. Dimensions are
@@ -2457,8 +2449,6 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
         rows: dict[str, dict[str, list[tuple[int, int, float]]]] = {}
         for sched in days.values():
             for seg in sched.segments:
-                if seg.error is not None:
-                    ungathered.append(f"tenant {tenant!r} {seg.start}-{seg.end} UTC")
                 if seg.value is None or not seg.series:
                     continue
                 for se in seg.series:
@@ -2510,12 +2500,6 @@ def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, ob
                     f"critical {cv:g} is not {'above' if direction == '>' else 'below'} "
                     f"warning {wv:g} (the shipped alert compares the tenant's largest of each "
                     f"and fires when the value is {direction} the threshold)")
-    # A part of the day /metrics cannot be gathered in serves nothing, so
-    # nothing is inverted there — but it was not judged either (#3691).
-    note = ([f"not judged where /metrics cannot be gathered (nothing is served): "
-             f"{', '.join(sorted(set(ungathered))[:WARN_LIMIT])}"
-             + (f" (+{len(set(ungathered)) - WARN_LIMIT} more)" if len(set(ungathered)) > WARN_LIMIT else "")]
-            if ungathered else [])
     if not found:
         if not pairs:
             # Nothing compared is not "compared and fine" (#3691).
@@ -2823,7 +2807,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "no_alert": (_NO_ALERT_HINT, "docs/cli-reference.md#validate-config"),
-    "unsupplied_defaults": (_UNSUPPLIED_DEFAULTS_HINT, "docs/cli-reference.md#validate-config"),
+    "platform_defaults": (_PLATFORM_DEFAULTS_HINT, "docs/cli-reference.md#validate-config"),
     "tier_inversion": (_TIER_INVERSION_HINT, "docs/cli-reference.md#validate-config"),
     # #1653: not a check — the one row `main()` emits under --json when
     # --config-dir is not a directory and no check could run at all.
@@ -3478,10 +3462,10 @@ def _main() -> "Report | None":
                               verdict=given if isinstance(given, key_verdict.TreeVerdict) else None,
                               judge=given is None, _config_dir=args.config_dir))
 
-    # 16. Default-armed thresholds of a deployed pack that the root platform
-    # file neither sets nor lists (#3830) — unconditional, advisory: WARN at
-    # most, never a FAIL.
-    results.append(_run_check("unsupplied_defaults", check_unsupplied_defaults,
+    # 16. What the tree does with each threshold the platform ships armed:
+    # served from the built-in layer or overridden at the root (#3832) —
+    # unconditional, an explanation: PASS, WARN only when it cannot say.
+    results.append(_run_check("platform_defaults", check_platform_defaults,
                               args.config_dir, _config_dir=args.config_dir))
 
     # 17. A tenant's served critical not stricter than its warning, across

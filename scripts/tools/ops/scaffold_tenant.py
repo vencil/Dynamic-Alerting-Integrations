@@ -207,7 +207,12 @@ _SCAFFOLD_PACK_EXTRAS = {'kubernetes': {'state_filters': {'container_crashloop':
                                                   'severity': 'info',
                                                   'default_state': 'disable',
                                                   'desc': 'Maintenance mode (suppresses all '
-                                                          'alerts)'}}},
+                                                          'alerts)'},
+                                  'unset_thresholds': {'reasons': [],
+                                                       'severity': 'info',
+                                                       'default_state': 'disable',
+                                                       'desc': 'Name the threshold keys that serve '
+                                                               'no threshold (#1200 D-A A3)'}}},
  'postgresql': {'dimensional_example': {'pg_connections{datname="orders"}': '70'}},
  'redis': {'dimensional_example': {'redis_connected_clients{instance="redis-orders:6379"}': '500',
                                    'redis_evicted_keys_rate{instance="redis-cache:6379"}': '500'}},

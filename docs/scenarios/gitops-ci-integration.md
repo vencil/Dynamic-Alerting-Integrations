@@ -503,7 +503,7 @@ git push origin feature/lower-connections
 # → ConfigMap 更新 → threshold-exporter hot-reload → Prometheus 使用新閾值
 ```
 
-> ⚠️ **上面第 2 步的 validate 不會提醒你「漏設了什麼」。** 平台有一批 key 是**認得但不主張值**的（`_defaults.yaml` 的 `optional_overrides:` 清單）：你不填，對應告警就永遠不會觸發，而且**驗證與 CI 全程綠燈、不會有任何錯誤訊息**——那是設計，不是漏掉的預設值（這些閾值只有你自己的 baseline 校準得出來）。要看某個 tenant 目前漏了哪些，跑：
+> ⚠️ **上面第 2 步的 validate 不會提醒你「漏設了什麼」。** 平台有一批 key 是**認得但不主張值**的（`_defaults.yaml` 的 `optional_overrides:` 清單）：你不填，對應告警就永遠不會觸發，而且**驗證與 CI 全程綠燈、不會有任何錯誤訊息**——那是設計，不是漏掉的預設值（這些閾值只有你自己的 baseline 校準得出來）。執行期想收到提醒，可以訂閱 `_state_unset_thresholds`（預設關閉，見 [for-tenants](../getting-started/for-tenants.md)）。要看某個 tenant 目前漏了哪些，跑：
 >
 > ```bash
 > da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance

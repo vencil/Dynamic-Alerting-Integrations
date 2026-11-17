@@ -61,8 +61,9 @@ func benchPlatformMerge(b *testing.B, entries int, uncached bool) {
 		if kv := m.ValidateTenantKeys(); len(kv.Errors) != 0 {
 			b.Fatalf("errors: %v", kv.Errors)
 		}
-		if len(m.Defaults) != 100 {
-			b.Fatalf("Defaults = %d keys", len(m.Defaults))
+		// #3832: the root's 100 plus the built-in layer's.
+		if want := 100 + len(builtinDefaults); len(m.Defaults) != want {
+			b.Fatalf("Defaults = %d keys, want %d", len(m.Defaults), want)
 		}
 		if entries > 1 && m.Tenants["tenant-001"]["metric_002"].Default != want {
 			b.Fatalf("platform layer not applied: %+v", m.Tenants["tenant-001"])

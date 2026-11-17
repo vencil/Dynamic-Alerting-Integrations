@@ -654,7 +654,7 @@ class TestOutputAndClusterExitCodes:
         import _grar_render as render
 
         def fake(argv, *, timeout, stdin_text=None):
-            out = json.dumps({"data": {"alertmanager.yml":
+            out = json.dumps({"metadata": {"managedFields": []}, "data": {"alertmanager.yml":
                                        "global: {}\nroute: {receiver: d}\n"
                                        "receivers: [{name: d}]\n"}}) \
                 if argv[:2] == ["kubectl", "get"] else ""
@@ -3287,11 +3287,24 @@ class TestPlatformAlertPlaneContract:
 # ============================================================
 # apply_to_configmap (mocked kubectl/curl)
 # ============================================================
+def _with_managed_fields(stdout: str) -> str:
+    """A ConfigMap JSON as `kubectl get --show-managed-fields` returns it:
+    with a (here empty) managedFields list (#3900)."""
+    try:
+        obj = json.loads(stdout)
+    except ValueError:
+        return stdout
+    if isinstance(obj, dict):
+        obj.setdefault("metadata", {}).setdefault("managedFields", [])
+        return json.dumps(obj)
+    return stdout
+
+
 class TestApplyToConfigmap:
     """apply_to_configmap() with mocked subprocess calls."""
 
     def _mock_subprocess(self, monkeypatch, kubectl_get_stdout, kubectl_get_rc=0,
-                         kubectl_create_rc=0, kubectl_apply_rc=0, curl_rc=0):
+                         kubectl_apply_rc=0, curl_rc=0):
         calls = []
         real_run = subprocess.run
 
@@ -3307,11 +3320,8 @@ class TestApplyToConfigmap:
 
             if "get" in cmd and "configmap" in cmd:
                 result.returncode = kubectl_get_rc
-                result.stdout = kubectl_get_stdout
-            elif "create" in cmd and "configmap" in cmd:
-                result.returncode = kubectl_create_rc
-                result.stdout = "apiVersion: v1\nkind: ConfigMap\ndata: {}"
-            elif "apply" in cmd:
+                result.stdout = _with_managed_fields(kubectl_get_stdout)
+            elif "replace" in cmd or "apply" in cmd:
                 result.returncode = kubectl_apply_rc
                 result.stdout = ""
             elif "curl" in cmd:
@@ -3367,44 +3377,37 @@ class TestApplyToConfigmap:
         monkeypatch.setattr(render, "kubectl_run", kubectl_run)
         return verbs
 
-    def test_the_apply_is_handed_the_manifest_the_create_printed(self, monkeypatch, capsys):
-        """`kubectl apply -f -` reads the manifest from stdin: the one
-        `create --dry-run=client -o yaml` printed, whole. Without it the
-        apply would read this tool's own stdin."""
+    def test_the_replace_is_handed_the_object_on_stdin(self, monkeypatch, capsys):
+        """#3900: one `kubectl replace`, the object on its stdin, whole — no
+        `create --dry-run=client` step, and the config in no argument."""
         import _grar_render as render
         seen = {}
-        manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: am-config\n"
+        body = render.replaced_configmap({"metadata": {"name": "am-config"}}, {"alertmanager.yml": "route: {}\n"})
 
         def kubectl_run(verb, args, **kw):
             seen[verb] = (list(args), kw.get("stdin_text"))
-            return subprocess.CompletedProcess([verb, *args], 0,
-                                               manifest if verb == "create" else "", "")
+            return subprocess.CompletedProcess([verb, *args], 0, "", "")
         monkeypatch.setattr(render, "kubectl_run", kubectl_run)
-        assert render._apply_merged_configmap("route: {}\n", "monitoring", "am-config") is True
-        assert seen["apply"] == (["-f", "-"], manifest)
-        assert seen["create"][1] is None
+        assert render._apply_merged_configmap(body, "monitoring", "am-config") is True
+        assert seen == {"replace": (["--field-manager=da-generate-routes", "-f", "-"], body)}
         assert "ConfigMap monitoring/am-config updated" in capsys.readouterr().out
 
     def test_a_read_kubectl_could_not_start_is_explained_not_empty(self, monkeypatch):
         import _grar_render as render
         self._kubectl_dies_at(monkeypatch, "get")
-        cfg, warnings, source = render._read_existing_configmap("monitoring", "am-config")
-        assert cfg is None and source is None
+        cfg, warnings, source, live = render._read_existing_configmap("monitoring", "am-config")
+        assert cfg is None and source is None and live is None
         assert len(warnings) == 1 and "cannot run kubectl" in warnings[0]
         assert "Failed to read ConfigMap am-config" in warnings[0]
 
-    @pytest.mark.parametrize("stage, ran", [("create", ["create"]),
-                                            ("apply", ["create", "apply"])])
-    def test_a_write_kubectl_could_not_start_is_never_an_update(self, monkeypatch, capsys,
-                                                               stage, ran):
-        """Part-way: the manifest was generated (`create --dry-run=client`
-        exits 0) and the `apply` cannot be started — False, the reason on
-        stderr, and no "updated" line."""
+    def test_a_write_kubectl_could_not_start_is_never_an_update(self, monkeypatch, capsys):
+        """The `apply` cannot be started — False, the reason on stderr, and no
+        "updated" line."""
         import _grar_render as render
-        verbs = self._kubectl_dies_at(monkeypatch, stage)
-        assert render._apply_merged_configmap("route: {}\n", "monitoring", "am-config") is False
+        verbs = self._kubectl_dies_at(monkeypatch, "replace")
+        assert render._apply_merged_configmap("{}", "monitoring", "am-config") is False
         out, err = capsys.readouterr()
-        assert verbs == ran
+        assert verbs == ["replace"]
         assert "updated" not in out + err
         assert "cannot run kubectl" in err
 

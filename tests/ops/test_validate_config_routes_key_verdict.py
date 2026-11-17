@@ -128,15 +128,16 @@ def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, t
     ], r["details"]
 
 
-def test_an_undecidable_key_fails(tmp_path):
-    """#3016 option A: a threshold key no root platform file lets the
-    verdict judge fails the row, as tenant-api refuses such a write (422)."""
+def test_a_tree_with_no_root_platform_file_is_judged(tmp_path):
+    """#3832 (ADR-038 decision 7): a tree with no root platform file is
+    judged as any other; a threshold key no layer declares is unread and
+    fails the row. The platform declares nothing, so the advice is
+    NO_DECLARED_DEFAULTS_HINT's."""
     r = vc.check_routes(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
     assert r["status"] == vc.FAIL and not r["caller_error"]
-    assert _key_lines(r) == [
-        "no root platform file was read: 1 threshold key(s) cannot be judged (undecidable)"]
-    # Nothing was found unread: the advice is about the root file.
-    assert r["hint"] == vc.KEY_VERDICT_UNDECIDABLE_HINT
+    assert any("unread `mysql_conections` (no_row)" in d for d in _key_lines(r)), r["details"]
+    assert not any("undecidable" in d for d in r["details"]), r["details"]
+    assert r["hint"] == vc.NO_DECLARED_DEFAULTS_HINT
 
 
 def test_a_finding_gets_the_key_advice(tmp_path):
@@ -313,13 +314,14 @@ class TestAPlatformDeclaringNothingIsNotAdvisedAway:
         assert vc._no_declared_defaults_hint(str(tmp_path)) is None
 
 
-def test_undecidable_keeps_its_advice_next_to_a_key_check(tmp_path):
-    """No root platform file and a renamed key: the rename line is the
-    exporter's key check, not a key found unread, so the advice stays about
-    the root file — never "remove a key nothing reads"."""
+def test_a_rename_line_beside_an_unread_key_in_a_tree_with_no_root_file(tmp_path):
+    """#3832: no root platform file and a renamed key — the tree is judged,
+    so the retired spelling no layer declares is unread beside its rename
+    line, and the advice is the platform-declares-nothing one."""
     r = vc.check_routes(_tree(tmp_path, {"t-a.yaml": "tenants:\n  t-a:\n    mysql_cpu: \"40\"\n"}))
     assert any("renamed" in d for d in r["details"]), r["details"]
-    assert r["hint"] == vc.KEY_VERDICT_UNDECIDABLE_HINT, r
+    assert any("unread `mysql_cpu` (no_row)" in d for d in r["details"]), r["details"]
+    assert r["hint"] == vc.NO_DECLARED_DEFAULTS_HINT, r
 
 
 def test_an_unbound_profiles_threshold_key_is_a_notice_not_a_failure(tmp_path):

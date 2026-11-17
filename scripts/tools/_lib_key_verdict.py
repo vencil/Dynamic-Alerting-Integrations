@@ -42,16 +42,17 @@ from typing import Any, Iterable, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib_confd  # noqa: E402
-from _lib_validation import shown_file, shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: keys and values into messages; #3703: files)
+from _lib_validation import ShapeError, shown_file, shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: keys and values into messages; #3703: files)
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
-SCHEMA = "da-guard.key-verdict/v4"
+SCHEMA = "da-guard.key-verdict/v5"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: the ERROR layer only; v2: judged at one instant, each row
 #: with what /metrics served then — #3835; v3: `key_checks` as sentences
-#: that quoted the key — #3703).
-OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2", "da-guard.key-verdict/v3")
+#: that quoted the key — #3703; v4: no `gate_kind` — #3996).
+OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2", "da-guard.key-verdict/v3",
+                 "da-guard.key-verdict/v4")
 
 READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
@@ -94,6 +95,11 @@ class Finding(NamedTuple):
     # #3829: a retired threshold key's hint (reason `retired`), naming the key
     # that replaces it; None for any other finding.
     hint: str | None = None
+    # #3996: the kind of da-guard's own (main gate) finding that reports the
+    # same fact, decided in Go where the verdict reads the gate's set; None
+    # when the gate reports nothing of it. A reader that shows the gate's
+    # findings too shows such a finding once.
+    gate_kind: str | None = None
 
 
 class TreeVerdict(NamedTuple):
@@ -184,17 +190,25 @@ _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
 _KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread",
                     "dead_entry", "schedule_unread"})
 _DISABLES = frozenset({"effective", "noop"})
+#: #3996: the da-guard finding kinds a verdict names in `gate_kind` — each
+#: one the gate reports as an error, so a reader that leaves such a finding
+#: out of its own report (validate-config's routes row) loses nothing. A
+#: kind outside it is output this reader cannot read, never a finding
+#: hidden on the gate's behalf (tests/shared/test_key_verdict_kinds_parity
+#: reads the set from the Go verdict's source).
+_GATE_KINDS = frozenset({"subtree_default_reserved_key", "subtree_default_undeliverable",
+                         "root_defaults_reserved_key"})
 
 
 def _str(v: Any, what: str) -> str:
     if not isinstance(v, str):
-        raise TypeError(f"{what}: not a string: {v!r}")
+        raise ShapeError(f"{what}: not a string: {shown_value(v)}")
     return v
 
 
 def _tuple(v: Any, what: str) -> tuple[str, ...]:
     if not isinstance(v, list):
-        raise TypeError(f"{what}: not a list: {v!r}")
+        raise ShapeError(f"{what}: not a list: {shown_value(v)}")
     return tuple(_str(x, what) for x in v)
 
 
@@ -206,35 +220,35 @@ def _optional(v: Any, what: str, allowed: "frozenset[str] | None" = None) -> str
 
 def _one_of(v: Any, what: str, allowed: "frozenset[str]") -> str:
     if v not in allowed:
-        raise ValueError(f"{what}: {v!r} is none of {sorted(allowed)}")
+        raise ShapeError(f"{what}: {shown_value(v)} is none of {sorted(allowed)}")
     return v
 
 
 def _bool(v: Any, what: str) -> bool:
     if not isinstance(v, bool):
-        raise TypeError(f"{what}: not a boolean: {v!r}")
+        raise ShapeError(f"{what}: not a boolean: {shown_value(v)}")
     return v
 
 
 def _mapping(v: Any, what: str) -> dict:
     if not isinstance(v, dict):
-        raise TypeError(f"{what}: not an object: {v!r}")
+        raise ShapeError(f"{what}: not an object: {shown_value(v)}")
     return v
 
 
 def _rows(v: Any, what: str) -> list:
     if not isinstance(v, list) or not all(isinstance(r, dict) for r in v):
-        raise TypeError(f"{what}: not a list of objects: {v!r}")
+        raise ShapeError(f"{what}: not a list of objects: {shown_value(v)}")
     return v
 
 
 def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
-    w = f"tenants.{tenant}"
+    w = f"tenants.{shown_key(tenant)}"
     verdict = _one_of(r["verdict"], f"{w}.verdict", _VERDICTS)
     severity = _optional(r["severity"], f"{w}.severity", _SEVERITIES)
     # A read key has no severity; an unread one has one (undecidable: none).
     if (verdict == UNREAD) != (severity is not None):
-        raise ValueError(f"{w}: verdict {verdict!r} with severity {severity!r}")
+        raise ShapeError(f"{w}: verdict {shown_value(verdict)} with severity {shown_value(severity)}")
     return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
                       _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
                       severity, _optional(r["reason"], f"{w}.reason"),
@@ -249,7 +263,7 @@ def _finding(f: dict) -> Finding:
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
                    _optional(f["reason"], "findings.reason"), _bool(f["blocks"], "findings.blocks"),
                    _optional(f["base"], "findings.base"), _finding_dead_entries(f),
-                   _optional(f["hint"], "findings.hint"))
+                   _optional(f["hint"], "findings.hint"), _optional(f["gate_kind"], "findings.gate_kind", _GATE_KINDS))
 
 
 def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":
@@ -257,10 +271,10 @@ def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":
     any other kind (#3502)."""
     v = f["dead_entries"]
     if (f["kind"] == "dead_entry") != (v is not None):
-        raise ValueError(f"findings: kind {f['kind']!r} with dead_entries {v!r}")
+        raise ShapeError(f"findings: kind {shown_value(f['kind'])} with dead_entries {shown_value(v)}")
     out = tv.dead_entries(v, "findings.dead_entries") if v is not None else ()
     if f["kind"] == "dead_entry" and not out:
-        raise ValueError("findings: a dead_entry without entries")
+        raise ShapeError("findings: a dead_entry without entries")
     return out
 
 
@@ -272,17 +286,17 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     module cannot read is not "nothing unread"."""
     tv._subset_absent(doc, requested)
     if not isinstance(doc["undecidable"], bool):
-        raise TypeError(f"undecidable: {doc['undecidable']!r}")
+        raise ShapeError(f"undecidable: {shown_value(doc['undecidable'])}")
     blocks = _bool(doc["blocks"], "blocks")
     undecidable_blocks = _bool(doc["undecidable_blocks"], "undecidable_blocks")
-    keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
+    keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{shown_key(t)}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
     # v4 (#3703): records; the sentences of v3 are named by the schema. The
     # records carry the author's keys: a message names the place and a type,
     # never a value (`tv._key_checks`), and the tenant through `shown_key`.
     if not isinstance(doc["key_checks"], dict):
-        raise TypeError(f"key_checks is a {type(doc['key_checks']).__name__}, not an object")
+        raise ShapeError(f"key_checks is a {type(doc['key_checks']).__name__}, not an object")
     checks = {t: tv._key_checks(c, f"key_checks.{shown_key(t)}")
               for t, c in doc["key_checks"].items()}
     return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks, undecidable_blocks)

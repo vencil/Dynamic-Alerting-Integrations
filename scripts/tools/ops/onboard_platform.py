@@ -78,7 +78,6 @@ from _lib_exitcodes import (  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Alertmanager config as its consumers read it)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
-from _lib_paths import require_path  # noqa: E402  (#3392)
 import _lib_input  # noqa: E402  (#3463: the one wording of "selected nothing")
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
@@ -630,52 +629,6 @@ def scan_rule_files(targets, exclude=()):
     Returns list of file paths.
     """
     return _lib_consumer_read.files_to_read(targets, exclude)
-
-
-def _dangling_symlink(path):
-    try:
-        os.stat(path)
-    except FileNotFoundError:
-        return os.path.islink(path)
-    except OSError:
-        return False
-    return False
-
-
-def judge_rule_files(targets, exclude=()):
-    """The rule files the --rule-files *targets* (less --exclude) select,
-    judged before any phase runs or anything is written (#3392: a value
-    that selected nothing was a WARN, an empty output tree and rc 1).
-
-    Each target is a path the caller wrote out (#3463: ``rules/b[1].yaml``
-    is that file, never a pattern), judged by `_lib_paths` like any other
-    caller-given path: nothing there is ``path_not_found``, a symlink loop
-    or a parent that cannot be entered ``path_not_accessible``. An entry
-    `scan_rule_files` cannot choose from (#3426) is named, rc 2. Targets
-    that select no file at all — directories with no *.yaml / *.yml — are
-    refused by `_lib_input.refuse_empty` (``input_empty``), rc 2.
-    """
-    if "" in targets:
-        # #3392 (owner ruling): '' names nothing — never "no --rule-files".
-        raise CallerError("--rule-files '': an empty value names no file", "file_not_found")
-    for target in targets:
-        if not _dangling_symlink(target):
-            # A dangling symlink is there (ls lists it): #3426's reading names it.
-            require_path(target, "any", lang="en", flag="--rule-files")
-    try:
-        files = scan_rule_files(targets, exclude)
-    except _lib_consumer_read.InputRefused as e:
-        # #3426: an entry that cannot be chosen (a dangling symlink, a
-        # directory that cannot be listed) or an --exclude that leaves
-        # no file is a caller error, named — never "no rule files".
-        print(f"ERROR: --rule-files: {safe_label(_lib_consumer_read.error_text(e))}",
-              file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    if not files:
-        raise _lib_input.refuse_empty(
-            "--rule-files " + ", ".join(safe_label(t) for t in targets),
-            _lib_consumer_read.FILES_TO_READ_WANTED, lang="en")
-    return files
 
 
 def classify_rule(rule):
@@ -1643,8 +1596,14 @@ def main():
     )
     _lib_input.add_input(parser, "--alertmanager-config", decode=CONFIG_DOCUMENT,  # #3797
                          help="Phase 1: Alertmanager config file (YAML or ConfigMap)")
-    parser.add_argument("--rule-files", nargs="+", action="extend", metavar="PATH",
-                        help="Phase 2: Prometheus rule file(s) or directory(ies); a "
+    # #3901: a declared input — each value a rule file or a directory of
+    # them, judged once (`_lib_input.selected`, below) before any phase runs
+    # or anything is written (#3392: a value that selected nothing was a
+    # WARN, an empty output tree and rc 1). Each value is a path the caller
+    # wrote out (#3463: `rules/b[1].yaml` is that file, never a pattern).
+    _lib_input.add_input(parser, "--rule-files", select=_lib_consumer_read.FILES_TO_READ,
+                         many=True, empty=_lib_input.EMPTY_REFUSED, metavar="PATH",
+                         help="Phase 2: Prometheus rule file(s) or directory(ies); a "
                              "directory is walked for *.yaml / *.yml. Paths, not patterns: "
                              "no glob is expanded (let the shell expand one). Repeatable: "
                              "the values add up")
@@ -1688,8 +1647,7 @@ def main():
     # every phase reads the text, never the file again.
     am_text = _lib_input.document(args, "alertmanager_config", lang="en")
     scrape_text = _lib_input.document(args, "scrape_config", lang="en")
-    rule_files = (judge_rule_files(args.rule_files, args.exclude)
-                  if args.rule_files is not None else [])
+    rule_files = _lib_input.selected(args, "rule_files", lang="en", exclude=args.exclude)
 
     phase1_results = None
     phase2_results = None
@@ -1759,6 +1717,10 @@ def main():
             print(f"ERROR: rule files: {safe_label(_lib_consumer_read.error_text(e))}",
                   file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        # #3901: the readers took the files by path — one gone or unreadable
+        # since the judgement is a refusal naming it, before anything of
+        # this phase is printed or written.
+        _lib_input.confirm_read(rule_files, flag="--rule-files", lang="en")
         phase2_results = (candidates, recording_rules, summary)
 
         print(f"  Scanned {summary['files_scanned']} file(s), "

@@ -151,7 +151,7 @@ def test_defaults_snippet_never_carries_a_critical_or_dimensional_key():
 
 def test_prefix_mapping_critical_entry_names_the_real_metric(tmp_path):
     out, _ = _run_migrate(tmp_path)
-    mapping = yaml.safe_load((out / "prefix-mapping.yaml").read_text(encoding="utf-8"))
+    mapping = yaml.safe_load((out / mr.ARTIFACT_DIR / "prefix-mapping.yaml").read_text(encoding="utf-8"))
     assert (mapping["custom_mysql_global_status_threads_connected_critical"]["original_metric"]
             == "mysql_global_status_threads_connected")
 
@@ -167,8 +167,8 @@ def test_generated_rules_fire_end_to_end_under_promtool(tmp_path):
     out, _ = _run_migrate(tmp_path)
     test_file = tmp_path / "t.yaml"
     test_file.write_text(yaml.safe_dump({
-        "rule_files": [str(out / "platform-recording-rules.yaml"),
-                       str(out / "platform-alert-rules.yaml")],
+        "rule_files": [str(out / mr.ARTIFACT_DIR / "platform-recording-rules.yaml"),
+                       str(out / mr.ARTIFACT_DIR / "platform-alert-rules.yaml")],
         "evaluation_interval": "1m",
         "tests": [{
             "interval": "1m",
@@ -226,8 +226,8 @@ def test_critical_only_rule_reads_the_base_row_so_defaults_arm_it(tmp_path):
     out, _ = _migrate_rules(tmp_path, (
         "  - alert: OnlyCritical\n    expr: mysql_global_status_threads_connected > 200\n"
         "    labels: {severity: critical}\n"))
-    rec = (out / "platform-recording-rules.yaml").read_text(encoding="utf-8")
-    alert = (out / "platform-alert-rules.yaml").read_text(encoding="utf-8")
+    rec = (out / mr.ARTIFACT_DIR / "platform-recording-rules.yaml").read_text(encoding="utf-8")
+    alert = (out / mr.ARTIFACT_DIR / "platform-alert-rules.yaml").read_text(encoding="utf-8")
     assert ("tenant:alert_threshold:custom_mysql_global_status_threads_connected\n"
             in rec.replace("\r", ""))
     assert 'metric="mysql_global_status_threads_connected", severity="warning"' in rec
@@ -244,7 +244,7 @@ def test_paired_rules_keep_the_critical_tier(tmp_path):
         "    labels: {severity: warning}\n"
         "  - alert: C\n    expr: mysql_global_status_threads_connected > 200\n"
         "    labels: {severity: critical}\n"))
-    rec = (out / "platform-recording-rules.yaml").read_text(encoding="utf-8")
+    rec = (out / mr.ARTIFACT_DIR / "platform-recording-rules.yaml").read_text(encoding="utf-8")
     assert "tenant:alert_threshold:custom_mysql_global_status_threads_connected_critical" in rec
 
 

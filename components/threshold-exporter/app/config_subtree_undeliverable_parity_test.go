@@ -240,7 +240,7 @@ func TestSubtreeUndeliverable_ExporterAndGuardReadOneSet(t *testing.T) {
 			}
 
 			for _, tid := range tc.noSeries {
-				if v, present := seriesFor(t, m, tid, "evicted_keys"); present {
+				if v, present := seriesFor(t, m, tid, "redis_evicted_keys"); present {
 					t.Errorf("%s serves a redis_evicted_keys series (%v)", tid, v)
 				}
 			}
@@ -325,7 +325,7 @@ func TestSubtreeDisabledUndeclared_WarnsOncePerChange(t *testing.T) {
 	step("tenant-only edit", func() {
 		writeTestYAML(t, tenant, "tenants:\n  t-fin:\n    mysql_connections: \"70\"\n")
 	}, 0)
-	if v, ok := seriesFor(t, m, "t-fin", "connections"); !ok || v != 70 {
+	if v, ok := seriesFor(t, m, "t-fin", "mysql_connections"); !ok || v != 70 {
 		t.Fatalf("precondition: the tenant-only edit did not land (got %v, present=%v)", v, ok)
 	}
 	step("set changes", func() {

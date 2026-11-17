@@ -92,7 +92,10 @@ def test_a_valid_request():
     (_body(writes=["x"]), "object"),
     (_body(writes=[{"path": "../a", "delete": True}]), "'..'"),
     (_body(writes=[{"path": "a", "delete": True}, {"path": "a", "delete": True}]),
-     "more than once"),
+     r"writes\[1\]: path is the one writes\[0\] already writes"),
+    # #3961: a lone surrogate (JSON's `\udcff`) is no file name; refused
+    # here, unnamed — encoding the response would fail on it.
+    (_body(writes=[{"path": "a\udcffb.yaml", "delete": True}]), r"writes\[0\]: path is not valid UTF-8"),
     (_body(writes=[{"path": "a", "delete": False}]), "delete must be true"),
     (_body(writes=[{"path": "a", "content_b64": "!!"}]), "not base64"),
     (_body(writes=[{"path": "a", "content_b64": 5}]), "string"),
@@ -112,6 +115,16 @@ def test_a_valid_request():
 def test_malformed_requests(body, needle):
     with pytest.raises(proto.RequestError, match=needle):
         proto.parse_validate_request(body, "sha1", 100)
+
+
+def test_a_refused_path_is_not_named():
+    """#3961: a write's path is the author's file name — the message names
+    the write by its index, not the path (it reaches tenant-api's 400)."""
+    for writes in ([{"path": "ZqX dup@x.yaml", "delete": True}] * 2,
+                   [{"path": "ZqX\udcff.yaml", "delete": True}]):
+        with pytest.raises(proto.RequestError) as ei:
+            proto.parse_validate_request(_body(writes=writes), "sha1", 100)
+        assert "zqx" not in str(ei.value).lower() and "\udcff" not in str(ei.value), ei.value
 
 
 def test_sha256_repo_takes_64_char_commits():
@@ -236,6 +249,75 @@ def _req(commit: str, deadline_ms: int) -> proto.ValidateRequest:
 
 def _doc(resp) -> dict:
     return json.loads(resp.body)
+
+
+# ── #3961: the answer carries no free text, and always encodes ──────────
+
+def _every_answer_constructor() -> "list":
+    return [*(gs._rejected(r) for r in proto.REJECT_REASONS),
+            *(gs._unavailable("VALIDATOR_UNAVAILABLE", r, "detail") for r in proto.UNAVAILABLE_REASONS),
+            gs._unavailable("VALIDATOR_UNAVAILABLE", "tool_fault", "detail",
+                            tool_fault=[{"binary": "da-guard", "subcommand": "parse-tree",
+                                         "reason": "not_found"}]),
+            gs._unavailable("POLICY_UNAVAILABLE", "policy_unusable", "detail"),
+            *(gs._error(st, err) for st, err in ((400, "BAD_REQUEST"), (404, "NOT_FOUND"),
+                                                  (405, "METHOD_NOT_ALLOWED"), (411, "LENGTH_REQUIRED"),
+                                                  (413, "PAYLOAD_TOO_LARGE"), (431, "BAD_REQUEST")))]
+
+
+@pytest.mark.parametrize("i", range(len(_every_answer_constructor())))
+def test_every_answer_is_of_the_closed_shape(i, capsys):
+    """Each way the service builds an answer to /v1/validate: keys and
+    `error` / `reason` from `_gsvc_proto`'s closed sets, no `message` and no
+    `stderr_tail`; the detail goes to its log (stderr)."""
+    resp = _every_answer_constructor()[i]
+    doc = _doc(resp)
+    assert proto.validate_answer_problem(resp.status, doc) is None, doc
+    assert not {"message", "stderr_tail"} & set(doc), doc
+
+
+def test_a_verdict_document_is_of_the_closed_shape():
+    """The 200 a judgement that ran answers, built from a child's result."""
+    doc = {"result": "pass", "rc": 0, "findings": {}, "validated": None, "cache": {},
+           "key_verdict": {"status": "complete", "tenants": 0, "seconds": 0.1, "findings": [],
+                           "truncated": 0}, "queue_wait_ms": 0}
+    assert proto.validate_answer_problem(200, doc) is None
+    for extra in ({"message": "x"}, {"stderr_tail": "x"}):
+        assert proto.validate_answer_problem(200, {**doc, **extra}) is not None
+    assert proto.validate_answer_problem(503, {"error": "VALIDATOR_UNAVAILABLE", "reason": "nope"})
+    assert proto.validate_answer_problem(200, {**doc, "key_verdict": {"status": "x", "message": "y"}})
+
+
+def test_a_da_guard_outcome_is_incomplete_with_one_fixed_log_line(capsys):
+    """#3961: names mode could not classify the base tree's path names — the
+    reply says `incomplete` and nothing more; the service's log gets one
+    fixed line naming the failure's class, no path."""
+    from types import SimpleNamespace
+    reader = SimpleNamespace(result={"outcome": "da_guard", "cache": {}}, ended=True)
+    resp = _FakeService(delay=0)._verdict(gs.ChildRun(False, 0, reader, 0))
+    assert _doc(resp)["reason"] == "incomplete", _doc(resp)
+    assert capsys.readouterr().err == ("generator-service: incomplete: da-guard names mode could "
+                                       "not classify the base tree's path names\n")
+
+
+def test_the_log_is_one_line_whatever_it_is_given(capsys):
+    """#3961: `_log` is the service's one way into its log; a value it is
+    given (a request's unknown field name) cannot start a line of its own."""
+    gs._log("bad request: unknown field(s): \nERROR: forged \x1b[31m")
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and not [ln for ln in err.splitlines() if ln.startswith("ERROR")], err
+    assert "\x1b" not in err, err
+
+
+@pytest.mark.parametrize("value", ["\udcff", "a\udcffb.yaml", "ZqX \x1b[31m é 中", "\ud83d"])
+def test_every_answer_body_is_ascii_and_reads_back(value):
+    """`Response.body` is the service's one exit: ASCII whatever a value
+    holds (a lone surrogate included), and JSON that reads back as written —
+    an answer is never lost to its own encoding (#3961)."""
+    doc = {"result": "findings", "rc": 1, "findings": {"findings": [{"message": value}]},
+           "validated": {"files": [{"path": value}]}, value: value}
+    body = gs.Response(200, doc).body
+    assert json.loads(body.decode("ascii")) == doc
 
 
 def test_a_request_that_expires_in_the_queue_is_answered_and_removed():
@@ -653,7 +735,7 @@ def test_a_fork_that_fails_for_load_is_busy_and_leaks_no_descriptor(tmp_path, mo
         svc.loop = asyncio.get_running_loop()
         resp = await svc.submit(_req("1" * 40, 25000), svc.loop.time())
         assert resp.status == 200, resp.doc
-        assert _doc(resp)["reason"] == "busy" and err in _doc(resp)["message"]
+        assert _doc(resp)["reason"] == "busy" and "message" not in _doc(resp), _doc(resp)
     asyncio.run(scenario())
     assert len(os.listdir("/proc/self/fd")) <= before
 
@@ -689,7 +771,7 @@ def test_more_than_one_thread_refuses_to_fork(tmp_path, monkeypatch):
         doc = _doc(resp)
         assert resp.status == 503, (resp.status, doc)
         assert doc["error"] == "VALIDATOR_UNAVAILABLE" and doc["reason"] == "internal_error", doc
-        assert "thread" in doc["message"], doc
+        assert set(doc) == {"error", "reason"}, doc  # #3961: the why is its log's
     asyncio.run(scenario())
     assert not forked, "forked with two threads"
     assert len(os.listdir("/proc/self/fd")) <= before
@@ -729,3 +811,133 @@ def test_main_makes_every_reader_binary_absolute_before_anything_else(tmp_path, 
     assert rc == gs.EXIT_CALLER_ERROR
     for name in cr.READER_BINARY_ENVS:
         assert os.environ[name] == str(tmp_path / "bin" / name), name
+
+
+# ── #3943: the self-check decides readiness; only a pass clears a fault ──
+
+_FAULT = [{"binary": "da-read", "subcommand": "prometheus-rules", "reason": "not_found"}]
+_PROGRAMS = [(name, f"/x/{name}", ()) for name in ("da-crdecode", "da-guard", "da-read")]
+
+
+def _gated_self_check(svc: _FakeService, answers: "dict[str, str | None]",
+                      gate: "asyncio.Event | None" = None) -> None:
+    """Each program's self-check answers *answers*[name] (None: passed),
+    after *gate* when given."""
+    async def one(name, exe, args):
+        if gate is not None:
+            await gate.wait()
+        return answers.get(name)
+    svc._self_check_one = one
+    svc._self_check_programs = lambda: list(_PROGRAMS)
+
+
+def test_a_self_check_that_started_before_a_fault_does_not_clear_it():
+    """A pass clears only the faults that came before it began: the round
+    that was running when a judgement's fault came says nothing about it."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        gate = asyncio.Event()
+        _gated_self_check(svc, {}, gate)
+        running = asyncio.ensure_future(svc.self_check_round())
+        await _settle()
+        assert svc.self_check_running is True
+        svc.tool_fault, svc._fault_seq = _FAULT, svc._fault_seq + 1
+        gate.set()
+        assert await running is False
+        assert svc.self_check_state == "passed" and svc.tool_fault == _FAULT
+        assert await svc.self_check_round() is True  # one that began after it
+        assert svc.tool_fault is None
+    asyncio.run(main())
+
+
+def test_a_fault_reruns_the_self_check_until_one_passes():
+    """A tool fault starts the self-check loop at once; a failed round leaves
+    the fault, the next passing round clears it and ends the loop."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.s.self_check_seconds = 0.01
+        svc.loop = asyncio.get_running_loop()
+        answers = {"da-read": "failed"}
+        _gated_self_check(svc, answers)
+        svc._note_tool_fault(_FAULT)
+        for _ in range(200):
+            await asyncio.sleep(0.005)
+            if svc.self_check_state == "failed":
+                break
+        assert svc.self_check_failures == [{"binary": "da-read", "reason": "failed"}]
+        assert svc.tool_fault == _FAULT and not svc._self_check_task.done()
+        answers.clear()
+        await asyncio.wait_for(svc._self_check_task, 5)
+        assert svc.self_check_state == "passed" and svc.tool_fault is None
+        assert svc.metrics.self_checks["failed"] >= 1 and svc.metrics.self_checks["passed"] == 1
+        assert proto.self_check_problem(svc._self_check_doc()) is None
+    asyncio.run(main())
+
+
+def test_a_judgement_that_ran_clears_no_tool_fault():
+    """#3943: outcome `ran` may have ended before the program that failed —
+    the verdict is given, the fault stays."""
+    from types import SimpleNamespace
+    svc = _FakeService(delay=0)
+    svc.tool_fault = _FAULT
+    reader = SimpleNamespace(result={"outcome": "ran", "rc": 0, "findings": {}, "cache": {}},
+                             ended=True)
+    resp = svc._verdict(gs.ChildRun(False, 0, reader, 0))
+    assert _doc(resp)["result"] == "pass" and svc.tool_fault == _FAULT
+
+
+@pytest.mark.parametrize("doc,ok", [
+    ({"state": "passed", "failures": [], "running": False}, True),
+    ({"state": "failed", "failures": [{"binary": "da-guard", "reason": "timed_out"}],
+      "running": True}, True),
+    ({"state": "failed", "failures": [], "running": False}, False),
+    ({"state": "passed", "failures": [{"binary": "da-guard", "reason": "failed"}],
+      "running": False}, False),
+    ({"state": "failed", "failures": [{"binary": "da-guard", "reason": "it broke"}],
+      "running": False}, False),
+    ({"state": "passed", "failures": [], "running": False, "message": "x"}, False),
+])
+def test_the_self_check_document_is_closed(doc, ok):
+    assert (proto.self_check_problem(doc) is None) is ok
+
+
+def test_a_self_check_never_overlaps_a_judgement():
+    """ADR-036 §3's memory budget holds one judgement (and its Go program)
+    at a time; a self-check round is one more Go program. It waits for the
+    running judgement, and while it runs no queued request starts — they
+    wait in the queue, then run once it is done."""
+    async def main():
+        svc = _FakeService(delay=0)
+        svc.loop = asyncio.get_running_loop()
+        svc.gate = asyncio.Event()  # the first judgement runs until released
+        check_gate = asyncio.Event()
+        seen = []
+
+        async def one(name, exe, args):
+            seen.append((name, svc.running is None, list(svc.judged)))
+            await check_gate.wait()
+            return None
+        svc._self_check_one = one
+        svc._self_check_programs = lambda: list(_PROGRAMS)
+        first = asyncio.create_task(svc.submit(_req("1" * 40, 25000), svc.loop.time()))
+        await _settle()
+        assert svc.running is not None
+        round_ = asyncio.ensure_future(svc.self_check_round())
+        await _settle()
+        assert seen == [], seen  # waits for the running judgement
+        second = asyncio.create_task(svc.submit(_req("2" * 40, 25000), svc.loop.time()))
+        await _settle()
+        svc.gate.set()
+        assert _doc(await first)["result"] == "pass"
+        await _settle()
+        # the round runs alone: the queued request has not started
+        assert seen == [("da-crdecode", True, ["1" * 40])], seen
+        assert svc.running is None and len(svc.waiting) == 1
+        check_gate.set()
+        assert await round_ is True
+        assert [name for name, _free, _judged in seen] == ["da-crdecode", "da-guard", "da-read"]
+        assert all(free for _name, free, _judged in seen)
+        assert _doc(await second)["result"] == "pass"
+        assert svc.judged == ["1" * 40, "2" * 40]
+    asyncio.run(main())

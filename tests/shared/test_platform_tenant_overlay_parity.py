@@ -34,6 +34,7 @@ from _lib_confd import overlay_platform_tenants  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
+from _builtin_layer import with_builtin  # noqa: E402  (#3832)
 
 MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.json")
                     .read_text(encoding="utf-8"))
@@ -168,7 +169,9 @@ def test_walker_plane_matches_the_table(tree, tmp_path: Path) -> None:
             assert tenant not in scanner.tenants, (tree["name"], tenant)
             continue
         info = scanner.source_info(tenant)
-        want_cfg = want["walker"]["effective_config"]
+        # The table names the tree's own keys; the built-in layer (#3832)
+        # lies under them for every tenant, as Go's twin of this row lays it.
+        want_cfg = with_builtin(want["walker"]["effective_config"])
         assert info["effective_config"] == want_cfg, (
             tree["name"], tenant, info["effective_config"])
         assert info.get("platform_overlay") == want["walker"]["platform_overlay"], (

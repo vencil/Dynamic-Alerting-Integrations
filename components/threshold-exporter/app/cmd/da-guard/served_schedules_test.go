@@ -520,6 +520,15 @@ func TestServedValues_SchedulesAreOptIn(t *testing.T) {
 			t.Errorf("tenant %s: the document differs beyond schedules:\n without %v\n with    %v", name, tv, w)
 		}
 	}
+	// #3991: the parts of the day the tree cannot be gathered in are read
+	// with the schedules only — [] here, the tree gathering all day.
+	if _, ok := without["ungathered"]; ok {
+		t.Error("ungathered present without --schedules")
+	}
+	if u, ok := with["ungathered"].([]any); !ok || len(u) != 0 {
+		t.Errorf("ungathered with --schedules = %#v, want []", with["ungathered"])
+	}
+	delete(with, "ungathered")
 	delete(with, "tenants")
 	delete(without, "tenants")
 	if !reflect.DeepEqual(with, without) {

@@ -253,7 +253,7 @@ EXPORTER_SHORT = {
     "redis": "redis_exporter",
     "mongodb": "mongodb_exporter",
     "elasticsearch": "elasticsearch_exporter",
-    "oracle": "oracledb_exporter",
+    "oracle": "query-exporter",
     "db2": "db2_exporter",
     "clickhouse": "built-in /metrics",
     "kafka": "kafka_exporter",

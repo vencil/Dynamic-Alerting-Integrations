@@ -105,10 +105,11 @@ packs:
     default_on: false
     rule_pack_file: rule-packs/rule-pack-elasticsearch.yaml
   oracle:
-    display: Oracle Database (oracledb_exporter)
-    exporter: iamseth/oracledb_exporter
+    display: Oracle Database (query-exporter)
+    exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-oracle.yaml
+    queries: rule-packs/exporters/oracle.yaml
   db2:
     display: IBM DB2 (ibm_db2_exporter)
     exporter: ibm_db2_exporter (community)
@@ -433,6 +434,11 @@ keys:
     metric_class: replication
     arming: operator
     portability: portable
+    blocker:
+      kind: unmeasured
+      tracking: 3979
+      reason: "No source with a replica-lag threshold found yet (only awesome-prometheus-alerts checked); 30s copies the MySQL/PostgreSQL anchor"
+      reason_zh: "尚未找到給出 replica lag 門檻的來源（只查了 awesome-prometheus-alerts）；30 秒是比照 MySQL／PostgreSQL 訂的"
   redis_connected_clients_critical:
     pack: redis
     tier: optional_overrides
@@ -478,6 +484,11 @@ keys:
     metric_class: replication
     arming: operator
     portability: portable
+    blocker:
+      kind: unmeasured
+      tracking: 3979
+      reason: "Sources disagree (10s vs 30s), and the current exporter may no longer export the metric the rule reads (#3833)"
+      reason_zh: "來源的值不一致（10 秒與 30 秒），現行 exporter 是否還輸出規則讀的指標也沒確認（#3833）"
   mongodb_opcounters_rate:
     pack: mongodb
     tier: defaults
@@ -908,6 +919,11 @@ keys:
     metric_class: replication
     arming: operator
     portability: portable
+    blocker:
+      kind: unmeasured
+      tracking: 3979
+      reason: "Only one source reads this exporter's metric (Strimzi, an example to adapt), and no source gives a for: that a rolling restart will not trip"
+      reason_zh: "讀這個 exporter 指標的來源只有 Strimzi 一個（自稱是要自行調整的範例）；也沒有來源給出滾動重啟不會誤觸的 for: 長度"
   kafka_broker_count:
     pack: kafka
     tier: defaults
@@ -1052,6 +1068,11 @@ keys:
     metric_class: saturation
     arming: operator
     portability: portable
+    blocker:
+      kind: aggregation_bug
+      tracking: 3976
+      reason: "Micrometer's per-pool limits do not add up to the heap limit: on Parallel GC with default flags the reading stays below 95 until OutOfMemoryError, on OpenJ9 balanced it reads about a quarter"
+      reason_zh: "Micrometer 的逐 pool 上限加總不等於 heap 上限：Parallel GC 預設旗標下到 OutOfMemoryError 都讀不到 95，OpenJ9 balanced 讀成約四分之一"
   jvm_threads:
     pack: jvm
     tier: defaults

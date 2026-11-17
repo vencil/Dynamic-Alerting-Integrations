@@ -177,8 +177,11 @@ from _grar_render import (  # noqa: E402
 from _grar_render import watchdog_receiver_findings  # noqa: E402
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, consumer_read_message, emitted_alertmanager_yml,
+    AM_CONFIGMAP_KEY, ConsumerReadError, configmap_data_bytes, consumer_read_message,
+    emitted_configmap_data,
 )
+# #3900: the limits Kubernetes puts on the ConfigMap this run writes.
+from _lib_kubectl import ANNOTATION_TOTAL_LIMIT_BYTES, CONFIGMAP_DATA_LIMIT_BYTES  # noqa: E402
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
 # #2311: the verdict on a generation result (`validate_tree`'s last step).
@@ -252,6 +255,31 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
     sys.exit(EXIT_VIOLATION)
 
 
+def _judge_configmap_size(data: "dict[str, str]", manifest: str, target: str) -> None:
+    """#3900: the emitted ConfigMap against the limits Kubernetes applies.
+    Its values (*data*, as kubectl reads them) over the data limit: no API
+    server stores it, so it is refused here (rc 1), naming the bytes. The
+    manifest over the annotation limit: a WARN only — a client-side
+    `kubectl apply` (or a GitOps tool applying client-side) stores the whole
+    object in an annotation and fails there, a server-side apply does not.
+    Measured on the manifest's YAML; the annotation holds the same object as
+    JSON, of the same order. Other keys the target object already holds also
+    count toward the data limit; this offline run cannot see them."""
+    total = configmap_data_bytes(data)
+    if total > CONFIGMAP_DATA_LIMIT_BYTES:
+        print(f"FAIL: the ConfigMap's values total {total} bytes; Kubernetes refuses a "
+              f"ConfigMap over {CONFIGMAP_DATA_LIMIT_BYTES} bytes — refusing to write it to "
+              f"{target} (nothing was written)", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    size = len(manifest.encode("utf-8"))
+    if size > ANNOTATION_TOTAL_LIMIT_BYTES:
+        print(f"WARN: the ConfigMap is {size} bytes, over the {ANNOTATION_TOTAL_LIMIT_BYTES}-byte "
+              "limit Kubernetes puts on an object's annotations: a client-side `kubectl apply -f` "
+              "stores the whole object in `last-applied-configuration` and fails with "
+              "`metadata.annotations: Too long`. Apply it with `kubectl apply --server-side`, or "
+              "in Argo CD with the `ServerSideApply=true` sync option.", file=sys.stderr)
+
+
 def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
     """#1533: the probe set degraded and an operator-supplied tenant-triggered
     inhibit rule could not be checked against it. No verdict on the config —
@@ -311,10 +339,16 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     # already printed and recorded) fail the run with the generator's own.
     # A key verdict line carries a tenant's key name: printed as the first
     # print did (safe_label), never raw (#3016 review).
-    errors = list(verdict.errors) + [safe_label(line) for line in key_blocks or []]
+    errors = list(verdict.errors) + list(key_blocks or [])
     if errors:
-        print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
-        for e in errors:
+        # #3996: every error once. The stream lines (a finding recorded
+        # above, and every key verdict line) were printed where found: the
+        # summary counts them and prints only the ones no stream printed
+        # (the inhibit tripwire).
+        unprinted = [e for e in verdict.errors if id(e) not in recorded]
+        print(f"FAIL: {len(errors)} error(s) found" + (":" if unprinted else " (listed above)"),
+              file=sys.stderr)
+        for e in unprinted:
             print(e, file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
     if verdict.assembly_error is not None:
@@ -514,12 +548,14 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     # Alertmanager's (da-read).
     if as_configmap:
         try:
-            am_yml = emitted_alertmanager_yml(content)
+            emitted_data = emitted_configmap_data(content)
         except ConsumerReadError as exc:
             print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
                   f"to write it to {target} (nothing was written): "
                   f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        am_yml = emitted_data[AM_CONFIGMAP_KEY]
+        _judge_configmap_size(emitted_data, content, target)
     else:
         am_yml = content
     # #3689: the one gate --validate and --apply ask too, in its one order.
@@ -1528,7 +1564,7 @@ def _not_read_text(exc: BaseException) -> str:
 
 
 def _report_key_verdict(config_dir: str, findings: list[str],
-                        verdict_out: list | None = None) -> list[str]:
+                        verdict_out: list | None = None, *, gate_reported: bool = True) -> list[str]:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
     ADR-038 §5), under ``--validate``, on stderr. *verdict_out*, given,
     receives the verdict, or the exception that kept it from being given
@@ -1567,6 +1603,11 @@ def _report_key_verdict(config_dir: str, findings: list[str],
         verdict_out.append(verdict)
     lines = []
     for f in verdict.findings:
+        if f.gate_kind is not None and not gate_reported:
+            # #3996: da-guard's own gate reports this fact (its finding
+            # kind is f.gate_kind) in the caller's own row, with the fix:
+            # neither printed nor counted here.
+            continue
         level = ("ERROR" if f.blocks else
                  "NOTICE" if f.severity == _lib_key_verdict.NOTICE else "WARN")
         lines.append(Finding(
@@ -1597,35 +1638,36 @@ def _report_key_verdict(config_dir: str, findings: list[str],
 
 # ── #1211: served page-mode custom alerts that reach no one ─────────
 
-def _load_served_tree(config_dir: str, *, disable_effects: bool,
-                      ) -> "_lib_tenant_values.ServedTree | BaseException":
-    """The run's ONE da-guard served-values reading of *config_dir*, or the
+def _load_served_facts(config_dir: str) -> "_lib_tenant_values.ServedFacts | BaseException":
+    """The run's ONE da-guard served-values reading of *config_dir* — its
+    config facts (`--config-facts`, #3918), which resolve and gather nothing,
+    so what this run says does not depend on when it runs: a /metrics that
+    cannot be gathered at the run's instant is no failure here — or the
     exception that stopped it (each reader reports that its own way: never a
     refusal — a broken da-guard must not fail a run the generator passed)."""
     try:
-        return _lib_tenant_values.load_served_tree(config_dir,
-                                                   disable_effects=disable_effects)
+        return _lib_tenant_values.load_served_facts(config_dir)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not checked", never a refusal
         return exc
 
 
-def _served_page_custom_alerts(served: "_lib_tenant_values.ServedTree",
+def _served_page_custom_alerts(served: "_lib_tenant_values.ServedFacts",
                                ) -> dict[str, tuple[str, ...]]:
     """tenant -> the names of its custom alerts the exporter SERVES in page
     mode (``mode`` unset or ``page``), declaration order. The exporter is the
     authority on which custom alerts a tenant has (#3042): a rejected,
     duplicate or switched-off entry is not one."""
     out = {}
-    for tenant, values in served.tenants.items():
+    for tenant, facts in served.tenants.items():
         names = tuple(str(e.spec.get("name") or f"_custom_alerts[{e.index}]")
-                      for e in values.custom_alerts or ()
+                      for e in facts.custom_alerts
                       if e.status == "served" and e.spec.get("mode") != "silent")
         if names:
             out[tenant] = names
     return out
 
 
-def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedTree | BaseException",
+def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedFacts | BaseException",
                                routes: list[dict], tree: TenantTree,
                                findings: list[str]) -> list[UndeliveredCustomAlerts]:
     """The tenants whose served page-mode custom alerts get no delivery child
@@ -1965,6 +2007,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
                        credential_scope: "frozenset[str] | None" = None,
                        key_blocks: "list[str] | None" = None,
                        key_verdicts: "list | None" = None,
+                       gate_reported: bool = True,
                        ) -> tuple[TenantTree, list[dict], list[dict], list[dict], list[str]]:
     """Scan *config_dir*, refuse what every mode refuses, generate:
     ``(tree, routes, receivers, inhibit_rules, all_warnings)``. Exits where
@@ -2006,7 +2049,8 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
     # nothing to render is judged too.
     key_blocks = [] if key_blocks is None else key_blocks
     if validate and key_verdict:
-        key_blocks.extend(_report_key_verdict(config_dir, findings, key_verdicts))
+        key_blocks.extend(_report_key_verdict(config_dir, findings, key_verdicts,
+                                              gate_reported=gate_reported))
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -2023,10 +2067,10 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
                   + (_policy_errors(schema_warnings) if strict else [])
                   + key_blocks)
         if errors:
-            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
+            # #3996: every one of them is a line printed just above (the
+            # loop) or by the key verdict: counted, not repeated.
+            print(f"FAIL: {len(errors)} error(s) found and nothing to render (listed above)",
                   file=sys.stderr)
-            for e in errors:
-                print(safe_label(e), file=sys.stderr)
             sys.exit(EXIT_VIOLATION)
         if not assembles_file:
             print("No tenants found in config directory.")
@@ -2091,7 +2135,8 @@ def validate_tree(config_dir: str, *, strict: bool = False,
                   key_verdict: bool = True,
                   credential_scope: "frozenset[str] | None" = None,
                   findings: list | None = None,
-                  show_loader_reason: bool = False) -> ValidateOutcome:
+                  show_loader_reason: bool = False,
+                  gate_reported: bool = True) -> ValidateOutcome:
     """The whole ``--validate`` judgement of the tree at *config_dir*.
 
     ``generate-routes --validate`` exits with this function's ``exit_code``
@@ -2101,7 +2146,10 @@ def validate_tree(config_dir: str, *, strict: bool = False,
     *show_loader_reason*: the flags; *policy*: the deployment policy the caller
     resolved (``resolve_policy``; None: not given); *key_verdict*,
     *credential_scope*: ``main``'s; *findings*: the list to record into
-    (``--findings-json``).
+    (``--findings-json``); *gate_reported* False (validate-config, whose
+    ``guard_errors`` row reports da-guard's own findings): a key-verdict
+    finding da-guard's gate reports too (``gate_kind``, #3996) is neither
+    printed nor counted.
 
     The caller holds the run's parse-tree session and ``judging()``
     (``_lib_parse_cache``) and has judged *config_dir* as its declared input
@@ -2117,12 +2165,12 @@ def validate_tree(config_dir: str, *, strict: bool = False,
             config_dir, findings, policy=resolved, mount_root=mount_root,
             strict=strict, validate=True, assembles_file=False,
             key_verdict=key_verdict, credential_scope=credential_scope,
-            key_blocks=key_blocks, key_verdicts=key_verdicts)
+            key_blocks=key_blocks, key_verdicts=key_verdicts, gate_reported=gate_reported)
         # #1211: a tenant's served page-mode custom alerts with no delivery
         # child under the custom route fall to the firehose receiver, which
         # only a mode that assembles the config it writes knows: --validate
         # says it could not check.
-        served = _load_served_tree(config_dir, disable_effects=False)
+        served = _load_served_facts(config_dir)
         undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
         if undelivered:
             _emit_custom_firehose_findings(undelivered, None, strict=strict,
@@ -2289,7 +2337,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # assembles the config it writes (--output-configmap, --output-alertmanager,
     # --apply) knows that receiver — it judges there. The same modes judge
     # the watchdog-heartbeat receiver.
-    served = _load_served_tree(args.config_dir, disable_effects=False)
+    served = _load_served_facts(args.config_dir)
     undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
     # A real base: the operator's --base-config, or the cluster's on --apply.
     assembled_judge = _assembled_judge(

@@ -73,6 +73,15 @@ def _write_tree(root, files):
     return root
 
 
+def _without_builtin(per_tenant):
+    """Each tenant's map minus the built-in layer's keys (#3832): the
+    platform's default-armed thresholds, in every tenant's effective config
+    and served on /metrics, which these tests do not pin."""
+    import _registry_lib
+    builtin = set(_registry_lib.builtin_defaults(_registry_lib.load_registry()))
+    return {t: {k: v for k, v in m.items() if k not in builtin} for t, m in per_tenant.items()}
+
+
 @pytest.mark.usefixtures("da_guard_env")
 class TestLoadTenantInputs:
     def test_tenants_are_written_plus_inherited_and_served_is_the_metrics_numbers(self, tmp_path):
@@ -82,6 +91,7 @@ class TestLoadTenantInputs:
             "team/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
         })
         tenants, served = pob.load_tenant_inputs(str(d))
+        tenants, served = _without_builtin(tenants), _without_builtin(served)  # #3832
         # tenants: 原形狀（寫法，舊拼法照寫），加上繼承；Go 自動補的不在。
         # #2720 之後 effective 是逐閾值 view：同一閾值跨層新舊拼法只留勝出那一層，
         # 所以租戶的 `mysql_cpu: '500'` 蓋掉根的 `mysql_threads_running: 50`，不再並列。

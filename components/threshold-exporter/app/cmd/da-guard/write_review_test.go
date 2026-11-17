@@ -13,7 +13,7 @@ import (
 // invalid UTF-8, an unpaired surrogate escape, a member given twice, a
 // member name in another case — is a caller error, and nothing is written.
 func TestWrite_InputIsTakenAsSent(t *testing.T) {
-	root := writeTree(t, map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"})
+	root := writeTreeDeclared(t, map[string]string{"t1.yaml": "tenants:\n  t1:\n    a: \"1\"\n"})
 	set := func(key string) string {
 		return `{"ops":[{"op":"set","path":["tenants","t1",` + key + `],"value":{"str":"2"}}]}`
 	}
@@ -33,12 +33,12 @@ func TestWrite_InputIsTakenAsSent(t *testing.T) {
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
-			before := snapshot(t, root)
+			before := snapshotDeclared(t, root)
 			code, res := runW(t, writeCmd, in, "--config-dir", root, "--path", "t1.yaml")
 			if code != exitCallerErr || reasonOf(res) != "bad_input" {
 				t.Fatalf("exit %d %+v (%v)", code, res, res.Message)
 			}
-			sameTree(t, before, snapshot(t, root))
+			sameTree(t, before, snapshotDeclared(t, root))
 		})
 	}
 	// A valid pair is a character, not an error.

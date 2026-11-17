@@ -38,7 +38,12 @@ Why each metric (read from the exporter's own source):
 * postgresql    ``pg_up`` — prometheus-community/postgres_exporter, same shape.
 * redis         ``redis_up`` — oliver006/redis_exporter, same shape.
 * mongodb       ``mongodb_up`` — percona/mongodb_exporter, same shape.
-* oracle        ``oracledb_up`` — iamseth/oracledb_exporter, same shape.
+* oracle        ``query_interval{query="oracle_liveness"}`` — query-exporter
+                running rule-packs/exporters/oracle.yaml (#3833). query-exporter
+                keeps serving while the database is down and reports no 0 (its
+                gauges expire), so presence reads the built-in query_interval of
+                the liveness query: set at start-up, served while the exporter
+                runs, whatever the database's state.
 * db2           ``db2_up`` — the DB2 exporter's up gauge (the DB2 pack reads it).
 * kafka         ``kafka_brokers`` — danielqsj/kafka_exporter: Collect emits it
                 first, unconditionally (kafka_exporter.go, clusterBrokers); the
@@ -99,12 +104,45 @@ EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
     "redis": ("redis_up",),
     "mongodb": ("mongodb_up",),
     "elasticsearch": ("elasticsearch_exporter_build_info",),
-    "oracle": ("oracledb_up",),
+    "oracle": ('query_interval{query="oracle_liveness"}',),
     "db2": ("db2_up",),
     "clickhouse": ("ClickHouseMetrics_TCPConnection",),
     "kafka": ("kafka_brokers",),
     "rabbitmq": ("rabbitmq_up", "rabbitmq_identity_info"),
 }
+
+#: pack → the presence metric(s) of an exporter whose kind is no db_type: the
+#: application packs whose threshold keys the platform does not ship a value
+#: for (#1200 D-A A3). Kept apart from EXPORTER_PRESENCE, whose keys must be
+#: exactly the db_type enum (liveness opt-in). jvm: the heap used series of
+#: client_java / jmx_exporter / Micrometer (jvm_memory_used_bytes) and of
+#: jmx_exporter before 1.0 (jvm_memory_bytes_used), the two names
+#: rule-pack-jvm.yaml reads; nginx: nginxinc/nginx-prometheus-exporter's
+#: nginx_up, written on every scrape.
+APP_PRESENCE: dict[str, tuple[str, ...]] = {
+    "jvm": ("jvm_memory_used_bytes", "jvm_memory_bytes_used"),
+    "nginx": ("nginx_up",),
+}
+
+#: pack → the prefix every alert of that pack carries. Alertnames are unique
+#: across rule packs (check_vmalert_coverage), so the unconfigured-threshold
+#: alert is <prefix>ThresholdNotConfigured (#1200 D-A A3);
+#: tests/rulepacks/test_exporter_presence.py holds each prefix to the pack's
+#: own alerts.
+ALERT_PREFIX: dict[str, str] = {
+    "clickhouse": "ClickHouse", "db2": "DB2", "elasticsearch": "Elasticsearch",
+    "jvm": "JVM", "kafka": "Kafka", "mariadb": "MariaDB", "mongodb": "MongoDB",
+    "nginx": "Nginx", "oracle": "Oracle", "rabbitmq": "RabbitMQ", "redis": "Redis",
+}
+UNSET_NOTICE_SUFFIX = "ThresholdNotConfigured"
+
+
+def unset_notice_alert(pack: str) -> str:
+    """The unconfigured-threshold alert's name in *pack*."""
+    if pack not in ALERT_PREFIX:
+        raise ValueError(f"pack {pack!r} reads unset-notice keys but has no ALERT_PREFIX")
+    return ALERT_PREFIX[pack] + UNSET_NOTICE_SUFFIX
+
 
 JOB_SELECTOR = 'job="tenant-exporters"'
 #: How far back TenantExporterUndeclared looks for a database exporter: an
@@ -121,6 +159,15 @@ PLATFORM_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("platform")
 _PAD = "  "
 
 
+def selector(metric: str) -> str:
+    """*metric* under the tenant-exporters job. A table entry is a bare name or
+    a selector with its own matchers (query-exporter's built-ins are told apart
+    by their `query` label); the job matcher joins those."""
+    if metric.endswith("}"):
+        return f"{metric[:-1]}, {JOB_SELECTOR}}}"
+    return f"{metric}{{{JOB_SELECTOR}}}"
+
+
 def _indent(text: str, depth: int) -> str:
     return "\n".join(_PAD * depth + line for line in text.split("\n"))
 
@@ -132,7 +179,7 @@ def presence_expr() -> str:
     them all)."""
     terms = []
     for db_type, metrics in EXPORTER_PRESENCE.items():
-        inner = " or ".join(f"{m}{{{JOB_SELECTOR}}}" for m in metrics)
+        inner = " or ".join(selector(m) for m in metrics)
         terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
     return "\nor ".join(terms)
 
@@ -143,10 +190,50 @@ def presence_over_time_expr() -> str:
     its kind as ``db_type``."""
     terms = []
     for db_type, metrics in EXPORTER_PRESENCE.items():
-        inner = " or ".join(f"max_over_time({m}{{{JOB_SELECTOR}}}[{UNDECLARED_LOOKBACK}])"
+        inner = " or ".join(f"max_over_time({selector(m)}[{UNDECLARED_LOOKBACK}])"
                             for m in metrics)
         terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
     return "\nor ".join(terms)
+
+
+def pack_presence(pack: str) -> tuple[str, ...]:
+    """The presence metric(s) of *pack*'s exporter: EXPORTER_PRESENCE for a
+    database pack (its name is the db_type), APP_PRESENCE otherwise."""
+    return EXPORTER_PRESENCE.get(pack) or APP_PRESENCE.get(pack) or ()
+
+
+def unset_notice_packs() -> list[str]:
+    """The packs that read a threshold key the platform ships no value for —
+    each carries <prefix>ThresholdNotConfigured (#1200 D-A A3). Derived from the
+    threshold registry, never listed here."""
+    ops_dir = os.path.join(_HERE, "ops")
+    if ops_dir not in sys.path:
+        sys.path.insert(0, ops_dir)
+    import _registry_lib  # noqa: PLC0415  (scripts/tools/ops)
+    return sorted(set(_registry_lib.unset_notice_keys(_registry_lib.load_registry()).values()))
+
+
+def unset_notice_expr(pack: str) -> str:
+    """<prefix>ThresholdNotConfigured's expr for *pack*: every user_threshold_unset
+    series of the pack for a tenant whose exporter of that kind is answering
+    under the tenant-exporters job, outside maintenance. The exporter's own
+    `instance` / `pod` are aggregated away first (as tenant_expected_exporter
+    is): with two replicas each key would otherwise fire twice, and a rollout
+    would restart the alert's `for:` with the new pod's series."""
+    metrics = pack_presence(pack)
+    if not metrics:
+        raise ValueError(f"pack {pack!r} reads unset-notice keys but has no presence metric "
+                         "(EXPORTER_PRESENCE / APP_PRESENCE)")
+    inner = " or ".join(selector(m) for m in metrics)
+    return "\n".join([
+        "(",
+        f'  max without(instance, pod) (user_threshold_unset{{pack="{pack}"}})',
+        "  and on(tenant)",
+        f"  ({inner})",
+        ")",
+        "unless on(tenant)",
+        '(user_state_filter{filter="maintenance"} == 1)',
+    ])
 
 
 def _absent_pairs() -> str:
@@ -191,7 +278,10 @@ def alert_exprs() -> dict[tuple[Path, str], str]:
         "unless on(tenant)",
         '(user_state_filter{filter="maintenance"} == 1)',
     ])
+    notices = {(Path(RULE_PACKS.directory) / RULE_PACKS.file_name(p), unset_notice_alert(p)):
+               unset_notice_expr(p) for p in unset_notice_packs()}
     return {
+        **notices,
         (LIVENESS_PACK, "TenantExporterAbsent"): absent,
         (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared,
         (PLATFORM_PACK, "MassExporterOutage"): mass,

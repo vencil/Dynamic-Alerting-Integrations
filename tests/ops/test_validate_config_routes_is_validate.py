@@ -81,14 +81,15 @@ CASES = {
          "t-a.yaml": _TENANT + "    cpu_usage_precent: \"85\"\n" + _WEBHOOK},
         None, "key verdict:", 1, 1),
     # #3873: the key verdict's own cases, now that no other row reports it —
-    # a warning alone passes, a key no root platform file lets it judge fails.
+    # a warning alone passes; with no root platform file the tree is judged
+    # as any other (#3832), so a key no layer declares fails as unread.
     "key-warning-only": (
         {"_defaults.yaml": _DEFAULTS,
          "t-a.yaml": _TENANT + "    cpu_usage_precent: disable\n" + _WEBHOOK},
         None, "WARN: key verdict:", 0, 0),
-    "key-undecidable": (
+    "key-no-root-platform-file": (
         {"t-a.yaml": _TENANT + _WEBHOOK},
-        None, "cannot be judged (undecidable)", 1, 1),
+        None, "ERROR: key verdict:", 1, 1),
     "unreadable-tenant-file": (
         {"_defaults.yaml": _DEFAULTS, "t-a.yaml": _TENANT + _WEBHOOK,
          "t-b.yaml": "tenants:\n  t-b: [1\n"},

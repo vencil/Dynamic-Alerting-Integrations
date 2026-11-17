@@ -111,8 +111,9 @@ func TestPeakTenantRowCounts_IsTheResolversRowCount(t *testing.T) {
 			if oracle := rowsEveryMinute(cfg)["tx"]; got != oracle {
 				t.Errorf("PeakTenantRowCounts = %d, ResolveAt's most rows over the day = %d", got, oracle)
 			}
-			if got != tc.want {
-				t.Errorf("PeakTenantRowCounts = %d, want %d", got, tc.want)
+			// #3832: every tenant also gets one row per built-in key.
+			if want := tc.want + len(builtinDefaults); got != want {
+				t.Errorf("PeakTenantRowCounts = %d, want %d", got, want)
 			}
 		})
 	}
@@ -131,8 +132,9 @@ func TestPeakTenantRowCounts_SameAtEveryInstant(t *testing.T) {
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	for _, at := range []time.Time{day, day.Add(150 * time.Minute), day.Add(4 * time.Hour), day.Add(23*time.Hour + 59*time.Minute)} {
 		got := cfg.PeakTenantRowCounts(at)
-		if got["tx"] != 2 || got["ty"] != 2 {
-			t.Errorf("at %s: %v, want tx 2, ty 2", at.Format("15:04"), got)
+		// #3832: plus one row per built-in key each.
+		if want := 2 + len(builtinDefaults); got["tx"] != want || got["ty"] != want {
+			t.Errorf("at %s: %v, want tx %d, ty %d", at.Format("15:04"), got, want, want)
 		}
 	}
 }
@@ -156,8 +158,9 @@ func TestPeakTenantRowCounts_CountsBeforeTheCut(t *testing.T) {
 		t.Fatalf("control: the exporter serves %d rows of tx, want 2 (its cap)", served)
 	}
 	got := cfg.PeakTenantRowCounts(fixedNow)["tx"]
-	if oracle := rowsEveryMinute(cfg)["tx"]; got != oracle || got != 5 {
-		t.Errorf("PeakTenantRowCounts = %d, want 5 (uncut ResolveAt = %d)", got, oracle)
+	// #3832: 5 of the tree's own plus one per built-in key, before the cut.
+	if want := 5 + len(builtinDefaults); got != rowsEveryMinute(cfg)["tx"] || got != want {
+		t.Errorf("PeakTenantRowCounts = %d, want %d (uncut ResolveAt = %d)", got, want, rowsEveryMinute(cfg)["tx"])
 	}
 }
 
@@ -188,7 +191,8 @@ func TestPeakTenantRowCountsOf_IsTheFullTablesEntry(t *testing.T) {
 		"tc.yaml": "tenants:\n  tc:\n    redis_keys: disable\n",
 	})
 	full := cfg.PeakTenantRowCounts(fixedNow)
-	if want := map[string]int{"ta": 2, "tb": 3, "tc": 1}; !reflect.DeepEqual(full, want) {
+	nb := len(builtinDefaults) // #3832: one row per built-in key each
+	if want := map[string]int{"ta": 2 + nb, "tb": 3 + nb, "tc": 1 + nb}; !reflect.DeepEqual(full, want) {
 		t.Fatalf("full table %v, want %v", full, want)
 	}
 	for _, subset := range [][]string{{"ta"}, {"tb", "tc"}, {"ta", "tb", "tc"}, {"tc", "nobody"}, nil} {
@@ -230,8 +234,8 @@ func TestPeakTenantRowCounts_ExpiresIsReadAtNow(t *testing.T) {
 			if oracle := rowsEveryMinute(cfg)["tx"]; got != oracle {
 				t.Errorf("PeakTenantRowCounts = %d, ResolveAt's most rows over the day = %d", got, oracle)
 			}
-			if got != tc.want {
-				t.Errorf("PeakTenantRowCounts = %d, want %d", got, tc.want)
+			if want := tc.want + len(builtinDefaults); got != want { // #3832: + the built-in rows
+				t.Errorf("PeakTenantRowCounts = %d, want %d", got, want)
 			}
 		})
 	}

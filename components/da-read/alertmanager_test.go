@@ -13,6 +13,16 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// refusedOut is stdout when the input is refused: the refusal document
+// (#3943), as refuse prints it.
+var refusedOut = func() string {
+	b, err := json.Marshal(refusal{Answer: answerRefused})
+	if err != nil {
+		panic(err)
+	}
+	return string(b) + "\n"
+}()
+
 // runOn writes *content* to a temp file and runs `da-read alertmanager` on it.
 func runOn(t *testing.T, content string) (int, string, string) {
 	t.Helper()
@@ -240,9 +250,9 @@ func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runWithReason(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) ||
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.wantErr) ||
 				!strings.HasPrefix(errOut, programName+": ") {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, no stdout, stderr with %q", rc, out, errOut, tc.wantErr)
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, the refusal document, stderr with %q", rc, out, errOut, tc.wantErr)
 			}
 		})
 	}
@@ -280,12 +290,12 @@ func TestALoaderRefusalIsAFixedSentenceUnlessAskedForTheReason(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runOn(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.HasSuffix(errOut, ": "+loaderRefused+"\n") ||
+			if rc != exitCallerErr || out != refusedOut || !strings.HasSuffix(errOut, ": "+loaderRefused+"\n") ||
 				strings.Count(errOut, "\n") != 1 || strings.Contains(strings.ToUpper(errOut), canary) {
 				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and only the fixed sentence %q", rc, out, errOut, loaderRefused)
 			}
 			rc, out, errOut = runWithReason(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.reason) {
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.reason) {
 				t.Fatalf("%s: rc=%d stdout=%q stderr=%q; want rc 2 and the loader's reason %q",
 					showLoaderReasonFlag, rc, out, errOut, tc.reason)
 			}
@@ -328,10 +338,30 @@ func TestURLsAreJudgedAsTheReleasedAlertmanager(t *testing.T) {
 		in := "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
 			"  - url: 'https://example.com/'\n    http_config: {proxy_url: '" + proxy + "'}\n"
 		rc, out, errOut := runWithReason(t, in)
-		if rc != exitCallerErr || out != "" ||
+		if rc != exitCallerErr || out != refusedOut ||
 			!strings.Contains(errOut, "refused by Alertmanager's config loader") ||
 			!strings.Contains(errOut, proxy) {
 			t.Fatalf("%s: rc=%d stdout=%q stderr=%q; want rc 2 and the loader's refusal", proxy, rc, out, errOut)
+		}
+	}
+}
+
+// failingWriter is a stdout that cannot be written.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
+
+// A stdout that cannot be written is no answer about the input: exit 2,
+// said on stderr, whether the input is read or refused (#3943).
+func TestStdoutThatCannotBeWritten(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"alertmanager", "-"}, {"prometheus-rules", "-"}} {
+		for _, in := range []string{minimal, "x: [\n"} {
+			var stderr bytes.Buffer
+			if rc := run(args, strings.NewReader(in), failingWriter{}, &stderr); rc != exitCallerErr ||
+				!strings.Contains(stderr.String(), "writing stdout") {
+				t.Fatalf("%v %q: rc=%d stderr=%q; want rc 2 naming the write", args, in, rc, stderr.String())
+			}
 		}
 	}
 }
@@ -348,11 +378,14 @@ func TestReadsStandardInput(t *testing.T) {
 	}
 	stdout.Reset()
 	rc = run([]string{"alertmanager", "-"}, strings.NewReader(""), &stdout, &stderr)
-	if rc != exitCallerErr || stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), programName+": "+stdinName+": ") {
+	if rc != exitCallerErr || stdout.String() != refusedOut || !strings.HasPrefix(stderr.String(), programName+": "+stdinName+": ") {
 		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming %s", rc, stdout.String(), stderr.String(), stdinName)
 	}
 }
 
+// TestCallerErrors: bad arguments and a file that cannot be opened are no
+// answer about the input — exit 2 with no refusal document (#3943), so a
+// caller cannot take them for a refusal.
 func TestCallerErrors(t *testing.T) {
 	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "missing.yml")
@@ -374,7 +407,7 @@ func TestCallerErrors(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			if rc := run(args, strings.NewReader(""), &stdout, &stderr); rc != exitCallerErr ||
 				stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, a message, no stdout", rc, stdout.String(), stderr.String())
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, a message, no stdout (no refusal document)", rc, stdout.String(), stderr.String())
 			}
 		})
 	}
@@ -491,7 +524,7 @@ func TestLaterDocumentsMustBeEmpty(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runOn(t, in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "has content; Alertmanager reads only the first") {
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, "has content; Alertmanager reads only the first") {
 				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming the later document", rc, out, errOut)
 			}
 		})
@@ -575,7 +608,7 @@ func TestOwnRefusalsCarryNoTextOfTheFile(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	rc := run([]string{"alertmanager", "-"}, strings.NewReader(in), &stdout, &stderr)
 	want := programName + ": " + stdinName + ": line 8: " + errNotInReading.Error() + "\n"
-	if rc != exitCallerErr || stdout.Len() != 0 || stderr.String() != want {
+	if rc != exitCallerErr || stdout.String() != refusedOut || stderr.String() != want {
 		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and %q", rc, stdout.String(), stderr.String(), want)
 	}
 

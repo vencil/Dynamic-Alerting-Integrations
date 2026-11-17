@@ -67,6 +67,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -268,6 +269,11 @@ type Input struct {
 	// read one set). Only the tenants Served or Effective hold are judged.
 	// nil: none.
 	SubtreeReserved map[string]map[string][]config.SubtreeReservedWrite
+	// Undeliverable (#3996): tenant → the keys it inherits from a subtree
+	// `_defaults.yaml` that the build cannot deliver
+	// (LoadReport.Undeliverable — the set da-guard's
+	// subtree_default_undeliverable finding reports, filtered alike).
+	Undeliverable map[string]map[string]config.ScheduledValue
 	// TenantFiles (#3671): tenant file (scan key) → its top-level keys as
 	// the file spells them (parse-tree's content), for the tenant files the
 	// caller judges. nil: none judged.
@@ -291,7 +297,9 @@ type KeyVerdict struct {
 	// Layer: the effective layer the tenant's value comes from; nil when
 	// effective has no source for the key.
 	Layer *string `json:"layer"`
-	// File: the file the tenant's value comes from; nil as Layer.
+	// File: the file the tenant's value comes from; nil as Layer, and nil
+	// for a value of the built-in layer (#3832: config.KeyLayerBuiltin, no
+	// file).
 	File *string `json:"file"`
 	// ReadBy: the readers that read it, sorted; [] for none.
 	ReadBy   []string `json:"read_by"`
@@ -313,6 +321,10 @@ type KeyVerdict struct {
 	// (v3, #3835: no `served` — what /metrics served at one instant is
 	// served-values'.)
 	Value any `json:"value"`
+	// GateKind (#3996): the kind of da-guard's own (main gate) finding that
+	// reports this very fact, read off the set the gate reports it from —
+	// nil when the gate reports nothing of it. See gateKindOf.
+	GateKind *string `json:"gate_kind"`
 }
 
 // Finding is one thing to report: a tenant's own key, or a platform file /
@@ -332,6 +344,10 @@ type Finding struct {
 	// Base: a disable_cascade's base, whose `disable` switches the key off;
 	// nil for any other kind.
 	Base *string `json:"base"`
+	// GateKind (#3996): as KeyVerdict.GateKind — the main gate's finding
+	// kind for the same fact, so a reader showing both (validate-config's
+	// routes and guard_errors rows) shows it once; nil for none.
+	GateKind *string `json:"gate_kind"`
 	// DeadEntries: a dead_entry's entries, in the order written; nil for
 	// any other kind.
 	DeadEntries []config.DeadEntry `json:"dead_entries"`
@@ -444,8 +460,10 @@ func Judge(in Input) Tree {
 			if hasEf {
 				value = ef.Config[key]
 			}
-			rows = append(rows, judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, held, hasRows,
-				in.Heads, in.Undecidable, policy, retired))
+			v := judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, held, hasRows,
+				in.Heads, in.Undecidable, policy, retired)
+			v.GateKind = optional(gateKindOf(key, in.Undeliverable[tenant], ef.NotServed))
+			rows = append(rows, v)
 		}
 		rows = append(rows, profileNotFilled(tenant, ef.NotServed, all)...)
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
@@ -593,7 +611,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		}
 	}
 	return KeyVerdict{
-		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
+		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc && src.File != ""),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
 		Disable: optional(disable), Hint: optional(hint), SwitchedOffWith: optional(sk.SwitchedOffWith),
 		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value,
@@ -633,6 +651,9 @@ type groupKey struct {
 	// platform file's `tenants:` entries write one key with one value per
 	// tenant, so the same file and key are not the same entries.
 	reading string
+	// gate: an unread finding's KeyVerdict.GateKind — rows the gate reports
+	// and rows it does not are not one finding (#3996).
+	gate string
 }
 
 func (g groupKey) id() string {
@@ -640,7 +661,7 @@ func (g groupKey) id() string {
 	if g.file != nil {
 		f = *g.file
 	}
-	return g.kind + "\x00" + f + "\x00" + g.key + "\x00" + g.tenant + "\x00" + g.reading
+	return g.kind + "\x00" + f + "\x00" + g.key + "\x00" + g.tenant + "\x00" + g.reading + "\x00" + g.gate
 }
 
 // findingsOf is the findings of keys: deduplicated by (kind, file, key) for
@@ -706,6 +727,9 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 						gk.reading = config.DeadEntriesReading(v.DeadEntries)
 					}
 				}
+				if kind == KindUnread {
+					gk.gate = deref(v.GateKind)
+				}
 				add(gk, v)
 			}
 		}
@@ -724,7 +748,7 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 		f := Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
 			Tenants: sortedKeys(tenantSet), Reason: g.vs[0].Reason}
 		if g.gk.kind == KindUnread {
-			f.Hint = g.vs[0].Hint
+			f.Hint, f.GateKind = g.vs[0].Hint, optional(g.gk.gate)
 		}
 		switch g.gk.kind {
 		case KindDisableCascade:
@@ -808,6 +832,29 @@ func tenantFileFindings(files map[string][]string) []Finding {
 	return out
 }
 
+// gateKindOf (#3996) is the kind of da-guard's own finding that reports the
+// same fact as a tenant's verdict row on key, read off the set that finding
+// is reported from — never off the row's reason, which names why the key
+// is unread, not who else says so (a retired key a subtree `defaults:`
+// writes is `retired` here and undeliverable to the gate):
+//   - key in the tenant's undeliverable set (LoadReport.Undeliverable, which
+//     subtree_default_undeliverable reports, filtered alike);
+//   - effective's not_served names root_defaults_reserved (a `_` key under
+//     the root `defaults:`, which root_defaults_reserved_key reports).
+//
+// "" for none. subtree_default_reserved_key has no row (the effective
+// config leaves the key out): subtreeReservedFindings carries it.
+func gateKindOf(key string, undeliverable map[string]config.ScheduledValue,
+	notServed map[string]config.NotServedKey) string {
+	if _, ok := undeliverable[key]; ok {
+		return findingkind.FindingSubtreeDefaultUndeliverable.String()
+	}
+	if ns, ok := notServed[key]; ok && ns.Reason == config.NotServedRootDefaultsReserved {
+		return findingkind.FindingRootDefaultsReservedKey.String()
+	}
+	return ""
+}
+
 // subtreeReservedFindings is one unread error per subtree `_defaults.yaml`
 // and key of reserved (Input.SubtreeReserved), on that file, naming the
 // judged tenants that inherit it (#3881). No verdict row carries the key:
@@ -835,7 +882,9 @@ func subtreeReservedFindings(reserved map[string]map[string][]config.SubtreeRese
 	out := make([]Finding, 0, len(byAt))
 	for at, who := range byAt {
 		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: at[1], File: optional(at[0]),
-			Tenants: sortedKeys(who), Reason: optional(ReasonSubtreeDefaultReservedKey)})
+			Tenants: sortedKeys(who), Reason: optional(ReasonSubtreeDefaultReservedKey),
+			// The very set da-guard's own finding reports (#3996).
+			GateKind: optional(findingkind.FindingSubtreeDefaultReservedKey.String())})
 	}
 	return out
 }

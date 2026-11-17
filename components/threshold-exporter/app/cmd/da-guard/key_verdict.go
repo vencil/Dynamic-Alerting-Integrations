@@ -55,12 +55,13 @@ import (
 const keyVerdictCmd = "key-verdict"
 
 // keyVerdictSchema names the document's shape (see servedValuesSchema).
-// v4 (#3703): key_checks, per tenant, a list of structured records
+// v5 (#3996): every key row and finding carries gate_kind — the main gate's
+// finding kind for the same fact, or null. v4 (#3703): key_checks, per tenant, a list of structured records
 // {kind, key, head, replacement_head, reason} instead of
 // {version_labels, renames} sentences that quoted the key. v3 (#3835): judged over the whole day, the per-key `served` (what /metrics
 // served at --at) gone. v2 (#3489 step 2): the whole verdict; v1 carried
 // the ERROR layer only.
-const keyVerdictSchema = "da-guard.key-verdict/v4"
+const keyVerdictSchema = "da-guard.key-verdict/v5"
 
 // keyError is one key the verdict reads as unread at severity ERROR — what
 // `da-guard write` compares before and after a batch.
@@ -150,11 +151,6 @@ type keyVerdictOpts struct {
 	// tenants: compute and judge only these (served-values' and effective's
 	// --tenant); nil for the whole tree.
 	tenants []string
-	// rootPlatform: a root platform file is read (hasRootPlatformFile of
-	// parse-tree's document of the same tree): without one the threshold
-	// keys are undecidable (decision 7). A write's baseline sets it whatever
-	// the tree holds (write_worsen.go).
-	rootPlatform bool
 	// profiles: rootProfilesOf the same document — the profile layer; nil:
 	// not judged. The facts, not the document: the document of a large tree
 	// need not stay in memory through the verdict.
@@ -170,7 +166,6 @@ type keyVerdictOpts struct {
 func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResult, error) {
 	discard := log.New(io.Discard, "", 0)
 	overlays := opts.scan.Overlays
-	rootPlatform := opts.rootPlatform
 	scan, err := config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
 		Overlays: overlays, OverlayMakesDirs: opts.scan.OverlayMakesDirs})
 	if err != nil {
@@ -192,7 +187,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	}
 	empty := func() keyVerdictResult {
 		return keyVerdictResult{judged: true, tree: keyverdict.Tree{Keys: map[string][]keyverdict.KeyVerdict{},
-			Findings: []keyverdict.Finding{}, Undecidable: !rootPlatform},
+			Findings: []keyverdict.Finding{}},
 			keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{}, errors: []keyError{},
 			setAside: setAside}
 	}
@@ -247,10 +242,12 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 		return unjudged(err)
 	}
 	in := keyverdict.Input{
-		Served:      servedForVerdict(served),
-		Effective:   make(map[string]keyverdict.EffectiveTenant, len(tree.Tenants)),
-		Heads:       heads,
-		Undecidable: !rootPlatform,
+		Served:    servedForVerdict(served),
+		Effective: make(map[string]keyverdict.EffectiveTenant, len(tree.Tenants)),
+		Heads:     heads,
+		// #3832: never undecidable. A tree with no root platform file gets
+		// the built-in layer, so the exporter half of every threshold key
+		// is judged as in any other tree (ADR-038 decision 7).
 	}
 	for _, ec := range tree.Tenants {
 		ec = ec.AsWritten() // #2031: as `da-guard effective` prints it
@@ -265,6 +262,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	// #3881: the subtree_default_reserved_key set, filtered as da-guard's own
 	// finding filters it — one set for both.
 	in.SubtreeReserved = guard.SubtreeReservedReported(rep.SubtreeReserved, rep.DefaultsFiles, rep.ParseFailed)
+	in.Undeliverable = rep.Undeliverable // #3996: subtree_default_undeliverable's set
 	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants, setAsideFiles)
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a
@@ -466,18 +464,6 @@ func setAsideOverlays(root string, overlays []config.FileOverlay, aside map[stri
 	return out, nil
 }
 
-// hasRootPlatformFile is Python's `root_platform_files(...) != []`: a
-// config file (role config, readable or not) of class defaults or platform
-// at depth 0 of parse-tree's document.
-func hasRootPlatformFile(doc *parseTreeDoc) bool {
-	for _, e := range doc.Entries {
-		if e.Role == config.RoleConfig && e.Depth == 0 && (e.Class == classDefaults || e.Class == classPlatform) {
-			return true
-		}
-	}
-	return false
-}
-
 // policyHeadsOf is Python's `policy_targets(_tree_rules(...))` over the root
 // carrier's bytes: the top-level `policies` when the document has that key
 // (whatever its value), else `_policies`; each rule's `target` and
@@ -570,7 +556,7 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // treeFacts is what parse-tree's document of the tree at dir says for the
-// verdict (keyVerdictOpts.rootPlatform, .profiles, .tenantFiles). The document itself does
+// verdict (keyVerdictOpts.profiles, .tenantFiles). The document itself does
 // not outlive this call: a large tree's need not stay in memory through the
 // verdict.
 func treeFacts(dir string) (keyVerdictOpts, error) {
@@ -582,7 +568,7 @@ func treeFacts(dir string) (keyVerdictOpts, error) {
 	if err != nil {
 		return keyVerdictOpts{}, err
 	}
-	return keyVerdictOpts{rootPlatform: hasRootPlatformFile(doc), profiles: rootProfilesOf(doc),
+	return keyVerdictOpts{profiles: rootProfilesOf(doc),
 		tenantFiles: tenantFileKeysOf(doc)}, nil
 }
 
@@ -604,11 +590,13 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "Print, as JSON, the shared key verdict (ADR-038): for every key of every tenant whether\n"+
 			"some reader reads it in some part of the UTC day, and the findings a report prints:\n"+
 			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
-			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value}]}, \"findings\":\n"+
-			"[{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks}], \"key_checks\":\n"+
+			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value, gate_kind}]},\n"+
+			"\"findings\": [{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks,\n"+
+			"gate_kind}], \"key_checks\":\n"+
 			"{<tenant>: [{kind, key, head, replacement_head, reason}]}, \"parse_failed\": [<file>],\n"+
 			"\"unreadable\": [{file, reason}]}. A key check's reason is a constant sentence per kind;\n"+
-			"only key and head carry what the tenant's config writes.\n"+
+			"only key and head carry what the tenant's config writes. gate_kind (#3996): the kind of\n"+
+			"da-guard's own finding that reports the same fact, or null.\n"+
 			"Only `expires:` is read at --at; nothing depends on the time of day.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+

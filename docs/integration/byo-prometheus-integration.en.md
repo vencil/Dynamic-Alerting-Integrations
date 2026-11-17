@@ -224,19 +224,19 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 <!-- BYO_RULEPACK_TABLE_START -->
 | ConfigMap Name | Contents | Rules |
 |---|---|---|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 17A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 18A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
-| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 9A |
-| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 10A |
-| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 14R + 11A |
-| `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 13R + 9A |
-| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 15R + 10A |
-| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
+| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 10A |
+| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 11A |
+| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 14R + 12A |
+| `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 13R + 11A |
+| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 15R + 11A |
+| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 8A |
 | `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 8A |
-| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 8R + 5A |
-| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 14R + 9A |
-| `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
-| `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |
+| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 8R + 6A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 16R + 12A |
+| `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 8A |
+| `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 7A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 54A |
 | `prometheus-rules-liveness` | `liveness-alert.yml` | 0R + 3A |
 | `prometheus-rules-operational` | `operational-alert.yml` | 0R + 4A |

@@ -40,6 +40,16 @@ def _bytes(root):
     ("0x1F", {"str": "0x1F"}), ("1_000", {"str": "1_000"}), (".5", {"str": ".5"}),
     ("disable", {"str": "disable"}), ("true", {"str": "true"}), ("", {"str": ""}),
     ("1" * 18, {"int": "1" * 18}), ("1" * 19, {"str": "1" * 19}),
+    # #3866: the exponent form YAML 1.1 and 1.2 both read as a float; the
+    # spellings PyYAML reads as a string stay strings.
+    ("1.0e+22", {"float": "1.0e+22"}), ("-1.5e-25", {"float": "-1.5e-25"}),
+    ("1e22", {"str": "1e22"}), ("1.0e22", {"str": "1.0e22"}), ("1.0E+22", {"str": "1.0E+22"}),
+    ("10.0e+2", {"str": "10.0e+2"}), ("0.5e+1", {"str": "0.5e+1"}), ("1.0e+05", {"str": "1.0e+05"}),
+    # Normalized: no trailing zero in the mantissa but `.0`, no `-0` exponent.
+    ("1.50e+3", {"str": "1.50e+3"}), ("-1.0e-0", {"str": "-1.0e-0"}), ("2.0e+0", {"float": "2.0e+0"}),
+    # The number is its text: not finite, or nonzero text read as 0 — a str.
+    ("1.0e+999", {"str": "1.0e+999"}), ("1.0e-400", {"str": "1.0e-400"}),
+    ("1" + "0" * 400 + ".0", {"str": "1" + "0" * 400 + ".0"}), ("-0.0", {"float": "-0.0"}),
 ])
 def test_a_typed_value_is_a_number_only_when_canonical_decimal(text, want):
     assert ce.cli_value(text) == want
@@ -74,7 +84,10 @@ def test_a_read_value_the_edit_cannot_carry_as_written_is_refused(node):
 @pytest.mark.parametrize("obj,want", [
     ("80", {"str": "80"}), ("disable", {"str": "disable"}), (80, {"int": "80"}),
     (-1, {"int": "-1"}), (1.5, {"float": "1.5"}), (2.0, {"float": "2.0"}),
-    (1e-05, {"float": "0.00001"}), (1e20, {"float": "100000000000000000000.0"}),
+    (1e-05, {"float": "0.00001"}), (1e20, {"float": "1.0e+20"}), (1e22, {"float": "1.0e+22"}),
+    (1e-25, {"float": "1.0e-25"}), (1.2345678901234567e-4, {"float": "1.2345678901234567e-4"}),
+    # 1e19 in plain decimal is 20 digits and `.0`, 21 in all: the exponent form.
+    (1e19, {"float": "1.0e+19"}), (1e18, {"float": "1000000000000000000.0"}),
     (True, {"bool": True}), (None, {"null": None}),
     (["a", 1], {"seq": [{"str": "a"}, {"int": "1"}]}),
     ({"b": 1, "a": "x"}, {"map": [["b", {"int": "1"}], ["a", {"str": "x"}]]}),
@@ -114,6 +127,47 @@ def test_a_generated_float_reads_back_as_the_number_meant(tmp_path):
         "a": ("!!float", "0.00001"), "b": ("!!float", "2.0"), "c": ("!!int", "7")}
 
 
+def test_a_float_past_20_digits_is_written_and_read_back_as_the_number_meant(tmp_path):
+    # #3866: plain decimal would spell these with more than 20 digits, which
+    # the exporter does not read; the exponent form is written, parse-tree
+    # reads it as the !!float it is, and it is a threshold number.
+    root = _tree(tmp_path / "conf.d", {})
+    content = ce.data_value({"defaults": {"big": 1e22, "tiny": 1e-25}})
+    ce.emit_all(root, [("_defaults.yaml", content)])
+    node = _lib_parse_tree.load(root, None, 120).node("_defaults.yaml")["defaults"]
+    assert {k: (v["tag"], v["text"]) for k, v in node.items()} == {
+        "big": ("!!float", "1.0e+22"), "tiny": ("!!float", "1.0e-25")}
+
+
+def _floats():
+    import random  # noqa: PLC0415
+    import struct  # noqa: PLC0415
+    rng = random.Random(3866)
+    edge = [0.0, -0.0, 5e-324, -5e-324, 2.2250738585072014e-308, 1.7976931348623157e308,
+            1e19, 1e20, 1e21, 1e22, 9.999999999999999e19, 1e-19, 1e-20, 1e-21, 0.1 + 0.2,
+            123456789012345678.0, 1.2345678901234567e-4, 12345678901234567890.0]
+    rand = [struct.unpack("<d", struct.pack("<Q", rng.getrandbits(64)))[0] for _ in range(3000)]
+    rand += [rng.uniform(-1, 1) * 10.0 ** rng.randint(-40, 40) for _ in range(3000)]
+    return [x for x in edge + rand if x == x and x not in (float("inf"), float("-inf"))]
+
+
+def test_every_generated_float_is_a_spelling_every_reader_reads_as_that_number():
+    """#3866: the writer spells every finite float so that (1) the edit
+    contract takes it, (2) it is a threshold number the exporter reads as
+    that float, and (3) PyYAML (YAML 1.1) reads it as that float too —
+    `1e22` and `1.0e22` it reads as strings. Before #3866 a float past 20
+    digits in plain decimal failed (2)."""
+    import yaml  # noqa: PLC0415
+    from _lib_validation import threshold_number  # noqa: PLC0415
+    for x in _floats():
+        (text,) = ce.data_value(x).values()
+        assert ce.is_canonical_float(text), (x, text)
+        assert threshold_number(text) == x, (x, text)
+        got = yaml.safe_load(text)
+        assert type(got) is float and got == x, (x, text, got)
+        assert ce.cli_value(text) == {"float": text}, (x, text)
+
+
 def test_a_generated_value_carries_the_head_comments_asked_for():
     # #3206 10c-3: `head` is asked about every map entry and sequence item
     # (its key path, its value); what it returns goes above that node only.
@@ -138,10 +192,11 @@ def test_a_comment_block_is_its_lines_text():
 
 
 def test_a_new_files_preview_is_the_text_da_guard_writes(tmp_path):
-    f = ce.NewFile("t-a.yaml", {"tenants": {"t-a": {"cpu": "70"}}}, "head",
-                   "foot", node_head=lambda at, v: "on cpu" if at[-1] == "cpu" else None)
+    # #3832: a default-armed key, read in a tree with no root carrier too.
+    f = ce.NewFile("t-a.yaml", {"tenants": {"t-a": {"container_cpu": "70"}}}, "head",
+                   "foot", node_head=lambda at, v: "on cpu" if at[-1] == "container_cpu" else None)
     text = f.preview()
-    assert text == ('# head\n\ntenants:\n  t-a:\n    # on cpu\n    cpu: "70"\n'
+    assert text == ('# head\n\ntenants:\n  t-a:\n    # on cpu\n    container_cpu: "70"\n'
                     '\n# foot\n')
     root = _tree(tmp_path / "conf.d", {"t-a.yaml": "tenants:\n  t-a: {}\n# old\n"})
     ce.write_all(root, [f.entry(replace=True)])
@@ -277,12 +332,13 @@ def test_the_batch_is_judged_as_one_tree(tmp_path):
 
 def test_emit_all_writes_every_new_file(tmp_path):
     root = _tree(tmp_path / "conf.d", {"x.yaml": "tenants:\n  t-x: {}\n"})
+    # #3832: a default-armed key, read in a tree with no root carrier too.
     files = [(f"team/t-{i}.yaml", ce.map_value([("tenants", ce.map_value(
-        [(f"t-{i}", ce.map_value([("cpu", ce.cli_value("70"))]))]))])) for i in range(3)]
+        [(f"t-{i}", ce.map_value([("container_cpu", ce.cli_value("70"))]))]))])) for i in range(3)]
     docs = ce.emit_all(root, files)
     assert [d["status"] for d in docs] == [ce.WRITTEN] * 3
     assert (root / "team" / "t-1.yaml").read_text(encoding="utf-8") == (
-        "tenants:\n  t-1:\n    cpu: 70\n")
+        "tenants:\n  t-1:\n    container_cpu: 70\n")
     with pytest.raises(ce.EditCallerError) as exc:  # they exist now
         ce.emit_all(root, files)
     assert (exc.value.path, exc.value.reason) == ("team/t-0.yaml", "path_exists")
@@ -494,12 +550,13 @@ def test_move_is_byte_for_byte_and_refuses_an_existing_target(tmp_path):
 
 def test_comments_are_written_as_comments(tmp_path):
     root = _tree(tmp_path / "conf.d", {})
+    # #3832: a default-armed key, read in a tree with no root carrier too.
     content = ce.map_value([("tenants", ce.map_value([
-        ("t-a", ce.map_value([("cpu", {"int": "80"}, ce.comments(head="⚠ counterexample", line="default"))])),
+        ("t-a", ce.map_value([("container_cpu", {"int": "80"}, ce.comments(head="⚠ counterexample", line="default"))])),
     ]))])
     doc = ce.emit(root, "t-a.yaml", content, head_comment="a header", dry_run=True)
     assert doc["content"] == ("# a header\n\ntenants:\n  t-a:\n    # ⚠ counterexample\n"
-                              "    cpu: 80 # default\n")
+                              "    container_cpu: 80 # default\n")
     with pytest.raises(ce.EditCallerError) as exc:  # a line comment is one line
         ce.emit(root, "t-a.yaml", ce.map_value([("tenants", ce.map_value([]),
                                                   ce.comments(line="x\ntenants: {}"))]))
@@ -581,7 +638,9 @@ def test_write_all_replaces_and_deletes_in_one_run(tmp_path):
 
 # ── write: copy（另一棵樹的檔，位元組原樣；assemble_config_dir）──────
 
-_COPIED = "# team-b — 團隊 B\ntenants:\n  t-c:\n    cpu: 010 # as written\n    note: \"警報\"\n"
+# #3832: keys a reader reads in a tree with no root carrier — a default-armed
+# threshold as written (`010`) and `_metadata` for the non-ASCII text.
+_COPIED = "# team-b — 團隊 B\ntenants:\n  t-c:\n    container_cpu: 010 # as written\n    _metadata: {owner: \"警報\"}\n"
 
 
 def test_copy_entry_is_the_contracts_shape(tmp_path):
@@ -681,7 +740,7 @@ def test_number_value_sends_an_int_past_18_characters_as_a_float():
     # #3206 10c: a generated `defaults:` number only has to be a number.
     assert ce.number_value(80) == {"int": "80"}
     assert ce.number_value(0.5) == {"float": "0.5"}
-    assert ce.number_value(10 ** 20) == {"float": "100000000000000000000.0"}
+    assert ce.number_value(10 ** 20) == {"float": "1.0e+20"}
     # 18 characters, a sign included: the last an int, one more a float
     assert ce.number_value(-(10 ** 16)) == {"int": str(-(10 ** 16))}
     assert ce.number_value(-(10 ** 17)) == {"float": "-100000000000000000.0"}
@@ -719,12 +778,13 @@ def test_comment_field_refuses_a_line_break_only_inside_one_line():
 # ── write_all_or_exit: the one CLI exit every conf.d writer shares (#3206 10c) ──
 
 def test_write_all_or_exit_returns_the_results_when_the_batch_passes(tmp_path, capsys):
+    # #3832: a default-armed key, read in a tree with no root carrier too.
     out = ce.write_all_or_exit(tmp_path, [
-        ce.create_entry("a.yaml", ce.data_value({"tenants": {"tenant-a": {"k": "1"}}}))],
+        ce.create_entry("a.yaml", ce.data_value({"tenants": {"tenant-a": {"container_cpu": "1"}}}))],
         tool="t")
     assert [r["status"] for r in out] == [ce.WRITTEN]
     assert (tmp_path / "a.yaml").read_text(encoding="utf-8") == \
-        'tenants:\n  tenant-a:\n    k: "1"\n'
+        'tenants:\n  tenant-a:\n    container_cpu: "1"\n'
     assert capsys.readouterr().err == ""
 
 
@@ -844,3 +904,14 @@ def test_write_all_or_exit_make_root_creates_and_on_failure_removes_the_root(tmp
 def test_number_value_names_where_a_non_finite_number_sits():
     with pytest.raises(ValueError, match=r"^defaults\.k: the float inf is not a finite number"):
         ce.number_value(float("inf"), at=("defaults", "k"))
+
+
+def test_the_number_grammar_is_the_contracts_not_a_copy():
+    """#3866: the edit contract's spellings of a number are written once, in
+    the recipe contract's edit_number (Go reads it through go:embed; Python's
+    copy is GENERATED into _lib_constants, gen_recipe_contract.py --check is
+    its drift gate). A hand-written pattern here would drift silently."""
+    import _lib_constants as k  # noqa: PLC0415
+    assert ce._CANONICAL_INT.pattern == k.EDIT_INT_PATTERN
+    assert ce._CANONICAL_FLOAT.pattern == k.EDIT_FLOAT_PATTERN
+    assert ce._MAX_INT_DIGITS == k.EDIT_INT_MAX_LENGTH

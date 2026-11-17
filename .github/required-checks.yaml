@@ -71,7 +71,7 @@ required:
   # 連網路，卻是必要：它驗的是跨租戶隔離的請求路徑（gateway → proxy → 儲存），沒有
   # 別的檢查重複擋；而它的網路依賴只有拉映像，runner 會先重試拉取，拉不到時以
   # exit 2 與點名「拉映像失敗」的訊息結束，不會讀成測試失敗。
-  - {name: Federation E2E (ADR-020 IV-2j), kind: job, pending: true}
+  - {name: Federation E2E (ADR-020 IV-2j), kind: job}
 
 # 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
 # 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證

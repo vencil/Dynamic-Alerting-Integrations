@@ -794,6 +794,12 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
             'severity': 'info',
             'default_state': 'disable',
         },
+        # #1200 D-A A3: <Pack>ThresholdNotConfigured, off until enabled.
+        'unset_thresholds': {
+            'reasons': [],
+            'severity': 'info',
+            'default_state': 'disable',
+        },
     }
 
     routing_defaults = {

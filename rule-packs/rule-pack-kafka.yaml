@@ -10,7 +10,7 @@
 #   kafka_consumer_lag: 1000   # messages — Consumer lag warning
 #       未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
 #   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+#       未啟用（尚未量測，#3979）：讀這個 exporter 指標的來源只有 Strimzi 一個（自稱是要自行調整的範例）；也沒有來源給出滾動重啟不會誤觸的 for: 長度
 #   kafka_broker_count: 3   # count — Minimum broker count warning
 #       未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
 #
@@ -228,6 +228,45 @@ groups:
           description: "Active brokers: {{ $value | printf \"%.0f\" }} (below minimum threshold)"
           description_zh: "活躍的 broker: {{ $value | printf \"%.0f\" }} (低於最小閾值)"
 
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+  # -------------------------------------------------------
+  # Unconfigured thresholds (#1200 D-A A3, #1175)
+  # -------------------------------------------------------
+  # The platform ships no value for some keys this pack reads; until the
+  # tenant (or the platform's conf.d) writes one, the alert comparing against
+  # it never fires. threshold-exporter serves user_threshold_unset{tenant,
+  # pack, key, fix} for each such key that serves no threshold and is not
+  # disabled, for tenants whose state filter unset_thresholds is on (off by
+  # default); this names them for a tenant whose kafka exporter is answering.
+  # The expr is generated from scripts/tools/_lib_exporter_presence.py —
+  # run `python3 scripts/tools/_lib_exporter_presence.py --write`, do not
+  # edit it by hand.
+  - name: kafka-unset-thresholds
+    rules:
+      - alert: KafkaThresholdNotConfigured
+        expr: |
+          (
+            max without(instance, pod) (user_threshold_unset{pack="kafka"})
+            and on(tenant)
+            (kafka_brokers{job="tenant-exporters"})
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 30m
+        labels:
+          severity: info
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "{{ $labels.key }} has no threshold for {{ $labels.tenant }}: the alert on it stays silent"
+          summary_zh: "{{ $labels.tenant }} 沒有設定 {{ $labels.key }}：讀它的告警不會響"
+          platform_summary: "{{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }})"
+          platform_summary_zh: "{{ $labels.key }}：沒有門檻值，讀它的告警不會響（處理方：{{ $labels.fix }}）"
+          description: "{{ if eq $labels.fix \"platform\" }}The platform does not declare {{ $labels.key }}, so a tenant value for it is not read and the {{ $labels.pack }} alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice.{{ else }}No threshold is served for {{ $labels.key }}, so the {{ $labels.pack }} alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice.{{ end }}"
+          description_zh: "{{ if eq $labels.fix \"platform\" }}平台沒有宣告 {{ $labels.key }}，租戶寫的值不會被讀，{{ $labels.pack }} 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。{{ else }}{{ $labels.key }} 沒有送出任何門檻值，{{ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。{{ end }}"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

@@ -10,7 +10,8 @@ import (
 )
 
 type rulesOutput struct {
-	Files []struct {
+	Answer string `json:"answer"`
+	Files  []struct {
 		Path      string            `json:"path"`
 		Documents []json.RawMessage `json:"documents"`
 		Problem   *struct {
@@ -46,7 +47,7 @@ func runRulesOn(t *testing.T, contents ...string) (int, rulesOutput, []string, s
 func ruleDocument(t *testing.T, in string) string {
 	t.Helper()
 	rc, out, _, errOut := runRulesOn(t, in)
-	if rc != exitOK || errOut != "" || len(out.Files) != 1 || out.Files[0].Problem != nil ||
+	if rc != exitOK || errOut != "" || out.Answer != "" || len(out.Files) != 1 || out.Files[0].Problem != nil ||
 		len(out.Files[0].Documents) != 1 {
 		t.Fatalf("%q: rc=%d stderr=%q out=%+v", in, rc, errOut, out)
 	}
@@ -145,8 +146,8 @@ func TestRulesReportEachFile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, paths, errOut := runRulesOn(t, good, tc.in, good)
-			if rc != exitCallerErr || len(out.Files) != 3 {
-				t.Fatalf("rc=%d out=%+v; want rc 2 and three entries", rc, out)
+			if rc != exitCallerErr || out.Answer != answerRefused || len(out.Files) != 3 {
+				t.Fatalf("rc=%d out=%+v; want rc 2, the refusal's answer and three entries", rc, out)
 			}
 			for i, f := range out.Files {
 				if f.Path != paths[i] {
@@ -177,21 +178,28 @@ func TestRulesAcceptEmptyLaterDocuments(t *testing.T) {
 	}
 }
 
-// A file that cannot be opened is a problem of its own entry, not a usage
-// error; `-` is standard input, named "<stdin>", at most once.
+// `-` is standard input, named "<stdin>", at most once. A file that cannot
+// be opened is no answer about the files (#3943): exit 2, nothing on stdout
+// — not a problem entry, which says the loader refuses the file.
 func TestRulesFilesAndStandardInput(t *testing.T) {
 	t.Parallel()
-	missing := filepath.Join(t.TempDir(), "missing.yml")
 	var stdout, stderr bytes.Buffer
-	rc := run([]string{"prometheus-rules", "-", missing}, strings.NewReader("groups: []\n"), &stdout, &stderr)
+	rc := run([]string{"prometheus-rules", "-"}, strings.NewReader("groups: []\n"), &stdout, &stderr)
 	var out rulesOutput
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if rc != exitCallerErr || len(out.Files) != 2 || out.Files[0].Path != stdinName ||
-		out.Files[0].Problem != nil || string(out.Files[0].Documents[0]) != `{"groups":[]}` ||
-		out.Files[1].Path != missing || out.Files[1].Problem == nil {
+	if rc != exitOK || out.Answer != "" || len(out.Files) != 1 || out.Files[0].Path != stdinName ||
+		out.Files[0].Problem != nil || string(out.Files[0].Documents[0]) != `{"groups":[]}` {
 		t.Fatalf("rc=%d out=%s stderr=%q", rc, stdout.String(), stderr.String())
+	}
+	missing := filepath.Join(t.TempDir(), "missing.yml")
+	stdout.Reset()
+	stderr.Reset()
+	rc = run([]string{"prometheus-rules", "-", missing}, strings.NewReader("groups: []\n"), &stdout, &stderr)
+	if rc != exitCallerErr || stdout.Len() != 0 || !strings.Contains(stderr.String(), missing) {
+		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming the file, nothing on stdout",
+			rc, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()

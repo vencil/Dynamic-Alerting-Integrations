@@ -47,7 +47,7 @@ func TestARetiredSpellingInASubtreeIsNotRefused(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got, ok := seriesFor(t, m, "t1", "threads_running"); !ok || got != 42 {
+	if got, ok := seriesFor(t, m, "t1", "mysql_threads_running"); !ok || got != 42 {
 		t.Errorf("the inherited retired spelling did not reach the canonical series: "+
 			"got %v (present=%v), want 42; tenant map = %v", got, ok, m.GetConfig().Tenants["t1"])
 	}

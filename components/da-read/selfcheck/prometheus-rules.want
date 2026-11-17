@@ -1,0 +1,1 @@
+{"files":[{"path":"\u003cstdin\u003e","documents":[{"groups":[{"name":"self-check","rules":[{"alert":"SelfCheckHigh","expr":"up{job=\"threshold-exporter\"} == 0","for":"5m","labels":{"severity":"warning"}}]}]}],"problem":null}]}

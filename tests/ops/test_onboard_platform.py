@@ -1571,9 +1571,13 @@ _ONBOARD_RULES = ("groups:\n- name: g\n  rules:\n"
 
 def _onboard_rules(monkeypatch, argv):
     import onboard_platform as op
+    from _lib_exitcodes import CallerError, exit_on_crash
     monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--dry-run", *argv])
     with pytest.raises(SystemExit) as exc_info:
-        op.main()
+        try:
+            op.main()
+        except CallerError as exc:  # #3901: a declared input refused — as run() ends it
+            exit_on_crash(exc)
     return exc_info.value.code
 
 
@@ -1700,10 +1704,8 @@ def test_rule_files_a_quoted_pattern_is_a_path_that_is_not_there(tmp_path, monke
     (tmp_path / "x").mkdir()
     (tmp_path / "x" / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
     pattern = str(tmp_path / "x" / "*.yaml")
-    from _lib_exitcodes import CallerError
-    with pytest.raises(CallerError) as exc_info:  # rc 2 by the crash hook
-        _onboard_rules(monkeypatch, ["--rule-files", pattern, "-o", str(tmp_path / "out")])
-    assert str(exc_info.value) == f"--rule-files {pattern}: No such file or directory"
+    assert _onboard_rules(monkeypatch, ["--rule-files", pattern, "-o", str(tmp_path / "out")]) == 2
+    assert capsys.readouterr().err == f"ERROR: --rule-files {pattern}: No such file or directory\n"
     assert not (tmp_path / "out").exists()
 
 

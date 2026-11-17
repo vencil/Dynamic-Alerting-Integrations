@@ -21,23 +21,23 @@ parent: architecture-and-design.en.md
 <!-- RULE_PACK_INVENTORY_START -->
 | Rule Pack | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|----------------|-----------------|-------------|
-| MariaDB/MySQL | `prometheus-rules-mariadb` | 11 | 17 |
+| MariaDB/MySQL | `prometheus-rules-mariadb` | 11 | 18 |
 | PostgreSQL | `prometheus-rules-postgresql` | 8 | 8 |
-| Redis | `prometheus-rules-redis` | 12 | 9 |
-| MongoDB | `prometheus-rules-mongodb` | 10 | 10 |
-| Elasticsearch | `prometheus-rules-elasticsearch` | 14 | 11 |
-| Oracle | `prometheus-rules-oracle` | 13 | 9 |
-| DB2 | `prometheus-rules-db2` | 15 | 10 |
-| ClickHouse | `prometheus-rules-clickhouse` | 12 | 7 |
-| Kafka | `prometheus-rules-kafka` | 8 | 5 |
-| RabbitMQ | `prometheus-rules-rabbitmq` | 14 | 9 |
-| JVM | `prometheus-rules-jvm` | 9 | 7 |
-| Nginx | `prometheus-rules-nginx` | 9 | 6 |
+| Redis | `prometheus-rules-redis` | 12 | 10 |
+| MongoDB | `prometheus-rules-mongodb` | 10 | 11 |
+| Elasticsearch | `prometheus-rules-elasticsearch` | 14 | 12 |
+| Oracle | `prometheus-rules-oracle` | 13 | 11 |
+| DB2 | `prometheus-rules-db2` | 15 | 11 |
+| ClickHouse | `prometheus-rules-clickhouse` | 12 | 8 |
+| Kafka | `prometheus-rules-kafka` | 8 | 6 |
+| RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
+| JVM | `prometheus-rules-jvm` | 9 | 8 |
+| Nginx | `prometheus-rules-nginx` | 9 | 7 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **165** | **183** (= **348** rules) |
+| **Total** | | **167** | **197** (= **364** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

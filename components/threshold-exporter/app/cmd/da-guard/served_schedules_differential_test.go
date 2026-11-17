@@ -201,7 +201,7 @@ func randomScheduleTree(r *rand.Rand) map[string]string {
 // for its name: the whole tree read at every cut of the tree.
 func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
 	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool,
-) error {
+) ([]ungatheredPart, error) {
 	cuts := cfg.ScheduleCuts()
 	ends := make([]int, len(cuts))
 	for i := range cuts {
@@ -225,7 +225,7 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 			err = fmt.Errorf("internal: the served values at --at cannot be gathered, the schedule reading at --at could")
 		}
 		if err != nil {
-			return fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
+			return nil, fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
 		}
 		passes[i], gatherErrs[i] = r, gerr
 	}
@@ -235,7 +235,7 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 			break
 		}
 		if err := sameAsValues(tenant, tv, passes[cur][tenant]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
@@ -246,7 +246,7 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 			expiryOf[te.Tenant] = map[string]config.ResolvedThresholdExpiry{}
 		}
 		if prev, dup := expiryOf[te.Tenant][canon]; dup {
-			return fmt.Errorf("internal: tenant %s: keys %q and %q both time-box %q", te.Tenant, prev.MetricKey, te.MetricKey, canon)
+			return nil, fmt.Errorf("internal: tenant %s: keys %q and %q both time-box %q", te.Tenant, prev.MetricKey, te.MetricKey, canon)
 		}
 		expiryOf[te.Tenant][canon] = te
 	}
@@ -284,7 +284,7 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 			if te, ok := expiryOf[tenant][k]; ok {
 				sv, written := cfg.Tenants[tenant][te.MetricKey]
 				if !written || sv.Expiry == nil {
-					return fmt.Errorf("internal: tenant %s: the expiry of %q has no `expires:` in the merged config", tenant, te.MetricKey)
+					return nil, fmt.Errorf("internal: tenant %s: the expiry of %q has no `expires:` in the merged config", tenant, te.MetricKey)
 				}
 				expired := te.Expired
 				sch.Expires = sv.Expiry.Expires
@@ -295,5 +295,19 @@ func addSchedulesWholeTree(cfg *config.ThresholdConfig, at time.Time, tenants ma
 		tv.Schedules = &schedules
 		tenants[tenant] = tv
 	}
-	return nil
+	// #3991: the document's ungathered, read off the whole tree's own
+	// pieces — every piece whose Gather fails, merged with the one before
+	// it when that one ends where it starts with the same error.
+	ungathered := []ungatheredPart{}
+	for i, gerr := range gatherErrs {
+		if gerr == "" {
+			continue
+		}
+		if n := len(ungathered); n > 0 && ungathered[n-1].To == hhmm(cuts[i]) && ungathered[n-1].Error == gerr {
+			ungathered[n-1].To = hhmm(ends[i])
+			continue
+		}
+		ungathered = append(ungathered, ungatheredPart{From: hhmm(cuts[i]), To: hhmm(ends[i]), Error: gerr})
+	}
+	return ungathered, nil
 }

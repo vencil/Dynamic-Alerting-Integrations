@@ -66,13 +66,13 @@ func TestWrite_ReplaceWritesTheWholeTextInConfDFileMode(t *testing.T) {
 }
 
 func TestWrite_ReplaceOfAMissingPathIsACreate(t *testing.T) {
-	root := writeTree(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
+	root := writeTreeDeclared(t, map[string]string{"x.yaml": "tenants:\n  t9: {}\n"})
 	in := `{"files":[{"path":"new/t.yaml","create":` + tenantsT3 + `,"replace":true}]}`
 	code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 	if code != exitOK || res.Status != writeStatusWritten || res.Files[0].Kind != writeKindReplace {
 		t.Fatalf("exit %d %+v (%v)", code, statuses(res), res.Message)
 	}
-	if got := snapshot(t, root)["new/t.yaml"]; got != "tenants:\n  t3:\n    cpu: 5\n" {
+	if got := snapshotDeclared(t, root)["new/t.yaml"]; got != "tenants:\n  t3:\n    cpu: 5\n" {
 		t.Fatalf("written %q", got)
 	}
 	if fi, err := os.Stat(filepath.Join(root, "new", "t.yaml")); err != nil || fi.Mode().Perm() != config.ConfDFileMode {
@@ -83,7 +83,7 @@ func TestWrite_ReplaceOfAMissingPathIsACreate(t *testing.T) {
 // TestWrite_ReplaceRepairsAFileParseTreeCannotRead: the old text is no base,
 // so one parse-tree cannot read (an edit's original_unreadable) is replaced.
 func TestWrite_ReplaceRepairsAFileParseTreeCannotRead(t *testing.T) {
-	root := writeTree(t, map[string]string{"t.yaml": "tenants: [\n"})
+	root := writeTreeDeclared(t, map[string]string{"t.yaml": "tenants: [\n"})
 	edit := `{"files":[{"path":"t.yaml","ops":[{"op":"set","path":["tenants"],"value":{"map":[]}}]}]}`
 	if code, res := runBatch(t, writeCmd, edit, "--config-dir", root); code != exitFindings ||
 		!reflect.DeepEqual(statuses(res), []string{"refused/original_unreadable"}) {
@@ -94,7 +94,7 @@ func TestWrite_ReplaceRepairsAFileParseTreeCannotRead(t *testing.T) {
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Message)
 	}
-	if got := snapshot(t, root)["t.yaml"]; got != "tenants:\n  t3:\n    cpu: 5\n" {
+	if got := snapshotDeclared(t, root)["t.yaml"]; got != "tenants:\n  t3:\n    cpu: 5\n" {
 		t.Fatalf("written %q", got)
 	}
 }
@@ -157,14 +157,14 @@ func TestWrite_ReplaceAndDeleteRefuseAFileChangedAfterItWasRead(t *testing.T) {
 		"delete":  `{"files":[{"path":"t.yaml","delete":true}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			root := writeTree(t, map[string]string{"t.yaml": "tenants:\n  t1: {}\n", "x.yaml": "tenants:\n  t9: {}\n"})
-			before := snapshot(t, root)
+			root := writeTreeDeclared(t, map[string]string{"t.yaml": "tenants:\n  t1: {}\n", "x.yaml": "tenants:\n  t9: {}\n"})
+			before := snapshotDeclared(t, root)
 			code, res := runSeamed(t, &writer{cmd: writeCmd, read: seenAsRead}, in, "--config-dir", root)
 			if code != exitFindings || res.Status != writeStatusRefused ||
 				!reflect.DeepEqual(statuses(res), []string{"refused/changed_during_write"}) {
 				t.Fatalf("exit %d %s %v (%v)", code, res.Status, statuses(res), res.Message)
 			}
-			sameTree(t, before, snapshot(t, root))
+			sameTree(t, before, snapshotDeclared(t, root))
 		})
 	}
 }
@@ -172,7 +172,7 @@ func TestWrite_ReplaceAndDeleteRefuseAFileChangedAfterItWasRead(t *testing.T) {
 // TestWrite_AReplaceIsRenamedAsAnEditIs: a replace of an existing file goes
 // with the edits — its rename is not undone when a later one fails.
 func TestWrite_AReplaceIsRenamedAsAnEditIs(t *testing.T) {
-	root := writeTree(t, map[string]string{"t.yaml": "tenants:\n  t3: {}\n", "a.yaml": "tenants:\n  t1:\n    cpu: \"5\"\n"})
+	root := writeTreeDeclared(t, map[string]string{"t.yaml": "tenants:\n  t3: {}\n", "a.yaml": "tenants:\n  t1:\n    cpu: \"5\"\n"})
 	n := 0
 	w := &writer{cmd: writeCmd, rename: func(o, nn string) error {
 		if n++; n == 2 {
@@ -187,7 +187,7 @@ func TestWrite_AReplaceIsRenamedAsAnEditIs(t *testing.T) {
 		callReason(res) != writeReasonPartialWrite || !reflect.DeepEqual(statuses(res), want) {
 		t.Fatalf("exit %d reason %q files %v, want %v", code, callReason(res), statuses(res), want)
 	}
-	got := snapshot(t, root)
+	got := snapshotDeclared(t, root)
 	if len(got) != 2 || got["t.yaml"] != "tenants:\n  t3:\n    cpu: 5\n" || got["a.yaml"] != "tenants:\n  t1:\n    cpu: \"5\"\n" {
 		t.Fatalf("tree %q", got)
 	}
@@ -224,7 +224,7 @@ func TestWrite_DeleteRemovesTheFile(t *testing.T) {
 // which would make them too long to create (#3206).
 func TestWrite_AFileNameNearNameMaxIsWrittenAndDeleted(t *testing.T) {
 	name := strings.Repeat("a", 250) + ".yaml"
-	root := writeTree(t, map[string]string{})
+	root := writeTreeDeclared(t, map[string]string{})
 	for _, in := range []string{
 		`{"files":[{"path":"` + name + `","create":` + tenantsT3 + `}]}`,
 		`{"files":[{"path":"` + name + `","create":{"map":[["tenants",{"map":[]}]]},"replace":true}]}`,
@@ -235,7 +235,7 @@ func TestWrite_AFileNameNearNameMaxIsWrittenAndDeleted(t *testing.T) {
 			t.Fatalf("%s: exit %d %v (%v)", in[:60], code, statuses(res), res.Message)
 		}
 	}
-	if got := snapshot(t, root); len(got) != 0 {
+	if got := snapshotDeclared(t, root); len(got) != 0 {
 		t.Fatalf("tree %q", got)
 	}
 }
@@ -375,7 +375,7 @@ func TestWrite_ADeleteThatCannotBeLinkedBackIsMaybeWritten(t *testing.T) {
 
 // TestWrite_AMixedBatchOfAllFiveKinds: every kind in one call, judged once.
 func TestWrite_AMixedBatchOfAllFiveKinds(t *testing.T) {
-	root := writeTree(t, map[string]string{
+	root := writeTreeDeclared(t, map[string]string{
 		"a.yaml": "tenants:\n  t1:\n    cpu: \"5\"\n",
 		"m.yaml": "tenants:\n  t2: {}\n",
 		"r.yaml": "# old\ntenants:\n  t4: {}\n",
@@ -403,7 +403,7 @@ func TestWrite_AMixedBatchOfAllFiveKinds(t *testing.T) {
 		"r.yaml":   "tenants:\n  t4:\n    mem: 1\n",
 		"n/m.yaml": "tenants:\n  t2: {}\n",
 	}
-	if got := snapshot(t, root); !reflect.DeepEqual(got, want) {
+	if got := snapshotDeclared(t, root); !reflect.DeepEqual(got, want) {
 		t.Fatalf("tree %q, want %q", got, want)
 	}
 }

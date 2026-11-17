@@ -84,9 +84,10 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 			"    mysql_connection_usage_percent: {default: \"70\", overrides: [{window: \"01:00-02:00\", value: \"90\"}]}\n",
 		"tb.yaml": "tenants:\n  tb:\n    mysql_connection_usage_percent: 60\n",
 	},
-	// No root platform file: threshold keys are undecidable, `_` keys are
-	// judged as usual.
-	"undecidable": {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n    _routng: disable\n"},
+	// No root platform file: since the built-in layer (#3832) the tree is
+	// judged like any other — threshold keys against the built-in values
+	// (the misspelt one is unread), `_` keys as usual. Was "undecidable".
+	"no-root-file": {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n    _routng: disable\n"},
 }
 
 func TestKeyVerdict_Golden(t *testing.T) {

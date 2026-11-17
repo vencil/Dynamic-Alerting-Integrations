@@ -53,6 +53,9 @@ func TestScopeEffective_AppliesPlatformOverlay(t *testing.T) {
 		t.Fatalf("tx missing from scope: %+v", scoped.Tenants)
 	}
 	want := map[string]any{"mysql_connections": "60", "_silent_mode": "warning", "redis_x": "7"}
+	for k, v := range builtinDefaults { // #3832: the built-in layer under it all
+		want[k] = v
+	}
 	if !reflect.DeepEqual(tx.EffectiveConfig, want) {
 		t.Errorf("tx effective = %v, want %v", tx.EffectiveConfig, want)
 	}

@@ -244,6 +244,47 @@ def test_a_part_of_the_day_metrics_cannot_be_gathered_in_is_named(tmp_path, at):
                    "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
                    "        - window: \"01:00-03:00\"\n          value: \"50:critical\"\n"}), at=at)
     assert r["status"] == vc.PASS, r
-    assert any(d.startswith("not judged where /metrics cannot be gathered")
-               and "'tx' 01:00-03:00" in d for d in r["details"]), r
+    # #3991: the tree's part of the day, as served-values' `ungathered` names it.
+    assert r["details"][-1] == ("not judged where /metrics cannot be gathered (nothing is served): "
+                                "01:00-03:00 UTC"), r
 
+
+_ALL_DAY_COLLISION = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+               "    mysql_connection_usage_percent_critical: \"95\"\n",
+}
+
+
+def test_a_day_metrics_cannot_be_gathered_in_at_all_is_not_checked(tmp_path):
+    """#3991: the two keys give one series at every minute, so no key is served
+    and no segment exists to carry the error; served-values' `ungathered`
+    names the whole day. Nothing was compared: not checked, never a PASS
+    that reads as "nothing to compare"."""
+    r = vc.check_tier_inversion(_tree(tmp_path, _ALL_DAY_COLLISION), at="2026-07-01T12:00:00Z")
+    assert r["status"] == vc.WARN, r
+    assert r["details"] == ["not checked: tier inversion across files was not judged (the exporter's "
+                            "/metrics cannot be gathered at any minute of the day, so nothing is "
+                            "served to judge — the guard_errors row names why)"], r
+
+
+
+@pytest.mark.parametrize("parts,all_day", [
+    ([("00:00", "12:00", "e1"), ("12:00", "24:00", "e2")], True),   # two errors, no gap
+    ([("00:00", "01:00", "e"), ("03:00", "24:00", "e")], False),    # a gap 01:00-03:00 gathers
+    ([("01:00", "24:00", "e")], False),                             # 00:00-01:00 gathers
+    ([("00:00", "23:59", "e")], False),                             # the last minute gathers
+    ([], False),
+], ids=["contiguous", "gap", "late-start", "early-end", "none"])
+def test_the_whole_day_is_only_parts_that_meet(parts, all_day):
+    """#3991: "not checked" only when the parts leave no minute of the day
+    that gathers — parts ending at 24:00 with a gap between them still
+    leave keys served, and judged, in the gap."""
+    from _lib_tenant_values import UngatheredPart
+    got_all_day, note = vc._ungathered_reading(tuple(UngatheredPart(*p) for p in parts))
+    assert got_all_day is all_day
+    if all_day or not parts:
+        assert note == []
+    else:
+        assert note == ["not judged where /metrics cannot be gathered (nothing is served): "
+                        + ", ".join(f"{a}-{b} UTC" for a, b, _e in parts)]

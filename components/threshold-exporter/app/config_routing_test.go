@@ -369,7 +369,8 @@ profiles:
 		t.Error("profiles in tenant file should be ignored")
 	}
 
-	result := cfg.ResolveAt(fixedNow)
+	// The built-in layer's rows (#3832) are not this test's.
+	result := dropBuiltinRows(cfg.ResolveAt(fixedNow))
 	if len(result) != 1 || result[0].Value != 85 {
 		t.Errorf("expected profile value 85, got %v", result)
 	}
@@ -407,7 +408,10 @@ tenants:
 		t.Fatalf("Load() failed: %v", err)
 	}
 	cfg := mgr.GetConfig()
-	result := cfg.ResolveAt(fixedNow)
+	// The built-in layer's rows (#3832) are not this test's — and the loop
+	// below matches the metric label alone, which `pg_connections` and
+	// `container_cpu` share.
+	result := dropBuiltinRows(cfg.ResolveAt(fixedNow))
 
 	// db-a: connections=95 (tenant override), threads_running=75 (profile)
 	// db-b: connections=85 (profile), threads_running=75 (profile)

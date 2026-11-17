@@ -41,6 +41,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,6 +90,14 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 	for tenant, overrides := range cfg.Tenants {
 		for k, sv := range overrides {
 			if switchedOff(sv) && !registeredReserved(k) {
+				perTenant[tenant] = append(perTenant[tenant], k)
+			}
+		}
+		// #3832: a root `disable` of a built-in key the tenant inherits is
+		// the tenant's `disable` as one a subtree level hands it is; taken
+		// away, the tenant gets the built-in value (withoutDisables).
+		for _, k := range cfg.InheritedRootDisables(tenant, at) {
+			if !slices.Contains(perTenant[tenant], k) {
 				perTenant[tenant] = append(perTenant[tenant], k)
 			}
 		}
@@ -263,6 +272,24 @@ func withoutDisables(cfg *config.ThresholdConfig, set []tenantKey) *config.Thres
 		out.Tenants[t] = m
 	}
 	for _, tk := range set {
+		// #3832: a key the root `disable`s (InheritedRootDisables) is taken
+		// away by giving the tenant the built-in value — what the tree serves
+		// it when the root does not opt out — whatever the tenant writes for
+		// it (nothing, a lapsed or unreadable value, its own `disable`): a
+		// `disable` is judged against the platform default (see the top of
+		// this file), and deleting the tenant's value would only fall back
+		// to the root's.
+		if v, root := cfg.Defaults[tk.key]; root && config.RootDisabledDefault(v) {
+			m := make(map[string]config.ScheduledValue, len(out.Tenants[tk.tenant])+1)
+			for k, v := range out.Tenants[tk.tenant] {
+				if ck, _ := config.CanonicalKeyFor(k); ck != tk.key {
+					m[k] = v
+				}
+			}
+			m[tk.key] = config.ScheduledValue{Default: config.BuiltinDefaultText(tk.key)}
+			out.Tenants[tk.tenant] = m
+			continue
+		}
 		sv, ok := cfg.Tenants[tk.tenant][tk.key]
 		if !ok || !config.IsDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
 			continue
@@ -298,7 +325,7 @@ func (r *cutReading) fingerprint(tenant string) string {
 // readCut reads cfg (one part of the day) through keyedRowsWith, silently.
 // A Gather failure is a reading (failed), not an error.
 func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet bool) (*cutReading, error) {
-	served, _, series, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name, quiet)
+	served, _, series, reserved, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name, quiet)
 	var ng *notGatherableError
 	if errors.As(err, &ng) {
 		return &cutReading{failed: true}, nil
@@ -307,15 +334,22 @@ func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet boo
 		return nil, err
 	}
 	r := &cutReading{rows: map[string]string{}, series: series}
+	parts := map[string][]string{}
 	for t := range served {
-		var parts []string
 		for k, rows := range served[t] {
 			for _, row := range rows {
-				parts = append(parts, "kept\x00"+k+"\x00"+rowOrder(row))
+				parts[t] = append(parts[t], "kept\x00"+k+"\x00"+rowOrder(row))
 			}
 		}
-		sort.Strings(parts)
-		r.rows[t] = strings.Join(parts, "\x01")
+	}
+	// #1200 D-A A3: a user_threshold_unset series is served output too, so a
+	// disable that ends a subscribed tenant's notice switches something off.
+	for _, u := range reserved.Unset {
+		parts[u.Tenant] = append(parts[u.Tenant], "unset\x00"+u.Key+"\x00"+u.Fix)
+	}
+	for t, p := range parts {
+		sort.Strings(p)
+		r.rows[t] = strings.Join(p, "\x01")
 	}
 	return r, nil
 }

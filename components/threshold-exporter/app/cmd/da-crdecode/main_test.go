@@ -12,6 +12,16 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// refusedOut is stdout when the input is refused: the refusal document
+// (#3943), as refuse prints it.
+var refusedOut = func() string {
+	b, err := json.Marshal(refusal{Answer: answerRefused})
+	if err != nil {
+		panic(err)
+	}
+	return string(b) + "\n"
+}()
+
 // runOn writes *content* to a temp file and runs the CLI on it with
 // --any-shape: the conversion, split and as-written comparison, which most
 // tests here are about, on documents that need not be Kubernetes objects.
@@ -44,10 +54,11 @@ func runArgs(t *testing.T, content string, flags ...string) (int, string, string
 
 // withoutReading checks that a successful run's stdout ends with the
 // `reading` it was asked for, and drops that field, so the expected outputs
-// below spell only documents and differences.
+// below spell only documents and differences. Nothing and the refusal
+// document are returned as they are.
 func withoutReading(t *testing.T, out, reading string) string {
 	t.Helper()
-	if out == "" {
+	if out == "" || out == refusedOut {
 		return out
 	}
 	suffix := `,"reading":"` + reading + `"}` + "\n"
@@ -85,9 +96,9 @@ func TestManifestDocumentsMustBeKubernetesObjects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runManifest(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) ||
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.wantErr) ||
 				!strings.HasPrefix(errOut, programName+": ") {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, no stdout, stderr with %q",
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, the refusal document, stderr with %q",
 					rc, out, errOut, tc.wantErr)
 			}
 			// --any-shape reads every one of them.
@@ -184,8 +195,8 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runOn(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, no stdout, stderr with %q",
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.wantErr) {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, the refusal document, stderr with %q",
 					rc, out, errOut, tc.wantErr)
 			}
 			if !strings.HasPrefix(errOut, programName+": ") {
@@ -206,7 +217,7 @@ func TestCollisionIsRefusedEveryTime(t *testing.T) {
 		_, _, first := runOn(t, in)
 		for i := 0; i < 30; i++ {
 			rc, out, errOut := runOn(t, in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "same JSON key") {
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, "same JSON key") {
 				t.Fatalf("%q run %d: rc=%d stdout=%q stderr=%q", in, i, rc, out, errOut)
 			}
 			// The file path differs per run; the message after it must not.
@@ -291,6 +302,9 @@ func TestJSONKeyMatchesYAMLToJSON(t *testing.T) {
 	}
 }
 
+// TestCallerErrors: bad arguments and a file that cannot be opened are no
+// answer about the input — exit 2 with no refusal document (#3943), so a
+// caller cannot take them for a refusal.
 func TestCallerErrors(t *testing.T) {
 	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
@@ -309,7 +323,7 @@ func TestCallerErrors(t *testing.T) {
 			t.Parallel()
 			var stdout, stderr bytes.Buffer
 			if rc := run(args, strings.NewReader(""), &stdout, &stderr); rc != exitCallerErr || stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, a message, no stdout", rc, stdout.String(), stderr.String())
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, a message, no stdout (no refusal document)", rc, stdout.String(), stderr.String())
 			}
 		})
 	}
@@ -358,6 +372,24 @@ func TestSeveralDocumentsAsKubectlSplitsThem(t *testing.T) {
 	}
 }
 
+// failingWriter is a stdout that cannot be written.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
+
+// A stdout that cannot be written is no answer either: exit 2, said on
+// stderr, whether the input is read or refused (#3943).
+func TestStdoutThatCannotBeWritten(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{"kind: A\n", "a: 1\n"} {
+		var stderr bytes.Buffer
+		if rc := run([]string{"-"}, strings.NewReader(in), failingWriter{}, &stderr); rc != exitCallerErr ||
+			!strings.Contains(stderr.String(), "writing stdout") {
+			t.Fatalf("%q: rc=%d stderr=%q; want rc 2 naming the write", in, rc, stderr.String())
+		}
+	}
+}
+
 // `-` reads standard input: the inner layer of a ConfigMap is handed over
 // that way, with no temporary file.
 func TestReadsStandardInput(t *testing.T) {
@@ -376,7 +408,7 @@ func TestReadsStandardInput(t *testing.T) {
 	}
 	stdout.Reset()
 	rc = run([]string{"-"}, strings.NewReader("a: 1\n"), &stdout, &stderr)
-	if rc != exitCallerErr || stdout.Len() != 0 ||
+	if rc != exitCallerErr || stdout.String() != refusedOut ||
 		stderr.String() != programName+": "+stdinName+": it is not a Kubernetes object: it has no `kind` "+
 			"(kubectl: Object 'Kind' is missing)\n" {
 		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming %s and the missing kind", rc, stdout.String(), stderr.String(), stdinName)
@@ -384,7 +416,7 @@ func TestReadsStandardInput(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	rc = run([]string{anyShapeFlag, "-"}, strings.NewReader("a: .inf\n"), &stdout, &stderr)
-	if rc != exitCallerErr || stdout.Len() != 0 || !strings.HasPrefix(stderr.String(), programName+": "+stdinName+": ") {
+	if rc != exitCallerErr || stdout.String() != refusedOut || !strings.HasPrefix(stderr.String(), programName+": "+stdinName+": ") {
 		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 naming %s", rc, stdout.String(), stderr.String(), stdinName)
 	}
 }
@@ -504,7 +536,7 @@ func TestManifestRefusesBadListItems(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rc, out, errOut := runManifest(t, tc.in)
-			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) {
+			if rc != exitCallerErr || out != refusedOut || !strings.Contains(errOut, tc.wantErr) {
 				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, stderr with %q", rc, out, errOut, tc.wantErr)
 			}
 			if rc, _, errOut := runOn(t, tc.in); rc != exitOK {

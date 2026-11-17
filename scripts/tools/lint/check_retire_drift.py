@@ -32,7 +32,9 @@ db_type are not monitored by TenantExporterAbsent, so a stale conf.d entry for t
 carries no false-positive risk and is not this gate's concern.)
 
 The db_type is the exporter's own reading, from `da-guard served-values`
-(`_lib_tenant_values.load_served_tree`; #2858): a db_type a tenant gets from
+(`_lib_tenant_values.load_served_facts`, `--config-facts`, which reads no
+instant, so a part of the day /metrics cannot be gathered in is no failure
+here — #2858, #3918): a db_type a tenant gets from
 a profile or a root platform file's `tenants:` entry, the per-key layering of
 `_metadata`, `optional_overrides` switching a profile's `_metadata` off and a
 non-string db_type are all the exporter's answer, not re-derived here. Which
@@ -115,7 +117,7 @@ import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests as kubectl rea
 import _lib_parse_cache  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     exit_on_served_values_error,
-    load_served_tree,
+    load_served_facts,
     print_load_warnings,
 )
 
@@ -148,7 +150,7 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
     with every layer the exporter applies (root platform files' `tenants:`
     entries, the tenant file, the profile filling what neither writes unless
     `optional_overrides` declares `_metadata`). A tenant the exporter serves
-    no metadata for counts as none. Raises what `load_served_tree` raises,
+    no metadata for counts as none. Raises what `load_served_facts` raises,
     and ParseTreeError for no usable parse-tree (exit 2).
     """
     reader = _lib_parse_cache.reader_for(config_dir)
@@ -165,13 +167,12 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
     if not judged:
         return {}
 
-    tree = load_served_tree(config_dir, binary=binary)
+    tree = load_served_facts(config_dir, binary=binary)
     print_load_warnings(tree)
     out: Dict[str, str] = {}
     for tenant in sorted(judged):
-        served = tree.tenants.get(tenant)
-        meta = served.values.get("_metadata") if served is not None else None
-        db_type = meta.get("db_type") if isinstance(meta, dict) else None
+        facts = tree.tenants.get(tenant)
+        db_type = facts.metadata.get("db_type") if facts is not None else None
         # #3771: served as a list (every declared kind); a string is one kind.
         if isinstance(db_type, str):
             db_type = [db_type]

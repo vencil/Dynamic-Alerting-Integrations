@@ -11,6 +11,13 @@ purpose: |
   lives. Extracted here so the rules can be exercised directly. LINT_RULES is
   re-exported because the component also renders the rule list.
 
+  Threshold values (#3964) are NOT read from the lenient parser: the
+  threshold rules read each value as the exporter reads it, from
+  yaml-parser.js parseTenantYaml (the scalar's text) through
+  threshold-value.js readThresholdRow — the reader the other simulator pages
+  use. A value the exporter does not read is reported (threshold-not-read)
+  and never judged as a number.
+
   Public API:
     lintConfig(yamlText) -> { ok, findings[], tenantCount, error? }
     LINT_RULES           (also rendered as the rule list)
@@ -27,7 +34,9 @@ purpose: |
 // How a conf.d file is read is decided by da-tools (`da-guard parse-tree`,
 // the exporter's yaml.v3 reading); where the two disagree, da-tools is right.
 
-import { parseDuration } from '../_common/validation/yaml-parser.js';
+import { parseDuration, parseTenantYaml } from '../_common/validation/yaml-parser.js';
+import { readThresholdRow, isCriticalKey } from '../_common/validation/threshold-value.js';
+import { unreadableThresholdMessage } from '../_common/sim/alert-engine.js';
 
 // i18n fallback — rule categories + finding messages are bilingual.
 // Evaluated at module load (LINT_RULES category fields call t()); the host page
@@ -98,19 +107,137 @@ function parseValue(raw) {
 // durations are reported by the Self-Service Portal's validateConfig, which
 // reads the YAML with js-yaml. ⛔ Do not grow a second YAML lexer here to
 // tell them apart.
+//
+// #3964: the threshold rules (threshold-not-read, threshold-too-high,
+// threshold-too-low, critical-lower-than-warning) take their values from the
+// second argument — parseTenantYaml's text reading — never from the lenient
+// parser above: its Number() reads `0x64` as 100 and `Infinity` as a number,
+// which the exporter refuses, and keeps `'96'` and `96   # note` as strings,
+// which the exporter serves as 96. A tenant is a top-level mapping that is
+// not a `_` block and not routing_profiles; a threshold is a key of it that
+// does not start with `_`. ⚠️ Not judged here:
+//   - a `_` block (`_defaults`): parseTenantYaml hands a `_` key over typed,
+//     not as text, so its thresholds cannot be read as the exporter reads
+//     them. `_defaults` gets one threshold-not-checked finding instead of
+//     silence; any other `_` block is no tenant (`_routing_defaults`, an
+//     anchor block a tenant merges from);
+//   - a top-level `tenants:` that is a conf.d file pasted whole
+//     (pastedConfdFile): its entries are tenants, not thresholds, and this
+//     page reads one level of tenants. confd-tenants-wrapper says so, and
+//     lintConfig drops every other finding on `tenants`;
+//   - what a tenant brings in with a merge key (`t1: {<<: *base}`):
+//     parseTenantYaml hands a top-level value that writes `<<` over
+//     unexpanded (#3959; it is built for a file whose top level is the
+//     thresholds), so the `<<` entry is skipped and only the tenant's own
+//     keys are judged. A merge inside a threshold value is not seen either:
+//     there js-yaml has already expanded it. Any merge key in the text gets
+//     one threshold-not-checked finding.
+// A merge key anywhere in the text (`<<:` as a block or flow key). Only to
+// say that merged values are not checked: a `<<:` that is no key (inside a
+// quoted or block scalar, or a `# comment`) makes that note appear
+// needlessly, which is all it can do.
+const MERGE_KEY_RE = /(?:^|[\s{,[])<<[ \t]*:/m;
+
+// parseTenantYaml judges its top level as one tenant's keys; this page's top
+// level is tenants, so its schedule check would judge a tenant as a schedule
+// (a tenant key named `default`) and never see a threshold's schedule
+// (#4001). Not asked for here: a schedule is not checked on this page, as it
+// was not before #3974. Its syntax and second-document errors still are.
+function readThresholds(yamlText) {
+  const { config, errors } = parseTenantYaml(yamlText, { schedules: false });
+  return { config, error: errors.length ? errors[0] : null, mergeKeys: MERGE_KEY_RE.test(yamlText) };
+}
+
+function isMapping(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+// A conf.d tenant file pasted whole: a top-level `tenants:` whose every entry
+// is a tenant — a mapping (or empty) under a key that does not start with
+// `_` and is no merge key, and no schedule (a mapping with a `default` key of
+// its own). A tenant of this page's own that is named `tenants` holds
+// thresholds, `_` keys, schedules or a merge, and stays a tenant — unless
+// every threshold it holds is empty (`tenants:\n  x_usage:`), which reads the
+// same as empty tenants.
+// Judged on the YAML as read (parseTenantYaml), never on the lenient parse:
+// that one reads `tenants: |`, a list or a quoted key into the same shape as
+// tenants, so it would take inputs that are no conf.d file for one. When the
+// YAML cannot be read the file is not recognised (its error is reported).
+function pastedConfdFile(thresholds) {
+  const section = thresholds.config.tenants;
+  return isMapping(section) && Object.entries(section).every(([key, v]) => !key.startsWith('_') && key !== '<<'
+    && (v === null || (isMapping(v) && !Object.prototype.hasOwnProperty.call(v, 'default'))));
+}
+
+function thresholdTenants(thresholds) {
+  return Object.entries(thresholds.config).filter(([tenant, keys]) => !tenant.startsWith('_')
+    && tenant !== 'routing_profiles' && isMapping(keys));
+}
+
+// Only a 'number' row has a `number`: a comparison with any other row's
+// (undefined) is false, so the rules below compare without asking the kind.
+function thresholdRow(keys, key) {
+  return readThresholdRow(keys[key], isCriticalKey(key) ? 'critical' : 'base');
+}
+
+function thresholdKeys(keys) {
+  return Object.keys(keys).filter((key) => !key.startsWith('_') && key !== '<<');
+}
+
 const LINT_RULES = [
+  {
+    id: 'threshold-not-read',
+    severity: 'warning',
+    category: t('閾值', 'Threshold'),
+    check: (tenants, thresholds) => {
+      if (thresholds.error) {
+        return [{ tenant: '-', key: '-', message: t(`閾值沒有檢查：${thresholds.error}`, `Threshold values not checked: ${thresholds.error}`) }];
+      }
+      const findings = [];
+      for (const [tenant, keys] of thresholdTenants(thresholds)) {
+        for (const key of thresholdKeys(keys)) {
+          const row = thresholdRow(keys, key);
+          if (row.kind === 'unreadable') {
+            findings.push({ tenant, key, message: unreadableThresholdMessage(row.raw, isCriticalKey(key) ? 'critical' : 'base') });
+          }
+        }
+      }
+      return findings;
+    },
+  },
+  {
+    id: 'threshold-not-checked',
+    severity: 'info',
+    category: t('閾值', 'Threshold'),
+    check: (tenants, thresholds) => {
+      // What the rules above cannot read as the exporter does is said, not
+      // dropped (config is {} when the YAML cannot be read: threshold-not-read
+      // says so).
+      const findings = [];
+      const defaults = thresholds.config._defaults;
+      if (isMapping(defaults) && thresholdKeys(defaults).length) {
+        findings.push({ tenant: '_defaults', key: '-', message: t('_defaults 裡的閾值這裡沒有檢查（範圍、critical 與 warning 的順序、exporter 讀不讀）',
+          'Thresholds in _defaults are not checked here (range, critical vs warning, whether the exporter reads them)') });
+      }
+      if (thresholds.mergeKeys) {
+        findings.push({ tenant: '-', key: '<<', message: t('以 << 合併進來的值這裡沒有檢查（範圍、critical 與 warning 的順序、exporter 讀不讀）',
+          'Values brought in with << are not checked here (range, critical vs warning, whether the exporter reads them)') });
+      }
+      return findings;
+    },
+  },
   {
     id: 'threshold-too-high',
     severity: 'warning',
     category: t('閾值', 'Threshold'),
-    check: (tenants) => {
+    check: (tenants, thresholds) => {
       const findings = [];
-      for (const [tenant, keys] of Object.entries(tenants)) {
-        for (const [key, val] of Object.entries(keys)) {
-          if (typeof val === 'number' && key.includes('_percent') || key.includes('_usage') || key.includes('cpu')) {
-            if (typeof val === 'number' && val > 95) {
-              findings.push({ tenant, key, message: t(`${key} = ${val} 非常高（>95），可能來不及反應`, `${key} = ${val} is very high (>95) — may not leave reaction time`) });
-            }
+      for (const [tenant, keys] of thresholdTenants(thresholds)) {
+        for (const key of thresholdKeys(keys)) {
+          if (!(key.includes('_percent') || key.includes('_usage') || key.includes('cpu'))) continue;
+          const row = thresholdRow(keys, key);
+          if (row.number > 95) {
+            findings.push({ tenant, key, message: t(`${key} = ${row.number} 非常高（>95），可能來不及反應`, `${key} = ${row.number} is very high (>95) — may not leave reaction time`) });
           }
         }
       }
@@ -121,12 +248,15 @@ const LINT_RULES = [
     id: 'threshold-too-low',
     severity: 'info',
     category: t('閾值', 'Threshold'),
-    check: (tenants) => {
+    check: (tenants, thresholds) => {
       const findings = [];
-      for (const [tenant, keys] of Object.entries(tenants)) {
-        for (const [key, val] of Object.entries(keys)) {
-          if (typeof val === 'number' && key.includes('_warning') && !key.includes('_critical') && val < 10) {
-            findings.push({ tenant, key, message: t(`${key} = ${val} 非常低（<10），可能產生過多噪音`, `${key} = ${val} is very low (<10) — may generate excessive noise`) });
+      for (const [tenant, keys] of thresholdTenants(thresholds)) {
+        for (const key of thresholdKeys(keys)) {
+          if (!key.includes('_warning') || key.includes('_critical')) continue;
+          const row = thresholdRow(keys, key);
+          // `5:critical` on a warning key is a critical row, not a noisy warning.
+          if (row.severity === 'warning' && row.number < 10) {
+            findings.push({ tenant, key, message: t(`${key} = ${row.number} 非常低（<10），可能產生過多噪音`, `${key} = ${row.number} is very low (<10) — may generate excessive noise`) });
           }
         }
       }
@@ -156,16 +286,20 @@ const LINT_RULES = [
     id: 'critical-lower-than-warning',
     severity: 'error',
     category: t('嚴重度', 'Severity'),
-    check: (tenants) => {
+    check: (tenants, thresholds) => {
       const findings = [];
-      for (const [tenant, keys] of Object.entries(tenants)) {
-        for (const [key, val] of Object.entries(keys)) {
-          if (key.endsWith('_warning_critical') && typeof val === 'number') {
-            const warnKey = key.replace('_critical', '');
-            const warnVal = keys[warnKey];
-            if (typeof warnVal === 'number' && val <= warnVal) {
-              findings.push({ tenant, key, message: t(`Critical (${val}) ≤ Warning (${warnVal}) — critical 應高於 warning`, `Critical (${val}) ≤ Warning (${warnVal}) — critical should be higher than warning`) });
-            }
+      for (const [tenant, keys] of thresholdTenants(thresholds)) {
+        for (const key of thresholdKeys(keys)) {
+          if (!key.endsWith('_warning_critical')) continue;
+          const crit = thresholdRow(keys, key);
+          const warnKey = key.replace('_critical', '');
+          const warn = thresholdRow(keys, warnKey);
+          // A warning key written `N:critical` is a critical row: there is no
+          // warning to compare with (and the exporter refuses that pair).
+          if (warn.severity === 'warning' && crit.number <= warn.number) {
+            const val = crit.number;
+            const warnVal = warn.number;
+            findings.push({ tenant, key, message: t(`Critical (${val}) ≤ Warning (${warnVal}) — critical 應高於 warning`, `Critical (${val}) ≤ Warning (${warnVal}) — critical should be higher than warning`) });
           }
         }
       }
@@ -241,6 +375,21 @@ const LINT_RULES = [
       }
       return findings;
     },
+  },
+  {
+    // #3998: a conf.d tenant file pasted whole (`tenants:\n  t1: …`). This
+    // page reads tenants at the top level, so it would take `tenants` for a
+    // tenant and its tenants for keys; say so instead (lintConfig drops the
+    // other rules' findings on the pseudo-tenant `tenants`). Not unwrapped
+    // here: the lenient parser above reads two levels by indentation, and a
+    // second YAML lexer is not to be grown in this file (see above).
+    id: 'confd-tenants-wrapper',
+    severity: 'warning',
+    category: t('配置', 'Config'),
+    check: (tenants, thresholds) => (thresholds.pasted
+      ? [{ tenant: 'tenants', key: '-', message: t('這是 conf.d 的租戶檔（最上層是 tenants:）：這頁把最上層的 key 當成租戶，請貼 tenants: 底下那一層再檢查',
+        'This is a conf.d tenant file (tenants: at the top): this page reads the top-level keys as tenants, so paste what is under tenants: to lint it') }]
+      : []),
   },
   {
     id: 'disabled-all-in-pack',
@@ -326,17 +475,38 @@ const LINT_RULES = [
 function lintConfig(yamlText) {
   try {
     const tenants = parseYaml(yamlText);
+    const thresholds = readThresholds(yamlText);
     const allFindings = [];
+    // #3998: on a pasted conf.d file `tenants` is no tenant; only the
+    // wrapper's own finding speaks for it. When the file is all there is,
+    // it speaks for the file as well (the file-level findings, tenant '-',
+    // judge the page's own shape); beside real tenants they stay — a YAML
+    // error there is what says those tenants went unchecked.
+    const pasted = pastedConfdFile(thresholds);
+    thresholds.pasted = pasted;
+    // The lenient parse keeps a quoted key as written (`"tenants":`, with
+    // escapes), which the YAML reading above decodes: compare it as that
+    // reading has it — the key read on its own by the same reader.
+    const unquoted = (k) => {
+      if (!/^["']/.test(k)) return k;
+      const keys = Object.keys(parseTenantYaml(`${k}: ~\n`).config);
+      return keys.length === 1 ? keys[0] : k;
+    };
+    const isPseudo = (k) => pasted && unquoted(k) === 'tenants';
+    const alone = !Object.keys(tenants).some((k) => !k.startsWith('_') && !isPseudo(k) && k !== 'routing_profiles');
     for (const rule of LINT_RULES) {
-      const findings = rule.check(tenants);
+      const findings = rule.check(tenants, thresholds);
       for (const f of findings) {
+        if (pasted && rule.id !== 'confd-tenants-wrapper'
+          && (isPseudo(f.tenant) || (alone && f.tenant === '-'))) continue;
         allFindings.push({ ...f, ruleId: rule.id, severity: rule.severity, category: rule.category });
       }
     }
     // Sort: error -> warning -> info
     const order = { error: 0, warning: 1, info: 2 };
     allFindings.sort((a, b) => order[a.severity] - order[b.severity]);
-    return { ok: true, findings: allFindings, tenantCount: Object.keys(tenants).filter(k => !k.startsWith('_')).length };
+    const tenantCount = Object.keys(tenants).filter((k) => !k.startsWith('_') && !isPseudo(k)).length;
+    return { ok: true, findings: allFindings, tenantCount };
   } catch (e) {
     return { ok: false, findings: [], error: e.message, tenantCount: 0 };
   }

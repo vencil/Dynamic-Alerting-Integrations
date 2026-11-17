@@ -26,6 +26,9 @@ _REPO = Path(__file__).resolve().parents[2]
 _TOOL = _REPO / "scripts" / "tools" / "ops" / "migrate_rule.py"
 _DUMMY = _REPO / "tests" / "fixtures" / "legacy-dummy.yml"
 _MULTIDB = _REPO / "tests" / "fixtures" / "legacy-multidb.yml"
+#: The tool's own layout, read from the tool (one name each; #3671, #3997).
+_CONFD = __import__("migrate_rule").CONFD_DIR
+_ARTIFACTS = __import__("migrate_rule").ARTIFACT_DIR
 
 
 def _run(*args):
@@ -44,8 +47,8 @@ def _migrate(tmp_path_factory, fixture):
         "stdout": stdout,
         "out": out,
         "tenant": (out / ".conf.d" / "t1.yaml").read_text(encoding="utf-8"),
-        "recording": (out / "platform-recording-rules.yaml").read_text(encoding="utf-8"),
-        "alert": (out / "platform-alert-rules.yaml").read_text(encoding="utf-8"),
+        "recording": (out / _ARTIFACTS / "platform-recording-rules.yaml").read_text(encoding="utf-8"),
+        "alert": (out / _ARTIFACTS / "platform-alert-rules.yaml").read_text(encoding="utf-8"),
         "report": (out / "migration-report.txt").read_text(encoding="utf-8"),
     }
 
@@ -109,9 +112,9 @@ def test_dummy_stdout(dummy, pattern):
 
 
 @pytest.mark.parametrize("name", [
-    ".conf.d/t1.yaml",
-    "platform-recording-rules.yaml",
-    "platform-alert-rules.yaml",
+    f"{_CONFD}/t1.yaml",
+    f"{_ARTIFACTS}/platform-recording-rules.yaml",
+    f"{_ARTIFACTS}/platform-alert-rules.yaml",
     "migration-report.txt",
 ])
 def test_dummy_writes_the_artifacts(dummy, name):

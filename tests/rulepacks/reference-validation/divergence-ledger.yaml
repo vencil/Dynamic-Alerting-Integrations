@@ -43,6 +43,15 @@ pack_level:
 # ---------------------------------------------------------------------
 absent_from_candidate:
   oracle:
+    - alert: OracleQueryStalled
+      reason: >-
+        query-exporter 自身的健康哨兵（#3833）：某支查詢被 exporter 永久停用或從未成功時
+        發出，讀的是 query_timestamp／query_interval 這兩個 exporter 內建指標，不是資料庫
+        的故障訊號；波形庫沒有這種 signature，harness 不建模。
+    - alert: OracleThresholdNotConfigured
+      reason: >-
+        讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的
+        key 尚未設定時的 info 提醒；candidate 是 inline 出貨值的參考檔，沒有這個訊號可對照。
     - alert: OracleHighActiveSessionsCritical
       reason: >-
         critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in（#3658；
@@ -50,6 +59,10 @@ absent_from_candidate:
     - alert: OracleTablespaceAlmostFullCritical
       reason: 同 OracleHighActiveSessionsCritical——critical 級為租戶 opt-in（#3658），無出貨預設值可 inline。
   db2:
+    - alert: DB2ThresholdNotConfigured
+      reason: >-
+        讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的
+        key 尚未設定時的 info 提醒；candidate 是 inline 出貨值的參考檔，沒有這個訊號可對照。
     - alert: DB2TablespaceAlmostFull
       reason: >-
         盲寫函式庫沒有 tablespace 故障 signature（anti-circularity：不回頭照規則
@@ -82,7 +95,7 @@ absent_from_candidate:
     - alert: CustomRecipeDiskInert
       reason: 平台/租戶設定失誤哨兵（#692 P0③），非故障偵測謂詞，harness 不建模。
     - alert: TenantHAReplicasDegraded
-      reason: KSM replica gauge 的 vanish 偵測（#875/#888），波形庫無 replica-degradation signature；#985 masking defer 脈絡。
+      reason: KSM replica gauge 的 vanish 偵測（#875/#888），波形庫無 replica-degradation signature。
 
 # ---------------------------------------------------------------------
 # 單條 alert 的欄位級分歧（field: for / severity / predicate_structure）

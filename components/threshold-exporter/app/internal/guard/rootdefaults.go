@@ -33,6 +33,7 @@ package guard
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -304,6 +305,31 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 			if r.Reason == config.RefusedNonFinite {
 				why = "is not a finite number: an alert compared against NaN or an infinity never fires or always fires"
 			}
+			off := ""
+			if config.IsDisabled(strings.ToLower(strings.TrimSpace(r.Text))) {
+				// #3832 decision 3: the root reads one opt-out word only,
+				// `disable`, and only for a default-armed key.
+				if _, armed := config.BuiltinDefault(r.Key); armed {
+					off = fmt.Sprintf(" The root reads no alias of `disable`: to switch `%s` off for every "+
+						"tenant, write `%s: disable`.", r.Key, r.Key)
+				} else {
+					off = fmt.Sprintf(" `disable` under the root `defaults:` switches off only a key the platform "+
+						"arms by default, and `%s` is not one: the root gives it no value to switch off.", r.Key)
+				}
+			}
+			if v, armed := config.BuiltinDefault(r.Key); armed {
+				// #3832: a default-armed key falls to the built-in value.
+				out = append(out, Finding{
+					Severity: SeverityError,
+					Kind:     findingkind.FindingRootDefaultRefused,
+					Field:    f.Name + ":defaults." + r.Key,
+					Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves "+
+						"the platform's built-in value %s for `%s` instead, as if the line were not there. Write a "+
+						"finite number to serve your own value (a root default takes no `:severity`), or delete the "+
+						"line to keep the platform's.%s", f.Name, r.Key, r.Text, why, formatBuiltin(v), r.Key, off),
+				})
+				continue
+			}
 			out = append(out, Finding{
 				Severity: SeverityError,
 				Kind:     findingkind.FindingRootDefaultRefused,
@@ -311,12 +337,145 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 				Message: fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The exporter serves no "+
 					"default row for `%s`; only a tenant's own value is served, as for an `optional_overrides:` "+
 					"key. Write a finite number (a root default takes no `:severity`), or list `%s` under "+
-					"`optional_overrides:` instead.", f.Name, r.Key, r.Text, why, r.Key, r.Key),
+					"`optional_overrides:` instead.%s", f.Name, r.Key, r.Text, why, r.Key, r.Key, off),
 			})
 		}
 	}
 	return out
 }
+
+// checkRootOptionalBuiltin reports findingkind.FindingRootOptionalBuiltin
+// for each default-armed key (config.BuiltinDefault) the conf.d root
+// carrier lists under its top-level `optional_overrides:` while its
+// `defaults:` mapping does not give the key a value — the key is absent there
+// or written as null (#3832). Such a list entry declares the key without a
+// platform value, which for a default-armed key changes nothing: the built-in
+// layer still gives every tenant the platform's value. A tree that lists the
+// key to keep its alert off (what validate-config advised before the built-in
+// layer, #3830) gets the alert after the upgrade, so the list entry is an
+// error, not a no-op. A value the root does write — a number, or one the
+// decode refuses (checkRootDefaultsRefused's) — is not this check's. A file
+// in ParseFailed is skipped, as checkRootCriticalKeys does.
+func checkRootOptionalBuiltin(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil {
+			continue
+		}
+		list, _ := doc["optional_overrides"].([]any)
+		var defaults map[string]any
+		if wrappedInMapping(doc) {
+			defaults, _ = doc["defaults"].(map[string]any)
+		}
+		seen := map[string]bool{}
+		for _, item := range list {
+			k, ok := item.(string)
+			if !ok || seen[k] {
+				continue
+			}
+			seen[k] = true
+			v, armed := config.BuiltinDefault(k)
+			if !armed || defaults[k] != nil {
+				continue
+			}
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootOptionalBuiltin,
+				Field:    f.Name + ":optional_overrides." + k,
+				Message: fmt.Sprintf("%s: `%s` is listed under the conf.d root `optional_overrides:` without a "+
+					"number under `defaults:`. The platform arms `%s` by default: every tenant gets its built-in "+
+					"value %s, and the list does not switch it off. To keep its alert off for every tenant, write "+
+					"`%s: disable` under the root `defaults:` (for part of the tree: in a subtree `_defaults.yaml` "+
+					"or the tenant files); to serve your own value, give it a number under `defaults:`. Then "+
+					"delete the list entry.", f.Name, k, k, formatBuiltin(v), k),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
+	return out
+}
+
+// checkRootDisableFamily reports findingkind.FindingRootDisableFamilyValue
+// for each key of the conf.d root carrier's `defaults:` mapping that gives a
+// value (not null, not a disable word) to `<base>_critical` or a
+// dimensional `<base>{…}` while the same mapping writes base as `disable`
+// (config.RootDisableText, #3832 decision 3). The root contradicts itself
+// either way: a root `<base>{…}` goes off with its base for every tenant
+// that gives base no value of its own, so its value reaches none of them;
+// a root `<base>_critical` is a threshold of its own
+// (root_defaults_critical_key), served while its base is off.
+// A file in ParseFailed is skipped, as checkRootCriticalKeys does.
+func checkRootDisableFamily(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil || !wrappedInMapping(doc) {
+			continue
+		}
+		defaults, _ := doc["defaults"].(map[string]any)
+		off := map[string]bool{}
+		for k, v := range defaults {
+			if s, ok := v.(string); ok && config.RootDisableText(k, s) {
+				off[k] = true
+			}
+		}
+		if len(off) == 0 {
+			continue
+		}
+		for k, v := range defaults {
+			if v == nil || off[k] {
+				continue
+			}
+			if text, ok := v.(string); ok && config.IsDisabled(strings.ToLower(strings.TrimSpace(text))) {
+				continue // not a value: root_default_refused names it
+			}
+			base, critical := strings.CutSuffix(k, "_critical")
+			if i := strings.Index(k, "{"); i >= 0 {
+				base, critical = k[:i], false
+			}
+			if base == k || !off[base] {
+				continue
+			}
+			what := fmt.Sprintf("which switches the `%s` family off for every tenant that gives `%s` no value "+
+				"of its own — `%s` included, so its value here is served to none of them", base, base, k)
+			if critical {
+				// A root `<base>_critical` is a threshold of its own, served
+				// at warning severity whatever its base reads
+				// (root_defaults_critical_key): the opt-out leaves it on.
+				what = fmt.Sprintf("yet `%s` here is a threshold of its own (see root_defaults_critical_key), "+
+					"served to every tenant while `%s` is switched off — the opt-out leaves an alert of the "+
+					"family on", k, base)
+			}
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootDisableFamilyValue,
+				Field:    f.Name + ":defaults." + k,
+				Message: fmt.Sprintf("%s: the conf.d root `defaults:` writes `%s: disable`, %s. Delete one of the "+
+					"two lines: the `disable` to serve the family, or `%s` to keep it off.", f.Name, base, what, k),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Field < out[j].Field })
+	return out
+}
+
+// formatBuiltin is a built-in value as the generated table writes it.
+func formatBuiltin(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
 // checkRootDimensionsCriticalBase reports
 // findingkind.FindingRootDimensionsCriticalBase for each base under the

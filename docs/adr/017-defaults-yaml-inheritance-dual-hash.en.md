@@ -12,7 +12,7 @@ lang: en
 
 > Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (conf.d/ directory hierarchy): ADR-016 decides how config files are laid out in directories; this ADR decides how each level's defaults flow down, and how to tell which tenants a defaults change affected.
 
-**Decision in brief**: every directory level of conf.d/ may hold a `_defaults.yaml`. A tenant's config is the defaults stacked from the root downwards, level by level, with the tenant file on top. Every tenant keeps two hashes: one of its own file, and one of the stacked result (its effective config); the second tells whether a defaults change really changed this tenant.
+**Decision in brief**: every directory level of conf.d/ may hold a `_defaults.yaml`. A tenant's config is the defaults stacked from the root downwards, level by level, with the tenant file on top; the thresholds the platform ships armed are built into the programs that read conf.d, below the root, so the customer's files hold only overrides and opt-outs. Every tenant keeps two hashes: one of its own file, and one of the stacked result (its effective config); the second tells whether a defaults change really changed this tenant.
 
 ## Status
 
@@ -29,6 +29,8 @@ lang: en
 | 2026-10-27 | A subdirectory `_defaults.yaml` no longer carries keys starting with `_` (da-guard reports an error); a tenant-side `null` on such a key always means the platform default | Decisions 2, 4, 10 |
 | 2026-10-27 | A threshold is read one way at every level (its text, as a number): a scalar the exporter cannot read in the root `defaults:` refuses that key alone and no longer drops the whole file; the effective config and `merged_hash` read what the exporter reads; a reserved key in the root `defaults:` reaches no tenant | Decisions 4, 6, 10 |
 | 2026-10-28 | A threshold only a subdirectory writes and the root does not declare: da-guard reports an error (exit 1) | Decision 3 |
+| 2026-11-15 | The thresholds the platform ships armed are built into the readers, below the root `_defaults.yaml`: a key the root does not write, writes as `null` or writes as a value it cannot read gets the platform's value; the effective config and `merged_hash` cover it; `validate-config` prints the built-in digest and what the tree does with each key | Decisions 1, 2, 3, 4, 7, 11 |
+| 2026-11-16 | The root `defaults:` may write `"disable"` for a key the built-in layer gives a value, switching that family off for the whole tree; that word only | Decisions 4, 11 |
 
 ## Terms
 
@@ -66,6 +68,8 @@ conf.d/
 
 The order is root → each level downwards → tenant file; what is applied later overrides what was applied earlier. Every level is optional, and the depth is not limited to the levels shown.
 
+Below the root there is one more layer, the **built-in layer**: the thresholds the platform ships armed, with the platform's values, compiled into the programs that read conf.d rather than kept in a file of conf.d (Decision 11). The full order is therefore built-in layer → root → each level downwards → tenant file.
+
 ### 2. Merge rules
 
 | Value type | Rule | Example |
@@ -73,6 +77,8 @@ The order is root → each level downwards → tenant file; what is applied late
 | Mapping | Deep merge: keys added by the lower level are kept; a key present in both takes the lower level's value | upper `{p: 1, q: 1}`, tenant `{q: 9}` → `{p: 1, q: 9}` |
 | List | Replaced whole, never concatenated | upper `[ns-a, ns-b]`, tenant `[ns-c]` → `[ns-c]` |
 | Scalar (number, string) | The lower level overrides | upper `200`, tenant `"150"` → `"150"` |
+
+A value from the built-in layer is marked `{"layer": "builtin"}` in `da-guard effective`'s `key_sources`, with no `file` and no `level`.
 
 Three exceptions:
 
@@ -107,36 +113,44 @@ tenants:
     pg_stat_activity_count: "150"
 ```
 
-Output of `da-guard effective --config-dir conf.d` (excerpt):
+Output of `da-guard effective --config-dir conf.d` (excerpt; `…` stands for the built-in layer's other keys):
 
 ```json
 "effective_config": {
+  "container_cpu": 80,
+  …
+  "pg_connections": 80,
   "pg_locks_count": 100,
+  "pg_replication_lag": 30,
   "pg_replication_lag_seconds": 30,
-  "pg_stat_activity_count": "150"
+  "pg_stat_activity_count": "150",
+  …
 },
 "key_sources": {
+  "container_cpu":              {"layer": "builtin"},
+  …
   "pg_locks_count":             {"layer": "defaults", "file": "finance/_defaults.yaml", "level": 1},
   "pg_replication_lag_seconds": {"layer": "defaults", "file": "_defaults.yaml", "level": 0},
-  "pg_stat_activity_count":     {"layer": "tenant",   "file": "finance/fin-db-001.yaml"}
+  "pg_stat_activity_count":     {"layer": "tenant",   "file": "finance/fin-db-001.yaml"},
+  …
 },
 "source_hash": "45006e7b8bf54ba3",
-"merged_hash": "5db367c3efd997ce"
+"merged_hash": "78ecf0a647d7b526"
 ```
 
-`da-guard served-values --config-dir conf.d` shows `/metrics` serving the same three values: `pg_locks_count` 100, `pg_replication_lag_seconds` 30, `pg_stat_activity_count` 150.
+`da-guard served-values --config-dir conf.d` shows `/metrics` serving the same values: `pg_locks_count` 100, `pg_replication_lag_seconds` 30, `pg_stat_activity_count` 150, plus every key of the built-in layer. `merged_hash` covers the built-in values, so it moves when the platform changes the built-in table (Decisions 7, 11).
 
 Two things to notice in this example:
 
 - **The tenant's value is quoted; the values under `defaults:` are not.** A tenant threshold is a string or an object with a schedule, and an unquoted number is rejected by `check_confd_schema.py`; platform defaults take numbers only.
-- **A subdirectory can only change thresholds the root declares.** Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it. Every tenant in `da-guard effective` has a `not_served` field that lists, key by key, the values the effective config shows but `/metrics` does not serve, with the reason; here it is `undeliverable`, and da-guard reports `subtree_default_undeliverable` and exits 1. The fix is to declare the threshold in the root `_defaults.yaml` or under `optional_overrides:`. A `<base>_critical` a subdirectory writes needs more: its base must hold a value in the root `defaults:` (the exporter serves a critical row only for such a base); declaring the base under `optional_overrides:` or writing it as null at the root is not enough, and the key is `undeliverable` too — unless the root `defaults:` values that `_critical` key itself, which is then read as a threshold of its own.
+- **A subdirectory can only change thresholds the root declares; a key the built-in layer gives a value counts as declared.** A subdirectory writing `pg_connections: 60` gets 60 on `/metrics` even when the root does not write it. Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it. Every tenant in `da-guard effective` has a `not_served` field that lists, key by key, the values the effective config shows but `/metrics` does not serve, with the reason; here it is `undeliverable`, and da-guard reports `subtree_default_undeliverable` and exits 1. The fix is to declare the threshold in the root `_defaults.yaml` or under `optional_overrides:`. A `<base>_critical` a subdirectory writes needs more: its base must hold a value in the root `defaults:` or from the built-in layer (the exporter serves a critical row only for such a base); declaring the base under `optional_overrides:` or writing it as null at the root is not enough, and the key is `undeliverable` too — unless the root `defaults:` values that `_critical` key itself, which is then read as a threshold of its own.
 
 ### 4. A threshold written as `null` is the same as not writing it at that level
 
-A threshold key written as `null` in a tenant file or a subdirectory `_defaults.yaml` does not switch the alert off (for `null` in the root `defaults:`, see the second item below); to switch it off, write `"disable"` in either of those places. Do not write `"disable"` in the root `defaults:`: a root default is a number only, so `disable` is a value the exporter cannot read and it refuses that key alone — no default row for it, the file's other thresholds served; `check_confd_schema.py` does not reject it, and da-guard reports `root_default_refused` and exits 1.
+A threshold key written as `null` in a tenant file or a subdirectory `_defaults.yaml` does not switch the alert off (for `null` in the root `defaults:`, see the second item below); to switch it off, write `"disable"` in either of those places. The root `defaults:` takes `"disable"` only for a key the built-in layer gives a value (Decision 11), and it then switches that family off for the whole tree; the rules are in Decision 11. Any other key has nothing to switch off at the root: a root default is a number only, so `disable` is a value the exporter cannot read and it refuses that key alone — no default row for it, the file's other thresholds served; `check_confd_schema.py` does not reject it, and da-guard reports `root_default_refused` and exits 1.
 
 - When a tenant file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`), `/effective` (`da-guard effective`) and `describe_tenant` give the same result as when that level does not write the key. A `null` in a tenant file (`kx:` and `kx: ~` included), however, is rejected by `check_confd_schema.py`; to keep the inherited value, a tenant deletes the key.
-- When the root `_defaults.yaml` writes `null` under `defaults:`, the root does not declare that threshold and `/metrics` serves no series for it (not a threshold of 0): a value the tenant supplies is named by da-guard's `root_default_null_undeclared`, a value a subdirectory `_defaults.yaml` supplies by `subtree_default_undeliverable`. If the same key is listed in the root's `optional_overrides:`, the tenant's value is served as usual. (`optional_overrides:` is a list of key names at the top level of the root `_defaults.yaml`: it declares that these thresholds exist without giving them a platform default, so they are served only when a tenant writes them.)
+- When the root `_defaults.yaml` writes `null` under `defaults:`, the root does not declare that threshold. A key the built-in layer gives a value falls to the built-in value and `/metrics` serves the platform's value; for any other key `/metrics` serves no series (not a threshold of 0): a value the tenant supplies is named by da-guard's `root_default_null_undeclared`, a value a subdirectory `_defaults.yaml` supplies by `subtree_default_undeliverable`. If the same key is listed in the root's `optional_overrides:`, the tenant's value is served as usual. (`optional_overrides:` is a list of key names at the top level of the root `_defaults.yaml`: it declares that these thresholds exist without giving them a platform default, so they are served only when a tenant writes them.)
 
 **Why `null` does not mean "off"**: in YAML, `kx:` followed by nothing parses to `null`, exactly like `kx: ~`. If `null` meant off, forgetting to fill in a value would silently switch an alert off. When config is wrong, an extra alert is better than a missing one.
 
@@ -183,7 +197,7 @@ Each key below has its own reader, and a change to it is not necessarily reflect
 
 This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect.
 
-**The `tenants:` block of a root platform file** (written in `_defaults.yaml` or in any other root file starting with `_`, such as `_ops.yaml`; when the root holds both `_defaults.yaml` and `_defaults.yml`, only the former is read and the latter is ignored whole with a WARN) holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it (`_ops.yaml` when it is written there), `merged_hash` moves from `5db367c3efd997ce` to `73e76f3cabed3a9f`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
+**The `tenants:` block of a root platform file** (written in `_defaults.yaml` or in any other root file starting with `_`, such as `_ops.yaml`; when the root holds both `_defaults.yaml` and `_defaults.yml`, only the former is read and the latter is ignored whole with a WARN) holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it (`_ops.yaml` when it is written there), `merged_hash` moves from `78ecf0a647d7b526` to `d6f6230d027d11df`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
 
 **The root `profiles:` block** (usually written in `_profiles.yaml`) enters too: when a tenant picks a profile with `_profile: std`, the profile's values enter its effective config (`key_sources` marks them `layer: profile`); when a value in the profile changes, the `merged_hash` moves for the tenants whose `key_sources` mark that key `layer: profile` with `file` naming the file that changed, and `tenant-verify --expect-merged-hash` given the hash recorded before the change exits 1; tenants for which the key is overridden by their tenant file or by a root platform file's `tenants:` block are unaffected.
 
@@ -210,16 +224,18 @@ The readers of these keys look only at the document's top level, so an indented 
 | `source_hash` | SHA-256 of the tenant file's bytes, first 16 hex characters | did the tenant file change |
 | `merged_hash` | SHA-256 of the effective config as canonical JSON (keys sorted, no whitespace), first 16 hex characters | did the effective config change |
 
-Checked against `fin-db-001` from the example:
+Checked against `fin-db-001` from the example (the second command sorts the effective config's keys and drops whitespace before hashing):
 
 ```bash
 $ sha256sum conf.d/finance/fin-db-001.yaml | cut -c1-16
 45006e7b8bf54ba3
-$ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_activity_count":"150"}' | sha256sum | cut -c1-16
-5db367c3efd997ce
+$ da-guard effective --config-dir conf.d | jq -jcS '.tenants["fin-db-001"].effective_config' | sha256sum | cut -c1-16
+78ecf0a647d7b526
 ```
 
-So `sha256sum` of any file never matches a `merged_hash`. And because `merged_hash` looks only at the effective config, changing or removing the root's `pg_locks_count` in the example leaves `fin-db-001`'s `merged_hash` at `5db367c3efd997ce`: the finance level already overrides it.
+So `sha256sum` of any file never matches a `merged_hash`. And because `merged_hash` looks only at the effective config, changing or removing the root's `pg_locks_count` in the example leaves `fin-db-001`'s `merged_hash` at `78ecf0a647d7b526`: the finance level already overrides it.
+
+The built-in values are in the effective config too: when the platform changes one value of the built-in table, the `merged_hash` of every tenant that does not override that key moves, which is exactly the question it answers. A tree whose root writes every built-in key with the platform's number gets the same effective config and `merged_hash` for every tenant with or without the built-in layer.
 
 **When reloads happen**: the exporter scans conf.d/ every 30 seconds (`-reload-interval`). After it sees a change it waits 300 ms (`-scan-debounce`) before reloading. This wait is called debouncing: changes that arrive close together are folded into one, so a `git pull` that changes 20 files triggers a single reload.
 
@@ -291,6 +307,72 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 4. **A `_defaults.yaml` on the chain with broken syntax does not make the tenant disappear.** The exporter does not read that file; `/effective` reads it as empty, still returns the tenant and lists the file in `chain_parse_failed`, and `merged_hash` is computed over the chain without it. tenant-api answers HTTP 200, `da-guard effective` exits 3, and da-guard's main check also stops with exit 3.
 5. **Keys keep the author's spelling.** A retired spelling (for example `mysql_cpu`) is not `not_served`: `/metrics` serves the same threshold under its current name, and `da-guard served-values`' `aliases` maps the two spellings.
 
+### 11. The built-in layer: the readers carry the thresholds the platform ships armed
+
+The threshold registry (`rule-packs/threshold-registry.yaml`, the one source of every threshold key) marks the keys the platform ships armed `arming: default`. Those keys and their platform values are compiled into the exporter, da-guard and tenant-api (the three share one Go library; `da-tools validate-config` takes its answers from da-guard), below the root `_defaults.yaml`: the built-in layer. Keys the registry marks `operator` (the platform claims no value; the deployer calibrates one) and every `_critical` key are not in it.
+
+**Why**: before, `da-tools init` copied the platform's defaults, numbers included, into the customer's root `_defaults.yaml`. That file then belonged to the customer, so neither a key the platform armed later nor a recalibrated value reached it: the matching alert never fired, with no error. The Helm chart's values move with the chart and the customer writes only the difference; the conf.d side had nothing like it. Now the customer's tree holds only overrides and opt-outs, and the defaults ship with the readers.
+
+**One rule decides all of its behaviour: a value from the built-in layer has the effect of the same number written under the root `defaults:`; only the source differs.** A key the root gives a number takes the root's number; a key the root does not write, writes as `null` (Decision 4) or writes as a value it cannot read (da-guard still reports `root_default_refused`) takes the built-in value. So every existing rule for "a key with a value in the root `defaults:`" holds for a key the built-in layer gives a value: a subdirectory or a tenant can override it or switch it off with `"disable"`; a tenant's `<key>_critical` is served as a critical row; a tenant writing the key is not judged read by no reader ([ADR-038](038-unread-keys-judged-by-readers.en.md) decision 7); a `"disable"` stops counting once it expires (`expires:`), and the base row comes back.
+
+| Wanted | How to write it |
+|:--|:--|
+| The platform's value, following its later recalibrations | Do not write the key |
+| A number of your own for the whole platform (which also pins it: it no longer follows the platform) | `<key>: 70` under the root `defaults:` |
+| No such alert by default across the platform (a subdirectory, a profile or a tenant that gives the key a value turns it back on) | `<key>: "disable"` under the root `defaults:` |
+| No such alert for one subdirectory or one tenant | `<key>: "disable"` in the subdirectory `_defaults.yaml` or the tenant file |
+| A number of its own for one tenant | `<key>: "70"` in the tenant file |
+
+The state of the root file decides whether the built-in layer gives values:
+
+| Root `_defaults.yaml` | Built-in layer |
+|:--|:--|
+| Absent, or its `defaults:` is empty | Gives values. This is a legal tree |
+| Cannot be read: a syntax error, or the file is there but cannot be read (for example a symlink to a file that does not exist) | Gives none; the whole tree serves no default row (da-guard exits 3). A root that cannot be read hides the overrides and opt-outs written in it; serving the platform's values then would switch on alerts the customer switched off |
+
+The built-in layer gives every tenant its values, whether or not the matching rule pack is deployed: an extra row is not an extra alert, since an alert also needs the rule pack deployed and the metric present. The Helm chart's `thresholdConfig.defaults` still renders these values; in the ConfigMap they are numbers the root writes.
+
+**`"disable"` at the root**: switching off is written the same way at every level. `<key>: "disable"` under the root is inherited by every tenant, with the effect of the same line in a subdirectory `_defaults.yaml`, one level up: the whole family is off (the base, `<key>_critical`, the dimensional keys; [ADR-038](038-unread-keys-judged-by-readers.en.md) decision 8); where a subdirectory, a profile or the tenant gives the key a value, the whole family comes back in that scope, the tenant's own `<key>_critical` included; a tenant's own `"disable"` past its expiry falls back to the inherited root `"disable"`, not to the platform's value. A `<key>_critical` or dimensional key in a tenant file switched off this way gets a `disable_cascade` warning from da-guard's key verdict, which does not block. The `platform_defaults` row of `validate-config` marks the key `opted_out`.
+
+The root's `"disable"` is stricter than a subdirectory's:
+
+- **The word `disable` only** (any letter case). A subdirectory also reads `false`, `off` and `disabled` as off; if the root took those aliases, `helm --set …=false` would quietly switch a family off for the whole tree. At the root they are values the exporter cannot read: da-guard reports `root_default_refused` (exit 1) and the key keeps the platform's value.
+- **No schedule and no `expires:`**. A root value is a scalar only; a root file holding a schedule does not read as a whole, and the built-in layer is withheld (table above). A time-boxed switch-off goes in a subdirectory or a tenant file.
+- **Only for a key the built-in layer gives a value**. Any other key is a value the exporter cannot read, as in Decision 4.
+- **The root may not also give a value to the same family**. When the root writes `<key>: "disable"` and also gives `<key>{…}` a value, that value goes off with the base and reaches no tenant that does not give the base a value of its own; when it gives `<key>_critical` a value, that is a threshold of its own at the root (Decision 3), served while the base is off. Either way the root contradicts itself; da-guard reports `root_disable_family_value` and exits 1.
+
+The root's `optional_overrides:` (a list of key names that declares "the platform knows this key but gives it no value") does not touch the built-in layer. When the root lists a default-armed key there while its `defaults:` does not write the key (or writes it `null`), da-guard reports `root_optional_builtin` and exits 1: listing the key does not switch its alert off; to switch it off for the whole tree, write `"disable"` under the root `defaults:`.
+
+Example: `conf.d/_defaults.yaml` writes `defaults: {redis_connected_clients: 1000}` and `conf.d/t1.yaml` writes:
+
+```yaml
+tenants:
+  t1:
+    pg_connections: "70"
+    pg_replication_lag_critical: "60"
+    container_cpu: "disable"
+```
+
+`da-guard served-values --config-dir conf.d` gives `t1` (excerpt): `pg_connections` 70 (the tenant's override), `pg_replication_lag` 30 (built-in layer), `pg_replication_lag_critical` 60 with severity `critical` (the base has a built-in value, so the tenant's critical is served), `redis_connected_clients` 1000 (root), and every other key of the built-in layer; `container_cpu` is switched off by the tenant's `"disable"` and has no row.
+
+Opting out for the whole platform: add `pg_replication_lag: "disable"` to the same root `defaults:`, and `t1`'s `pg_replication_lag` and `pg_replication_lag_critical` rows are gone (the tenant's critical goes with its base); every other row stays, and da-guard exits 0.
+
+**How the table is produced**: `scripts/tools/lint/check_threshold_registry.py --regen` generates it from the registry as Go source (`components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go`), which the three readers compile from; `--ci` fails while the registry has changed without a regeneration. The table is named by a digest: the first 12 hex digits of the SHA-256 of its `key=value` lines sorted by key.
+
+**Changing the built-in table is a breaking change.** A changed value, or a key armed or disarmed, changes alert behaviour with no diff in the customer's repo. So `check_threshold_registry.py --ci` requires the new table's digest to appear in a `changelog.d/` fragment marked `⚠️ breaking` (or in the released `CHANGELOG.md`); once the digest moves, the old fragment no longer counts.
+
+**Components align by digest, not by version.** The exporter, da-tools (which holds da-guard) and tenant-api each have their own release line and version, and the rule packs have none, so "the same version" names nothing to compare; two components whose built-in digests are equal are aligned. A skew between them has consequences by direction, none of which reports an error:
+
+| Skew | Result |
+|:--|:--|
+| The rule packs' registry is newer than the exporter | A newly armed key has no built-in value; its alert does not fire |
+| The exporter is newer than the rule packs | A newly armed key serves rows no rule reads; a recalibrated value is read by the old rules |
+| CI's da-guard or tenant-api is newer than the running exporter | A tree or a write that relies on the built-in layer passes the check, while the exporter does not serve those rows ([ADR-036](036-single-parser-effective-config.en.md) §6) |
+
+**Where the digest and each key's handling can be read**: the `platform_defaults` row of `da-tools validate-config` prints the built-in digest da-tools holds on its first line, then one line per default-armed key saying what this tree does with it: `builtin` (the root gives it no value, so the built-in layer gives the platform's, with the number of tenants `/metrics` serves that value) `overridden` (the root gives a number, shown with the platform's value) or `opted_out` (the root writes `"disable"`). The answer is `da-guard effective`'s `builtin_defaults`; validate-config reads no registry of its own.
+
+Upgrades and rollbacks have to mind the same thing: an older reader without the built-in layer reads a tree that holds only overrides and finds no value for those keys. So upgrade every reader first, and only then delete the root's numbers that equal the platform's; to roll back to an older version, put them back first.
+
 ## Consequences
 
 - **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the affected-tenant metrics show whom a change really affected.
@@ -298,6 +380,10 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
   - Changes to top-level keys such as the root's `_routing_defaults` and `state_filters` are invisible in the effective config (Decision 8).
   - A comment-only edit of a tenant file is recorded as applied (Decision 7).
   - A subdirectory file without `defaults:` is merged whole, so its top-level keys (such as `state_filters`) also enter the effective config: changing one moves the `merged_hash` of every tenant in that subtree.
+  - **Omitting a key means "use the platform's value"** (Decision 11). A change to the built-in table changes alerts with no diff in the customer's repo; a customer who does not accept that writes the number into the root, which pins it.
+  - A skew between the components' built-in tables is found only by comparing digests, and today no component or alert compares them for you (the skew table of Decision 11).
+  - The rows the built-in layer adds count toward `max_metrics_per_tenant`. Over the cap the exporter truncates, and the rows cut first can be the tenant's own; da-guard names those tenants with `cardinality_exceeded` and exits 1.
+  - The exporter does not count "a file that cannot be read appeared or went away" as a change: when the root gains a `_defaults.yml` that cannot be read, the exporter withholds the built-in layer only at its next reload triggered by another file, while da-guard and tenant-api reflect it at once.
 
 ## Alternatives Considered
 
@@ -322,6 +408,17 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 3. **A deep merge cannot express routing's semantics.** A tenant's `_routing` overrides `_routing_defaults` top-level key by top-level key; it is not a same-key deep merge. When the platform's `group_wait` changes, a tenant with its own `_routing.group_wait` keeps exactly the same route; a deep merge would still move its `merged_hash` and record it as affected.
 
 These keys do not need `merged_hash` to take effect: changing only `state_filters`' severity changes `user_state_filter` on `/metrics` while `merged_hash` stays put; as a control, changing a key under `defaults:` moves the `merged_hash` of every tenant that does not override it.
+
+### E: Other ways to provide the built-in layer
+
+- **Keep init's copy of the defaults and only have a check name the missing keys**: the signal reaches only deployments that run the check, and every key the platform arms has to be added by every customer by hand.
+- **Have init re-run to update**: `init --force` rewrites every file it generated and drops every hand edit.
+- **Ship the registry with the rule packs and have the exporter read the file at run time**: the values and the rules that read them would always be of one version, so the skew disappears; but da-guard in CI and tenant-api do not have that file, so the three readers would answer differently, against "one tree, one answer" (ADR-036).
+- **Inject the defaults only when the ConfigMap is assembled**: deployments that bring their own ConfigMap and tenant-api's Git working copy would not get them, and the readers would disagree.
+- **Use a listing under `optional_overrides:` as the opt-out**: an opted-out key would then follow that field's rules (a tenant switching the base back on gets no `_critical` row, and a profile's value is not applied); and since init copies that list into the customer's tree, the day the platform arms a listed key, existing trees would read it as opted out, with no error.
+- **Let a `null` at the root mean opt-out**: for the reason in Decision 4, a key left blank must not silently switch an alert off.
+- **Give values only to tenants whose rule pack is deployed**: the exporter does not know which rule packs are deployed and could only guess from the tree's content, a guess with known misses.
+- **Delete the numbers equal to the platform's from the customer's files on upgrade**: such a number may be pinned on purpose, and once deleted it follows the platform; that is the customer's call.
 
 ## Scope of Impact
 

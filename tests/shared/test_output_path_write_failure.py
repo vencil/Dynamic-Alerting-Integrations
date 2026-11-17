@@ -396,9 +396,29 @@ def _shard_source_dir(tmp: Path) -> str:
     d = tmp / "shard-a"
     if not d.is_dir():
         d.mkdir()
+        # #3832: a default-armed key — the assembled output has no root
+        # carrier, and an undeclared key there is unread (the write refused).
         (d / "alpha.yaml").write_text(
-            "tenants:\n  alpha:\n    max_connections: 100\n", encoding="utf-8")
+            "tenants:\n  alpha:\n    container_cpu: 100\n", encoding="utf-8")
     return str(d)
+
+
+def _example_cr_for_a_rootless_dir(tmp: Path) -> str:
+    """The in-repo example ThresholdConfig CR, minus its one key that needs
+    the deployment's root carrier: `mysql_threads_running`, an operator key
+    the platform ships no value for (the CR's own comment: "the key is
+    declared" — by the deployment's defaults). The control run renders into
+    a fresh `--config-dir` with no root file, which is judged (#3832), so an
+    undeclared key there is unread and the write refused; every other key of
+    the example is read in such a tree."""
+    p = tmp / "example-thresholdconfig.yaml"
+    if not p.is_file():
+        text = THRESHOLDCONFIG_CR.read_text(encoding="utf-8")
+        kept = [ln for ln in text.splitlines(keepends=True)
+                if not ln.lstrip().startswith("mysql_threads_running:")]
+        assert len(kept) == len(text.splitlines(keepends=True)) - 1, "example CR changed"
+        p.write_text("".join(kept), encoding="utf-8")
+    return str(p)
 
 
 def _history_conf_d(out: Path) -> str:
@@ -834,8 +854,9 @@ ROWS: list[Row] = [
       variant="snapshot-file", shapes=("sibling_is_dir",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
     R("ops/da_assembler.py", "--config-dir", "dir", "operator",
-      lambda c, out: ["--render-cr", str(THRESHOLDCONFIG_CR), "--config-dir", str(out)],
-      reach="in-repo example ThresholdConfig CR through --render-cr; the "
+      lambda c, out: ["--render-cr", _example_cr_for_a_rootless_dir(c.tmp),
+                      "--config-dir", str(out)],
+      reach="in-repo example ThresholdConfig CR (minus its operator key, #3832) through --render-cr; the "
             "offline path needs no Kubernetes client",
       # ⛔ This tool used to exit 0 here having written nothing: `reconcile_one`
       # logged the OSError and `render_cr_file` returned EXIT_OK regardless
@@ -3576,7 +3597,7 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
            "pin LF, a name it looks for in other files and never calls."),
     ("ops/_registry_lib.py", "write_repo_artifact"): (
-        4, "handed to `_write_or_stop` as its `write` argument for the generated "
+        5, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),

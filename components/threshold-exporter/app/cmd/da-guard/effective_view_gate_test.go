@@ -14,16 +14,20 @@ package main
 // from 3 to 2. On main fc5438c4: rc 0, no findings, count 3.
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // effectiveViewGateTree: root canonical, subtree retired spelling, the
 // tenant writing only the retired spelling's `_critical` key. The merge has
-// 3 keys, the per-threshold view 2; /metrics serves tx 4 series.
+// 3 keys of its own, the per-threshold view 2; /metrics serves tx 4 series of
+// its own, plus one per built-in key (#3832).
 var effectiveViewGateTree = map[string]string{
 	"conf.d/_defaults.yaml":     "defaults:\n  mysql_threads_running: 30\n",
 	"conf.d/sub/_defaults.yaml": "defaults:\n  mysql_cpu: 40\n",
@@ -46,8 +50,9 @@ func TestMainGate_RequiredFieldsJudgeTheMergeNotTheView(t *testing.T) {
 
 	// Must-trigger control: a key neither the merge nor the view carries is
 	// still reported missing, so the green above is not a gate that stopped
-	// looking.
-	code, stdout, _ = runOnce(t, "--config-dir", dir, "--required-fields", "pg_connections", "--format", "md")
+	// looking. Not a default-armed key: the built-in layer (#3832) would
+	// carry that one into both.
+	code, stdout, _ = runOnce(t, "--config-dir", dir, "--required-fields", "redis_connected_clients", "--format", "md")
 	if code != exitFindings || !strings.Contains(stdout, "missing_required") {
 		t.Errorf("control: exit = %d, want %d with missing_required: %q", code, exitFindings, stdout)
 	}
@@ -61,15 +66,17 @@ func TestMainGate_CardinalityCountsWhatMetricsServes(t *testing.T) {
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, effectiveViewGateTree)
 	dir := filepath.Join(tmp, "conf.d")
-	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", true); served != 4 {
-		t.Fatalf("control: /metrics serves %d series of tx, want 4", served)
+	// #3832: every built-in key adds one row of tx; the limit moves with it.
+	n := len(config.BuiltinDefaults())
+	if served := metricsRows(t, loadTree(t, dir), fixedNow, "tx", true); served != 4+n {
+		t.Fatalf("control: /metrics serves %d series of tx, want %d", served, 4+n)
 	}
 
-	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", "3", "--format", "md")
+	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--cardinality-limit", strconv.Itoa(3+n), "--format", "md")
 	if code != exitFindings {
 		t.Errorf("exit = %d, want %d. stdout=%q stderr=%q", code, exitFindings, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "would produce 4 user_threshold rows") {
-		t.Errorf("want /metrics' count (4) over the limit: %q", stdout)
+	if want := fmt.Sprintf("would produce %d user_threshold rows", 4+n); !strings.Contains(stdout, want) {
+		t.Errorf("want /metrics' count (%d) over the limit: %q", 4+n, stdout)
 	}
 }

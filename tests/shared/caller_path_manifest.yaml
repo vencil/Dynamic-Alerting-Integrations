@@ -144,6 +144,8 @@ commands:
     "--policy": {kind: reader, by: "read for every judgement: policy_unusable", pinned_by: "tests/ops/test_generator_service.py::test_policy_is_read_for_every_judgement"}
     "--read-timeout-seconds": not_path
     "--repo": {kind: reader, by: "git, at start (rev-parse --show-object-format --show-prefix, in git_env: no inherited GIT_DIR / GIT_WORK_TREE …): not a repository, or a directory inside one, refuses to start naming --repo; a work tree it cannot list is still a repository git reads (#3739)", pinned_by: "tests/ops/test_generator_service.py::test_a_repo_that_is_no_repository_is_named"}
+    "--self-check-seconds": not_path
+    "--self-check-timeout-seconds": not_path
     "--socket": output
     "--warm-ref": not_path
     "--warm-seconds": not_path
@@ -167,7 +169,6 @@ commands:
     "--tenants": not_path
   lint:
     "--exclude": not_path
-    paths: any
   migrate:
     "--output-dir": output
     "--prefix": not_path
@@ -189,7 +190,6 @@ commands:
     "--da-read-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--exclude": not_path
     "--output-dir": output
-    "--rule-files": any
     "--tenant-label": not_path
   opa-evaluate:
     "--opa-binary": {kind: reader, by: "OPA binary not found", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_missing"}
@@ -256,7 +256,6 @@ commands:
     phase: not_path
   silencer-drift-check:
     "--exclude": not_path
-    "--rule-source": any
   state-reconcile:
     "--manifest-path": {kind: reader, by: "read_old_manifest: an existing one that is not a manifest is manifest_unreadable, never overwritten", pinned_by: "tests/ops/test_state_reconcile.py::test_an_unreadable_manifest_is_not_overwritten"}
   tenant-verify:

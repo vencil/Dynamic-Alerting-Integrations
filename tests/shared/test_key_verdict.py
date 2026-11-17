@@ -24,7 +24,9 @@ def _tree(root: Path, files: dict[str, str]) -> Path:
 
 
 def _by_key(verdict, tenant):
-    return {v.key: v for v in verdict.keys[tenant]}
+    # #3832: the built-in layer's keys (layer `builtin`, every tenant's,
+    # always read) are not what these tests judge.
+    return {v.key: v for v in verdict.keys[tenant] if v.layer != "builtin"}
 
 
 _ADR_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
@@ -145,14 +147,15 @@ def test_an_unregistered_key_the_root_declares_is_unread(tmp_path):
                      ("unread", "error", "ta.yaml", ("ta",))]
 
 
-def test_no_root_platform_file_leaves_threshold_keys_undecidable(tmp_path):
-    """客戶 CI 只檢出租戶 repo：閾值鍵無從判斷；保留鍵照常判（決定 7）。"""
+def test_no_root_platform_file_is_judged_as_any_tree(tmp_path):
+    """#3832（決定 7）：客戶 CI 只檢出租戶 repo、沒有根平台檔，照常判：平台預設啟用的
+    閾值內建在讀取端，沒有任何一層宣告的閾值鍵判 unread；保留鍵照常判。"""
     t = kv.judge_tree(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"
                                                   "    _routng: x\n    _namespaces: [n]\n"}))
     got = {k: (v.verdict, v.severity) for k, v in _by_key(t, "ta").items()}
-    assert got == {"mysql_conections": ("undecidable", None), "_routng": ("unread", "error"),
+    assert got == {"mysql_conections": ("unread", "error"), "_routng": ("unread", "error"),
                    "_namespaces": ("read", None)}
-    assert t.undecidable
+    assert not t.undecidable
 
 
 def test_a_root_platform_file_without_thresholds_still_decides(tmp_path):
@@ -428,9 +431,10 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
         "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
-        "dead_entries": [], "value": 1}
+        "dead_entries": [], "value": 1, "gate_kind": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True}
+            "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True,
+            "gate_kind": None}
 _CHECK = {"kind": "version_label_empty", "key": 'm{version=""}', "head": "m", "replacement_head": None,
           "reason": "r"}
 _DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
@@ -503,6 +507,9 @@ def _doc(**over):
     _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
     _doc(findings=[dict(_FINDING, hint=1)]),  # #3829: a hint is text or null
+    _doc(findings=[dict(_FINDING, gate_kind=1)]),  # #3996: the gate's kind is text or null
+    _doc(findings=[dict(_FINDING, gate_kind="typo")]),  # #3996: one of the gate's kinds the verdict names
+    _doc(findings=[{k: v for k, v in _FINDING.items() if k != "gate_kind"}]),  # #3996: always written
     # #3502: a dead_entry carries its entries, no other kind does; a reason
     # outside the closed set is not read as one inside it.
     _doc(findings=[dict(_FINDING, kind="dead_entry")]),

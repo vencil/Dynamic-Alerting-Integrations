@@ -193,16 +193,18 @@ def test_a_missing_config_dir_is_a_caller_error(tmp_path):
     assert "nope: No such file or directory" in p.stderr, p.stderr
 
 
-def test_undecidable_threshold_keys_exit_2(tmp_path):
-    """沒讀到任何根平台檔：閾值鍵無從判斷，結果照樣印出，結束碼 2（決定 4、7）。"""
+def test_a_tree_with_no_root_platform_file_is_judged(tmp_path):
+    """#3832：沒讀到任何根平台檔的樹照常判（平台預設啟用的閾值內建在讀取端，
+    ADR-038 決定 7）：拼錯的閾值鍵判 unread（no_row），不再是 undecidable。"""
     d = tmp_path / "conf.d"
     d.mkdir()
     (d / "ta.yaml").write_text("tenants:\n  ta:\n    mysql_conections: 70\n", encoding="utf-8")
     p = _run("--config-dir", d, "--json")
-    assert p.returncode == 2
+    assert p.returncode == 0, p.stderr
     doc = _json(p)
-    assert doc["undecidable"] is True
-    assert doc["tenants"]["ta"][0]["verdict"] == "undecidable"
+    assert doc["undecidable"] is False
+    row = next(r for r in doc["tenants"]["ta"] if r["key"] == "mysql_conections")
+    assert (row["verdict"], row["reason"]) == ("unread", "no_row")
 
 
 def test_subdirectory_policies_it_does_not_count_are_named(tmp_path):
