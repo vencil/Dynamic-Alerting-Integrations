@@ -979,6 +979,7 @@ def test_each_value_is_judged_once(tmp_path, monkeypatch):
     (dict(flag="--d", select=_lib_consumer_read.FILES_TO_READ, default="x",
           absent_default=_lib_input.ABSENT_REFUSED), "takes no default="),
     (dict(flag="--d", select=_lib_input.TopLevel("*"), remedy="x"), "remedy= is for"),
+    (dict(flag="input", decode=_lib_input.Document("text", str), stdin=True), "stdin= is for a flag"),
 ])
 def test_a_gatherer_declaration_it_cannot_honour_is_refused(kw, error):
     flag = kw.pop("flag")
@@ -995,3 +996,45 @@ def test_confirm_read_refuses_a_file_gone_since(tmp_path):
     with pytest.raises(CallerError) as exc:
         _lib_input.confirm_read([str(a), str(b)], flag="--rule-files", lang="en")
     assert str(exc.value).startswith(f"--rule-files {b}: ") and exc.value.reason == "file_unreadable"
+
+
+def _positional_document(argv):
+    parser = argparse.ArgumentParser()
+    _lib_input.add_input(parser, "input_file", decode=_lib_input.Document("text", str))
+    return parser.parse_args(argv)
+
+
+@pytest.mark.parametrize("case, said", [
+    ("missing", "No such file or directory"),
+    ("directory", "not a regular file"),
+])
+def test_a_positional_document_is_named_by_its_path_alone(tmp_path, case, said):
+    """#4040: a decode= positional (migrate's rule file) is read once, as a
+    flag's is; its refusal names the path alone — the caller typed no flag,
+    so the dest (`input_file`) is never shown as one."""
+    target = tmp_path / "in.yaml"
+    if case == "directory":
+        target.mkdir()
+    with pytest.raises(CallerError) as exc:
+        _lib_input.document(_positional_document([str(target)]), "input_file", lang="en")
+    assert str(exc.value).startswith(f"{target}: "), str(exc.value)
+    assert said.lower() in str(exc.value).lower(), str(exc.value)
+    assert "input_file" not in str(exc.value)
+
+
+def test_a_positional_document_reads_the_file(tmp_path):
+    target = tmp_path / "in.yaml"
+    target.write_text("groups: []\n", encoding="utf-8")
+    assert _lib_input.document(_positional_document([str(target)]), "input_file",
+                               lang="en") == "groups: []\n"
+
+
+@pytest.mark.parametrize("call", [
+    lambda args: _lib_input.absent(args, "paths"),
+    lambda args: _lib_input.require_selection(args, "paths", [], wanted="x", lang="en"),
+])
+def test_a_many_input_is_not_called_undeclared(tmp_path, call):
+    """#4040: absent()/require_selection() read one value; a many=True input
+    is told so, not that add_input never declared it."""
+    with pytest.raises(TypeError, match="paths is a many=True input"):
+        call(_many([str(tmp_path)]))

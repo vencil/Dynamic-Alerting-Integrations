@@ -57,6 +57,8 @@ when a refusal is raised, as in `_lib_paths`.
   ``file_unreadable``: rc 2, one line naming the flag and the path — never
   a traceback, never an empty input. ``stdin=True`` (#3797): the value
   ``-`` is standard input, read and judged the same way (one flag per run).
+  ``documents(args, dests, *, lang)`` reads several, every refusal at once.
+  A positional ``decode=`` input (#4040) is named by its path alone.
 * ``decode_bytes(raw, *, fmt, name)`` — ⛔ with ``read_bytes``, the one reading
   of a caller's input file: strict UTF-8, then JSON (``json.loads``) or
   YAML (PyYAML's pure-Python ``SafeLoader``, see ``_lib_io``'s
@@ -447,8 +449,9 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
     ``ABSENT_REFUSED``, and it may take a *remedy*. *many*: several values —
     *flag* with no leading ``-`` is then a positional (zero or more values;
     the tool says when none is an error), else a flag taking one or more
-    values whose every use adds to the list. Only a *many* input may be a
-    positional.
+    values whose every use adds to the list. A positional is a *many*
+    input or a *decode* input (#4040: one file, named by its path alone —
+    the caller typed no flag), never one with *stdin*.
 
     *kwargs* go to ``add_argument`` (``help``, ``required``, ``metavar``);
     the value is always the string given, so ``type`` / ``nargs`` /
@@ -492,8 +495,10 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
                         f"or DA_GUARD_LISTS, not {select!r}")
     if many and not _is_gatherer(select):
         raise TypeError("many= is for a gatherer select= (a file or a directory per value)")
-    if not flag.startswith("-") and not many:
-        raise TypeError("a positional input is a many=True input")
+    if not flag.startswith("-") and not many and decode is None:
+        raise TypeError("a positional input is a many=True input or a decode= input")
+    if not flag.startswith("-") and stdin:
+        raise ValueError("stdin= is for a flag: a positional `-` would name no flag")
     if empty not in (EMPTY_ALLOWED, EMPTY_REFUSED):
         raise ValueError(f"empty must be {EMPTY_ALLOWED!r} or {EMPTY_REFUSED!r}")
     if (default is None) != (absent_default is None):
@@ -571,6 +576,15 @@ def spec_of(args: argparse.Namespace, dest: str) -> InputSpec:
     return value.spec
 
 
+def _one_value(value: Any, dest: str, what: str) -> None:
+    """TypeError unless *value* is one declared value: a ``many=True``
+    input is told apart from a flag ``add_input`` never declared (#4040)."""
+    if isinstance(value, _Many):
+        raise TypeError(f"{dest} is a many=True input: {what}() reads one value")
+    if not isinstance(value, _Value):
+        raise TypeError(f"{dest} was not declared with _lib_input.add_input")
+
+
 def require_selection(args: argparse.Namespace, dest: str, chosen: "list[Any]", *,
                       wanted: str, lang: str, item: Any = None) -> "list[Any]":
     """*chosen* — what was selected from the flag declared at *dest* by a
@@ -580,8 +594,7 @@ def require_selection(args: argparse.Namespace, dest: str, chosen: "list[Any]", 
     directory of a ``separator`` list it was chosen from (named instead of
     the whole value). Returns *chosen*."""
     value = getattr(args, dest)
-    if not isinstance(value, _Value):
-        raise TypeError(f"{dest} was not declared with _lib_input.add_input")
+    _one_value(value, dest, "require_selection")
     if not chosen and value.spec.empty == EMPTY_REFUSED:
         raise refuse_empty(_label(value if item is None else item, value.spec.flag), wanted,
                            lang=lang)
@@ -776,8 +789,7 @@ def absent(args: argparse.Namespace, dest: str) -> bool:
     value = getattr(args, dest)
     if value is None:
         return True
-    if not isinstance(value, _Value):
-        raise TypeError(f"{dest} was not declared with _lib_input.add_input")
+    _one_value(value, dest, "absent")
     if value.absent is None:
         raise TypeError(f"{dest}: absent() reads what selected() judged — call selected() first")
     return value.absent
@@ -882,6 +894,27 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
         raise again from exc
 
 
+def documents(args: argparse.Namespace, dests: "list[str]", *, lang: str) -> "list[Any]":
+    """``document`` of each of *dests*, in order — every refusal at once
+    (#4040: ``rule-pack-diff`` with both ``--from`` and ``--to`` missing named
+    one, then the other on the next run). One refusal is raised as it is;
+    several are one ``CallerError`` with an ``ERROR:`` line each, the reason
+    the first's (as ``selected`` does for the values of one flag)."""
+    from _lib_exitcodes import CallerError  # noqa: PLC0415  (see the module docstring)
+    out: "list[Any]" = []
+    refused: "list[CallerError]" = []
+    for dest in dests:
+        try:
+            out.append(document(args, dest, lang=lang))
+        except CallerError as exc:
+            refused.append(exc)
+    if len(refused) == 1:
+        raise refused[0]
+    if refused:
+        raise _caller_error("\nERROR: ".join(str(e) for e in refused), refused[0].reason)
+    return out
+
+
 def _document(args: argparse.Namespace, value: "_Value", spec: InputSpec, *,
               lang: str) -> Any:
     """``document``'s judgement and reading, before its *remedy*."""
@@ -889,11 +922,11 @@ def _document(args: argparse.Namespace, value: "_Value", spec: InputSpec, *,
     if spec.stdin and value == STDIN:
         raw = _read_stdin(args, spec, lang=lang)
     else:
-        problem = classify_path(value, "file", lang=lang, flag=spec.flag)
+        problem = classify_path(value, "file", lang=lang, flag=spec.named)
         if problem is not None:
             raise _caller_error(problem.message, problem.reason)
-        raw = read_bytes(value, flag=spec.flag, lang=lang)
-    label = _label(value, spec.flag)
+        raw = read_bytes(value, flag=spec.named, lang=lang)
+    label = _label(value, spec.named)
     try:
         data = decode_bytes(raw, fmt=doc.fmt, name=str(value))
     except DocumentError as exc:

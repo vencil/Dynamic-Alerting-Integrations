@@ -29,7 +29,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import migrate_rule as mr  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -722,13 +722,32 @@ class TestMain:
     )
 
     def test_missing_input_file_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
+        """#4040: the rule file is a declared input — a missing one is the
+        caller error (rc 2 through run()) naming the path alone: it is a
+        positional, the caller typed no flag."""
         ghost = tmp_path / "ghost.yaml"
         cli_argv("migrate_rule.py", str(ghost))
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(CallerError) as exc:
             mr.main()
-        assert exc.value.code == EXIT_CALLER_ERROR
-        err = capsys.readouterr().err
-        assert "Error reading rule file" in err
+        assert str(exc.value) == f"{ghost}: No such file or directory"
+        assert exc.value.reason == "file_not_found"
+
+    def test_the_rule_file_is_read_once(self, monkeypatch, tmp_path, capsys, cli_argv):
+        """#4040: da-read reads the text _lib_input read; the path is never
+        opened again — a file changed while the reader runs is not read."""
+        f = tmp_path / "rules.yaml"
+        f.write_text(self.SIMPLE_YAML, encoding="utf-8")
+        real = mr._lib_consumer_read.da_read_binary(None)
+        if not real:
+            pytest.skip("da-read is not built here")
+        wrapper = tmp_path / "da-read-wrapper"
+        wrapper.write_text(f"#!/bin/sh\nprintf 'groups: [\\n' > '{f}'\nexec '{real}' \"$@\"\n",
+                           encoding="utf-8")
+        wrapper.chmod(0o755)
+        monkeypatch.setenv("DA_READ_BINARY", str(wrapper))
+        cli_argv("migrate_rule.py", str(f), "-o", str(tmp_path / "out"), "--dry-run")
+        mr.main()
+        assert "HighCPU" in capsys.readouterr().out
 
     def test_invalid_yaml_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "bad.yaml"

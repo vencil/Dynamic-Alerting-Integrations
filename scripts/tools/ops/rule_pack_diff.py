@@ -91,23 +91,24 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
+import _lib_input  # noqa: E402  (#4040: --from / --to are read once, here)
 
 
 # ─── Parsing ──────────────────────────────────────────────────────────
 
 
-def load_rule_packs(paths: "list[Path]") -> "list[dict | None]":
-    """Every pack of *paths* as Prometheus' rule loader reads it (#3206,
+def load_rule_pack_texts(texts: "list[tuple[str, str]]") -> "list[dict | None]":
+    """Every pack of *texts* — ``(label, text)``, the text read once by
+    ``_lib_input`` (#4040) — as Prometheus' rule loader reads it (#3206,
     ADR-036 §12: ``da-read prometheus-rules``, one run for all), in order;
-    None for one it refuses (the reason is printed, naming the pack). Raises
+    None for one it refuses (the reason is printed, naming the label: the
+    flag and the path). The file is never opened again. Raises
     ``_lib_consumer_read.ConsumerReadError`` when da-read cannot be had."""
-    out: "list[dict | None]" = []
-    for path, rule_file in zip(paths, _lib_consumer_read.prometheus_rule_file_results(paths)):
-        out.append(load_rule_pack(path, rule_file))
-    return out
+    results = _lib_consumer_read.prometheus_rule_text_results(texts)
+    return [load_rule_pack(label, rule_file) for (label, _text), rule_file in zip(texts, results)]
 
 
-def load_rule_pack(path: Path, rule_file=None) -> dict | None:
+def load_rule_pack(path: "Path | str", rule_file=None) -> dict | None:
     """The rule pack at *path* as Prometheus' rule loader reads it (*rule_file*
     from ``load_rule_packs``; read here when not given). Returns the
     top-level dict, or None when the loader refuses it (the reason printed)."""
@@ -487,18 +488,11 @@ def main(argv: list[str] | None = None) -> "int | Report":
             "  da-tools rule-pack-diff --from /tmp/v1.yaml --to /tmp/v2.yaml\n"
         ),
     )
-    ap.add_argument(
-        "--from",
-        dest="from_path",
-        required=True,
-        help="Path to the older rule pack YAML (e.g. v1.0.0).",
-    )
-    ap.add_argument(
-        "--to",
-        dest="to_path",
-        required=True,
-        help="Path to the newer rule pack YAML (e.g. v2.0.0).",
-    )
+    # #4040: each file is read once, by _lib_input; da-read reads that text.
+    _lib_input.add_input(ap, "--from", decode=_lib_input.Document("text", str), required=True,
+                         help="Path to the older rule pack YAML (e.g. v1.0.0).")
+    _lib_input.add_input(ap, "--to", decode=_lib_input.Document("text", str), required=True,
+                         help="Path to the newer rule pack YAML (e.g. v2.0.0).")
     ap.add_argument(
         "--json",
         action="store_true",
@@ -515,11 +509,13 @@ def main(argv: list[str] | None = None) -> "int | Report":
     )
     args = ap.parse_args(argv)
 
-    from_path = Path(args.from_path)
-    to_path = Path(args.to_path)
+    from_path = Path(getattr(args, "from"))
+    to_path = Path(args.to)
+    # Both judged before either is refused: one run names every bad input.
+    old, new = _lib_input.documents(args, ["from", "to"], lang="en")
 
     try:
-        v1, v2 = load_rule_packs([from_path, to_path])
+        v1, v2 = load_rule_pack_texts([(f"--from {from_path}", old), (f"--to {to_path}", new)])
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
