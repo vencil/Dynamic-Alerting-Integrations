@@ -2150,6 +2150,28 @@ class TestOutputPreflight:
         finally:
             d.chmod(0o700)
 
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+    @pytest.mark.parametrize("flag", ["-o", "--markdown-output"])
+    def test_a_write_the_preflight_passes_but_that_fails_is_one_line_rc2(self, tmp_path, flag):
+        """#3107 ③b: a FIFO with no reader exists and is writable, so the
+        preflight passes it; the operator entry's open then fails (ENXIO).
+        That failure must still end at rc 2 with the one `cannot write` line
+        — the write sites exit themselves (`_or_die`); nothing above them
+        would turn an escaped `OutputWriteError` into rc 2."""
+        target = tmp_path / "out"
+        os.mkfifo(target)
+        tool = os.path.join(os.path.dirname(bt.__file__), "backtest_threshold.py")
+        # A caller error (no --baseline) still writes both outputs (#3089).
+        r = subprocess.run(
+            [sys.executable, tool, "--config-dir", str(tmp_path), "--prometheus",
+             "http://127.0.0.1:1", "--skip-if-unavailable", flag, str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        named = "-o/--output" if flag == "-o" else flag
+        assert r.returncode == 2, r.stderr
+        assert f"ERROR: cannot write {target}: " in r.stderr, r.stderr
+        assert f"check the value given to {named}" in r.stderr, r.stderr
+        assert "Traceback" not in r.stderr and "internal error" not in r.stderr, r.stderr
+
     def test_a_writable_file_someone_else_owns_is_writable(self, tmp_path, monkeypatch):
         """#3107 ③b: the operator entry sets 0600 only on a file this euid
         owns, so a file another user owns that we may write is written —
