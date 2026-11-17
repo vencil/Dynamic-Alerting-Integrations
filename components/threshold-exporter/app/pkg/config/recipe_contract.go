@@ -83,6 +83,14 @@ type recipeContract struct {
 		// see thresholdNumberRe.
 		ThresholdNumber string `json:"thresholdNumber"`
 	} `json:"patterns"`
+	// EditNumber is the one grammar of a number the conf.d writer takes
+	// (pkg/confedit, #3866): see EditIntRe / EditFloatRe / EditIntMaxLength.
+	EditNumber struct {
+		Comment      string `json:"_comment" optional:"true"`
+		Int          string `json:"int"`
+		Float        string `json:"float"`
+		IntMaxLength int    `json:"int_max_length"`
+	} `json:"edit_number"`
 	Op struct {
 		Enum      []string          `json:"enum"`
 		Default   string            `json:"default"`
@@ -263,13 +271,28 @@ func parseRecipeContract(data []byte) (recipeContract, error) {
 			return c, fmt.Errorf("forecast lookback: %w", err)
 		}
 	}
-	for _, p := range []string{c.Patterns.Name, c.Patterns.Metric, c.Patterns.Label, c.Patterns.Window, c.Patterns.Decimal, c.Patterns.ThresholdNumber} {
+	for _, p := range []string{c.Patterns.Name, c.Patterns.Metric, c.Patterns.Label, c.Patterns.Window, c.Patterns.Decimal, c.Patterns.ThresholdNumber,
+		c.EditNumber.Int, c.EditNumber.Float} {
 		if _, err := regexp.Compile(p); err != nil || p == "" {
 			return c, fmt.Errorf("pattern %q does not compile: %v", p, err)
 		}
 	}
+	if c.EditNumber.IntMaxLength < 1 {
+		return c, fmt.Errorf("edit_number int_max_length %d must be at least 1", c.EditNumber.IntMaxLength)
+	}
 	return c, nil
 }
+
+// The grammar of a number the conf.d writer takes (pkg/confedit, #3866),
+// from the contract's edit_number: an {"int": ...} value's text matches
+// EditIntRe and is at most EditIntMaxLength characters long; a {"float": ...}
+// value's text matches EditFloatRe. Every such text is read as the same type
+// and number by a YAML 1.1 reader and a 1.2 one.
+var (
+	EditIntRe        = regexp.MustCompile(contract.EditNumber.Int)
+	EditFloatRe      = regexp.MustCompile(contract.EditNumber.Float)
+	EditIntMaxLength = contract.EditNumber.IntMaxLength
+)
 
 // requireNonEmpty reports the first string, slice or map under v that is
 // empty and not tagged optional:"true" — a key dropped from the contract, or

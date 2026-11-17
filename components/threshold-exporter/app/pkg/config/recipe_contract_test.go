@@ -99,9 +99,16 @@ func TestParseRecipeContract_FailsClosed(t *testing.T) {
 		"horizon not one unit": mutateContract(t, func(m map[string]any) {
 			sub(m, "horizon")["enum"] = []any{"1h", "1d"}
 		}),
+		"edit int_max_length below one": mutateContract(t, func(m map[string]any) {
+			sub(m, "edit_number")["int_max_length"] = 0
+		}),
+		"edit float pattern does not compile": mutateContract(t, func(m map[string]any) {
+			sub(m, "edit_number")["float"] = "^(-"
+		}),
+		"empty edit int pattern": mutateContract(t, func(m map[string]any) { sub(m, "edit_number")["int"] = "" }),
 	}
 	for _, k := range []string{"reserved_labels", "template_metachars", "fields", "forecast",
-		"quantile", "group_by", "horizon", "base_required", "patterns", "recipes", "lifecycle", "op"} {
+		"quantile", "group_by", "horizon", "base_required", "patterns", "recipes", "lifecycle", "op", "edit_number"} {
 		k := k
 		bad["drop "+k] = mutateContract(t, func(m map[string]any) { delete(m, k) })
 		bad["null "+k] = mutateContract(t, func(m map[string]any) { m[k] = nil })

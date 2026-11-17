@@ -419,7 +419,8 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 	fmt.Fprintf(errOut, "<value> names its type, so a mapping's order and a scalar's type are the caller's:\n"+
 		"  {\"str\": \"80\"}  written double-quoted (under _custom_alerts, a multi-line string is a literal\n"+
 		"                 block when it reads back the same)\n"+
-		"  {\"int\": \"80\"}  {\"float\": \"0.5\"}  canonical decimal text only (other text: send \"str\")\n"+
+		"  {\"int\": \"80\"}  {\"float\": \"0.5\"}  canonical decimal text only (other text: send \"str\");\n"+
+		"                 a float also 1.0e+22 / 1.5e-25 (a '.' in the mantissa, a signed exponent)\n"+
 		"  {\"bool\": true}  {\"null\": null}\n"+
 		"  {\"map\": [[\"key\", <value>], [\"key\", <value>, {\"head\": <text>, \"line\": <text>}], ...]}\n"+
 		"                 keys unique, never `<<`; a new key is written plain only when it is\n"+
