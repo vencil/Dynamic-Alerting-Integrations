@@ -296,3 +296,11 @@ def test_label_replace_reading_query_is_not_a_write():
 @pytest.mark.parametrize("value", ["x_\\x6civeness", "x_\\u006civeness", "x_\\154iveness"])
 def test_go_escapes_in_a_query_value_are_decoded(value):
     assert ceq.query_label_findings([f'q{{query="{value}"}}'], {"x_liveness"}, "P") == []
+
+
+@pytest.mark.parametrize("value", ["oracle_café", "oracle_caf\\u00e9", "oracle_caf\\xc3\\xa9",
+                                   "oracle_caf\\303\\251"])
+def test_non_ascii_query_names_decode_by_go_rules(value):
+    """Go: \\x / octal are bytes (UTF-8 assembled), \\u a code point, a literal
+    é itself — all four spell the same name."""
+    assert ceq.query_label_findings([f'q{{query="{value}"}}'], {"oracle_café"}, "P") == []

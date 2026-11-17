@@ -47,7 +47,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import codecs
 import re
 import sys
 import tempfile
@@ -193,14 +192,46 @@ def _seconds(value: "int | float | str") -> float:
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
 
 
+_GO_SIMPLE = {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+              "v": "\v", "\\": "\\", "'": "'", '"': '"'}
+
+
 def _unescape(value: str) -> str:
-    """A PromQL double/single-quoted string's value: Go escapes decoded
-    (\\n, \\", \\x6c, \\u006c, octal), the same set Python's unicode_escape reads.
-    A value it cannot decode keeps the old reading: drop each backslash."""
-    try:
-        return codecs.decode(value, "unicode_escape")
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return re.sub(r"\\(.)", r"\1", value)
+    """A PromQL double/single-quoted string's value, decoded by Go's rules: \\x
+    and octal escapes are BYTES, \\u / \\U are code points, any other character is
+    itself (UTF-8); the bytes are decoded as UTF-8 at the end. Python's
+    unicode_escape is not this — it reads non-ASCII as Latin-1 (café -> cafÃ©)."""
+    out = bytearray()
+    i, n = 0, len(value)
+    while i < n:
+        c = value[i]
+        if c != "\\" or i + 1 == n:
+            out += c.encode("utf-8")
+            i += 1
+            continue
+        e = value[i + 1]
+        if e in _GO_SIMPLE:
+            out += _GO_SIMPLE[e].encode("utf-8")
+            i += 2
+        elif e == "x" and re.fullmatch(r"[0-9a-fA-F]{2}", value[i + 2:i + 4]):
+            out.append(int(value[i + 2:i + 4], 16))
+            i += 4
+        elif e in "uU":
+            width = 4 if e == "u" else 8
+            digits = value[i + 2:i + 2 + width]
+            if not re.fullmatch(r"[0-9a-fA-F]{%d}" % width, digits):
+                out += e.encode("utf-8")
+                i += 2
+                continue
+            out += chr(int(digits, 16)).encode("utf-8")
+            i += 2 + width
+        elif re.fullmatch(r"[0-7]{3}", value[i + 1:i + 4]):
+            out.append(int(value[i + 1:i + 4], 8) & 0xFF)
+            i += 4
+        else:  # not a Go escape (Prometheus would reject it); keep the character
+            out += e.encode("utf-8")
+            i += 2
+    return out.decode("utf-8", errors="replace")
 
 
 def _str_value(groups: tuple[str, str, str]) -> str:
