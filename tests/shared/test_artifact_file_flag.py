@@ -39,8 +39,15 @@ def test_dash_is_refused_and_nothing_else_is_judged():
     with pytest.raises(argparse.ArgumentTypeError) as ei:
         kind("-")
     assert REFUSAL in str(ei.value)
-    for value in ("out.yml", "./-", "--", "", " ", "/dev/null", "/dev/stdout", "a/-"):
+    for value in ("out.yml", "./-", "--", " ", "/dev/null", "/dev/stdout", "a/-"):
         assert kind(value) == value
+
+
+def test_an_empty_value_is_refused():
+    """An unset variable (`-o "$OUT"`): it names no file, and generate-routes
+    reads a falsy -o as "not given" — it printed to stdout and exited 0."""
+    with pytest.raises(argparse.ArgumentTypeError, match="an empty value names no file"):
+        _lib_validation.artifact_file_type()("")
 
 
 def test_the_tools_own_type_runs_after_it():

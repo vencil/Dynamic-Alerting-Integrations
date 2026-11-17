@@ -374,8 +374,10 @@ def _write_output_or_die(output: str, content: str) -> None:
     fallback) and leaves it ``0o600`` (it can carry receiver credentials),
     as ``configmap_assemble --output`` does. ``-`` is refused at parse time
     (``artifact_file_type``); a device, a FIFO or the file this process's
-    stdout already is, before the run (``refuse_clashing_outputs``) and
-    again here.
+    stdout already is, before the run (``refuse_clashing_outputs``). ⚠️ A
+    target swapped for a FIFO between that check and this write is NOT
+    refused here: ``atomic_write_text`` writes a non-regular file in place
+    even with ``atomic_only`` (#4047).
 
     A failed write is rc 2 with the one ``ERROR: cannot write <path>: ... —
     check the value given to -o/--output`` line, nothing on stdout; the
@@ -1804,7 +1806,8 @@ def refuse_unwritable_artifact(args: argparse.Namespace) -> None:
     refuse anyway (#3107 ③a): a device, a FIFO, a directory, the file this
     process's stdout already is (``_lib_io.check_repo_artifact``). Checked
     here so a pipe or a FIFO with no reader is answered before the tree is
-    read, not after; the write checks again (the path can change between).
+    read, not after. The write re-checks a std stream and ``-``, not a FIFO
+    swapped in meanwhile (#4047).
     Only in a mode that writes ``-o`` — the others refuse the flag by name
     (``_flags_this_mode_never_reads``)."""
     writes_o = ((args.output_alertmanager or args.output_configmap)

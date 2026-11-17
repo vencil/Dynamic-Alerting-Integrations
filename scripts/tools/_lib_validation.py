@@ -307,7 +307,9 @@ class ArtifactFileArg:
     write_repo_artifact``): a reader must never see half of it, so it is
     never a stream, and ``-`` — standard output for an operator output
     flag — is refused at parse time (rc 2, argparse's ``argument --flag:
-    ...`` line) instead of becoming a file called ``-``. Devices, FIFOs and
+    ...`` line) instead of becoming a file called ``-``. So is ``""``
+    (an unset variable in a script): it names no file, and a tool that
+    reads a falsy value as "not given" would print instead. Devices, FIFOs and
     the file this process's stdout already is are the write's to refuse
     (``_lib_io.check_repo_artifact``): only ``-`` is decidable from the
     string.
@@ -318,6 +320,10 @@ class ArtifactFileArg:
         self.__name__ = "artifact_file"
 
     def __call__(self, value: str) -> Any:
+        if value == "":
+            raise argparse.ArgumentTypeError(
+                "an empty value names no file (an unset variable?); pass the "
+                "path of the file to write")
         if value == "-":
             raise argparse.ArgumentTypeError(
                 "'-' is standard output, and this flag names a file that is "
@@ -328,8 +334,8 @@ class ArtifactFileArg:
 
 def artifact_file_type(*, then: Any = None) -> ArtifactFileArg:
     """argparse ``type=`` for a flag that names a file written with
-    ``_lib_io.write_repo_artifact`` (#3107 ③a): the value ``-`` exits 2
-    (CALLER_ERROR) at parse time, named by argparse. *then* as in
+    ``_lib_io.write_repo_artifact`` (#3107 ③a): the value ``-`` (and an
+    empty one) exits 2 (CALLER_ERROR) at parse time, named by argparse. *then* as in
     :func:`output_dir_type`."""
     return ArtifactFileArg(then)
 

@@ -173,3 +173,13 @@ def test_a_control_character_in_the_path_is_escaped_in_the_error(tmp_path):
     assert r.returncode == 2, err
     assert "ERROR: cannot write" in err
     assert "\x1b" not in err, "a raw ESC reached the terminal"
+
+
+def test_an_empty_o_is_refused_at_parse_time(tmp_path):
+    """`-o "$UNSET"` used to print the config to stdout and exit 0, leaving
+    the file a pipeline meant to update as it was."""
+    r = _run("", cwd=tmp_path)
+    err = _err(r)
+    assert r.returncode == 2, err
+    assert "error: argument -o/--output: an empty value names no file" in err
+    assert r.stdout == b""
