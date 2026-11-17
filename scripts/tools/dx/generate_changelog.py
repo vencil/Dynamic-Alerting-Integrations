@@ -43,7 +43,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
-from _lib_python import write_text_or_die  # noqa: E402
+from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③c)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③c)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -763,6 +764,9 @@ def main() -> int:
     )
     parser.add_argument(
         "-o", "--output",
+        # #3107 ③c: the draft is this mode's only stdout document, so `-`
+        # is stdout (the operator entry); an empty value is refused.
+        type=operator_file_type(),
         help="Write output to file instead of stdout",
     )
     parser.add_argument(
@@ -1024,7 +1028,7 @@ def main() -> int:
 
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
-        write_text_or_die(args.output, output, flag="-o/--output")
+        write_operator_output_or_die(args.output, output, flag="-o/--output")
         print(f"Written to {args.output}", file=sys.stderr)
     else:
         print(output)

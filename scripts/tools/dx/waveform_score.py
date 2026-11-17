@@ -83,7 +83,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json  # noqa: E402
-from _lib_python import write_text_secure  # noqa: E402
+from _lib_io import write_operator_output  # noqa: E402  (#3107 ③c)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③c)
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789)
 from _lib_io import DuplicateKeyError, strict_safe_load  # noqa: E402  (#2123)
 
@@ -782,7 +783,12 @@ def main() -> "int | Report":
                              "docs/schemas/waveform-tolerances.schema.json）")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="stdout 輸出機器可讀 JSON（R2-4 結構化 baseline）")
-    parser.add_argument("--out", help="另將 JSON 報告寫到檔案（write_text_secure）")
+    # #3107 ③c: the human report (or --json) owns stdout, so `-` and the
+    # file stdout already writes are refused at parse time.
+    parser.add_argument("--out", help="另將 JSON 報告寫到檔案",
+                        type=operator_file_type(
+                            stdout="this tool prints its report there "
+                                   "(--json prints this JSON document)"))
     parser.add_argument("--redact", action="store_true",
                         help="出關安全模式（air-gapped / 受限 egress）：所有輸出只含 "
                              "verdict + 計數 + 比率 + scope，剝除全部識別項（alertname"
@@ -859,7 +865,7 @@ def main() -> "int | Report":
         # #3216: the one encoder, for --out and for the --json document
         # run() prints — the two cannot differ.
         if args.out:
-            write_text_secure(args.out, encode_json(emit) + "\n", flag="--out")
+            write_operator_output(args.out, encode_json(emit) + "\n", flag="--out")
         if args.json_output:
             pass  # run() prints the document (returned below)
         elif args.redact:
