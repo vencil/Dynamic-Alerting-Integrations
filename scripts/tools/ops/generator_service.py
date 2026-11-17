@@ -1223,7 +1223,9 @@ class Service:
                          f"{self.s.self_check_timeout_seconds}s: "
                          + run.stderr.decode("utf-8", "replace"))
                     return "repo_unreadable"
-                argv = steps.send((run.rc, run.stdout, run.stderr))
+                # cut: `_run_held` reads one byte past the limit to tell
+                argv = steps.send((run.rc, run.stdout, run.stderr,
+                                   len(run.stdout) > _SELF_CHECK_STDOUT_LIMIT))
         except StopIteration as done:
             state = done.value
         except RepoRefused as exc:
@@ -1756,7 +1758,8 @@ class RepoState:
 def _repo_judgement(git: str, repo: str):
     """The one judgement of --repo (#3739, #3903, #4035), as a generator of
     its steps: it yields each git argv to run, in order, is sent ``(rc,
-    stdout, stderr)`` of each, and returns a :class:`RepoState` — or raises
+    stdout, stderr, cut)`` of each (`_git_step`: *cut*, the driver read less
+    than git wrote), and returns a :class:`RepoState` — or raises
     :class:`RepoRefused`. It runs nothing itself: start-up
     (:func:`_repo_state`) and the self-check's probe
     (``Service._repo_probe``) each run what it yields their own way, and
@@ -1783,8 +1786,8 @@ def _repo_judgement(git: str, repo: str):
     service started, answered ``ready``, and every request was
     ``rejected/git_read``."""
     shown = safe_label(repo) if repo else "''"
-    rc, out, err = yield [git, "-C", repo, "rev-parse", "--show-object-format",
-                          "--show-prefix"]
+    rc, out, err = yield from _git_step(
+        [git, "-C", repo, "rev-parse", "--show-object-format", "--show-prefix"], shown)
     if rc != 0:
         why = " ".join(err.decode("utf-8", "replace").split()) or f"git exited {rc}"
         raise RepoRefused(f"--repo {shown}: {safe_label(why)}")
@@ -1802,19 +1805,34 @@ def _repo_judgement(git: str, repo: str):
     def commit_of(rc: int, out: bytes) -> str:
         return out.decode("ascii", "replace").strip() if rc == 0 else ""
 
-    rc, out, _err = yield resolve
+    rc, out, _err = yield from _git_step(resolve, shown)
     head = commit_of(rc, out)
     if not head:
-        unborn, why = yield from _head_is_unborn(git, repo)
+        unborn, why = yield from _head_is_unborn(git, repo, shown)
         if not unborn:
             # Once more: the first commit may have landed between the two
             # looks (HEAD was unborn for `rev-parse`, a commit for `show-ref`).
-            rc, out, _err = yield resolve
+            rc, out, _err = yield from _git_step(resolve, shown)
             head = commit_of(rc, out)
             if not head:
                 raise RepoRefused(f"--repo {shown}: HEAD names no commit git can "
                                   f"read ({safe_label(why)})")
     return RepoState(fmt, head or None)
+
+
+def _git_step(argv: list, shown: str):
+    """One git run of :func:`_repo_judgement` (``yield from``): yields
+    *argv*, is sent ``(rc, stdout, stderr, cut)``, returns ``(rc, stdout,
+    stderr)``. *cut* — the driver read less of stdout than git wrote (the
+    probe reads a bounded amount, ``Service._repo_probe``) — refuses --repo
+    here, the one place: a cut answer is never read on as if whole (a
+    ``symbolic-ref`` name cut short names a ref that is not there, which
+    reads as a branch with no commit yet)."""
+    rc, out, err, cut = yield argv
+    if cut:
+        raise RepoRefused(f"--repo {shown}: git's answer is longer than what is "
+                          f"read of it; --repo is not judged on part of it")
+    return rc, out, err
 
 
 def _repo_state(git: str, repo: str) -> RepoState:
@@ -1841,7 +1859,8 @@ def _repo_state(git: str, repo: str) -> RepoState:
                     raise
                 raise RuntimeError(f"--git {shown_git}: {exc.strerror}") from exc
             first = False
-            argv = steps.send((proc.returncode, proc.stdout, proc.stderr))
+            # all of it read: never cut
+            argv = steps.send((proc.returncode, proc.stdout, proc.stderr, False))
     except StopIteration as done:
         return done.value
 
@@ -1868,7 +1887,7 @@ def _normalize_config_subdir(value: str) -> str:
 _TREE_MODE = "040000"
 
 
-def _head_is_unborn(git: str, repo: str):
+def _head_is_unborn(git: str, repo: str, shown: str):
     """A step of :func:`_repo_judgement` (``yield from``): ``(whether HEAD
     is a branch nothing was committed to yet, what git said when it is
     not)`` — `git init`, `git checkout --orphan`: a symbolic ref (``git
@@ -1886,7 +1905,7 @@ def _head_is_unborn(git: str, repo: str):
     def said(rc, stderr, what):
         return (" ".join(stderr.decode("utf-8", "replace").split())
                 or f"git {what} exited {rc}")
-    rc, out, err = yield [git, "-C", repo, "symbolic-ref", "-q", "HEAD"]
+    rc, out, err = yield from _git_step([git, "-C", repo, "symbolic-ref", "-q", "HEAD"], shown)
     # ⛔ The ref's own bytes, less git's one newline: `str.strip()` also takes
     # a trailing U+00A0, which a branch name may end in — `topic `
     # naming a missing commit was asked about as `topic`, found absent, and
@@ -1894,8 +1913,9 @@ def _head_is_unborn(git: str, repo: str):
     name = out[:-1] if out.endswith(b"\n") else out
     if rc != 0 or not name:
         return False, said(rc, err, "symbolic-ref")
-    rc, _out, err = yield [os.fsencode(git), b"-C", os.fsencode(repo), b"show-ref",
-                           b"--verify", b"--quiet", name]
+    rc, _out, err = yield from _git_step(
+        [os.fsencode(git), b"-C", os.fsencode(repo), b"show-ref", b"--verify", b"--quiet", name],
+        shown)
     if rc == 0:
         return False, f"{name.decode('utf-8', 'replace')} is there and names no commit"
     return rc == 1, said(rc, err, "show-ref")

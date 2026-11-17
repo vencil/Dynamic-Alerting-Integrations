@@ -1156,6 +1156,33 @@ def test_a_reader_that_cannot_be_added_leaves_no_process_or_descriptor(
     assert not os.path.exists(f"/proc/{started[0]}"), "the process was not collected"
 
 
+def test_a_probe_never_judges_on_a_cut_answer(tmp_path, monkeypatch, capsys):
+    """CodeRabbit (#4050): the probe reads a bounded stdout. A `symbolic-ref`
+    answer longer than that, cut short, names a ref that is not there —
+    which `show-ref` would answer "absent", read as a branch with no commit
+    yet: passed. A cut answer refuses --repo instead (``repo_unreadable``)."""
+    import os
+    import _gsvc_child
+    if not hasattr(os, "pidfd_open"):
+        pytest.skip("pidfd_open: Linux only")
+    long_ref = "refs/heads/" + "b" * (gs._SELF_CHECK_STDOUT_LIMIT + 100)
+    git = tmp_path / "git"
+    git.write_text(
+        "#!/bin/sh\n"
+        'case "$3" in\n'
+        "  rev-parse) [ \"$4\" = --show-object-format ] && { printf 'sha1\\n\\n'; exit 0; }\n"
+        "             exit 1;;\n"            # HEAD^{commit}: no commit
+        f"  symbolic-ref) echo '{long_ref}'; exit 0;;\n"
+        "  show-ref) exit 1;;\n"             # whatever is asked: not there
+        "esac\nexit 2\n", encoding="utf-8")
+    git.chmod(0o755)
+    monkeypatch.setitem(_gsvc_child._LOCAL_ENV_VARS, str(git), frozenset({"GIT_DIR"}))
+    svc = _probing_service(tmp_path, tmp_path)
+    svc.s.git = str(git)
+    assert _probe(svc) == "repo_unreadable"
+    assert "longer than what is read of it" in capsys.readouterr().err
+
+
 def test_a_probe_past_its_time_limit_logs_what_git_said(tmp_path, monkeypatch, capsys):
     """CodeRabbit (#4050): git's stderr goes to the log, as cli-reference
     says — also when git said something and then stopped answering: the
