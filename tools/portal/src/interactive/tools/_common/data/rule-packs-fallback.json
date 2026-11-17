@@ -643,7 +643,7 @@
       "exporter": "threshold-exporter",
       "configMap": "prometheus-rules-platform",
       "recordingRules": 1,
-      "alertRules": 55,
+      "alertRules": 56,
       "required": true,
       "defaults": {},
       "metrics": [

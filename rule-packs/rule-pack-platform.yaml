@@ -2781,53 +2781,81 @@ groups:
         labels:
           rulepack_digest: "63343e1d88e9"
       # <<< GENERATED:threshold-registry:platform-builtin-digest
-      # A threshold-exporter that serves no digest series is a
-      # release older than the built-in layer (#3832): it has no built-in
-      # value at all, so it counts as a mismatch (digest="none"). The same
-      # holds for a scraped tenant-api. A component that is not scraped
-      # (up absent) is not judged here; ThresholdExporterAbsent covers the
-      # exporter. for: 30m leaves room for a rolling upgrade of the
-      # components one after another (#3832 decision 9, step 3).
+      # A component that serves no digest series is a release older than the
+      # built-in layer (#3832): it has no built-in value at all, so it counts
+      # as a mismatch (digest="none"). A component that is not scraped (up
+      # absent) or is down is not judged here; ThresholdExporterAbsent /
+      # ThresholdExporterDown cover the exporter. Grouped by (job, digest),
+      # not instance: a rescheduled pod does not restart `for:`, and for: 30m
+      # leaves room for a rolling upgrade of the components one after another
+      # (#3832 decision 9, step 3). The pack's digest is read in the
+      # annotations (a template query), not joined in: several pack digests
+      # loaded at once must not turn the expression into a many-to-many
+      # error — that case is BuiltinDefaultsRulePackDigestsDiffer below.
       - alert: BuiltinDefaultsDigestMismatch
         expr: |
           (
-            (
-              max by (job, instance, digest) (da_config_builtin_defaults_info{job="threshold-exporter"})
-              or max by (job, instance, digest) (tenant_api_builtin_defaults_info{job="tenant-api"})
-              or on (job, instance)
-              label_replace(max by (job, instance) (up{job="threshold-exporter"} == 1), "digest", "none", "", "")
-              or on (job, instance)
-              label_replace(max by (job, instance) (up{job="tenant-api"} == 1), "digest", "none", "", "")
+            max by (job, digest) (da_config_builtin_defaults_info{job="threshold-exporter"})
+            or max by (job, digest) (tenant_api_builtin_defaults_info{job="tenant-api"})
+            or label_replace(
+              max by (job) (
+                (up{job="threshold-exporter"} == 1 unless on (job, instance) da_config_builtin_defaults_info)
+                or (up{job="tenant-api"} == 1 unless on (job, instance) tenant_api_builtin_defaults_info)
+              ),
+              "digest", "none", "", ""
             )
-            unless on (digest)
-            label_replace(rule_pack_builtin_defaults_info, "digest", "$1", "rulepack_digest", "(.*)")
           )
-          * on () group_left (rulepack_digest) rule_pack_builtin_defaults_info
+          unless on (digest)
+          label_replace(rule_pack_builtin_defaults_info, "digest", "$1", "rulepack_digest", "(.*)")
         for: 30m
         labels:
           severity: warning
           alert_source: platform
         annotations:
-          summary: "{{ $labels.job }} built-in defaults table {{ $labels.digest }} differs from the platform rule pack's {{ $labels.rulepack_digest }}"
+          summary: "{{ $labels.job }} built-in defaults table {{ $labels.digest }} differs from the platform rule pack's {{ with query \"rule_pack_builtin_defaults_info\" }}{{ range . }}{{ .Labels.rulepack_digest }} {{ end }}{{ end }}"
           description: |
-            {{ $labels.job }} ({{ $labels.instance }}) is compiled with the
-            built-in defaults table {{ $labels.digest }}; the platform rule
-            pack was generated from the threshold registry whose table is
-            {{ $labels.rulepack_digest }}. digest="none" means the component
-            serves no digest series: a release older than the
-            built-in layer, which gives no default-armed threshold a value
-            unless conf.d writes it.
+            {{ $labels.job }} has served the built-in defaults table
+            {{ $labels.digest }} for 30 minutes (on at least one of its
+            instances); the platform rule pack was generated from the
+            threshold registry whose table is {{ with query "rule_pack_builtin_defaults_info" }}{{ range . }}{{ .Labels.rulepack_digest }} {{ end }}{{ end }}.
+            digest="none" means an instance serves no digest series: a release
+            older than the built-in layer, which gives no default-armed
+            threshold a value unless conf.d writes it.
             Which side is newer decides what goes wrong (#3832 decision 5):
             rule packs newer than the threshold-exporter — a newly
             default-armed threshold has no value, so its alert never fires;
             threshold-exporter newer than the rule packs — it serves rows no
-            rule reads, and recalibrated values are read by the old rules;
-            tenant-api newer than the threshold-exporter — a write that relies
-            on the built-in layer passes tenant-api's check while the
-            exporter serves no row for it.
+            rule reads, and recalibrated values are read by the old rules.
+            For tenant-api, compare with the threshold-exporter's digest too
+            (da_config_builtin_defaults_info): tenant-api newer than the
+            exporter — a write that relies on the built-in layer passes
+            tenant-api's check while the exporter serves no row for it;
+            tenant-api older — it may refuse a write the exporter would serve.
             Upgrade the threshold-exporter, tenant-api and the rule packs
             until every digest is the same; `da-guard effective` (da-tools)
             prints the digest of the table it was built with. Do not remove
             the copies of the platform values from conf.d (the migration
             command) while this fires.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
+
+      # Two pack versions loaded at once (a stale ConfigMap beside a new
+      # PrometheusRule, an old copy of this group in another rule file): their
+      # rules disagree on which thresholds are default-armed, and a component
+      # aligned with either one does not fire the alert above.
+      - alert: BuiltinDefaultsRulePackDigestsDiffer
+        expr: count(count by (rulepack_digest) (rule_pack_builtin_defaults_info)) > 1
+        for: 30m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "{{ $value }} platform rule pack versions with different built-in defaults tables are loaded"
+          description: |
+            This Prometheus evaluates {{ $value }} copies of the platform rule
+            pack generated from different threshold registries (digests:
+            {{ with query "rule_pack_builtin_defaults_info" }}{{ range . }}{{ .Labels.rulepack_digest }} {{ end }}{{ end }}).
+            Their rules disagree on which thresholds are default-armed and
+            at what value, and BuiltinDefaultsDigestMismatch stays silent for
+            a component that matches either copy. Remove the stale copy
+            (an old configmap-rules-platform ConfigMap or PrometheusRule).
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
