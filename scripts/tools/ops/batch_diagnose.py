@@ -57,7 +57,7 @@ from _lib_python import (  # noqa: E402
 from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
 from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, encode_json)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, json_file_text)
 from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
 import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9: Go classes the key names)
@@ -533,9 +533,11 @@ def main():
         # an unwritable -o is then rc 2 with stdout empty, not a document
         # beside rc 2.
         # #3107 ③b: the operator entry (0600, kernel open) and the one
-        # encoder — byte for byte what --json prints.
-        write_operator_output_or_die(args.output, encode_json(report) + "\n",
-                                     flag="-o/--output")
+        # encoder — byte for byte what --json prints; a document JSON cannot
+        # carry: under --json no file, run() names it.
+        text = json_file_text(report, flag="-o/--output", under_json=args.json)
+        if text is not None:
+            write_operator_output_or_die(args.output, text, flag="-o/--output")
         if not args.json:
             print(f"\nJSON report written to: {args.output}")
 

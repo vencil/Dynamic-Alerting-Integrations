@@ -64,7 +64,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_operator_output_or_die, output_dir_type, add_prometheus_arg, prometheus_url, non_negative_seconds  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, encode_json  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, json_file_text  # noqa: E402
 from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
 from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT  # noqa: E402  (#3662)
@@ -556,8 +556,8 @@ def main():
                     )
                     conv_flag = _convergence_flag(args)
                     ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
-                    write_operator_output_or_die(conv_path, encode_json(report) + "\n",
-                                                 flag=conv_flag)
+                    write_operator_output_or_die(
+                        conv_path, json_file_text(report, flag=conv_flag), flag=conv_flag)
                     print(f"\n  Cutover readiness report: {conv_path}")
                     break
 
@@ -572,8 +572,8 @@ def main():
             )
             conv_flag = _convergence_flag(args)
             ensure_dir_or_die(Path(conv_path).parent, flag=conv_flag)
-            write_operator_output_or_die(conv_path, encode_json(final) + "\n",
-                                         flag=conv_flag)
+            write_operator_output_or_die(
+                conv_path, json_file_text(final, flag=conv_flag), flag=conv_flag)
             print(f"  Partial convergence report: {conv_path}")
 
         if csv_path:

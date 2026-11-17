@@ -2161,14 +2161,22 @@ class TestOutputPreflight:
         target = tmp_path / "out"
         os.mkfifo(target)
         tool = os.path.join(os.path.dirname(bt.__file__), "backtest_threshold.py")
-        # A caller error (no --baseline) still writes both outputs (#3089).
+        seed = os.path.join(os.path.dirname(bt.__file__), "..", "..", "..",
+                            "try-local", "seed", "conf.d")
+        # A full argument set, so the preflight runs (and passes the FIFO);
+        # Prometheus is unreachable, and the skip still writes both outputs
+        # (#3089) — the write is what fails.
         r = subprocess.run(
-            [sys.executable, tool, "--config-dir", str(tmp_path), "--prometheus",
-             "http://127.0.0.1:1", "--skip-if-unavailable", flag, str(target)],
+            [sys.executable, tool, "--config-dir", seed, "--baseline", seed,
+             "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable",
+             flag, str(target)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         named = "-o/--output" if flag == "-o" else flag
         assert r.returncode == 2, r.stderr
         assert f"ERROR: cannot write {target}: " in r.stderr, r.stderr
+        # The write's failure, not the preflight's: the run got past it.
+        skipped = r.stderr.find("skipping backtest")
+        assert 0 <= skipped < r.stderr.find("cannot write"), r.stderr
         assert f"check the value given to {named}" in r.stderr, r.stderr
         assert "Traceback" not in r.stderr and "internal error" not in r.stderr, r.stderr
 

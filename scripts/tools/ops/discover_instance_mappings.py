@@ -436,8 +436,10 @@ def main(argv: list[str] | None = None) -> "int | Report":
 
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        # #3107 ③b: under --json the file is what --json prints (with its
+        # newline); the draft holds no float, so it always encodes.
         write_operator_output_or_die(args.output,
-                                     encode_json(draft) if args.json else output,
+                                     encode_json(draft) + "\n" if args.json else output,
                                      flag="-o/--output")
         saved_msg = "已儲存" if lang == "zh" else "Saved to"
         print(f"\n{saved_msg}: {args.output}", file=sys.stderr)

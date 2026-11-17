@@ -50,7 +50,7 @@ from _lib_tenant_values import (  # noqa: E402  (#2115)
     load_served_tree,
     print_load_warnings,
 )
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report, encode_json  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report, json_file_text  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default paths (relative to script location for da-tools container)
@@ -473,9 +473,11 @@ def _main(args):
         # an unwritable -o is then rc 2 with stdout empty, not a document
         # beside rc 2.
         # #3107 ③b: the operator entry (0600, kernel open) and the one
-        # encoder — byte for byte what --json prints.
-        write_operator_output_or_die(args.output, encode_json(results) + "\n",
-                                     flag="-o/--output")
+        # encoder — byte for byte what --json prints. A document JSON cannot
+        # carry (a conf.d .nan): under --json no file, run() names it.
+        text = json_file_text(results, flag="-o/--output", under_json=args.json)
+        if text is not None:
+            write_operator_output_or_die(args.output, text, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")
     if args.json:

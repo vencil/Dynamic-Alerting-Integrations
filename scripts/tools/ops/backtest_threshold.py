@@ -68,7 +68,7 @@ import _lib_input  # noqa: E402  (#3902 the two trees are declared inputs)
 import _lib_parse_cache  # noqa: E402  (#3902 their one judgement)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, InputChanged,
-    OutputNotSerializable, Report, encode_json)
+    Report, json_file_text)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import THRESHOLD_SEVERITIES  # noqa: E402  (#3071)
 # #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
@@ -1522,14 +1522,11 @@ def _write_outputs(args, report, markdown, recipe_tenants):
     document, so an unwritable path ends with the envelope, not with a
     complete-looking document beside rc 2. A document JSON cannot carry
     writes no `-o`: under `--json` it goes on to `run()`, which names it
-    (`output_not_serializable`, the crash code); without `--json` it is
-    the crash it is."""
+    (`output_not_serializable`, the crash code); without `--json`
+    `json_file_text` names it for `-o` with the same code (#3107 ③b)."""
     if args.output:
-        try:
-            text = encode_json(report) + "\n"
-        except OutputNotSerializable:
-            if not args.json:
-                raise
+        text = json_file_text(report, flag="-o/--output", under_json=args.json)
+        if text is None:
             return
         write_operator_output_or_die(args.output, text, flag="-o/--output")
         if not args.json:

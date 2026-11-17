@@ -353,7 +353,13 @@ class OperatorFileArg:
     * ``-`` when *stdout* is given: this tool's standard output already has
       an owner (its report, ``--json``), so a second document there could
       not be told apart from the first (owner 2026-11-15). *stdout* says who
-      owns it and where to get the document instead.
+      owns it and where to get the document instead;
+    * likewise any other name of this run's standard output — the file or
+      pipe fd 1 already writes to (``-o F > F``, ``/dev/stdout`` on a pipe,
+      ``/proc/self/fd/1``): the operator entry writes those through stdout
+      as it does ``-`` (``_lib_io.targets_stdout``), so they are the same
+      second document. A terminal is not one (``targets_stdout``: a
+      character device is reopened, not shared).
     """
 
     def __init__(self, stdout: Optional[str], then: Any = None) -> None:
@@ -370,6 +376,14 @@ class OperatorFileArg:
             raise argparse.ArgumentTypeError(
                 f"'-' is standard output, and {self.stdout} (to write a file "
                 f"called -, pass ./-)")
+        if self.stdout is not None:
+            # Imported here: a module-level import of the I/O layer from the
+            # validators would be the first edge between the two.
+            from _lib_io import targets_stdout  # noqa: E402
+            if targets_stdout(value):
+                raise argparse.ArgumentTypeError(
+                    f"{value!r} is this run's standard output, and "
+                    f"{self.stdout}; name another file")
         return self.then(value) if self.then is not None else value
 
 

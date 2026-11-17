@@ -142,3 +142,65 @@ def test_dash_is_standard_output_where_nothing_else_writes_it(tool, flag, tmp_pa
     assert proc.returncode == 0, proc.stderr[-800:]
     assert proc.stdout.strip(), "the document did not reach stdout"
     assert list(cwd.iterdir()) == [], "a file called - was made"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="fd 1 redirected to a file")
+@pytest.mark.parametrize("tool,flag", [k for k, v in OPERATOR_FILE_FLAGS.items() if v],
+                         ids=[i for i, v in zip(_IDS, OPERATOR_FILE_FLAGS.values()) if v])
+def test_another_name_of_stdout_is_refused_where_stdout_is_taken(tool, flag, tmp_path, stub_url):
+    """`-o F > F` (and `/dev/stdout` on a pipe) is `-` to the operator
+    entry: written through stdout, beside the report or the --json document.
+    Refused at parse time like `-`, the file left as it was."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == (tool, flag))
+    ctx = Ctx(tmp_path, stub_url)
+    target = tmp_path / "taken.out"
+    target.write_text("kept\n", encoding="utf-8")
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    cmd = [sys.executable, str(TOOLS_DIR / tool), *row.build(ctx, target)]
+    with open(target, "ab") as fd1:
+        proc = subprocess.run(cmd, stdout=fd1, stderr=subprocess.PIPE, timeout=180,
+                              env=env, cwd=tmp_path)
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err[-800:]
+    assert _refused_by_name(err, flag, f"{str(target)!r} is this run's standard output"), err[-800:]
+    assert target.read_text(encoding="utf-8") == "kept\n"
+    proc = subprocess.run([sys.executable, str(TOOLS_DIR / tool),
+                           *row.build(ctx, Path("/dev/stdout"))],
+                          capture_output=True, timeout=180, env=env, cwd=tmp_path)
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err[-800:]
+    assert _refused_by_name(err, flag, "'/dev/stdout' is this run's standard output"), err[-800:]
+    assert proc.stdout == b""
+
+
+#: Flags whose file is the JSON document `--json` prints.
+JSON_DOCUMENT_FLAGS = [
+    ("ops/analyze_rule_pack_gaps.py", "-o/--output"),
+    ("ops/backtest_threshold.py", "-o/--output"),
+    ("ops/batch_diagnose.py", "-o/--output"),
+    ("ops/discover_instance_mappings.py", "-o/--output"),
+]
+
+
+@pytest.mark.parametrize("tool,flag", JSON_DOCUMENT_FLAGS,
+                         ids=[f"{Path(t).stem}[{f}]" for t, f in JSON_DOCUMENT_FLAGS])
+def test_the_file_is_byte_for_byte_what_json_prints(tool, flag, tmp_path, stub_url):
+    """#3107 ③b: one encoder (`json_file_text`) for the file and for
+    --json's stdout — same bytes, trailing newline included; and under
+    --json the file is still written."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == (tool, flag))
+    ctx = Ctx(tmp_path, stub_url)
+    target = tmp_path / "doc.json"
+    argv = row.build(ctx, target)
+    if "--json" not in argv:
+        argv = [*argv, "--json"]
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    proc = subprocess.run([sys.executable, str(TOOLS_DIR / tool), *argv],
+                          capture_output=True, timeout=180, env=env, cwd=tmp_path)
+    assert proc.returncode in (0, 1), proc.stderr.decode("utf-8", "replace")[-800:]
+    assert proc.stdout.strip(), "no --json document"
+    assert target.read_bytes() == proc.stdout
