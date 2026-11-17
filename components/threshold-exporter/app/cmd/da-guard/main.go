@@ -430,14 +430,16 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			// ScopeEffective returns the files the walk could not read
 			// beside a DecodeError (#2588); name them too.
 			var unreadable []skippedFile
+			identity := ""
 			if scoped != nil {
 				unreadable = unreadableEntries(scoped.Unreadable)
+				identity = scoped.TreeIdentity
 			}
 			// The evidence is the whole tree's, so the stopped run still lists
 			// it (the exit code stays 3).
 			undetermined := undeterminedEvidence(f.configDir, rootUnreadable(unreadable),
 				reportedPaths([]string{de.Path}, unreadable), errOut)
-			if werr := writeDecodeStopReport(stdout, errOut, f, de, unreadable, undetermined); werr != nil {
+			if werr := writeDecodeStopReport(stdout, errOut, f, identity, de, unreadable, undetermined); werr != nil {
 				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
 				return exitCallerErr
 			}
@@ -515,7 +517,7 @@ func runDefault(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	// 3, never the vacuous 0. Nor when the tree holds what only the route
 	// generator judges (#2991, #2904): that is exit 4.
 	if len(scoped.Tenants) == 0 && len(report.Findings) == 0 {
-		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable, undetermined); err != nil {
+		if err := writeEmptyReport(stdout, errOut, f, scoped.TreeIdentity, scoped.ParseFailed, scoped.Unreadable, undetermined); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
@@ -891,7 +893,10 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 		body = renderMarkdown(f.configDir, scoped, report, notices, undetermined)
 	case "json":
 		b, err := json.MarshalIndent(struct {
-			ConfigDir   string        `json:"config_dir"`
+			ConfigDir string `json:"config_dir"`
+			// ConfigHash: the identity of the walk of the whole --config-dir
+			// tree this report read, whatever --scope is (configHashField).
+			ConfigHash  *string       `json:"config_hash"`
 			Scope       string        `json:"scope,omitempty"`
 			SourceFiles []string      `json:"source_files"`
 			Notices     []string      `json:"notices,omitempty"`
@@ -902,6 +907,7 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 			Report       *guard.GuardReport `json:"report"`
 		}{
 			ConfigDir:    f.configDir,
+			ConfigHash:   configHashField(scoped.TreeIdentity),
 			Scope:        f.scopeDir,
 			SourceFiles:  nonNilStrings(scoped.SourceFiles), // #2031: [] for a scope with no tenant
 			Notices:      notices,
@@ -977,7 +983,7 @@ func renderMarkdown(configDir string, scoped *config.ScopedTenants, report *guar
 // Emits a clean Markdown / JSON shell so downstream consumers (PR
 // comment poster, dashboards, log scrapers) don't have to
 // special-case empty input.
-func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, unreadable []config.UnreadableFile,
+func writeEmptyReport(stdout, errOut io.Writer, f *flags, identity string, parseFailed []string, unreadable []config.UnreadableFile,
 	undetermined []undeterminedItem) error {
 	var body string
 	switch f.format {
@@ -1004,6 +1010,7 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, 
 	case "json":
 		doc := map[string]any{
 			"config_dir":   f.configDir,
+			"config_hash":  configHashField(identity),
 			"scope":        f.scopeDir,
 			"source_files": []string{},
 			"undetermined": nonNilUndetermined(undetermined),
@@ -1053,7 +1060,7 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, 
 // the scope because one file failed the decode (#2123, exit 3). No tenant was
 // checked: ScopeEffective fails the whole scope on the first such file, so
 // the list names that file only — fix it and re-run to see the next one.
-func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError, unreadable []skippedFile,
+func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, identity string, de *config.DecodeError, unreadable []skippedFile,
 	undetermined []undeterminedItem) error {
 	files := []string{de.Path}
 	var body string
@@ -1066,6 +1073,7 @@ func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.Decode
 	case "json":
 		doc := map[string]any{
 			"config_dir":   f.configDir,
+			"config_hash":  configHashField(identity),
 			"scope":        f.scopeDir,
 			"source_files": []string{},
 			"parse_failed": files,

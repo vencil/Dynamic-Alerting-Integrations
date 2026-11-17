@@ -44,6 +44,8 @@ const effectiveSchema = "da-guard.effective/v1"
 // not echoed back (see servedValuesDoc).
 type effectiveDoc struct {
 	Schema string `json:"schema"`
+	// ConfigHash: the identity of the walk this document read (configHashField).
+	ConfigHash *string `json:"config_hash"`
 	// ParseFailed: the files the exporter's load of the tree skips because
 	// they do not decode (ScopedTenants.ParseFailed over the whole tree).
 	// Always present ([] when none).
@@ -302,6 +304,7 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		// Set on success and on a DecodeError stop alike (#2588): a run
 		// stopped by one undecodable file still names the unreadable ones.
 		doc.Unreadable = unreadableEntries(tree.Unreadable)
+		doc.ConfigHash = configHashField(tree.TreeIdentity)
 	}
 	if err == nil {
 		doc.BuiltinDefaults = builtinDefaultsOf(tree)

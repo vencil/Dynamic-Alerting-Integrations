@@ -78,6 +78,8 @@ type keyError struct {
 // keyVerdictDoc is `da-guard key-verdict`'s JSON document.
 type keyVerdictDoc struct {
 	Schema string `json:"schema"`
+	// ConfigHash: the identity of the walk this document read (configHashField).
+	ConfigHash *string `json:"config_hash"`
 	// At: the instant `expires:` is read at — the one input of the verdict
 	// that is not the whole day (#3835).
 	At string `json:"at"`
@@ -134,6 +136,10 @@ type keyVerdictResult struct {
 	// no error (a `da-guard write` that starts the tree has an empty
 	// baseline). served-values refuses such a tree; `key-verdict` does too.
 	noConfig bool
+	// identity: the walk identity of the tree as it is on disk (the first
+	// scan), "" when the verdict read another — the caller's overlays, or
+	// the declaring files of a duplicate set aside (#3965).
+	identity string
 	// setAside: with ScanOptions.SkipDuplicated, every tenant left out of
 	// the judgment because a file declaring it also declares a tenant
 	// another file declares (setAsideDuplicates).
@@ -171,6 +177,10 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	if err != nil {
 		return keyVerdictResult{}, err
 	}
+	identity := ""
+	if len(overlays) == 0 {
+		identity = scan.Composite // before a set-aside re-scan reads another tree
+	}
 	var setAside, setAsideFiles map[string]bool
 	if scan.Conflict != nil && opts.scan.SkipDuplicated {
 		setAsideFiles, setAside = duplicateDeclarers(scan)
@@ -181,6 +191,8 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 			Overlays: overlays, OverlayMakesDirs: opts.scan.OverlayMakesDirs}); err != nil {
 			return keyVerdictResult{}, err
 		}
+		identity = "" // the verdict reads the tree with the declaring files set aside: not the disk's
+
 	}
 	unjudged := func(err error) (keyVerdictResult, error) {
 		return keyVerdictResult{why: err, setAside: setAside}, nil
@@ -189,7 +201,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 		return keyVerdictResult{judged: true, tree: keyverdict.Tree{Keys: map[string][]keyverdict.KeyVerdict{},
 			Findings: []keyverdict.Finding{}},
 			keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{}, errors: []keyError{},
-			setAside: setAside}
+			setAside: setAside, identity: identity}
 	}
 	var heads []keyverdict.PolicyHead
 	if _, data, ok := scan.RootCarrier(); ok {
@@ -270,7 +282,8 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	in.Whole = opts.tenants == nil && len(rep.ParseFailed) == 0 && len(rep.Unreadable) == 0 && len(setAside) == 0
 	res := keyVerdictResult{judged: true, tree: keyverdict.Judge(in),
 		keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{},
-		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}
+		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside,
+		identity: identity}
 	for t, sv := range served {
 		res.keyChecks[t] = sv.KeyChecks
 		res.computed[t] = true
@@ -646,7 +659,8 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 	if !res.judged || res.noConfig {
 		return fail(res.why)
 	}
-	out := keyVerdictDoc{Schema: keyVerdictSchema, At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
+	out := keyVerdictDoc{Schema: keyVerdictSchema, ConfigHash: configHashField(res.identity),
+		At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
 		Blocks: res.tree.Blocks, UndecidableBlocks: res.tree.UndecidableBlocks,
 		Tenants: res.tree.Keys, Findings: res.tree.Findings, KeyChecks: res.keyChecks,
 		ParseFailed: nonNilStrings(res.parseFailed), Unreadable: res.unreadable,
