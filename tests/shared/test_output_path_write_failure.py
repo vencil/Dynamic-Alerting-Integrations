@@ -1005,10 +1005,8 @@ ROWS: list[Row] = [
       reach="tmp legacy Prometheus rules file",
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
       # #3107: `artifact_is_dir` reaches one of the five writes after the
-      # mkdir. The report is the artefact because a DIRECTORY named `*.yaml`
-      # in -o is refused by the shared conf.d check before anything is
-      # written; the other four calls are driven in process by
-      # tests/ops/test_migrate_rule_outputs.py.
+      # mkdirs — the report. All five calls are driven one by one, in
+      # process, by tests/ops/test_migrate_rule_outputs.py.
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="migration-report.txt", writer="python+da-guard"),
     R("ops/migrate_to_operator.py", "--output-dir", "dir", "operator",
