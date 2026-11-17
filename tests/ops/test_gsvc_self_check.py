@@ -463,8 +463,8 @@ def test_a_probe_the_kill_does_not_end_holds_the_slot_not_the_loop(rig):
     awaited on its pidfd — never a blocking wait: while it outlives the kill
     the service still answers, the round still running. The round has
     failed the moment the limit passed — not ready, ``repo_unreadable`` —
-    not once the process is collected; and once it is, the round's record
-    says the same."""
+    not once the process is collected; and once it is, the round is counted
+    failed."""
     git, armed = _hanging_git(rig)
     try:
         with rig.service("probe-unkillable", "--git", str(git),
@@ -484,10 +484,10 @@ def test_a_probe_the_kill_does_not_end_holds_the_slot_not_the_loop(rig):
             armed.unlink()
             _end_hanging(rig)
             _until(lambda: not _status(svc)["self_check"]["running"], "the round ending")
-            st = _status(svc)
-            assert st["self_check"]["failures"] == [_REPO_FAILURE], st
-            assert st["self_check"]["state"] == "failed" and st["tool_fault"] is None, st
+            # only what the next round (0.2 s later, passing) cannot undo: the
+            # round was counted failed, and no tool fault was made of it
             assert _rounds(svc, "failed") == 1
+            assert _status(svc)["tool_fault"] is None
     finally:
         _end_hanging(rig)
 
@@ -547,9 +547,9 @@ def test_a_probe_whose_exit_cannot_be_watched_holds_the_slot_not_the_loop(rig):
     either, the service still answers while it runs, the round holding the
     slot. The time limit holds on that path too (CodeRabbit, #4050): past
     it the round has failed that moment — ``internal_error``, what the path
-    records, not ready, still running — while the process lives on. Once it
-    ends the probe is the service's own failure (``internal_error``), never
-    ``repo_unreadable``."""
+    records, not ready, still running — while the process lives on: the
+    service's own failure, never ``repo_unreadable``. Once it ends the round
+    is counted failed."""
     git, armed = _hanging_git(rig)
     want = [{"binary": _gsvc_proto.SELF_CHECK_GIT_BINARY, "reason": "internal_error"}]
     try:
@@ -571,9 +571,9 @@ def test_a_probe_whose_exit_cannot_be_watched_holds_the_slot_not_the_loop(rig):
             armed.unlink()
             _end_hanging(rig)
             _until(lambda: not _status(svc)["self_check"]["running"], "the round ending")
-            st = _status(svc)
-            assert st["self_check"]["failures"] == want, st
-            assert st["ready"] is False, st
+            # only what the next round (0.2 s later, passing) cannot undo: the
+            # round was counted failed
+            assert _rounds(svc, "failed") == 1
     finally:
         _end_hanging(rig)
 
