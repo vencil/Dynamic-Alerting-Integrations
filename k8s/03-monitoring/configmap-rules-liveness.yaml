@@ -22,9 +22,10 @@ data:
     n  or label_replace(mongodb_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\"\
     , \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(elasticsearch_exporter_build_info{job=\\\
     \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\
-    \\\")\\n  or label_replace(oracledb_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
-    \", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(db2_up{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
+    \\\")\\n  or label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\
+    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\\
+    n  or label_replace(db2_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"\
+    db2\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
     \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\
     \")\\n  or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
     \", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(rabbitmq_up{job=\\\
@@ -91,12 +92,12 @@ data:
     \")\\n  or label_replace(max_over_time(mongodb_up{job=\\\"tenant-exporters\\\"\
     }[1h]), \\\"db_type\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(elasticsearch_exporter_build_info{job=\\\
     \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\"\
-    , \\\"\\\")\\n  or label_replace(max_over_time(oracledb_up{job=\\\"tenant-exporters\\\
-    \"}[1h]), \\\"db_type\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(db2_up{job=\\\
-    \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\\\"\
-    )\\n  or label_replace(max_over_time(ClickHouseMetrics_TCPConnection{job=\\\"\
-    tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\
-    \\\")\\n  or label_replace(max_over_time(kafka_brokers{job=\\\"tenant-exporters\\\
+    , \\\"\\\")\\n  or label_replace(max_over_time(query_interval{query=\\\"oracle_liveness\\\
+    \", job=\\\"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"oracle\\\", \\\"\\\
+    \", \\\"\\\")\\n  or label_replace(max_over_time(db2_up{job=\\\"tenant-exporters\\\
+    \"}[1h]), \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(ClickHouseMetrics_TCPConnection{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\
+    \"\\\")\\n  or label_replace(max_over_time(kafka_brokers{job=\\\"tenant-exporters\\\
     \"}[1h]), \\\"db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(rabbitmq_up{job=\\\
     \"tenant-exporters\\\"}[1h]) or max_over_time(rabbitmq_identity_info{job=\\\"\
     tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\

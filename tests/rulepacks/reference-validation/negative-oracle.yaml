@@ -9,7 +9,7 @@
 # vendor 文件 + DBA 領域知識 —— 沒有任何一項是從告警門檻反推、或被刻意
 # 調到剛好貼在門檻下方。如果有規則對其中之一觸發，那就是一個真實的
 # 過度觸發發現，而不是這個 pack 的缺陷。
-# metric 名稱取自 oracledb_exporter（iamseth）catalog。
+# metric 名稱取自 rule-packs/exporters/oracle.yaml（query-exporter 執行的查詢設定，#3833）。
 # =====================================================================
 
 pack:
@@ -36,12 +36,10 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: oracledb_sessions_active
+    metric: oracledb_sessions_current
     metric_kind: gauge
     companion_series:
-      - metric: oracledb_resource_limit
-        labels:
-          resource: sessions
+      - metric: oracledb_sessions_limit
         role: denominator
         metric_kind: gauge
         level: 1000

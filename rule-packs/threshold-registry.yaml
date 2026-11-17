@@ -105,10 +105,11 @@ packs:
     default_on: false
     rule_pack_file: rule-packs/rule-pack-elasticsearch.yaml
   oracle:
-    display: Oracle Database (oracledb_exporter)
-    exporter: iamseth/oracledb_exporter
+    display: Oracle Database (query-exporter)
+    exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-oracle.yaml
+    queries: rule-packs/exporters/oracle.yaml
   db2:
     display: IBM DB2 (ibm_db2_exporter)
     exporter: ibm_db2_exporter (community)

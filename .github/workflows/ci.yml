@@ -313,6 +313,8 @@ jobs:
           # All three scan a fixed surface and run in under 3s, so the usual
           # "too expensive for the ungated leg" argument does not apply.
           pre-commit run vmalert-coverage-check --all-files
+          # #3833: rule packs read only what their query-exporter config serves.
+          pre-commit run exporter-queries-check --all-files
           # #978: same fixed surface and cost as vmalert-coverage-check above.
           pre-commit run percent-render-pinned-check --all-files
           pre-commit run threshold-observed-map-drift-check --all-files
@@ -882,6 +884,18 @@ jobs:
       - name: "tenant-api-errors.json + swagger ErrorResponse match errcode + the kind table (HARD gate — #3202, #3272)"
         working-directory: components/tenant-api
         run: go run ./cmd/gen-error-contract --check
+
+      # #3833: the runtime half of check_exporter_queries.py. The static half
+      # (pre-commit `exporter-queries-check`, run in the Lint job) derives the
+      # names query-exporter serves for rule-packs/exporters/oracle.yaml; this
+      # runs that file against Oracle Database Free and fails when a query does
+      # not succeed or a derived name is not served. query-exporter's version is
+      # the requirements/ci-constraints.txt pin, for the package and the image.
+      - name: "Oracle queries run against a real Oracle and serve the derived names (HARD gate — #3833)"
+        run: |
+          pip install query-exporter -c requirements/ci-constraints.txt
+          # The comparison reads the rule pack the way Prometheus does (da-read).
+          bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_queries_oracle_runtime.sh
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
