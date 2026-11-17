@@ -1,5 +1,10 @@
 package main
 
+import (
+	"fmt"
+	"io"
+)
+
 // configHashField is a document's `config_hash` (#3965): the identity of the
 // walk the document was computed from (pkg/config treeIdentity — the value
 // `da-guard parse-tree` reports for the same tree and the exporter serves on
@@ -11,4 +16,24 @@ func configHashField(identity string) *string {
 		return nil
 	}
 	return &identity
+}
+
+// betweenWalks, when set, runs between two walks of --config-dir in one run
+// (after the default check's ScopeEffective; after key-verdict's facts walk
+// and after its first scan): a test changes the tree there to have the
+// run's later walks read another one. nil outside tests; set only by
+// non-parallel tests (#3965).
+var betweenWalks func(configDir string)
+
+// sameWalks reports whether two walks of one run read the same tree: first
+// and later are their identities ("" — a walk that claims none — compares
+// with anything). When they differ it says so on errOut: the run's answer
+// would mix two trees, so the caller ends it with exit 2 and no document.
+func sameWalks(first, later string, errOut io.Writer) bool {
+	if first == "" || later == "" || first == later {
+		return true
+	}
+	fmt.Fprintf(errOut, "%s: --config-dir changed during this run (its walks read %s, then %s); nothing was judged — run it again\n",
+		programName, first, later)
+	return false
 }

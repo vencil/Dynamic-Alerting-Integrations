@@ -754,13 +754,13 @@ def test_every_variant_row_has_its_own_argv():
 # ── running a row ────────────────────────────────────────────────────────
 
 def _env(case: pathlib.Path, meta: pathlib.Path, input_path: pathlib.Path, k: int,
-         mode: str) -> dict:
+         mode: str, victim: str = "") -> dict:
     env = {key: v for key, v in os.environ.items()
            if key != "PYTHONPATH" and not key.startswith(("COVERAGE_", "DA_FI_"))}
     env.update(DA_LANG="en", HOME=str(case / "home"), PYTHONPATH=str(HOOK),
                PYTHONDONTWRITEBYTECODE="1", DA_FI_INPUT=str(input_path),
                DA_FI_LOG=str(meta / "log.jsonl"), DA_FI_COUNT=str(meta / "count"),
-               DA_FI_K=str(k), DA_FI_MODE=mode,
+               DA_FI_K=str(k), DA_FI_MODE=mode, DA_FI_VICTIM=victim,
                PATH=f"{case.parent / 'bin'}{os.pathsep}{os.environ['PATH']}")
     return env
 
@@ -791,7 +791,7 @@ class Run:
 
 
 def _run(row_dir: pathlib.Path, n: int, kind: str, plan: dict, script: str, content: str,
-         k: int = 0, mode: str = "input") -> Run:
+         k: int = 0, mode: str = "input", victim: str = "") -> Run:
     """One run in a fresh case directory: the input at ``{CASE}/in``,
     ``{BOX}`` = ``{CASE}/box``, the working directory and HOME under it.
     Output and files have the case directory spelled ``{CASE}``."""
@@ -818,7 +818,7 @@ def _run(row_dir: pathlib.Path, n: int, kind: str, plan: dict, script: str, cont
             a = a.replace(key, v)
         args.append(a)
     proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / script), *args],
-                          cwd=case, env=_env(case, meta, input_path, k, mode),
+                          cwd=case, env=_env(case, meta, input_path, k, mode, victim),
                           capture_output=True, text=True, encoding="utf-8", errors="replace",
                           timeout=300, check=False, stdin=subprocess.DEVNULL)
     spelled = str(case)
@@ -902,12 +902,13 @@ def test_a_vanished_input_is_never_read_as_success(row, tmp_path, record_propert
     prometheus = _Prometheus(plan["prometheus"])
     plan["prom_url"] = prometheus.url
     try:
-        _gate_row(tmp_path, kind, rid, script, flag, plan, record_property)
+        _gate_row(tmp_path, kind, rid, script, flag, plan, record_property,
+                  confd=kind == "D" and getattr(spec, "select", None) == _lib_input.DA_GUARD_LISTS)
     finally:
         prometheus.close()
 
 
-def _gate_row(tmp_path, kind, rid, script, flag, plan, record_property):
+def _gate_row(tmp_path, kind, rid, script, flag, plan, record_property, confd=False):
     seq = iter(range(10_000))
     b0 = _run(tmp_path, next(seq), kind, plan, script, "live")
     # Over a second apart: a timestamp printed to the second differs between
@@ -938,24 +939,44 @@ def _gate_row(tmp_path, kind, rid, script, flag, plan, record_property):
     keys0, keys1 = [_key(e) for e in b0.points], [_key(e) for e in b1.points]
     assert keys0 == keys1, f"{rid}: the two baselines look at the input differently"
     record_property("points", len(keys0))
-    plans = [(k, "input") for k in range(1, len(keys0) + 1)]
-    plans += [(e["k"], "file") for e in b0.points
+    plans = [(k, "input", "") for k in range(1, len(keys0) + 1)]
+    plans += [(e["k"], "file", "") for e in b0.points
               if e["where"] == "child" and not e["path"].endswith("/in")
               and (tmp_path / "run-0" / e["path"].removeprefix("{CASE}/")).is_file()]
+    if confd:
+        # #3965: a declared conf.d tree is walked again by da-guard (served-
+        # values, effective, the route generator, …), which Python does not
+        # look inside. Each file of the tree is removed at the judgement
+        # itself and before every child process after it: the second walk
+        # reads one file fewer, and the run must refuse naming the flag or
+        # answer as with the whole tree.
+        victims = sorted(p.relative_to(tmp_path / "run-0" / "in").as_posix()
+                         for p in (tmp_path / "run-0" / "in").rglob("*")
+                         if p.is_file() and not p.is_symlink())
+        plans += [(0, "judged-victim", v) for v in victims]
+        plans += [(e["k"], "victim", v) for e in b0.points if e["ev"] == "subprocess.Popen"
+                  for v in victims]
     faults = []
-    for k, mode in plans:
-        got = _run(tmp_path, next(seq), kind, plan, script, "live", k=k, mode=mode)
-        fired = [e for e in got.points if e["fired"]]
-        at = b0.points[k - 1]
-        where = f"{rid}: K={k} ({mode}) at {at['site']} {at['ev']}({at['path']})"
-        if len(fired) != 1:
-            faults.append(f"{where}: the fault did not fire ({len(fired)} fired)")
-            continue
-        if _key(fired[0]) != _key(at):
-            faults.append(f"{where}: the {k}-th point of this run is "
-                          f"{fired[0]['site']} {fired[0]['ev']}({fired[0]['path']})")
-            continue
-        names = ["{CASE}/in"] + ([at["path"]] if mode == "file" else [])
+    for k, mode, victim in plans:
+        got = _run(tmp_path, next(seq), kind, plan, script, "live", k=k, mode=mode, victim=victim)
+        if mode == "judged-victim":
+            where = f"{rid}: {victim} removed at the judgement"
+            if not any(e.get("fired") for e in got.judged):
+                faults.append(f"{where}: the fault did not fire")
+                continue
+        else:
+            fired = [e for e in got.points if e["fired"]]
+            at = b0.points[k - 1]
+            where = f"{rid}: K={k} ({mode}{' ' + victim if victim else ''}) at {at['site']} {at['ev']}({at['path']})"
+            if len(fired) != 1:
+                faults.append(f"{where}: the fault did not fire ({len(fired)} fired)")
+                continue
+            if _key(fired[0]) != _key(at):
+                faults.append(f"{where}: the {k}-th point of this run is "
+                              f"{fired[0]['site']} {fired[0]['ev']}({fired[0]['path']})")
+                continue
+        names = (["{CASE}/in"] + ([at["path"]] if mode == "file" else [])
+                 + (["{CASE}/in/" + victim] if victim else []))
         if named_refusal(b0, got, flag, names) or same_answer(b0, b1, got):
             continue
         what = "crashed" if crashed(got) else (
@@ -1108,12 +1129,21 @@ def test_a_refusal_must_name_and_not_crash():
 
 # ── the refusal the fixes raise (`_lib_parse_cache.refuse_changed`) ─────
 
+def _identity(root) -> str:
+    """The judgement's identity (#3965): the tree-mode document's config_hash."""
+    import _lib_parse_tree
+    return _lib_parse_tree.load(root).config_hash
+
+
 @pytest.fixture
 def fresh_declarations(monkeypatch):
     import _lib_parse_cache as pc
     for name in ("_DECLARED", "_JUDGED_AS", "_GIVEN"):
         monkeypatch.setattr(pc, name, {})
     monkeypatch.setattr(pc._lib_input, "judged", lambda *_a: None)
+    # Judgements are handed to child processes through the environment
+    # (#3965): set it so monkeypatch puts back what was there.
+    monkeypatch.setenv(pc.JUDGED_TREES_ENV, "")
     return pc
 
 
@@ -1127,7 +1157,7 @@ def test_a_flag_naming_a_link_removed_after_the_judgement_is_refused(tmp_path,
     (tmp_path / "tree" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
     link = tmp_path / "current"
     symlink_or_skip(tmp_path / "tree", link)
-    pc.record_judgement(link, "--config-dir", "en", ["t.yaml"])
+    pc.record_judgement(link, "--config-dir", "en", _identity(link))
     link.unlink()
     assert pc.judged(link)
     with pytest.raises(InputChanged, match=f"^--config-dir {re.escape(str(link))}: changed"):
@@ -1145,7 +1175,7 @@ def test_a_file_linked_out_of_the_tree_gone_is_refused_by_its_place(tmp_path,
     tree = tmp_path / "tree"
     tree.mkdir()
     symlink_or_skip(outside, tree / "_defaults.yaml")
-    pc.record_judgement(tree, "--config-dir", "en", ["_defaults.yaml"])
+    pc.record_judgement(tree, "--config-dir", "en", _identity(tree))
     outside.unlink()
     gone = FileNotFoundError(2, "No such file or directory")
     with pytest.raises(InputChanged):
@@ -1157,7 +1187,7 @@ def test_the_refusal_is_one_line_whatever_the_path_holds(tmp_path, fresh_declara
     pc = fresh_declarations
     root = tmp_path / "a\nERROR: forged\x1b[2J"
     root.mkdir()
-    pc.record_judgement(root, "--config-dir", "en", [])
+    pc.record_judgement(root, "--config-dir", "en", _identity(root))
     root.rmdir()
     with pytest.raises(InputChanged) as exc:
         pc.refuse_changed(root, "x\n\x1b[31my")
@@ -1175,7 +1205,7 @@ def test_a_directory_of_a_declared_tree_is_refused_as_that_tree(tmp_path, fresh_
     root = tmp_path / "conf.d"
     (root / "team").mkdir(parents=True)
     (root / "team" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
-    pc.record_judgement(root, "--config-dir", "en", ["team/t.yaml"])
+    pc.record_judgement(root, "--config-dir", "en", _identity(root))
     pc.refuse_changed(root / "team", "da-guard key-refs: no .yaml files")  # as judged
     assert not pc.judged(root / "team")  # the judgement itself stays the root's
     (root / "team" / "t.yaml").unlink()
@@ -1199,7 +1229,7 @@ def test_a_file_under_two_declared_trees_is_the_inner_ones(tmp_path, fresh_decla
         (inner / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
         for tree in order:
             pc.record_judgement(tree, "--baseline" if tree == inner else "--config-dir", "en",
-                                ["t.yaml"] if tree == inner else ["base/t.yaml"])
+                                _identity(tree))
         (inner / "t.yaml").unlink()
         for refuse in (lambda: pc.refuse_gone(inner / "t.yaml", gone),
                        lambda: pc.refuse_changed(inner, "gone")):
@@ -1207,6 +1237,144 @@ def test_a_file_under_two_declared_trees_is_the_inner_ones(tmp_path, fresh_decla
                 refuse()
 
 
+
+
+# ── #3965: every later walk of a judged tree is compared with its judgement ──
+
+def _judged_tree(tmp_path, pc):
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 70\n", encoding="utf-8")
+    (root / "a.yaml").write_text("tenants:\n  ta:\n    mysql_connections: \"80\"\n", encoding="utf-8")
+    pc.record_judgement(root, "--config-dir", "en", _identity(root))
+    return root
+
+
+@pytest.mark.parametrize("read", [
+    pytest.param(lambda pc, root: pc.ConfdReader(root).tree(), id="parse-tree read again"),
+    pytest.param(lambda pc, root: pc.judge_now(root), id="judge_now"),
+    pytest.param(lambda pc, root: __import__("_lib_tenant_values").load_guard_report(root),
+                 id="the guard report"),
+    pytest.param(lambda pc, root: __import__("_lib_tenant_values").load_served_values(root),
+                 id="served-values"),
+])
+def test_a_later_walk_of_another_tree_is_the_flags_refusal(tmp_path, fresh_declarations, read):
+    """A da-guard document of a judged tree whose walk read another tree
+    (a file added since the judgement) is the refusal naming the flag —
+    whatever its exit code; the same tree reads as before."""
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    root = _judged_tree(tmp_path, pc)
+    read(pc, root)  # the tree as judged: no refusal
+    (root / "b.yaml").write_text("tenants:\n  tb:\n    mysql_connections: \"81\"\n", encoding="utf-8")
+    with pytest.raises(InputChanged, match=f"^--config-dir {re.escape(str(root))}: changed after it was judged"):
+        read(pc, root)
+
+
+def test_a_child_run_reads_the_tree_its_parent_judged(tmp_path, fresh_declarations):
+    """#3965 review: a tool's child process judges the tree again in its own
+    process (config-diff's route generator). The parent's judgement is handed
+    down: a child that reads another tree refuses naming the flag, never
+    answers for its parent from a tree the parent did not judge."""
+    pc = fresh_declarations
+    root = _judged_tree(tmp_path, pc)
+    argv = [sys.executable, str(REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"),
+            "--config-dir", str(root), "--output-alertmanager", "--dry-run"]
+
+    def child():
+        return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=300, check=False, env=dict(os.environ))
+    same = child()
+    assert same.returncode == 0, same.stderr[-800:]
+    (root / "b.yaml").write_text("tenants:\n  tb:\n    mysql_connections: \"81\"\n", encoding="utf-8")
+    got = child()
+    assert got.returncode == 2 and "--config-dir" in got.stderr \
+        and "judged another tree" in got.stderr, (got.returncode, got.stderr[-800:])
+
+
+def test_a_second_run_in_one_process_judges_its_own_tree(tmp_path, fresh_declarations):
+    """#3965 review: judgements are process state. A second run of a tool in
+    the same process, after an edit between the runs, judges the tree as it
+    is then — never compared with the first run's tree."""
+    import argparse
+    pc = fresh_declarations
+    root = tmp_path / "conf.d"
+    root.mkdir()
+    (root / "a.yaml").write_text("tenants:\n  ta:\n    mysql_connections: \"80\"\n", encoding="utf-8")
+
+    def run_once():
+        parser = argparse.ArgumentParser()
+        _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS)
+        args = parser.parse_args(["--config-dir", str(root)])
+        pc.declared_trees(args, "config_dir", lang="en")
+        pc.ConfdReader(root).tree()  # a later read of it in the same run
+    run_once()
+    (root / "b.yaml").write_text("tenants:\n  tb:\n    mysql_connections: \"81\"\n", encoding="utf-8")
+    run_once()
+
+
+def test_a_tree_da_guard_now_refuses_is_a_changed_tree(tmp_path, fresh_declarations):
+    """#3965 review: a tree parse-tree judged, and refuses after (a name that
+    is not valid UTF-8 added), changed — never "the binary, not the tree"."""
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    root = _judged_tree(tmp_path, pc)
+    try:
+        (root / os.fsdecode(b"bad\xff.yaml")).write_text("tenants: {}\n", encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        pytest.skip(f"this filesystem takes no such name ({exc})")
+    with pytest.raises(InputChanged, match="changed after it was judged"):
+        pc.refuse_changed(root, "da-guard served-values: exit 2")
+
+
+def test_the_guard_reports_exit_2_on_a_changed_tree_is_the_flags_refusal(tmp_path, fresh_declarations):
+    """#3965 review: the default check's exit 2 (a tenant declared twice since
+    the judgement) on a judged tree is the change, named by the flag — not a
+    guard error row."""
+    from _lib_exitcodes import InputChanged
+    import _lib_tenant_values
+    pc = fresh_declarations
+    root = _judged_tree(tmp_path, pc)
+    (root / "dup.yaml").write_text((root / "a.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    with pytest.raises(InputChanged, match="changed after it was judged"):
+        _lib_tenant_values.load_guard_report(root)
+
+
+def test_a_write_below_a_judged_tree_is_refused(tmp_path, fresh_declarations):
+    """#3965 review: the precondition of a write is the judged tree's identity;
+    a write whose --config-dir is a directory below that tree cannot carry it,
+    so it goes through the tree's root."""
+    import _lib_confedit
+    pc = fresh_declarations
+    root = _judged_tree(tmp_path, pc)
+    (root / "team").mkdir()
+    with pytest.raises(ValueError, match="written through the tree's root"):
+        _lib_confedit.edit(root / "team", "t.yaml", [])
+
+
+def test_one_directory_on_both_sides_of_config_diff_reads_alike(tmp_path, fresh_declarations, monkeypatch):
+    """#3965 review: config-diff walks --old-dir and --new-dir apart; when they
+    name one directory, the second walk must read the first's tree."""
+    from _lib_exitcodes import InputChanged
+    sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
+    import config_diff as cd
+    pc = fresh_declarations
+    d = tmp_path / "d"
+    d.mkdir()
+    (d / "a.yaml").write_text("tenants:\n  ta:\n    mysql_connections: \"80\"\n", encoding="utf-8")
+    real, calls = cd._lib_parse_tree.run, []
+
+    def run(conf_d, *args, **kwargs):
+        doc = real(conf_d, *args, **kwargs)
+        calls.append(conf_d)
+        if len(calls) == 2:  # the other side's walk read another tree
+            doc = {**doc, "config_hash": "f" * 64}
+        return doc
+    monkeypatch.setattr(cd._lib_parse_tree, "run", run)
+    monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(d), "--new-dir", str(d)])
+    with pytest.raises(InputChanged, match="changed after it was judged"):
+        cd.main()
+    assert len(calls) >= 2
 
 # ── #3901: a selected file gone when the Go readers run ──────────────────
 # The gate's file mode fires where PYTHON looks at a file under the input;

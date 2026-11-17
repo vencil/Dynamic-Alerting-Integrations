@@ -44,7 +44,7 @@ var walksTheTree = map[string][]string{
 var readsNoTree = map[string]string{
 	thresholdValuesCmd: "reads values on stdin, no tree",
 	keySpellingsCmd:    "reads keys on stdin, no tree",
-	writeCmd:           "writes the tree: its pre- and post-write identities are #3965's second part",
+	writeCmd:           "its own document, through --input: TestConfigHash_WriteTakesTheJudgedIdentity",
 }
 
 func TestConfigHash_EverySubcommandIsClassified(t *testing.T) {
@@ -219,5 +219,99 @@ func TestConfigHash_ASetAsideKeyVerdictClaimsNone(t *testing.T) {
 	}
 	if res.identity != "" {
 		t.Errorf("key-verdict with %v set aside: identity %q, want none", res.setAside, res.identity)
+	}
+}
+
+// writeBatchWithExpect is a batch of one edit of t1.yaml (set
+// mysql_connections) with expect_config_hash = expect ("" = none given).
+func writeBatchWithExpect(expect, value string) string {
+	b := `{"files":[{"path":"t1.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_connections"],"value":{"str":"` + value + `"}}]}]`
+	if expect != "" {
+		b += `,"expect_config_hash":"` + expect + `"`
+	}
+	return b + `}`
+}
+
+// #3965: `write` writes only to the tree the caller judged. Given the
+// identity the caller judged (expect_config_hash), a tree whose walk is
+// another is refused before anything is judged or written; on a write the
+// document names the tree the call left — what a parse-tree of it gives.
+func TestConfigHash_WriteTakesTheJudgedIdentity(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"t1.yaml": "tenants:\n  t1:\n    mysql_connections: \"80\"\n"}
+
+	dir := configHashTree(t, files)
+	_, judged := runForConfigHash(t, parseTreeCmd, dir)
+	if err := os.WriteFile(filepath.Join(dir, "t2.yaml"), []byte("tenants:\n  t2: {}\n"), 0o600); err != nil {
+		t.Fatal(err) // the tree changes after the caller judged it
+	}
+	before := snapshot(t, dir)
+	code, res := runBatch(t, writeCmd, writeBatchWithExpect(judged, "90"), "--config-dir", dir)
+	if code != exitCallerErr || callReason(res) != writeReasonTreeChanged {
+		t.Fatalf("a tree changed since the caller judged it: exit %d reason %q, want %d %q",
+			code, callReason(res), exitCallerErr, writeReasonTreeChanged)
+	}
+	sameTree(t, before, snapshot(t, dir))
+
+	dir = configHashTree(t, files)
+	_, judged = runForConfigHash(t, parseTreeCmd, dir)
+	code, res = runBatch(t, writeCmd, writeBatchWithExpect(judged, "90"), "--config-dir", dir)
+	if code != exitOK || res.Status != writeStatusWritten || res.ConfigHash == nil {
+		t.Fatalf("the judged tree: exit %d status %q config_hash %v", code, res.Status, res.ConfigHash)
+	}
+	if _, now := runForConfigHash(t, parseTreeCmd, dir); *res.ConfigHash != now || now == judged {
+		t.Errorf("write's config_hash %s; the tree it left walks as %s (judged %s)", *res.ConfigHash, now, judged)
+	}
+
+	// Nothing written: the tree it walked.
+	code, res = runBatch(t, writeCmd, writeBatchWithExpect("", "90"), "--config-dir", dir, "--dry-run")
+	if _, now := runForConfigHash(t, parseTreeCmd, dir); code != exitOK || res.ConfigHash == nil || *res.ConfigHash != now {
+		t.Errorf("dry run: exit %d config_hash %v, the tree walks as %s", code, res.ConfigHash, now)
+	}
+}
+
+// #3965: the walks of one run read one tree. A tree changed between two of
+// them (betweenWalks, at the nth call) ends the run with exit 2 and no
+// document — never an answer mixed from two trees. Not parallel: the hook
+// is package state, and parallel tests start only after these end.
+func TestConfigHash_ATreeChangedBetweenWalksIsNotJudged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cmd  string
+		nth  int
+	}{
+		{"default check: between its first and last walk", "", 1},
+		{"key-verdict: between the facts and the served reading", keyVerdictCmd, 1},
+		{"key-verdict: between the served reading and the effective one", keyVerdictCmd, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := configHashTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+				"a.yaml": "tenants:\n  ta:\n    mysql_connections: \"80\"\n"})
+			calls := 0
+			betweenWalks = func(string) {
+				calls++
+				if calls == tc.nth {
+					if err := os.WriteFile(filepath.Join(dir, "b.yaml"),
+						[]byte("tenants:\n  tb:\n    mysql_connections: \"81\"\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			t.Cleanup(func() { betweenWalks = nil })
+			args := []string{}
+			if tc.cmd != "" {
+				args = append(args, tc.cmd)
+			}
+			args = append(append(args, "--config-dir", dir), walksTheTree[tc.cmd]...)
+			var out, errOut bytes.Buffer
+			rc := dispatch(args, strings.NewReader(""), &out, &errOut, guard.CheckDefaultsImpact)
+			if calls < tc.nth {
+				t.Fatalf("the run walked the tree %d time(s) before its end; the case needs %d", calls, tc.nth)
+			}
+			if rc != exitCallerErr || out.Len() != 0 || !strings.Contains(errOut.String(), "changed during this run") {
+				t.Errorf("rc %d, stdout %q, stderr %q: want exit 2, no document, the change named", rc, out.String(), errOut.String())
+			}
+		})
 	}
 }

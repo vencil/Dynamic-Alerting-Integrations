@@ -67,6 +67,7 @@ import contextlib
 import contextvars
 import hashlib
 import io
+import json
 import os
 import pickle
 from dataclasses import dataclass, field
@@ -254,28 +255,20 @@ def _declare(root: "str | os.PathLike[str]", flag: str, lang: str) -> None:
     for key in _spellings(root):
         _DECLARED[key] = (flag, lang)
 
-#: realpath of a declared tree → what it was when it was judged (#3724): its
-#: root and every config file its listing named, each ``(st_dev, st_ino,
-#: st_mtime_ns)`` (None: not there). `refuse_changed` tells a tree changed
-#: since (gone, replaced, a file removed or rewritten, at any depth) from one
-#: da-guard refuses as it is (no config file, a tenant in two files).
-_JUDGED_AS: "dict[str, dict[str, Optional[tuple[int, int, int]]]]" = {}
+#: Key of a declared tree (`_spellings`) → the identity of the walk that
+#: judged it (#3965): the `config_hash` of the judging parse-tree document —
+#: pkg/config treeIdentity, the value every later da-guard document of the
+#: same tree names (`check_judged`). What the walk read, not a stat taken
+#: after it: a file gone between the listing and any later look cannot be
+#: recorded as "never there" (#3965 gap 1). None when the judgement had no
+#: identity to keep: a listing under a cache (the generator container,
+#: `--list-only`, reads no byte) — its tree is the service's own checkout.
+_JUDGED_AS: "dict[str, Optional[str]]" = {}
 
-#: `_JUDGED_AS` key → the root as the caller spelled it (what a refusal names).
-_GIVEN: "dict[str, str]" = {}
-
-
-def _stamp(path: "str | os.PathLike[str]") -> "Optional[tuple[int, int, int]]":
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return (st.st_dev, st.st_ino, st.st_mtime_ns)
-
-
-def _fingerprint(root: "str | os.PathLike[str]", files: "Iterable[str]",
-                 ) -> "dict[str, Optional[tuple[int, int, int]]]":
-    return {rel: _stamp(os.path.join(root, rel)) for rel in (".", *files)}
+#: `_JUDGED_AS` key → the root as the caller spelled it (what a refusal
+#: names) and the da-guard / limit the judgement ran with (a re-judgement
+#: runs the same one, never the `$PATH` default).
+_GIVEN: "dict[str, tuple[str, Optional[str], Optional[float]]]" = {}
 
 
 class ConfdReader:
@@ -329,7 +322,12 @@ class ConfdReader:
         it may not serve. A tool that writes calls `require()` before its
         first write."""
         if self._tree is None:
-            self._tree = _lib_parse_tree.load(self.root, self.binary, self.timeout)
+            tree = _lib_parse_tree.load(self.root, self.binary, self.timeout)
+            # A judged tree read again: the same tree or the flag's refusal
+            # (#3965). The judging reader itself runs before there is a
+            # judgement to compare with.
+            check_judged(self.root, tree.config_hash, "da-guard parse-tree")
+            self._tree = tree
         self._judge_root(self._tree.entries)
         if refuses():
             _lib_parse_tree.refuse_unservable(self._tree.entries, self.root)
@@ -704,6 +702,7 @@ def judge_now(root: "str | os.PathLike[str]", *, binary: Optional[str] = None,
     the caller names every line and skips its writes. Raises
     ParseTreeError."""
     tree = _lib_parse_tree.load(root, binary, timeout)
+    check_judged(root, tree.config_hash, "da-guard parse-tree")  # #3965
     bad = _lib_parse_tree.refused_entries(tree.entries)
     return tree, (_lib_parse_tree.refusal_lines(bad, root) if bad else [])
 
@@ -795,12 +794,13 @@ def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = N
 
     After it: the served-values family takes this reading of the tree
     (`require_servable`: no second parse-tree), and any other parse-tree
-    reader of it in the process carries the flag (`_DECLARED`). ⚠️ A
-    da-guard subcommand that walks the tree itself (`effective`,
-    `key-verdict`) walks it once more: a tree changed in between is refused
-    there, and the reader turns that into the refusal naming the flag
-    (`refuse_changed`, #3724: told from the tree's own refusal by what the
-    tree was when it was judged).
+    reader of it in the process carries the flag (`_DECLARED`). A da-guard
+    subcommand that walks the tree itself (`effective`, `key-verdict`, …)
+    walks it once more: its document names what that walk read
+    (`config_hash`), and one that is not what the judgement read is the
+    refusal naming the flag (`check_judged`, #3965) — exit 0 or not; a
+    walk da-guard refuses is told from the tree's own refusal the same way
+    (`refuse_changed`, #3724).
     Raises `_lib_exitcodes.CallerError` (rc 2) and ParseTreeError (no
     usable da-guard)."""
     spec = _lib_input.spec_of(args, dest)
@@ -808,7 +808,7 @@ def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = N
         raise TypeError(f"{dest}: declared_trees reads a select=DA_GUARD_LISTS input")
     roots = _lib_input.selected(args, dest, lang=lang)
     for root in roots:
-        root_was = _stamp(root)  # before the listing: a change during it is a change
+        forget_judgement(root)  # an earlier run in this process judged its own tree
         _declare(root, spec.flag, lang)
         reader = reader_for(root)
         reader.declared = (spec.flag, lang)
@@ -817,49 +817,116 @@ def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = N
         _lib_input.require_selection(args, dest, listing.config_files(),
                                      wanted=CONFIG_FILES_WANTED[lang], lang=lang,
                                      item=root if spec.separator is not None else None)
-        record_judgement(root, spec.flag, lang, [e.path for e in listing.config_files()],
-                         root_was=root_was)
+        # The judging document's own identity (#3965): tree mode, the CLI;
+        # under a cache the listing is `--list-only` and names none.
+        identity = reader._tree.config_hash if reader._tree is not None else None
+        inherited = _inherited_identity(root)  # before this run hands its own down
+        record_judgement(root, spec.flag, lang, identity, binary=binary, timeout=timeout)
+        if identity is not None and inherited is not None and inherited != identity:
+            # A child of a run that judged this tree (config-diff's route
+            # generator, validate-config's uniqueness check): it reads
+            # another tree than its parent's judgement did (#3965).
+            _raise_changed(_declared_key(root), root, "the run that started this one judged another tree")
     return roots
 
 
 def record_judgement(root: "str | os.PathLike[str]", flag: str, lang: str,
-                     files: "Iterable[str]", *, root_was: Any = None) -> None:
-    """The judgement of the tree *flag* names at *root* is done: *files*
-    (root-relative) are the config files its listing named. Every reader of
-    it in the process carries the flag (`_DECLARED`), what it was is kept
-    for `refuse_changed` (#3724; *root_was*: the root's stamp taken before
-    the listing, else now), and `_lib_input.judged` says so. ⛔ Only the
-    code that ends a tree's judgement calls it: `declared_trees`, or a tool
-    that judges its trees itself (config-diff's two sides)."""
+                     identity: Optional[str], *, binary: Optional[str] = None,
+                     timeout: Optional[float] = None) -> None:
+    """The judgement of the tree *flag* names at *root* is done: *identity*
+    is the `config_hash` of the parse-tree document that judged it (None:
+    that document names none — a listing under a cache). Every reader of it
+    in the process carries the flag (`_DECLARED`), the identity is kept for
+    `check_judged` / `refuse_changed` (#3965), with the da-guard (*binary*,
+    *timeout*) a re-judgement runs, and `_lib_input.judged` says so.
+    ⛔ Only the code that ends a tree's judgement calls it: `declared_trees`,
+    or a tool that judges its trees itself (config-diff's two sides)."""
     _declare(root, flag, lang)
-    stamps = _fingerprint(root, files)
-    if root_was is not None:
-        stamps["."] = root_was
     for key in _spellings(root):
-        _JUDGED_AS[key] = stamps
-        _GIVEN[key] = os.fspath(root)
+        _JUDGED_AS[key] = identity
+        _GIVEN[key] = (os.fspath(root), binary, timeout)
+    _hand_down(root, identity)
     _lib_input.judged(flag, root)
 
 
-def refuse_changed(root: "str | os.PathLike[str]", detail: str) -> None:
-    """For a tree a declared input named (`judged`) — or a directory of one
-    (`_declared_over`, #3902) — that da-guard refused
-    after its judgement: when the tree changed since (its root gone,
-    replaced, an entry added or removed: not what `declared_trees` saw),
-    raise the refusal of it (#3724) — rc 2, naming the flag
-    (`_lib_exitcodes.InputChanged`), with *detail* (what saw it: da-guard's
-    own words, the file read that failed). A reader must not turn that into
-    a notice, a degraded row or "da-guard is broken". Returns for a tree no
-    declared input named, and for one still as it was judged: da-guard's
-    refusal is then the tree's own (no config file, a tenant in two files),
-    for the caller to report as it does."""
+#: The environment variable that hands a run's judgements to its child
+#: processes (#3965): JSON {"pid": <the run's pid>, "trees": {realpath:
+#: identity}}. A child's own judgement of one of those trees must read the
+#: same tree (`declared_trees`); the run that wrote it never reads it back.
+JUDGED_TREES_ENV = "DA_JUDGED_TREES"
+
+
+def _handed_down() -> "tuple[Optional[int], dict]":
+    try:
+        doc = json.loads(os.environ.get(JUDGED_TREES_ENV, ""))
+        pid, trees = doc["pid"], doc["trees"]
+        if isinstance(pid, int) and isinstance(trees, dict):
+            return pid, trees
+    except (ValueError, KeyError, TypeError):
+        pass
+    return None, {}
+
+
+def _hand_down(root: "str | os.PathLike[str]", identity: Optional[str]) -> None:
+    pid, trees = _handed_down()
+    trees = dict(trees) if pid == os.getpid() else {}
+    real = os.path.realpath(root)
+    if identity is None:
+        trees.pop(real, None)
+    else:
+        trees[real] = identity
+    os.environ[JUDGED_TREES_ENV] = json.dumps({"pid": os.getpid(), "trees": trees})
+
+
+def _inherited_identity(root: "str | os.PathLike[str]") -> Optional[str]:
+    """The identity the run that started this process judged *root* with —
+    None in that run itself, or when it judged no such tree."""
+    pid, trees = _handed_down()
+    if pid is None or pid == os.getpid():
+        return None
+    got = trees.get(os.path.realpath(root))
+    return got if isinstance(got, str) else None
+
+
+def forget_judgement(root: "str | os.PathLike[str]") -> None:
+    """Drop what an earlier judgement of *root* in this process kept: a new
+    judgement starts clean (a second run in one process, after an edit
+    between, is not compared with the first run's tree)."""
+    for key in _spellings(root):
+        _JUDGED_AS.pop(key, None)
+        _GIVEN.pop(key, None)
+
+
+def judged_identity(root: "str | os.PathLike[str]") -> Optional[str]:
+    """The identity the judgement of the declared tree *root* kept (None:
+    no declared tree there, or one judged without an identity)."""
+    key = _declared_key(root)
+    return None if key is None else _JUDGED_AS.get(key)
+
+
+def adopt_identity(root: "str | os.PathLike[str]", identity: Optional[str]) -> None:
+    """The tool itself wrote the declared tree *root* (`da-guard write`,
+    #3965): *identity* is the tree it left (the write's own `config_hash`),
+    what every later read is compared with from now on. A no-op for a tree
+    no declared input named."""
+    key = _declared_key(root)
+    if key is None or key not in _GIVEN:
+        return
+    for k in _spellings(_GIVEN[key][0]):
+        _JUDGED_AS[k] = identity
+    _hand_down(_GIVEN[key][0], identity)
+
+
+def held_below(root: "str | os.PathLike[str]") -> bool:
+    """Whether *root* is a directory BELOW a declared tree judged with an
+    identity (not the tree itself): a write there cannot carry the tree's
+    identity as its precondition (`_lib_confedit` refuses it, #3965)."""
     where = _declared_over(root)
-    if where is None:
-        return
-    was = _JUDGED_AS.get(where)
-    shown = _GIVEN.get(where, os.fspath(root))
-    if was is not None and _fingerprint(shown, [r for r in was if r != "."]) == was:
-        return
+    return where is not None and _declared_key(root) is None and _JUDGED_AS.get(where) is not None
+
+
+def _raise_changed(where: str, root: "str | os.PathLike[str]", detail: str) -> None:
+    shown = _GIVEN[where][0] if where in _GIVEN else os.fspath(root)
     flag, lang = _DECLARED[where]
     from _lib_label import safe_label  # one line, whatever the path or da-guard holds
     detail = safe_label(" ".join(str(detail).split()))
@@ -867,6 +934,70 @@ def refuse_changed(root: "str | os.PathLike[str]", detail: str) -> None:
             else f"changed after it was judged: {detail}")
     from _lib_exitcodes import InputChanged  # lazy: its import installs the crash hook
     raise InputChanged(f"{flag} {safe_label(shown)}: {said}")
+
+
+def check_judged(root: "str | os.PathLike[str]", config_hash: Optional[str],
+                 detail: str) -> None:
+    """A da-guard document of a walk of *root* names *config_hash* (#3965):
+    when *root* is a tree a declared input named and the walk read another
+    tree than its judgement did, raise the refusal naming the flag
+    (`_lib_exitcodes.InputChanged`, rc 2) — whatever the document's exit
+    code: an answer read from another tree is not this run's input.
+    *detail* names what walked (``da-guard served-values``).
+
+    Returns for a tree no declared input named, one judged without an
+    identity, a walk of a directory below the declared root (its identity
+    is that directory's, not the tree's), and a document that claims none
+    (`null`: an overlay made it read a tree that is not on disk — only a
+    caller that passed one gets that)."""
+    key = _declared_key(root)
+    if key is None or config_hash is None:
+        return
+    judged = _JUDGED_AS.get(key)
+    if judged is None or judged == config_hash:
+        return
+    _raise_changed(key, root, f"{detail} read another tree")
+
+
+def refuse_changed(root: "str | os.PathLike[str]", detail: str) -> None:
+    """For a tree a declared input named (`judged`) — or a directory of one
+    (`_declared_over`, #3902) — that da-guard refused, or a file of which a
+    read found gone, after its judgement: when the tree is not what the
+    judgement read, raise the refusal of it (#3724) — rc 2, naming the flag
+    (`_lib_exitcodes.InputChanged`), with *detail* (what saw it: da-guard's
+    own words, the file read that failed). A reader must not turn that into
+    a notice, a degraded row or "da-guard is broken". Returns for a tree no
+    declared input named, and for one still as it was judged: the refusal
+    is then the tree's own (no config file, a tenant in two files), for the
+    caller to report as it does.
+
+    "As it was judged" is asked of the tree's identity (#3965): one more
+    `parse-tree` of the root, with the da-guard the judgement ran, compared
+    with the identity the judgement kept. A root that is no longer a
+    directory is changed, and so is one parse-tree now refuses
+    (`TreeRefused`: it walked the tree when it judged it). A tree judged
+    without an identity (a cache's listing), or a parse-tree that did not
+    run (the binary, a timeout), tells nothing: the refusal stays the
+    caller's."""
+    where = _declared_over(root)
+    if where is None:
+        return
+    judged = _JUDGED_AS.get(where)
+    if judged is None:
+        return
+    shown, binary, timeout = _GIVEN[where]
+    if not os.path.isdir(shown):
+        _raise_changed(where, root, detail)
+    try:
+        now = _lib_parse_tree.load(shown, binary, timeout).config_hash
+    except _lib_parse_tree.TreeRefused:
+        # It judged this tree; it refuses the tree now (a name that is not
+        # valid UTF-8 added since, …): the tree changed.
+        _raise_changed(where, root, detail)
+    except _lib_parse_tree.ParseTreeError:
+        return  # the binary, not the tree: the refusal stays the caller's
+    if now != judged:
+        _raise_changed(where, root, detail)
 
 
 def refuse_gone(path: "str | os.PathLike[str]", exc: OSError) -> None:
