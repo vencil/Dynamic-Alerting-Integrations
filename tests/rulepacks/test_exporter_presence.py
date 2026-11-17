@@ -69,7 +69,8 @@ def test_every_db_type_has_a_presence_metric():
     for db_type, metrics in presence.EXPORTER_PRESENCE.items():
         assert metrics, db_type
         for m in metrics:
-            assert re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", m), (db_type, m)
+            assert re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*(\{[a-z_]+="[a-z0-9_]+"\})?', m), (
+                db_type, m)
 
 
 def test_alert_exprs_are_fresh():
@@ -86,8 +87,9 @@ def test_presence_reads_every_table_metric_on_the_tenant_exporters_job():
         expr = presence.presence_expr()
         assert f'"db_type", "{db_type}", "", ""' in expr, db_type
         for metric in metrics:
-            assert f'{metric}{{job="tenant-exporters"}}' in expr
-            assert f'max_over_time({metric}{{job="tenant-exporters"}}[1h])' in (
+            assert presence.selector(metric) in expr
+            assert 'job="tenant-exporters"' in presence.selector(metric)
+            assert f'max_over_time({presence.selector(metric)}[1h])' in (
                 presence.presence_over_time_expr())
 
 

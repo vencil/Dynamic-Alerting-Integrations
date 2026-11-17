@@ -51,7 +51,7 @@ defaults:
   # — carrying 15 into a used-% rule would fire permanently（critical 加嚴
   # opt-in：es_disk_usage_percent_critical，registry 建議 90）
   es_disk_usage_percent: 85
-  # ── oracle：Oracle Database (oracledb_exporter) ──
+  # ── oracle：Oracle Database (query-exporter) ──
   # % — Tablespace usage warning（critical 加嚴 opt-in：oracle_tablespace_used_percent_critical，registry
   # 建議 95）
   oracle_tablespace_used_percent: 85
@@ -115,7 +115,7 @@ optional_overrides:
     # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
     # PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with
     # CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)
-  # ── oracle：Oracle Database (oracledb_exporter) ──
+  # ── oracle：Oracle Database (query-exporter) ──
   - oracle_wait_time_rate   # s/s — Wait time rate (5m)
   - oracle_process_count   # count — Active processes warning
     # ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值

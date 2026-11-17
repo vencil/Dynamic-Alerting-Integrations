@@ -11,9 +11,14 @@
 # NOT covered here (deliberate — surfaces as MISS/FN in the report = coverage gaps):
 #   - oracledb_activity_parse_count_total  → no shipped alert (exported-but-unalerted probe)
 #
-# OracleHighSessionUtilization (ratio): the companion oracledb_resource_limit inherits
-# the injection identity labels + carries its own resource="sessions" label, so the
-# division matches with `ignoring(resource)` and keeps the numerator's attribution labels.
+# OracleHighSessionUtilization (ratio): the companion oracledb_sessions_limit inherits
+# the injection identity labels, so the division matches one-to-one and keeps the
+# numerator's attribution labels (#3833: every session over the SESSIONS parameter).
+# OracleDatabaseDown: query-exporter serves no 0 when the database is down — the
+# liveness query's query_timestamp stops advancing (#3833). The candidate keeps only
+# the "unchanged across 90s" arm (no count guard: the waveform has no restarts);
+# the "never succeeded" arm needs no waveform. changes() is independent of the
+# epoch, so the integrated counter waveform (rate 1/s healthy, 0 down) reads right.
 # Threshold 0.85 is HARD-CODED in the shipped rule (not user_threshold). The shipped
 # denominator guard `> 0` is reproduced (a zero session limit would otherwise divide
 # to +Inf and over-fire; shipped drops the series instead).
@@ -22,7 +27,7 @@ groups:
     interval: 30s
     rules:
       - alert: OracleDatabaseDown
-        expr: oracledb_up == 0
+        expr: changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) == 0
         for: 15s
         labels: {severity: critical}
       - alert: OracleHighActiveSessions
@@ -46,6 +51,6 @@ groups:
         for: 10m
         labels: {severity: warning}
       - alert: OracleHighSessionUtilization
-        expr: oracledb_sessions_active / ignoring(resource) (oracledb_resource_limit{resource="sessions"} > 0) > 0.85
+        expr: oracledb_sessions_current / (oracledb_sessions_limit > 0) > 0.85
         for: 5m
         labels: {severity: warning}

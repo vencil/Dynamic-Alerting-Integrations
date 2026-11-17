@@ -28,12 +28,12 @@ lang: zh
 | Mongodb | rule-pack-mongodb.yaml | 10 | 11 | 21 |
 | Nginx | rule-pack-nginx.yaml | 9 | 7 | 16 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
-| Oracle | rule-pack-oracle.yaml | 13 | 10 | 23 |
+| Oracle | rule-pack-oracle.yaml | 13 | 11 | 24 |
 | Platform | rule-pack-platform.yaml | 0 | 54 | 54 |
 | Postgresql | rule-pack-postgresql.yaml | 8 | 8 | 16 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 16 | 12 | 28 |
 | Redis | rule-pack-redis.yaml | 12 | 10 | 22 |
-| **TOTAL** | | **165** | **195** | **360** |
+| **TOTAL** | | **165** | **196** | **361** |
 
 ## 架構說明
 
@@ -119,7 +119,7 @@ groups:
 - **redis_exporter**: https://github.com/oliver006/redis_exporter
 - **mongodb_exporter**: https://github.com/percona/mongodb_exporter
 - **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter
-- **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter
+- **query-exporter** (Oracle; queries in `exporters/oracle.yaml`): https://github.com/albertodonato/query-exporter
 - **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)
 - **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter

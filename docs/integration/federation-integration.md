@@ -142,7 +142,7 @@ scrape_configs:
 | MariaDB/MySQL | mysqld_exporter | `mysql_*` |
 | Redis | redis_exporter | `redis_*` |
 | MongoDB | mongodb_exporter | `mongodb_*` |
-| Oracle | oracledb_exporter | `oracledb_*` |
+| Oracle | query-exporter（`rule-packs/exporters/oracle.yaml`） | `oracledb_*`、`query_interval`／`query_timestamp` |
 | DB2 | db2_exporter | `db2_*` |
 | ClickHouse | 內建 /metrics | `ClickHouse*` |
 | Kafka | kafka_exporter | `kafka_*` |

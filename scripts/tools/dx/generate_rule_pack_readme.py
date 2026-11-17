@@ -241,7 +241,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("- **redis_exporter**: https://github.com/oliver006/redis_exporter")
     lines.append("- **mongodb_exporter**: https://github.com/percona/mongodb_exporter")
     lines.append("- **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter")
-    lines.append("- **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter")
+    lines.append("- **query-exporter** (Oracle; queries in `exporters/oracle.yaml`): https://github.com/albertodonato/query-exporter")
     lines.append("- **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)")
     lines.append("- **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）")
     lines.append("- **kafka_exporter**: https://github.com/danielqsj/kafka-exporter")
