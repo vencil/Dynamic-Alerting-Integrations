@@ -50,6 +50,8 @@ type lifecycleUse struct {
 
 type compileCustomAlertsDoc struct {
 	Schema string `json:"schema"`
+	// ConfigHash: the identity of the walk this document read (configHashField).
+	ConfigHash *string `json:"config_hash"`
 	// Groups: the pack's `groups:` list, in pack order.
 	Groups any `json:"groups"`
 	Shapes int `json:"shapes"`
@@ -119,6 +121,7 @@ func runCompileCustomAlerts(args []string, stdout, errOut io.Writer) int {
 
 	doc := compileCustomAlertsDoc{
 		Schema:      compileCustomAlertsSchema,
+		ConfigHash:  configHashField(rep.TreeIdentity),
 		Groups:      []any{},
 		NotCompiled: []notCompiledEntry{},
 		BlockErrors: map[string]string{},

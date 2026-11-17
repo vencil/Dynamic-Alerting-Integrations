@@ -74,6 +74,15 @@ const NoTenantReason = "declares no tenant: a file whose name does not start wit
 // LoadReport is what LoadDirReport says about the files of the tree besides
 // the config it built.
 type LoadReport struct {
+	// TreeIdentity is the identity of the walk this load read
+	// (TreeScan.Composite, pkg/config treeIdentity, #3965): the value
+	// `da-guard parse-tree` reports as config_hash for the same tree, so a
+	// reader can tell two walks of one tree read the same thing. Set on
+	// every return once the walk ran, an error return included. ⚠️ It is
+	// the identity of the scan given: a scan taken over overlays is the
+	// overlaid tree's, not the disk's — the caller that made the overlays
+	// claims none (ScopedTenants does that for its own scan).
+	TreeIdentity string
 	// ParseFailed is LoadDir's parseFailed.
 	ParseFailed []string
 	// NoTenant is the scan keys (root-relative slash paths, sorted) of the
@@ -234,6 +243,7 @@ func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *Thres
 // says so (rootListReported).
 func loadDirFromScan(scan *TreeScan, dir string, logger *log.Logger, reported bool) (cfg *ThresholdConfig,
 	rep LoadReport, built *FlatBuild, err error) {
+	defer func() { rep.TreeIdentity = scan.Composite }() // every return, #3965
 	if err := RejectDuplicateTenant(scan); err != nil {
 		return nil, LoadReport{}, nil, err
 	}
