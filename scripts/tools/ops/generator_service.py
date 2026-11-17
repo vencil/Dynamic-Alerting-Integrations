@@ -1562,6 +1562,35 @@ def _normalize_config_subdir(value: str) -> str:
 _TREE_MODE = "040000"
 
 
+def _head_is_unborn(git: str, repo: str, env: dict) -> "tuple[bool, str]":
+    """``(whether HEAD is a branch nothing was committed to yet, what git
+    said when it is not)`` — `git init`, `git checkout --orphan`: a symbolic
+    ref (``git symbolic-ref -q HEAD`` exits 0, naming it) whose ref is not
+    there (``git show-ref --verify --quiet`` exits 1).
+
+    ⛔ Not ``rev-parse --verify --quiet HEAD^{commit}`` failing: that exits
+    1 with nothing on stderr for an unborn branch AND for a branch naming a
+    commit whose object is gone (measured, git 2.43: #3903). What tells them
+    apart: a ref that is there but broken — empty, garbage, unreadable — is
+    ``symbolic-ref``'s 128 (``No such ref: HEAD``: it resolves the chain); a
+    ref naming a missing object is ``show-ref``'s 128 (``bad ref``); a ref
+    naming something that is no commit is ``show-ref``'s 0; a detached
+    ``HEAD`` is no symbolic ref (1); a repository git cannot open is 128."""
+    def said(proc, what):
+        return (" ".join(proc.stderr.decode("utf-8", "replace").split())
+                or f"git {what} exited {proc.returncode}")
+    ref = subprocess.run([git, "-C", repo, "symbolic-ref", "-q", "HEAD"],
+                         capture_output=True, check=False, timeout=60, env=env)
+    name = ref.stdout.decode("utf-8", "replace").strip()
+    if ref.returncode != 0 or not name:
+        return False, said(ref, "symbolic-ref")
+    there = subprocess.run([git, "-C", repo, "show-ref", "--verify", "--quiet", name],
+                           capture_output=True, check=False, timeout=60, env=env)
+    if there.returncode == 0:
+        return False, f"{name} is there and names no commit"
+    return there.returncode == 1, said(there, "show-ref")
+
+
 def _check_config_subdir(git: str, repo: str, sub: str, shown: str) -> None:
     """#3392: --config-subdir is looked up in the tree of the revision the
     service starts on (``HEAD``) — by its own entry, `_gsvc_child.path_mode`,
@@ -1576,12 +1605,34 @@ def _check_config_subdir(git: str, repo: str, sub: str, shown: str) -> None:
     git keeps no empty directory, so a conf.d whose last tenant was
     offboarded, or one the first write has yet to create, reads the same as
     a misspelt one — and a service that refused it could never take that
-    first write. So does a ``HEAD`` that is no commit yet."""
-    proc = subprocess.run([git, "-C", repo, "rev-parse", "--verify", "--quiet",
-                           "HEAD^{commit}"], capture_output=True, check=False, timeout=60,
-                          env=_gsvc_child.git_env(git))
-    head = proc.stdout.decode("ascii", "replace").strip()
-    if proc.returncode != 0 or not head:
+    first write. So does a ``HEAD`` that is no commit YET (`_head_is_unborn`:
+    a branch with nothing committed).
+
+    ⛔ Only that (#3903): every other way ``HEAD`` resolves to no commit —
+    the repository gone or unreadable since `_object_format` judged it, a
+    ``HEAD`` naming a commit whose object is missing — is a repository git
+    cannot read, and the service refuses to start, naming --repo. It was
+    all read as "no HEAD commit": the service started, answered ``ready``,
+    and every request was ``rejected/git_read``."""
+    env = _gsvc_child.git_env(git)
+
+    def resolve() -> str:
+        proc = subprocess.run([git, "-C", repo, "rev-parse", "--verify", "--quiet",
+                               "HEAD^{commit}"], capture_output=True, check=False,
+                              timeout=60, env=env)
+        return proc.stdout.decode("ascii", "replace").strip() if proc.returncode == 0 else ""
+
+    head = resolve()
+    if not head:
+        unborn, why = _head_is_unborn(git, repo, env)
+        if not unborn:
+            # Once more: the first commit may have landed between the two
+            # looks (HEAD was unborn for `rev-parse`, a commit for `show-ref`).
+            head = resolve()
+            if not head:
+                raise RuntimeError(f"--repo {safe_label(repo) if repo else chr(39) * 2}: HEAD "
+                                   f"names no commit git can read ({safe_label(why)})")
+    if not head:
         print(f"generator-service: --repo {safe_label(repo)} has no HEAD commit; "
               f"--config-subdir {shown} is not checked", file=sys.stderr, flush=True)
         return
