@@ -176,7 +176,7 @@ _ENTRY = ('{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t"
      '"files": {}, "rendered_by": {}}\'\n', "field 'entries' missing"),
     ("echo not-json\n", "wrote no document"),
     ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
-     '"entries": [' + _ENTRY + '], "files": {}, "rendered_by": {}}\'\n',
+     '"entries": [' + _ENTRY + '], "files": {}, "rendered_by": {}, "config_hash": "' + "0" * 64 + '"}\'\n',
      "neither content nor a problem"),
     ('echo "flag provided but not defined" >&2; exit 2\n', "older than this tool"),
     ("exit 3\n", "exited 3"),
@@ -203,11 +203,15 @@ def test_refuses_a_da_guard_answer_it_cannot_read(tmp_path, body, needle) -> Non
     ('{"files": {"t.yaml": {"a": 1}}}', "wrong shape"),
     ('{"files": {"t.yaml": {"a": {"text": "x", "tag": "!!str", "value": [1]}}}}', "wrong shape"),
     ('{"files": {"t.yaml": {"a": {"text": "x"}}}}', "wrong shape"),
+    # #4042: tree mode carries the walk's identity; a hash that is not one
+    # (or none in tree mode) is not da-guard's answer.
+    ('{"config_hash": null}', "config_hash None in tree mode"),
+    ('{"config_hash": "abc"}', "in tree mode"),
 ])
 def test_refuses_a_parse_tree_document_of_the_wrong_shape(tmp_path, doc, needle) -> None:
     base = {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree",
             "defaults_carriers": {}, "entries": [json.loads(_ENTRY)], "files": {"t.yaml": {}},
-            "rendered_by": {}}
+            "rendered_by": {}, "config_hash": "0" * 64}
     patch = json.loads(doc)
     base.update(patch)
     if "entries" in patch and "files" not in patch:
@@ -217,6 +221,26 @@ def test_refuses_a_parse_tree_document_of_the_wrong_shape(tmp_path, doc, needle)
     with pytest.raises(lpt.ParseTreeError) as e:
         lpt.load(root, fake, 30)
     assert needle in str(e.value), str(e.value)
+
+
+def test_a_tree_document_without_config_hash_is_an_older_da_guard(tmp_path) -> None:
+    """#4042: every tree-mode document of this tool's da-guard names the
+    walk's identity; one without the field is a da-guard older than the tool."""
+    doc = {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree",
+           "defaults_carriers": {}, "entries": [json.loads(_ENTRY)], "files": {"t.yaml": {}},
+           "rendered_by": {}}
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    fake = _fake_da_guard(tmp_path, "cat <<'JSON'\n" + json.dumps(doc) + "\nJSON\n")
+    with pytest.raises(lpt.ParseTreeError, match="older than this tool"):
+        lpt.load(root, fake, 30)
+
+
+def test_a_tree_document_names_the_identity_the_exporter_reports(tmp_path) -> None:
+    """The real da-guard's tree mode gives config_hash; file mode none."""
+    root = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    mysql_connections: '1'\n"})
+    tree = lpt.load(root)
+    assert isinstance(tree.config_hash, str) and len(tree.config_hash) == 64
+    assert lpt.load_file(root, "t.yaml", b"tenants: {}\n").config_hash is None
 
 
 def test_the_image_ships_the_module() -> None:
@@ -348,7 +372,7 @@ def _entry(path, readers=("exporter", "generator"), *, cls="tenant", tenant="t",
 def _doc(**over) -> dict:
     doc = {
         "schema": lpt.SCHEMA, "da_guard_version": "test", "mode": "tree",
-        "defaults_carriers": {},
+        "defaults_carriers": {}, "config_hash": "0" * 64,
         "entries": [
             _entry("a/_defaults.yml", (), cls="defaults", not_read="unselected_defaults_carrier",
                    document=True),

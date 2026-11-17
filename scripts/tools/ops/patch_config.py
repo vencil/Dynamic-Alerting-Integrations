@@ -136,11 +136,13 @@ apply (no --diff) is verified by every exporter pod before it succeeds:
   3. kubectl patch, conditional on the ConfigMap's resourceVersion as read
      (changed since -> nothing is written, exit {EXIT_CALLER_ERROR}: re-run; if the call fails
      otherwise, the ConfigMap is re-read to tell whether it landed). From
-     the ConfigMap the patch returned, compute the config_hash a pod serving
-     exactly that version reports: SHA-256 over the SHA-256 hex digests of
-     the keys the exporter reads (not dot-hidden, a .yaml / .yml extension in
-     any case), in key order; for a pod in single-file mode, the SHA-256 of
-     {LEGACY_KEY}. Poll each pod's identity until it reports that hash;
+     the ConfigMap as written (computed before the patch is sent: a da-guard
+     that cannot answer stops the run with nothing written), the config_hash a
+     pod serving exactly that version reports: `da-guard parse-tree` over its
+     keys written out as files, as kubelet mounts them — the exporter's own
+     walk identity, file names included; for a pod in single-file mode, the
+     SHA-256 of {LEGACY_KEY}. A ConfigMap mounted with `items:` that rename
+     keys is not what the exporter walks, and never verifies. Poll each pod's identity until it reports that hash;
      --reload-timeout is the deadline that ends the wait, checked between
      polling passes. /metrics is then read between two identity reads and
      kept only if both show the same install (same config_hash and
@@ -236,12 +238,6 @@ def run_cmd(cmd):
     if result.returncode != 0:
         raise KubectlError(f"Error executing: {' '.join(cmd)}\n{result.stderr}")
     return result.stdout.strip()
-
-
-#: Go's classes of a name the exporter's walk reads as a config file
-#: (`da-guard parse-tree --list-only --names`; the others a name alone can
-#: be are `hidden` and `not_config_name`, which the walk skips).
-_SCANNED_CLASSES = frozenset({"tenant", "defaults", "platform"})
 
 
 def _mountable(key):
@@ -717,14 +713,6 @@ def _same_install(a, b):
     return (a["config_hash"], a["last_reload"]) == (b["config_hash"], b["last_reload"])
 
 
-def exporter_reads(key):
-    """Whether the exporter's conf.d walker reads a file named `key`
-    (pkg/confdname IsScanned) — Go's class of the name (`key_classes`) is a
-    config file's. A ConfigMap key has no `/`, so no directory on the way
-    can be hidden."""
-    return key_classes([key]).get(key) in _SCANNED_CLASSES
-
-
 def configmap_files(cm):
     """{key: bytes} of a ConfigMap object, as kubelet writes them into the
     mounted directory: `data` values UTF-8 encoded, `binaryData` decoded the
@@ -744,19 +732,33 @@ def configmap_files(cm):
 
 def config_hash(files, mode="directory"):
     """The config_hash an exporter serving exactly `files` ({key: bytes})
-    reports in /api/v1/config/identity: in directory mode the walker's
-    composite, the SHA-256 of the SHA-256 hex digests of the files it reads
-    (`exporter_reads`) concatenated in key order; in single-file mode the
-    SHA-256 of LEGACY_KEY's bytes (None if there is no such key).
-    tests/shared/config_identity_golden.json pins it against the exporter."""
+    reports in /api/v1/config/identity. Directory mode: `da-guard parse-tree`
+    over `files` written out as kubelet writes a mounted ConfigMap (one file
+    per mountable key, its bytes as they are), its document's config_hash —
+    the exporter's own walk identity (pkg/config treeIdentity, #4042), never
+    a rule of this tool's. Single-file mode: the SHA-256 of LEGACY_KEY's bytes
+    (None if there is no such key). tests/shared/config_identity_golden.json
+    pins both. Raises ParseTreeError for no usable da-guard."""
     if mode == "single-file":
         data = files.get(LEGACY_KEY)
         return None if data is None else hashlib.sha256(data).hexdigest()
-    outer = hashlib.sha256()
-    classes = key_classes(files)
-    for key in sorted(k for k in files if classes.get(k) in _SCANNED_CLASSES):
-        outer.update(hashlib.sha256(files[key]).hexdigest().encode("ascii"))
-    return outer.hexdigest()
+    with tempfile.TemporaryDirectory(prefix="patch-config-identity-") as root:
+        keys = sorted(k for k in files if _mountable(k))
+        for key in keys:
+            path = os.path.join(root, key)
+            with open(path, "wb") as fh:
+                fh.write(files[key])
+            os.chmod(path, 0o600)
+        # A filesystem that folds case (macOS, Windows) or rewrites a name
+        # (a trailing dot) holds fewer or other files than kubelet's mount
+        # does: its identity would be another tree's, and no pod would ever
+        # report it. Refused here, before anything is written.
+        if sorted(os.listdir(root)) != keys:
+            raise ConfigMapShapeError(
+                f"{_CM_NAME}: this filesystem cannot hold its keys as the exporter's "
+                "mount does (names that differ only in case, or that it rewrites); "
+                "run patch-config where file names are case-sensitive (the da-tools image)")
+        return _lib_parse_tree.load(root, None, PARSE_TREE_TIMEOUT_S).config_hash
 
 
 class Exporter:
@@ -1199,12 +1201,15 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
     write.key, write.old, write.new = key, old, new
     write.exporter, write.before, write.seen = exporter, before, seen
 
-    # The verification after the write classes the written ConfigMap's keys
-    # (`config_hash` → `key_classes`, through da-guard): class them now, so a
-    # da-guard that fails ends the run BEFORE the write, never between the
-    # write and its verification (the written keys are these: the patch is
-    # conditional on the version read).
-    key_classes([*configmap_files(cm_data), key])
+    # The config_hash each pod must come to report (#4042: da-guard's, over
+    # the ConfigMap as this write leaves it), taken now: a da-guard that fails
+    # ends the run BEFORE the write, never between the write and its
+    # verification. The patch is conditional on the version read, so the
+    # ConfigMap it returns is this one.
+    predicted = written_files(None, cm_data, key, new)
+    hashes = {mode: config_hash(predicted, mode)
+              for mode in sorted({snap[3]["mode"] for snap in before.values()
+                                  if snap[3] is not None})}
     _say(f"Patching ConfigMap ({mode}) for {tenant}: {metric_key} = {value}...",
          out=True)
     SIGNALS.install()
@@ -1216,7 +1221,12 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
     write.returned = True
     SIGNALS.armed = True
     files = written_files(written, cm_data, key, new)
-    expected = {pod: config_hash(files, snap[3]["mode"])
+    if files != predicted:
+        # Not what a conditional patch returns; verified as returned all the
+        # same (test_another_key_newly_failing_…). A da-guard failing here
+        # ends in the after-the-write path: rolled back, never left unverified.
+        hashes = {mode: config_hash(files, mode) for mode in hashes}
+    expected = {pod: hashes[snap[3]["mode"]]
                 for pod, snap in before.items() if snap[3] is not None}
     _say(f"Waiting for {len(before)} exporter pod(s) to serve the new bytes...",
          out=True)

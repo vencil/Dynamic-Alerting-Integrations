@@ -196,7 +196,7 @@ curl -s http://localhost:8080/api/v1/config/identity
 | `loaded` | Whether any config has been installed |
 | `mode` | `directory` (`-config-dir`) or `single-file` (`-config`) |
 | `last_reload` | Install time, UTC, RFC 3339 with nanoseconds; `""` when nothing is loaded |
-| `config_hash` | Directory mode: the files the exporter reads in conf.d (not dot-prefixed, a `.yaml` / `.yml` extension in any case), sorted by relative path, each SHA-256'd, the hex digests concatenated and SHA-256'd again; single-file mode: the SHA-256 of that file's bytes |
+| `config_hash` | Directory mode: the identity of what the exporter's walk saw — every file it reads (relative path and the SHA-256 of its bytes), every entry it cannot read (path), every entry with a config file's name that is not a file (path and kind), one record each, SHA-256'd in order (one definition: `treeIdentity` in `pkg/config`; `da-guard parse-tree` reports the same value). File names are in it: a rename or a move is another value. Single-file mode: the SHA-256 of that file's bytes |
 | `parse_failed` | The files (relative paths, sorted) whose bytes in this version did not parse: those bytes were **not** taken in, and neither are the tenants that file declared, unless another file that parses declares them too (on every load path, [#1980](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1980)); always an array. Always empty in single-file mode (a single file that does not parse is never installed) |
 
 ⚠️ `da_config_parse_failure_total` answers a different question: it rises on every scan that meets a broken file, whether or not a new version was installed, so it cannot tell whether the version being served left a file out.

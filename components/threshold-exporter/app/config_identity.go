@@ -3,8 +3,8 @@ package main
 // GET /api/v1/config/identity — WHICH bytes this process is serving (#2069).
 //
 // A machine-read contract, versioned by its `schema` field: patch-config
-// (scripts/tools/ops/patch_config.py) computes the same composite from the
-// ConfigMap it just wrote and polls this until the two agree, so a pod that
+// (scripts/tools/ops/patch_config.py) gets the same value for the ConfigMap
+// it just wrote and polls this until the two agree, so a pod that
 // reloaded SOMEONE ELSE's earlier write can no longer pass as having loaded
 // this one. /api/v1/config stays the human-read page; its one-second
 // `Last reload` line was all a verifier had before.
@@ -13,12 +13,13 @@ package main
 //	 "last_reload":"2026-09-27T01:02:03.456789Z",
 //	 "config_hash":"<64 hex>","parse_failed":["t-b.yaml"]}
 //
-//   - config_hash is lastHash: in directory mode the walker's composite
-//     (pkg/config/tree_scan.go: the SHA-256 of the per-file SHA-256 hex
-//     digests concatenated in sorted root-relative key order, over every
-//     file confdname.IsScanned keeps); in single-file mode the SHA-256 of that
-//     file's bytes. tests/shared/config_identity_golden.json pins the
-//     directory rule for both the exporter and patch-config.
+//   - config_hash is lastHash: in directory mode the walk's identity
+//     (pkg/config treeIdentity, #4042: one record per kept file — its
+//     root-relative key and SHA-256 — per unreadable entry and per NotFile,
+//     so a rename or a move is another config); in single-file mode the
+//     SHA-256 of that file's bytes. patch-config takes the directory value
+//     from `da-guard parse-tree` over the ConfigMap it wrote, never from a
+//     rule of its own; tests/shared/config_identity_golden.json pins it.
 //   - parse_failed is the root-relative keys, sorted, of the files the
 //     installed config left out because their bytes did not parse (see
 //     flatScanState.parseFailed). Always a list, never null. Empty in

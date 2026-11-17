@@ -38,11 +38,12 @@ def fake_config_hash(data, mode="directory"):
     """What an exporter serving `data` ({key: text}) reports as config_hash."""
     if mode == "single-file":
         return hashlib.sha256(data["config.yaml"].encode("utf-8")).hexdigest()
+    # #4042: one record per kept key, the key in it (pkg/config treeIdentity).
     keys = sorted(k for k in data if not k.startswith(".")
                   and k.lower().endswith((".yaml", ".yml")))
     return hashlib.sha256("".join(
-        hashlib.sha256(data[k].encode("utf-8")).hexdigest() for k in keys
-    ).encode("ascii")).hexdigest()
+        f"f\0{k}\0{hashlib.sha256(data[k].encode('utf-8')).hexdigest()}\n" for k in keys
+    ).encode("utf-8")).hexdigest()
 
 
 def yaml_rejects(key, text):
