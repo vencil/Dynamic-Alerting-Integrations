@@ -96,7 +96,7 @@ def _v2_doc(files):
                 "readers": ["exporter", "generator"],
                 "not_read": None, "role": "config", "problem": None, "verdict": None}
     return {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree",
-            "defaults_carriers": {},
+            "defaults_carriers": {}, "config_hash": "0" * 64,
             "entries": [entry(r) for r in sorted(files)], "files": files, "rendered_by": {}}
 
 
