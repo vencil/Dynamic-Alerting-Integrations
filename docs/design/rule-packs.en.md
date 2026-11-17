@@ -28,7 +28,7 @@ parent: architecture-and-design.en.md
 | Elasticsearch | `prometheus-rules-elasticsearch` | 14 | 12 |
 | Oracle | `prometheus-rules-oracle` | 13 | 11 |
 | DB2 | `prometheus-rules-db2` | 15 | 11 |
-| ClickHouse | `prometheus-rules-clickhouse` | 12 | 8 |
+| ClickHouse | `prometheus-rules-clickhouse` | 10 | 7 |
 | Kafka | `prometheus-rules-kafka` | 8 | 6 |
 | RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
 | JVM | `prometheus-rules-jvm` | 9 | 8 |
@@ -37,7 +37,7 @@ parent: architecture-and-design.en.md
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **169** | **197** (= **366** rules) |
+| **Total** | | **167** | **196** (= **363** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

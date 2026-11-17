@@ -2175,7 +2175,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | Code | 含義 |
 |------|------|
 | 0 | 收到 SIGTERM／SIGINT 後正常結束 |
-| 2 | caller error：`--repo` 不是 git repo、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd、`--max-inflight-body-bytes` 小於 `--max-body-bytes` |
+| 2 | caller error：`--repo` 不是 git repo，或它的 `HEAD` 指不到 git 讀得了的 commit——repo 消失或讀不了、`HEAD` 指向的 commit 物件不見了；只有還沒有任何 commit 的分支照常啟動（[#3903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3903)：以前這些都被當成「no HEAD commit」照常啟動、回 ready，之後每個請求才以 `git_read` 拒絕）、`--socket` 路徑上是非 socket 的檔或無法監聽、`--work-dir` 建不起來、`RLIMIT_NOFILE` 的硬上限容不下 `--max-connections` 加預留的 fd、`--max-inflight-body-bytes` 小於 `--max-body-bytes` |
 
 ---
 

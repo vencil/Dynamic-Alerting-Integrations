@@ -880,17 +880,6 @@ keys:
       tracking: 1320
       reason: "No measurement yet; #1320 keeps it declared until there is a signal"
       reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
-  clickhouse_memory_tracking_bytes:
-    pack: clickhouse
-    tier: optional_overrides
-    value: 8589934592
-    unit: bytes (8GB)
-    desc: Memory tracking warning
-    metric_class: capacity
-    arming: operator
-    portability: ratio_pending
-    portability_reason: "Absolute bytes do not carry across deployments; the portable form is a share of the server memory limit, whose export is still to be confirmed in #1320"
-    portability_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔伺服器記憶體上限的比例，該上限能否取得待 #1320 確認"
   clickhouse_active_connections_critical:
     pack: clickhouse
     tier: optional_overrides
@@ -1168,6 +1157,10 @@ keys:
 deprecated_aliases:
   mysql_cpu: mysql_threads_running
 retired_keys:
+  clickhouse_memory_tracking_bytes:
+    replaced_by: container_memory
+    tracking: 1320
+    hint: "ClickHouse's absolute memory bytes alert is retired; container_memory (percent of the container memory limit, shipped at 85) covers it only for a pod in a tenant namespace with a memory limit set and the kubernetes pack on. The unit changed from bytes to a percentage: do not copy the value."
   kafka_active_controllers:
     replaced_by: null
     tracking: 3783

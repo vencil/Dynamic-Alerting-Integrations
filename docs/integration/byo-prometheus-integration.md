@@ -231,7 +231,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 | `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 14R + 12A |
 | `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 13R + 11A |
 | `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 15R + 11A |
-| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 8A |
+| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 10R + 7A |
 | `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 8A |
 | `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 8R + 6A |
 | `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 16R + 12A |
