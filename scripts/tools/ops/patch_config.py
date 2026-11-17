@@ -750,10 +750,12 @@ def config_hash(files, mode="directory"):
                 fh.write(files[key])
             os.chmod(path, 0o600)
         # A filesystem that folds case (macOS, Windows) or rewrites a name
-        # (a trailing dot) holds fewer or other files than kubelet's mount
-        # does: its identity would be another tree's, and no pod would ever
-        # report it. Refused here, before anything is written.
-        if sorted(os.listdir(root)) != keys:
+        # (a trailing dot) puts two keys in one file, where kubelet's mount
+        # has two: its identity would be another tree's, and no pod would
+        # ever report it. Refused here, before anything is written. Asked of
+        # each key (one file each?), not by listing the directory.
+        held = {(st.st_dev, st.st_ino) for st in (os.stat(os.path.join(root, k)) for k in keys)}
+        if len(held) != len(keys):
             raise ConfigMapShapeError(
                 f"{_CM_NAME}: this filesystem cannot hold its keys as the exporter's "
                 "mount does (names that differ only in case, or that it rewrites); "

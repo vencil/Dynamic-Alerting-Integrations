@@ -154,9 +154,14 @@ class TestIdentityVerdicts:
         """#4042：config_hash 由 da-guard 對落地成檔案的 ConfigMap 算。檔案系統把兩個 key
         併成一個檔（macOS／Windows 不分大小寫）時，算出的是另一棵樹的身分、沒有 pod 會回報
         它——寫入前就拒絕，什麼都不寫。"""
-        real = pc.os.listdir
-        monkeypatch.setattr(pc.os, "listdir", lambda root: (  # one file lost there only
-            real(root)[1:] if "patch-config-identity-" in str(root) else real(root)))
+        real = pc.os.stat
+
+        def stat(path, *args, **kwargs):  # every key of the identity dir is one file there
+            p = Path(path)
+            if p.parent.name.startswith("patch-config-identity-"):
+                path = min(p.parent.iterdir())
+            return real(path, *args, **kwargs)
+        monkeypatch.setattr(pc.os, "stat", stat)
         c = FakeCluster(_multi())
         before = dict(c.data)
         err = io.StringIO()
