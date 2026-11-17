@@ -300,6 +300,46 @@ def output_dir_type(*, then: Any = None) -> OutputDirArg:
     return OutputDirArg(then)
 
 
+class ArtifactFileArg:
+    """An argparse ``type=`` made by :func:`artifact_file_type` (#3107 ③a).
+
+    The flag names a file the tool replaces whole (``_lib_io.
+    write_repo_artifact``): a reader must never see half of it, so it is
+    never a stream, and ``-`` — standard output for an operator output
+    flag — is refused at parse time (rc 2, argparse's ``argument --flag:
+    ...`` line) instead of becoming a file called ``-``. So is ``""``
+    (an unset variable in a script): it names no file, and a tool that
+    reads a falsy value as "not given" would print instead. Devices, FIFOs and
+    the file this process's stdout already is are the write's to refuse
+    (``_lib_io.check_repo_artifact``): only ``-`` is decidable from the
+    string.
+    """
+
+    def __init__(self, then: Any = None) -> None:
+        self.then = then
+        self.__name__ = "artifact_file"
+
+    def __call__(self, value: str) -> Any:
+        if value == "":
+            raise argparse.ArgumentTypeError(
+                "an empty value names no file (an unset variable?); pass the "
+                "path of the file to write")
+        if value == "-":
+            raise argparse.ArgumentTypeError(
+                "'-' is standard output, and this flag names a file that is "
+                "replaced whole, never a stream (to write a file of that "
+                "name, pass ./-)")
+        return self.then(value) if self.then is not None else value
+
+
+def artifact_file_type(*, then: Any = None) -> ArtifactFileArg:
+    """argparse ``type=`` for a flag that names a file written with
+    ``_lib_io.write_repo_artifact`` (#3107 ③a): the value ``-`` (and an
+    empty one) exits 2 (CALLER_ERROR) at parse time, named by argparse. *then* as in
+    :func:`output_dir_type`."""
+    return ArtifactFileArg(then)
+
+
 def format_duration(seconds: int) -> str:
     """Format seconds back to a Prometheus-compatible duration string.
 
