@@ -134,11 +134,18 @@ def _seed_rng(seed: int) -> random.Random:
 
 def _written_number_text(value: "int | float") -> str:
     """The text the conf.d writer spells *value* with under `defaults:`
-    (`_lib_confedit.number_value`: canonical decimal). Raises ValueError for
+    (`_lib_confedit.number_value`: `float_text`). Raises ValueError for
     a number the edit contract cannot carry."""
     import _lib_confedit  # noqa: PLC0415
     (text,) = _lib_confedit.number_value(value).values()
     return text
+
+
+def _is_edit_int(value: int) -> bool:
+    """Whether the edit contract takes *value* as an int (at most 18
+    characters, a sign counted)."""
+    import _lib_confedit  # noqa: PLC0415
+    return _lib_confedit.is_canonical_int(str(value))
 
 
 def _gen_threshold_value(rng: random.Random) -> int | str:
@@ -739,10 +746,10 @@ def main() -> None:
             "must be a number the exporter reads as a threshold (finite, "
             "decimal, at most 20 digits; so not 1_000, 0x1F, nan or inf) "
             "AND one this tool can write: the file spells a number in plain "
-            "decimal, with no exponent, and that spelling must have at most "
-            "20 digits too. 1e3 is fine (written 1000.0); 1e20, 1e-25 and "
-            "99999999999999999999 are refused (exit 2), since the exporter "
-            "would serve no default for what would be written."
+            "decimal, or as 1.0e+22 when plain decimal would have more than "
+            "20 digits. 1e3 is written 1000.0, 1e22 1.0e+22, 1e-25 1.0e-25 "
+            "and 99999999999999999999 1.0e+20 (the float64 it is to the "
+            "exporter); a value refused is exit 2."
         ),
     )
     args = parser.parse_args()
@@ -771,9 +778,14 @@ def main() -> None:
         # An integer stays an int (the identity the _defaults parser most
         # often expects); `1.5`, `1e3` and the like are floats.
         value = int(raw) if raw.lstrip("+-").isdecimal() and raw.isascii() else number
+        # An int past the edit contract's 18 characters is written as the
+        # float it is to the exporter (number_value's rule), so it is stored
+        # as that float: the file is generated with data_value, which would
+        # refuse the int (#3866).
+        if isinstance(value, int) and not _is_edit_int(value):
+            value = float(value)
         # What the writer will spell it as must be a threshold number too: the
-        # edit contract writes plain decimal (no exponent), an int past 18
-        # characters as the float it rounds to.
+        # edit contract writes plain decimal or, past 20 digits, 1.0e+22 (#3866).
         try:
             written = _written_number_text(value)
         except ValueError as e:
@@ -781,9 +793,8 @@ def main() -> None:
         if not is_threshold_number_text(written):
             parser.error(
                 f"--extra-defaults {spec!r}: {raw} would be written to _defaults.yaml as "
-                f"{written}, {sum(ch.isdigit() for ch in written)} digits (this tool writes a "
-                f"number in plain decimal, with no exponent); a threshold number has at most "
-                f"20 digits, so the exporter would serve no default for {key}"
+                f"{written}, which is not a threshold number (at most 20 digits), so the "
+                f"exporter would serve no default for {key}"
             )
         extra_defaults[key] = value
 

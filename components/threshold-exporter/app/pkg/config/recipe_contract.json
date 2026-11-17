@@ -56,6 +56,12 @@
     "decimal": "^[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$",
     "thresholdNumber": "^(?:\\+|-)?(?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:\\.)?|\\.[0-9]{0,1})?|\\.[0-9]{0,2})?|\\.[0-9]{0,3})?|\\.[0-9]{0,4})?|\\.[0-9]{0,5})?|\\.[0-9]{0,6})?|\\.[0-9]{0,7})?|\\.[0-9]{0,8})?|\\.[0-9]{0,9})?|\\.[0-9]{0,10})?|\\.[0-9]{0,11})?|\\.[0-9]{0,12})?|\\.[0-9]{0,13})?|\\.[0-9]{0,14})?|\\.[0-9]{0,15})?|\\.[0-9]{0,16})?|\\.[0-9]{0,17})?|\\.[0-9]{0,18})?|\\.[0-9]{0,19})?|\\.[0-9]{1,20})(?:[eE](?:\\+|-)?[0-9]+)?$"
   },
+  "edit_number": {
+    "_comment": "The spellings of a number the conf.d writer (pkg/confedit, `da-guard write`) takes in an {\"int\": ...} / {\"float\": ...} value, so that the value is its text: no leading zero, no `+`, no `-0` int, no hex or underscore. A YAML 1.1 reader (PyYAML) and a 1.2 one (yaml.v3) read every text the writer takes as the same type and number. `float` is plain decimal or the normalized exponent form: a one-digit mantissa with a `.` and no trailing zero but `.0`, a signed exponent with no leading zero (`1.0e+22`, `1.5e-25`, `2.0e+0`); `1e22` and `1.0e22` are refused, as PyYAML reads both as strings (#3866). The pattern is the shape; the writer also refuses a float whose number is not finite (`1.0e+999`) or a nonzero text that reads as 0 (`1.0e-400`), so the number is its text. int_max_length keeps an int inside int64, where yaml.v3 reads it as an integer, the sign counted. Python's copy is GENERATED (scripts/tools/_lib_constants.py); no other copy is written by hand.",
+    "int": "^(?:0|-?[1-9][0-9]*)$",
+    "float": "^-?(?:(?:0|[1-9][0-9]*)\\.[0-9]+|[1-9]\\.(?:0|[0-9]*[1-9])e(?:\\+0|[+-][1-9][0-9]*))$",
+    "int_max_length": 18
+  },
   "op": {
     "enum": [">", ">=", "<", "<=", "=="],
     "default": ">",

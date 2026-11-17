@@ -32,6 +32,44 @@ import (
 // which this must not equal.
 const refusedUnparsedNaN uint64 = 0x7ff8_0000_0000_0002
 
+// rootDisabledNaN is the quiet-NaN bit pattern of a root `defaults:` value
+// that opts the whole tree out of a built-in key (#3832 decision 3:
+// RootDisableText). Like a refused value it is no finite number, so no
+// resolver serves a default row for it; unlike one it is no refusal
+// (RefusedDefault reports it not refused), the built-in layer does not
+// replace it (seedBuiltinDefaults), and it switches the key's family off for
+// every tenant whose merged config gives the key no value of its own
+// (familyHeadOff). It must equal neither refusedUnparsedNaN nor math.NaN().
+const rootDisabledNaN uint64 = 0x7ff8_0000_0000_0003
+
+// rootDisabledDefault is the Defaults value of a root `disable`
+// (rootDisabledNaN).
+func rootDisabledDefault() float64 { return math.Float64frombits(rootDisabledNaN) }
+
+// RootDisabledDefault reports whether v, a Defaults value, is a root
+// `disable` of a built-in key (RootDisableText).
+func RootDisabledDefault(v float64) bool { return math.Float64bits(v) == rootDisabledNaN }
+
+// RootDisableText reports whether text, the value the conf.d root
+// `defaults:` writes for key, opts the whole tree out of key (#3832
+// decision 3): key is in the built-in table and text is the word `disable`
+// (any letter case, no `:<severity>`). Nothing else is a root opt-out:
+//
+//   - not the aliases a subtree level reads as off (`false`, `off`,
+//     `disabled`): `helm --set …=false` would switch a whole family off for
+//     the whole tree in silence. They stay values the root decode refuses
+//     (root_default_refused), and the key keeps the built-in value;
+//   - not a key outside the built-in table: the root gives it no value, so
+//     there is nothing to switch off — the text stays refused;
+//   - not a schedule or an `expires:` — a mapping is no scalar, and the
+//     root decode reads none (readRootDefault).
+func RootDisableText(key, text string) bool {
+	if _, builtin := builtinDefaults[key]; !builtin {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(text), disabledSpelling)
+}
+
 // refusedDefault is the Defaults value of a root default whose text
 // thresholdTextNumber refuses, for reason (refusedReason).
 func refusedDefault(reason string) float64 {
@@ -53,9 +91,10 @@ func refusedReason(text string) string {
 
 // RefusedDefault reports, for a Defaults value, whether the resolver refuses
 // it, and why (RefusedNonFinite or RefusedUnparsed). A NaN or ±Inf set by
-// code, not decoded from a file, is RefusedNonFinite.
+// code, not decoded from a file, is RefusedNonFinite. A root `disable`
+// (RootDisabledDefault) is not refused.
 func RefusedDefault(v float64) (reason string, refused bool) {
-	if finiteThreshold(v) {
+	if finiteThreshold(v) || RootDisabledDefault(v) {
 		return "", false
 	}
 	if math.Float64bits(v) == refusedUnparsedNaN {
@@ -248,7 +287,7 @@ func readRootDefaults(n *yaml.Node) (out map[string]float64, refused map[string]
 			return nil, nil, fmt.Errorf("yaml: line %d: mapping key %q already defined", kn.Line, key)
 		}
 		written[key] = true
-		v, text, err := readRootDefault(vn)
+		v, text, err := readRootDefault(key, vn)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -290,9 +329,10 @@ func readRootDefaults(n *yaml.Node) (out map[string]float64, refused map[string]
 	return out, refused, nil
 }
 
-// readRootDefault is one root `defaults:` value (readRootDefaults); refused
-// is the text when thresholdTextNumber refuses it.
-func readRootDefault(vn *yaml.Node) (v float64, refused *string, err error) {
+// readRootDefault is one root `defaults:` value of key (readRootDefaults);
+// refused is the text when thresholdTextNumber refuses it. A root `disable`
+// of a built-in key (RootDisableText) is rootDisabledDefault, not refused.
+func readRootDefault(key string, vn *yaml.Node) (v float64, refused *string, err error) {
 	if vn.Kind == yaml.AliasNode {
 		vn = vn.Alias
 	}
@@ -305,6 +345,9 @@ func readRootDefault(vn *yaml.Node) (v float64, refused *string, err error) {
 	}
 	if v, ok := thresholdTextNumber(vn.Value); ok {
 		return v, nil, nil
+	}
+	if vn.Tag == "!!str" && RootDisableText(key, vn.Value) {
+		return rootDisabledDefault(), nil, nil
 	}
 	text := vn.Value
 	return refusedDefault(refusedReason(text)), &text, nil

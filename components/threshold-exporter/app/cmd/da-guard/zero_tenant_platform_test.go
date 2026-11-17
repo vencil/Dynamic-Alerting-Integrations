@@ -140,6 +140,12 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\noptional_overrides: [pg_connections]\n"},
 		finding: findingkind.FindingRootOptionalBuiltin,
 	},
+	// #3832: a root `disable` beside a value of its own family is judged in
+	// the carrier.
+	"root disable beside a value of its family": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  pg_connections: disable\n  pg_connections_critical: 90\n"},
+		finding: findingkind.FindingRootDisableFamilyValue,
+	},
 	// #3250: a reserved key in the root defaults is judged in the carrier.
 	"reserved key in the root defaults": {
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  _silent_mode: warning\n"},
@@ -205,6 +211,7 @@ var zeroTenantKindClass = map[string]string{
 	"root_defaults_critical_key":    kindTreeLevel,
 	"root_default_refused":          kindTreeLevel,
 	"root_optional_builtin":         kindTreeLevel,
+	"root_disable_family_value":     kindTreeLevel,
 	"root_defaults_reserved_key":    kindTreeLevel,
 	"root_dimensions_critical_base": kindTreeLevel,
 	// The whole tree's /metrics.

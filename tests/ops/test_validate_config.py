@@ -2786,7 +2786,10 @@ class TestRootDefaultsValues:
         (".inf", ".inf", "unparsed"),
         (".nan", ".nan", "unparsed"),
         ("!!float .inf", ".inf", "unparsed"),
-        ("disable", "disable", "unparsed"),
+        # #3832: `disable` of a default-armed key is the root opt-out, not a
+        # refusal; its aliases are refused.
+        ("disabled", "disabled", "unparsed"),
+        ('"off"', "off", "unparsed"),
         ("true", "true", "unparsed"),
         ("2026-01-01", "2026-01-01", "unparsed"),
         ("0x10", "0x10", "unparsed"),
@@ -2889,7 +2892,9 @@ class TestRootDefaultsValues:
         assert got == want, (case, r, g)
 
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
-        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: disable\n")
+        # `false`, not `disable`: the root reads `disable` of a default-armed
+        # key as the tree's opt-out (#3832), and none of its aliases.
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: false\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             _as_run(vc.main())
