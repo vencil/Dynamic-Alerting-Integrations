@@ -20,9 +20,10 @@
   （經分支或 detached）⇒ 判定回 ``git_read`` 並觸發一輪，探測失敗、``ready``
   為 false、理由為封閉的 ``repo_unreadable``；放回後下一輪通過、ready 回 true。
   ``base_commit`` 不在 repo 裡的 ``git_read`` 也觸發一輪，但探測通過、ready
-  不變。git_read 觸發的輪次受 ``--self-check-seconds`` 節流、一串合併成一輪、
-  不縮短失敗輪之後的等待。探測卡住時服務照常回應；逾時那一刻該輪就判失敗；
-  kill 不生效（或連 pidfd 的 reader 都掛不上）時名額被佔住、迴圈不卡。
+  不變。git_read 觸發的輪次受 ``--self-check-seconds`` 節流、不縮短失敗輪
+  之後的等待（一串合併成一輪由單元測試守）。探測卡住時服務照常回應；逾時那一刻
+  該輪就判失敗；kill 不生效（或連 pidfd 的 reader 都掛不上）時名額被佔住、迴圈
+  不卡，reader 掛不上時時限照樣生效。
 - 文件列出的自檢理由與 SSOT（``_gsvc_proto.SELF_CHECK_REASONS``）雙向相等。
 
 程式用 shim 注入：包住真 binary 的 shell 腳本，控制檔的每一行是「程式 第一個
@@ -544,29 +545,34 @@ def test_a_probe_whose_exit_cannot_be_watched_holds_the_slot_not_the_loop(rig):
     """CodeRabbit (#4023): with no reader on the process's pidfd its end is
     polled for, never waited for on the loop — the kill not ending it
     either, the service still answers while it runs, the round holding the
-    slot. Once it ends the probe is the service's own failure
-    (``internal_error``), never ``repo_unreadable``."""
+    slot. The time limit holds on that path too (CodeRabbit, #4050): past
+    it the round has failed that moment — ``internal_error``, what the path
+    records, not ready, still running — while the process lives on. Once it
+    ends the probe is the service's own failure (``internal_error``), never
+    ``repo_unreadable``."""
     git, armed = _hanging_git(rig)
+    want = [{"binary": _gsvc_proto.SELF_CHECK_GIT_BINARY, "reason": "internal_error"}]
     try:
         with rig.service("probe-unwatched", "--git", str(git),
-                         "--self-check-timeout-seconds", "600",
+                         "--self-check-timeout-seconds", "1",
                          prelude=_NO_PIDFD_READER.format(armed=str(armed))) as svc:
             assert _status(svc)["ready"] is True
             armed.touch()
             status, doc = svc.validate("0" * 40, timeout=30)
             assert doc.get("reason") == "git_read", doc
             _until(lambda: rig.hanging(), "the probe hanging", timeout=10)
-            time.sleep(1.0)
+            time.sleep(2.0)  # past the 1 s limit
             for _ in range(3):
                 st = _answers_at_once(svc)
-                assert st["self_check"]["running"] is True and rig.hanging(), st
+                assert st["self_check"] == {"state": "failed", "failures": want,
+                                            "running": True}, st
+                assert st["ready"] is False and rig.hanging(), st
                 time.sleep(0.3)
             armed.unlink()
             _end_hanging(rig)
             _until(lambda: not _status(svc)["self_check"]["running"], "the round ending")
             st = _status(svc)
-            assert st["self_check"]["failures"] == [
-                {"binary": _gsvc_proto.SELF_CHECK_GIT_BINARY, "reason": "internal_error"}], st
+            assert st["self_check"]["failures"] == want, st
             assert st["ready"] is False, st
     finally:
         _end_hanging(rig)
@@ -585,33 +591,6 @@ def test_git_reads_ask_for_no_round_within_the_interval(rig):
         st = _status(svc)
         assert st["self_check"]["running"] is False and st["ready"] is True, st
         assert (_rounds(svc, "passed"), _rounds(svc, "failed")) == (1, 0)
-
-
-def test_a_burst_of_git_reads_is_one_round(rig):
-    """The git_reads asked for before a round begins are one ask — one round
-    once the interval is past, not one per request — and once it has run,
-    nothing is left asked for: no round follows a whole interval later.
-
-    The burst must end inside the interval (6 s) for "one round" to be the
-    right count: one that outlasts it — a host slow enough that six refusals
-    take 6 s — measures nothing and is skipped, not failed."""
-    interval = 6.0
-    with rig.service("coalesce", "--self-check-seconds", str(interval)) as svc:
-        assert _rounds(svc, "passed") == 1
-        began = time.monotonic()  # the first round ended before this
-        for _ in range(6):
-            assert svc.validate("0" * 40)[1].get("reason") == "git_read"
-        took = time.monotonic() - began
-        if took >= interval:
-            pytest.skip(f"the burst took {took:.1f}s, not inside the {interval}s interval: "
-                        f"nothing measured")
-        # inside the interval: no round has begun yet — one that has is the
-        # throttle broken, a failure, never a skip
-        st = _status(svc)
-        assert (_rounds(svc, "passed"), st["self_check"]["running"]) == (1, False), st
-        _until(lambda: _rounds(svc, "passed") == 2, "the round asked for")
-        time.sleep(interval + 1.0)  # a round still asked for would have run by now
-        assert (_rounds(svc, "passed"), _rounds(svc, "failed")) == (2, 0)
 
 
 def test_git_reads_never_shorten_the_wait_after_a_failed_round(rig):

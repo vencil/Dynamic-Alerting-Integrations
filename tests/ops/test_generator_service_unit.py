@@ -1156,6 +1156,29 @@ def test_a_reader_that_cannot_be_added_leaves_no_process_or_descriptor(
     assert not os.path.exists(f"/proc/{started[0]}"), "the process was not collected"
 
 
+def test_a_probe_past_its_time_limit_logs_what_git_said(tmp_path, monkeypatch, capsys):
+    """CodeRabbit (#4050): git's stderr goes to the log, as cli-reference
+    says — also when git said something and then stopped answering: the
+    probe's time-out line carries it (bounded), the answer never does."""
+    import os
+    import _gsvc_child
+    if not hasattr(os, "pidfd_open"):
+        pytest.skip("pidfd_open: Linux only")
+    sleep, mark = _sleep_mark()
+    git = tmp_path / "git"
+    git.write_text(f"#!/bin/sh\necho 'error: stuck reading pack {mark}' >&2\n"
+                   f"exec '{sleep}' '{mark}'\n", encoding="utf-8")
+    git.chmod(0o755)
+    monkeypatch.setitem(_gsvc_child._LOCAL_ENV_VARS, str(git), frozenset({"GIT_DIR"}))
+    svc = _probing_service(tmp_path, tmp_path)
+    svc.s.git = str(git)
+    svc.s.self_check_timeout_seconds = 0.5
+    assert _probe(svc) == "repo_unreadable"
+    err = capsys.readouterr().err
+    assert "git did not answer within 0.5s" in err, err
+    assert f"error: stuck reading pack {mark}" in err, err
+
+
 def test_an_unwatched_process_the_kill_does_not_end_never_blocks_the_loop(
         tmp_path, monkeypatch):
     """CodeRabbit (#4023): no reader on the pidfd AND a kill that does not

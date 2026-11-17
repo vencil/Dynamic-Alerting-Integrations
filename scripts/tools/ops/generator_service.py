@@ -1218,8 +1218,10 @@ class Service:
                 finally:
                     shutil.rmtree(work, ignore_errors=True)
                 if run.timed_out:
+                    # what git said before it stopped answering: the log only
                     _log(f"self-check: --repo: git did not answer within "
-                         f"{self.s.self_check_timeout_seconds}s")
+                         f"{self.s.self_check_timeout_seconds}s: "
+                         + run.stderr.decode("utf-8", "replace"))
                     return "repo_unreadable"
                 argv = steps.send((run.rc, run.stdout, run.stderr))
         except StopIteration as done:
@@ -1318,8 +1320,11 @@ class Service:
         uninterruptible sleep on a hung NFS mount) holds the slot until it
         does, never the loop. When its exit cannot be watched (``pidfd_open``
         or ``add_reader`` failing: descriptors, epoll's ENOSPC) it is killed
-        and polled for without blocking; the failure then propagates, once
-        it is collected (``internal_error`` for the caller)."""
+        and polled for without blocking, under the same time limit — past
+        it the round fails that moment with ``internal_error`` (what that
+        path records) and the kill is sent again; the failure then
+        propagates, once it is collected (``internal_error`` for the
+        caller)."""
         out_path, err_path = os.path.join(work, "stdout"), os.path.join(work, "stderr")
         # 0600 from creation (the work directory is 0700 already): what a
         # self-check prints is the service's to read, nobody else's
@@ -1343,6 +1348,7 @@ class Service:
         # No await between the fork and this: _reap_orphans (a SIGCHLD
         # callback on this loop) cannot have collected it.
         self._held_pids.add(proc.pid)
+        deadline = self.loop.time() + max(0.0, self.s.self_check_timeout_seconds)
         pidfd = -1
         exited: Optional[asyncio.Future] = None
         watched = False  # its exit is a reader on this loop
@@ -1375,8 +1381,19 @@ class Service:
                     os.close(pidfd)
                 try:
                     # ended (watched), or polled for until it has: never a
-                    # blocking wait on this loop
-                    await self._collected(proc)
+                    # blocking wait on this loop. Unwatched, the time limit
+                    # still holds: past it the round fails that moment
+                    # (internal_error, what this path records) and the kill
+                    # is sent again; the pid and the slot stay held until it
+                    # is collected.
+                    late = None
+                    if not watched:
+                        def late() -> None:
+                            _kill_group(proc.pid)  # not collected yet (#3923)
+                            if timeout_failure is not None:
+                                self._fail_round_now({**timeout_failure,
+                                                      "reason": "internal_error"})
+                    await self._collected(proc, deadline, late)
                 finally:
                     self._held_pids.discard(proc.pid)
                     self._reap_orphans()  # what was held back behind it
@@ -1386,13 +1403,22 @@ class Service:
             stderr = fh.read(_SELF_CHECK_STDERR_LOGGED)
         return HeldRun(proc.returncode, stdout, stderr, timed_out)
 
-    @staticmethod
-    async def _collected(proc: subprocess.Popen) -> None:
+    async def _collected(self, proc: subprocess.Popen, deadline: float,
+                         late=None) -> None:
         """Until *proc* has been collected: ``poll`` (``waitpid`` WNOHANG)
-        with a growing sleep between — the loop serves meanwhile."""
+        with a growing sleep between — the loop serves meanwhile. *late*,
+        when given, is called once the first time the loop time passes
+        *deadline* with *proc* not yet collected; no sleep runs past the
+        deadline before that."""
         delay = _POLL_FIRST_SECONDS
         while proc.poll() is None:
-            await asyncio.sleep(delay)
+            now = self.loop.time()
+            if late is not None and now >= deadline:
+                late()
+                late = None
+                continue
+            pause = delay if late is None else min(delay, max(0.0, deadline - now))
+            await asyncio.sleep(pause)
             delay = min(delay * 2, _POLL_MAX_SECONDS)
 
     def _self_check_doc(self) -> dict:
