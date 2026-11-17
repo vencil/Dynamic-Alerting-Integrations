@@ -725,7 +725,7 @@ class ParseFailedError(YamlFileError):
 #: The closed set of a built-in key's `state` in effective's
 #: `builtin_defaults` (pkg/config BuiltinState*, #3832). A state outside it
 #: is output this reader cannot read.
-BUILTIN_STATES = frozenset({"builtin", "overridden", "withheld"})
+BUILTIN_STATES = frozenset({"builtin", "overridden", "opted_out", "withheld"})
 
 
 class BuiltinDefault(NamedTuple):

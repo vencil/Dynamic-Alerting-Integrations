@@ -116,10 +116,18 @@ ALLOWED = {
             "reads go through da-read / da-crdecode"),
     ('scripts/tools/lint/check_portal_audience_enum.py', '_check_registry'):
         (1, "docs/assets/tool-registry.yaml, the repo's own tool catalogue"),
+    ('scripts/tools/lint/check_percent_render_pinned.py', '_load_yaml'):
+        (1, "promtool unit-test fixtures under tests/rulepacks (their rule_files and the "
+            "exp_annotations keys of firing cases, #978; promtool reads them in CI and no "
+            "da-read reading covers that format) and this lint's own baseline; the rule "
+            "packs go through da-read prometheus-rules"),
     ('scripts/tools/lint/check_property_coverage.py', 'main'):
         (1, "the property-test coverage manifest, this lint's own data"),
     ('scripts/tools/lint/check_tool_registry_jsx_parity.py', 'load_registry'):
         (1, "docs/assets/tool-registry.yaml, the repo's own tool catalogue"),
+    ('scripts/tools/lint/check_exporter_queries.py', 'load_queries'):
+        (1, "rule-packs/exporters/*.yaml, query-exporter's own config (#3833): its only "
+            "consumer is query-exporter, a Python program — no Go reader to ask"),
     ('scripts/tools/lint/check_vmalert_coverage.py', '_load_yaml'):
         (1, "promtool unit-test fixtures under tests/rulepacks (only their alert_rule_test "
             "alertnames are taken, to count coverage; promtool reads them in CI and no da-read "

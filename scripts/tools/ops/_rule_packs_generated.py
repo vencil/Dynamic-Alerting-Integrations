@@ -1,7 +1,7 @@
 """GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.
 
 The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its
-display/exporter/default_on/rule_pack_file and the `defaults` /
+display/exporter/default_on/rule_pack_file(/queries) and the `defaults` /
 `optional_overrides` tiers. Edit the registry, then run
   python3 scripts/tools/lint/check_threshold_registry.py --regen
 `--ci` (pre-commit, CI) fails while this file is stale.
@@ -307,10 +307,11 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                                     'latency '
                                                                                     'critical',
                                                                             'metric_class': 'latency'}}},
- 'oracle': {'display': 'Oracle Database (oracledb_exporter)',
-            'exporter': 'iamseth/oracledb_exporter',
+ 'oracle': {'display': 'Oracle Database (query-exporter)',
+            'exporter': 'albertodonato/query-exporter',
             'default_on': False,
             'rule_pack_file': 'rule-packs/rule-pack-oracle.yaml',
+            'queries': 'rule-packs/exporters/oracle.yaml',
             'defaults': {'oracle_sessions_active': {'value': 200,
                                                     'unit': 'count',
                                                     'desc': 'Active sessions warning',

@@ -445,7 +445,11 @@ func headLive(base string, defaults map[string]float64, sv ScheduledValue, now t
 
 // familyHeadOff reports whether the tenant switches family base off at now
 // (#3046): its value applies (headLive) and is a `disable`
-// (thresholdRowDisabled; `disable:<severity>` is none, #3141). Its family —
+// (thresholdRowDisabled; `disable:<severity>` is none, #3141) — or the
+// tenant's merged config gives base no value the base phase reads (none
+// written, an expired one, one it cannot read) and the root `defaults:`
+// writes base as `disable` (RootDisabledDefault, #3832 decision 3), which
+// every tenant inherits as it inherits a subtree level's. Its family —
 // `<base>_critical` and every dimensional `<base>{…}`, the tenant's own and
 // the root `defaults:` ones — is then served no row.
 //
@@ -464,12 +468,21 @@ func familyHeadOff(base string, defaults map[string]float64, overrides map[strin
 // the schedule at valueAt — da-guard's reading of one part of the day,
 // which, like the resolver's (AtMinuteOfDay), reads `expires:` at --at.
 func familyHeadOffSplit(base string, defaults map[string]float64, overrides map[string]ScheduledValue, expiryAt, valueAt time.Time) bool {
-	sv, ok := overrides[base]
-	if !ok || !headLive(base, defaults, sv, expiryAt) {
-		return false
+	if sv, ok := overrides[base]; ok && headLive(base, defaults, sv, expiryAt) {
+		v := sv.resolveValue(valueAt, nil)
+		if off, _ := thresholdRowDisabled(v); off {
+			return true
+		}
+		if _, _, parsed := parseThresholdValue(v); parsed {
+			return false
+		}
+		// A value the base phase cannot read falls back to the root's,
+		// as resolveBaseRows does: below.
 	}
-	off, _ := thresholdRowDisabled(sv.resolveValue(valueAt, nil))
-	return off
+	// #3832: the root `disable` of a built-in key (RootDisabledDefault)
+	// — the head every tenant inherits when its merged config (a subtree
+	// level, a profile, its own file) gives the key no live value.
+	return RootDisabledDefault(defaults[base])
 }
 
 // criticalRowRead is resolveCriticalRows' entry test: key is a
@@ -623,6 +636,13 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// With no finite default either (#3140, RefusedRootDefaults)
 			// there is nothing to fall back to and the row is dropped.
 			hint := suffixedHint(suffixedOff, metricKey)
+			if RootDisabledDefault(defaultValue) {
+				logf("WARN: unknown value %q for tenant=%s metric=%s, and the root default is disable, skipping%s", override, tenant, metricKey, hint)
+				if rec != nil {
+					rec.note(tenant, metricKey, NotServedValueUnparsedDropped)
+				}
+				continue
+			}
 			if !finiteThreshold(defaultValue) {
 				logf("WARN: unknown value %q for tenant=%s metric=%s, and the root default is not a finite number, skipping%s", override, tenant, metricKey, hint)
 				if rec != nil {
@@ -640,7 +660,8 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 		// root decode refuses (#3140, #3250: refusedDefault, a NaN): the key
 		// is then served like an `optional_overrides:` one, the tenant's own
 		// value only, and da-guard reports the root value
-		// (root_default_refused).
+		// (root_default_refused). A root `disable` of a built-in key
+		// (RootDisabledDefault, #3832) is no finite number either: no row.
 		if !finiteThreshold(defaultValue) {
 			continue
 		}

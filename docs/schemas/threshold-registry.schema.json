@@ -70,6 +70,11 @@
             "rule_pack_file": {
               "type": "string",
               "pattern": "^rule-packs/rule-pack-[a-z0-9-]+\\.yaml$"
+            },
+            "queries": {
+              "type": "string",
+              "pattern": "^rule-packs/exporters/[a-z0-9-]+\\.yaml$",
+              "description": "query-exporter config that produces this pack's raw metrics (#3833); checked by scripts/tools/lint/check_exporter_queries.py"
             }
           }
         }

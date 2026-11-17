@@ -175,6 +175,7 @@ lang: zh
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
 | `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
+| `check_exporter_queries.py` | check_exporter_queries — a rule pack reads only what its query-exporter config serves. |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
 | `check_go_fmt.py` | gofmt -s -l over the staged .go files; any unformatted file fails the commit (#2583). |
@@ -206,6 +207,7 @@ lang: zh
 | `check_orphan_lint.py` | orphan / dead-lint detector (#717; supersedes #456 residue). |
 | `check_orphan_recordings.py` | Orphan recording-rule gate — every recording rule must have a consumer somewhere in the platform (TRK-339 WS2a / #1200). |
 | `check_path_metadata_consistency.py` | Warn when conf.d/ hierarchical path disagrees with tenant `_metadata`. |
+| `check_percent_render_pinned.py` | check_percent_render_pinned — a percent-rendered annotation must be pinned by a firing test. |
 | `check_pint.py` | Prometheus rule linting (pint engine + thin Vibe wrapper). |
 | `check_pipestatus_errexit.py` | PIPESTATUS read where errexit and pipefail are on and never relaxed (TRK-382 / #1845). |
 | `check_planning_status_sync.py` | CI-time PR-trailer ↔ frontmatter sync gate. |

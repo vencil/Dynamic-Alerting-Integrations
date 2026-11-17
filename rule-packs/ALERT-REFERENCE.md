@@ -114,7 +114,7 @@ lang: zh
 | VersionAwareThresholdInert | warning | 照常觸發 | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
 | CustomRecipeDiskInert | warning | 靜音 | [SRE] {{ $labels.tenant }} disk recipe inert  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
 | NodeNotReady | warning | 靜音 | [tier] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:node_not_ready:core |
-| TenantHAReplicasDegraded | warning | 靜音 | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:ha_replicas_degraded:core |
+| TenantHAReplicasDegraded | warning | 靜音 | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:ha_replicas_degraded:by_kind |
 
 ---
 
@@ -200,7 +200,8 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| OracleDatabaseDown | critical | 照常觸發 | oracledb_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | oracledb_up |
+| OracleDatabaseDown | critical | 照常觸發 | The Oracle liveness query has not succeeded for 90s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | query_timestamp |
+| OracleQueryStalled | warning | 靜音 | [tier] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database ans | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | queries_total |
 | OracleHighActiveSessions | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle active sessions elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_sessions_active:max |
 | OracleHighActiveSessionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: Oracle active sessions at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_sessions_active:max |
 | OracleTablespaceAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_tablespace_used_percent:max |

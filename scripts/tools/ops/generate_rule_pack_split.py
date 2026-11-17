@@ -185,6 +185,10 @@ def extract_metrics_from_expr(expr: str) -> Set[str]:
         # `{[`/whitespace, so the regex never captures them; verified across
         # every rule-pack, so they need no listing here.)
         "or", "and",
+        # Modifier keywords: `x offset 90s` and `x > bool 1` put a keyword after
+        # whitespace too (#3833: OracleDatabaseDown's `offset 90s` read as a
+        # metric named `offset` and failed the real-pack split gate).
+        "offset", "bool",
     }
 
     # Match word followed by { or [ or whitespace
@@ -268,6 +272,17 @@ _FEDERATED_EXPORTER_PREFIXES = (
 )
 
 
+# query-exporter's built-in metrics (#3833): served by every query-exporter a
+# tenant runs (rule-packs/exporters/*.yaml), tenant-labelled by the same scrape.
+# Named one by one, not by a `query_` prefix: the family is the exporter, and
+# the packs tell its instances apart by the `query` label.
+_QUERY_EXPORTER_BUILTINS = frozenset({
+    "query_interval", "query_timestamp",
+    "query_latency_bucket", "query_latency_count", "query_latency_sum",
+    "queries_total", "database_errors_total",
+})
+
+
 def is_federated_exporter_metric(metric: str) -> bool:
     """True if *metric* belongs to a per-tenant exporter family.
 
@@ -277,7 +292,8 @@ def is_federated_exporter_metric(metric: str) -> bool:
     `*_up` suffix shortcut on top of it — so the shared half looked like an SSOT
     while the duplicated half diverged exactly where it mattered.
     """
-    return metric.startswith(_FEDERATED_EXPORTER_PREFIXES)
+    return (metric.startswith(_FEDERATED_EXPORTER_PREFIXES)
+            or metric in _QUERY_EXPORTER_BUILTINS)
 
 
 def _is_external_pipeline_input(metric: str) -> bool:

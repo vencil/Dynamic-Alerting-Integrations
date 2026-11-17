@@ -114,7 +114,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | VersionAwareThresholdInert | warning | fires | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | Check alert metrics and review related logs; contact platform team for assistance if needed | user_threshold |
 | CustomRecipeDiskInert | warning | muted | [SRE] {{ $labels.tenant }} disk recipe inert  | Check alert metrics and review related logs; contact platform team for assistance if needed | user_threshold |
 | NodeNotReady | warning | muted | [tier] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:node_not_ready:core |
-| TenantHAReplicasDegraded | warning | muted | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:ha_replicas_degraded:core |
+| TenantHAReplicasDegraded | warning | muted | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | Check alert metrics and review related logs; contact platform team for assistance if needed | rule_pack_kubernetes:ha_replicas_degraded:by_kind |
 
 ---
 
@@ -200,7 +200,8 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| OracleDatabaseDown | critical | fires | oracledb_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | oracledb_up |
+| OracleDatabaseDown | critical | fires | The Oracle liveness query has not succeeded for 90s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | query_timestamp |
+| OracleQueryStalled | warning | muted | [tier] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database ans | Check alert metrics and review related logs; contact platform team for assistance if needed | queries_total |
 | OracleHighActiveSessions | warning | muted | [tier] {{ $labels.tenant }}: Oracle active sessions elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_sessions_active:max |
 | OracleHighActiveSessionsCritical | critical | muted | [tier] {{ $labels.tenant }}: Oracle active sessions at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_sessions_active:max |
 | OracleTablespaceAlmostFull | warning | muted | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_tablespace_used_percent:max |

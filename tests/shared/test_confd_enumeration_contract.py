@@ -554,6 +554,9 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
         "globs .github/workflows",
     "lint/check_unpinned_deps.py":
         "globs .github/workflows",
+    "lint/check_percent_render_pinned.py":
+        "iterdir over tests/rulepacks/ (its rule packs are listed by "
+        "_lib_consumer_read.rule_pack_files, #978)",
     "lint/check_vmalert_coverage.py":
         "iterdir over tests/rulepacks/ (its rule packs are listed by "
         "_lib_consumer_read.rule_pack_files, #3426)",
