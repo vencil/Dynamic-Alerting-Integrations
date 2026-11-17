@@ -294,12 +294,6 @@ ClickHouseAsyncMetrics_MaxPartCountForPartition:
   rule_pack: clickhouse
   note: "Max part count — merge 壓力指標, Regex 維度鍵可寫但 rule pack 以 max by(tenant) 合成 #3475 (database=~)"
 
-ClickHouseMetrics_MemoryTracking:
-  maps_to: clickhouse_memory_tracking_bytes
-  golden_rule: ClickHouseHighMemoryUsage
-  rule_pack: clickhouse
-  note: "Memory tracking — max by(tenant) 聚合"
-
 ClickHouseProfileEvents_FailedQuery:
   maps_to: null
   golden_rule: ClickHouseHighFailedQueryRate

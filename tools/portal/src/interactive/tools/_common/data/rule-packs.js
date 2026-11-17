@@ -153,7 +153,6 @@ const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
   clickhouse: [
     { key: 'clickhouse_max_part_count', value: 300, unit: 'count', desc: 'Max part count per partition' },
     { key: 'clickhouse_replication_queue', value: 50, unit: 'count', desc: 'Replication queue size' },
-    { key: 'clickhouse_memory_tracking_bytes', value: 8589934592, unit: 'bytes (8GB)', desc: 'Memory tracking warning' },
   ],
 };
 

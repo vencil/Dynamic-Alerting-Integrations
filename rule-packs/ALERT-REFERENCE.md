@@ -26,7 +26,6 @@ lang: zh
 | ClickHouseHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse connections at critical level  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:clickhouse_active_connections:max |
 | ClickHouseHighPartCount | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse partition merge pressure  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:clickhouse_max_part_count:max |
 | ClickHouseReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse replication queue high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:clickhouse_replication_queue:max |
-| ClickHouseHighMemoryUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse memory usage high  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | tenant:clickhouse_memory_tracking:max |
 | ClickHouseHighFailedQueryRate | warning | 靜音 | Failed query rate: {{ $value \| printf "%.1f" }} queries/sec | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:clickhouse_failed_queries:rate5m |
 | ClickHouseThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
