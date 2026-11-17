@@ -2911,6 +2911,8 @@ Dangling Defaults Guard（v2.8.0）。Python 包裝 shell-out 到 `da-guard` Go 
 da-tools guard <subcommand> [flags]
 ```
 
+**walk 身分 `config_hash`**（[#3965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3965)）：走過 `--config-dir` 的每份 JSON 文件（預設檢查、`parse-tree` tree mode、`served-values`、`effective`、`key-verdict`、`key-refs`、`compile-custom-alerts`、`severity-dedup`）都帶 `config_hash`：這次 walk 讀到的樹的身分，與 exporter 在 `/api/v1/config/identity` 回報的是同一個值（定義見 [API Reference §5](api/README.md)）。同一棵樹沒變時各文件的值相同，exit 3 時也照帶；`effective --overlay` 讀的不是磁碟上的樹，為 `null`。
+
 **子命令**
 
 | 子命令 | 說明 |

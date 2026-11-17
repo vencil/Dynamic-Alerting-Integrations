@@ -1,5 +1,6 @@
 {
   "config_dir": "{tree}",
+  "config_hash": "52288814bb386bd985ea1713ac5b51d1e5c4ff7ada90fa3bf2d45f08e309bcb8",
   "source_files": [
     "team/t1.yaml"
   ],

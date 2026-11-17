@@ -2928,6 +2928,8 @@ Dangling Defaults Guard (v2.8.0). Python wrapper that shells out to the `da-guar
 da-tools guard <subcommand> [flags]
 ```
 
+**Walk identity `config_hash`** ([#3965](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3965)): every JSON document computed from a walk of `--config-dir` (the default check, `parse-tree` tree mode, `served-values`, `effective`, `key-verdict`, `key-refs`, `compile-custom-alerts`, `severity-dedup`) carries `config_hash`: the identity of the tree that walk read, the same value the exporter reports on `/api/v1/config/identity` (definition: [API Reference §5](api/README.en.md)). Documents of an unchanged tree carry the same value, on exit 3 too; `effective --overlay` reads a tree that is not the one on disk and gives `null`.
+
 **Subcommands**
 
 | Subcommand | Description |

@@ -61,6 +61,8 @@ const customAlertsKey = "_custom_alerts"
 // to refuse the tree.
 type servedValuesDoc struct {
 	Schema string `json:"schema"`
+	// ConfigHash: the identity of the walk this document read (configHashField).
+	ConfigHash *string `json:"config_hash"`
 	// At: the instant the document was read at (--at, default the run's
 	// clock). Absent with --config-facts, which reads no instant (#3918):
 	// the document must not change with the time the run starts at.
@@ -830,6 +832,7 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 	}
 	doc := servedValuesDoc{
 		Schema:              servedValuesSchema,
+		ConfigHash:          configHashField(rep.TreeIdentity),
 		At:                  at.Format(time.RFC3339),
 		ParseFailed:         parseFailed,
 		Skipped:             skipped,
