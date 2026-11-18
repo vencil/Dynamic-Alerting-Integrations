@@ -643,7 +643,7 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
     views: dict[str, dict[str, Any]] = {}
     for tenant, served in tree.tenants.items():
         view: dict[str, Any] = {
-            k: v for k, v in written_config(effective[tenant], served).items()
+            k: v for k, v in written_config(effective[tenant], served.values.get("_metadata")).items()
             if k.startswith("_") and k != _ROUTING}
         for key, raw in served.unserved.items():
             if not str(key).startswith("_"):

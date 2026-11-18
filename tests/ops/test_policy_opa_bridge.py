@@ -24,6 +24,11 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
+def _whole_day(value):
+    """A threshold served at one value all day (#4025): its one segment."""
+    return [{"from": "00:00", "to": "24:00", "value": value, "severity": "warning"}]
+
+
 def _as_run(result):
     """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
     document is written and its status is the exit, as SystemExit."""
@@ -98,9 +103,11 @@ class TestLoadTenantInputs:
         assert tenants["tenant-a"] == {"mysql_cpu": "500", "_silent_mode": "disable",
                                        "mysql_connections": 80}
         assert tenants["tenant-b"] == {"mysql_connections": 80, "mysql_threads_running": 50}
-        # served: /metrics 的數字，現行拼法
-        assert served["tenant-a"] == {"mysql_connections": 80.0, "mysql_threads_running": 500.0}
-        assert served["tenant-b"] == {"mysql_connections": 80.0, "mysql_threads_running": 50.0}
+        # served: /metrics 整天的值（#4025：segment 清單，整天一段），現行拼法
+        assert served["tenant-a"] == {"mysql_connections": _whole_day(80.0),
+                                      "mysql_threads_running": _whole_day(500.0)}
+        assert served["tenant-b"] == {"mysql_connections": _whole_day(80.0),
+                                      "mysql_threads_running": _whole_day(50.0)}
 
     def test_flat_file_is_not_a_tenant(self, tmp_path, capsys):
         d = _write_tree(tmp_path, {
@@ -611,7 +618,7 @@ class TestMain:
         # Stub load_tenant_inputs to return one tenant.
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})
         rc = emit_result(pob.main(["--config-dir", str(tmp_path), "--dry-run"]))
         assert rc == 0
@@ -625,7 +632,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == EXIT_CALLER_ERROR
@@ -636,7 +643,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -663,7 +670,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -690,7 +697,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "bad", "severity": "error",
@@ -709,7 +716,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "soft", "severity": "warning",
@@ -726,7 +733,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [])
         rc = emit_result(pob.main([
@@ -751,7 +758,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == EXIT_CALLER_ERROR
@@ -1082,7 +1089,9 @@ _REGO = """package dynamic_alerting.policy
 import rego.v1
 violations contains v if {
   some t
-  input.served[t].mysql_connections > 90
+  some seg in input.served[t].mysql_connections
+  seg.value != null
+  seg.value > 90
   v := {"msg": sprintf("%s too high", [t]), "severity": "error",
         "tenant": t, "field": "mysql_connections"}
 }
@@ -1103,7 +1112,8 @@ def rego_file(tmp_path_factory):
     # The common rego idiom: a set of message strings, not violation objects.
     (d / "strings.rego").write_text(
         "package dynamic_alerting.policy\nimport rego.v1\n"
-        "violations contains msg if {\n  some t\n  input.served[t].mysql_connections > 90\n"
+        "violations contains msg if {\n  some t\n  some seg in input.served[t].mysql_connections\n"
+        "  seg.value != null\n  seg.value > 90\n"
         '  msg := sprintf("%s too high", [t])\n}\n', encoding="utf-8")
     return d
 
@@ -1210,3 +1220,114 @@ class TestRealOpa:
             "--config-dir", tree, "--opa-binary", real_opa,
             "--policy-path", str(d / "d.rego"), "--ci"])
         assert rc == 1 and "seen" in out, (out, err)
+
+
+# ---------------------------------------------------------------------------
+# #4025: input.served is the whole UTC day, never one instant
+# ---------------------------------------------------------------------------
+_AT_HOURS = ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z")
+
+_SCHEDULED = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    "ta.yaml": ("tenants:\n  ta:\n    _metadata:\n      owner: team-a\n"
+                "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+                "        - window: \"01:00-03:00\"\n          value: disable\n"),
+}
+
+#: Two rows giving one series in 01:00-01:29: /metrics cannot be gathered.
+_UNGATHERED = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+                "    mysql_connection_usage_percent_critical:\n      default: disable\n"
+                "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n"),
+}
+
+
+def _dry_run(conf_d, capsys, *extra):
+    rc = emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run", *extra]))
+    out, err = capsys.readouterr()
+    return rc, out, err
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestServedWholeDay:
+    def test_the_same_tree_gives_the_same_input_at_any_hour(self, tmp_path, capsys):
+        # #4025: inside the disabled window the key was gone from
+        # input.served, outside it was a number — one tree, two inputs.
+        conf_d = _write_tree(tmp_path, _SCHEDULED)
+        docs = []
+        for at in _AT_HOURS:
+            rc, out, err = _dry_run(conf_d, capsys, "--at", at)
+            assert rc == 0, err
+            docs.append(json.loads(out))
+        assert docs[0] == docs[1]
+        assert docs[0]["served"]["ta"]["mysql_connections"] == [
+            {"from": "00:00", "to": "01:00", "value": 70.0, "severity": "warning"},
+            {"from": "01:00", "to": "03:00", "value": None, "reason": "disabled"},
+            {"from": "03:00", "to": "24:00", "value": 70.0, "severity": "warning"},
+        ]
+        # _metadata comes from facts (read at no instant), as /metrics inherits it.
+        assert docs[0]["tenants"]["ta"]["_metadata"]["owner"] == "team-a"
+
+    def test_a_part_of_the_day_not_gathered_is_exit_2_at_any_hour(self, tmp_path, capsys):
+        # #4025: rc 2 inside the window, rc 0 outside it.
+        conf_d = _write_tree(tmp_path, _UNGATHERED)
+        for at in _AT_HOURS:
+            with pytest.raises(SystemExit) as exc:  # exit_on_served_values_error
+                _dry_run(conf_d, capsys, "--at", at)
+            out, err = capsys.readouterr()
+            assert exc.value.code == 2, (at, out, err)
+            assert out == ""
+            assert "01:00-01:29 UTC" in err and "nothing is judged" in err, err
+
+    def test_a_time_boxed_key_is_named_until_it_expires(self, tmp_path, capsys):
+        conf_d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections:\n      default: \"60\"\n"
+                        "      expires: \"2026-11-13T18:00:00Z\"\n"),
+        })
+        rc, out, err = _dry_run(conf_d, capsys, "--at", "2026-11-13T12:00:00Z")
+        assert rc == 0, err
+        assert json.loads(out)["served"]["ta"]["mysql_connections"][0]["value"] == 60.0
+        assert "NOTE: ta: mysql_connections is time-boxed by `expires: 2026-11-13T18:00:00Z`" in err
+        rc, out, err = _dry_run(conf_d, capsys, "--at", "2026-11-13T19:00:00Z")
+        assert rc == 0, err
+        assert json.loads(out)["served"]["ta"]["mysql_connections"][0]["value"] == 80.0
+        assert "time-boxed" not in err, err
+
+    def test_an_empty_at_is_refused(self, tmp_path, capsys):
+        conf_d = _write_tree(tmp_path, _SCHEDULED)
+        rc, out, err = _dry_run(conf_d, capsys, "--at", "")
+        assert rc == 2 and out == "", (out, err)
+        assert "--at takes an RFC3339 instant" in err, err
+
+    def test_a_tenant_one_reading_lacks_is_exit_2_named(self, tmp_path, monkeypatch, capsys):
+        # #4025 review: three readings (effective, schedules, facts) must name
+        # one tenant set; one short of a tenant is rc 2 naming it, never a
+        # KeyError traceback.
+        conf_d = _write_tree(tmp_path, {**_SCHEDULED,
+                                        "tb.yaml": "tenants:\n  tb: {}\n"})
+        real = pob.load_served_facts
+
+        def short(*a, **k):
+            facts = real(*a, **k)
+            return facts._replace(tenants={t: v for t, v in facts.tenants.items() if t != "tb"})
+        monkeypatch.setattr(pob, "load_served_facts", short)
+        with pytest.raises(SystemExit) as exc:
+            _dry_run(conf_d, capsys)
+        out, err = capsys.readouterr()
+        assert exc.value.code == 2 and out == "", (out, err)
+        assert "disagree on the tenants" in err and "tb" in err, err
+
+    def test_the_note_escapes_a_tenant_id(self, tmp_path, capsys):
+        # #4025 review: the one line of this tool that printed a tenant id
+        # unescaped (#1538).
+        conf_d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "ta.yaml": ('tenants:\n  "t\\u001b[31mX":\n    mysql_connections:\n'
+                        '      default: "60"\n      expires: "2099-01-01T00:00:00Z"\n'),
+        })
+        rc, out, err = _dry_run(conf_d, capsys, "--at", "2026-11-13T12:00:00Z")
+        assert rc == 0, err
+        note = [ln for ln in err.splitlines() if ln.startswith("NOTE:")]
+        assert note and "\x1b" not in note[0], err
