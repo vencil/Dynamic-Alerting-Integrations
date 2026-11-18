@@ -192,6 +192,7 @@ commands:
     "--output-dir": output
     "--tenant-label": not_path
   opa-evaluate:
+    "--at": not_path
     "--opa-binary": {kind: reader, by: "OPA binary not found", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_missing"}
     "--opa-url": url
     "--policy-package": not_path

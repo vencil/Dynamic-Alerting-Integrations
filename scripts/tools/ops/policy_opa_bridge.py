@@ -33,7 +33,14 @@ OPA Input JSON format:
       ...
     },
     "served": {
-      "tenant-a": { "mysql_connection_usage_percent": 70, "mysql_connection_usage_percent_critical": 95 },
+      "tenant-a": {
+        "mysql_connection_usage_percent": [
+          { "from": "00:00", "to": "24:00", "value": 70, "severity": "warning" } ],
+        "mysql_connections": [
+          { "from": "00:00", "to": "01:00", "value": 70, "severity": "warning" },
+          { "from": "01:00", "to": "03:00", "value": null, "reason": "disabled" },
+          { "from": "03:00", "to": "24:00", "value": 70, "severity": "warning" } ]
+      },
       ...
     },
     "defaults": { "defaults": { "mysql_connection_usage_percent": 80 } },
@@ -51,11 +58,20 @@ tenant's), and `_metadata` as /metrics inherits it (/effective drops it)
 minus the fields the exporter fills in empty. A default the exporter fills
 in by itself is not there (`_lib_tenant_values.written_config`).
 
-`served` (#2115 0-B): per tenant, every threshold /metrics serves at this
-moment, as a number, keyed by the exporter's canonical spelling (aliases
-resolved; `<key>_critical` for the critical row). A key switched off, or
-with no /metrics row now, is absent. A policy on a threshold's VALUE reads
-it here: it is the number that alerts. A file the exporter drops or cannot
+`served` (#2115 0-B, #4025): per tenant, every threshold /metrics serves
+over the whole UTC day, keyed by the exporter's canonical spelling (aliases
+resolved; `<key>_critical` for the critical row), each the day as a list of
+segments (`KeySchedule.as_json`: `{from, to, value, severity}`; a segment
+with no row has `value: null` and da-guard's `reason`) — one segment
+`00:00`-`24:00` when the value does not change, never a bare number, so a
+policy reads one shape. The same tree gives the same `served` at any hour:
+only an `expires:` is judged at `--at` (default now; ADR-038), and a key
+time-boxed so is named on stderr with the instant its answer holds until.
+Which keys are there is da-guard's answer (served in some part of the day,
+or time-boxed). A part of the day /metrics cannot be gathered in is exit 2,
+naming it: nothing is known of any key there. A policy on a threshold's VALUE
+reads it here, every segment: it is the number that alerts. A rego guards
+`value != null` before comparing (OPA orders null below every number). A file the exporter drops or cannot
 read is exit 2, as is a tree da-guard refuses; a file it reads but serves no
 tenant from is a WARN line.
 
@@ -127,8 +143,10 @@ from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
     ServedValuesError,
     exit_on_served_values_error,
     load_effective,
-    load_served_tree,
+    load_served_facts,
+    load_served_schedules,
     print_load_warnings,
+    ungathered_refusal,
     written_config,
 )
 # A file parse-tree cannot read raises YamlFileError (rc 2 via
@@ -170,23 +188,39 @@ class PolicyResult:
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
-def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
-    """`(tenants, served)` for the OPA input (#2115 0-B; see the module
-    docstring): `tenants` from `da-guard effective`, `served` from
-    `da-guard served-values`. Prints da-guard's stderr and one WARN per file
-    the load serves no tenant from. Raises what `load_served_tree` /
-    `load_effective` raise, and `ServedValuesError` when the two disagree on
-    the tenants; `main` turns each into exit 2 (`exit_on_served_values_error`)."""
-    tree = load_served_tree(config_dir)
-    print_load_warnings(tree)
+def load_tenant_inputs(config_dir: str, at: Optional[str] = None,
+                       ) -> tuple[dict[str, dict], dict[str, dict]]:
+    """`(tenants, served)` for the OPA input (#2115 0-B, #4025; see the
+    module docstring): `tenants` from `da-guard effective` with `_metadata`
+    from served-values' facts, `served` the whole day from `da-guard
+    served-values --schedules-only` (*at*: the instant an `expires:` is
+    judged at, None = now) — nothing read at one instant of the day. Prints
+    da-guard's stderr, one WARN per file the load serves no tenant from, and
+    one NOTE per time-boxed key not yet expired. Raises what the loads raise,
+    and `ServedValuesError` when a part of the day cannot be gathered
+    (`ungathered_refusal`) or the readings disagree on the tenants; `main`
+    turns each into exit 2 (`exit_on_served_values_error`)."""
+    days = load_served_schedules(config_dir, at=at)
+    print_load_warnings(days)
+    refusal = ungathered_refusal(days.ungathered)
+    if refusal is not None:
+        raise ServedValuesError(f"da-guard served-values: {refusal}", None, "")
+    facts = load_served_facts(config_dir)
     effective = load_effective(config_dir)
-    if set(effective) != set(tree.tenants):
+    if not set(effective) == set(days.tenants) == set(facts.tenants):
         raise ServedValuesError(
             "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
-            f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
-    tenants = {t: written_config(e, tree.tenants[t]) for t, e in sorted(effective.items())}
-    served = {t: {k: v.values[k] for k in sorted(v.severities)}
-              for t, v in sorted(tree.tenants.items())}
+            f"{sorted((set(effective) | set(days.tenants) | set(facts.tenants)) - (set(effective) & set(days.tenants) & set(facts.tenants)))}",
+            None, "")
+    tenants = {t: written_config(e, facts.tenants[t].metadata)
+               for t, e in sorted(effective.items())}
+    served = {t: {k: day.as_json() for k, day in sorted(d.items())}
+              for t, d in sorted(days.tenants.items())}
+    for t, d in sorted(days.tenants.items()):
+        for k, day in sorted(d.items()):
+            if day.expires is not None and day.expired is False:
+                print(f"NOTE: {t}: {k} is time-boxed by `expires: {day.expires}`; "
+                      f"its served day holds until then", file=sys.stderr)
     return tenants, served
 
 
@@ -657,6 +691,8 @@ _HELP = {
         "json": "Output in JSON format",
         "ci": "CI mode: exit 1 if any error-level violations found",
         "dry_run": "Show OPA input JSON only, do not call OPA",
+        "at": "The instant an `expires:` is judged at (default: now); `served` is "
+              "read over the whole UTC day. da-guard judges the value",
     },
     "zh": {
         "description": "OPA (Open Policy Agent) 策略評估橋接 — 將 tenant 配置轉換為 OPA 輸入並評估。",
@@ -668,6 +704,8 @@ _HELP = {
         "json": "JSON 格式輸出",
         "ci": "CI 模式：有 error 級違規時 exit 1",
         "dry_run": "僅顯示 OPA 輸入 JSON，不呼叫 OPA",
+        "at": "判斷 `expires:` 是否過期的時刻（預設：現在）；`served` 一律讀整個 UTC 日。"
+              "值由 da-guard 判",
     },
 }
 
@@ -690,6 +728,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", dest="json_output", help=h["json"])
     parser.add_argument("--ci", action="store_true", help=h["ci"])
     parser.add_argument("--dry-run", action="store_true", help=h["dry_run"])
+    parser.add_argument("--at", default=None, metavar="RFC3339", help=h["at"])
     return parser
 
 
@@ -707,7 +746,11 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
     # Load configs
     # #3902: judged once, before anything is read — a refusal names the flag.
     _lib_parse_cache.declared_trees(args, "config_dir", lang=lang)
-    tenant_configs, served = load_tenant_inputs(args.config_dir)
+    if args.at == "":  # '' is given (#1616), not passed on as "now"
+        print("ERROR: --at takes an RFC3339 instant (e.g. 2026-10-10T03:00:00Z)",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    tenant_configs, served = load_tenant_inputs(args.config_dir, at=args.at)
     defaults = load_defaults(args.config_dir)
 
     if not tenant_configs:

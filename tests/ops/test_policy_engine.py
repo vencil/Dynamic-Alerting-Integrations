@@ -339,9 +339,8 @@ class TestEvaluateWhen:
             "value": "prod",
             "when": {"target": "_metadata.tags", "operator": "not_equals", "value": "prod"},
         }]})
-        served = SimpleNamespace(values={"_metadata": {
-            "tags": [] if tags is None else tags, "owner": "o"}})
-        config = tv.written_config(SimpleNamespace(effective_config={}), served)
+        metadata = {"tags": [] if tags is None else tags, "owner": "o"}
+        config = tv.written_config(SimpleNamespace(effective_config={}), metadata)
         assert len(pe.evaluate_rule(rules[0], "t-a", config)) == violations
 
     def test_when_required_true(self, sample_config):
