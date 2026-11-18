@@ -1866,10 +1866,15 @@ def test_a_fifo_out_is_refused_before_it_is_read(tmp_path, monkeypatch, capsys, 
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
-def test_the_pack_keeps_a_checkouts_mode(tmp_path, monkeypatch):
-    """A tracked file: 0644 as a checkout leaves it, not the operator 0600."""
+@pytest.mark.parametrize("existing", [None, 0o600, 0o664])
+def test_the_pack_keeps_a_checkouts_mode(tmp_path, monkeypatch, existing):
+    """A tracked file: 0644 as a checkout leaves it, whatever mode the pack
+    had (the in-place write kept 0600 / 0664 — independent review)."""
     import stat
     src, out = tmp_path / "src", tmp_path / "pack.yaml"
     _write_tree(src, _ONE_RECIPE_SOURCE)
+    if existing is not None:
+        out.write_text("groups: []\n", encoding="utf-8")
+        out.chmod(existing)
     assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
     assert stat.S_IMODE(out.stat().st_mode) == 0o644

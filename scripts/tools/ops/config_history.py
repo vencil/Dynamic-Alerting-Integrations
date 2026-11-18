@@ -17,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -130,17 +131,31 @@ def _load_history(config_dir):
     return []
 
 
+def _index_mode(path):
+    """The mode the index keeps: the existing file's, or for a new one what
+    a plain create gives (``0o666`` less the umask) — so a ``.da-history``
+    shared through a group directory stays readable and writable by the
+    group, as before #3982 (independent review: a forced ``0o600`` left the
+    first user unable to read the index after a second one wrote it)."""
+    try:
+        return stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        mask = os.umask(0)
+        os.umask(mask)
+        return 0o666 & ~mask
+
+
 def _save_history(config_dir, history):
     """Save history to disk."""
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
     # #3982 (owner 2026-11-18): the index this tool reads back on every run is
     # an artifact — replaced whole, so a failed write leaves the previous index
-    # (an in-place write half way left a JSON every later run died on). 0600:
-    # it names the files and carries the operator's messages. atomic_only: in
-    # the tool's own directory a hard link is replaced, not written through.
+    # (an in-place write half way left a JSON every later run died on). Its
+    # mode and owner are kept (`_index_mode`; the shared writer writes in
+    # place, with a WARN, where it cannot keep the owner or the inode).
     write_repo_artifact(history_file, encode_json(history), flag="--config-dir",
-                        mode=0o600, atomic_only=True)
+                        mode=_index_mode(history_file))
 
 
 def cmd_snapshot(config_dir, message=None):
@@ -196,8 +211,7 @@ def cmd_snapshot(config_dir, message=None):
         # #3982 (owner 2026-11-18): `show` and `diff` read the copy back, so it
         # is an artifact — replaced whole. A snapshot may hold sensitive
         # config: 0o600.
-        write_repo_artifact(fp, f['content'], flag="--config-dir",
-                            mode=0o600, atomic_only=True)
+        write_repo_artifact(fp, f['content'], flag="--config-dir", mode=0o600)
 
     history.append(entry)
     _save_history(config_dir, history)

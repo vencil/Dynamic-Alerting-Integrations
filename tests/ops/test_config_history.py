@@ -1502,9 +1502,32 @@ def test_a_failed_index_write_leaves_the_previous_index_and_log_still_reads_it(t
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX modes')
-def test_the_index_and_the_copies_are_0600(tmp_path):
+def test_the_index_keeps_its_mode_and_the_copies_are_0600(tmp_path):
+    """The index's mode is what it was (a new one: 0666 less the umask), so a
+    `.da-history` shared through a group stays usable by the group; the
+    copies, which hold the config, are 0600 (#3982 independent review)."""
     import stat
-    _history_tree(tmp_path, 1)
+    confd, shard, run = _history_tree(tmp_path, 1)
     hdir = tmp_path / '.da-history'
-    assert stat.S_IMODE((hdir / 'history.json').stat().st_mode) == 0o600
+    index = hdir / 'history.json'
     assert stat.S_IMODE((hdir / 'snap-1' / 't1.yaml').stat().st_mode) == 0o600
+    index.chmod(0o664)
+    with shard.open('a', encoding='utf-8') as fh:
+        fh.write('# again\n')
+    assert run('snapshot', '-m', 'again').returncode == 0
+    assert stat.S_IMODE(index.stat().st_mode) == 0o664
+    assert stat.S_IMODE((hdir / 'snap-2' / 't1.yaml').stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX modes')
+def test_a_new_index_follows_the_umask(tmp_path):
+    import stat
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'tools' / 'ops' / 'config_history.py'
+    confd = tmp_path / 'conf.d'
+    confd.mkdir()
+    (confd / 't1.yaml').write_text('tenants:\n  t1:\n    cpu: "80"\n', encoding='utf-8')
+    r = subprocess.run([sys.executable, str(script), '--config-dir', str(confd), 'snapshot'],
+                       capture_output=True, text=True, encoding='utf-8', timeout=120,
+                       preexec_fn=lambda: os.umask(0o002))
+    assert r.returncode == 0, r.stderr
+    assert stat.S_IMODE((tmp_path / '.da-history' / 'history.json').stat().st_mode) == 0o664
