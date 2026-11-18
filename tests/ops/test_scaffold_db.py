@@ -20,6 +20,8 @@ import yaml
 
 import scaffold_tenant  # noqa: E402
 
+CONFD_DIR = scaffold_tenant.CONFD_DIR  # the draft conf.d (#4014)
+
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 RULE_PACKS_DIR = os.path.join(PROJECT_ROOT, "rule-packs")
 K8S_DIR = os.path.join(PROJECT_ROOT, "k8s", "03-monitoring")
@@ -147,7 +149,7 @@ class TestNonInteractiveGeneration:
         """Scaffold 產生 tenant YAML 檔案。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, tenant, dbs)
-            path = os.path.join(tmpdir, f"{tenant}.yaml")
+            path = os.path.join(tmpdir, CONFD_DIR, f"{tenant}.yaml")
             assert os.path.isfile(path), f"Missing {path}"
 
     @pytest.mark.parametrize("tenant,dbs,metrics,report_kw", SCAFFOLD_CASES,
@@ -156,7 +158,7 @@ class TestNonInteractiveGeneration:
         """_defaults.yaml 包含預期 metric key。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, tenant, dbs)
-            path = os.path.join(tmpdir, "_defaults.yaml")
+            path = os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml")
             with open(path, encoding="utf-8") as f:
                 content = f.read()
             for m in metrics:
@@ -178,13 +180,13 @@ class TestNonInteractiveGeneration:
         """Oracle scaffold 產生 _defaults.yaml。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, "test-ora", "oracle")
-            assert os.path.isfile(os.path.join(tmpdir, "_defaults.yaml"))
+            assert os.path.isfile(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"))
 
     def test_combined_oracle_db2(self, monkeypatch):
         """Combined oracle+db2 scaffold 包含兩組 metric。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, "test-combo", "oracle,db2")
-            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
                 content = f.read()
             assert "oracle_sessions_active" in content
             assert "db2_connections_active" in content
@@ -235,7 +237,7 @@ class TestNamespaceMapping:
         """Tenant YAML includes _namespaces metadata when --namespaces used."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, "test-ns", "mariadb", namespaces="ns1,ns2,ns3")
-            data = _load_yaml(os.path.join(tmpdir, "test-ns.yaml"))
+            data = _load_yaml(os.path.join(tmpdir, CONFD_DIR, "test-ns.yaml"))
             tenant_data = data["tenants"]["test-ns"]
             assert "_namespaces" in tenant_data
             assert tenant_data["_namespaces"] == ["ns1", "ns2", "ns3"]
@@ -411,7 +413,7 @@ class TestScaffoldReceiverTypes:
             run_scaffold(monkeypatch, tmpdir, tenant, "mariadb",
                          receiver=receiver, receiver_type=rtype,
                          non_interactive=True)
-            data = _load_yaml(os.path.join(tmpdir, f"{tenant}.yaml"))
+            data = _load_yaml(os.path.join(tmpdir, CONFD_DIR, f"{tenant}.yaml"))
             routing = data["tenants"][tenant]["_routing"]
             assert routing["receiver"]["type"] == rtype
             assert routing["receiver"][expected_key] == expected_value

@@ -811,12 +811,13 @@ class TestMain:
         assert out_dir.is_dir()
         assert any(out_dir.iterdir())
         # #3107: every file the Python side writes is an operator output,
-        # 0600; the conf.d files (the tenant's and `.conf.d/`) are
-        # `da-guard write`'s and are not judged here.
+        # 0600; the conf.d files (under `mr.CONFD_DIR`) are `da-guard
+        # write`'s and are not judged here.
         if os.name == "posix":
             modes = {p.relative_to(out_dir).as_posix(): os.stat(p).st_mode & 0o777
                      for p in out_dir.rglob("*")
-                     if p.is_file() and p.name != "t1.yaml" and ".conf.d" not in p.parts}
+                     if p.is_file() and not p.relative_to(out_dir).as_posix().startswith(
+                         mr.CONFD_DIR + "/")}
             assert len(modes) >= 4, modes
             assert set(modes.values()) == {0o600}, modes
 

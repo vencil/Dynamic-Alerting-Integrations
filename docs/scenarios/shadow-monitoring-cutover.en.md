@@ -177,10 +177,11 @@ python3 scripts/tools/ops/onboard_platform.py \
 # Output (migration_input/):
 #   - onboard-hints.json (tenant list, routing hints, DB types; written only when
 #     the Alertmanager config has tenant routes)
-#   - phase1-routing/: routing summary per tenant route, plus a <tenant>.yaml snippet
+#   - phase1-routing/routing-summary.csv: routing summary per tenant route
+#   - .onboard/conf.d/<tenant>.yaml: a routing snippet (a draft, never served)
 #   - phase2-rules/migration-plan.csv (per old alert rule: metric, threshold, suggested
 #     aggregation, and status: perfect converts directly / complex needs a human check / unparseable)
-#   - phase2-rules/_defaults-suggestion.yaml (platform defaults inferred from the old
+#   - .onboard/conf.d/_defaults.yaml (platform defaults inferred from the old
 #     thresholds; includes complex rules' thresholds — check each before merging)
 
 # 1.3 Verify environment readiness
@@ -201,10 +202,10 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 # Output (migration_output/):
 #   - .migration/platform-recording-rules.yaml, .migration/platform-alert-rules.yaml
 #     (new rules; the alert rules carry the migration_status: shadow label)
-#   - .conf.d/_defaults.yaml (merge its defaults: block into the conf.d root _defaults.yaml first,
+#   - .migration/conf.d/_defaults.yaml (merge its defaults: block into the conf.d root _defaults.yaml first,
 #     merging rather than overwriting the whole file; the exporter only emits declared
 #     keys. Values come from the original rules; the warning tier applies to every tenant)
-#   - .conf.d/db-a.yaml (the tenant given by --tenant, thresholds under tenants.db-a. For the
+#   - .migration/conf.d/db-a.yaml (the tenant given by --tenant, thresholds under tenants.db-a. For the
 #     warning tier, only tenants that need a value different from the default;
 #     <key>_critical cannot go in defaults, so every tenant that wants the critical tier
 #     writes it into its own conf.d file; a legacy rule that only had a critical tier is
