@@ -29,6 +29,7 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 
 #: (tool, flag) — the same strings as the rows of the write gate.
 DIR_FLAGS = [
+    ("dx/waveform_compile.py", "--out"),
     ("ops/generate_rule_pack_split.py", "--output-dir"),
     ("ops/init_project.py", "-o/--output-dir"),
     ("ops/migrate_rule.py", "-o/--output-dir"),

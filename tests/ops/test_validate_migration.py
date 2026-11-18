@@ -709,6 +709,18 @@ class TestMain:
         assert ei.value.code == 2
         err = capsys.readouterr().err
         assert "check the value given to --convergence-output" in err, err
+        # The write itself (its parent exists, so ensure_dir passes): the
+        # target is a directory. This is the line the write point's own
+        # `flag=` decides — the case above is ensure_dir's.
+        target_dir = tmp_path / "a-dir"
+        target_dir.mkdir()
+        argv[-1] = str(target_dir)
+        with mock.patch("sys.argv", argv), pytest.raises(SystemExit) as ei:
+            vm.main()
+        assert ei.value.code == 2
+        err = capsys.readouterr().err
+        assert f"cannot write {target_dir}" in err, err
+        assert "check the value given to --convergence-output" in err, err
 
     @mock.patch("validate_migration.time.sleep")
     @mock.patch("validate_migration.run_single_comparison")

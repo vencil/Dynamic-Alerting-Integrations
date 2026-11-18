@@ -29,6 +29,8 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx, stub_url  # noq
 
 #: (tool, flag) → whether `-` is refused (the tool's stdout has another owner).
 OPERATOR_FILE_FLAGS: dict[tuple[str, str], bool] = {
+    ("dx/generate_changelog.py", "-o/--output"): False,
+    ("dx/waveform_score.py", "--out"): True,
     ("ops/analyze_rule_pack_gaps.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "--markdown-output"): True,
@@ -93,9 +95,14 @@ def _refused_by_name(stderr: str, flag: str, why: str) -> bool:
 
 def _run(tool: str, flag: str, value: str, tmp_path: Path, stub: str):
     row = next(r for r in ROWS if (r.tool, r.flag) == (tool, flag))
-    cwd = tmp_path / "cwd"
-    cwd.mkdir()
     ctx = Ctx(tmp_path, stub)
+    # The row's own working directory when it has one (generate_changelog
+    # runs in a git tree), else an empty one.
+    if row.cwd is not None:
+        cwd = row.cwd(ctx)
+    else:
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
     # The row's own argv with its output path swapped for *value* (a Path
     # cannot carry "" — it reads it as ".").
     marker = tmp_path / "@OUT@"
@@ -104,11 +111,23 @@ def _run(tool: str, flag: str, value: str, tmp_path: Path, stub: str):
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     if row.env is not None:
         env.update(row.env(ctx))
+    before = set(os.listdir(cwd))
     proc = subprocess.run(
         [sys.executable, str(TOOLS_DIR / tool), *argv],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=180, cwd=cwd, env=env)
-    return proc, cwd
+    return proc, _Made(cwd, before)
+
+
+class _Made:
+    """What a run added to its working directory (a row's own cwd is not
+    empty to begin with)."""
+
+    def __init__(self, cwd: Path, before: set[str]) -> None:
+        self.cwd, self.before = cwd, before
+
+    def iterdir(self):
+        return [self.cwd / n for n in sorted(set(os.listdir(self.cwd)) - self.before)]
 
 
 _IDS = [f"{Path(t).stem}[{f}]" for t, f in OPERATOR_FILE_FLAGS]
@@ -141,6 +160,8 @@ def test_dash_is_standard_output_where_nothing_else_writes_it(tool, flag, tmp_pa
     proc, cwd = _run(tool, flag, "-", tmp_path, stub_url)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert proc.stdout.strip(), "the document did not reach stdout"
+    # The tool's receipts stay on stderr: stdout is the document alone.
+    assert "Written to" not in proc.stdout and "Generated " not in proc.stdout, proc.stdout[-400:]
     assert list(cwd.iterdir()) == [], "a file called - was made"
 
 
@@ -177,6 +198,7 @@ def test_another_name_of_stdout_is_refused_where_stdout_is_taken(tool, flag, tmp
 
 #: Flags whose file is the JSON document `--json` prints.
 JSON_DOCUMENT_FLAGS = [
+    ("dx/waveform_score.py", "--out"),
     ("ops/analyze_rule_pack_gaps.py", "-o/--output"),
     ("ops/backtest_threshold.py", "-o/--output"),
     ("ops/batch_diagnose.py", "-o/--output"),
