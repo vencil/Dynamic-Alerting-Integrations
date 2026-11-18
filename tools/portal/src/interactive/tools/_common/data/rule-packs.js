@@ -142,8 +142,7 @@ const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
   ],
   oracle: [
     { key: 'oracle_wait_time_rate', value: 50, unit: 's/s', desc: 'Wait time rate (5m)' },
-    { key: 'oracle_process_count', value: 300, unit: 'count', desc: 'Active processes warning', valueCounterexample: { issue: 1176, direction: 'over_fire', observed: 'a routine backup batch reaches 560 processes', observed_zh: '例行備份批次會到 560 個 process' } },
-    { key: 'oracle_pga_allocated_bytes', value: 4294967296, unit: 'bytes (4GB)', desc: 'PGA allocation warning', valueCounterexample: { issue: 1176, direction: 'over_fire', observed: 'a planned stats-gather reaches 22 GB PGA', observed_zh: '計畫性 stats-gather 會用到 22 GB PGA' } },
+    { key: 'oracle_pga_usage_percent', value: 85, unit: '% of PGA_AGGREGATE_LIMIT', desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a database with no limit set (0) has no share. Replaces the absolute-bytes key oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)' },
   ],
   db2: [
     { key: 'db2_log_usage_percent', value: 70, unit: '%', desc: 'Transaction log usage warning' },

@@ -204,8 +204,7 @@ _A_DECLARED = (
 
 KNOWN_UNWIRED: dict[str, str] = {
     "oracle_wait_time_rate": _A_DECLARED,
-    "oracle_process_count": _A_DECLARED,
-    "oracle_pga_allocated_bytes": _A_DECLARED,
+    "oracle_pga_usage_percent": _A_DECLARED,
     "db2_log_usage_percent": _A_DECLARED,
     "db2_deadlock_rate": _A_DECLARED,
     "db2_tablespace_used_percent": _A_DECLARED,
@@ -658,7 +657,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +7, generators +28. Red here means RAISE the floor.
+#     tolerate +8, generators +28. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -722,12 +721,16 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      artifact keys, total 86 -> 88. Same remedy as #3258: the floor went
 #      74 -> 76, the full-l0-l3 probe reads 75 against it, and both figures
 #      here stay at +7 / 12.)
+#     (#1320 promoted oracle_process_usage_percent the same way as #3929: the
+#      exporter's conf.d `_defaults.yaml` gained it, 20 -> 21, total 88 -> 89,
+#      the artifact floor went 76 -> 77 (one-key margin kept, DOWN stays 12),
+#      and with the biggest group one larger again UP is +8.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
 #     is the floor doing its job. Today the slack is total − floor: artifacts 12
-#     keys, generators 10 (was 22 until issue 1196 retired init's 9 surplus
+#     keys, generators 11 (was 22 until issue 1196 retired init's 9 surplus
 #     keys — dead ones, so no floor edit). Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
 #     in the same commit, naming what went. Two deliberate removals took the
@@ -741,12 +744,16 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     defaults; scaffold and init already rendered them), total 86 -> 89: the
 #     floor went 76 -> 79, so UP stays +28 and DOWN stays 10. #3929 added an
 #     eleventh (rabbitmq_node_mem_percent), total 89 -> 90, floor 79 -> 80.
+#     #1320 promoted a twelfth (oracle_process_usage_percent), which the chart,
+#     scaffold and init all render under `defaults:` (it was optional_overrides
+#     before), total 90 -> 93 with the biggest group 39 -> 40: the floor went
+#     80 -> 82 so UP stays +28, and DOWN is 11.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 76
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 82
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 77
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every

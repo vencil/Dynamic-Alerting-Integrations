@@ -207,7 +207,7 @@ func TestSimulate_FullParseLeavesValidResultUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "ef576018daebc450"
+	const want = "047759dcfb30692d"
 	if sim.MergedHash != want {
 		t.Fatalf("merged_hash = %s, want %s (config %v)", sim.MergedHash, want, sim.Config)
 	}

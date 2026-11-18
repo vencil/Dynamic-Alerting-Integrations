@@ -68,6 +68,12 @@ signatures:
     must_detect: false
     metric: oracledb_process_count
     metric_kind: gauge
+    # #1320：描述寫明 PROCESSES 上限約 2000。
+    companion_series:
+      - metric: oracledb_processes_limit
+        role: denominator
+        metric_kind: gauge
+        level: 2000
     shape_class: spike
     noise_kind: gaussian
     fault_class: backup-batch-process-spike
@@ -94,6 +100,12 @@ signatures:
     must_detect: false
     metric: oracledb_pga_allocated_bytes
     metric_kind: gauge
+    # #1320：描述寫明 PGA_AGGREGATE_TARGET 32 GB；未設 MEMORY_TARGET 時 PGA_AGGREGATE_LIMIT 預設為其 200%（Oracle 參數文件），即 64 GB。
+    companion_series:
+      - metric: oracledb_pga_aggregate_limit_bytes
+        role: denominator
+        metric_kind: gauge
+        level: 64000000000
     shape_class: spike
     noise_kind: gaussian
     fault_class: planned-stats-gather-pga-spike

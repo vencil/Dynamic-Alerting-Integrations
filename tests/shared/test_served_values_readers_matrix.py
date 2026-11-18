@@ -95,14 +95,21 @@ def test_the_oracle_serves_the_value_in_every_position(where, tmp_path):
 @pytest.mark.parametrize("where", sorted(POSITIONS))
 def test_analyze_gaps_dir_mode_matches_served_values(where, tmp_path):
     conf_d = _tree(tmp_path, POSITIONS[where])
-    served = tv.load_served_values(conf_d)
+    # #4027: the directory branch reads the whole day — each key the
+    # exporter's schedule reading of it, as da-guard gives it.
+    days = tv.load_served_schedules(conf_d).tenants
     got = arg.load_tenant_configs(config_dir=str(conf_d))
     for tenant in ("tenant-a", "tenant-b"):
-        assert got[tenant]["custom_mysql_slow"] == served[tenant].values["custom_mysql_slow"], (where, tenant)
-    assert got["tenant-a"]["custom_mysql_slow"] == 5.0, where
-    assert got["tenant-b"]["custom_mysql_slow"] == 7.0, where  # 對照組不變
-    metrics = {(m["tenant"], m["metric_key"]): m["value"] for m in arg.extract_custom_metrics(got)}
-    assert metrics == {("tenant-a", "custom_mysql_slow"): 5.0, ("tenant-b", "custom_mysql_slow"): 7.0}, where
+        assert got[tenant]["custom_mysql_slow"] == days[tenant]["custom_mysql_slow"], (where, tenant)
+
+    def whole_day(value):
+        return [{"from": "00:00", "to": "24:00", "value": value, "severity": "warning"}]
+    assert got["tenant-a"]["custom_mysql_slow"].as_json() == whole_day(5.0), where
+    assert got["tenant-b"]["custom_mysql_slow"].as_json() == whole_day(7.0), where  # 對照組不變
+    metrics = {(m["tenant"], m["metric_key"]): m["value"].as_json()
+               for m in arg.extract_custom_metrics(got)}
+    assert metrics == {("tenant-a", "custom_mysql_slow"): whole_day(5.0),
+                       ("tenant-b", "custom_mysql_slow"): whole_day(7.0)}, where
 
 
 @pytest.mark.parametrize("where", sorted(POSITIONS))
@@ -140,8 +147,8 @@ def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
     assert {db: t for db, t in got.items() if db not in builtin} == {"redis": {"tenant-b"}}
     assert "redis" not in builtin  # the control above would hide redis otherwise
     cfgs = arg.load_tenant_configs(config_dir=str(conf_d))
-    assert {t: {k: v for k, v in c.items() if k not in BUILTIN_DEFAULTS} for t, c in cfgs.items()} == {
-        "tenant-a": {}, "tenant-b": {"redis_memory": 1024.0}}
+    assert {t: {k: v.as_json()[0]["value"] for k, v in c.items() if k not in BUILTIN_DEFAULTS}
+            for t, c in cfgs.items()} == {"tenant-a": {}, "tenant-b": {"redis_memory": 1024.0}}
 
 
 def _cli(script: str, conf_d: Path, *extra: str) -> subprocess.CompletedProcess:

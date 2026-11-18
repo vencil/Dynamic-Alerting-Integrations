@@ -334,7 +334,7 @@ state_filters:
     reasons: ["CrashLoopBackOff"]
     severity: "critical"
 optional_overrides:
-  - oracle_process_count
+  - oracle_pga_usage_percent
 _routing_defaults:
   receiver:
     type: "email"

@@ -1104,15 +1104,15 @@ def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_g
     `reason` are read as da-guard writes them (the facts PR-side readers use
     instead of re-reading the value)."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\noptional_overrides:\n  - oracle_process_count\n",
-        "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"NaN\"\n    oracle_process_count: \"-Inf\"\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\noptional_overrides:\n  - oracle_pga_usage_percent\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"NaN\"\n    oracle_pga_usage_percent: \"-Inf\"\n"
                   "    mysql_connection_usage_percent_critical:\n      default: \"95\"\n      overrides:\n"
                   "        - window: \"01:00-02:00\"\n          value: \"Inf\"\n"
                   "        - window: \"03:00-04:00\"\n          value: disable\n",
     })
     got = tv.load_served_values(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, schedules=True)["t"]
     assert got.keys["mysql_connection_usage_percent"] == tv.ServedKey(True, refused="non_finite")
-    assert got.keys["oracle_process_count"] == tv.ServedKey(False, "value_non_finite", refused="non_finite")
+    assert got.keys["oracle_pga_usage_percent"] == tv.ServedKey(False, "value_non_finite", refused="non_finite")
     reasons = [(s.start, s.reason) for s in got.schedules["mysql_connection_usage_percent_critical"].segments
                if s.value is None]
     assert reasons == [("01:00", "value_non_finite"), ("03:00", "disabled")]
@@ -1403,3 +1403,59 @@ def test_served_schedules_of_a_tree_no_file_of_which_reads_name_the_files(tmp_pa
     day = tv.load_served_schedules(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, partial=True)
     assert day.tenants == {} and day.ungathered == ()
     assert [(u.file, u.reason) for u in day.unreadable] == [("a.yaml", "stat_error")]
+
+
+# ── #4027: the whole day as a tool hands it on ──────────────────────────────
+
+def test_key_schedule_as_json_mirrors_da_guards_segments():
+    import _lib_tenant_values as tv
+    day = tv.KeySchedule(segments=[
+        tv.ScheduleSegment("00:00", "10:00", 5.0, "warning", series=()),
+        tv.ScheduleSegment("10:00", "12:00", None, None, reason="disabled"),
+        tv.ScheduleSegment("12:00", "13:00", None, None),
+        tv.ScheduleSegment("13:00", "24:00", None, None, error="cannot be gathered"),
+    ], expires=None, expired=None)
+    assert day.as_json() == [
+        {"from": "00:00", "to": "10:00", "value": 5.0, "severity": "warning"},
+        {"from": "10:00", "to": "12:00", "value": None, "reason": "disabled"},
+        {"from": "12:00", "to": "13:00", "value": None},
+        {"from": "13:00", "to": "24:00", "error": "cannot be gathered"},
+    ]
+
+
+def test_key_schedule_as_json_is_da_guards_segments_without_series(tmp_path):
+    # #4027 review: a hand-written expectation cannot see a field Go adds.
+    # Differential: da-guard's own segments, `series` left out, are what
+    # `as_json` gives — a field Go adds turns this red until it is carried.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import _lib_tenant_values as tv
+    (tmp_path / "_defaults.yaml").write_text(
+        "defaults:\n  custom_q: 80\n  custom_r: 5\n", encoding="utf-8")
+    (tmp_path / "ta.yaml").write_text(
+        "tenants:\n  ta:\n    custom_q:\n      default: \"60\"\n      overrides:\n"
+        "        - window: \"01:00-02:00\"\n          value: disable\n"
+        "        - window: \"03:00-04:00\"\n          value: \"70:critical\"\n"
+        "        - window: \"05:00-06:00\"\n          value: abc\n"
+        "    custom_r:\n      default: disable\n      expires: \"2099-01-01T00:00:00Z\"\n",
+        encoding="utf-8")
+    at = "2026-11-13T12:00:00Z"
+    raw = _json.loads(_sp.run(
+        [_os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir", str(tmp_path),
+         "--schedules-only", "--at", at], capture_output=True, text=True, encoding="utf-8",
+        check=True, timeout=120).stdout)["tenants"]["ta"]["schedules"]
+    got = tv.load_served_schedules(tmp_path, at=at).tenants["ta"]
+    assert set(got) == set(raw)
+    for key, day in got.items():
+        want = [{k: v for k, v in seg.items() if k != "series"} for seg in raw[key]["segments"]]
+        assert day.as_json() == want, key
+    assert {"reason"} <= {k for seg in raw["custom_q"]["segments"] for k in seg}
+
+
+def test_ungathered_refusal_names_every_part():
+    import _lib_tenant_values as tv
+    assert tv.ungathered_refusal(()) is None
+    text = tv.ungathered_refusal((tv.UngatheredPart("01:00", "01:29", "HTTP 500"),
+                                  tv.UngatheredPart("22:00", "24:00", "dup")))
+    assert "01:00-01:29 UTC (HTTP 500)" in text and "22:00-24:00 UTC (dup)" in text

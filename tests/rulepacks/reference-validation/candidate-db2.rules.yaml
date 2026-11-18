@@ -11,8 +11,9 @@
 #   - DB2HighLockWaitTime (#1188): shipped pack NOW alerts on
 #     db2_lock_wait_time_seconds_total (run#1 found the orphaned recording rule);
 #     mirrored below with the header-documented starting value 10.
-#   - DB2HighSortOverflow (#1184): shipped ratio is now rate/rate over 5m with a
-#     `> 0` denominator guard (NOT lifetime-cumulative division); mirrored below.
+#   - DB2HighSortOverflow (#1184): shipped ratio is now rate/rate over 5m (NOT
+#     lifetime-cumulative division); its denominator guard is the #1176 minimum
+#     sample, ≥ 200 sorts per 5m (n·p0 ≥ 10 at the 0.05 threshold); mirrored below.
 #
 # NOT covered here (declared in divergence-ledger.yaml):
 #   - DB2TablespaceAlmostFull → the blind library authored no tablespace fault, so
@@ -52,6 +53,6 @@ groups:
         for: 5m
         labels: {severity: warning}
       - alert: DB2HighSortOverflow
-        expr: rate(db2_sort_overflows[5m]) / (rate(db2_total_sorts[5m]) > 0) > 0.05
+        expr: rate(db2_sort_overflows[5m]) / (rate(db2_total_sorts[5m]) >= 200 / 300) > 0.05
         for: 10m
         labels: {severity: warning}

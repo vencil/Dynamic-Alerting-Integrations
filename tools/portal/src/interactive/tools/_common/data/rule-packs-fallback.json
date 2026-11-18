@@ -270,6 +270,12 @@
           "unit": "%",
           "desc": "Tablespace usage warning",
           "metricClass": "capacity"
+        },
+        "oracle_process_usage_percent": {
+          "value": 85,
+          "unit": "% of PROCESSES",
+          "desc": "Process usage warning: v$process rows as a share of the PROCESSES parameter, per exporter, busiest per tenant; 85 = awesome-prometheus-alerts \"Oracle DB processes reaching limit\". Replaces the absolute-count key oracle_process_count (#1320: a unit change is a removal plus an addition, no alias)",
+          "metricClass": "capacity"
         }
       },
       "metrics": [

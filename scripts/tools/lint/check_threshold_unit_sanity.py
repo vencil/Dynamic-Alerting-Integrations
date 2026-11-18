@@ -106,6 +106,8 @@ import _lib_doc_yaml_inventory as doc_inventory  # noqa: E402
 UNIT_DIMENSION: dict[str, str] = {
     "%": "percent",
     "% of max_connections": "percent",
+    "% of PROCESSES": "percent",
+    "% of PGA_AGGREGATE_LIMIT": "percent",
     "ratio": "ratio",
     "0=green,1=yellow,2=red": "enum",
     "bytes": "bytes",

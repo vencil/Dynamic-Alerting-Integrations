@@ -40,6 +40,7 @@
         "es_heap_usage_percent": 85,
         "mysql_connection_usage_percent": 70,
         "mysql_replication_lag": 30,
+        "oracle_process_usage_percent": 85,
         "oracle_tablespace_used_percent": 85,
         "pg_connections": 80,
         "pg_replication_lag": 30,
@@ -53,6 +54,7 @@
         "es_heap_usage_percent": "warning",
         "mysql_connection_usage_percent": "warning",
         "mysql_replication_lag": "warning",
+        "oracle_process_usage_percent": "warning",
         "oracle_tablespace_used_percent": "warning",
         "pg_connections": "warning",
         "pg_replication_lag": "warning",
@@ -159,6 +161,21 @@
               "tenant": "t1"
             },
             "metric_key": "mysql_replication_lag",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "oracle_process_usage_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "oracle",
+              "metric": "process_usage_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "oracle_process_usage_percent",
             "legacy_twin": false,
             "dimensions": {},
             "dimensions_regex": {}

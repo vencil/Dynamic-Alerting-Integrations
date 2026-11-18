@@ -66,7 +66,7 @@ func rowsAndNotServed(t *testing.T, files map[string]string) ([]string, map[stri
 	return rows, cfg.ValuesNotServed(now)["tx"]
 }
 
-const nfDefaults = "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\noptional_overrides:\n  - oracle_process_count\n"
+const nfDefaults = "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\noptional_overrides:\n  - oracle_pga_usage_percent\n"
 
 // Every tenant-side reader refuses a quoted non-finite value: the base key
 // serves the platform default (value_unparsed), the others no row
@@ -81,7 +81,7 @@ func TestNonFiniteThreshold_EveryRowReaderRefusesIt(t *testing.T) {
 			"base":        {"    mysql_connections: %q\n", "mysql_connections", NotServedValueUnparsed, []string{"mysql_connections=80/warning"}},
 			"base suffix": {"    mysql_connections: \"%s:critical\"\n", "mysql_connections", NotServedValueUnparsed, []string{"mysql_connections=80/warning"}},
 			"critical":    {"    mysql_connections_critical: %q\n", "mysql_connections_critical", NotServedValueUnparsedDropped, []string{"mysql_connections=80/warning"}},
-			"declared":    {"    oracle_process_count: %q\n", "oracle_process_count", NotServedValueUnparsedDropped, []string{"mysql_connections=80/warning"}},
+			"declared":    {"    oracle_pga_usage_percent: %q\n", "oracle_pga_usage_percent", NotServedValueUnparsedDropped, []string{"mysql_connections=80/warning"}},
 			"dimensional": {"    'mysql_connections{db=\"x\"}': %q\n", `mysql_connections{db="x"}`, NotServedValueUnparsedDropped, []string{"mysql_connections=80/warning"}},
 		} {
 			t.Run(name+"/"+v, func(t *testing.T) {

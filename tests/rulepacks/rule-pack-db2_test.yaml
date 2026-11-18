@@ -559,3 +559,54 @@ tests:
               owner: ""
               tier: ""
         # db-c/db-e (maintenance, with / without metadata) and db-d (0.02 < 0.05) produce NO alert.
+
+  - interval: 15s
+    input_series:
+      # Minimum-sample gate (#1176): the ratio needs ≥ 200 sorts per 5m window
+      # (n·p0 ≥ 10 at the 0.05 threshold). All three are bare (no metadata):
+      #   db-g idle: 3 sorts / 1 overflow per 5m = 0.33 — the old `> 0` guard
+      #        fired on it after for: 10m; under the gate it has no ratio.
+      #   db-h 210 sorts / 21 overflows per 5m = 0.10, just over the floor — fires.
+      #   db-i 190 sorts / 19 overflows per 5m = 0.10, just under it — no ratio.
+      #   db-h and db-i differ only in volume, so a floor moved past either side
+      #   (or dropped) turns one of them red.
+      # A test case of its own, asserted only at 16m: db-h sits just over the floor
+      # (0.7 vs 0.667 sorts/s), so rate()'s cold start decides when it first clears
+      # it — ~4.6m on Prometheus (window-extrapolated), from the start on
+      # MetricsQL (actual data span) — and for: 10m ends ~14.6m vs ~10.25m. 16m is
+      # past both, so the two engines agree; x96 (24m) keeps the series fresh there.
+      - series: 'db2_sort_overflows{tenant="db-g"}'
+        values: '0+0.05x96'
+      - series: 'db2_total_sorts{tenant="db-g"}'
+        values: '0+0.15x96'
+      - series: 'db2_sort_overflows{tenant="db-h"}'
+        values: '0+1.05x96'
+      - series: 'db2_total_sorts{tenant="db-h"}'
+        values: '0+10.5x96'
+      - series: 'db2_sort_overflows{tenant="db-i"}'
+        values: '0+0.95x96'
+      - series: 'db2_total_sorts{tenant="db-i"}'
+        values: '0+9.5x96'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DB2HighSortOverflow
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DB2HighSortOverflow
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-h
+            exp_annotations:
+              summary: "DB2 high sort overflow ratio on db-h"
+              summary_zh: "db-h 上 DB2 sort overflow 比率過高"
+              platform_summary: "[] db-h: DB2 sort overflow ratio high — SORTHEAP tuning review"
+              platform_summary_zh: "[] db-h：DB2 sort overflow 比率過高 — SORTHEAP 調優審查"
+              description: "Sort overflow ratio: 0.10 — consider increasing SORTHEAP"
+              description_zh: "Sort overflow 比率：0.10 — 考慮增加 SORTHEAP"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-g (3 sorts per 5m) and db-i (190 per 5m) stay under the 200-sorts-per-5m
+        # floor (#1176) and never get a ratio, so they produce NO alert.
