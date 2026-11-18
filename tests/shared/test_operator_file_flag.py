@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 import _lib_validation
+from _platform_fs import symlink_or_skip
 from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx, stub_url  # noqa: F401
 
 #: (tool, flag) → whether `-` is refused (the tool's stdout has another owner).
@@ -257,7 +258,6 @@ def test_the_file_is_byte_for_byte_what_json_prints(tool, flag, tmp_path, stub_u
     assert target.read_bytes() == proc.stdout
 
 
-@pytest.mark.skipif(os.name != "posix", reason="symlinks")
 def test_a_dangling_link_gets_its_targets_directory_made(tmp_path, stub_url):
     """`scan_component_health --output` made the RESOLVED parent before
     #3982: a link to a file in a directory not made yet still works."""
@@ -265,7 +265,7 @@ def test_a_dangling_link_gets_its_targets_directory_made(tmp_path, stub_url):
     ctx = Ctx(tmp_path, stub_url)
     target = tmp_path / "tdir" / "sub" / "h.json"
     link = tmp_path / "link.json"
-    os.symlink(target, link)
+    symlink_or_skip(target, link)
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     if row.env is not None:
         env.update(row.env(ctx))
