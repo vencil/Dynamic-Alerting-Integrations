@@ -161,6 +161,12 @@ def _default_plan(kind: str, spec) -> dict:
             "minimal": _files({"a.json": "{}\n"})}
 
 
+#: A rule file Prometheus loads, with one alert (#4040's rows).
+_PACK_ONE = ("groups:\n  - name: g\n    rules:\n      - alert: HighCPU\n"
+             "        expr: cpu_usage > 0.9\n        for: 5m\n"
+             "        labels: {severity: warning}\n")
+
+
 #: Row id → what makes the row live where the default does not: "live" /
 #: "minimal" (content builders), "argv" (replacing the G1 row's, whose argv
 #: is made to reach the path check, not to succeed — it names
@@ -604,6 +610,21 @@ LIVE.update({
     "onboard --scrape-config": {
         "argv": ["--scrape-config", "{F}", "-o", "{BOX}/out", "--json", "--dry-run"],
         "live": _file(_SCRAPE), "minimal": _file(_SCRAPE_MIN),
+    },
+    # #4040: one alert, against none — the diff (or the migration) differs.
+    "rule-pack-diff --from": {
+        "argv": ["--from", "{F}", "--to", "{BOX}/to.yaml", "--json"],
+        "box": {"to.yaml": _file(_PACK_ONE)},
+        "live": _file(_PACK_ONE), "minimal": _file("groups: []\n"),
+    },
+    "rule-pack-diff --to": {
+        "argv": ["--from", "{BOX}/from.yaml", "--to", "{F}", "--json"],
+        "box": {"from.yaml": _file(_PACK_ONE)},
+        "live": _file(_PACK_ONE), "minimal": _file("groups: []\n"),
+    },
+    "migrate input_file": {
+        "argv": ["{F}", "-o", "{BOX}/out", "--dry-run"],
+        "live": _file(_PACK_ONE), "minimal": _file("groups: []\n"),
     },
     # One Secret mounted, against none: the list's row compares them.
     "operator-check --secret-mounts": {

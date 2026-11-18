@@ -1303,7 +1303,10 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
         "helm-optional", "dev-optional", "try-local-optional",
         "helm-dimensions", "dev-dimensions", "try-local-dimensions"]
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
-    assert len(ids) == 10 + 13  # 13 threshold packs, non-threshold packs none
+    # #3831: the platform pack's digest recording rule, between the file-level
+    # surfaces and the pack headers.
+    assert ids[10] == "platform-builtin-digest"
+    assert len(ids) == 10 + 1 + 13  # 13 threshold packs, non-threshold packs none
     # the two surfaces per file must target the same path but distinct blocks
     by_id = {s["id"]: s for s in specs}
     assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]

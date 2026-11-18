@@ -63,6 +63,7 @@ from _lib_python import (  # noqa: E402
 )
 from _lib_io import find_metric_dictionary  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+import _lib_input  # noqa: E402  (#4040: the rule file is read once, here)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
@@ -1660,7 +1661,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="傳統 Prometheus 警報規則遷移輔助工具 (v4 AST) — 自動轉換為動態多租戶三件套"
     )
-    parser.add_argument("input_file", help="傳統 Prometheus alert rules YAML 檔案")
+    # #4040：規則檔由 _lib_input 讀一次；da-read 讀的是那份文字，不再開檔。
+    _lib_input.add_input(parser, "input_file", decode=_lib_input.Document("text", str),
+                         help="傳統 Prometheus alert rules YAML 檔案")
     parser.add_argument("-o", "--output-dir", default="migration_output", type=output_dir_type(),
                         help="輸出目錄 (預設: migration_output)")
     parser.add_argument("--tenant",
@@ -1700,10 +1703,14 @@ def main():
     # #3206（ADR-036 §12）：輸入的規則檔以 Prometheus 的 rule loader 讀
     # （da-read prometheus-rules）；它拒收的檔、或找不到 da-read，都以
     # rc 2 結束並說明原因，不改用其他讀法。
+    # 拒收行與本工具其他拒收行同為英文（--output-dir 等），一律以 ERROR: 開頭。
+    text = _lib_input.document(args, "input_file", lang="en")
     try:
-        (rule_file,) = _lib_consumer_read.prometheus_rule_files([args.input_file])
+        (rule_file,) = _lib_consumer_read.require_read(
+            _lib_consumer_read.prometheus_rule_text_results(
+                [(_lib_input.named(args, "input_file"), text)]))
     except _lib_consumer_read.ConsumerReadError as e:
-        print(f"Error reading rule file: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
+        print(f"ERROR: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     groups = rule_file.groups

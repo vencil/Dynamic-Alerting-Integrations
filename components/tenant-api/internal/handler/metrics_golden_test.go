@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/vencil/tenant-api/internal/federation/orphan"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/ws"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // metricsGoldenPath is the byte-exact snapshot of the full /metrics body.
@@ -116,6 +118,16 @@ func TestMetricsHandler_Golden(t *testing.T) {
 		t.Fatalf("uptime line matched %d times, want exactly 1 — %%.1f format or line drifted\nbody:\n%s", n, got)
 	}
 	got = uptimeLineRe.ReplaceAllString(got, "tenant_api_uptime_seconds 0.0")
+
+	// #3831: the built-in table's digest changes whenever the registry's
+	// default-armed keys do, which is no exposition change. Normalized to a
+	// placeholder, exactly once; TestMetrics_BuiltinDefaultsInfo pins the
+	// value itself.
+	digestLine := fmt.Sprintf("tenant_api_builtin_defaults_info{digest=%q} 1", cfg.BuiltinDefaultsDigest())
+	if n := strings.Count(got, digestLine); n != 1 {
+		t.Fatalf("builtin digest line matched %d times, want exactly 1\nbody:\n%s", n, got)
+	}
+	got = strings.Replace(got, digestLine, `tenant_api_builtin_defaults_info{digest="<digest>"} 1`, 1)
 
 	// Guard against an empty-vs-empty false green before any byte compare.
 	if !strings.Contains(got, "tenant_api_up 1") {

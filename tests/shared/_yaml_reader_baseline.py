@@ -181,6 +181,8 @@ ALLOWED = {
         (1, "a Grafana dashboard (--dashboard), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/lint_custom_rules.py', 'main'):
         (1, "the custom-rule lint policy (--policy), this tool's own input"),
+    ('scripts/tools/ops/rule_pack_diff.py', 'main'):
+        (1, "--from and --to, read through _lib_input.documents as text (#4040): no YAML is parsed in Python, da-read prometheus-rules reads them"),
     ('scripts/tools/ops/runtime_audit.py', 'RuntimeAuditor._load_runtime'):
         (1, "a saved /api/v1/rules answer (--runtime-json), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/scaffold_tenant.py', 'run_from_onboard'):
@@ -200,6 +202,8 @@ ALLOWED = {
         (1, "the base Alertmanager config (--base-config), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-read alertmanager reads it"),
     ('scripts/tools/ops/generate_alertmanager_routes.py', 'resolve_policy'):
         (1, 'the deployment policy (--policy); its reader is the generator itself (Python), tenant-api only hashes it'),
+    ('scripts/tools/ops/migrate_rule.py', 'main'):
+        (1, "the rule file (input_file), read through _lib_input.document as text (#4040): no YAML is parsed in Python, da-read prometheus-rules reads it"),
     ('scripts/tools/ops/onboard_platform.py', 'main'):
         (2, "--alertmanager-config and --scrape-config, read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-crdecode and da-read read them"),
     ('scripts/tools/ops/operator_check.py', 'load_mount_list'):
