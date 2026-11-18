@@ -124,12 +124,18 @@ def test_check_policy_dsl_matches_served_values(where, tmp_path):
 @pytest.mark.parametrize("where", sorted(POSITIONS))
 def test_opa_input_served_matches_served_values(where, tmp_path, capsys):
     conf_d = _tree(tmp_path, POSITIONS[where])
-    served = tv.load_served_values(conf_d)
+    # #4025: `served` is the whole day as da-guard reads it, each key its
+    # segments (`KeySchedule.as_json`), never one instant's number.
+    days = tv.load_served_schedules(conf_d).tenants
     assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     doc = json.loads(capsys.readouterr().out)
-    assert doc["served"] == {t: {k: s.values[k] for k in s.severities} for t, s in served.items()}, where
-    assert doc["served"]["tenant-a"]["custom_mysql_slow"] == 5.0, where
-    assert doc["served"]["tenant-b"]["custom_mysql_slow"] == 7.0, where
+    assert doc["served"] == {t: {k: day.as_json() for k, day in d.items()}
+                             for t, d in days.items()}, where
+
+    def whole_day(value):
+        return [{"from": "00:00", "to": "24:00", "value": value, "severity": "warning"}]
+    assert doc["served"]["tenant-a"]["custom_mysql_slow"] == whole_day(5.0), where
+    assert doc["served"]["tenant-b"]["custom_mysql_slow"] == whole_day(7.0), where
     # input.tenants：原形狀（寫法），加上繼承——四格都看得到 tenant-a 的 5 與根的 80。
     assert doc["tenants"]["tenant-a"]["custom_mysql_slow"] == 5, where
     assert doc["tenants"]["tenant-a"]["mysql_connections"] == 80, where
@@ -173,7 +179,12 @@ def test_retired_spelling_in_tenant_or_rule_is_compared(spelling, tmp_path, caps
     served = json.loads(capsys.readouterr().out)["served"]["tenant-a"]
     # #3832: the built-in layer's rows are served too; this test's are the two.
     served = {k: v for k, v in served.items() if k not in BUILTIN_DEFAULTS}
-    assert served == {"mysql_threads_running": 500.0, "mysql_threads_running_critical": 900.0}
+    # #4025: each key the whole day, one segment here; the critical row its own.
+    assert served == {
+        "mysql_threads_running": [
+            {"from": "00:00", "to": "24:00", "value": 500.0, "severity": "warning"}],
+        "mysql_threads_running_critical": [
+            {"from": "00:00", "to": "24:00", "value": 900.0, "severity": "critical"}]}
 
 
 def test_wildcard_matches_the_retired_spelling_too(tmp_path, capsys):

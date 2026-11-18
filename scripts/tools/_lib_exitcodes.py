@@ -93,8 +93,9 @@ tool said something that did not arrive (gnulib ``close_stdout``'s "never
 the caller rebound is left alone.
 
 ``Report(..., delivery="best_effort")`` (patch-config only; gate:
-tests/shared/test_json_stdout_contract.py): stdout failing still prints the
-line, but the run keeps the tool's status — patch-config's exit code says
+tests/shared/test_json_stdout_contract.py): stdout failing — or the document
+failing to encode (#4046) — still prints the line, but the run keeps the
+tool's status — patch-config's exit code says
 what the ConfigMap holds, which a lost stdout does not change. A lost
 stderr keeps that status too, a 0 included.
 
@@ -888,14 +889,27 @@ def _write_report(report: Report) -> int:
     """Encode and print *report*'s document; the exit status. A document
     that cannot be encoded is the tool's defect: one named line on stderr,
     no part of the document, and the crash exit code."""
+    global _stdout_failure_line, _best_effort
+    # #4046: before the encoding — a best-effort document that cannot be
+    # encoded keeps the status through the last flush too (a lost stderr
+    # must not turn its 0 into the caller-error code).
+    _best_effort = report.delivery == "best_effort"
     try:
         text = encode_json(report.document)
     except OutputNotSerializable as exc:
         _to_stderr(f"ERROR: the --json document cannot be written as JSON: {exc}")
-        return _crash_code()
-    global _stdout_failure_line, _best_effort
+        return report.status if report.delivery == "best_effort" else _crash_code()
+    except Exception as exc:  # noqa: BLE001 — best effort: the status was fixed before
+        # #4046: a best-effort document that cannot be made (MemoryError, an
+        # encoder fault) is lost as a failed stdout is: the status stands —
+        # patch-config's says what the ConfigMap holds after a write, and the
+        # crash code (2, "nothing written") would say otherwise.
+        if report.delivery != "best_effort":
+            raise
+        _to_stderr(f"ERROR: the --json document could not be written "
+                   f"({type(exc).__name__}); the exit code stands")
+        return report.status
     _stdout_failure_line = report.on_stdout_failure  # #3450: through the last flush
-    _best_effort = report.delivery == "best_effort"  # through the last flush too
     try:
         print(text)
     except OSError as exc:  # this write is stdout's
