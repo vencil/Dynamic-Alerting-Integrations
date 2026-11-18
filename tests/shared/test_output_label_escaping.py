@@ -211,6 +211,8 @@ def _write_hostile_tree(root: Path, *, malformed: bool) -> None:
     if not malformed:
         (root / "names.yaml").write_text(
             f'tenants:\n  "tn\\n{TN_MARK}\\nz":\n    pg_connections: 93\n'
+            # blind-spot names the tenants that declare a DB type (#4026).
+            '    _metadata: {db_type: postgresql}\n'
             '  "\\x1b[31mredtenant\\x1b[0m":\n    pg_connections: 94\n',
             encoding="utf-8")
 
@@ -475,6 +477,10 @@ MEASURED: set[tuple[str, str]] = {
     ("malformed", "offboard_tenant.py"),
     ("malformed", "validate_config.py"),
     ("valid", "blind_spot_discovery.py"),
+    # #4026: arrived when the valid tree's tenant began declaring a db_type —
+    # red before its WARN / VIOLATION lines went through `safe_label` (three
+    # forged `[PASS]` lines), the counterfactual measured on the tool itself.
+    ("valid", "check_retire_drift.py"),
     ("valid", "check_confd_schema.py"),
     ("valid", "deprecate_rule.py"),
     ("valid", "offboard_tenant.py"),

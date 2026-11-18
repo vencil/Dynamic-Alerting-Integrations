@@ -752,7 +752,9 @@ def test_scan_sees_the_known_population():
         # left with #3206 (ADR-036 §12): their rule files are read by
         # `da-read prometheus-rules`, their manifests by da-crdecode.
         "policy_engine.py", "policy_opa_bridge.py",
-        "blind_spot_discovery.py",
+        # blind_spot_discovery.py left with #4026: it reads `_metadata.db_type`
+        # through `load_served_facts`, not a root this scan names; its row
+        # above pins the refusal.
         # threshold_recommend.py left with #3990: it reads served-values
         # through `load_served_schedules` and `da-guard effective`, neither a
         # root this scan names; its row above pins the refusal.

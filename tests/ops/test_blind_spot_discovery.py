@@ -19,7 +19,7 @@ from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() 
 # ── 1. DB Type Inference ────────────────────────────────────────────
 
 class TestInferDbType:
-    """Test _infer_db_type_from_job and _infer_db_type_from_metric。"""
+    """Test _infer_db_type_from_job。"""
 
     @pytest.mark.parametrize("job_name,expected", [
         ("mysql", "mariadb"),
@@ -45,16 +45,15 @@ class TestInferDbType:
         """job 名稱正確推斷 DB 類型。"""
         assert bsd._infer_db_type_from_job(job_name) == expected
 
-    @pytest.mark.parametrize("metric,expected", [
-        ("mysql_connections", "mariadb"),
-        ("pg_cache_hit", "postgresql"),
-        ("redis_memory_used", "redis"),
-        ("cpu_usage", None),
-        ("_reserved_key", None),
-    ], ids=["mysql-metric", "pg-metric", "redis-metric", "unrelated", "reserved"])
-    def test_infer_db_from_metric(self, metric, expected):
-        """metric 名稱正確推斷 DB 類型。"""
-        assert bsd._infer_db_type_from_metric(metric) == expected
+    def test_job_vocabulary_is_the_declared_db_type_vocabulary(self):
+        """#4026：live 端 job 推得的 DB 類型，與租戶 `_metadata.db_type`
+        能宣告的值（schema `definitions.dbTypeValue.enum`）是同一組名字。
+        兩邊差一個字，那類 DB 不是永遠 covered 就是永遠 blind_spot。"""
+        import pathlib
+        repo = pathlib.Path(bsd.__file__).resolve().parents[3]
+        schema = json.loads((repo / "docs/schemas/tenant-config.schema.json")
+                            .read_text(encoding="utf-8"))
+        assert set(bsd.JOB_DB_MAP.values()) == set(schema["definitions"]["dbTypeValue"]["enum"])
 
 
 # ── 2. Extract DB Instances ─────────────────────────────────────────
@@ -103,9 +102,10 @@ class TestExtractDbInstances:
 class TestLoadMonitoredDbTypes:
     """Test load_monitored_db_types()。
 
-    #2115：已監控＝exporter 的 /metrics 對該租戶實際發出的閾值（da-guard
-    served-values），不是租戶檔字面上寫了哪些 key。以下各支在該裁決下改寫：
-    閾值要有 `defaults:` 才會發出；平面格式檔不是租戶（具名 WARN）。
+    #4026：已監控＝租戶 `_metadata.db_type` 宣告的 DB 類型，照 exporter 的讀法
+    （da-guard served-values --config-facts）——也就是 exporter 送出
+    `tenant_expected_exporter{tenant,db_type}` 的那份宣告（#869、#2737）。
+    /metrics 送了哪些閾值鍵不算：內建層的鍵每個租戶都有列（#3832）。
     """
 
     @staticmethod
@@ -118,70 +118,95 @@ class TestLoadMonitoredDbTypes:
 
     _DEFAULTS = "defaults:\n  mysql_connections: 80\n  redis_memory: 1024\n"
 
-    @staticmethod
-    def _builtin_types():
-        """The DB types of the built-in layer's keys (#3832): every tenant is
-        served those rows, as it is a root default's, so every tenant counts
-        as monitored for them."""
-        import _registry_lib
-        keys = _registry_lib.builtin_defaults(_registry_lib.load_registry())
-        return {t for t in map(bsd._infer_db_type_from_metric, keys) if t}
-
     def test_flat_file_is_not_a_tenant_and_is_named(self, capsys):
-        """平面格式（無 `tenants:` 包裝）：exporter 不當租戶，不算已監控，並具名 WARN（R3）。
-        改寫前：被當成租戶 `db-a`、算 mariadb＋redis 已監控。"""
+        """平面格式（無 `tenants:` 包裝）：exporter 不當租戶，不算已監控，並具名 WARN（R3）。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
-                            "db-a.yaml": "mysql_connections: 50\nredis_memory: 1024\n"})
+                            "db-a.yaml": "mysql_connections: 50\n_metadata: {db_type: mariadb}\n"})
             result = bsd.load_monitored_db_types(d)
             assert result == {}
             err = capsys.readouterr().err
             assert "WARN: db-a.yaml: declares no tenant" in err
 
-    def test_basic_loading_wrapped(self):
-        """包裝格式 (actual conf.d/): {tenants: {name: {metric: value}}}。"""
+    def test_declared_db_type_is_monitored(self):
+        """宣告一個或一串 db_type：每一類都算這個租戶已監控。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
-                            "db-a.yaml": yaml.dump({"tenants": {"db-a": {
-                                "mysql_connections": "70",
-                                "_routing": {"receiver": {"type": "webhook",
-                                                          "url": "https://example.com/h"}},
-                            }}})})
-            result = bsd.load_monitored_db_types(d)
-            assert "mariadb" in result
-            assert "db-a" in result["mariadb"]
+                            "db-a.yaml": "tenants:\n  db-a:\n    _metadata: {db_type: mariadb}\n",
+                            "db-b.yaml": "tenants:\n  db-b:\n    _metadata: {db_type: [postgresql, redis]}\n"})
+            assert bsd.load_monitored_db_types(d) == {
+                "mariadb": {"db-a"}, "postgresql": {"db-b"}, "redis": {"db-b"}}
 
-    def test_skips_reserved_keys(self):
-        """保留鍵不算閾值：只有 mariadb／redis（defaults 的兩把），沒有 _routing 之類。"""
+    def test_served_keys_without_a_declaration_are_not_monitored(self):
+        """#4026 行為變更：租戶送出 mysql_／redis_ 的閾值鍵（自己寫的、繼承的、內建層的），
+        沒宣告 db_type 就不算已監控。改寫前 db-a 算 mariadb＋redis，以及內建層推得出的
+        每一類（樹裡只要有一個租戶，那幾類永遠不會是盲點）。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
-                            "db-a.yaml": "tenants:\n  db-a:\n    _severity_dedup: enable\n"
-                                         "    mysql_connections: 50\n"})
-            result = bsd.load_monitored_db_types(d)
-            # #3832: plus the built-in layer's types.
-            assert set(result) == {"mariadb", "redis"} | self._builtin_types()
+                            "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"
+                                         "    redis_memory: 512\n"})
+            assert bsd.load_monitored_db_types(d) == {}
 
-    def test_skips_defaults_file(self):
-        """`_defaults.yaml` 本身不是租戶：沒有租戶檔 → 沒有已監控。"""
+    def test_a_disabled_key_does_not_withdraw_the_declaration(self):
+        """宣告不看閾值鍵：db-a 把 redis 的鍵全關了，仍宣告 redis，仍算已監控
+        （exporter 照樣送 tenant_expected_exporter）。"""
         with tempfile.TemporaryDirectory() as d:
-            self._write(d, {"_defaults.yaml": "defaults:\n  mysql_connections: 99\n"})
-            result = bsd.load_monitored_db_types(d)
-            assert result == {}
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n    redis_memory: disable\n"
+                                         "    _metadata: {db_type: redis}\n"})
+            assert bsd.load_monitored_db_types(d) == {"redis": {"db-a"}}
 
-    def test_disabled_or_unserved_key_is_not_monitored(self):
-        """#2115 行為變更：`disable` 的鍵、沒有預設值（/metrics 不發）的鍵都不算已監控。
-        改寫前兩者都因為租戶檔寫了 key 而算已監控（db-a 算 redis、db-b 算 mariadb）。"""
+    def test_the_declaration_is_read_through_the_platform_layer(self):
+        """根平台檔 `tenants.<id>._metadata` 是一層（#2370）：db-a 只在那裡宣告也算；
+        db-b 的租戶檔整值換掉平台層的宣告。"""
         with tempfile.TemporaryDirectory() as d:
-            self._write(d, {"_defaults.yaml": "defaults:\n  redis_memory: 1024\n",
-                            "db-a.yaml": "tenants:\n  db-a:\n    redis_memory: disable\n",
-                            "db-b.yaml": "tenants:\n  db-b:\n    mysql_slow_queries: 5\n"})
-            result = bsd.load_monitored_db_types(d)
-            # db-b 只有 defaults 的 redis_memory；db-a 關掉了它。
-            # #3832: the built-in layer's types count for both tenants.
-            builtin = self._builtin_types()
-            assert result.pop("redis") == {"db-b"}
-            assert set(result) == builtin - {"redis"}
-            assert all(v == {"db-a", "db-b"} for v in result.values())
+            self._write(d, {"_defaults.yaml": self._DEFAULTS
+                            + "tenants:\n  db-a:\n    _metadata: {db_type: oracle}\n"
+                            + "  db-b:\n    _metadata: {db_type: [oracle, db2]}\n",
+                            "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n",
+                            "db-b.yaml": "tenants:\n  db-b:\n    _metadata: {db_type: kafka}\n"})
+            assert bsd.load_monitored_db_types(d) == {"oracle": {"db-a"}, "kafka": {"db-b"}}
+
+    @pytest.mark.parametrize("at", ["2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"])
+    def test_no_instant_enters_the_answer(self, tmp_path, monkeypatch, at):
+        """#4026 的重現：mariadb 的鍵在 01:00-03:00 全部排程 `disable`，另一個鍵在
+        02:00-03:00 與 `_critical` 撞成同一條 series（那段 /metrics 收集不了）。
+        改寫前 01:15 判成沒監控 mariadb、12:00 判成有；收集不了的時段 rc 2。
+        現在任何時刻都是同一個答案，也不用收集 /metrics。"""
+        from factories import da_guard_at
+        window = ('{default: "70", overrides: [{window: "01:00-03:00", value: disable}]}')
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        self._write(str(d), {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": "tenants:\n  ta:\n    _metadata: {db_type: mariadb}\n"
+                       + "".join(f"    {k}: {window}\n" for k in (
+                           "mysql_connections", "mysql_connection_usage_percent",
+                           "mysql_replication_lag"))
+                       + '    redis_memory: {default: "70", overrides: '
+                         '[{window: "02:00-03:00", value: "95:critical"}]}\n'
+                       + '    redis_memory_critical: "95"\n'})
+        monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
+        assert bsd.load_monitored_db_types(str(d)) == {"mariadb": {"ta"}}
+
+    def test_a_db_type_that_is_not_a_list_of_strings_is_exit_2_named(self, monkeypatch):
+        """da-guard 送的 db_type 一律是字串清單；不是時不猜（字串會被逐字拆開），
+        rc 2 並點名租戶。"""
+        import _lib_tenant_values as tv
+        real = tv.load_served_facts
+
+        def fake(conf_d, *a, **kw):
+            facts = real(conf_d, *a, **kw)
+            t = facts.tenants["db-a"]
+            facts.tenants["db-a"] = t._replace(metadata={**t.metadata, "db_type": "mariadb"})
+            return facts
+        monkeypatch.setattr(bsd, "load_served_facts", fake)
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n    _metadata: {db_type: mariadb}\n"})
+            with pytest.raises(tv.ServedValuesError, match="tenant 'db-a' carries a _metadata.db_type "
+                                                           "that is not a list of strings"):
+                bsd.load_monitored_db_types(d)
 
     @pytest.mark.parametrize("name, reason", [("nope", "dir_not_found"), ("f", "dir_not_found")])
     def test_a_config_dir_that_is_not_a_directory_is_a_caller_error(self, tmp_path, name,

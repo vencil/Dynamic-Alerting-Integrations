@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 blind_spot_discovery.py — Scan Prometheus targets and cross-reference tenant configs
-to find cluster instances not covered by this platform's threshold monitoring.
+to find cluster instances of a DB type no tenant declares (`_metadata.db_type`,
+the declaration per-tenant exporter liveness pages from).
 
 Complements analyze_rule_pack_gaps.py (custom rule vs Rule Pack coverage).
 Blind Spot Discovery analyzes infrastructure coverage vs tenant config coverage.
@@ -25,17 +26,19 @@ from _lib_python import (  # noqa: E402
     prometheus_url,
     exit_on_yaml_file_error,
     JOB_DB_MAP,
-    METRIC_PREFIX_DB_MAP,
 )
-# #2115: the thresholds each tenant is monitored by are the ones the
-# exporter's /metrics serves (da-guard served-values), not the keys its own
-# file spells — so a value inherited from `defaults:`, a platform `tenants:`
-# block or a subtree counts, and a nested tenant is seen.
+# #4026: the DB types a tenant is monitored for are the ones its
+# `_metadata.db_type` declares, as the exporter's resolver reads it
+# (`da-guard served-values --config-facts`) — the declaration the exporter
+# turns into `tenant_expected_exporter{tenant,db_type}` (#869, #2737). No
+# instant, schedule or gather enters it.
 from _lib_tenant_values import (  # noqa: E402
+    ServedValuesError,
     exit_on_served_values_error,
-    load_served_tree,
+    load_served_facts,
     print_load_warnings,
 )
+from _lib_validation import shown_key  # noqa: E402  (#3961: a key from the tree, shown)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lib_prometheus import prometheus_targets  # noqa: E402
 import _lib_input  # noqa: E402
@@ -105,41 +108,43 @@ def _infer_db_type_from_job(job):
 
 
 def load_monitored_db_types(config_dir):
-    """Infer which DB types each tenant is monitored for.
+    """Which tenants declare each DB type.
 
     Returns {db_type: set(tenant_ids)}.
 
-    A tenant is monitored by the threshold keys /metrics serves for it
-    (`da-guard served-values`, #2115): wherever the value is written —
-    `defaults:`, a platform `tenants:` block, the tenant file, a subtree —
-    and at any depth. A key switched off (`disable`) or with no row on
-    /metrics (e.g. no default for it) does not count. Files the load serves
-    no tenant from are named on stderr, after whatever da-guard prints on
-    stderr (line by line, each behind `DA_GUARD_PREFIX`). da-guard missing or failing, or a
-    file the load cannot decode, raises (the CLI exits 2). So does a
-    *config_dir* that is not there or not a directory (#3392: it was a WARN
-    and every live DB reported as a blind spot, rc 0) — judged by `main`
-    (`_lib_parse_cache.declared_trees`, #3751), never again here.
+    A tenant is monitored for the DB types its `_metadata.db_type` declares
+    (#4026), wherever the declaration is written — the tenant file, a
+    platform layer, a subtree — as the exporter's resolver reads it
+    (`load_served_facts`, `da-guard served-values --config-facts`). That is
+    the declaration the exporter emits `tenant_expected_exporter{tenant,
+    db_type}` from, so a tenant counted here is one `TenantExporterAbsent`
+    pages for when no exporter of that kind is up (#869, #2737). The
+    threshold keys a tenant is served do not enter: every tenant is served
+    the built-in layer's keys (#3832), so a key's prefix says what the
+    platform ships, not what the tenant runs. No instant is read, so neither
+    the time the run starts at nor a schedule changes the answer.
+
+    Files the load serves no tenant from are named on stderr, after whatever
+    da-guard prints on stderr (line by line, each behind `DA_GUARD_PREFIX`).
+    da-guard missing or failing, a file the load cannot decode, or a
+    `db_type` that is not a list of strings raises (the CLI exits 2). So does
+    a *config_dir* that is not there or not a directory (#3392) — judged by
+    `main` (`_lib_parse_cache.declared_trees`, #3751), never again here.
     """
     result = {}
-    tree = load_served_tree(config_dir)
-    print_load_warnings(tree)
-    for t_name, served in tree.tenants.items():
-        for key in served.severities:  # exactly the threshold keys with a row
-            db_type = _infer_db_type_from_metric(key)
-            if db_type:
-                result.setdefault(db_type, set()).add(t_name)
+    facts = load_served_facts(config_dir)
+    print_load_warnings(facts)
+    for t_name, tenant in facts.tenants.items():
+        declared = tenant.metadata.get("db_type")
+        if not (isinstance(declared, list) and all(isinstance(d, str) for d in declared)):
+            raise ServedValuesError(
+                f"da-guard served-values: tenant '{shown_key(t_name)}' carries a "
+                f"_metadata.db_type that is not a list of strings "
+                f"({type(declared).__name__})", None, "")
+        for db_type in declared:
+            result.setdefault(db_type, set()).add(t_name)
 
     return result
-
-
-def _infer_db_type_from_metric(metric_key):
-    """Infer DB type from metric key prefix."""
-    key_lower = metric_key.lower()
-    for prefix, db_type in METRIC_PREFIX_DB_MAP.items():
-        if key_lower.startswith(prefix):
-            return db_type
-    return None
 
 
 def find_blind_spots(live_instances, monitored_db_types):
@@ -192,11 +197,11 @@ def render_report(results):
     unknown = [r for r in results if r["status"] == "unrecognized"]
 
     if blind_spots:
-        lines.append("BLIND SPOTS (cluster instances with no tenant monitoring):")
+        lines.append("BLIND SPOTS (cluster instances of a DB type no tenant declares in _metadata.db_type):")
         lines.append("")
         for r in blind_spots:
             lines.append(f"  ⚠ {safe_label(r['db_type'])}: {r['live_count']} instance(s) in cluster, "
-                         "0 tenants monitoring")
+                         "0 tenants declare it")
             for inst in r["live_instances"][:5]:
                 lines.append(f"      - {safe_label(inst)}")
             if r["live_count"] > 5:
@@ -204,11 +209,11 @@ def render_report(results):
         lines.append("")
 
     if covered:
-        lines.append("COVERED (instances with active tenant monitoring):")
+        lines.append("COVERED (instances of a DB type a tenant declares in _metadata.db_type):")
         lines.append("")
         for r in covered:
             lines.append(f"  ✓ {safe_label(r['db_type'])}: {r['live_count']} instance(s), "
-                         f"{r['monitored_count']} tenant(s) "
+                         f"{r['monitored_count']} tenant(s) declaring it "
                          f"({safe_label(', '.join(r['monitored_tenants']))})")
         lines.append("")
 

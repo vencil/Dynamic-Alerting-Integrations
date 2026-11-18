@@ -596,7 +596,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 
 #### blind-spot
 
-Scan Prometheus cluster's active targets, cross-reference with tenant config to find blind spots (exporter present but no tenant config).
+Scan Prometheus cluster's active targets, cross-reference with tenant config to find blind spots (an exporter of a DB type runs in the cluster, but no tenant declares that type in `_metadata.db_type`).
 
 When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
 
@@ -625,11 +625,11 @@ da-tools blind-spot --config-dir <path> [options]
 **Output**
 
 Presented in three sections:
-- **Covered**: Exporters with corresponding tenant config
-- **Blind Spots**: Exporters without tenant config
+- **Covered**: Exporters of a DB type a tenant declares
+- **Blind Spots**: Exporters of a DB type no tenant declares
 - **Unrecognized**: Jobs with unidentifiable DB type
 
-"Corresponding tenant config" means the thresholds the exporter's `/metrics` actually serves for the tenant (read through `da-guard served-values`, #2115): a value written in `defaults:`, a platform file's `tenants:`, the tenant file or a subdirectory counts, and so does a tenant in a subdirectory; a key switched off with `disable`, or one with no default that is never served, does not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file. A file or sub-directory the exporter cannot read (e.g. no permission, a dangling symlink, a sub-directory it cannot list) ends the run with exit 2, the `ERROR` line naming the file (or directory) and the reason (`stat_error` / `read_error` / `walk_error` / `special_file`); the exception is a symlink to a directory, which the exporter never follows (a k8s ConfigMap's nested paths are mounted as such links): it is only skipped and does not change the exit code. Whatever da-guard prints on stderr is passed on to stderr line by line, each line behind the prefix `da-guard|` (two leading spaces, one trailing) and with control characters escaped (a newline inside a file name makes da-guard print two lines, which cannot be told apart here, but neither starts a line). Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`).
+"A tenant declares" means the tenant's `_metadata.db_type` (one string or a list) names that DB type, read as the exporter reads it through `da-guard served-values --config-facts` ([#4026](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4026)): written in the tenant file or in a root platform file's `tenants.<id>._metadata`, the tenant file's declaration replacing the platform layer's whole. It is the declaration the exporter emits `tenant_expected_exporter{tenant,db_type}` from, the one `TenantExporterAbsent` pages per tenant on. ⚠️ The threshold keys a tenant is served (`mysql_`, `redis_`, …) do not count: every tenant is served the built-in layer's keys ([#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832)), so when the verdict followed a key's prefix, one tenant in the tree was enough for those DB types never to be a blind spot. No instant is read: the time of the run, a scheduled `disable`, or a part of the day `/metrics` cannot be gathered in does not change the result. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file. A file or sub-directory the exporter cannot read (e.g. no permission, a dangling symlink, a sub-directory it cannot list) ends the run with exit 2, the `ERROR` line naming the file (or directory) and the reason (`stat_error` / `read_error` / `walk_error` / `special_file`); the exception is a symlink to a directory, which the exporter never follows (a k8s ConfigMap's nested paths are mounted as such links): it is only skipped and does not change the exit code. Whatever da-guard prints on stderr is passed on to stderr line by line, each line behind the prefix `da-guard|` (two leading spaces, one trailing) and with control characters escaped (a newline inside a file name makes da-guard print two lines, which cannot be told apart here, but neither starts a line). Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`).
 
 **Examples**
 
@@ -3712,7 +3712,7 @@ spec:
 ### Q: What's the difference between blind-spot and analyze-gaps?
 
 **A**:
-- **blind-spot**: Cross-reference "cluster infrastructure vs tenant config", find exporters without tenant config (blind spots).
+- **blind-spot**: Cross-reference "cluster infrastructure vs the `_metadata.db_type` tenants declare", find exporters of a DB type no tenant declares (blind spots).
 - **analyze-gaps**: Cross-reference "custom rules vs Rule Pack", evaluate Rule Pack coverage.
 
 They're complementary; run both after migration.

@@ -478,11 +478,12 @@ def _avg_correlations(proc: subprocess.CompletedProcess) -> object:
 
 
 def _mysql_only_confd(tmp: Path) -> str:
-    """One tenant monitored for mysql only (and the built-in layer's types,
-    #3832) — the stub's redis and mongodb targets are the blind spots."""
+    """One tenant declaring mariadb only (`_metadata.db_type`, #4026) — the
+    stub's redis and mongodb targets are the blind spots."""
     d = tmp / "confd-mysql-only"
     _write(d / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
-    _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 90\n")
+    _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 90\n"
+                                  "    _metadata: {db_type: mariadb}\n")
     return str(d)
 
 
