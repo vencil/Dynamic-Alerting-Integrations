@@ -54,6 +54,9 @@ def test_an_empty_value_is_refused():
 def test_the_tools_own_type_runs_after_it():
     kind = _lib_validation.artifact_file_type(then=Path)
     assert kind("x.yml") == Path("x.yml")
+    # `Path("./-")` is `Path("-")`, which the artifact entry refuses as
+    # standard output: the way out the refusal names keeps its file (#3982).
+    assert kind("./-") == Path(os.path.abspath("-"))
     with pytest.raises(argparse.ArgumentTypeError) as ei:
         kind("-")
     assert REFUSAL in str(ei.value)
@@ -118,3 +121,24 @@ def test_an_artifact_flag_given_an_empty_value_is_refused_at_parse_time(tool, fl
         proc.stderr[-800:]
     assert proc.stdout == ""
     assert list(cwd.iterdir()) == []
+
+
+@pytest.mark.parametrize("tool,flag", ARTIFACT_FILE_FLAGS,
+                         ids=[Path(t).stem for t, _f in ARTIFACT_FILE_FLAGS])
+def test_dot_dash_is_a_file_called_dash(tool, flag, tmp_path):
+    """The way out the refusal of `-` names: `./-` writes a file called `-`
+    (a `then=Path` collapsed it to `-`, which the entry refused, #3982)."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == (tool, flag))
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    marker = tmp_path / "@OUT@"
+    argv = ["./-" if a == str(marker) else a
+            for a in row.build(Ctx(tmp_path, "http://127.0.0.1:1"), marker)]
+    proc = subprocess.run(
+        [sys.executable, str(TOOLS_DIR / tool), *argv],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=300, cwd=cwd,
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert [p.name for p in cwd.iterdir()] == ["-"]
+    assert (cwd / "-").stat().st_size > 0
