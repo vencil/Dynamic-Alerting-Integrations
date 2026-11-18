@@ -317,8 +317,9 @@ NOTHING_GENERATED_ROUTES_HINT = (
 # `key verdict:` lines are this row's, and so is the advice on them
 # (`_key_verdict_hint`): one of the hints below.
 KEY_VERDICT_ROUTES_HINT = (
-    "On each `key verdict:` line: fix a misspelt key, or remove a key nothing "
-    "reads; a `disable` that switches nothing off usually sits on a misspelt "
+    "On each `key verdict:` line: fix a misspelt key; a key the platform "
+    "should serve, declare at the root (`defaults:` or `optional_overrides:`); "
+    "remove a key only when it is neither; a `disable` that switches nothing off usually sits on a misspelt "
     "key; a value_unread "
     "line is a key that is read with a value its reader does not read — "
     "fix the value, not the key; a dead_entry line is a schedule entry "
@@ -334,15 +335,6 @@ KEY_VERDICT_INCOMPLETE_HINT = (
     "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
     "`key verdict incomplete` line names and run again: a tree no verdict was "
     "given for does not pass (#3016).")
-NO_DECLARED_DEFAULTS_HINT = (
-    "This config declares no platform defaults at all, so every tenant key "
-    "is reported as unread — that is the platform's side missing, not a "
-    "typo in the tenant files. \u26d4 Do NOT remove the keys named above: "
-    "they are the tenants' settings, served once the platform declares "
-    "them. Add a `defaults:` block — create "
-    "_defaults.yaml if the tree has none, or restore the block that "
-    "was emptied.")
-
 # #1556: the three hints below are shown when --policy / --rule-packs /
 # --policy-dsl was supplied but is unusable. Without them the row inherits
 # the generic per-check advice, which points at tenant YAML — the wrong place
@@ -391,54 +383,6 @@ def _argv_error_row(name: str, detail: str, hint: str) -> dict[str, object]:
     row = _make_result(name, FAIL, [detail], caller_error=True, hint=hint)
     row["reads_config_dir"] = False
     return row
-
-
-def _no_declared_defaults_hint(config_dir: str) -> str | None:
-    """Replacement hint for when the platform declares no defaults at all.
-
-    ⛔ When nothing is declared, the shared key verdict reads every tenant
-    threshold key as one no reader reads (``unread … (no_row)``), and the
-    generic advice on the key verdict says to remove a key nothing
-    reads — pointing at overrides that are legal and in force. Following it
-    deletes a working config. (The ``routes`` row carries this hint since
-    #3873, the ``unread_keys`` row before it, the ``schema`` row until
-    ADR-038 §11.)
-
-    Only the *advice* changes here. The findings are the shared verdict's;
-    silencing them in this report would hide what the gates will refuse.
-
-    Returns ``None`` when defaults *are* declared, so the generic hint —
-    which is right for an actual typo — is used unchanged.
-    """
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import generate_alertmanager_routes as gen
-
-    # ⛔ Fail soft. This reads a private helper through a re-export and two
-    # dict keys that belong to another module; renaming any of them is an
-    # ordinary refactor over there, and an exception raised here would be
-    # caught by `_run_check`'s catch-all and turn a WARN row into "FAIL,
-    # exit 2, please report this with the traceback" — for a config that is
-    # fine. Losing the replacement hint degrades to today's generic advice,
-    # which is the outcome this whole helper is an improvement on; losing
-    # the run is not.
-    try:
-        parsed = gen._parse_config_files(config_dir)
-        declared = (parsed.get("defaults_keys", set())
-                    | parsed.get("optional_override_keys", set()))
-    except (Exception, SystemExit):  # noqa: BLE001 — see above
-        # ⛔ `SystemExit` is NOT an `Exception`. `_parse_config_files` calls
-        # `sys.exit(EXIT_CALLER_ERROR)` when the directory is gone, which a
-        # bare `except Exception` lets straight through — and `_run_check`
-        # cannot catch it either, so the run dies with no report at all:
-        # #1448 exactly, reintroduced by the guard written to prevent it.
-        # Reachable by TOCTOU — a GitOps ConfigMap projected volume swaps
-        # `..data` atomically between `main()`'s isdir() check and this call.
-        return None
-    if declared:
-        return None
-    return NO_DECLARED_DEFAULTS_HINT
 
 
 def _make_result(
@@ -881,7 +825,7 @@ def check_routes(config_dir: str, policy: object = None,
         verdict_out.append(outcome.key_verdict)
 
     findings = [gen.as_finding(f) for f in outcome.findings]
-    key_hint = _key_verdict_hint(gen, config_dir, findings)
+    key_hint = _key_verdict_hint(findings)
     if outcome.exit_code == EXIT_OK:
         warned = [f for f in findings if f.severity != "note"]
         if not warned:
@@ -898,22 +842,15 @@ def check_routes(config_dir: str, policy: object = None,
     return _with_key_hint(row, hint, key_hint)
 
 
-def _key_verdict_hint(gen, config_dir: str, findings: list) -> str | None:
+def _key_verdict_hint(findings: list) -> str | None:
     """The advice on the shared key verdict's lines in a routes row (#3873),
     by their `kind`; None when no such line is above a notice."""
     key_lines = [f for f in findings if f.kind.startswith("key_")]
     if all(f.severity == "note" for f in key_lines):
         return None
-    kinds = {f.kind for f in key_lines}
-    if "key_verdict_incomplete" in kinds:
+    if any(f.kind == "key_verdict_incomplete" for f in key_lines):
         return KEY_VERDICT_INCOMPLETE_HINT
-    found = kinds & set(gen._KEY_VERDICT_KINDS.values())
-    if not found:
-        # No key was found unread (an exporter key check is no finding).
-        return KEY_VERDICT_ROUTES_HINT
-    # ⛔ A platform declaring nothing: every key reads as unread, and
-    # "remove a key nothing reads" would delete a working config.
-    return _no_declared_defaults_hint(config_dir) or KEY_VERDICT_ROUTES_HINT
+    return KEY_VERDICT_ROUTES_HINT
 
 
 def _with_key_hint(row: dict[str, object], hint: str | None,
@@ -3233,9 +3170,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
         # needs a TOCTOU to fire (a GitOps ConfigMap projected volume swaps
         # `..data` atomically), and then the process dies before
         # `print_report`: #1448's own symptom, through the wrapper written
-        # to prevent it. The sibling fix in `_no_declared_defaults_hint`
-        # landed a round before this one and its comment said this clause
-        # was already covered; it was not.
+        # to prevent it.
         detail = f"a check exited the process (code {exc.code})"
         row = _make_result(
             name, FAIL,

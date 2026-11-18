@@ -175,9 +175,7 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 // writes only a platform file — a root `_defaults.yaml` dropping a default,
 // a `dimensions:` declaration removed — and so leaves a key in some other
 // file read by nothing is not refused for that here; validate-config and
-// the route generator's `--validate` (CI) refuse the tree. tenant-api's
-// write gate (components/tenant-api/internal/gitops/key_verdict.go) refuses
-// the same files' errors.
+// the route generator's `--validate` (CI) refuse the tree.
 //
 // What is new is keyverdict's one rule (Block.identity): a block about a
 // tenant is the tenant and the key, wherever the file is — a tenant moved
