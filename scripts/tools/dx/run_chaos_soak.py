@@ -92,8 +92,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_prometheus import transport_error_text  # noqa: E402
-from _lib_io import (  # noqa: E402  (#1789; #3276)
-    OutputWriteError, exit_on_output_write_error, output_write, safe_label)
+from _lib_io import (  # noqa: E402  (#1789; #3276; #3982: open_operator_output, ensure_dir)
+    OutputWriteError, ensure_dir, exit_on_output_write_error, open_operator_output, safe_label)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
@@ -265,7 +265,8 @@ def main() -> int:
     try_utf8_stdout()
     # #3528 (imported here: a line added above would move the sink pins
     # test_output_write_sites_stay_guarded.py holds by line)
-    from _lib_validation import url_type
+    from _lib_validation import output_dir_type, url_type
+    import contextlib  # #3982: csv_stack (here for the same reason)
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--target-url", required=True, type=url_type(empty="refuse"),  # #3528
                         help="threshold-exporter URL (e.g. http://localhost:8080)")
@@ -277,7 +278,7 @@ def main() -> int:
                         help="Trigger reload every N seconds (default 60)")
     parser.add_argument("--metrics-poll-sec", type=int, default=30,
                         help="Poll /metrics every N seconds (default 30)")
-    parser.add_argument("--output-dir", required=True,
+    parser.add_argument("--output-dir", required=True, type=output_dir_type(),  # #3982
                         help="Where to write timeseries CSV + summary")
     args = parser.parse_args()
 
@@ -301,8 +302,7 @@ def main() -> int:
     carriers = reload_carriers(config_dir)
 
     out = Path(args.output_dir)
-    with output_write(out, flag="--output-dir", action="create directory"):
-        out.mkdir(parents=True, exist_ok=True)
+    ensure_dir(args.output_dir, flag="--output-dir")
     csv_path = out / "metrics-timeseries.csv"
     summary_path = out / "summary.txt"
     run_config_path = out / "run-config.json"
@@ -327,17 +327,19 @@ def main() -> int:
     next_poll_at = time.time()  # first poll immediately
 
     # Open CSV with header.
-    # ⚠️ Only the `open` is wrapped, and that is the whole of what can be
-    # wrapped here: the handle lives for the length of the soak, so its
-    # `writerow` / `flush` (in the loop below) and its `close()` (in the
-    # `finally`) happen OUTSIDE any block a context manager could span. A
-    # write or a flush that fails there — a filesystem that filled up mid-run
-    # — still exits 1 with a traceback. Written down in
+    # #3982: through the operator entry, held open for the length of the
+    # soak by `csv_stack`; it is closed in the `finally` below with the
+    # summary writes, so a failure of its last flush is remembered like
+    # theirs. (The handle's newline="\n" translates nothing: csv's "\r\n"
+    # row ends are written as they were under newline="".)
+    # ⚠️ Its `writerow` / `flush` in the poll loop happen OUTSIDE the entry's
+    # conversion: a write or a flush that fails there — a filesystem that
+    # filled up mid-run — still exits 1 with a traceback. Written down in
     # tests/shared/test_output_write_sites_stay_guarded.py (below its
     # NOT_GUARDED list, which cannot hold them: they are not sinks the scanner
     # can see), not silently ignored.
-    with output_write(csv_path, flag="--output-dir"):
-        csv_file = open(csv_path, "w", newline="", encoding="utf-8")
+    csv_stack = contextlib.ExitStack()
+    csv_file = csv_stack.enter_context(open_operator_output(str(csv_path), flag="--output-dir"))
     writer = csv.writer(csv_file)
     writer.writerow(["timestamp_utc", "elapsed_sec", "reload_count_so_far", *TRACKED_METRICS])
 
@@ -400,32 +402,30 @@ def main() -> int:
         # `except OutputWriteError` the current exception IS that error, so
         # `sys.exc_info()` there can never answer this question.
         in_flight = sys.exc_info()[0]
-        csv_file.close()
         cfg.ended_at_utc = datetime.now(timezone.utc).isoformat()
 
-        # Write summary + run-config
+        # Close the CSV, then write summary + run-config
         try:
-            with output_write(summary_path, flag="--output-dir"):
-                with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(f"v2.8.0 readiness chaos soak — summary\n")
-                    f.write(f"=" * 60 + "\n")
-                    f.write(f"target:           {args.target_url}\n")
-                    f.write(f"config-dir:       {args.config_dir}\n")
-                    f.write(f"duration:         {args.duration_min} min "
-                            f"({'completed' if not interrupted else 'INTERRUPTED'})\n")
-                    f.write(f"reload interval:  {args.reload_interval_sec}s\n")
-                    f.write(f"metrics poll:     {args.metrics_poll_sec}s\n")
-                    f.write(f"started (UTC):    {cfg.started_at_utc}\n")
-                    f.write(f"ended (UTC):      {cfg.ended_at_utc}\n")
-                    f.write(f"reload count:     {cfg.reload_count}\n")
-                    f.write(f"metric polls:     {cfg.poll_count}\n")
-                    f.write(f"\nTimeseries:       {csv_path.name}\n")
-                    f.write(f"Run report:       run `python3 scripts/tools/dx/render_soak_diff.py "
-                            f"--input-dir {out}`\n")
+            csv_stack.close()
+            with open_operator_output(str(summary_path), flag="--output-dir") as f:
+                f.write(f"v2.8.0 readiness chaos soak — summary\n")
+                f.write(f"=" * 60 + "\n")
+                f.write(f"target:           {args.target_url}\n")
+                f.write(f"config-dir:       {args.config_dir}\n")
+                f.write(f"duration:         {args.duration_min} min "
+                        f"({'completed' if not interrupted else 'INTERRUPTED'})\n")
+                f.write(f"reload interval:  {args.reload_interval_sec}s\n")
+                f.write(f"metrics poll:     {args.metrics_poll_sec}s\n")
+                f.write(f"started (UTC):    {cfg.started_at_utc}\n")
+                f.write(f"ended (UTC):      {cfg.ended_at_utc}\n")
+                f.write(f"reload count:     {cfg.reload_count}\n")
+                f.write(f"metric polls:     {cfg.poll_count}\n")
+                f.write(f"\nTimeseries:       {csv_path.name}\n")
+                f.write(f"Run report:       run `python3 scripts/tools/dx/render_soak_diff.py "
+                        f"--input-dir {out}`\n")
 
-            with output_write(run_config_path, flag="--output-dir"):
-                with open(run_config_path, "w", encoding="utf-8", newline="\n") as f:
-                    json.dump(asdict(cfg), f, indent=2, ensure_ascii=False)
+            with open_operator_output(str(run_config_path), flag="--output-dir") as f:
+                json.dump(asdict(cfg), f, indent=2, ensure_ascii=False)
         except OutputWriteError as exc:
             # First failure wins and skips the rest; the info lines below still
             # run so the operator sees where the (partial) output went.

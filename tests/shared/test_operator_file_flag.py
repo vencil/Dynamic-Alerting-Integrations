@@ -29,8 +29,15 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx, stub_url  # noq
 
 #: (tool, flag) → whether `-` is refused (the tool's stdout has another owner).
 OPERATOR_FILE_FLAGS: dict[tuple[str, str], bool] = {
+    ("dx/describe_tenant.py", "-o/--output"): False,
     ("dx/generate_changelog.py", "-o/--output"): False,
+    ("dx/migrate_conf_d.py", "-o/--output-plan"): True,
+    ("dx/pair_bench_ratio.py", "--out"): True,
+    ("dx/paired_trend_watch.py", "--summary-file"): True,
+    ("dx/render_soak_diff.py", "--output"): False,
+    ("dx/scan_component_health.py", "--output"): True,
     ("dx/waveform_score.py", "--out"): True,
+    ("lint/trufflehog_to_sarif.py", "--output"): True,
     ("ops/analyze_rule_pack_gaps.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "--markdown-output"): True,

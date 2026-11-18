@@ -271,11 +271,12 @@ _NOT_GUARDED_CEILING = 2
 # directions. The known ones are all in `dx/run_chaos_soak`, on the
 # long-lived CSV handle it holds open for the length of the soak:
 #
-#   * `writer.writerow(...)` + `csv_file.flush()` in the poll loop, and
-#   * `csv_file.close()` in the `finally`, where the last flush happens.
+#   * `writer.writerow(...)` + `csv_file.flush()` in the poll loop.
 #
-# `open()` is wrapped (the failure an operator actually causes — a bad
-# `--output-dir` — happens there); a write or a flush that fails LATER means
+# The open (through `open_operator_output`, #3982) is converted — the failure
+# an operator actually causes, a bad `--output-dir`, happens there — and so
+# is the last flush, at `csv_stack.close()` in the `finally`, remembered like
+# the summary writes'. A write or a flush that fails in the LOOP means
 # the filesystem filled up or went away mid-run, and it still ends in a
 # traceback at rc=1. Wrapping them would need the wrapper to span the whole
 # soak, which would also catch every unrelated OSError in the loop. Recorded
@@ -1029,7 +1030,7 @@ def test_this_scanner_agrees_with_the_secure_writer_one_where_they_overlap():
 _KNOWN_SITES = {
     # file → sinks that must still be found there. Measured on this tree;
     # each is a real argv-fed output path from the #1789 survey.
-    "scripts/tools/dx/describe_tenant.py": {".write_text"},
+    "scripts/tools/dx/describe_tenant.py": {"write_operator_output()"},  # #3982: was .write_text
     # #3107: the CSVs go through write_operator_output; the `-o` makedirs
     # is the tool's own sink left.
     "scripts/tools/ops/baseline_discovery.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
@@ -1038,7 +1039,9 @@ _KNOWN_SITES = {
     # own sinks left.
     "scripts/tools/ops/assemble_config_dir.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
     "scripts/tools/ops/state_reconcile.py": {"write_repo_artifact()"},  # #3982: mkdir → ensure_dir
-    "scripts/tools/dx/run_chaos_soak.py": {".mkdir", "open(w)"},
+    # #3982: the `--output-dir` mkdir and opens went through ensure_dir /
+    # open_operator_output; the sink left is NOT_GUARDED's carrier toggle.
+    "scripts/tools/dx/run_chaos_soak.py": {".write_text"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
     "scripts/ops/audit_rules_drift.py": {"atomic_write_text()"},
 }

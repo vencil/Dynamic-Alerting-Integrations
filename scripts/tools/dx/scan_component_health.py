@@ -49,7 +49,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, Report, encode_json  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789; #3982)
+    ensure_dir, exit_on_output_write_error, write_operator_output)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
 # --- 自動偵測 repo 根目錄（從 script 位置往上找 .git） ---
 def _find_repo_root(start: Path) -> Path:
@@ -514,7 +516,12 @@ def scan(today: datetime | None = None) -> dict:
 def main() -> "int | Report":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
-        "--output", type=Path, default=DEFAULT_OUTPUT,
+        "--output", default=DEFAULT_OUTPUT,
+        # #3982: the summary (or --stdout's full document) owns stdout, so
+        # `-` is refused.
+        type=operator_file_type(stdout="this tool prints its summary there "
+                                       "(--stdout prints this JSON document)",
+                                then=Path),
         help=f"Output JSON path (default: {DEFAULT_OUTPUT.relative_to(REPO)})",
     )
     parser.add_argument("--summary-only", action="store_true", help="Skip writing JSON file")
@@ -535,20 +542,15 @@ def main() -> "int | Report":
         # #1789: `--output` may name a path outside the repo, or a relative
         # one — both are legitimate operator input, and `relative_to(REPO)`
         # raises ValueError for both, which crashed the SUCCESS path with a
-        # traceback after the file had already been written. Resolve once so
-        # the mkdir, the write and the label all name the same path, and show
-        # the absolute path when it is not under the repo.
+        # traceback after the file had already been written. The label is
+        # the resolved path, shown absolute when it is not under the repo.
+        # #3982: the mkdir and the write take the path AS GIVEN — the
+        # operator entry judges a symlink there itself (written through, not
+        # chmodded), which a resolved path would hide from it. The mkdir is
+        # of the PARENT, the directory it actually creates.
         out_path = args.output.resolve()
-        # #1789: the wrapper is given the PARENT — the directory this mkdir
-        # actually creates. Handing it the output FILE makes the message a
-        # sentence about a path nobody was creating (worked example in
-        # `_lib_io.output_write`). The ancestor rule still converts the
-        # failure, and the write below keeps naming the file.
-        with output_write(out_path.parent, flag="--output",
-                          action="create directory"):
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-        with output_write(out_path, flag="--output"):
-            out_path.write_text(encode_json(data), encoding="utf-8", newline="\n")
+        ensure_dir(args.output.parent, flag="--output")
+        write_operator_output(str(args.output), encode_json(data), flag="--output")
         try:
             shown: Path = out_path.relative_to(REPO)
         except ValueError:

@@ -129,7 +129,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_output_write_error, write_operator_output  # noqa: E402  (#1789; #3982)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
 # ── The pinned rule (ADR-032 §待決 5) ─────────────────────────────────────
 DEFAULT_THRESHOLD_PCT = 5.0
@@ -1877,7 +1878,10 @@ def main(argv=None):
     parser.add_argument("--canary-gate-pct", type=float, default=DEFAULT_CANARY_GATE_PCT)
     parser.add_argument("--gap", choices=(GAP_BREAK, GAP_SKIP), default=GAP_BREAK,
                         help="what an uncounted night does to a consecutive run")
-    parser.add_argument("--summary-file", type=Path, default=None,
+    # #3982: the rendered body is printed to stdout as well, so `-` is refused.
+    parser.add_argument("--summary-file", default=None,
+                        type=operator_file_type(stdout="this tool prints the same "
+                                                       "Markdown there", then=Path),
                         help="append the rendered Markdown here "
                              "(defaults to $GITHUB_STEP_SUMMARY when set)")
     args = parser.parse_args(argv)
@@ -1953,9 +1957,7 @@ def main(argv=None):
         # `FileNotFoundError` at rc=1 — a code this tool's exit contract has
         # no room for: 0 = reported, 2 = could not check).
         flag = "--summary-file" if args.summary_file else None
-        with output_write(target, flag=flag, action="append to"):
-            with open(target, "a", encoding="utf-8", newline="\n") as handle:
-                handle.write(body + "\n")
+        write_operator_output(str(target), body + "\n", flag=flag, append=True)
 
     # ⛔ Exit 0 for FINDINGS as well as CLEAR. This is a REPORTER during the
     # parallel-run period, and a non-zero exit would turn the nightly red on a
