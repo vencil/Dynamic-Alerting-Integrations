@@ -220,10 +220,11 @@ class TestScannerControls:
 def test_population_is_not_vacuous():
     calls = scan_tree()
     # #3107 moves these calls to the operator / artifact entries, so the
-    # floor follows the tree down (it was 4): what is left is measured, and a
-    # scan that finds fewer has drifted.
-    assert len(calls) >= 3, (
-        "fewer than 3 secure-writer calls under scripts/tools — the scan root "
+    # floor follows the tree down (4 → 3 → 2 at ③c): what is left is
+    # measured — inject_waveform's, and _registry_lib's tmp file the owner
+    # kept (2026-11-15) — and a scan that finds fewer has drifted.
+    assert len(calls) >= 2, (
+        "fewer than 2 secure-writer calls under scripts/tools — the scan root "
         "or the writer names have drifted; this gate would pass vacuously")
 
 

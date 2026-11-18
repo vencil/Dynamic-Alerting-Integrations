@@ -44,7 +44,9 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
-from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
+from _lib_python import ensure_dir_or_die  # noqa: E402
+from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③c)
+from _lib_validation import output_dir_type  # noqa: E402  (#3107 ③c)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -88,7 +90,7 @@ def _compile_one(pack: dict, out_dir: str, seed: int, fanout: int) -> list[str]:
     for name, content in targets.items():
         path = os.path.join(out_dir, name)
         # #1641: `out_dir` is `--out`; an unwritable path is rc=2, not rc=1.
-        write_text_or_die(path, content, flag="--out")
+        write_operator_output_or_die(path, content, flag="--out")
         written.append(path)
     return written
 
@@ -106,7 +108,8 @@ def main() -> "int | Report":
                       help="輸出 ASCII sparkline + 中文摘要，供 SME 回讀簽核")
     mode.add_argument("--compile", action="store_true", dest="compile_mode",
                       help="物化：promtool fixture 片段 (a) + VM import 行 (b) + metadata")
-    parser.add_argument("--out", help="--compile 的輸出目錄（必填）")
+    # #3107 ③c: a directory flag — `-` names no directory (rc 2 at parse).
+    parser.add_argument("--out", type=output_dir_type(), help="--compile 的輸出目錄（必填）")
     parser.add_argument("--seed", type=int, default=wf.DEFAULT_SEED,
                         help=f"PRNG seed（決定性；預設 {wf.DEFAULT_SEED}）")
     parser.add_argument("--fanout", type=int, default=wf.DEFAULT_FANOUT,
