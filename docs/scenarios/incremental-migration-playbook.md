@@ -53,7 +53,7 @@ da-tools onboard \
   --output-dir onboard-audit
 ```
 
-**預期輸出**：stderr 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`；要存檔記得導 `2>`，只導 stdout 會拿到只有檔案清單的輸出），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定；找到租戶 route 時另有每個租戶一份 `phase1-routing/<租戶>.yaml` 路由片段，以及 `onboard-hints.json`。分析要點：
+**預期輸出**：stderr 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`；要存檔記得導 `2>`，只導 stdout 會拿到只有檔案清單的輸出），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定；找到租戶 route 時另有每個租戶一份 `.onboard/conf.d/<租戶>.yaml` 路由片段（草稿，不會被服務），以及 `onboard-hints.json`。分析要點：
 - Receiver 數量 → 潛在租戶數量
 - 現有 group_wait / repeat_interval → 後續 Dynamic Alerting 的 Routing Guardrails 參考值
 - Inhibit rules → 是否需要遷移至 Dynamic Alerting 的 severity dedup 機制
@@ -70,9 +70,9 @@ da-tools onboard \
 
 `--rule-files` 收一個或多個路徑（檔或目錄，目錄遞迴取其中的 `*.yaml`／`*.yml`），規則檔散在多處時全部列出即可。它不展開 glob：要用萬用字元就不加引號、交給 shell 展開；加了引號的 `'rules.d/*.yaml'` 會被當成一個不存在的路徑，rc=2。在 Kubernetes Job 裡跑時 `args` 不經過 shell，直接給目錄。⚠️ v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔。 <!-- image-caveat: v2.9.0 -->
 
-**預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出目錄 `rule-audit/phase2-rules/`：
-- `migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
-- `_defaults-suggestion.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
+**預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出：
+- `rule-audit/phase2-rules/migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
+- `rule-audit/.onboard/conf.d/_defaults.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
 
 依 `status` 排遷移順序：`perfect` 先遷，`complex` 逐條人工確認，`unparseable` 留到最後或保留原規則。
 
@@ -138,10 +138,11 @@ da-tools scaffold \
   --tenant redis-prod \
   --db redis \
   --non-interactive \
-  --output-dir conf.d
+  --output-dir scaffold_output
+cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 ```
 
-**預期輸出**：`conf.d/redis-prod.yaml` 包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）；同一個目錄下另有 `_defaults.yaml`（平台預設值）與 `scaffold-report.txt`。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
+**預期輸出**：`scaffold_output/.scaffold/conf.d/redis-prod.yaml`（複製進 `conf.d/` 後的 `conf.d/redis-prod.yaml`）包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）；同一個草稿目錄下另有 `_defaults.yaml`（平台預設值），`scaffold_output/` 下另有 `scaffold-report.txt`。草稿放在點開頭的目錄，不會被服務（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
 
 ### 步驟 1.2：編輯閾值配置
 
@@ -151,12 +152,12 @@ da-tools scaffold \
 
 chart 以 OCI 發布（[ADR-002](../adr/002-oci-registry-over-chartmuseum.md)）。租戶設定放在 values 的 `thresholdConfig.tenants`，chart 會把它渲染成 `threshold-config` ConfigMap，一個 exporter 服務所有租戶。
 
-⚠️ chart 出貨的 `thresholdConfig.defaults` 只含登錄表標為預設啟用的 key（Kubernetes、MariaDB、PostgreSQL，以及 Elasticsearch、Oracle 的容量類與 RabbitMQ 的節點記憶體），redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會在「config keys no row of this exporter reads」那一行列出 `key="redis_memory_used_bytes" reason=unconsumed`。
+⚠️ chart 出貨的 `thresholdConfig.defaults` 只含登錄表標為預設啟用的 key（Kubernetes、MariaDB、PostgreSQL，以及 Elasticsearch、Oracle 的容量類與 RabbitMQ 的節點記憶體），redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `scaffold_output/.scaffold/conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會在「config keys no row of this exporter reads」那一行列出 `key="redis_memory_used_bytes" reason=unconsumed`。
 
 ```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
-  defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 conf.d/_defaults.yaml
+  defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 _defaults.yaml
     redis_memory_used_bytes: 4294967296
     redis_connected_clients: 200
     redis_evicted_keys_rate: 100
@@ -491,9 +492,9 @@ da-tools scaffold \
   --db mariadb \
   --non-interactive \
   --output-dir scaffold_output
-# 只搬租戶檔：scaffold 每次都會重新產生 _defaults.yaml，
-# 直接指到 conf.d 會把步驟 1.2 調過的平台預設值蓋掉
-cp scaffold_output/mariadb-prod.yaml conf.d/
+# 產物在 scaffold_output/.scaffold/conf.d/（草稿，不會被服務）；只搬租戶檔，
+# _defaults.yaml 是範本，不要蓋掉步驟 1.2 調過的平台預設值
+cp scaffold_output/.scaffold/conf.d/mariadb-prod.yaml conf.d/
 
 # 編輯閾值
 # 把新租戶（與 chart 出貨沒有的 defaults）加進同一份 values，

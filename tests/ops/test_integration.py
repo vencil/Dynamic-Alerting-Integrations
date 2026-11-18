@@ -9,6 +9,7 @@
 這些測試不啟動 K8s，僅驗證模組間的資料契約。
 """
 import os
+import shutil
 
 import pytest
 import yaml
@@ -19,6 +20,7 @@ from factories import make_am_config, make_am_receiver, write_yaml
 
 from _lib_python import write_onboard_hints, read_onboard_hints
 from scaffold_tenant import (
+    CONFD_DIR,
     generate_defaults,
     generate_tenant,
     write_outputs,
@@ -77,7 +79,7 @@ class TestOnboardToScaffoldPipeline:
         write_outputs(config_dir, "db-a", defaults, tenant_data, report)
 
         # Step 2: load_tenant_tree 讀取
-        routing_configs = load_tenant_tree(config_dir).routing_configs
+        routing_configs = load_tenant_tree(os.path.join(config_dir, CONFD_DIR)).routing_configs
         assert "db-a" in routing_configs
         assert routing_configs["db-a"]["receiver"]["type"] == "webhook"
 
@@ -97,7 +99,7 @@ class TestScaffoldToGeneratePipeline:
         tenant_data["tenants"]["db-a"]["_severity_dedup"] = "enable"
         write_outputs(config_dir, "db-a", defaults, tenant_data, "report")
 
-        tree = load_tenant_tree(config_dir)
+        tree = load_tenant_tree(os.path.join(config_dir, CONFD_DIR))
         routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
         routes, receivers, warnings = generate_routes(routing_configs, tenants=())
 
@@ -119,7 +121,12 @@ class TestScaffoldToGeneratePipeline:
                 "receiver": {"type": "webhook",
                              "url": f"https://{tenant}.example.com/alert"},
             }
-            write_outputs(config_dir, tenant, defaults, td, "report")
+            # #4014: each run is a draft of its own (a second tenant into the
+            # same -o is refused); its tenant file is copied into conf.d, as
+            # the report says.
+            draft = os.path.join(config_dir, "drafts", tenant)
+            write_outputs(draft, tenant, defaults, td, "report")
+            shutil.copy(os.path.join(draft, CONFD_DIR, f"{tenant}.yaml"), config_dir)
 
         routing_configs = load_tenant_tree(config_dir).routing_configs
         routes, receivers, _ = generate_routes(routing_configs, tenants=())
@@ -226,7 +233,7 @@ class TestDataContracts:
         td["tenants"]["db-x"]["_severity_dedup"] = "enable"
         write_outputs(config_dir, "db-x", defaults, td, "report")
 
-        tree = load_tenant_tree(config_dir)
+        tree = load_tenant_tree(os.path.join(config_dir, CONFD_DIR))
         routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
 
         # Routing config 有 receiver key

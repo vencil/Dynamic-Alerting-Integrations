@@ -23,7 +23,7 @@ from generate_alertmanager_routes import (
     generate_routes,
     generate_inhibit_rules,
 )
-from scaffold_tenant import RULE_PACKS, generate_defaults, generate_tenant
+from scaffold_tenant import CONFD_DIR, RULE_PACKS, generate_defaults, generate_tenant
 from onboard_platform import (
     analyze_alertmanager,
     generate_tenant_routing_yamls,
@@ -157,7 +157,7 @@ class TestScaffoldLoadRegression:
         from scaffold_tenant import write_outputs
         write_outputs(config_dir, "db-a", defaults, td, "# report")
 
-        routing_configs = load_tenant_tree(config_dir).routing_configs
+        routing_configs = load_tenant_tree(os.path.join(config_dir, CONFD_DIR)).routing_configs
         assert "db-a" in routing_configs
         assert routing_configs["db-a"]["receiver"]["type"] == "webhook"
 

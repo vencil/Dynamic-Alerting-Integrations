@@ -27,6 +27,9 @@ import pytest
 
 import entrypoint  # noqa: E402  (path set by conftest.py)
 
+#: migrate_rule's draft conf.d under -o, read from the tool (#4014).
+_MR_CONFD = __import__("migrate_rule").CONFD_DIR
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TRANSCRIPTS = (
     REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
@@ -107,7 +110,7 @@ def test_displayed_command_parses_with_real_cli(command):
 #
 # The argv check above cannot see the output: migrate's playback kept
 # showing the old flat `tenant-config.yaml` ("copy into conf.d/<tenant>.yaml")
-# long after the tool started writing `.conf.d/<tenant>.yaml` (thresholds
+# long after the tool started writing `<draft conf.d>/<tenant>.yaml` (thresholds
 # under `tenants.<tenant>`) + a `defaults:` fragment for the root
 # `_defaults.yaml` (#3698, #3759). This runs the displayed command on the
 # fixture the transcript names and compares terminal + sample verbatim.
@@ -156,12 +159,12 @@ def test_migrate_playback_matches_a_fresh_run(tmp_path):
     )
     assert proc.returncode == 0, f"`{command}` rc={proc.returncode}\n{proc.stdout[-1500:]}"
 
-    conf_d = tmp_path / out_dir / ".conf.d"
+    conf_d = tmp_path / out_dir / _MR_CONFD
     written = sorted(p.name for p in conf_d.iterdir())
     assert written == sorted(_MIGRATE_SAMPLE_FILES), written
     fresh_terminal = [f"$ {command}", "", *proc.stdout.splitlines()]
     fresh_sample = "\n".join(
-        f"# ── {out_dir}/.conf.d/{name} ──\n"
+        f"# ── {out_dir}/{_MR_CONFD}/{name} ──\n"
         + (conf_d / name).read_text(encoding="utf-8").rstrip("\n")
         for name in _MIGRATE_SAMPLE_FILES)
 

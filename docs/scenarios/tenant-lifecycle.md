@@ -87,13 +87,12 @@ da-tools scaffold \
   --output-dir scaffold_output
 # 指向已存在的目錄時，寫入前該目錄須先通過 da-guard 的整樹檢查：
 # 有任何路徑被 da-guard 點名，就結束碼 2、點名每一條、一個檔都不寫
-# 只搬租戶檔：scaffold 每次都會重新產生 _defaults.yaml，
-# 直接指到 conf.d 會把平台既有的預設值蓋掉
-cp scaffold_output/db-product-01.yaml conf.d/
+# 只搬租戶檔：_defaults.yaml 是範本，不要蓋掉平台既有的預設值
+cp scaffold_output/.scaffold/conf.d/db-product-01.yaml conf.d/
 
 # 輸出（scaffold_output/）：
-# - db-product-01.yaml（租戶配置框架）
-# - _defaults.yaml（平台預設值範本，不要覆蓋 conf.d 裡既有的那份）
+# - .scaffold/conf.d/db-product-01.yaml（租戶配置框架；.scaffold/conf.d/ 是草稿，不會被服務）
+# - .scaffold/conf.d/_defaults.yaml（平台預設值範本，不要覆蓋 conf.d 裡既有的那份）
 # - relabel_configs-db-product-01.txt（多 namespace 對映用的 Prometheus relabel 片段）
 # - scaffold-report.txt（規劃文件）
 ```

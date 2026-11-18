@@ -96,9 +96,9 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 
 對於已有成熟監控體系的企業，`da-tools onboard` **反向分析** Alertmanager / Prometheus rules / scrape config，自動產出遷移計畫（沒有既有監控可跳過此步）：
 
-- Alertmanager（`--alertmanager-config`）→ `phase1-routing/`：每個租戶 route 的路由摘要與 `<租戶>.yaml` 路由片段，以及 `onboard-hints.json`（找得到租戶 route 時）
-- 規則檔（`--rule-files <檔或目錄>...`；v2.9.0 映像給目錄選不到檔，改給加引號的 glob <!-- image-caveat: v2.9.0 -->）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `_defaults-suggestion.yaml`
-- scrape config（`--scrape-config`）→ `phase3-scrape/`：`scrape-analysis.yaml` 與各 job 的 `<job>-relabel-suggestion.yaml`
+- Alertmanager（`--alertmanager-config`）→ `phase1-routing/routing-summary.csv`（每個租戶 route 的路由摘要）、`.onboard/conf.d/<租戶>.yaml` 路由片段，以及 `onboard-hints.json`（找得到租戶 route 時）
+- 規則檔（`--rule-files <檔或目錄>...`；v2.9.0 映像給目錄選不到檔，改給加引號的 glob <!-- image-caveat: v2.9.0 -->）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `.onboard/conf.d/_defaults.yaml`（平台預設值建議）
+- scrape config（`--scrape-config`）→ `.onboard/`：`scrape-analysis.yaml` 與各 job 的 `<job>-relabel-suggestion.yaml`
 
 完整 flag、輸出條件與結束碼：[`cli-reference.md#onboard`](cli-reference.md#onboard)。`onboard-hints.json` 可餵 `scaffold --from-onboard`；規則轉換用 `migrate`，它直接吃舊規則檔。
 
@@ -110,7 +110,7 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-輸出：`_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt`（+ `relabel_configs-<tenant>.txt` 當 `--namespaces` 指定時）。完整 flag、`--routing-receiver`、`--catalog`、`--from-onboard <hints>` pipeline：[`cli-reference.md#scaffold`](cli-reference.md#scaffold)。
+輸出：`.scaffold/conf.d/_defaults.yaml` + `.scaffold/conf.d/<tenant>.yaml` + `scaffold-report.txt`（+ `relabel_configs-<tenant>.txt` 當 `--namespaces` 指定時）。完整 flag、`--routing-receiver`、`--catalog`、`--from-onboard <hints>` pipeline：[`cli-reference.md#scaffold`](cli-reference.md#scaffold)。
 
 注入 ConfigMap 的三種方式（Helm / kubectl / GitOps）：[threshold-exporter README — K8s 部署](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
 
@@ -127,7 +127,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶
 工具自動處理：
 
 - **三種輸入情境**：`✅ 完美解析` / `⚠️ 複雜表達式 (含警告方塊)` / `🚨 無法解析 (產出 LLM Prompt)`
-- **三件套輸出**：`.conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`，另附 `.conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值。v2.9.0 映像還沒有 `--tenant` 與 `.conf.d/`，只產出 `tenant-config.yaml`（閾值平鋪在頂層，要自己縮排放進 `tenants.<tenant>`），沒有 defaults 片段 <!-- image-caveat: v2.9.0 -->
+- **三件套輸出**：`.migration/conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`，另附 `.migration/conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值。v2.9.0 映像還沒有 `--tenant` 與 `.migration/conf.d/`，只產出 `tenant-config.yaml`（閾值平鋪在頂層，要自己縮排放進 `tenants.<tenant>`），沒有 defaults 片段 <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
 - **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
 

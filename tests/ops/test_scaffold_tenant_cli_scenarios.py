@@ -17,6 +17,8 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 _TOOL = _REPO / "scripts" / "tools" / "ops" / "scaffold_tenant.py"
+#: The draft conf.d the YAML goes to (#4014); the report stays at -o.
+_CONFD = __import__("scaffold_tenant").CONFD_DIR
 
 
 def _run(*args):
@@ -50,15 +52,19 @@ def scaffolded(tmp_path_factory):
     return out
 
 
+def _path(d, name):
+    return d / _CONFD / name if name.endswith(".yaml") else d / name
+
+
 def _read(scaffolded, case, name):
-    return (scaffolded[case][1] / name).read_text(encoding="utf-8")
+    return _path(scaffolded[case][1], name).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("case", list(_CASES))
 def test_writes_the_three_artifacts(scaffolded, case):
     tenant, d = scaffolded[case]
     for name in (f"{tenant}.yaml", "_defaults.yaml", "scaffold-report.txt"):
-        assert (d / name).is_file(), name
+        assert _path(d, name).is_file(), name
 
 
 def test_tenant_file_names_the_tenant(scaffolded):
