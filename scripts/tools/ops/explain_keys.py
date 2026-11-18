@@ -9,7 +9,7 @@ tenant of a conf.d, every key of its config is listed with
   reserved-key registry declares for that layer (route generator,
   custom-alert compiler, Policy-as-Code, annotation), plus Policy-as-Code
   for a key a `_policies` rule names as `target`;
-* the verdict (read / unread / undecidable) with its severity and reason;
+* the verdict (read / unread) with its severity and reason;
 * what a `disable` does (effective / noop);
 * the value as written (`value`).
 
@@ -37,15 +37,13 @@ Exit codes (dev-rules §13, `_lib_exitcodes`):
   0  done (and, with --assert, the result matches)
   1  --assert: the result differs from the expected document
   2  caller error: --config-dir missing, no da-guard or da-guard failed, an
-     --assert file that cannot be read, a --tenant the tree does not have,
-     or a verdict that cannot be given (no root platform file was read, so
-     the threshold keys are `undecidable`; ADR-038 decision 7)
+     --assert file that cannot be read, or a --tenant the tree does not have
 
-`--json`: stdout is one JSON document (schema ``da-tools.explain-keys/v2``)
+`--json`: stdout is one JSON document (schema ``da-tools.explain-keys/v3``)
 on every path that has an answer. A caller error leaves stdout empty, the
 cause on stderr (#3617: it was ``status: "caller_error"`` and ``reason``
-with ``tenants`` empty); undecidable threshold keys are a partial answer:
-exit 2 with ``status: "ok"`` and the whole result, ``undecidable`` true. The `--assert` file is refused (exit 2) when an entry has a field this
+with ``tenants`` empty). A tree with no root platform file is judged as
+any other (#3832: the built-in layer), so v3 has no ``undecidable``. The `--assert` file is refused (exit 2) when an entry has a field this
 document does not have or a tenant lists a key twice: either would let it
 pass without comparing what it seems to.
 """
@@ -75,11 +73,11 @@ import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_python import detect_cli_lang, positive_seconds  # noqa: E402
 
-SCHEMA = "da-tools.explain-keys/v2"  # v2 (#3835): judged over the whole day, no `served`
+SCHEMA = "da-tools.explain-keys/v3"  # v3 (#3832): no `undecidable`; v2 (#3835): judged over the whole day, no `served`
 DEFAULT_TIMEOUT = tv.DEFAULT_TIMEOUT
 #: What this tool writes at the top level; an expected file may carry them
 #: (it is often this tool's own output) but only `tenants` is compared.
-TOP_FIELDS = frozenset({"schema", "status", "at", "undecidable", "tenants", "findings",
+TOP_FIELDS = frozenset({"schema", "status", "at", "tenants", "findings",
                         "assert_differences"})
 FIELDS = ("layer", "file", "read_by", "verdict", "severity", "reason", "disable",
           "switched_off_with", "value")
@@ -144,7 +142,6 @@ def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Option
         "schema": SCHEMA,
         "status": "ok",
         "at": at,
-        "undecidable": verdict.undecidable,
         "tenants": {t: [_entry(v) for v in verdict.keys[t]] for t in shown},
         "findings": [dict(f._asdict(), tenants=list(f.tenants))
                      for f in verdict.findings
@@ -219,8 +216,6 @@ def render_text(doc: dict[str, Any]) -> str:
                 why = f" (switched off with its base {safe_label(f['base'])})"  # #3046
             lines.append(f"  {f['severity']}: {f['kind']}: {safe_label(f['key'])} in "
                          f"{safe_label(f['file'] or '?')}{why} — {who or 'no tenant'}")
-    if doc["undecidable"]:
-        lines.append("No root platform file was read: threshold keys are undecidable (ADR-038 decision 7).")
     return "\n".join(lines).rstrip("\n")
 
 
@@ -233,7 +228,7 @@ _HELP = {
                         "`disable` does and the value as written (ADR-038 decision 9)."),
         "epilog": ("Exit codes: 0 done (and --assert matches), 1 --assert differs, 2 caller error "
                    "(no --config-dir, no da-guard, da-guard failed, unreadable --assert file, "
-                   "unknown --tenant, or undecidable threshold keys). "
+                   "or unknown --tenant). "
                    f"--json: one document on stdout, schema {SCHEMA}."),
         "config_dir": "Path to the conf.d/ root.",
         "tenant": "Only this tenant (repeatable). Default: every tenant.",
@@ -248,8 +243,8 @@ _HELP = {
         "description": ("對 conf.d 的每個租戶，逐鍵列出：來源層與檔案、哪些讀取端讀它、"
                         "依整天判的判決、`disable` 的作用與寫下的值（ADR-038 決定 9）。"),
         "epilog": ("結束碼：0 完成（--assert 時結果相符）、1 --assert 不符、2 呼叫錯誤（--config-dir "
-                   "不存在、找不到 da-guard 或 da-guard 失敗、--assert 檔讀不了、--tenant 不存在，"
-                   f"或閾值鍵無從判斷）。--json：stdout 恰好一份 JSON，schema {SCHEMA}。"),
+                   "不存在、找不到 da-guard 或 da-guard 失敗、--assert 檔讀不了，或 --tenant "
+                   f"不存在）。--json：stdout 恰好一份 JSON，schema {SCHEMA}。"),
         "config_dir": "conf.d/ 根目錄。",
         "tenant": "只列這個租戶（可重複）。預設：全部租戶。",
         "at": "判斷時效（`expires:`）是否已過的時間點，RFC3339；一天中的幾點不影響結果。預設：現在。",
@@ -322,21 +317,10 @@ def _main(args: argparse.Namespace) -> "int | Report":
         print(render_text(doc))
         for d in diffs:
             print(f"ASSERT: {safe_label(d)}", file=sys.stderr)
-    if doc["undecidable"]:
-        print("ERROR: no root platform file was read; threshold keys are undecidable "
-              "(ADR-038 decision 7)", file=sys.stderr)
     if args.json:
         doc["assert_differences"] = diffs
-        # #3216: run() encodes it. #3617: undecidable keys are a partial
-        # answer — every other key's verdict, the threshold keys named.
-        if doc["undecidable"]:
-            # Two parts: the threshold keys (undecidable) and every other
-            # key's verdict (read).
-            return Report(doc, EXIT_CALLER_ERROR, unanswered=[
-                "threshold keys (no root platform file was read)"], of=2)
+        # #3216: run() encodes it.
         return Report(doc, EXIT_VIOLATION if diffs else EXIT_OK)
-    if doc["undecidable"]:
-        return EXIT_CALLER_ERROR
     return EXIT_VIOLATION if diffs else EXIT_OK
 
 

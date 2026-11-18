@@ -301,8 +301,7 @@ func TestBuiltinLayer_TheKeyVerdictJudgesATreeWithNoRootFile(t *testing.T) {
 	})
 	_, stdout, stderr := runOnce(t, keyVerdictCmd, "--config-dir", dir)
 	var doc struct {
-		Undecidable bool `json:"undecidable"`
-		Tenants     map[string][]struct {
+		Tenants map[string][]struct {
 			Key     string  `json:"key"`
 			Verdict string  `json:"verdict"`
 			Reason  *string `json:"reason"`
@@ -312,9 +311,6 @@ func TestBuiltinLayer_TheKeyVerdictJudgesATreeWithNoRootFile(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
 		t.Fatalf("key-verdict: %v\n%s\n%s", err, stdout, stderr)
-	}
-	if doc.Undecidable {
-		t.Fatal("undecidable: a tree with no root file is judged with the built-in layer")
 	}
 	got := map[string]string{}
 	for _, v := range doc.Tenants["t1"] {

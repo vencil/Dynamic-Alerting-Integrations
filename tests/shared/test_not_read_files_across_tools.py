@@ -99,10 +99,6 @@ _TOOLS: dict[str, tuple[list[str], tuple[str, ...]]] = {
 }
 
 
-#: A tool whose rc 2 on a tree is a documented verdict, not a failed read:
-#: the sentence that says so. explain-keys exits 2 when no root platform file
-#: was read (ADR-038 decision 7) — a shape with no root carrier.
-_RC2_VERDICT = {"ops/explain_keys.py": "threshold keys are undecidable"}
 #: `ConfdReader`'s `NotSelected` message: the read this file guards against.
 _NOT_SELECTED = "da-guard parse-tree does not read this file"
 
@@ -170,8 +166,7 @@ def _run(tool: str, shape: str) -> tuple[int, str]:
 @pytest.mark.parametrize("tool", sorted(_TOOLS))
 def test_no_tool_reads_a_file_parse_tree_does_not_read(tool, shape):
     rc, text = _run(tool, shape)
-    rc2_ok = tool in _RC2_VERDICT and _RC2_VERDICT[tool] in text
-    assert (rc != 2 or rc2_ok) and "Traceback" not in text and _NOT_SELECTED not in text, (
+    assert rc != 2 and "Traceback" not in text and _NOT_SELECTED not in text, (
         f"{tool} on {shape!r}: rc {rc} — a file parse-tree lists in `not_read` reached "
         f"its read (NotSelected), or it crashed:\n{text[-3000:]}")
     assert MARK not in text, (

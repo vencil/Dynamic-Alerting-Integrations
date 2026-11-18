@@ -63,9 +63,6 @@ type LayerValueProblem struct {
 	// swaps one unread value for another makes a new one (the Ratchet's
 	// rule, readAlike).
 	Reading string
-	// RefersToRoot: the problem is a name the root platform files do not
-	// define (`_profile`) — judged only when a root platform file was read.
-	RefersToRoot bool
 	// Schedule (#3834): the problem is not the value but the schedule it is
 	// written with (scheduledReserved, #3269) — LayerScheduleProblems'.
 	// Reading is then the schedule as written (ScheduleReading), not a
@@ -96,7 +93,7 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 				canon, _ := canonicalKeyFor(key)
 				out = append(out, LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: key, Problem: p,
 					Value:   sv.Default,
-					Reading: ValueReading(canon, sv), RefersToRoot: canon == "_profile"})
+					Reading: ValueReading(canon, sv)})
 			}
 		}
 	})

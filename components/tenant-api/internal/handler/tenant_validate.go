@@ -76,7 +76,7 @@ type ValidateResponse struct {
 // @Description so a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.
 // @Description In direct mode a body that passes those steps is then judged as PUT judges it (#3016): the route generator and the shared key verdict.
 // @Description Their refusal is valid: false with PUT's text (its 400 key-verdict lines, its 422 findings as the caller may see them, a GENERATOR_REJECTED
-// @Description that is a verdict on the write: too_large, invalid_request, normalized, key_verdict_undecidable, key_verdict_platform_file).
+// @Description that is a verdict on the write: too_large, invalid_request, normalized, key_verdict_platform_file).
 // @Description judged is false when that judgement gave no verdict on the body, with not_judged saying why: refused (an earlier step refused the body),
 // @Description pr_mode, unchanged (the body changes nothing), preview_busy (another preview is being judged; retry), no_validator, canceled,
 // @Description error, or the generator's reason — what PUT would answer 429 (retry) or 503 with, or the container's own failure (memory,

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-16
+updated_at: 2026-11-18
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -75,6 +75,8 @@ updated_at: 2026-11-16
 2026-11-15 修訂：平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11）。沒讀到任何根平台檔的樹不再無從判斷，租戶寫的閾值鍵照常判；租戶寫預設啟用的鍵，即使根目錄沒寫，也判為有讀；這些鍵的 `disable` 過期即失效（決定 4、7、8）。
 
 2026-11-16 修訂：`disable` 可以寫在根目錄 `defaults:`（只限內建層給值的鍵），每個租戶繼承，連帶與判定規則與子目錄的 `disable` 相同（決定 8）。
+
+2026-11-18 修訂：判決不再有 `undecidable`：判決文件拿掉 `undecidable` 與 `undecidable_blocks` 兩個欄位，各閘門也不再有「判不了的閾值鍵」這種結果；決定 7 改寫成「沒讀到根平台檔的樹」（決定 5、6、7）。
 
 ## 摘要
 
@@ -270,7 +272,6 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 |---|---|---|
 | `read` | 至少一個讀取端讀它；登記為 `annotation` 的鍵也算 | — |
 | `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`）；閾值 registry `retired_keys:` 登記的退役閾值鍵也是（原因 `retired`），即使 exporter 仍為它送出一列——部署方根 `defaults:` 寫的也算；finding 的 `hint` 點名替代鍵 | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
-| `undecidable` | 不再出現：沒讀到任何根平台檔的樹，閾值鍵照常判（見決定 7）。判決文件保留 `undecidable` 欄位，恆為 false | — |
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 
@@ -299,7 +300,7 @@ profiles:
 
 等級只描述缺陷，不決定誰被擋；一道寫入閘門擋不擋，看的是 finding 所在的檔（決定 6）。
 
-上表的等級隨各閘門改成「判到就擋」一起生效（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)，breaking change）：整棵樹的 CI 有 error、或有判不了的閾值鍵就擋（決定 6、7）。擋不擋只在判決裡定一次：每筆 finding 帶 `blocks`（等級是 error 時為 true），判決文件頂層的 `blocks` 表示整棵樹該不該擋；各閘門讀這兩個欄位，不自己依等級另判。
+上表的等級隨各閘門改成「判到就擋」一起生效（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)，breaking change）：整棵樹的 CI 有 error 就擋（決定 6）。擋不擋只在判決裡定一次：每筆 finding 帶 `blocks`（等級是 error 時為 true），判決文件頂層的 `blocks` 表示整棵樹該不該擋；各閘門讀這兩個欄位，不自己依等級另判。
 
 沒有租戶綁定的 profile 上的閾值鍵不判，報 `profile_not_judged` notice（上文，[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）。
 
@@ -311,11 +312,11 @@ profiles:
 - 它併上登錄表宣告的其他讀取端（見決定 1），以及根 `_defaults.yaml` 的 policy 規則點名的鍵。
 - validate-config、產生器 `--validate`、`explain-keys` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）都呼叫它。產生器 `--validate` 把判到的每一筆印成一行（與 validate-config 的行相同），判決會擋的（`blocks`）讓結束碼 1（決定 4 末段）；被拒收的樹不判。容器在產生器放行之後、在同一次判定裡判（下一點），所以它執行產生器時，產生器不再判一次。
 - 產生器容器每次寫入只需要被寫入的租戶的判決，所以 `da-guard key-verdict`（連同它底下的 served-values 與 effective）都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。判決不看 /metrics 收集得了收集不了（決定 1），所以別的租戶收集失敗不影響要求的租戶得到的判決。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
-- 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。判全天（決定 1）讓判決的工作量隨每個租戶的時窗數成長，帶著時窗的租戶越多，越可能在期限內判不完；判不完時這筆寫入以可重試的錯誤不收，不會被當成 finding 擋下，也不會照收。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
+- 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、或 da-guard 失敗，都回「判決未完成」與原因。判全天（決定 1）讓判決的工作量隨每個租戶的時窗數成長，帶著時窗的租戶越多，越可能在期限內判不完；判不完時這筆寫入以可重試的錯誤不收，不會被當成 finding 擋下，也不會照收。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
   - 被寫入的檔裡、屬於寫入對象租戶、判決說會擋（`blocks`）的 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
-  - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；da-guard 已不再給出這個結果（決定 7）。
-  - 擋不擋讀判決的 `blocks`，tenant-api 與容器都不依等級另判；容器原樣轉送每筆 finding 的 `blocks`，判不了的閾值鍵讀判決的 `undecidable_blocks`。finding 不帶 `blocks`（映像早於 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）與沒有回判決同樣是容器太舊，回 503。
+  - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。
+  - 擋不擋讀判決的 `blocks`，tenant-api 與容器都不依等級另判；容器原樣轉送每筆 finding 的 `blocks`。finding 不帶 `blocks`（映像早於 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）與沒有回判決同樣是容器太舊，回 503。
   - 找不到或無法執行 da-guard，或容器沒有回判決（映像早於這一步），依 ADR-036 §3 是容器不可用，回 503；與找不到 da-read 相同，每次判定前先確認 da-guard，所以長期缺 da-guard 會出現在容器可用性的告警上，不會變成一筆筆的拒收。
   - 其餘的 finding 放進寫入回應的 `warnings`。
 
@@ -356,8 +357,8 @@ tenants:
 決定 4 的等級只描述缺陷。一道寫入閘門擋不擋一筆寫入，只看 finding 所在的檔是不是這次寫入的檔，與等級來自哪一層無關：
 
 - **tenant-api**：error 只在 finding 所在的檔就是這次寫入的檔、而且屬於寫入對象租戶時才擋（決定 5）。所以 profile、子目錄 `_defaults.yaml` 或其他平台檔上的 error，不擋只改了租戶檔的寫入；寫到 defaults 檔或帶 `profiles:` 的根平台檔時判決不判（決定 5）。今天已經這樣判。
-- **經 `da-guard write` 寫檔的工具**（改租戶檔、profile 檔、子目錄 `_defaults.yaml` 或根平台檔）：這次寫入讓被寫的檔新出現 error 時被擋；寫入前就有的 error 不擋。與 tenant-api 不同（它連被寫的檔裡原本就有的 error 也擋，決定 5），這裡只擋新出現的；這個差異是刻意的：整棵樹的 CI 擋住任何 error，main 上平常沒有既有的 error，tenant-api 擋既有的是讓租戶自己的檔先修好，`da-guard write` 常一次改多個平台檔，擋既有的會讓與之無關的修改都過不了。新舊的比對單位跟著 finding 的單位走：鍵寫在租戶自己那一筆（租戶檔，或根平台檔 `tenants:` 下它那一筆）時以「租戶＋鍵」比對，所以把租戶搬到別的檔不算新出現，同檔另一個租戶新寫錯則算；其他 finding（鍵來自 profile、子目錄 `_defaults.yaml` 等繼承的檔，或沒有列出租戶）以「檔案＋鍵」比對，寫入前同一個檔與鍵已有 error 就不算新的，所以解除或改綁 profile 不會讓它原有的錯變成新的，profile 新寫錯的鍵也不會因為租戶檔裡已有同一個錯而放行。已知限制：同一個根平台檔裡 profile 與 `tenants:` 下的租戶寫了同一個錯鍵時，兩者是同一筆 finding，其中一邊新寫進同一個錯不算新出現。這條規則只在 `pkg/keyverdict` 定一次（`NewBlocks`）。判不了的閾值鍵寫入時不擋，交給整棵樹的 CI 擋。
-- **整棵樹的 CI**（validate-config、產生器 `--validate`）：判到 error、有判不了的閾值鍵、或判決沒有給出時就擋，不分 finding 在哪個檔；讀判決文件的 `blocks`。
+- **經 `da-guard write` 寫檔的工具**（改租戶檔、profile 檔、子目錄 `_defaults.yaml` 或根平台檔）：這次寫入讓被寫的檔新出現 error 時被擋；寫入前就有的 error 不擋。與 tenant-api 不同（它連被寫的檔裡原本就有的 error 也擋，決定 5），這裡只擋新出現的；這個差異是刻意的：整棵樹的 CI 擋住任何 error，main 上平常沒有既有的 error，tenant-api 擋既有的是讓租戶自己的檔先修好，`da-guard write` 常一次改多個平台檔，擋既有的會讓與之無關的修改都過不了。新舊的比對單位跟著 finding 的單位走：鍵寫在租戶自己那一筆（租戶檔，或根平台檔 `tenants:` 下它那一筆）時以「租戶＋鍵」比對，所以把租戶搬到別的檔不算新出現，同檔另一個租戶新寫錯則算；其他 finding（鍵來自 profile、子目錄 `_defaults.yaml` 等繼承的檔，或沒有列出租戶）以「檔案＋鍵」比對，寫入前同一個檔與鍵已有 error 就不算新的，所以解除或改綁 profile 不會讓它原有的錯變成新的，profile 新寫錯的鍵也不會因為租戶檔裡已有同一個錯而放行。已知限制：同一個根平台檔裡 profile 與 `tenants:` 下的租戶寫了同一個錯鍵時，兩者是同一筆 finding，其中一邊新寫進同一個錯不算新出現。這條規則只在 `pkg/keyverdict` 定一次（`NewBlocks`）。
+- **整棵樹的 CI**（validate-config、產生器 `--validate`）：判到 error、或判決沒有給出時就擋，不分 finding 在哪個檔；讀判決文件的 `blocks`。
 
 平台側的問題不算在正在修改的租戶頭上，由上面的檔案範圍保證，不靠降低平台側 finding 的等級。
 
@@ -369,13 +370,12 @@ tenants:
 | 子目錄 `_defaults.yaml` 寫 `redis_evicted_keys: 100` | 判決報 notice；da-guard 報 error（子目錄的值送不到 exporter），兩者等級不一致 | 兩者都是 error，掛在子目錄 `_defaults.yaml`。改這個檔的寫入與整棵樹的 CI 照上一列；子目錄下租戶自己的寫入照收 |
 | 沒有租戶綁的 profile 寫錯閾值鍵（決定 4 例子裡的 `silver`） | 沒有任何 finding | 不判，報 `profile_not_judged` notice，不擋（決定 4，[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）。有租戶綁定之後判為 error、掛在 profile 檔，只有整棵樹的 CI 擋：綁定那筆寫入只改租戶檔，tenant-api 與 `da-guard write` 都不擋，只給 warning |
 
-### 7. 無從判斷的情況
+### 7. 沒讀到根平台檔的樹
 
-exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，而不是 conf.d 裡有沒有某個檔：
+每棵樹都照常判，沒有「無從判斷」這種結果；差別只在**有沒有讀到任何根平台檔**，而不是 conf.d 裡有沒有某個檔：
 
 - **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：照常判。平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），不靠根平台檔，所以租戶寫這些鍵判為有讀，其他閾值鍵沒有任何一層宣告，判為 `unread`（原因 `no_row`）。例：沒有根檔的樹，租戶 `t1` 寫 `pg_connections: "70"` 與 `redis_connected_clients: "5"`，前者 `read`、後者 `unread`。分片樹裡判為 `unread` 的鍵，組好整棵樹之後可能有根檔宣告它；要驗，就驗組好的整棵樹。
-- **有讀到根平台檔，但沒有宣告任何閾值**（例如只有 profiles、只有子目錄的 `_defaults.yaml`）：這是可以判定的錯誤，照現有的精確 finding 報（例如「子目錄的 defaults 送不到 exporter」），不降級成無從判斷。
-- **只有路由設定的樹**：沒有閾值鍵，也就沒有判不了的鍵，rc 0。
+- **有讀到根平台檔，但沒有宣告任何閾值**（例如只有 profiles、只有子目錄的 `_defaults.yaml`）：照現有的精確 finding 報（例如「子目錄的 defaults 送不到 exporter」）。
 
 拼錯的閾值鍵與「平台沒宣告、租戶有意省略」得到的原因相同，判決不嘗試區分兩者。
 

@@ -64,7 +64,7 @@ func (e *normalizedRefusal) LogValue() slog.Value {
 // keyVerdictLogReasons is the closed vocabulary of a key verdict's reason
 // (KeyVerdict.Reason's doc); anything else is logged as "unknown".
 var keyVerdictLogReasons = map[string]bool{"": true, "no_time": true, "deadline": true, "memory": true,
-	"error": true, "undecidable": true, "platform_file": true, "preempted": true, KeyVerdictNotReported: true}
+	"error": true, "platform_file": true, "preempted": true, KeyVerdictNotReported: true}
 
 func keyVerdictLogReason(reason string) string {
 	if keyVerdictLogReasons[reason] {

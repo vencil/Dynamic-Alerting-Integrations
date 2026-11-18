@@ -834,8 +834,7 @@ func generatorRejectedText(e *generator.RejectedError) string {
 
 // keyVerdictRejectedTexts are the client texts of a write the generator
 // passed but whose key verdict did not complete (ADR-038 decision 5): fixed
-// sentences per reason, never the generator's message. undecidable names
-// what is missing, as the decision asks.
+// sentences per reason, never the generator's message.
 var keyVerdictRejectedTexts = map[string]string{
 	generator.ReasonKeyVerdictNoTime: "the route generator passed this write, but too little time was left to judge " +
 		"whether every key of it is read (key_verdict_no_time); nothing was written — retry",
@@ -845,9 +844,6 @@ var keyVerdictRejectedTexts = map[string]string{
 		"read ran out of memory (key_verdict_memory); nothing was written",
 	generator.ReasonKeyVerdictError: "the route generator passed this write, but judging whether every key of it is " +
 		"read failed (key_verdict_error); nothing was written",
-	generator.ReasonKeyVerdictUndecidable: "no root platform file (such as _defaults.yaml) was read, so whether the " +
-		"threshold keys of this write are read cannot be judged (key_verdict_undecidable); nothing was written — add " +
-		"the root platform file to conf.d",
 	generator.ReasonKeyVerdictPlatformFile: "this write changes a platform file, whose keys only a whole-tree judgement " +
 		"can judge (key_verdict_platform_file); nothing was written",
 }

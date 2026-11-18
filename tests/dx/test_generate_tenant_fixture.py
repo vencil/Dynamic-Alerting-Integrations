@@ -408,10 +408,9 @@ def test_every_generated_tenant_key_has_a_reader(fixture_module, tmp_path, layou
     """`da-guard write` refuses a tenant file that adds a key no reader reads
     (#3489), so the generator declares every key it writes in the root
     `_defaults.yaml`. Judged here by the shared key verdict itself: the tree
-    is decidable (a root platform file) and no tenant key is unread at ERROR
-    — nor at all, for a threshold key. A tree without the declarations is
-    refused before this runs; one whose verdict is undecidable would pass
-    vacuously, so that is asserted too."""
+    has a root platform file and no tenant key is unread at ERROR — nor at
+    all, for a threshold key. A tree without the declarations is refused
+    before this runs."""
     import _lib_key_verdict as kv
     out = tmp_path / "conf.d"
     gen = {"flat": fixture_module.generate_flat, "hierarchical": fixture_module.generate_hierarchical,
@@ -419,7 +418,6 @@ def test_every_generated_tenant_key_has_a_reader(fixture_module, tmp_path, layou
     gen(count=200, output_dir=out, with_defaults=with_defaults, seed=7,
         extra_defaults={"bench_trigger": 50})
     verdict = kv.judge_tree(out)
-    assert not verdict.undecidable
     rows = [v for vs in verdict.keys.values() for v in vs]
     assert len({v.tenant for v in rows}) == 200
     unread = [(v.tenant, v.key, v.severity, v.reason) for v in rows

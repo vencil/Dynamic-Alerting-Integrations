@@ -335,12 +335,6 @@ KEY_VERDICT_INCOMPLETE_HINT = (
     "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
     "`key verdict incomplete` line names and run again: a tree no verdict was "
     "given for does not pass (#3016).")
-KEY_VERDICT_UNDECIDABLE_HINT = (
-    "Whether a threshold key is read is judged against the root platform "
-    "files (`_defaults.yaml` at the root of --config-dir); none was read. "
-    "Point --config-dir at the conf.d root (a sharded team's directory alone "
-    "has none: validate the assembled tree), or add the root `_defaults.yaml`, "
-    "and run again (#3016).")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unread — that is the platform's side missing, not a "
@@ -916,9 +910,8 @@ def _key_verdict_hint(gen, config_dir: str, findings: list) -> str | None:
         return KEY_VERDICT_INCOMPLETE_HINT
     found = kinds & set(gen._KEY_VERDICT_KINDS.values())
     if not found:
-        # No key was found unread (an exporter key check is no finding):
-        # the advice is about the root file when it was missing.
-        return KEY_VERDICT_UNDECIDABLE_HINT if "key_undecidable" in kinds else KEY_VERDICT_ROUTES_HINT
+        # No key was found unread (an exporter key check is no finding).
+        return KEY_VERDICT_ROUTES_HINT
     # ⛔ A platform declaring nothing: every key reads as unread, and
     # "remove a key nothing reads" would delete a working config.
     return _no_declared_defaults_hint(config_dir) or KEY_VERDICT_ROUTES_HINT
@@ -2189,8 +2182,6 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     try:
         if verdict is None:
             verdict = key_verdict.judge_tree(config_dir)
-        if verdict.undecidable:
-            return not_checked("no root platform file was read, so the threshold keys were not judged")
         observed = _observed_map_lib.load_observed_map()
         schedules = load_served_schedules(config_dir, partial=True)
         days = schedules.tenants

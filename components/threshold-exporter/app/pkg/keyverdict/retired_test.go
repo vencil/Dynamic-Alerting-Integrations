@@ -79,16 +79,6 @@ func TestJudge_ARetiredThresholdKeyIsAnErrorInEveryLayerThoughTheExporterReadsIt
 	}
 }
 
-// Decidable without a root platform file: the registry alone says so.
-func TestJudge_ARetiredThresholdKeyIsJudgedInAnUndecidableTree(t *testing.T) {
-	t.Parallel()
-	in := servedAndRead(retiredKey, config.KeySource{Layer: config.KeyLayerTenant, File: "t1.yaml"})
-	in.Undecidable = true
-	if v := one(t, Judge(in), "t1", retiredKey); v.Verdict != Unread || deref(v.Reason) != ReasonRetired {
-		t.Fatalf("verdict %+v", v)
-	}
-}
-
 // Every other key is judged as before: read, no hint, no finding — a
 // replacement key included, and a key that merely shares the retired
 // key's prefix.

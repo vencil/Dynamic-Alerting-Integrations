@@ -103,10 +103,10 @@ def test_an_inherited_sibling_switched_off_with_its_base(tmp_path):
 
 
 def test_json_carries_the_value_and_nothing_read_at_one_instant(conf_d):
-    """#3835: v2 judges each key over the whole day; no row carries what
-    /metrics served at --at (v1's `served`)."""
+    """#3835: each key is judged over the whole day; no row carries what
+    /metrics served at --at (v1's `served`). v3 (#3832): no `undecidable`."""
     doc = _json(_run("--config-dir", conf_d, "--json"))
-    assert doc["schema"] == "da-tools.explain-keys/v2"
+    assert doc["schema"] == "da-tools.explain-keys/v3"
     assert doc["status"] == "ok" and set(doc["tenants"]) == {"db-a", "db-b"}
     e = {x["key"]: x for x in doc["tenants"]["db-b"]}["mysql_connection_usage_percent"]
     assert (e["value"], e["layer"], e["file"]) == (60, "tenant", "db-b.yaml")
@@ -202,7 +202,7 @@ def test_a_tree_with_no_root_platform_file_is_judged(tmp_path):
     p = _run("--config-dir", d, "--json")
     assert p.returncode == 0, p.stderr
     doc = _json(p)
-    assert doc["undecidable"] is False
+    assert "undecidable" not in doc  # v3 (#3832): no such field
     row = next(r for r in doc["tenants"]["ta"] if r["key"] == "mysql_conections")
     assert (row["verdict"], row["reason"]) == ("unread", "no_row")
 
