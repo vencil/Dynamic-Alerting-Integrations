@@ -86,7 +86,7 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 	},
 	// No root platform file: since the built-in layer (#3832) the tree is
 	// judged like any other — threshold keys against the built-in values
-	// (the misspelt one is unread), `_` keys as usual. Was "undecidable".
+	// (the misspelt one is unread), `_` keys as usual (#3832).
 	"no-root-file": {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n    _routng: disable\n"},
 }
 

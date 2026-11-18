@@ -58,7 +58,6 @@ const (
 	ReasonKeyVerdictDeadline     = "key_verdict_deadline"
 	ReasonKeyVerdictMemory       = "key_verdict_memory"
 	ReasonKeyVerdictError        = "key_verdict_error"
-	ReasonKeyVerdictUndecidable  = "key_verdict_undecidable"
 	ReasonKeyVerdictPlatformFile = "key_verdict_platform_file"
 )
 
@@ -68,7 +67,7 @@ var RejectionReasons = []string{
 	ReasonDeadline, ReasonMemory, ReasonIncomplete, ReasonGitRead, ReasonBusy,
 	ReasonTooLarge, ReasonInvalidRequest, ReasonMismatch, ReasonNoTime, ReasonNormalized,
 	ReasonKeyVerdictNoTime, ReasonKeyVerdictDeadline, ReasonKeyVerdictMemory,
-	ReasonKeyVerdictError, ReasonKeyVerdictUndecidable, ReasonKeyVerdictPlatformFile,
+	ReasonKeyVerdictError, ReasonKeyVerdictPlatformFile,
 }
 
 // Reasons of an *UnavailableError the service gives (its 503s, ADR-036 §5).

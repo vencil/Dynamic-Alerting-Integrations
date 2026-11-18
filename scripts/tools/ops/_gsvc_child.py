@@ -556,7 +556,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
 # this process, under its RLIMIT_DATA, within the same judgement deadline as
 # the generator: it has no deadline of its own and does not yield to a
 # waiting write. A verdict that does not fit — out of time or memory,
-# da-guard failing, an undecidable tree — is reported as not completed, with
+# da-guard failing — is reported as not completed, with
 # the reason. The counterfactual of `disable` (`--disable-effects`) is
 # computed for the requested tenants only (da-guard's subset). Its cost grows
 # with the tree (measured: about 1.2 s at 1000 tenants, 3 s at 2500, 6 s at
@@ -649,8 +649,7 @@ def written_scope(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
 def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                 cache: "_lib_parse_cache.ParseCache") -> dict:
     """The verdict's report: ``status`` complete or not_completed (with
-    ``reason`` no_time / deadline / memory / error / undecidable /
-    platform_file; #3961: no free text), ``tenants`` judged, ``seconds``, and
+    ``reason`` no_time / deadline / memory / error / platform_file; #3961: no free text), ``tenants`` judged, ``seconds``, and
     when complete the findings."""
     started = time.monotonic()
     try:
@@ -700,12 +699,6 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
             return report("complete", tenants=0, findings=[], truncated=0)
         verdict = _lib_key_verdict.judge_tree(
             tree_dir, tenants=tenants, timeout=budget, reader=reader)
-        # The verdict's own answer (#3016), not re-derived from the keys.
-        if verdict.undecidable_blocks:
-            # ADR-038 §7: no root platform file, so a threshold key the
-            # tenants write cannot be told from a misspelt one; a retry
-            # changes nothing. Reserved keys alone are judged as always.
-            return report("not_completed", reason="undecidable", tenants=len(tenants))
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
                      "tenants": list(f.tenants), "reason": f.reason, "hint": f.hint,

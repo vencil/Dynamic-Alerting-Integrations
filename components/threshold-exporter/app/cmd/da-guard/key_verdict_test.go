@@ -161,9 +161,14 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["undecidable"] != false ||
-		doc["blocks"] != true {
-		t.Fatalf("head %v %v %v %v", doc["schema"], doc["at"], doc["undecidable"], doc["blocks"])
+	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["blocks"] != true {
+		t.Fatalf("head %v %v %v", doc["schema"], doc["at"], doc["blocks"])
+	}
+	// v6 (#3832): no key is undecidable, so neither field is written.
+	for _, gone := range []string{"undecidable", "undecidable_blocks"} {
+		if _, ok := doc[gone]; ok {
+			t.Errorf("%s still written: %v", gone, doc[gone])
+		}
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
 		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "hint": nil, "switched_off_with": nil,

@@ -175,23 +175,18 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 // writes only a platform file — a root `_defaults.yaml` dropping a default,
 // a `dimensions:` declaration removed — and so leaves a key in some other
 // file read by nothing is not refused for that here; validate-config and
-// the route generator's `--validate` (CI) refuse the tree. tenant-api's
-// write gate (components/tenant-api/internal/gitops/key_verdict.go) refuses
-// the same files' errors.
+// the route generator's `--validate` (CI) refuse the tree.
 //
 // What is new is keyverdict's one rule (Block.identity): a block about a
 // tenant is the tenant and the key, wherever the file is — a tenant moved
 // into a batch file, or onto a renamed profile, keeps its baseline — and
 // one about no tenant (a profile no tenant binds) is the file and the key.
 //
-// The baseline is the before-tree judged as decidable even when it has no
-// root platform file: its threshold keys enter the baseline, so a batch
-// that adds the root carrier is not charged with the keys already there.
-// A threshold key the after-tree cannot judge (no root platform file,
-// decision 7) is no block here: a write into such a tree is the tool's
-// ordinary case (a scaffold before its root file, a fixture), and the
-// whole-tree gates — validate-config, the route generator's `--validate` —
-// refuse the tree.
+// Every tree is judged, one with no root platform file included (#3832,
+// decision 7): the baseline is the before-tree as judged, so a batch that
+// adds the root carrier is not charged with the keys already there, and a
+// key the call writes into a tree with no root platform file is judged as
+// in any other.
 //
 // A tenant declared in two files is set aside on both sides
 // (keyVerdictOf's SkipDuplicated), with every tenant its files declare; the
@@ -277,9 +272,7 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 	return out, nil
 }
 
-// judgedBlocks is blocks without the keys the verdict could not judge (see
-// newlyUnread: a writer refuses what it judged, not a tree with no root
-// platform file), and without its subtree_default_reserved_key unread
+// judgedBlocks is blocks without its subtree_default_reserved_key unread
 // (#3881): that set is da-guard's own finding of the same name, which the
 // tree-validation rule above already compares (one set,
 // guard.SubtreeReservedReported) and words with each key's own fix — the
@@ -287,7 +280,7 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 func judgedBlocks(blocks []keyverdict.Block) []keyverdict.Block {
 	out := blocks[:0:0]
 	for _, b := range blocks {
-		if b.Kind != keyverdict.Undecidable && b.Reason != keyverdict.ReasonSubtreeDefaultReservedKey {
+		if b.Reason != keyverdict.ReasonSubtreeDefaultReservedKey {
 			out = append(out, b)
 		}
 	}

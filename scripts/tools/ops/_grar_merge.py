@@ -312,9 +312,6 @@ FINDING_KINDS: dict[str, str] = {
         "#3834). Judged in the file that writes it as key_value_unread is: an "
         "error in a tenant file, a notice in a profile or a root platform "
         "file's `tenants:` entry.",
-    "key_undecidable":
-        "No root platform file was read, so the threshold keys were not "
-        "judged (ADR-038 decision 7); with any such key, --validate fails.",
     "key_version_label":
         "A dimensional key's `version` label the exporter refuses (ADR-024 "
         "OQ-6): the exporter's check, named by its kind, metric and key.",

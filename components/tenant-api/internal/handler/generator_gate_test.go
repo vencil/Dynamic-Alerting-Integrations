@@ -730,8 +730,7 @@ func TestGeneratorGate_KeyVerdictNotCompletedRefusesEveryPath(t *testing.T) {
 	}
 }
 
-// Every key_verdict_* reason has its own fixed text; undecidable names the
-// missing root platform file.
+// Every key_verdict_* reason has its own fixed text.
 func TestKeyVerdictRejectedTexts(t *testing.T) {
 	t.Parallel()
 	for _, r := range generator.RejectionReasons {
@@ -742,9 +741,6 @@ func TestKeyVerdictRejectedTexts(t *testing.T) {
 		if !strings.Contains(text, "("+r+")") || strings.Contains(text, "/srv/secret") {
 			t.Errorf("%s: %q", r, text)
 		}
-	}
-	if text := generatorRejectedText(&generator.RejectedError{Reason: generator.ReasonKeyVerdictUndecidable}); !strings.Contains(text, "root platform file") {
-		t.Errorf("undecidable: %q", text)
 	}
 }
 
