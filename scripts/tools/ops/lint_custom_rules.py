@@ -143,11 +143,16 @@ def _string_list_problem(value) -> "str | None":
 
 
 def _duration_problem(value) -> "str | None":
-    """Why *value* is not a positive Prometheus duration (``5m``), or None.
-    ⛔ One the range check cannot read (``banana``, ``0s``) turned that check
-    off for the files it covered (#3977)."""
-    if not isinstance(value, str) or not parse_duration_seconds(value):
-        return "must be a positive duration such as 5m"
+    """Why *value* is not a positive single-unit duration (``90m``), or None:
+    what the range check reads (``parse_duration_seconds``; ``1h30m`` is not
+    — the grammar is #4061's to settle). ⛔ One it cannot read (``banana``,
+    ``0s``, ``1h30m``) turned that check off for the files it covered (#3977)."""
+    try:
+        seconds = parse_duration_seconds(value) if isinstance(value, str) else None
+    except (OverflowError, ValueError):   # a number too large to be seconds
+        seconds = None
+    if not seconds:
+        return "must be a positive single-unit duration such as 90m"
     return None
 
 
@@ -190,6 +195,13 @@ def file_overrides_problems(overrides) -> "list[str]":
             out.append(f"{at}.path {safe_label(path)} is given twice: the first entry would "
                        "shadow this one")
         else:
+            # an earlier entry whose path this one ends with matches this
+            # one's files first (_override_path_matches) — and the reverse
+            for other in sorted(seen):
+                if path.endswith("/" + other) or other.endswith("/" + path):
+                    out.append(f"{at}.path {safe_label(path)} and {safe_label(other)} "
+                               "can match the same file: which entry applies would "
+                               "depend on their order")
             seen.add(path)
         if not isinstance(entry.get("require_generated_marker", True), bool):
             out.append(f"{at}.require_generated_marker must be true or false")

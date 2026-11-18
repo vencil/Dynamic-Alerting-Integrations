@@ -773,9 +773,16 @@ def test_override_cannot_relax_non_whitelisted_check():
     ([{"path": "a.yaml", "policy": {"denied_functions": "holt_winters"}}],
      "file_overrides[0].policy.denied_functions must be a list of non-empty strings"),
     ([{"path": "a.yaml", "policy": {"max_range_duration": "banana"}}],
-     "file_overrides[0].policy.max_range_duration must be a positive duration such as 5m"),
+     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
+    ([{"path": "a.yaml", "policy": {"max_range_duration": "1h30m"}}],
+     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
+    ([{"path": "a.yaml", "policy": {"max_range_duration": "9" * 400 + "h"}}],
+     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
+    ([{"path": "a.yaml"}, {"path": "sub/a.yaml"}],
+     "file_overrides[1].path sub/a.yaml and a.yaml can match the same file: which entry "
+     "applies would depend on their order"),
     ([{"path": "a.yaml", "policy": {"max_range_duration": "0s"}}],
-     "file_overrides[0].policy.max_range_duration must be a positive duration such as 5m"),
+     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
 ])
 def test_a_malformed_file_override_is_refused_when_the_policy_is_loaded(overrides, said):
     """#3977: one shape for an entry, judged in load_policy — matched or not."""
