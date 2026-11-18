@@ -5,11 +5,15 @@
 rc 1 帶 traceback，而檔案其實已經寫出去了。
 
 這裡經由真正的 ``main`` 驅動，斷言 rc 0、檔案存在、訊息印出的路徑。
+#3982（owner 2026-11-18）：``--out`` 是 operator 輸出——原地寫、0600、
+``-`` 是 stdout，所以收據行改印在 stderr。
 「repo 內」的對照組把 ``REPO_ROOT`` 指到暫存假根，不寫進真 repo 的
 ``docs/internal/audit-reports/``。
 """
 from __future__ import annotations
 
+import os
+import stat
 import sys
 from pathlib import Path
 
@@ -42,7 +46,7 @@ def test_out_outside_repo_absolute(tmp_path, memory_dir, capsys):
     rc = ard.main(["--memory-dir", str(memory_dir), "--out", str(target)])
     assert rc == 0
     assert target.is_file()
-    assert _wrote_line(capsys.readouterr().out) == str(target.resolve())
+    assert _wrote_line(capsys.readouterr().err) == str(target.resolve())
 
 
 def test_out_relative_outside_repo(tmp_path, memory_dir, capsys, monkeypatch):
@@ -50,7 +54,7 @@ def test_out_relative_outside_repo(tmp_path, memory_dir, capsys, monkeypatch):
     rc = ard.main(["--memory-dir", str(memory_dir), "--out", "rel-report.md"])
     assert rc == 0
     assert (tmp_path / "rel-report.md").is_file()
-    assert _wrote_line(capsys.readouterr().out) == str(
+    assert _wrote_line(capsys.readouterr().err) == str(
         (tmp_path / "rel-report.md").resolve()
     )
 
@@ -72,7 +76,7 @@ def test_out_relative_inside_repo_prints_relative(
     rc = ard.main(["--memory-dir", str(memory_dir), "--out", "rel.md"])
     assert rc == 0
     assert (fake_root / "sub" / "rel.md").is_file()
-    assert _wrote_line(capsys.readouterr().out) == str(Path("sub") / "rel.md")
+    assert _wrote_line(capsys.readouterr().err) == str(Path("sub") / "rel.md")
 
 
 def test_out_absolute_inside_repo_prints_relative(fake_root, memory_dir, capsys):
@@ -81,4 +85,42 @@ def test_out_absolute_inside_repo_prints_relative(fake_root, memory_dir, capsys)
     rc = ard.main(["--memory-dir", str(memory_dir), "--out", str(target)])
     assert rc == 0
     assert target.is_file()
-    assert _wrote_line(capsys.readouterr().out) == str(Path("reports") / "in.md")
+    assert _wrote_line(capsys.readouterr().err) == str(Path("reports") / "in.md")
+
+
+# ── #3982: an operator output ─────────────────────────────────────────────
+def test_out_dash_is_the_report_on_stdout_alone(tmp_path, memory_dir, capsys, monkeypatch):
+    """`--out -` used to write a file called `-`. The receipt is on stderr,
+    so stdout is the report and nothing else — the same text `--stdout`
+    prints."""
+    monkeypatch.chdir(tmp_path)
+    assert ard.main(["--memory-dir", str(memory_dir), "--out", "-"]) == 0
+    got = capsys.readouterr()
+    assert not (tmp_path / "-").exists()
+    assert "wrote drift report" not in got.out and "wrote drift report" not in got.err
+    assert ard.main(["--memory-dir", str(memory_dir), "--stdout"]) == 0
+    assert capsys.readouterr().out == got.out
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
+@pytest.mark.parametrize("existing", [None, 0o644])
+def test_the_report_is_written_in_place_and_ends_0600(tmp_path, memory_dir, existing):
+    target = tmp_path / "r.md"
+    ino = None
+    if existing is not None:
+        target.write_text("old\n", encoding="utf-8")
+        target.chmod(existing)
+        ino = target.stat().st_ino
+    assert ard.main(["--memory-dir", str(memory_dir), "--out", str(target)]) == 0
+    st = target.stat()
+    assert stat.S_IMODE(st.st_mode) == 0o600
+    assert target.read_text(encoding="utf-8").startswith("#")
+    if ino is not None:
+        assert st.st_ino == ino, "replaced, not written in place"
+
+
+def test_an_empty_out_is_refused_at_parse_time(memory_dir, capsys):
+    with pytest.raises(SystemExit) as ei:
+        ard.main(["--memory-dir", str(memory_dir), "--out", ""])
+    assert ei.value.code == 2
+    assert "argument --out: an empty value names no file" in capsys.readouterr().err

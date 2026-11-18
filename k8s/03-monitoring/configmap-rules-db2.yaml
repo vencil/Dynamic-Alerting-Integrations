@@ -22,8 +22,8 @@ data:
     \ (db2_tablespace_used_percent)\n  - record: tenant:db2_lock_wait_time:rate5m\n\
     \    expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))\n  - record:\
     \ tenant:db2_sort_overflow_ratio:avg\n    expr: 'sum by(tenant) (rate(db2_sort_overflows[5m]))\n\
-    \n      / (sum by(tenant) (rate(db2_total_sorts[5m])) > 0)\n\n      '\n- name:\
-    \ db2-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:db2_connections_active\n\
+    \n      / (sum by(tenant) (rate(db2_total_sorts[5m])) >= 200 / 300)\n\n      '\n\
+    - name: db2-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:db2_connections_active\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"connections_active\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_connections_active_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"connections_active\"\

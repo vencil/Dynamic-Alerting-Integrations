@@ -83,7 +83,10 @@ nowhere else:
 Owner rulings that the rule alone would not give (#3107, 2026-10-24 and
 2026-11-15): ``generate-routes -o/--output``, ``configmap_assemble
 --output`` and ``state-reconcile --manifest-path`` are artifacts — a half
-written one is a config some reader will load. A row carries the class its
+written one is a config some reader will load. #3982, 2026-11-18:
+``generate_tenant_metadata --output`` is an artifact (tenant-api reads it;
+``-`` is refused, stdout is the flag left out); ``audit_rules_drift --out``
+is an operator output (``-`` is stdout). A row carries the class its
 flag SHOULD have; where the tool does not write that way yet, the row is on
 one of the lists below, not reclassified to match.
 
@@ -682,13 +685,12 @@ ROWS: list[Row] = [
       reach="throw-away git repo with one conventional commit (cwd)",
       out_name="CHANGELOG-draft.md",
       cwd=lambda c: _git_repo_with_one_commit(c.tmp)),
-    R("dx/generate_tenant_metadata.py", "--output", "file", "operator",
+    R("dx/generate_tenant_metadata.py", "--output", "file", "artifact",
       lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output", str(out)],
       reach="in-repo try-local seed conf.d",
       out_name="tenant-metadata.json",
-      # Its own `mkdir -p` creates a missing parent, so only the blocked
-      # parent fails. The `chmod 0644` sits inside the same wrapped block as
-      # the write, so a chmod failure lands on the same flag.
+      # `ensure_dir` creates a missing parent, so only the blocked parent
+      # fails; the artifact entry's own failures name the same flag.
       shapes=("parent_is_file",)),
     # Three rows, one per `--layout`: each layout has its OWN
     # `output_dir.mkdir` (generate_flat / generate_hierarchical /
@@ -1772,23 +1774,15 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
 #: whether that is all the run wrote there ("all") or it also wrote through
 #: an entry ("some"). A `mkdir` counts — `ensure_dir` is the entry for it.
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
-    ("../ops/audit_rules_drift.py", "--out"): ("some", ("os.mkdir .",)),
     ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
-    ("dx/generate_tenant_metadata.py", "--output"): ("some", ("os.mkdir .",)),
     ("ops/config_history.py", "--config-dir"): (
         "some", ("open .da-history/history.json", "os.mkdir .da-history",
                  "os.mkdir .da-history/snap-1")),
-    ("ops/migrate_credentials.py", "--manifests-out"): ("some", ("os.mkdir secrets",)),
 }
 
 #: Rows whose output came through the entry of the OTHER class than the row
 #: declares, and which one. Each is a tool to move or a row to reclassify.
 VIA_OTHER_CLASS: dict[Key, str] = {
-    # Neither flag has a default that is a tracked file (the first has none,
-    # the second a dated report name the tool never reads back): operator by
-    # the rule at the top. Both write it with `atomic_write_text`.
-    ("../ops/audit_rules_drift.py", "--out"): "artifact",
-    ("dx/generate_tenant_metadata.py", "--output"): "artifact",
 }
 
 
@@ -3364,13 +3358,15 @@ class TestTheLists:
 
     def test_a_listed_row_that_is_clean_now_must_come_off(self, monkeypatch):
         """Each list, on its own first entry: clean ⇒ red. A list the
-        migration has emptied (#3107 ③c: VIA_OLD_NAMES) still has its
+        migration has emptied (#3107 ③c: VIA_OLD_NAMES; #3982: VIA_OTHER_CLASS) still has its
         judgement until ④ removes the old names: it is held on a synthetic
         entry."""
         synthetic = ("dx/zz_synthetic.py", "--out")
         if not VIA_OLD_NAMES:
             monkeypatch.setitem(VIA_OLD_NAMES, synthetic,
                                 ("scripts/tools/dx/zz_synthetic.py:main write_text_or_die ×1",))
+        if not VIA_OTHER_CLASS:  # emptied by #3982 (owner 2026-11-18)
+            monkeypatch.setitem(VIA_OTHER_CLASS, synthetic, "artifact")
         for key in (sorted(VIA_OLD_NAMES)[0], sorted(RAW_UNDER_OUT)[0],
                     sorted(VIA_OTHER_CLASS)[0]):
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
