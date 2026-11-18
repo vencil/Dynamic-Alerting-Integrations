@@ -375,7 +375,7 @@ tenants:
 判決裡的每個鍵都是 `read` 或 `unread`，沒有「無從判斷」這種結果。exporter 整棵拒收的樹（例如同一個租戶宣告在兩個檔）沒有判決：`da-guard key-verdict` 結束碼 2、不輸出文件。其餘的樹照常判，差別只在**有沒有讀到任何根平台檔**，而不是 conf.d 裡有沒有某個檔：
 
 - **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：照常判。平台預設啟用的閾值由讀取端內建（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），不靠根平台檔，所以租戶寫這些鍵判為有讀，其他閾值鍵沒有任何一層宣告，判為 `unread`（原因 `no_row`）。例：沒有根檔的樹，租戶 `t1` 寫 `pg_connections: "70"` 與 `redis_connected_clients: "5"`，前者 `read`、後者 `unread`。分片樹裡判為 `unread` 的鍵，組好整棵樹之後可能有根檔宣告它；要驗，就驗組好的整棵樹。
-- **根目錄的 `_defaults.yaml` 在，但讀不了**（例如語法錯）：內建層撤掉（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），預設啟用的鍵也沒有值，租戶寫的閾值鍵判為 `unread`；`da-guard key-verdict` 照樣輸出判決，結束碼 3 點名那個檔。例：上一列的租戶 `t1` 寫 `pg_connections: "70"`，根檔是 `defaults: [` 時判為 `unread`。
+- **根目錄的 `_defaults.yaml` 在，但讀不了**（例如語法錯）：內建層撤掉（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11），預設啟用的鍵也沒有值，租戶寫的閾值鍵若沒有其他讀取端讀，判為 `unread`（根檔 YAML 能解析、只是型別不對時，其中的 policy 規則仍會讀，點到的鍵判 `read`）；`da-guard key-verdict` 照樣輸出判決，結束碼 3 點名那個檔。例：上一列的租戶 `t1` 寫 `pg_connections: "70"`，根檔是 `defaults: [` 時判為 `unread`。
 - **有讀到根平台檔，但沒有宣告任何閾值**（例如根目錄只有 `_profiles.yaml`，閾值只寫在子目錄的 `_defaults.yaml`）：照現有的精確 finding 報（例如「子目錄的 defaults 送不到 exporter」）。
 
 拼錯的閾值鍵與「平台沒宣告、租戶有意省略」得到的原因相同，判決不嘗試區分兩者。
