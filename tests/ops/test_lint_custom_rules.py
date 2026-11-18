@@ -27,6 +27,7 @@ import yaml
 # Add scripts/tools to path
 
 import lint_custom_rules  # noqa: E402
+import _lib_exitcodes  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_python import parse_duration_seconds  # noqa: E402
 
@@ -738,42 +739,76 @@ def test_nested_path_does_not_get_exemption(compiled_forecast_pack, tmp_path):
         "nested path must be fully linted, not exempted"
 
 
-def test_override_cannot_relax_non_whitelisted_check(tmp_path):
+def test_override_cannot_relax_non_whitelisted_check():
     """對抗式 review FINDING 3：override.policy 設 OVERRIDABLE_POLICY_KEYS 以外的 key
-    （如清空 required_labels）不得生效——該 key 被忽略且回報 ERROR，原檢查照跑。"""
-    text = (
-        "# GENERATED test fixture\n"
-        "groups:\n"
-        "- name: g\n"
-        "  rules:\n"
-        "  - alert: NoTenant\n"          # 缺 tenant label → required_labels 應照殺
-        "    expr: my_metric > 1\n"
-        "    labels: {severity: warning}\n"
-    )
-    fpath = tmp_path / _GENERATED_PACK_RELPATH
-    fpath.parent.mkdir(parents=True)
-    fpath.write_text(text, encoding="utf-8")
-    policy = lint_custom_rules.DEFAULT_POLICY.copy()
-    policy["file_overrides"] = [{
-        "path": _GENERATED_PACK_RELPATH.replace(os.sep, "/"),
-        "require_generated_marker": True,
-        "policy": {"required_labels": []},   # 攻擊：想關掉 tenant label 強制
-    }]
-    results, _ = lint_custom_rules.lint_file(str(fpath), policy)
-    messages = [r.message for r in results if r.severity == "ERROR"]
-    assert any("required label 'tenant'" in m for m in messages)   # 仍照殺
-    assert any("may only relax" in m for m in messages)            # 且回報忽略
+    （如清空 required_labels）不得生效。#3977：載入時就拒收（rc 2），不論有沒有檔案
+    匹配；先前只在匹配的檔上回報一個 finding（不帶 --ci 時 rc 0）。"""
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"file_overrides": [{
+            "path": "rule-packs/nothing-matches.yaml",
+            "policy": {"required_labels": []},   # 攻擊：想關掉 tenant label 強制
+        }]}, "p.yaml")
+    assert exc.value.reason == "policy_invalid"
+    assert str(exc.value) == ("--policy p.yaml: file_overrides[0].policy may only relax "
+                              "denied_functions, max_range_duration, not required_labels")
 
 
-def test_malformed_override_entry_does_not_crash(tmp_path):
-    """對抗式 review QUAL-1：file_overrides 含非 dict（字串）項不得 traceback。"""
-    fpath = tmp_path / _GENERATED_PACK_RELPATH
-    fpath.parent.mkdir(parents=True)
-    fpath.write_text("# GENERATED\ngroups: []\n", encoding="utf-8")
-    policy = lint_custom_rules.DEFAULT_POLICY.copy()
-    policy["file_overrides"] = ["oops-a-string", None, {"path": "other.yaml"}]
-    results, count = lint_custom_rules.lint_file(str(fpath), policy)  # 不應 raise
-    assert count == 0
+@pytest.mark.parametrize("overrides, said", [
+    # #3977: every one of these was silent (rc 0), a finding only on a
+    # matching file, or a crash — now the policy is refused when loaded.
+    ([{"path": "a.yaml", "require_generated_markr": False, "bogus": 1}],
+     "file_overrides[0] has no key(s) bogus, require_generated_markr "
+     "(an entry has path, require_generated_marker, policy)"),
+    (["oops-a-string"], "file_overrides[0] must be a mapping, not str"),
+    ({"path": "a.yaml"}, "file_overrides must be a list of entries, not dict"),
+    (None, "file_overrides must be a list of entries, not NoneType"),
+    ([{"policy": {}}], "file_overrides[0].path must be a non-empty string"),
+    ([{"path": ""}], "file_overrides[0].path must be a non-empty string"),
+    ([{"path": "a.yaml"}, {"path": "a.yaml"}],
+     "file_overrides[1].path a.yaml is given twice: the first entry would shadow this one"),
+    ([{"path": "a.yaml", "require_generated_marker": "false"}],
+     "file_overrides[0].require_generated_marker must be true or false"),
+    ([{"path": "a.yaml", "policy": ["denied_functions"]}],
+     "file_overrides[0].policy must be a mapping, not list"),
+    ([{"path": "a.yaml", "policy": {"denied_functions": "holt_winters"}}],
+     "file_overrides[0].policy.denied_functions must be a list of non-empty strings"),
+    ([{"path": "a.yaml", "policy": {"max_range_duration": "banana"}}],
+     "file_overrides[0].policy.max_range_duration must be a positive duration such as 5m"),
+    ([{"path": "a.yaml", "policy": {"max_range_duration": "0s"}}],
+     "file_overrides[0].policy.max_range_duration must be a positive duration such as 5m"),
+])
+def test_a_malformed_file_override_is_refused_when_the_policy_is_loaded(overrides, said):
+    """#3977: one shape for an entry, judged in load_policy — matched or not."""
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"file_overrides": overrides}, "p.yaml")
+    assert exc.value.reason == "policy_invalid"
+    assert str(exc.value) == f"--policy p.yaml: {said}"
+
+
+def test_every_problem_of_the_overrides_is_named_at_once():
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"file_overrides": [
+            "x", {"path": "a.yaml", "policy": {"max_range_duration": "x"}}]}, "p.yaml")
+    assert str(exc.value).count("file_overrides[") == 2, str(exc.value)
+
+
+def test_the_built_in_overrides_are_of_the_shape_judged():
+    """DEFAULT_POLICY is judged as a --policy is (#3977)."""
+    assert lint_custom_rules.file_overrides_problems(
+        lint_custom_rules.DEFAULT_POLICY["file_overrides"]) == []
+    assert lint_custom_rules.load_policy(None) == lint_custom_rules.DEFAULT_POLICY
+
+
+def test_an_entry_a_file_matches_relaxes_only_its_listed_keys(tmp_path):
+    """The override applies as before for a policy that loads."""
+    policy = lint_custom_rules.load_policy({"file_overrides": [{
+        "path": "rule-packs/x.yaml", "require_generated_marker": False,
+        "policy": {"denied_functions": []}}]}, "p.yaml")
+    effective, results = lint_custom_rules.resolve_file_policy(
+        str(tmp_path / "rule-packs" / "x.yaml"), "groups: []\n", policy)
+    assert results == []
+    assert effective["denied_functions"] == []
+    assert effective["required_labels"] == policy["required_labels"]
 
 
 def test_lint_result_error_format():

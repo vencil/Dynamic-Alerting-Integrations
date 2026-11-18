@@ -225,8 +225,13 @@ file_overrides:
 > `rule-packs/*/rule-packs/<file>` gets no exemption; (2) the GENERATED header
 > is required, else ERROR + full lint; (3) only `denied_functions` /
 > `max_range_duration` may be relaxed (whitelist) — any other key (e.g.
-> emptying `required_labels`) is ignored and flagged as ERROR; (4) every
-> non-overridden check still runs. CI separately guards against a hand-written
+> emptying `required_labels`) is exit `2` when the policy is loaded; (4) every
+> non-overridden check still runs. An entry's shape is judged when the policy
+> is loaded, whether or not a file matches it ([#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)):
+> `file_overrides` is a list; each entry has only `path` (required, no two
+> alike), `require_generated_marker` (a bool) and `policy`; `denied_functions`
+> is a list of strings and `max_range_duration` a positive duration. Anything
+> else is exit `2`, naming the entry and why. CI separately guards against a hand-written
 > file posing as a compiled pack via the `compile_custom_alerts.py --check`
 > drift gate.
 
