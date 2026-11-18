@@ -53,7 +53,7 @@ da-tools onboard \
   --output-dir onboard-audit
 ```
 
-**預期輸出**：stderr 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`；要存檔記得導 `2>`，只導 stdout 會拿到只有檔案清單的輸出），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定；找到租戶 route 時另有每個租戶一份 `phase1-routing/<租戶>.yaml` 路由片段，以及 `onboard-hints.json`。分析要點：
+**預期輸出**：stderr 列出每個 receiver 是否帶租戶 matcher（`Found N tenant route(s) (of M total)`，沒有的逐一 `SKIP`；要存檔記得導 `2>`，只導 stdout 會拿到只有檔案清單的輸出），並寫出目錄 `onboard-audit/`（`-o/--output-dir` 吃的是**目錄**，給檔名會得到一個同名目錄）——裡面是 `phase1-routing/routing-summary.csv`：每個租戶 route 的 receiver 類型、`group_wait`／`group_interval`／`repeat_interval` 與 severity dedup 判定；找到租戶 route 時另有每個租戶一份 `.onboard/conf.d/<租戶>.yaml` 路由片段（草稿，不會被服務），以及 `onboard-hints.json`。分析要點：
 - Receiver 數量 → 潛在租戶數量
 - 現有 group_wait / repeat_interval → 後續 Dynamic Alerting 的 Routing Guardrails 參考值
 - Inhibit rules → 是否需要遷移至 Dynamic Alerting 的 severity dedup 機制
@@ -72,7 +72,7 @@ da-tools onboard \
 
 **預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出：
 - `rule-audit/phase2-rules/migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
-- `rule-audit/.conf.d/_defaults.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
+- `rule-audit/.onboard/conf.d/_defaults.yaml`：由既有閾值推得的平台預設值建議。⚠️ `complex` 規則的閾值也在裡面，合併前要和 `migration-plan.csv` 逐條對過；規則全部 `unparseable` 時不會產生這個檔
 
 依 `status` 排遷移順序：`perfect` 先遷，`complex` 逐條人工確認，`unparseable` 留到最後或保留原規則。
 
@@ -491,9 +491,9 @@ da-tools scaffold \
   --db mariadb \
   --non-interactive \
   --output-dir scaffold_output
-# 產物在 scaffold_output/.conf.d/（草稿，不會被服務）；只搬租戶檔，
+# 產物在 scaffold_output/.scaffold/conf.d/（草稿，不會被服務）；只搬租戶檔，
 # _defaults.yaml 是範本，不要蓋掉步驟 1.2 調過的平台預設值
-cp scaffold_output/.conf.d/mariadb-prod.yaml conf.d/
+cp scaffold_output/.scaffold/conf.d/mariadb-prod.yaml conf.d/
 
 # 編輯閾值
 # 把新租戶（與 chart 出貨沒有的 defaults）加進同一份 values，

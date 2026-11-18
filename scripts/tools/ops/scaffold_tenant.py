@@ -786,12 +786,13 @@ def _die(message: str) -> None:
 
 
 #: #4014: the conf.d files of a run (`<tenant>.yaml`, `_defaults.yaml`,
-#: `_instance_mapping.yaml`) go to the draft conf.d every one-shot writer
-#: shares (`_lib_write_check.DRAFT_CONFD_DIR`; why it is dot-prefixed is said
-#: there): they are a draft to copy into conf.d (the report says so), and
-#: `-o` at a served conf.d used to replace its root `_defaults.yaml` whole —
-#: every other tenant's keys undeclared — and serve the new tenant.
-CONFD_DIR = _lib_write_check.DRAFT_CONFD_DIR
+#: `_instance_mapping.yaml`) go to this tool's draft conf.d under its own
+#: dot-directory (`_lib_write_check.DRAFT_ROOTS`, where why it is
+#: dot-prefixed and one per tool is said, once): they are a draft to copy
+#: into conf.d (the report says so), and `-o` at a served conf.d used to
+#: replace its root `_defaults.yaml` whole — every other tenant's keys
+#: undeclared — and serve the new tenant.
+CONFD_DIR = _lib_write_check.draft_confd_rel("scaffold_tenant")
 
 
 def _write_confd_files(out: Path, files: list) -> None:
@@ -819,7 +820,7 @@ def _write_confd_files(out: Path, files: list) -> None:
         # #4014: a draft holding an earlier run's tenant is another tenant
         # in it — refused before anything is written or made.
         refusal = _lib_write_check.refuse_draft_layout(
-            out, [e["path"] for e in entries],
+            out, "scaffold_tenant", [e["path"] for e in entries],
             why="an earlier run's tenant file is another tenant in the draft, #4014")
     except _lib_parse_tree.ParseTreeError as exc:
         _die(f"cannot judge {out} through `da-guard parse-tree` (ADR-036 §2): "

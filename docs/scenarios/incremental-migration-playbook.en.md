@@ -53,7 +53,7 @@ da-tools onboard \
   --output-dir onboard-audit
 ```
 
-**Expected output**: stderr lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one; redirect `2>` to keep it — stdout alone only carries the list of written files), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. When tenant routes are found there is also one `phase1-routing/<tenant>.yaml` routing snippet per tenant, and `onboard-hints.json`. Analysis points:
+**Expected output**: stderr lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one; redirect `2>` to keep it — stdout alone only carries the list of written files), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. When tenant routes are found there is also one `.onboard/conf.d/<tenant>.yaml` routing snippet per tenant (a draft, never served), and `onboard-hints.json`. Analysis points:
 - Receiver count → potential tenant count
 - Existing group_wait / repeat_interval → reference values for Dynamic Alerting routing guardrails
 - Inhibit rules → whether to migrate to Dynamic Alerting severity dedup
@@ -72,7 +72,7 @@ da-tools onboard \
 
 **Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and these are written:
 - `rule-audit/phase2-rules/migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
-- `rule-audit/.conf.d/_defaults.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
+- `rule-audit/.onboard/conf.d/_defaults.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
 
 Order the migration by `status`: `perfect` first, `complex` checked one by one, `unparseable` last or kept as original rules.
 
@@ -493,10 +493,10 @@ da-tools scaffold \
   --db mariadb \
   --non-interactive \
   --output-dir scaffold_output
-# The outputs are in scaffold_output/.conf.d/ (a draft, never served); move only
+# The outputs are in scaffold_output/.scaffold/conf.d/ (a draft, never served); move only
 # the tenant file — _defaults.yaml is a template, do not overwrite the platform
 # defaults tuned in Step 1.2
-cp scaffold_output/.conf.d/mariadb-prod.yaml conf.d/
+cp scaffold_output/.scaffold/conf.d/mariadb-prod.yaml conf.d/
 
 # Edit thresholds
 # Add the new tenant (and any defaults the chart does not ship) to the same

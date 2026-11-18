@@ -96,8 +96,8 @@ Full command set, hash verification, air-gapped flow, cosign keyless verificatio
 
 For enterprises with mature monitoring stacks, `da-tools onboard` **reverse-analyzes** Alertmanager / Prometheus rules / scrape config and produces a migration plan (skip this step if you have no existing monitoring):
 
-- Alertmanager (`--alertmanager-config`) → `phase1-routing/routing-summary.csv` (a routing summary per tenant route), a `.conf.d/<tenant>.yaml` routing snippet, plus `onboard-hints.json` (when tenant routes are found)
-- Rule files (`--rule-files <file-or-dir>...`; on the v2.9.0 image a directory selects no file, so give a quoted glob <!-- image-caveat: v2.9.0 -->) → `phase2-rules/migration-plan.csv` (per alert rule `status`: `perfect` / `complex` / `unparseable`) and `.conf.d/_defaults.yaml` (suggested platform defaults)
+- Alertmanager (`--alertmanager-config`) → `phase1-routing/routing-summary.csv` (a routing summary per tenant route), a `.onboard/conf.d/<tenant>.yaml` routing snippet, plus `onboard-hints.json` (when tenant routes are found)
+- Rule files (`--rule-files <file-or-dir>...`; on the v2.9.0 image a directory selects no file, so give a quoted glob <!-- image-caveat: v2.9.0 -->) → `phase2-rules/migration-plan.csv` (per alert rule `status`: `perfect` / `complex` / `unparseable`) and `.onboard/conf.d/_defaults.yaml` (suggested platform defaults)
 - Scrape config (`--scrape-config`) → `.onboard/`: `scrape-analysis.yaml` and a `<job>-relabel-suggestion.yaml` per job
 
 Full flags, output conditions and exit codes: [`cli-reference.md#onboard`](cli-reference.md#onboard). `onboard-hints.json` feeds `scaffold --from-onboard`; rule conversion is `migrate`, which reads the old rule files directly.
@@ -110,7 +110,7 @@ For brand-new tenants, the interactive generator completes setup in 30 seconds:
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-Outputs: `.conf.d/_defaults.yaml` + `.conf.d/<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.txt` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
+Outputs: `.scaffold/conf.d/_defaults.yaml` + `.scaffold/conf.d/<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.txt` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
 
 The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-exporter README — K8s Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 
@@ -127,7 +127,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # Large-tenant
 The tool automatically handles:
 
 - **Three input scenarios**: `✅ clean parse` / `⚠️ complex expression (with warning box)` / `🚨 unparseable (emits LLM Prompt)`
-- **Three-piece output**: `.conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`, plus `.conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds. The v2.9.0 image has neither `--tenant` nor `.conf.d/`: it writes only `tenant-config.yaml` (thresholds flat at the top level, to indent under `tenants.<tenant>` yourself) and no defaults fragment <!-- image-caveat: v2.9.0 -->
+- **Three-piece output**: `.migration/conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `.migration/platform-recording-rules.yaml` + `.migration/platform-alert-rules.yaml` + `migration-report.txt`, plus `.migration/conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds. The v2.9.0 image has neither `--tenant` nor `.migration/conf.d/`: it writes only `tenant-config.yaml` (thresholds flat at the top level, to indent under `tenants.<tenant>` yourself) and no defaults fragment <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
 

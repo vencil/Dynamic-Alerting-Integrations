@@ -2,15 +2,15 @@
 """migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
-1. 租戶檔                  → migration_output/.conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
+1. 租戶檔                  → migration_output/.migration/conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
 2. 平台 Recording Rule      → migration_output/.migration/platform-recording-rules.yaml
 3. 平台動態 Alert Rule      → migration_output/.migration/platform-alert-rules.yaml
 4. 遷移報告                 → migration_output/migration-report.txt
 5. Triage CSV               → migration_output/triage-report.csv
 6. Prefix Mapping           → migration_output/.migration/prefix-mapping.yaml
-7. 根 defaults              → migration_output/.conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
+7. 根 defaults              → migration_output/.migration/conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
 
-1 與 7 寫在 `-o` 底下自己的 `.conf.d/`（#3671）：那是一棵只有這兩個檔的 conf.d，
+1 與 7 寫在 `-o/.migration/conf.d/`（`CONFD_DIR`，#3671、#4014）：那是一棵只有這兩個檔的 conf.d，
 可以整棵驗。2、3、6 是 YAML 但不是 conf.d 檔，寫在 `-o/.migration/`（`ARTIFACT_DIR`，
 #3997）：點開頭的目錄，conf.d 的每個讀取端都整棵略過（Go `confdname.IsHidden`），
 所以 `-o` 落在一棵服務中的 conf.d 裡（不論服務的根在哪一層）也不會被當成設定檔讀。
@@ -1076,16 +1076,15 @@ def _dedup_recording_rules(results):
     return deduplicated_rules
 
 
-#: The conf.d this tool writes, under `-o` (#3671): the draft conf.d every
-#: one-shot writer shares (`_lib_write_check.DRAFT_CONFD_DIR`, #4014 — why it
-#: is dot-prefixed is said there, once). A tree of its own, so its two files
-#: are judged as a conf.d root holds them and the other outputs (rule packs,
-#: reports) never share a name with the tenant file.
-CONFD_DIR = _lib_write_check.DRAFT_CONFD_DIR
-#: #3997: where the YAML that is not a conf.d file goes (rule packs, prefix
-#: mapping): a dot-directory, which every conf.d reader prunes (Go
-#: `confdname.IsHidden`), wherever the served root is above `-o`.
-ARTIFACT_DIR = ".migration"
+#: This tool's own dot-directory under `-o` (#3997, #4014:
+#: `_lib_write_check.DRAFT_ROOTS`, where why it is dot-prefixed and one per
+#: tool is said, once): the YAML that is not a conf.d file (rule packs,
+#: prefix mapping) goes here.
+ARTIFACT_DIR = _lib_write_check.DRAFT_ROOTS["migrate_rule"]
+#: The conf.d this tool writes (#3671), under `ARTIFACT_DIR`: a tree of its
+#: own, so its two files are judged as a conf.d root holds them and the
+#: other outputs never share a name with the tenant file.
+CONFD_DIR = _lib_write_check.draft_confd_rel("migrate_rule")
 
 #: The root defaults file of that conf.d: what declares the keys the tenant
 #: file writes — scaffold_tenant writes the same pair.
@@ -1500,10 +1499,10 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
 
     ADR-036 §2（#3206 步驟 10c）：寫 conf.d 的只有 Go。兩個 conf.d 內容檔
     （`<tenant>.yaml`、`_defaults.yaml`）一次交給同一次 `da-guard write`，寫進
-    `-o/.conf.d`（`CONFD_DIR`，#3671；已存在就整份取代）：那棵樹判一次，兩個檔
+    `-o/.migration/conf.d`（`CONFD_DIR`，#3671、#4014；已存在就整份取代）：那棵樹判一次，兩個檔
     同進退——一個被拒就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的
-    `-o` 過共用的 conf.d 拒絕（`_require_output_tree`；點開頭的 `.conf.d/` 不在其中），且 `.conf.d/` 不得有這兩個
-    檔以外的檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack 與
+    `-o` 過共用的 conf.d 拒絕（`_require_output_tree`；點開頭的 `.migration/` 不在其中），且那棵 conf.d 不得有
+    別的租戶檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack 與
     prefix mapping 是 YAML 但不是 conf.d 檔，在批次之後寫進 `-o/.migration/`
     （`ARTIFACT_DIR`，#3997：點開頭，conf.d 的讀取端不讀）；報表與 CSV 不是 YAML，
     寫在 `-o`。
@@ -1524,7 +1523,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     # `-o/.migration` that is not a directory ends the run with nothing
     # written, not after the conf.d files are on disk (#3997).
     refusal = _lib_write_check.refuse_draft_layout(
-        output_dir, [e["path"] for e in entries], artifact_dirs=(ARTIFACT_DIR,),
+        output_dir, "migrate_rule", [e["path"] for e in entries],
         why="another --tenant's file is another tenant in the tree, #3671")
     if refusal:
         print(f"ERROR: {refusal} — nothing was written", file=sys.stderr)

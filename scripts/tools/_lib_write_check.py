@@ -61,18 +61,41 @@ def require_output_tree(root: "str | os.PathLike[str]", *,
         _lib_parse_cache.require_servable(root, binary=binary, timeout=timeout)
 
 
-#: ⛔ The draft conf.d a one-shot writer builds under its output directory
-#: (#3671, #4014): `migrate_rule`, `onboard_platform` and `scaffold_tenant`
-#: write the conf.d files of a run here, never at `-o` itself. The files are
-#: a draft (a tenant to review, a `_defaults.yaml` fragment to merge by hand),
-#: and `-o` may lie inside a served conf.d — pointed at it, or the relative
-#: default run from inside it. A `.`-prefixed directory is pruned whole by
-#: every conf.d reader (Go's `confdname.IsHidden`, shared by the exporter's
-#: walk and `da-guard parse-tree`), so the draft is never served wherever
-#: `-o` lands, and the draft passed as a `--config-dir` root of its own is
-#: judged whole. tests/shared/test_writers_keep_served_tree.py runs every
-#: conf.d writer inside a served tree and asks Go which tenants it serves.
-DRAFT_CONFD_DIR = ".conf.d"
+#: ⛔ THE one table (#4014): each one-shot writer whose output is a draft
+#: owns a dot-directory of its own under its output directory, and writes
+#: every YAML it makes there — its draft conf.d at `<root>/conf.d/`
+#: (`draft_confd_rel`), its other YAML (rule packs, relabel suggestions) in
+#: `<root>/` itself. The CSVs and reports, which no conf.d reader reads,
+#: stay where an operator looks.
+#:
+#: * Dot-prefixed: the outputs are a draft (a tenant to review, a
+#:   `_defaults.yaml` fragment to merge by hand), and `-o` may lie inside a
+#:   served conf.d — pointed at it, or the relative default run from inside
+#:   it. A `.`-prefixed directory is pruned whole by every conf.d reader
+#:   (Go's `confdname.IsHidden`, shared by the exporter's walk and
+#:   `da-guard parse-tree`), so nothing under it is served wherever `-o`
+#:   lands; the draft conf.d passed as a `--config-dir` root of its own is
+#:   judged whole.
+#: * One per tool: the tools' outputs are meant to be chained through one
+#:   `-o` (`scaffold --from-onboard <-o>/onboard-hints.json -o <-o>`), so a
+#:   directory they shared let one tool replace another's draft whole, rc 0.
+#:
+#: tests/shared/test_writers_keep_served_tree.py derives the conf.d writers,
+#: runs every draft writer inside a served tree (asking Go which tenants it
+#: serves) and all of them into one -o (no draft replaced by another tool).
+DRAFT_ROOTS = {
+    "migrate_rule": ".migration",
+    "onboard_platform": ".onboard",
+    "scaffold_tenant": ".scaffold",
+}
+
+#: The draft conf.d's name under a tool's draft root.
+DRAFT_CONFD = "conf.d"
+
+
+def draft_confd_rel(tool: str) -> str:
+    """*tool*'s draft conf.d, relative to its output directory."""
+    return f"{DRAFT_ROOTS[tool]}/{DRAFT_CONFD}"
 
 
 def draft_confd_extras(conf_dir: "str | os.PathLike[str]", mine) -> list:
@@ -93,30 +116,32 @@ def draft_confd_extras(conf_dir: "str | os.PathLike[str]", mine) -> list:
             if e.cls == "tenant" and e.path not in mine]
 
 
-def refuse_draft_layout(output_dir: "str | os.PathLike[str]", mine, *,
-                        artifact_dirs=(), why: str,
-                        writes_tenants: bool = True) -> Optional[str]:
-    """Why a run may not write its draft under *output_dir*, or None — asked
+def refuse_draft_layout(output_dir: "str | os.PathLike[str]", tool: str, mine, *,
+                        why: str, writes_tenants: bool = True,
+                        made_later=()) -> Optional[str]:
+    """Why *tool*'s run may not write under *output_dir*, or None — asked
     before anything is written or made, so a refused run leaves nothing
-    behind (#3997):
+    behind (#3997, #4014):
 
-    * the draft conf.d (`DRAFT_CONFD_DIR`) holds a tenant file this run does
-      not write (*mine*; `draft_confd_extras`): an earlier run's tenant is
-      another tenant in the draft tree (#3671). *why* names what such a file
-      is, for the message. Only a run that writes tenants (*writes_tenants*)
-      owns the draft's tenant set: a run of onboard's Phase 2 alone, after a
-      Phase 1 run into the same -o, writes `_defaults.yaml` beside them;
-    * a directory this run writes its other YAML into (*artifact_dirs*,
-      names under *output_dir*) exists and is not a directory.
+    * a directory the run makes after its conf.d batch exists and is not a
+      directory: the tool's draft root, its draft conf.d, and *made_later*
+      (names under *output_dir*, such as a CSV directory);
+    * the draft conf.d holds a tenant file this run does not write (*mine*;
+      `draft_confd_extras`): an earlier run's tenant is another tenant in
+      the draft tree (#3671). *why* names what such a file is, for the
+      message. Only a run that writes tenants (*writes_tenants*) owns the
+      draft's tenant set: a run of onboard's Phase 2 alone, after a Phase 1
+      run into the same -o, writes `_defaults.yaml` beside them.
 
     Raises `_lib_parse_tree.ParseTreeError` for no usable da-guard."""
-    conf_dir = Path(output_dir) / DRAFT_CONFD_DIR
+    out = Path(output_dir)
+    for rel in (DRAFT_ROOTS[tool], draft_confd_rel(tool), *made_later):
+        path = out / rel
+        if path.exists() and not path.is_dir():
+            return f"{path} is not a directory; remove it or use another -o"
+    conf_dir = out / draft_confd_rel(tool)
     other = draft_confd_extras(conf_dir, set(mine)) if writes_tenants else []
     if other:
         return (f"{conf_dir} holds {', '.join(other)}, which this run does not write "
                 f"({why}); remove it or use another -o")
-    for name in artifact_dirs:
-        path = Path(output_dir) / name
-        if path.exists() and not path.is_dir():
-            return f"{path} is not a directory; remove it or use another -o"
     return None

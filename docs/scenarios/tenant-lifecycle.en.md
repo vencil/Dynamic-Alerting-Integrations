@@ -89,11 +89,11 @@ da-tools scaffold \
 # exit 2, every such path named, nothing written
 # Copy only the tenant file: _defaults.yaml is a template, do not overwrite the
 # platform's existing defaults
-cp scaffold_output/.conf.d/db-product-01.yaml conf.d/
+cp scaffold_output/.scaffold/conf.d/db-product-01.yaml conf.d/
 
 # Output (scaffold_output/):
-# - .conf.d/db-product-01.yaml (tenant config framework; .conf.d/ is a draft, never served)
-# - .conf.d/_defaults.yaml (platform defaults template; do not overwrite the one in conf.d)
+# - .scaffold/conf.d/db-product-01.yaml (tenant config framework; .scaffold/conf.d/ is a draft, never served)
+# - .scaffold/conf.d/_defaults.yaml (platform defaults template; do not overwrite the one in conf.d)
 # - relabel_configs-db-product-01.txt (Prometheus relabel snippet for multi-namespace mapping)
 # - scaffold-report.txt (planning document)
 ```

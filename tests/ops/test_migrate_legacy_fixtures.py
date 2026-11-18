@@ -46,7 +46,7 @@ def _migrate(tmp_path_factory, fixture):
     return {
         "stdout": stdout,
         "out": out,
-        "tenant": (out / ".conf.d" / "t1.yaml").read_text(encoding="utf-8"),
+        "tenant": (out / _CONFD / "t1.yaml").read_text(encoding="utf-8"),
         "recording": (out / _ARTIFACTS / "platform-recording-rules.yaml").read_text(encoding="utf-8"),
         "alert": (out / _ARTIFACTS / "platform-alert-rules.yaml").read_text(encoding="utf-8"),
         "report": (out / "migration-report.txt").read_text(encoding="utf-8"),

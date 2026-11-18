@@ -9,7 +9,7 @@ Three-phase analysis for enterprises migrating to the Dynamic Alerting platform:
   Phase 3: Prometheus scrape config → relabel_configs suggestions
 
 The conf.d files among the outputs (Phase 1's `<tenant>.yaml`, Phase 2's
-suggested `_defaults.yaml`) are a draft conf.d at `-o/.conf.d/` (#4014: a
+suggested `_defaults.yaml`) are a draft conf.d at `-o/.onboard/conf.d/` (#4014: a
 dot-directory no conf.d reader reads, so `-o` inside a served conf.d serves
 none of it), written by Go (ADR-036 §2, #3206): their data (typed values,
 comments) goes to ONE `da-guard write` batch before any other output is
@@ -1187,18 +1187,18 @@ def analyze_scrape_configs(scrape_configs, tenant_label=DEFAULT_TENANT_LABEL):
 # Output Generation
 # ============================================================
 
-#: #4014: the conf.d files of a run (Phase 1's tenant files, Phase 2's
-#: suggested `_defaults.yaml`) go to the draft conf.d every one-shot writer
-#: shares (`_lib_write_check.DRAFT_CONFD_DIR`; why it is dot-prefixed is said
-#: there): a draft, never served wherever `-o` lands, and a tree of its own
-#: that `validate-config --config-dir <-o>/.conf.d` judges whole. Before, they
-#: were in `phase1-routing/` and `phase2-rules/`, which the exporter's walk
-#: read: `-o` at a served conf.d served the draft tenants, every check green.
-_CONFD_DIR = _lib_write_check.DRAFT_CONFD_DIR
-#: #4014: Phase 3's YAML (relabel suggestions, the scrape analysis) is not a
-#: conf.d file: a dot-directory, which every conf.d reader prunes (Go
-#: `confdname.IsHidden`), as migrate_rule's `.migration/` (#3997).
-_ARTIFACT_DIR = ".onboard"
+#: #4014: this tool's own dot-directory under `-o`
+#: (`_lib_write_check.DRAFT_ROOTS`, where why it is dot-prefixed and one per
+#: tool is said, once). Phase 3's YAML (relabel suggestions, the scrape
+#: analysis) goes here; it is not a conf.d file.
+_ARTIFACT_DIR = _lib_write_check.DRAFT_ROOTS["onboard_platform"]
+#: The conf.d files of a run (Phase 1's tenant files, Phase 2's suggested
+#: `_defaults.yaml`), under `_ARTIFACT_DIR`: a draft, never served wherever
+#: `-o` lands, and a tree of its own that `validate-config --config-dir`
+#: judges whole. Before, they were in `phase1-routing/` and `phase2-rules/`,
+#: which the exporter's walk read: `-o` at a served conf.d served the draft
+#: tenants, every check green.
+_CONFD_DIR = _lib_write_check.draft_confd_rel("onboard_platform")
 #: The CSVs — no conf.d reader reads a `.csv` — stay where an operator looks.
 _PHASE1_DIR = "phase1-routing"
 _PHASE2_DIR = "phase2-rules"
@@ -1335,13 +1335,14 @@ def _confd_or_die(output_dir, build):
         sys.exit(EXIT_CALLER_ERROR)
     entries = built if isinstance(built, list) else [e for part in built for e in part]
     # #4014: before anything is written or made — a draft holding an
-    # earlier run's tenant this run does not write, or a `-o/.onboard` that
-    # is not a directory, ends the run with nothing written. A run with no
+    # earlier run's tenant this run does not write, or a directory this run
+    # makes after the batch (the draft's, the CSVs') that is a file, ends the
+    # run with nothing written. A run with no
     # Phase 1 writes no tenant, so it leaves the draft's tenants alone.
     paths = [e["path"] for e in entries]
     try:
         refusal = _lib_write_check.refuse_draft_layout(
-            output_dir, paths, artifact_dirs=(_ARTIFACT_DIR,),
+            output_dir, "onboard_platform", paths, made_later=(_PHASE1_DIR, _PHASE2_DIR),
             why="an earlier run's tenant file is another tenant in the draft, #4014",
             writes_tenants=any(p != _PHASE2_DEFAULTS for p in paths))
     except _lib_parse_tree.ParseTreeError as exc:

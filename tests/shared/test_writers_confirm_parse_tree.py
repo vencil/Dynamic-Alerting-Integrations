@@ -1695,7 +1695,7 @@ def test_migrate_rule_output_is_a_conf_d_the_exporter_serves(tmp_path):
 def test_migrate_rule_a_tenant_named_like_another_output_keeps_its_file(tmp_path, tenant):
     # Review of #3671: these are valid tenant ids, and with every output in
     # -o the rule pack / mapping written after the batch replaced the tenant
-    # file (rc 0, thresholds gone). The conf.d files live in -o/.conf.d (`_MR_CONFD`).
+    # file (rc 0, thresholds gone). The conf.d files live in the draft conf.d (`_MR_CONFD`).
     rules = tmp_path / "rules.yml"
     rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
                      "    expr: app_queue_depth > 80\n", encoding="utf-8")
@@ -1794,7 +1794,7 @@ def test_migrate_rule_one_refused_file_writes_neither(tmp_path):
     assert "_defaults.yaml: symlink" in r.stderr and "nothing was written" in r.stderr, \
         r.stderr
     assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*")) == \
-        [_MR_CONFD, f"{_MR_CONFD}/_defaults.yaml"]
+        [Path(_MR_CONFD).parent.as_posix(), _MR_CONFD, f"{_MR_CONFD}/_defaults.yaml"]
     assert _bytes(out) == before
 
 

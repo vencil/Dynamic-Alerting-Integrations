@@ -944,7 +944,7 @@ class TestRunFromOnboard:
                 json.dump(hints, f)
             out = os.path.join(d, "out")
             run_from_onboard(_onboard_ns(from_onboard=hints_path, output_dir=out))
-            assert sorted(os.listdir(out)) == [CONFD_DIR, "scaffold-report.txt"]
+            assert sorted(os.listdir(out)) == [CONFD_DIR.split("/")[0], "scaffold-report.txt"]
             assert sorted(os.listdir(os.path.join(out, CONFD_DIR))) == [
                 "_defaults.yaml", "db-a.yaml", "db-b.yaml"]
 
