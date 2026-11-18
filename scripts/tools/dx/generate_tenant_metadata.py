@@ -44,6 +44,7 @@ from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR, OutputNotSerializa
 from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     FIELD_NOT_STRING,
     FIELD_SET,
+    artifact_file_type,
     is_secret_ref,
     receiver_field_state,
 )
@@ -56,12 +57,13 @@ from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's an
     print_load_warnings,
     recorded_at,
 )
-from _lib_io import (  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789; #3982: the artifact entry)
+    check_repo_artifact,
+    ensure_dir,
     exit_on_output_write_error,
     exit_on_yaml_file_error,
-    output_write,
+    write_repo_artifact,
 )
-from _lib_atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
 from _lib_confd import legacy_state_files  # noqa: E402  (#2883)
 from _lib_tenant_state import (  # noqa: E402  (#2883)
     KEY_GROUPS, StateInputError, add_state_argument, load_state)
@@ -457,8 +459,9 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
 # The #2082 writer that lived here (realpath, private mkstemp tmp, owner /
 # mode / xattr carry-over, in-place fallback + WARN for hard links and
 # unwritable directories) moved into `_atomic_write.atomic_write_text` so
-# there is one implementation; this tool passes its flag so an error still
-# ends "check the value given to --output".
+# there is one implementation, reached since #3982 through the artifact
+# entry `_lib_io.write_repo_artifact`; this tool passes its flag so an error
+# still ends "check the value given to --output".
 
 
 def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
@@ -518,7 +521,9 @@ def main():
     )
     parser.add_argument(
         "--output",
-        type=Path,
+        # #3982 (owner 2026-11-18): an artifact — tenant-api reads it, so it
+        # is replaced whole; `-` is refused (leave --output out for stdout).
+        type=artifact_file_type(then=Path),
         help="Output file path (default: stdout)",
     )
     parser.add_argument(
@@ -585,6 +590,8 @@ def main():
         return Report(data)  # #3216: run() encodes it — the same text as the file
 
     if args.check:
+        # A FIFO or a device would block the read below, or read as damaged.
+        check_repo_artifact(args.output, flag="--output")
         if not args.output.exists():
             print(
                 f"ERROR: {args.output} does not exist. "
@@ -624,20 +631,11 @@ def main():
         return
 
     # Write output file
-    # #1789: the wrapper is given the PARENT — the directory this mkdir
-    # actually creates. Handing it the output FILE makes the message a
-    # sentence about a path nobody was creating (worked example in
-    # `_lib_io.output_write`). The ancestor rule still converts the
-    # failure, and the write below keeps naming the file.
-    with output_write(args.output.parent, flag="--output",
-                      action="create directory"):
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-    # #2082: atomic replace (0644 set on the tmp before the rename), so a
-    # failed run leaves the previous file whole. It converts its own
-    # failures to OutputWriteError; the wrapper stays as the #1789 guard for
-    # anything it does not, and is what the static pin looks for.
-    with output_write(args.output, flag="--output"):
-        atomic_write_text(args.output, content, flag="--output")
+    # #3982: the artifact entry — an atomic replace (#2082), so a failed run
+    # leaves the previous file whole; a regular file only, mode kept the
+    # way a checkout makes it (0644, 0755 for an executable one).
+    ensure_dir(args.output.parent, flag="--output")
+    write_repo_artifact(args.output, content, flag="--output")
 
     try:
         display_path = args.output.relative_to(REPO_ROOT)

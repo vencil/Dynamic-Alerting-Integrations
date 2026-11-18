@@ -28,6 +28,7 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 
 #: (tool, flag) — the same strings as the rows of the write gate.
 ARTIFACT_FILE_FLAGS = [
+    ("dx/generate_tenant_metadata.py", "--output"),  # #3982, owner 2026-11-18
     ("ops/generate_alertmanager_routes.py", "-o/--output"),
 ]
 
@@ -93,3 +94,27 @@ def test_an_artifact_flag_given_dash_is_refused_at_parse_time(tool, flag, tmp_pa
     assert "Traceback" not in proc.stderr
     assert proc.stdout == ""
     assert list(cwd.iterdir()) == [], "the run made something in the working directory"
+
+
+@pytest.mark.parametrize("tool,flag", ARTIFACT_FILE_FLAGS,
+                         ids=[Path(t).stem for t, _f in ARTIFACT_FILE_FLAGS])
+def test_an_artifact_flag_given_an_empty_value_is_refused_at_parse_time(tool, flag, tmp_path):
+    """`--output "$UNSET"`: a tool that reads a falsy value as "not given"
+    printed to stdout at rc 0 and left the file a pipeline meant to update."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == (tool, flag))
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    marker = tmp_path / "@OUT@"
+    argv = ["" if a == str(marker) else a
+            for a in row.build(Ctx(tmp_path, "http://127.0.0.1:1"), marker)]
+    assert "" in argv, argv
+    proc = subprocess.run(
+        [sys.executable, str(TOOLS_DIR / tool), *argv],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=120, cwd=cwd,
+        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+    assert proc.returncode == 2, proc.stderr[-800:]
+    assert f"error: argument {flag}: an empty value names no file" in proc.stderr, \
+        proc.stderr[-800:]
+    assert proc.stdout == ""
+    assert list(cwd.iterdir()) == []

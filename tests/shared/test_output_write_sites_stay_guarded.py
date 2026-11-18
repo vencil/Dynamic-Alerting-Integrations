@@ -1043,7 +1043,8 @@ _KNOWN_SITES = {
     # open_operator_output; the sink left is NOT_GUARDED's carrier toggle.
     "scripts/tools/dx/run_chaos_soak.py": {".write_text"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
-    "scripts/ops/audit_rules_drift.py": {"atomic_write_text()"},
+    # #3982: now the operator entry.
+    "scripts/ops/audit_rules_drift.py": {"write_operator_output()"},
 }
 
 
@@ -1255,9 +1256,15 @@ def test_every_shared_atomic_writer_caller_is_pinned():
     ``GUARDED_FILES`` (the ceiling test goes red too — this one says which).
     """
     callers = shared_writer_callers()
-    # Anti-vacuity: the walk must see callers on both sides of TOOLS_DIR.
-    assert any(not f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    # Anti-vacuity: the walk sees callers under TOOLS_DIR, and it reads the
+    # files outside it too. Since #3982 moved `audit_rules_drift` to the
+    # operator entry, no caller is left outside TOOLS_DIR to show that, so
+    # the second half is held on the tree: the walk's root is all of
+    # `scripts/`, and `scripts/` has Python files outside TOOLS_DIR.
     assert any(f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    assert SCRIPTS_DIR == REPO_ROOT / "scripts"
+    assert any(not p.relative_to(REPO_ROOT).as_posix().startswith("scripts/tools/")
+               for p in SCRIPTS_DIR.rglob("*.py"))
     unpinned = sorted(f"  {f}:{','.join(map(str, lines))}"
                       for f, lines in callers.items() if f not in GUARDED_FILES)
     assert not unpinned, (

@@ -602,6 +602,25 @@ class TestOrDieSisters:
         _lib_io.ensure_dir_or_die(target)
         assert target.is_dir()
 
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
+    def test_ensure_dir_mode_is_the_leafs_and_leaves_an_existing_one(self, tmp_path):
+        """#3982: `mode=` as `os.makedirs` takes it — the leaf only, under
+        the umask; a directory already there keeps its own mode."""
+        import stat
+        leaf = tmp_path / "p" / "secrets"
+        old = os.umask(0)
+        try:
+            _lib_io.ensure_dir(leaf, mode=0o700)
+            _lib_io.ensure_dir_or_die(tmp_path / "q", mode=0o700)
+        finally:
+            os.umask(old)
+        assert stat.S_IMODE(leaf.stat().st_mode) == 0o700
+        assert stat.S_IMODE((tmp_path / "q").stat().st_mode) == 0o700
+        assert stat.S_IMODE(leaf.parent.stat().st_mode) == 0o777
+        leaf.chmod(0o750)
+        _lib_io.ensure_dir(leaf, mode=0o700)
+        assert stat.S_IMODE(leaf.stat().st_mode) == 0o750
+
 
 class TestLibraryPassthrough:
     """Library wrappers forward ``flag`` so the tool-level handler's message
