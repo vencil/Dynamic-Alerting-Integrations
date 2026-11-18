@@ -2272,6 +2272,30 @@ def test_a_reports_stdout_failure_line_does_not_outlive_its_run(capsys):
 
 # ── #3558 P2: Report(..., delivery="best_effort") ────────────────────────
 
+
+@pytest.mark.parametrize("bad", ["float('nan')", "MemoryErrorOnEncode"])
+def test_a_best_effort_document_that_cannot_be_encoded_keeps_a_0_with_stderr_lost(bad, tmp_path):
+    """#4046: the document fails to encode and stderr is /dev/full — the
+    best-effort status (0) stands, as for a lost stdout. The delivery was
+    set after the encoding, so the lost stderr turned the 0 into 2."""
+    if not os.path.exists("/dev/full"):
+        pytest.skip("/dev/full does not exist here")
+    doc = "{'x': float('nan')}" if bad.startswith("float") else "{'x': 1}"
+    patch = ("" if bad.startswith("float") else
+             "def boom(_d):\n    raise MemoryError('injected')\n"
+             "ec.encode_json = boom\n")
+    script = tmp_path / "t.py"
+    script.write_text(
+        f"import sys\nsys.path.insert(0, {str(TOOLS_DIR)!r})\n"
+        "import _lib_exitcodes as ec\n" + patch +
+        f"ec.run(lambda: ec.Report({doc}, 0, delivery='best_effort'))\n",
+        encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "DA_TEST_CRASH_EXIT_CODE"}
+    with open("/dev/full", "wb") as full:
+        proc = subprocess.run([sys.executable, str(script)], stdout=subprocess.DEVNULL,
+                              stderr=full, env=env, timeout=60)
+    assert proc.returncode == 0
+
 _DELIVERY_WAYS = {
     # (how stdout fails, size of the document)
     "dev-full-small": ("dev-full", 10),
