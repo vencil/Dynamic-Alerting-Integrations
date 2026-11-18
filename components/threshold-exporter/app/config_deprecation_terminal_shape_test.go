@@ -174,7 +174,7 @@ func TestDeprecatedMetricTerminalShape_CarrierStillParses(t *testing.T) {
 					t.Errorf("defaults[%q] = %v, want %v", k, got, want)
 				}
 			}
-			if len(cfg.OptionalOverrides) != 1 || cfg.OptionalOverrides[0] != "oracle_process_count" {
+			if len(cfg.OptionalOverrides) != 1 || cfg.OptionalOverrides[0] != "oracle_pga_usage_percent" {
 				t.Errorf("optional_overrides = %v, want the one surviving name",
 					cfg.OptionalOverrides)
 			}

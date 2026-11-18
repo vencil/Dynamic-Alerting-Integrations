@@ -1774,18 +1774,7 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
     ("../ops/audit_rules_drift.py", "--out"): ("some", ("os.mkdir .",)),
     ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
-    ("dx/describe_tenant.py", "-o/--output"): ("all", ("open tenants.json",)),
     ("dx/generate_tenant_metadata.py", "--output"): ("some", ("os.mkdir .",)),
-    ("dx/migrate_conf_d.py", "-o/--output-plan"): ("all", ("open migration-plan.json",)),
-    ("dx/pair_bench_ratio.py", "--out"): ("all", ("open bench-paired.json", "os.mkdir .")),
-    ("dx/paired_trend_watch.py", "--summary-file"): ("all", ("open paired-trend.md",)),
-    ("dx/render_soak_diff.py", "--output"): ("all", ("open soak-report.md",)),
-    ("dx/run_chaos_soak.py", "--output-dir"): (
-        "all", ("open out/metrics-timeseries.csv", "open out/run-config.json",
-                "open out/summary.txt", "os.mkdir out")),
-    ("dx/scan_component_health.py", "--output"): (
-        "all", ("open component-health.json", "os.mkdir .")),
-    ("lint/trufflehog_to_sarif.py", "--output"): ("all", ("open trufflehog.sarif",)),
     ("ops/config_history.py", "--config-dir"): (
         "some", ("open .da-history/history.json", "os.mkdir .da-history",
                  "os.mkdir .da-history/snap-1")),
@@ -3389,7 +3378,7 @@ class TestTheLists:
             assert _list_faults(row, self._CLEAN), key
 
     def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self):
-        key = ("dx/run_chaos_soak.py", "--output-dir")
+        key = ("ops/config_history.py", "--config-dir")
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
         how, sites = RAW_UNDER_OUT[key]
         started = SPAWNS[key]

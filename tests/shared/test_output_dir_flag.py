@@ -30,6 +30,7 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 #: (tool, flag) — the same strings as the rows of the write gate.
 DIR_FLAGS = [
     ("dx/generate_tenant_fixture.py", "-o/--output"),
+    ("dx/run_chaos_soak.py", "--output-dir"),
     ("ops/assemble_config_dir.py", "--output"),
     ("ops/baseline_discovery.py", "-o/--output-dir"),
     ("dx/waveform_compile.py", "--out"),

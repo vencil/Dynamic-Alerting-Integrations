@@ -104,8 +104,10 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_io import (  # noqa: E402  (#1789; #3982)
+    ensure_dir, exit_on_output_write_error, write_operator_output)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
 # Same shape analyze_bench_history.py parses, deliberately: both read the raw
 # `go test -bench` stdout that bench_interleave.sh appends per round.
@@ -375,7 +377,10 @@ def main() -> int:
                     help="TAB-separated `<side>\t<relpath>\t<sha256>` records "
                          "over the workload closure; aggregated per side, never "
                          "compared across nights here")
-    ap.add_argument("--out", type=pathlib.Path, required=True)
+    # #3982: the verdict lines own stdout, so `-` is refused.
+    ap.add_argument("--out", required=True,
+                    type=operator_file_type(stdout="this tool prints its verdict "
+                                                   "there", then=pathlib.Path))
     args = ap.parse_args()
     try_utf8_stdout()
 
@@ -438,16 +443,12 @@ def main() -> int:
         "deterministic": pair_deterministic(read_side_deterministic(args.reference),
                                             read_side_deterministic(args.main)),
     }
-    # #1789: the wrapper is given the PARENT — the directory this mkdir
-    # actually creates. Handing it the output FILE makes the message a
-    # sentence about a path nobody was creating (worked example in
-    # `_lib_io.output_write`). The ancestor rule still converts the
-    # failure, and the write below keeps naming the file.
-    with output_write(args.out.parent, flag="--out", action="create directory"):
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-    with output_write(args.out, flag="--out"):
-        args.out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n",
-                            encoding="utf-8", newline="\n")
+    # #1789: the mkdir is of the PARENT — the directory it actually creates,
+    # so its failure names that directory; the write keeps naming the file.
+    ensure_dir(args.out.parent, flag="--out")
+    write_operator_output(str(args.out),
+                          json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                          flag="--out")
 
     print(f"[pair_bench_ratio] reference {args.reference_tag} on {ref_cpu}")
     print(f"[pair_bench_ratio] {len(evaluated)} evaluated, "

@@ -206,14 +206,14 @@ func boolOrNil(b *bool) any {
 func TestServedValues_RefusedValuesAreNamedApartFromDisables(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := servedWith(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\noptional_overrides:\n  - oracle_process_count\n",
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\noptional_overrides:\n  - oracle_pga_usage_percent\n",
 		"db-a.yaml": "tenants:\n  db-a:\n" +
 			"    mysql_connections: \"NaN\"\n" + // base: the default is served
 			"    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n" +
 			"        - window: \"01:00-02:00\"\n          value: \"-Inf\"\n" +
 			"        - window: \"03:00-04:00\"\n          value: disable\n" +
 			"        - window: \"05:00-06:00\"\n          value: abc\n" +
-			"    oracle_process_count: \"Inf\"\n" +
+			"    oracle_pga_usage_percent: \"Inf\"\n" +
 			"    redis_memory_critical: \"7O\"\n" +
 			"    redis_memory: disable\n" +
 			"    mysql_conections: \"NaN\"\n",
@@ -227,7 +227,7 @@ func TestServedValues_RefusedValuesAreNamedApartFromDisables(t *testing.T) {
 	want := map[string]k3{
 		"mysql_connections":          {true, "", "non_finite"},
 		"mysql_connections_critical": {true, "", ""},
-		"oracle_process_count":       {false, keyReasonValueNonFinite, "non_finite"},
+		"oracle_pga_usage_percent":   {false, keyReasonValueNonFinite, "non_finite"},
 		"redis_memory_critical":      {false, keyReasonValueUnparsed, "unparsed"},
 		"redis_memory":               {false, keyReasonDisabled, ""},
 		"mysql_conections":           {false, keyReasonNoRow, ""},

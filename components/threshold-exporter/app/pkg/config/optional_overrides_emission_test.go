@@ -286,11 +286,11 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 func TestDeclaredEmission_CountsTowardCardinalityCap(t *testing.T) {
 	t.Parallel()
 	cfg := declaredEmissionCfg(nil,
-		[]string{"oracle_wait_time_rate", "oracle_process_count", "db2_deadlock_rate"},
+		[]string{"oracle_wait_time_rate", "oracle_pga_usage_percent", "db2_deadlock_rate"},
 		map[string]ScheduledValue{
-			"oracle_wait_time_rate": {Default: "1"},
-			"oracle_process_count":  {Default: "2"},
-			"db2_deadlock_rate":     {Default: "3"},
+			"oracle_wait_time_rate":    {Default: "1"},
+			"oracle_pga_usage_percent": {Default: "2"},
+			"db2_deadlock_rate":        {Default: "3"},
 		})
 	cfg.MaxMetricsPerTenant = 2
 

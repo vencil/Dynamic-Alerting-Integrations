@@ -682,38 +682,43 @@ keys:
       tracking: 1320
       reason: "No measurement yet; #1320 keeps it declared until there is a signal"
       reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
-  oracle_process_count:
+  oracle_process_usage_percent:
+    pack: oracle
+    tier: defaults
+    value: 85
+    unit: '% of PROCESSES'
+    desc: 'Process usage warning: v$process rows as a share of the PROCESSES parameter,
+      per exporter, busiest per tenant; 85 = awesome-prometheus-alerts "Oracle DB processes
+      reaching limit". Replaces the absolute-count key oracle_process_count (#1320: a
+      unit change is a removal plus an addition, no alias)'
+    metric_class: capacity
+    arming: default
+    portability: portable
+    validation:
+      basis: vendor
+      sources:
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "oracledb_resource_current_utilization{resource_name=\"processes\"} / oracledb_resource_limit_value{resource_name=\"processes\"} * 100 > 85 and oracledb_resource_limit_value{resource_name=\"processes\"} > 0"
+        value: 85
+        tier: warning
+  oracle_pga_usage_percent:
     pack: oracle
     tier: optional_overrides
-    value: 300
-    unit: count
-    desc: Active processes warning
+    value: 85
+    unit: '% of PGA_AGGREGATE_LIMIT'
+    desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT
+      (past it Oracle terminates sessions), per exporter, busiest per tenant; a database
+      with no limit set (0) has no share. Replaces the absolute-bytes key
+      oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)'
     metric_class: capacity
     arming: operator
-    portability: ratio_pending
-    portability_reason: "#1176 measured a routine backup at 560 processes; the portable form is a share of the PROCESSES limit, pending #1320"
-    portability_reason_zh: "#1176 量到例行備份達 560 個 process；可攜的形式是佔 PROCESSES 上限的比例，待 #1320"
-    value_counterexample:
-      issue: 1176
-      direction: over_fire
-      observed: a routine backup batch reaches 560 processes
-      observed_zh: 例行備份批次會到 560 個 process
-  oracle_pga_allocated_bytes:
-    pack: oracle
-    tier: optional_overrides
-    value: 4294967296
-    unit: bytes (4GB)
-    desc: PGA allocation warning
-    metric_class: capacity
-    arming: operator
-    portability: ratio_pending
-    portability_reason: "#1176 measured a planned stats-gather at 22 GB; the portable form is a share of PGA_AGGREGATE_LIMIT, pending #1320"
-    portability_reason_zh: "#1176 量到計畫性 stats-gather 用到 22 GB；可攜的形式是佔 PGA_AGGREGATE_LIMIT 的比例，待 #1320"
-    value_counterexample:
-      issue: 1176
-      direction: over_fire
-      observed: a planned stats-gather reaches 22 GB PGA
-      observed_zh: 計畫性 stats-gather 會用到 22 GB PGA
+    portability: portable
+    blocker:
+      kind: unmeasured
+      tracking: 1320
+      reason: "No public alert rule or vendor default states a share of PGA_AGGREGATE_LIMIT to warn at; 85 matches the process and session shares and is a starting point"
+      reason_zh: "沒有公開的告警規則或 vendor 預設值給出佔 PGA_AGGREGATE_LIMIT 多少比例該警告；85 與 process、session 比例一致，只是起點"
   oracle_sessions_active_critical:
     pack: oracle
     tier: optional_overrides
@@ -1173,3 +1178,19 @@ retired_keys:
     replaced_by: mysql_connection_usage_percent
     tracking: 3778
     hint: "The unit changed from an absolute connection count to a percentage of max_connections; convert the value, do not copy it."
+  oracle_pga_allocated_bytes:
+    replaced_by: oracle_pga_usage_percent
+    tracking: 1320
+    hint: "The unit changed from absolute bytes to a percentage of PGA_AGGREGATE_LIMIT; convert the value, do not copy it."
+  oracle_pga_allocated_bytes_critical:
+    replaced_by: null
+    tracking: 1320
+    hint: "The PGA alert has no critical tier: oracle_pga_usage_percent (a percentage of PGA_AGGREGATE_LIMIT) is a warning only."
+  oracle_process_count:
+    replaced_by: oracle_process_usage_percent
+    tracking: 1320
+    hint: "The unit changed from an absolute process count to a percentage of the PROCESSES parameter; convert the value, do not copy it."
+  oracle_process_count_critical:
+    replaced_by: null
+    tracking: 1320
+    hint: "The process alert has no critical tier: oracle_process_usage_percent (a percentage of the PROCESSES parameter) is a warning only."

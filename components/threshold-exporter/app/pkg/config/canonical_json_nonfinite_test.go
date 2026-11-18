@@ -96,7 +96,7 @@ func TestScopeEffective_RoutingOverrideInf_ResolvesWithPythonHash(t *testing.T) 
 	// hash is of that body with the built-in keys (integral values written
 	// as ints, as yaml loads them) beside `_routing`; it was b35b4f8f5c95253c
 	// for `_routing` alone.
-	const wantHash = "e76ea1620d94b760"
+	const wantHash = "9e68b00279ec3f5f"
 	if got := scoped.Tenants[0].MergedHash; got != wantHash {
 		t.Errorf("merged_hash = %q, want Python's %q", got, wantHash)
 	}

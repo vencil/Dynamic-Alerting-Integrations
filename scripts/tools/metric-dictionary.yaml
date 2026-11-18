@@ -229,16 +229,28 @@ oracledb_wait_time_seconds_total:
   note: "Wait time — rate() 指標, sum by(tenant) 聚合"
 
 oracledb_process_count:
-  maps_to: oracle_process_count
+  maps_to: oracle_process_usage_percent
   golden_rule: OracleHighProcessCount
   rule_pack: oracle
-  note: "Active processes — max by(tenant) 聚合"
+  note: "Process 使用率的分子；閾值是佔 PROCESSES 參數的 %（#1320），用 scaffold_tenant.py 設定 oracle_process_usage_percent"
+
+oracledb_processes_limit:
+  maps_to: oracle_process_usage_percent
+  golden_rule: OracleHighProcessCount
+  rule_pack: oracle
+  note: "Process 使用率的分母（PROCESSES 參數，逐 exporter 相除，#1320）"
 
 oracledb_pga_allocated_bytes:
-  maps_to: oracle_pga_allocated_bytes
+  maps_to: oracle_pga_usage_percent
   golden_rule: OracleHighPGAUsage
   rule_pack: oracle
-  note: "PGA 記憶體分配 — max by(tenant) 聚合"
+  note: "PGA 使用率的分子；閾值是佔 PGA_AGGREGATE_LIMIT 的 %（#1320），用 scaffold_tenant.py 設定 oracle_pga_usage_percent"
+
+oracledb_pga_aggregate_limit_bytes:
+  maps_to: oracle_pga_usage_percent
+  golden_rule: OracleHighPGAUsage
+  rule_pack: oracle
+  note: "PGA 使用率的分母（PGA_AGGREGATE_LIMIT，0 表示未設上限、不計比例，#1320）"
 
 # ────────────────────────────────────────
 # IBM DB2

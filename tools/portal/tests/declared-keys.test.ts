@@ -35,7 +35,7 @@ const platformData = JSON.parse(
 const PD_DECLARED: Record<string, Array<{ key: string }>> = platformData.declaredKeys;
 
 const PACK = 'oracle';
-const DECLARED_KEY = 'oracle_process_count';
+const DECLARED_KEY = 'oracle_pga_usage_percent';
 
 describe('declaredKeys — generated data', () => {
   it('platform-data.json actually carries a non-empty declaredKeys block', () => {
@@ -193,7 +193,9 @@ describe('alert-engine — a declared key must not be called unknown', () => {
     // write tenant-api refuses. The page judges no key name, so it says nothing.
     const { validateConfig } = await import(ENGINE_MOD);
     const field = `${DECLARED_KEY}_critical`;
-    expect(msgs(validateConfig({ [field]: '500' }, [PACK]), field)).toEqual([]);
+    // An in-range value: DECLARED_KEY is a percentage (#1320), and 500 would
+    // draw the unrelated "exceeds 100" range check instead of testing silence.
+    expect(msgs(validateConfig({ [field]: '50' }, [PACK]), field)).toEqual([]);
   });
 });
 

@@ -64,7 +64,8 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
 )
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_output_write_error, write_operator_output  # noqa: E402  (#1789; #3982)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
 SARIF_SCHEMA = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json"
 SARIF_VERSION = "2.1.0"
@@ -209,7 +210,10 @@ def main() -> int:
     )
     parser.add_argument("--input", required=True,
                         help="trufflehog --json output file (NDJSON)")
+    # #3982: the scan summary owns stdout, so `-` is refused.
     parser.add_argument("--output", required=True,
+                        type=operator_file_type(stdout="this tool prints its scan "
+                                                       "summary there"),
                         help="SARIF file to write")
     parser.add_argument("--tool-version", default="unknown",
                         help="trufflehog version string for the SARIF tool.driver")
@@ -225,17 +229,13 @@ def main() -> int:
     findings = parse_ndjson(in_path.read_text(encoding="utf-8", errors="replace"))
     sarif, verified_count = convert(findings, args.tool_version)
 
-    # #1789: the rc was already EXIT_USAGE (2), but the message was this
-    # tool's own — it printed the `OSError` message and never named the flag
-    # to fix. The wrapper keeps the write EXACTLY as it is (raw `write_text`,
-    # so the bytes and the 0644 the SARIF uploader reads do not move) and
-    # turns the failure into the one line every tool in the batch prints,
-    # via the decorator on `main`.
-    with output_write(args.output, flag="--output"):
-        Path(args.output).write_text(
-            json.dumps(sarif, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8", newline="\n",
-        )
+    # #3982: through the operator entry — same bytes; the file is 0600 (it
+    # lists secret findings; the SARIF upload steps run as the same user).
+    # A failure is the one line every tool prints, via the decorator on
+    # `main` (rc 2).
+    write_operator_output(args.output,
+                          json.dumps(sarif, indent=2, ensure_ascii=False) + "\n",
+                          flag="--output")
 
     total = len(findings)
     unverified_count = total - verified_count

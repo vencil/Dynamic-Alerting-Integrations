@@ -52,8 +52,9 @@ from _lib_compat import try_utf8_stdout, find_project_root  # noqa: E402
 from _lib_confd import duplicate_declarations, tenant_declarations  # noqa: E402  (#2049)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789; #3276)
-    YamlFileError, exit_on_output_write_error, output_write, safe_label)
+    YamlFileError, exit_on_output_write_error, safe_label, write_operator_output)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: one parse-tree document per run)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
@@ -530,8 +531,10 @@ def main() -> None:
         help="Dump all tenants' effective configs",
     )
     parser.add_argument(
-        "--output", "-o", type=str, default=None,
-        help="Output file (default: stdout). Used with --all.",
+        # #3982: with --all and -o, nothing else writes stdout (the receipt
+        # is stderr's), so `-` is standard output.
+        "--output", "-o", type=operator_file_type(), default=None,
+        help="Output file (default: stdout; - is stdout). Used with --all.",
     )
     parser.add_argument(
         "--format", "-f", choices=["json", "yaml"], default="json",
@@ -693,8 +696,7 @@ def main() -> None:
             print(f"❌ no other tenant is described: {scanner.refused}.", file=sys.stderr)
         out = _output(result)
         if args.output:
-            with output_write(args.output, flag="-o/--output"):
-                Path(args.output).write_text(out, encoding="utf-8", newline="\n")
+            write_operator_output(args.output, out, flag="-o/--output")
             print(f"✅ Written {len(result)} tenants to {args.output}", file=sys.stderr)
         else:
             print(out)

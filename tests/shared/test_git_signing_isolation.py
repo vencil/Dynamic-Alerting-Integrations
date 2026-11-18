@@ -81,6 +81,7 @@ def test_the_session_points_git_at_a_copy_with_signing_off():
     assert os.environ.get("GIT_CONFIG_NOSYSTEM") == "1"
     assert gi.read_key(path, "commit.gpgsign") == "false"
     assert gi.read_key(path, "tag.gpgsign") == "false"
+    assert gi.read_key(path, "maintenance.auto") == "false"
 
 
 def test_a_commit_through_the_session_environment_needs_no_signer(tmp_path):
@@ -167,7 +168,30 @@ def test_an_empty_host_config_copies_to_signing_off_alone(tmp_path):
     env = _hostile_env(tmp_path, Path(os.devnull))
     path = gi.write_config_copy(str(tmp_path), env)
     assert Path(path).read_text(encoding="utf-8") == (
-        "[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n")
+        "[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n"
+        "[maintenance]\n\tauto = false\n")
+
+
+def test_a_commit_under_the_session_starts_no_background_maintenance(tmp_path):
+    """#4037: without the session's maintenance.auto=false, a commit spawns
+    `git maintenance run --auto` (detached), whose worktree-prune (git ≥ 2.50)
+    removed a worktree `git worktree add` was still making. Read from
+    GIT_TRACE: the counterfactual first, then the session's environment."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
+               GIT_CEILING_DIRECTORIES=str(tmp_path), GIT_TRACE="1")
+    _git("init", "-q", cwd=repo, env=env)
+
+    def spawns(n, *extra):
+        (repo / f"f{n}.txt").write_text("x\n", encoding="utf-8")
+        _git("add", f"f{n}.txt", cwd=repo, env=env)
+        proc = _git(*extra, "commit", "-q", "-m", "c", cwd=repo, env=env)
+        return "maintenance run --auto" in proc.stderr
+
+    assert spawns(1, "-c", "maintenance.auto=true"), "the counterfactual: git does start it"
+    assert not spawns(2), "the session's config starts no maintenance"
 
 
 def test_a_config_git_cannot_read_fails_the_copy(tmp_path):

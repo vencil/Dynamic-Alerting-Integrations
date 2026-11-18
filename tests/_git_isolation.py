@@ -33,6 +33,20 @@ from typing import Mapping, Optional
 #: Written after the copy, so they win over whatever the host config says.
 SIGNING_OFF = (("commit.gpgsign", "false"), ("tag.gpgsign", "false"))
 
+#: #4037: a test's `git commit` starts `git maintenance run --auto`, detached
+#: into the background. From git 2.50 its default tasks include
+#: worktree-prune, which removes a `.git/worktrees/<id>` that has neither a
+#: `locked` nor a `gitdir` file yet — the state `git worktree add` leaves
+#: between its mkdir and its first write (builtin/worktree.c add_worktree;
+#: worktree.c should_prune_worktree). A test that adds a worktree right
+#: after its fixture commits then failed at random on CI's git 2.56:
+#: "could not open '.git/worktrees/wt/locked' for writing". No test needs
+#: the repository maintained behind its back.
+MAINTENANCE_OFF = (("maintenance.auto", "false"),)
+
+#: Every entry the session's config forces, in the order written.
+FORCED = SIGNING_OFF + MAINTENANCE_OFF
+
 CONFIG_FILE_NAME = "gitconfig"
 
 
@@ -107,18 +121,19 @@ def config_copy_text(workdir: str, env: Optional[Mapping[str, str]] = None) -> s
 
 
 def write_config_copy(dest_dir: str, env: Optional[Mapping[str, str]] = None) -> str:
-    """Write the copy (``config_copy_text``) plus ``SIGNING_OFF`` to
-    *dest_dir*/gitconfig and return its path. Before returning, git reads the
-    file back: it must parse and say false for both signing keys."""
+    """Write the copy (``config_copy_text``) plus ``FORCED`` (signing off,
+    auto maintenance off) to *dest_dir*/gitconfig and return its path.
+    Before returning, git reads the file back: it must parse and say the
+    forced value for each forced key."""
     text = config_copy_text(dest_dir, env)
-    for key, value in SIGNING_OFF:
+    for key, value in FORCED:
         section, _sub, name = _split_key(key)
         text += f"[{section}]\n\t{name} = {value}\n"
     path = os.path.join(dest_dir, CONFIG_FILE_NAME)
     with open(path, "w", encoding="utf-8", errors="surrogateescape") as fh:
         fh.write(text)
     os.chmod(path, 0o600)
-    for key, value in SIGNING_OFF:
+    for key, value in FORCED:
         got = read_key(path, key)
         if got != value:
             raise GitConfigCopyError(

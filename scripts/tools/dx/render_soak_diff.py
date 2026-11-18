@@ -39,8 +39,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_io import exit_on_output_write_error, write_operator_output  # noqa: E402  (#1789; #3982)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
 # How much rise across the run counts as drift?
 WARN_THRESHOLD_PCT = 5.0
@@ -249,8 +250,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--input-dir", required=True,
                         help="Output directory from run_chaos_soak.py")
-    parser.add_argument("--output", default=None,
-                        help="Optional output file (default: stdout)")
+    # #3982: the report is the only thing this tool prints to stdout, so `-`
+    # is standard output.
+    parser.add_argument("--output", default=None, type=operator_file_type(),
+                        help="Optional output file (default: stdout; - is stdout)")
     parser.add_argument("--warmup-sec", type=int, default=None,
                         help=f"Override warmup-skip window in seconds "
                              f"(default: 10%% of run, clamped {MIN_WARMUP_SEC}-{MAX_WARMUP_SEC}s; "
@@ -260,8 +263,7 @@ def main() -> int:
     report, exit_code = render(Path(args.input_dir), warmup_sec_override=args.warmup_sec)
 
     if args.output:
-        with output_write(args.output, flag="--output"):
-            Path(args.output).write_text(report, encoding="utf-8", newline="\n")
+        write_operator_output(args.output, report, flag="--output")
         print(f"[info] report written to {args.output}", file=sys.stderr)
     else:
         sys.stdout.write(report)

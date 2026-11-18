@@ -54,7 +54,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_io import exit_on_output_write_error, write_operator_output  # noqa: E402  (#1789; #3982)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
@@ -377,7 +378,10 @@ def main() -> None:
         help="Inference source for target directories (default: metadata)",
     )
     parser.add_argument(
-        "--output-plan", "-o", type=str, default=None,
+        "--output-plan", "-o", default=None,
+        # #3982: the scan summary and the move list own stdout, so `-` is refused.
+        type=operator_file_type(stdout="this tool prints its scan summary and "
+                                       "move list there"),
         help="Write migration plan as JSON to file",
     )
     args = parser.parse_args()
@@ -417,10 +421,9 @@ def main() -> None:
     print()
 
     if args.output_plan:
-        with output_write(args.output_plan, flag="-o/--output-plan"):
-            Path(args.output_plan).write_text(
-                json.dumps(actions, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
-            )
+        write_operator_output(args.output_plan,
+                              json.dumps(actions, indent=2, ensure_ascii=False),
+                              flag="-o/--output-plan")
         print(f"✅ Plan written to {args.output_plan}")
 
     if not ok:

@@ -6,7 +6,7 @@ defaults:
   disk_usage: 85
 optional_overrides:
 - cpu_usage
-- oracle_process_count
+- oracle_pga_usage_percent
 state_filters:
   container_crashloop:
     reasons: ["CrashLoopBackOff"]

@@ -384,7 +384,16 @@ class OperatorFileArg:
                 raise argparse.ArgumentTypeError(
                     f"{value!r} is this run's standard output, and "
                     f"{self.stdout}; name another file")
-        return self.then(value) if self.then is not None else value
+        if self.then is None:
+            return value
+        result = self.then(value)
+        if value != "-" and isinstance(result, (str, os.PathLike)) \
+                and os.fspath(result) == "-":
+            # `Path("./-")` is `Path("-")`: the operator entry would read
+            # the file the operator named as standard output (#3982). The
+            # same file, by a name no `then` collapses.
+            result = self.then(os.path.abspath(value))
+        return result
 
 
 def operator_file_type(*, stdout: Optional[str] = None,
