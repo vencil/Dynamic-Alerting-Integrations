@@ -242,8 +242,16 @@ def test_extract_alerts_label_values_coerced_to_strings():
 # ─── load_alerts (file + dir) ─────────────────────────────────────────
 
 
+def _load(source, exclude=()):
+    """load_alerts on what --rule-source selects (#4040: the CLI's one
+    listing, `_lib_consumer_read.files_to_read`, less --exclude); an empty
+    selection is the declaration's refusal, pinned by
+    test_main_empty_rule_source."""
+    return sdc.load_alerts(sdc._lib_consumer_read.files_to_read([source], exclude))
+
+
 def test_load_alerts_single_file(rule_pack_file):
-    alerts, errors = sdc.load_alerts(rule_pack_file)
+    alerts, errors = _load(rule_pack_file)
     assert errors == []
     assert len(alerts) == 1
     assert alerts[0]["name"] == "FooAlert"
@@ -256,7 +264,7 @@ def test_load_alerts_directory_recursive(tmp_path):
     _write(tmp_path / "b/c/pack2.yaml", """
         groups: [{name: g, rules: [{alert: A2, expr: up}]}]
     """)
-    alerts, errors = sdc.load_alerts(tmp_path)
+    alerts, errors = _load(tmp_path)
     assert errors == []
     assert {a["name"] for a in alerts} == {"A1", "A2"}
 
@@ -273,10 +281,10 @@ def test_load_alerts_names_non_rule_pack_yaml_until_excluded(tmp_path):
         defaults:
           mysql_connections: 80
     """)
-    alerts, errors = sdc.load_alerts(tmp_path)
+    alerts, errors = _load(tmp_path)
     assert [a["name"] for a in alerts] == ["A"]
     assert len(errors) == 1 and "_defaults.yaml" in errors[0] and "--exclude" in errors[0]
-    alerts, errors = sdc.load_alerts(tmp_path, ["_defaults.yaml"])
+    alerts, errors = _load(tmp_path, ["_defaults.yaml"])
     assert errors == []
     assert [a["name"] for a in alerts] == ["A"]
 
@@ -311,7 +319,7 @@ def test_load_alerts_names_a_misspelt_groups_and_a_manifest_without_kind(tmp_pat
     (tmp_path / "grups.yaml").write_text("grups:\n- name: g\n  rules: []\n", encoding="utf-8")
     (tmp_path / "nokind.yaml").write_text(
         "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n", encoding="utf-8")
-    alerts, errors = sdc.load_alerts(tmp_path)
+    alerts, errors = _load(tmp_path)
     assert alerts == []
     assert [e.split(":")[0].rsplit("/", 1)[-1] for e in errors] == ["grups.yaml", "nokind.yaml"]
     assert all("it has no `kind`" in e for e in errors), errors
@@ -322,17 +330,11 @@ def test_load_alerts_reports_yaml_parse_error(tmp_path):
         groups: [{name: g, rules: [{alert: A, expr: up}]}]
     """)
     (tmp_path / "bad.yaml").write_text("groups: [unclosed\n", encoding="utf-8")
-    alerts, errors = sdc.load_alerts(tmp_path)
+    alerts, errors = _load(tmp_path)
     # Good file's alert is still loaded
     assert [a["name"] for a in alerts] == ["A"]
     # Bad file is captured as an error naming it (main exits 2 on it)
     assert any("bad.yaml" in e and "no reader reads it" in e for e in errors), errors
-
-
-def test_load_alerts_empty_dir(tmp_path):
-    alerts, errors = sdc.load_alerts(tmp_path)
-    assert alerts == []
-    assert any("no YAML files found" in e for e in errors)
 
 
 # ─── matcher_applies: full 4-combination matrix ───────────────────────
@@ -1270,7 +1272,7 @@ def test_load_alerts_reads_rule_packs_held_in_a_configmap(tmp_path, text):
     a file holds are `rule_files_in`'s answer."""
     (tmp_path / "cm.yaml").write_text(text, encoding="utf-8")
     (tmp_path / "_defaults.yaml").write_text("defaults: {a: 1}\n", encoding="utf-8")
-    alerts, errors = sdc.load_alerts(tmp_path, ["_defaults.yaml"])
+    alerts, errors = _load(tmp_path, ["_defaults.yaml"])
     assert errors == []
     assert [a["name"] for a in alerts] == ["InCm"]
 
@@ -1287,7 +1289,7 @@ def test_load_alerts_names_a_prometheusrule_with_top_level_groups(tmp_path):
     """The API server refuses it (strict decoding error: unknown field
     "groups"); it used to be read as a PrometheusRule with no rule file."""
     (tmp_path / "pr.yaml").write_text(_PR_TOP_GROUPS, encoding="utf-8")
-    alerts, errors = sdc.load_alerts(tmp_path)
+    alerts, errors = _load(tmp_path)
     assert alerts == []
     assert len(errors) == 1 and 'unknown field "groups"' in errors[0], errors
 

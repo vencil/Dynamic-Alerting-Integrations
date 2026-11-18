@@ -26,7 +26,7 @@ from textwrap import dedent
 import pytest
 
 import rule_pack_diff as rpd
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError, emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ─── Fixtures: minimal valid rule pack snippets ───────────────────────
@@ -601,10 +601,54 @@ def test_main_ci_exits_1_on_breaking(v1_path, v2_path, capsys, extra):
 
 
 def test_main_missing_input_exits_2(tmp_path):
-    rc = emit_result(rpd.main(
-        ["--from", str(tmp_path / "nope.yaml"), "--to", str(tmp_path / "also.yaml")]
-    ))
+    """#4040: --from / --to are declared inputs — a missing one is the
+    caller error (rc 2 through run()) naming the flag, and both are named in
+    one run, not the second only after the first is fixed."""
+    with pytest.raises(CallerError) as exc:
+        rpd.main(["--from", str(tmp_path / "nope.yaml"), "--to", str(tmp_path / "also.yaml")])
+    assert str(exc.value) == (f"--from {tmp_path / 'nope.yaml'}: No such file or directory\n"
+                              f"ERROR: --to {tmp_path / 'also.yaml'}: No such file or directory")
+    assert exc.value.reason == "file_not_found"
+
+
+def _da_read_that_breaks(tmp_path, monkeypatch, victim: Path) -> None:
+    """DA_READ_BINARY: a wrapper that makes *victim* no rule pack (bytes da-read
+    would refuse), then runs the real da-read — whatever the tool hands it."""
+    real = rpd._lib_consumer_read.da_read_binary(None)
+    if not real:
+        pytest.skip("da-read is not built here")
+    wrapper = tmp_path / "da-read-wrapper"
+    wrapper.write_text(f"#!/bin/sh\nprintf 'groups: [\\n' > '{victim}'\nexec '{real}' \"$@\"\n",
+                       encoding="utf-8")
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("DA_READ_BINARY", str(wrapper))
+
+
+def test_main_reads_each_pack_once(tmp_path, monkeypatch, capsys):
+    """#4040: da-read reads the text _lib_input read — the path given is
+    never opened again, so a pack changed while the reader runs is not what
+    is compared."""
+    v1 = _write_pack(tmp_path / "v1.yaml", """
+        groups:
+          - name: g1
+            rules:
+              - alert: A1
+                expr: up == 0
+    """)
+    _da_read_that_breaks(tmp_path, monkeypatch, v1)
+    rc = emit_result(rpd.main(["--from", str(v1), "--to", str(v1)]))
+    assert rc == 0, capsys.readouterr().err
+    assert "No differences detected" in capsys.readouterr().out
+
+
+def test_main_names_the_flag_of_a_pack_the_loader_refuses(tmp_path, capsys):
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("groups: [\n", encoding="utf-8")
+    good = _write_pack(tmp_path / "good.yaml", "groups: []\n")
+    rc = emit_result(rpd.main(["--from", str(good), "--to", str(bad)]))
     assert rc == 2
+    err = capsys.readouterr().err
+    assert f"Prometheus' rule loader refuses --to {bad}: " in err, err
 
 
 def test_main_clean_diff_text(v1_path, capsys):
@@ -678,3 +722,18 @@ def test_main_json_roundtrip_for_label_value_tuple(tmp_path, capsys):
     breaking = report["breaking_modifications"][0]["change"]["label_values_changed"]
     # Tuple round-trips as a 2-element list
     assert breaking == {"severity": ["warning", "critical"]}
+
+
+def test_a_refused_pack_is_named_as_the_declaration_names_it(tmp_path, monkeypatch, capsys):
+    """#4040 review: the loader's refusal names the input as _lib_input's
+    refusals do — the value as typed (`./` kept) and through safe_label (a
+    newline in a path cannot print a line of its own)."""
+    monkeypatch.chdir(tmp_path)
+    bad = tmp_path / "b\nERROR: forged.yml"
+    bad.write_text("groups: [\n", encoding="utf-8")
+    (tmp_path / "good.yml").write_text("groups: []\n", encoding="utf-8")
+    rc = emit_result(rpd.main(["--from", "./good.yml", "--to", f"./{bad.name}"]))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "\nERROR: forged.yml" not in err, err
+    assert "refuses --to ./b" in err, err

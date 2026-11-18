@@ -1421,6 +1421,8 @@ da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml> [options]
 | `--json` | Emit JSON structured report |
 | `--ci` | Exit 1 on breaking changes (CI gate). Breaking = alert removed, label key added/removed, label value change, alert↔record kind swap |
 
+Each file is read once and Prometheus' rule loader reads that content ([#4040](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4040)): a file that is not there, cannot be read or is not UTF-8 is exit `2`, one line naming the flag and the path — both at once when both are; a file the loader refuses is named by its flag too.
+
 **Breaking vs informational changes**
 
 | Change | Breaking? |
@@ -2287,7 +2289,7 @@ da-tools migrate <input_file> [options]
 
 | Parameter | Description |
 |-----------|-------------|
-| `<input_file>` | Input legacy rules YAML file |
+| `<input_file>` | Input legacy rules YAML file. Read once; Prometheus' rule loader reads that content ([#4040](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4040)): a file that is not there, cannot be read or is not UTF-8 is exit `2`, one line naming the path |
 
 **Options**
 
