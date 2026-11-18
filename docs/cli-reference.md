@@ -2693,17 +2693,18 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 |------|------|--------|
 | `-o, --output <FILE>` | 另把 JSON 報告寫到檔案。`-`、空值與本次 stdout 已在寫的檔（如 `/dev/stdout`）是結束碼 `2`（stdout 已印報告；要名為 `-` 的檔請給 `./-`）；權限 `0600`，只對自己擁有的一般檔設定（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)） | （無） |
 | `--json` | stdout 只印 JSON | false |
+| `--at <RFC3339>` | `--config-dir`：判斷 `expires:` 有沒有過期的時刻；其餘一律讀整個 UTC 日。值由 da-guard 判，不合格時結束碼 2 | 現在 |
 | `--metric-dictionary <FILE>` | 指標字典；給了但檔案不存在時結束碼 2 | 工具同層的 `metric-dictionary.yaml`（映像），或上一層（repo 的 `scripts/tools/`） |
 
-`--config-dir` 讀的是 exporter 的 `/metrics` 對每個租戶實際發出的閾值與其值（經 `da-guard served-values`，#2115）：繼承來的 `custom_` 閾值也列入，`disable` 的鍵、沒有預設值而不會發出的鍵不列；沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；exporter 讀不到的檔或子目錄（權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束、`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`），指向目錄的 symlink 例外（exporter 本來就不跟進，只跳過、不影響結束碼）；da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）；因檔案解析失敗或讀不到而結束時，`ERROR` 行下面附的 da-guard 訊息寫的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
+`--config-dir` 讀的是 exporter 的 `/metrics` 對每個租戶整個 UTC 日實際發出的閾值與其值（經 `da-guard served-values --schedules-only`，#2115、[#4027](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4027)），不是執行那一刻的值：同一棵樹不論幾點跑，結果都一樣（只有 `expires:` 依 `--at`）。一天中任一時段有發出的鍵就列入；有排程的鍵在 `--json` 的 `served` 逐段列出、文字報告標 `[scheduled: …]`；`expires:` 限時的鍵另帶 `expires`（文字報告標 `[until …]`），結論只成立到那個時刻。一天中有 `/metrics` 收集不了的時段（例如同一條 series 有兩列）時，那段時間的值不可知，以結束碼 2 結束、`ERROR` 行點名時段，什麼都不判。繼承來的 `custom_` 閾值也列入，整天都 `disable` 的鍵、沒有預設值而不會發出的鍵不列；沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；exporter 讀不到的檔或子目錄（權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束、`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`），指向目錄的 symlink 例外（exporter 本來就不跟進，只跳過、不影響結束碼）；da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）；因檔案解析失敗或讀不到而結束時，`ERROR` 行下面附的 da-guard 訊息寫的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
 
-`--tenant-config` 讀單一檔案寫了什麼，不繼承 `defaults:` 或其他檔；有 `tenants:` 就逐一列出其下的租戶，沒有就以檔名（去掉副檔名）當租戶 id；頂層是清單或純量時結束碼 2、點名旗標與路徑（空檔仍是沒有鍵的租戶，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）。讀法是 exporter 的 yaml.v3（經 `da-guard parse-tree` 的單檔模式，#2906）：未加引號的 `yes` 是字串 `"yes"`、日期在 `--json` 的 `current_value` 是原文、租戶 id `010` 就是 `"010"`；同一 mapping 寫兩次同一個鍵（`123` 與 `"123"` 算同一個鍵）或一個檔有多份文件時，以結束碼 2 結束並指名該檔。一樣需要 da-guard。
+`--tenant-config` 讀單一檔案寫了什麼，不繼承 `defaults:` 或其他檔；有 `tenants:` 就逐一列出其下的租戶，沒有就以檔名（去掉副檔名）當租戶 id；頂層是清單或純量時結束碼 2、點名旗標與路徑（空檔仍是沒有鍵的租戶，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）。讀法是 exporter 的 yaml.v3（經 `da-guard parse-tree` 的單檔模式，#2906）：未加引號的 `yes` 是字串 `"yes"`、日期在 `--json` 的 `written` 是原文、租戶 id `010` 就是 `"010"`；同一 mapping 寫兩次同一個鍵（`123` 與 `"123"` 算同一個鍵）或一個檔有多份文件時，以結束碼 2 結束並指名該檔。一樣需要 da-guard。
 
 兩個預設位置都找不到字典時，stderr 印一行 `WARN`，比對退回名稱前綴與字詞重疊（`match_type: "prefix"`、`confidence: 0.7`）。⚠️ v2.9.0 映像不受影響（字典與工具同層）；但在 repo 裡用那個版本的程式直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時找不到字典，而且不會警告，請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。 <!-- image-caveat: v2.9.0 -->
 
 **輸出**
 
-文字報告：依 Rule Pack 分組，列出每個 `custom_` 指標對應到哪個原始指標與比對方式，例如 `custom_mysql_global_status_threads_connected -> mysql_global_status_threads_connected (exact, 100%)`，最後統計可改用 Rule Pack 的數量。租戶配置裡沒有 `custom_` 指標時只印 `No custom_ metrics found in tenant configs.`。`--json` 時是一個陣列，每個 `custom_` 指標一筆，含 `tenant`、`custom_metric`、`original_metric`、`current_value`、`best_match_pack`、`match_type`、`confidence`、`recommendation` 等欄位。
+文字報告：依 Rule Pack 分組，列出每個 `custom_` 指標對應到哪個原始指標與比對方式，例如 `custom_mysql_global_status_threads_connected -> mysql_global_status_threads_connected (exact, 100%)`，最後統計可改用 Rule Pack 的數量。租戶配置裡沒有 `custom_` 指標時只印 `No custom_ metrics found in tenant configs.`。`--json` 時是一個陣列，每個 `custom_` 指標一筆，含 `tenant`、`custom_metric`、`original_metric`、`best_match_pack`、`match_type`、`confidence`、`recommendation` 等欄位；值依來源分欄：`--config-dir` 是 `served`（整天的 segment 清單，每段 `{from, to, value, severity}`，停用的段 `value` 為 `null` 並帶 `reason`；限時的鍵另有 `expires`），`--tenant-config` 是 `written`（檔案寫的原樣）。⚠️ 舊的 `current_value` 已移除（[#4027](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4027)）。
 
 **範例**
 

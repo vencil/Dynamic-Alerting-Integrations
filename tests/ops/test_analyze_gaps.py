@@ -410,7 +410,7 @@ class TestSingleFileReadsParseTree:
         assert configs == {"t1": {"custom_x": "yes"}}
         p = _run_tool("--tenant-config", path, "--json")
         assert p.returncode == 0, p.stderr
-        assert json.loads(p.stdout)[0]["current_value"] == "yes"
+        assert json.loads(p.stdout)[0]["written"] == "yes"
 
     def test_tenant_id_is_source_text(self, config_dir, da_guard_env):
         """租戶 id `010:` 讀成 "010"，不是整數 10 / 8。"""
@@ -425,7 +425,7 @@ class TestSingleFileReadsParseTree:
                           "    custom_n:\n      since: 2001-12-14t21:59:43.10-05:00\n")
         p = _run_tool("--tenant-config", path, "--json")
         assert p.returncode == 0, p.stdout + p.stderr
-        got = {r["custom_metric"]: r["current_value"] for r in json.loads(p.stdout)}
+        got = {r["custom_metric"]: r["written"] for r in json.loads(p.stdout)}
         assert got == {"custom_d": "2024-01-02",
                        "custom_n": {"since": "2001-12-14t21:59:43.10-05:00"}}
         out = os.path.join(config_dir, "gaps.json")
@@ -535,7 +535,7 @@ class TestPrintReport:
             "tenant": "db-a",
             "custom_metric": "custom_cpu",
             "original_metric": "cpu",
-            "current_value": 80,
+            "written": 80,
             "best_match_pack": "kubernetes",
             "golden_name": "container_cpu",
             "confidence": 1.0,
@@ -552,14 +552,14 @@ class TestPrintReport:
         results = [
             {
                 "tenant": "db-a", "custom_metric": "custom_mysql_conn",
-                "original_metric": "mysql_conn", "current_value": 50,
+                "original_metric": "mysql_conn", "written": 50,
                 "best_match_pack": "mariadb", "golden_name": "mysql_conn",
                 "confidence": 1.0, "match_type": "exact",
                 "recommendation": "Consider official Rule Pack 'mariadb'",
             },
             {
                 "tenant": "db-b", "custom_metric": "custom_redis_mem",
-                "original_metric": "redis_mem", "current_value": 70,
+                "original_metric": "redis_mem", "written": 70,
                 "best_match_pack": "redis", "golden_name": None,
                 "confidence": 0.7, "match_type": "prefix",
                 "recommendation": "Consider official Rule Pack 'redis'",
@@ -574,7 +574,7 @@ class TestPrintReport:
         """報表顯示可遷移 metric 數量。"""
         results = [{
             "tenant": "db-a", "custom_metric": "custom_test",
-            "original_metric": "test", "current_value": 1,
+            "original_metric": "test", "written": 1,
             "best_match_pack": "mariadb", "golden_name": "test",
             "confidence": 0.8, "match_type": "prefix",
             "recommendation": "Consider official Rule Pack 'mariadb'",
@@ -610,3 +610,101 @@ def test_a_report_json_cannot_carry_is_one_named_line_and_no_file(tmp_path, as_j
     assert f"ERROR: the {named} document cannot be written as JSON: " in r.stderr, r.stderr
     assert "Traceback" not in r.stderr and "internal error" not in r.stderr, r.stderr
     assert not out.exists()
+
+
+# ── #4027：--config-dir 讀整個 UTC 日，不讀執行那一刻 ─────────────────────
+
+_AT_HOURS = ("2026-11-13T01:15:00Z", "2026-11-13T11:00:00Z", "2026-11-13T13:00:00Z")
+
+_SCHEDULED = {
+    "_defaults.yaml": "defaults:\n  custom_mysql_global_status_slow_queries: 5\n",
+    "ta.yaml": ("tenants:\n  ta:\n    custom_mysql_global_status_slow_queries:\n"
+                "      default: \"5\"\n      overrides:\n"
+                "        - window: \"10:00-12:00\"\n          value: disable\n"),
+}
+
+#: Two rows giving one series between 01:00 and 01:29: /metrics cannot be
+#: gathered there (HTTP 500), nothing is served in that part of the day.
+_UNGATHERED = {
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+    "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70:critical\"\n"
+                "    mysql_connection_usage_percent_critical:\n      default: disable\n"
+                "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n"),
+}
+
+
+def _tree(root, files):
+    for name, text in files.items():
+        write_yaml(str(root), name, text)
+    return str(root)
+
+
+class TestWholeDay:
+    def test_the_same_tree_answers_the_same_at_any_hour(self, tmp_path, da_guard_env):
+        # #4027: it read the instant it ran at — at 11:00, inside the
+        # disabled window, the key was gone from the report.
+        tree = _tree(tmp_path, _SCHEDULED)
+        outs = [_run_tool("--config-dir", tree, "--json", "--at", at) for at in _AT_HOURS]
+        assert all(p.returncode == 0 for p in outs), [p.stderr for p in outs]
+        docs = [json.loads(p.stdout) for p in outs]
+        assert docs[0] == docs[1] == docs[2]
+        [row] = docs[0]
+        assert row["served"] == [
+            {"from": "00:00", "to": "10:00", "value": 5.0, "severity": "warning"},
+            {"from": "10:00", "to": "12:00", "value": None, "reason": "disabled"},
+            {"from": "12:00", "to": "24:00", "value": 5.0, "severity": "warning"},
+        ]
+        assert "current_value" not in row and "written" not in row and "expires" not in row
+
+    def test_a_part_of_the_day_not_gathered_is_rc2_at_any_hour(self, tmp_path, da_guard_env):
+        # #4027: rc 2 inside the window, rc 0 outside it. What a key is in a
+        # part /metrics cannot be gathered in is not known: never judged.
+        tree = _tree(tmp_path, _UNGATHERED)
+        for at in _AT_HOURS:
+            p = _run_tool("--config-dir", tree, "--json", "--at", at)
+            assert p.returncode == 2, (at, p.stdout, p.stderr)
+            assert p.stdout == ""
+            assert "01:00-01:29 UTC" in p.stderr and "nothing is judged" in p.stderr, p.stderr
+
+    def test_expires_is_judged_at_at_and_named(self, tmp_path, da_guard_env):
+        # The one input that follows --at (ADR-038): a time-boxed value holds
+        # until its `expires:`, and the report says until when.
+        tree = _tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  custom_queue_depth: 80\n",
+            "ta.yaml": ("tenants:\n  ta:\n    custom_queue_depth:\n      default: \"60\"\n"
+                        "      expires: \"2026-11-13T18:00:00Z\"\n"),
+        })
+        before = _run_tool("--config-dir", tree, "--json", "--at", "2026-11-13T12:00:00Z")
+        after = _run_tool("--config-dir", tree, "--json", "--at", "2026-11-13T19:00:00Z")
+        assert before.returncode == after.returncode == 0, before.stderr + after.stderr
+        [b], [a] = json.loads(before.stdout), json.loads(after.stdout)
+        assert b["served"][0]["value"] == 60.0 and a["served"][0]["value"] == 80.0
+        assert b["expires"] == a["expires"] == "2026-11-13T18:00:00Z"
+        text = _run_tool("--config-dir", tree, "--at", "2026-11-13T12:00:00Z").stdout
+        assert "[until 2026-11-13T18:00:00Z]" in text, text
+
+    def test_a_key_served_at_no_minute_of_the_day_is_not_listed(self, tmp_path, da_guard_env):
+        # da-guard lists a time-boxed key even when every segment has no row
+        # (`default: disable`): it is not served, so it is not a custom_ rule.
+        tree = _tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  custom_queue_depth: 80\n",
+            "ta.yaml": ("tenants:\n  ta:\n    custom_queue_depth:\n      default: disable\n"
+                        "      expires: \"2026-11-13T18:00:00Z\"\n"),
+        })
+        p = _run_tool("--config-dir", tree, "--json", "--at", "2026-11-13T12:00:00Z")
+        assert p.returncode == 0, p.stderr
+        assert json.loads(p.stdout) == []
+
+    def test_the_text_report_marks_a_scheduled_key(self, tmp_path, da_guard_env):
+        tree = _tree(tmp_path, _SCHEDULED)
+        p = _run_tool("--config-dir", tree, "--at", "2026-11-13T11:00:00Z")
+        assert p.returncode == 0, p.stderr
+        assert ("[scheduled: 00:00-10:00 5, 10:00-12:00 disabled, 12:00-24:00 5]"
+                in p.stdout), p.stdout
+
+    def test_the_single_file_value_is_named_written(self, tmp_path, da_guard_env):
+        path = write_yaml(str(tmp_path), "t.yaml", "tenants:\n  t1:\n    custom_x: \"7\"\n")
+        p = _run_tool("--tenant-config", path, "--json")
+        assert p.returncode == 0, p.stderr
+        [row] = json.loads(p.stdout)
+        assert row["written"] == "7" and "served" not in row

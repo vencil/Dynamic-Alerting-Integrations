@@ -1403,3 +1403,31 @@ def test_served_schedules_of_a_tree_no_file_of_which_reads_name_the_files(tmp_pa
     day = tv.load_served_schedules(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, partial=True)
     assert day.tenants == {} and day.ungathered == ()
     assert [(u.file, u.reason) for u in day.unreadable] == [("a.yaml", "stat_error")]
+
+
+# ── #4027: the whole day as a tool hands it on ──────────────────────────────
+
+def test_key_schedule_as_json_mirrors_da_guards_segments():
+    import _lib_tenant_values as tv
+    day = tv.KeySchedule(segments=[
+        tv.ScheduleSegment("00:00", "10:00", 5.0, "warning", series=()),
+        tv.ScheduleSegment("10:00", "12:00", None, None, reason="disabled"),
+        tv.ScheduleSegment("12:00", "13:00", None, None),
+        tv.ScheduleSegment("13:00", "24:00", None, None, error="cannot be gathered"),
+    ], expires=None, expired=None)
+    assert day.as_json() == [
+        {"from": "00:00", "to": "10:00", "value": 5.0, "severity": "warning"},
+        {"from": "10:00", "to": "12:00", "value": None, "reason": "disabled"},
+        {"from": "12:00", "to": "13:00", "value": None},
+        {"from": "13:00", "to": "24:00", "error": "cannot be gathered"},
+    ]
+    assert day.served_any
+    assert not tv.KeySchedule([day.segments[1]], None, None).served_any
+
+
+def test_ungathered_refusal_names_every_part():
+    import _lib_tenant_values as tv
+    assert tv.ungathered_refusal(()) is None
+    text = tv.ungathered_refusal((tv.UngatheredPart("01:00", "01:29", "HTTP 500"),
+                                  tv.UngatheredPart("22:00", "24:00", "dup")))
+    assert "01:00-01:29 UTC (HTTP 500)" in text and "22:00-24:00 UTC (dup)" in text
