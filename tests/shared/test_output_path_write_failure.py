@@ -3482,8 +3482,8 @@ class TestOwnWordedRefusal:
 #: count cannot tell apart is in the module docstring, under NOT SEEN.
 UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
     ("ops/migrate_rule.py", "main", "ensure_dir_or_die"): 1,
-    ("ops/onboard_platform.py", "_write_phase1_outputs", "ensure_dir_or_die"): 1,
-    ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 2,
+    ("ops/onboard_platform.py", "_write_draft", "ensure_dir_or_die"): 1,
+    ("ops/onboard_platform.py", "_write_phase2_outputs", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase3_outputs", "ensure_dir_or_die"): 1,
     ("ops/onboard_platform.py", "_write_phase3_outputs", "write_operator_output_or_die"): 2,
     ("ops/onboard_platform.py", "write_migration_csv", "write_operator_output_or_die"): 1,

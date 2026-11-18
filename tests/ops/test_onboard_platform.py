@@ -38,6 +38,7 @@ from onboard_platform import (
     write_outputs,
     _build_onboard_hints,
     DEFAULT_TENANT_LABEL,
+    _CONFD_DIR,
 )
 
 #: da-read's fixed sentence for a refusal by Alertmanager's loader (#3703).
@@ -989,7 +990,7 @@ class TestGenerateDefaultsFromCandidates:
             op._write_phase2_outputs(tmpdir, (candidates, [], {}), report)
 
             written = [p for p in report["files_written"]
-                       if p.endswith("_defaults-suggestion.yaml")]
+                       if p.endswith(f"{op._CONFD_DIR}/_defaults.yaml")]
             assert written, report["files_written"]
             text = Path(written[0]).read_text(encoding="utf-8")
 
@@ -1168,7 +1169,7 @@ class TestAWriteThatFailsExitsTwo:
     @pytest.mark.parametrize("name", ["mysql-relabel-suggestion.yaml", "scrape-analysis.yaml"])
     def test_a_phase_3_file(self, tmp_path, capsys, name):
         import onboard_platform as op
-        blocked = tmp_path / "phase3-scrape" / name
+        blocked = tmp_path / op._ARTIFACT_DIR / name
         blocked.mkdir(parents=True)
         jobs = [{"job_name": "mysql", "has_tenant_mapping": False, "mapping_type": None,
                  "suggestions": [{"description": "add a tenant label",
@@ -1429,7 +1430,7 @@ class TestWriteOutputs:
             ),
         )
         assert len(report["files_written"]) > 0
-        assert os.path.exists(os.path.join(config_dir, "phase1-routing", "db-a.yaml"))
+        assert os.path.exists(os.path.join(config_dir, _CONFD_DIR, "db-a.yaml"))
 
     def test_phase2_file_output(self, config_dir):
         """Phase 2 輸出檔案正確產生。"""
@@ -1500,7 +1501,7 @@ class TestInvalidTenantIdFromAlertmanager:
         rc = self._run(monkeypatch, ["--alertmanager-config",
                                      self._am(tmp_path, ["db-a"]), "-o", str(out)])
         assert rc == 0
-        assert (out / "phase1-routing" / "db-a.yaml").exists()
+        assert (out / _CONFD_DIR / "db-a.yaml").exists()
 
     def test_an_unwritable_hints_file_is_rc_2_and_one_line(self, tmp_path, monkeypatch, capsys):
         """#3107: `onboard-hints.json` is written by the library writer, which
@@ -1535,8 +1536,8 @@ class TestConfdThroughDaGuardWrite:
 
         def stopped(root, entries, **_kw):
             raise _lib_confedit.PartialWrite(
-                ["phase1-routing/tenant-a.yaml"], "phase2-rules/_defaults-suggestion.yaml",
-                OSError("disk full"), maybe_written=["phase2-rules/_defaults-suggestion.yaml"])
+                ["tenant-a.yaml"], "_defaults.yaml",
+                OSError("disk full"), maybe_written=["_defaults.yaml"])
         monkeypatch.setattr(_lib_confedit, "write_all", stopped)
         out = tmp_path / "out"
         with pytest.raises(SystemExit) as exc:
@@ -1545,8 +1546,8 @@ class TestConfdThroughDaGuardWrite:
                 {"dedup_tenants": {}}))
         assert exc.value.code == 2
         err = capsys.readouterr().err
-        assert "stopped part-way" in err and "phase1-routing/tenant-a.yaml" in err \
-            and "_defaults-suggestion.yaml" in err and "not rolled back" in err, err
+        assert "stopped part-way" in err and "tenant-a.yaml" in err \
+            and "_defaults.yaml" in err and "not rolled back" in err, err
         # nothing after the batch (the CSV, the hints) is written
         assert not (out / "phase1-routing" / "routing-summary.csv").exists()
 
@@ -1560,7 +1561,7 @@ class TestConfdThroughDaGuardWrite:
                 {"dedup_tenants": {}}))
         assert exc.value.code == 2
         err = capsys.readouterr().err
-        assert "phase1-routing/tenant-a.yaml" in err and "group_wait" in err, err
+        assert f"{_CONFD_DIR}/tenant-a.yaml" in err and "group_wait" in err, err
         assert not out.exists() or not any(out.rglob("*"))
 
 

@@ -2005,7 +2005,7 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
     ⛔ `onboard` is a PROBE, not a render, and it is the face this list would
     most easily have been written without. `da-tools onboard` reverse-engineers
     a customer's existing Alertmanager estate and writes
-    `phase2-rules/_defaults-suggestion.yaml`, whose own header says "Review and
+    a suggested `_defaults.yaml` (draft conf.d, #4014), whose own header says "Review and
     merge into conf.d/_defaults.yaml" — so until #1218 it turned every
     critical-severity rule it recovered into a `<key>_critical` under
     `defaults:`, i.e. it manufactured this defect from customer input, on the

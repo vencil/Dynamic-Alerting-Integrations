@@ -33,6 +33,8 @@ import pytest
 import yaml
 
 from scaffold_tenant import (
+    CONFD_DIR,
+    relabel_snippet_name,
     build_receiver_from_args,
     counterexample_for_key,
     counterexample_prompt_lines,
@@ -299,8 +301,8 @@ class TestWriteOutputs:
             report = "# Test Report"
             write_outputs(tmpdir, "db-c", defaults, tenant, report)
 
-            assert os.path.isfile(os.path.join(tmpdir, "_defaults.yaml"))
-            assert os.path.isfile(os.path.join(tmpdir, "db-c.yaml"))
+            assert os.path.isfile(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"))
+            assert os.path.isfile(os.path.join(tmpdir, CONFD_DIR, "db-c.yaml"))
             assert os.path.isfile(os.path.join(tmpdir, "scaffold-report.txt"))
 
     @_skipif_unix_modes
@@ -312,17 +314,18 @@ class TestWriteOutputs:
             defaults = {"defaults": {}}
             tenant = {"tenants": {"db-c": {}}}
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            for fn, want in [("_defaults.yaml", 0o644), ("db-c.yaml", 0o644),
+            for fn, want in [(f"{CONFD_DIR}/_defaults.yaml", 0o644),
+                             (f"{CONFD_DIR}/db-c.yaml", 0o644),
                              ("scaffold-report.txt", 0o600)]:
                 path = os.path.join(tmpdir, fn)
                 mode = os.stat(path).st_mode & 0o777
                 assert mode == want, f"{fn} permissions {oct(mode)} != {oct(want)}"
             # A replace does not keep the mode the file has (#3535). Another
             # text: the same text is `unchanged`, and nothing is written.
-            os.chmod(os.path.join(tmpdir, "db-c.yaml"), 0o640)
+            os.chmod(os.path.join(tmpdir, CONFD_DIR, "db-c.yaml"), 0o640)
             write_outputs(tmpdir, "db-c", {"defaults": {"mysql_connection_usage_percent": 80}},
                           {"tenants": {"db-c": {"mysql_connection_usage_percent": "70"}}}, "report")
-            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o644
+            assert os.stat(os.path.join(tmpdir, CONFD_DIR, "db-c.yaml")).st_mode & 0o777 == 0o644
 
     def test_creates_relabel_file(self):
         """提供 relabel_snippet 時建立 relabel 檔案。"""
@@ -342,7 +345,7 @@ class TestWriteOutputs:
             tenant = {"tenants": {"db-c": {"container_cpu": "70"}}}
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
 
-            with open(os.path.join(tmpdir, "db-c.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "db-c.yaml"), encoding="utf-8") as f:
                 parsed = yaml.safe_load(f)
             assert parsed["tenants"]["db-c"]["container_cpu"] == "70"
 
@@ -450,7 +453,7 @@ class TestWriteOutputsFixture:
         report = "# test"
         write_outputs(config_dir, "db-z", defaults, tenant, report)
 
-        with open(os.path.join(config_dir, "_defaults.yaml"), encoding="utf-8") as f:
+        with open(os.path.join(config_dir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
             parsed = yaml.safe_load(f)
         assert "defaults" in parsed
         assert "container_cpu" in parsed["defaults"]
@@ -462,7 +465,7 @@ class TestWriteOutputsFixture:
         tenant = generate_tenant("db-z", ["kubernetes"], interactive=False)
         write_outputs(config_dir, "db-z", defaults, tenant, "report")
 
-        with open(os.path.join(config_dir, "db-z.yaml"), encoding="utf-8") as f:
+        with open(os.path.join(config_dir, CONFD_DIR, "db-z.yaml"), encoding="utf-8") as f:
             parsed = yaml.safe_load(f)
         t = parsed["tenants"]["db-z"]
         allowed_reserved = {"_routing", "_routing_profile", "_severity_dedup",
@@ -515,14 +518,17 @@ class TestRunNonInteractive:
                 routing_receiver=None, namespaces=None,
             )
             run_non_interactive(args)
-            assert os.path.exists(os.path.join(d, "db-x.yaml"))
-            assert os.path.exists(os.path.join(d, "_defaults.yaml"))
+            assert os.path.exists(os.path.join(d, CONFD_DIR, "db-x.yaml"))
+            assert os.path.exists(os.path.join(d, CONFD_DIR, "_defaults.yaml"))
 
     def test_with_profile(self):
         with tempfile.TemporaryDirectory() as d:
             # The profile is defined in the tree first: a tenant naming no
             # profile is refused (#3591).
-            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
+            # #4014: the draft conf.d is judged as a tree of its own, so the
+            # profile goes there; a platform file is not another tenant.
+            os.makedirs(os.path.join(d, CONFD_DIR))
+            with open(os.path.join(d, CONFD_DIR, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 f.write("profiles:\n  high-load:\n    mysql_connection_usage_percent: 95\n")
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
@@ -531,7 +537,7 @@ class TestRunNonInteractive:
                 namespaces=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert data["tenants"]["db-x"]["_profile"] == "high-load"
 
@@ -548,7 +554,7 @@ class TestRunNonInteractive:
             )
             with pytest.raises(SystemExit):
                 run_non_interactive(args)
-            assert not os.path.exists(os.path.join(d, "db-x.yaml"))
+            assert not os.path.exists(os.path.join(d, CONFD_DIR, "db-x.yaml"))
 
     def test_with_silent_mode(self):
         with tempfile.TemporaryDirectory() as d:
@@ -559,7 +565,7 @@ class TestRunNonInteractive:
                 namespaces=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert data["tenants"]["db-x"]["_silent_mode"] == "warning"
 
@@ -572,7 +578,7 @@ class TestRunNonInteractive:
                 namespaces=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert data["tenants"]["db-x"]["_severity_dedup"] == "disable"
 
@@ -592,7 +598,7 @@ class TestRunNonInteractive:
                 namespaces=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             routing = data["tenants"]["db-x"]["_routing"]
             assert routing["receiver"]["type"] == "webhook"
@@ -623,8 +629,15 @@ class TestRunNonInteractive:
                 namespaces="ns1,ns2",
             )
             run_non_interactive(args)
+            # #4014: the snippet stays at -o beside the draft conf.d; -o holds
+            # no file a conf.d reader reads (the draft is a hidden directory),
+            # so -o inside a served tree adds no tenant file there either.
+            import _lib_parse_tree
+            assert os.path.isfile(os.path.join(d, relabel_snippet_name("db-x")))
+            assert [e.path for e in _lib_parse_tree.list_tree(d).config_files()] == []
             binary = os.environ.get("DA_GUARD_BINARY", "da-guard")
-            out = subprocess.run([binary, "key-verdict", "--config-dir", d],
+            out = subprocess.run([binary, "key-verdict", "--config-dir",
+                                  os.path.join(d, CONFD_DIR)],
                                  capture_output=True, text=True, encoding="utf-8", timeout=60)
             assert out.returncode == 0, out.stderr
             verdict = json.loads(out.stdout)
@@ -679,7 +692,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert data["tenants"]["db-x"]["_routing_profile"] == "team-sre-apac"
 
@@ -696,7 +709,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert "_routing_profile" not in data["tenants"]["db-x"]
 
@@ -720,7 +733,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             t = data["tenants"]["db-x"]
             assert t["_routing_profile"] == "team-dba-global"
@@ -742,7 +755,7 @@ class TestRunNonInteractive:
                 mapping_filter='schema=~"app_a_.*"',
             )
             run_non_interactive(args)
-            mapping_path = os.path.join(d, "_instance_mapping.yaml")
+            mapping_path = os.path.join(d, CONFD_DIR, "_instance_mapping.yaml")
             assert os.path.exists(mapping_path)
             with open(mapping_path, encoding="utf-8") as f:
                 content = f.read()
@@ -770,7 +783,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            mapping_path = os.path.join(d, "_instance_mapping.yaml")
+            mapping_path = os.path.join(d, CONFD_DIR, "_instance_mapping.yaml")
             assert not os.path.exists(mapping_path)
             captured = capsys.readouterr()
             assert "WARN" in captured.err
@@ -820,7 +833,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            assert not os.path.exists(os.path.join(d, "_instance_mapping.yaml"))
+            assert not os.path.exists(os.path.join(d, CONFD_DIR, "_instance_mapping.yaml"))
             assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.txt"))
 
     @_skipif_unix_modes
@@ -839,7 +852,7 @@ class TestRunNonInteractive:
                 mapping_filter='schema=~"test"',
             )
             run_non_interactive(args)
-            mapping_path = os.path.join(d, "_instance_mapping.yaml")
+            mapping_path = os.path.join(d, CONFD_DIR, "_instance_mapping.yaml")
             mode = os.stat(mapping_path).st_mode & 0o777
             assert mode == 0o644
 
@@ -883,8 +896,8 @@ class TestRunFromOnboard:
                 from_onboard=hints_path, output_dir=d,
             )
             run_from_onboard(args)
-            assert os.path.exists(os.path.join(d, "db-a.yaml"))
-            assert os.path.exists(os.path.join(d, "db-b.yaml"))
+            assert os.path.exists(os.path.join(d, CONFD_DIR, "db-a.yaml"))
+            assert os.path.exists(os.path.join(d, CONFD_DIR, "db-b.yaml"))
 
     def test_one_defaults_file_holds_every_tenants_packs(self):
         """⛔ 迴歸（#3206 10c-3）：每個租戶各算一份 `_defaults.yaml`、寫到同一個
@@ -900,11 +913,11 @@ class TestRunFromOnboard:
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump(hints, f)
             run_from_onboard(_onboard_ns(from_onboard=hints_path, output_dir=d))
-            with open(os.path.join(d, "_defaults.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
                 written = yaml.safe_load(f)
-            with open(os.path.join(d, "db-a.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-a.yaml"), encoding="utf-8") as f:
                 db_a = f.read()
-            with open(os.path.join(d, "db-b.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-b.yaml"), encoding="utf-8") as f:
                 db_b = f.read()
         for db in ("mariadb", "oracle"):
             for key in RULE_PACKS[db]["defaults"]:
@@ -931,8 +944,9 @@ class TestRunFromOnboard:
                 json.dump(hints, f)
             out = os.path.join(d, "out")
             run_from_onboard(_onboard_ns(from_onboard=hints_path, output_dir=out))
-            assert sorted(os.listdir(out)) == [
-                "_defaults.yaml", "db-a.yaml", "db-b.yaml", "scaffold-report.txt"]
+            assert sorted(os.listdir(out)) == [CONFD_DIR.split("/")[0], "scaffold-report.txt"]
+            assert sorted(os.listdir(os.path.join(out, CONFD_DIR))) == [
+                "_defaults.yaml", "db-a.yaml", "db-b.yaml"]
 
     def test_with_routing_hints(self):
         with tempfile.TemporaryDirectory() as d:
@@ -956,7 +970,7 @@ class TestRunFromOnboard:
                 from_onboard=hints_path, output_dir=d,
             )
             run_from_onboard(args)
-            with open(os.path.join(d, "db-a.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(d, CONFD_DIR, "db-a.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             routing = data["tenants"]["db-a"]["_routing"]
             assert routing["group_wait"] == "10s"
@@ -1103,7 +1117,7 @@ class TestSaturationWriteOutputs:
             defaults = {"defaults": {"mysql_connection_usage_percent": 80}}
             tenant = {"tenants": {"db-x": {"mysql_connection_usage_percent_critical": "90"}}}
             write_outputs(tmpdir, "db-x", defaults, tenant, "report")
-            with open(os.path.join(tmpdir, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 lines = f.read().split("\n")
             idx = next(i for i, l in enumerate(lines)
                        if l.strip().startswith("mysql_connection_usage_percent_critical:"))
@@ -1115,7 +1129,7 @@ class TestSaturationWriteOutputs:
             defaults = generate_defaults(["kubernetes"])
             tenant = generate_tenant("db-x", ["kubernetes"], interactive=False)
             write_outputs(tmpdir, "db-x", defaults, tenant, "report")
-            with open(os.path.join(tmpdir, "db-x.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "db-x.yaml"), encoding="utf-8") as f:
                 content = f.read()
             assert SATURATION_CRITICAL_COMMENT not in content
 
@@ -1235,7 +1249,7 @@ class TestMainCLI:
                 "--non-interactive",
             ]):
                 scaffold_tenant.main()
-            assert os.path.exists(os.path.join(d, "db-test.yaml"))
+            assert os.path.exists(os.path.join(d, CONFD_DIR, "db-test.yaml"))
 
     def test_non_interactive_missing_args_exits(self):
         import scaffold_tenant
@@ -1793,7 +1807,7 @@ def _tenant_yaml_for(tmpdir, dbs, tenant="db-c", overrides=None):
     if overrides:
         tenant_data["tenants"][tenant] = dict(overrides)
     write_outputs(tmpdir, tenant, defaults, tenant_data, "report")
-    with open(os.path.join(tmpdir, f"{tenant}.yaml"), encoding="utf-8") as f:
+    with open(os.path.join(tmpdir, CONFD_DIR, f"{tenant}.yaml"), encoding="utf-8") as f:
         return f.read()
 
 
@@ -1837,7 +1851,7 @@ class TestTenantStubDeclaredBlock:
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             content = _tenant_yaml_for(tmpdir, ["oracle", "postgresql"])
-            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
                 sibling = yaml.safe_load(f)
         defaults = sibling["defaults"]
         crit = [k for k in defaults if k.endswith("_critical")]
@@ -1965,7 +1979,7 @@ class TestTenantStubDeclaredBlock:
         dbs = ["oracle", "db2", "clickhouse"]
         with tempfile.TemporaryDirectory() as tmpdir:
             content = _tenant_yaml_for(tmpdir, dbs)
-            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
                 declared_in_defaults = yaml.safe_load(f)["optional_overrides"]
         assert [k for k, _ in _stub_key_lines(content)] == declared_in_defaults
 
@@ -2024,7 +2038,7 @@ class TestTenantStubDeclaredBlock:
             args = argparse.Namespace(
                 tenant="db-c", db="oracle", output_dir=tmpdir)
             run_non_interactive(args)
-            with open(os.path.join(tmpdir, "db-c.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "db-c.yaml"), encoding="utf-8") as f:
                 content = f.read()
         assert {k for k, _ in _stub_key_lines(content)} == set(
             self._declared(["oracle"]))
@@ -2076,7 +2090,7 @@ class TestCounterexamplePrompt:
         # the comment this tool puts above the key).
         with tempfile.TemporaryDirectory() as tmpdir:
             write_outputs(tmpdir, "db-c", defaults, {"tenants": {"db-c": {}}}, "r")
-            with open(os.path.join(tmpdir, "_defaults.yaml"), encoding="utf-8") as f:
+            with open(os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
                 lines = f.read().split("\n")
 
         marked = 0

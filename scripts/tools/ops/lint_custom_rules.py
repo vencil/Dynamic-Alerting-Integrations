@@ -128,9 +128,98 @@ GENERATED_MARKER_SCAN_LINES = 10
 # integrity checks (tenant-isolation patterns, required labels, group interval)
 # must NEVER be disable-able via a per-file override, even for a compiled pack —
 # those guard against compiler bugs, not just tenant misuse. Anything outside
-# this set in an override's `policy` block is ignored (and flagged), so a stray
-# or malicious `required_labels: []` cannot silently widen the exemption.
+# this set in an override's `policy` block is refused when the policy is
+# loaded (#3977), so a stray or malicious `required_labels: []` cannot widen
+# the exemption.
 OVERRIDABLE_POLICY_KEYS = frozenset({"denied_functions", "max_range_duration"})
+
+
+def _string_list_problem(value) -> "str | None":
+    """Why *value* is not a list of non-empty strings (a ``denied_functions``),
+    or None. A string is no list: it was matched character by character."""
+    if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+        return "must be a list of non-empty strings"
+    return None
+
+
+def _duration_problem(value) -> "str | None":
+    """Why *value* is not a positive single-unit duration (``90m``), or None:
+    what the range check reads (``parse_duration_seconds``; ``1h30m`` is not
+    — the grammar is #4061's to settle). ⛔ One it cannot read (``banana``,
+    ``0s``, ``1h30m``) turned that check off for the files it covered (#3977)."""
+    try:
+        seconds = parse_duration_seconds(value) if isinstance(value, str) else None
+    except (OverflowError, ValueError):   # a number too large to be seconds
+        seconds = None
+    if not seconds:
+        return "must be a positive single-unit duration such as 90m"
+    return None
+
+
+#: How each overridable key's value is judged (#3977). ⛔ The one definition:
+#: #4061 judges the top-level values with these.
+POLICY_VALUE_PROBLEMS = {
+    "denied_functions": _string_list_problem,
+    "max_range_duration": _duration_problem,
+}
+assert set(POLICY_VALUE_PROBLEMS) >= OVERRIDABLE_POLICY_KEYS
+
+#: The keys of a ``file_overrides`` entry (``path`` required).
+OVERRIDE_ENTRY_KEYS = ("path", "require_generated_marker", "policy")
+
+
+def file_overrides_problems(overrides) -> "list[str]":
+    """Every way *overrides* (a policy's ``file_overrides``) is not what
+    ``resolve_file_policy`` reads (#3977): a list of mappings, each with a
+    non-empty ``path`` (no two alike), ``require_generated_marker`` a bool
+    when given, ``policy`` a mapping of OVERRIDABLE_POLICY_KEYS with values
+    as POLICY_VALUE_PROBLEMS judges them. ⛔ Judged whether or not a file
+    matches: an unknown key was silent, a disallowed one a finding only on a
+    matching file, a non-mapping entry skipped, a list ``policy`` a crash."""
+    if not isinstance(overrides, list):
+        return [f"file_overrides must be a list of entries, not {type(overrides).__name__}"]
+    out, seen = [], set()
+    for i, entry in enumerate(overrides):
+        at = f"file_overrides[{i}]"
+        if not isinstance(entry, dict):
+            out.append(f"{at} must be a mapping, not {type(entry).__name__}")
+            continue
+        unknown = sorted(safe_label(str(k)) for k in entry if k not in OVERRIDE_ENTRY_KEYS)
+        if unknown:
+            out.append(f"{at} has no key(s) {', '.join(unknown)} "
+                       f"(an entry has {', '.join(OVERRIDE_ENTRY_KEYS)})")
+        path = entry.get("path")
+        if not isinstance(path, str) or not path:
+            out.append(f"{at}.path must be a non-empty string")
+        elif path in seen:
+            out.append(f"{at}.path {safe_label(path)} is given twice: the first entry would "
+                       "shadow this one")
+        else:
+            # an earlier entry whose path this one ends with matches this
+            # one's files first (_override_path_matches) — and the reverse
+            for other in sorted(seen):
+                if path.endswith("/" + other) or other.endswith("/" + path):
+                    out.append(f"{at}.path {safe_label(path)} and {safe_label(other)} "
+                               "can match the same file: which entry applies would "
+                               "depend on their order")
+            seen.add(path)
+        if not isinstance(entry.get("require_generated_marker", True), bool):
+            out.append(f"{at}.require_generated_marker must be true or false")
+        ov_policy = entry.get("policy", {})
+        if not isinstance(ov_policy, dict):
+            out.append(f"{at}.policy must be a mapping, not {type(ov_policy).__name__}")
+            continue
+        disallowed = sorted(safe_label(str(k)) for k in ov_policy
+                            if k not in OVERRIDABLE_POLICY_KEYS)
+        if disallowed:
+            out.append(f"{at}.policy may only relax "
+                       f"{', '.join(sorted(OVERRIDABLE_POLICY_KEYS))}, not "
+                       f"{', '.join(disallowed)}")
+        for key in sorted(OVERRIDABLE_POLICY_KEYS & set(ov_policy)):
+            why = POLICY_VALUE_PROBLEMS[key](ov_policy[key])
+            if why:
+                out.append(f"{at}.policy.{key} {why}")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -410,15 +499,14 @@ def resolve_file_policy(filepath, content, policy):
     Returns (effective_policy, list of LintResult). A matching override whose
     GENERATED-marker requirement fails yields an ERROR and the base policy —
     fail loud: either the pack was hand-authored at a platform path or the
-    policy entry is stale. Only OVERRIDABLE_POLICY_KEYS are relaxable; any other
-    key in an override's `policy` block is ignored and flagged.
+    policy entry is stale. ⛔ *policy* must be ``load_policy``'s: its
+    file_overrides were judged there (``file_overrides_problems``, #3977) and
+    are read here as judged — a malformed one handed in directly raises.
     """
     norm = Path(filepath).as_posix()
-    for override in policy.get("file_overrides") or []:
-        if not isinstance(override, dict):       # tolerate malformed policy entries
-            continue
-        ov_path = override.get("path")
-        if not ov_path or not _override_path_matches(norm, ov_path):
+    for override in policy.get("file_overrides", []):
+        ov_path = override["path"]
+        if not _override_path_matches(norm, ov_path):
             continue
         if override.get("require_generated_marker", True):
             head = content.splitlines()[:GENERATED_MARKER_SCAN_LINES]
@@ -430,20 +518,9 @@ def resolve_file_policy(filepath, content, policy):
                     f"the first {GENERATED_MARKER_SCAN_LINES} lines — "
                     "hand-authored files are fully linted"
                 )]
-        ov_policy = override.get("policy") or {}
-        rejected = sorted(set(ov_policy) - OVERRIDABLE_POLICY_KEYS)
-        out = []
-        if rejected:
-            out.append(LintResult(
-                filepath, None, None, "ERROR",
-                f"file_overrides for '{ov_path}' may only relax "
-                f"{sorted(OVERRIDABLE_POLICY_KEYS)}; ignoring disallowed "
-                f"key(s) {rejected} (those checks stay enforced)"
-            ))
         effective = policy.copy()
-        effective.update({k: v for k, v in ov_policy.items()
-                          if k in OVERRIDABLE_POLICY_KEYS})
-        return effective, out
+        effective.update(override.get("policy", {}))
+        return effective, []
     return policy, []
 
 
@@ -470,7 +547,7 @@ def load_policy(custom, path=None):
     and refused there, never taken for "not given".
     """
     if custom is not None:
-        unknown = sorted(str(k) for k in custom if k not in POLICY_KEYS)
+        unknown = sorted(safe_label(str(k)) for k in custom if k not in POLICY_KEYS)
         if unknown:
             from _grar_validate import POLICY_KEYS as deployment_keys  # noqa: PLC0415
             deploy = [k for k in unknown if k in deployment_keys]
@@ -482,16 +559,20 @@ def load_policy(custom, path=None):
                 f"--policy {safe_label(path)}: the custom-rule lint policy has no key(s) "
                 f"{', '.join(unknown)} "
                 f"(it has {', '.join(sorted(POLICY_KEYS))}).{hint}", "policy_unknown_key")
-    if custom is None:
-        # ⛔ deepcopy, not `.copy()`: the latter is shallow, so a caller
-        # appending to one of the nested lists reaches into the module default
-        # and changes what every later call in the process returns. Same shape
-        # as #1616's load_base_config fix; fixed here for symmetry rather than
-        # because a mutating caller exists today.
-        return copy.deepcopy(DEFAULT_POLICY)
-    # Merge: custom overrides defaults
+    # ⛔ deepcopy, not `.copy()`: the latter is shallow, so a caller
+    # appending to one of the nested lists reaches into the module default
+    # and changes what every later call in the process returns. Same shape
+    # as #1616's load_base_config fix; fixed here for symmetry rather than
+    # because a mutating caller exists today.
     merged = copy.deepcopy(DEFAULT_POLICY)
-    merged.update(custom)
+    if custom is not None:
+        merged.update(custom)   # custom overrides defaults, key by key
+    # #3977: the file_overrides read below are judged here, the built-in
+    # ones too — matched or not, the same answer.
+    problems = file_overrides_problems(merged["file_overrides"])
+    if problems:
+        source = f"--policy {safe_label(path)}" if custom is not None else "the built-in policy"
+        raise _lib_exitcodes.CallerError(f"{source}: " + "; ".join(problems), "policy_invalid")
     return merged
 
 

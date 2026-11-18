@@ -99,8 +99,9 @@ def written(tmp_path_factory, doc) -> dict:
     out = tmp_path_factory.mktemp("scaffold-out")
     scaffold.write_outputs(str(out), tenant_name, defaults_data, tenant_data, "")
     return {
-        "_defaults.yaml": (out / "_defaults.yaml").read_text(encoding="utf-8"),
-        "tenant.yaml": (out / f"{tenant_name}.yaml").read_text(encoding="utf-8"),
+        "_defaults.yaml": (out / scaffold.CONFD_DIR / "_defaults.yaml").read_text(encoding="utf-8"),
+        "tenant.yaml": (out / scaffold.CONFD_DIR / f"{tenant_name}.yaml").read_text(
+            encoding="utf-8"),
         "defaults_data": defaults_data,
     }
 

@@ -53,7 +53,7 @@ da-tools onboard \
   --output-dir onboard-audit
 ```
 
-**Expected output**: stderr lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one; redirect `2>` to keep it — stdout alone only carries the list of written files), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. When tenant routes are found there is also one `phase1-routing/<tenant>.yaml` routing snippet per tenant, and `onboard-hints.json`. Analysis points:
+**Expected output**: stderr lists whether each receiver carries a tenant matcher (`Found N tenant route(s) (of M total)`, one `SKIP` line per receiver without one; redirect `2>` to keep it — stdout alone only carries the list of written files), and the directory `onboard-audit/` is written (`-o/--output-dir` takes a **directory**; a file name yields a directory of that name) containing `phase1-routing/routing-summary.csv`: per tenant route, the receiver type, `group_wait` / `group_interval` / `repeat_interval`, and the severity-dedup verdict. When tenant routes are found there is also one `.onboard/conf.d/<tenant>.yaml` routing snippet per tenant (a draft, never served), and `onboard-hints.json`. Analysis points:
 - Receiver count → potential tenant count
 - Existing group_wait / repeat_interval → reference values for Dynamic Alerting routing guardrails
 - Inhibit rules → whether to migrate to Dynamic Alerting severity dedup
@@ -70,9 +70,9 @@ da-tools onboard \
 
 `--rule-files` takes one or more paths (files or directories; a directory is walked recursively for `*.yaml` / `*.yml`), so rule files in several places can all be listed. It expands no glob: for a wildcard leave it unquoted and let the shell expand it; a quoted `'rules.d/*.yaml'` is taken as one path that is not there, rc=2. In a Kubernetes Job the `args` do not go through a shell, so give a directory. ⚠️ The v2.9.0 image still takes the value as one glob and one value only, and a directory selects no file there (a WARN, exit code 1); on that image give a quoted glob (`'rules/*.yaml'`) or a single file. <!-- image-caveat: v2.9.0 -->
 
-**Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and the directory `rule-audit/phase2-rules/` is written:
-- `migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
-- `_defaults-suggestion.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
+**Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and these are written:
+- `rule-audit/phase2-rules/migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
+- `rule-audit/.onboard/conf.d/_defaults.yaml`: platform defaults inferred from the existing thresholds. ⚠️ Thresholds of `complex` rules are included too — check them against `migration-plan.csv` before merging; the file is not written when every rule is `unparseable`
 
 Order the migration by `status`: `perfect` first, `complex` checked one by one, `unparseable` last or kept as original rules.
 
@@ -138,10 +138,11 @@ da-tools scaffold \
   --tenant redis-prod \
   --db redis \
   --non-interactive \
-  --output-dir conf.d
+  --output-dir scaffold_output
+cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 ```
 
-**Expected output**: `conf.d/redis-prod.yaml` contains recording rules config, threshold initial values (conservative), and routing config (initially disabled); the same directory also gets `_defaults.yaml` (platform defaults) and `scaffold-report.txt`. `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
+**Expected output**: `scaffold_output/.scaffold/conf.d/redis-prod.yaml` (`conf.d/redis-prod.yaml` once copied) contains recording rules config, threshold initial values (conservative), and routing config (initially disabled); the same draft directory also gets `_defaults.yaml` (platform defaults), and `scaffold_output/` gets `scaffold-report.txt`. The draft is in a dot-directory and is never served ([#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)). `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
 
 ### Step 1.2: Edit Threshold Configuration
 
@@ -151,12 +152,12 @@ Based on Phase 0.2 audit results, adjust threshold parameters to match existing 
 
 The chart is published as an OCI artifact ([ADR-002](../adr/002-oci-registry-over-chartmuseum.en.md)). Tenant config goes under `thresholdConfig.tenants` in the values; the chart renders it into the `threshold-config` ConfigMap, and one exporter serves every tenant.
 
-⚠️ The chart's shipped `thresholdConfig.defaults` only covers the keys the registry arms by default (Kubernetes, MariaDB and PostgreSQL, plus the Elasticsearch and Oracle capacity keys and RabbitMQ node memory); you must add the redis keys yourself. Copy the `redis_*` lines from the `conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter lists `key="redis_memory_used_bytes" reason=unconsumed` in its "config keys no row of this exporter reads" line.
+⚠️ The chart's shipped `thresholdConfig.defaults` only covers the keys the registry arms by default (Kubernetes, MariaDB and PostgreSQL, plus the Elasticsearch and Oracle capacity keys and RabbitMQ node memory); you must add the redis keys yourself. Copy the `redis_*` lines from the `scaffold_output/.scaffold/conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter lists `key="redis_memory_used_bytes" reason=unconsumed` in its "config keys no row of this exporter reads" line.
 
 ```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
-  defaults:                 # not shipped by the chart; taken from scaffold's conf.d/_defaults.yaml
+  defaults:                 # not shipped by the chart; taken from scaffold's _defaults.yaml
     redis_memory_used_bytes: 4294967296
     redis_connected_clients: 200
     redis_evicted_keys_rate: 100
@@ -493,9 +494,10 @@ da-tools scaffold \
   --db mariadb \
   --non-interactive \
   --output-dir scaffold_output
-# Move only the tenant file: scaffold regenerates _defaults.yaml on every run,
-# so pointing it at conf.d would overwrite the platform defaults tuned in Step 1.2
-cp scaffold_output/mariadb-prod.yaml conf.d/
+# The outputs are in scaffold_output/.scaffold/conf.d/ (a draft, never served); move only
+# the tenant file — _defaults.yaml is a template, do not overwrite the platform
+# defaults tuned in Step 1.2
+cp scaffold_output/.scaffold/conf.d/mariadb-prod.yaml conf.d/
 
 # Edit thresholds
 # Add the new tenant (and any defaults the chart does not ship) to the same

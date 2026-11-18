@@ -10,11 +10,11 @@ purpose: |
   output is not localised still print Chinese), mechanically transcribed:
   a `\r`-redrawn progress line keeps only its last frame. `sample` is
   the file the command wrote. One continuous session: scaffold's
-  demo-out/_defaults.yaml + demo-tenant.yaml were copied into conf.d/,
+  demo-out/.scaffold/conf.d/_defaults.yaml + demo-tenant.yaml were copied into conf.d/,
   which validate-config and generate-routes read; migrate ran on
   tests/fixtures/legacy-dummy.yml saved as legacy_rules.yaml; baseline
   ran against a local stub Prometheus, so its numbers are synthetic.
-  migrate's `sample` is its two conf.d files (migration_output/.conf.d/
+  migrate's `sample` is its two conf.d files (migration_output/.migration/conf.d/
   <tenant>.yaml, then _defaults.yaml), each under a `# ── <path> ──` line;
   `--no-dictionary` because with the dictionary on, every rule in that
   fixture is routed to a golden-standard pack and both files come out empty.
@@ -38,8 +38,8 @@ const DEMO_TRANSCRIPTS = {
       '⚙️  生成 demo-tenant config (DBs: kubernetes, mariadb, redis)...',
       '',
       '📁 輸出至 demo-out/',
-      '  📄 demo-out/_defaults.yaml',
-      '  📄 demo-out/demo-tenant.yaml',
+      '  📄 demo-out/.scaffold/conf.d/_defaults.yaml',
+      '  📄 demo-out/.scaffold/conf.d/demo-tenant.yaml',
       '  📄 demo-out/scaffold-report.txt',
       '',
       '✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)',
@@ -74,11 +74,11 @@ tenants:
       '[🔗] Auto-Suppression: 1 組 warning↔critical 配對完成',
       '[✓] 成功轉換 3 條規則 (✅ 2 完美, ⚠️ 1 已猜測)',
       '[!] 1 條需人工處理 (LLM Prompt 已寫入報告)',
-      '📁 檔案已輸出至 migration_output/：conf.d 檔在 migration_output/.conf.d/，rule pack 與 prefix mapping 在 migration_output/.migration/（點開頭的目錄，conf.d 的讀取端不讀）',
+      '📁 檔案已輸出至 migration_output/：conf.d 檔在 migration_output/.migration/conf.d/，rule pack 與 prefix mapping 在 migration_output/.migration/（點開頭的目錄，conf.d 的讀取端不讀）',
       '⚠️  先把 _defaults.yaml 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。',
       '🏷️  前綴: custom_ (Prefix Mapping 已輸出)',
     ],
-    sample: `# ── migration_output/.conf.d/demo-tenant.yaml ──
+    sample: `# ── migration_output/.migration/conf.d/demo-tenant.yaml ──
 # ============================================================
 # 租戶 demo-tenant — 合併進 conf.d 的租戶檔（tenants.demo-tenant）
 # ============================================================
@@ -98,7 +98,7 @@ tenants:
     # --- From: MySQLTooManyConnectionsCritical (severity: critical) ---
     # 📖 annotation／label 引用了依租戶聚合後不存在的 label（instance），已改讀 $labels.tenant；通知裡看不到原本是哪一個 instance
     custom_mysql_global_status_threads_connected_critical: "200"
-# ── migration_output/.conf.d/_defaults.yaml ──
+# ── migration_output/.migration/conf.d/_defaults.yaml ──
 # ============================================================
 # 根 defaults — 合併進 conf.d 根 _defaults.yaml 的 defaults: 區塊
 # ⚠️ 合併，不要整份覆蓋：你的 _defaults.yaml 還有其他 key。

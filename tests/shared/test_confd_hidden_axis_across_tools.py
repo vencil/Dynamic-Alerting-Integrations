@@ -254,12 +254,13 @@ def _config_diff(root):
     return sorted(config_diff._changed_tenants(report)) + report["uncovered_files"]
 
 
-def _migrate_rule_other_confd_files(root):
-    # #3671: migrate_rule refuses an output conf.d holding a config file
-    # other than the two it writes (another --tenant's tenant file is another
-    # tenant). A hidden file there is read by no reader: no tenant, no refusal.
-    import migrate_rule
-    return migrate_rule.other_confd_files(root, {"_defaults.yaml"})
+def _draft_confd_extras(root):
+    # #3671: the draft-conf.d writers (migrate_rule, onboard_platform,
+    # scaffold_tenant; #4014) refuse a draft holding a config file other than
+    # the ones the run writes (another run's tenant file is another tenant).
+    # A hidden file there is read by no reader: no tenant, no refusal.
+    import _lib_write_check
+    return _lib_write_check.draft_confd_extras(root, {"_defaults.yaml"})
 
 
 def _da_assembler_foreign_paths(root):
@@ -298,7 +299,7 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),
     "check_retire_drift": ("lint/check_retire_drift.py", _check_retire_drift),
-    "migrate_rule_other_confd_files": ("ops/migrate_rule.py", _migrate_rule_other_confd_files),
+    "draft_confd_extras": ("_lib_write_check.py", _draft_confd_extras),
     "da_assembler_foreign_paths": ("ops/da_assembler.py", _da_assembler_foreign_paths),
 }
 
