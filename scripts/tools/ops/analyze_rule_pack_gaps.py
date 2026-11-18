@@ -515,9 +515,11 @@ def _main(args):
 
     # Load data
     # #4027: --at judges an `expires:` of what /metrics serves; a single file
-    # is read as written, so it has nothing to judge. '' is given, refused
-    # (#1616), not passed on as "now".
-    if args.at is not None and (args.at == "" or config_dir is None):
+    # is read as written, so it has nothing to judge — and with both inputs
+    # the single file is the one read. '' is given, refused (#1616), not
+    # passed on as "now".
+    if args.at is not None and (args.at == "" or config_dir is None
+                                or args.tenant_config is not None):
         print("ERROR: --at applies to --config-dir only and takes an RFC3339 instant "
               "(e.g. 2026-10-10T03:00:00Z)", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

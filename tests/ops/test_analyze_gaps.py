@@ -782,7 +782,8 @@ class TestWholeDay:
     @pytest.mark.parametrize("argv", [
         ("--tenant-config", "{t}/ta.yaml", "--at", "2026-11-13T12:00:00Z"),
         ("--config-dir", "{t}", "--at", ""),
-    ], ids=["with-tenant-config", "empty"])
+        ("--config-dir", "{t}", "--tenant-config", "{t}/ta.yaml", "--at", "2026-11-13T12:00:00Z"),
+    ], ids=["with-tenant-config", "empty", "with-both-inputs"])
     def test_at_outside_its_use_is_refused(self, tmp_path, da_guard_env, argv):
         # #4027 review: ignored beside --tenant-config, '' taken as "now".
         tree = _tree(tmp_path, _SCHEDULED)
