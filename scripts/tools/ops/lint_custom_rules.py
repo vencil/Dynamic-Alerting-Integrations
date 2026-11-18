@@ -179,7 +179,7 @@ def file_overrides_problems(overrides) -> "list[str]":
         if not isinstance(entry, dict):
             out.append(f"{at} must be a mapping, not {type(entry).__name__}")
             continue
-        unknown = sorted(str(k) for k in entry if k not in OVERRIDE_ENTRY_KEYS)
+        unknown = sorted(safe_label(str(k)) for k in entry if k not in OVERRIDE_ENTRY_KEYS)
         if unknown:
             out.append(f"{at} has no key(s) {', '.join(unknown)} "
                        f"(an entry has {', '.join(OVERRIDE_ENTRY_KEYS)})")
@@ -197,7 +197,8 @@ def file_overrides_problems(overrides) -> "list[str]":
         if not isinstance(ov_policy, dict):
             out.append(f"{at}.policy must be a mapping, not {type(ov_policy).__name__}")
             continue
-        disallowed = sorted(str(k) for k in ov_policy if k not in OVERRIDABLE_POLICY_KEYS)
+        disallowed = sorted(safe_label(str(k)) for k in ov_policy
+                            if k not in OVERRIDABLE_POLICY_KEYS)
         if disallowed:
             out.append(f"{at}.policy may only relax "
                        f"{', '.join(sorted(OVERRIDABLE_POLICY_KEYS))}, not "
@@ -486,9 +487,9 @@ def resolve_file_policy(filepath, content, policy):
     Returns (effective_policy, list of LintResult). A matching override whose
     GENERATED-marker requirement fails yields an ERROR and the base policy —
     fail loud: either the pack was hand-authored at a platform path or the
-    policy entry is stale. *policy* is ``load_policy``'s: its file_overrides
-    were judged there (``file_overrides_problems``, #3977), so only
-    OVERRIDABLE_POLICY_KEYS are in an entry's ``policy``.
+    policy entry is stale. ⛔ *policy* must be ``load_policy``'s: its
+    file_overrides were judged there (``file_overrides_problems``, #3977) and
+    are read here as judged — a malformed one handed in directly raises.
     """
     norm = Path(filepath).as_posix()
     for override in policy.get("file_overrides", []):
@@ -534,7 +535,7 @@ def load_policy(custom, path=None):
     and refused there, never taken for "not given".
     """
     if custom is not None:
-        unknown = sorted(str(k) for k in custom if k not in POLICY_KEYS)
+        unknown = sorted(safe_label(str(k)) for k in custom if k not in POLICY_KEYS)
         if unknown:
             from _grar_validate import POLICY_KEYS as deployment_keys  # noqa: PLC0415
             deploy = [k for k in unknown if k in deployment_keys]

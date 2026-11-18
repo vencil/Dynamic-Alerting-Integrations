@@ -785,6 +785,18 @@ def test_a_malformed_file_override_is_refused_when_the_policy_is_loaded(override
     assert str(exc.value) == f"--policy p.yaml: {said}"
 
 
+@pytest.mark.parametrize("custom", [
+    {"file_overrides": [{"path": "a.yaml", "x\nERROR: forged": 1}]},
+    {"file_overrides": [{"path": "a.yaml", "policy": {"x\nERROR: forged": 1}}]},
+    {"x\nERROR: forged": 1},
+])
+def test_a_key_in_a_refusal_cannot_print_a_line_of_its_own(custom):
+    """#3977 review: a key is echoed through safe_label, as a path is."""
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy(custom, "p.yaml")
+    assert "\n" not in str(exc.value), str(exc.value)
+
+
 def test_every_problem_of_the_overrides_is_named_at_once():
     with pytest.raises(_lib_exitcodes.CallerError) as exc:
         lint_custom_rules.load_policy({"file_overrides": [
