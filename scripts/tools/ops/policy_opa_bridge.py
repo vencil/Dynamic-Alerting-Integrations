@@ -219,8 +219,9 @@ def load_tenant_inputs(config_dir: str, at: Optional[str] = None,
     for t, d in sorted(days.tenants.items()):
         for k, day in sorted(d.items()):
             if day.expires is not None and day.expired is False:
-                print(f"NOTE: {t}: {k} is time-boxed by `expires: {day.expires}`; "
-                      f"its served day holds until then", file=sys.stderr)
+                print(f"NOTE: {safe_label(t)}: {safe_label(k)} is time-boxed by "
+                      f"`expires: {safe_label(day.expires)}`; its served day holds until then",
+                      file=sys.stderr)
     return tenants, served
 
 
@@ -283,8 +284,9 @@ def build_opa_input(
         defaults: defaults dict (usually from _defaults.yaml)
         rule_packs: list of rule pack names
         platform_version: platform version string
-        served: {tenant_name: {threshold_key: value}}, what /metrics serves
-            (`load_tenant_inputs`); `{}` when omitted
+        served: {tenant_name: {threshold_key: [segment, ...]}}, what /metrics
+            serves over the whole day (`load_tenant_inputs`, #4025); `{}` when
+            omitted
 
     Returns:
         OPA input dict ready for JSON serialization

@@ -1300,3 +1300,34 @@ class TestServedWholeDay:
         rc, out, err = _dry_run(conf_d, capsys, "--at", "")
         assert rc == 2 and out == "", (out, err)
         assert "--at takes an RFC3339 instant" in err, err
+
+    def test_a_tenant_one_reading_lacks_is_exit_2_named(self, tmp_path, monkeypatch, capsys):
+        # #4025 review: three readings (effective, schedules, facts) must name
+        # one tenant set; one short of a tenant is rc 2 naming it, never a
+        # KeyError traceback.
+        conf_d = _write_tree(tmp_path, {**_SCHEDULED,
+                                        "tb.yaml": "tenants:\n  tb: {}\n"})
+        real = pob.load_served_facts
+
+        def short(*a, **k):
+            facts = real(*a, **k)
+            return facts._replace(tenants={t: v for t, v in facts.tenants.items() if t != "tb"})
+        monkeypatch.setattr(pob, "load_served_facts", short)
+        with pytest.raises(SystemExit) as exc:
+            _dry_run(conf_d, capsys)
+        out, err = capsys.readouterr()
+        assert exc.value.code == 2 and out == "", (out, err)
+        assert "disagree on the tenants" in err and "tb" in err, err
+
+    def test_the_note_escapes_a_tenant_id(self, tmp_path, capsys):
+        # #4025 review: the one line of this tool that printed a tenant id
+        # unescaped (#1538).
+        conf_d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "ta.yaml": ('tenants:\n  "t\\u001b[31mX":\n    mysql_connections:\n'
+                        '      default: "60"\n      expires: "2099-01-01T00:00:00Z"\n'),
+        })
+        rc, out, err = _dry_run(conf_d, capsys, "--at", "2026-11-13T12:00:00Z")
+        assert rc == 0, err
+        note = [ln for ln in err.splitlines() if ln.startswith("NOTE:")]
+        assert note and "\x1b" not in note[0], err
