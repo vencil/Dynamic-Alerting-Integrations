@@ -427,6 +427,28 @@ class KeySchedule(NamedTuple):
     expires: str | None     # the time-box as written, when the exporter honours one
     expired: bool | None    # the exporter's verdict at `at`; None without a time-box
 
+    def as_json(self) -> "list[dict[str, Any]]":
+        """The day as a tool hands it on (#4025, #4027): da-guard's segments
+        as served-values writes them, `series` left out — `{from, to, value,
+        severity}` where the key has a row, `{from, to, value: null,
+        reason}` where it has none (`reason` only when da-guard gives one),
+        `{from, to, error}` where /metrics cannot be gathered. One segment
+        `00:00`-`24:00` when the value does not change over the day."""
+        out = []
+        for seg in self.segments:
+            doc: dict[str, Any] = {"from": seg.start, "to": seg.end}
+            if seg.error is not None:
+                doc["error"] = seg.error
+            elif seg.value is not None:
+                doc["value"] = seg.value
+                doc["severity"] = seg.severity
+            else:
+                doc["value"] = None
+                if seg.reason is not None:
+                    doc["reason"] = seg.reason
+            out.append(doc)
+        return out
+
 
 class TimeBox(NamedTuple):
     target: str    # the silenced severity for `_silent_mode`; "" for `_state_maintenance`
@@ -661,6 +683,19 @@ class UngatheredPart(NamedTuple):
     start: str  # "HH:MM", UTC
     end: str    # "HH:MM", UTC; at most "24:00"
     error: str  # da-guard's text: the Gather's failure
+
+
+def ungathered_refusal(parts: "tuple[UngatheredPart, ...]") -> "str | None":
+    """Why a reader of the whole day can judge nothing (#4025, #4027): the
+    parts of the day /metrics cannot be gathered in, named with da-guard's
+    text — None when there is none. In such a part no key of any tenant is
+    served, so what a key is there is not known: a tool that reads the day
+    whole refuses (rc 2) rather than judge the rest of the day as the day."""
+    if not parts:
+        return None
+    spans = "; ".join(f"{p.start}-{p.end} UTC ({p.error})" for p in parts)
+    return (f"the exporter's /metrics cannot be gathered in part of the day, so nothing "
+            f"is judged: {spans}")
 
 
 class ServedSchedules(NamedTuple):
@@ -1829,7 +1864,7 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
     return KeySchedule(segments, None if expires is None else str(expires), expired)
 
 
-def print_load_warnings(tree: "ServedTree | ServedFacts | EffectiveTree | CustomAlertPack",
+def print_load_warnings(tree: "ServedTree | ServedSchedules | ServedFacts | EffectiveTree | CustomAlertPack",
                         stream: TextIO | None = None) -> None:
     """Every non-empty line da-guard wrote to stderr, each behind
     `DA_GUARD_PREFIX`, then one `WARN: <file>: <reason>` line per file the

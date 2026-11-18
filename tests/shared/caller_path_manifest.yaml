@@ -19,6 +19,7 @@ commands:
     "--prometheus": url
     "--tenant": not_path
   analyze-gaps:
+    "--at": not_path
     "--output": output
   backtest:
     "--git-diff": not_path

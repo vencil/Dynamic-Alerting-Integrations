@@ -98,7 +98,7 @@ _OFFBOARD_REF = {
     "other.yaml": "tenants:\n  other:\n    note: {VALUE}\n",
 }
 #: A tenant's `custom_` value, read alone (`--tenant-config`): the gap report
-#: carries it as `current_value` — a string "yes", or a boolean.
+#: carries it as `written` (#4027) — a string "yes", or a boolean.
 _CUSTOM_VALUE = {
     "tenant-a.yaml": "tenants:\n  tenant-a:\n    custom_mysql_x: {VALUE}\n",
 }
