@@ -1775,7 +1775,6 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
     ("../ops/audit_rules_drift.py", "--out"): ("some", ("os.mkdir .",)),
     ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
     ("dx/describe_tenant.py", "-o/--output"): ("all", ("open tenants.json",)),
-    ("dx/generate_tenant_fixture.py", "-o/--output"): ("all", ("os.mkdir conf.d",)),
     ("dx/generate_tenant_metadata.py", "--output"): ("some", ("os.mkdir .",)),
     ("dx/migrate_conf_d.py", "-o/--output-plan"): ("all", ("open migration-plan.json",)),
     ("dx/pair_bench_ratio.py", "--out"): ("all", ("open bench-paired.json", "os.mkdir .")),
@@ -1787,14 +1786,10 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
     ("dx/scan_component_health.py", "--output"): (
         "all", ("open component-health.json", "os.mkdir .")),
     ("lint/trufflehog_to_sarif.py", "--output"): ("all", ("open trufflehog.sarif",)),
-    ("ops/assemble_config_dir.py", "--output"): ("all", ("os.mkdir out",)),
-    ("ops/baseline_discovery.py", "-o/--output-dir"): ("some", ("os.mkdir out",)),
     ("ops/config_history.py", "--config-dir"): (
         "some", ("open .da-history/history.json", "os.mkdir .da-history",
                  "os.mkdir .da-history/snap-1")),
-    ("ops/da_assembler.py", "--config-dir"): ("all", ("os.mkdir out",)),
     ("ops/migrate_credentials.py", "--manifests-out"): ("some", ("os.mkdir secrets",)),
-    ("ops/state_reconcile.py", "--manifest-path"): ("some", ("os.mkdir .",)),
 }
 
 #: Rows whose output came through the entry of the OTHER class than the row

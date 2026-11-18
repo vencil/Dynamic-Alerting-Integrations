@@ -29,6 +29,9 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 
 #: (tool, flag) — the same strings as the rows of the write gate.
 DIR_FLAGS = [
+    ("dx/generate_tenant_fixture.py", "-o/--output"),
+    ("ops/assemble_config_dir.py", "--output"),
+    ("ops/baseline_discovery.py", "-o/--output-dir"),
     ("dx/waveform_compile.py", "--out"),
     ("ops/generate_rule_pack_split.py", "--output-dir"),
     ("ops/init_project.py", "-o/--output-dir"),
@@ -108,7 +111,10 @@ def test_a_directory_flag_given_dash_is_refused_at_parse_time(tool, flag, tmp_pa
         timeout=120, cwd=cwd,
         env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     assert proc.returncode == 2, proc.stderr[-800:]
-    assert f"error: argument {flag}: {REFUSAL}" in proc.stderr, proc.stderr[-800:]
+    # argparse names the flag by its option strings in declaration order.
+    names = {flag, "/".join(reversed(flag.split("/")))}
+    assert any(f"error: argument {n}: {REFUSAL}" in proc.stderr for n in names), \
+        proc.stderr[-800:]
     assert "Traceback" not in proc.stderr
     assert proc.stdout == ""
     assert list(cwd.iterdir()) == [], "the run made something in the working directory"
