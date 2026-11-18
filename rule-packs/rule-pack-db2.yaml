@@ -155,17 +155,19 @@ groups:
       # The ratio itself is window-length-independent (numerator and denominator
       # scale together), so the 0.05 threshold semantics are unchanged.
       #
-      # ⚠️ 低 sort 量時本比值噪訊高：分母守衛只有 `> 0`，只排除「完全沒排序」，
-      # 不排除「排序極少」。閒置庫 5 分鐘內 3 次排序、1 次溢位＝33% 遠高於 0.05
-      # 門檻——此低量模式**持續 ≥ DB2HighSortOverflow 的 for: 10m** 才會誤警；
-      # 單次 5 分鐘叢發會滑出 rate 窗、撐不滿 for: 而不 page（ADR-030 precision
-      # 面向）。要加最小樣本量 floor（分母改 `> N`）或改 0.05 門檻，都需該租戶
-      # 真實 sort 速率分布才有依據，否則只是換一個沒根據的猜測值 → 見 #1176，
-      # defer 到首個 DB2 客戶的實際流量分布。
+      # 最小樣本 gate（#1176）：5 分鐘窗內至少 200 次排序才計算比值，否則這個租戶
+      # 沒有比值、告警不會響。閒置庫 5 分鐘 3 次排序、1 次溢位就是 33%，這種比值
+      # 不是可以拿來和 0.05 比的估計值。200 來自比例的 success-failure（large
+      # counts）條件：n·p0 ≥ 10 且 n·(1−p0) ≥ 10，即 n ≥ 10 / min(p0, 1−p0)，
+      # p0 = 0.05 時為 200；改 0.05 門檻時要一起改。它只由門檻推出、與租戶流量
+      # 無關。⚠️ 它只保證比值可以解讀，不控制誤報：n = 200 時真實比例 0.04 的庫，
+      # 單一窗量到超過 0.05 的機率約 18%（二項分布）；門檻附近的雜訊靠 for: 10m
+      # 吸收。代價是排序量低於 200 次／5m 的庫，即使真的大量溢位也不會告警。
+      # 窗是 5m，所以寫成每秒 200 / 300 次。0.05 門檻本身仍待真實流量校準（#1176）。
       - record: tenant:db2_sort_overflow_ratio:avg
         expr: |
           sum by(tenant) (rate(db2_sort_overflows[5m]))
-          / (sum by(tenant) (rate(db2_total_sorts[5m])) > 0)
+          / (sum by(tenant) (rate(db2_total_sorts[5m])) >= 200 / 300)
 
   # -------------------------------------------------------
   # Threshold normalization: DB2
