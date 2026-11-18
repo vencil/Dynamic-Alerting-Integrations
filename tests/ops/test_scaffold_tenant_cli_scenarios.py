@@ -131,3 +131,22 @@ def test_catalog_lists_the_db_types():
 def test_unknown_db_type_is_rejected(tmp_path):
     proc = _run("--tenant", "t-err", "--db", "invalid_db", "-o", tmp_path / "out")
     assert proc.returncode != 0, proc.stdout
+
+
+def test_the_root_header_explains_the_built_in_layer_without_copying_it(scaffolded):
+    """#3832 decision 7: the root file no longer lists the built-in keys, so its
+    comment says how to write one (three forms) and where the values in force
+    are — and names no built-in key or number, which would go stale."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from _builtin_layer import BUILTIN_DEFAULTS
+    text = _read(scaffolded, "mariadb", "_defaults.yaml")
+    comments = "\n".join(ln for ln in text.splitlines() if ln.startswith("#"))
+    for phrase in ('"disable"', "platform_defaults", "validate-config"):
+        assert phrase in comments, phrase
+    assert not [k for k in BUILTIN_DEFAULTS if k in comments], comments
+
+
+def test_the_tenant_header_counts_a_built_in_base_as_valued(scaffolded):
+    tenant, _ = scaffolded["mariadb"]
+    head = _read(scaffolded, "mariadb", f"{tenant}.yaml").split("\ntenants:")[0]
+    assert "或平台內建" in head, head

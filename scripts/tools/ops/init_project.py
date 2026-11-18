@@ -913,8 +913,10 @@ def _tenant_file(tenant: str, rule_packs: list[str]) -> "_lib_confedit.NewFile":
     section that file does not contain — see
     `_registry_lib.render_tenant_declared_note_lines`.
     """
-    # The mapping `_defaults_file` will write for this same run — the header
-    # claims below are read off it, not asserted about it. Same for the declared
+    # The selected packs' valued bases (`_defaults_file` writes these minus the
+    # built-in keys, #3832; a built-in base still has a value, so the critical
+    # note counts it) — the header claims below are read off it, not asserted
+    # about it. Same for the declared
     # list: one derivation per run, shared by the header sentence and the block
     # appended at the bottom, so the two cannot disagree.
     defaults = _catalog_defaults(rule_packs)
