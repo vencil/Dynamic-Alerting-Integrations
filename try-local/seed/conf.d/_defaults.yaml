@@ -81,10 +81,11 @@ optional_overrides:
     # CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)
   # ── oracle：Oracle Database (query-exporter) ──
   - oracle_wait_time_rate   # s/s — Wait time rate (5m)
-  - oracle_process_count   # count — Active processes warning
-    # ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-  - oracle_pga_allocated_bytes   # bytes (4GB) — PGA allocation warning
-    # ⚠ 參考庫實測反例（#1176）：計畫性 stats-gather 會用到 22 GB PGA —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+  - oracle_pga_usage_percent
+    # % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
+    # PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a
+    # database with no limit set (0) has no share. Replaces the absolute-bytes key
+    # oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)
   # ── db2：IBM DB2 (ibm_db2_exporter) ──
   - db2_log_usage_percent   # % — Transaction log usage warning
   - db2_deadlock_rate   # count/s — Deadlock rate (5m)

@@ -11,4 +11,8 @@ var retiredThresholdKeys = []retiredThresholdKey{
 	{"kafka_active_controllers", "", 3783, "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"},
 	{"kafka_request_rate", "", 3783, "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"},
 	{"mysql_connections", "mysql_connection_usage_percent", 3778, "The unit changed from an absolute connection count to a percentage of max_connections; convert the value, do not copy it."},
+	{"oracle_pga_allocated_bytes", "oracle_pga_usage_percent", 1320, "The unit changed from absolute bytes to a percentage of PGA_AGGREGATE_LIMIT; convert the value, do not copy it."},
+	{"oracle_pga_allocated_bytes_critical", "", 1320, "The PGA alert has no critical tier: oracle_pga_usage_percent (a percentage of PGA_AGGREGATE_LIMIT) is a warning only."},
+	{"oracle_process_count", "oracle_process_usage_percent", 1320, "The unit changed from an absolute process count to a percentage of the PROCESSES parameter; convert the value, do not copy it."},
+	{"oracle_process_count_critical", "", 1320, "The process alert has no critical tier: oracle_process_usage_percent (a percentage of the PROCESSES parameter) is a warning only."},
 }

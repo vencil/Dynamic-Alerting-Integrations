@@ -48,13 +48,13 @@ func TestCollector_ServesUnsetThresholdsToSubscribedTenants(t *testing.T) {
 	t.Parallel()
 	cfg := &config.ThresholdConfig{
 		Defaults:          map[string]float64{"container_cpu": 80},
-		OptionalOverrides: []string{"oracle_wait_time_rate", "oracle_process_count"},
+		OptionalOverrides: []string{"oracle_wait_time_rate", "oracle_pga_usage_percent"},
 		StateFilters:      map[string]config.StateFilter{config.UnsetThresholdsFilter: {DefaultState: "disable"}},
 		Tenants: map[string]map[string]config.ScheduledValue{
 			"ta": {
-				"_state_unset_thresholds": svYAML(`enable`),
-				"oracle_wait_time_rate":   svYAML(`"5"`),
-				"oracle_process_count":    svYAML(`"disable"`),
+				"_state_unset_thresholds":  svYAML(`enable`),
+				"oracle_wait_time_rate":    svYAML(`"5"`),
+				"oracle_pga_usage_percent": svYAML(`"disable"`),
 			},
 			"tb": {"oracle_wait_time_rate": svYAML(`"5"`)}, // not subscribed
 		},
@@ -67,7 +67,7 @@ func TestCollector_ServesUnsetThresholdsToSubscribedTenants(t *testing.T) {
 	if got["redis_replication_lag"] != config.UnsetFixPlatform {
 		t.Errorf("redis_replication_lag (not declared): fix %q, want platform", got["redis_replication_lag"])
 	}
-	for _, configured := range []string{"oracle_wait_time_rate", "oracle_process_count", "container_cpu"} {
+	for _, configured := range []string{"oracle_wait_time_rate", "oracle_pga_usage_percent", "container_cpu"} {
 		if _, ok := got[configured]; ok {
 			t.Errorf("%s is served or disabled (or ships armed): no series", configured)
 		}

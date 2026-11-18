@@ -1104,15 +1104,15 @@ def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_g
     `reason` are read as da-guard writes them (the facts PR-side readers use
     instead of re-reading the value)."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\noptional_overrides:\n  - oracle_process_count\n",
-        "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"NaN\"\n    oracle_process_count: \"-Inf\"\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\noptional_overrides:\n  - oracle_pga_usage_percent\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"NaN\"\n    oracle_pga_usage_percent: \"-Inf\"\n"
                   "    mysql_connection_usage_percent_critical:\n      default: \"95\"\n      overrides:\n"
                   "        - window: \"01:00-02:00\"\n          value: \"Inf\"\n"
                   "        - window: \"03:00-04:00\"\n          value: disable\n",
     })
     got = tv.load_served_values(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, schedules=True)["t"]
     assert got.keys["mysql_connection_usage_percent"] == tv.ServedKey(True, refused="non_finite")
-    assert got.keys["oracle_process_count"] == tv.ServedKey(False, "value_non_finite", refused="non_finite")
+    assert got.keys["oracle_pga_usage_percent"] == tv.ServedKey(False, "value_non_finite", refused="non_finite")
     reasons = [(s.start, s.reason) for s in got.schedules["mysql_connection_usage_percent_critical"].segments
                if s.value is None]
     assert reasons == [("01:00", "value_non_finite"), ("03:00", "disabled")]

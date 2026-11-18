@@ -914,7 +914,7 @@ data:
     \      summary: Vector projection-gate init-container is stuck (crash loop / image\
     \ pull) — DaemonSet rollout wedged in {{ $labels.namespace }}\n- name: builtin-defaults-alignment\n\
     \  rules:\n  - record: rule_pack_builtin_defaults_info\n    expr: vector(1)\n\
-    \    labels:\n      rulepack_digest: 63343e1d88e9\n  - alert: BuiltinDefaultsDigestMismatch\n\
+    \    labels:\n      rulepack_digest: 522437716e2a\n  - alert: BuiltinDefaultsDigestMismatch\n\
     \    expr: \"(\\n  max by (job, digest) (da_config_builtin_defaults_info{job=\\\
     \"threshold-exporter\\\"})\\n  or max by (job, digest) (tenant_api_builtin_defaults_info{job=\\\
     \"tenant-api\\\"})\\n  or label_replace(\\n    max by (job) (\\n      (up{job=\\\
