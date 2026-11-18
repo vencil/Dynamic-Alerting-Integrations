@@ -2,7 +2,9 @@
 
 The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its
 display/exporter/default_on/rule_pack_file(/queries) and the `defaults` /
-`optional_overrides` tiers. Edit the registry, then run
+`optional_overrides` tiers, and BUILTIN_DEFAULT_KEYS: the keys the readers
+build in (`arming: default`, the same derivation as builtin_defaults_gen.go,
+#3832). Edit the registry, then run
   python3 scripts/tools/lint/check_threshold_registry.py --regen
 `--ci` (pre-commit, CI) fails while this file is stale.
 """
@@ -627,3 +629,5 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                              'unit': 'count',
                                                              'desc': 'Waiting connections critical',
                                                              'metric_class': 'saturation'}}}}
+
+BUILTIN_DEFAULT_KEYS = frozenset({'container_cpu', 'container_cpu_throttle', 'container_memory', 'es_disk_usage_percent', 'es_heap_usage_percent', 'mysql_connection_usage_percent', 'mysql_replication_lag', 'oracle_process_usage_percent', 'oracle_tablespace_used_percent', 'pg_connections', 'pg_replication_lag', 'rabbitmq_node_mem_percent'})

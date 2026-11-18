@@ -836,7 +836,9 @@ _RULE_PACKS_MODULE_HEADER = (
     "\n"
     "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
     "display/exporter/default_on/rule_pack_file(/queries) and the `defaults` /\n"
-    "`optional_overrides` tiers. Edit the registry, then run\n"
+    "`optional_overrides` tiers, and BUILTIN_DEFAULT_KEYS: the keys the readers\n"
+    "build in (`arming: default`, the same derivation as builtin_defaults_gen.go,\n"
+    "#3832). Edit the registry, then run\n"
     "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
     "`--ci` (pre-commit, CI) fails while this file is stale.\n"
     '"""\n'
@@ -909,7 +911,9 @@ def render_rule_packs_module(doc: dict) -> str:
 
     body = pprint.pformat(project_rule_packs(doc), indent=1, width=100,
                           sort_dicts=False)
-    return _RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+    builtin = ", ".join(repr(k) for k in sorted(builtin_defaults(doc)))
+    return (_RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+            + "\nBUILTIN_DEFAULT_KEYS = frozenset({" + builtin + "})\n")
 
 
 def packaged_registry_doc() -> dict:
@@ -1722,6 +1726,25 @@ def is_shipped_optional_key(key: str) -> bool:
     ``{`` arm is defence, not a live branch.
     """
     return not key.endswith(CRITICAL_SUFFIX) and "{" not in key
+
+
+def builtin_default_keys() -> "frozenset[str]":
+    """The keys the readers of conf.d build in (`arming: default`, #3832), as
+    the generated RULE_PACKS module carries them: the same derivation as
+    builtin_defaults_gen.go (`builtin_defaults`), so a reader of the module
+    and the exporter's table cannot name different keys."""
+    from _rule_packs_generated import BUILTIN_DEFAULT_KEYS  # noqa: PLC0415
+    return BUILTIN_DEFAULT_KEYS
+
+
+def root_written_defaults(defaults: dict) -> dict:
+    """The root `defaults:` an onboarding generator writes for *defaults* (the
+    selected packs' platform values): every key but the built-in ones
+    (#3832 decision 7). A copy of a built-in value would pin the number the
+    platform shipped on that day; left out, the readers serve the platform's
+    value and follow its later recalibrations."""
+    builtin = builtin_default_keys()
+    return {k: v for k, v in defaults.items() if k not in builtin}
 
 
 def shipped_optional_keys_for_packs(
@@ -2555,7 +2578,8 @@ _TENANT_STUB_CRITICAL_NOTE = {
     ("zh", False): (
         "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 一個都沒有列，",
         "# 平台不供給 critical 值 ⇒ 你在這裡填一個，只要 <base> 在 defaults: 有值，就會",
-        "# 產生一條真的 critical 閾值（不填則無此列，base 的 warning 列不受影響）。",
+        "# 產生一條真的 critical 閾值（不填則無此列，base 的 warning 列不受影響）；",
+        "# 平台內建的 base 不在 defaults: 裡也算有值。",
     ),
     ("zh", True): (
         "# ⚠️ 第三類 <base>_critical：本次一起產出的 _defaults.yaml 把其中 {n} 個放進了",
@@ -2567,8 +2591,8 @@ _TENANT_STUB_CRITICAL_NOTE = {
         "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
         "# this file lists none of them under `defaults:`, so the platform supplies",
         "# no critical value: set one here and it produces a real critical-severity",
-        "# threshold as long as `<base>` has a value under `defaults:`; leave it out",
-        "# and there simply is no critical row.",
+        "# threshold as long as `<base>` has a value under `defaults:` (a base the",
+        "# platform builds in counts); leave it out and there is no critical row.",
     ),
     ("en", True): (
         "# ⚠️ A third group is `<base>_critical`. The _defaults.yaml generated next",

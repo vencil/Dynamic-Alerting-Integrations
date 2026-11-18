@@ -62,7 +62,9 @@ class TestOnboardToScaffoldPipeline:
             defaults = generate_defaults(db_list)
             tenant_data = generate_tenant(tenant, db_list, interactive=False)
 
-            assert "defaults" in defaults
+            # postgresql / mariadb / kubernetes values are all built in (#3832):
+            # the generated root file carries no `defaults:` for them.
+            assert "defaults" not in defaults and "state_filters" in defaults
             assert tenant in tenant_data["tenants"]
 
     def test_scaffold_output_loadable_by_generate(self, config_dir):

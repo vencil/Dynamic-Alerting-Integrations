@@ -316,7 +316,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 閾值登錄表（`rule-packs/threshold-registry.yaml`，平台所有閾值鍵的唯一來源）把平台出貨即啟用的鍵標為 `arming: default`。這些鍵與它們的平台值編譯在 exporter、da-guard 與 tenant-api 裡（三者共用同一套 Go 程式庫，`da-tools validate-config` 經 da-guard 取得答案），排在根目錄 `_defaults.yaml` 之下，叫做內建層。登錄表標為 `operator`（平台不主張值、要部署方自己校準）的鍵與所有 `_critical` 鍵不在內建層。
 
-**為什麼**：在此之前，平台的預設值要由 `da-tools init` 連數字複製進客戶的根目錄 `_defaults.yaml`。那份檔案之後歸客戶所有，平台新增的預設啟用鍵與重新校準的值都進不來，對應的告警不會響，也沒有錯誤訊息。Helm chart 的值隨 chart 升級、客戶只寫差異，conf.d 這一側沒有同樣的機制。現在客戶的樹只放覆寫與退出，預設值跟著讀取端出貨。
+**為什麼**：在此之前，平台的預設值要由 `da-tools init` 連數字複製進客戶的根目錄 `_defaults.yaml`。那份檔案之後歸客戶所有，平台新增的預設啟用鍵與重新校準的值都進不來，對應的告警不會響，也沒有錯誤訊息。Helm chart 的值隨 chart 升級、客戶只寫差異，conf.d 這一側沒有同樣的機制。現在客戶的樹只放覆寫與退出，預設值跟著讀取端出貨：`da-tools init` 與 `da-tools scaffold` 產生的根 `_defaults.yaml` 不寫這些鍵，註解只說明下表的寫法、不列數字（寫進註解的數字一樣會過期；現值由 `da-tools validate-config` 的 `platform_defaults` 列回答）。
 
 **一條規則決定它的所有行為：內建層給的值，效果等同把同一個數字寫在根目錄 `defaults:`，差別只有來源標示。** 根目錄給了數字的鍵用根目錄的數字；根目錄沒寫、寫 `null`（決策 4）或寫了讀不了的值（da-guard 照舊以 `root_default_refused` 報錯）的鍵，都拿內建值。所以凡是「根目錄 `defaults:` 有值」的既有規則，內建層給值的鍵一律適用：子目錄與租戶可以覆寫它、可以寫 `"disable"` 關掉它；租戶寫的 `<鍵>_critical` 會送出 critical 列；租戶寫這個鍵不會被判為沒有讀取端讀（[ADR-038](038-unread-keys-judged-by-readers.md) 決定 7）；`"disable"` 過期（`expires:`）後失效，基底列回來。
 

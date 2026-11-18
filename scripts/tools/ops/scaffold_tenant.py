@@ -58,6 +58,7 @@ from _registry_lib import (  # noqa: E402
     is_shipped_optional_key,
     render_tenant_critical_note_lines,
     render_tenant_declared_note_lines,
+    root_written_defaults,
     shipped_dimensions_for_packs,
     shipped_optional_keys_for_packs,
     tenant_declared_foot,
@@ -450,11 +451,14 @@ def generate_defaults(selected_dbs: list[str]) -> dict:
     # disease this whole line of work exists to end.
     #
     # `defaults` is untouched by this — `check_threshold_reachability._supply()`
-    # reads `generated["defaults"]` alone, so the supply face is unchanged.
+    # reads `generated["defaults"]` (and the built-in keys) alone.
     optional_overrides = shipped_optional_keys_for_packs(
         ["kubernetes", *selected_dbs], RULE_PACKS)
 
-    out = {"defaults": defaults}
+    # #3832 decision 7: no built-in key (`root_written_defaults`), and no
+    # `defaults:` at all when that leaves nothing (absent and empty read the same).
+    defaults = root_written_defaults(defaults)
+    out = {"defaults": defaults} if defaults else {}
     if optional_overrides:
         # Omitted entirely when empty: `optional_overrides: []` reads as an
         # accident, and the Go loader treats absent and empty identically.

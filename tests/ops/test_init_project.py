@@ -23,6 +23,8 @@ _BASH = shutil.which("bash") or "bash"
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "ops"))
 
 import init_project as ip  # noqa: E402
+sys.path.insert(0, os.path.join(REPO_ROOT, "tests"))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832: read from the Go table)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
@@ -343,29 +345,34 @@ class TestGenDefaultsYaml:
 
     def test_basic_structure(self):
         """Generated YAML has defaults, state_filters, _routing_defaults."""
-        yaml_str = ip._gen_defaults_yaml(['mariadb'], 'monitoring')
+        yaml_str = ip._gen_defaults_yaml(['redis'], 'monitoring')
         config = yaml.safe_load(yaml_str)
         assert 'defaults' in config
         assert 'state_filters' in config
         assert '_routing_defaults' in config
 
-    def test_mariadb_defaults_merged(self):
-        """MariaDB defaults are merged into 'defaults' key."""
-        yaml_str = ip._gen_defaults_yaml(['mariadb'], 'monitoring')
-        config = yaml.safe_load(yaml_str)
-        defaults = config['defaults']
-        assert 'mysql_connection_usage_percent' in defaults
-        assert defaults['mysql_connection_usage_percent'] == 80
-        # …and its critical twin is NOT here (#1218). See TestCriticalTierPlacement.
-        assert 'mysql_connection_usage_percent_critical' not in defaults
+    @pytest.mark.parametrize('packs', [['mariadb'], ['redis'], ['elasticsearch', 'oracle', 'rabbitmq'],
+                                       ['kubernetes', 'mariadb', 'postgresql']])
+    def test_writes_every_selected_value_but_the_built_in_ones(self, packs):
+        """#3832 decision 7: the selected packs' platform values, minus the
+        keys the readers build in (a copy would pin the day's number); an
+        operator key stays. The built-in set is read from the Go table, not
+        from the generated module the code reads. No `defaults:` at all when
+        nothing is left."""
+        config = yaml.safe_load(ip._gen_defaults_yaml(packs, 'monitoring'))
+        want = {k: v for k, v in ip._catalog_defaults(packs).items() if k not in BUILTIN_DEFAULTS}
+        assert config.get('defaults', {}) == want
+        assert ('defaults' in config) == bool(want)
+        # …and no critical twin either (#1218). See TestCriticalTierPlacement.
+        assert not [k for k in config.get('defaults') or {} if k.endswith('_critical')]
 
     def test_multiple_rule_packs_merged(self):
         """Multiple rule packs' defaults are all merged."""
         yaml_str = ip._gen_defaults_yaml(['mariadb', 'redis'], 'monitoring')
         config = yaml.safe_load(yaml_str)
         defaults = config['defaults']
-        # MariaDB keys
-        assert 'mysql_connection_usage_percent' in defaults
+        # MariaDB keys are built in (#3832): not written
+        assert 'mysql_connection_usage_percent' not in defaults
         # Redis keys — the key the Redis pack reads (issue 1196: the old
         # catalog's `redis_memory_usage` matched no alert)
         assert 'redis_memory_used_bytes' in defaults
@@ -405,8 +412,7 @@ class TestGenDefaultsYaml:
 
     def test_custom_namespace_used(self):
         """Custom namespace parameter doesn't affect YAML structure."""
-        yaml_str = ip._gen_defaults_yaml(['mariadb'], 'custom-ns')
-        config = yaml.safe_load(yaml_str)
+        config = yaml.safe_load(ip._gen_defaults_yaml(['redis'], 'custom-ns'))
         # Namespace is in header comment, not in structure
         assert 'defaults' in config
 
@@ -506,23 +512,21 @@ class TestGenTenantYaml:
         url = tenant_config['_routing']['receiver']['url']
         assert 'prod-db' in url
 
-    def test_example_overrides_from_first_pack(self):
-        """First 3 metric keys from first pack are included as examples."""
-        yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
-        config = yaml.safe_load(yaml_str)
-        tenant_config = config['tenants']['db-a']
-        mariadb_keys = list(ip._catalog_defaults(['mariadb']).keys())[:3]
-        for key in mariadb_keys:
-            assert key in tenant_config
+    @pytest.mark.parametrize('packs', [['mariadb'], ['redis'], ['mariadb', 'redis', 'kubernetes']])
+    def test_the_stub_writes_no_base_value(self, packs):
+        """#3832 decision 7: no line equal to the value it inherits (it used to
+        carry three of the first pack's base values as examples — a copy that
+        stops following the platform). Only the critical seeds and `_routing`."""
+        tenant_config = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
+        assert set(tenant_config) == set(ip._catalog_critical(packs)) | {'_routing'}
+        assert not set(tenant_config) & set(ip._catalog_defaults(packs))
 
-    def test_example_values_are_strings(self):
-        """Example metric values are converted to strings (YAML 3-state)."""
-        yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
-        config = yaml.safe_load(yaml_str)
-        tenant_config = config['tenants']['db-a']
-        mariadb_keys = list(ip._catalog_defaults(['mariadb']).keys())[:3]
-        for key in mariadb_keys:
-            # Values should be strings in final YAML
+    def test_critical_seed_values_are_strings(self):
+        """Seeded values are strings in the final YAML (YAML 3-state)."""
+        tenant_config = yaml.safe_load(ip._gen_tenant_yaml('db-a', ['mariadb']))['tenants']['db-a']
+        seeds = ip._catalog_critical(['mariadb'])
+        assert seeds
+        for key in seeds:
             assert isinstance(tenant_config[key], str)
 
     def test_header_mentions_tenant_name(self):
@@ -988,7 +992,7 @@ class TestCriticalTierPlacement:
         packs = list(ip.RULE_PACK_CATALOG)
         for selection in [[p] for p in packs] + [packs]:
             config = yaml.safe_load(ip._gen_defaults_yaml(selection, 'monitoring'))
-            offenders = [k for k in config['defaults'] if k.endswith('_critical')]
+            offenders = [k for k in config.get('defaults') or {} if k.endswith('_critical')]
             assert offenders == [], f'{selection}: {offenders}'
 
     def test_stub_seeds_the_critical_tier_for_every_selected_pack(self):
@@ -1065,15 +1069,12 @@ class TestCriticalTierPlacement:
         # comes BACK at the platform default, because an absent key is State 2.
         assert 'DELETING both lines is not the same thing' in prefill, header
 
-        # (1c) ⛔ "BOTH lines" presumes both lines exist, and usually they do
-        # not: base overrides are seeded from rule_packs[0] only while the
-        # critical tier is seeded for every selected pack. Measured with
-        # `--rule-packs mariadb,redis,kubernetes`: 7 `_critical` keys, 5 with no
-        # twin in the file. A remedy the reader cannot carry out is worse than
-        # none, so the header has to say the line may be missing (round-6 blind
-        # review).
-        assert 'most `<base>` lines are NOT in this file' in prefill, header
-        assert 'ADD the `<base>: "disable"` line yourself' in prefill, header
+        # (1c) ⛔ "BOTH lines" presumes both lines exist, and they do not: the
+        # stub writes no base line at all (#3832 decision 7 — a base equal to
+        # the value it inherits is a copy). A remedy the reader cannot carry
+        # out is worse than none, so the header says so (round-6 blind review).
+        assert 'no `<base>` line is in this file' in prefill, header
+        assert 'ADD `<base>: "disable"` yourself' in prefill, header
 
         # (2) the rejection claim must name WHICH path blocks, and must state an
         # invariant rather than the current state of the generated CI.
@@ -1099,13 +1100,11 @@ class TestCriticalTierPlacement:
                            'the CI generated beside this file runs'):
             assert time_bound not in prefill, (time_bound, header)
 
-        # (3) the only in-tool refresh route is --force, which discards the
-        # retuning the same paragraph invites two lines earlier
-        assert '--force' in prefill and 'discards every hand edit' in prefill, header
-
-        # the staleness statement must cover BOTH files, never just these lines
-        assert 'sibling' in prefill and '_defaults.yaml' in prefill, header
-        assert 'one-time copy into your repo' in prefill, header
+        # (3) the staleness statement is about these lines only (#3832): the
+        # built-in base values above them follow the platform, so a sentence
+        # calling the sibling _defaults.yaml a frozen copy too would be false.
+        assert 'they are a one-time copy' in prefill, header
+        assert 'sibling' not in prefill, header
         # …and it must not re-assert that the platform supplies the values —
         # the paragraph above it (correctly) says the opposite.
         assert 'the platform supplies' not in prefill
@@ -1116,11 +1115,10 @@ class TestCriticalTierPlacement:
         must really produce `_critical` keys whose base is absent, otherwise the
         caveat describes a state that cannot occur and is just noise.
 
-        Measured at the time of writing (`mariadb,redis,kubernetes`): 7 critical
-        keys, 5 of them twinless — because the illustrative base overrides come
-        from `rule_packs[0]` only while the critical tier is seeded for every
-        selected pack (blind review, round 6: the header said "BOTH lines must
-        say disable" while most files have only one of the two).
+        Since #3832 decision 7 the stub writes no base line at all (a base equal
+        to the value it inherits is a copy), so every seeded critical key is
+        twinless (blind review, round 6: the header once said "BOTH lines must
+        say disable" while the files had only one of the two).
         """
         text = ip._gen_tenant_yaml('acme', ['mariadb', 'redis', 'kubernetes'])
         stub = yaml.safe_load(text)['tenants']['acme']
@@ -1132,8 +1130,8 @@ class TestCriticalTierPlacement:
         assert crit, stub
         assert twinless, (
             'no twinless critical key — the header caveat would be vacuous')
-        # the base tier really is first-pack-only, which is WHY they are twinless
-        assert all(k.startswith('mysql_') for k in base), base
+        # no base line is written, which is WHY they are twinless
+        assert base == [] and twinless == crit, (base, twinless, crit)
 
     def test_stub_header_makes_no_deploy_specific_claim(self):
         """⛔ `_gen_tenant_yaml` never receives `deploy`, so any sentence about
@@ -1162,7 +1160,7 @@ class TestCriticalTierPlacement:
                           'argocd'):
             assert mechanism not in header, (mechanism, header)
         # the deploy-independent property it says instead
-        assert 'nothing generated here tracks the platform' in header, header
+        assert 'a later platform recalibration does not reach them' in header, header
 
     def test_validate_config_really_fails_on_a_dangling_critical(self):
         """⛔ The load-bearing sentence in the tenant header says `da-tools
@@ -3401,7 +3399,8 @@ class TestRunInit:
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
             with open(defaults_path, 'r', encoding='utf-8') as f:
                 config_data = yaml.safe_load(f)
-            assert 'defaults' in config_data
+            # mariadb's values are built in (#3832): no `defaults:`, the rest stays.
+            assert isinstance(config_data, dict) and 'state_filters' in config_data
 
     def test_tenant_yaml_is_valid_yaml(self):
         """Created tenant YAML is valid YAML."""
@@ -3679,7 +3678,8 @@ class TestEdgeCases:
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
             with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults = yaml.safe_load(f)
-            assert 'mysql_connection_usage_percent' in defaults['defaults']
+            # mariadb's values are all built in (#3832): no `defaults:` at all.
+            assert 'defaults' not in defaults
 
     def test_all_selectable_rule_packs(self):
         """Initialization with all 13 selectable packs works."""
@@ -3700,8 +3700,11 @@ class TestEdgeCases:
                 defaults = yaml.safe_load(f)
             # Should have metrics from all packs — exactly scaffold's keys
             # (issue 1196: the old catalog's 65 included 36 no alert read)
-            assert defaults['defaults'] == ip._catalog_defaults(selectable)
-            assert len(defaults['defaults']) > 30
+            # #3832 decision 7: every selected value but the built-in ones.
+            assert defaults['defaults'] == {
+                k: v for k, v in ip._catalog_defaults(selectable).items()
+                if k not in BUILTIN_DEFAULTS}
+            assert len(defaults['defaults']) > 20
 
     def test_custom_namespace(self):
         """Initialization with custom namespace works."""
@@ -6083,7 +6086,8 @@ class TestTheSummaryDoesNotContradictItself:
         keys = [ln.split(':')[0] for ln in body.splitlines()
                 if ln and not ln.startswith((' ', '#'))]
         # optional_overrides: mariadb declares mysql_threads_running (#3778).
-        assert keys == ['defaults', 'optional_overrides', 'state_filters',
+        # No `defaults:`: mariadb's values are built in (#3832 decision 7).
+        assert keys == ['optional_overrides', 'state_filters',
                         '_routing_defaults'], keys
         # 反空洞：這個順序必須**不是**字母序，否則 sort_keys 開不開都一樣、
         # 這條測試等於沒有鑑別力。

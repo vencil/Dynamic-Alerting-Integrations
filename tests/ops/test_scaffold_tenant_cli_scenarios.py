@@ -72,12 +72,12 @@ def test_tenant_file_names_the_tenant(scaffolded):
     assert tenant in _read(scaffolded, "mariadb", f"{tenant}.yaml")
 
 
+# #3832 決策 7：內建鍵（mariadb、kubernetes 的全部、es_heap_usage_percent、
+# oracle_tablespace_used_percent 等）不再寫進根檔，見 test_defaults_omit_the_built_in_keys。
 @pytest.mark.parametrize("case,keys", [
-    ("mariadb", ["mysql_connection_usage_percent", "container_cpu"]),
     ("mariadb_redis", ["redis_memory", "redis_connected_clients"]),
-    # #1196 C：ES heap key 由 es_jvm_memory_used_percent 改名
-    ("all_four", ["mongodb_connections", "es_heap_usage_percent"]),
-    ("oracle", ["oracle_sessions_active", "oracle_tablespace_used_percent"]),
+    ("all_four", ["mongodb_connections", "es_search_latency_ms"]),
+    ("oracle", ["oracle_sessions_active"]),
     ("db2", ["db2_connections_active", "db2_bufferpool_hit_ratio"]),
     ("oracle_db2", ["oracle_sessions_active", "db2_connections_active"]),
     ("clickhouse", ["clickhouse_queries_rate", "clickhouse_active_connections"]),
@@ -86,6 +86,19 @@ def test_defaults_declare_the_db_keys(scaffolded, case, keys):
     defaults = _read(scaffolded, case, "_defaults.yaml")
     for key in keys:
         assert key in defaults, key
+
+
+@pytest.mark.parametrize("case,keys", [
+    ("mariadb", ["mysql_connection_usage_percent", "container_cpu"]),
+    ("all_four", ["es_heap_usage_percent"]),
+    ("oracle", ["oracle_tablespace_used_percent"]),
+])
+def test_defaults_omit_the_built_in_keys(scaffolded, case, keys):
+    """#3832 決策 7：讀取端內建的鍵不寫進產生的根檔的 `defaults:`。"""
+    import yaml
+    written = (yaml.safe_load(_read(scaffolded, case, "_defaults.yaml")) or {}).get("defaults") or {}
+    for key in keys:
+        assert key not in written, key
 
 
 @pytest.mark.parametrize("word", ["container_crashloop", "maintenance", "default_state"])

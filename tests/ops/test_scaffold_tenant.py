@@ -32,6 +32,9 @@ _skipif_unix_modes = pytest.mark.skipif(
 import pytest
 import yaml
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832: read from the Go table)
+
 from scaffold_tenant import (
     CONFD_DIR,
     relabel_snippet_name,
@@ -102,12 +105,12 @@ class TestBuildReceiverFromArgs:
 class TestGenerateDefaults:
     """generate_defaults() 測試。"""
 
-    def test_includes_kubernetes(self):
-        """kubernetes defaults 永遠包含。"""
+    def test_kubernetes_values_are_built_in_so_no_defaults_section(self):
+        """#3832 決策 7：kubernetes 的閾值全是讀取端內建，根檔不複製；
+        `defaults:` 沒有任何鍵時整段不寫（沒寫與空的讀法相同）。"""
         result = generate_defaults(["kubernetes"])
-        assert "defaults" in result
-        assert "container_cpu" in result["defaults"]
-        assert "container_memory" in result["defaults"]
+        assert "defaults" not in result
+        assert "state_filters" in result
 
     def test_includes_state_filters(self):
         """state_filters 從 kubernetes pack 提取。"""
@@ -115,18 +118,22 @@ class TestGenerateDefaults:
         assert "state_filters" in result
         assert "container_crashloop" in result["state_filters"]
 
-    def test_adds_db_defaults(self):
-        """指定的 DB pack defaults 合併到結果中。"""
-        result = generate_defaults(["kubernetes", "postgresql"])
-        assert "pg_connections" in result["defaults"]
-        assert "pg_replication_lag" in result["defaults"]
-        # kubernetes defaults 也在
-        assert "container_cpu" in result["defaults"]
+    @pytest.mark.parametrize("dbs", [["kubernetes", "postgresql"], ["kubernetes", "redis"],
+                                     ["kubernetes", "elasticsearch", "oracle", "rabbitmq"],
+                                     list(RULE_PACKS)])
+    def test_writes_every_selected_value_but_the_built_in_ones(self, dbs):
+        """#3832 決策 7：所選 pack 的平台值，扣掉讀取端內建的鍵（照寫會釘住
+        當天的數字）；`operator` 鍵照寫。內建鍵集合取自 Go 的內建表，不經
+        產生器讀的那份生成模組。"""
+        want = {k: info["value"] for db in dbs
+                for k, info in RULE_PACKS.get(db, {}).get("defaults", {}).items()
+                if k not in BUILTIN_DEFAULTS}
+        assert generate_defaults(dbs).get("defaults", {}) == want
+        assert not set(generate_defaults(dbs).get("defaults", {})) & set(BUILTIN_DEFAULTS)
 
     def test_unknown_db_ignored(self):
         """未知的 DB 類型不造成錯誤。"""
-        result = generate_defaults(["kubernetes", "nonexistent_db"])
-        assert "container_cpu" in result["defaults"]
+        assert generate_defaults(["kubernetes", "nonexistent_db"]) == generate_defaults(["kubernetes"])
 
 
 # ============================================================
@@ -179,7 +186,8 @@ class TestGenerateDefaultsDeclaredList:
         # 42 → 39：#3783 移除 kafka_active_controllers / kafka_request_rate；#3778 把
         # mysql_threads_running 移到宣告層（optional_overrides）。
         # 39 → 40：#1320 oracle_process_usage_percent 預設出貨。
-        assert len(generate_defaults(db_packs)["defaults"]) == 40
+        # 40 → 28：#3832 決策 7 內建鍵不再寫進根檔（扣掉 12 個內建鍵）。
+        assert len(generate_defaults(db_packs)["defaults"]) == 28
 
     def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
         """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、
@@ -390,22 +398,10 @@ class TestGenerateDefaultsAdvanced:
     """generate_defaults() 進階場景。"""
 
     def test_multiple_db_packs_merged(self):
-        """多 DB pack defaults 全部合併。"""
-        result = generate_defaults(["kubernetes", "postgresql", "mariadb"])
-        d = result["defaults"]
-        assert "container_cpu" in d      # kubernetes
-        assert "pg_connections" in d     # postgresql
-        assert "mysql_connection_usage_percent" in d  # mariadb (MySQL/MariaDB combo pack)
-
-    def test_empty_db_list_only_kubernetes(self):
-        """空 DB list 只產生 kubernetes defaults。"""
-        result = generate_defaults(["kubernetes"])
-        d = result["defaults"]
-        assert "container_cpu" in d
-        # 不該有任何 DB 特有 key
-        db_keys = {"pg_connections", "mysql_connection_usage_percent", "redis_memory",
-                    "mongo_connections", "mssql_cpu"}
-        assert not db_keys.intersection(d.keys())
+        """多 DB pack 的非內建值全部合併。"""
+        d = generate_defaults(["kubernetes", "redis", "mongodb"])["defaults"]
+        assert "redis_connected_clients" in d   # redis
+        assert "mongodb_replication_lag" in d   # mongodb
 
     def test_defaults_values_are_numeric(self):
         """所有 defaults 值為數值型別。"""
@@ -455,9 +451,9 @@ class TestWriteOutputsFixture:
 
         with open(os.path.join(config_dir, CONFD_DIR, "_defaults.yaml"), encoding="utf-8") as f:
             parsed = yaml.safe_load(f)
-        assert "defaults" in parsed
-        assert "container_cpu" in parsed["defaults"]
-        assert "pg_connections" in parsed["defaults"]
+        # kubernetes + postgresql 的值全是內建：根檔沒有 `defaults:`。
+        assert "defaults" not in parsed
+        assert "state_filters" in parsed
 
     def test_tenant_yaml_no_reserved_leak(self, config_dir):
         """tenant YAML 不含 _reserved prefix keys（除 _routing 等預期 key）。"""
@@ -919,9 +915,11 @@ class TestRunFromOnboard:
                 db_a = f.read()
             with open(os.path.join(d, CONFD_DIR, "db-b.yaml"), encoding="utf-8") as f:
                 db_b = f.read()
-        for db in ("mariadb", "oracle"):
-            for key in RULE_PACKS[db]["defaults"]:
-                assert key in written["defaults"], (db, key)
+        # Both tenants' packs, minus the built-in keys (#3832 decision 7).
+        assert written.get("defaults", {}) == {
+            k: info["value"] for db in ("mariadb", "oracle")
+            for k, info in RULE_PACKS[db]["defaults"].items() if k not in BUILTIN_DEFAULTS}
+        assert "oracle_sessions_active" in written["defaults"]
         oracle_declared = generate_defaults(["kubernetes", "oracle"])["optional_overrides"]
         mariadb_declared = generate_defaults(["kubernetes", "mariadb"])["optional_overrides"]
         assert mariadb_declared == ["mysql_threads_running"]  # #3778

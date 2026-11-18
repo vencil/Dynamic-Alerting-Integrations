@@ -81,6 +81,7 @@ from _registry_lib import (  # noqa: E402
     defaults_counterexample_head,
     render_tenant_critical_note_lines,
     render_tenant_declared_note_lines,
+    root_written_defaults,
     shipped_dimensions_for_packs,
     shipped_optional_keys_for_packs,
     tenant_declared_foot,
@@ -647,13 +648,9 @@ def _critical_prefill_note(critical: dict) -> str:
     and a follow-up that read like a platform assertion would contradict it
     (blind review, #1218).
 
-    ⛔ And it does NOT say "a later platform recalibration cannot reach these
-    copies" full stop, which an earlier draft did. That sentence is true and
-    misleading in the same breath: stated about the `_critical` lines alone it
-    implies the sibling `defaults:` keys DO keep flowing, and for this
-    generator's customers they do not — nothing in the generated tree
-    references the chart's `thresholdConfig` values (measured across all three
-    `--deploy` values). The pre-fill's marginal freeze is therefore zero.
+    It says a later platform recalibration does not reach these lines: since
+    #3832 the built-in base values above do follow the platform, so the
+    pre-filled `_critical` values are the copies that do not.
 
     ⛔ Nor does it name the ConfigMap wiring, which an earlier draft also did
     ("this tool wires conf.d/ straight into the threshold-config ConfigMap").
@@ -726,28 +723,22 @@ def _critical_prefill_note(critical: dict) -> str:
         return ''
     return (
         '\n# {n} of them are written in below, as a starting point. The lines\n'
-        '# are in THIS file, so they are yours: retune them freely. Like every\n'
-        '# key in the sibling _defaults.yaml, they are a one-time copy into\n'
-        '# your repo — nothing generated here tracks the platform. Picking up\n'
-        '# a later upstream recalibration means re-running this tool with\n'
-        '# `--force`, which REWRITES both files and discards every hand edit\n'
-        '# in them, so diff before you keep the result.\n'
+        '# are in THIS file, so they are yours: retune them freely. Like any\n'
+        '# value written into your repo, they are a one-time copy: a later\n'
+        '# platform recalibration does not reach them.\n'
         '#\n'
         '# What editing alone will not tell you:\n'
         '#   * `<base>: "disable"` switches its `<base>_critical` off too:\n'
         '#     the critical line below then serves nothing. To keep the\n'
         '#     critical tier only, write `<base>: "N:critical"` and DELETE\n'
         '#     the `<base>_critical` line (both together fail /metrics).\n'
-        '#   * …and most `<base>` lines are NOT in this file. The illustrative\n'
-        '#     base overrides above come from the FIRST selected pack only,\n'
-        '#     while the critical tier is seeded for every selected pack — so a\n'
-        '#     `<base>_critical` here often has no twin to edit. To silence one\n'
-        '#     of those, ADD the `<base>: "disable"` line yourself; omitting it\n'
-        '#     means "inherit the platform value", not "off".\n'
+        '#   * …and no `<base>` line is in this file: to silence one, ADD\n'
+        '#     `<base>: "disable"` yourself; omitting it means "inherit the\n'
+        '#     value above", not "off".\n'
         '#   * DELETING both lines is not the same thing: an absent key falls\n'
-        '#     back to the platform value, so the warning row returns at the\n'
-        '#     _defaults.yaml number. Delete only suppresses the critical row.\n'
-        '#   * If a `<base>` ever leaves `defaults:`, its `<base>_critical`\n'
+        '#     back to the value above, so the warning row returns. Delete only\n'
+        '#     suppresses the critical row.\n'
+        '#   * If a `<base>` ever stops having a value, its `<base>_critical`\n'
         '#     line here must go too: no reader reads it. `da-tools\n'
         '#     validate-config` FAILs on it (exit 1), and the tenant-api write\n'
         '#     path rejects THIS WHOLE FILE while it is there — every other\n'
@@ -771,8 +762,11 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     is the customer repo clone and `config.mergeTenantConfig` reads its
     `_defaults.yaml` for `OptionalOverrides` (the chart-side list only ever
     reaches threshold-exporter).
+
+    #3832 decision 7: `defaults:` holds no built-in key (`root_written_defaults`):
+    the readers serve those, and a copy here would pin the day's number.
     """
-    defaults = _catalog_defaults(rule_packs)
+    defaults = root_written_defaults(_catalog_defaults(rule_packs))
 
     # DERIVED from the shared predicate, never listed here — see the import
     # comment for why this one derivation is shared while the values above are
@@ -813,7 +807,9 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
         'repeat_interval': '4h',
     }
 
-    config = {'defaults': defaults}
+    # Omitted when empty (a selection whose every valued key is built in):
+    # an absent and an empty `defaults:` read the same.
+    config = {'defaults': defaults} if defaults else {}
     if optional_overrides:
         # Omitted when empty rather than emitted as `[]` (an empty list reads
         # as an accident; the Go loader treats absent and empty the same).
@@ -826,12 +822,9 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     config['state_filters'] = state_filters
     config['_routing_defaults'] = routing_defaults
 
-    # No three-state ("Custom value / Omitted / Disable") block in this header:
-    # a root `defaults:` is `map[string]float64` (`ThresholdConfig` in
-    # `pkg/config/types.go`), so a `"disable"` string there makes
-    # `parsePartialConfig` drop the whole file (#1787). The tenant-side sentence
-    # lives in `_tenant_file`, the file it is true of.
-    # The header names the packs: a `--rule-packs` name is the caller's input
+    # The built-in paragraph names no key and no number (#3832 decision 7):
+    # either would be a copy that goes stale; validate-config answers both
+    # from the readers' own table. The header names the packs: a `--rule-packs` name is the caller's input
     # (`run_init` takes a config dict), so a character no comment can carry is
     # refused here, naming the flag, not as the batch's bad_input.
     for rp in rule_packs:
@@ -839,6 +832,16 @@ def _defaults_file(rule_packs: list[str], namespace: str) -> "_lib_confedit.NewF
     header = textwrap.dedent("""\
     # _defaults.yaml — Platform global defaults
     # Managed by Platform Team. Tenant files should NOT contain this section.
+    #
+    # The thresholds the platform ships armed are built into the readers
+    # (exporter, da-guard, tenant-api), so `defaults:` does not list them.
+    # For each such key, in `defaults:`:
+    #   leave it out        -> the platform's value, following its updates
+    #   <key>: <number>     -> your value, pinned
+    #   <key>: "disable"    -> off for every tenant; a subdirectory, profile
+    #                          or tenant that gives it a value turns it back on
+    # Which keys they are, and the values in force:
+    #   da-tools validate-config --config-dir <this dir>   (platform_defaults)
     #
     # optional_overrides (if present): key NAMES only, no values. The platform
     # RECOGNISES these keys — a tenant may set them in its own file and they
@@ -925,8 +928,8 @@ def _tenant_file(tenant: str, rule_packs: list[str]) -> "_lib_confedit.NewFile":
     header = textwrap.dedent("""\
     # {tenant}.yaml — Tenant threshold overrides
     # Only the 'tenants' section is allowed in tenant files.
-    # Omitting a key that _defaults.yaml gives a value to (its `defaults:`
-    # section) inherits that value.
+    # Omitting a key that has a value above (in _defaults.yaml's `defaults:`,
+    # or built in by the platform) inherits that value.
     {declared_note}
     {critical_note}
     # Set a key to "disable" to suppress that metric.
@@ -958,11 +961,9 @@ def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     One derivation, two readers: two hand-kept copies of a key list is the
     shape this module keeps deleting (issue 1454 B).
 
-    Add a few example overrides from the first rule pack. Reads the BASE tier
-    only — before #1218 this slice ran over a mapping that still held the
-    `_critical` keys, so `--rule-packs mariadb` spent one of its three
-    illustrative lines on `mysql_connection_usage_percent_critical` for whichever pack
-    happened to be first, and on nothing for every other pack.
+    No base key (#3832 decision 7): a tenant line equal to the value it
+    inherits is a copy that stops following the platform. (It used to carry
+    three of the first pack's base values as examples.)
 
     The critical tier goes in for EVERY selected pack — not just the first.
     This is the section the keys had to move to (#1218):
@@ -975,10 +976,6 @@ def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     which is exactly the tier boundary `defaults:` violated.
     """
     rows: dict = {}
-    if rule_packs and rule_packs[0] in RULE_PACK_CATALOG:
-        pack_defaults = _catalog_defaults([rule_packs[0]])
-        for k in list(pack_defaults)[:3]:
-            rows[k] = str(pack_defaults[k])
     for k, v in _catalog_critical(rule_packs).items():
         rows[k] = str(v)
     rows['_routing'] = {
