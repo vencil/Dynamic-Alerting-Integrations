@@ -232,6 +232,12 @@ required_labels:
 max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
 max_evaluation_interval: 60s  # Custom Rule group interval 上限
 
+# 每個值在載入政策時判定（#4061），不符即結束碼 2、點名鍵與原因：
+# denied_functions／denied_patterns／required_labels 是清單（可為空），每項是
+# 非空字串（寫成單一字串會被拒，不再逐字元比對）；兩個時長是正的 Prometheus
+# 時長，語法同 Prometheus 的 ParseDuration（90m、1h30m、2w 可；1.5h、不加
+# 引號的 5 不可）。group 的 interval 也照這個語法讀。
+
 # 這份只給 lint（`lint --policy`、`validate-config --lint-policy`）；webhook 網域
 # 白名單 `allowed_domains` 在部署端 policy（另一份檔，給 generate-routes /
 # validate-config 的 --policy）。兩份各自拒收對方的鍵（#3797）。
@@ -257,7 +263,7 @@ file_overrides:
 > `file_overrides` 是清單；每筆只有 `path`（必填、不重複，也不能有兩筆可能匹配
 > 同一個檔，例如 `a.yaml` 與 `sub/a.yaml`）、`require_generated_marker`（布林）、
 > `policy`；`denied_functions` 是清單（可為空），每項是非空字串；
-> `max_range_duration` 是正的單一單位時長（`90m` 可，`1h30m` 不可）。不符即結束碼 `2`、點名第幾筆與原因。CI 另以
+> `max_range_duration` 是正的時長。不符即結束碼 `2`、點名第幾筆與原因。CI 另以
 > `compile_custom_alerts.py --check` drift gate 防止手寫檔冒充 compiled pack。
 
 ### 4.2 Linting 工具
