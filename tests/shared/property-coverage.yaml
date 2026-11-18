@@ -62,6 +62,7 @@ modules:
       output_dir_type: "#3107 constructor of the OutputDirArg argparse type (refuses `-` for a directory flag); every case pinned by example, and run per declaring tool, by tests/shared/test_output_dir_flag.py"
       operator_file_type: "#3107 ③b constructor of the OperatorFileArg argparse type (refuses an empty value, and `-` where the tool's stdout has another owner); every case pinned by example, and run per declaring tool, by tests/shared/test_operator_file_flag.py"
       artifact_file_type: "#3107 ③a constructor of the ArtifactFileArg argparse type (refuses `-` for a flag naming a file replaced whole); every case pinned by example, and run per declaring tool, by tests/shared/test_artifact_file_flag.py"
+      _then_keeping_the_file: "#3982 a type's `then` applied so a value other than `-` never comes back as `-` (Path('./-') is Path('-')); pinned by example in both type tests and run per declaring tool (`./-` writes a file called `-`) by tests/shared/test_artifact_file_flag.py and tests/shared/test_operator_file_flag.py"
       UrlArg._one: "#3528 url_problem → ArgumentTypeError; run by the same gate"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"

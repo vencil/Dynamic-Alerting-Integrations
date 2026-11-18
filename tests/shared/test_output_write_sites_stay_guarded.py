@@ -93,6 +93,7 @@ lands in ``GUARDED_FILES`` with an atomic-rename site must spell it
 """
 from __future__ import annotations
 
+import sys
 import ast
 from dataclasses import dataclass
 from pathlib import Path
@@ -1043,7 +1044,8 @@ _KNOWN_SITES = {
     # open_operator_output; the sink left is NOT_GUARDED's carrier toggle.
     "scripts/tools/dx/run_chaos_soak.py": {".write_text"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
-    "scripts/ops/audit_rules_drift.py": {"atomic_write_text()"},
+    # #3982: now the operator entry.
+    "scripts/ops/audit_rules_drift.py": {"write_operator_output()"},
 }
 
 
@@ -1238,7 +1240,7 @@ class TestSharedWriterCallerDetection:
         assert shared_writer_caller_lines(src) == []
 
 
-def test_every_shared_atomic_writer_caller_is_pinned():
+def test_every_shared_atomic_writer_caller_is_pinned(monkeypatch):
     """#2128. The shared atomic writer raises ``OutputWriteError`` and may
     fall back in place with a WARN. What the gate below checks statically,
     and only for files in ``GUARDED_FILES``, is that each call site sits in
@@ -1254,10 +1256,22 @@ def test_every_shared_atomic_writer_caller_is_pinned():
     A specific break that reddens this: drop any caller file from
     ``GUARDED_FILES`` (the ceiling test goes red too — this one says which).
     """
+    # Anti-vacuity: the walk sees callers under TOOLS_DIR, and it READS the
+    # files outside it too. Since #3982 moved `audit_rules_drift` to the
+    # operator entry, no caller is left outside TOOLS_DIR to show that, so
+    # the second half is held on what the walk hands the detector: every
+    # file it reads is recorded, and some must lie outside TOOLS_DIR.
+    read: list[str] = []
+    detect = shared_writer_caller_lines
+
+    def recording(source, label="<snippet>"):
+        read.append(label)
+        return detect(source, label)
+    monkeypatch.setattr(sys.modules[__name__], "shared_writer_caller_lines", recording)
     callers = shared_writer_callers()
-    # Anti-vacuity: the walk must see callers on both sides of TOOLS_DIR.
-    assert any(not f.startswith("scripts/tools/") for f in callers), sorted(callers)
     assert any(f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    assert any(not r.startswith(("scripts/tools/", "<")) for r in read), \
+        "the walk read no file outside scripts/tools/"
     unpinned = sorted(f"  {f}:{','.join(map(str, lines))}"
                       for f, lines in callers.items() if f not in GUARDED_FILES)
     assert not unpinned, (

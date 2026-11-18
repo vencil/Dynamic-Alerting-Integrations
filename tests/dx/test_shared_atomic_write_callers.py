@@ -3,14 +3,15 @@
 The helper now writes symlinks through, keeps hard links and a user's
 ``<out>.tmp``, and falls back in place (with a WARN) when the directory
 cannot take a temp file. Those are helper properties, pinned in
-``test_atomic_write.py``; what is pinned HERE is that each of the eight call
+``test_atomic_write.py``; what is pinned HERE is that each of the call
 sites actually gets them end to end, and that a write failure leaves the
 tool as rc 2 plus one line naming the target — not a traceback at rc 1.
 
 Each call site is driven through its real ``main`` with only its INPUTS
 stubbed (what to render, where the target is), so the write path — the
 ``with output_write(...)`` wrapper, the helper, ``exit_on_output_write_error``
-— is the code that ships. ``CALLERS`` holds the eight sites; every test is
+— is the code that ships. ``CALLERS`` holds the sites (#2128's eight, less
+``audit_rules_drift`` since #3982); every test is
 parametrized over all of them.
 
 The adapters are module-level on purpose: the same scenarios can be replayed
@@ -133,19 +134,7 @@ def _setup_planning_index(mod, mp, root, target):
                                   "--repo-root", str(root), "--target", str(target)])
 
 
-def _setup_audit_rules_drift(mod, mp, root, target):
-    mp.setattr(mod, "REPO_ROOT", root)
-    mp.setattr(mod, "DEFAULT_MEMORY", root / "no-memory-here")
-    for loader in ("load_dev_rules", "load_hooks", "load_skills"):
-        mp.setattr(mod, loader, lambda: [])
-    mp.setattr(mod, "render_report", lambda *a, **k: NEW)
-    return lambda: mod.main(["--out", str(target)])
-
-
 CALLERS: dict[str, Caller] = {
-    "audit_rules_drift": Caller(
-        "audit_rules_drift", "scripts/ops/audit_rules_drift.py:490", "--out",
-        _setup_audit_rules_drift),
     "rule_pack_stats_fragment": Caller(
         "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:445",
         None, _setup_rule_pack_stats_fragment),
@@ -378,11 +367,13 @@ def test_enospc_mid_write_is_rc2_and_keeps_the_previous_file(name, root, monkeyp
 
 
 def test_the_caller_table_is_the_surveyed_population():
-    """Anti-vacuity for the parametrization: the eight #2128 sites, each at a
+    """Anti-vacuity for the parametrization: the #2128 sites, each at a
     line that still calls the helper — so a moved call is noticed here rather
     than the table silently testing a neighbour. #3107: a committed artifact
-    may reach the helper through its entry point, `_lib_io.write_repo_artifact`."""
-    assert len(CALLERS) == 8
+    may reach the helper through its entry point, `_lib_io.write_repo_artifact`.
+    #3982 (owner 2026-11-18): `audit_rules_drift --out` is an operator
+    output now and left the table (seven of the eight remain)."""
+    assert len(CALLERS) == 7
     for caller in CALLERS.values():
         rel, line = caller.site.rsplit(":", 1)
         src = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()

@@ -819,15 +819,18 @@ def _write_manifests(out: str, by_tenant: dict, paths: dict[str, str]) -> None:
     naming the manifests already written; conf.d is not changed."""
     done: list[str] = []
     try:
-        os.makedirs(out, mode=0o700, exist_ok=True)
+        # #3982: the directory entry; the Secrets' directory is 0700.
+        _lib_io.ensure_dir(out, flag="--manifests-out", mode=0o700)
         for tenant in sorted(by_tenant):
             _write_manifest(paths[tenant], _manifest_text(_object_name(tenant),
                                                           sorted(by_tenant[tenant])))
             done.append(paths[tenant])
     except OSError as exc:
         shown = ", ".join(_lib_io.safe_label(p) for p in done) or "(none)"
+        # The entries raise OutputWriteError: name what it carries.
+        cause = exc.cause if isinstance(exc, _lib_io.OutputWriteError) else exc
         _die(f"ERROR: writing the Secret manifests under --manifests-out "
-             f"{_lib_io.safe_label(out)} failed ({type(exc).__name__}: "
+             f"{_lib_io.safe_label(out)} failed ({type(cause).__name__}: "
              f"{exc.strerror or 'see above'}): conf.d was not changed. The Secret "
              f"manifests written before it: {shown}")
 
