@@ -620,12 +620,13 @@ da-tools blind-spot --config-dir <path> [options]
 
 **輸出**
 
-以下列三部分呈現：
+以下列四部分呈現（`--json-output` 的 `status` 依序是 `covered`／`blind_spot`／`unknown_declaration`／`unrecognized`）：
 - **Covered**：有租戶宣告這類 DB 的 exporter
 - **Blind Spots**：有 exporter，但沒有租戶宣告這類 DB
+- **Unknown Declarations**：租戶宣告的 `db_type` 不是任何 exporter job 對應得到的類型（大小寫不同也算，例如 `MySQL`），沒有 live target 會是這一類，`TenantExporterAbsent` 對它永遠不會解除；不算 covered
 - **Unrecognized**：無法推斷 DB 類型的 job
 
-「有租戶宣告」指租戶的 `_metadata.db_type`（一個字串或一串）列了這類 DB，照 exporter 的讀法經 `da-guard served-values --config-facts` 讀出（[#4026](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4026)）：寫在租戶檔或根平台檔的 `tenants.<id>._metadata` 都算，租戶檔整值換掉平台層的宣告。這就是 exporter 送出 `tenant_expected_exporter{tenant,db_type}`、讓 `TenantExporterAbsent` 逐租戶告警的那份宣告。⚠️ 租戶送了哪些閾值鍵（`mysql_`、`redis_`…）不算：內建層的鍵每個租戶都有列（[#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832)），以前照鍵名前綴判時，樹裡只要有一個租戶，那幾類 DB 就永遠不會是盲點。判決不讀任何時刻，執行時間、排程停用、`/metrics` 某時段收集不了都不影響結果。沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`。exporter 讀不到的檔或子目錄（例如權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束，`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`）；例外是指向目錄的 symlink——exporter 本來就不跟進（k8s ConfigMap 的巢狀路徑會掛成這種 symlink），只跳過、不影響結束碼。da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）、經控制字元跳脫（檔名裡的換行會讓 da-guard 印成兩行，轉印時無法還原，但不會出現在行首）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
+「有租戶宣告」指租戶的 `_metadata.db_type`（一個字串或一串）列了這類 DB，照 exporter 的讀法經 `da-guard served-values --config-facts` 讀出（[#4026](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4026)）：寫在租戶檔（含子目錄裡的）、根平台檔的 `tenants.<id>._metadata`、租戶綁定的 profile 都算，租戶檔整值換掉平台層的宣告；子目錄 `_defaults.yaml` 裡的 `tenants:` 不算（exporter 也不讀）。這就是 exporter 送出 `tenant_expected_exporter{tenant,db_type}`、讓 `TenantExporterAbsent` 逐租戶告警的那份宣告。⚠️ 租戶送了哪些閾值鍵（`mysql_`、`redis_`…）不算：內建層的鍵每個租戶都有列（[#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832)），以前照鍵名前綴判時，樹裡只要有一個租戶，那幾類 DB 就永遠不會是盲點。判決不讀任何時刻，執行時間、排程停用、`/metrics` 某時段收集不了都不影響結果。沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`。exporter 讀不到的檔或子目錄（例如權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束，`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`）；例外是指向目錄的 symlink——exporter 本來就不跟進（k8s ConfigMap 的巢狀路徑會掛成這種 symlink），只跳過、不影響結束碼。da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）、經控制字元跳脫（檔名裡的換行會讓 da-guard 印成兩行，轉印時無法還原，但不會出現在行首）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
 
 **範例**
 

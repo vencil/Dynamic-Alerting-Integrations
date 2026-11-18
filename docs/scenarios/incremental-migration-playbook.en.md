@@ -81,14 +81,15 @@ Order the migration by `status`: `perfect` first, `complex` checked one by one, 
 Scan all active scrape targets in Prometheus to understand what's actually being monitored:
 
 ```bash
+mkdir -p conf.d && echo 'defaults: {}' > conf.d/_defaults.yaml
 da-tools blind-spot \
-  --config-dir /dev/null \
+  --config-dir conf.d \
   --prometheus http://prometheus:9090 \
   --json-output \
   > blind-spot-report.json
 ```
 
-**Expected output**: `blind-spot-report.json` is an array with one element per DB type inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants that declare this DB type in `_metadata.db_type`), and `status`. No tenant config exists yet (`--config-dir /dev/null`; the `WARN: config-dir not found` line on stderr is expected), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). When Prometheus is unreachable (or answers in the wrong shape) there is no blind-spot list: `blind-spot-report.json` is empty (since [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); read the exit code first), stderr one `ERROR: Prometheus query failed: …` line, and the exit code is 2 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133); it used to output `[]` at exit code 0).
+**Expected output**: `blind-spot-report.json` is an array with one element per DB type inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants that declare this DB type in `_metadata.db_type`), and `status`. No tenant config exists yet (the conf.d holds only an empty `_defaults.yaml`: a `--config-dir` that does not exist, or an empty directory, is refused with exit 2), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). When Prometheus is unreachable (or answers in the wrong shape) there is no blind-spot list: `blind-spot-report.json` is empty (since [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); read the exit code first), stderr one `ERROR: Prometheus query failed: …` line, and the exit code is 2 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133); it used to output `[]` at exit code 0).
 
 ### Step 0.4: Decision Matrix — Select Pilot Domain
 

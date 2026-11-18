@@ -255,6 +255,26 @@ class TestFindBlindSpots:
         assert results[0]["live_count"] == 0
         assert results[0]["status"] == "covered"
 
+    @pytest.mark.parametrize("declared", ["MySQL", "mysql", "unknown", "123"])
+    def test_a_declaration_no_job_maps_to_is_never_covered(self, declared):
+        """#4026 審查 F2：宣告不在詞彙表（`JOB_DB_MAP` 的值＝schema enum）裡時，沒有任何
+        live target 會是這一類，TenantExporterAbsent 永遠解不掉——不算 covered，
+        另列 unknown_declaration。`unknown` 也不能被 live 端的 unknown 吃掉。"""
+        live = {"mariadb": {"db/m:9104"}, "unknown": {"ns/x:80"}}
+        results = bsd.find_blind_spots(live, {declared: {"t1"}})
+        by = {(r["db_type"], r["status"]): r for r in results}
+        assert by[(declared, "unknown_declaration")]["monitored_tenants"] == ["t1"]
+        assert (declared, "covered") not in by
+        assert by[("mariadb", "blind_spot")]["live_count"] == 1
+        assert by[("unknown", "unrecognized")]["live_count"] == 1
+
+    def test_the_report_lists_unknown_declarations_escaped(self):
+        report = bsd.render_report(bsd.find_blind_spots(
+            {"unknown": {"ns/\n[PASS] inst:80"}}, {"redis\n[PASS] x": {"t\n[PASS] y"}}))
+        assert "UNKNOWN DECLARATIONS" in report
+        assert "1 unknown declaration(s)" in report
+        assert not [ln for ln in report.splitlines() if ln.startswith("[PASS]")], report
+
     def test_unknown_targets_separate(self):
         """未知 target 分開標記。"""
         live = {"unknown": {"ns/nginx:80"}}

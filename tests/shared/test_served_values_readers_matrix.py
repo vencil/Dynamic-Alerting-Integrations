@@ -128,6 +128,44 @@ def test_blind_spot_monitored_set_is_the_declared_db_type(where, tmp_path):
     assert tv.load_served_values(conf_d)["tenant-a"].severities, where  # 鍵確實有列
 
 
+# #4026：宣告寫在哪裡，blind-spot 都照 Go 的讀法（--config-facts）。每格同時寫死期望值：
+# 光跟 Go 比會讓「兩邊都讀不到」也算過。子目錄 `_defaults.yaml` 的 `tenants:` 不是
+# 一層，Go 不讀，blind-spot 也不算。
+_A = "tenant-a.yaml"
+_DECLARED_AT = {
+    "租戶檔": ({_A: "tenants:\n  tenant-a:\n    _metadata: {db_type: redis}\n"},
+               {"redis": {"tenant-a"}}),
+    "子目錄租戶檔": ({"team/" + _A: "tenants:\n  tenant-a:\n    _metadata: {db_type: redis}\n"},
+                   {"redis": {"tenant-a"}}),
+    "根平台檔 tenants:": ({"_defaults.yaml": _BASE + "tenants:\n  tenant-a:\n"
+                                            "    _metadata: {db_type: redis}\n",
+                         _A: "tenants:\n  tenant-a:\n    _silent_mode: disable\n"},
+                        {"redis": {"tenant-a"}}),
+    "租戶檔換掉平台層": ({"_defaults.yaml": _BASE + "tenants:\n  tenant-a:\n"
+                                           "    _metadata: {db_type: [redis, oracle]}\n",
+                        _A: "tenants:\n  tenant-a:\n    _metadata: {db_type: kafka}\n"},
+                       {"kafka": {"tenant-a"}}),
+    "profile": ({"_defaults.yaml": _BASE + "profiles:\n  p1:\n    _metadata: {db_type: redis}\n",
+                 _A: "tenants:\n  tenant-a:\n    _profile: p1\n"},
+                {"redis": {"tenant-a"}}),
+    "子目錄 _defaults.yaml（不算）": ({"team/_defaults.yaml": "tenants:\n  tenant-a:\n"
+                                                       "    _metadata: {db_type: redis}\n",
+                                    "team/" + _A: "tenants:\n  tenant-a:\n    _silent_mode: disable\n"},
+                                   {}),
+}
+
+
+@pytest.mark.parametrize("where", sorted(_DECLARED_AT))
+def test_blind_spot_reads_the_declaration_wherever_go_does(where, tmp_path):
+    files, expected = _DECLARED_AT[where]
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, **files})
+    want: dict[str, set[str]] = {}
+    for tenant, f in tv.load_served_facts(conf_d).tenants.items():
+        for db in f.metadata["db_type"]:
+            want.setdefault(db, set()).add(tenant)
+    assert bsd.load_monitored_db_types(str(conf_d)) == want == expected, where
+
+
 def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
     """`disable` 的鍵與沒有預設值、Go 不發的鍵，analyze-gaps 都不列；blind-spot 只看
     `_metadata.db_type` 的宣告（#4026），送了哪些鍵都不算。"""

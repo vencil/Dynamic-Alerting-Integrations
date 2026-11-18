@@ -113,8 +113,9 @@ def load_monitored_db_types(config_dir):
     Returns {db_type: set(tenant_ids)}.
 
     A tenant is monitored for the DB types its `_metadata.db_type` declares
-    (#4026), wherever the declaration is written — the tenant file, a
-    platform layer, a subtree — as the exporter's resolver reads it
+    (#4026), wherever the exporter's resolver reads it from — the tenant
+    file (at any depth), a root platform file's `tenants.<id>._metadata`, a
+    profile the tenant binds; a subdirectory `_defaults.yaml` is not one —
     (`load_served_facts`, `da-guard served-values --config-facts`). That is
     the declaration the exporter emits `tenant_expected_exporter{tenant,
     db_type}` from, so a tenant counted here is one `TenantExporterAbsent`
@@ -151,9 +152,15 @@ def find_blind_spots(live_instances, monitored_db_types):
     """Compare live cluster instances vs monitored tenant configs.
 
     Returns list of dicts: [{db_type, live_count, monitored_tenants, status}].
+
+    A declared `db_type` no exporter job maps to (not one of `JOB_DB_MAP`'s
+    values, which are the schema's `dbTypeValue` enum) is
+    `unknown_declaration`, never `covered`: no live target can ever be of
+    that type, so `TenantExporterAbsent` never clears for it (#4026).
     """
-    all_db_types = set(live_instances.keys()) | set(monitored_db_types.keys())
-    all_db_types.discard("unknown")
+    known = frozenset(JOB_DB_MAP.values())
+    all_db_types = ((set(live_instances) - {"unknown"})
+                    | (set(monitored_db_types) & known))
 
     results = []
     for db_type in sorted(all_db_types):
@@ -167,6 +174,17 @@ def find_blind_spots(live_instances, monitored_db_types):
             "monitored_tenants": sorted(tenants),
             "monitored_count": len(tenants),
             "status": status,
+        })
+
+    for db_type in sorted(set(monitored_db_types) - known):
+        tenants = monitored_db_types[db_type]
+        results.append({
+            "db_type": db_type,
+            "live_count": 0,
+            "live_instances": [],
+            "monitored_tenants": sorted(tenants),
+            "monitored_count": len(tenants),
+            "status": "unknown_declaration",
         })
 
     # Add unknown targets summary
@@ -195,6 +213,7 @@ def render_report(results):
     blind_spots = [r for r in results if r["status"] == "blind_spot"]
     covered = [r for r in results if r["status"] == "covered"]
     unknown = [r for r in results if r["status"] == "unrecognized"]
+    undeclarable = [r for r in results if r["status"] == "unknown_declaration"]
 
     if blind_spots:
         lines.append("BLIND SPOTS (cluster instances of a DB type no tenant declares in _metadata.db_type):")
@@ -217,12 +236,21 @@ def render_report(results):
                          f"({safe_label(', '.join(r['monitored_tenants']))})")
         lines.append("")
 
+    if undeclarable:
+        lines.append("UNKNOWN DECLARATIONS (a _metadata.db_type no exporter job maps to; "
+                     "TenantExporterAbsent never clears for it):")
+        lines.append("")
+        for r in undeclarable:
+            lines.append(f"  ✗ {safe_label(r['db_type'])}: declared by {r['monitored_count']} tenant(s) "
+                         f"({safe_label(', '.join(r['monitored_tenants']))})")
+        lines.append("")
+
     if unknown:
         lines.append("UNRECOGNIZED (job names not mapped to any DB type):")
         lines.append("")
         for r in unknown:
             for inst in r["live_instances"][:5]:
-                lines.append(f"  ? {inst}")
+                lines.append(f"  ? {safe_label(inst)}")
             if r["live_count"] > 5:
                 lines.append(f"  ... and {r['live_count'] - 5} more")
         lines.append("")
@@ -233,6 +261,7 @@ def render_report(results):
     lines.append("-" * 60)
     lines.append(f"Summary: {len(covered)} DB type(s) covered, "
                  f"{len(blind_spots)} blind spot(s), "
+                 f"{len(undeclarable)} unknown declaration(s), "
                  f"{total_covered} monitored instance(s), "
                  f"{total_blind} unmonitored instance(s)")
 

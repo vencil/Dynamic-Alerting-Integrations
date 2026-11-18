@@ -316,3 +316,21 @@ def test_the_db_types_do_not_depend_on_the_time_of_day(tmp_path: Path, monkeypat
         monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
         got[at] = crd.conf_d_declared_db_type_tenants(root)
     assert list(got.values()) == [{"alpha": "mariadb"}] * 2, got
+
+
+def test_a_warn_line_escapes_the_target_it_names(tmp_path: Path, monkeypatch, capsys) -> None:
+    """#4026 review F4: a WARN line names a K8s target, taken from a helm
+    file name — a newline in it must not start a forged line at column 0
+    (#1538). The VIOLATION line is measured by test_output_label_escaping."""
+    root = _tree(tmp_path / "conf.d", None)
+    helm = tmp_path / "helm"
+    helm.mkdir()
+    (helm / "values-x\n[PASS] forged.yaml").write_text("{}\n", encoding="utf-8")
+    ns = tmp_path / "ns.yaml"
+    ns.write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["check_retire_drift.py", "--config-dir", str(root),
+                                      "--helm-dir", str(helm), "--namespaces-file", str(ns)])
+    assert crd.main() == 0
+    out = capsys.readouterr().out
+    assert "WARN: tenant 'x?[PASS] forged' has a K8s target" in out, out
+    assert not [ln for ln in out.splitlines() if ln.startswith("[PASS]")], out
