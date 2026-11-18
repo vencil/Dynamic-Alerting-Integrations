@@ -560,6 +560,10 @@ def main():
     # Build metadata. --check evaluates at the instant the existing file
     # recorded, not now: the exporter's answer moves with the clock.
     at = None
+    if args.check and args.output:
+        # #3982: the artifact's preconditions before the FIRST read — a
+        # FIFO with no writer would block it, a device read as damaged.
+        check_repo_artifact(args.output, flag="--output")
     if args.check and args.output and args.output.exists():
         at = recorded_at(_read_existing_for_check(args.output)[0])
     state = None
@@ -590,8 +594,6 @@ def main():
         return Report(data)  # #3216: run() encodes it — the same text as the file
 
     if args.check:
-        # A FIFO or a device would block the read below, or read as damaged.
-        check_repo_artifact(args.output, flag="--output")
         if not args.output.exists():
             print(
                 f"ERROR: {args.output} does not exist. "
