@@ -328,8 +328,7 @@ KEY_VERDICT_ROUTES_HINT = (
     "only its default is read: remove the window or expiry; a line on a "
     "`version` label or a renamed key is the exporter's and says what to "
     "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
-    "key, who reads it and why not. An error, or a threshold key no root "
-    "platform file lets the verdict judge, fails the run (#3016).")
+    "key, who reads it and why not. An error fails the run (#3016).")
 KEY_VERDICT_INCOMPLETE_HINT = (
     "No key was judged: the verdict needs da-guard (built into the image; in "
     "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
@@ -2106,8 +2105,7 @@ _NO_ALERT_HINT = (
 
 _NO_ALERT_NOT_CHECKED_HINT = (
     "Nothing was judged, so nothing is known to be unused: fix what the line "
-    "above names (a root `_defaults.yaml` at the root of --config-dir, a "
-    "working da-guard) and run again. Never blocks (#3591).")
+    "above names (a working da-guard, a readable tree) and run again. Never blocks (#3591).")
 
 
 def _ungathered_reading(parts: "tuple[UngatheredPart, ...]") -> tuple[bool, list[str]]:
@@ -2163,9 +2161,8 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     (KNOWN_DEFERRED) is not listed.
 
     Advisory only: WARN or PASS, never FAIL — a reader outside the shipped
-    rule packs (a customer's own rules) is not seen. A tree the verdict could
-    not judge (no root platform file), or a verdict, served reading or map
-    that cannot be read, is a WARN saying the keys were not checked.
+    rule packs (a customer's own rules) is not seen. A verdict, served reading
+    or map that cannot be read is a WARN saying the keys were not checked.
 
     *judge* False (`main`, after the `routes` row tried and gave no verdict):
     no verdict is judged here — the reason is that row's, already reported —

@@ -164,7 +164,8 @@ def compare(doc: dict[str, Any], expected: Any) -> list[str]:
     removed_top = sorted(set(expected) & set(TOP_REMOVED_FIELDS))
     if removed_top:
         raise ExplainError(f"--assert: top-level field `{removed_top[0]}` "
-                           f"{TOP_REMOVED_FIELDS[removed_top[0]]}; regenerate the expected file")
+                           f"{TOP_REMOVED_FIELDS[removed_top[0]]}; delete it from the expected file "
+                           "(only `tenants` is compared)")
     unknown_top = sorted(set(expected) - TOP_FIELDS)
     if unknown_top:
         raise ExplainError(f"--assert: unknown top-level field(s) {unknown_top}; only `tenants` is compared")
