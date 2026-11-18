@@ -162,7 +162,7 @@ Phase 1: Mtime Guard — 快速篩選
   ├─ 每檔 stat() 取 mtime + size
   ├─ 若 (mtime + size 不變) 且 (檔齡 > 2s) → 複用快取 SHA-256
   ├─ 否則 → 讀檔 + 計算 SHA-256
-  └─ 組合所有 per-file hash → composite hash
+  └─ 每檔（路徑＋hash）、讀不到的項目、非檔案的設定名各一筆紀錄 → composite hash（walk 身分）
      └─ composite hash == 前次 → 直接 RETURN（零成本）
 
 Phase 2: Per-File Hash Diff

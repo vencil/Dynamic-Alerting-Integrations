@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -37,6 +38,9 @@ var overlayBase = map[string]string{
 	"team/sub/other.yaml": "tenants:\n  tenant-c: {}\n",
 }
 
+// walkHash is a document's config_hash naming a walk.
+var walkHash = regexp.MustCompile(`"config_hash": "[0-9a-f]{64}"`)
+
 // overlayMatchesDisk: --overlay rel=<draft> on base prints exactly what the
 // tree with draft's bytes written at rel prints, and leaves base untouched.
 func overlayMatchesDisk(t *testing.T, rel, draft string, substitute bool) string {
@@ -53,6 +57,12 @@ func overlayMatchesDisk(t *testing.T, rel, draft string, substitute bool) string
 	written[rel] = draft
 	code, want, stderr := runOnce(t, effectiveCmd, "--config-dir", writeParityTree(t, written))
 	mustOK(t, code, stderr)
+	// The one difference by design (#3965): the overlaid run read a tree
+	// that is not on disk and claims no identity; the written one names its walk.
+	if !strings.Contains(got, `"config_hash": null`) || !walkHash.MatchString(want) {
+		t.Fatalf("config_hash: overlaid run %q, written tree %q", walkHash.FindString(got), walkHash.FindString(want))
+	}
+	want = walkHash.ReplaceAllString(want, `"config_hash": null`)
 	if got != want {
 		t.Errorf("--overlay %s differs from the tree with the file written:\n got: %s\nwant: %s", rel, got, want)
 	}

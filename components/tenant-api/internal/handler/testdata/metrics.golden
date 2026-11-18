@@ -53,6 +53,9 @@ tenant_api_policy_available 0
 # HELP tenant_api_async_task_panics_total Async batch tasks whose work panicked; each was marked failed and the worker went on. Should stay 0 (the tenant-api log has the panic and stack per task id).
 # TYPE tenant_api_async_task_panics_total counter
 tenant_api_async_task_panics_total 0
+# HELP tenant_api_builtin_defaults_info The built-in defaults table this tenant-api was compiled with (#3832): the default-armed thresholds and their platform values its write check and /effective lay under the root _defaults.yaml. Info metric, always 1; digest names the table. The threshold-exporter serves its own as da_config_builtin_defaults_info; the platform rule pack fires BuiltinDefaultsDigestMismatch while it differs from the pack's.
+# TYPE tenant_api_builtin_defaults_info gauge
+tenant_api_builtin_defaults_info{digest="<digest>"} 1
 # HELP tenant_api_dev_auth_bypass_active 1 if --dev-bypass-auth is enabled (LOCAL DEV ONLY; must be 0 in production).
 # TYPE tenant_api_dev_auth_bypass_active gauge
 tenant_api_dev_auth_bypass_active 0

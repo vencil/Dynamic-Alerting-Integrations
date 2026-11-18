@@ -864,6 +864,26 @@ def encode_json(document: Any) -> str:
     return json.dumps(_to_json_tree(document), allow_nan=False, ensure_ascii=False, indent=2)
 
 
+def json_file_text(document: Any, *, flag: str, under_json: bool = False) -> Optional[str]:
+    """The text of a JSON file the operator named with *flag* (#3107 ③b):
+    :func:`encode_json` plus a newline — byte for byte what ``--json``
+    prints for the same document.
+
+    A document JSON cannot carry (:class:`OutputNotSerializable`, e.g. a
+    conf.d ``.nan``) ends the run as ``--json`` does (:func:`_write_report`):
+    under ``--json`` (*under_json*) this returns None — the caller writes no
+    file and returns the document, and ``run()`` names it and exits with
+    the crash code; otherwise the same named line, for *flag*, and the same
+    code. Never a traceback, never a file that is not JSON."""
+    try:
+        return encode_json(document) + "\n"
+    except OutputNotSerializable as exc:
+        if under_json:
+            return None
+        die_caller_error(f"ERROR: the {flag} document cannot be written as JSON: {exc}",
+                         reason=OutputNotSerializable.reason, code=_crash_code())
+
+
 def _write_report(report: Report) -> int:
     """Encode and print *report*'s document; the exit status. A document
     that cannot be encoded is the tool's defect: one named line on stderr,

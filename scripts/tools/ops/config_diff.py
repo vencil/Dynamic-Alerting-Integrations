@@ -31,6 +31,7 @@ Usage:
       --at 2026-10-10T03:00:00Z --format json
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -176,11 +177,14 @@ SETTINGS_TO_REVIEW = frozenset({SETTING_NO_RENDER_CHANGE, SETTING_NOT_READ_HERE,
 
 #: The document of a side with no config (a first import): a tree-mode
 #: document of the shape `_lib_parse_tree.check_shape` accepts — its version
-#: says what it is, as no da-guard wrote it (#3206).
+#: says what it is, as no da-guard wrote it (#3206). Its config_hash is the
+#: walk identity of a tree with nothing in it: no record, so SHA-256 of no
+#: bytes (#4042, pkg/config treeIdentity).
 _EMPTY_TREE = {"schema": _lib_parse_tree.SCHEMA,
                "da_guard_version": "none (empty-tree placeholder: no da-guard ran)",
                "mode": "tree", "entries": [], "files": {},
-               "defaults_carriers": {}, "rendered_by": {}}
+               "defaults_carriers": {}, "rendered_by": {},
+               "config_hash": hashlib.sha256(b"").hexdigest()}
 
 
 def _canonical(node, *, by_text=False):
@@ -1757,12 +1761,17 @@ def _run(args):
         args, "new_dir", [e for e in _lib_parse_tree.entries_of(new_doc) if e.config_file],
         wanted="a file da-guard lists as a config file", lang="en")
     # #3724: both sides judged — a side changed after this is refused, naming
-    # its flag, wherever it is read again (the route generator's run of it).
-    for dest, flag, doc in (("old_dir", "--old-dir", old_doc), ("new_dir", "--new-dir", new_doc)):
-        if not _lib_input.absent(args, dest):
-            _lib_parse_cache.record_judgement(
-                getattr(args, dest), flag, "en",
-                [e.path for e in _lib_parse_tree.entries_of(doc) if e.config_file])
+    # its flag, wherever it is read again (the route generator's run of it);
+    # what each side was is its document's walk identity (#3965).
+    sides = [(getattr(args, dest), flag, doc)
+             for dest, flag, doc in (("old_dir", "--old-dir", old_doc), ("new_dir", "--new-dir", new_doc))
+             if not _lib_input.absent(args, dest)]
+    for path, _flag, _doc in sides:
+        _lib_parse_cache.forget_judgement(path)
+    for path, flag, doc in sides:
+        # One directory on both sides: the second walk must read the first's tree.
+        _lib_parse_cache.check_judged(path, doc.get("config_hash"), "da-guard parse-tree")
+        _lib_parse_cache.record_judgement(path, flag, "en", doc.get("config_hash"))
     has = (_has_config_file(old_doc), _has_config_file(new_doc))
     diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections, has=has)
     report = build_report(diff, args.old_dir, args.new_dir, platform=platform)

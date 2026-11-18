@@ -2150,16 +2150,47 @@ class TestOutputPreflight:
         finally:
             d.chmod(0o700)
 
-    def test_a_regular_file_someone_else_owns_is_unwritable(self, tmp_path, monkeypatch):
-        """The secure writer's chmod 0600 fails on a file another user owns
-        (EPERM) after writing it: judged unwritable up front (#3105)."""
+    @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+    @pytest.mark.parametrize("flag", ["-o", "--markdown-output"])
+    def test_a_write_the_preflight_passes_but_that_fails_is_one_line_rc2(self, tmp_path, flag):
+        """#3107 ③b: a FIFO with no reader exists and is writable, so the
+        preflight passes it; the operator entry's open then fails (ENXIO).
+        That failure must still end at rc 2 with the one `cannot write` line
+        — the write sites exit themselves (`_or_die`); nothing above them
+        would turn an escaped `OutputWriteError` into rc 2."""
+        target = tmp_path / "out"
+        os.mkfifo(target)
+        tool = os.path.join(os.path.dirname(bt.__file__), "backtest_threshold.py")
+        seed = os.path.join(os.path.dirname(bt.__file__), "..", "..", "..",
+                            "try-local", "seed", "conf.d")
+        # A full argument set, so the preflight runs (and passes the FIFO);
+        # Prometheus is unreachable, and the skip still writes both outputs
+        # (#3089) — the write is what fails.
+        r = subprocess.run(
+            [sys.executable, tool, "--config-dir", seed, "--baseline", seed,
+             "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable",
+             flag, str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+        named = "-o/--output" if flag == "-o" else flag
+        assert r.returncode == 2, r.stderr
+        assert f"ERROR: cannot write {target}: " in r.stderr, r.stderr
+        # The write's failure, not the preflight's: the run got past it.
+        skipped = r.stderr.find("skipping backtest")
+        assert 0 <= skipped < r.stderr.find("cannot write"), r.stderr
+        assert f"check the value given to {named}" in r.stderr, r.stderr
+        assert "Traceback" not in r.stderr and "internal error" not in r.stderr, r.stderr
+
+    def test_a_writable_file_someone_else_owns_is_writable(self, tmp_path, monkeypatch):
+        """#3107 ③b: the operator entry sets 0600 only on a file this euid
+        owns, so a file another user owns that we may write is written —
+        no chmod fails after it (the old writer's EPERM, #3105, is gone),
+        and the preflight no longer refuses it."""
         target = tmp_path / "r.json"
         target.write_text("old", encoding="utf-8")
         target.chmod(0o666)
         owner = target.stat().st_uid
         monkeypatch.setattr(bt.os, "geteuid", lambda: owner + 1)
-        exc = bt._unwritable_output(str(target), "-o/--output")
-        assert exc is not None and exc.errno == errno.EPERM
+        assert bt._unwritable_output(str(target), "-o/--output") is None
 
     def test_a_device_is_not_judged_by_its_owner(self, tmp_path, monkeypatch):
         """`-o /dev/null`: the writer does not chmod a device (#3105), so who
@@ -3148,10 +3179,15 @@ class TestUnserializableDocument:
         assert "changes[0].impact_pct" in res.stderr
         assert written == "stale\n"
 
-    def test_text_mode_is_a_crash_and_writes_no_o(self, tmp_path):
+    def test_text_mode_names_o_with_the_crash_code_and_writes_no_o(self, tmp_path):
+        """#3107 ③b: `json_file_text` ends it as --json's run() would — the
+        crash code, one line naming -o and where in the document — not a
+        traceback."""
         res, written = self._run(tmp_path)
         assert res.returncode == _crash_code(), res.stderr
-        assert "OutputNotSerializable" in res.stderr and "changes[0].impact_pct" in res.stderr
+        assert ("ERROR: the -o/--output document cannot be written as JSON: "
+                "changes[0].impact_pct") in res.stderr, res.stderr
+        assert "Traceback" not in res.stderr
         assert "{" not in res.stdout
         assert written == "stale\n"
 

@@ -152,13 +152,6 @@ from _lib_label import safe_label  # noqa: E402
 SILENCES_DOCUMENT = _lib_input.Document("json", list)
 
 
-def _yaml_files_in(source: Path, exclude: "list[str] | tuple[str, ...]" = ()) -> list[Path]:
-    """The files of the rule source: `_lib_consumer_read.files_to_read`
-    (#3426) — a file as given, a directory's .yaml / .yml recursively, less
-    the ones an `--exclude` pattern matches."""
-    return [Path(f) for f in _lib_consumer_read.files_to_read([source], exclude)]
-
-
 def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
     """Pull all `alert:` rules out of a parsed rule pack.
 
@@ -200,23 +193,18 @@ def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
     return alerts
 
 
-def load_alerts(rule_source: Path,
-                exclude: "list[str] | tuple[str, ...]" = (), *,
-                rule_pack_files: "list[Path] | None" = None) -> tuple[list[dict], list[str]]:
-    """Load all alerts from a rule-source path, less the files *exclude*
-    leaves out — or, given *rule_pack_files*, from those: the rule packs
-    ``--rule-pack-dir`` selected (``_lib_input.selected``, the rule-pack
-    declaration, #3426 / #3755 — judged and listed once, by ``main``).
+def load_alerts(rule_pack_files: "list[Path | str]") -> tuple[list[dict], list[str]]:
+    """Load all alerts from *rule_pack_files*: what ``main`` selected
+    (``_lib_input.selected``) — the rule packs of ``--rule-pack-dir`` (the
+    rule-pack declaration, #3426 / #3755) or the files of ``--rule-source``
+    less ``--exclude`` (#3901), judged and listed once. ⛔ This lists
+    nothing itself (#4040: its own listing, and its "no YAML files found",
+    were left after #3901 with only tests calling them).
     Returns (alerts, errors).
     Raises ``_lib_consumer_read.ConsumerReadError`` when da-read /
-    da-crdecode cannot be had, and its ``InputRefused`` when the files
-    cannot be chosen (an undeclared YAML beside the packs, a dangling
-    symlink, an `--exclude` that leaves nothing)."""
+    da-crdecode cannot be had."""
     errors: list[str] = []
-    files = ([Path(f) for f in rule_pack_files]
-             if rule_pack_files is not None else _yaml_files_in(rule_source, exclude))
-    if not files:
-        return [], [f"no YAML files found at {rule_source}"]
+    files = [Path(f) for f in rule_pack_files]
 
     # #3206 (ADR-036 §12) / #3426: which rule files a file holds is
     # `_lib_consumer_read.rule_files_in`'s answer — a plain rule file, a
@@ -731,7 +719,7 @@ def main(argv: list[str] | None = None) -> "int | Report":
                                               exclude=args.exclude)
 
     try:
-        alerts, errors = load_alerts(Path(rule_source), rule_pack_files=rule_pack_files)
+        alerts, errors = load_alerts(rule_pack_files)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR

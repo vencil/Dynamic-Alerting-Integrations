@@ -54,7 +54,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import ensure_dir, exit_on_output_write_error, output_write  # noqa: E402  (#1789, #3982)
+from _lib_validation import output_dir_type  # noqa: E402  (#3982)
 from _lib_validation import (  # noqa: E402  (#3457)
     is_threshold_number_text, threshold_number, threshold_trim)
 
@@ -413,8 +414,7 @@ def generate_flat(
     the root `_defaults.yaml` only (not cascaded; see _gen_defaults_yaml
     docstring)."""
     rng = _seed_rng(seed)
-    with output_write(output_dir, flag=flag, action="create directory"):
-        output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(output_dir, flag=flag)  # #3982: the directory entry
 
     files: list[tuple[str, dict]] = [
         ("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults))]
@@ -445,8 +445,7 @@ def generate_hierarchical(
     cascading level. Use case: bench harness `bench_trigger` registration.
     """
     rng = _seed_rng(seed)
-    with output_write(output_dir, flag=flag, action="create directory"):
-        output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(output_dir, flag=flag)  # #3982: the directory entry
 
     # Distribute tenants across domain/region/env
     slots: list[tuple[str, str, str]] = []
@@ -587,8 +586,7 @@ def generate_synthetic_v2(
     looks alike.
     """
     rng = _seed_rng(seed)
-    with output_write(output_dir, flag=flag, action="create directory"):
-        output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(output_dir, flag=flag)  # #3982: the directory entry
 
     slots: list[tuple[str, str, str]] = []
     for d in DOMAINS:
@@ -719,7 +717,7 @@ def main() -> None:
         help="Directory layout mode (default: flat). 'synthetic-v2' is hierarchical layout with Zipf+power-law skews per phase-b-e2e-harness §6.2 (B-1 Phase 2 calibration baseline).",
     )
     parser.add_argument(
-        "--output", "-o", type=str, default=None,
+        "--output", "-o", type=output_dir_type(), default=None,  # #3982: `-` names no dir
         help="Output directory (default: tests/fixtures/synthetic-<count>-<layout>/conf.d)",
     )
     parser.add_argument(

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """patch-config apply 以 exporter 的 /api/v1/config/identity 驗收（#2069、#2132）。
 
-寫後驗收改問「pod 服務的是不是本次寫入產生的那一版整份位元組」：由 PATCH 回應的
+寫後驗收改問「pod 服務的是不是本次寫入產生的那一版整份位元組」：寫入前就對寫後的
 ConfigMap 算出 exporter 會回報的 config_hash，輪詢到相符為止；parse 失敗改看寫入後
-的 parse_failed 集合，不再看計數器差值。fake kubectl 的 identity 由它自己照 exporter
-規則算（`_patch_config_fake.fake_config_hash`），不呼叫 patch_config——Python 那份
-規則對錯由 `tests/shared/config_identity_golden.json` 與 Go 端共同釘住。
+的 parse_failed 集合，不再看計數器差值。config_hash 由 `da-guard parse-tree` 對落地成
+檔案的 ConfigMap 回報（#4042：exporter 自己的 walk 身分，Python 不另寫一份規則）；
+fake kubectl 的 identity 由它自己照 exporter 規則算（`_patch_config_fake.fake_config_hash`），
+不呼叫 patch_config 或 da-guard。兩者對錯由 `tests/shared/config_identity_golden.json`
+與 Go 端共同釘住。
 """
 import contextlib
 import io
@@ -75,10 +77,31 @@ class TestCrossLanguageGolden:
         files = pc.configmap_files({"data": self.golden["data"]})
         assert pc.config_hash(files) == self.golden["expected_directory_hash"]
 
-    def test_the_kept_keys_are_the_exporters(self):
-        kept = sorted(k for k in self.golden["data"] if pc.exporter_reads(k))
-        assert kept == self.golden["expected_scanned_keys"]
-        assert len(kept) < len(self.golden["data"])  # it still excludes something
+    def test_a_renamed_key_is_another_hash(self):
+        """#4042：檔名在身分裡——同樣位元組換成另一類的 key（tenant 檔改名成 `_` 檔，
+        exporter 不再服務那個租戶），config_hash 必須不同。"""
+        r = self.golden["rename"]
+        data = dict(self.golden["data"])
+        data[r["to"]] = data.pop(r["from"])
+        files = pc.configmap_files({"data": data})
+        assert pc.config_hash(files) == r["expected_directory_hash"]
+        assert r["expected_directory_hash"] != self.golden["expected_directory_hash"]
+
+    def test_the_hash_is_da_guards(self, monkeypatch):
+        """patch-config 沒有自己的一份規則：目錄模式的值就是 da-guard parse-tree 回報的。"""
+        import _lib_parse_tree
+        seen = []
+
+        class _Tree:
+            config_hash = "f" * 64
+
+        def load(root, *args, **kwargs):
+            seen.append(sorted(p.name for p in Path(root).iterdir()))
+            return _Tree()
+        monkeypatch.setattr(_lib_parse_tree, "load", load)
+        files = pc.configmap_files({"data": self.golden["data"]})
+        assert pc.config_hash(files) == "f" * 64
+        assert seen == [sorted(files)]  # every key, written as a file
 
     def test_single_file_hash(self):
         files = pc.configmap_files({"data": self.golden["data"]})
@@ -127,6 +150,30 @@ def test_only_the_proxied_404_counts_as_an_older_exporter():
 
 
 class TestIdentityVerdicts:
+    def test_a_filesystem_that_cannot_hold_the_keys_writes_nothing(self, monkeypatch):
+        """#4042：config_hash 由 da-guard 對落地成檔案的 ConfigMap 算。檔案系統把兩個 key
+        併成一個檔（macOS／Windows 不分大小寫）時，算出的是另一棵樹的身分、沒有 pod 會回報
+        它——寫入前就拒絕，什麼都不寫。"""
+        real = pc.os.stat
+
+        def stat(path, *args, **kwargs):  # every key of the identity dir is one file there
+            p = Path(path)
+            if p.parent.name.startswith("patch-config-identity-"):
+                path = min(p.parent.iterdir())
+            return real(path, *args, **kwargs)
+        monkeypatch.setattr(pc.os, "stat", stat)
+        c = FakeCluster(_multi())
+        before = dict(c.data)
+        err = io.StringIO()
+        with mock.patch("patch_config.run_cmd", side_effect=c), \
+                mock.patch("sys.argv", ["patch_config.py", "t-a", "mysql_connections", "65", *FAST]), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            with pytest.raises(SystemExit) as exc:
+                run_main()
+        assert exc.value.code == pc.EXIT_CALLER_ERROR, err.getvalue()
+        assert c.patches == [] and c.data == before
+        assert "cannot hold its keys" in err.getvalue()
+
     def test_success_waits_for_the_written_hash(self):
         c = FakeCluster(_multi())
         code, doc = _run(c, "t-a", "mysql_connections", "65")

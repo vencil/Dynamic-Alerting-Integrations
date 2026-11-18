@@ -155,8 +155,9 @@ func seedBuiltinDefaults(d map[string]float64) []string {
 
 // SeedBuiltinDefaults is seedBuiltinDefaults, for package main's flat
 // incremental reload (config.go) and its single-file load, each of which
-// asks RootBuiltinWithheld itself first.
-func SeedBuiltinDefaults(d map[string]float64) { seedBuiltinDefaults(d) }
+// asks RootBuiltinWithheld itself first. It returns the keys it seeded, which
+// those loads hand to BuiltinStatesOf for the exporter's state gauge (#3831).
+func SeedBuiltinDefaults(d map[string]float64) []string { return seedBuiltinDefaults(d) }
 
 // The states of BuiltinDefaultState.State (#3832).
 const (
@@ -217,28 +218,57 @@ func (s *ScopedTenants) BuiltinDefaultStates() map[string]BuiltinDefaultState {
 		return nil
 	}
 	b := s.built
+	return BuiltinStatesOf(&b.Config, b.BuiltinSeeded, b.BuiltinWithheld)
+}
+
+// BuiltinStatesOf is, per key of the built-in table, what one build of a
+// tree did with it: cfg is the build's merged config (its Defaults after the
+// built-in layer was laid under them), seeded the keys that layer gave the
+// platform's value (seedBuiltinDefaults' answer) and withheld whether the
+// layer was withheld (RootBuiltinWithheld). It is the one derivation
+// behind both `da-guard effective`'s builtin_defaults
+// (ScopedTenants.BuiltinDefaultStates) and the exporter's
+// da_config_builtin_default_state gauge (#3831), so the two cannot name a
+// key's state differently.
+func BuiltinStatesOf(cfg *ThresholdConfig, seeded []string, withheld bool) map[string]BuiltinDefaultState {
 	out := make(map[string]BuiltinDefaultState, len(builtinDefaults))
 	for k, v := range builtinDefaults {
 		st := BuiltinDefaultState{Value: v, State: BuiltinStateWithheld}
 		switch {
-		case b.BuiltinWithheld:
-		case slices.Contains(b.BuiltinSeeded, k):
+		case withheld:
+		case slices.Contains(seeded, k):
 			st.State = BuiltinStateBuiltin
-			for _, overrides := range b.Config.Tenants {
+			for _, overrides := range cfg.Tenants {
 				sv, ok := overrides[k]
 				if servesBuiltinValue(sv, ok) {
 					st.Tenants++
 				}
 			}
-		case RootDisabledDefault(b.Config.Defaults[k]):
+		case RootDisabledDefault(cfg.Defaults[k]):
 			st.State = BuiltinStateOptedOut
 		default:
-			root := b.Config.Defaults[k]
+			root := cfg.Defaults[k]
 			st.State, st.Root = BuiltinStateOverridden, &root
 		}
 		out[k] = st
 	}
 	return out
+}
+
+// BuiltinStates is the closed set of BuiltinDefaultState.State, in the
+// order da_config_builtin_default_state's series are created (#3831).
+func BuiltinStates() []string {
+	return []string{BuiltinStateBuiltin, BuiltinStateOverridden, BuiltinStateOptedOut, BuiltinStateWithheld}
+}
+
+// BuiltinDefaultKeys is the built-in table's keys, sorted.
+func BuiltinDefaultKeys() []string {
+	keys := make([]string, 0, len(builtinDefaults))
+	for k := range builtinDefaults {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // InheritedRootDisables is, sorted, the built-in keys the root `defaults:`

@@ -10,6 +10,7 @@ import contextlib
 import functools
 import io
 import json
+import errno
 import os
 import re
 import stat
@@ -1348,6 +1349,13 @@ def ensure_dir(path: Any, *, flag: Optional[str] = None) -> None:
     through here keeps the failure in the one class, with the same message
     shape (``cannot create directory <path>: …``).
     """
+    # #3982 (independent review): `Path("")` is `.`, which always exists —
+    # an empty value (`-o "$UNSET"`) would "succeed" and the tool would then
+    # write into the working directory. `os.makedirs("")` refuses it
+    # (ENOENT), as the tools did before they came through here.
+    if os.fspath(path) == "":
+        exc = FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), "")
+        raise OutputWriteError(path, exc, flag=flag, action="create directory") from exc
     try:
         Path(path).mkdir(parents=True, exist_ok=True)
     except OSError as exc:

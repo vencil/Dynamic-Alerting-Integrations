@@ -830,3 +830,21 @@ class TestIntervalAndDurationRange:
         baseline_discovery.main()
         assert "共 3 個採樣點" in capsys.readouterr().out
         assert slept == [15, 15] and all(type(s) is int for s in slept)
+
+
+def test_an_empty_output_dir_writes_nothing_into_the_working_directory(tmp_path):
+    """#3982 (independent review): `-o ""` (an unset variable) is rc 2 naming
+    the flag, before anything is sampled — not the CSVs written into the
+    working directory."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    tool = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops" / "baseline_discovery.py"
+    r = subprocess.run([sys.executable, str(tool), "--tenant", "t1", "--prometheus",
+                        "http://127.0.0.1:1", "--duration", "1", "--interval", "1", "-o", ""],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=120, cwd=tmp_path)
+    assert r.returncode == 2, r.stderr
+    assert "cannot create directory : No such file or directory" in r.stderr, r.stderr
+    assert "check the value given to -o/--output-dir" in r.stderr
+    assert list(tmp_path.iterdir()) == []

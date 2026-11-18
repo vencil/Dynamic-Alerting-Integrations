@@ -13,7 +13,11 @@ Go readers) is not seen inside, so the point is the moment before it starts.
 The count is shared by every Python process of the run (DA_FI_COUNT, under
 ``flock``). With DA_FI_K=k the k-th point is where the fault happens:
 DA_FI_MODE ``input`` removes the input; ``file`` removes the file under it
-that the point looks at. Every point is a JSON line in DA_FI_LOG with the
+that the point looks at; ``victim`` removes DA_FI_VICTIM (a path relative to
+the input) — at a ``subprocess.Popen`` point, a file a Go reader would walk
+(#3965). DA_FI_MODE ``judged-victim`` removes DA_FI_VICTIM at the judgement
+itself (the audit event, no count): the moment between the judging walk and
+anything after it. Every point is a JSON line in DA_FI_LOG with the
 first frame outside the standard library (its site), so the gate can check
 that the k-th point of an injected run is the k-th of the baseline.
 
@@ -33,6 +37,7 @@ if _INPUT and _LOG and _COUNT:
     _EVENT = "da.input.judged"
     _K = int(os.environ.get("DA_FI_K", "0"))
     _MODE = os.environ.get("DA_FI_MODE", "input")
+    _VICTIM = os.environ.get("DA_FI_VICTIM", "")
     _NAMES = {os.path.normpath(os.path.abspath(_INPUT)), os.path.realpath(_INPUT)}
     _local = threading.local()
     _judged = [False]
@@ -90,8 +95,17 @@ if _INPUT and _LOG and _COUNT:
         finally:
             os.close(fd)
 
+    def _remove_victim():
+        victim = os.path.join(_INPUT, _VICTIM)
+        if not _VICTIM or not os.path.isfile(victim) or os.path.islink(victim):
+            return False
+        os.remove(victim)
+        return True
+
     def _fault(path, where):
         """Remove what DA_FI_MODE says; True when something was removed."""
+        if _MODE == "victim":
+            return _remove_victim()
         if _MODE == "file":
             if where != "child" or not os.path.isfile(path) or os.path.islink(path):
                 return False
@@ -132,9 +146,11 @@ if _INPUT and _LOG and _COUNT:
     def _audit(event, args):
         if event == _EVENT:
             if _where(args[1]) == "self":
+                first = not _judged[0]
                 _judged[0] = True
                 _write({"ev": "judged", "flag": args[0], "path": args[1], "pid": os.getpid(),
-                        "ppid": os.getppid()})
+                        "ppid": os.getppid(),
+                        "fired": _MODE == "judged-victim" and first and _remove_victim()})
         elif event == "subprocess.Popen":
             _point(event, args[0])
         elif event in ("os.listdir", "os.scandir"):

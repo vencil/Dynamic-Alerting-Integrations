@@ -1079,3 +1079,19 @@ def test_redact_json_keeps_err_output_when_stdout_fails(tmp_path):
     assert proc.returncode == 2, err
     assert "ERROR [ERR_OUTPUT]: 處理失敗（--redact 抑制細節" in err, err
     assert "cannot write to stdout" not in err and "secret-site" not in err, err
+
+
+def test_cli_redact_unwritable_out_names_no_path(tmp_path):
+    """#3107 ③c (independent review): --out that cannot be written ends
+    ERR_OUTPUT at rc 2; under --redact the line carries the code and the
+    generic suppression only — the path is a customer identifier. Without
+    --redact the shared `cannot write <path>` line is shown."""
+    rec = _report([_record(alerts=[_alert()])], [_meta()])
+    p = _write_report(tmp_path, rec, name="r.json")
+    out = tmp_path / "LEAKYOUT" / "missing-dir" / "score.json"
+    r = _run_score(str(p), "--tolerances", str(_TOL), "--out", str(out), "--redact")
+    assert r.returncode == 2, r.stderr
+    assert "ERR_OUTPUT" in r.stderr and "LEAKYOUT" not in r.stderr, r.stderr
+    r2 = _run_score(str(p), "--tolerances", str(_TOL), "--out", str(out))
+    assert r2.returncode == 2 and "LEAKYOUT" in r2.stderr
+    assert "check the value given to --out" in r2.stderr

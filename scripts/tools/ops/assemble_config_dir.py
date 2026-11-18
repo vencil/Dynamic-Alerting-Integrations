@@ -59,7 +59,8 @@ from _lib_confd import (  # noqa: E402
     warn_nested,
 )
 from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import ensure_dir, exit_on_output_write_error  # noqa: E402  (#1789, #3982)
+from _lib_validation import output_dir_type  # noqa: E402  (#3982)
 from _lib_paths import require_dir  # noqa: E402  (#3276)
 from _lib_io import claim_stdout, targets_stdout, write_operator_output  # noqa: E402  (#3107)
 import _lib_confedit  # noqa: E402  (#3206: da-guard write puts the files in place)
@@ -384,8 +385,7 @@ def _make_output(output_dir: Path) -> None:
     # #1789: `output_dir` reaches here from `--output` only — main is the
     # sole caller — so the flag is named literally rather than threaded
     # through a parameter no other caller would ever set.
-    with output_write(output_dir, flag="--output", action="create directory"):
-        output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(output_dir, flag="--output")  # #3982: the directory entry
 
 
 def assemble(
@@ -463,7 +463,7 @@ def main() -> "int | Report":
         help="Comma-separated list of source directories",
     )
     parser.add_argument(
-        "--output", type=str, default="",
+        "--output", type=output_dir_type(), default="",  # #3982: `-` names no dir
         help="Output config-dir path",
     )
     parser.add_argument(

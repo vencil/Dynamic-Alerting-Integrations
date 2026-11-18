@@ -152,6 +152,8 @@ type configMetrics struct {
 	metadataStringForm prometheus.Gauge
 	// #2914: da_config_profile_routing_keys. See SetProfileRoutingKeys.
 	profileRoutingKeys prometheus.Gauge
+	// #3831: da_config_builtin_default_state. See SetBuiltinDefaultStates.
+	builtinDefaultState *prometheus.GaugeVec
 }
 
 // da_config_scan_failures_total{reason} label values (#2452, #2592). ⛔ A
@@ -328,6 +330,7 @@ func newConfigMetrics() *configMetrics {
 		valuesNotServed:             valuesNotServed,
 		metadataStringForm:          s.MetadataStringForm,
 		profileRoutingKeys:          s.ProfileRoutingKeys,
+		builtinDefaultState:         s.BuiltinDefaultState,
 		set:                         s,
 		scanDuration:                s.ScanDuration,
 		reloadTriggers:              s.ReloadTriggers,
@@ -647,6 +650,29 @@ func (cm *configMetrics) SetProfileRoutingKeys(n int) {
 		return
 	}
 	cm.profileRoutingKeys.Set(float64(n))
+}
+
+// SetBuiltinDefaultStates publishes da_config_builtin_default_state (#3831):
+// for every key of the built-in table, 1 on the series of its state in
+// states (config.BuiltinStatesOf of the committed config) and 0 on the
+// other states'. Called on every commit, so a key whose state changes moves
+// its 1 in the same scrape. A key states does not name (none today: the
+// derivation names every key of the table) keeps every series at 0.
+// Nil-receiver safe.
+func (cm *configMetrics) SetBuiltinDefaultStates(states map[string]config.BuiltinDefaultState) {
+	if cm == nil {
+		return
+	}
+	for _, key := range config.BuiltinDefaultKeys() {
+		st, ok := states[key]
+		for _, state := range config.BuiltinStates() {
+			v := 0.0
+			if ok && st.State == state {
+				v = 1
+			}
+			cm.builtinDefaultState.WithLabelValues(key, state).Set(v)
+		}
+	}
 }
 
 // SetConfigShape publishes the two whole-tree size maxima of the config

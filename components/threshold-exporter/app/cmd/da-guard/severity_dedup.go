@@ -56,6 +56,8 @@ const severityDedupKey = "_severity_dedup"
 // severityDedupDoc is the JSON document on stdout.
 type severityDedupDoc struct {
 	Schema string `json:"schema"`
+	// ConfigHash: the identity of the walk this document read (configHashField).
+	ConfigHash *string `json:"config_hash"`
 	// Tenants: every tenant of the exporter's config → its mode.
 	Tenants map[string]severityDedupTenant `json:"tenants"`
 	// Problems: each `_severity_dedup` value the exporter does not read
@@ -188,6 +190,7 @@ func severityDedupOf(dir string, logger *log.Logger, errOut io.Writer) (severity
 	if err != nil {
 		return doc, err
 	}
+	doc.ConfigHash = configHashField(scan.Composite)
 	cfg, rep, _, err := config.LoadDirFromScan(scan, dir, logger)
 	if rep.RootListErr != nil {
 		// The reason; the root itself is named in unreadable as "." (#2627).

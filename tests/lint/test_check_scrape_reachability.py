@@ -196,6 +196,7 @@ _THRESHOLD_EXPORTER_METRICS = (
     "da_config_scan_failures_total",
     "da_config_unreadable_files",
     "da_config_defaults_unusable",
+    "da_config_builtin_defaults_info",  # #3831: internal/scrape/config_metrics.go
     "da_tenant_metrics_over_limit",
     "user_severity_dedup",
     "user_silent_mode",
