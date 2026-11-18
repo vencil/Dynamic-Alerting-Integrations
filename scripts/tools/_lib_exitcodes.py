@@ -889,6 +889,11 @@ def _write_report(report: Report) -> int:
     """Encode and print *report*'s document; the exit status. A document
     that cannot be encoded is the tool's defect: one named line on stderr,
     no part of the document, and the crash exit code."""
+    global _stdout_failure_line, _best_effort
+    # #4046: before the encoding — a best-effort document that cannot be
+    # encoded keeps the status through the last flush too (a lost stderr
+    # must not turn its 0 into the caller-error code).
+    _best_effort = report.delivery == "best_effort"
     try:
         text = encode_json(report.document)
     except OutputNotSerializable as exc:
@@ -904,9 +909,7 @@ def _write_report(report: Report) -> int:
         _to_stderr(f"ERROR: the --json document could not be written "
                    f"({type(exc).__name__}); the exit code stands")
         return report.status
-    global _stdout_failure_line, _best_effort
     _stdout_failure_line = report.on_stdout_failure  # #3450: through the last flush
-    _best_effort = report.delivery == "best_effort"  # through the last flush too
     try:
         print(text)
     except OSError as exc:  # this write is stdout's
