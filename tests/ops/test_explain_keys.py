@@ -126,6 +126,20 @@ def test_an_assert_file_pinning_served_is_refused_by_name(conf_d, tmp_path):
     assert "field `served` removed in schema v2" in p.stderr and "served-values --at" in p.stderr, p.stderr
 
 
+def test_an_assert_file_carrying_undecidable_is_refused_by_name(conf_d, tmp_path):
+    """#3832: a v2 expected file (this tool's older output) carries the
+    top-level `undecidable`; it is refused naming why the field is gone,
+    not as an unknown field."""
+    golden = tmp_path / "v2.json"
+    golden.write_text(json.dumps({"schema": "da-tools.explain-keys/v2", "undecidable": False,
+                                  "tenants": {"db-b": [{"key": "mysql_connection_usage_percent"}]}}),
+                      encoding="utf-8")
+    p = _run("--config-dir", conf_d, "--assert", golden, "--json")
+    assert p.returncode == 2 and p.stdout == "", p.stderr
+    assert "field `undecidable` removed in schema v3" in p.stderr, p.stderr
+    assert "unknown top-level" not in p.stderr, p.stderr
+
+
 def test_assert_passes_on_its_own_output_and_fails_on_a_difference(conf_d, tmp_path):
     golden = tmp_path / "golden.json"
     golden.write_text(_run("--config-dir", conf_d, "--json").stdout, encoding="utf-8")

@@ -147,11 +147,15 @@ def test_a_tree_without_a_root_platform_file_is_judged(tmp_path, monkeypatch):
     any other — a complete verdict, its error findings included (the real
     judge_tree)."""
     tree = h.write_tree(tmp_path / "conf.d", {
-        "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode: warning\n    _routng: {}\n"})
+        "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode: warning\n    _routng: {}\n"
+                    "    redis_conected_clients: \"5\"\n"})
     monkeypatch.setattr(child, "written_scope", lambda *_a: ([], ["t-a"]))
     got = child.key_verdict(_job(tmp_path, 60.0), str(tree), {}, pc.ParseCache())
     assert got["status"] == "complete", got
     assert any(f["key"] == "_routng" and f["severity"] == kv.ERROR for f in got["findings"]), got
+    # The threshold key too: before #3832 it was undecidable here.
+    assert any(f["key"] == "redis_conected_clients" and f["severity"] == kv.ERROR
+               and f["reason"] == "no_row" for f in got["findings"]), got
 
 
 def _finding(severity: str, n: int) -> kv.Finding:

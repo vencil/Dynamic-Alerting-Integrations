@@ -86,6 +86,10 @@ FIELDS = ("layer", "file", "read_by", "verdict", "severity", "reason", "disable"
 #: read as a misspelling.
 REMOVED_FIELDS = {"served": "removed in schema v2 (#3835): the verdict is judged over the whole "
                             "day; what /metrics serves at one instant is `da-guard served-values --at`'s"}
+#: The same, for the top level: an expected file is often this tool's own
+#: output, so an older one carries what this schema no longer writes.
+TOP_REMOVED_FIELDS = {"undecidable": "removed in schema v3 (#3832): a tree with no root platform "
+                                     "file is judged as any other, so no key is undecidable"}
 
 
 class ExplainError(Exception):
@@ -157,6 +161,10 @@ def compare(doc: dict[str, Any], expected: Any) -> list[str]:
     """Every difference between `doc` and the expected document, one line each."""
     if not isinstance(expected, dict) or not isinstance(expected.get("tenants"), dict):
         raise ExplainError("--assert: the expected document needs a `tenants` mapping")
+    removed_top = sorted(set(expected) & set(TOP_REMOVED_FIELDS))
+    if removed_top:
+        raise ExplainError(f"--assert: top-level field `{removed_top[0]}` "
+                           f"{TOP_REMOVED_FIELDS[removed_top[0]]}; regenerate the expected file")
     unknown_top = sorted(set(expected) - TOP_FIELDS)
     if unknown_top:
         raise ExplainError(f"--assert: unknown top-level field(s) {unknown_top}; only `tenants` is compared")

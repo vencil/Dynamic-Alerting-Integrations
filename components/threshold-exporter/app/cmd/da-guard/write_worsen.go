@@ -184,14 +184,11 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 // into a batch file, or onto a renamed profile, keeps its baseline — and
 // one about no tenant (a profile no tenant binds) is the file and the key.
 //
-// The baseline is the before-tree judged as decidable even when it has no
-// root platform file: its threshold keys enter the baseline, so a batch
-// that adds the root carrier is not charged with the keys already there.
-// A threshold key the after-tree cannot judge (no root platform file,
-// decision 7) is no block here: a write into such a tree is the tool's
-// ordinary case (a scaffold before its root file, a fixture), and the
-// whole-tree gates — validate-config, the route generator's `--validate` —
-// refuse the tree.
+// Every tree is judged, one with no root platform file included (#3832,
+// decision 7): the baseline is the before-tree as judged, so a batch that
+// adds the root carrier is not charged with the keys already there, and a
+// key the call writes into a tree with no root platform file is judged as
+// in any other.
 //
 // A tenant declared in two files is set aside on both sides
 // (keyVerdictOf's SkipDuplicated), with every tenant its files declare; the
