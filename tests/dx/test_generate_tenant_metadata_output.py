@@ -554,6 +554,13 @@ class TestNoRegressionVsInPlace:
             os.umask(old_umask)
         assert stat.S_IMODE(out.stat().st_mode) == 0o644
 
+    def test_a_missing_parent_directory_is_made(self, monkeypatch, confd, tmp_path):
+        """`--output new/dir/meta.json`: the parent is made (`ensure_dir`),
+        as the `mkdir -p` before #3982 did."""
+        out = tmp_path / "new" / "dir" / "meta.json"
+        assert _run(monkeypatch, confd, out) == 0
+        assert "acme" in json.loads(out.read_text(encoding="utf-8"))["tenant_metadata"]
+
     def test_a_directory_as_output_is_still_rc2_named(self, monkeypatch, confd, tmp_path, capsys):
         out = tmp_path / "meta.json"
         out.mkdir()
@@ -854,9 +861,26 @@ class TestSameResultAsInPlace:
         whole, so a stream is not one (#2082 wrote into it in place). Refused
         before the write and before `--check` reads it: nothing blocks on a
         FIFO with no reader. Leave --output out to get the JSON on stdout."""
+        import threading
         out = tmp_path / "meta.fifo"
         os.mkfifo(out)
-        rc = _run(monkeypatch, confd, out, *(["--check"] if check else []))
+        # A guard, not part of the behaviour: if the tool DID open the FIFO
+        # (the refusal gone), give it a writer that closes at once, so the
+        # run ends and the assertions below fail instead of the test hanging.
+        done = threading.Event()
+
+        def unblock():
+            # Every read the tool might make (`--check` reads twice). O_RDWR
+            # never blocks on a FIFO (Linux); its close is the EOF.
+            wait = 10
+            while not done.wait(wait):
+                os.close(os.open(out, os.O_RDWR))
+                wait = 1
+        threading.Thread(target=unblock, daemon=True).start()
+        try:
+            rc = _run(monkeypatch, confd, out, *(["--check"] if check else []))
+        finally:
+            done.set()
         assert rc == 2
         assert f"ERROR: cannot write {out}: not a regular file — check the value " \
                "given to --output" in capsys.readouterr().err
