@@ -751,7 +751,11 @@ def test_scan_sees_the_known_population():
         # migrate_to_operator.py, onboard_platform.py and operator_generate.py
         # left with #3206 (ADR-036 §12): their rule files are read by
         # `da-read prometheus-rules`, their manifests by da-crdecode.
-        "policy_engine.py", "policy_opa_bridge.py",
+        "policy_engine.py",
+        # policy_opa_bridge.py left with #4025: it reads served-values
+        # through `load_served_schedules` and `load_served_facts`, neither a
+        # root this scan names; its `--dry-run` / `_defaults` rows above pin
+        # the refusal.
         "blind_spot_discovery.py",
         # threshold_recommend.py left with #3990: it reads served-values
         # through `load_served_schedules` and `da-guard effective`, neither a
