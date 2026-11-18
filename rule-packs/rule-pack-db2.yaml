@@ -155,17 +155,17 @@ groups:
       # The ratio itself is window-length-independent (numerator and denominator
       # scale together), so the 0.05 threshold semantics are unchanged.
       #
-      # ⚠️ 低 sort 量時本比值噪訊高：分母守衛只有 `> 0`，只排除「完全沒排序」，
-      # 不排除「排序極少」。閒置庫 5 分鐘內 3 次排序、1 次溢位＝33% 遠高於 0.05
-      # 門檻——此低量模式**持續 ≥ DB2HighSortOverflow 的 for: 10m** 才會誤警；
-      # 單次 5 分鐘叢發會滑出 rate 窗、撐不滿 for: 而不 page（ADR-030 precision
-      # 面向）。要加最小樣本量 floor（分母改 `> N`）或改 0.05 門檻，都需該租戶
-      # 真實 sort 速率分布才有依據，否則只是換一個沒根據的猜測值 → 見 #1176，
-      # defer 到首個 DB2 客戶的實際流量分布。
+      # 最小樣本 gate（#1176）：5 分鐘窗內至少 200 次排序才計算比值，否則這個租戶
+      # 沒有比值、告警不會響。閒置庫 5 分鐘 3 次排序、1 次溢位就是 33%，遠高於
+      # 0.05，那是取樣雜訊而不是 SORTHEAP 不足。200 來自比例檢定的 success-failure
+      # （large counts）條件：以門檻 p0 = 0.05 檢定時要 n·p0 ≥ 10、n·(1−p0) ≥ 10，
+      # 即 n ≥ 200。這個數只由門檻推出、與租戶流量無關；改 0.05 門檻時要一起改
+      # （n = 10 / p0）。窗是 5m，所以寫成每秒 200 / 300 次。
+      # 門檻 0.05 本身、以及 for: 10m 是否接得到真實事件，仍要真實流量才能校準（#1176）。
       - record: tenant:db2_sort_overflow_ratio:avg
         expr: |
           sum by(tenant) (rate(db2_sort_overflows[5m]))
-          / (sum by(tenant) (rate(db2_total_sorts[5m])) > 0)
+          / (sum by(tenant) (rate(db2_total_sorts[5m])) >= 200 / 300)
 
   # -------------------------------------------------------
   # Threshold normalization: DB2
