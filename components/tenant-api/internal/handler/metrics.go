@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
+
 	"github.com/vencil/tenant-api/internal/federation/orphan"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/ws"
@@ -175,6 +177,13 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// (every write answers 500 TENANT_STORE_FAULT while one is there).
 	writeStoreUnreadableMetrics(w)
 
+	// #3831 (#3832 decision 8): the built-in defaults table this binary's
+	// write check and /effective were compiled with — the threshold-exporter
+	// serves its own digest too, and the platform rule pack's
+	// BuiltinDefaultsDigestMismatch compares both with the digest the pack
+	// was generated from.
+	writeBuiltinDefaultsInfo(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0
@@ -268,4 +277,14 @@ func circuitStateValue(state string) int {
 	default:
 		return -1
 	}
+}
+
+// writeBuiltinDefaultsInfo writes tenant_api_builtin_defaults_info{digest}
+// (#3831), tenant-api's twin of the threshold-exporter's
+// da_config_builtin_defaults_info: the same digest when both are built from
+// the same registry.
+func writeBuiltinDefaultsInfo(w http.ResponseWriter) {
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_builtin_defaults_info The built-in defaults table this tenant-api was compiled with (#3832): the default-armed thresholds and their platform values its write check and /effective lay under the root _defaults.yaml. Info metric, always 1; digest names the table. The threshold-exporter serves its own as da_config_builtin_defaults_info; the platform rule pack fires BuiltinDefaultsDigestMismatch while it differs from the pack's.\n")
+	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_builtin_defaults_info gauge\n")
+	_, _ = fmt.Fprintf(w, "tenant_api_builtin_defaults_info{digest=%q} 1\n", cfg.BuiltinDefaultsDigest())
 }

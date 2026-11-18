@@ -562,6 +562,60 @@ def test_the_builtin_table_renders_armed_keys_only_sorted(tmp_path):
     assert lib.BUILTIN_DEFAULTS_GO_ID in (lib.check_builtin_defaults_go(doc, str(go)) or "")
 
 
+# ── the platform pack's digest and its promtool test (#3831) ─────────────
+
+def test_the_platform_pack_carries_the_digest_the_components_are_built_with():
+    """Head: the platform pack's recording rule names the digest of the
+    registry's built-in table, and that is the digest the Go table the
+    components are compiled with names — so a pack and a component built
+    from one registry compare equal in BuiltinDefaultsDigestMismatch."""
+    doc = lib.load_registry()
+    digest = lib.builtin_defaults_digest(lib.builtin_defaults(doc))
+    spec = next(s for s in lib.surface_specs(doc) if s["id"] == lib.PLATFORM_DIGEST_SURFACE_ID)
+    assert f'rulepack_digest: "{digest}"' in spec["block"], spec["block"]
+    with open(spec["path"], encoding="utf-8") as fh:
+        assert lib.check_surface(fh.read(), spec) is None
+    with open(lib.BUILTIN_DEFAULTS_GO_PATH, encoding="utf-8") as fh:
+        assert f'const builtinDefaultsDigest = "{digest}"' in fh.read()
+
+
+def test_a_changed_armed_value_without_regen_leaves_the_pack_digest_stale(tmp_path):
+    """A table change moves the pack's digest: without --regen the platform
+    pack's recording rule and the promtool test are both red in --ci."""
+    def bump(doc):
+        key = _armed_key(doc)
+        doc["keys"][key]["value"] = doc["keys"][key]["value"] + 1
+    errors = gate.run_check(registry_path=_write_registry_variant(tmp_path, bump))["errors"]
+    assert any(e.startswith("stale-surface:") and lib.PLATFORM_DIGEST_SURFACE_ID + "'" in e
+               for e in errors), errors
+    assert any(e.startswith("stale-surface:") and lib.PLATFORM_DIGEST_TEST_ID in e
+               for e in errors), errors
+
+
+def test_the_promtool_test_digest_is_checked_and_rewritten(tmp_path):
+    """The promtool test of BuiltinDefaultsDigestMismatch must expect the
+    table's digest: --ci names a stale one (or none at all), and the --regen
+    rewrite replaces the stale digest everywhere in the file while a made-up
+    component digest stays."""
+    doc = lib.load_registry()
+    digest = lib.builtin_defaults_digest(lib.builtin_defaults(doc))
+    test = tmp_path / "t_test.yaml"
+    stale = ('rulepack_digest: "aaaaaaaaaaaa"\n'
+             "series: 'x{digest=\"aaaaaaaaaaaa\"}'\n"
+             "series: 'x{digest=\"0123456789ab\"}'\n")
+    test.write_text(stale, encoding="utf-8")
+    msg = lib.check_platform_digest_test(doc, str(test)) or ""
+    assert lib.PLATFORM_DIGEST_TEST_ID in msg and "aaaaaaaaaaaa" in msg and digest in msg, msg
+    fresh = lib.render_platform_digest_test(doc, stale)
+    assert "aaaaaaaaaaaa" not in fresh and fresh.count(digest) == 2 and "0123456789ab" in fresh
+    test.write_text(fresh, encoding="utf-8")
+    assert lib.check_platform_digest_test(doc, str(test)) is None
+    test.write_text("no digest here\n", encoding="utf-8")
+    assert "nowhere" in (lib.check_platform_digest_test(doc, str(test)) or "")
+    errors = gate.run_check(surface_paths={lib.PLATFORM_DIGEST_TEST_ID: str(tmp_path / "gone.yaml")})["errors"]
+    assert any(lib.PLATFORM_DIGEST_TEST_ID in e and "does not exist" in e for e in errors), errors
+
+
 def test_the_committed_unset_keys_table_is_what_the_registry_generates():
     """Head: the generated Go table is fresh and holds exactly the operator
     keys of both tiers (#1200 D-A A3), with their packs."""

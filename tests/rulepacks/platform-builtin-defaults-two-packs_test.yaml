@@ -1,0 +1,30 @@
+# promtool test: two platform pack versions with different built-in tables
+# loaded at once (#3831). BuiltinDefaultsRulePackDigestsDiffer fires, and
+# BuiltinDefaultsDigestMismatch keeps evaluating (no many-to-many error) and
+# fires for a component matching neither pack.
+# Run: promtool test rules tests/rulepacks/platform-builtin-defaults-two-packs_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+  - platform-builtin-defaults-stale-pack.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: two-pack-versions-loaded
+    input_series:
+      - series: 'up{job="threshold-exporter", instance="10.0.0.1:8080"}'
+        values: '1x60'
+      - series: 'da_config_builtin_defaults_info{job="threshold-exporter", instance="10.0.0.1:8080", digest="0123456789ab"}'
+        values: '1x60'
+    promql_expr_test:
+      - expr: count by (alertname) (ALERTS{alertname="BuiltinDefaultsRulePackDigestsDiffer", alertstate="firing"})
+        eval_time: 31m
+        exp_samples:
+          - labels: '{alertname="BuiltinDefaultsRulePackDigestsDiffer"}'
+            value: 1
+      - expr: count by (job, digest) (ALERTS{alertname="BuiltinDefaultsDigestMismatch", alertstate="firing"})
+        eval_time: 31m
+        exp_samples:
+          - labels: '{job="threshold-exporter", digest="0123456789ab"}'
+            value: 1
