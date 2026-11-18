@@ -33,7 +33,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, encode_json  # noqa: 
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
-from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
+from _lib_io import ensure_dir, exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#1789, #3107, #3982)
 from _lib_label import safe_label  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3751)
@@ -101,8 +101,9 @@ def _history_dir(config_dir):
     operator has to fix and the one the message names.
     """
     hdir = _history_path(config_dir)
-    with output_write(hdir, flag="--config-dir", action="create directory"):
-        hdir.mkdir(exist_ok=True)
+    # #3982: the directory entry. Not `parents=True` in effect: the parent is
+    # --config-dir's, which `snapshot` has already checked exists.
+    ensure_dir(hdir, flag="--config-dir")
     return hdir
 
 
@@ -133,9 +134,13 @@ def _save_history(config_dir, history):
     """Save history to disk."""
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
-    with output_write(history_file, flag="--config-dir", action="write"):
-        history_file.write_text(encode_json(history),
-                                encoding='utf-8', newline='\n')
+    # #3982 (owner 2026-11-18): the index this tool reads back on every run is
+    # an artifact — replaced whole, so a failed write leaves the previous index
+    # (an in-place write half way left a JSON every later run died on). 0600:
+    # it names the files and carries the operator's messages. atomic_only: in
+    # the tool's own directory a hard link is replaced, not written through.
+    write_repo_artifact(history_file, encode_json(history), flag="--config-dir",
+                        mode=0o600, atomic_only=True)
 
 
 def cmd_snapshot(config_dir, message=None):
@@ -185,15 +190,14 @@ def cmd_snapshot(config_dir, message=None):
     # Save snapshot content
     hdir = _history_dir(config_dir)
     snap_dir = hdir / f"snap-{entry['id']}"
-    with output_write(snap_dir, flag="--config-dir", action="create directory"):
-        snap_dir.mkdir(exist_ok=True)
+    ensure_dir(snap_dir, flag="--config-dir")
     for f in files:
         fp = snap_dir / f['name']
-        # A snapshot may hold sensitive config: 0o600, set by the one writer
-        # of operator-named output (#3107) — the kernel opens it, and the mode
-        # is applied to a regular file this euid owns, never through a symlink.
-        with output_write(fp, flag="--config-dir", action="write"):
-            write_operator_output(str(fp), f['content'], flag="--config-dir")
+        # #3982 (owner 2026-11-18): `show` and `diff` read the copy back, so it
+        # is an artifact — replaced whole. A snapshot may hold sensitive
+        # config: 0o600.
+        write_repo_artifact(fp, f['content'], flag="--config-dir",
+                            mode=0o600, atomic_only=True)
 
     history.append(entry)
     _save_history(config_dir, history)

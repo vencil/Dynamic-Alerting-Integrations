@@ -1450,3 +1450,61 @@ class TestReviewFollowUps:
         assert e.value.reason == 'file_unreadable'
         assert f"--config-dir {conf / 'db-a.yaml'}" in str(e.value)
         assert not (tmp_path / '.da-history').exists()
+
+
+# ── #3982 (owner 2026-11-18): the history is read back, so it is replaced whole ──
+def _history_tree(tmp_path, n):
+    """A conf.d of one small file and *n* snapshots, so history.json is the
+    largest file a snapshot writes."""
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'tools' / 'ops' / 'config_history.py'
+    confd = tmp_path / 'conf.d'
+    confd.mkdir()
+    shard = confd / 't1.yaml'
+    shard.write_text('tenants:\n  t1:\n    cpu: "80"\n', encoding='utf-8')
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('COV_CORE_', 'COVERAGE_'))}
+
+    def run(*argv, preexec=None):
+        return subprocess.run([sys.executable, str(script), '--config-dir', str(confd), *argv],
+                              capture_output=True, text=True, encoding='utf-8', timeout=120,
+                              env=env, preexec_fn=preexec)
+    for i in range(n):
+        with shard.open('a', encoding='utf-8') as fh:
+            fh.write(f'# {i}\n')
+        assert run('snapshot', '-m', f'm{i}').returncode == 0
+    return confd, shard, run
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='RLIMIT_FSIZE')
+def test_a_failed_index_write_leaves_the_previous_index_and_log_still_reads_it(tmp_path):
+    """Measured on main before #3982: the index cut at 4096 bytes, and every
+    later run — `log` included — died on JSONDecodeError."""
+    import signal
+    resource = pytest.importorskip('resource')
+    confd, shard, run = _history_tree(tmp_path, 12)
+    index = tmp_path / '.da-history' / 'history.json'
+    before = index.read_bytes()
+    assert len(before) > 4096, len(before)
+    with shard.open('a', encoding='utf-8') as fh:
+        fh.write('# last\n')
+
+    def limit():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (4096, 4096))
+
+    r = run('snapshot', '-m', 'fails', preexec=limit)
+    assert r.returncode == 2, r.stderr
+    assert 'cannot write' in r.stderr and 'history.json' in r.stderr
+    assert 'Traceback' not in r.stderr
+    assert index.read_bytes() == before
+    log = run('log')
+    assert log.returncode == 0, log.stderr
+    assert 'm11' in log.stdout
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX modes')
+def test_the_index_and_the_copies_are_0600(tmp_path):
+    import stat
+    _history_tree(tmp_path, 1)
+    hdir = tmp_path / '.da-history'
+    assert stat.S_IMODE((hdir / 'history.json').stat().st_mode) == 0o600
+    assert stat.S_IMODE((hdir / 'snap-1' / 't1.yaml').stat().st_mode) == 0o600
