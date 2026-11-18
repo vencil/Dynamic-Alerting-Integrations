@@ -75,6 +75,17 @@ def test_the_tools_own_type_runs_after_it():
     assert kind("r.json") == Path("r.json")
 
 
+@pytest.mark.parametrize("stdout", [None, "x"])
+def test_a_then_that_collapses_dot_dash_to_dash_still_names_the_file(stdout):
+    """`Path("./-")` is `Path("-")`, which the operator entry writes to
+    standard output (#3982): the file the operator named is kept by an
+    absolute name. `-` itself is untouched."""
+    kind = _lib_validation.operator_file_type(stdout=stdout, then=Path)
+    assert kind("./-") == Path(os.path.abspath("-"))
+    if stdout is None:
+        assert kind("-") == Path("-")
+
+
 def test_argparse_names_the_flag_and_exits_2(capsys):
     parser = argparse.ArgumentParser(prog="t")
     parser.add_argument("-o", "--output",
@@ -170,6 +181,17 @@ def test_dash_is_standard_output_where_nothing_else_writes_it(tool, flag, tmp_pa
     # The tool's receipts stay on stderr: stdout is the document alone.
     assert "Written to" not in proc.stdout and "Generated " not in proc.stdout, proc.stdout[-400:]
     assert list(cwd.iterdir()) == [], "a file called - was made"
+
+
+@pytest.mark.parametrize("tool,flag", list(OPERATOR_FILE_FLAGS), ids=_IDS)
+def test_dot_dash_is_a_file_called_dash(tool, flag, tmp_path, stub_url):
+    """The way out both refusals name: `./-` writes a file called `-`,
+    never standard output (a `then=Path` collapsed it to `-`, #3982)."""
+    proc, cwd = _run(tool, flag, "./-", tmp_path, stub_url)
+    assert proc.returncode in (0, 1), proc.stderr[-800:]
+    made = [p.name for p in cwd.iterdir()]
+    assert "-" in made, (made, proc.stderr[-400:])
+    assert (cwd.cwd / "-").stat().st_size > 0
 
 
 @pytest.mark.skipif(os.name != "posix", reason="fd 1 redirected to a file")
