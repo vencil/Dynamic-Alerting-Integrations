@@ -815,3 +815,51 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
+
+  # ── OraclePGALimitNotSet (#4044, info, for: 30m) ──
+  # Fires only when a database's PGA_AGGREGATE_LIMIT reads 0 AND the tenant set
+  # oracle_pga_usage_percent (otherwise OracleThresholdNotConfigured covers it).
+  #   t-a: limit 0, threshold set                → fires
+  #   t-b: limit 0, no threshold                 → no
+  #   t-c: limit 10 GiB, threshold set           → no
+  #   t-d: limit 0, threshold set, maintenance   → no
+  - interval: 1m
+    input_series:
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-a", instance="a1"}'
+        values: '0x45'
+      - series: 'user_threshold{tenant="t-a", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-b", instance="b1"}'
+        values: '0x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-c", instance="c1"}'
+        values: '10737418240x45'
+      - series: 'user_threshold{tenant="t-c", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-d", instance="d1"}'
+        values: '0x45'
+      - series: 'user_threshold{tenant="t-d", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'user_state_filter{tenant="t-d", filter="maintenance"}'
+        values: '1x45'
+    alert_rule_test:
+      - eval_time: 25m          # for: 30m not yet served
+        alertname: OraclePGALimitNotSet
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: OraclePGALimitNotSet
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: info
+              tenant: t-a
+            exp_annotations:
+              summary: "Oracle PGA_AGGREGATE_LIMIT is not set on t-a: the PGA alert stays silent"
+              summary_zh: "t-a 的 Oracle 沒有設定 PGA_AGGREGATE_LIMIT：PGA 告警不會響"
+              platform_summary: "t-a: PGA_AGGREGATE_LIMIT is 0, so oracle_pga_usage_percent has nothing to measure against"
+              platform_summary_zh: "t-a：PGA_AGGREGATE_LIMIT 為 0，oracle_pga_usage_percent 沒有可比的上限"
+              description: "A database of this tenant runs with PGA_AGGREGATE_LIMIT = 0 (no limit), so its PGA share is not computed and OracleHighPGAUsage cannot fire for it, although oracle_pga_usage_percent is set. Set PGA_AGGREGATE_LIMIT, or write \"disable\" for oracle_pga_usage_percent to end this notice."
+              description_zh: "這個租戶有資料庫的 PGA_AGGREGATE_LIMIT 為 0（沒有上限），所以不計算它的 PGA 比例，即使設了 oracle_pga_usage_percent，OracleHighPGAUsage 也不會為它而響。設定 PGA_AGGREGATE_LIMIT，或把 oracle_pga_usage_percent 寫成 \"disable\" 就會結束這則提醒。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # t-b (no threshold), t-c (limit set) and t-d (maintenance) produce NO alert.
