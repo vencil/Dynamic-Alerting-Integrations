@@ -1879,12 +1879,21 @@ def main(argv=None):
     parser.add_argument("--gap", choices=(GAP_BREAK, GAP_SKIP), default=GAP_BREAK,
                         help="what an uncounted night does to a consecutive run")
     # #3982: the rendered body is printed to stdout as well, so `-` is refused.
-    parser.add_argument("--summary-file", default=None,
-                        type=operator_file_type(stdout="this tool prints the same "
-                                                       "Markdown there", then=Path),
+    summary_type = operator_file_type(stdout="this tool prints the same "
+                                             "Markdown there", then=Path)
+    parser.add_argument("--summary-file", default=None, type=summary_type,
                         help="append the rendered Markdown here "
                              "(defaults to $GITHUB_STEP_SUMMARY when set)")
     args = parser.parse_args(argv)
+    # The variable fills the same slot, so it is held to the same type (an
+    # empty one still means "not set", as it always has).
+    if args.summary_file is None and os.environ.get("GITHUB_STEP_SUMMARY"):
+        try:
+            args.summary_from_env = summary_type(os.environ["GITHUB_STEP_SUMMARY"])
+        except argparse.ArgumentTypeError as exc:
+            parser.error(f"$GITHUB_STEP_SUMMARY: {exc}")
+    else:
+        args.summary_from_env = None
 
     # ⛔ EVERY numeric rule parameter, not just the one that was already
     # checked. `--consecutive` was validated and the two float knobs were not,
@@ -1946,7 +1955,7 @@ def main(argv=None):
     body = render(result)
     print(body)
 
-    target = args.summary_file or os.environ.get("GITHUB_STEP_SUMMARY")
+    target = args.summary_file or args.summary_from_env
     if target:
         # ⚠️ The flag is named only when the path CAME from the flag. The same
         # variable is also filled from `$GITHUB_STEP_SUMMARY`, and telling an

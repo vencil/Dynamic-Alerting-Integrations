@@ -255,3 +255,47 @@ def test_the_file_is_byte_for_byte_what_json_prints(tool, flag, tmp_path, stub_u
     assert proc.returncode in (0, 1), proc.stderr.decode("utf-8", "replace")[-800:]
     assert proc.stdout.strip(), "no --json document"
     assert target.read_bytes() == proc.stdout
+
+
+@pytest.mark.skipif(os.name != "posix", reason="symlinks")
+def test_a_dangling_link_gets_its_targets_directory_made(tmp_path, stub_url):
+    """`scan_component_health --output` made the RESOLVED parent before
+    #3982: a link to a file in a directory not made yet still works."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == ("dx/scan_component_health.py", "--output"))
+    ctx = Ctx(tmp_path, stub_url)
+    target = tmp_path / "tdir" / "sub" / "h.json"
+    link = tmp_path / "link.json"
+    os.symlink(target, link)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    proc = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *row.build(ctx, link)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=180, env=env, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert link.is_symlink() and target.stat().st_size > 0
+
+
+@pytest.mark.parametrize("value", ["-", "/dev/stdout"])
+def test_the_step_summary_variable_is_held_to_the_flags_type(value, tmp_path, stub_url):
+    """`$GITHUB_STEP_SUMMARY` fills `--summary-file`'s slot: `-` (or another
+    name of stdout) there would print the body twice, so it is refused at
+    parse time the same way, the variable named."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == ("dx/paired_trend_watch.py", "--summary-file"))
+    ctx = Ctx(tmp_path, stub_url)
+    marker = tmp_path / "@OUT@"
+    argv = row.build(ctx, marker)
+    i = argv.index(str(marker))
+    assert argv[i - 1] == "--summary-file", argv
+    argv = argv[:i - 1] + argv[i + 1:]
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+           "GITHUB_STEP_SUMMARY": value}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    proc = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *argv],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=180, env=env, cwd=tmp_path)
+    assert proc.returncode == 2, proc.stderr[-800:]
+    assert "error: $GITHUB_STEP_SUMMARY: " in proc.stderr, proc.stderr[-800:]
+    assert proc.stdout == ""
+    assert not (tmp_path / "-").exists()

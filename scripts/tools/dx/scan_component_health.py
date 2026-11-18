@@ -544,12 +544,13 @@ def main() -> "int | Report":
         # raises ValueError for both, which crashed the SUCCESS path with a
         # traceback after the file had already been written. The label is
         # the resolved path, shown absolute when it is not under the repo.
-        # #3982: the mkdir and the write take the path AS GIVEN — the
-        # operator entry judges a symlink there itself (written through, not
-        # chmodded), which a resolved path would hide from it. The mkdir is
-        # of the PARENT, the directory it actually creates.
+        # #3982: the write takes the path AS GIVEN — the operator entry
+        # judges a symlink there itself (written through, not chmodded),
+        # which a resolved path would hide from it. The mkdir is of the
+        # RESOLVED parent, as before: a dangling link's target directory is
+        # the one the write needs.
         out_path = args.output.resolve()
-        ensure_dir(args.output.parent, flag="--output")
+        ensure_dir(out_path.parent, flag="--output")
         write_operator_output(str(args.output), encode_json(data), flag="--output")
         try:
             shown: Path = out_path.relative_to(REPO)
