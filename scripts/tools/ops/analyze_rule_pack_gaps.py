@@ -130,8 +130,9 @@ def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None, a
       value of the one instant the tool runs at — the same tree answers the
       same at any hour. *at* (RFC3339; None = now) is the instant an
       ``expires:`` is judged at, the one input that depends on it (ADR-038).
-      A key counts when it is served in some part of the day
-      (`KeySchedule.served_any`). A value inherited from ``defaults:``, a
+      Which keys count is da-guard's answer, taken as given: a key served
+      in some part of the day, or time-boxed by an ``expires:`` (served
+      once it expires, perhaps — the answer holds until then). A value inherited from ``defaults:``, a
       platform ``tenants:`` block or a subtree counts, and a nested tenant
       is seen; a key switched off (``disable``) all day or with no row on
       /metrics (e.g. no default for it) does not. A part of the day /metrics
@@ -182,8 +183,7 @@ def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None, a
         refusal = ungathered_refusal(tree.ungathered)
         if refusal is not None:
             raise ServedValuesError(f"da-guard served-values: {refusal}", None, "")
-        configs = {t: {k: day for k, day in days.items() if day.served_any}
-                   for t, days in tree.tenants.items()}
+        configs = {t: dict(days) for t, days in tree.tenants.items()}
 
     return configs
 
@@ -352,27 +352,42 @@ def analyze_gaps(custom_metrics, metric_dict):
 def _value_fields(value):
     """The value fields of a result (#4027), named by where the value comes
     from: `served`, the key's whole day as /metrics serves it
-    (`KeySchedule.as_json`; `expires` beside it when an ``expires:``
-    time-boxes it, the answer holding until then), from --config-dir;
-    `written`, the value as the file writes it, from --tenant-config."""
+    (`KeySchedule.as_json`), from --config-dir — with `expires` and
+    `expired` (da-guard's verdict at --at) beside it when an ``expires:``
+    time-boxes it; `written`, the value as the file writes it, from
+    --tenant-config."""
     if isinstance(value, KeySchedule):
         out = {"served": value.as_json()}
         if value.expires is not None:
             out["expires"] = value.expires
+            out["expired"] = value.expired
         return out
     return {"written": _jsonable(value)}
 
 
+def _segment_text(seg):
+    """One segment of the day in the text report: its value as served (a
+    whole number without a fraction, `:critical` when it is that tier), or
+    why it has no row (da-guard's `reason`: `disabled`, `value_unparsed`,
+    …; `no row` when it gives none)."""
+    if seg.get("value") is None:
+        return seg.get("reason") or "no row"
+    value = seg["value"]
+    text = str(int(value)) if float(value).is_integer() else repr(value)
+    return text + ("" if seg.get("severity") == "warning" else f":{seg.get('severity')}")
+
+
 def _day_note(item):
-    """The text report's note on a served value that is not one value all
-    day, or holds only until its ``expires:`` (#4027); "" otherwise."""
+    """The text report's note (#4027): a served value that is not one value
+    all day, segment by segment; an ``expires:`` not yet past, the answer
+    holding until then (one past is history: its fallback holds on).
+    "" otherwise."""
     notes = []
     if len(item.get("served", ())) > 1:
         notes.append("scheduled: " + ", ".join(
-            f"{seg['from']}-{seg['to']} "
-            + ("disabled" if seg.get("value") is None else f"{seg['value']:g}")
+            f"{seg['from']}-{seg['to']} {safe_label(_segment_text(seg))}"
             for seg in item["served"]))
-    if item.get("expires"):
+    if item.get("expires") and item.get("expired") is False:
         notes.append(f"until {safe_label(item['expires'])}")
     return f" [{'; '.join(notes)}]" if notes else ""
 
@@ -499,6 +514,13 @@ def _main(args):
               "Pass --metric-dictionary to use one.", file=sys.stderr)
 
     # Load data
+    # #4027: --at judges an `expires:` of what /metrics serves; a single file
+    # is read as written, so it has nothing to judge. '' is given, refused
+    # (#1616), not passed on as "now".
+    if args.at is not None and (args.at == "" or config_dir is None):
+        print("ERROR: --at applies to --config-dir only and takes an RFC3339 instant "
+              "(e.g. 2026-10-10T03:00:00Z)", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     configs = load_tenant_configs(
         config_dir=config_dir,
         tenant_config=args.tenant_config,

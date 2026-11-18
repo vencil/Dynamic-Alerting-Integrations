@@ -427,14 +427,6 @@ class KeySchedule(NamedTuple):
     expires: str | None     # the time-box as written, when the exporter honours one
     expired: bool | None    # the exporter's verdict at `at`; None without a time-box
 
-    @property
-    def served_any(self) -> bool:
-        """Whether /metrics serves the key in some part of the day (#4027):
-        some segment has a row. A key every segment of which has none (a
-        `disable` default under an `expires:`, the whole day disabled) is
-        not served, though da-guard lists it."""
-        return any(seg.value is not None for seg in self.segments)
-
     def as_json(self) -> "list[dict[str, Any]]":
         """The day as a tool hands it on (#4025, #4027): da-guard's segments
         as served-values writes them, `series` left out — `{from, to, value,

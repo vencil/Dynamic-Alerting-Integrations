@@ -693,17 +693,102 @@ class TestWholeDay:
         text = _run_tool("--config-dir", tree, "--at", "2026-11-13T12:00:00Z").stdout
         assert "[until 2026-11-13T18:00:00Z]" in text, text
 
-    def test_a_key_served_at_no_minute_of_the_day_is_not_listed(self, tmp_path, da_guard_env):
-        # da-guard lists a time-boxed key even when every segment has no row
-        # (`default: disable`): it is not served, so it is not a custom_ rule.
-        tree = _tree(tmp_path, {
-            "_defaults.yaml": "defaults:\n  custom_queue_depth: 80\n",
-            "ta.yaml": ("tenants:\n  ta:\n    custom_queue_depth:\n      default: disable\n"
-                        "      expires: \"2026-11-13T18:00:00Z\"\n"),
-        })
+    _DISABLED_UNTIL = {
+        "_defaults.yaml": "defaults:\n  custom_queue_depth: 80\n",
+        "ta.yaml": ("tenants:\n  ta:\n    custom_queue_depth:\n      default: disable\n"
+                    "      expires: \"2026-11-13T18:00:00Z\"\n"),
+    }
+
+    def test_a_key_disabled_until_it_expires_is_listed_with_its_expiry(self, tmp_path,
+                                                                       da_guard_env):
+        # #4027 review: switched off until 18:00, then served (80): "no
+        # custom_ rule" would hold only until then — so it is listed, every
+        # segment without a row, the expiry named. Which keys are listed is
+        # da-guard's answer (served somewhere, or time-boxed).
+        tree = _tree(tmp_path, self._DISABLED_UNTIL)
         p = _run_tool("--config-dir", tree, "--json", "--at", "2026-11-13T12:00:00Z")
         assert p.returncode == 0, p.stderr
-        assert json.loads(p.stdout) == []
+        [row] = json.loads(p.stdout)
+        assert row["served"] == [{"from": "00:00", "to": "24:00", "value": None,
+                                  "reason": "disabled"}]
+        assert (row["expires"], row["expired"]) == ("2026-11-13T18:00:00Z", False)
+        text = _run_tool("--config-dir", tree, "--at", "2026-11-13T12:00:00Z").stdout
+        assert "[until 2026-11-13T18:00:00Z]" in text, text
+
+    def test_an_expiry_past_is_not_until(self, tmp_path, da_guard_env):
+        # #4027 review: past 18:00 the fallback (80) holds on; "until 18:00"
+        # would say the answer had already lapsed.
+        tree = _tree(tmp_path, self._DISABLED_UNTIL)
+        p = _run_tool("--config-dir", tree, "--json", "--at", "2026-11-13T19:00:00Z")
+        assert p.returncode == 0, p.stderr
+        [row] = json.loads(p.stdout)
+        assert row["served"][0]["value"] == 80.0 and row["expired"] is True
+        text = _run_tool("--config-dir", tree, "--at", "2026-11-13T19:00:00Z").stdout
+        assert "until" not in text, text
+
+    def test_a_key_switched_off_from_midnight_and_served_later_is_listed(self, tmp_path,
+                                                                        da_guard_env):
+        # #4027 review: a day whose first segment has no row is still served.
+        tree = _tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  custom_queue_depth: 80\n",
+            "ta.yaml": ("tenants:\n  ta:\n    custom_queue_depth:\n      default: \"60\"\n"
+                        "      overrides:\n        - window: \"00:00-06:00\"\n"
+                        "          value: disable\n"),
+        })
+        p = _run_tool("--config-dir", tree, "--json", "--at", "2026-11-13T03:00:00Z")
+        assert p.returncode == 0, p.stderr
+        [row] = json.loads(p.stdout)
+        assert [seg.get("value") for seg in row["served"]] == [None, 60.0]
+
+    def test_every_part_of_the_day_not_gathered_is_named(self, tmp_path, da_guard_env):
+        tree = _tree(tmp_path, {
+            "_defaults.yaml": _UNGATHERED["_defaults.yaml"],
+            "ta.yaml": _UNGATHERED["ta.yaml"] + ("        - window: \"20:00-21:00\"\n"
+                                                 "          value: \"96\"\n"),
+        })
+        p = _run_tool("--config-dir", tree, "--json")
+        assert p.returncode == 2, p.stdout + p.stderr
+        assert "01:00-01:29 UTC" in p.stderr and "20:00-21:00 UTC" in p.stderr, p.stderr
+
+    def test_the_text_report_shows_each_segment_as_served(self, tmp_path, da_guard_env):
+        # #4027 review: `:g` printed 1234567 and 1234568 alike, the tier was
+        # not shown, and a value the exporter refuses read as "disabled".
+        tree = _tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  custom_mem_bytes: 1\n",
+            "ta.yaml": ("tenants:\n  ta:\n    custom_mem_bytes:\n      default: \"1234567\"\n"
+                        "      overrides:\n        - window: \"01:00-02:00\"\n"
+                        "          value: \"1234568:critical\"\n"
+                        "        - window: \"03:00-04:00\"\n          value: disable\n"),
+        })
+        p = _run_tool("--config-dir", tree, "--at", "2026-11-13T12:00:00Z")
+        assert p.returncode == 0, p.stderr
+        assert ("[scheduled: 00:00-01:00 1234567, 01:00-02:00 1234568:critical, "
+                "02:00-03:00 1234567, 03:00-04:00 disabled, 04:00-24:00 1234567]") in p.stdout, \
+            p.stdout
+
+    def test_the_text_report_names_why_a_segment_has_no_row(self, tmp_path, da_guard_env):
+        # #4027 review: a value the exporter refuses is not a `disable`.
+        tree = _tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  custom_foo: 1\n",
+            "ta.yaml": ("tenants:\n  ta:\n    custom_foo_critical:\n      default: \"95\"\n"
+                        "      overrides:\n        - window: \"01:00-02:00\"\n"
+                        "          value: \"-Inf\"\n"),
+        })
+        p = _run_tool("--config-dir", tree, "--at", "2026-11-13T12:00:00Z")
+        assert p.returncode == 0, p.stderr
+        assert ("[scheduled: 00:00-01:00 95:critical, 01:00-02:00 value_non_finite, "
+                "02:00-24:00 95:critical]") in p.stdout, p.stdout
+
+    @pytest.mark.parametrize("argv", [
+        ("--tenant-config", "{t}/ta.yaml", "--at", "2026-11-13T12:00:00Z"),
+        ("--config-dir", "{t}", "--at", ""),
+    ], ids=["with-tenant-config", "empty"])
+    def test_at_outside_its_use_is_refused(self, tmp_path, da_guard_env, argv):
+        # #4027 review: ignored beside --tenant-config, '' taken as "now".
+        tree = _tree(tmp_path, _SCHEDULED)
+        p = _run_tool(*(a.format(t=tree) for a in argv), "--json")
+        assert p.returncode == 2, p.stdout + p.stderr
+        assert p.stdout == "" and "--at applies to --config-dir only" in p.stderr, p.stderr
 
     def test_the_text_report_marks_a_scheduled_key(self, tmp_path, da_guard_env):
         tree = _tree(tmp_path, _SCHEDULED)

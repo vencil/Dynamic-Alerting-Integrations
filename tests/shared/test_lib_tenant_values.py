@@ -1421,8 +1421,36 @@ def test_key_schedule_as_json_mirrors_da_guards_segments():
         {"from": "12:00", "to": "13:00", "value": None},
         {"from": "13:00", "to": "24:00", "error": "cannot be gathered"},
     ]
-    assert day.served_any
-    assert not tv.KeySchedule([day.segments[1]], None, None).served_any
+
+
+def test_key_schedule_as_json_is_da_guards_segments_without_series(tmp_path):
+    # #4027 review: a hand-written expectation cannot see a field Go adds.
+    # Differential: da-guard's own segments, `series` left out, are what
+    # `as_json` gives — a field Go adds turns this red until it is carried.
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import _lib_tenant_values as tv
+    (tmp_path / "_defaults.yaml").write_text(
+        "defaults:\n  custom_q: 80\n  custom_r: 5\n", encoding="utf-8")
+    (tmp_path / "ta.yaml").write_text(
+        "tenants:\n  ta:\n    custom_q:\n      default: \"60\"\n      overrides:\n"
+        "        - window: \"01:00-02:00\"\n          value: disable\n"
+        "        - window: \"03:00-04:00\"\n          value: \"70:critical\"\n"
+        "        - window: \"05:00-06:00\"\n          value: abc\n"
+        "    custom_r:\n      default: disable\n      expires: \"2099-01-01T00:00:00Z\"\n",
+        encoding="utf-8")
+    at = "2026-11-13T12:00:00Z"
+    raw = _json.loads(_sp.run(
+        [_os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir", str(tmp_path),
+         "--schedules-only", "--at", at], capture_output=True, text=True, encoding="utf-8",
+        check=True, timeout=120).stdout)["tenants"]["ta"]["schedules"]
+    got = tv.load_served_schedules(tmp_path, at=at).tenants["ta"]
+    assert set(got) == set(raw)
+    for key, day in got.items():
+        want = [{k: v for k, v in seg.items() if k != "series"} for seg in raw[key]["segments"]]
+        assert day.as_json() == want, key
+    assert {"reason"} <= {k for seg in raw["custom_q"]["segments"] for k in seg}
 
 
 def test_ungathered_refusal_names_every_part():
