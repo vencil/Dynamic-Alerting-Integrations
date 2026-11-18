@@ -79,6 +79,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_consumer_read import CRDECODE_ENV  # noqa: E402  (the env-name register, #3424)
 from _lib_io import (  # noqa: E402  (#1789)
+    ensure_dir,  # #3982
     OutputWriteError,
     exit_on_output_write_error,
     output_write,
@@ -544,8 +545,7 @@ def _cr_id(cr: dict) -> str:
 def _make_config_dir(config_dir: Path) -> None:
     """Create --config-dir (da-guard writes into an existing root only)."""
     # #1789: the wrapper is given the directory this mkdir creates.
-    with output_write(config_dir, flag="--config-dir", action="create directory"):
-        config_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(config_dir, flag="--config-dir")  # #3982: the directory entry
 
 
 def write_rendered(

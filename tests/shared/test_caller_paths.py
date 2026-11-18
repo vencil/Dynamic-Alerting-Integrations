@@ -241,6 +241,13 @@ OPS_SITES = [
     ("onboard --scrape-config", "onboard_platform.py",
      ["--scrape-config", "{F}", "--output-dir", "{BOX}/onboard-sc", "--json"],
      "--scrape-config", None),
+    # #4040: rule files da-read read by path; the text is read once now.
+    ("rule-pack-diff --from", "rule_pack_diff.py", ["--from", "{F}", "--to", "{RP}/rule-pack-mariadb.yaml"],
+     "--from", None),
+    ("rule-pack-diff --to", "rule_pack_diff.py",
+     ["--from", "{RP}/rule-pack-mariadb.yaml", "--to", "{F}"], "--to", None),
+    ("migrate input_file", "migrate_rule.py", ["{F}", "-o", "{BOX}/migrate-out", "--dry-run"],
+     None, None),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -1583,7 +1590,7 @@ def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_d
                 why.append(f"rc {proc.returncode}")
             if "Traceback" in out or "unexpected internal error" in out:
                 why.append("a crash")
-            if f"{flag} {given}:" not in proc.stderr:
+            if f"{_named(flag, given)}:" not in proc.stderr:
                 why.append("the flag and the path not named on stderr")
             elif (says := _CSV_SAYS.get(case if not case.startswith("form_") else "form_")) \
                     and says not in proc.stderr:
@@ -1611,7 +1618,7 @@ def test_a_declared_document_given_as_empty_is_refused_not_skipped(tmp_path, dec
         subst = {**_document_subst(case_dir), "{F}": ""}
         proc = _run_ops(script.split("/", 1)[1], [_expand(a, subst) for a in argv],
                         under=script.split("/", 1)[0])
-        if proc.returncode != 2 or f"{flag} '': " not in proc.stderr:
+        if proc.returncode != 2 or f"{_named(flag, chr(39) * 2)}: " not in proc.stderr:
             faults.append(f"{rid}: rc {proc.returncode}: {(proc.stdout + proc.stderr)[-400:]}")
     assert not faults, "\n".join(faults)
 
@@ -1646,11 +1653,14 @@ JUDGED_DOCUMENTS = {
     "generate-routes --policy": ("yaml", dict, None, (), ()),
     "grafana-import --dashboard": ("json", dict, None, (), ()),
     "lint --policy": ("yaml", dict, dict, (), ()),
+    "migrate input_file": ("text", str, None, (), ()),
     "migrate-credentials --policy": ("yaml", dict, None, (), ()),
     "offboard --state": ("text", str, None, (), ()),
     "onboard --alertmanager-config": ("text", str, None, (), ()),
     "onboard --scrape-config": ("text", str, None, (), ()),
     "operator-check --secret-mounts": ("json", dict, None, (), ()),
+    "rule-pack-diff --from": ("text", str, None, (), ()),
+    "rule-pack-diff --to": ("text", str, None, (), ()),
     "runtime-audit --runtime-json": ("json", dict, None, (), ()),
     "scaffold --from-onboard": ("json", dict, None, (), ()),
     "shadow-verify --mapping": ("yaml", dict, None, (), ()),

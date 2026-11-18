@@ -70,7 +70,8 @@ from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noq
 # The query seam tests replace (the lib's raising reader).
 query_prometheus = prometheus_instant
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
+from _lib_io import ensure_dir, exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107, #3982)
+from _lib_validation import output_dir_type  # noqa: E402  (#3982)
 
 # 「佔上限的 %」有上界：佔 limit 的 % 到 100 就 OOMKill（memory）或被 CFS 節流（CPU），
 # 佔 max_connections 的 % 到 100 就拒絕新連線（#3778）。
@@ -272,6 +273,7 @@ def main():
     parser.add_argument("--metrics", default=None,
                         help="觀測指標（逗號分隔，預設: 全部）")
     parser.add_argument("-o", "--output-dir", default="baseline_output",
+                        type=output_dir_type(),  # #3982: `-` names no directory
                         help="輸出目錄（預設: baseline_output）")
     parser.add_argument("--dry-run", action="store_true",
                         help="僅顯示要觀測的指標，不實際採樣")
@@ -409,9 +411,7 @@ def main():
     # text-mode open that translates "\n" (Windows) would put "\r\r\n" on
     # disk. write_operator_output opens with newline="\n", so the writer's
     # terminators reach disk verbatim.
-    with output_write(args.output_dir, flag="-o/--output-dir",
-                      action="create directory"):
-        os.makedirs(args.output_dir, exist_ok=True)
+    ensure_dir(args.output_dir, flag="-o/--output-dir")  # #3982: the directory entry
 
     def _write_csv_secure(path: str, body_with_bom: str) -> None:
         # #1789: the `with` lives INSIDE this helper, not around its two call

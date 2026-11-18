@@ -70,10 +70,10 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, encode_
 import _lib_input  # noqa: E402  (#3446: which state files --state-dir selects)
 from _lib_paths import classify_path  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
+    ensure_dir,  # #3982
     OutputWriteError,
     check_repo_artifact,
     exit_on_output_write_error,
-    output_write,
     write_repo_artifact,
 )
 
@@ -393,9 +393,7 @@ def reconcile(
             # sentence about a path nobody was creating (worked example in
             # `_lib_io.output_write`). The ancestor rule still converts the
             # failure, and the write below keeps naming the file.
-            with output_write(manifest_path.parent, flag="--manifest-path",
-                              action="create directory"):
-                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_dir(manifest_path.parent, flag="--manifest-path")  # #3982: the directory entry
             write_json(manifest_path, new_manifest, flag="--manifest-path")
         report["manifest_change"] = {
             "old_state_count": (

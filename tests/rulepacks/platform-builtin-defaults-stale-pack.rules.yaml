@@ -1,0 +1,11 @@
+# A stale copy of the platform pack's digest recording rule, from a registry
+# whose built-in table is the made-up "aaaaaaaaaaaa" — the second pack
+# version platform-builtin-defaults-two-packs_test.yaml loads beside the real
+# one (#3831).
+groups:
+  - name: builtin-defaults-alignment-stale-copy
+    rules:
+      - record: rule_pack_builtin_defaults_info
+        expr: vector(1)
+        labels:
+          rulepack_digest: "aaaaaaaaaaaa"

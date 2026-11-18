@@ -1765,9 +1765,6 @@ Key = tuple[str, str]
 #: are, and a second call beside it is a second line. Emptied by the
 #: migration to the two classes (#3107 steps ①–③).
 VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
-    ("dx/generate_changelog.py", "-o/--output"): ("scripts/tools/dx/generate_changelog.py:main write_text_or_die ×1",),
-    ("dx/waveform_compile.py", "--out"): ("scripts/tools/dx/waveform_compile.py:_compile_one write_text_or_die ×1",),
-    ("dx/waveform_score.py", "--out"): ("scripts/tools/dx/waveform_score.py:main write_text_secure ×1",),
 }
 
 #: Rows with a write under the output path that came through NO entry: each
@@ -1778,7 +1775,6 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
     ("../ops/audit_rules_drift.py", "--out"): ("some", ("os.mkdir .",)),
     ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
     ("dx/describe_tenant.py", "-o/--output"): ("all", ("open tenants.json",)),
-    ("dx/generate_tenant_fixture.py", "-o/--output"): ("all", ("os.mkdir conf.d",)),
     ("dx/generate_tenant_metadata.py", "--output"): ("some", ("os.mkdir .",)),
     ("dx/migrate_conf_d.py", "-o/--output-plan"): ("all", ("open migration-plan.json",)),
     ("dx/pair_bench_ratio.py", "--out"): ("all", ("open bench-paired.json", "os.mkdir .")),
@@ -1790,14 +1786,10 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
     ("dx/scan_component_health.py", "--output"): (
         "all", ("open component-health.json", "os.mkdir .")),
     ("lint/trufflehog_to_sarif.py", "--output"): ("all", ("open trufflehog.sarif",)),
-    ("ops/assemble_config_dir.py", "--output"): ("all", ("os.mkdir out",)),
-    ("ops/baseline_discovery.py", "-o/--output-dir"): ("some", ("os.mkdir out",)),
     ("ops/config_history.py", "--config-dir"): (
         "some", ("open .da-history/history.json", "os.mkdir .da-history",
                  "os.mkdir .da-history/snap-1")),
-    ("ops/da_assembler.py", "--config-dir"): ("all", ("os.mkdir out",)),
     ("ops/migrate_credentials.py", "--manifests-out"): ("some", ("os.mkdir secrets",)),
-    ("ops/state_reconcile.py", "--manifest-path"): ("some", ("os.mkdir .",)),
 }
 
 #: Rows whose output came through the entry of the OTHER class than the row
@@ -3381,8 +3373,15 @@ class TestTheLists:
         # One direction only — see SPAWNS for why.
         assert _list_faults(row, Seen([], (), (), False, None, ())) == []
 
-    def test_a_listed_row_that_is_clean_now_must_come_off(self):
-        """Each list, on its own first entry: clean ⇒ red."""
+    def test_a_listed_row_that_is_clean_now_must_come_off(self, monkeypatch):
+        """Each list, on its own first entry: clean ⇒ red. A list the
+        migration has emptied (#3107 ③c: VIA_OLD_NAMES) still has its
+        judgement until ④ removes the old names: it is held on a synthetic
+        entry."""
+        synthetic = ("dx/zz_synthetic.py", "--out")
+        if not VIA_OLD_NAMES:
+            monkeypatch.setitem(VIA_OLD_NAMES, synthetic,
+                                ("scripts/tools/dx/zz_synthetic.py:main write_text_or_die ×1",))
         for key in (sorted(VIA_OLD_NAMES)[0], sorted(RAW_UNDER_OUT)[0],
                     sorted(VIA_OTHER_CLASS)[0]):
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
@@ -3585,7 +3584,7 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
            "pin LF, a name it looks for in other files and never calls."),
     ("ops/_registry_lib.py", "write_repo_artifact"): (
-        5, "handed to `_write_or_stop` as its `write` argument for the generated "
+        6, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),

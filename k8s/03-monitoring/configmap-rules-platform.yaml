@@ -912,4 +912,53 @@ data:
     \ stop is worse than fail-available 0:0 for\n\n        your environment. See platform-log-aggregation-runbook\
     \ §8.9.3.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector projection-gate init-container is stuck (crash loop / image\
-    \ pull) — DaemonSet rollout wedged in {{ $labels.namespace }}\n"
+    \ pull) — DaemonSet rollout wedged in {{ $labels.namespace }}\n- name: builtin-defaults-alignment\n\
+    \  rules:\n  - record: rule_pack_builtin_defaults_info\n    expr: vector(1)\n\
+    \    labels:\n      rulepack_digest: 522437716e2a\n  - alert: BuiltinDefaultsDigestMismatch\n\
+    \    expr: \"(\\n  max by (job, digest) (da_config_builtin_defaults_info{job=\\\
+    \"threshold-exporter\\\"})\\n  or max by (job, digest) (tenant_api_builtin_defaults_info{job=\\\
+    \"tenant-api\\\"})\\n  or label_replace(\\n    max by (job) (\\n      (up{job=\\\
+    \"threshold-exporter\\\"} == 1 unless on (job, instance) da_config_builtin_defaults_info)\\\
+    n      or (up{job=\\\"tenant-api\\\"} == 1 unless on (job, instance) tenant_api_builtin_defaults_info)\\\
+    n    ),\\n    \\\"digest\\\", \\\"none\\\", \\\"\\\", \\\"\\\"\\n  )\\n)\\nunless\
+    \ on (digest)\\nlabel_replace(rule_pack_builtin_defaults_info, \\\"digest\\\"\
+    , \\\"$1\\\", \\\"rulepack_digest\\\", \\\"(.*)\\\")\\n\"\n    for: 30m\n    labels:\n\
+    \      alert_source: platform\n      severity: warning\n    annotations:\n   \
+    \   description: '{{ $labels.job }} has served the built-in defaults table\n\n\
+    \        {{ $labels.digest }} for 30 minutes (on at least one of its\n\n     \
+    \   instances); the platform rule pack was generated from the\n\n        threshold\
+    \ registry whose table is {{ with query \"rule_pack_builtin_defaults_info\" }}{{\
+    \ range . }}{{ .Labels.rulepack_digest }} {{ end }}{{ end }}.\n\n        digest=\"\
+    none\" means an instance serves no digest series: a release\n\n        older than\
+    \ the built-in layer, which gives no default-armed\n\n        threshold a value\
+    \ unless conf.d writes it.\n\n        Which side is newer decides what goes wrong\
+    \ (#3832 decision 5):\n\n        rule packs newer than the threshold-exporter\
+    \ — a newly\n\n        default-armed threshold has no value, so its alert never\
+    \ fires;\n\n        threshold-exporter newer than the rule packs — it serves rows\
+    \ no\n\n        rule reads, and recalibrated values are read by the old rules.\n\
+    \n        For tenant-api, compare with the threshold-exporter''s digest too\n\n\
+    \        (da_config_builtin_defaults_info): tenant-api newer than the\n\n    \
+    \    exporter — a write that relies on the built-in layer passes\n\n        tenant-api''s\
+    \ check while the exporter serves no row for it;\n\n        tenant-api older —\
+    \ it may refuse a write the exporter would serve.\n\n        Upgrade the threshold-exporter,\
+    \ tenant-api and the rule packs\n\n        until every digest is the same; `da-guard\
+    \ effective` (da-tools)\n\n        prints the digest of the table it was built\
+    \ with. Do not remove\n\n        the copies of the platform values from conf.d\
+    \ (the migration\n\n        command) while this fires.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \      summary: '{{ $labels.job }} built-in defaults table {{ $labels.digest }}\
+    \ differs from the platform rule pack''s {{ with query \"rule_pack_builtin_defaults_info\"\
+    \ }}{{ range . }}{{ .Labels.rulepack_digest }} {{ end }}{{ end }}'\n  - alert:\
+    \ BuiltinDefaultsRulePackDigestsDiffer\n    expr: count(count by (rulepack_digest)\
+    \ (rule_pack_builtin_defaults_info)) > 1\n    for: 30m\n    labels:\n      alert_source:\
+    \ platform\n      severity: warning\n    annotations:\n      description: 'This\
+    \ Prometheus evaluates {{ $value }} copies of the platform rule\n\n        pack\
+    \ generated from different threshold registries (digests:\n\n        {{ with query\
+    \ \"rule_pack_builtin_defaults_info\" }}{{ range . }}{{ .Labels.rulepack_digest\
+    \ }} {{ end }}{{ end }}).\n\n        Their rules disagree on which thresholds\
+    \ are default-armed and\n\n        at what value, and BuiltinDefaultsDigestMismatch\
+    \ stays silent for\n\n        a component that matches either copy. Remove the\
+    \ stale copy\n\n        (an old configmap-rules-platform ConfigMap or PrometheusRule).\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \      summary: '{{ $value }} platform rule pack versions with different built-in\
+    \ defaults tables are loaded'\n"
