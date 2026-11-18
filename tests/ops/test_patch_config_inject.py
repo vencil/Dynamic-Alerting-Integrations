@@ -12,6 +12,7 @@ from unittest import mock
 
 import pytest
 
+import _lib_exitcodes  # noqa: E402
 import patch_config as pc  # noqa: E402
 from _patch_config_fake import MIRROR, FakeCluster, run_main  # noqa: E402
 
@@ -35,17 +36,29 @@ MODULE_FNS = ["_kubectl_patch", "_rv_of", "written_files", "config_hash",
               "_read_key", "_read_cm", "parse_metrics", "verify_pod",
               "_conclude", "_send_rollback",
               "_wait_rolled_back", "_observed_fallback",
-              "_say", "_emit", "_apply_envelope", "encode_json",
+              "_say", "_emit", "_apply_envelope",
               "_status_exit_code", "_outcome", "_answer"]
+# The answer is written by _lib_exitcodes.run, through its one encoder (#3216):
+# patch_config never held encode_json, so it was listed here under the wrong
+# owner and every one of its rows skipped (#4046).
+EXITCODES_FNS = ["encode_json"]
 EXPORTER_FNS = ["wait_served", "wait_moved", "snapshot", "consistent", "identity",
                 "probe", "last_reload", "get"]
 SIGNAL_FNS = ["cause", "ignore", "checkpoint"]
 OUTPUT_FNS = {"_say", "_emit", "_apply_envelope", "encode_json",
               "_answer"}
 TARGETS = ([("module", f) for f in MODULE_FNS] + [("Exporter", f) for f in EXPORTER_FNS]
-           + [("_Signals", f) for f in SIGNAL_FNS])
+           + [("_Signals", f) for f in SIGNAL_FNS]
+           + [("_lib_exitcodes", f) for f in EXITCODES_FNS])
+OWNERS = {"module": pc, "Exporter": pc.Exporter, "_Signals": pc._Signals,
+          "_lib_exitcodes": _lib_exitcodes}
 EXCS = {"RuntimeError": RuntimeError, "MemoryError": MemoryError,
         "KeyboardInterrupt": KeyboardInterrupt}
+#: Targets that run only after `_emit` set SIGINT / SIGTERM to SIG_IGN: no
+#: signal reaches them, so a KeyboardInterrupt there is not a case (#4046).
+AFTER_SIGNALS_IGNORED = {("_lib_exitcodes", "encode_json")}
+CASES = [(t, e) for t in TARGETS for e in EXCS
+         if not (e == "KeyboardInterrupt" and t in AFTER_SIGNALS_IGNORED)]
 
 
 @pytest.fixture(autouse=True)
@@ -54,11 +67,39 @@ def _signals_reset():
     pc.SIGNALS.reset()
 
 
+def test_signals_are_ignored_before_the_answer_is_encoded():
+    """What AFTER_SIGNALS_IGNORED stands on: `_emit` sets SIG_IGN before it
+    hands run() the document run() encodes."""
+    import signal
+    seen = []
+    real = _lib_exitcodes.encode_json
+
+    def spy(doc):
+        seen.append((signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)))
+        return real(doc)
+    cluster = FakeCluster(dict(SCENARIOS["applied"][0]))
+    argv = ["patch_config.py", "--json", "t-a", "mysql_connections", SCENARIOS["applied"][2], *FAST]
+    with mock.patch("patch_config.run_cmd", side_effect=cluster), mock.patch("sys.argv", argv), \
+            contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+            mock.patch.object(_lib_exitcodes, "encode_json", spy):
+        try:
+            run_main()
+        except SystemExit:
+            pass
+    assert seen and all(s == (signal.SIG_IGN, signal.SIG_IGN) for s in seen), seen
+
+
+def test_every_target_exists():
+    """#4046: a name that is not there was a skip, so a misspelt or renamed
+    target turned its rows into rows that measure nothing, still green."""
+    missing = [f"{where}.{name}" for where, name in TARGETS
+               if not callable(getattr(OWNERS[where], name, None))]
+    assert not missing, missing
+
+
 def _inject(where, name, nth, exc_type, sticky):
-    owner = {"module": pc, "Exporter": pc.Exporter, "_Signals": pc._Signals}[where]
-    real = getattr(owner, name, None)
-    if real is None:
-        pytest.skip(f"{name} does not exist in this version")
+    owner = OWNERS[where]
+    real = getattr(owner, name)   # test_every_target_exists names a missing one
     calls = {"n": 0}
 
     def wrapper(*a, **k):
@@ -101,10 +142,10 @@ def _judge(scenario, cluster, outcome, out, target):
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS)
-@pytest.mark.parametrize("exc_name", EXCS)
 @pytest.mark.parametrize("nth", [1, 2, 3])
 @pytest.mark.parametrize("sticky", [False, True], ids=["once", "from-then-on"])
-@pytest.mark.parametrize("target", TARGETS, ids=[f"{w}.{n}" for w, n in TARGETS])
+@pytest.mark.parametrize("target, exc_name", CASES,
+                         ids=[f"{w}.{n}-{e}" for (w, n), e in CASES])
 def test_the_answer_follows_the_configmap(scenario, exc_name, nth, sticky, target):
     data, key, value, _ = SCENARIOS[scenario]
     cluster = FakeCluster(dict(data), **FAKE_KW.get(scenario, {}))
