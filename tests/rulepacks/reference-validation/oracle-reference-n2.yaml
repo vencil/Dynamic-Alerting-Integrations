@@ -123,6 +123,14 @@ signatures:
     must_detect: true
     metric: oracledb_process_count
     metric_kind: gauge
+    # #1320：PROCESSES 940。描述說新連線出現 ORA-00020「或」OS 層 fork 失敗；ORA-00020
+    # 表示 process 數已達 PROCESSES，所以上限取峰值本身。若實際先撞到的是 OS 上限、
+    # PROCESSES 設得比它高很多，比例會偏低而漏抓——那是比例形式的盲點，這筆波形不涵蓋。
+    companion_series:
+      - metric: oracledb_processes_limit
+        role: denominator
+        metric_kind: gauge
+        level: 940
     shape_class: ramp
     fault_class: pq-process-leak
     min_value: 0

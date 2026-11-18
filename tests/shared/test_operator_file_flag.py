@@ -25,12 +25,20 @@ from pathlib import Path
 import pytest
 
 import _lib_validation
+from _platform_fs import symlink_or_skip
 from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx, stub_url  # noqa: F401
 
 #: (tool, flag) → whether `-` is refused (the tool's stdout has another owner).
 OPERATOR_FILE_FLAGS: dict[tuple[str, str], bool] = {
+    ("dx/describe_tenant.py", "-o/--output"): False,
     ("dx/generate_changelog.py", "-o/--output"): False,
+    ("dx/migrate_conf_d.py", "-o/--output-plan"): True,
+    ("dx/pair_bench_ratio.py", "--out"): True,
+    ("dx/paired_trend_watch.py", "--summary-file"): True,
+    ("dx/render_soak_diff.py", "--output"): False,
+    ("dx/scan_component_health.py", "--output"): True,
     ("dx/waveform_score.py", "--out"): True,
+    ("lint/trufflehog_to_sarif.py", "--output"): True,
     ("ops/analyze_rule_pack_gaps.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "-o/--output"): True,
     ("ops/backtest_threshold.py", "--markdown-output"): True,
@@ -66,6 +74,17 @@ def test_an_empty_value_is_refused_with_or_without_an_owner():
 def test_the_tools_own_type_runs_after_it():
     kind = _lib_validation.operator_file_type(then=Path)
     assert kind("r.json") == Path("r.json")
+
+
+@pytest.mark.parametrize("stdout", [None, "x"])
+def test_a_then_that_collapses_dot_dash_to_dash_still_names_the_file(stdout):
+    """`Path("./-")` is `Path("-")`, which the operator entry writes to
+    standard output (#3982): the file the operator named is kept by an
+    absolute name. `-` itself is untouched."""
+    kind = _lib_validation.operator_file_type(stdout=stdout, then=Path)
+    assert kind("./-") == Path(os.path.abspath("-"))
+    if stdout is None:
+        assert kind("-") == Path("-")
 
 
 def test_argparse_names_the_flag_and_exits_2(capsys):
@@ -165,6 +184,17 @@ def test_dash_is_standard_output_where_nothing_else_writes_it(tool, flag, tmp_pa
     assert list(cwd.iterdir()) == [], "a file called - was made"
 
 
+@pytest.mark.parametrize("tool,flag", list(OPERATOR_FILE_FLAGS), ids=_IDS)
+def test_dot_dash_is_a_file_called_dash(tool, flag, tmp_path, stub_url):
+    """The way out both refusals name: `./-` writes a file called `-`,
+    never standard output (a `then=Path` collapsed it to `-`, #3982)."""
+    proc, cwd = _run(tool, flag, "./-", tmp_path, stub_url)
+    assert proc.returncode in (0, 1), proc.stderr[-800:]
+    made = [p.name for p in cwd.iterdir()]
+    assert "-" in made, (made, proc.stderr[-400:])
+    assert (cwd.cwd / "-").stat().st_size > 0
+
+
 @pytest.mark.skipif(os.name != "posix", reason="fd 1 redirected to a file")
 @pytest.mark.parametrize("tool,flag", [k for k, v in OPERATOR_FILE_FLAGS.items() if v],
                          ids=[i for i, v in zip(_IDS, OPERATOR_FILE_FLAGS.values()) if v])
@@ -226,3 +256,46 @@ def test_the_file_is_byte_for_byte_what_json_prints(tool, flag, tmp_path, stub_u
     assert proc.returncode in (0, 1), proc.stderr.decode("utf-8", "replace")[-800:]
     assert proc.stdout.strip(), "no --json document"
     assert target.read_bytes() == proc.stdout
+
+
+def test_a_dangling_link_gets_its_targets_directory_made(tmp_path, stub_url):
+    """`scan_component_health --output` made the RESOLVED parent before
+    #3982: a link to a file in a directory not made yet still works."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == ("dx/scan_component_health.py", "--output"))
+    ctx = Ctx(tmp_path, stub_url)
+    target = tmp_path / "tdir" / "sub" / "h.json"
+    link = tmp_path / "link.json"
+    symlink_or_skip(target, link)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    proc = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *row.build(ctx, link)],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=180, env=env, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert link.is_symlink() and target.stat().st_size > 0
+
+
+@pytest.mark.parametrize("value", ["-", "/dev/stdout"])
+def test_the_step_summary_variable_is_held_to_the_flags_type(value, tmp_path, stub_url):
+    """`$GITHUB_STEP_SUMMARY` fills `--summary-file`'s slot: `-` (or another
+    name of stdout) there would print the body twice, so it is refused at
+    parse time the same way, the variable named."""
+    row = next(r for r in ROWS if (r.tool, r.flag) == ("dx/paired_trend_watch.py", "--summary-file"))
+    ctx = Ctx(tmp_path, stub_url)
+    marker = tmp_path / "@OUT@"
+    argv = row.build(ctx, marker)
+    i = argv.index(str(marker))
+    assert argv[i - 1] == "--summary-file", argv
+    argv = argv[:i - 1] + argv[i + 1:]
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+           "GITHUB_STEP_SUMMARY": value}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    proc = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *argv],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          timeout=180, env=env, cwd=tmp_path)
+    assert proc.returncode == 2, proc.stderr[-800:]
+    assert "error: $GITHUB_STEP_SUMMARY: " in proc.stderr, proc.stderr[-800:]
+    assert proc.stdout == ""
+    assert not (tmp_path / "-").exists()

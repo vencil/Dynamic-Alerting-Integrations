@@ -42,8 +42,9 @@ import yaml
 # which lives in scripts/tools/ beside _lib_io (#3107).
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
-from _lib_atomic_write import atomic_write_text  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import (  # noqa: E402  (#2128; #3982: the operator entry)
+    ensure_dir, exit_on_output_write_error, targets_stdout, write_operator_output)
+from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
 # Make stdout tolerate non-ASCII on legacy Windows consoles.
 if hasattr(sys.stdout, "reconfigure"):
@@ -453,9 +454,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     ap.add_argument(
         "--out",
-        type=Path,
+        # #3982 (owner 2026-11-18): an operator output — written in place,
+        # 0600, `-` is stdout (nothing else prints there: the receipt is on
+        # stderr).
+        type=operator_file_type(then=Path),
         default=None,
-        help="report 輸出路徑（預設 docs/internal/audit-reports/rules-drift-YYYY-MM.md）",
+        help="report 輸出路徑（預設 docs/internal/audit-reports/rules-drift-YYYY-MM.md；- 為 stdout）",
     )
     ap.add_argument("--stdout", action="store_true", help="只印到 stdout，不寫檔")
     args = ap.parse_args(argv)
@@ -491,11 +495,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     # #2128: a failure ends at rc 2 with one line naming the report, and the
     # flag is named only when the operator actually gave --out.
     flag = "--out" if args.out is not None else None
-    with output_write(out.parent, flag=flag, action="create directory"):
-        out.parent.mkdir(parents=True, exist_ok=True)
-    with output_write(out, flag=flag):
-        atomic_write_text(out, report, flag=flag)
-    sys.stdout.write(f"wrote drift report: {_display_path(out)}\n")
+    to_stdout = targets_stdout(str(out))
+    if not to_stdout:
+        ensure_dir(out.parent, flag=flag)
+    write_operator_output(str(out), report, flag=flag)
+    # stderr: with `--out -` stdout carries the report alone (#3982).
+    if not to_stdout:
+        sys.stderr.write(f"wrote drift report: {_display_path(out)}\n")
     if not memory_available:
         sys.stderr.write(
             "note: memory 目錄不存在，feedback 檢查已跳過（CI 環境正常；"

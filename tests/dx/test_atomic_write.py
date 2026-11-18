@@ -638,10 +638,11 @@ def test_regen_tools_expose_safe_flag():
 
 def test_generate_tenant_metadata_uses_the_shared_helper():
     """#2128: one implementation. The #2082 writer that lived in
-    generate_tenant_metadata must not come back as a second copy."""
+    generate_tenant_metadata must not come back as a second copy. #3982:
+    it reaches the helper through the artifact entry."""
     src = (_REPO_ROOT / "scripts" / "tools" / "dx" / "generate_tenant_metadata.py").read_text(
         encoding="utf-8")
-    assert "from _lib_atomic_write import atomic_write_text" in src
+    assert "write_repo_artifact(args.output" in src
     for gone in ("def atomic_replace_output", "def _try_atomic", "def _xattr_mismatch",
                  "tempfile.mkstemp"):
         assert gone not in src, gone

@@ -46,9 +46,12 @@ from _lib_python import (  # noqa: E402
 from _lib_io import write_operator_output_or_die  # noqa: E402  (#3107 ③b)
 from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 from _lib_tenant_values import (  # noqa: E402  (#2115)
+    KeySchedule,
+    ServedValuesError,
     exit_on_served_values_error,
-    load_served_tree,
+    load_served_schedules,
     print_load_warnings,
+    ungathered_refusal,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report, json_file_text  # noqa: E402
 
@@ -118,15 +121,23 @@ def _jsonable(value):
     return value
 
 
-def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None):
+def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None, at=None):
     """Load tenant configs from directory or single file.
 
-    - Directory branch (#2115): the threshold keys the exporter's /metrics
-      serves per tenant, with the served value (``da-guard served-values``).
-      A value inherited from ``defaults:``, a platform ``tenants:`` block or
-      a subtree counts, and a nested tenant is seen; a key switched off
-      (``disable``) or with no row on /metrics (e.g. no default for it) does
-      not. A file the load serves no tenant from (no ``tenants:`` mapping)
+    - Directory branch (#2115, #4027): the threshold keys the exporter's
+      /metrics serves per tenant over the whole UTC day, each a
+      `KeySchedule` (``da-guard served-values --schedules-only``), never the
+      value of the one instant the tool runs at — the same tree answers the
+      same at any hour. *at* (RFC3339; None = now) is the instant an
+      ``expires:`` is judged at, the one input that depends on it (ADR-038).
+      Which keys count is da-guard's answer, taken as given: a key served
+      in some part of the day, or time-boxed by an ``expires:`` (served
+      once it expires, perhaps — the answer holds until then). A value inherited from ``defaults:``, a
+      platform ``tenants:`` block or a subtree counts, and a nested tenant
+      is seen; a key switched off (``disable``) all day or with no row on
+      /metrics (e.g. no default for it) does not. A part of the day /metrics
+      cannot be gathered in raises `ServedValuesError` naming it
+      (`ungathered_refusal`): what a key is there is not known. A file the load serves no tenant from (no ``tenants:`` mapping)
       is named on stderr, not read as a tenant; whatever da-guard prints on
       stderr is passed on line by line, each behind ``DA_GUARD_PREFIX``.
       da-guard missing or failing, or a file the load cannot decode, raises
@@ -147,7 +158,9 @@ def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None):
       YamlFileError naming it; no usable da-guard raises
       `_lib_parse_tree.ParseTreeError` (the CLI exits 2 either way).
 
-    Returns dict: {tenant_name: {metric_key: value, ...}}
+    Returns dict: {tenant_name: {metric_key: value, ...}}, a value a
+    `KeySchedule` in the directory branch and the value as written in the
+    single-file branch.
     """
     configs = {}
 
@@ -165,10 +178,12 @@ def load_tenant_configs(config_dir=None, tenant_config=None, tenant_text=None):
             name = os.path.splitext(os.path.basename(tenant_config))[0]
             configs[name] = data
     elif config_dir:
-        tree = load_served_tree(config_dir)
+        tree = load_served_schedules(config_dir, at=at)
         print_load_warnings(tree)
-        configs = {t: {k: served.values[k] for k in served.severities}
-                   for t, served in tree.tenants.items()}
+        refusal = ungathered_refusal(tree.ungathered)
+        if refusal is not None:
+            raise ServedValuesError(f"da-guard served-values: {refusal}", None, "")
+        configs = {t: dict(days) for t, days in tree.tenants.items()}
 
     return configs
 
@@ -323,7 +338,7 @@ def analyze_gaps(custom_metrics, metric_dict):
             "tenant": cm["tenant"],
             "custom_metric": cm["metric_key"],
             "original_metric": original,
-            "current_value": _jsonable(cm["value"]),
+            **_value_fields(cm["value"]),
             "best_match_pack": best_match["pack"] if best_match else None,
             "golden_name": best_match.get("golden_name") if best_match else None,
             "confidence": round(confidence, 2),
@@ -332,6 +347,49 @@ def analyze_gaps(custom_metrics, metric_dict):
         })
 
     return results
+
+
+def _value_fields(value):
+    """The value fields of a result (#4027), named by where the value comes
+    from: `served`, the key's whole day as /metrics serves it
+    (`KeySchedule.as_json`), from --config-dir — with `expires` and
+    `expired` (da-guard's verdict at --at) beside it when an ``expires:``
+    time-boxes it; `written`, the value as the file writes it, from
+    --tenant-config."""
+    if isinstance(value, KeySchedule):
+        out = {"served": value.as_json()}
+        if value.expires is not None:
+            out["expires"] = value.expires
+            out["expired"] = value.expired
+        return out
+    return {"written": _jsonable(value)}
+
+
+def _segment_text(seg):
+    """One segment of the day in the text report: its value as served (a
+    whole number without a fraction, `:critical` when it is that tier), or
+    why it has no row (da-guard's `reason`: `disabled`, `value_unparsed`,
+    …; `no row` when it gives none)."""
+    if seg.get("value") is None:
+        return seg.get("reason") or "no row"
+    value = seg["value"]
+    text = str(int(value)) if float(value).is_integer() else repr(value)
+    return text + ("" if seg.get("severity") == "warning" else f":{seg.get('severity')}")
+
+
+def _day_note(item):
+    """The text report's note (#4027): a served value that is not one value
+    all day, segment by segment; an ``expires:`` not yet past, the answer
+    holding until then (one past is history: its fallback holds on).
+    "" otherwise."""
+    notes = []
+    if len(item.get("served", ())) > 1:
+        notes.append("scheduled: " + ", ".join(
+            f"{seg['from']}-{seg['to']} {safe_label(_segment_text(seg))}"
+            for seg in item["served"]))
+    if item.get("expires") and item.get("expired") is False:
+        notes.append(f"until {safe_label(item['expires'])}")
+    return f" [{'; '.join(notes)}]" if notes else ""
 
 
 def print_report(results):
@@ -372,7 +430,7 @@ def print_report(results):
             mt = item["match_type"]
             print(f"    {safe_label(item['custom_metric'])} -> "
                   f"{safe_label(item.get('golden_name', '?'))} "
-                  f"({safe_label(mt)}, {conf:.0%})")
+                  f"({safe_label(mt)}, {conf:.0%}){_day_note(item)}")
         print()
 
     # Actionable recommendations
@@ -418,6 +476,11 @@ def main():
         "--json", action="store_true",
         help="Output JSON only",
     )
+    parser.add_argument(
+        "--at", default=None, metavar="RFC3339",
+        help="--config-dir: the instant an `expires:` is judged at (default: now); "
+             "the rest is read over the whole UTC day. da-guard judges the value",
+    )
     args = parser.parse_args()
     # One reader of --config-dir for the run: the one `declared_trees` judged.
     with _lib_parse_cache.session():
@@ -451,10 +514,20 @@ def _main(args):
               "Pass --metric-dictionary to use one.", file=sys.stderr)
 
     # Load data
+    # #4027: --at judges an `expires:` of what /metrics serves; a single file
+    # is read as written, so it has nothing to judge — and with both inputs
+    # the single file is the one read. '' is given, refused (#1616), not
+    # passed on as "now".
+    if args.at is not None and (args.at == "" or config_dir is None
+                                or args.tenant_config is not None):
+        print("ERROR: --at applies to --config-dir only and takes an RFC3339 instant "
+              "(e.g. 2026-10-10T03:00:00Z)", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     configs = load_tenant_configs(
         config_dir=config_dir,
         tenant_config=args.tenant_config,
         tenant_text=tenant_text,
+        at=args.at,
     )
     custom_metrics = extract_custom_metrics(configs)
     metric_dict = (metric_lookup(dictionary) if dictionary is not None

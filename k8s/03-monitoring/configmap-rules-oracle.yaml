@@ -18,13 +18,15 @@ data:
     \ (oracledb_sessions_active)\n  - record: tenant:oracle_tablespace_used_percent:max\n\
     \    expr: max by(tenant) (oracledb_tablespace_used_percent)\n  - record: tenant:oracle_wait_time:rate5m\n\
     \    expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))\n  - record:\
-    \ tenant:oracle_process_count:max\n    expr: max by(tenant) (oracledb_process_count)\n\
-    \  - record: tenant:oracle_pga_allocated_bytes:max\n    expr: max by(tenant) (oracledb_pga_allocated_bytes)\n\
-    \  - record: tenant:oracle_session_utilization:ratio\n    expr: \"max by(tenant)\
-    \ (\\n  oracledb_sessions_current / (oracledb_sessions_limit > 0)\\n)\\n\"\n-\
-    \ name: oracle-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
-    \ tenant:alert_threshold:oracle_sessions_active\n    expr: max by(tenant) (user_threshold{component=\"\
-    oracle\", metric=\"sessions_active\", severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_sessions_active_critical\n\
+    \ tenant:oracle_process_usage:percent\n    expr: \"max by(tenant) (\\n  100 *\
+    \ oracledb_process_count\\n  / (oracledb_processes_limit > 0)\\n)\\n\"\n  - record:\
+    \ tenant:oracle_pga_usage:percent\n    expr: \"max by(tenant) (\\n  100 * oracledb_pga_allocated_bytes\\\
+    n  / (oracledb_pga_aggregate_limit_bytes > 0)\\n)\\n\"\n  - record: tenant:oracle_session_utilization:ratio\n\
+    \    expr: \"max by(tenant) (\\n  oracledb_sessions_current / (oracledb_sessions_limit\
+    \ > 0)\\n)\\n\"\n- name: oracle-threshold-normalization\n  interval: 15s\n  rules:\n\
+    \  - record: tenant:alert_threshold:oracle_sessions_active\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"oracle\", metric=\"sessions_active\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:oracle_sessions_active_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"sessions_active\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:oracle_tablespace_used_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"tablespace_used_percent\"\
@@ -32,10 +34,10 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"tablespace_used_percent\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:oracle_wait_time_rate\n\
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"wait_time_rate\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_process_count\n\
-    \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"process_count\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_pga_allocated_bytes\n\
-    \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"pga_allocated_bytes\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_process_usage_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"process_usage_percent\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_pga_usage_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"pga_usage_percent\"\
     , severity=\"warning\"})\n"
   oracle-alert.yml: "groups:\n- name: oracle-alerts\n  rules:\n  - alert: OracleDatabaseDown\n\
     \    expr: \"max by(tenant, instance) (\\n  changes(query_timestamp{job=\\\"tenant-exporters\\\
@@ -199,43 +201,46 @@ data:
     \ }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle 等待時間過高'\n      tier: '{{\
     \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: OracleHighProcessCount\n\
-    \    expr: \"(\\n  tenant:oracle_process_count:max\\n  > on(tenant) group_left\\\
-    n  tenant:alert_threshold:oracle_process_count\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: '{{ $value | printf \"%.0f\" }} active processes'\n      description_zh:\
-    \ '{{ $value | printf \"%.0f\" }} 個活動 process'\n      owner: '{{ with query (printf\
+    \    expr: \"(\\n  tenant:oracle_process_usage:percent\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:oracle_process_usage_percent\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
+    \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: 'Processes: {{ $value | printf \"\
+    %.1f\" }}% of the PROCESSES limit'\n      description_zh: Process 數：PROCESSES\
+    \ 上限的 {{ $value | printf \"%.1f\" }}%\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle processes near the PROCESSES\
+    \ limit — capacity review'\n      platform_summary_zh: '[{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
-    \ Oracle process count high — resource review'\n      platform_summary_zh: '[{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}：Oracle process 數過高 — 資源審查'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle process\
+    \ 數逼近 PROCESSES 上限 — 容量審查'\n      runbook_url: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
-    \ }}{{ end }}{{ end }}'\n      summary: Oracle high process count on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle process 數過高'\n      tier:\
+    \ }}{{ end }}{{ end }}'\n      summary: Oracle processes approaching the PROCESSES\
+    \ limit on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle\
+    \ process 數逼近 PROCESSES 上限'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: OracleHighPGAUsage\n    expr: \"(\\n  tenant:oracle_pga_usage:percent\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:oracle_pga_usage_percent\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 10m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'PGA\
+    \ allocated: {{ $value | printf \"%.1f\" }}% of PGA_AGGREGATE_LIMIT'\n      description_zh:\
+    \ 配置的 PGA：PGA_AGGREGATE_LIMIT 的 {{ $value | printf \"%.1f\" }}%\n      owner:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: OracleHighPGAUsage\n\
-    \    expr: \"(\\n  tenant:oracle_pga_allocated_bytes:max\\n  > on(tenant) group_left\\\
-    n  tenant:alert_threshold:oracle_pga_allocated_bytes\\n)\\nunless on(tenant)\\\
-    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 10m\n   \
-    \ labels:\n      maintenance: mute\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: 'PGA allocated: {{\
-    \ $value | humanize1024 }}B'\n      description_zh: 配置的 PGA：{{ $value | humanize1024\
-    \ }}B\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: Oracle PGA usage high — memory sizing review'\n      platform_summary_zh:\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}：Oracle PGA 使用率過高 — 記憶體大小調整審查'\n      runbook_url: '{{ with query (printf\
-    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: Oracle high\
-    \ PGA usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上\
-    \ Oracle PGA 使用率過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ }}: Oracle PGA near PGA_AGGREGATE_LIMIT — sessions are terminated past it'\n\
+    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}：Oracle PGA 逼近 PGA_AGGREGATE_LIMIT — 超過時會終止 session'\n \
+    \     runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Oracle PGA approaching PGA_AGGREGATE_LIMIT on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle PGA 逼近 PGA_AGGREGATE_LIMIT'\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: OracleHighSessionUtilization\n    expr: 'tenant:oracle_session_utilization:ratio\
     \ > 0.85\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\

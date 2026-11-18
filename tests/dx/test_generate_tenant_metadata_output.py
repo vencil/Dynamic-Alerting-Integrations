@@ -554,11 +554,20 @@ class TestNoRegressionVsInPlace:
             os.umask(old_umask)
         assert stat.S_IMODE(out.stat().st_mode) == 0o644
 
+    def test_a_missing_parent_directory_is_made(self, monkeypatch, confd, tmp_path):
+        """`--output new/dir/meta.json`: the parent is made (`ensure_dir`),
+        as the `mkdir -p` before #3982 did."""
+        out = tmp_path / "new" / "dir" / "meta.json"
+        assert _run(monkeypatch, confd, out) == 0
+        assert "acme" in json.loads(out.read_text(encoding="utf-8"))["tenant_metadata"]
+
     def test_a_directory_as_output_is_still_rc2_named(self, monkeypatch, confd, tmp_path, capsys):
         out = tmp_path / "meta.json"
         out.mkdir()
         assert _run(monkeypatch, confd, out) == 2
-        assert f"ERROR: cannot write {out}: {DIR_WRITE_STRERROR}" in capsys.readouterr().err
+        # #3982: the artifact entry refuses it before the write, by kind.
+        assert f"ERROR: cannot write {out}: not a regular file — check the value " \
+               "given to --output" in capsys.readouterr().err
 
 
 class TestSameResultAsInPlace:
@@ -844,24 +853,38 @@ class TestSameResultAsInPlace:
                              f"(errno 13) — check the value given to --output"]
 
     @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
-    def test_a_fifo_output_stays_a_fifo_and_the_reader_gets_json(
-        self, monkeypatch, confd, tmp_path,
+    @pytest.mark.parametrize("check", [False, True], ids=["write", "check"])
+    def test_a_fifo_output_is_refused_before_it_is_opened(
+        self, monkeypatch, confd, tmp_path, capsys, check,
     ):
+        """#3982 (owner 2026-11-18): `--output` is an artifact — replaced
+        whole, so a stream is not one (#2082 wrote into it in place). Refused
+        before the write and before `--check` reads it: nothing blocks on a
+        FIFO with no reader. Leave --output out to get the JSON on stdout."""
         import threading
-
         out = tmp_path / "meta.fifo"
         os.mkfifo(out)
-        got: list[bytes] = []
-        reader = threading.Thread(target=lambda: got.append(out.read_bytes()), daemon=True)
-        reader.start()
+        # A guard, not part of the behaviour: if the tool DID open the FIFO
+        # (the refusal gone), give it a writer that closes at once, so the
+        # run ends and the assertions below fail instead of the test hanging.
+        done = threading.Event()
 
-        rc = _run(monkeypatch, confd, out)
-        reader.join(timeout=10)
-
-        assert rc == 0
-        assert not reader.is_alive(), "the writer never opened the FIFO"
+        def unblock():
+            # Every read the tool might make (`--check` reads twice). O_RDWR
+            # never blocks on a FIFO (Linux); its close is the EOF.
+            wait = 10
+            while not done.wait(wait):
+                os.close(os.open(out, os.O_RDWR))
+                wait = 1
+        threading.Thread(target=unblock, daemon=True).start()
+        try:
+            rc = _run(monkeypatch, confd, out, *(["--check"] if check else []))
+        finally:
+            done.set()
+        assert rc == 2
+        assert f"ERROR: cannot write {out}: not a regular file — check the value " \
+               "given to --output" in capsys.readouterr().err
         assert stat.S_ISFIFO(os.stat(out).st_mode)
-        assert "acme" in json.loads(got[0])["tenant_metadata"]
 
     @pytest.mark.parametrize("code", [errno.ENOSPC, errno.EIO])
     def test_a_failing_fsync_does_not_replace(self, monkeypatch, confd, tmp_path, capsys, code):
@@ -952,9 +975,13 @@ class TestCheckOnDamagedOutput:
 
         assert rc == 2, err
         assert "Traceback" not in err
+        assert "outdated" not in err
+        if kind == "directory":
+            # #3982: the artifact entry's precheck, before the read.
+            assert f"ERROR: cannot write {out}: not a regular file" in err
+            return
         assert f"ERROR: {out} is damaged:" in err
         assert "Regenerate it by re-running without --check" in err
-        assert "outdated" not in err
 
     def test_the_file_a_failed_write_used_to_leave_is_reported_damaged(
         self, monkeypatch, confd, tmp_path, capsys,

@@ -228,42 +228,81 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="oracle", metric="wait_time_rate", severity="warning"}'
         values: '1x48'
 
-      # Process count: 350 > 300 warning; db-d 100 < 300.
+      # Process usage, % of PROCESSES (#1320): 900/1000 = 90 > 85 (db-a/c).
+      # db-b runs two exporters: 300/2000 = 15 and 450/500 = 90, so the share is
+      # taken per exporter before the max (90 fires); summing first reads
+      # 750/2500 = 30 and goes red. db-d 400/1000 = 40 stays under, and its second
+      # exporter reads PROCESSES as 0: without the `> 0` guard 50/0 = +Inf wins the
+      # max and db-d fires.
       - series: 'oracledb_process_count{tenant="db-a"}'
-        values: '350x48'
-      - series: 'oracledb_process_count{tenant="db-b"}'
-        values: '350x48'
+        values: '900x48'
+      - series: 'oracledb_processes_limit{tenant="db-a"}'
+        values: '1000x48'
+      - series: 'oracledb_process_count{tenant="db-b", instance="b1"}'
+        values: '300x48'
+      - series: 'oracledb_processes_limit{tenant="db-b", instance="b1"}'
+        values: '2000x48'
+      - series: 'oracledb_process_count{tenant="db-b", instance="b2"}'
+        values: '450x48'
+      - series: 'oracledb_processes_limit{tenant="db-b", instance="b2"}'
+        values: '500x48'
       - series: 'oracledb_process_count{tenant="db-c"}'
-        values: '350x48'
-      - series: 'oracledb_process_count{tenant="db-d"}'
-        values: '100x48'
-      - series: 'user_threshold{tenant="db-a", component="oracle", metric="process_count", severity="warning"}'
-        values: '300x48'
-      - series: 'user_threshold{tenant="db-b", component="oracle", metric="process_count", severity="warning"}'
-        values: '300x48'
-      - series: 'user_threshold{tenant="db-c", component="oracle", metric="process_count", severity="warning"}'
-        values: '300x48'
-      - series: 'user_threshold{tenant="db-d", component="oracle", metric="process_count", severity="warning"}'
-        values: '300x48'
+        values: '900x48'
+      - series: 'oracledb_processes_limit{tenant="db-c"}'
+        values: '1000x48'
+      - series: 'oracledb_process_count{tenant="db-d", instance="d1"}'
+        values: '400x48'
+      - series: 'oracledb_processes_limit{tenant="db-d", instance="d1"}'
+        values: '1000x48'
+      - series: 'oracledb_process_count{tenant="db-d", instance="d2"}'
+        values: '50x48'
+      - series: 'oracledb_processes_limit{tenant="db-d", instance="d2"}'
+        values: '0x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="process_usage_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="process_usage_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="process_usage_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="process_usage_percent", severity="warning"}'
+        values: '85x48'
 
-      # PGA allocated: 5 GiB (5368709120) > 4 GiB threshold; db-d 2 GiB. Exact powers of
-      # two keep humanize1024's %.4g rendering unambiguous ("5Gi").
+      # PGA usage, % of PGA_AGGREGATE_LIMIT (#1320): 9 GiB / 10 GiB = 90 > 85
+      # (db-a/c). db-b: 1 GiB / 20 GiB = 5 and 9 GiB / 10 GiB = 90 on two exporters
+      # (summing first reads 10/30 = 33 and goes red). db-d: 2 GiB / 10 GiB = 20,
+      # and a second exporter with no limit set (0): without the guard it is +Inf.
       - series: 'oracledb_pga_allocated_bytes{tenant="db-a"}'
-        values: '5368709120x48'
-      - series: 'oracledb_pga_allocated_bytes{tenant="db-b"}'
-        values: '5368709120x48'
+        values: '9663676416x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-a"}'
+        values: '10737418240x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-b", instance="b1"}'
+        values: '1073741824x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-b", instance="b1"}'
+        values: '21474836480x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-b", instance="b2"}'
+        values: '9663676416x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-b", instance="b2"}'
+        values: '10737418240x48'
       - series: 'oracledb_pga_allocated_bytes{tenant="db-c"}'
-        values: '5368709120x48'
-      - series: 'oracledb_pga_allocated_bytes{tenant="db-d"}'
+        values: '9663676416x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-c"}'
+        values: '10737418240x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-d", instance="d1"}'
         values: '2147483648x48'
-      - series: 'user_threshold{tenant="db-a", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
-        values: '4294967296x48'
-      - series: 'user_threshold{tenant="db-b", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
-        values: '4294967296x48'
-      - series: 'user_threshold{tenant="db-c", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
-        values: '4294967296x48'
-      - series: 'user_threshold{tenant="db-d", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
-        values: '4294967296x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-d", instance="d1"}'
+        values: '10737418240x48'
+      - series: 'oracledb_pga_allocated_bytes{tenant="db-d", instance="d2"}'
+        values: '5368709120x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-d", instance="d2"}'
+        values: '0x48'
+      - series: 'user_threshold{tenant="db-a", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-b", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-c", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x48'
+      - series: 'user_threshold{tenant="db-d", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x48'
 
       # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
       # has NO tenant_metadata_info. Only the bare arm's hand-copied
@@ -286,13 +325,17 @@ tests:
       - series: 'user_threshold{tenant="db-e", component="oracle", metric="wait_time_rate", severity="warning"}'
         values: '1x48'
       - series: 'oracledb_process_count{tenant="db-e"}'
-        values: '350x48'
-      - series: 'user_threshold{tenant="db-e", component="oracle", metric="process_count", severity="warning"}'
-        values: '300x48'
+        values: '900x48'
+      - series: 'oracledb_processes_limit{tenant="db-e"}'
+        values: '1000x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="process_usage_percent", severity="warning"}'
+        values: '85x48'
       - series: 'oracledb_pga_allocated_bytes{tenant="db-e"}'
-        values: '5368709120x48'
-      - series: 'user_threshold{tenant="db-e", component="oracle", metric="pga_allocated_bytes", severity="warning"}'
-        values: '4294967296x48'
+        values: '9663676416x48'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="db-e"}'
+        values: '10737418240x48'
+      - series: 'user_threshold{tenant="db-e", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x48'
 
     alert_rule_test:
       # ── OracleHighActiveSessions (for: 5m) ──
@@ -425,12 +468,12 @@ tests:
               severity: warning
               tenant: db-a
             exp_annotations:
-              summary: "Oracle high process count on db-a"
-              summary_zh: "db-a 上 Oracle process 數過高"
-              platform_summary: "[gold] db-a: Oracle process count high — resource review"
-              platform_summary_zh: "[gold] db-a：Oracle process 數過高 — 資源審查"
-              description: "350 active processes"
-              description_zh: "350 個活動 process"
+              summary: "Oracle processes approaching the PROCESSES limit on db-a"
+              summary_zh: "db-a 上 Oracle process 數逼近 PROCESSES 上限"
+              platform_summary: "[gold] db-a: Oracle processes near the PROCESSES limit — capacity review"
+              platform_summary_zh: "[gold] db-a：Oracle process 數逼近 PROCESSES 上限 — 容量審查"
+              description: "Processes: 90.0% of the PROCESSES limit"
+              description_zh: "Process 數：PROCESSES 上限的 90.0%"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -439,16 +482,16 @@ tests:
               severity: warning
               tenant: db-b
             exp_annotations:
-              summary: "Oracle high process count on db-b"
-              summary_zh: "db-b 上 Oracle process 數過高"
-              platform_summary: "[] db-b: Oracle process count high — resource review"
-              platform_summary_zh: "[] db-b：Oracle process 數過高 — 資源審查"
-              description: "350 active processes"
-              description_zh: "350 個活動 process"
+              summary: "Oracle processes approaching the PROCESSES limit on db-b"
+              summary_zh: "db-b 上 Oracle process 數逼近 PROCESSES 上限"
+              platform_summary: "[] db-b: Oracle processes near the PROCESSES limit — capacity review"
+              platform_summary_zh: "[] db-b：Oracle process 數逼近 PROCESSES 上限 — 容量審查"
+              description: "Processes: 90.0% of the PROCESSES limit"
+              description_zh: "Process 數：PROCESSES 上限的 90.0%"
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (40 < 85; its 0-limit exporter dropped) produce NO alert.
 
       # ── OracleHighPGAUsage (for: 10m — longer debounce window) ──
       - eval_time: 6m           # 5m-alerts already fire here, but the 10m one must NOT yet
@@ -462,12 +505,12 @@ tests:
               severity: warning
               tenant: db-a
             exp_annotations:
-              summary: "Oracle high PGA usage on db-a"
-              summary_zh: "db-a 上 Oracle PGA 使用率過高"
-              platform_summary: "[gold] db-a: Oracle PGA usage high — memory sizing review"
-              platform_summary_zh: "[gold] db-a：Oracle PGA 使用率過高 — 記憶體大小調整審查"
-              description: "PGA allocated: 5GiB"
-              description_zh: "配置的 PGA：5GiB"
+              summary: "Oracle PGA approaching PGA_AGGREGATE_LIMIT on db-a"
+              summary_zh: "db-a 上 Oracle PGA 逼近 PGA_AGGREGATE_LIMIT"
+              platform_summary: "[gold] db-a: Oracle PGA near PGA_AGGREGATE_LIMIT — sessions are terminated past it"
+              platform_summary_zh: "[gold] db-a：Oracle PGA 逼近 PGA_AGGREGATE_LIMIT — 超過時會終止 session"
+              description: "PGA allocated: 90.0% of PGA_AGGREGATE_LIMIT"
+              description_zh: "配置的 PGA：PGA_AGGREGATE_LIMIT 的 90.0%"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -476,16 +519,16 @@ tests:
               severity: warning
               tenant: db-b
             exp_annotations:
-              summary: "Oracle high PGA usage on db-b"
-              summary_zh: "db-b 上 Oracle PGA 使用率過高"
-              platform_summary: "[] db-b: Oracle PGA usage high — memory sizing review"
-              platform_summary_zh: "[] db-b：Oracle PGA 使用率過高 — 記憶體大小調整審查"
-              description: "PGA allocated: 5GiB"
-              description_zh: "配置的 PGA：5GiB"
+              summary: "Oracle PGA approaching PGA_AGGREGATE_LIMIT on db-b"
+              summary_zh: "db-b 上 Oracle PGA 逼近 PGA_AGGREGATE_LIMIT"
+              platform_summary: "[] db-b: Oracle PGA near PGA_AGGREGATE_LIMIT — sessions are terminated past it"
+              platform_summary_zh: "[] db-b：Oracle PGA 逼近 PGA_AGGREGATE_LIMIT — 超過時會終止 session"
+              description: "PGA allocated: 90.0% of PGA_AGGREGATE_LIMIT"
+              description_zh: "配置的 PGA：PGA_AGGREGATE_LIMIT 的 90.0%"
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (2 GiB < 4 GiB) produce NO alert.
+        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (20 < 85; its 0-limit exporter dropped) produce NO alert.
 
       # ── OracleHighSessionUtilization (for: 5m, hardcoded ratio > 0.85) ──
       # $value is the RAW ratio (here 250/250 = 1.0); the description renders it via

@@ -26,7 +26,7 @@ defaults:
   mysql_connections: 100
 optional_overrides:
   - db2_log_usage_percent
-  - oracle_process_count
+  - oracle_pga_usage_percent
 `), &cfg); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

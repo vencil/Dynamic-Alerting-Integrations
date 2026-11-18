@@ -13,6 +13,7 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 	{"es_heap_usage_percent", 85},
 	{"mysql_connection_usage_percent", 80},
 	{"mysql_replication_lag", 30},
+	{"oracle_process_usage_percent", 85},
 	{"oracle_tablespace_used_percent", 85},
 	{"pg_connections", 80},
 	{"pg_replication_lag", 30},
@@ -21,4 +22,4 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 
 // builtinDefaultsDigest names this table: the first 12 hex digits of the
 // SHA-256 of its `key=value` lines, sorted by key.
-const builtinDefaultsDigest = "63343e1d88e9"
+const builtinDefaultsDigest = "522437716e2a"

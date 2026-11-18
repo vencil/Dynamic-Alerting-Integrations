@@ -1,0 +1,40 @@
+# promtool unit test — the shipped default of oracle_process_usage_percent.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-oracle.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # 800 of PROCESSES 1000 (80 %) for 10m, then 900 (90 %).
+      - series: 'oracledb_process_count{tenant="t-armed", instance="db-0"}'
+        values: '800x40 900x40'
+      - series: 'oracledb_processes_limit{tenant="t-armed", instance="db-0"}'
+        values: '1000x81'
+      - series: 'user_threshold{tenant="t-armed", component="oracle", metric="process_usage_percent", severity="warning"}'
+        values: '85x81'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="OracleHighProcessCount"})
+        eval_time: 8m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="OracleHighProcessCount"})
+        eval_time: 12m
+        exp_samples:
+          - labels: '{alertname="OracleHighProcessCount", tenant="t-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="OracleHighProcessCount"})
+        eval_time: 12m
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="OracleHighProcessCount"})
+        eval_time: 17m
+        exp_samples:
+          - labels: '{alertname="OracleHighProcessCount", tenant="t-armed"}'
+            value: 1

@@ -1339,8 +1339,13 @@ def write_repo_artifact(path: Any, content: str, *, flag: Optional[str] = None,
     atomic_write_text(p, content, mode=mode, flag=flag, atomic_only=atomic_only)
 
 
-def ensure_dir(path: Any, *, flag: Optional[str] = None) -> None:
+def ensure_dir(path: Any, *, flag: Optional[str] = None, mode: int = 0o777) -> None:
     """``mkdir -p`` *path*, raising :class:`OutputWriteError` on failure.
+
+    *mode* (#3982): the leaf directory's permission bits before the umask,
+    as ``os.makedirs(..., mode=)`` — a directory that will hold secrets
+    passes ``0o700``. Parents it creates get the default, and an existing
+    directory is left as it is.
 
     #1641. Output-directory tools create the directory themselves before the
     first secure write, and ``os.makedirs(..., exist_ok=True)`` raises the
@@ -1357,7 +1362,7 @@ def ensure_dir(path: Any, *, flag: Optional[str] = None) -> None:
         exc = FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), "")
         raise OutputWriteError(path, exc, flag=flag, action="create directory") from exc
     try:
-        Path(path).mkdir(parents=True, exist_ok=True)
+        Path(path).mkdir(mode=mode, parents=True, exist_ok=True)
     except OSError as exc:
         raise OutputWriteError(path, exc, flag=flag, action="create directory") from exc
 
@@ -1367,10 +1372,11 @@ def ensure_dir_or_die(
     *,
     flag: Optional[str] = None,
     exit_code: Optional[int] = None,
+    mode: int = 0o777,
 ) -> None:
     """:func:`ensure_dir`, but an unusable path ends the process (rc=2)."""
     try:
-        ensure_dir(path, flag=flag)
+        ensure_dir(path, flag=flag, mode=mode)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
 

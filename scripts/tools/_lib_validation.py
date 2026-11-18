@@ -267,6 +267,20 @@ def url_list_type(*, empty: str, separator: str = ",") -> UrlArg:
     return UrlArg(empty, separator)
 
 
+def _then_keeping_the_file(then: Any, value: str) -> Any:
+    """*then* applied to *value*, so that a value which is not ``-`` never
+    comes back as ``-``: ``Path("./-")`` is ``Path("-")``, which the output
+    entries read as standard output — the way out both refusals of ``-``
+    name. The same file, by a name no *then* collapses (#3982)."""
+    if then is None:
+        return value
+    result = then(value)
+    if value != "-" and isinstance(result, (str, os.PathLike)) \
+            and os.fspath(result) == "-":
+        result = then(os.path.abspath(value))
+    return result
+
+
 class OutputDirArg:
     """An argparse ``type=`` made by :func:`output_dir_type` (#3107).
 
@@ -329,7 +343,7 @@ class ArtifactFileArg:
                 "'-' is standard output, and this flag names a file that is "
                 "replaced whole, never a stream (to write a file of that "
                 "name, pass ./-)")
-        return self.then(value) if self.then is not None else value
+        return _then_keeping_the_file(self.then, value)
 
 
 def artifact_file_type(*, then: Any = None) -> ArtifactFileArg:
@@ -384,7 +398,7 @@ class OperatorFileArg:
                 raise argparse.ArgumentTypeError(
                     f"{value!r} is this run's standard output, and "
                     f"{self.stdout}; name another file")
-        return self.then(value) if self.then is not None else value
+        return _then_keeping_the_file(self.then, value)
 
 
 def operator_file_type(*, stdout: Optional[str] = None,

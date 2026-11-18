@@ -1178,7 +1178,7 @@ def test_the_declared_tier_is_deprecated_with_the_valued_one(tmp_path):
     root.mkdir()
     _write(root, "_defaults.yaml",
            "defaults:\n  cpu_usage: 80\n  mem_usage: 90\n"
-           "optional_overrides:\n- cpu_usage\n- oracle_process_count\n")
+           "optional_overrides:\n- cpu_usage\n- oracle_pga_usage_percent\n")
 
     r = _run(root, "--execute")
 
@@ -1186,7 +1186,7 @@ def test_the_declared_tier_is_deprecated_with_the_valued_one(tmp_path):
     assert "optional_overrides" in r.stdout, r.stdout
     data = yaml.safe_load((root / "_defaults.yaml").read_text(encoding="utf-8"))
     assert data["defaults"] == {"mem_usage": 90}, data
-    assert data["optional_overrides"] == ["oracle_process_count"], data
+    assert data["optional_overrides"] == ["oracle_pga_usage_percent"], data
 
 
 def test_a_declared_only_carrier_empties_the_list_rather_than_leaving_it(
@@ -1264,7 +1264,7 @@ def test_a_declared_only_carrier_does_not_grow_an_empty_defaults_block(
     root = tmp_path / "conf.d"
     root.mkdir()
     _write(root, "_defaults.yaml",
-           "# hdr\noptional_overrides:\n- cpu_usage\n- oracle_process_count\n")
+           "# hdr\noptional_overrides:\n- cpu_usage\n- oracle_pga_usage_percent\n")
 
     r = _run(root, "--execute")
 
@@ -1272,7 +1272,7 @@ def test_a_declared_only_carrier_does_not_grow_an_empty_defaults_block(
     text = (root / "_defaults.yaml").read_text(encoding="utf-8")
     assert "defaults" not in text, text
     assert yaml.safe_load(text) == {
-        "optional_overrides": ["oracle_process_count"]}, text
+        "optional_overrides": ["oracle_pga_usage_percent"]}, text
 
 
 # ===================================================================

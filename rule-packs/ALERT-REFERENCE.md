@@ -206,8 +206,8 @@ lang: zh
 | OracleTablespaceAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_tablespace_used_percent:max |
 | OracleTablespaceAlmostFullCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: Oracle tablespace almost out of space  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_tablespace_used_percent:max |
 | OracleHighWaitTime | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle wait time elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_wait_time:rate5m |
-| OracleHighProcessCount | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle process count high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_process_count:max |
-| OracleHighPGAUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle PGA usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_pga_allocated_bytes:max |
+| OracleHighProcessCount | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle processes near the PROCESSES limit  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_process_usage:percent |
+| OracleHighPGAUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle PGA near PGA_AGGREGATE_LIMIT  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_pga_usage:percent |
 | OracleHighSessionUtilization | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle session limit approaching  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_session_utilization:ratio |
 | OracleThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 

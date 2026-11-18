@@ -16,10 +16,11 @@
 #
 # One exporter per database: the tenant comes from the scrape (the pod's
 # namespace), so one exporter must not serve two tenants' databases.
-# RAC: v$session and v$parameter are per instance, so an exporter sees only
-# the instance its DSN reaches. Run one exporter per instance (each DSN pinned
-# to its instance, same tenant namespace); the session ratio is taken per
-# exporter before the max, so a saturated instance is not diluted by the others.
+# RAC: v$session, v$process, v$pgastat and v$parameter are per instance, so an
+# exporter sees only the instance its DSN reaches. Run one exporter per instance
+# (each DSN pinned to its instance, same tenant namespace); the session, process
+# and PGA shares are taken per exporter before the max, so a saturated instance
+# is not diluted by the others.
 #
 # Every query has a `timeout` below its interval, and oracle_liveness stays the
 # FIRST query with the LARGEST timeout (all checked). With the default
@@ -76,11 +77,25 @@ metrics:
     expiration: 2m
   oracledb_process_count:
     type: gauge
-    description: Rows in v$process.
+    description: >-
+      Rows in v$process the container connected to can see: in the CDB root or a
+      non-CDB every process of the instance; in a PDB fewer (its own and the
+      instance-wide ones), so the share of PROCESSES is a lower bound there.
+    expiration: 2m
+  oracledb_processes_limit:
+    type: gauge
+    description: The PROCESSES parameter (v$parameter), an instance-wide limit.
     expiration: 2m
   oracledb_pga_allocated_bytes:
     type: gauge
-    description: v$pgastat "total PGA allocated", bytes.
+    description: v$pgastat "total PGA allocated", bytes, as the container connected to sees it.
+    expiration: 2m
+  oracledb_pga_aggregate_limit_bytes:
+    type: gauge
+    description: >-
+      The PGA_AGGREGATE_LIMIT parameter (v$parameter), bytes: a PDB's own value when
+      it sets one, otherwise the CDB's. 0 means no limit, and the pack then
+      computes no share.
     expiration: 2m
   oracledb_tablespace_used_percent:
     type: gauge
@@ -116,14 +131,22 @@ queries:
     interval: 15
     timeout: 8
     databases: [oracle]
-    metrics: [oracledb_process_count]
-    sql: SELECT COUNT(*) AS oracledb_process_count FROM v$process
+    metrics: [oracledb_process_count, oracledb_processes_limit]
+    sql: >-
+      SELECT
+        (SELECT COUNT(*) FROM v$process) AS oracledb_process_count,
+        (SELECT TO_NUMBER(value) FROM v$parameter WHERE name = 'processes') AS oracledb_processes_limit
+      FROM dual
   oracle_pga:
     interval: 15
     timeout: 8
     databases: [oracle]
-    metrics: [oracledb_pga_allocated_bytes]
-    sql: SELECT value AS oracledb_pga_allocated_bytes FROM v$pgastat WHERE name = 'total PGA allocated'
+    metrics: [oracledb_pga_allocated_bytes, oracledb_pga_aggregate_limit_bytes]
+    sql: >-
+      SELECT
+        (SELECT value FROM v$pgastat WHERE name = 'total PGA allocated') AS oracledb_pga_allocated_bytes,
+        (SELECT TO_NUMBER(value) FROM v$parameter WHERE name = 'pga_aggregate_limit') AS oracledb_pga_aggregate_limit_bytes
+      FROM dual
   oracle_tablespace:
     interval: 60
     timeout: 8

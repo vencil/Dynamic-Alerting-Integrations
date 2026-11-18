@@ -93,6 +93,7 @@ lands in ``GUARDED_FILES`` with an atomic-rename site must spell it
 """
 from __future__ import annotations
 
+import sys
 import ast
 from dataclasses import dataclass
 from pathlib import Path
@@ -271,11 +272,12 @@ _NOT_GUARDED_CEILING = 2
 # directions. The known ones are all in `dx/run_chaos_soak`, on the
 # long-lived CSV handle it holds open for the length of the soak:
 #
-#   * `writer.writerow(...)` + `csv_file.flush()` in the poll loop, and
-#   * `csv_file.close()` in the `finally`, where the last flush happens.
+#   * `writer.writerow(...)` + `csv_file.flush()` in the poll loop.
 #
-# `open()` is wrapped (the failure an operator actually causes — a bad
-# `--output-dir` — happens there); a write or a flush that fails LATER means
+# The open (through `open_operator_output`, #3982) is converted — the failure
+# an operator actually causes, a bad `--output-dir`, happens there — and so
+# is the last flush, at `csv_stack.close()` in the `finally`, remembered like
+# the summary writes'. A write or a flush that fails in the LOOP means
 # the filesystem filled up or went away mid-run, and it still ends in a
 # traceback at rc=1. Wrapping them would need the wrapper to span the whole
 # soak, which would also catch every unrelated OSError in the loop. Recorded
@@ -1029,7 +1031,7 @@ def test_this_scanner_agrees_with_the_secure_writer_one_where_they_overlap():
 _KNOWN_SITES = {
     # file → sinks that must still be found there. Measured on this tree;
     # each is a real argv-fed output path from the #1789 survey.
-    "scripts/tools/dx/describe_tenant.py": {".write_text"},
+    "scripts/tools/dx/describe_tenant.py": {"write_operator_output()"},  # #3982: was .write_text
     # #3107: the CSVs go through write_operator_output; the `-o` makedirs
     # is the tool's own sink left.
     "scripts/tools/ops/baseline_discovery.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
@@ -1038,9 +1040,12 @@ _KNOWN_SITES = {
     # own sinks left.
     "scripts/tools/ops/assemble_config_dir.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
     "scripts/tools/ops/state_reconcile.py": {"write_repo_artifact()"},  # #3982: mkdir → ensure_dir
-    "scripts/tools/dx/run_chaos_soak.py": {".mkdir", "open(w)"},
+    # #3982: the `--output-dir` mkdir and opens went through ensure_dir /
+    # open_operator_output; the sink left is NOT_GUARDED's carrier toggle.
+    "scripts/tools/dx/run_chaos_soak.py": {".write_text"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
-    "scripts/ops/audit_rules_drift.py": {"atomic_write_text()"},
+    # #3982: now the operator entry.
+    "scripts/ops/audit_rules_drift.py": {"write_operator_output()"},
 }
 
 
@@ -1235,7 +1240,7 @@ class TestSharedWriterCallerDetection:
         assert shared_writer_caller_lines(src) == []
 
 
-def test_every_shared_atomic_writer_caller_is_pinned():
+def test_every_shared_atomic_writer_caller_is_pinned(monkeypatch):
     """#2128. The shared atomic writer raises ``OutputWriteError`` and may
     fall back in place with a WARN. What the gate below checks statically,
     and only for files in ``GUARDED_FILES``, is that each call site sits in
@@ -1251,10 +1256,22 @@ def test_every_shared_atomic_writer_caller_is_pinned():
     A specific break that reddens this: drop any caller file from
     ``GUARDED_FILES`` (the ceiling test goes red too — this one says which).
     """
+    # Anti-vacuity: the walk sees callers under TOOLS_DIR, and it READS the
+    # files outside it too. Since #3982 moved `audit_rules_drift` to the
+    # operator entry, no caller is left outside TOOLS_DIR to show that, so
+    # the second half is held on what the walk hands the detector: every
+    # file it reads is recorded, and some must lie outside TOOLS_DIR.
+    read: list[str] = []
+    detect = shared_writer_caller_lines
+
+    def recording(source, label="<snippet>"):
+        read.append(label)
+        return detect(source, label)
+    monkeypatch.setattr(sys.modules[__name__], "shared_writer_caller_lines", recording)
     callers = shared_writer_callers()
-    # Anti-vacuity: the walk must see callers on both sides of TOOLS_DIR.
-    assert any(not f.startswith("scripts/tools/") for f in callers), sorted(callers)
     assert any(f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    assert any(not r.startswith(("scripts/tools/", "<")) for r in read), \
+        "the walk read no file outside scripts/tools/"
     unpinned = sorted(f"  {f}:{','.join(map(str, lines))}"
                       for f, lines in callers.items() if f not in GUARDED_FILES)
     assert not unpinned, (

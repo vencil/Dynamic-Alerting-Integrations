@@ -197,6 +197,34 @@ def test_manifest_is_created_0600_under_a_loose_umask(tmp_path):
         capture_output=True, text=True, encoding="utf-8", check=False, timeout=300)
     assert proc.returncode == 1, proc.stderr
     assert stat.S_IMODE((out / "da-team-a.yaml").stat().st_mode) == 0o600
+    # #3982: the directory comes from `_lib_io.ensure_dir(mode=0o700)`.
+    assert stat.S_IMODE(out.stat().st_mode) == 0o700
+
+
+def test_a_failure_to_make_the_manifest_directory_keeps_its_own_message(
+        monkeypatch, tmp_path, capsys):
+    """#3982 (owner 2026-11-18): the mkdir goes through `ensure_dir`, which
+    raises OutputWriteError; the message still names what failed and that
+    conf.d was not changed, with the cause's class, not the wrapper's."""
+    import pathlib
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    out = tmp_path / "secrets"
+    real = pathlib.Path.mkdir
+
+    def mkdir(self, *a, **k):
+        if os.fspath(self) == str(out):
+            raise PermissionError(13, "Permission denied", str(out))
+        return real(self, *a, **k)
+    monkeypatch.setattr(pathlib.Path, "mkdir", mkdir)
+    before = _snapshot(root)
+    with pytest.raises(SystemExit) as e:
+        mc.main(["--config-dir", str(root), "--manifests-out", str(out), "--write"])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert (f"ERROR: writing the Secret manifests under --manifests-out {out} failed "
+            f"(PermissionError: Permission denied): conf.d was not changed. The Secret "
+            f"manifests written before it: (none)") in err
+    assert _snapshot(root) == before and CANARY not in err
 
 
 def test_write_needs_manifests_out(tmp_path):

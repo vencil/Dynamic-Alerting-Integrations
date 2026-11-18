@@ -1205,7 +1205,7 @@ class TestWrittenValues:
         ("mysql_connection_usage_percent", "NaN:critical", (80.0, "warning")),
         # `_critical`／optional_overrides key：沒有預設值可退，不送 row。
         ("mysql_connection_usage_percent_critical", "+Inf", bt._REFUSED_NO_ROW),
-        ("oracle_process_count", "-Inf", bt._REFUSED_NO_ROW),
+        ("oracle_pga_usage_percent", "-Inf", bt._REFUSED_NO_ROW),
     ])
     def test_a_non_finite_number_is_read_from_the_exporters_refusal(self, key, raw, want):
         """#3140：Go 的 ParseFloat 讀得懂 NaN／Inf，但 exporter 拒收；拒收後送什麼是
@@ -1223,9 +1223,9 @@ class TestWrittenValues:
         # no default to fall back to: no row, marked refused (judged HIGH).
         ("mysql_connection_usage_percent_critical", "95", "+Inf",
          [("mysql_connection_usage_percent_critical", "95", None, "non_finite")]),
-        ("oracle_process_count", "70", "-Inf", [("oracle_process_count", "70", None, "non_finite")]),
+        ("oracle_pga_usage_percent", "70", "-Inf", [("oracle_pga_usage_percent", "70", None, "non_finite")]),
         # refused on the OLD side: no row there, nothing marked (a newly served row).
-        ("oracle_process_count", "-Inf", "70", [("oracle_process_count", None, "70", None)]),
+        ("oracle_pga_usage_percent", "-Inf", "70", [("oracle_pga_usage_percent", None, "70", None)]),
     ])
     def test_tenant_reads_a_non_finite_side_as_what_the_exporter_serves(
             self, capsys, metric, old, new, want):
@@ -1260,7 +1260,7 @@ class TestWrittenValues:
         assert rc == 0
 
     @pytest.mark.parametrize("metric,raw", [
-        ("mysql_connection_usage_percent_critical", "+Inf"), ("oracle_process_count", "-Inf")])
+        ("mysql_connection_usage_percent_critical", "+Inf"), ("oracle_pga_usage_percent", "-Inf")])
     def test_a_row_lost_to_a_refused_non_finite_value_is_high(
             self, monkeypatch, capsys, cli_argv, metric, raw):
         """#3140 PR2：`_critical`／宣告 key 寫非有限值，exporter 拒收且不送 row——
