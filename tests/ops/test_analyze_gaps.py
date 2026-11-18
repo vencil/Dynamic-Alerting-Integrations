@@ -259,12 +259,22 @@ def _text(path):
         return f.read()
 
 
+def _day(value):
+    """A served key (#4027: a `KeySchedule`, the whole day) as its one value
+    when it has one all day, else as its segments; a written value as is."""
+    if isinstance(value, ag.KeySchedule):
+        day = value.as_json()
+        return day[0]["value"] if len(day) == 1 else day
+    return value
+
+
 def _without_builtin(values):
     """values minus the keys of the built-in layer (#3832): the platform's
-    default-armed thresholds, which /metrics serves for every tenant."""
+    default-armed thresholds, which /metrics serves for every tenant; each
+    served value as `_day` gives it."""
     import _registry_lib
     builtin = set(_registry_lib.builtin_defaults(_registry_lib.load_registry()))
-    return {k: v for k, v in values.items() if k not in builtin}
+    return {k: _day(v) for k, v in values.items() if k not in builtin}
 
 
 class TestLoadTenantConfigs:
@@ -326,7 +336,7 @@ class TestLoadTenantConfigs:
                    "    mysql_threads_running: 80\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert set(configs) == {"db-a", "db-b"}
-        assert configs["db-a"]["custom_mysql_uptime"] == 1.0
+        assert _day(configs["db-a"]["custom_mysql_uptime"]) == 1.0
 
     def test_load_directory_yml_extension(self, config_dir, da_guard_env):
         """`.yml` 副檔名也要被掃到（修前只 glob `*.yaml`）。"""
@@ -334,7 +344,7 @@ class TestLoadTenantConfigs:
         write_yaml(config_dir, "db-c.yml", "tenants:\n  db-c:\n    mysql_connections: 50\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert "db-c" in configs
-        assert configs["db-c"]["mysql_connections"] == 50.0
+        assert _day(configs["db-c"]["mysql_connections"]) == 50.0
 
     def test_load_single_file_wrapper_format(self, config_dir, da_guard_env):
         """單檔分支同樣解開 wrapper（簽名與 flat 語意保留）。"""
