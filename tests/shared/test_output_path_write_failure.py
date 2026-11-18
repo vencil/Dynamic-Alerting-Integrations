@@ -86,7 +86,9 @@ Owner rulings that the rule alone would not give (#3107, 2026-10-24 and
 written one is a config some reader will load. #3982, 2026-11-18:
 ``generate_tenant_metadata --output`` is an artifact (tenant-api reads it;
 ``-`` is refused, stdout is the flag left out); ``audit_rules_drift --out``
-is an operator output (``-`` is stdout). A row carries the class its
+is an operator output (``-`` is stdout); ``compile_custom_alerts --out`` is an
+artifact (the tracked pack Prometheus loads, read back by the erase guard and
+``--check``). A row carries the class its
 flag SHOULD have; where the tool does not write that way yet, the row is on
 one of the lists below, not reclassified to match.
 
@@ -676,7 +678,7 @@ ROWS: list[Row] = [
       # no shape here can make the write fail while the mkdir succeeds for
       # a FILE-shaped output flag.
       shapes=("parent_is_file",)),
-    R("dx/compile_custom_alerts.py", "--out", "file", "operator",
+    R("dx/compile_custom_alerts.py", "--out", "file", "artifact",
       lambda c, out: ["--config-dir", _custom_alerts_conf_d(c.tmp), "--out", str(out)],
       reach="tmp conf.d with one _custom_alerts threshold recipe",
       out_name="rule-pack-custom-alerts.yaml"),
@@ -1774,7 +1776,6 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
 #: whether that is all the run wrote there ("all") or it also wrote through
 #: an entry ("some"). A `mkdir` counts — `ensure_dir` is the entry for it.
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
-    ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
     ("ops/config_history.py", "--config-dir"): (
         "some", ("open .da-history/history.json", "os.mkdir .da-history",
                  "os.mkdir .da-history/snap-1")),
