@@ -2327,7 +2327,7 @@ def key_spellings(keys: "Iterable[str]", binary: str | None = None,
 _EMPTY_FILL = ("", [], {}, None)
 
 
-def written_config(effective: TenantEffective, served: TenantValues) -> dict[str, Any]:
+def written_config(effective: TenantEffective, metadata: Any) -> dict[str, Any]:
     """A tenant's config as written plus inherited, for a reader that judges
     what was WRITTEN (#2115 (c), the policy readers): `effective_config`
     (`da-guard effective`) with
@@ -2336,7 +2336,9 @@ def written_config(effective: TenantEffective, served: TenantValues) -> dict[str
       a root `_defaults.yaml` without a `defaults:` mapping is merged whole,
       so its `_policies` / `_routing_defaults` would otherwise read as the
       tenant's own;
-    * `_metadata` from /metrics (`served.values["_metadata"]`), not from
+    * `_metadata` as /metrics inherits it — *metadata*, served-values'
+      `_metadata` (`load_served_facts`' `metadata`, which reads nothing at an
+      instant, #4025; or a reading's `values["_metadata"]`) — not from
       /effective, which drops `_metadata` at every level: /metrics inherits
       it shallowly (#2115 R4). The fields the exporter fills in empty (`""`,
       `[]`) are not written, and with none left there is no `_metadata`.
@@ -2346,9 +2348,8 @@ def written_config(effective: TenantEffective, served: TenantValues) -> dict[str
     for key, value in effective.effective_config.items():
         if not key.startswith("_") or (key != "_metadata" and is_tenant_reserved_key(key)):
             out[key] = value
-    meta = served.values.get("_metadata")
-    if isinstance(meta, dict):
-        written = {k: v for k, v in meta.items()
+    if isinstance(metadata, dict):
+        written = {k: v for k, v in metadata.items()
                    if not any(type(v) is type(e) and v == e for e in _EMPTY_FILL)}
         if written:
             out["_metadata"] = written
