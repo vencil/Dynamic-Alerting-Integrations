@@ -217,7 +217,6 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/ops/audit_rules_drift.py",
     "scripts/tools/dx/compile_custom_alerts.py",
     "scripts/tools/dx/describe_tenant.py",
-    "scripts/tools/dx/generate_tenant_fixture.py",
     "scripts/tools/dx/generate_byo_rulepack_table.py",
     "scripts/tools/dx/generate_doc_map.py",
     "scripts/tools/dx/generate_rule_pack_stats.py",
@@ -233,11 +232,10 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/ops/assemble_config_dir.py",
     "scripts/tools/ops/baseline_discovery.py",
     "scripts/tools/ops/config_history.py",
-    "scripts/tools/ops/da_assembler.py",
     "scripts/tools/ops/generate_rule_pack_split.py",
     "scripts/tools/ops/state_reconcile.py",
 )
-_GUARDED_FILES_CEILING = 22  # write_baseline_marker.py removed with the retired ns/op trend watchdog
+_GUARDED_FILES_CEILING = 20  # #3982: generate_tenant_fixture / da_assembler's mkdir went through ensure_dir (was 22)
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an
@@ -1034,12 +1032,12 @@ _KNOWN_SITES = {
     "scripts/tools/dx/describe_tenant.py": {".write_text"},
     # #3107: the CSVs go through write_operator_output; the `-o` makedirs
     # is the tool's own sink left.
-    "scripts/tools/ops/baseline_discovery.py": {"os.makedirs", "write_operator_output()"},
+    "scripts/tools/ops/baseline_discovery.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
     # #3206: the copies are da-guard write's; the `--output` mkdir and the
     # manifest write (#3107: through write_operator_output) are the tool's
     # own sinks left.
-    "scripts/tools/ops/assemble_config_dir.py": {".mkdir", "write_operator_output()"},
-    "scripts/tools/ops/state_reconcile.py": {".mkdir"},
+    "scripts/tools/ops/assemble_config_dir.py": {"write_operator_output()"},  # #3982: mkdir → ensure_dir
+    "scripts/tools/ops/state_reconcile.py": {"write_repo_artifact()"},  # #3982: mkdir → ensure_dir
     "scripts/tools/dx/run_chaos_soak.py": {".mkdir", "open(w)"},
     # #2128: outside TOOLS_DIR — proves a pinned file there is really read.
     "scripts/ops/audit_rules_drift.py": {"atomic_write_text()"},

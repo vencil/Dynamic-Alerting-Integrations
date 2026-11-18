@@ -49,6 +49,7 @@ live in ``tests/shared/test_output_path_write_failure.py``.
 from __future__ import annotations
 
 import ast
+import errno
 import json
 import os
 import sys
@@ -582,6 +583,18 @@ class TestOrDieSisters:
         _, err = capsys.readouterr()
         assert err.startswith("ERROR: cannot create directory ")
         assert "Traceback" not in err
+
+    def test_ensure_dir_refuses_an_empty_path(self, tmp_path, monkeypatch):
+        """#3982: `Path("")` is `.` — an empty value (an unset variable) must
+        not "create" the working directory and let the tool write there.
+        The same refusal `os.makedirs("")` gave: ENOENT, named by the flag."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(_lib_io.OutputWriteError) as ei:
+            _lib_io.ensure_dir("", flag="-o/--output-dir")
+        assert ei.value.errno == errno.ENOENT
+        assert "cannot create directory : No such file or directory" in str(ei.value)
+        assert "check the value given to -o/--output-dir" in str(ei.value)
+        assert list(tmp_path.iterdir()) == []
 
     def test_ensure_dir_creates_parents_and_is_idempotent(self, tmp_path):
         target = tmp_path / "a" / "b" / "c"
