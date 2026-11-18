@@ -1531,3 +1531,22 @@ def test_a_new_index_follows_the_umask(tmp_path):
                        preexec_fn=lambda: os.umask(0o002))
     assert r.returncode == 0, r.stderr
     assert stat.S_IMODE((tmp_path / '.da-history' / 'history.json').stat().st_mode) == 0o664
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='hard links')
+def test_an_index_the_writer_cannot_replace_is_written_in_place_with_a_warn(tmp_path):
+    """The shared writer's way out where a replace would lose something — a
+    hard link here; another user's index in a group directory takes the same
+    path (#3982 independent review: `atomic_only` closed it, and the index
+    changed owner). Every name sees the new index; one WARN line says why."""
+    confd, shard, run = _history_tree(tmp_path, 1)
+    index = tmp_path / '.da-history' / 'history.json'
+    other = tmp_path / 'index-link.json'
+    os.link(index, other)
+    with shard.open('a', encoding='utf-8') as fh:
+        fh.write('# again\n')
+    r = run('snapshot', '-m', 'again')
+    assert r.returncode == 0, r.stderr
+    assert 'WARN' in r.stderr
+    assert os.stat(index).st_ino == os.stat(other).st_ino
+    assert len(json.loads(other.read_text(encoding='utf-8'))) == 2
