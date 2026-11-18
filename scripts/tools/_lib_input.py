@@ -57,7 +57,8 @@ when a refusal is raised, as in `_lib_paths`.
   ``file_unreadable``: rc 2, one line naming the flag and the path — never
   a traceback, never an empty input. ``stdin=True`` (#3797): the value
   ``-`` is standard input, read and judged the same way (one flag per run).
-  ``documents(args, dests, *, lang)`` reads several, every refusal at once.
+  ``documents(args, dests, *, lang)`` reads several, every refusal at once;
+  ``named(args, dest)`` is how a refusal names the input (for a reader's).
   A positional ``decode=`` input (#4040) is named by its path alone.
 * ``decode_bytes(raw, *, fmt, name)`` — ⛔ with ``read_bytes``, the one reading
   of a caller's input file: strict UTF-8, then JSON (``json.loads``) or
@@ -894,12 +895,24 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
         raise again from exc
 
 
+def named(args: argparse.Namespace, dest: str) -> str:
+    """How every refusal names the input declared at *dest*: ``<flag>
+    <path>``, or the path alone for a positional — its value through
+    ``safe_label`` (#4040: a reader's refusal of a declared input names it
+    as this module's does, never the raw value)."""
+    value = getattr(args, dest)
+    _one_value(value, dest, "named")
+    return _label(value, value.spec.named)
+
+
 def documents(args: argparse.Namespace, dests: "list[str]", *, lang: str) -> "list[Any]":
     """``document`` of each of *dests*, in order — every refusal at once
     (#4040: ``rule-pack-diff`` with both ``--from`` and ``--to`` missing named
     one, then the other on the next run). One refusal is raised as it is;
     several are one ``CallerError`` with an ``ERROR:`` line each, the reason
-    the first's (as ``selected`` does for the values of one flag)."""
+    the first's (as ``selected`` does for the values of one flag). Only a
+    ``CallerError`` is collected: anything else (``InputChanged``, a
+    ``TypeError`` for an undeclared *dest*) is raised at once, as it is."""
     from _lib_exitcodes import CallerError  # noqa: PLC0415  (see the module docstring)
     out: "list[Any]" = []
     refused: "list[CallerError]" = []

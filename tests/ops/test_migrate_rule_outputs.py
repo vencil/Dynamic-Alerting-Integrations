@@ -757,7 +757,9 @@ class TestMain:
             mr.main()
         assert exc.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
-        assert "Error reading rule file" in err
+        # #4040: the loader's refusal names the path as the declaration does
+        assert f"ERROR: Prometheus' rule loader refuses 1 of 1 rule file(s)" in err, err
+        assert f"{f}: refused by Prometheus' rule file loader" in err, err
 
     def test_no_groups_returns_cleanly(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "empty.yaml"

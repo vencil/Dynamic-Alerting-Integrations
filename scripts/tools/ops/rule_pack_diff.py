@@ -110,7 +110,8 @@ def load_rule_pack_texts(texts: "list[tuple[str, str]]") -> "list[dict | None]":
 
 def load_rule_pack(path: "Path | str", rule_file=None) -> dict | None:
     """The rule pack at *path* as Prometheus' rule loader reads it (*rule_file*
-    from ``load_rule_packs``; read here when not given). Returns the
+    from ``load_rule_pack_texts``, *path* then its label; read here when not
+    given). Returns the
     top-level dict, or None when the loader refuses it (the reason printed)."""
     if rule_file is None:
         (rule_file,) = _lib_consumer_read.prometheus_rule_file_results([path])
@@ -515,7 +516,8 @@ def main(argv: list[str] | None = None) -> "int | Report":
     old, new = _lib_input.documents(args, ["from", "to"], lang="en")
 
     try:
-        v1, v2 = load_rule_pack_texts([(f"--from {from_path}", old), (f"--to {to_path}", new)])
+        v1, v2 = load_rule_pack_texts([(_lib_input.named(args, "from"), old),
+                                       (_lib_input.named(args, "to"), new)])
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR

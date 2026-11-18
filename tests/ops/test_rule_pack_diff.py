@@ -722,3 +722,18 @@ def test_main_json_roundtrip_for_label_value_tuple(tmp_path, capsys):
     breaking = report["breaking_modifications"][0]["change"]["label_values_changed"]
     # Tuple round-trips as a 2-element list
     assert breaking == {"severity": ["warning", "critical"]}
+
+
+def test_a_refused_pack_is_named_as_the_declaration_names_it(tmp_path, monkeypatch, capsys):
+    """#4040 review: the loader's refusal names the input as _lib_input's
+    refusals do — the value as typed (`./` kept) and through safe_label (a
+    newline in a path cannot print a line of its own)."""
+    monkeypatch.chdir(tmp_path)
+    bad = tmp_path / "b\nERROR: forged.yml"
+    bad.write_text("groups: [\n", encoding="utf-8")
+    (tmp_path / "good.yml").write_text("groups: []\n", encoding="utf-8")
+    rc = emit_result(rpd.main(["--from", "./good.yml", "--to", f"./{bad.name}"]))
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "\nERROR: forged.yml" not in err, err
+    assert "refuses --to ./b" in err, err

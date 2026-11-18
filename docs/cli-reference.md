@@ -1413,9 +1413,11 @@ da-tools rule-pack-diff --from <v1.yaml> --to <v2.yaml> [options]
 | 參數 | 用途 |
 |------|------|
 | `--from <path>` | 舊版本 Rule Pack YAML 路徑 |
-| `--to <path>` | 新版本 Rule Pack YAML 路徑。兩個檔各讀一次，Prometheus 的 rule loader 讀的是那份內容（[#4040](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4040)）：不存在、讀不了、不是 UTF-8 的檔，結束碼 `2`、一行點名旗標與路徑，兩個都有問題時一次列出；loader 拒收的檔也點名旗標 |
+| `--to <path>` | 新版本 Rule Pack YAML 路徑 |
 | `--json` | 輸出 JSON 結構化報告 |
 | `--ci` | breaking changes 偵測到時 exit 1（CI gate）—— breaking 定義：alert 被移除、label key 增減、label value 變動、alert↔record kind 互換 |
+
+兩個檔各讀一次，Prometheus 的 rule loader 讀的是那份內容（[#4040](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4040)）：不存在、讀不了、不是 UTF-8 的檔，結束碼 `2`、一行點名旗標與路徑，兩個都有問題時一次列出；loader 拒收的檔也點名旗標。
 
 **Breaking 判定 vs 不 breaking（informational）**
 

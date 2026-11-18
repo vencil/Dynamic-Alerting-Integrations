@@ -1703,13 +1703,14 @@ def main():
     # #3206（ADR-036 §12）：輸入的規則檔以 Prometheus 的 rule loader 讀
     # （da-read prometheus-rules）；它拒收的檔、或找不到 da-read，都以
     # rc 2 結束並說明原因，不改用其他讀法。
-    # 拒收行與本工具其他拒收行同為英文（Error reading rule file、--output-dir）。
+    # 拒收行與本工具其他拒收行同為英文（--output-dir 等），一律以 ERROR: 開頭。
     text = _lib_input.document(args, "input_file", lang="en")
     try:
         (rule_file,) = _lib_consumer_read.require_read(
-            _lib_consumer_read.prometheus_rule_text_results([(str(args.input_file), text)]))
+            _lib_consumer_read.prometheus_rule_text_results(
+                [(_lib_input.named(args, "input_file"), text)]))
     except _lib_consumer_read.ConsumerReadError as e:
-        print(f"Error reading rule file: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
+        print(f"ERROR: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     groups = rule_file.groups

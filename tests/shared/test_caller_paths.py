@@ -242,10 +242,10 @@ OPS_SITES = [
      ["--scrape-config", "{F}", "--output-dir", "{BOX}/onboard-sc", "--json"],
      "--scrape-config", None),
     # #4040: rule files da-read read by path; the text is read once now.
-    ("rule-pack-diff --from", "rule_pack_diff.py", ["--from", "{F}", "--to", "{F}", "--json"],
+    ("rule-pack-diff --from", "rule_pack_diff.py", ["--from", "{F}", "--to", "{RP}/rule-pack-mariadb.yaml"],
      "--from", None),
     ("rule-pack-diff --to", "rule_pack_diff.py",
-     ["--from", "{BOX}/rpd-from.yaml", "--to", "{F}", "--json"], "--to", None),
+     ["--from", "{RP}/rule-pack-mariadb.yaml", "--to", "{F}"], "--to", None),
     ("migrate input_file", "migrate_rule.py", ["{F}", "-o", "{BOX}/migrate-out", "--dry-run"],
      None, None),
     # config-history is not a row: every subcommand creates `.da-history`
