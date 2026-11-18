@@ -1,8 +1,9 @@
 """寫 conf.d 的工具跑進一棵服務中的樹，那棵樹服務的東西不變（#4014）。
 
-母體由 AST 推導：`scripts/tools/` 底下 import `_lib_confedit` 的每一個模組（ADR-036
-§2：Python 寫 conf.d 只經它送給 `da-guard write`；不論用哪個入口、有沒有 alias）。
-每一支都要歸類，新增的寫入工具沒歸類就轉紅：
+母體由 AST 的呼叫圖推導（ADR-036 §2：Python 寫 conf.d 只經 `_lib_confedit` 送給
+`da-guard write`，送出的只有它的 `_run`）：從 `_lib_confedit._run` 出發，凡是呼叫或引用到
+「寫入函式」的函式也是寫入函式（跨模組、經 alias／`from … import`、經包裝函式庫都算），
+做到不動點；有寫入函式的模組就是母體。每一支都要歸類，新增的寫入工具沒歸類就轉紅：
 
 * `DRAFT_WRITERS`：產物是草稿（要人審過才搬進 conf.d），寫在自己的點目錄
   （`_lib_write_check.DRAFT_ROOTS`，一支工具一個，兩邊一一對上）。每支都真的跑進一棵
@@ -12,6 +13,9 @@
   每支的草稿與它單獨跑時逐位元組相同（工具會串在同一個 `-o` 上用）。
 * `EDITS_THE_SERVED_TREE`：工具的職責就是改它指到的那棵 conf.d（或產生一棵要被服務的
   conf.d），寫完被服務是對的；或只送 dry run。每支寫明理由。
+
+「服務的東西不變」比的是整份 `da-guard served-values`（同一個 `--at`），不只是租戶名：
+換掉根層 `_defaults.yaml` 不會改租戶集合，卻會改每個租戶的值。
 
 判準只問 Go，不在這裡複製路徑規則：讀取端略過點開頭目錄是 Go `confdname.IsHidden` 的事。
 
@@ -38,6 +42,10 @@ import _lib_write_check  # noqa: E402
 pytestmark = pytest.mark.usefixtures("da_guard_env", "da_read_env", "da_crdecode_env")
 
 _CONFEDIT = "_lib_confedit"
+#: The one function that sends a batch to `da-guard write`.
+_SEED = (_CONFEDIT, "_run")
+#: served-values is read at one fixed instant, so two readings compare.
+_AT = "2026-11-13T12:00:00Z"
 _DRAFT_TENANT = "draft-a"
 
 #: The tree being served: it passes validate-config, so a draft that leaks
@@ -93,6 +101,10 @@ EDITS_THE_SERVED_TREE = {
     "ops/patch_config.py": "patches a tenant's keys in the conf.d it is given",
     "ops/_registry_lib.py": "writes back the conf.d files the threshold registry generates "
                             "in the repo (`write_planned`)",
+    "lint/check_threshold_registry.py": "`--regen` rewrites the repo's generated conf.d "
+                                        "surfaces (`_registry_lib.regen`)",
+    "lint/check_threshold_reachability.py": "renders init's defaults through `da-guard write "
+                                            "--dry-run` (`NewFile.preview`); writes nothing",
 }
 
 
@@ -101,18 +113,53 @@ def _tool_of(rel: str) -> str:
 
 
 def _derived_writers(root: Path = TOOLS) -> frozenset:
-    """Modules under *root* importing `_lib_confedit` (`import`, `import …
-    as`, `from _lib_confedit import …`, at any depth), it left out."""
-    out = set()
-    for p in root.rglob("*.py"):
-        if "__pycache__" in p.parts or p.stem == _CONFEDIT:
-            continue
-        for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
-            if (isinstance(node, ast.Import) and any(a.name == _CONFEDIT for a in node.names)) \
-                    or (isinstance(node, ast.ImportFrom) and node.module == _CONFEDIT):
-                out.add(p.relative_to(root).as_posix())
-                break
-    return frozenset(out)
+    """Modules under *root* with a writer function, `_lib_confedit` left
+    out: a fixpoint over the call graph from `_SEED`. A unit is a top-level
+    function or class (its methods and nested functions included) or the
+    module's other statements; it is a writer when it calls or references a
+    writer — `mod.f` through an `import mod [as m]`, `f` through a `from mod
+    import f [as g]`, or a top-level `f` of its own module."""
+    mods = {}
+    for p in sorted(root.rglob("*.py")):
+        if "__pycache__" not in p.parts:
+            mods.setdefault(p.stem, p)
+    uses: dict = {}
+    for stem, path in mods.items():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        alias, imported = {}, {}
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    alias[a.asname or a.name] = a.name.split(".")[-1]
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                for a in n.names:
+                    imported[a.asname or a.name] = (n.module.split(".")[-1], a.name)
+        defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        own = {n.name for n in tree.body if isinstance(n, defs)}
+        units = [(n.name, n) for n in tree.body if isinstance(n, defs)]
+        units.append(("<module>", ast.Module(
+            body=[n for n in tree.body if not isinstance(n, defs)], type_ignores=[])))
+        for name, node in units:
+            out = uses.setdefault((stem, name), set())
+            for n in ast.walk(node):
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) \
+                        and n.value.id in alias:
+                    out.add((alias[n.value.id], n.attr))
+                elif isinstance(n, ast.Name):
+                    if n.id in imported:
+                        out.add(imported[n.id])
+                    elif n.id in own and n.id != name:
+                        out.add((stem, n.id))
+    writers = {_SEED}
+    grew = True
+    while grew:
+        grew = False
+        for unit, used in uses.items():
+            if unit not in writers and used & writers:
+                writers.add(unit)
+                grew = True
+    return frozenset(mods[m].relative_to(root).as_posix()
+                     for m, _ in writers if m != _CONFEDIT and m in mods)
 
 
 def test_every_conf_d_writer_is_classified():
@@ -138,19 +185,29 @@ def test_the_draft_writers_are_the_draft_roots_one_each():
 
 
 def test_the_derivation_sees_every_way_of_reaching_confedit(tmp_path):
-    # #4014 review: an entry-name list missed `emit_all` / `edit_all` and an
-    # aliased import. Every import form, at any depth, is a conf.d writer.
+    # #4014 reviews: an entry-name list missed `emit_all` / `edit_all` and an
+    # aliased import; an import list missed a tool writing through a helper
+    # library and took a reader of `_lib_confedit`'s value helpers for a
+    # writer. Every way of reaching `_run` is a writer, and nothing else.
     forms = {
-        "a.py": "import _lib_confedit\n_lib_confedit.emit_all('.', [])\n",
-        "b.py": "from _lib_confedit import write_all_or_exit as w\nw('.', [], tool='b')\n",
-        "c.py": "def f():\n    import _lib_confedit as ce\n    ce.edit_all('.', [])\n",
-        "d.py": "import _lib_confedit_other\n",
-        "_lib_confedit.py": "def write_all(*a):\n    pass\n",
+        "_lib_confedit.py": "def _run(*a):\n    pass\n"
+                            "def write_all(*a):\n    return _run(*a)\n"
+                            "def data_value(x):\n    return x\n",
+        "a.py": "import _lib_confedit\n_lib_confedit.write_all('.', [])\n",
+        "b.py": "from _lib_confedit import write_all as w\ndef go():\n    w('.', [])\n",
+        "c.py": "def f():\n    import _lib_confedit as ce\n    ce.write_all('.', [])\n",
+        "d.py": "import _lib_confedit\nWRITE = _lib_confedit.write_all\n",
+        "_lib_draft.py": "import _lib_confedit\ndef put(x):\n    return helper(x)\n"
+                         "def helper(x):\n    return _lib_confedit.write_all(x, [])\n",
+        "e.py": "import _lib_draft as d\nd.put('.')\n",
+        "reader.py": "import _lib_confedit\nprint(_lib_confedit.data_value(1))\n",
+        "other.py": "import _lib_draft\nprint('no call')\n",
     }
     for name, body in forms.items():
-        (tmp_path / "sub" / name).parent.mkdir(exist_ok=True)
+        (tmp_path / "sub").mkdir(exist_ok=True)
         (tmp_path / "sub" / name).write_text(body, encoding="utf-8")
-    assert _derived_writers(tmp_path) == {"sub/a.py", "sub/b.py", "sub/c.py"}
+    assert _derived_writers(tmp_path) == {
+        f"sub/{n}" for n in ("a.py", "b.py", "c.py", "d.py", "_lib_draft.py", "e.py")}
 
 
 def test_the_derivation_did_not_collapse():
@@ -168,12 +225,20 @@ def _draft_root(out: Path, tool: str) -> Path:
     return out / _lib_write_check.DRAFT_ROOTS[_tool_of(tool)]
 
 
-def _served_tenants(root: Path) -> list:
+def _served(root: Path) -> dict:
+    """The whole `da-guard served-values` document of *root* at `_AT`, the
+    binary's version left out: every tenant's every served value."""
     sv = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
-                         str(root)], capture_output=True, text=True, encoding="utf-8",
-                        timeout=120, check=False)
+                         str(root), "--at", _AT], capture_output=True, text=True,
+                        encoding="utf-8", timeout=120, check=False)
     assert sv.returncode == 0, sv.stdout + sv.stderr
-    return sorted(json.loads(sv.stdout)["tenants"])
+    doc = json.loads(sv.stdout)
+    doc.pop("da_guard_version", None)
+    return doc
+
+
+def _served_tenants(root: Path) -> list:
+    return sorted(_served(root)["tenants"])
 
 
 _CHECK_LINE = re.compile(r"^\[(PASS|FAIL|WARN|SKIP)\] \S+", re.M)
@@ -197,10 +262,10 @@ def _write_tree(root: Path, files: dict) -> Path:
 @pytest.fixture(scope="module")
 def served_baseline(tmp_path_factory):
     live = _write_tree(tmp_path_factory.mktemp("baseline") / "live", _SERVED_TREE)
-    tenants, conclusion = _served_tenants(live), _validate_conclusion(live)
-    assert tenants == ["tenant-a"], tenants
+    served, conclusion = _served(live), _validate_conclusion(live)
+    assert sorted(served["tenants"]) == ["tenant-a"], served
     assert conclusion[0] == 0, conclusion  # the tree is clean to begin with
-    return tenants, conclusion
+    return served, conclusion
 
 
 def _run(tool, args, out=None, cwd=None):
@@ -237,14 +302,16 @@ def test_a_draft_writer_run_into_a_served_tree_changes_nothing_it_serves(
     assert (draft / f"{_DRAFT_TENANT}.yaml").is_file(), sorted(
         p.relative_to(live).as_posix() for p in live.rglob("*"))
     assert _DRAFT_TENANT in _served_tenants(draft)
-    tenants, conclusion = served_baseline
-    assert _served_tenants(live) == tenants
+    served, conclusion = served_baseline
+    assert _served(live) == served
     assert _validate_conclusion(live) == conclusion
 
 
 def _tree_bytes(root: Path) -> dict:
-    return {p.relative_to(root).as_posix(): p.read_bytes()
-            for p in sorted(root.rglob("*")) if p.is_file()}
+    """Every path under *root*: a file's bytes, a directory as None — so a
+    directory left behind (an empty one too) is a difference."""
+    return {p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None)
+            for p in sorted(root.rglob("*"))}
 
 
 def test_draft_writers_chained_through_one_o_keep_each_others_drafts(tmp_path):
@@ -332,6 +399,18 @@ def test_a_directory_made_after_the_batch_that_is_a_file_writes_nothing(tool, bl
     assert r.returncode == 2, r.stdout[-800:] + r.stderr[-800:]
     assert f"{blocker} is not a directory" in r.stderr, r.stderr
     assert _tree_bytes(out) == before
+
+
+def test_onboard_checks_only_the_csv_directories_of_the_phases_it_runs(tmp_path):
+    # #4014 review: a run of Phase 3 alone makes no `phase1-routing/`, so a
+    # file of that name in -o is none of its business.
+    inputs = _inputs(tmp_path / "in")
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "phase1-routing").write_text("notes\n", encoding="utf-8")
+    r = _run("ops/onboard_platform.py", ["--scrape-config", inputs["prom.yml"]], out)
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert (out / "phase1-routing").read_text(encoding="utf-8") == "notes\n"
 
 
 def test_onboard_phase_2_alone_after_phase_1_keeps_the_draft_tenants(tmp_path):

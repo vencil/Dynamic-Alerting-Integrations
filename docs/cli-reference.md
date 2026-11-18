@@ -2638,7 +2638,7 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files <PATH>...] \
 | `.onboard/scrape-analysis.yaml`、`.onboard/<job>-relabel-suggestion.yaml` | Phase 3 | 各 job 有無租戶對映，以及建議的 `relabel_configs` |
 | `onboard-hints.json` | Phase 1（加上 Phase 2 推得的 DB 類型） | 租戶清單、路由提示，以及 DB 類型——⚠️ Phase 2 推得的每一種 DB 類型都掛到**每一個**租戶上（所有租戶共用同一份聯集），`scaffold --from-onboard` 因此會替每個租戶開同一組 pack；Phase 1 沒找到任何租戶 route、或帶 `--dry-run`／`--json` 時不寫 |
 
-YAML 產物都在點開頭的目錄裡（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）：`.onboard/conf.d/` 是一棵草稿 conf.d（可用 `validate-config --config-dir <輸出目錄>/.onboard/conf.d` 整棵驗），`.onboard/` 放其他 YAML。conf.d 的讀取端都不讀點開頭的目錄，所以 `--output-dir` 指到服務中的 conf.d 時，草稿租戶不會被服務。`.onboard/conf.d/` 裡已經有這次不寫的租戶檔（例如上一次執行的租戶）時以 `2` 結束，什麼都不寫。
+YAML 產物都在點開頭的目錄裡（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）：`.onboard/conf.d/` 是一棵草稿 conf.d（可用 `validate-config --config-dir <輸出目錄>/.onboard/conf.d` 整棵驗），`.onboard/` 放其他 YAML。conf.d 的讀取端都不讀點開頭的目錄，所以 `--output-dir` 指到服務中的 conf.d 時，草稿租戶不會被服務。`.onboard/conf.d/` 裡已經有這次不寫的租戶檔（例如上一次執行的租戶）、而這次有跑 Phase 1 時以 `2` 結束，什麼都不寫；只跑 Phase 2／3 的執行不寫租戶，留著先前的租戶照常寫入（分 phase 跑同一個輸出目錄）。這次要建的目錄（`.onboard/`、`.onboard/conf.d/`、這次有跑的 phase 的 CSV 目錄）已存在但不是目錄時同樣以 `2` 結束。
 
 **範例**
 

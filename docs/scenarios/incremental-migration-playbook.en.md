@@ -138,10 +138,11 @@ da-tools scaffold \
   --tenant redis-prod \
   --db redis \
   --non-interactive \
-  --output-dir conf.d
+  --output-dir scaffold_output
+cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 ```
 
-**Expected output**: `conf.d/redis-prod.yaml` contains recording rules config, threshold initial values (conservative), and routing config (initially disabled); the same directory also gets `_defaults.yaml` (platform defaults) and `scaffold-report.txt`. `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
+**Expected output**: `scaffold_output/.scaffold/conf.d/redis-prod.yaml` (`conf.d/redis-prod.yaml` once copied) contains recording rules config, threshold initial values (conservative), and routing config (initially disabled); the same draft directory also gets `_defaults.yaml` (platform defaults), and `scaffold_output/` gets `scaffold-report.txt`. The draft is in a dot-directory and is never served ([#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)). `-o/--output-dir` takes a **directory** — writing `--output conf.d/redis-prod.yaml` yields a directory named `redis-prod.yaml` with the tenant file one level inside it.
 
 ### Step 1.2: Edit Threshold Configuration
 
@@ -151,12 +152,12 @@ Based on Phase 0.2 audit results, adjust threshold parameters to match existing 
 
 The chart is published as an OCI artifact ([ADR-002](../adr/002-oci-registry-over-chartmuseum.en.md)). Tenant config goes under `thresholdConfig.tenants` in the values; the chart renders it into the `threshold-config` ConfigMap, and one exporter serves every tenant.
 
-⚠️ The chart's shipped `thresholdConfig.defaults` only covers the keys the registry arms by default (Kubernetes, MariaDB and PostgreSQL, plus the Elasticsearch and Oracle capacity keys and RabbitMQ node memory); you must add the redis keys yourself. Copy the `redis_*` lines from the `conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter lists `key="redis_memory_used_bytes" reason=unconsumed` in its "config keys no row of this exporter reads" line.
+⚠️ The chart's shipped `thresholdConfig.defaults` only covers the keys the registry arms by default (Kubernetes, MariaDB and PostgreSQL, plus the Elasticsearch and Oracle capacity keys and RabbitMQ node memory); you must add the redis keys yourself. Copy the `redis_*` lines from the `scaffold_output/.scaffold/conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter lists `key="redis_memory_used_bytes" reason=unconsumed` in its "config keys no row of this exporter reads" line.
 
 ```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
-  defaults:                 # not shipped by the chart; taken from scaffold's conf.d/_defaults.yaml
+  defaults:                 # not shipped by the chart; taken from scaffold's _defaults.yaml
     redis_memory_used_bytes: 4294967296
     redis_connected_clients: 200
     redis_evicted_keys_rate: 100

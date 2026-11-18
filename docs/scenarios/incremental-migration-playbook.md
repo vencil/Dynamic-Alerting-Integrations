@@ -138,10 +138,11 @@ da-tools scaffold \
   --tenant redis-prod \
   --db redis \
   --non-interactive \
-  --output-dir conf.d
+  --output-dir scaffold_output
+cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 ```
 
-**預期輸出**：`conf.d/redis-prod.yaml` 包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）；同一個目錄下另有 `_defaults.yaml`（平台預設值）與 `scaffold-report.txt`。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
+**預期輸出**：`scaffold_output/.scaffold/conf.d/redis-prod.yaml`（複製進 `conf.d/` 後的 `conf.d/redis-prod.yaml`）包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）；同一個草稿目錄下另有 `_defaults.yaml`（平台預設值），`scaffold_output/` 下另有 `scaffold-report.txt`。草稿放在點開頭的目錄，不會被服務（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
 
 ### 步驟 1.2：編輯閾值配置
 
@@ -151,12 +152,12 @@ da-tools scaffold \
 
 chart 以 OCI 發布（[ADR-002](../adr/002-oci-registry-over-chartmuseum.md)）。租戶設定放在 values 的 `thresholdConfig.tenants`，chart 會把它渲染成 `threshold-config` ConfigMap，一個 exporter 服務所有租戶。
 
-⚠️ chart 出貨的 `thresholdConfig.defaults` 只含登錄表標為預設啟用的 key（Kubernetes、MariaDB、PostgreSQL，以及 Elasticsearch、Oracle 的容量類與 RabbitMQ 的節點記憶體），redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會在「config keys no row of this exporter reads」那一行列出 `key="redis_memory_used_bytes" reason=unconsumed`。
+⚠️ chart 出貨的 `thresholdConfig.defaults` 只含登錄表標為預設啟用的 key（Kubernetes、MariaDB、PostgreSQL，以及 Elasticsearch、Oracle 的容量類與 RabbitMQ 的節點記憶體），redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `scaffold_output/.scaffold/conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會在「config keys no row of this exporter reads」那一行列出 `key="redis_memory_used_bytes" reason=unconsumed`。
 
 ```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
-  defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 conf.d/_defaults.yaml
+  defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 _defaults.yaml
     redis_memory_used_bytes: 4294967296
     redis_connected_clients: 200
     redis_evicted_keys_rate: 100

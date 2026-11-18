@@ -121,23 +121,17 @@ Mode:        normal (no silence/maintenance)
     description: t('生成新租戶配置', 'Generate new tenant configuration'),
     category: t('文件系統工具', 'Filesystem Tools'),
     popular: true,
-    preview: `$ da-tools scaffold --tenant my-app --db mariadb,redis
+    preview: `$ da-tools scaffold --tenant my-app --db mariadb,redis --non-interactive
 
-Scaffolding tenant configuration...
-
-Created:
-  conf.d/my-app.yaml       (MariaDB + Redis thresholds)
-  conf.d/_defaults.yaml     (updated with new tenant)
-
-Summary:
-  Tenant:     my-app
-  Databases:  mariadb (8 thresholds), redis (6 thresholds)
-  Routing:    not configured (add _routing to enable)
+Created (a draft, never served — scaffold_output/.scaffold/conf.d/):
+  scaffold_output/.scaffold/conf.d/_defaults.yaml   (platform defaults template)
+  scaffold_output/.scaffold/conf.d/my-app.yaml      (MariaDB + Redis thresholds)
+  scaffold_output/scaffold-report.txt
 
 Next steps:
-  1. Edit conf.d/my-app.yaml to customize thresholds
-  2. Run: da-tools validate-config --config-dir conf.d/
-  3. Deploy: kubectl apply -k .`,
+  1. Review and edit scaffold_output/.scaffold/conf.d/my-app.yaml
+  2. cp scaffold_output/.scaffold/conf.d/my-app.yaml conf.d/
+  3. Run: da-tools validate-config --config-dir conf.d/`,
     args: [],
     flags: [
       { name: '--non-interactive', label: t('非互動模式', 'Non-Interactive Mode'), required: false, type: 'checkbox' },

@@ -1315,11 +1315,13 @@ def _defaults_number(raw):
     return int(value) if value.is_integer() else value
 
 
-def _confd_or_die(output_dir, build):
+def _confd_or_die(output_dir, build, made_later):
     """*build()*'s entries; a ValueError (a value or a comment `da-guard
     write` cannot carry) is rc 2 naming it, nothing written. Before them,
     an existing -o passes the shared conf.d refusal
-    (`_lib_write_check.require_output_tree`, #3206)."""
+    (`_lib_write_check.require_output_tree`, #3206); after, the draft's
+    layout (`_lib_write_check.refuse_draft_layout`) with *made_later*, the
+    CSV directories of the phases this run writes."""
     import _lib_parse_tree  # noqa: PLC0415
     try:
         _lib_write_check.require_output_tree(output_dir)
@@ -1342,7 +1344,7 @@ def _confd_or_die(output_dir, build):
     paths = [e["path"] for e in entries]
     try:
         refusal = _lib_write_check.refuse_draft_layout(
-            output_dir, "onboard_platform", paths, made_later=(_PHASE1_DIR, _PHASE2_DIR),
+            output_dir, "onboard_platform", paths, made_later=made_later,
             why="an earlier run's tenant file is another tenant in the draft, #4014",
             writes_tenants=any(p != _PHASE2_DEFAULTS for p in paths))
     except _lib_parse_tree.ParseTreeError as exc:
@@ -1380,7 +1382,8 @@ def _write_phase1_outputs(output_dir, phase1_results, report, confd=None):
     tenant_routings, summary = phase1_results
     dedup_info = summary.get("dedup_tenants", {})
     if confd is None:
-        confd = _confd_or_die(output_dir, lambda: _phase1_confd(phase1_results))
+        confd = _confd_or_die(output_dir, lambda: _phase1_confd(phase1_results),
+                              (_PHASE1_DIR,))
         _write_draft(output_dir, confd)
 
     p1 = Path(output_dir) / _PHASE1_DIR
@@ -1428,7 +1431,8 @@ def _write_phase2_outputs(output_dir, phase2_results, report, confd=None):
     """
     candidates, recording_rules, summary = phase2_results
     if confd is None:
-        confd = _confd_or_die(output_dir, lambda: _phase2_confd(phase2_results))
+        confd = _confd_or_die(output_dir, lambda: _phase2_confd(phase2_results),
+                              (_PHASE2_DIR,))
         _write_draft(output_dir, confd)
 
     p2 = Path(output_dir) / _PHASE2_DIR
@@ -1550,7 +1554,9 @@ def write_outputs(output_dir, phase1_results=None, phase2_results=None,
     # written by this tool after the batch.
     confd1, confd2 = _confd_or_die(output_dir, lambda: (
         _phase1_confd(phase1_results) if phase1_results else [],
-        _phase2_confd(phase2_results) if phase2_results else []))
+        _phase2_confd(phase2_results) if phase2_results else []),
+        tuple(d for d, ran in ((_PHASE1_DIR, phase1_results), (_PHASE2_DIR, phase2_results))
+              if ran))
 
     _write_draft(output_dir, confd1 + confd2)
 
