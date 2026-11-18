@@ -252,7 +252,7 @@ file_overrides:
 > GENERATED 檔頭，否則 ERROR + 全檢；(3) 只有 `denied_functions` /
 > `max_range_duration` 可被放寬（白名單），列其他 key（如清空
 > `required_labels`）在載入政策時即結束碼 `2`；(4) 未覆寫的檢查照跑。
-> entry 的格式在載入時判定，不論有沒有檔案匹配（[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977））：
+> entry 的格式在載入時判定，不論有沒有檔案匹配（[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)）：
 > `file_overrides` 是清單；每筆只有 `path`（必填、不重複）、
 > `require_generated_marker`（布林）、`policy`；`denied_functions` 是字串清單、
 > `max_range_duration` 是正的時長。不符即結束碼 `2`、點名第幾筆與原因。CI 另以
