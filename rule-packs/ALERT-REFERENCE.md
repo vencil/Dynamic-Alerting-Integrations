@@ -208,7 +208,7 @@ lang: zh
 | OracleHighWaitTime | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle wait time elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_wait_time:rate5m |
 | OracleHighProcessCount | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle processes near the PROCESSES limit  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_process_usage:percent |
 | OracleHighPGAUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle PGA near PGA_AGGREGATE_LIMIT  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_pga_usage:percent |
-| OraclePGALimitNotSet | info | 靜音 | {{ $labels.tenant }}: PGA_AGGREGATE_LIMIT is 0, so oracle_pga_usage_percent has nothing to measure a | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | oracledb_pga_aggregate_limit_bytes |
+| OraclePGALimitNotSet | info | 靜音 | {{ $labels.tenant }}: PGA_AGGREGATE_LIMIT is 0, so oracle_pga_usage_percent has nothing to measure a | 替 instance 標籤指出的資料庫設定 PGA_AGGREGATE_LIMIT，PGA 比例就會開始計算；不需要 PGA 告警就把 oracle_pga_usage_percent 寫成 "disable"，提醒隨之結束 | oracledb_pga_aggregate_limit_bytes |
 | OracleHighSessionUtilization | warning | 靜音 | [tier] {{ $labels.tenant }}: Oracle session limit approaching  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:oracle_session_utilization:ratio |
 | OracleThresholdNotConfigured | info | 靜音 | {{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }}) | 看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 "disable"，提醒隨之結束 | user_threshold_unset |
 
