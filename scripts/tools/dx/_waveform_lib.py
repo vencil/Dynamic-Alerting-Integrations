@@ -354,6 +354,16 @@ def semantic_issues(pack: dict) -> list[dict]:
                             f"({nl}) → 無故障可注入，此 must_detect 序列會稀釋 "
                             f"catch-rate 分母；請填與正常水位有落差的故障水位"),
             })
+        for ci, comp in enumerate(sig.get("companion_series") or []):
+            if (isinstance(comp, dict) and comp.get("role") == "complement"
+                    and (sig.get("metric_kind") != "gauge"
+                         or comp.get("metric_kind", "gauge") != "gauge")):
+                issues.append({
+                    "tier": "platform", "field": "companion_series",
+                    "message": (f"平台補填: signatures/{i}/companion_series/{ci}: "
+                                "role=complement 只接受 gauge 主序列與 gauge companion"
+                                "（每點 = level − 主序列該點，counter 的速率沒有「總量」可減）"),
+                })
     return issues
 
 
@@ -704,7 +714,23 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                 comp_level = float(comp["level"])
                 comp_kind = comp.get("metric_kind", "gauge")
                 comp_notes = [f"companion role={comp['role']} of {sig['metric']}"]
-                if comp_kind == "counter":
+                if comp["role"] == "complement":
+                    # The rest of a fixed total: level − the parent's sample,
+                    # floored at 0 — e.g. log space still available beside
+                    # the space in use, whose sum is the log's size (#3833).
+                    # A constant companion cannot express it: the parent
+                    # moves, so a constant "available" would make the share
+                    # used / (used + available) a non-linear warp of the
+                    # authored levels.
+                    if comp_kind != "gauge" or kind != "gauge":
+                        raise WaveformInputError(
+                            f"signatures/{si}: companion role=complement needs a "
+                            "gauge parent and a gauge companion")
+                    comp_samples = [None if s is None else round(max(0.0, comp_level - s), 6)
+                                    for s in samples]
+                    comp_notes.append(
+                        f"complement: {comp_level} − {sig['metric']} per sample, floored at 0")
+                elif comp_kind == "counter":
                     # A constant counter renders rate()==0, so a ratio's
                     # denominator would divide by zero (+Inf when the
                     # numerator fires, NaN otherwise) — integrate to a
@@ -735,7 +761,11 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                     jitter_s=jitter_s,
                     truncated=series.truncated,
                     auto_adjustments=comp_notes,
-                    rng_key=f"{seed}|{pack_id}|{si}|{variant}|{fan_index or 0}|comp{ci}",
+                    # A complement shares its parent's key, so jitter moves
+                    # both series' timestamps alike and each pair still sums
+                    # to the total; other companions draw their own.
+                    rng_key=(series.rng_key if comp["role"] == "complement" else
+                             f"{seed}|{pack_id}|{si}|{variant}|{fan_index or 0}|comp{ci}"),
                     fault_window=series.fault_window,  # companion 隨主 series（informational）
                     hold_start_s=series.hold_start_s,  # 隨主 series（informational）
                 ))

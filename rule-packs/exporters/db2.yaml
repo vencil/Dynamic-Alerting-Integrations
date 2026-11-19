@@ -1,0 +1,188 @@
+# query-exporter queries for the DB2 rule pack (#3833).
+#
+# This file is the source of every db2_* metric rule-pack-db2.yaml reads.
+# Run albertodonato/query-exporter at the version pinned in
+# requirements/ci-constraints.txt (query-exporter), with the DB2 driver
+# (ibm_db_sa; x86_64 only), this file plus your own databases file:
+#
+#   query-exporter --config databases.yaml --config rule-packs/exporters/db2.yaml
+#
+# databases.yaml must define TWO database entries with the same DSN: `db2`
+# for the metric queries and `db2_liveness` for the liveness query alone
+# (the queries below name them). Keep the two entries identical — DSN,
+# credentials and any `labels:` — or one connection can fail while the other
+# answers (a liveness-only failure pages DatabaseDown), for example:
+#
+#   databases:
+#     db2:
+#       dsn: db2+ibm_db://monitor:<password>@<host>:50000/<DBNAME>
+#     db2_liveness:
+#       dsn: db2+ibm_db://monitor:<password>@<host>:50000/<DBNAME>
+#
+# One exporter per database: the tenant comes from the scrape (the pod's
+# namespace), so one exporter must not serve two tenants' databases.
+# Every MON_GET_* call below reads member -1, the member the connection reaches.
+# pureScale / DPF: run one exporter per member (each DSN pinned to its member,
+# same tenant namespace); the pack takes each ratio per exporter before the
+# max / min, so a saturated member is not diluted by the others.
+# The monitor user needs EXECUTE on the three table functions below; SYSMON
+# authority does NOT grant it (SQL0551N on DB2 11.5.9). Grant it explicitly:
+#   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_DATABASE TO USER MONITOR
+#   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_TRANSACTION_LOG TO USER MONITOR
+#   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_TABLESPACE TO USER MONITOR
+#
+# Every query has a `timeout` below its interval. Each database entry has ONE
+# connection by default, and a query that times out keeps it until the
+# driver cancels the statement (ibm_db cannot cancel at all). So the liveness
+# query has a database entry of its own (checked): a hung metric query cannot
+# hold the connection it needs, and the database reads as down only when the
+# liveness query itself stops succeeding. A query that times out counts as
+# queries_total{status="timeout"}; DB2QueryStalled names it.
+# Column aliases are matched by name: DB2 folds an unquoted alias to upper case,
+# and the driver lowers it back except for a reserved word (TABLESPACE), so a
+# label column named like one is quoted ("tablespace"); query-exporter drops a
+# query for good on a name mismatch (seen on DB2 11.5.9).
+# Arithmetic uses DOUBLE literals (100e0): with 100.0 DB2 computes in DECIMAL
+# and truncates the scale (0.586 % read as 0.5).
+# Keep query-exporter's built-in metrics on (do not set `builtin_metrics: false`):
+# DB2DatabaseDown, DB2QueryStalled and the platform's presence check read
+# query_interval / query_timestamp / queries_total.
+#
+# ⛔ The metric names here are a contract with the rule pack, checked by
+# scripts/tools/lint/check_exporter_queries.py: it derives the exposed names
+# with query-exporter's own code (a counter is exposed as <name>_total) and
+# fails when the pack reads a name this file does not produce, when a gauge
+# has no `expiration` (a gauge keeps its last value while the database is
+# unreachable; expiration drops it), or when the pack rate()s a gauge.
+#
+# Counters carry the database's own cumulative values (MON_GET_DATABASE counts
+# from database activation), so the pack takes rate() of them; a deactivation
+# resets them, which rate() handles as a counter reset.
+#
+# Liveness: query-exporter keeps serving when the database is down. It does
+# not report 0; `db2_up` expires and query_timestamp{query="db2_liveness"}
+# stops advancing. DB2DatabaseDown reads that; the platform's presence check
+# reads query_interval{query="db2_liveness"}, which is served whenever the
+# exporter runs, whatever the database's state.
+metrics:
+  db2_up:
+    type: gauge
+    description: 1 while the liveness query succeeds; expires when it stops.
+    expiration: 2m
+  db2_connections_current:
+    type: gauge
+    description: Applications currently connected to the database (MON_GET_DATABASE.APPLS_CUR_CONS).
+    expiration: 2m
+  db2_log_used_bytes:
+    type: gauge
+    description: >-
+      Active transaction log space in use (MON_GET_TRANSACTION_LOG.TOTAL_LOG_USED).
+      Not served under infinite logging (LOGSECOND -1), where no share of a limit exists.
+    expiration: 2m
+  db2_log_available_bytes:
+    type: gauge
+    description: >-
+      Active transaction log space still available (TOTAL_LOG_AVAILABLE). Not served
+      under infinite logging, where DB2 reports -1.
+    expiration: 2m
+  db2_tablespace_used_percent:
+    type: gauge
+    description: >-
+      Share of the space a tablespace can grow to, 0-100 (MON_GET_TABLESPACE): used
+      pages over usable pages for a tablespace that does not auto-resize, used bytes
+      over TBSP_MAX_SIZE for one that does. Only DMS / automatic-storage regular and
+      large tablespaces: SMS and temporary tablespaces, and an auto-resizing one with
+      no maximum (bounded only by its file system), are not served. A default
+      database's automatic-storage tablespaces have no maximum (MAXSIZE NONE), so
+      it serves no rows until one is set; their file system is #4093.
+    labels: [tablespace]
+    expiration: 10m
+  db2_bufferpool_logical_reads:
+    type: counter
+    description: >-
+      Pages requested from the buffer pools — data, index, XML and column-organized,
+      regular and temporary (POOL_*_L_READS + POOL_TEMP_*_L_READS; exposed as _total).
+      The denominator of IBM's buffer pool hit ratio (Db2 11.5, "Formulas for
+      calculating buffer pool hit ratios").
+  db2_bufferpool_pages_found:
+    type: counter
+    description: >-
+      Requested pages the agents found in the buffer pool, without the ones a
+      prefetcher had brought in (POOL_*_LBP_PAGES_FOUND − POOL_ASYNC_*_LBP_PAGES_FOUND,
+      data + index + XML + column; exposed as _total): the numerator of IBM's hit
+      ratio. 1 − physical / logical reads would count prefetched pages as misses
+      and read a well-prefetched table scan as a collapse.
+  db2_deadlocks:
+    type: counter
+    description: Deadlocks (MON_GET_DATABASE.DEADLOCKS; exposed as _total).
+  db2_lock_wait_time_seconds:
+    type: counter
+    description: Time applications waited for locks, seconds (LOCK_WAIT_TIME / 1000; exposed as _total).
+  db2_sorts:
+    type: counter
+    description: Sorts executed (TOTAL_SORTS; exposed as _total).
+  db2_sort_overflows:
+    type: counter
+    description: Sorts that ran out of sort heap and spilled to disk (SORT_OVERFLOWS; exposed as _total).
+
+queries:
+  db2_liveness:
+    interval: 15
+    timeout: 12
+    databases: [db2_liveness]
+    metrics: [db2_up]
+    sql: SELECT 1 AS db2_up FROM sysibm.sysdummy1
+  db2_database:
+    interval: 15
+    timeout: 8
+    databases: [db2]
+    metrics:
+      - db2_connections_current
+      - db2_bufferpool_logical_reads
+      - db2_bufferpool_pages_found
+      - db2_deadlocks
+      - db2_lock_wait_time_seconds
+      - db2_sorts
+      - db2_sort_overflows
+    sql: >-
+      SELECT
+        appls_cur_cons AS db2_connections_current,
+        pool_data_l_reads + pool_index_l_reads + pool_xda_l_reads + pool_col_l_reads
+          + pool_temp_data_l_reads + pool_temp_index_l_reads + pool_temp_xda_l_reads
+          + pool_temp_col_l_reads AS db2_bufferpool_logical_reads,
+        pool_data_lbp_pages_found - pool_async_data_lbp_pages_found
+          + pool_index_lbp_pages_found - pool_async_index_lbp_pages_found
+          + pool_xda_lbp_pages_found - pool_async_xda_lbp_pages_found
+          + pool_col_lbp_pages_found - pool_async_col_lbp_pages_found
+          AS db2_bufferpool_pages_found,
+        deadlocks AS db2_deadlocks,
+        lock_wait_time / 1000e0 AS db2_lock_wait_time_seconds,
+        total_sorts AS db2_sorts,
+        sort_overflows AS db2_sort_overflows
+      FROM TABLE(MON_GET_DATABASE(-1))
+  db2_log:
+    interval: 15
+    timeout: 8
+    databases: [db2]
+    metrics: [db2_log_used_bytes, db2_log_available_bytes]
+    sql: >-
+      SELECT total_log_used AS db2_log_used_bytes,
+             total_log_available AS db2_log_available_bytes
+      FROM TABLE(MON_GET_TRANSACTION_LOG(-1))
+      WHERE total_log_available >= 0
+  db2_tablespace:
+    interval: 60
+    timeout: 8
+    databases: [db2]
+    metrics: [db2_tablespace_used_percent]
+    sql: >-
+      SELECT tbsp_name AS "tablespace",
+             CASE WHEN tbsp_auto_resize_enabled = 1
+                  THEN 100e0 * tbsp_used_pages * tbsp_page_size / tbsp_max_size
+                  ELSE 100e0 * tbsp_used_pages / tbsp_usable_pages
+             END AS db2_tablespace_used_percent
+      FROM TABLE(MON_GET_TABLESPACE(NULL, -1))
+      WHERE tbsp_type = 'DMS'
+        AND tbsp_content_type NOT IN ('SYSTEMP', 'USRTEMP')
+        AND tbsp_usable_pages > 0
+        AND (tbsp_auto_resize_enabled = 0 OR tbsp_max_size > 0)

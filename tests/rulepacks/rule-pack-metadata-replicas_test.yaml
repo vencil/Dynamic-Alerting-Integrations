@@ -78,7 +78,7 @@ tests:
         values: '500x60'
 
       # db2 — DB2HighConnections
-      - series: 'db2_connections_active{tenant="t1"}'
+      - series: 'db2_connections_current{tenant="t1"}'
         values: '600x60'
       - series: 'user_threshold{tenant="t1", component="db2", metric="connections_active", severity="warning"}'
         values: '500x60'

@@ -345,9 +345,8 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
             out.append(f"{rel}: {name} sets increment: true — a counter must carry the "
                        "database's own cumulative value")
     # One connection per database by default (connection-pool size 1, one worker):
-    # a query without a timeout that hangs holds it, the liveness query queues
-    # behind it and the database reads as down. The timeout must also end before
-    # the next run is due.
+    # a query without a timeout that hangs holds it and every other query on
+    # that database waits. The timeout must also end before the next run is due.
     for name, spec in sorted((doc.get("queries") or {}).items()):
         spec = spec or {}
         timeout, interval = spec.get("timeout"), spec.get("interval")
@@ -357,23 +356,26 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
         elif interval and _seconds(timeout) >= _seconds(interval):
             out.append(f"{rel}: query {name} timeout {_seconds(timeout):g}s is not below "
                        f"its interval {_seconds(interval):g}s")
-    # The query the presence check names is the liveness query: each tick queues
-    # the queries in file order and a timeout counts from the queueing, so it
-    # must come first and outwait any other query that still holds the
-    # connection, or a hung query makes a live database read as down.
+    # The query the presence check names is the liveness query. It runs on a
+    # database entry no other query uses: each database entry has its own
+    # connection pool and worker, so a hung query cannot hold the connection
+    # the liveness query needs. Ordering and timeouts cannot give that alone:
+    # query-exporter can only abandon a timed-out statement if the driver can
+    # cancel it (cancel()/interrupt()), and ibm_db cannot — the statement keeps
+    # the connection and the liveness query times out behind it.
     qspecs = doc.get("queries") or {}
     live = {v for text in _presence_selectors(pack)
             for op, v in _query_matchers(text) if op == "=" and v in qspecs}
     for name in sorted(live):
-        if next(iter(qspecs)) != name:
-            out.append(f"{rel}: liveness query {name} is not the first query — a hung "
-                       "query queued before it makes it time out")
-        mine = _seconds((qspecs[name] or {}).get("timeout") or 0)
+        mine = set((qspecs[name] or {}).get("databases") or [])
         for other, spec in qspecs.items():
-            theirs = (spec or {}).get("timeout")
-            if other != name and theirs and _seconds(theirs) >= mine:
-                out.append(f"{rel}: liveness query {name} timeout {mine:g}s does not "
-                           f"exceed {other}'s {_seconds(theirs):g}s")
+            shared = mine & set((spec or {}).get("databases") or [])
+            if other != name and shared:
+                out.append(f"{rel}: liveness query {name} shares database "
+                           f"{sorted(shared)[0]} with {other} — a hung {other} holds "
+                           "that database's connection and the liveness query times "
+                           "out behind it; give the liveness query a database entry "
+                           "of its own (same DSN)")
     served = served_names(queries, doc)
     raw, _records, exprs = pack_rules(rule_pack)
     for m in sorted(raw - served):

@@ -52,10 +52,14 @@ fi
 docker exec "qe-ora-$$" bash -c \
   "printf 'GRANT SELECT_CATALOG_ROLE TO monitor;\nexit\n' | sqlplus -s system/Ci_only_pw1@localhost/FREEPDB1" >/dev/null
 
+DSN="oracle+oracledb://monitor:Ci_monitor_pw1@qe-ora-$$:1521/?service_name=FREEPDB1"
+# The liveness query has a database entry of its own (rule-packs/exporters/oracle.yaml).
 cat > "$WORK/databases.yaml" <<EOF
 databases:
   oracle:
-    dsn: oracle+oracledb://monitor:Ci_monitor_pw1@qe-ora-$$:1521/?service_name=FREEPDB1
+    dsn: $DSN
+  oracle_liveness:
+    dsn: $DSN
 EOF
 docker run -d --name "qe-exp-$$" --network "$NET" -p 127.0.0.1::9560 \
   -v "$WORK/databases.yaml:/config/databases.yaml:ro" \

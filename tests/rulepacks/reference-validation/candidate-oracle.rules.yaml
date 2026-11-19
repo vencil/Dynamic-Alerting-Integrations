@@ -25,7 +25,8 @@
 # numerator's attribution labels (#3833: every session over the SESSIONS parameter).
 # OracleDatabaseDown: query-exporter serves no 0 when the database is down — the
 # liveness query's query_timestamp stops advancing (#3833). The candidate keeps only
-# the "unchanged across 90s" arm (no count guard: the waveform has no restarts);
+# the "unchanged across 90s" arm with the shipped `offset 90s` history guard (no
+# count guard: the waveform has no restarts);
 # the "never succeeded" arm needs no waveform. changes() is independent of the
 # epoch, so the integrated counter waveform (rate 1/s healthy, 0 down) reads right.
 # Threshold 0.85 is HARD-CODED in the shipped rule (not user_threshold). The shipped
@@ -42,7 +43,7 @@ groups:
     interval: 30s
     rules:
       - alert: OracleDatabaseDown
-        expr: changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) == 0
+        expr: changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) == 0 and query_timestamp{job="tenant-exporters", query="oracle_liveness"} offset 90s
         for: 15s
         labels: {severity: critical}
       - alert: OracleHighActiveSessions

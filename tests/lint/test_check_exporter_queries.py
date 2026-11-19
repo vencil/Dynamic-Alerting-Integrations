@@ -35,7 +35,7 @@ QUERIES = {
         "x_waits": {"type": "counter"},
     },
     "queries": {
-        "x_liveness": {"interval": 15, "timeout": 10, "databases": ["db"], "metrics": ["x_up"],
+        "x_liveness": {"interval": 15, "timeout": 10, "databases": ["db_live"], "metrics": ["x_up"],
                        "sql": "SELECT 1 AS x_up"},
         "x_main": {"interval": 15, "timeout": 10, "databases": ["db"],
                    "metrics": ["x_sessions", "x_waits"],
@@ -262,20 +262,15 @@ def test_selected_queries_applies_every_matcher():
     assert ceq.selected_queries("query!~'x_(main|other)'", qs) == {"x_liveness"}
 
 
-def test_liveness_query_first_and_longest_timeout(tree, monkeypatch):
+def test_liveness_query_on_a_database_of_its_own(tree, monkeypatch):
     monkeypatch.setattr(ceq, "_presence_selectors",
                         lambda pack: ['query_interval{query="x_liveness"}'])
     q = yaml.safe_load(yaml.safe_dump(QUERIES))
-    q["queries"]["x_liveness"]["timeout"] = 12
-    q["queries"]["x_main"]["timeout"] = 8
     assert tree(["x_up == 0"], queries=q) == []
-    q["queries"]["x_main"]["timeout"] = 12
+    q["queries"]["x_main"]["databases"] = ["db", "db_live"]
     found = tree(["x_up == 0"], queries=q)
-    assert any("timeout 12s does not exceed x_main's 12s" in f for f in found), found
-    q["queries"]["x_main"]["timeout"] = 8
-    q["queries"] = {"x_main": q["queries"]["x_main"], "x_liveness": q["queries"]["x_liveness"]}
-    found = tree(["x_up == 0"], queries=q)
-    assert any("liveness query x_liveness is not the first query" in f for f in found), found
+    assert any("liveness query x_liveness shares database db_live with x_main" in f
+               for f in found), found
 
 
 def test_brace_inside_a_selector_regex():

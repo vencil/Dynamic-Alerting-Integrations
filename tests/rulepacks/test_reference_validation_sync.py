@@ -116,6 +116,8 @@ def _candidate_metrics(expr):
     # strip, `ignoring(resource)` leaks `resource` into the shipped-metric lookup
     # (benign-empty today, but the gate would claim alignment it never checked).
     stripped = re.sub(r"\b(?:ignoring|on|group_left|group_right)\s*\([^)]*\)", "", stripped)
+    # `offset 90s`: the duration is not a metric (its `s` would read as one).
+    stripped = re.sub(r"\boffset\s+-?[0-9][0-9a-zA-Z]*", "", stripped)
     names = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", stripped))
     return {n for n in names if n not in _NON_METRIC and not n.isdigit()}
 

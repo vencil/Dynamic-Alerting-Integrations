@@ -9,9 +9,8 @@
 # vendor 文件 + DBA 領域知識 —— 沒有任何一項是從告警門檻反推、或被刻意
 # 調到剛好貼在門檻下方。如果有規則對其中之一觸發，那就是一個真實的
 # 過度觸發發現，而不是這個 pack 的缺陷。
-# metric 名稱取自 db2 exporter catalog。注意
-# db2_bufferpool_hit_ratio 是 0-1 範圍、「高即健康」的 gauge，因此它的
-# 良性偏移會略低於正常值。
+# metric 名稱取自 rule-packs/exporters/db2.yaml（query-exporter 執行的查詢設定，
+# #3833）。命中率與日誌使用率由 pack 從兩個指標算出，各 signature 註明換算。
 # =====================================================================
 
 pack:
@@ -31,17 +30,27 @@ signatures:
       的故障那種掉到 70 出頭的崩落還差得很遠 —— 這只是帶有小幅、可自癒
       下滑的正常穩態。這個 metric 是「高即健康」，因此良性偏移落在正常值
       略下方。
+    # 平台單位換算（#3833，不是從門檻反推）：exporter 不再出命中率 gauge，pack 由
+    # 兩個 counter 的 rate 算 pages found / logical reads（IBM 的公式）。這裡以
+    # logical reads 100 頁/秒為基準（companion），pages found 的速率 = 100 × 作者
+    # 寫的命中率，wobble 與 dip 深度同乘 100。比值與基準無關；100 只需高於 pack
+    # 的最小樣本（每 5 分鐘 200 次 logical read）。
     source: vendor-doc
-    normal_level: 0.975
-    fault_level: 0.965
+    normal_level: 97.5
+    fault_level: 96.5
     onset_duration: 10m
     hold_duration: 40m
-    typical_wobble: 0.004
+    typical_wobble: 0.4
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: db2_bufferpool_hit_ratio
-    metric_kind: gauge
+    metric: db2_bufferpool_pages_found_total
+    metric_kind: counter
+    companion_series:
+      - metric: db2_bufferpool_logical_reads_total
+        role: denominator
+        metric_kind: counter
+        level: 100
     shape_class: plateau
     noise_kind: gaussian
     fault_class: healthy-bufferpool-hit-ratio
@@ -85,6 +94,9 @@ signatures:
       與日誌封存排空回到基線。它從未接近 SQL0964C "transaction log full"
       （100%）狀態。這是預期中、計畫內、良性且會在維護窗口內自行消解的
       行為 —— 屬於檢視事項，不該叫人。
+    # 平台單位換算（#3833）：exporter 出 used／available 兩個 bytes gauge，pack 算
+    # used / (used + available)。日誌總量取 100，used 即作者寫的百分比，available
+    # 是 100 − used（companion role=complement）。
     source: vendor-doc
     normal_level: 30
     fault_level: 68
@@ -94,8 +106,12 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: db2_log_usage_percent
+    metric: db2_log_used_bytes
     metric_kind: gauge
+    companion_series:
+      - metric: db2_log_available_bytes
+        role: complement
+        level: 100
     shape_class: plateau
     noise_kind: gaussian
     fault_class: planned-reorg-log-usage
@@ -121,7 +137,7 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: db2_connections_active
+    metric: db2_connections_current
     metric_kind: gauge
     shape_class: ramp
     noise_kind: gaussian
@@ -150,10 +166,10 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: db2_sort_overflows
+    metric: db2_sort_overflows_total
     metric_kind: counter
     companion_series:
-      - metric: db2_total_sorts
+      - metric: db2_sorts_total
         role: denominator
         metric_kind: counter
         level: 50

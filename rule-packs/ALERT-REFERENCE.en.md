@@ -35,7 +35,8 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| DB2DatabaseDown | critical | fires | db2_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | db2_up |
+| DB2DatabaseDown | critical | fires | The DB2 liveness query has not succeeded for 90s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | query_timestamp |
+| DB2QueryStalled | warning | muted | [tier] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database ans | Check alert metrics and review related logs; contact platform team for assistance if needed | queries_total |
 | DB2HighConnections | warning | muted | [tier] {{ $labels.tenant }}: DB2 connection usage high  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:db2_connections_active:max |
 | DB2HighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: DB2 connections at critical level  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:db2_connections_active:max |
 | DB2LowBufferpoolHitRatio | warning | muted | [tier] {{ $labels.tenant }}: DB2 bufferpool hit ratio low  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_bufferpool_hit_ratio:min |

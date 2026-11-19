@@ -44,7 +44,9 @@ Why each metric (read from the exporter's own source):
                 gauges expire), so presence reads the built-in query_interval of
                 the liveness query: set at start-up, served while the exporter
                 runs, whatever the database's state.
-* db2           ``db2_up`` — the DB2 exporter's up gauge (the DB2 pack reads it).
+* db2           ``query_interval{query="db2_liveness"}`` — query-exporter
+                running rule-packs/exporters/db2.yaml (#3833), the same shape
+                as oracle.
 * kafka         ``kafka_brokers`` — danielqsj/kafka_exporter: Collect emits it
                 first, unconditionally (kafka_exporter.go, clusterBrokers); the
                 exporter has no ``kafka_up``.
@@ -105,7 +107,7 @@ EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
     "mongodb": ("mongodb_up",),
     "elasticsearch": ("elasticsearch_exporter_build_info",),
     "oracle": ('query_interval{query="oracle_liveness"}',),
-    "db2": ("db2_up",),
+    "db2": ('query_interval{query="db2_liveness"}',),
     "clickhouse": ("ClickHouseMetrics_TCPConnection",),
     "kafka": ("kafka_brokers",),
     "rabbitmq": ("rabbitmq_up", "rabbitmq_identity_info"),

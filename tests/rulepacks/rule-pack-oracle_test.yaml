@@ -41,12 +41,12 @@ tests:
       # from 2m15s, firing after for: 15s.
       - series: 'query_interval{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="oracle_liveness"}'
         values: '15x16'
-      - series: 'query_timestamp{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x4 60x12'
       # db-b: healthy — the timestamp advances every sample → no-fire control.
       - series: 'query_interval{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="oracle_liveness"}'
         values: '15x16'
-      - series: 'query_timestamp{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x16'
       # db-c: the exporter runs but the liveness query never succeeded (no
       # query_timestamp at all) → fires on the second arm.
@@ -62,6 +62,58 @@ tests:
       - eval_time: 2m
         alertname: OracleDatabaseDown
         exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-c
+              instance: qe-c:9560
+            exp_annotations:
+              summary: "Oracle instance qe-c:9560 is DOWN"
+              summary_zh: "Oracle 實例 qe-c:9560 已關閉"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      # The 90s window, pinned at both edges (#3833 review). db-a's last
+      # change is at 1m, so on Prometheus (t−90s, t] first holds no change at
+      # 2m15s and the alert fires after for: 15s at 2m30s; MetricsQL's
+      # changes() also compares the sample before the window, so vmalert
+      # fires one interval later. 2m15s (neither fires) and 2m45s (both) are
+      # where the engines agree; a 75s window fires by 2m15s, a 120s one
+      # not before 3m.
+      - eval_time: 2m15s
+        alertname: OracleDatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-c
+              instance: qe-c:9560
+            exp_annotations:
+              summary: "Oracle instance qe-c:9560 is DOWN"
+              summary_zh: "Oracle 實例 qe-c:9560 已關閉"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 2m45s
+        alertname: OracleDatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-a
+              instance: qe-a:9560
+            exp_annotations:
+              summary: "Oracle instance qe-a:9560 is DOWN"
+              summary_zh: "Oracle 實例 qe-a:9560 已關閉"
+              description: "The Oracle liveness query has not succeeded for 90s on qe-a:9560"
+              description_zh: "Oracle 存活查詢 90 秒內沒有成功，實例：qe-a:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
           - exp_labels:
               maintenance: page
               severity: critical
@@ -113,7 +165,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="oracle_liveness"}'
         values: '_x4 15x4'
-      - series: 'query_timestamp{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '_x4 100+30x4'
     alert_rule_test:
       - eval_time: 2m15s
@@ -583,21 +635,21 @@ tests:
   #    (a run with no rows succeeds without touching query_timestamp). ──
   - interval: 15s
     input_series:
-      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x48'
       - series: 'queries_total{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_process", database="oracle", status="success"}'
         values: '1+1x48'
       - series: 'queries_total{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="oracle_sessions", database="oracle", status="success"}'
         values: '1+1x4 5x44'
-      - series: 'query_timestamp{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x48'
       - series: 'query_interval{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="oracle_wait_time"}'
         values: '15x48'
-      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x4 60x44'
       - series: 'queries_total{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="oracle_sessions", database="oracle", status="success"}'
         values: '1+1x4 5x44'
-      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x48'
       - series: 'queries_total{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="oracle_sessions", database="oracle", status="success"}'
         values: '1+1x4 5x44'
@@ -606,7 +658,7 @@ tests:
       # db-w: oracle_tablespace succeeds with no rows — query-exporter then
       # leaves query_timestamp alone, but queries_total{status="success"}
       # counts the run → not stalled.
-      - series: 'query_timestamp{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+15x48'
       - series: 'query_interval{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="oracle_tablespace"}'
         values: '60x48'
@@ -697,13 +749,13 @@ tests:
   - interval: 15s
     input_series:
       - series: 'query_interval{tenant="db-u", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness"}'
-        values: '15x8'
+        values: '15x12'
       - series: 'query_interval{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness"}'
-        values: '15x8'
-      - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
-        values: '0+15x8'
+        values: '15x12'
+      - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
+        values: '0+15x12'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 2m
         alertname: OracleDatabaseDown
         exp_alerts:
           - exp_labels:
@@ -727,7 +779,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="oracle_liveness"}'
         values: '15x20'
-      - series: 'query_timestamp{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '0+30x4 120x6 _ 120x9'
     alert_rule_test:
       - eval_time: 5m
@@ -790,7 +842,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="oracle_liveness"}'
         values: '_x4 15x20'
-      - series: 'query_timestamp{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="oracle_liveness", database="oracle"}'
+      - series: 'query_timestamp{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
         values: '_x4 60x20'
     alert_rule_test:
       - eval_time: 1m30s
@@ -1130,3 +1182,77 @@ tests:
               owner: ""
               tier: ""
         # hp-t19 (19% < 20) produces NO alert.
+
+  # ── OracleDatabaseDown across an exporter restart through 30s federation
+  #    (#3833 review). The exporter at the same instance is healthy until 2m,
+  #    gone, and back at 4m30s with a fresh timestamp. Its first new sample
+  #    stands alone in the 90s window; with `count_over_time(...) > 0` instead
+  #    of `> 1` changes() reads 0 and pages 15s after the restart. ──
+  - interval: 30s
+    input_series:
+      - series: 'query_interval{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '15x4 _x4 15x8'
+      - series: 'query_timestamp{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
+        values: '0+30x4 _x4 1000+30x8'
+    alert_rule_test:
+      - eval_time: 4m45s
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+
+  # ── OracleQueryStalled stays quiet while the liveness query has never
+  #    succeeded (#3833 review): db-y's exporter schedules oracle_liveness and
+  #    oracle_sessions and neither ever succeeded. That is OracleDatabaseDown's
+  #    page; without the `unless` arm for a liveness query that never ran,
+  #    OracleQueryStalled would also fire for oracle_sessions. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-y", instance="qe-y:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '15x40'
+      - series: 'query_interval{tenant="db-y", instance="qe-y:9560", job="tenant-exporters", query="oracle_sessions"}'
+        values: '15x40'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: OracleQueryStalled
+        exp_alerts: []
+
+  # ── OracleDatabaseDown waits 90s for a FIRST success too (#3833, CodeRabbit):
+  #    db-l's exporter serves query_interval from 0 but its first liveness
+  #    run succeeds only at 1m (a slow first connection). Without the
+  #    `query_interval offset 90s` guard on the never-succeeded arm, it
+  #    pages at 15s while the database is up. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '15x16'
+      - series: 'query_timestamp{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
+        values: '_x4 60+15x12'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+
+  # ── OracleDatabaseDown across an exporter restarted IN PLACE (#3833 review):
+  #    same instance (pod IP or static target). Last success at 1m30s, the
+  #    exporter restarts at 1m45s (Prometheus marks the old timestamp stale)
+  #    and its first new success comes at 2m45s. The old query_interval
+  #    already satisfies `offset 90s`; only "no timestamp sample in 90s"
+  #    keeps the arm quiet until a real 90s without success. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-m", instance="qe-m:9560", job="tenant-exporters", query="oracle_liveness"}'
+        values: '15x20'
+      - series: 'query_timestamp{tenant="db-m", instance="qe-m:9560", job="tenant-exporters", query="oracle_liveness", database="oracle_liveness"}'
+        values: '0+15x6 stale _x3 165+15x8'
+    alert_rule_test:
+      - eval_time: 2m30s
+        alertname: OracleDatabaseDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: OracleDatabaseDown
+        exp_alerts: []

@@ -18,7 +18,7 @@
     "operational",
     "platform"
   ],
-  "tenantAlertRules": 144,
+  "tenantAlertRules": 145,
   "rulePacks": {
     "mariadb": {
       "label": "MariaDB/MySQL",
@@ -298,10 +298,10 @@
     "db2": {
       "label": "DB2",
       "category": "database",
-      "exporter": "db2_exporter",
+      "exporter": "query-exporter",
       "configMap": "prometheus-rules-db2",
       "recordingRules": 15,
-      "alertRules": 11,
+      "alertRules": 12,
       "required": false,
       "defaults": {
         "db2_connections_active": {

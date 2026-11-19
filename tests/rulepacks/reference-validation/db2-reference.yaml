@@ -4,8 +4,8 @@
 # 獨立於 VM 告警規則轉換而撰寫。每一個參數描述的都是真實的 Db2 故障行為，
 # 依據為 vendor 文件 + DBA 領域知識 —— 沒有任何一項是從任何告警門檻反推
 # 而來。
-# metric 名稱取自 db2 exporter catalog。注意 db2_bufferpool_hit_ratio 是
-# 「高即健康」的 gauge，因此它的 fault_level 會低於 normal_level。
+# metric 名稱取自 rule-packs/exporters/db2.yaml（query-exporter 執行的查詢設定，
+# #3833）。命中率與日誌使用率由 pack 從兩個指標算出，各 signature 註明換算。
 # =====================================================================
 
 pack:
@@ -16,25 +16,30 @@ pack:
   readback_signed_off: true
 
 signatures:
-  # 1) db2sysc 失效／deactivation —— boolean up->0，持續維持在 down。
+  # 1) db2sysc 失效／deactivation —— liveness 查詢停止成功，query_timestamp 不再前進（counter 速率 1→0）。
   - description: >-
       db2sysc 失效或資料庫被 deactivate：exporter 的連線被拒絕，因此
-      db2_up 由 1->0 翻轉，並一直維持在 down，直到執行個體／資料庫被
-      重新啟用為止。典型的硬性中斷。
+      liveness 查詢不再成功、query_timestamp 停止前進（query-exporter 不會報
+      0），並一直維持到執行個體／資料庫被重新啟用為止。典型的硬性中斷。
     source: vendor-doc
     normal_level: 1
     fault_level: 0
     onset_duration: 30s
     hold_duration: 20m
+    # query-exporter 每次成功都把 query_timestamp 設成當下時間，健康時正好每秒
+    # 前進 1，沒有抖動（#3833）。
+    typical_wobble: 0
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_up
-    metric_kind: boolean
+    metric: query_timestamp
+    metric_kind: counter
     shape_class: step
     noise_kind: gaussian
     fault_class: database-down
     labels:
+      job: tenant-exporters
+      query: db2_liveness
       instance: db2-ref-01
       database: SAMPLE
 
@@ -52,7 +57,7 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_connections_active
+    metric: db2_connections_current
     metric_kind: gauge
     shape_class: ramp
     noise_kind: gaussian
@@ -62,7 +67,7 @@ signatures:
       database: SAMPLE
     min_value: 0
 
-  # 3) 緩衝集區命中率崩落 —— gauge 跌到低於正常值，並維持在該 step。
+  # 3) 緩衝集區命中率崩落 —— 命中頁數的速率跌到低於正常值，並維持在該 step。
   - description: >-
       緩衝集區配置過小（一次錯誤的 ALTER BUFFERPOOL，或大型表格掃描灌入
       大量分頁）使命中率從健康的約 97% 崩落到 70 出頭；同步讀取激增、
@@ -74,17 +79,27 @@ signatures:
     # 的比例（預設 0.95）。因此重新縮放到 0–1，讓故障在我們規則所假設的
     # exporter 尺度下被評估；相對跌幅（健康→約低 25%）維持不變。註：exporter
     # 尺度的歧義本身就是一個真實的案場發現（尺度不一致 = 靜默的 FN）。
+    # 平台單位換算（#3833，不是從門檻反推）：exporter 不再出命中率 gauge，pack 由
+    # 兩個 counter 的 rate 算 pages found / logical reads（IBM 的公式）。這裡以
+    # logical reads 100 頁/秒為基準（companion），pages found 的速率 = 100 × 作者
+    # 寫的命中率，wobble 與 dip 深度同乘 100。比值與基準無關；100 只需高於 pack
+    # 的最小樣本（每 5 分鐘 200 次 logical read）。
     source: vendor-doc
-    normal_level: 0.97
-    fault_level: 0.72
+    normal_level: 97
+    fault_level: 72
     onset_duration: 10m
     hold_duration: 1h30m
-    typical_wobble: 0.01
+    typical_wobble: 1
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_bufferpool_hit_ratio
-    metric_kind: gauge
+    metric: db2_bufferpool_pages_found_total
+    metric_kind: counter
+    companion_series:
+      - metric: db2_bufferpool_logical_reads_total
+        role: denominator
+        metric_kind: counter
+        level: 100
     shape_class: step
     noise_kind: gaussian
     fault_class: bufferpool-hit-ratio-collapse
@@ -101,6 +116,9 @@ signatures:
       並回滾，exporter 自己的監控查詢也卡住 —— 因此 metric 會變成 stale，
       直到日誌被清空為止。Db2 會一直停在 log-full 狀態，直到那筆肇事交易
       的回滾完成。
+    # 平台單位換算（#3833）：exporter 出 used／available 兩個 bytes gauge，pack 算
+    # used / (used + available)。日誌總量取 100，used 即作者寫的百分比，available
+    # 是 100 − used（companion role=complement）。
     source: vendor-doc
     normal_level: 35
     fault_level: 99
@@ -110,8 +128,12 @@ signatures:
     dips_back: false
     agent_keeps_reporting: false
     must_detect: true
-    metric: db2_log_usage_percent
+    metric: db2_log_used_bytes
     metric_kind: gauge
+    companion_series:
+      - metric: db2_log_available_bytes
+        role: complement
+        level: 100
     shape_class: ramp
     noise_kind: gaussian
     time_axis:
@@ -187,10 +209,10 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: db2_sort_overflows
+    metric: db2_sort_overflows_total
     metric_kind: counter
     companion_series:
-      - metric: db2_total_sorts
+      - metric: db2_sorts_total
         role: denominator
         metric_kind: counter
         level: 40

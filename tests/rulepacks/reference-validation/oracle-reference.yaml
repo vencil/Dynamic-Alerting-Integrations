@@ -26,6 +26,9 @@ signatures:
     fault_level: 0
     onset_duration: 30s
     hold_duration: 25m
+    # query-exporter 每次成功都把 query_timestamp 設成當下時間，健康時正好每秒
+    # 前進 1，沒有抖動（#3833）。
+    typical_wobble: 0
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true

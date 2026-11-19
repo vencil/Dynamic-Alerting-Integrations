@@ -52,7 +52,7 @@ PACK_META = {
     "mongodb": ("MongoDB", "mongodb_exporter"),
     "elasticsearch": ("Elasticsearch", "elasticsearch_exporter"),
     "oracle": ("Oracle", "query-exporter"),
-    "db2": ("DB2", "db2_exporter"),
+    "db2": ("DB2", "query-exporter"),
     "clickhouse": ("ClickHouse", "built-in /metrics"),
     "kafka": ("Kafka", "kafka_exporter"),
     "rabbitmq": ("RabbitMQ", "rabbitmq_exporter"),

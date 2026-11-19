@@ -256,7 +256,7 @@ EXPORTER_SHORT = {
     "mongodb": "mongodb_exporter",
     "elasticsearch": "elasticsearch_exporter",
     "oracle": "query-exporter",
-    "db2": "db2_exporter",
+    "db2": "query-exporter",
     "clickhouse": "built-in /metrics",
     "kafka": "kafka_exporter",
     "rabbitmq": "rabbitmq_exporter",

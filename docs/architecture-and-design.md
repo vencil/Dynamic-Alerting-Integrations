@@ -246,7 +246,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | 規則包 | Exporter | Recording | Alert |
 |--------|----------|-----------|-------|
 | clickhouse | built-in /metrics | 10 | 7 |
-| db2 | db2_exporter | 15 | 11 |
+| db2 | query-exporter | 15 | 12 |
 | elasticsearch | elasticsearch_exporter | 14 | 12 |
 | jvm | jmx_exporter | 9 | 8 |
 | kafka | kafka_exporter | 8 | 6 |
@@ -261,7 +261,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 16 | 12 |
 | redis | redis_exporter | 12 | 10 |
-| **合計** | | **170** | **200** |
+| **合計** | | **170** | **201** |
 <!-- RULE_PACK_STATS_END -->
 
 

@@ -17,20 +17,30 @@ signatures:
       被置換出去，命中率從平常的高檔明顯滑落；批次每完成一階段查詢、暫停
       交接下一支 SQL 時命中率會短暫回升，下一階段掃描一開始又再度下滑，
       直到整個報表批次結束才恢復正常。
+    # 平台單位換算（#3833，不是從門檻反推）：exporter 不再出命中率 gauge，pack 由
+    # 兩個 counter 的 rate 算 pages found / logical reads（IBM 的公式）。這裡以
+    # logical reads 100 頁/秒為基準（companion），pages found 的速率 = 100 × 作者
+    # 寫的命中率，wobble 與 dip 深度同乘 100。比值與基準無關；100 只需高於 pack
+    # 的最小樣本（每 5 分鐘 200 次 logical read）。
     source: real-incident
-    normal_level: 0.97
-    fault_level: 0.58
+    normal_level: 97
+    fault_level: 58
     onset_duration: 8m
     hold_duration: 50m
-    typical_wobble: 0.01
+    typical_wobble: 1
     dips_back: true
     dip_detail:
-      depth: 0.85
+      depth: 85
       period: 10m
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_bufferpool_hit_ratio
-    metric_kind: gauge
+    metric: db2_bufferpool_pages_found_total
+    metric_kind: counter
+    companion_series:
+      - metric: db2_bufferpool_logical_reads_total
+        role: denominator
+        metric_kind: counter
+        level: 100
     shape_class: plateau
     fault_class: bufferpool-thrash-fullscan
     min_value: 0
@@ -61,6 +71,9 @@ signatures:
       一支忘記加上定期 COMMIT 的批次程式在單一長交易中連續寫入數百萬筆
       異動，交易日誌使用率隨交易時間拉長持續攀升；若未即時介入會耗盡
       active log 空間，導致後續交易全部因 SQL0964C（transaction log full）失敗。
+    # 平台單位換算（#3833）：exporter 出 used／available 兩個 bytes gauge，pack 算
+    # used / (used + available)。日誌總量取 100，used 即作者寫的百分比，available
+    # 是 100 − used（companion role=complement）。
     source: real-incident
     normal_level: 35
     fault_level: 94
@@ -70,8 +83,12 @@ signatures:
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_log_usage_percent
+    metric: db2_log_used_bytes
     metric_kind: gauge
+    companion_series:
+      - metric: db2_log_available_bytes
+        role: complement
+        level: 100
     shape_class: ramp
     fault_class: long-txn-log-fill
     min_value: 0
@@ -95,10 +112,10 @@ signatures:
       period: 8m
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_sort_overflows
+    metric: db2_sort_overflows_total
     metric_kind: counter
     companion_series:
-      - metric: db2_total_sorts
+      - metric: db2_sorts_total
         labels: {}
         role: denominator
         metric_kind: counter
@@ -130,7 +147,7 @@ signatures:
     fault_class: hot-row-lock-contention
     labels: {instance: db2-ref2-01, database: SAMPLE}
 
-  # ── 6. Database instance down (boolean up→0, sustained) ─────────────────
+  # ── 6. Database instance down (liveness query_timestamp stops advancing, sustained) ──
   - description: >
       儲存子系統對 DB2 執行個體所在檔案系統的一次寫入逾時，觸發實例異常
       結束（相當於非預期的 db2stop force）；監控代理本身仍存活並持續嘗試
@@ -140,14 +157,17 @@ signatures:
     fault_level: 0
     onset_duration: 30s
     hold_duration: 15m
+    # query-exporter 每次成功都把 query_timestamp 設成當下時間，健康時正好每秒
+    # 前進 1，沒有抖動（#3833）。
+    typical_wobble: 0
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: db2_up
-    metric_kind: boolean
+    metric: query_timestamp
+    metric_kind: counter
     shape_class: step
     fault_class: instance-crash-recovery
-    labels: {instance: db2-ref2-01, database: SAMPLE}
+    labels: {job: tenant-exporters, query: db2_liveness, instance: db2-ref2-01, database: SAMPLE}
 
   # ── 7. Exporter staleness during a connection leak (agent dies) ─────────
   - description: >
@@ -164,7 +184,7 @@ signatures:
     dips_back: false
     agent_keeps_reporting: false
     must_detect: true
-    metric: db2_connections_active
+    metric: db2_connections_current
     metric_kind: gauge
     shape_class: ramp
     time_axis:
@@ -178,17 +198,27 @@ signatures:
       排定的線上表格重組（online REORG）與 RUNSTATS 維護作業執行期間，
       緩衝集區命中率出現預期中的短暫下滑，作業結束後迅速回復正常水準；
       屬於已知的維護窗口行為，不需要告警。
+    # 平台單位換算（#3833，不是從門檻反推）：exporter 不再出命中率 gauge，pack 由
+    # 兩個 counter 的 rate 算 pages found / logical reads（IBM 的公式）。這裡以
+    # logical reads 100 頁/秒為基準（companion），pages found 的速率 = 100 × 作者
+    # 寫的命中率，wobble 與 dip 深度同乘 100。比值與基準無關；100 只需高於 pack
+    # 的最小樣本（每 5 分鐘 200 次 logical read）。
     source: expert-experience
-    normal_level: 0.97
-    fault_level: 0.88
+    normal_level: 97
+    fault_level: 88
     onset_duration: 2m
     hold_duration: 12m
-    typical_wobble: 0.01
+    typical_wobble: 1
     dips_back: false
     agent_keeps_reporting: true
     must_detect: false
-    metric: db2_bufferpool_hit_ratio
-    metric_kind: gauge
+    metric: db2_bufferpool_pages_found_total
+    metric_kind: counter
+    companion_series:
+      - metric: db2_bufferpool_logical_reads_total
+        role: denominator
+        metric_kind: counter
+        level: 100
     shape_class: spike
     fault_class: reorg-maintenance-blip
     min_value: 0

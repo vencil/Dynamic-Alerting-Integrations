@@ -281,7 +281,7 @@ tests:
     input_series:
       - series: 'user_threshold_unset{tenant="t-db2", pack="db2", key="db2_bufferpool_hit_ratio", fix="tenant"}'
         values: '1x160'
-      - series: 'db2_up{tenant="t-db2", job="tenant-exporters"}'
+      - series: 'query_interval{tenant="t-db2", job="tenant-exporters", query="db2_liveness"}'
         values: '1x160'
     alert_rule_test:
       - alertname: DB2ThresholdNotConfigured

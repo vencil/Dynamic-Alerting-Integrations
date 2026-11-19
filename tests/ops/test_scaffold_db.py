@@ -69,7 +69,7 @@ RULE_PACK_CATALOGUE = [
     ("oracle", False,
      ["oracle_sessions_active", "oracle_tablespace_used_percent"], "tablespace"),
     ("db2", False,
-     ["db2_connections_active", "db2_bufferpool_hit_ratio"], "bufferpool"),
+     ["db2_connections_active", "db2_bufferpool_hit_ratio"], "tablespace"),
     ("clickhouse", False,
      ["clickhouse_queries_rate", "clickhouse_active_connections"], "database"),
     ("kafka", False,
