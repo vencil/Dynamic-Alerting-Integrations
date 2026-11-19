@@ -28,6 +28,7 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 
 #: (tool, flag) — the same strings as the rows of the write gate.
 ARTIFACT_FILE_FLAGS = [
+    ("dx/compile_custom_alerts.py", "--out"),  # #3982, owner 2026-11-18
     ("dx/generate_tenant_metadata.py", "--output"),  # #3982, owner 2026-11-18
     ("ops/generate_alertmanager_routes.py", "-o/--output"),
 ]

@@ -81,7 +81,9 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_compat import find_project_root  # noqa: E402  (#2852)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import (  # noqa: E402  (#1789; #3982: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
+from _lib_validation import artifact_file_type  # noqa: E402  (#3982)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -545,7 +547,10 @@ def main() -> int:
                         help="verify committed pack matches source (semantic); exit 1 on drift")
     parser.add_argument("--config-dir", default=None,
                         help=f"conf.d tree with _custom_alerts (default: {DEFAULT_CONFIG_REL})")
-    parser.add_argument("--out", default=None,
+    # #3982 (owner 2026-11-18): an artifact — a tracked pack Prometheus loads
+    # and this tool reads back (the erase guard, --check): replaced whole, so
+    # a failed write leaves the previous pack; `-` and "" are refused.
+    parser.add_argument("--out", default=None, type=artifact_file_type(then=Path),
                         help=f"output rule pack path — REQUIRED to write. Optional "
                              f"for --check, which compares against {OUT_REL} (#1582)")
     parser.add_argument("--allow-empty", action="store_true",
@@ -674,6 +679,10 @@ def main() -> int:
 
     produced = sync._extract(groups)
     cr = sync._consumer_read()
+    # #3982: the artifact's preconditions before the first read — a FIFO
+    # would block the erase guard's read and --check's, a device read as
+    # an empty pack.
+    check_repo_artifact(out_path, flag="--out" if args.out is not None else None)
     try:
         committed = _committed_rules(out_path)
     except cr.ConsumerReadError as exc:
@@ -754,8 +763,9 @@ def main() -> int:
               f"genuinely empty.", file=sys.stderr)
         return EXIT_VIOLATION
 
-    with output_write(out_path, flag="--out"):
-        out_path.write_text(rendered, encoding="utf-8", newline="\n")
+    # #3982: atomic replace — a failed write leaves the previous pack whole
+    # (it used to leave a truncated one that --check read as an older pack).
+    write_repo_artifact(out_path, rendered, flag="--out")
     if pack.shapes:
         print(f"✅ Compiled {pack.shapes} shape(s) → {shown}")
     else:

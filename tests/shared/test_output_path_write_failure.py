@@ -86,7 +86,9 @@ Owner rulings that the rule alone would not give (#3107, 2026-10-24 and
 written one is a config some reader will load. #3982, 2026-11-18:
 ``generate_tenant_metadata --output`` is an artifact (tenant-api reads it;
 ``-`` is refused, stdout is the flag left out); ``audit_rules_drift --out``
-is an operator output (``-`` is stdout). A row carries the class its
+is an operator output (``-`` is stdout); ``compile_custom_alerts --out`` is an
+artifact (the tracked pack Prometheus loads, read back by the erase guard and
+``--check``). A row carries the class its
 flag SHOULD have; where the tool does not write that way yet, the row is on
 one of the lists below, not reclassified to match.
 
@@ -676,7 +678,7 @@ ROWS: list[Row] = [
       # no shape here can make the write fail while the mkdir succeeds for
       # a FILE-shaped output flag.
       shapes=("parent_is_file",)),
-    R("dx/compile_custom_alerts.py", "--out", "file", "operator",
+    R("dx/compile_custom_alerts.py", "--out", "file", "artifact",
       lambda c, out: ["--config-dir", _custom_alerts_conf_d(c.tmp), "--out", str(out)],
       reach="tmp conf.d with one _custom_alerts threshold recipe",
       out_name="rule-pack-custom-alerts.yaml"),
@@ -837,19 +839,22 @@ ROWS: list[Row] = [
     # unwritable also makes it unreadable, and the deliberately unguarded READ
     # at `_load_history` dies first (measured: rc=1 traceback at that line).
     # It is wrapped; the static pin is the only evidence for it.
-    R("ops/config_history.py", "--config-dir", "dir", "operator",
+    # #3982 (owner 2026-11-18): artifact — `history.json` is read back on
+    # every run and the `snap-N/` copies by `show` / `diff`; both through
+    # `write_repo_artifact(mode=0o600)`, the directories through `ensure_dir`.
+    R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="a one-shard conf.d built in place; `snapshot` is what writes",
       out_name="conf.d", artifact=".da-history", variant="history-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/config_history.py", "--config-dir", "dir", "operator",
+    R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot subdirectory blocked",
       out_name="conf.d", artifact=".da-history/snap-1", variant="snapshot-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/config_history.py", "--config-dir", "dir", "operator",
+    R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot COPY of alpha.yaml blocked",
       out_name="conf.d", artifact=".da-history/snap-1/alpha.yaml",
@@ -1774,10 +1779,6 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
 #: whether that is all the run wrote there ("all") or it also wrote through
 #: an entry ("some"). A `mkdir` counts — `ensure_dir` is the entry for it.
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
-    ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
-    ("ops/config_history.py", "--config-dir"): (
-        "some", ("open .da-history/history.json", "os.mkdir .da-history",
-                 "os.mkdir .da-history/snap-1")),
 }
 
 #: Rows whose output came through the entry of the OTHER class than the row
@@ -3367,17 +3368,22 @@ class TestTheLists:
                                 ("scripts/tools/dx/zz_synthetic.py:main write_text_or_die ×1",))
         if not VIA_OTHER_CLASS:  # emptied by #3982 (owner 2026-11-18)
             monkeypatch.setitem(VIA_OTHER_CLASS, synthetic, "artifact")
+        if not RAW_UNDER_OUT:  # emptied by #3982 (the last key, config_history)
+            monkeypatch.setitem(RAW_UNDER_OUT, synthetic, ("all", ("open zz.json",)))
         for key in (sorted(VIA_OLD_NAMES)[0], sorted(RAW_UNDER_OUT)[0],
                     sorted(VIA_OTHER_CLASS)[0]):
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
                       variant="synthetic")
             assert _list_faults(row, self._CLEAN), key
 
-    def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self):
-        key = ("ops/config_history.py", "--config-dir")
+    def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self, monkeypatch):
+        # A synthetic entry: #3982 emptied RAW_UNDER_OUT, and its judgement
+        # stays until the list itself is retired.
+        key = ("dx/zz_synthetic.py", "--out-dir")
+        monkeypatch.setitem(RAW_UNDER_OUT, key, ("some", ("open zz/a.json", "os.mkdir zz")))
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
         how, sites = RAW_UNDER_OUT[key]
-        started = SPAWNS[key]
+        started = SPAWNS.get(key, ())
         assert _list_faults(row, Seen([], (), sites, how == "all", None, started)) == []
         assert _list_faults(row, Seen([], (), (*sites, "open out/zz.json"), True, None,
                                       started))
@@ -3395,7 +3401,7 @@ class TestTheLists:
         assert not sorted({tool for tool, _f, _n in UNREACHED_WRITER_CALLS}
                           - {r.tool for r in ROWS})
 
-    def test_the_mode_of_a_clean_operator_rows_files_is_held(self, tmp_path):
+    def test_the_mode_of_a_clean_operator_rows_files_is_held(self, tmp_path, monkeypatch):
         """What an `fchmod` after the entry, or a `chmod` in a child, leaves
         behind: the audit names who opened the file, the disk says its mode."""
         if not has_posix_modes():
@@ -3409,7 +3415,9 @@ class TestTheLists:
         out.chmod(0o666)
         assert len(_mode_faults(clean, tmp_path, frozenset({"findings.json"}))) == 1
         # Not asked of a row on a list, nor of an artifact.
-        listed = next(r for r in ROWS if (r.tool, r.flag) in RAW_UNDER_OUT)
+        listed = Row("dx/zz_synthetic.py", "--out", "file", "operator", lambda c, out: [],
+                     reach="synthetic")
+        monkeypatch.setitem(RAW_UNDER_OUT, (listed.tool, listed.flag), ("all", ("open zz",)))
         artifact = next(r for r in ROWS if r.cls == "artifact" and _is_clean(r))
         for row in (listed, artifact):
             assert _mode_faults(row, tmp_path, frozenset({"findings.json"})) == []
