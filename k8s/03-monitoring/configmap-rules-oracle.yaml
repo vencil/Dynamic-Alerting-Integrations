@@ -21,7 +21,9 @@ data:
     \ tenant:oracle_process_usage:percent\n    expr: \"max by(tenant) (\\n  100 *\
     \ oracledb_process_count\\n  / (oracledb_processes_limit > 0)\\n)\\n\"\n  - record:\
     \ tenant:oracle_pga_usage:percent\n    expr: \"max by(tenant) (\\n  100 * oracledb_pga_allocated_bytes\\\
-    n  / (oracledb_pga_aggregate_limit_bytes > 0)\\n)\\n\"\n  - record: tenant:oracle_session_utilization:ratio\n\
+    n  / (oracledb_pga_aggregate_limit_bytes > 0)\\n)\\n\"\n  - record: tenant:oracle_hard_parse_time:percent\n\
+    \    expr: \"max by(tenant) (\\n  100 * rate(oracledb_hard_parse_elapsed_seconds_total[5m])\\\
+    n  / (rate(oracledb_db_time_seconds_total[5m]) >= 1)\\n)\\n\"\n  - record: tenant:oracle_session_utilization:ratio\n\
     \    expr: \"max by(tenant) (\\n  oracledb_sessions_current / (oracledb_sessions_limit\
     \ > 0)\\n)\\n\"\n- name: oracle-threshold-normalization\n  interval: 15s\n  rules:\n\
     \  - record: tenant:alert_threshold:oracle_sessions_active\n    expr: max by(tenant)\
@@ -38,6 +40,8 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"process_usage_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_pga_usage_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"pga_usage_percent\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:oracle_hard_parse_time_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"hard_parse_time_percent\"\
     , severity=\"warning\"})\n"
   oracle-alert.yml: "groups:\n- name: oracle-alerts\n  rules:\n  - alert: OracleDatabaseDown\n\
     \    expr: \"max by(tenant, instance) (\\n  changes(query_timestamp{job=\\\"tenant-exporters\\\
@@ -241,6 +245,27 @@ data:
     \ }}'\n      summary: Oracle PGA approaching PGA_AGGREGATE_LIMIT on {{ $labels.tenant\
     \ }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle PGA 逼近 PGA_AGGREGATE_LIMIT'\n\
     \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: OracleHighHardParseTime\n    expr: \"(\\n  tenant:oracle_hard_parse_time:percent\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:oracle_hard_parse_time_percent\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 10m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Hard\
+    \ parse time: {{ $value | printf \"%.1f\" }}% of DB time'\n      description_zh:\
+    \ Hard parse 耗時：DB time 的 {{ $value | printf \"%.1f\" }}%\n      owner: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: Oracle hard parse share of DB time high — look for SQL without bind variables'\n\
+    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable\
+    \ 的 SQL'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Oracle hard parsing takes a high share of DB time on {{\
+    \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle hard parse\
+    \ 佔 DB time 比例過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: OraclePGALimitNotSet\n    expr: \"(\\n  max by(tenant, instance) (oracledb_pga_aggregate_limit_bytes\
     \ == 0)\\n  and on(tenant)\\n  tenant:alert_threshold:oracle_pga_usage_percent\\\

@@ -252,6 +252,18 @@ oracledb_pga_aggregate_limit_bytes:
   rule_pack: oracle
   note: "PGA 使用率的分母（PGA_AGGREGATE_LIMIT，0 表示未設上限、不計比例，#1320）"
 
+oracledb_hard_parse_elapsed_seconds_total:
+  maps_to: oracle_hard_parse_time_percent
+  golden_rule: OracleHighHardParseTime
+  rule_pack: oracle
+  note: "Hard parse 耗時佔 DB time 的分子（v$sys_time_model，#1174），用 scaffold_tenant.py 設定 oracle_hard_parse_time_percent"
+
+oracledb_db_time_seconds_total:
+  maps_to: oracle_hard_parse_time_percent
+  golden_rule: OracleHighHardParseTime
+  rule_pack: oracle
+  note: "Hard parse 佔比的分母（DB time）；DB time 增速不到 1 秒／秒（AAS < 1）時不計比例（#1174）"
+
 # ────────────────────────────────────────
 # IBM DB2
 # ────────────────────────────────────────

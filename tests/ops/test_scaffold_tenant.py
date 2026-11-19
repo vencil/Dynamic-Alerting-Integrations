@@ -147,7 +147,8 @@ class TestGenerateDefaultsDeclaredList:
     def test_selected_pack_declares_its_flat_optional_keys(self):
         result = generate_defaults(["kubernetes", "oracle"])
         assert result["optional_overrides"] == [
-            "oracle_wait_time_rate", "oracle_pga_usage_percent",
+            "oracle_wait_time_rate", "oracle_hard_parse_time_percent",
+            "oracle_pga_usage_percent",
         ]
 
     def test_declared_keys_carry_no_value(self):
@@ -1673,11 +1674,11 @@ class TestPromptDefaultsSplitByKeyClass:
         return seen, res["tenants"]["db-c"]
 
     def test_flat_optional_key_empty_input_writes_nothing(self):
-        """oracle：3 個 defaults 全部按 Enter 保留，2 個平鍵一個都不落地；
+        """oracle：3 個 defaults 全部按 Enter 保留，3 個平鍵一個都不落地；
         2 個 `_critical`（#3658）照 `_critical` 那一類的規矩，Enter 採用平台值。"""
         res = _gen_tenant_interactive("db-c", ["oracle"], [
             "", "", "",          # defaults: sessions_active / tablespace / process_usage（#1320）
-            "", "",              # 平鍵 ×2 —— 留空即跳過
+            "", "", "",          # 平鍵 ×3 —— 留空即跳過
             "", "",              # _critical ×2 —— Enter 仍採用平台值
             *self._NEUTRAL_TAIL,
         ])
@@ -1693,7 +1694,7 @@ class TestPromptDefaultsSplitByKeyClass:
         """拿掉的是**預設**、不是這一格：租戶真的填了就照樣寫進去。"""
         res = _gen_tenant_interactive("db-c", ["oracle"], [
             "", "", "",
-            "60", "",                 # wait_time_rate 填 / pga_usage 跳過
+            "60", "", "",             # wait_time_rate 填 / hard_parse_time、pga_usage 跳過
             "", "",                   # _critical ×2 —— Enter 採用平台值
             *self._NEUTRAL_TAIL,
         ])
@@ -1731,7 +1732,8 @@ class TestPromptDefaultsSplitByKeyClass:
             "oracle_sessions_active_critical",
             "oracle_tablespace_used_percent_critical",
         }, overrides
-        for key in ("oracle_wait_time_rate", "oracle_pga_usage_percent"):
+        for key in ("oracle_wait_time_rate", "oracle_hard_parse_time_percent",
+                    "oracle_pga_usage_percent"):
             assert key not in overrides
 
     def test_prompt_text_shows_the_number_as_a_reference_not_a_default(self):
