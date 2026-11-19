@@ -2,10 +2,10 @@
 
 WHAT THESE TWO HELPERS ARE FOR
 ------------------------------
-#1641 closed the write-failure class for paths that go through the secure
-writers. It could not close it for the sites that write RAW — ``open()``,
+#1641 closed the write-failure class for paths that go through the output
+entries. It could not close it for the sites that write RAW — ``open()``,
 ``Path.mkdir()``, ``shutil.copy2()``, a ``csv.writer`` holding the handle —
-because routing those through ``write_text_secure`` would change the bytes or
+because routing those through an output entry would change the bytes or
 the permissions of the SUCCESS path. ``output_write`` closes the same class by
 WRAPPING such a site instead of converting it: on success it does nothing at
 all, and on an ``OSError`` that is about the output path it re-raises the one
@@ -47,7 +47,7 @@ from _lib_io import (  # noqa: E402
     _output_write_names_target,
     output_write,
 )
-from _platform_fs import DIR_WRITE_ERROR, has_posix_modes, symlink_or_skip  # noqa: E402
+from _platform_fs import DIR_WRITE_ERROR, has_posix_modes  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -337,7 +337,7 @@ def test_inner_output_write_error_on_the_same_path_is_not_wrapped_again(blocker:
     wrapped a second time — the outer ``flag`` would overwrite the accurate
     inner one and the real cause would sit one ``__cause__`` deeper. This is
     the shape that actually occurs: a block wrapped for its raw ``open`` also
-    calls a secure writer for a sibling artefact under the same output path.
+    calls an output entry for a sibling artefact under the same output path.
 
     ⚠️ The same assertion on a DIFFERENT inner path proves nothing — that one
     survives on the filename rule alone, with or without the arm (measured).
@@ -345,7 +345,7 @@ def test_inner_output_write_error_on_the_same_path_is_not_wrapped_again(blocker:
     target = blocker / "same.json"
     with pytest.raises(OutputWriteError) as ei:
         with output_write(target, flag="--outer-flag", action="create directory"):
-            _lib_io.write_json_secure(str(target), {"a": 1}, flag="--inner-flag")
+            _lib_io.write_operator_output(str(target), "x", flag="--inner-flag")
     exc = ei.value
     assert exc.path == str(target)
     assert exc.flag == "--inner-flag", "the outer flag must not overwrite the inner one"
@@ -358,8 +358,8 @@ def test_inner_output_write_error_on_another_path_is_not_wrapped_either(blocker:
     one must keep its own identity rather than be re-attributed."""
     with pytest.raises(OutputWriteError) as ei:
         with output_write(blocker / "outer.txt", flag="--outer-flag"):
-            _lib_io.write_json_secure(str(blocker / "inner.json"), {"a": 1},
-                                      flag="--inner-flag")
+            _lib_io.write_operator_output(str(blocker / "inner.json"), "x",
+                                          flag="--inner-flag")
     assert ei.value.path == str(blocker / "inner.json")
     assert ei.value.flag == "--inner-flag"
 
@@ -510,7 +510,7 @@ def test_decorator_does_not_claim_a_plain_oserror(tmp_path: Path):
     assert "ERROR: cannot " not in proc.stderr
 
 
-# ── #3105: the secure writers chmod regular files only ───────────────────
+# ── #3105: the operator entry tightens an own regular file only ─────────
 
 def _device_clone(tmp_path: Path) -> Path:
     """A character device equal to /dev/null (1, 3) inside tmp_path, so a
@@ -530,68 +530,35 @@ def _device_clone(tmp_path: Path) -> Path:
     return dev
 
 
-@pytest.mark.parametrize("writer", ["text", "json"])
-def test_a_device_target_is_written_and_its_mode_left_alone(tmp_path: Path, writer):
+def test_a_device_target_is_written_and_its_mode_left_alone(tmp_path: Path):
     """`-o /dev/null`: the content goes to the device and its mode stays as
     it was — as root the old chmod turned /dev/null into crw------- (#3105)."""
     dev = _device_clone(tmp_path)
-    if writer == "text":
-        _lib_io.write_text_secure(str(dev), "x\n", flag="-o/--output")
-    else:
-        _lib_io.write_json_secure(str(dev), {"a": 1}, flag="-o/--output")
+    _lib_io.write_operator_output(str(dev), "x\n", flag="-o/--output")
     assert (os.stat(dev).st_mode & 0o777) == 0o666
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
                     reason="as root the chmod of /dev/null would succeed (see the clone test)")
-@pytest.mark.parametrize("writer", ["text", "json"])
-def test_dev_null_is_writable_without_owning_it(writer):
+def test_dev_null_is_writable_without_owning_it():
     """Not root: the chmod of /dev/null used to fail with EPERM after the
     write, so `-o /dev/null` ended rc 2 (#3105)."""
-    if writer == "text":
-        _lib_io.write_text_secure("/dev/null", "x\n", flag="-o/--output")
-    else:
-        _lib_io.write_json_secure("/dev/null", {"a": 1}, flag="-o/--output")
+    _lib_io.write_operator_output("/dev/null", "x\n", flag="-o/--output")
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
-@pytest.mark.parametrize("writer", ["text", "json"])
-def test_a_fifo_target_keeps_its_mode(tmp_path: Path, writer):
-    """A FIFO the caller owns: the writer must not chmod it (#3105). Runs as
+def test_a_fifo_target_keeps_its_mode(tmp_path: Path):
+    """A FIFO the caller owns: the entry must not chmod it (#3105). Runs as
     any user, so CI (not root) catches "chmod whenever it is allowed" too."""
-    import threading
     fifo = tmp_path / "pipe"
     os.mkfifo(fifo)
     os.chmod(fifo, 0o666)
-    got = []
-    reader = threading.Thread(target=lambda: got.append(fifo.read_bytes()), daemon=True)
-    reader.start()
-    if writer == "text":
-        _lib_io.write_text_secure(str(fifo), "x\n", flag="-o/--output")
-    else:
-        _lib_io.write_json_secure(str(fifo), {"a": 1}, flag="-o/--output")
-    reader.join(timeout=10)
-    assert not reader.is_alive() and got and got[0]
+    # The reader is open BEFORE the write: the entry refuses a FIFO with no
+    # reader (test_lib_io_operator_output), so a reader thread would race it.
+    rfd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        _lib_io.write_operator_output(str(fifo), "x\n", flag="-o/--output")
+        assert os.read(rfd, 16) == b"x\n"
+    finally:
+        os.close(rfd)
     assert (os.stat(fifo).st_mode & 0o777) == 0o666
-
-
-@pytest.mark.skipif(not has_posix_modes(), reason="POSIX modes only")
-def test_a_symlink_to_a_regular_file_still_makes_it_private(tmp_path: Path):
-    """CONTROL: the regular-file check follows the link (stat, not lstat)."""
-    target = tmp_path / "real.json"
-    target.write_text("old", encoding="utf-8")
-    os.chmod(target, 0o644)
-    link = tmp_path / "link.json"
-    symlink_or_skip(target, link)
-    _lib_io.write_json_secure(str(link), {"a": 1})
-    assert (os.stat(target).st_mode & 0o777) == 0o600
-
-
-@pytest.mark.skipif(not has_posix_modes(), reason="POSIX modes only")
-def test_a_regular_file_is_still_made_private(tmp_path: Path):
-    """CONTROL: the 0600 the writers promise for a regular file is kept."""
-    target = tmp_path / "out.json"
-    target.write_text("old", encoding="utf-8")
-    os.chmod(target, 0o644)
-    _lib_io.write_json_secure(str(target), {"a": 1})
-    assert (os.stat(target).st_mode & 0o777) == 0o600

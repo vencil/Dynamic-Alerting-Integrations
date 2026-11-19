@@ -121,7 +121,6 @@ def scan_file_full(filepath, fix=False):
     if fix and changed:
         with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
             f.writelines(fixed_lines)
-        os.chmod(filepath, 0o644)
 
     return violations
 

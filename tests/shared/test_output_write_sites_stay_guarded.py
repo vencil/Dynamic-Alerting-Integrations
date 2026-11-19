@@ -2,21 +2,22 @@
 
 WHAT THIS FILE IS FOR, AND WHAT IT IS NOT
 -----------------------------------------
-``test_write_failure_class`` pins the SECURE-WRITER population: every
-``write_text_secure`` / ``write_json_secure`` call is guarded or allowlisted.
-That population is closed at the helper, so it stays closed on its own.
+The output entries in ``_lib_io`` close the write-failure class at the
+helper: they raise ``OutputWriteError`` and their ``_or_die`` forms end the
+run with one line at rc=2 (``test_write_failure_class``); whether each
+tool's flag reaches that line is measured per flag by
+``test_output_path_write_failure``.
 
 The raw sinks are the other half and they have no helper to close them. A
 tool that writes with a bare ``open(..., "w")``, ``Path.mkdir``,
-``os.makedirs``, ``shutil.copy2`` or ``os.replace`` cannot move to the secure
-writers without changing the bytes or the permissions it emits, so #1789
+``os.makedirs``, ``shutil.copy2`` or ``os.replace`` cannot move to an entry
+without changing the bytes or the permissions it emits, so #1789
 WRAPS those sites in ``_lib_io.output_write`` instead. A wrapper is not a
 helper: nothing stops the next edit from adding a raw sink beside a wrapped
 one, or from deleting the ``with`` line. That is what this file watches.
 
 ⛔ **The measured wording, stated so nobody over-reads a green run.** The
-``write_*_secure`` population has a static guard over the WHOLE tree. The raw
-sink population has a pin only for the files this ticket touched — the ones
+raw sink population has a pin only for the files this ticket touched — the ones
 listed in ``GUARDED_FILES``. Everything else that writes raw is unpinned, and
 this file does not know about it. Do not read this as "raw sinks are
 guarded"; read it as "the raw sinks in these named files are".
@@ -29,9 +30,8 @@ A sink is guarded when, walking up from it WITHOUT crossing a ``def`` /
 1. it is in the body of a ``with output_write(...)`` (#1789's wrapper);
 2. the call is itself one of the already-closed shared writers, named one by
    one in ``_CLOSED_WRITERS`` (a local ``foo_or_die`` a tool defined for
-   itself is NOT one). The two ``_secure`` names are judged by
-   ``test_write_failure_class``; recording all five keeps a CONVERTED site
-   visible in this file's inventory instead of silently vanishing from it;
+   itself is NOT one). Recording them keeps a CONVERTED site visible in this
+   file's inventory instead of silently vanishing from it;
 3. it is in the body of a ``try`` whose handler can catch ``OSError`` /
    ``OutputWriteError`` **and actually ends the run the right way** — the
    handler body calls ``sys.exit`` / ``os._exit`` (or
@@ -40,9 +40,8 @@ A sink is guarded when, walking up from it WITHOUT crossing a ``def`` /
    (``raise OutputWriteError(...)``). ⛔ Judged on the DOTTED name:
    ``log.error(exc)`` is a swallow, not an exit.
 
-Arm 3 is deliberately STRICTER than the one in ``test_write_failure_class``,
-in TWO measured ways, and both are pinned by
-``test_this_scanner_agrees_with_the_secure_writer_one_where_they_overlap``:
+Arm 3 is deliberately strict, in TWO measured ways, both pinned by
+``test_a_handler_that_does_not_end_the_run_is_not_a_guard``:
 
 * **A handler that swallows is not a guard.** ``ops/da_assembler`` measured
   rc=0 on an unwritable ``--config-dir`` because its ``except Exception:``
@@ -53,11 +52,10 @@ in TWO measured ways, and both are pinned by
   re-raise passes that ``OSError`` outwards UNCHANGED, and the thing waiting
   at the top — ``exit_on_output_write_error`` — catches only
   ``OutputWriteError``. So the operator still gets a traceback at rc=1: the
-  handler stopped the run, but not in the way this ticket is about. In
-  ``test_write_failure_class``'s population the same shape is genuinely a
-  guard, because there the exception in flight ALREADY IS an
-  ``OutputWriteError`` (the secure writer made it one) and re-raising it
-  reaches ``_or_die`` / the decorator intact.
+  handler stopped the run, but not in the way this ticket is about. Around
+  an output ENTRY the same shape would be a guard — the exception in flight
+  is already an ``OutputWriteError`` — but an entry's call is arm 2, never
+  this arm.
 
   Measured: ``ops/state_reconcile.write_json`` cleans its temp file up in an
   ``except BaseException: … raise``. Under the old arm its ``os.fdopen`` /
@@ -67,10 +65,10 @@ in TWO measured ways, and both are pinned by
 
 THE SCANNER
 -----------
-Reuses ``test_write_failure_class``: the same handler predicate
-(``_handler_can_catch`` over ``CATCHING_HANDLER_NAMES``) and the same scope
-boundaries (``_SCOPE_BOUNDARIES``), imported rather than restated, plus a
-control that its walk-up rule and this one agree on the shapes they share.
+A handler predicate (``_handler_can_catch`` over ``CATCHING_HANDLER_NAMES``)
+and scope boundaries (``_SCOPE_BOUNDARIES``). #3107 ④ moved them here from
+``test_write_failure_class``, whose static scanner of the retired in-place
+writers they served, when that scanner was retired.
 
 Method-form ``<receiver>.open(...)`` with a literal write mode IS a sink
 (``Path.open("w")``, ``tarfile.open(name, "w:gz")``); with no literal mode it
@@ -100,18 +98,32 @@ from pathlib import Path
 
 import pytest
 
-# The scanner shape is REUSED, not restated: same handler predicate, same
-# scope boundaries, same "walk up, stop at a def" rule.
-import test_write_failure_class as _wfc  # noqa: E402  (tests/shared on sys.path)
-from test_write_failure_class import (  # noqa: E402
-    CATCHING_HANDLER_NAMES,
-    _handler_can_catch,
-    _SCOPE_BOUNDARIES,
-    scan_source as _secure_writer_scan,
-)
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
+
+# Handler names that CAN catch what a raw sink raises — a plain ``OSError``.
+# ``IOError`` is an alias of ``OSError``; ``Exception`` / ``BaseException`` /
+# a bare ``except`` catch it by inclusion. ``OutputWriteError`` is absent: it
+# is a SUBCLASS, and a bare ``open()`` never raises it (only an entry, or
+# ``output_write`` — arms 2 and 1 — does). Narrower subclasses
+# (``FileNotFoundError``) are absent for the same reason.
+CATCHING_HANDLER_NAMES = frozenset({
+    "OSError", "IOError", "Exception", "BaseException",
+})
+
+_SCOPE_BOUNDARIES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _handler_can_catch(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return True  # bare except
+    types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    for t in types:
+        if isinstance(t, ast.Name) and t.id in CATCHING_HANDLER_NAMES:
+            return True
+        if isinstance(t, ast.Attribute) and t.attr in CATCHING_HANDLER_NAMES:
+            return True
+    return False
 
 # ── The sink vocabulary ────────────────────────────────────────────────────
 # Module-qualified: only counted as `<module>.<attr>(...)`, because the bare
@@ -149,16 +161,12 @@ WRITE_MODE_CHARS = frozenset("wax+")
 WRAPPER_NAME = "output_write"
 GUARD_KINDS = ("output_write", "or_die", "try")
 
-# ⛔ A closed list, not a ``_or_die`` / ``_secure`` SUFFIX. The suffix rule
-# claimed these were judged by ``test_write_failure_class``, but that file's
-# ``WRITER_NAMES`` is exactly the two ``_secure`` names — so any local
-# ``foo_or_die`` a tool defined for itself got a free pass here from a gate
-# that had never heard of it. These five are the shared writers in
-# ``_lib_io``, and adding a sixth means adding it here.
+# ⛔ A closed list, not a ``_or_die`` SUFFIX: under the suffix rule any local
+# ``foo_or_die`` a tool defined for itself got a free pass here. These are the
+# shared writers in ``_lib_io`` (#3107: the two output entries; the old
+# in-place names left with ④), and adding one means adding it here.
 _CLOSED_WRITERS = frozenset({
-    "write_text_secure", "write_json_secure",
-    "write_text_or_die", "write_json_or_die", "ensure_dir_or_die",
-    # #3107 v2: the two output entry points.
+    "ensure_dir_or_die",
     "write_operator_output", "write_operator_output_or_die", "write_repo_artifact",
 })
 
@@ -567,8 +575,7 @@ def _is_output_write(item: ast.withitem) -> bool:
 def scan_source(source: str, label: str = "<snippet>") -> list[SinkCall]:
     """Every raw output sink in *source*, each with the guard around it.
 
-    Same walk as ``test_write_failure_class.scan_source``: climb the parent
-    chain and STOP at a ``def`` / ``class`` / ``lambda``, because a body
+    Climb the parent chain and STOP at a ``def`` / ``class`` / ``lambda``, because a body
     written inside a ``try`` or a ``with`` runs when it is CALLED, not where
     it is written.
     """
@@ -753,15 +760,15 @@ class TestGuardShapes:
                "open(q, 'w')\n")
         assert _guards(src) == ["output_write", None]
 
-    def test_or_die_and_secure_calls_read_as_already_closed(self):
-        assert _guards("write_text_or_die(p, c, flag='-o')\n") == ["or_die"]
-        assert _guards("lib.write_json_secure(p, d)\n") == ["or_die"]
+    def test_entry_calls_read_as_already_closed(self):
+        assert _guards("write_operator_output_or_die(p, c, flag='-o')\n") == ["or_die"]
+        assert _guards("lib.write_repo_artifact(p, d)\n") == ["or_die"]
         assert _guards("ensure_dir_or_die(p, flag='-o')\n") == ["or_die"]
 
     def test_a_locally_defined_or_die_is_not_one_of_the_closed_writers(self):
         """#1789 F5. The old rule was the SUFFIX `_or_die` / `_secure`, and it
         justified itself by saying those calls are judged by
-        `test_write_failure_class` — whose `WRITER_NAMES` is exactly the two
+        `test_write_failure_class` — whose `WRITER_NAMES` was exactly the two
         `_secure` names. So a tool that wrote `def save_or_die(...)` around a
         bare `open()` got a free pass here from a gate that had never heard of
         it, and nothing else was looking.
@@ -775,7 +782,7 @@ class TestGuardShapes:
 
     def test_try_with_a_stopping_handler_is_guarded(self):
         for handler in ("except OSError as e:\n    sys.exit(2)\n",
-                        "except OutputWriteError as e:\n    return EXIT_CALLER_ERROR\n",
+                        "except IOError as e:\n    return EXIT_CALLER_ERROR\n",
                         "except Exception:\n    raise SystemExit(2)\n",
                         # A raise that CONVERTS: a new exception object, which
                         # `exit_on_output_write_error` can act on.
@@ -813,8 +820,12 @@ class TestGuardShapes:
                         "except OSError as e:\n    parser.error(str(e))\n",
                         "except OSError as e:\n    self.parser.error(str(e))\n",
                         "except OSError as e:\n    ap.error(str(e))\n",
-                        "except OutputWriteError as e:\n    _die_on_write_error(e, 2)\n"):
+                        "except OSError as e:\n    _die_on_write_error(e, 2)\n"):
             assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
+        # A raw open raises a plain OSError: `except OutputWriteError` never
+        # sees it, whatever its body does.
+        assert _guards("try:\n    open(p, 'w')\nexcept OutputWriteError as e:\n"
+                       "    sys.exit(2)\n") == [None]
 
     def test_an_exit_that_says_it_worked_is_not_a_guard(self):
         """#1789 F3. Ending the run is only half of it: `sys.exit(0)` and
@@ -958,67 +969,29 @@ class TestGuardShapes:
         assert _guards(src) == ["output_write"]
 
 
-def test_this_scanner_agrees_with_the_secure_writer_one_where_they_overlap():
-    """Reuse check, per axis (rulebook D-05a): the imported pieces really are
-    the same judgement, not a second copy that drifts.
-
-    Both scanners answer "is this call lexically inside a catching try,
-    without crossing a def". Fed the same shapes, they must agree — with the
-    TWO documented differences, both pinned below: a handler that catches but
-    does not stop, and a handler whose only action is a BARE ``raise``, are
-    each guarded there and unguarded here.
-    """
-    assert _handler_can_catch is _wfc._handler_can_catch
-    assert CATCHING_HANDLER_NAMES is _wfc.CATCHING_HANDLER_NAMES
-    assert _SCOPE_BOUNDARIES is _wfc._SCOPE_BOUNDARIES
-
-    # Written with a CONVERTING raise, not a bare one: a bare `raise` is now
-    # one of the deliberate divergences below, and using it here would make
-    # these templates agree for a reason that has nothing to do with the axis
-    # they are testing (scope boundaries and the handler-catch predicate).
-    agree = [
-        "try:\n    {call}\nexcept OSError:\n    raise SystemExit(2)\n",
-        "try:\n    {call}\nexcept ValueError:\n    raise SystemExit(2)\n",
-        "try:\n    def f():\n        {call}\nexcept OSError:\n    raise SystemExit(2)\n",
-        "try:\n    pass\nexcept OSError:\n    {call}\n    raise SystemExit(2)\n",
-    ]
-    for tpl in agree:
-        mine = scan_source(tpl.format(call="open(p, 'w')"))
-        theirs = _secure_writer_scan(tpl.format(call="write_text_secure(p, c)"))
-        assert [c.guarded for c in mine] == [c.guarded for c in theirs], tpl
-
-    # ── The deliberate divergences, pinned so neither becomes accidental ──
-    # (1) A handler that catches but SWALLOWS. Guarded there, not here: the
-    #     write-failure class being "handled" is not the same as the operator
-    #     being told (ops/da_assembler measured rc=0).
-    swallow = "try:\n    {call}\nexcept OSError:\n    pass\n"
-    assert _guards(swallow.format(call="open(p, 'w')")) == [None]
-    assert [c.guarded for c in _secure_writer_scan(
-        swallow.format(call="write_text_secure(p, c)"))] == [True]
-
-    # (2) #1789 group 3 — a BARE re-raise. Guarded there, not here, and the
-    #     asymmetry is in the POPULATIONS, not in either scanner's taste:
-    #
-    #       there  the sink is a secure writer, so the exception in flight is
-    #              ALREADY an OutputWriteError; `raise` hands it to `_or_die` /
-    #              `exit_on_output_write_error` intact ⇒ still rc=2, one line.
-    #       here   the sink is raw, so the exception in flight is a plain
-    #              OSError; `raise` hands THAT outwards, and the decorator
-    #              catches only OutputWriteError ⇒ traceback at rc=1.
-    #
-    #     Measured on ops/state_reconcile: with the old arm, deleting the
-    #     `with output_write(...)` around its atomic write left this gate
-    #     green because the temp-file cleanup's `except BaseException: … raise`
-    #     answered for it. It goes red now.
-    #
-    #     ⛔ The fix belongs on THIS side. `test_write_failure_class` is not
-    #     changed: for its population a bare re-raise really is a guard, and
-    #     tightening it there would be a false red on every secure-writer site
-    #     that re-raises for a caller to handle.
-    bare = "try:\n    {call}\nexcept OSError:\n    raise\n"
-    assert _guards(bare.format(call="open(p, 'w')")) == [None]
-    assert [c.guarded for c in _secure_writer_scan(
-        bare.format(call="write_text_secure(p, c)"))] == [True]
+def test_a_handler_that_does_not_end_the_run_is_not_a_guard():
+    """The walk-up and the two ways arm 3 is strict (see the module
+    docstring), on the shapes the retired secure-writer scanner shared with
+    this one (#3107 ④ removed it; the expectations are what both agreed on,
+    and the two places they differed, kept as this scanner's own)."""
+    # Catching and ending the run: guarded. Not catching, a body written in a
+    # `def` under the try, or the sink in the handler itself: not.
+    assert _guards("try:\n    open(p, 'w')\nexcept OSError:\n    raise SystemExit(2)\n") == ["try"]
+    assert _guards("try:\n    open(p, 'w')\nexcept ValueError:\n    raise SystemExit(2)\n") == [None]
+    assert _guards("try:\n    def f():\n        open(p, 'w')\n"
+                   "except OSError:\n    raise SystemExit(2)\n") == [None]
+    assert _guards("try:\n    pass\nexcept OSError:\n    open(p, 'w')\n"
+                   "    raise SystemExit(2)\n") == [None]
+    # (1) A handler that catches but SWALLOWS: the write-failure class
+    #     "handled", the operator not told (ops/da_assembler measured rc=0).
+    assert _guards("try:\n    open(p, 'w')\nexcept OSError:\n    pass\n") == [None]
+    # (2) #1789 group 3 — a BARE re-raise of the plain OSError a raw sink
+    #     raises: `exit_on_output_write_error` catches only OutputWriteError
+    #     ⇒ traceback at rc=1. Measured on ops/state_reconcile: with the old
+    #     arm, deleting the `with output_write(...)` around its atomic write
+    #     left this gate green because the temp-file cleanup's
+    #     `except BaseException: … raise` answered for it.
+    assert _guards("try:\n    open(p, 'w')\nexcept OSError:\n    raise\n") == [None]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

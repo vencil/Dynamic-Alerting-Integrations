@@ -365,12 +365,12 @@ class TestSharedWriteHelpersPinLF:
         atomic_write_text(target, "alpha\nbeta\ngamma\n")
         assert b"\r\n" not in target.read_bytes()
 
-    def test_write_text_secure_emits_lf(self, tmp_path):
+    def test_write_operator_output_emits_lf(self, tmp_path):
         """行為測試 —— 在 Windows 上具鑑別力，Linux 上是 smoke test。"""
-        from _lib_io import write_text_secure
+        from _lib_io import write_operator_output
 
         target = tmp_path / "sample.md"
-        write_text_secure(str(target), "alpha\nbeta\ngamma\n")
+        write_operator_output(str(target), "alpha\nbeta\ngamma\n", flag=None)
         assert b"\r\n" not in target.read_bytes()
 
 

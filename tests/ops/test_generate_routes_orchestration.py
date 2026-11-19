@@ -52,7 +52,6 @@ from generate_alertmanager_routes import (
     _build_synthetic_probe_route,
     _build_sentinel_sinkhole_route,
     _parse_config_files,
-    write_text_secure,
 )
 from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
 from _grar_render import merge_generated, _enforce_equal_labels_gated

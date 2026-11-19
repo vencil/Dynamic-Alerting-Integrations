@@ -1235,7 +1235,7 @@ def test_threshold_registry_regen_writes_through_da_guard_write(tmp_path, monkey
     conf.d root, each file a `replace` of its whole text — asked first as a
     dry run, then the same batch written; no Python write of a conf.d file."""
     import _lib_confedit
-    import _lib_python
+    import _lib_io
     lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                   _stale(_SEED_REL, *_SEED_STALE))
     calls = []
@@ -1247,10 +1247,14 @@ def test_threshold_registry_regen_writes_through_da_guard_write(tmp_path, monkey
         return real(root, entries, **kw)
 
     monkeypatch.setattr(_lib_confedit, "write_all", spy)
-    secure = []
-    real_secure = _lib_python.write_text_secure
-    monkeypatch.setattr(_lib_python, "write_text_secure",
-                        lambda p, *a, **k: (secure.append(str(p)), real_secure(p, *a, **k)))
+    # No Python write of a conf.d file, through either output entry.
+    # (#3107 ④: this spied `_lib_python.write_text_secure`, a name the lib
+    # never looked up there — it could not see a write.)
+    python_writes = []
+    for name in ("write_operator_output", "write_repo_artifact"):
+        real_writer = getattr(_lib_io, name)
+        monkeypatch.setattr(_lib_io, name, lambda p, *a, _w=real_writer, **k: (
+            python_writes.append(str(p)), _w(p, *a, **k))[1])
     lib.regen_surfaces(lib.build_registry_doc())
     want = {str(dev.parent): (REPO / _DEV_REL).read_bytes(),
             str(seed.parent): (REPO / _SEED_REL).read_bytes()}
@@ -1259,7 +1263,7 @@ def test_threshold_registry_regen_writes_through_da_guard_write(tmp_path, monkey
         (str(dev.parent), False), (str(seed.parent), False)]
     for root, entries, _dry in calls:
         assert entries == [{"path": "_defaults.yaml", "copy": want[root], "replace": True}]
-    assert secure == []
+    assert python_writes == []
     assert dev.read_bytes() == want[str(dev.parent)]
 
 
