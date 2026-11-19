@@ -41,7 +41,7 @@ func TestKeyVerdict_RootDefaultsUnreadKeyWithOrWithoutATenant(t *testing.T) {
 		dir := writeReservedConfD(t, c.files)
 		var out, errOut bytes.Buffer
 		if code := run([]string{keyVerdictCmd, "--config-dir", dir}, &out, &errOut); code != exitOK &&
-			!(name == "a root the load drops" && code == exitParseFailed) {
+			(name != "a root the load drops" || code != exitParseFailed) {
 			t.Fatalf("%s: exit %d: %s", name, code, errOut.String())
 		}
 		var doc struct {
