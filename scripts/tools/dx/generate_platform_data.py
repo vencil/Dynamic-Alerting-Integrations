@@ -133,6 +133,8 @@ def build_fallback(data: dict) -> dict:
             "generate_platform_data.py — DO NOT EDIT. Run `make platform-data`."
         ),
         "packOrder": list(order),
+        # Offline arm of the wizard's ALERT_COUNT (#4012).
+        "tenantAlertRules": data["totals"]["tenantAlertRules"],
         "rulePacks": {
             pack_id: {
                 field: (packs[pack_id].get(field)
@@ -778,6 +780,12 @@ def build_platform_data(at: str | None = None, release_charts: bool = False) -> 
     # Totals
     total_rec = sum(rule_counts.get(k, {}).get("recording", 0) for k in PACK_ORDER)
     total_alert = sum(rule_counts.get(k, {}).get("alert", 0) for k in PACK_ORDER)
+    # The alerts a tenant can select: every pack but the declared platform
+    # packs (PLATFORM_PACKS, the one declaration). It is the row count of
+    # rule-packs/ALERT-REFERENCE.md and the portal wizard's ALERT_COUNT reads
+    # it, so neither restates which pack is the platform one (#4012).
+    tenant_alert = sum(rule_counts.get(k, {}).get("alert", 0) for k in PACK_ORDER
+                       if not _lib_consumer_read.is_platform_pack(k))
 
     # v2.3.0: Integrate tenant metadata if conf.d/ exists
     # The tenants are the exporter's answer at `at` (#2115 B4); `generated`
@@ -800,6 +808,7 @@ def build_platform_data(at: str | None = None, release_charts: bool = False) -> 
             "packs": len(PACK_ORDER),
             "recordingRules": total_rec,
             "alertRules": total_alert,
+            "tenantAlertRules": tenant_alert,
             "total": total_rec + total_alert,
         },
     }

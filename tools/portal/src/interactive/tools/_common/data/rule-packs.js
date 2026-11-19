@@ -91,6 +91,14 @@ const RULE_PACK_DATA = window.__PLATFORM_DATA?.rulePacks
 const PACK_ORDER = window.__PLATFORM_DATA?.packOrder
   || RULE_PACKS_FALLBACK.packOrder;
 
+// Alerts a tenant can select — every pack but the declared platform packs.
+// It is the row count of rule-packs/ALERT-REFERENCE.md (count-literals-drift
+// pins the two). The generator computes it from PLATFORM_PACKS and writes it to
+// totals.tenantAlertRules and to the offline fallback, so this file restates
+// neither the number nor which pack is the platform one (#4012).
+const TENANT_ALERT_COUNT = window.__PLATFORM_DATA?.totals?.tenantAlertRules
+  ?? RULE_PACKS_FALLBACK.tenantAlertRules;
+
 const CATEGORY_LABELS = {
   database: () => t('資料庫', 'Databases'),
   messaging: () => t('訊息佇列', 'Messaging'),
@@ -168,6 +176,18 @@ function getDeclaredKeys(selectedPacks) {
     for (const row of rows) keys.push({ pack: packId, label, ...row });
   }
   return keys;
+}
+
+/**
+ * Labels of the packs that have at least one declared-without-value key — the
+ * thresholds a tenant must set themselves, silent until they do (#4012, from
+ * #1175's onboarding advice). Derived from DECLARED_KEYS, so the onboarding
+ * checklist names exactly the packs the registry says, in pack order.
+ */
+function silentByDefaultPacks() {
+  return PACK_ORDER
+    .filter((packId) => (DECLARED_KEYS[packId] || []).length > 0)
+    .map((packId) => RULE_PACK_DATA[packId]?.label || packId);
 }
 
 /**
@@ -348,8 +368,8 @@ function sameNumber(rawScalar, value) {
 }
 
 export {
-  RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER,
-  DECLARED_KEYS, getDeclaredKeys, getValueCounterexample,
+  RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER, TENANT_ALERT_COUNT,
+  DECLARED_KEYS, getDeclaredKeys, silentByDefaultPacks, getValueCounterexample,
   counterexampleVerdict, counterexampleComment, counterexampleLabel,
   counterexampleObserved, annotateCounterexamples,
 };
