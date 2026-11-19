@@ -530,6 +530,21 @@ class TestMainCLI:
         assert output["status"] == "ok"
         assert output["file_count"] == 2
 
+    def test_a_manifest_file_beside_the_json_document(self, config_dir, capsys, cli_argv):
+        """#3107 ④: under --json the report IS the --json document — the tool
+        claims stdout under that name, so `run()` printing it is no second
+        owner (the safety net in `_write_report` would otherwise refuse it)."""
+        from _lib_exitcodes import emit_result
+        sources = self._setup_sources(config_dir)
+        out = Path(config_dir) / "output"
+        manifest = Path(config_dir) / "manifest.json"
+        cli_argv("assemble", "--sources", sources, "--output", str(out),
+                 "--manifest", str(manifest), "--json")
+        assert emit_result(main()) == 0
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["status"] == "ok", captured.err
+        assert json.loads(manifest.read_text(encoding="utf-8"))["file_count"] == 2
+
     def test_the_validate_flag_was_removed(self, config_dir, capsys, cli_argv):
         """#3206: every file `--validate` called an ERROR is refused before
         assembly by the shared conf.d refusal, so the flag was removed: it is
