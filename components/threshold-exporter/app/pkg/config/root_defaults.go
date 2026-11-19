@@ -149,6 +149,40 @@ func RootDefaultsReservedKey(k string) bool {
 	return baseRowsSkipKey(k) && !IsUnregisteredUnderscoreKey(k) && !mergeDroppedKeys[k]
 }
 
+// RootDefaultsUnreadKeys is, sorted, the `_` keys of the root carrier's
+// `defaults:` mapping (data: the file's bytes) that no reader reads (#4031):
+// a `_` key the reserved-key registry does not list
+// (IsUnregisteredUnderscoreKey: served in no layer, #3045) and one the
+// defaults merge drops at every level (mergeDroppedKeys) — the `_` keys of
+// the root `defaults:` RootDefaultsReservedKey leaves out, which
+// root_defaults_reserved_key reports. A routing key is left to the route
+// generator's checks (#2291) and a null value to the root decode's verdict
+// on a value with none (#2518); both are reported as they are. nil when the
+// file does not decode or has no `defaults:` mapping — the merge then reads
+// the whole document, and root_defaults_unwrapped speaks.
+func RootDefaultsUnreadKeys(data []byte) []string {
+	var raw any
+	if yaml.Unmarshal(data, &raw) != nil {
+		return nil
+	}
+	doc, ok := NormalizeYAMLToJSON(raw).(map[string]any)
+	if !ok || !DefaultsBlockWrapped(doc) {
+		return nil
+	}
+	var out []string
+	for k, v := range ExtractDefaultsBlock(doc) {
+		if v != nil && !IsRoutingKey(k) && (IsUnregisteredUnderscoreKey(k) || mergeDroppedKeys[k]) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// IsMergeDroppedKey reports whether the defaults-chain merge drops k from
+// every level (mergeDroppedKeys).
+func IsMergeDroppedKey(k string) bool { return mergeDroppedKeys[k] }
+
 // RootDefaultRefusal is one key of a file's root `defaults:` whose value the
 // root decode refuses: the text the file wrote, and why.
 type RootDefaultRefusal struct {

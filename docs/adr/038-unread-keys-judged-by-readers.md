@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-18
+updated_at: 2026-11-19
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -77,6 +77,8 @@ updated_at: 2026-11-18
 2026-11-16 修訂：`disable` 可以寫在根目錄 `defaults:`（只限內建層給值的鍵），每個租戶繼承，連帶與判定規則與子目錄的 `disable` 相同（決定 8）。
 
 2026-11-18 修訂：判決不再有 `undecidable`：判決文件拿掉 `undecidable` 與 `undecidable_blocks` 兩個欄位，各閘門也不再有「判不了的閾值鍵」這種結果；決定 7 改寫成「沒讀到根平台檔的樹」（決定 5、6、7）。
+
+2026-11-19 修訂：根 `defaults:` 裡沒有讀取端讀的 `_` 鍵（登錄表沒有的鍵，以及 defaults 合併每一層都丟掉的 `_metadata`），判在那份檔上，沒有租戶繼承它時也判；`_metadata` 的原因是 `merge_dropped`（決定 4）。
 
 ## 摘要
 
@@ -271,7 +273,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 | verdict | 意義 | 等級 |
 |---|---|---|
 | `read` | 至少一個讀取端讀它；登記為 `annotation` 的鍵也算 | — |
-| `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`）；閾值 registry `retired_keys:` 登記的退役閾值鍵也是（原因 `retired`），即使 exporter 仍為它送出一列——部署方根 `defaults:` 寫的也算；finding 的 `hint` 點名替代鍵 | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
+| `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`）；閾值 registry `retired_keys:` 登記的退役閾值鍵也是（原因 `retired`），即使 exporter 仍為它送出一列——部署方根 `defaults:` 寫的也算；finding 的 `hint` 點名替代鍵；根 `defaults:` 裡的 `_metadata` 也是（原因 `merge_dropped`：defaults 合併每一層都丟掉它，根 `defaults:` 又只讀閾值），根 `defaults:` 的這類 `_` 鍵判在該檔上，沒有租戶繼承時也判 | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml`、根 `defaults:` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 

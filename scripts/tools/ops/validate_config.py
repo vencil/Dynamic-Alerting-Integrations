@@ -233,6 +233,9 @@ import _lib_key_verdict as key_verdict  # noqa: E402
 from _grar_validate import (  # noqa: E402
     POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY, POLICY_WARN_PREFIX,
     PolicyInputError, PolicyVersionError, is_field_type_error)
+# #4031: a routing key is the route generator's own predicate (Go's
+# config.IsRoutingKey): `_routingProfile` is none, and da-guard judges it.
+from _grar_parse import _is_routing_key  # noqa: E402
 
 # ============================================================
 # Check results
@@ -2473,7 +2476,7 @@ def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
-    Three rules, one row:
+    Two rules, one row:
 
     * #1414 — a mapping or a list as a value fails the exporter's decode
       and it drops the whole root file — every platform threshold and
@@ -2486,13 +2489,9 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       ``tests/golden/fixtures/defaults-carrier-oracle.json`` that the Go test
       ``TestDefaultsCarrierOracle`` judges. Every kind in
       ``deprecate_rule.BLOCKING_KINDS`` is a FAIL here too.
-    * #2291 — no ``_routing*`` key, whatever its value (below). A
-      ``_routing*`` key gets that rule's line only, never a second one from
-      the value rule.
-    * #3045 — any other ``_`` key under ``defaults:`` whose value decodes
-      is a WARN: no ``_`` key is a threshold (the exporter makes no row of
-      one) and no other reader reads one there, so it is dead config. A
-      value that does not decode keeps the value rule's FAIL line only.
+    * #2291 — no routing key (``_routing`` / ``_routing_<…>``, the route
+      generator's ``_is_routing_key``), whatever its value (below). A routing
+      key gets that rule's line only, never a second one from the value rule.
 
     #3387: what da-guard reports as an error about this file is the
     ``guard_errors`` row's, not this one's — a scalar the exporter refuses
@@ -2500,6 +2499,13 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     registered ``_`` key that reaches no tenant (root_defaults_reserved_key),
     and a carrier with no ``defaults:`` mapping whose top level holds a key
     the merge takes (root_defaults_unwrapped).
+
+    #4031: any other ``_`` key under ``defaults:`` — one the registry does
+    not list, or ``_metadata``, which the merge drops — is the key verdict's
+    unread error (the ``routes`` row), on the file, with or without a tenant
+    inheriting it. This row no longer judges ``_`` keys: it did (#3045, a
+    WARN) and so said a second thing about a key da-guard reports, once with
+    the opposite fix.
 
     ⚠️ A file parse-tree cannot read at all fails through
     ``load_confd_file`` and ``_run_check``'s input-error row;
@@ -2560,7 +2566,7 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     details = [_root_defaults_value_detail(rel, k, r,
                                            kind == dr.NULL_NOT_DECLARED)
                for k, r, kind in verdicts
-               if not (k is not None and k.startswith("_routing"))
+               if not (k is not None and _is_routing_key(k))
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
     block = raw.get("defaults")
     if not isinstance(block, dict):
@@ -2571,23 +2577,15 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     details += [_root_defaults_routing_detail(rel, str(k), v,
                                               dropped.get(str(k)))
                 for k, v in block.items()
-                if isinstance(k, str) and k.startswith("_routing")]
+                if _is_routing_key(k)]
     if details:
         return _make_result("root_defaults", FAIL, details)
-    # #3387: which scalar the exporter refuses (root_default_refused) and a
-    # registered `_` key that reaches no tenant (root_defaults_reserved_key)
-    # are da-guard's errors, the `guard_errors` row's — not judged here.
-    dead = [f"{rel}: `defaults.{k}` is read by nothing — no `_` key is a threshold "
-            "(threshold-exporter makes no row of one, #3045) and no other reader reads "
-            "`_` keys under `defaults:`; delete it, or drop the `_` to make it a threshold"
-            for k in block
-            if isinstance(k, str) and k.startswith("_") and not k.startswith("_routing")
-            and k not in dropped]
-    if dead:
-        return _make_result("root_defaults", WARN, dead)
+    # #3387 / #4031: a value the exporter refuses and a `_` key no reader
+    # reads there are da-guard's — `guard_errors` and the key verdict.
     return _make_result("root_defaults", PASS, [
         f"{rel}: {len(block)} key(s) under `defaults:`, no mapping, list or null value "
-        f"and no `_routing*` key (a value the exporter refuses: `guard_errors`)"])
+        f"and no routing key (a value the exporter refuses: `guard_errors`; a `_` key "
+        f"no reader reads: the key verdict, `routes`)"])
 
 
 # ============================================================
