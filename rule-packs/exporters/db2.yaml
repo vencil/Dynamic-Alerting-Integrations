@@ -9,7 +9,9 @@
 #
 # databases.yaml must define TWO database entries with the same DSN: `db2`
 # for the metric queries and `db2_liveness` for the liveness query alone
-# (the queries below name them), for example:
+# (the queries below name them). Keep the two entries identical — DSN,
+# credentials and any `labels:` — or one connection can fail while the other
+# answers (a liveness-only failure pages DatabaseDown), for example:
 #
 #   databases:
 #     db2:

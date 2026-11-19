@@ -222,9 +222,12 @@ groups:
       # takes about 90-105s after the last success (iamseth's up==0 for: 15s
       # took 25-40s): the cost of reading progress instead of a 0 the exporter
       # never reports.
-      # The "never succeeded" arm waits as long: the exporter must have served
-      # query_interval 90s ago, so a first success that is merely slow (the
-      # connection still opening, a scrape that came early) does not page.
+      # The "no success" arm waits as long: no query_timestamp sample in the
+      # last 90s, and the exporter served query_interval 90s ago. A first
+      # success that is merely slow (the connection still opening) does not
+      # page, and neither does an exporter restarted in place (same instance:
+      # its old timestamp goes stale at once, but its samples stay in the 90s
+      # window).
       # The series must also have a sample from 90s ago (`offset 90s`): changes()
       # sees only the samples there are, so a series that began 30s ago, ran
       # once and then stopped would otherwise read as 90s without progress and
@@ -246,7 +249,7 @@ groups:
             (
               query_interval{job="tenant-exporters", query="oracle_liveness"}
               unless on(tenant, instance)
-              query_timestamp{job="tenant-exporters", query="oracle_liveness"}
+              count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s])
             )
             and on(tenant, instance)
             query_interval{job="tenant-exporters", query="oracle_liveness"} offset 90s
@@ -298,7 +301,7 @@ groups:
             or
             (query_interval{job="tenant-exporters", query="oracle_liveness"}
              unless on(tenant, instance)
-             query_timestamp{job="tenant-exporters", query="oracle_liveness"})
+             count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[5m]))
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)

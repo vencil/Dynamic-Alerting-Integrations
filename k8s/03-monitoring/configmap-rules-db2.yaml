@@ -48,14 +48,14 @@ data:
     \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[90s]) > 1\\n  and\\n  query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"db2_liveness\\\"} offset 90s\\n)\\nor\\nmax\
     \ by(tenant, instance) (\\n  (\\n    query_interval{job=\\\"tenant-exporters\\\
-    \", query=\\\"db2_liveness\\\"}\\n    unless on(tenant, instance)\\n    query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}\\n  )\\n  and on(tenant, instance)\\\
-    n  query_interval{job=\\\"tenant-exporters\\\", query=\\\"db2_liveness\\\"} offset\
-    \ 90s\\n)\\n\"\n    for: 15s\n    labels:\n      maintenance: page\n      severity:\
-    \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
-    \ The DB2 liveness query has not succeeded for 90s on {{ $labels.instance }}\n\
-    \      description_zh: DB2 存活查詢 90 秒內沒有成功，實例：{{ $labels.instance }}\n      owner:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \", query=\\\"db2_liveness\\\"}\\n    unless on(tenant, instance)\\n    count_over_time(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[90s])\\n  )\\n  and on(tenant,\
+    \ instance)\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\"db2_liveness\\\
+    \"} offset 90s\\n)\\n\"\n    for: 15s\n    labels:\n      maintenance: page\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: The DB2 liveness query has not succeeded for 90s on {{ $labels.instance\
+    \ }}\n      description_zh: DB2 存活查詢 90 秒內沒有成功，實例：{{ $labels.instance }}\n   \
+    \   owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
@@ -75,8 +75,8 @@ data:
     \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[5m]) == 0\\n    and\\n   \
     \ count_over_time(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\"db2_liveness\\\
     \"}[5m]) > 1\\n  )\\n  or\\n  (query_interval{job=\\\"tenant-exporters\\\", query=\\\
-    \"db2_liveness\\\"}\\n   unless on(tenant, instance)\\n   query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"})\\n)\\nunless on(tenant)\\\
+    \"db2_liveness\\\"}\\n   unless on(tenant, instance)\\n   count_over_time(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[5m]))\\n)\\nunless on(tenant)\\\
     n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
     \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\
     \ }}'\n    annotations:\n      description: query-exporter stopped running {{\

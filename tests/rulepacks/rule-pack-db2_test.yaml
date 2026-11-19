@@ -40,12 +40,12 @@ tests:
       # from 2m15s, firing after for: 15s.
       - series: 'query_interval{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '15x16'
-      - series: 'query_timestamp{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x4 60x12'
       # db-b: healthy — the timestamp advances every sample → no-fire control.
       - series: 'query_interval{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '15x16'
-      - series: 'query_timestamp{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x16'
       # db-c: the exporter runs but the liveness query never succeeded (no
       # query_timestamp at all) → fires on the second arm.
@@ -164,7 +164,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '_x4 15x4'
-      - series: 'query_timestamp{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '_x4 100+30x4'
     alert_rule_test:
       - eval_time: 2m15s
@@ -799,21 +799,21 @@ tests:
   #    (a run with no rows succeeds without touching query_timestamp). ──
   - interval: 15s
     input_series:
-      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x48'
       - series: 'queries_total{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_log", database="db2", status="success"}'
         values: '1+1x48'
       - series: 'queries_total{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_database", database="db2", status="success"}'
         values: '1+1x4 5x44'
-      - series: 'query_timestamp{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x48'
       - series: 'query_interval{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="db2_tablespace"}'
         values: '15x48'
-      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x4 60x44'
       - series: 'queries_total{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="db2_database", database="db2", status="success"}'
         values: '1+1x4 5x44'
-      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x48'
       - series: 'queries_total{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="db2_database", database="db2", status="success"}'
         values: '1+1x4 5x44'
@@ -822,7 +822,7 @@ tests:
       # db-w: db2_tablespace succeeds with no rows — query-exporter then
       # leaves query_timestamp alone, but queries_total{status="success"}
       # counts the run → not stalled.
-      - series: 'query_timestamp{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x48'
       - series: 'query_interval{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="db2_tablespace"}'
         values: '60x48'
@@ -916,7 +916,7 @@ tests:
         values: '15x12'
       - series: 'query_interval{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '15x12'
-      - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+15x12'
     alert_rule_test:
       - eval_time: 2m
@@ -943,7 +943,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '15x20'
-      - series: 'query_timestamp{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+30x4 120x6 _ 120x9'
     alert_rule_test:
       - eval_time: 5m
@@ -1006,7 +1006,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '_x4 15x20'
-      - series: 'query_timestamp{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '_x4 60x20'
     alert_rule_test:
       - eval_time: 1m30s
@@ -1041,7 +1041,7 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '15x4 _x4 15x8'
-      - series: 'query_timestamp{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '0+30x4 _x4 1000+30x8'
     alert_rule_test:
       - eval_time: 4m45s
@@ -1073,13 +1073,33 @@ tests:
     input_series:
       - series: 'query_interval{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="db2_liveness"}'
         values: '15x16'
-      - series: 'query_timestamp{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+      - series: 'query_timestamp{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
         values: '_x4 60+15x12'
     alert_rule_test:
       - eval_time: 30s
         alertname: DB2DatabaseDown
         exp_alerts: []
       - eval_time: 1m
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+
+  # ── DB2DatabaseDown across an exporter restarted IN PLACE (#3833 review):
+  #    same instance (pod IP or static target). Last success at 1m30s, the
+  #    exporter restarts at 1m45s (Prometheus marks the old timestamp stale)
+  #    and its first new success comes at 2m45s. The old query_interval
+  #    already satisfies `offset 90s`; only "no timestamp sample in 90s"
+  #    keeps the arm quiet until a real 90s without success. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-m", instance="qe-m:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x20'
+      - series: 'query_timestamp{tenant="db-m", instance="qe-m:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
+        values: '0+15x6 stale _x3 165+15x8'
+    alert_rule_test:
+      - eval_time: 2m30s
         alertname: DB2DatabaseDown
         exp_alerts: []
       - eval_time: 3m
