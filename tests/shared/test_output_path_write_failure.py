@@ -2694,7 +2694,8 @@ def test_every_caller_of_a_two_class_entry_has_a_row():
     and skips libraries; a call that names no flag, or sits in a library, is
     still a write through an entry that some control run has to exercise
     (carried over from the file-level audit this table replaced). The callers
-    no row can be written for are `ENTRY_CALLERS_WITH_NO_FLAG`."""
+    no row can be written for are `ENTRY_CALLERS_WITH_NO_FLAG` (no flag at
+    the writer) and the tools of `NO_ROW` (a flag, and a measured reason)."""
     import _lib_io
     entries = {name.split(".")[1] for kind in CLASSES
                for name in _lib_io.OUTPUT_ENTRY_POINTS[kind] if name.startswith("_lib_io.")}
@@ -2704,7 +2705,11 @@ def test_every_caller_of_a_two_class_entry_has_a_row():
                       for node in ast.walk(tree))}
     assert callers, "no caller of an operator/artifact entry found — the scan measured nothing"
     rowed = {r.tool for r in ROWS}
-    missing = sorted(callers - rowed - set(ENTRY_CALLERS_WITH_NO_FLAG))
+    # A tool whose flag is in NO_ROW is accounted for there, with its reason
+    # (#3107 ④: inject_waveform --out reached this population when it moved
+    # off the old names).
+    no_row = {tool for tool, _flag in NO_ROW}
+    missing = sorted(callers - rowed - no_row - set(ENTRY_CALLERS_WITH_NO_FLAG))
     assert not missing, f"module(s) calling an operator/artifact entry with no row: {missing}"
     stale = sorted(tool for tool in ENTRY_CALLERS_WITH_NO_FLAG
                    if tool not in callers or tool in rowed or _flags_at_writers(modules[tool]))
