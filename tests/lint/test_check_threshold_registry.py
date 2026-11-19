@@ -328,7 +328,7 @@ def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path, monkeypatch):
     victim = next(iter(doc["packs"]))
     # A STALE copy of the real pack: the markers are intact so `splice_surface`
     # succeeds, and the extra line inside the block makes the render differ, so
-    # an unguarded run reaches `write_text_secure` instead of no-op'ing.
+    # an unguarded run reaches the write instead of no-op'ing.
     marker = lib.begin_marker(f"pack-{victim}", "")
     original = (REPO_ROOT / doc["packs"][victim]["rule_pack_file"]).read_text(
         encoding="utf-8")

@@ -42,7 +42,6 @@ import generate_alertmanager_routes as facade
 # not silently follow it.
 EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
     "_lib_python": (
-        "write_text_secure",
         "PLATFORM_DEFAULTS",
     ),
     "_grar_validate": (

@@ -18,6 +18,7 @@
     "operational",
     "platform"
   ],
+  "tenantAlertRules": 145,
   "rulePacks": {
     "mariadb": {
       "label": "MariaDB/MySQL",

@@ -641,12 +641,10 @@ def main():
     try:
         with open(file_zh, "w", encoding="utf-8", newline="\n") as f:
             f.write(content_zh)
-        os.chmod(file_zh, 0o644)
         print(f"Generated {file_zh}")
 
         with open(file_en, "w", encoding="utf-8", newline="\n") as f:
             f.write(content_en)
-        os.chmod(file_en, 0o644)
         print(f"Generated {file_en}")
 
     except IOError as e:

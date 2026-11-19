@@ -828,11 +828,11 @@ def find_metric_dictionary(tool_dir: str) -> "str | None":
 
 
 class OutputWriteError(OSError):
-    """A secure writer could not write (or create the directory for) *path*.
+    """An output entry could not write (or create the directory for) *path*.
 
-    #1641. Raised by :func:`write_text_secure` / :func:`write_json_secure` /
-    :func:`ensure_dir` in place of the bare ``OSError`` family, so that the
-    ONE class of failure — "the output path is unusable" — has one name and
+    #1641. Raised by the two output entries (:func:`write_operator_output`,
+    :func:`write_repo_artifact`) and :func:`ensure_dir` in place of the bare
+    ``OSError`` family, so that the ONE class of failure — "the output path is unusable" — has one name and
     one message shape across every tool, instead of a traceback at rc=1
     (which in this repo reads as EXIT_VIOLATION, "your config has a
     violation", for what is a mistyped ``-o``).
@@ -889,147 +889,6 @@ def _die_on_write_error(exc: OutputWriteError, exit_code: Optional[int]) -> None
                      code=exit_code)
 
 
-# #3105: ``0o600`` on a regular file only (both writers below). A device or
-# FIFO (``-o /dev/null``) is left alone — a socket already fails the open: as root the chmod would change the
-# device for every process on the host (a ``crw-------`` /dev/null), and as
-# anyone else it fails (EPERM) after the content was already written. A
-# regular file owned by someone else still fails the chmod and the write is
-# reported as failed — the ``0o600`` the caller asked for is not dropped.
-
-
-def write_text_secure(path: str, content: str, *, flag: Optional[str] = None) -> None:
-    """Write text to *path* with UTF-8 encoding, LF endings, and ``0o600``
-    (a regular file only; a device or FIFO keeps its mode, #3105).
-
-    Centralises the SAST-mandated pattern::
-
-        with open(path, "w", encoding="utf-8", newline="\\n") as f:
-            f.write(content)
-        Path(path).chmod(0o600)   # regular files only (#3105)
-
-    ⛔ ``newline="\\n"`` is load-bearing, not cosmetic. Without it Python's
-    text layer translates every ``\\n`` to ``os.linesep``, so the SAME
-    generator emits LF on Linux/CI and CRLF on a Windows host. Since reads go
-    through universal-newline translation, the CRLF is invisible to the tool's
-    own ``--check`` and ``.gitattributes`` (``* text=auto eol=lf``) normalises
-    it away at commit — so the staged diff stays correct and nothing fails.
-    What breaks is the *working copy*: it diverges byte-wise from every other
-    file in the tree, which defeats byte-level comparisons (mutation harnesses
-    asserting a file was restored byte-identical) and emits a confusing
-    "CRLF will be replaced by LF" warning on every subsequent ``git diff``.
-
-    Note this pins LF unconditionally, which is correct for every current
-    caller. If a caller ever needs to emit a Windows-shell script
-    (``.bat`` / ``.cmd`` / ``.ps1`` — the only paths ``.gitattributes`` marks
-    ``eol=crlf``), it must NOT use this helper.
-
-    Args:
-        path: Filesystem path to write.
-        content: Text content.
-        flag: The CLI flag *path* came from (e.g. ``"-o/--output"``), named
-              in the error message; ``None`` for an internally derived path.
-
-    Raises:
-        OutputWriteError: on any ``OSError`` from the write or the chmod
-            (#1641). It IS an ``OSError``, so an existing ``except OSError``
-            still catches it. Tool code on a CLI path should prefer
-            :func:`write_text_or_die`, which turns it into rc=2 + one line.
-    """
-    target = Path(path)
-    try:
-        target.write_text(content, encoding="utf-8", newline="\n")
-        if stat.S_ISREG(os.stat(path).st_mode):  # #3105: not a device
-            os.chmod(path, 0o600)
-    except OSError as exc:
-        raise OutputWriteError(path, exc, flag=flag) from exc
-
-
-def write_json_secure(
-    path: str,
-    data: Any,
-    *,
-    indent: int = 2,
-    ensure_ascii: bool = False,
-    flag: Optional[str] = None,
-) -> None:
-    """Write *data* as JSON to *path* with ``0o600`` permissions (a regular
-    file only; a device or FIFO keeps its mode, #3105).
-
-    Args:
-        path: Filesystem path to write.
-        data: JSON-serializable object.
-        indent: JSON indentation (default 2).
-        ensure_ascii: If ``False`` (default), allow non-ASCII characters.
-        flag: The CLI flag *path* came from; see :func:`write_text_secure`.
-
-    ``newline="\\n"`` is load-bearing for the same reason as
-    :func:`write_text_secure` — ``json.dump`` emits ``\\n`` between lines and
-    the text layer would translate every one of them to CRLF on a Windows
-    host. ``.gitattributes`` pins ``*.json`` to ``eol=lf``.
-
-    Raises:
-        OutputWriteError: on any ``OSError`` from the open / write / chmod
-            (#1641), same contract as :func:`write_text_secure`. A
-            non-serialisable *data* still raises ``TypeError`` — that is a
-            programming error, not an output-path problem.
-    """
-    try:
-        with open(path, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
-        if stat.S_ISREG(os.stat(path).st_mode):  # #3105: not a device
-            os.chmod(path, 0o600)
-    except OSError as exc:
-        raise OutputWriteError(path, exc, flag=flag) from exc
-
-
-def write_text_or_die(
-    path: str,
-    content: str,
-    *,
-    flag: Optional[str] = None,
-    exit_code: Optional[int] = None,
-) -> None:
-    """:func:`write_text_secure`, but an unusable path ends the process.
-
-    #1641. On :class:`OutputWriteError` prints ``ERROR: <message>`` to stderr
-    and exits with *exit_code* (default: the process caller-error code,
-    ``EXIT_CALLER_ERROR`` = 2 unless the tool set another — the exit-code
-    SSOT's "IO failure" cell) — no traceback, and NOT rc=1, which
-    would read as "your config has a violation".
-
-    Args:
-        path: Filesystem path to write.
-        content: Text content.
-        flag: The CLI flag *path* came from (e.g. ``"-o/--output"``). Pass it
-              whenever the path is operator-supplied so the message can say
-              which flag to check; leave ``None`` for internal paths.
-        exit_code: Process exit code on failure.
-    """
-    try:
-        write_text_secure(path, content, flag=flag)
-    except OutputWriteError as exc:
-        _die_on_write_error(exc, exit_code)
-
-
-def write_json_or_die(
-    path: str,
-    data: Any,
-    *,
-    indent: int = 2,
-    ensure_ascii: bool = False,
-    flag: Optional[str] = None,
-    exit_code: Optional[int] = None,
-) -> None:
-    """:func:`write_json_secure`, but an unusable path ends the process.
-
-    Same contract as :func:`write_text_or_die` (#1641).
-    """
-    try:
-        write_json_secure(path, data, indent=indent, ensure_ascii=ensure_ascii, flag=flag)
-    except OutputWriteError as exc:
-        _die_on_write_error(exc, exit_code)
-
-
 # ---------------------------------------------------------------------------
 # #3107 v2: the two output entry points.
 #
@@ -1056,10 +915,6 @@ OUTPUT_ENTRY_POINTS: dict[str, tuple[str, ...]] = {
                  "_lib_io.write_operator_output_or_die"),
     # A committed file a tool rewrites: replaced atomically.
     "artifact": ("_lib_io.write_repo_artifact", "_lib_atomic_write.atomic_write_text"),
-    # The names from before the two classes existed (in-place write + 0600
-    # for either kind of path); being migrated to one of the two above.
-    "legacy": ("_lib_io.write_text_secure", "_lib_io.write_json_secure",
-               "_lib_io.write_text_or_die", "_lib_io.write_json_or_die"),
     # ``mkdir -p`` of an output directory, for either class.
     "directory": ("_lib_io.ensure_dir", "_lib_io.ensure_dir_or_die"),
     # Not writers: they name the flag for a write made by other code — a raw
@@ -1446,9 +1301,9 @@ def output_write(
     flag: Optional[str],
     action: str = "write",
 ) -> Iterator[None]:
-    """Make a RAW write to *path* fail the way the secure writers do (#1789).
+    """Make a RAW write to *path* fail the way the output entries do (#1789).
 
-    :func:`write_text_secure` and friends already turn "the output path is
+    The output entries already turn "the output path is
     unusable" into one :class:`OutputWriteError`, but a tool that writes with
     ``open()``, ``Path.mkdir()``, ``shutil.copy2()`` or ``csv.writer`` cannot
     use them without changing the bytes it emits. This wraps such a site
@@ -1565,7 +1420,8 @@ def write_onboard_hints(
     Args:
         output_dir: Directory to write ``onboard-hints.json`` into.
         hints: Data dict (tenants, db_types, routing_hints, …).
-        flag: The CLI flag *output_dir* came from; see :func:`write_text_secure`.
+        flag: The CLI flag *output_dir* came from, named in the error message;
+              ``None`` for an internally derived path.
 
     Returns:
         Absolute path to the written file.

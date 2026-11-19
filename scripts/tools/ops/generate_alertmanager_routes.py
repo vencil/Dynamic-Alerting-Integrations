@@ -68,7 +68,6 @@ from _lib_validation import artifact_file_type  # noqa: E402  (#3107 ③a: -o re
 from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_compat import read_shipped_da_tools_version  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
-    write_text_secure,
     PLATFORM_DEFAULTS,
 )
 from _lib_exitcodes import (  # noqa: E402

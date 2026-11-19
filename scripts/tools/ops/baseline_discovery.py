@@ -61,7 +61,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
-    write_text_secure, add_prometheus_arg, prometheus_url, DOCS_INSTALL_URL, positive_int_seconds,
+    add_prometheus_arg, prometheus_url, DOCS_INSTALL_URL, positive_int_seconds,
 )
 # #3133: a query not answered raises QueryError, never "no sample"; the
 # sample is read once, by the lib (#3213).

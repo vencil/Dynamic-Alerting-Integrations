@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import ensure_dir_or_die  # noqa: E402
+from _lib_validation import artifact_file_type  # noqa: E402  (#3107 ④)
 from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#3107)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -211,7 +212,8 @@ def main():
     )
     parser.add_argument(
         "--output",
-        type=Path,
+        # #3107 ④: an artifact (its --check reads it back) — `-` and "" refused.
+        type=artifact_file_type(then=Path),
         default=Path("docs/includes/abbreviations.md"),
         help="Override output path (default: docs/includes/abbreviations.md)",
     )

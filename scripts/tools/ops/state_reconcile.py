@@ -68,6 +68,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, encode_json  # noqa: E402
 import _lib_input  # noqa: E402  (#3446: which state files --state-dir selects)
+from _lib_validation import artifact_file_type  # noqa: E402  (#3107 ④)
 from _lib_paths import classify_path  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
     ensure_dir,  # #3982
@@ -488,6 +489,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--manifest-path",
         default=".da/manifest.json",
+        # #3107 ④: an artifact (owner 2026-11-15) — `-` and "" are refused
+        # here, not at the write.
+        type=artifact_file_type(then=Path),
         help="Manifest file path (default: .da/manifest.json)",
     )
     ap.add_argument(

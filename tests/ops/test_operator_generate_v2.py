@@ -340,7 +340,7 @@ class TestWritingIsOptIn:
             f"stdout must carry the real character as UTF-8; got {raw[:200]!r}"
         )
         assert b"\r\n" not in raw, (
-            "write_text_secure forces LF and calls it load-bearing; the stdout "
+            "the file write forces LF and calls it load-bearing; the stdout "
             "channel must not hand back CRLF for the same document"
         )
 

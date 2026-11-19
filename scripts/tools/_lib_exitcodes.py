@@ -551,6 +551,8 @@ def report_crash(exc: BaseException) -> None:
 
 # #3107 v2: who writes to stdout this run (the operator-output ``claim_stdout``).
 _stdout_owner: Optional[str] = None
+#: The name the --json document claims stdout under (`_write_report`).
+JSON_DOCUMENT_OWNER = "the --json document"
 
 
 def claim_stdout_owner(owner: str) -> Optional[str]:
@@ -894,6 +896,17 @@ def _write_report(report: Report) -> int:
     # encoded keeps the status through the last flush too (a lost stderr
     # must not turn its 0 into the caller-error code).
     _best_effort = report.delivery == "best_effort"
+    # #3107 ④ (owner 2026-11-15): the document is a stdout owner like any
+    # other. When an operator output already wrote to stdout this run (`-`,
+    # or a path that is stdout), a second document there could not be told
+    # apart from the first: nothing more is printed, and the run is the
+    # caller's error — a best-effort document keeps its status, as when
+    # stdout fails. Only the ownership; the encoding stays this function's.
+    other = claim_stdout_owner(JSON_DOCUMENT_OWNER)
+    if other is not None:
+        _to_stderr(f"ERROR: cannot print the --json document: standard output "
+                   f"is already used by {other}")
+        return report.status if _best_effort else _caller_error_code
     try:
         text = encode_json(report.document)
     except OutputNotSerializable as exc:
