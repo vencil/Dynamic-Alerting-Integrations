@@ -35,17 +35,21 @@ pytestmark = pytest.mark.usefixtures("da_read_env")
 
 REPO = Path(__file__).resolve().parents[2]
 
-# `job <op> <quoted value>`; the value in any of PromQL's three quotings, the
-# name bare or quoted (Prometheus 3 UTF-8 label names). \b keeps `xjob=` and
-# `job_name=` out; a `by (job)` has no operator.
-_JOB_RE = re.compile(
-    r"(?:\bjob|\"job\"|'job'|`job`)\s*(=~|!~|!=|=)\s*"
-    r"(\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`[^`]*`)")
+_STR = r"(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|`[^`]*`)"
+# Scanned left to right, one token at a time: a `job <op> <quoted value>`
+# matcher (the value in any of PromQL's three quotings, the name bare or
+# quoted — Prometheus 3 UTF-8 label names), else a whole string literal, else
+# a `#` comment. A string or comment is consumed as one token, so `job=...`
+# inside another label's value (`note="job='node'"`) is not a matcher.
+# \b keeps `xjob=` and `job_name=` out; a `by (job)` has no operator.
+_TOKEN_RE = re.compile(
+    r"(?:\bjob|\"job\"|'job'|`job`)\s*(?P<op>=~|!~|!=|=)\s*(?P<val>" + _STR + r")"
+    r"|" + _STR + r"|#[^\n]*")
 
 
 def job_matchers(expr: str) -> list[tuple[str, str]]:
     """(operator, unquoted value) for each `job` matcher in *expr*."""
-    return [(op, quoted[1:-1]) for op, quoted in _JOB_RE.findall(expr)]
+    return [(m["op"], m["val"][1:-1]) for m in _TOKEN_RE.finditer(expr) if m["op"]]
 
 
 def job_violations(expr: str, allowed: "frozenset[str]") -> list[str]:
@@ -126,6 +130,9 @@ T = frozenset({ms.TENANT_EXPORTER_JOB})
     ('up{"job"="tenant-exporter"} == 0', ['job="tenant-exporter"']),
     ("{'up', 'job'='tenant-exporters'}", []),
     ('{"up", `job`=~"node"}', ['job=~"node"']),
+    ('up{job="tenant-exporters", note="job=\'node\'"}', []),
+    ('up{note="job=\'node\'", job="node"}', ['job="node"']),
+    ('up{job="tenant-exporters"}  # job="node" in a comment', []),
 ])
 def test_job_violations_reads_each_matcher(expr, bad):
     assert job_violations(expr, T) == bad
