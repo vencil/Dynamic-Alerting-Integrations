@@ -592,7 +592,10 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # the same YamlFileError, were deleted in ADR-036 §7 step 13, #3206.)
 _LIB_ROOTS = {"load_yaml_file",
               # #2115: raises YamlFileError for a file the exporter's load skips.
-              "load_served_tree", "load_served_values"}
+              "load_served_tree", "load_served_values",
+              # #4026: "same exceptions as load_served_tree", ParseFailedError
+              # (a YamlFileError) among them.
+              "load_served_facts"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python",
                 "_lib_tenant_values", "scripts.tools._lib_tenant_values"}
 # Handler spellings that catch YamlFileError (a yaml.YAMLError). Matched on
@@ -751,11 +754,9 @@ def test_scan_sees_the_known_population():
         # migrate_to_operator.py, onboard_platform.py and operator_generate.py
         # left with #3206 (ADR-036 §12): their rule files are read by
         # `da-read prometheus-rules`, their manifests by da-crdecode.
-        "policy_engine.py",
-        # policy_opa_bridge.py left with #4025: it reads served-values
-        # through `load_served_schedules` and `load_served_facts`, neither a
-        # root this scan names; its `--dry-run` / `_defaults` rows above pin
-        # the refusal.
+        "policy_engine.py", "policy_opa_bridge.py",
+        # blind_spot_discovery.py and policy_opa_bridge.py are seen through
+        # `load_served_facts` (#4025, #4026), a root above since #4026.
         "blind_spot_discovery.py",
         # threshold_recommend.py left with #3990: it reads served-values
         # through `load_served_schedules` and `da-guard effective`, neither a
