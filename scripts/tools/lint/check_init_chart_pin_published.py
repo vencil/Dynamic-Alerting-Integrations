@@ -33,6 +33,14 @@ publish (the wrap-up PR bumped `--exporter`):
     playbook pushed `exporter/v*` first): a violation, because nothing will
     publish that chart.
 
+The built-in table (#3832): the generated root `_defaults.yaml` no longer
+writes the thresholds the readers build in, so the exporter of the pinned
+tag must build in every key HEAD's table holds — read from
+`builtin_defaults_gen.go` at the tag and at HEAD. A key promoted or a value
+recalibrated also changes the chart's values.yaml (the reachability lint holds
+it equal to the registry), so the check above already fires then; this one
+names the cause instead of leaving it to that coincidence.
+
 ⚠️ Scope: a tag is not a published chart. If the `exporter/v*` job fails
 before its `helm push`, this gate still passes the `tools/v*` job; that
 window is the playbook's "do not announce da-tools until the exporter job
@@ -55,6 +63,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+BUILTIN_GO = "components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go"
+_BUILTIN_ENTRY_RE = re.compile(r'\{"([^"]+)", [-0-9.eE+]+\}')
 INIT_PY = Path("scripts/tools/ops/init_project.py")
 CHART_DIR = "helm/threshold-exporter"
 _PIN_RE = re.compile(
@@ -151,6 +161,22 @@ def changed_files(root: Path, commit: str) -> list[str]:
             if line and is_packed(line[len(prefix):], rules)]
 
 
+def builtin_keys(text: str) -> set[str]:
+    """The keys of a `builtin_defaults_gen.go` text (empty for no text)."""
+    return set(_BUILTIN_ENTRY_RE.findall(text or ""))
+
+
+def builtin_keys_missing_at(root: Path, commit: str) -> list[str]:
+    """HEAD's built-in keys the table at *commit* does not hold (#3832);
+    none when HEAD has no table."""
+    head = root / BUILTIN_GO
+    want = builtin_keys(head.read_text(encoding="utf-8")) if head.is_file() else set()
+    if not want:
+        return []
+    proc = _git(root, "show", f"{commit}:{BUILTIN_GO}")
+    return sorted(want - builtin_keys(proc.stdout if proc.returncode == 0 else ""))
+
+
 def check(root: Path, require_tag: bool) -> tuple[int, list[str]]:
     pin = read_pin(root)
     tag = f"exporter/v{pin}"
@@ -176,6 +202,15 @@ def check(root: Path, require_tag: bool) -> tuple[int, list[str]]:
             f"published chart does not have. Bump the chart "
             f"(`bump_docs.py --exporter <next>`) and release exporter/v* too.",
             *(f"  changed: {path}" for path in changed)]
+    missing = builtin_keys_missing_at(root, commit)
+    if missing:
+        return EXIT_VIOLATION, [
+            f"FAIL: init pins chart {pin}, but the exporter of {tag} does not build "
+            f"in {len(missing)} threshold(s) this tree's generators leave out of the "
+            f"root _defaults.yaml (#3832): a project generated now would serve no "
+            f"row for them. Bump the chart (`bump_docs.py --exporter <next>`) and "
+            f"release exporter/v* too.",
+            *(f"  not built in: {key}" for key in missing)]
     return EXIT_OK, [f"OK: {CHART_DIR}/ is identical to {tag} (init pin {pin})."]
 
 

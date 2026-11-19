@@ -20,6 +20,9 @@ import yaml
 
 import scaffold_tenant  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832: read from the Go table)
+
 CONFD_DIR = scaffold_tenant.CONFD_DIR  # the draft conf.d (#4014)
 
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
@@ -131,12 +134,12 @@ class TestRulePacksCatalogue:
 # (tenant, dbs, expected_metric_in_defaults, report_keyword)
 
 SCAFFOLD_CASES = [
-    ("test-pg", "postgresql", ["pg_connections", "pg_replication_lag"], "PostgreSQL"),
+    ("test-pg", "postgresql", [], "PostgreSQL"),  # its two keys are built in (#3832)
     ("test-ora", "oracle", ["oracle_sessions_active"], "Oracle"),
     ("test-db2", "db2", ["db2_connections_active", "db2_bufferpool_hit_ratio"], "DB2"),
     ("test-ch", "clickhouse", ["clickhouse_queries_rate", "clickhouse_active_connections"], "ClickHouse"),
     ("test-kafka", "kafka", ["kafka_consumer_lag", "kafka_under_replicated_partitions"], "Kafka"),
-    ("test-rmq", "rabbitmq", ["rabbitmq_queue_messages", "rabbitmq_node_mem_percent"], "RabbitMQ"),
+    ("test-rmq", "rabbitmq", ["rabbitmq_queue_messages", "rabbitmq_connections"], "RabbitMQ"),
 ]
 
 
@@ -155,14 +158,15 @@ class TestNonInteractiveGeneration:
     @pytest.mark.parametrize("tenant,dbs,metrics,report_kw", SCAFFOLD_CASES,
                              ids=[c[0] for c in SCAFFOLD_CASES])
     def test_defaults_contain_expected_metrics(self, monkeypatch, tenant, dbs, metrics, report_kw):
-        """_defaults.yaml 包含預期 metric key。"""
+        """_defaults.yaml 的 `defaults:` 有預期的 key，沒有任何內建鍵（#3832 決策 7）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, tenant, dbs)
             path = os.path.join(tmpdir, CONFD_DIR, "_defaults.yaml")
             with open(path, encoding="utf-8") as f:
-                content = f.read()
+                written = (yaml.safe_load(f) or {}).get("defaults") or {}
             for m in metrics:
-                assert m in content, f"{dbs} defaults missing {m}"
+                assert m in written, f"{dbs} defaults missing {m}"
+            assert not set(written) & set(BUILTIN_DEFAULTS), written
 
     @pytest.mark.parametrize("tenant,dbs,metrics,report_kw", SCAFFOLD_CASES,
                              ids=[c[0] for c in SCAFFOLD_CASES])

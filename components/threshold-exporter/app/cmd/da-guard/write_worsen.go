@@ -23,12 +23,12 @@ package main
 //     a copy repairs the tree;
 //   - a tenant key the shared key verdict (ADR-038; key_verdict.go, its
 //     ERROR layer) reads as unread at ERROR that it did not before the call
-//     (#3489), in a tenant file the batch writes: a misspelt key, a
+//     (#3489), in a file the batch writes (ADR-038 decision 6): a misspelt key, a
 //     dimensional key whose labels the root `dimensions:` does not declare,
 //     an unregistered `_` key. Keyed by (tenant, key), so an error already
 //     there does not block an unrelated write and a fix passes; a batch that
-//     writes only platform files is not judged on other tenants' keys, as
-//     tenant-api's gate is not (newlyUnread).
+//     writes only platform files is not judged on keys in files it does not
+//     write (newlyUnread).
 //
 // ⚠️ Not compared: validation warnings (they do not fail validation), and
 // what only the route generator judges (exit 4's evidence beyond the
