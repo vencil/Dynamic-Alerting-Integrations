@@ -88,6 +88,15 @@ nor ``EXTERNAL_READERS`` explains, are faults. The rule replaced one that
 asked for a tracked default and so needed five owner exceptions; every one
 of them reads its output back or is on ``EXTERNAL_READERS``.
 
+⚠️ NOT SEEN by the read-back measurement (independent review, #3982) — the
+threat model is an honest regression in a Python tool, as for the write
+audit: a read by a child that is not Python (``cat``, da-guard, git) or is
+Python run with ``-I`` (the hook is not loaded); an ``os.open`` relative to
+a ``dir_fd`` (the ``open`` event carries no ``dir_fd``); a read only on a
+path the reruns do not take (output-dependent, or a command no row's
+``readers`` names); a read through an ``a+`` open (logged as a write). A run
+argparse refuses is not counted, and every row must have one counted run.
+
 THE WRITE AUDIT (#3107) — WHICH ENTRY WROTE IT
 ----------------------------------------------
 The control run is also the measurement of who wrote. It runs under
@@ -433,6 +442,17 @@ def _history_conf_d(out: Path) -> str:
     (out / "alpha.yaml").write_text(
         "tenants:\n  alpha:\n    max_connections: 100\n", encoding="utf-8")
     return str(out)
+
+
+def _history_readers(c: "Ctx", out: Path) -> list[list[str]]:
+    """`config_history`'s readers of its snapshots: `diff` reads the copies
+    only where the two snapshots differ, so the shard is changed first — the
+    rerun of the control argv then takes snapshot 2, and `diff 1 2` reads
+    snapshot 1's copy, which the control run wrote (#3982)."""
+    with (out / "alpha.yaml").open("a", encoding="utf-8") as fh:
+        fh.write("# changed after the control run\n")
+    return [["--config-dir", str(out), "diff", "1", "2"],
+            ["--config-dir", str(out), "log"]]
 
 
 def _inject_report(tmp: Path) -> str:
@@ -845,21 +865,21 @@ ROWS: list[Row] = [
     R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="a one-shard conf.d built in place; `snapshot` is what writes",
-      readers=lambda c, out: [["--config-dir", str(out), "log"],
-                              ["--config-dir", str(out), "show", "1"],
-                              ["--config-dir", str(out), "diff", "1", "1"]],
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history", variant="history-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
     R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot subdirectory blocked",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history/snap-1", variant="snapshot-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
     R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot COPY of alpha.yaml blocked",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history/snap-1/alpha.yaml",
       variant="snapshot-file", shapes=("sibling_is_dir",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
@@ -995,10 +1015,17 @@ ROWS: list[Row] = [
       out_name="secrets", artifact="da-alpha.yaml",
       shapes=("target_is_file", "artifact_is_dir"),
       wording="own", control_rc=1),
-    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+    # #3982: artifact by the read-back rule — a `--force` run reads the
+    # ownership ledger (`.da-init.yaml`) and the files the last run wrote.
+    # Still written through the operator entry: VIA_OTHER_CLASS.
+    R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb"],
       reach="non-interactive flags only",
+      # Its rerun is refused (the path is occupied); `--force` is the run
+      # that reads the last one's ledger back.
+      readers=lambda c, out: [["-o", str(out), "--non-interactive", "--tenants", "alpha",
+                               "--rule-packs", "mariadb", "--force"]],
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
       shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
     # #3107: the two mkdir shapes above die at `ensure_dir_or_die`, so they
@@ -1006,7 +1033,7 @@ ROWS: list[Row] = [
     # the scaffold goes through). A directory where a file goes is only
     # reached with `--force`: without it init refuses a path that is already
     # occupied in a pre-check of its own (rc 1).
-    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+    R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb", "--force"],
       reach="the same flags with --force, so an occupied path is written over",
@@ -1813,6 +1840,10 @@ EXTERNAL_READERS: dict[Key, str] = {
 #: Rows whose output came through the entry of the OTHER class than the row
 #: declares, and which one. Each is a tool to move or a row to reclassify.
 VIA_OTHER_CLASS: dict[Key, str] = {
+    # #3982: the read-back rule makes it an artifact (its `--force` run reads
+    # the `.da-init.yaml` ledger it wrote); the move to `write_repo_artifact`
+    # is its own change (#4085).
+    ("ops/init_project.py", "-o/--output-dir"): "operator",
 }
 
 
@@ -2041,24 +2072,26 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
     if row.kind == "file":
         made_abs.add(os.path.realpath(out))
     read: set[str] = set()
+    measured: list[str] = []
     for i, run in enumerate(runs):
         log = tmp / f"read-audit-{i}.jsonl"
         run_env = {**env, **_audit_env(log, tmp), "DA_WRITE_AUDIT_READS": str(out.parent)}
-        subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *run],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=TIMEOUT_S, env=run_env, cwd=proc.run_cwd)
+        done = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *run],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=TIMEOUT_S, env=run_env,
+                              cwd=proc.run_cwd)
+        # A run argparse refused measured nothing (an added `--check` the
+        # tool's flags exclude): it is not counted.
+        if done.returncode == 2 and "usage:" in done.stderr:
+            continue
+        measured.append(" ".join(run))
         for ev in _read_audit_log(log) or []:
             if ev.get("ev") == "read" and ev.get("path") in made_abs:
                 read.add(ev["path"])
-    return sorted(read), [" ".join(r) for r in runs]
+    return sorted(read), measured
 
 
-#: One row per (tool, flag): the class is the flag's, not a shape's.
-_CLASS_ROWS = list({(r.tool, r.flag): r for r in reversed(ROWS)}.values())
-
-
-@pytest.mark.parametrize("row", _CLASS_ROWS, ids=[f"{Path(r.tool).stem}[{r.flag}]"
-                                                  for r in _CLASS_ROWS])
+@pytest.mark.parametrize("row", ROWS, ids=[r.id for r in ROWS])
 def test_the_class_follows_the_read_back(row, tmp_path, stub_url):
     """#3982 (owner 2026-11-18): artifact iff the tool reads the output
     back, or its default is tracked, or another program loads it whole —
@@ -2066,6 +2099,10 @@ def test_the_class_follows_the_read_back(row, tmp_path, stub_url):
     _skip_if_unavailable(row)
     key = (row.tool, row.flag)
     read, runs = _read_back(row, tmp_path, stub_url)
+    # Every row of a flag is measured (its argv decides what a rerun can
+    # reach: `init_project`'s `--force` row reads, the other is refused), and
+    # each must have measured something.
+    assert runs, f"{row.id}: no rerun was measured — every one was refused by argparse"
     explained = bool(read) or key in EXTERNAL_READERS
     if row.cls == "operator":
         assert not read, (f"{row.id}: the tool reads its output back ({read}) through "
@@ -2075,6 +2112,16 @@ def test_the_class_follows_the_read_back(row, tmp_path, stub_url):
         assert explained, (f"{row.id}: an artifact that no run read back ({runs}) and "
                            f"that EXTERNAL_READERS does not name — an operator output by "
                            f"the rule")
+        if row.artifact and key not in EXTERNAL_READERS:
+            # A row that names its sink is held to THAT sink: another file of
+            # the same tool read back does not make this one an artifact.
+            # Where `_expected_fragment` puts it: beside the output for a
+            # sibling shape, inside it for `artifact_is_dir`.
+            out = tmp_path / "good" / row.out_name
+            base = out.parent if {"sibling_is_file", "sibling_is_dir"} & set(row.shapes) else out
+            sink = os.path.realpath(out_sink := (base / row.artifact))
+            assert any(r == sink or r.startswith(sink + os.sep) for r in read), (
+                f"{row.id}: its sink {out_sink} was not read back by {runs} (read: {read})")
     if key in EXTERNAL_READERS:
         assert not read, (f"{row.id}: on EXTERNAL_READERS but the tool reads it back "
                           f"itself ({read}) — the measured half explains it; take it off")
