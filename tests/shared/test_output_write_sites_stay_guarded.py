@@ -101,13 +101,14 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 
-# Handler names that CAN catch what a raw sink or an entry raises. ``IOError``
-# is an alias of ``OSError``; ``Exception`` / ``BaseException`` / a bare
-# ``except`` catch it by inclusion. Narrower OSError subclasses
-# (``FileNotFoundError``) do NOT catch an ``OutputWriteError`` and are
-# deliberately absent.
+# Handler names that CAN catch what a raw sink raises — a plain ``OSError``.
+# ``IOError`` is an alias of ``OSError``; ``Exception`` / ``BaseException`` /
+# a bare ``except`` catch it by inclusion. ``OutputWriteError`` is absent: it
+# is a SUBCLASS, and a bare ``open()`` never raises it (only an entry, or
+# ``output_write`` — arms 2 and 1 — does). Narrower subclasses
+# (``FileNotFoundError``) are absent for the same reason.
 CATCHING_HANDLER_NAMES = frozenset({
-    "OSError", "IOError", "OutputWriteError", "Exception", "BaseException",
+    "OSError", "IOError", "Exception", "BaseException",
 })
 
 _SCOPE_BOUNDARIES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
@@ -781,7 +782,7 @@ class TestGuardShapes:
 
     def test_try_with_a_stopping_handler_is_guarded(self):
         for handler in ("except OSError as e:\n    sys.exit(2)\n",
-                        "except OutputWriteError as e:\n    return EXIT_CALLER_ERROR\n",
+                        "except IOError as e:\n    return EXIT_CALLER_ERROR\n",
                         "except Exception:\n    raise SystemExit(2)\n",
                         # A raise that CONVERTS: a new exception object, which
                         # `exit_on_output_write_error` can act on.
@@ -819,8 +820,12 @@ class TestGuardShapes:
                         "except OSError as e:\n    parser.error(str(e))\n",
                         "except OSError as e:\n    self.parser.error(str(e))\n",
                         "except OSError as e:\n    ap.error(str(e))\n",
-                        "except OutputWriteError as e:\n    _die_on_write_error(e, 2)\n"):
+                        "except OSError as e:\n    _die_on_write_error(e, 2)\n"):
             assert _guards(f"try:\n    open(p, 'w')\n{handler}") == ["try"], handler
+        # A raw open raises a plain OSError: `except OutputWriteError` never
+        # sees it, whatever its body does.
+        assert _guards("try:\n    open(p, 'w')\nexcept OutputWriteError as e:\n"
+                       "    sys.exit(2)\n") == [None]
 
     def test_an_exit_that_says_it_worked_is_not_a_guard(self):
         """#1789 F3. Ending the run is only half of it: `sys.exit(0)` and

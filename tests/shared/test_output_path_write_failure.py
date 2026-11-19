@@ -2687,6 +2687,38 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
 _ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 2
 
 
+def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
+    """Whether every call of an entry in *module* names a flag, and only
+    flags in *flags* (an empty *flags*: never)."""
+    if not flags:
+        return False
+    parents = {child: node for node in ast.walk(module)
+               for child in ast.iter_child_nodes(node)}
+    for node in ast.walk(module):
+        if not (isinstance(node, ast.Call) and _called_name(node) in entries):
+            continue
+        kw = next((k for k in node.keywords if k.arg == "flag"), None)
+        if kw is None or (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+            return False
+        named = _flag_values(kw.value, module, parents)
+        if not named or not named <= flags:
+            return False
+    return True
+
+
+def test_a_no_row_flag_excuses_only_calls_that_name_it():
+    entries = {"write_operator_output"}
+    def ok(source: str) -> bool:
+        return _entry_calls_name_only(ast.parse(source), entries, {"--out"})
+    assert ok("write_operator_output(p, t, flag='--out')")
+    assert not ok("write_operator_output(p, t, flag='--out')\n"
+                  "write_operator_output(q, t, flag=None)")
+    assert not ok("write_operator_output(p, t, flag='--out')\nwrite_operator_output(q, t)")
+    assert not ok("write_operator_output(p, t, flag='--other')")
+    assert not _entry_calls_name_only(ast.parse("write_operator_output(p, t, flag='--out')"),
+                                      entries, set())
+
+
 def test_every_caller_of_a_two_class_entry_has_a_row():
     """File level, and regardless of ``flag=``: a module under the CLI roots
     — a library too — that CALLS one of `_lib_io`'s operator or artifact
@@ -2705,10 +2737,13 @@ def test_every_caller_of_a_two_class_entry_has_a_row():
                       for node in ast.walk(tree))}
     assert callers, "no caller of an operator/artifact entry found — the scan measured nothing"
     rowed = {r.tool for r in ROWS}
-    # A tool whose flag is in NO_ROW is accounted for there, with its reason
-    # (#3107 ④: inject_waveform --out reached this population when it moved
-    # off the old names).
-    no_row = {tool for tool, _flag in NO_ROW}
+    # A tool whose EVERY entry call names a flag in NO_ROW is accounted for
+    # there, with its reason (#3107 ④: inject_waveform --out reached this
+    # population when it moved off the old names). One more call beside it —
+    # `flag=None`, or another flag — is not, and still needs a row.
+    no_row = {tool for tool in callers
+              if _entry_calls_name_only(modules[tool], entries,
+                                        {flag for t, flag in NO_ROW if t == tool})}
     missing = sorted(callers - rowed - no_row - set(ENTRY_CALLERS_WITH_NO_FLAG))
     assert not missing, f"module(s) calling an operator/artifact entry with no row: {missing}"
     stale = sorted(tool for tool in ENTRY_CALLERS_WITH_NO_FLAG
@@ -3051,6 +3086,12 @@ class TestWriteAuditVerdict:
         nested = [*_OP[:3], "scripts/tools/_lib_yaml.py:write_yaml_crd",
                   "scripts/tools/ops/t.py:main"]
         seen = _Log(tmp_path).add("open", "o.json", nested).seen(_audit_row())
+        assert seen == Seen([], (), False, None)
+        # Two classes on one stack: the inner one is the write's. Read from
+        # the outside in, this would be the artifact entry's.
+        inside_artifact = [*_OP[:3], "scripts/tools/_lib_io.py:write_repo_artifact",
+                           "scripts/tools/ops/t.py:main"]
+        seen = _Log(tmp_path).add("open", "o.json", inside_artifact).seen(_audit_row())
         assert seen == Seen([], (), False, None)
 
     def test_no_log_is_a_fault_not_a_pass(self, tmp_path):
@@ -3436,11 +3477,13 @@ class TestTheLists:
         """Each list, on its own first entry: clean ⇒ red. A list the
         migration has emptied (#3982: VIA_OTHER_CLASS, RAW_UNDER_OUT) still has
         its judgement while the list exists: it is held on a synthetic entry."""
-        synthetic = ("dx/zz_synthetic.py", "--out")
+        # Two keys, not one: on a shared key either list's fault would answer
+        # for the other.
         if not VIA_OTHER_CLASS:  # emptied by #3982 (owner 2026-11-18)
-            monkeypatch.setitem(VIA_OTHER_CLASS, synthetic, "artifact")
+            monkeypatch.setitem(VIA_OTHER_CLASS, ("dx/zz_other_class.py", "--out"), "artifact")
         if not RAW_UNDER_OUT:  # emptied by #3982 (the last key, config_history)
-            monkeypatch.setitem(RAW_UNDER_OUT, synthetic, ("all", ("open zz.json",)))
+            monkeypatch.setitem(RAW_UNDER_OUT, ("dx/zz_raw.py", "--out"),
+                                ("all", ("open zz.json",)))
         for key in (sorted(RAW_UNDER_OUT)[0], sorted(VIA_OTHER_CLASS)[0]):
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
                       variant="synthetic")
@@ -3455,9 +3498,11 @@ class TestTheLists:
         how, sites = RAW_UNDER_OUT[key]
         started = SPAWNS.get(key, ())
         assert _list_faults(row, Seen([], sites, how == "all", None, started)) == []
-        assert _list_faults(row, Seen([], (*sites, "open out/zz.json"), True, None,
+        # One site more, one fewer — with the listed all/some, so only the
+        # sites differ; the next line differs in all/some alone.
+        assert _list_faults(row, Seen([], (*sites, "open out/zz.json"), how == "all", None,
                                       started))
-        assert _list_faults(row, Seen([], sites[1:], True, None, started))
+        assert _list_faults(row, Seen([], sites[1:], how == "all", None, started))
         assert _list_faults(row, Seen([], sites, how != "all", None, started))
 
     def test_every_list_entry_is_a_row(self):

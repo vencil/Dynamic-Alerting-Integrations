@@ -296,10 +296,13 @@ class TestNoShellTrue:
 #    chmod 就放行）與它的豁免表已移除。0o777 那一半是 bandit B103。
 #
 #    權限由入口決定，不由呼叫端各自 chmod：operator 輸出
-#    （`_lib_io.write_operator_output`／`open_operator_output`）自己擁有的一般
-#    檔寫完 0600；artifact（`_lib_io.write_repo_artifact`）照 checkout 的樣子。
-#    「每個輸出旗標的寫入都出自它那一類的入口」由
-#    `tests/shared/test_output_path_write_failure.py` 以執行期 audit hook 量。
+#    （`_lib_io.write_operator_output`／`open_operator_output`）把新建或自己
+#    擁有的一般檔設成呼叫端要求的模式（預設 0600；例如 `federation_keygen
+#    --jwks-out` 要求 0644），經 symlink 抵達或別人擁有的檔不改；artifact
+#    （`_lib_io.write_repo_artifact`）照 checkout 的樣子。
+#    「有控制列的輸出旗標，寫入都出自它那一類的入口」由
+#    `tests/shared/test_output_path_write_failure.py` 以執行期 audit hook 量；
+#    寫不出控制列的旗標記在同檔的 `NO_ROW`，各附理由與替代的測試。
 #
 #    ⚠️ 沒有旗標、寫固定 repo 路徑的裸寫入不在那個母體裡（#3981）；啟發式
 #    在那裡也只看形狀，不看結果。⛔ 不要在本檔重新長出一份靜態的 chmod 啟發式。

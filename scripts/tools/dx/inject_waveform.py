@@ -680,7 +680,8 @@ def main() -> "int | Report":
         # so `-` is refused at parse time.
         type=operator_file_type(stdout="this tool prints its report there "
                                        "(--json prints this JSON document)"),
-        help="另將 JSON 報告寫到檔案（0600，就地寫入）")
+        help="另將 JSON 報告寫到檔案（就地寫入；新建或自己擁有的一般檔設為 0600，"
+             "經 symlink 或別人擁有的檔保留原權限）")
     args = parser.parse_args()
 
     if sys.flags.optimize:

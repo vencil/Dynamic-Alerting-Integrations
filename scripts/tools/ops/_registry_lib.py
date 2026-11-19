@@ -2972,8 +2972,9 @@ def _confd_batches(confd: "list[tuple[str, str]]"):
             # A process-private intermediate (owner 2026-11-15: stays a bare
             # write, under the write gate's temp-directory rule): created
             # here, 0600 and LF, as the retired `write_text_secure` wrote it.
-            with os.fdopen(os.open(src, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600),
-                           "w", encoding="utf-8", newline="\n") as fh:
+            fd = os.open(src, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.fchmod(fd, 0o600)  # the umask does not decide it (da-guard must read it)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(text)
             by_root.setdefault(os.path.dirname(path), []).append(
                 _lib_confedit.copy_entry(os.path.basename(path), src, replace=True))
