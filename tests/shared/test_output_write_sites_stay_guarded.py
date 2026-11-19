@@ -22,6 +22,16 @@ listed in ``GUARDED_FILES``. Everything else that writes raw is unpinned, and
 this file does not know about it. Do not read this as "raw sinks are
 guarded"; read it as "the raw sinks in these named files are".
 
+⛔ **This is the floor, not the judge** (#3215). The behavioural judgement is
+``test_output_path_write_failure``: each row's control run carries a write
+audit hook (``tests/shared/_write_audit/sitecustomize.py``), and every write
+under that row's output path must come from its class's entry — whatever
+the code looks like (a renamed import, ``getattr``, a temp file). What this
+file adds is static and shape-only: it reads code no control run reaches,
+and the raw sinks in ``GUARDED_FILES`` that write somewhere no row's output
+path covers. Neither sees a tool with no row (``NO_ROW`` names the ones that
+cannot have one) nor a write to a fixed repo path with no flag (#3981).
+
 WHAT COUNTS AS GUARDED
 ----------------------
 A sink is guarded when, walking up from it WITHOUT crossing a ``def`` /
