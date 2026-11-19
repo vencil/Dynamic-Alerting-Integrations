@@ -7,11 +7,14 @@
 #
 #   query-exporter --config databases.yaml --config rule-packs/exporters/oracle.yaml
 #
-# databases.yaml must define ONE database named `oracle` (the queries below
-# name it), for example:
+# databases.yaml must define TWO database entries with the same DSN: `oracle`
+# for the metric queries and `oracle_liveness` for the liveness query alone
+# (the queries below name them), for example:
 #
 #   databases:
 #     oracle:
+#       dsn: oracle+oracledb://monitor:<password>@<host>:1521/?service_name=<SERVICE>
+#     oracle_liveness:
 #       dsn: oracle+oracledb://monitor:<password>@<host>:1521/?service_name=<SERVICE>
 #
 # One exporter per database: the tenant comes from the scrape (the pod's
@@ -22,14 +25,13 @@
 # and PGA shares are taken per exporter before the max, so a saturated instance
 # is not diluted by the others.
 #
-# Every query has a `timeout` below its interval, and oracle_liveness stays the
-# FIRST query with the LARGEST timeout (all checked). With the default
-# connection pool there is ONE connection per database; a query's timeout
-# counts from when it is queued, and each tick queues the queries in file
-# order. A hung query would otherwise hold the connection until the liveness
-# query behind it also times out, and the database would read as down while
-# it answers. A query that times out counts as queries_total{status="timeout"};
-# OracleQueryStalled names it.
+# Every query has a `timeout` below its interval. Each database entry has ONE
+# connection by default, and a query that times out keeps it until the
+# driver cancels the statement (ibm_db cannot cancel at all). So the liveness
+# query has a database entry of its own (checked): a hung metric query cannot
+# hold the connection it needs, and the database reads as down only when the
+# liveness query itself stops succeeding. A query that times out counts as
+# queries_total{status="timeout"}; OracleQueryStalled names it.
 # Keep query-exporter's built-in metrics on (do not set `builtin_metrics: false`):
 # OracleDatabaseDown, OracleQueryStalled and the platform's presence check read
 # query_interval / query_timestamp / queries_total.
@@ -122,7 +124,7 @@ queries:
   oracle_liveness:
     interval: 15
     timeout: 12
-    databases: [oracle]
+    databases: [oracle_liveness]
     metrics: [oracledb_up]
     sql: SELECT 1 AS oracledb_up FROM dual
   oracle_sessions:

@@ -710,8 +710,15 @@ def test_complement_companion_rejects_counter(tmp_path):
         comp["role"] = "complement"
         comp["metric_kind"] = "counter"
     p = _mutate_fixture(tmp_path, _RATIO, mut)
-    with pytest.raises(ValueError, match="complement"):
+    with pytest.raises(wf.WaveformInputError, match="complement"):
         _series_of(p)
+    # --check reports it too, as an issue (exit 1), not as a crash.
+    r = _run("--check", "--allow-selftest", str(p))
+    assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+    assert "complement" in r.stdout + r.stderr
+    # --compile turns it into a caller error, not a traceback.
+    r = _run("--compile", "--out", str(tmp_path / "o"), "--allow-selftest", str(p))
+    assert r.returncode != 0 and "Traceback" not in r.stderr, r.stderr
 
 
 def test_min_value_clamps_negative_gauge(tmp_path):

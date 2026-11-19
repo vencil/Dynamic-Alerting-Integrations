@@ -22,7 +22,8 @@
 # Raw metrics are those of rule-packs/exporters/db2.yaml (query-exporter, #3833):
 #   - DB2DatabaseDown: query-exporter serves no 0 when the database is down — the
 #     liveness query's query_timestamp stops advancing. Only the "unchanged across
-#     90s" arm (no count guard: the waveform has no restarts); changes() is
+#     90s" arm with the shipped `offset 90s` history guard (no count guard:
+#     the waveform has no restarts); changes() is
 #     independent of the epoch, so the integrated counter waveform reads right.
 #   - DB2LowBufferpoolHitRatio: IBM's pages found / logical reads over 5m, with the
 #     shipped ≥ 200 logical reads per 5m floor.
@@ -38,7 +39,7 @@ groups:
     interval: 30s
     rules:
       - alert: DB2DatabaseDown
-        expr: changes(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s]) == 0
+        expr: changes(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s]) == 0 and query_timestamp{job="tenant-exporters", query="db2_liveness"} offset 90s
         for: 15s
         labels: {severity: critical}
       - alert: DB2HighConnections

@@ -913,13 +913,13 @@ tests:
   - interval: 15s
     input_series:
       - series: 'query_interval{tenant="db-u", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness"}'
-        values: '15x8'
+        values: '15x12'
       - series: 'query_interval{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness"}'
-        values: '15x8'
+        values: '15x12'
       - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
-        values: '0+15x8'
+        values: '0+15x12'
     alert_rule_test:
-      - eval_time: 1m
+      - eval_time: 2m
         alertname: DB2DatabaseDown
         exp_alerts:
           - exp_labels:
@@ -1062,4 +1062,26 @@ tests:
     alert_rule_test:
       - eval_time: 7m
         alertname: DB2QueryStalled
+        exp_alerts: []
+
+  # ── DB2DatabaseDown waits 90s for a FIRST success too (#3833, CodeRabbit):
+  #    db-l's exporter serves query_interval from 0 but its first liveness
+  #    run succeeds only at 1m (a slow first connection). Without the
+  #    `query_interval offset 90s` guard on the never-succeeded arm, it
+  #    pages at 15s while the database is up. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x16'
+      - series: 'query_timestamp{tenant="db-l", instance="qe-l:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '_x4 60+15x12'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: DB2DatabaseDown
         exp_alerts: []

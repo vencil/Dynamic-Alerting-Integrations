@@ -354,6 +354,16 @@ def semantic_issues(pack: dict) -> list[dict]:
                             f"({nl}) → 無故障可注入，此 must_detect 序列會稀釋 "
                             f"catch-rate 分母；請填與正常水位有落差的故障水位"),
             })
+        for ci, comp in enumerate(sig.get("companion_series") or []):
+            if (isinstance(comp, dict) and comp.get("role") == "complement"
+                    and (sig.get("metric_kind") != "gauge"
+                         or comp.get("metric_kind", "gauge") != "gauge")):
+                issues.append({
+                    "tier": "platform", "field": "companion_series",
+                    "message": (f"平台補填: signatures/{i}/companion_series/{ci}: "
+                                "role=complement 只接受 gauge 主序列與 gauge companion"
+                                "（每點 = level − 主序列該點，counter 的速率沒有「總量」可減）"),
+                })
     return issues
 
 
@@ -713,7 +723,7 @@ def synthesize_pack(pack: dict, seed: int = DEFAULT_SEED,
                     # used / (used + available) a non-linear warp of the
                     # authored levels.
                     if comp_kind != "gauge" or kind != "gauge":
-                        raise ValueError(
+                        raise WaveformInputError(
                             f"signatures/{si}: companion role=complement needs a "
                             "gauge parent and a gauge companion")
                     comp_samples = [None if s is None else round(max(0.0, comp_level - s), 6)

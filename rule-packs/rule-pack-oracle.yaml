@@ -222,6 +222,9 @@ groups:
       # takes about 90-105s after the last success (iamseth's up==0 for: 15s
       # took 25-40s): the cost of reading progress instead of a 0 the exporter
       # never reports.
+      # The "never succeeded" arm waits as long: the exporter must have served
+      # query_interval 90s ago, so a first success that is merely slow (the
+      # connection still opening, a scrape that came early) does not page.
       # The series must also have a sample from 90s ago (`offset 90s`): changes()
       # sees only the samples there are, so a series that began 30s ago, ran
       # once and then stopped would otherwise read as 90s without progress and
@@ -240,9 +243,13 @@ groups:
           )
           or
           max by(tenant, instance) (
-            query_interval{job="tenant-exporters", query="oracle_liveness"}
-            unless on(tenant, instance)
-            query_timestamp{job="tenant-exporters", query="oracle_liveness"}
+            (
+              query_interval{job="tenant-exporters", query="oracle_liveness"}
+              unless on(tenant, instance)
+              query_timestamp{job="tenant-exporters", query="oracle_liveness"}
+            )
+            and on(tenant, instance)
+            query_interval{job="tenant-exporters", query="oracle_liveness"} offset 90s
           )
         for: 15s
         labels:

@@ -7,11 +7,14 @@
 #
 #   query-exporter --config databases.yaml --config rule-packs/exporters/db2.yaml
 #
-# databases.yaml must define ONE database named `db2` (the queries below name
-# it), for example:
+# databases.yaml must define TWO database entries with the same DSN: `db2`
+# for the metric queries and `db2_liveness` for the liveness query alone
+# (the queries below name them), for example:
 #
 #   databases:
 #     db2:
+#       dsn: db2+ibm_db://monitor:<password>@<host>:50000/<DBNAME>
+#     db2_liveness:
 #       dsn: db2+ibm_db://monitor:<password>@<host>:50000/<DBNAME>
 #
 # One exporter per database: the tenant comes from the scrape (the pod's
@@ -20,17 +23,19 @@
 # pureScale / DPF: run one exporter per member (each DSN pinned to its member,
 # same tenant namespace); the pack takes each ratio per exporter before the
 # max / min, so a saturated member is not diluted by the others.
-# The monitor user needs EXECUTE on the MON_GET_* table functions (SYSMON
-# authority grants it).
+# The monitor user needs EXECUTE on the three table functions below; SYSMON
+# authority does NOT grant it (SQL0551N on DB2 11.5.9). Grant it explicitly:
+#   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_DATABASE TO USER MONITOR
+#   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_TRANSACTION_LOG TO USER MONITOR
+#   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_TABLESPACE TO USER MONITOR
 #
-# Every query has a `timeout` below its interval, and db2_liveness stays the
-# FIRST query with the LARGEST timeout (all checked). With the default
-# connection pool there is ONE connection per database; a query's timeout
-# counts from when it is queued, and each tick queues the queries in file
-# order. A hung query would otherwise hold the connection until the liveness
-# query behind it also times out, and the database would read as down while
-# it answers. A query that times out counts as queries_total{status="timeout"};
-# DB2QueryStalled names it.
+# Every query has a `timeout` below its interval. Each database entry has ONE
+# connection by default, and a query that times out keeps it until the
+# driver cancels the statement (ibm_db cannot cancel at all). So the liveness
+# query has a database entry of its own (checked): a hung metric query cannot
+# hold the connection it needs, and the database reads as down only when the
+# liveness query itself stops succeeding. A query that times out counts as
+# queries_total{status="timeout"}; DB2QueryStalled names it.
 # Column aliases are matched by name: DB2 folds an unquoted alias to upper case,
 # and the driver lowers it back except for a reserved word (TABLESPACE), so a
 # label column named like one is quoted ("tablespace"); query-exporter drops a
@@ -122,7 +127,7 @@ queries:
   db2_liveness:
     interval: 15
     timeout: 12
-    databases: [db2]
+    databases: [db2_liveness]
     metrics: [db2_up]
     sql: SELECT 1 AS db2_up FROM sysibm.sysdummy1
   db2_database:

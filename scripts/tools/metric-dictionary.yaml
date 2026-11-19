@@ -277,7 +277,7 @@ db2_bufferpool_hit_ratio:
   maps_to: db2_bufferpool_hit_ratio
   golden_rule: DB2LowBufferpoolHitRatio
   rule_pack: db2
-  note: "Bufferpool hit ratio — 1 − physical / logical reads 的 5m rate，逐 exporter 算後取 min by(tenant)；exporter 不出 bufferpool 維度 (#3833)"
+  note: "Bufferpool hit ratio — rate(db2_bufferpool_pages_found_total[5m]) / rate(db2_bufferpool_logical_reads_total[5m])（IBM 公式，不計 prefetch 讀進的頁），逐 exporter 算後取 min by(tenant)；exporter 不出 bufferpool 維度 (#3833)"
 
 db2_log_usage_percent:
   maps_to: db2_log_usage_percent
