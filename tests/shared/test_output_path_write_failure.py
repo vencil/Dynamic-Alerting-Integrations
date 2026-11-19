@@ -1583,6 +1583,15 @@ class Audit:
     programs: tuple[str, ...] = ()
 
 
+def _tool_loaded(events: list[dict], tool: Path) -> bool:
+    """Did the hook load in THE TOOL's process — not only in a Python child
+    of it, whose `loaded` line lands in the same log?"""
+    tool_path = os.path.realpath(tool)
+    return any(e.get("ev") == "loaded"
+               and any(os.path.realpath(a) == tool_path for a in e.get("argv", [])[:3])
+               for e in events)
+
+
 def _audit(events: list[dict] | None, scope: Path, tool: Path,
            made: frozenset[str] = frozenset()) -> Audit:
     """*made*: the files under *scope* that are there after the run and were
@@ -1592,10 +1601,7 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
         return Audit(False, False, {}, ())
     frames = _entry_frames()
     writer_frames = _writer_frames()
-    tool_path = os.path.realpath(tool)
-    loaded = any(e["ev"] == "loaded"
-                 and any(os.path.realpath(a) == tool_path for a in e["argv"][:3])
-                 for e in events)
+    loaded = _tool_loaded(events, tool)
     sites: dict[str, list[tuple[str, str]]] = {}
     spawned = []
     faults: list[str] = []
@@ -2088,8 +2094,9 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
         # A measurement that did not happen is not "no reads" (CodeRabbit):
         # the hook must have loaded, and must not have failed.
         events = _read_audit_log(log)
-        assert events is not None and any(e.get("ev") == "loaded" for e in events), (
-            f"{row.id}: the audit hook did not load in the rerun {' '.join(run)!r}")
+        assert events is not None and _tool_loaded(events, TOOLS_DIR / row.tool), (
+            f"{row.id}: the audit hook did not load in the tool's process for the "
+            f"rerun {' '.join(run)!r}")
         failed = [e for e in events if e.get("ev") == "hook-error"]
         assert not failed, f"{row.id}: the audit hook failed in the rerun: {failed[:3]}"
         for ev in events:
@@ -2132,6 +2139,17 @@ def test_the_class_follows_the_read_back(row, tmp_path, stub_url):
     if key in EXTERNAL_READERS:
         assert not read, (f"{row.id}: on EXTERNAL_READERS but the tool reads it back "
                           f"itself ({read}) — the measured half explains it; take it off")
+
+
+def test_only_the_tools_own_loaded_line_counts():
+    """A Python child's `loaded` line is in the same log; it does not say the
+    tool's own process was measured (CodeRabbit, #4086)."""
+    tool = TOOLS_DIR / "dx" / "describe_tenant.py"
+    child = {"ev": "loaded", "argv": [sys.executable, "-c", "pass"]}
+    own = {"ev": "loaded", "argv": [sys.executable, str(tool), "-o", "x"]}
+    assert not _tool_loaded([child], tool)
+    assert _tool_loaded([child, own], tool)
+    assert not _tool_loaded([], tool)
 
 
 def test_the_external_readers_are_artifact_rows_with_a_reason():
