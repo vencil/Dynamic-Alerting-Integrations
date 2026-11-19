@@ -7,10 +7,23 @@ related: [wizard, architecture-quiz, glossary]
 
 import React, { useState, useMemo } from 'react';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
+import { silentByDefaultPacks } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
 
 const REPO_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main";
+
+// Packs whose thresholds have no platform value: silent until the tenant sets
+// one (#4012 / #1175). Named from the registry-generated declared keys, never a
+// hand-written list.
+const SILENT_PACKS = silentByDefaultPacks().join(t('、', ', '));
+const SILENT_DEFAULTS_STEP = {
+  text: t(
+    `這些 pack 有平台只宣告、不給值的閾值：${SILENT_PACKS}。不設就不會響，也不報錯；想收到提醒，在租戶檔寫 _state_unset_thresholds: "enable"（平台已預設開啟則不必寫；既有部署要先請平台在 state_filters 加 unset_thresholds）`,
+    `These packs have thresholds the platform declares but gives no value: ${SILENT_PACKS}. Unset, their alerts never fire and nothing reports it; for a notice, write _state_unset_thresholds: "enable" in your tenant file (not needed if the platform enables it by default; an existing deployment must first have the platform add unset_thresholds under state_filters)`,
+  ),
+  doc: 'docs/getting-started/for-tenants.md',
+};
 
 const ROLES = [
   { id: 'platform', label: 'Platform Engineer', icon: '⚙️' },
@@ -96,6 +109,7 @@ const CHECKLISTS = {
         icon: '⚙️',
         steps: [
           { text: t('建立 tenant YAML 並設定閾值', 'Create tenant YAML with thresholds'), doc: 'docs/getting-started/for-tenants.md' },
+          SILENT_DEFAULTS_STEP,
           { text: t('設定 warning 和 critical 兩層嚴重度', 'Set warning and critical severity levels'), doc: 'docs/architecture-and-design.md' },
           { text: t('用 YAML 語法檢查器檢查配置語法', 'Check config syntax with the YAML Syntax Checker'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
           { text: t('（選用）配置排程式閾值', '(Optional) Configure scheduled thresholds'), doc: 'docs/internal/test-coverage-matrix.md' },
@@ -134,6 +148,7 @@ const CHECKLISTS = {
           { text: t('登入後到 Tenant Manager 檢視自己的身分與存取範圍（/me）', 'After logging in, open Tenant Manager to review your identity and access scope (/me)'), doc: null, tool: '../assets/jsx-loader.html?component=../tenant-manager.jsx' },
           { text: t('選擇需要的 Rule Pack 組合', 'Select the Rule Packs for your stack'), doc: null, tool: '../assets/jsx-loader.html?component=../rule-pack-selector.jsx' },
           { text: t('建立 tenant YAML 配置檔', 'Create tenant YAML config file'), doc: 'docs/getting-started/for-tenants.md' },
+          SILENT_DEFAULTS_STEP,
           { text: t('設定告警路由（Slack / Email / Webhook / PagerDuty）', 'Configure alert routing (Slack / Email / Webhook / PagerDuty)'), doc: 'docs/scenarios/alert-routing-split.md' },
           { text: t('用 YAML 語法檢查器檢查配置語法', 'Check config syntax with the YAML Syntax Checker'), doc: null, tool: '../assets/jsx-loader.html?component=../playground.jsx' },
         ],
