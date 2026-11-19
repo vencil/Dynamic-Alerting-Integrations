@@ -51,7 +51,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, JSON_DOCUMENT_OWNER, Report, encode_json)
 from _lib_confd import (  # noqa: E402
     config_listing,
     iter_config_files,
@@ -753,7 +753,9 @@ def main() -> "int | Report":
             manifest["residue"] = sorted(residue)
         # #3107 v2: an operator output — the kernel opens it; `-` is stdout,
         # which the assembly report already uses.
-        claim_stdout("the assembly report")
+        # Under --json the report IS the --json document: claimed under
+        # its name, so `run()` printing it is the same owner (#3107 ④).
+        claim_stdout(JSON_DOCUMENT_OWNER if args.json else "the assembly report")
         write_operator_output(args.manifest, encode_json(manifest) + "\n",
                               flag="--manifest", mode=0o644)
 
