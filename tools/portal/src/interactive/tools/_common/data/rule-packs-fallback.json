@@ -250,7 +250,7 @@
       "exporter": "query-exporter",
       "configMap": "prometheus-rules-oracle",
       "recordingRules": 13,
-      "alertRules": 11,
+      "alertRules": 12,
       "required": false,
       "defaults": {
         "oracle_sessions_active": {

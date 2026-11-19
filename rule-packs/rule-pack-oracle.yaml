@@ -466,6 +466,38 @@ groups:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # PGA_AGGREGATE_LIMIT not set (#4044): tenant:oracle_pga_usage:percent drops
+      # a database whose limit reads 0 (no limit), so OracleHighPGAUsage can never
+      # fire for it — while the tenant has set oracle_pga_usage_percent, so
+      # OracleThresholdNotConfigured stays quiet too. This notice closes that gap:
+      # info only, it pages nobody. It names the tenant, not the database; a tenant
+      # with two databases, one of them limited, still gets its share from the
+      # other and this notice for the unlimited one, per database (instance).
+      - alert: OraclePGALimitNotSet
+        expr: |
+          (
+            max by(tenant, instance) (oracledb_pga_aggregate_limit_bytes == 0)
+            and on(tenant)
+            tenant:alert_threshold:oracle_pga_usage_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 30m
+        labels:
+          severity: info
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Oracle PGA_AGGREGATE_LIMIT is not set on {{ $labels.tenant }}: the PGA alert stays silent"
+          summary_zh: "{{ $labels.tenant }} 的 Oracle 沒有設定 PGA_AGGREGATE_LIMIT：PGA 告警不會響"
+          platform_summary: "{{ $labels.tenant }}: PGA_AGGREGATE_LIMIT is 0, so oracle_pga_usage_percent has nothing to measure against"
+          platform_summary_zh: "{{ $labels.tenant }}：PGA_AGGREGATE_LIMIT 為 0，oracle_pga_usage_percent 沒有可比的上限"
+          description: "Database {{ $labels.instance }} of this tenant runs with PGA_AGGREGATE_LIMIT = 0 (no limit), so its PGA share is not computed and OracleHighPGAUsage cannot fire for it, although oracle_pga_usage_percent is set. Set PGA_AGGREGATE_LIMIT, or write \"disable\" for oracle_pga_usage_percent to end this notice."
+          description_zh: "這個租戶的資料庫 {{ $labels.instance }} 的 PGA_AGGREGATE_LIMIT 為 0（沒有上限），所以不計算它的 PGA 比例，即使設了 oracle_pga_usage_percent，OracleHighPGAUsage 也不會為它而響。設定 PGA_AGGREGATE_LIMIT，或把 oracle_pga_usage_percent 寫成 \"disable\" 就會結束這則提醒。"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: OracleHighSessionUtilization
         expr: |
           tenant:oracle_session_utilization:ratio > 0.85
