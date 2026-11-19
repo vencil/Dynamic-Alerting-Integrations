@@ -800,6 +800,8 @@ def test_a_key_in_a_refusal_cannot_print_a_line_of_its_own(custom):
     ("max_range_duration", "0s", "must be a positive Prometheus duration such as 90m or 1h30m"),
     ("max_range_duration", 5, "must be a positive Prometheus duration such as 90m or 1h30m"),
     ("max_range_duration", None, "must be a positive Prometheus duration such as 90m or 1h30m"),
+    ("max_range_duration", "9" * 5000 + "h",
+     "must be a positive Prometheus duration such as 90m or 1h30m"),
     ("max_evaluation_interval", ["1m"], "must be a positive Prometheus duration such as 90m or 1h30m"),
 ])
 def test_a_malformed_top_level_value_is_refused_when_the_policy_is_loaded(key, value, said):
