@@ -74,6 +74,15 @@ def test_the_json_document_after_an_operator_output_on_stdout_is_refused(monkeyp
     assert "cannot print the --json document: standard output is already used by --out" in err
 
 
+def test_the_conflict_ends_at_the_tools_caller_error_code(capsys):
+    """The run's caller-error code, as every other caller error — a tool
+    that set it to 1 (`set_caller_error_code`) ends with 1, not with 2."""
+    _lib_exitcodes.set_caller_error_code(1)
+    _lib_exitcodes.claim_stdout_owner("--out")
+    assert _lib_exitcodes.emit_result(_lib_exitcodes.Report({"a": 1}, 0)) == 1
+    assert capsys.readouterr().out == ""
+
+
 def test_a_best_effort_document_keeps_its_status_when_stdout_is_taken(capsys):
     """As when stdout fails (#3558): a best-effort document's status says
     what happened, whether or not its document could be printed."""
