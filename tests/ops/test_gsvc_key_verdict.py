@@ -4,7 +4,7 @@
   `key_verdict`，結果（pass）不因判決改變；產生器擋下的寫入不跑判決。
 - 判決與產生器共用同一次判定的期限，沒有自己的期限：剩的時間不夠就不開始
   （no_time），期限到了就停（deadline），記憶體不足（memory）、da-guard 失敗
-  （error）、沒讀到根平台檔（undecidable）都回「未完成」與原因。
+  （error）都回「未完成」與原因；沒讀到根平台檔的樹照常判（#3832）。
 - 受影響的租戶是被寫的檔寫入前後宣告的租戶；不被選取的 `_` 檔不宣告租戶。
 - 有另一筆寫入在排隊時，判決不讓位：照樣判完。
 - error 級的 finding 一律送回；上限只略去 warning 與 notice。
@@ -142,30 +142,20 @@ def test_the_deadline_running_out_stops_it_and_reports_it(monkeypatch, tmp_path)
     assert time.monotonic() - start < 5, "the verdict ran past the judgement deadline"
 
 
-def _key(verdict: str, key: str = "mysql_connections") -> SimpleNamespace:
-    return SimpleNamespace(key=key, verdict=verdict)
-
-
-def test_an_undecidable_key_is_not_completed(monkeypatch, tmp_path):
-    """ADR-038 §5/§7: no root platform file read and a threshold key written
-    — it cannot be judged, and a retry changes nothing: not complete."""
-    got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
-        findings=[], undecidable=True, undecidable_blocks=True,
-        keys={"t-a": [_key(kv.UNDECIDABLE), _key(kv.READ, "_routing")]}))
-    assert (got["status"], got["reason"]) == ("not_completed", "undecidable"), got
-    assert "message" not in got, got  # #3961: no free text
-
-
-def test_reserved_keys_alone_are_judged_without_a_root_platform_file(tmp_path, monkeypatch):
-    """ADR-038 §7: with no root platform file only threshold keys are
-    undecidable; a tenant writing reserved keys alone gets a complete
-    verdict, its error findings included (the real judge_tree)."""
+def test_a_tree_without_a_root_platform_file_is_judged(tmp_path, monkeypatch):
+    """ADR-038 §7 (#3832): a tree with no root platform file is judged as
+    any other — a complete verdict, its error findings included (the real
+    judge_tree)."""
     tree = h.write_tree(tmp_path / "conf.d", {
-        "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode: warning\n    _routng: {}\n"})
+        "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode: warning\n    _routng: {}\n"
+                    "    redis_conected_clients: \"5\"\n"})
     monkeypatch.setattr(child, "written_scope", lambda *_a: ([], ["t-a"]))
     got = child.key_verdict(_job(tmp_path, 60.0), str(tree), {}, pc.ParseCache())
     assert got["status"] == "complete", got
     assert any(f["key"] == "_routng" and f["severity"] == kv.ERROR for f in got["findings"]), got
+    # The threshold key too: before #3832 it was undecidable here.
+    assert any(f["key"] == "redis_conected_clients" and f["severity"] == kv.ERROR
+               and f["reason"] == "no_row" for f in got["findings"]), got
 
 
 def _finding(severity: str, n: int) -> kv.Finding:
@@ -185,8 +175,7 @@ def test_error_findings_are_never_truncated(monkeypatch, tmp_path, errors, other
     found = ([_finding(kv.WARNING, i) for i in range(others)]
              + [_finding(kv.ERROR, i) for i in range(errors)])
     got = _run(monkeypatch, tmp_path, 15.0,
-               lambda *_a, **_k: SimpleNamespace(findings=found, undecidable=False,
-                                                 undecidable_blocks=False, keys={}))
+               lambda *_a, **_k: SimpleNamespace(findings=found, keys={}))
     assert got["status"] == "complete", got
     sev = [f["severity"] for f in got["findings"]]
     assert sev.count(kv.ERROR) == sent_errors
@@ -229,7 +218,7 @@ def test_the_verdicts_parses_are_not_streamed(monkeypatch, tmp_path):
 
     def storing(*_a, **_k):
         pc.active().store(("k" * 64, "mode"), {"tenants": {}})
-        return SimpleNamespace(findings=[], undecidable=False, undecidable_blocks=False, keys={})
+        return SimpleNamespace(findings=[], keys={})
     _run(monkeypatch, tmp_path, 15.0, storing, cache)
     assert sent == [], "a verdict entry went down the pipe"
     assert cache.on_store is not None, "the generator's streaming is not restored"
@@ -364,24 +353,19 @@ def test_a_retired_keys_hint_reaches_tenant_api(monkeypatch, tmp_path):
     retired = kv.Finding(kv.ERROR, "unread", "k_old", "t-a.yaml", ("t-a",), "retired", blocks=True,
                          hint="retired threshold key (#3829): write `k_new` instead; h")
     got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
-        findings=[retired], undecidable=False, undecidable_blocks=False, keys={}))
+        findings=[retired], keys={}))
     assert [(f["key"], f["reason"], f["hint"]) for f in got["findings"]] == [
         ("k_old", "retired", retired.hint)], got
 
 
 def test_what_blocks_is_the_verdicts_own_answer(monkeypatch, tmp_path):
     """#3016: the container sends Go's `blocks` as it came and keeps the
-    blocking findings by it, never by the severity; whether keys are
-    undecidable is the verdict's `undecidable_blocks`."""
+    blocking findings by it, never by the severity."""
     not_blocking = kv.Finding(kv.ERROR, "unread", "k", "t-a.yaml", ("t-a",), "no_row", blocks=False)
     blocking = kv.Finding(kv.WARNING, "unread", "j", "t-a.yaml", ("t-a",), "no_row", blocks=True)
     monkeypatch.setattr(child, "VERDICT_MAX_FINDINGS", 1)
     got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
-        findings=[not_blocking, blocking], undecidable=False, undecidable_blocks=False, keys={}))
+        findings=[not_blocking, blocking], keys={}))
     assert got["status"] == "complete", got
     assert [(f["key"], f["blocks"]) for f in got["findings"]] == [("j", True)], got
     assert got["truncated"] == 1, got
-    # An undecidable key the verdict does not block on: complete.
-    got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
-        findings=[], undecidable=True, undecidable_blocks=False, keys={"t-a": [_key(kv.UNDECIDABLE)]}))
-    assert got["status"] == "complete", got

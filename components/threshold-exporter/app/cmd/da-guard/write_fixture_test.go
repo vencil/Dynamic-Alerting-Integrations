@@ -7,7 +7,7 @@ import "testing"
 
 // declaredKeys are the threshold keys the write-mechanics fixtures write. A
 // tree with no root platform file is judged by the key verdict since the
-// built-in layer (#3832: no longer undecidable), so a key no layer declares
+// built-in layer (#3832), so a key no layer declares
 // is unread and the write that adds it is refused (worsens_tree). These
 // tests are about how a file is written, not about the verdict: the root
 // declares the keys (optional_overrides), so each one is read.

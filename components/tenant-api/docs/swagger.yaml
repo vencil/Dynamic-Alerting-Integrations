@@ -2371,8 +2371,7 @@ paths:
             result is status error with code GENERATOR_FINDINGS (its message names
             the findings about that result''s tenant) and findings[] / findings_compared_with_base
             / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
-            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable
-            (no root platform file: threshold keys cannot be judged), key_verdict_platform_file
+            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_platform_file
             (the shared key verdict did not complete, ADR-038 decision 5), memory,
             incomplete, too_large: the files the batch produces are too large to judge
             in one request — split the batch, invalid_request, normalized: git attributes
@@ -2731,13 +2730,12 @@ paths:
             tree before the write was judged too); a finding unrelated to this write
             is shown only to a caller with write permission on all tenants (others
             get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
-            key_verdict_memory / key_verdict_error / key_verdict_undecidable (no root
-            platform file: threshold keys cannot be judged) / key_verdict_platform_file
-            (the shared key verdict did not complete, ADR-038 decision 5) / memory
-            / incomplete / too_large (the files the write produces are too large to
-            judge in one request) / invalid_request: the generator gave no verdict;
-            or normalized: git attributes (.gitattributes eol, text or a filter) would
-            commit other bytes than the ones the generator judged. Nothing written'
+            key_verdict_memory / key_verdict_error / key_verdict_platform_file (the
+            shared key verdict did not complete, ADR-038 decision 5) / memory / incomplete
+            / too_large (the files the write produces are too large to judge in one
+            request) / invalid_request: the generator gave no verdict; or normalized:
+            git attributes (.gitattributes eol, text or a filter) would commit other
+            bytes than the ones the generator judged. Nothing written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2893,13 +2891,12 @@ paths:
             tree before the write was judged too); a finding unrelated to this write
             is shown only to a caller with write permission on all tenants (others
             get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
-            key_verdict_memory / key_verdict_error / key_verdict_undecidable (no root
-            platform file: threshold keys cannot be judged) / key_verdict_platform_file
-            (the shared key verdict did not complete, ADR-038 decision 5) / memory
-            / incomplete / too_large (the files the write produces are too large to
-            judge in one request) / invalid_request: the generator gave no verdict;
-            or normalized: git attributes (.gitattributes eol, text or a filter) would
-            commit other bytes than the ones the generator judged. Nothing written'
+            key_verdict_memory / key_verdict_error / key_verdict_platform_file (the
+            shared key verdict did not complete, ADR-038 decision 5) / memory / incomplete
+            / too_large (the files the write produces are too large to judge in one
+            request) / invalid_request: the generator gave no verdict; or normalized:
+            git attributes (.gitattributes eol, text or a filter) would commit other
+            bytes than the ones the generator judged. Nothing written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -3339,7 +3336,7 @@ paths:
         so a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.
         In direct mode a body that passes those steps is then judged as PUT judges it (#3016): the route generator and the shared key verdict.
         Their refusal is valid: false with PUT's text (its 400 key-verdict lines, its 422 findings as the caller may see them, a GENERATOR_REJECTED
-        that is a verdict on the write: too_large, invalid_request, normalized, key_verdict_undecidable, key_verdict_platform_file).
+        that is a verdict on the write: too_large, invalid_request, normalized, key_verdict_platform_file).
         judged is false when that judgement gave no verdict on the body, with not_judged saying why: refused (an earlier step refused the body),
         pr_mode, unchanged (the body changes nothing), preview_busy (another preview is being judged; retry), no_validator, canceled,
         error, or the generator's reason — what PUT would answer 429 (retry) or 503 with, or the container's own failure (memory,
@@ -3466,8 +3463,7 @@ paths:
             result is status error with code GENERATOR_FINDINGS (its message names
             the findings about that result''s tenant) and findings[] / findings_compared_with_base
             / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
-            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable
-            (no root platform file: threshold keys cannot be judged), key_verdict_platform_file
+            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_platform_file
             (the shared key verdict did not complete, ADR-038 decision 5), memory,
             incomplete, too_large: the files the batch produces are too large to judge
             in one request — split the batch, invalid_request, normalized: git attributes

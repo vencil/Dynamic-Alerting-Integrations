@@ -1,10 +1,8 @@
 {
-  "schema": "da-guard.key-verdict/v5",
+  "schema": "da-guard.key-verdict/v6",
   "config_hash": "a51835b44dfa394a6797a2f575a93871cfc14be5253e36a4f16c25b814c2e358",
   "at": "2026-07-01T03:00:00Z",
-  "undecidable": false,
   "blocks": true,
-  "undecidable_blocks": false,
   "tenants": {
     "ta": [
       {

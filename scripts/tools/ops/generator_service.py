@@ -402,7 +402,7 @@ class Metrics:
 
 #: A key verdict's outcomes (``complete`` or ``_gsvc_child``'s reasons).
 KEY_VERDICT_OUTCOMES = ("complete", "no_time", "deadline", "memory", "error",
-                        "undecidable", "platform_file")
+                        "platform_file")
 
 
 def _escape_label(value: str) -> str:

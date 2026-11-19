@@ -55,13 +55,15 @@ import (
 const keyVerdictCmd = "key-verdict"
 
 // keyVerdictSchema names the document's shape (see servedValuesSchema).
-// v5 (#3996): every key row and finding carries gate_kind — the main gate's
+// v6 (#3832): `undecidable` and `undecidable_blocks` gone — since the
+// built-in layer every tree is judged, a tree with no root platform file
+// too, so no key's verdict is "undecidable". v5 (#3996): every key row and finding carries gate_kind — the main gate's
 // finding kind for the same fact, or null. v4 (#3703): key_checks, per tenant, a list of structured records
 // {kind, key, head, replacement_head, reason} instead of
 // {version_labels, renames} sentences that quoted the key. v3 (#3835): judged over the whole day, the per-key `served` (what /metrics
 // served at --at) gone. v2 (#3489 step 2): the whole verdict; v1 carried
 // the ERROR layer only.
-const keyVerdictSchema = "da-guard.key-verdict/v5"
+const keyVerdictSchema = "da-guard.key-verdict/v6"
 
 // keyError is one key the verdict reads as unread at severity ERROR — what
 // `da-guard write` compares before and after a batch.
@@ -83,16 +85,9 @@ type keyVerdictDoc struct {
 	// At: the instant `expires:` is read at — the one input of the verdict
 	// that is not the whole day (#3835).
 	At string `json:"at"`
-	// Undecidable: no root platform file was read (decision 7): a threshold
-	// key's verdict is "undecidable".
-	Undecidable bool `json:"undecidable"`
 	// Blocks: a gate that judges the whole tree refuses it — some finding
-	// blocks, or some key is undecidable (keyverdict.Blocks; #3016).
+	// blocks (keyverdict.Blocks; #3016).
 	Blocks bool `json:"blocks"`
-	// UndecidableBlocks: some key is undecidable, which blocks such a gate
-	// — the answer a report of the undecidable keys prints, so no reader
-	// infers it from Blocks and the findings.
-	UndecidableBlocks bool `json:"undecidable_blocks"`
 	// Tenants: tenant → the verdict on each of its keys, sorted by key.
 	Tenants map[string][]keyverdict.KeyVerdict `json:"tenants"`
 	// Findings: what a report prints, error first.
@@ -279,9 +274,9 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 		Served:    servedForVerdict(served),
 		Effective: make(map[string]keyverdict.EffectiveTenant, len(tree.Tenants)),
 		Heads:     heads,
-		// #3832: never undecidable. A tree with no root platform file gets
-		// the built-in layer, so the exporter half of every threshold key
-		// is judged as in any other tree (ADR-038 decision 7).
+		// #3832: a tree with no root platform file gets the built-in layer,
+		// so every threshold key is judged as in any other tree (ADR-038
+		// decision 7).
 	}
 	for _, ec := range tree.Tenants {
 		ec = ec.AsWritten() // #2031: as `da-guard effective` prints it
@@ -624,7 +619,7 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--tenant <id> ...]\n", programName, keyVerdictCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the shared key verdict (ADR-038): for every key of every tenant whether\n"+
 			"some reader reads it in some part of the UTC day, and the findings a report prints:\n"+
-			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
+			"{\"schema\": %q, \"at\", \"blocks\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
 			"verdict, severity, reason, disable, hint, switched_off_with, dead_entries, value, gate_kind}]},\n"+
 			"\"findings\": [{severity, kind, key, file, tenants, reason, hint, base, dead_entries, blocks,\n"+
 			"gate_kind}], \"key_checks\":\n"+
@@ -685,8 +680,8 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		return fail(res.why)
 	}
 	out := keyVerdictDoc{Schema: keyVerdictSchema, ConfigHash: configHashField(res.identity),
-		At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
-		Blocks: res.tree.Blocks, UndecidableBlocks: res.tree.UndecidableBlocks,
+		At:      at.Format(time.RFC3339),
+		Blocks:  res.tree.Blocks,
 		Tenants: res.tree.Keys, Findings: res.tree.Findings, KeyChecks: res.keyChecks,
 		ParseFailed: nonNilStrings(res.parseFailed), Unreadable: res.unreadable,
 		tenantSubset: subset(requested, func(t string) bool { return res.computed[t] })}

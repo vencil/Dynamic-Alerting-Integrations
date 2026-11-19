@@ -103,10 +103,10 @@ def test_an_inherited_sibling_switched_off_with_its_base(tmp_path):
 
 
 def test_json_carries_the_value_and_nothing_read_at_one_instant(conf_d):
-    """#3835: v2 judges each key over the whole day; no row carries what
-    /metrics served at --at (v1's `served`)."""
+    """#3835: each key is judged over the whole day; no row carries what
+    /metrics served at --at (v1's `served`). v3 (#3832): no `undecidable`."""
     doc = _json(_run("--config-dir", conf_d, "--json"))
-    assert doc["schema"] == "da-tools.explain-keys/v2"
+    assert doc["schema"] == "da-tools.explain-keys/v3"
     assert doc["status"] == "ok" and set(doc["tenants"]) == {"db-a", "db-b"}
     e = {x["key"]: x for x in doc["tenants"]["db-b"]}["mysql_connection_usage_percent"]
     assert (e["value"], e["layer"], e["file"]) == (60, "tenant", "db-b.yaml")
@@ -124,6 +124,20 @@ def test_an_assert_file_pinning_served_is_refused_by_name(conf_d, tmp_path):
     p = _run("--config-dir", conf_d, "--assert", golden, "--json")
     assert p.returncode == 2 and p.stdout == "", p.stderr
     assert "field `served` removed in schema v2" in p.stderr and "served-values --at" in p.stderr, p.stderr
+
+
+def test_an_assert_file_carrying_undecidable_is_refused_by_name(conf_d, tmp_path):
+    """#3832: a v2 expected file (this tool's older output) carries the
+    top-level `undecidable`; it is refused naming why the field is gone,
+    not as an unknown field."""
+    golden = tmp_path / "v2.json"
+    golden.write_text(json.dumps({"schema": "da-tools.explain-keys/v2", "undecidable": False,
+                                  "tenants": {"db-b": [{"key": "mysql_connection_usage_percent"}]}}),
+                      encoding="utf-8")
+    p = _run("--config-dir", conf_d, "--assert", golden, "--json")
+    assert p.returncode == 2 and p.stdout == "", p.stderr
+    assert "field `undecidable` removed in schema v3" in p.stderr, p.stderr
+    assert "unknown top-level" not in p.stderr, p.stderr
 
 
 def test_assert_passes_on_its_own_output_and_fails_on_a_difference(conf_d, tmp_path):
@@ -202,7 +216,7 @@ def test_a_tree_with_no_root_platform_file_is_judged(tmp_path):
     p = _run("--config-dir", d, "--json")
     assert p.returncode == 0, p.stderr
     doc = _json(p)
-    assert doc["undecidable"] is False
+    assert "undecidable" not in doc  # v3 (#3832): no such field
     row = next(r for r in doc["tenants"]["ta"] if r["key"] == "mysql_conections")
     assert (row["verdict"], row["reason"]) == ("unread", "no_row")
 

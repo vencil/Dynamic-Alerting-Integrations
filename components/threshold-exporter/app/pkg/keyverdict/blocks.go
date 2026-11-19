@@ -18,9 +18,7 @@ import (
 func Blocking(severity string) bool { return severity == SeverityError }
 
 // Block is one thing a gate refuses: a blocking finding, once per tenant it
-// names (Tenant ""  for one that names none, a profile no tenant binds), or a
-// key the verdict could not judge (Kind Undecidable: no root platform file
-// was read, decision 7).
+// names (Tenant ""  for one that names none, a profile no tenant binds).
 type Block struct {
 	Kind   string
 	Key    string
@@ -76,14 +74,6 @@ func Blocks(t Tree) []Block {
 		for _, tenant := range f.Tenants {
 			b.Tenant, b.Own = tenant, f.own || ownEntry(t, tenant, f.Key, b.File)
 			out = append(out, b)
-		}
-	}
-	for _, tenant := range sortedKeys(t.Keys) {
-		for _, v := range t.Keys[tenant] {
-			if v.Verdict == Undecidable {
-				out = append(out, Block{Kind: Undecidable, Key: v.Key, File: deref(v.File), Tenant: tenant,
-					Reason: Undecidable, Own: ownEntry(t, tenant, v.Key, deref(v.File))})
-			}
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {

@@ -233,7 +233,7 @@ def test_key_verdict_false_asks_for_none(tmp_path, monkeypatch, capsys):
 
     def judge(*a, **k):
         calls.append(a)
-        return kv.TreeVerdict({}, [], False)
+        return kv.TreeVerdict({}, [])
     assert _main(tmp_path, monkeypatch, judge, key_verdict=False) == 0
     assert calls == []
     assert "key verdict" not in capsys.readouterr().err
@@ -271,7 +271,7 @@ def test_the_generator_container_does_not_judge_keys_inside_the_generator(
 
     def judge(*a, **k):
         calls.append(a)
-        return kv.TreeVerdict({}, [], False)
+        return kv.TreeVerdict({}, [])
     monkeypatch.setattr(kv, "judge_tree", judge)
     monkeypatch.setattr(child, "key_verdict", lambda *_a: {"status": "stubbed"})
     r, w = os.pipe()

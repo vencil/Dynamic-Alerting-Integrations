@@ -1546,8 +1546,7 @@ def _report_key_verdict(config_dir: str, findings: list[str],
     receives the verdict, or the exception that kept it from being given
     (``ValidateOutcome.key_verdict``). Returns the lines that block the
     run (#3016), each a ``blocks: validate`` finding: the findings the
-    verdict says block (an error), the undecidable line when a threshold key
-    could not be judged (decision 7), and the one line saying no verdict was
+    verdict says block (an error), and the one line saying no verdict was
     given — a tree no verdict was given for does not pass, as tenant-api
     refuses a write it has none for (decision 5). Warnings and notices are
     ``blocks: never``.
@@ -1592,12 +1591,6 @@ def _report_key_verdict(config_dir: str, findings: list[str],
             blocks="validate" if f.blocks else "never",
             tenant=f.tenants[0] if len(f.tenants) == 1 else None,
             file=f.file, field=key_segment(f.key)))
-    undecidable = _lib_key_verdict.undecidable_line(verdict)
-    if undecidable is not None:
-        stops = verdict.undecidable_blocks
-        lines.append(Finding(f"  {'ERROR' if stops else 'NOTICE'}: key verdict: {undecidable}",
-                             kind="key_undecidable",
-                             blocks="validate" if stops else "never"))
     # ADR-038 §11: the exporter's own key checks (a `version` label, a
     # retired spelling) — this tool no longer judges keys itself. #3703:
     # worded here from the record's fields (`key_check_line`), never as a
