@@ -226,6 +226,10 @@ thresholdConfig:
       # resolves)
     # ── oracle：Oracle Database (query-exporter) ──
     - oracle_wait_time_rate   # s/s — Wait time rate (5m)
+    - oracle_hard_parse_time_percent
+      # % of DB time — Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a
+      # share of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest
+      # per tenant; only while the database averages at least one active session (AAS >= 1)
     - oracle_pga_usage_percent
       # % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
       # PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant;

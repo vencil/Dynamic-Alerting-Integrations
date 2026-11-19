@@ -142,6 +142,7 @@ const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
   ],
   oracle: [
     { key: 'oracle_wait_time_rate', value: 50, unit: 's/s', desc: 'Wait time rate (5m)' },
+    { key: 'oracle_hard_parse_time_percent', value: 20, unit: '% of DB time', desc: 'Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest per tenant; only while the database averages at least one active session (AAS >= 1)' },
     { key: 'oracle_pga_usage_percent', value: 85, unit: '% of PGA_AGGREGATE_LIMIT', desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a database with no limit set (0) has no share. Replaces the absolute-bytes key oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)' },
   ],
   db2: [

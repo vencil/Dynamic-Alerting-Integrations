@@ -108,6 +108,7 @@ UNIT_DIMENSION: dict[str, str] = {
     "% of max_connections": "percent",
     "% of PROCESSES": "percent",
     "% of PGA_AGGREGATE_LIMIT": "percent",
+    "% of DB time": "percent",
     "ratio": "ratio",
     "0=green,1=yellow,2=red": "enum",
     "bytes": "bytes",

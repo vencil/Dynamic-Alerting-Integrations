@@ -682,6 +682,22 @@ keys:
       tracking: 1320
       reason: "No measurement yet; #1320 keeps it declared until there is a signal"
       reason_zh: "尚無實測；#1320 在有訊號前維持宣告"
+  oracle_hard_parse_time_percent:
+    pack: oracle
+    tier: optional_overrides
+    value: 20
+    unit: '% of DB time'
+    desc: 'Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share
+      of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest
+      per tenant; only while the database averages at least one active session (AAS >= 1)'
+    metric_class: latency
+    arming: operator
+    portability: portable
+    blocker:
+      kind: unmeasured
+      tracking: 1174
+      reason: "No vendor default exists (Oracle EM leaves its parse metrics Not Defined). 20 sits between what #1174 measured on Oracle Free 23: healthy work 0.2-1.5%, dictionary stats gathering 12%, a hard-parse storm diluted by a recursive batch 38%, undiluted 73%"
+      reason_zh: "沒有 vendor 預設值（Oracle EM 的 parse 指標閾值為 Not Defined）。20 落在 #1174 於 Oracle Free 23 實測的區間：健康負載 0.2–1.5%、字典統計收集 12%、被遞迴批次稀釋的 hard parse 風暴 38%、未稀釋 73%"
   oracle_process_usage_percent:
     pack: oracle
     tier: defaults

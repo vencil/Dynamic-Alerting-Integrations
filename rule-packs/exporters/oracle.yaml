@@ -106,6 +106,17 @@ metrics:
     type: counter
     description: v$system_wait_class time waited, seconds, per non-idle wait class (exposed as _total).
     labels: [wait_class]
+  oracledb_db_time_seconds:
+    type: counter
+    description: >-
+      v$sys_time_model "DB time", seconds (exposed as _total): time spent in user
+      calls. Connected to a PDB it is that PDB's own; in the CDB root or a non-CDB
+      the whole instance's.
+  oracledb_hard_parse_elapsed_seconds:
+    type: counter
+    description: >-
+      v$sys_time_model "hard parse elapsed time", seconds (exposed as _total);
+      same scope as oracledb_db_time_seconds.
 
 queries:
   oracle_liveness:
@@ -165,3 +176,13 @@ queries:
     sql: >-
       SELECT wait_class, time_waited / 100 AS oracledb_wait_time_seconds
       FROM v$system_wait_class WHERE wait_class <> 'Idle'
+  oracle_time_model:
+    interval: 15
+    timeout: 8
+    databases: [oracle]
+    metrics: [oracledb_db_time_seconds, oracledb_hard_parse_elapsed_seconds]
+    sql: >-
+      SELECT
+        (SELECT value / 1e6 FROM v$sys_time_model WHERE stat_name = 'DB time') AS oracledb_db_time_seconds,
+        (SELECT value / 1e6 FROM v$sys_time_model WHERE stat_name = 'hard parse elapsed time') AS oracledb_hard_parse_elapsed_seconds
+      FROM dual
