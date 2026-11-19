@@ -293,6 +293,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	in.SubtreeReserved = guard.SubtreeReservedReported(rep.SubtreeReserved, rep.DefaultsFiles, rep.ParseFailed)
 	in.Undeliverable = rep.Undeliverable // #3996: subtree_default_undeliverable's set
 	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants, setAsideFiles)
+	in.RootDefaults = rootDefaultsKeys(scan, rep.ParseFailed)
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a
 	// tenant set aside, may be the one binding it.
@@ -390,6 +391,28 @@ func tenantFileKeysOf(doc *parseTreeDoc) map[string][]string {
 		}
 	}
 	return out
+}
+
+// rootDefaultsKeys (#4031) is the root carrier, by its scan key (as a
+// tenant's DefaultsChain names it), with the `_` keys of its `defaults:` no
+// reader reads; nil when the tree has no root carrier or the load drops it
+// (parseFailed: its parse_failed finding speaks for the file).
+func rootDefaultsKeys(scan *config.TreeScan, parseFailed []string) *keyverdict.RootDefaultsKeys {
+	p, data, ok := scan.RootCarrier()
+	if !ok {
+		return nil
+	}
+	rel, err := filepath.Rel(scan.AbsRoot, p)
+	if err != nil {
+		return nil
+	}
+	rel = filepath.ToSlash(rel)
+	for _, f := range parseFailed {
+		if f == rel {
+			return nil
+		}
+	}
+	return &keyverdict.RootDefaultsKeys{File: rel, Keys: config.RootDefaultsUnreadKeys(data)}
 }
 
 // judgedTenantFiles is files restricted to the ones the verdict judges: a

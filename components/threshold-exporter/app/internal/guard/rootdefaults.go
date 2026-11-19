@@ -521,12 +521,37 @@ func checkRootDimensionsCriticalBase(input CheckInput) []Finding {
 	return out
 }
 
+// rootReservedKeyFix (#4031) is root_defaults_reserved_key's fix, by the
+// key's shape as subtree defaults word it (reservedKeyShape): only a
+// recognised key takes effect in a tenant's own entry. A reserved-looking
+// key nothing reads (`_routingProfile`: the `_routing` prefix makes it
+// reserved, yet no reader reads it) or a `_state_<f>` the root does not
+// declare `f` for would be unread there too.
+func rootReservedKeyFix(k string, declared map[string]bool) string {
+	if readElsewhere[k] { // read at the top level: reservedKeyFixAt says where
+		return reservedKeyFixAt(k, true)
+	}
+	switch reservedKeyShape(k, declared) {
+	case shapeUndeclaredState:
+		f := strings.TrimPrefix(k, "_state_")
+		return fmt.Sprintf("The conf.d root `state_filters:` does not declare a filter `%s`, so nothing reads `%s` "+
+			"anywhere, a tenant's own entry included. Declare it in this file — `state_filters.%s.default_state` "+
+			"sets the state every tenant in the tree gets — or delete `%s` from `defaults:`.",
+			filterName(f), k, filterPath(f), k)
+	case shapeUnrecognised:
+		return fmt.Sprintf("It is not a recognised key: the exporter does not read `%s` under the root "+
+			"`defaults:` or in a tenant's own entry. Delete it from `defaults:`.", k)
+	}
+	return reservedKeyFixAt(k, true)
+}
+
 // checkRootReservedKeys reports findingkind.FindingRootDefaultsReservedKey for
 // each `_` key under the root carrier's `defaults:` mapping that reaches no
 // tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a
 // routing key is the route generator's to judge; a file in ParseFailed is
 // skipped, as checkRootCriticalKeys does. The fix is subtree_default_reserved_key's
-// (reservedKeyFixAt, worded for the root): where the key's reader reads it.
+// (rootReservedKeyFix, worded for the root): where the key's reader reads it,
+// or delete it when none would.
 func checkRootReservedKeys(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
 	for _, pf := range input.ParseFailed {
@@ -556,7 +581,7 @@ func checkRootReservedKeys(input CheckInput) []Finding {
 				Field:    f.Name + ":defaults." + k,
 				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` reaches no tenant: the exporter "+
 					"reads the root `defaults:` for thresholds only, while /effective shows the value as inherited "+
-					"(not_served root_defaults_reserved). %s", f.Name, k, reservedKeyFixAt(k, true)),
+					"(not_served root_defaults_reserved). %s", f.Name, k, rootReservedKeyFix(k, input.DeclaredStateFilters)),
 			})
 		}
 	}

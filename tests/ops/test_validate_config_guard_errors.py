@@ -260,8 +260,9 @@ def test_a_registered_reserved_key_under_root_defaults_fails(tmp_path, key):
                          "tenant-x.yaml": _TX})
     r = vc.check_guard_errors(d)
     assert ("root_defaults_reserved_key", f"_defaults.yaml:defaults.{key}", "") in _lines(r), r
-    # root_defaults 只剩 #3045 的 WARN（`_` 鍵不是閾值），不再 FAIL。
-    assert vc.check_root_defaults(d)["status"] == vc.WARN
+    # #4031：同一件事只報一次。root_defaults 不再判 `_` 鍵（先前這裡是 #3045 的
+    # WARN，修法還與 guard_errors 相反）。
+    assert vc.check_root_defaults(d)["status"] == vc.PASS
 
 
 @pytest.mark.parametrize("sub, fails", [

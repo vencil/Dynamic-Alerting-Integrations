@@ -72,6 +72,8 @@ Revised 2026-11-16: `disable` may be written under the root `defaults:` (for a k
 
 Revised 2026-11-18: the verdict no longer has `undecidable`: the verdict document drops its `undecidable` and `undecidable_blocks` fields, and no gate has a "threshold key it cannot judge" outcome any more; decision 7 is rewritten as "A tree with no root platform file" (decisions 5, 6, 7).
 
+Revised 2026-11-19: a `_` key no reader reads under the root `defaults:` (one the registry does not list, and `_metadata`, which the defaults merge drops at every level) is judged on that file, also when no tenant inherits it; `_metadata`'s reason is `merge_dropped` (decision 4).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -265,7 +267,7 @@ For each key of each tenant, the shared function gives:
 | verdict | Meaning | Level |
 |---|---|---|
 | `read` | At least one reader reads it; keys registered as `annotation` also count | — |
-| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`), and for a retired `_` key (reason `retired`); so is a retired threshold key the threshold registry's `retired_keys:` lists (reason `retired`), even though the exporter still serves a row for it — one the deployment's root `defaults:` writes included; the finding's `hint` names the key that replaces it | Error, whether written in a tenant file, a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:`; from a file other than the tenant file, the file is named. Two exceptions: unread only because of `disable_noop`: warning (see decision 8); a `_state_<filter>` naming a filter the platform has not declared: notice (see decision 7) |
+| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`), and for a retired `_` key (reason `retired`); so is a retired threshold key the threshold registry's `retired_keys:` lists (reason `retired`), even though the exporter still serves a row for it — one the deployment's root `defaults:` writes included; the finding's `hint` names the key that replaces it; so is `_metadata` under the root `defaults:` (reason `merge_dropped`: the defaults merge drops it at every level, and the root `defaults:` is read for thresholds only), and such a `_` key under the root `defaults:` is judged on that file, also when no tenant inherits it | Error, whether written in a tenant file, a profile, a sub-directory `_defaults.yaml`, the root `defaults:` or a root platform file's `tenants:`; from a file other than the tenant file, the file is named. Two exceptions: unread only because of `disable_noop`: warning (see decision 8); a `_state_<filter>` naming a filter the platform has not declared: notice (see decision 7) |
 
 The same typo coming from a platform file is reported only once (deduplicated by file and key), listing the affected tenants, rather than one finding per tenant.
 
