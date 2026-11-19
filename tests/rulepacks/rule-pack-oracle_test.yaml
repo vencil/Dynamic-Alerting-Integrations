@@ -1047,3 +1047,86 @@ tests:
               owner: ""
               tier: ""
         # hp-healthy, hp-stats, hp-idle, hp-floorlo, hp-maint and hp-nothr produce NO alert.
+
+  # ── OracleHighHardParseTime: for: and threshold edges (#1174 review F1) ──
+  # The group above holds every series at one rate from t=0, so it cannot tell
+  # for: 5m from 15m, or 20 from 30. Here:
+  #   hp-late  idle (flat counters) until 8m, then AAS 2 at 50%. Flat history
+  #            means no cold start: both engines see the DB-time rate ramp from
+  #            0 at 8m to 2 at 13m, clear the AAS >= 1 gate at ~10.5m, and
+  #            for: 10m ends ~20.5m — pending at 19m, firing at 23m. for: 5m
+  #            fires by 19m, for: 15m not yet at 23m.
+  #   hp-t21   AAS 2 at 21% → fires;  hp-t19  AAS 2 at 19% → no. Both sit one
+  #            point from the threshold 20, so a moved or loosened comparison
+  #            turns one of them red.
+  - interval: 15s
+    input_series:
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-late", instance="e"}'
+        values: '0x32 0+30x88'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-late", instance="e"}'
+        values: '0x32 0+15x88'
+      - series: 'user_threshold{tenant="hp-late", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-t21", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-t21", instance="e"}'
+        values: '0+6.3x120'
+      - series: 'user_threshold{tenant="hp-t21", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-t19", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-t19", instance="e"}'
+        values: '0+5.7x120'
+      - series: 'user_threshold{tenant="hp-t19", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: OracleHighHardParseTime
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-t21
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-t21"
+              summary_zh: "hp-t21 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-t21: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-t21：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 21.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 21.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # hp-late is still pending (for: 10m ends ~20.5m); hp-t19 is under 20.
+      - eval_time: 23m
+        alertname: OracleHighHardParseTime
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-late
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-late"
+              summary_zh: "hp-late 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-late: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-late：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 50.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 50.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-t21
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-t21"
+              summary_zh: "hp-t21 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-t21: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-t21：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 21.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 21.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # hp-t19 (19% < 20) produces NO alert.
