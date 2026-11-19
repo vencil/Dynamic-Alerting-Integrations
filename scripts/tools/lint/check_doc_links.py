@@ -918,7 +918,6 @@ def _fix_broken_anchors(broken_anchors: list, repo_root: Path) -> int:
 
         if new_content != content:
             fpath.write_text(new_content, encoding="utf-8", newline="\n")
-            os.chmod(fpath, 0o644)
 
     return fixed_count
 

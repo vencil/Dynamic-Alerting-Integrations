@@ -60,6 +60,48 @@ def test_dash_is_stdout_and_a_second_owner_is_refused(monkeypatch):
         _lib_io.write_operator_output("-", "two\n", flag="--jwks-out")
 
 
+def test_the_json_document_after_an_operator_output_on_stdout_is_refused(monkeypatch, capsys):
+    """#3107 ④ (owner 2026-11-15): the --json document claims stdout too.
+    After `-` (or a path that is stdout) took it, a second document would be
+    indistinguishable from the first: nothing more is printed, and the run
+    ends at the caller-error code."""
+    _lib_io.write_operator_output("-", "first\n", flag="--out")
+    capsys.readouterr()
+    status = _lib_exitcodes.emit_result(_lib_exitcodes.Report({"a": 1}, 0))
+    out, err = capsys.readouterr()
+    assert status == _lib_exitcodes.EXIT_CALLER_ERROR == 2
+    assert out == ""
+    assert "cannot print the --json document: standard output is already used by --out" in err
+
+
+def test_the_conflict_ends_at_the_tools_caller_error_code(capsys):
+    """The run's caller-error code, as every other caller error — a tool
+    that set it to 1 (`set_caller_error_code`) ends with 1, not with 2."""
+    _lib_exitcodes.set_caller_error_code(1)
+    _lib_exitcodes.claim_stdout_owner("--out")
+    assert _lib_exitcodes.emit_result(_lib_exitcodes.Report({"a": 1}, 0)) == 1
+    assert capsys.readouterr().out == ""
+
+
+def test_a_best_effort_document_keeps_its_status_when_stdout_is_taken(capsys):
+    """As when stdout fails (#3558): a best-effort document's status says
+    what happened, whether or not its document could be printed."""
+    _lib_exitcodes.claim_stdout_owner("--out")
+    status = _lib_exitcodes.emit_result(
+        _lib_exitcodes.Report({"a": 1}, 1, delivery="best_effort"))
+    out, err = capsys.readouterr()
+    assert status == 1 and out == ""
+    assert "already used by --out" in err
+
+
+def test_the_json_document_alone_is_printed(capsys):
+    """CONTROL: no other owner — the document is printed and the status kept
+    (the claim itself is no conflict)."""
+    status = _lib_exitcodes.emit_result(_lib_exitcodes.Report({"a": 1}, 1))
+    out, err = capsys.readouterr()
+    assert status == 1 and out == '{\n  "a": 1\n}\n' and err == ""
+
+
 def test_each_run_starts_with_stdout_unclaimed():
     """Risk 4 of the v2 design: the claim is the run's state, not the
     process's — `run()` clears it, so a second run in one process may claim."""

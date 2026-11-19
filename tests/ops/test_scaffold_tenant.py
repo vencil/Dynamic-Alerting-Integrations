@@ -2193,3 +2193,15 @@ class TestSilentModeChoicesWithinSchema:
         scalar, target = _silent_mode_schema_enums()
         picks = set(INTERACTIVE_SILENT_TARGETS.values())
         assert picks and picks <= set(scalar) and picks <= set(target), picks
+
+
+def test_a_file_written_again_is_replaced_not_appended(tmp_path):
+    """#3107 ④ (`append=True` on the scaffold write survived the ② mutations):
+    a non-conf.d file the scaffold writes over an existing one ends as the
+    new content alone."""
+    import scaffold_tenant as st
+    # Not a config name: those go through `da-guard write`, not this write.
+    path = tmp_path / "scaffold-report.md"
+    path.write_text("an older and longer report\n" * 3, encoding="utf-8")
+    st._perform_writes(tmp_path, [], [(str(path), "# new\n")])
+    assert path.read_text(encoding="utf-8") == "# new\n"

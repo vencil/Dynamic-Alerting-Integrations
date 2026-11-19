@@ -4,7 +4,7 @@ v2.3.0: Split into sub-modules for reduced coupling.
 This file serves as a backward-compatible facade.
 Direct imports from sub-modules are preferred for new code:
   from _lib_constants import GUARDRAILS
-  from _lib_io import write_text_secure
+  from _lib_io import write_operator_output
   from _lib_validation import parse_duration_seconds
   from _lib_prometheus import prometheus_instant
 """
@@ -35,11 +35,7 @@ from _lib_io import (  # noqa: F401
     YamlFileError,
     exit_on_yaml_file_error,
     load_yaml_file,
-    write_text_secure,
-    write_json_secure,
     OutputWriteError,
-    write_text_or_die,
-    write_json_or_die,
     write_operator_output,
     write_operator_output_or_die,
     open_operator_output,
