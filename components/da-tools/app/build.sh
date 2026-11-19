@@ -238,7 +238,7 @@ TOOL_FILES=(
     _lib_atomic_write.py
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
     # ops/operator_generate.py + ops/migrate_to_operator.py (write_yaml_crd
-    # + _dict_to_yaml). Imports write_text_secure from _lib_io (above).
+    # + _dict_to_yaml). Writes through _lib_io's operator entry (above).
     _lib_yaml.py
     # v2.8.0 PR-2 — shared dispatcher for the three Go-binary
     # subcommands (guard / batchpr / parser). Imported by their

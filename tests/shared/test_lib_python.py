@@ -9,10 +9,8 @@ pytest style：使用 plain assert + conftest fixtures。
   3. load_yaml_file() — YAML 載入 + 錯誤處理
   4. validate_and_clamp() — timing guardrails
   5. http_get_json — HTTP helper
-  6. write_text_secure / write_json_secure — SAST-compliant file writes
 """
 
-import json
 import os
 import pathlib
 import stat
@@ -574,106 +572,3 @@ class TestOnboardHintsRoundTrip:
         assert lib.read_onboard_hints(path) == {"v": 2}
 
 
-# ============================================================
-# write_text_secure
-# ============================================================
-
-class TestWriteTextSecure:
-    """write_text_secure() 安全文字寫入測試。"""
-
-    def test_basic_write(self, tmp_path):
-        """基本文字內容正確寫入。"""
-        path = str(tmp_path / "test.txt")
-        lib.write_text_secure(path, "hello world")
-        assert pathlib.Path(path).read_text(encoding="utf-8") == "hello world"
-
-    @_skipif_unix_modes
-    def test_permissions_0o600(self, tmp_path):
-        """寫入檔案權限為 0o600。"""
-        path = str(tmp_path / "secure.txt")
-        lib.write_text_secure(path, "secret")
-        mode = os.stat(path).st_mode & 0o777
-        assert mode == 0o600
-
-    def test_unicode_content(self, tmp_path):
-        """UTF-8 中文內容正確寫入。"""
-        path = str(tmp_path / "zh.txt")
-        lib.write_text_secure(path, "租戶設定 — 三態")
-        content = pathlib.Path(path).read_text(encoding="utf-8")
-        assert "租戶" in content
-        assert "三態" in content
-
-    def test_overwrites_existing(self, tmp_path):
-        """覆蓋既有檔案。"""
-        path = str(tmp_path / "overwrite.txt")
-        lib.write_text_secure(path, "v1")
-        lib.write_text_secure(path, "v2")
-        assert pathlib.Path(path).read_text(encoding="utf-8") == "v2"
-
-    @_skipif_unix_modes
-    def test_empty_string(self, tmp_path):
-        """空字串寫入產生空檔案。"""
-        path = str(tmp_path / "empty.txt")
-        lib.write_text_secure(path, "")
-        assert pathlib.Path(path).read_text(encoding="utf-8") == ""
-        assert os.stat(path).st_mode & 0o777 == 0o600
-
-
-# ============================================================
-# write_json_secure
-# ============================================================
-
-class TestWriteJsonSecure:
-    """write_json_secure() 安全 JSON 寫入測試。"""
-
-    def test_basic_dict(self, tmp_path):
-        """基本 dict 正確寫入為 JSON。"""
-        path = str(tmp_path / "data.json")
-        lib.write_json_secure(path, {"key": "value", "count": 42})
-        content = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-        assert content == {"key": "value", "count": 42}
-
-    @_skipif_unix_modes
-    def test_permissions_0o600(self, tmp_path):
-        """寫入檔案權限為 0o600。"""
-        path = str(tmp_path / "secure.json")
-        lib.write_json_secure(path, {"x": 1})
-        mode = os.stat(path).st_mode & 0o777
-        assert mode == 0o600
-
-    def test_unicode_no_escape(self, tmp_path):
-        """預設 ensure_ascii=False，Unicode 字元不轉義。"""
-        path = str(tmp_path / "zh.json")
-        lib.write_json_secure(path, {"note": "租戶告警"})
-        raw = pathlib.Path(path).read_text(encoding="utf-8")
-        assert "租戶" in raw
-        assert "\\u" not in raw
-
-    def test_custom_indent(self, tmp_path):
-        """自訂 indent 生效。"""
-        path = str(tmp_path / "indent4.json")
-        lib.write_json_secure(path, {"a": 1}, indent=4)
-        raw = pathlib.Path(path).read_text(encoding="utf-8")
-        assert "    " in raw  # 4-space indent
-
-    def test_nested_structure(self, tmp_path):
-        """深層巢狀結構正確序列化。"""
-        path = str(tmp_path / "nested.json")
-        data = {"level1": {"level2": {"level3": [1, 2, 3]}}}
-        lib.write_json_secure(path, data)
-        result = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-        assert result == data
-
-    def test_empty_dict(self, tmp_path):
-        """空 dict 寫入 '{}'。"""
-        path = str(tmp_path / "empty.json")
-        lib.write_json_secure(path, {})
-        result = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-        assert result == {}
-
-    def test_list_data(self, tmp_path):
-        """list 型別資料正確寫入。"""
-        path = str(tmp_path / "list.json")
-        lib.write_json_secure(path, [1, "two", {"three": 3}])
-        result = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-        assert result == [1, "two", {"three": 3}]

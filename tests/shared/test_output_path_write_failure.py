@@ -156,8 +156,8 @@ cannot see into:
   the output path: the audit says nothing about those, and the list says so
   by name.
 
-Tools that do not write that way YET are on three lists, each exact in both
-directions (``VIA_OLD_NAMES``, ``RAW_UNDER_OUT``, ``VIA_OTHER_CLASS``): they
+Tools that do not write that way YET are on two lists, each exact in both
+directions (``RAW_UNDER_OUT``, ``VIA_OTHER_CLASS``): they
 record what the control runs logged, and an entry that is no longer true is
 a failure telling you to remove it.
 
@@ -1462,20 +1462,12 @@ def _entry_frames() -> dict[str, str]:
 
 def _via(event: dict, frames: dict[str, str]) -> str:
     """The kind of the INNERMOST entry on the event's stack, or ``raw``.
-    Innermost: `write_yaml_crd` → `write_text_secure` is a legacy write, and
-    stays one whatever is above it."""
+    Innermost: `write_yaml_crd` → `write_operator_output` is an operator
+    write, and stays one whatever is above it."""
     for frame in event["stack"]:
         if frame in frames:
             return frames[frame]
     return "raw"
-
-
-def _writer_frames() -> frozenset[str]:
-    """Every function `_lib_io.OUTPUT_ENTRY_POINTS` names (wrappers and the
-    flag-only two included), as a stack frame."""
-    import _lib_io
-    return frozenset(f"scripts/tools/{name.split('.')[0]}.py:{name.split('.')[1]}"
-                     for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names)
 
 
 #: The two functions that DO the write of each class, below the public
@@ -1575,8 +1567,6 @@ class Audit:
     spawned: tuple[tuple[str, ...], ...]      # argv of every process spawned
     unlogged: tuple[str, ...] = ()            # files the run left that no logged write made
     faults: tuple[str, ...] = ()              # events that are wrong in themselves
-    # "<caller frame> <old name it called> ×<distinct calling lines>"
-    old_name_calls: tuple[str, ...] = ()
     # (file, line) of every frame of every event under the scope
     reached: frozenset[tuple[str, int]] = frozenset()
     # `_program` of every spawn, marked GIVEN_THE_OUTPUT_PATH where it was
@@ -1600,13 +1590,11 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
     if events is None:
         return Audit(False, False, {}, ())
     frames = _entry_frames()
-    writer_frames = _writer_frames()
     loaded = _tool_loaded(events, tool)
     sites: dict[str, list[tuple[str, str]]] = {}
     spawned = []
     faults: list[str] = []
     programs: set[str] = set()
-    old_calls: dict[tuple[str, str], set[int]] = {}
     reached: set[tuple[str, int]] = set()
     for event in events:
         if event["ev"] == "loaded":
@@ -1663,11 +1651,6 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
             if not any(frame.startswith(_ATOMIC_WRITER) for frame in stack):
                 faults.append(f"{event['ev']} {rel} came through the artifact entry but "
                               "not through `_lib_atomic_write`: not the atomic writer")
-        elif kind == "legacy":
-            outer = max(i for i, frame in enumerate(stack) if frame in writer_frames)
-            caller = stack[outer + 1] if outer + 1 < len(stack) else "<no caller in scripts/>"
-            line = lines[outer + 1] if outer + 1 < len(lines) else 0
-            old_calls.setdefault((caller, stack[outer].rpartition(":")[2]), set()).add(line)
         bucket = sites.setdefault(kind, [])
         if site not in bucket:
             bucket.append(site)
@@ -1675,15 +1658,12 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
               if event in _FILE_EVENTS}
     return Audit(True, loaded, {k: tuple(v) for k, v in sites.items()}, tuple(spawned),
                  tuple(sorted(made - logged)), tuple(faults),
-                 tuple(sorted(f"{caller} {name} ×{len(at)}"
-                              for (caller, name), at in old_calls.items())),
                  frozenset(reached), tuple(sorted(programs)))
 
 
 @dataclass(frozen=True)
 class Seen:
     faults: list[str]            # wrong whatever any list says
-    old_names: tuple[str, ...]   # the calls that wrote through an old name (Audit.old_name_calls)
     raw: tuple[str, ...]         # "<event> <path under the scope>" of each raw site, sorted
     raw_is_all: bool             # no write under the scope came through any entry
     other_class: str | None      # the OTHER class's entry wrote here
@@ -1748,26 +1728,17 @@ def _verdict(row: Row, audit: Audit) -> Seen:
             for event, rel in sites:
                 if event != "os.mkdir":
                     faults.append(f"{event} {rel} under ensure_dir: it makes directories only")
-        elif kind == "legacy" and row.kind == "file" and row.produces is None:
-            # VIA_OLD_NAMES lists the CALL, not the files: a second file out
-            # of the same line is the same entry. For a single-file flag the
-            # one file an old name may write is the flag's value.
-            for event, rel in sites:
-                if rel != row.out_name:
-                    faults.append(f"{event} {rel} through an old name: {row.flag} names "
-                                  f"one file ({row.out_name}), and this is another")
     raw = tuple(sorted(f"{event} {rel}" for event, rel in audit.sites.get("raw", ())))
     through_an_entry = any(sites for kind, sites in audit.sites.items() if kind != "raw")
-    return Seen(faults, audit.old_name_calls, raw, bool(raw) and not through_an_entry, other,
+    return Seen(faults, raw, bool(raw) and not through_an_entry, other,
                 audit.programs)
 
 
 def _is_clean(row: Row) -> bool:
-    """On none of the three write lists: the row claims every write under
-    its output path came through its class's entry."""
+    """On neither write list: the row claims every write under its output
+    path came through its class's entry."""
     key = (row.tool, row.flag)
-    return (key not in VIA_OLD_NAMES and key not in RAW_UNDER_OUT
-            and key not in VIA_OTHER_CLASS)
+    return key not in RAW_UNDER_OUT and key not in VIA_OTHER_CLASS
 
 
 def _mode_faults(row: Row, scope: Path, made: frozenset[str]) -> list[str]:
@@ -1801,17 +1772,6 @@ def _mode_faults(row: Row, scope: Path, made: frozenset[str]) -> list[str]:
 # Keyed by (tool, flag). SPAWNS, further down, is the one list that is NOT
 # exact both ways; it says why.
 Key = tuple[str, str]
-
-#: Rows whose output is written through an old name (`write_text_secure`,
-#: `write_json_secure`, their `_or_die` forms — also when reached through
-#: `write_yaml_crd` / `write_onboard_hints`), and each CALL that does it: the
-#: function that calls the old name (or its wrapper), which one, and from how
-#: many distinct lines. By call, not by file written: a tool that writes one
-#: file per rule pack from one line stays one entry however many packs there
-#: are, and a second call beside it is a second line. Emptied by the
-#: migration to the two classes (#3107 steps ①–③).
-VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
-}
 
 #: Rows with a write under the output path that came through NO entry: each
 #: site as "<event> <path under the control run's output directory>", and
@@ -1905,11 +1865,6 @@ SPAWNS: dict[Key, tuple[str, ...]] = {
 def _list_faults(row: Row, seen: Seen) -> list[str]:
     key = (row.tool, row.flag)
     out = []
-    if (seen.old_names or None) != VIA_OLD_NAMES.get(key):
-        out.append(f"writes through an old name under the output path of {key}: the run "
-                   f"made {seen.old_names or None}, VIA_OLD_NAMES says "
-                   f"{VIA_OLD_NAMES.get(key)} — a new one goes through the entry of "
-                   "the row's class; shrink or drop the entry for one that is gone")
     listed = RAW_UNDER_OUT.get(key)
     found = (("all" if seen.raw_is_all else "some"), seen.raw) if seen.raw else None
     if found != listed:
@@ -2625,13 +2580,13 @@ def _flags_at_writers(module: ast.Module) -> set[str]:
 def test_a_flag_expression_that_resolves_to_nothing_is_unresolved_not_absent():
     def flags(source: str) -> set[str]:
         return _flags_at_writers(ast.parse(source))
-    assert flags("write_text_secure(p, t, flag=None)") == set()
-    assert flags("write_text_secure(p, t, flag='--out')") == {"--out"}
-    assert flags("F = '--out' if given else None\nwrite_text_secure(p, t, flag=F)") == {"--out"}
+    assert flags("write_operator_output(p, t, flag=None)") == set()
+    assert flags("write_operator_output(p, t, flag='--out')") == {"--out"}
+    assert flags("F = '--out' if given else None\nwrite_operator_output(p, t, flag=F)") == {"--out"}
     # Bound, and to nothing this scan can read: that is not "names no flag".
-    assert flags("F = None\nwrite_text_secure(p, t, flag=F)") == {
+    assert flags("F = None\nwrite_operator_output(p, t, flag=F)") == {
         _UNRESOLVED.format("F")}
-    assert flags("write_text_secure(p, t, flag=pick())") == {_UNRESOLVED.format("pick()")}
+    assert flags("write_operator_output(p, t, flag=pick())") == {_UNRESOLVED.format("pick()")}
     assert flags("ensure_dir(p, flag=args.flag)") == {_UNRESOLVED.format("args.flag")}
     assert flags("unrelated(p, flag='--x')") == set()
 
@@ -2657,9 +2612,10 @@ NO_ROW: dict[Key, str] = {
         "gets as far as the write needs both. A `requires=` row would be a "
         "permanent skip that reads as a pass — and would still be wrong on a "
         "host that has `vmalert` but no vmsingle. #1789 gave it the shared "
-        "`flag=\"--out\"` message anyway. What speaks for it instead: "
-        "test_write_failure_class statically (its writer is "
-        "`write_text_secure`), and behaviourally its own "
+        "`flag=\"--out\"` message anyway, and since #3107 ④ it writes "
+        "through the operator entry and its parser refuses `-` and \"\" "
+        "(tests/dx/test_inject_waveform.py `test_out_*`). What speaks for the "
+        "write failure: its own "
         "`test_out_write_failure_exits_two`, which stubs out the injection "
         "pipeline, calls `main()` IN PROCESS and asserts rc=2 plus the "
         "standard line. That is a weaker pair than a row — no subprocess, no "
@@ -2941,8 +2897,6 @@ _OP = ["scripts/tools/_lib_io.py:_kernel_open_operator_output",
 _ART = ["scripts/tools/_lib_atomic_write.py:_try_atomic",
         "scripts/tools/_lib_atomic_write.py:atomic_write_text",
         "scripts/tools/_lib_io.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
-_OLD = ["scripts/tools/_lib_io.py:write_text_secure", "scripts/tools/_lib_yaml.py:write_yaml_crd",
-        "scripts/tools/ops/t.py:main"]
 _MKDIR = ["scripts/tools/_lib_io.py:ensure_dir", "scripts/tools/ops/t.py:main"]
 _RAW = ["scripts/tools/ops/t.py:main"]
 
@@ -2979,12 +2933,12 @@ class TestWriteAuditVerdict:
     def test_an_operator_write_through_the_operator_entry_is_clean(self, tmp_path):
         seen = _Log(tmp_path).add("os.mkdir", ".", _MKDIR).add("open", "o.json", _OP).seen(
             _audit_row())
-        assert seen == Seen([], (), (), False, None)
+        assert seen == Seen([], (), False, None)
 
     def test_an_artifact_replaced_through_the_artifact_entry_is_clean(self, tmp_path):
         log = _Log(tmp_path).add("open", ".o.json.tmp", _ART)
         log.add("os.rename", "o.json", _ART, src=str(tmp_path / ".o.json.tmp"))
-        assert log.seen(_audit_row("artifact")) == Seen([], (), (), False, None)
+        assert log.seen(_audit_row("artifact")) == Seen([], (), False, None)
 
     def test_the_wrong_class_is_seen(self, tmp_path):
         """Both directions: the row's class is an assertion about the entry."""
@@ -3000,42 +2954,6 @@ class TestWriteAuditVerdict:
         assert seen.raw == ("open extra.json", "os.mkdir sub") and not seen.raw_is_all
         only_raw = _Log(tmp_path).add("open", "o.json", _RAW).seen(_audit_row())
         assert only_raw.raw == ("open o.json",) and only_raw.raw_is_all
-
-    def test_an_old_name_is_the_innermost_entry(self, tmp_path):
-        """`write_yaml_crd` → `write_text_secure`: legacy, whatever is above."""
-        seen = _Log(tmp_path).add("open", "o.yaml", _OLD).add("os.chmod", "o.yaml", _OLD).seen(
-            _audit_row(out_name="o.yaml"))
-        assert seen.old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×1",)
-        assert not seen.raw and not seen.faults
-
-    def test_an_old_name_is_listed_by_the_call_that_reaches_it(self, tmp_path):
-        """One call writing many files is one entry; a second call — another
-        line, another function, another name — is a second."""
-        direct = ["scripts/tools/_lib_io.py:write_text_secure", "scripts/tools/_lib_io.py:"
-                  "write_text_or_die", "scripts/tools/ops/t.py:emit"]
-        log, row = _Log(tmp_path), _audit_row(kind="dir")
-        for n in range(3):
-            log.add("open", f"{n}.yaml", _OLD, lines=[10, 20, 30])
-        assert log.seen(row).old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×1",)
-        log.add("open", "extra.yaml", _OLD, lines=[10, 20, 31])
-        assert log.seen(row).old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×2",)
-        log.add("open", "report.txt", direct, lines=[10, 5, 40])
-        assert log.seen(row).old_names == (
-            "scripts/tools/ops/t.py:emit write_text_or_die ×1",
-            "scripts/tools/ops/t.py:main write_yaml_crd ×2")
-        assert not log.seen(row).faults
-
-    def test_an_old_name_writes_a_file_flags_one_file_and_no_other(self, tmp_path):
-        """The call is what VIA_OLD_NAMES lists, so a second file out of the
-        same line (`; write(out + ".second")`, a loop) is the same entry. A
-        single-file flag has one file; a directory flag has as many as it has."""
-        log = _Log(tmp_path).add("open", "o.json", _OLD).add("os.chmod", "o.json", _OLD)
-        assert not log.seen(_audit_row(out_name="o.json")).faults
-        log.add("open", "o.json.second", _OLD)
-        faults = log.seen(_audit_row(out_name="o.json")).faults
-        assert faults == ["open o.json.second through an old name: --out names one file "
-                          "(o.json), and this is another"]
-        assert not log.seen(_audit_row(kind="dir", out_name="o.json")).faults
 
     def test_a_rename_out_of_the_output_path_is_a_write_there(self, tmp_path):
         """The destination is elsewhere, the name taken away is not: moving
@@ -3090,7 +3008,7 @@ class TestWriteAuditVerdict:
         wrap = [f for f in _OP if f != _OPERATOR_OPENER]
         log = _Log(tmp_path).add("open", "o.json", _OP).add("open", "o.json", wrap, fd=5)
         log.add("os.chmod", "o.json", _OP, fd=5)
-        assert log.seen(_audit_row()) == Seen([], (), (), False, None)
+        assert log.seen(_audit_row()) == Seen([], (), False, None)
         outside = _Log(tmp_path).add("open", "o.json", _OP).add("os.chmod", "o.json", wrap, fd=5)
         assert any("outside its opener" in f for f in outside.seen(_audit_row()).faults)
         later = _Log(tmp_path).add("open", "o.json", _OP).add("os.chmod", "o.json", _RAW, fd=5)
@@ -3122,13 +3040,13 @@ class TestWriteAuditVerdict:
         assert log.seen(_audit_row()).spawned == ("cp", "da-guard", "git", "python")
 
     def test_the_innermost_entry_decides(self, tmp_path):
-        """What is asked is who opened the file. Were an old name made a thin
-        wrapper over the operator entry, the write would be the operator
-        entry's — and one entry calling another must not count twice."""
-        nested = [*_OP[:3], "scripts/tools/_lib_io.py:write_text_secure",
+        """What is asked is who opened the file. A wrapper over the operator
+        entry (`write_yaml_crd`) leaves the write the operator entry's — and
+        one entry calling another must not count twice."""
+        nested = [*_OP[:3], "scripts/tools/_lib_yaml.py:write_yaml_crd",
                   "scripts/tools/ops/t.py:main"]
         seen = _Log(tmp_path).add("open", "o.json", nested).seen(_audit_row())
-        assert seen == Seen([], (), (), False, None)
+        assert seen == Seen([], (), False, None)
 
     def test_no_log_is_a_fault_not_a_pass(self, tmp_path):
         seen = _verdict(_audit_row(), _audit(None, tmp_path, TOOLS_DIR / "ops" / "t.py"))
@@ -3263,7 +3181,6 @@ import os, subprocess, sys, tempfile
 out = sys.argv[1]
 sys.path.insert(0, os.path.join(sys.argv[2], "ops", ".."))   # how a tool under ops/ finds it
 import _lib_io
-_lib_io.write_text_secure(os.path.join(out, "old.txt"), "x")
 _lib_io.write_operator_output(os.path.join(out, "op.txt"), "x", flag=None)
 _lib_io.write_repo_artifact(os.path.join(out, "art.txt"), "x")
 _lib_io.ensure_dir(os.path.join(out, "sub"))
@@ -3301,7 +3218,6 @@ class TestTheHookItself:
         events, good, script = _hooked(tmp_path, _HOOK_SNIPPET, args=(str(TOOLS_DIR),))
         audit = _audit(events, good, script)
         assert audit.logged and audit.loaded and not audit.faults
-        assert audit.sites["legacy"] == (("open", "old.txt"), ("os.chmod", "old.txt"))
         assert audit.sites["operator"] == (("open", "op.txt"),)
         assert ("os.rename", "art.txt") in audit.sites["artifact"]
         assert ("open", "art.txt") not in audit.sites["artifact"]
@@ -3310,8 +3226,6 @@ class TestTheHookItself:
         # land under the output path, raw; the read-mode open does not.
         assert set(audit.sites["raw"]) == {("open", "raw.txt"), ("open", "child.txt")}
         assert (Path(sys.executable).name, "-c", "pass") in audit.spawned
-        assert audit.old_name_calls == (
-            f"{'<no caller in scripts/>'} write_text_secure ×1",)
 
     def test_the_scratch_file_and_its_cleanup_are_not_under_the_output_path(self, tmp_path):
         events, _good, _script = _hooked(tmp_path, _HOOK_SNIPPET, args=(str(TOOLS_DIR),))
@@ -3491,61 +3405,38 @@ threads = [threading.Thread(target=work, args=(i,)) for i in range(8)]
 
 class TestTheLists:
     """`_list_faults` on a row that is on no list, and on one that is on each."""
-    _CLEAN = Seen([], (), (), False, None)
+    _CLEAN = Seen([], (), False, None)
 
     def test_a_clean_row_on_no_list_has_no_fault(self):
         assert _list_faults(_audit_row(), self._CLEAN) == []
 
     def test_an_unlisted_write_or_program_is_a_fault(self):
         row = _audit_row()
-        assert len(_list_faults(row, Seen([], ("f g ×1",), (), False, None))) == 1
-        assert len(_list_faults(row, Seen([], (), ("open x",), True, None))) == 1
-        assert len(_list_faults(row, Seen([], (), (), False, "artifact"))) == 1
-        assert len(_list_faults(row, Seen([], (), (), False, None, ("cp",)))) == 1
-
-    def test_an_old_name_call_more_or_fewer_than_listed_is_a_fault(self, monkeypatch):
-        # A hand-made entry: no row left on the list has more than one call
-        # (#3107 batch 2 took `migrate_rule`, the one this used to read, off it).
-        key = ("ops/synthetic.py", "-o/--output-dir")
-        row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
-        calls = ("scripts/tools/ops/synthetic.py:write_outputs write_text_or_die ×3",
-                 "scripts/tools/ops/synthetic.py:write_csv write_text_or_die ×1")
-        monkeypatch.setitem(VIA_OLD_NAMES, key, calls)
-        started = ()
-        assert _list_faults(row, Seen([], calls, (), False, None, started)) == []
-        assert _list_faults(row, Seen([], calls[1:], (), False, None, started))
-        assert _list_faults(row, Seen([], (*calls, "x.py:f write_text_secure ×1"), (), False,
-                                      None, started))
-        more_lines = (calls[0].replace("×3", "×4"), *calls[1:])
-        assert more_lines != calls
-        assert _list_faults(row, Seen([], more_lines, (), False, None, started))
+        assert len(_list_faults(row, Seen([], ("open x",), True, None))) == 1
+        assert len(_list_faults(row, Seen([], (), False, "artifact"))) == 1
+        assert len(_list_faults(row, Seen([], (), False, None, ("cp",)))) == 1
 
     def test_a_program_that_is_not_listed_is_a_fault_and_one_not_started_is_not(self):
         row = next(r for r in ROWS if r.id == "federation_keygen[--jwks-out]")
         listed = SPAWNS[(row.tool, row.flag)]
         assert listed == ("openssl",)
-        assert _list_faults(row, Seen([], (), (), False, None, listed)) == []
-        assert _list_faults(row, Seen([], (), (), False, None, (*listed, "sh")))
-        assert _list_faults(row, Seen([], (), (), False, None,
+        assert _list_faults(row, Seen([], (), False, None, listed)) == []
+        assert _list_faults(row, Seen([], (), False, None, (*listed, "sh")))
+        assert _list_faults(row, Seen([], (), False, None,
                                       ("openssl" + GIVEN_THE_OUTPUT_PATH,)))
         # One direction only — see SPAWNS for why.
-        assert _list_faults(row, Seen([], (), (), False, None, ())) == []
+        assert _list_faults(row, Seen([], (), False, None, ())) == []
 
     def test_a_listed_row_that_is_clean_now_must_come_off(self, monkeypatch):
         """Each list, on its own first entry: clean ⇒ red. A list the
-        migration has emptied (#3107 ③c: VIA_OLD_NAMES; #3982: VIA_OTHER_CLASS) still has its
-        judgement until ④ removes the old names: it is held on a synthetic
-        entry."""
+        migration has emptied (#3982: VIA_OTHER_CLASS, RAW_UNDER_OUT) still has
+        its judgement while the list exists: it is held on a synthetic entry."""
         synthetic = ("dx/zz_synthetic.py", "--out")
-        if not VIA_OLD_NAMES:
-            monkeypatch.setitem(VIA_OLD_NAMES, synthetic,
-                                ("scripts/tools/dx/zz_synthetic.py:main write_text_or_die ×1",))
         if not VIA_OTHER_CLASS:  # emptied by #3982 (owner 2026-11-18)
             monkeypatch.setitem(VIA_OTHER_CLASS, synthetic, "artifact")
         if not RAW_UNDER_OUT:  # emptied by #3982 (the last key, config_history)
             monkeypatch.setitem(RAW_UNDER_OUT, synthetic, ("all", ("open zz.json",)))
-        for key in (sorted(VIA_OLD_NAMES)[0], sorted(RAW_UNDER_OUT)[0],
-                    sorted(VIA_OTHER_CLASS)[0]):
+        for key in (sorted(RAW_UNDER_OUT)[0], sorted(VIA_OTHER_CLASS)[0]):
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
                       variant="synthetic")
             assert _list_faults(row, self._CLEAN), key
@@ -3558,15 +3449,15 @@ class TestTheLists:
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
         how, sites = RAW_UNDER_OUT[key]
         started = SPAWNS.get(key, ())
-        assert _list_faults(row, Seen([], (), sites, how == "all", None, started)) == []
-        assert _list_faults(row, Seen([], (), (*sites, "open out/zz.json"), True, None,
+        assert _list_faults(row, Seen([], sites, how == "all", None, started)) == []
+        assert _list_faults(row, Seen([], (*sites, "open out/zz.json"), True, None,
                                       started))
-        assert _list_faults(row, Seen([], (), sites[1:], True, None, started))
-        assert _list_faults(row, Seen([], (), sites, how != "all", None, started))
+        assert _list_faults(row, Seen([], sites[1:], True, None, started))
+        assert _list_faults(row, Seen([], sites, how != "all", None, started))
 
     def test_every_list_entry_is_a_row(self):
         rowed = {(r.tool, r.flag) for r in ROWS}
-        for name, listed in (("VIA_OLD_NAMES", VIA_OLD_NAMES), ("RAW_UNDER_OUT", RAW_UNDER_OUT),
+        for name, listed in (("RAW_UNDER_OUT", RAW_UNDER_OUT),
                              ("VIA_OTHER_CLASS", VIA_OTHER_CLASS)):
             assert not sorted(set(listed) - rowed), (
                 f"{name} names (tool, flag) no row runs: {sorted(set(listed) - rowed)}")
@@ -3781,7 +3672,7 @@ def _writer_names_used_as_values() -> dict[tuple[str, str], int]:
             elif isinstance(node, ast.Attribute) and id(node) not in called:
                 name = node.attr
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                name = node.value  # getattr(_lib_io, "write_text_secure"), a dispatch table
+                name = node.value  # getattr(_lib_io, "write_operator_output"), a dispatch table
             if name in writers and not (isinstance(node, ast.Name)
                                         and isinstance(node.ctx, ast.Store)):
                 found[(tool, name)] = found.get((tool, name), 0) + 1

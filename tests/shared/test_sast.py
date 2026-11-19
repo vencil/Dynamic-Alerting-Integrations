@@ -3,7 +3,8 @@
 
 規則集的 SSOT 是 `docs/internal/dev-rules.md` §5（編號 1-7），本檔的分節標號與它
 一致。⛔ 第 4 條（yaml.load）**不在本檔**——#1643 起由 bandit B506 強制，理由寫
-在下面第 4 節。其餘六條在本檔各有一個 Test* class。
+在下面第 4 節；第 3 條（寫入權限）#3107 ④ 起由輸出入口與寫入閘門負責，見第 3 節。
+其餘五條在本檔各有一個 Test* class。
 
 涵蓋範圍: scripts/tools/ 全部 Python 檔案；⚠️ BOM 那一條例外，它掃全部 tracked
 `.py`（理由見下方 `_tracked_py` 上方的註解），以及 `.md` / `.yaml` / `.yml` /
@@ -122,9 +123,8 @@ def _starts_with_bom(head: bytes) -> bool:
 def _short_path(path):
     """回傳相對於 repo root 的短路徑（永遠用 forward-slash）。
 
-    Windows 上 os.path.relpath 會回傳 backslash 路徑，但 CHMOD_EXEMPT 的
-    key 一律是 forward-slash（POSIX 慣例）。為了讓 `short in CHMOD_EXEMPT`
-    在所有 OS 上一致，這裡顯式 normalize 到 forward-slash。
+    Windows 上 os.path.relpath 會回傳 backslash 路徑；參數化的 test id 與
+    訊息裡的路徑一律用 forward-slash，在所有 OS 上一致。
     """
     return os.path.relpath(path, REPO_ROOT).replace(os.sep, "/")
 
@@ -291,143 +291,19 @@ class TestNoShellTrue:
 
 # ============================================================
 # 3. 檔案寫入需有適當權限設定
+#    ⛔ 這一條的「寫入要配 chmod」那一半**不在本檔**——#3107 ④ 起由兩個輸出
+#    入口與寫入閘門負責，本檔原有的 open+chmod 啟發式（同一函式體內有任何
+#    chmod 就放行）與它的豁免表已移除。0o777 那一半是 bandit B103。
+#
+#    權限由入口決定，不由呼叫端各自 chmod：operator 輸出
+#    （`_lib_io.write_operator_output`／`open_operator_output`）自己擁有的一般
+#    檔寫完 0600；artifact（`_lib_io.write_repo_artifact`）照 checkout 的樣子。
+#    「每個輸出旗標的寫入都出自它那一類的入口」由
+#    `tests/shared/test_output_path_write_failure.py` 以執行期 audit hook 量。
+#
+#    ⚠️ 沒有旗標、寫固定 repo 路徑的裸寫入不在那個母體裡（#3981）；啟發式
+#    在那裡也只看形狀，不看結果。⛔ 不要在本檔重新長出一份靜態的 chmod 啟發式。
 # ============================================================
-
-class TestFileWritePermissions:
-    """掃描寫入模式的 open() 呼叫，確認同函式內有 os.chmod。
-
-    注意：此檢查為啟發式（heuristic），採用寬鬆策略——
-    只要同一函式體內有 os.chmod 呼叫即視為合規。
-
-    v2.7.0 Harness Audit: 將原本的 advisory skip 改為 explicit exemption。
-    每個豁免必須有文件化原因，新增工具若觸發此規則將硬性失敗。
-    """
-
-    # ── 豁免清單（每個項目必須有原因）──────────────────────────
-    # key = 相對於 repo root 的路徑
-    # value = 豁免原因
-    CHMOD_EXEMPT = {
-        "scripts/tools/_lib_io.py": (
-            "#3107 v2 operator 輸出入口：io.open 包的是 _kernel_open_operator_output"
-            " 已開好、已依 R2／V15 對 fd 做 fchmod 的檔案描述元；chmod 在另一個函式、"
-            "且是對 fd 不是對路徑，這支啟發式看不到（寫入閘門改由 audit hook，#3215）"
-        ),
-        "scripts/tools/_lib_exitcodes.py": (
-            "唯一的寫入 open() 開的是 os.devnull：`2>&-` 時拿它頂替不存在的"
-            " stderr，不產生任何檔案，沒有權限可套（#3124；啟發式本身由 #3107 換掉）"
-        ),
-        "scripts/tools/lint/fix_file_hygiene.py": (
-            "pre-commit auto-fixer：以 open(path, 'wb') 寫回同一檔案，"
-            "應保留原始權限而非強制 0o600（會改變既有檔案的 permission bits）"
-        ),
-        "scripts/tools/dx/sync_schema.py": (
-            "--update 寫回 repo 內已追蹤、由保留鍵登錄表產生的檔"
-            "（_lib_constants.py、reserved_keys_gen.go、兩份 schema）；"
-            "應保留原始權限而非強制 0o600（#3016 R3、ADR-038）"
-        ),
-        "scripts/tools/ops/generate_rule_pack_split.py": (
-            "寫出 validation-report.json 至使用者指定的 output 目錄，"
-            "為 DX 報告檔非敏感資料，沿用目錄預設 umask 即可"
-        ),
-        "scripts/tools/dx/generate_tenant_fixture.py": (
-            "產生測試用 conf.d/ fixture YAML 至使用者指定的 --output 目錄，"
-            "為開發者 DX 工具非敏感資料，沿用目錄預設 umask 即可"
-        ),
-        "scripts/tools/dx/run_chaos_soak.py": (
-            "v2.8.0 readiness chaos soak harness：寫 metrics-timeseries.csv / "
-            "summary.txt / run-config.json 至使用者指定的 --output-dir，"
-            "為 DX 觀測非敏感資料，沿用目錄預設 umask 即可"
-        ),
-    }
-
-    @pytest.mark.parametrize("py_file", _PY_FILES, ids=_short_path)
-    def test_write_open_has_chmod(self, py_file):
-        """寫入模式 open() 的同一函式中應有 os.chmod 呼叫。"""
-        source = _read_source(py_file)
-        try:
-            tree = ast.parse(source, filename=py_file)
-        except SyntaxError:
-            pytest.skip(f"語法錯誤，跳過: {_short_path(py_file)}")
-            return
-
-        short = _short_path(py_file)
-
-        # 收集每個函式中的寫入 open() 和 chmod 呼叫
-        violations = []
-
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-
-            write_opens = []
-            has_chmod = False
-
-            for child in ast.walk(node):
-                if isinstance(child, ast.Call):
-                    func = child.func
-                    # 偵測 open(..., "w"...)
-                    is_write_open = False
-                    if isinstance(func, ast.Name) and func.id == "open":
-                        is_write_open = True
-                    elif isinstance(func, ast.Attribute) and func.attr == "open":
-                        is_write_open = True
-
-                    if is_write_open:
-                        mode_val = None
-                        if len(child.args) >= 2:
-                            arg = child.args[1]
-                            if isinstance(arg, ast.Constant):
-                                mode_val = arg.value
-                        for kw in child.keywords:
-                            if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                                mode_val = kw.value.value
-                        if mode_val and "w" in str(mode_val):
-                            write_opens.append(child.lineno)
-
-                    # 偵測 os.chmod(...) 或 pathlib 等價形式 Path(p).chmod(...)
-                    # 兩者語意完全等價（都呼叫 os.chmod 底層），SAST 只在意
-                    # 「write open 後有對檔案套權限」的 intent，不限定 spelling。
-                    if isinstance(func, ast.Attribute) and func.attr == "chmod":
-                        receiver = func.value
-                        # os.chmod(p, mode)
-                        if isinstance(receiver, ast.Name) and receiver.id == "os":
-                            has_chmod = True
-                        # Path(p).chmod(mode) — pathlib idiom
-                        elif isinstance(receiver, ast.Call):
-                            inner = receiver.func
-                            if isinstance(inner, ast.Name) and inner.id == "Path":
-                                has_chmod = True
-
-            if write_opens and not has_chmod:
-                for lineno in write_opens:
-                    violations.append(
-                        f"L{lineno}: {node.name}() 有 write open 但缺少 os.chmod"
-                    )
-
-        if violations:
-            if short in self.CHMOD_EXEMPT:
-                # 已審查的豁免：pass 而非 skip，避免虛假的 skip count 膨脹
-                return
-            # 未豁免的新工具：硬性失敗，強制補 chmod 或加入 CHMOD_EXEMPT
-            pytest.fail(
-                f"{short} 有 {len(violations)} 個潛在權限問題:\n"
-                + "\n".join(f"  {v}" for v in violations)
-                + "\n\n如確認不需 os.chmod，請將此檔加入 "
-                "TestFileWritePermissions.CHMOD_EXEMPT 並註明原因。"
-            )
-
-    def test_chmod_exempt_files_exist(self):
-        """確保 CHMOD_EXEMPT 中的檔案仍然存在（dead exemption 偵測）。"""
-        for rel_path, reason in self.CHMOD_EXEMPT.items():
-            full_path = os.path.join(REPO_ROOT, rel_path)
-            assert os.path.isfile(full_path), (
-                f"CHMOD_EXEMPT 中的 {rel_path} 不存在，"
-                "請移除此豁免項目"
-            )
-            assert len(reason) > 10, (
-                f"CHMOD_EXEMPT[{rel_path}] 的原因太短，"
-                "請提供有意義的豁免說明"
-            )
 
 
 # ============================================================

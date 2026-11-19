@@ -84,10 +84,11 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json  # noqa: E402
-from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789; #3276)
+from _lib_io import write_operator_output  # noqa: E402  (#3107 ④)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_validation import url_type  # noqa: E402  (#3528)
+from _lib_validation import operator_file_type  # noqa: E402  (#3107 ④)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 try:
@@ -673,7 +674,13 @@ def main() -> "int | Report":
                         help=f"vmalert -replay 子行程 timeout（預設 {DEFAULT_REPLAY_TIMEOUT_S}s）")
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="stdout 輸出機器可讀 JSON（PR-3 消費格式）")
-    parser.add_argument("--out", help="另將 JSON 報告寫到檔案（write_text_secure）")
+    parser.add_argument(
+        "--out",
+        # #3107 ④: operator output. The human report (or --json) owns stdout,
+        # so `-` is refused at parse time.
+        type=operator_file_type(stdout="this tool prints its report there "
+                                       "(--json prints this JSON document)"),
+        help="另將 JSON 報告寫到檔案（0600，就地寫入）")
     args = parser.parse_args()
 
     if sys.flags.optimize:
@@ -755,7 +762,7 @@ def main() -> "int | Report":
         # #3216: the one encoder, for --out and for the --json document
         # run() prints — the two cannot differ.
         if args.out:
-            write_text_secure(args.out, encode_json(report) + "\n", flag="--out")
+            write_operator_output(args.out, encode_json(report) + "\n", flag="--out")
         if not args.json_output:
             _print_human(report)
     except OutputWriteError as exc:
