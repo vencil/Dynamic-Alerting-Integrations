@@ -266,10 +266,12 @@ _CHART_VALUES = PROJECT_ROOT / "helm" / "threshold-exporter" / "values.yaml"
 
 
 def _supply() -> set[str]:
-    """Every conf.d threshold key the platform-defaults path can produce."""
+    """Every conf.d threshold key the platform-defaults path can produce: what
+    the generated root `defaults:` writes, and the keys the readers build in
+    (#3832), which that file no longer copies."""
     db_packs = [k for k in scaffold_tenant.RULE_PACKS if k != "kubernetes"]
     generated = scaffold_tenant.generate_defaults(db_packs)
-    return set(generated["defaults"].keys())
+    return set(generated.get("defaults") or {}) | _registry_lib.builtin_default_keys()
 
 
 def _chart_supply() -> set[str]:
@@ -402,7 +404,7 @@ def _written_faces() -> dict[str, set[str]]:
     scaffold_packs = list(scaffold_tenant.RULE_PACKS)
     return {
         "onboarding/scaffold defaults (scaffold_tenant.generate_defaults)":
-            set(scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
+            set(scaffold_tenant.generate_defaults(scaffold_packs).get("defaults") or {}),
         "onboarding/init defaults (init_project._catalog_defaults)":
             set(init_project._catalog_defaults(init_packs)),
         "onboarding/init tenant critical seeds (init_project._catalog_critical)":
@@ -658,7 +660,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +8, generators +28. Red here means RAISE the floor.
+#     tolerate +8, generators +16. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -749,11 +751,15 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     scaffold and init all render under `defaults:` (it was optional_overrides
 #     before), total 90 -> 93 with the biggest group 39 -> 40: the floor went
 #     80 -> 82 so UP stays +28, and DOWN is 11.
+#     #3832 decision 7 took the built-in keys (12 today) out of the root
+#     `defaults:` both onboarding generators write: scaffold and init 40 -> 28
+#     each, total 93 -> 69 (chart 12, onboard 1 unchanged). The floor went
+#     82 -> 58 so DOWN stays 11; with the biggest group 28, UP is +16.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 82
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 58
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 77
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
@@ -2047,7 +2053,7 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
         # round-trip through YAML text.
         "onboarding/scaffold (scaffold_tenant.generate_defaults)":
             _walk_defaults_keys(
-                scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
+                scaffold_tenant.generate_defaults(scaffold_packs).get("defaults") or {}),
         "onboarding/init (init_project._gen_defaults_yaml)":
             _defaults_section(_generated_defaults(
                 "init_project._gen_defaults_yaml",

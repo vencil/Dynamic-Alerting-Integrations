@@ -207,3 +207,41 @@ def test_the_tools_release_job_runs_the_gate_with_require_tag() -> None:
               or "docker push" in str(s.get("run", ""))
               or "build.sh" in str(s.get("run", ""))]
     assert pushes and gate_at[0] < min(pushes), (gate_at, pushes)
+
+
+def _table(*keys: str) -> str:
+    return "var t = []e{\n" + "".join(f'\t{{"{k}", 80}},\n' for k in keys) + "}\n"
+
+
+def test_a_pinned_exporter_without_a_key_the_generators_leave_out_fails(repo: Path) -> None:
+    """#3832: the generated root `_defaults.yaml` leaves the built-in keys out,
+    so the pinned exporter must build every one of them in. HEAD adds a key the
+    tag's table lacks (the chart itself unchanged): fail, naming the key."""
+    _commit(repo, gate.BUILTIN_GO, _table("pg_connections"))
+    _git(repo, "tag", "-f", "exporter/v1.0.0")
+    _commit(repo, gate.BUILTIN_GO, _table("pg_connections", "container_cpu"))
+    rc, lines = gate.check(repo, require_tag=False)
+    assert rc == gate.EXIT_VIOLATION, lines
+    assert "  not built in: container_cpu" in lines and "pg_connections" not in "".join(lines[1:])
+
+
+def test_a_pinned_exporter_with_no_table_at_all_fails(repo: Path) -> None:
+    """The tag predates the built-in layer: every HEAD key is missing."""
+    _commit(repo, gate.BUILTIN_GO, _table("pg_connections"))
+    rc, lines = gate.check(repo, require_tag=False)
+    assert rc == gate.EXIT_VIOLATION, lines
+    assert lines[1:] == ["  not built in: pg_connections"]
+
+
+def test_a_pinned_exporter_holding_every_key_passes(repo: Path) -> None:
+    _commit(repo, gate.BUILTIN_GO, _table("pg_connections", "container_cpu"))
+    _git(repo, "tag", "-f", "exporter/v1.0.0")
+    _commit(repo, "README.md", "z\n")
+    rc, lines = gate.check(repo, require_tag=False)
+    assert rc == gate.EXIT_OK, lines
+
+
+def test_the_table_regex_reads_the_real_generated_file() -> None:
+    """The parse must find this tree's own table, or every check above is vacuous."""
+    keys = gate.builtin_keys((_REPO_ROOT / gate.BUILTIN_GO).read_text(encoding="utf-8"))
+    assert len(keys) >= 10 and "pg_connections" in keys, keys
