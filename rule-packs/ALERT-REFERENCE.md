@@ -35,7 +35,8 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| DB2DatabaseDown | critical | 照常觸發 | db2_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | db2_up |
+| DB2DatabaseDown | critical | 照常觸發 | The DB2 liveness query has not succeeded for 90s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | query_timestamp |
+| DB2QueryStalled | warning | 靜音 | [tier] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database ans | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | queries_total |
 | DB2HighConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 connection usage high  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:db2_connections_active:max |
 | DB2HighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: DB2 connections at critical level  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:db2_connections_active:max |
 | DB2LowBufferpoolHitRatio | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 bufferpool hit ratio low  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_bufferpool_hit_ratio:min |

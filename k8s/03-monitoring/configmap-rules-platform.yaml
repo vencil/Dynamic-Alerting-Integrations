@@ -692,26 +692,27 @@ data:
     )\\n      or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
     \"}, \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(query_interval{query=\\\
     \"oracle_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"oracle\\\
-    \", \\\"\\\", \\\"\\\")\\n      or label_replace(db2_up{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\
-    \")\\n      or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\"\
-    db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(rabbitmq_up{job=\\\
-    \"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\"\
-    }, \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n    )\\n  )) > 5\\\
-    n  and\\n  (\\n    count without (tenant, db_type) (\\n      max without(instance,\
-    \ pod) (tenant_expected_exporter)\\n      unless on(tenant, db_type) (\\n    \
-    \    label_replace(mysql_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\
-    \"mariadb\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(pg_up{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(redis_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"redis\\\", \\\"\\\", \\\"\\\")\\\
-    n        or label_replace(mongodb_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
-    \", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(elasticsearch_exporter_build_info{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\
-    \\\")\\n        or label_replace(query_interval{query=\\\"oracle_liveness\\\"\
-    , job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"oracle\\\", \\\"\\\", \\\
-    \"\\\")\\n        or label_replace(db2_up{job=\\\"tenant-exporters\\\"}, \\\"\
-    db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
+    \", \\\"\\\", \\\"\\\")\\n      or label_replace(query_interval{query=\\\"db2_liveness\\\
+    \", job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\
+    \\\")\\n      or label_replace(ClickHouseMetrics_TCPConnection{job=\\\"tenant-exporters\\\
+    \"}, \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(kafka_brokers{job=\\\
+    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\\
+    n      or label_replace(rabbitmq_up{job=\\\"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\
+    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\"\
+    )\\n    )\\n  )) > 5\\n  and\\n  (\\n    count without (tenant, db_type) (\\n\
+    \      max without(instance, pod) (tenant_expected_exporter)\\n      unless on(tenant,\
+    \ db_type) (\\n        label_replace(mysql_up{job=\\\"tenant-exporters\\\"}, \\\
+    \"db_type\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(pg_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\
+    \")\\n        or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
+    \", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(mongodb_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\"\
+    )\\n        or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
+    \"}, \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n        or\
+    \ label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\"tenant-exporters\\\
+    \"}, \\\"db_type\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(query_interval{query=\\\
+    \"db2_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"db2\\\"\
+    , \\\"\\\", \\\"\\\")\\n        or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
     \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\
     \")\\n        or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\
     \"db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(rabbitmq_up{job=\\\

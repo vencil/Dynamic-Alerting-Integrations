@@ -18,8 +18,8 @@
 #   - db-d: healthy value, metadata present → no alert (threshold-driven no-fire).
 #   - db-e: breaching, maintenance, NO meta → suppressed (maintenance does not
 #     depend on metadata; alerts join no metadata since #3483).
-# db-a's bufferpool and tablespace inputs carry a SECOND, healthy dimension so the
-# worst-dimension-wins aggregation direction is pinned (:min for hit ratio, :max for
+# db-a's bufferpool, log and tablespace inputs carry a SECOND, healthy exporter or
+# dimension so the worst-wins aggregation direction is pinned (:min for hit ratio, :max for
 # tablespace usage — a min↔max flip turns the firing assertion red).
 # Note DB2LowBufferpoolHitRatio inverts the comparison (min < threshold), so its db-d
 # no-fire control sits ABOVE the threshold. All input values are steady-state (constant
@@ -34,35 +34,143 @@ tests:
   # ── Availability: DB2DatabaseDown (raw leaf expr, no threshold/branch plumbing) ──
   - interval: 15s
     input_series:
-      # db-a: exporter reports the instance down for the whole window.
-      - series: 'db2_up{tenant="db-a", instance="db2-exporter-a:9953"}'
-        values: '0x8'
-      # db-b: healthy instance → no-fire control.
-      - series: 'db2_up{tenant="db-b", instance="db2-exporter-b:9953"}'
-        values: '1x8'
+      # query-exporter serves no 0 when the database is down: the liveness
+      # query's query_timestamp stops advancing (#3833).
+      # db-a: succeeds every 15s until 1m, then stops → unchanged across 90s
+      # from 2m15s, firing after for: 15s.
+      - series: 'query_interval{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x16'
+      - series: 'query_timestamp{tenant="db-a", instance="qe-a:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x4 60x12'
+      # db-b: healthy — the timestamp advances every sample → no-fire control.
+      - series: 'query_interval{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x16'
+      - series: 'query_timestamp{tenant="db-b", instance="qe-b:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x16'
+      # db-c: the exporter runs but the liveness query never succeeded (no
+      # query_timestamp at all) → fires on the second arm.
+      - series: 'query_interval{tenant="db-c", instance="qe-c:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x16'
 
     alert_rule_test:
-      # for: 15s debounce — expr true at t=0 but the alert is only PENDING until 15s.
+      # db-c is only pending at 0 (for: 15s).
       - eval_time: 0m
         alertname: DB2DatabaseDown
         exp_alerts: []
-      - eval_time: 1m
+      # 2m: db-a's window (30s, 2m] still holds its last change (45s → 1m).
+      - eval_time: 2m
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-c
+              instance: qe-c:9560
+            exp_annotations:
+              summary: "DB2 instance qe-c:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-c:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      # The 90s window, pinned at both edges (#3833 review). db-a's last
+      # change is at 1m, so on Prometheus (t−90s, t] first holds no change at
+      # 2m15s and the alert fires after for: 15s at 2m30s; MetricsQL's
+      # changes() also compares the sample before the window, so vmalert
+      # fires one interval later. 2m15s (neither fires) and 2m45s (both) are
+      # where the engines agree; a 75s window fires by 2m15s, a 120s one
+      # not before 3m.
+      - eval_time: 2m15s
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-c
+              instance: qe-c:9560
+            exp_annotations:
+              summary: "DB2 instance qe-c:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-c:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 2m45s
         alertname: DB2DatabaseDown
         exp_alerts:
           - exp_labels:
               maintenance: page
               severity: critical
               tenant: db-a
-              instance: db2-exporter-a:9953
+              instance: qe-a:9560
             exp_annotations:
-              summary: "DB2 instance db2-exporter-a:9953 is DOWN"
-              summary_zh: "DB2 實例 db2-exporter-a:9953 已關閉"
-              description: "db2_up=0 for 15s on db2-exporter-a:9953"
-              description_zh: "db2_up=0，持續 15 秒，實例：db2-exporter-a:9953"
+              summary: "DB2 instance qe-a:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-a:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-a:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-a:9560"
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-b (db2_up=1) produces NO alert.
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-c
+              instance: qe-c:9560
+            exp_annotations:
+              summary: "DB2 instance qe-c:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-c:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 3m
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-a
+              instance: qe-a:9560
+            exp_annotations:
+              summary: "DB2 instance qe-a:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-a:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-a:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-a:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-c
+              instance: qe-c:9560
+            exp_annotations:
+              summary: "DB2 instance qe-c:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-c:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-c:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-c:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── DB2DatabaseDown: one sample is not "stopped" (#3833). Through 30s
+  #    federation a restarted exporter's first query_timestamp sample stands
+  #    alone for 30s; without the count_over_time guard changes() reads 0 and
+  #    the alert pages. db-d's series start at 2m, one sample per 30s. ──
+  - interval: 30s
+    input_series:
+      - series: 'query_interval{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '_x4 15x4'
+      - series: 'query_timestamp{tenant="db-d", instance="qe-d:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '_x4 100+30x4'
+    alert_rule_test:
+      - eval_time: 2m15s
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+
 
   # ── Threshold + ratio alerts: four-tenant scaffold, one shared input set ──
   - interval: 15s
@@ -81,13 +189,13 @@ tests:
         values: '1x48'
 
       # Active connections: 250 > 200 warning (db-a/b/c, and db-e in its block below); db-d 100 < 200.
-      - series: 'db2_connections_active{tenant="db-a"}'
+      - series: 'db2_connections_current{tenant="db-a"}'
         values: '250x48'
-      - series: 'db2_connections_active{tenant="db-b"}'
+      - series: 'db2_connections_current{tenant="db-b"}'
         values: '250x48'
-      - series: 'db2_connections_active{tenant="db-c"}'
+      - series: 'db2_connections_current{tenant="db-c"}'
         values: '250x48'
-      - series: 'db2_connections_active{tenant="db-d"}'
+      - series: 'db2_connections_current{tenant="db-d"}'
         values: '100x48'
       - series: 'user_threshold{tenant="db-a", component="db2", metric="connections_active", severity="warning"}'
         values: '200x48'
@@ -98,20 +206,35 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="db2", metric="connections_active", severity="warning"}'
         values: '200x48'
 
-      # Bufferpool hit ratio — INVERTED comparison (min < threshold fires): 0.9 < 0.95
-      # breaches (db-a/b/c); db-d 0.99 ≥ 0.95 is the healthy no-fire control.
-      - series: 'db2_bufferpool_hit_ratio{tenant="db-a", bufferpool_name="IBMDEFAULTBP"}'
-        values: '0.9x48'
-      # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:min) direction:
-      # min(0.9, 0.99) = 0.9 fires; a min→max flip reads 0.99 (≥ 0.95) and goes red.
-      - series: 'db2_bufferpool_hit_ratio{tenant="db-a", bufferpool_name="BP_USER"}'
-        values: '0.99x48'
-      - series: 'db2_bufferpool_hit_ratio{tenant="db-b", bufferpool_name="IBMDEFAULTBP"}'
-        values: '0.9x48'
-      - series: 'db2_bufferpool_hit_ratio{tenant="db-c", bufferpool_name="IBMDEFAULTBP"}'
-        values: '0.9x48'
-      - series: 'db2_bufferpool_hit_ratio{tenant="db-d", bufferpool_name="IBMDEFAULTBP"}'
-        values: '0.99x48'
+      # Bufferpool hit ratio — INVERTED comparison (min < threshold fires). The
+      # pack computes rate(pages found) / rate(logical reads) per exporter:
+      # logical +1000/15s, found +900/15s ⇒ 0.9 < 0.95 breaches (db-a/b/c); db-d
+      # found +990/15s ⇒ 0.99, the healthy no-fire control. Both counters of
+      # an exporter start together, so rate()'s cold-start extrapolation scales
+      # them alike and the ratio is exact from the first tick on both engines.
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-a", instance="db2-a1"}'
+        values: '0+1000x48'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-a", instance="db2-a1"}'
+        values: '0+900x48'
+      # Second, HEALTHY exporter for db-a — pins worst-member-wins (:min) direction:
+      # min(0.9, 0.99) = 0.9 fires; a min→max flip reads 0.99 (≥ 0.95) and goes red,
+      # and so does summing the counters across exporters first (0.945).
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-a", instance="db2-a2"}'
+        values: '0+1000x48'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-a", instance="db2-a2"}'
+        values: '0+990x48'
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-b"}'
+        values: '0+1000x48'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-b"}'
+        values: '0+900x48'
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-c"}'
+        values: '0+1000x48'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-c"}'
+        values: '0+900x48'
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-d"}'
+        values: '0+1000x48'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-d"}'
+        values: '0+990x48'
       - series: 'user_threshold{tenant="db-a", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
         values: '0.95x48'
       - series: 'user_threshold{tenant="db-b", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
@@ -121,14 +244,29 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
         values: '0.95x48'
 
-      # Transaction log usage: 85 > 70 warning; db-d 50 < 70.
-      - series: 'db2_log_usage_percent{tenant="db-a"}'
+      # Transaction log usage = 100 · used / (used + available): 85 / (85 + 15)
+      # = 85% > 70 warning; db-d 50 / (50 + 50) = 50% < 70. db-a's second
+      # exporter is at 10%, pinning the per-exporter share before :max (summing
+      # first reads 47.5%, below 70, and goes red).
+      - series: 'db2_log_used_bytes{tenant="db-a", instance="db2-a1"}'
         values: '85x48'
-      - series: 'db2_log_usage_percent{tenant="db-b"}'
+      - series: 'db2_log_available_bytes{tenant="db-a", instance="db2-a1"}'
+        values: '15x48'
+      - series: 'db2_log_used_bytes{tenant="db-a", instance="db2-a2"}'
+        values: '10x48'
+      - series: 'db2_log_available_bytes{tenant="db-a", instance="db2-a2"}'
+        values: '90x48'
+      - series: 'db2_log_used_bytes{tenant="db-b"}'
         values: '85x48'
-      - series: 'db2_log_usage_percent{tenant="db-c"}'
+      - series: 'db2_log_available_bytes{tenant="db-b"}'
+        values: '15x48'
+      - series: 'db2_log_used_bytes{tenant="db-c"}'
         values: '85x48'
-      - series: 'db2_log_usage_percent{tenant="db-d"}'
+      - series: 'db2_log_available_bytes{tenant="db-c"}'
+        values: '15x48'
+      - series: 'db2_log_used_bytes{tenant="db-d"}'
+        values: '50x48'
+      - series: 'db2_log_available_bytes{tenant="db-d"}'
         values: '50x48'
       - series: 'user_threshold{tenant="db-a", component="db2", metric="log_usage_percent", severity="warning"}'
         values: '70x48'
@@ -170,17 +308,17 @@ tests:
         values: '5x48'
 
       # Tablespace usage: 92 > 85 warning; db-d 70 < 85.
-      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace_name="USERSPACE1"}'
+      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace="USERSPACE1"}'
         values: '92x48'
       # Second, HEALTHY dimension for db-a — pins worst-dimension-wins (:max) direction:
       # max(92, 70) = 92 fires; a max→min flip reads 70 (< 85) and goes red.
-      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace_name="SYSCATSPACE"}'
+      - series: 'db2_tablespace_used_percent{tenant="db-a", tablespace="SYSCATSPACE"}'
         values: '70x48'
-      - series: 'db2_tablespace_used_percent{tenant="db-b", tablespace_name="USERSPACE1"}'
+      - series: 'db2_tablespace_used_percent{tenant="db-b", tablespace="USERSPACE1"}'
         values: '92x48'
-      - series: 'db2_tablespace_used_percent{tenant="db-c", tablespace_name="USERSPACE1"}'
+      - series: 'db2_tablespace_used_percent{tenant="db-c", tablespace="USERSPACE1"}'
         values: '92x48'
-      - series: 'db2_tablespace_used_percent{tenant="db-d", tablespace_name="USERSPACE1"}'
+      - series: 'db2_tablespace_used_percent{tenant="db-d", tablespace="USERSPACE1"}'
         values: '70x48'
       - series: 'user_threshold{tenant="db-a", component="db2", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
@@ -240,44 +378,48 @@ tests:
       #     - recent RATE ratio = 8/100 = 0.08                → ABOVE 0.05 (post-fix)
       #     That gap IS the bug: a real recent episode diluted by lifetime history.
       #   * db-d keeps the below-threshold contrast at rate 2/100 = 0.02.
-      - series: 'db2_sort_overflows{tenant="db-a"}'
+      - series: 'db2_sort_overflows_total{tenant="db-a"}'
         values: '1000+8x48'
-      - series: 'db2_sort_overflows{tenant="db-b"}'
+      - series: 'db2_sort_overflows_total{tenant="db-b"}'
         values: '1000+8x48'
-      - series: 'db2_sort_overflows{tenant="db-c"}'
+      - series: 'db2_sort_overflows_total{tenant="db-c"}'
         values: '1000+8x48'
-      - series: 'db2_sort_overflows{tenant="db-d"}'
+      - series: 'db2_sort_overflows_total{tenant="db-d"}'
         values: '1000+2x48'
-      - series: 'db2_total_sorts{tenant="db-a"}'
+      - series: 'db2_sorts_total{tenant="db-a"}'
         values: '100000+100x48'
-      - series: 'db2_total_sorts{tenant="db-b"}'
+      - series: 'db2_sorts_total{tenant="db-b"}'
         values: '100000+100x48'
-      - series: 'db2_total_sorts{tenant="db-c"}'
+      - series: 'db2_sorts_total{tenant="db-c"}'
         values: '100000+100x48'
-      - series: 'db2_total_sorts{tenant="db-d"}'
+      - series: 'db2_sorts_total{tenant="db-d"}'
         values: '100000+100x48'
 
       # db-e: BARE-arm maintenance control — breaches EVERY metric, is in maintenance,
       # has NO tenant_metadata_info. Only the bare arm's hand-copied
       # `unless (user_state_filter{filter="maintenance"} == 1)` can suppress it; delete
       # or typo that clause in any alert and its implicit no-fire assertion turns red.
-      - series: 'db2_connections_active{tenant="db-e"}'
+      - series: 'db2_connections_current{tenant="db-e"}'
         values: '250x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="connections_active", severity="warning"}'
         values: '200x48'
-      - series: 'db2_bufferpool_hit_ratio{tenant="db-e", bufferpool_name="IBMDEFAULTBP"}'
-        values: '0.9x48'
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-e"}'
+        values: '0+1000x48'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-e"}'
+        values: '0+900x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
         values: '0.95x48'
-      - series: 'db2_log_usage_percent{tenant="db-e"}'
+      - series: 'db2_log_used_bytes{tenant="db-e"}'
         values: '85x48'
+      - series: 'db2_log_available_bytes{tenant="db-e"}'
+        values: '15x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="log_usage_percent", severity="warning"}'
         values: '70x48'
       - series: 'db2_deadlocks_total{tenant="db-e"}'
         values: '0+300x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="deadlock_rate", severity="warning"}'
         values: '5x48'
-      - series: 'db2_tablespace_used_percent{tenant="db-e", tablespace_name="USERSPACE1"}'
+      - series: 'db2_tablespace_used_percent{tenant="db-e", tablespace="USERSPACE1"}'
         values: '92x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="tablespace_used_percent", severity="warning"}'
         values: '85x48'
@@ -285,9 +427,9 @@ tests:
         values: '0+60x48'
       - series: 'user_threshold{tenant="db-e", component="db2", metric="lock_wait_time", severity="warning"}'
         values: '1x48'
-      - series: 'db2_sort_overflows{tenant="db-e"}'
+      - series: 'db2_sort_overflows_total{tenant="db-e"}'
         values: '0+8x48'
-      - series: 'db2_total_sorts{tenant="db-e"}'
+      - series: 'db2_sorts_total{tenant="db-e"}'
         values: '0+100x48'
 
     alert_rule_test:
@@ -575,18 +717,33 @@ tests:
       # it — ~4.6m on Prometheus (window-extrapolated), from the start on
       # MetricsQL (actual data span) — and for: 10m ends ~14.6m vs ~10.25m. 16m is
       # past both, so the two engines agree; x96 (24m) keeps the series fresh there.
-      - series: 'db2_sort_overflows{tenant="db-g"}'
+      - series: 'db2_sort_overflows_total{tenant="db-g"}'
         values: '0+0.05x96'
-      - series: 'db2_total_sorts{tenant="db-g"}'
+      - series: 'db2_sorts_total{tenant="db-g"}'
         values: '0+0.15x96'
-      - series: 'db2_sort_overflows{tenant="db-h"}'
+      - series: 'db2_sort_overflows_total{tenant="db-h"}'
         values: '0+1.05x96'
-      - series: 'db2_total_sorts{tenant="db-h"}'
+      - series: 'db2_sorts_total{tenant="db-h"}'
         values: '0+10.5x96'
-      - series: 'db2_sort_overflows{tenant="db-i"}'
+      - series: 'db2_sort_overflows_total{tenant="db-i"}'
         values: '0+0.95x96'
-      - series: 'db2_total_sorts{tenant="db-i"}'
+      - series: 'db2_sorts_total{tenant="db-i"}'
         values: '0+9.5x96'
+      # The bufferpool hit ratio has the same floor (≥ 200 logical reads per 5m,
+      # from p0 = 0.95), built the same way: db-j 210 reads / 105 found per 5m
+      # (hit 0.5) fires; db-k 190 / 95 per 5m has no ratio.
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-j"}'
+        values: '0+10.5x96'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-j"}'
+        values: '0+5.25x96'
+      - series: 'user_threshold{tenant="db-j", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x96'
+      - series: 'db2_bufferpool_logical_reads_total{tenant="db-k"}'
+        values: '0+9.5x96'
+      - series: 'db2_bufferpool_pages_found_total{tenant="db-k"}'
+        values: '0+4.75x96'
+      - series: 'user_threshold{tenant="db-k", component="db2", metric="bufferpool_hit_ratio", severity="warning"}'
+        values: '0.95x96'
     alert_rule_test:
       - eval_time: 6m
         alertname: DB2HighSortOverflow
@@ -610,3 +767,299 @@ tests:
               tier: ""
         # db-g (3 sorts per 5m) and db-i (190 per 5m) stay under the 200-sorts-per-5m
         # floor (#1176) and never get a ratio, so they produce NO alert.
+      - eval_time: 16m
+        alertname: DB2LowBufferpoolHitRatio
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-j
+            exp_annotations:
+              summary: "DB2 low bufferpool hit ratio on db-j"
+              summary_zh: "db-j 上 DB2 bufferpool 命中率偏低"
+              platform_summary: "[] db-j: DB2 bufferpool hit ratio low — memory tuning review"
+              platform_summary_zh: "[] db-j：DB2 bufferpool 命中率偏低 — 記憶體調優審查"
+              description: "Hit ratio: 0.5000 — check bufferpool sizing"
+              description_zh: "命中率：0.5000 — 檢查 bufferpool 大小調整"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # db-k (190 logical reads per 5m) stays under the floor: NO alert.
+
+  # ── DB2QueryStalled (#3833): query-exporter drops a query for good on a
+  #    result-shape error. db-q: liveness and db2_log keep running,
+  #    db2_database stops at 1m → its window (t-5m, t] holds only the
+  #    stopped value from 5m45s, firing after for: 5m at 10m45s on Prometheus;
+  #    MetricsQL's changes() also compares against the sample just before the
+  #    window, so vmalert fires one interval later. Asserted at 10m30s (neither
+  #    fires) and 11m (both fire). db-r: db2_tablespace is scheduled (query_interval) but
+  #    never succeeded → fires at 5m. db-s: the database is down (liveness
+  #    stops too) → DB2DatabaseDown's case, not this one. db-t: in
+  #    maintenance → muted. Success is read off queries_total{status="success"}
+  #    (a run with no rows succeeds without touching query_timestamp). ──
+  - interval: 15s
+    input_series:
+      - series: 'query_timestamp{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x48'
+      - series: 'queries_total{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_log", database="db2", status="success"}'
+        values: '1+1x48'
+      - series: 'queries_total{tenant="db-q", instance="qe-db-q:9560", job="tenant-exporters", query="db2_database", database="db2", status="success"}'
+        values: '1+1x4 5x44'
+      - series: 'query_timestamp{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x48'
+      - series: 'query_interval{tenant="db-r", instance="qe-db-r:9560", job="tenant-exporters", query="db2_tablespace"}'
+        values: '15x48'
+      - series: 'query_timestamp{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x4 60x44'
+      - series: 'queries_total{tenant="db-s", instance="qe-db-s:9560", job="tenant-exporters", query="db2_database", database="db2", status="success"}'
+        values: '1+1x4 5x44'
+      - series: 'query_timestamp{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x48'
+      - series: 'queries_total{tenant="db-t", instance="qe-db-t:9560", job="tenant-exporters", query="db2_database", database="db2", status="success"}'
+        values: '1+1x4 5x44'
+      - series: 'user_state_filter{tenant="db-t", filter="maintenance"}'
+        values: '1x48'
+      # db-w: db2_tablespace succeeds with no rows — query-exporter then
+      # leaves query_timestamp alone, but queries_total{status="success"}
+      # counts the run → not stalled.
+      - series: 'query_timestamp{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x48'
+      - series: 'query_interval{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="db2_tablespace"}'
+        values: '60x48'
+      - series: 'queries_total{tenant="db-w", instance="qe-db-w:9560", job="tenant-exporters", query="db2_tablespace", database="db2", status="success"}'
+        values: '1+0x3 2+0x3 3+0x3 4+0x3 5+0x3 6+0x3 7+0x3 8+0x3 9+0x3 10+0x3 11+0x3 12+0x3'
+    alert_rule_test:
+      - eval_time: 4m45s
+        alertname: DB2QueryStalled
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DB2QueryStalled
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-r
+              instance: qe-db-r:9560
+              query: db2_tablespace
+            exp_annotations:
+              summary: "DB2 query db2_tablespace stopped on qe-db-r:9560"
+              summary_zh: "qe-db-r:9560 上的 DB2 查詢 db2_tablespace 已停止"
+              platform_summary: "[] db-r: query-exporter query db2_tablespace stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-r：資料庫有回應，但 query-exporter 的查詢 db2_tablespace 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running db2_tablespace (or it never succeeded). When a result does not fit the declared metrics it drops the query for good; the cause is in its log at the default level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/db2.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 db2_tablespace（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/db2.yaml 的 SQL 後重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 10m30s
+        alertname: DB2QueryStalled
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-r
+              instance: qe-db-r:9560
+              query: db2_tablespace
+            exp_annotations:
+              summary: "DB2 query db2_tablespace stopped on qe-db-r:9560"
+              summary_zh: "qe-db-r:9560 上的 DB2 查詢 db2_tablespace 已停止"
+              platform_summary: "[] db-r: query-exporter query db2_tablespace stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-r：資料庫有回應，但 query-exporter 的查詢 db2_tablespace 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running db2_tablespace (or it never succeeded). When a result does not fit the declared metrics it drops the query for good; the cause is in its log at the default level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/db2.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 db2_tablespace（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/db2.yaml 的 SQL 後重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 11m
+        alertname: DB2QueryStalled
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-q
+              instance: qe-db-q:9560
+              query: db2_database
+            exp_annotations:
+              summary: "DB2 query db2_database stopped on qe-db-q:9560"
+              summary_zh: "qe-db-q:9560 上的 DB2 查詢 db2_database 已停止"
+              platform_summary: "[] db-q: query-exporter query db2_database stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-q：資料庫有回應，但 query-exporter 的查詢 db2_database 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running db2_database (or it never succeeded). When a result does not fit the declared metrics it drops the query for good; the cause is in its log at the default level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/db2.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 db2_database（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/db2.yaml 的 SQL 後重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-r
+              instance: qe-db-r:9560
+              query: db2_tablespace
+            exp_annotations:
+              summary: "DB2 query db2_tablespace stopped on qe-db-r:9560"
+              summary_zh: "qe-db-r:9560 上的 DB2 查詢 db2_tablespace 已停止"
+              platform_summary: "[] db-r: query-exporter query db2_tablespace stopped while the database answers — the alerts on its metrics are silent"
+              platform_summary_zh: "[] db-r：資料庫有回應，但 query-exporter 的查詢 db2_tablespace 已停止 — 讀它指標的告警不會響"
+              description: "query-exporter stopped running db2_tablespace (or it never succeeded). When a result does not fit the declared metrics it drops the query for good; the cause is in its log at the default level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/db2.yaml, then restart the exporter."
+              description_zh: "query-exporter 不再執行 db2_tablespace（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/db2.yaml 的 SQL 後重啟 exporter。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── DB2DatabaseDown after federation (#3833): two clusters' pods can share
+  #    an IP:port. db-u never ran its liveness query; db-v, at the same
+  #    instance, is healthy. Joined on instance alone, db-v's timestamp would
+  #    hide db-u's alert. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-u", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x8'
+      - series: 'query_interval{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x8'
+      - series: 'query_timestamp{tenant="db-v", instance="10.244.0.7:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+15x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-u
+              instance: 10.244.0.7:9560
+            exp_annotations:
+              summary: "DB2 instance 10.244.0.7:9560 is DOWN"
+              summary_zh: "DB2 實例 10.244.0.7:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on 10.244.0.7:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：10.244.0.7:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── DB2DatabaseDown through 30s federation (#3833 review): the database
+  #    stops after 2m; the scrape at 5m30s is missed. Requiring 3 samples in
+  #    the 90s window would resolve the page there and re-fire later. ──
+  - interval: 30s
+    input_series:
+      - series: 'query_interval{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x20'
+      - series: 'query_timestamp{tenant="db-x", instance="qe-db-x:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+30x4 120x6 _ 120x9'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-x
+              instance: qe-db-x:9560
+            exp_annotations:
+              summary: "DB2 instance qe-db-x:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-db-x:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-db-x:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-db-x:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 5m30s
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-x
+              instance: qe-db-x:9560
+            exp_annotations:
+              summary: "DB2 instance qe-db-x:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-db-x:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-db-x:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-db-x:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 6m
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-x
+              instance: qe-db-x:9560
+            exp_annotations:
+              summary: "DB2 instance qe-db-x:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-db-x:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-db-x:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-db-x:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── DB2DatabaseDown on a NEW series: the exporter starts at 1m, the
+  #    liveness query succeeds once (timestamp 60) and never again. changes()
+  #    sees only the samples there are, so without the `offset 90s` sample the
+  #    window (t-90s, t] reads as "no progress" from 1m15s and pages at 1m30s,
+  #    30s after the last success. With it the series must reach back 90s:
+  #    true from 2m30s, firing after for: 15s at 2m45s (105s after the
+  #    success, the same 90-105s as a long-lived series). ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '_x4 15x20'
+      - series: 'query_timestamp{tenant="db-n", instance="qe-n:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '_x4 60x20'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+      - eval_time: 2m45s
+        alertname: DB2DatabaseDown
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: db-n
+              instance: qe-n:9560
+            exp_annotations:
+              summary: "DB2 instance qe-n:9560 is DOWN"
+              summary_zh: "DB2 實例 qe-n:9560 已關閉"
+              description: "The DB2 liveness query has not succeeded for 90s on qe-n:9560"
+              description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：qe-n:9560"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── DB2DatabaseDown across an exporter restart through 30s federation
+  #    (#3833 review). The exporter at the same instance is healthy until 2m,
+  #    gone, and back at 4m30s with a fresh timestamp. Its first new sample
+  #    stands alone in the 90s window; with `count_over_time(...) > 0` instead
+  #    of `> 1` changes() reads 0 and pages 15s after the restart. ──
+  - interval: 30s
+    input_series:
+      - series: 'query_interval{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x4 _x4 15x8'
+      - series: 'query_timestamp{tenant="db-z", instance="qe-z:9560", job="tenant-exporters", query="db2_liveness", database="db2"}'
+        values: '0+30x4 _x4 1000+30x8'
+    alert_rule_test:
+      - eval_time: 4m45s
+        alertname: DB2DatabaseDown
+        exp_alerts: []
+
+  # ── DB2QueryStalled stays quiet while the liveness query has never
+  #    succeeded (#3833 review): db-y's exporter schedules db2_liveness and
+  #    db2_database and neither ever succeeded. That is DB2DatabaseDown's
+  #    page; without the `unless` arm for a liveness query that never ran,
+  #    DB2QueryStalled would also fire for db2_database. ──
+  - interval: 15s
+    input_series:
+      - series: 'query_interval{tenant="db-y", instance="qe-y:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x40'
+      - series: 'query_interval{tenant="db-y", instance="qe-y:9560", job="tenant-exporters", query="db2_database"}'
+        values: '15x40'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: DB2QueryStalled
+        exp_alerts: []

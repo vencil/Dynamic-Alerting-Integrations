@@ -42,13 +42,13 @@ tests:
   # so only the warning twin DB2HighConnections would page it — DB2HighConnectionsCritical must not.
   - interval: 15s
     input_series:
-      - series: "db2_connections_active{tenant=\"t-fire\"}"
+      - series: "db2_connections_current{tenant=\"t-fire\"}"
         values: "450x60"
       - series: "user_threshold{tenant=\"t-fire\", component=\"db2\", metric=\"connections_active\", severity=\"warning\"}"
         values: "200x60"
       - series: "user_threshold{tenant=\"t-fire\", component=\"db2\", metric=\"connections_active\", severity=\"critical\"}"
         values: "400x60"
-      - series: "db2_connections_active{tenant=\"t-quiet\"}"
+      - series: "db2_connections_current{tenant=\"t-quiet\"}"
         values: "300x60"
       - series: "user_threshold{tenant=\"t-quiet\", component=\"db2\", metric=\"connections_active\", severity=\"warning\"}"
         values: "200x60"

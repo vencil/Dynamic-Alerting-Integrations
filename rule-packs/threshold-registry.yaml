@@ -111,10 +111,11 @@ packs:
     rule_pack_file: rule-packs/rule-pack-oracle.yaml
     queries: rule-packs/exporters/oracle.yaml
   db2:
-    display: IBM DB2 (ibm_db2_exporter)
-    exporter: ibm_db2_exporter (community)
+    display: IBM DB2 (query-exporter)
+    exporter: albertodonato/query-exporter
     default_on: false
     rule_pack_file: rule-packs/rule-pack-db2.yaml
+    queries: rule-packs/exporters/db2.yaml
   clickhouse:
     display: ClickHouse (built-in /metrics)
     exporter: ClickHouse built-in Prometheus endpoint

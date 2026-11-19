@@ -160,7 +160,10 @@
             "properties": {
               "metric": { "$ref": "#/definitions/metric_name" },
               "labels": { "$ref": "#/definitions/labels" },
-              "role": { "enum": ["denominator", "static"] },
+              "role": {
+                "enum": ["denominator", "static", "complement"],
+                "description": "denominator / static: a constant level (see metric_kind). complement: the rest of a fixed total — each sample is `level` minus the parent's sample, floored at 0 (gauge parent and gauge companion only), e.g. log space available beside log space used, whose sum is the log's size."
+              },
               "metric_kind": {
                 "enum": ["gauge", "counter"],
                 "default": "gauge",

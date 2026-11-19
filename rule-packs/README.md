@@ -18,7 +18,7 @@ lang: zh
 | Rule Pack | File | Recording Rules | Alert Rules | Total |
 |-----------|------|-----------------|-------------|-------|
 | Clickhouse | rule-pack-clickhouse.yaml | 10 | 7 | 17 |
-| DB2 | rule-pack-db2.yaml | 15 | 11 | 26 |
+| DB2 | rule-pack-db2.yaml | 15 | 12 | 27 |
 | Elasticsearch | rule-pack-elasticsearch.yaml | 14 | 12 | 26 |
 | JVM | rule-pack-jvm.yaml | 9 | 8 | 17 |
 | Kafka | rule-pack-kafka.yaml | 8 | 6 | 14 |
@@ -33,7 +33,7 @@ lang: zh
 | Postgresql | rule-pack-postgresql.yaml | 8 | 8 | 16 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 16 | 12 | 28 |
 | Redis | rule-pack-redis.yaml | 12 | 10 | 22 |
-| **TOTAL** | | **170** | **200** | **370** |
+| **TOTAL** | | **170** | **201** | **371** |
 
 ## 架構說明
 
@@ -119,8 +119,7 @@ groups:
 - **redis_exporter**: https://github.com/oliver006/redis_exporter
 - **mongodb_exporter**: https://github.com/percona/mongodb_exporter
 - **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter
-- **query-exporter** (Oracle; queries in `exporters/oracle.yaml`): https://github.com/albertodonato/query-exporter
-- **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)
+- **query-exporter** (Oracle, DB2; queries in `exporters/oracle.yaml`, `exporters/db2.yaml`): https://github.com/albertodonato/query-exporter
 - **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter
 - **rabbitmq_exporter**: https://github.com/kbudde/rabbitmq_exporter

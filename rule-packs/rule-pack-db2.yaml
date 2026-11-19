@@ -1,9 +1,12 @@
 # ============================================================
-# Rule Pack: IBM DB2 (via ibm_db2_exporter / custom exporter)
-# 選配 — 涵蓋 Connection、Bufferpool、Log Usage、Deadlock、Tablespace
+# Rule Pack: IBM DB2 (via query-exporter)
+# 選配 — 涵蓋 Connection、Bufferpool、Log Usage、Deadlock、Tablespace、Sort
 #
 # 需要的 exporter:
-#   - ibm_db2_exporter (community) or custom Prometheus exporter
+#   - albertodonato/query-exporter，跑 rule-packs/exporters/db2.yaml（#3833）。
+#     本 pack 讀的每個 db2_* 指標都由那份查詢設定產生，名稱由
+#     check_exporter_queries.py 用 query-exporter 自己的程式推導後比對。
+#     其他 DB2 exporter（grafana/ibm-db2-prometheus-exporter 等）不支援。
 #
 # >>> GENERATED:threshold-registry:pack-db2 — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
@@ -70,8 +73,8 @@
 #   • deadlock_rate 實測是**偏高漏抓**（under-fire）不是 over-fire，見下方語意陷阱。
 #
 # ⛔ 兩個會靜默失效 / 漏抓的語意陷阱：
-#   1. bufferpool_hit_ratio 尺度是 0–1。exporter 若輸出百分數（95 而非 0.95），
-#      `< 0.95` 永遠不成立 → 告警永不發射＝靜默 FN；onboarding 必須確認尺度。
+#   1. bufferpool_hit_ratio 尺度是 0–1，由本 pack 從兩個讀取 counter 的 rate 算出；
+#      門檻若寫成百分數（95 而非 0.95），`< 95` 永遠成立 → 一直響。
 #   2. deadlock_rate 比的是 rate() ＝**每秒值**，不是每分鐘——單位換算錯一次就
 #      差 60 倍。這個 key 的實測反例（含具體量到什麼）標在上方生成區塊該 key
 #      底下，此處不重述數字；要抓住較小的 storm 須依 baseline 往下調。
@@ -112,17 +115,35 @@ groups:
   - name: db2-normalization
     interval: 15s
     rules:
-      # Active connections
+      # Connected applications (MON_GET_DATABASE.APPLS_CUR_CONS)
       - record: tenant:db2_connections_active:max
-        expr: max by(tenant) (db2_connections_active)
+        expr: max by(tenant) (db2_connections_current)
 
-      # Bufferpool hit ratio (key dimensional metric)
+      # Bufferpool hit ratio over the last 5m, 0–1, IBM's formula: pages the
+      # agents found in the pool (without prefetched ones) / logical reads, per
+      # exporter, then the worst one (rule-packs/exporters/db2.yaml). Rates of
+      # the database's own counters, not the hit ratio since activation, which
+      # a long-running database would dilute (#3833).
+      # 最小樣本 gate：5 分鐘至少 200 次 logical read 才算比值。和
+      # tenant:db2_sort_overflow_ratio:avg 同一條推導（比例的 success-failure
+      # 條件 n ≥ 10 / min(p0, 1−p0)），p0 取 registry 的參考值 0.95，得 200；
+      # 它只保證比值可以解讀，不控制誤報。
       - record: tenant:db2_bufferpool_hit_ratio:min
-        expr: min by(tenant) (db2_bufferpool_hit_ratio)
+        expr: |
+          min by(tenant) (
+            rate(db2_bufferpool_pages_found_total[5m])
+            / (rate(db2_bufferpool_logical_reads_total[5m]) >= 200 / 300)
+          )
 
-      # Transaction log usage percentage
+      # Active transaction log in use, % of used + available, per exporter,
+      # then the fullest. Under infinite logging the exporter serves neither
+      # gauge (DB2 reports available −1), so there is no share and no alert.
       - record: tenant:db2_log_usage_percent:max
-        expr: max by(tenant) (db2_log_usage_percent)
+        expr: |
+          max by(tenant) (
+            100 * db2_log_used_bytes
+            / ((db2_log_used_bytes + db2_log_available_bytes) > 0)
+          )
 
       # Deadlock rate
       - record: tenant:db2_deadlocks:rate5m
@@ -146,7 +167,7 @@ groups:
         expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
 
       # Sort overflow ratio — RATE ratio, NOT lifetime-cumulative ratio (#1181).
-      # db2_sort_overflows / db2_total_sorts are both CUMULATIVE counters. Dividing
+      # db2_sort_overflows_total / db2_sorts_total are both CUMULATIVE counters. Dividing
       # them raw yields the all-time overflow fraction, which progressively
       # desensitises as the instance ages: on a long-running database a severe
       # recent episode (say 50% of sorts overflowing for an hour) is diluted by the
@@ -166,8 +187,8 @@ groups:
       # 窗是 5m，所以寫成每秒 200 / 300 次。0.05 門檻本身仍待真實流量校準（#1176）。
       - record: tenant:db2_sort_overflow_ratio:avg
         expr: |
-          sum by(tenant) (rate(db2_sort_overflows[5m]))
-          / (sum by(tenant) (rate(db2_total_sorts[5m])) >= 200 / 300)
+          sum by(tenant) (rate(db2_sort_overflows_total[5m]))
+          / (sum by(tenant) (rate(db2_sorts_total[5m])) >= 200 / 300)
 
   # -------------------------------------------------------
   # Threshold normalization: DB2
@@ -204,8 +225,39 @@ groups:
   # -------------------------------------------------------
   - name: db2-alerts
     rules:
+      # query-exporter keeps serving while the database is down and reports no
+      # 0: db2_up expires and query_timestamp of the liveness query stops
+      # advancing (rule-packs/exporters/db2.yaml, #3833). Down = the
+      # liveness query's timestamp did not change across 90s (6 runs at its 15s
+      # interval) with at least 2 samples there — one sample alone (an exporter
+      # that just restarted, seen through 30s federation) is not "stopped", and
+      # 3 would let one missed federation scrape resolve a firing page — or an
+      # exporter that serves the query but never ran it successfully. Detection
+      # takes about 90-105s after the last success (the previous exporter's db2_up == 0
+      # for: 15s took 25-40s): the cost of reading progress instead of a 0 the exporter
+      # never reports.
+      # The series must also have a sample from 90s ago (`offset 90s`): changes()
+      # sees only the samples there are, so a series that began 30s ago, ran
+      # once and then stopped would otherwise read as 90s without progress and
+      # page 60s early.
+      # changes() rather than time() - query_timestamp: the exporter's clock
+      # does not matter. Joined on (tenant, instance): two clusters' pods can
+      # share an IP:port after federation.
       - alert: DB2DatabaseDown
-        expr: db2_up == 0
+        expr: |
+          max by(tenant, instance) (
+            changes(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s]) == 0
+            and
+            count_over_time(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s]) > 1
+            and
+            query_timestamp{job="tenant-exporters", query="db2_liveness"} offset 90s
+          )
+          or
+          max by(tenant, instance) (
+            query_interval{job="tenant-exporters", query="db2_liveness"}
+            unless on(tenant, instance)
+            query_timestamp{job="tenant-exporters", query="db2_liveness"}
+          )
         for: 15s
         labels:
           severity: critical
@@ -214,8 +266,61 @@ groups:
         annotations:
           summary: "DB2 instance {{ $labels.instance }} is DOWN"
           summary_zh: "DB2 實例 {{ $labels.instance }} 已關閉"
-          description: "db2_up=0 for 15s on {{ $labels.instance }}"
-          description_zh: "db2_up=0，持續 15 秒，實例：{{ $labels.instance }}"
+          description: "The DB2 liveness query has not succeeded for 90s on {{ $labels.instance }}"
+          description_zh: "DB2 存活查詢 90 秒內沒有成功，實例：{{ $labels.instance }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+      # query-exporter removes a query from its schedule for good when its result
+      # does not fit the metrics declared for it (wrong column names or column
+      # count: db.py FATAL_ERRORS); the gauges then expire and the threshold
+      # alerts on them go silent. This names such a query while the database
+      # itself answers: its successful-run count stopped across 5m (the longest
+      # query interval is 60s), or the exporter schedules it and it never
+      # succeeded (#3833). queries_total{status="success"}, not query_timestamp:
+      # a run that returns no rows succeeds without touching query_timestamp.
+      - alert: DB2QueryStalled
+        expr: |
+          (
+            max by(tenant, instance, query) (
+              increase(queries_total{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness", status="success"}[5m]) == 0
+              and
+              count_over_time(queries_total{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness", status="success"}[5m]) > 1
+            )
+            or
+            max by(tenant, instance, query) (
+              query_interval{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness"}
+              unless on(tenant, instance, query)
+              queries_total{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness", status="success"}
+            )
+          )
+          unless on(tenant, instance)
+          max by(tenant, instance) (
+            (
+              changes(query_timestamp{job="tenant-exporters", query="db2_liveness"}[5m]) == 0
+              and
+              count_over_time(query_timestamp{job="tenant-exporters", query="db2_liveness"}[5m]) > 1
+            )
+            or
+            (query_interval{job="tenant-exporters", query="db2_liveness"}
+             unless on(tenant, instance)
+             query_timestamp{job="tenant-exporters", query="db2_liveness"})
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "DB2 query {{ $labels.query }} stopped on {{ $labels.instance }}"
+          summary_zh: "{{ $labels.instance }} 上的 DB2 查詢 {{ $labels.query }} 已停止"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while the database answers — the alerts on its metrics are silent"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：資料庫有回應，但 query-exporter 的查詢 {{ $labels.query }} 已停止 — 讀它指標的告警不會響"
+          description: "query-exporter stopped running {{ $labels.query }} (or it never succeeded). When a result does not fit the declared metrics it drops the query for good; the cause is in its log at the default level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/db2.yaml, then restart the exporter."
+          description_zh: "query-exporter 不再執行 {{ $labels.query }}（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/db2.yaml 的 SQL 後重啟 exporter。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
@@ -475,7 +580,7 @@ groups:
           (
             max without(instance, pod) (user_threshold_unset{pack="db2"})
             and on(tenant)
-            (db2_up{job="tenant-exporters"})
+            (query_interval{query="db2_liveness", job="tenant-exporters"})
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)

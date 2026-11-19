@@ -87,6 +87,25 @@ def test_check_all_seed_packs_pass():
     assert "OK" in r.stdout
 
 
+_REFERENCE_LIBS = sorted(
+    p for p in (_REPO / "tests" / "rulepacks" / "reference-validation").glob("*.yaml")
+    if not p.name.startswith(("candidate-", "divergence-ledger", "tolerances")))
+
+
+def test_reference_libraries_found():
+    # Not vacuous: the shipped fault and benign libraries (Oracle, DB2, K8s).
+    assert len(_REFERENCE_LIBS) >= 7, [p.name for p in _REFERENCE_LIBS]
+
+
+@pytest.mark.parametrize("lib", _REFERENCE_LIBS, ids=lambda p: p.name)
+def test_reference_library_passes_check(lib):
+    """Every reference library the replay runs compiles (#3833). Nothing ran
+    `--check` on them before: a migrated signature that dropped a required
+    field (a counter without typical_wobble) was only found by the replay."""
+    r = _run("--check", str(lib))
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
 def test_check_json_output_shape():
     r = _run("--check", "--allow-selftest", "--json", str(_DISK))
     assert r.returncode == 0, r.stderr
@@ -644,6 +663,55 @@ def test_counter_companion_integrates_to_ramp(tmp_path):
     vals = [v for v in comp.samples if v is not None]
     assert vals and all(b > a for a, b in zip(vals, vals[1:])), "counter companion 非單調"
     assert any("counter" in n for n in comp.auto_adjustments)
+
+
+def test_complement_companion_is_total_minus_parent(tmp_path):
+    """role=complement: 每點 = level − 主 series 該點（下限 0），兩者相加是固定
+    總量——例如日誌已用與可用（#3833）。常數 companion 表達不了：主 series 在動，
+    常數「可用」會讓 used / (used + available) 對作者給的水位做非線性扭曲。"""
+    def mut(pack):
+        pack["signatures"][0]["companion_series"][0]["role"] = "complement"
+        pack["signatures"][0]["companion_series"][0]["level"] = 100
+    p = _mutate_fixture(tmp_path, _RATIO, mut)
+    series = _series_of(p)
+
+    def _key(s):
+        return tuple(sorted((k, v) for k, v in s.labels.items()
+                            if k in ("waveform_variant", "series")))
+    comps = [s for s in series if s.expects == "companion"]
+    assert comps
+    for comp in comps:
+        main = next(s for s in series if s.expects != "companion" and _key(s) == _key(comp))
+        for m, c in zip(main.samples, comp.samples):
+            if m is None:
+                assert c is None
+            else:
+                assert c == round(max(0.0, 100 - m), 6)
+        assert any("complement" in n for n in comp.auto_adjustments)
+
+
+def test_complement_companion_shares_parent_jitter(tmp_path):
+    def mut(pack):
+        pack["signatures"][0]["companion_series"][0]["role"] = "complement"
+        pack["signatures"][0]["companion_series"][0]["level"] = 100
+    p = _mutate_fixture(tmp_path, _RATIO, mut)
+    series = _series_of(p)
+    comps = [s for s in series if s.expects == "companion"]
+    assert comps
+    for comp in comps:
+        main = next(s for s in series if s.expects != "companion"
+                    and s.rng_key == comp.rng_key and s.variant == comp.variant)
+        assert main.jitter_s == comp.jitter_s
+
+
+def test_complement_companion_rejects_counter(tmp_path):
+    def mut(pack):
+        comp = pack["signatures"][0]["companion_series"][0]
+        comp["role"] = "complement"
+        comp["metric_kind"] = "counter"
+    p = _mutate_fixture(tmp_path, _RATIO, mut)
+    with pytest.raises(ValueError, match="complement"):
+        _series_of(p)
 
 
 def test_min_value_clamps_negative_gauge(tmp_path):

@@ -64,6 +64,11 @@ absent_from_candidate:
     - alert: OracleTablespaceAlmostFullCritical
       reason: 同 OracleHighActiveSessionsCritical——critical 級為租戶 opt-in（#3658），無出貨預設值可 inline。
   db2:
+    - alert: DB2QueryStalled
+      reason: >-
+        query-exporter 自身的健康哨兵（#3833）：某支查詢被 exporter 永久停用或從未成功時
+        發出，讀的是 queries_total／query_interval 這些 exporter 內建指標，不是資料庫
+        的故障訊號；波形庫沒有這種 signature，harness 不建模。
     - alert: DB2ThresholdNotConfigured
       reason: >-
         讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的
