@@ -626,6 +626,19 @@ class TestLibraryPassthrough:
     """Library wrappers forward ``flag`` so the tool-level handler's message
     still names the operator's flag."""
 
+    @pytest.mark.skipif(os.name != "posix", reason="symlinks")
+    def test_write_yaml_crd_writes_through_a_symlink_and_replaces_the_content(self, tmp_path):
+        """#3107 ④ (an `nofollow=True` survived the ② mutations): the
+        operator entry follows a symlink to its target, and an existing
+        file is rewritten whole, not appended to."""
+        target = tmp_path / "real.yaml"
+        target.write_text("old: content that is longer than the new one\n", encoding="utf-8")
+        link = tmp_path / "crd.yaml"
+        link.symlink_to(target)
+        _lib_yaml.write_yaml_crd(link, {"kind": "X"}, flag="--output-dir")
+        assert link.is_symlink()
+        assert target.read_text(encoding="utf-8").strip() == "kind: X"
+
     def test_write_yaml_crd_forwards_flag(self, missing_parent):
         with pytest.raises(_lib_io.OutputWriteError) as ei:
             _lib_yaml.write_yaml_crd(missing_parent, {"a": 1}, flag="--output-dir")

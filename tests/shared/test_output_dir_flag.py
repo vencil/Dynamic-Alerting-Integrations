@@ -55,7 +55,9 @@ def test_dash_is_refused_and_nothing_else_is_judged():
     assert REFUSAL in str(ei.value)
     # Only the one value: what the directory is, and whether it can be made,
     # is the write's to say (rc 2 there too, naming the path).
-    for value in ("out", "./-", "-/", "--", "", " ", "/dev/null", "a/-"):
+    # #3107 ④: `-` with white space is another name, not `-` (a `.strip()`
+    # in the comparison survived the ② mutations).
+    for value in ("out", "./-", "-/", "--", "", " ", "/dev/null", "a/-", " -", "- ", "\t-"):
         assert kind(value) == value
 
 
