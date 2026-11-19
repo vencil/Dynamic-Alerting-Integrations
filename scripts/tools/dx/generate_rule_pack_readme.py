@@ -352,7 +352,6 @@ def main():
         try:
             with open(readme_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(generated_content)
-            os.chmod(readme_path, 0o644)
             print(f"Updated {readme_path}", file=sys.stderr)
         except IOError as e:
             print(f"Error: Failed to write {readme_path}: {e}", file=sys.stderr)

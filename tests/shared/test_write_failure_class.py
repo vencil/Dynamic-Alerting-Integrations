@@ -17,8 +17,11 @@ every call of the old in-place writers (``write_text_secure`` and friends) sat
 inside a catching ``try``, and its library allowlist. Those names are gone,
 so its population was empty and it could not fail. It is not retargeted at
 the new entries: a lexical scan does not follow a catch in ``main()`` or a
-decorator, and reads 40 of their 48 tool call sites as "unguarded"; the
-behavioural rows measure the real rc and stderr instead.
+decorator. Over ``write_operator_output``, ``open_operator_output``,
+``write_repo_artifact``, ``ensure_dir`` and ``atomic_write_text`` under
+``scripts/tools`` (``_lib_io.py`` excluded) it read 40 of 48 call sites as
+"unguarded" (measured at #3107 ④); the behavioural rows measure the real rc
+and stderr instead.
 """
 from __future__ import annotations
 
