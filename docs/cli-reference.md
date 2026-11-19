@@ -592,7 +592,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 
 #### blind-spot
 
-掃描 Prometheus 叢集的活躍 targets，與 tenant 配置交叉比對，找出盲區（有 exporter 但無對應 tenant 配置）。
+掃描 Prometheus 叢集的活躍 targets，與 tenant 配置交叉比對，找出盲區（叢集裡有這類 DB 的 exporter，但沒有任何租戶在 `_metadata.db_type` 宣告這類 DB）。
 
 conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
 
@@ -620,12 +620,13 @@ da-tools blind-spot --config-dir <path> [options]
 
 **輸出**
 
-以下列三部分呈現：
-- **Covered**：有對應 tenant 配置的 exporter
-- **Blind Spots**：有 exporter 但無 tenant 配置
+以下列四部分呈現（`--json-output` 的 `status` 依序是 `covered`／`blind_spot`／`unknown_declaration`／`unrecognized`）：
+- **Covered**：有租戶宣告這類 DB 的 exporter
+- **Blind Spots**：有 exporter，但沒有租戶宣告這類 DB
+- **Unknown Declarations**：租戶宣告的 `db_type` 不是任何 exporter job 對應得到的類型（大小寫不同也算，例如 `MySQL`），沒有 live target 會是這一類，`TenantExporterAbsent` 對它永遠不會解除；不算 covered
 - **Unrecognized**：無法推斷 DB 類型的 job
 
-「有對應 tenant 配置」指 exporter 的 `/metrics` 對該租戶實際發出的閾值（經 `da-guard served-values` 讀出，#2115）：值寫在 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄都算，子目錄裡的租戶也算；`disable` 的鍵、沒有預設值而不會發出的鍵不算。沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`。exporter 讀不到的檔或子目錄（例如權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束，`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`）；例外是指向目錄的 symlink——exporter 本來就不跟進（k8s ConfigMap 的巢狀路徑會掛成這種 symlink），只跳過、不影響結束碼。da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）、經控制字元跳脫（檔名裡的換行會讓 da-guard 印成兩行，轉印時無法還原，但不會出現在行首）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
+「有租戶宣告」指租戶的 `_metadata.db_type`（一個字串或一串）列了這類 DB，照 exporter 的讀法經 `da-guard served-values --config-facts` 讀出（[#4026](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4026)）：寫在租戶檔（含子目錄裡的）、根平台檔的 `tenants.<id>._metadata`、租戶綁定的 profile 都算，租戶檔整值換掉平台層的宣告；子目錄 `_defaults.yaml` 裡的 `tenants:` 不算（exporter 也不讀）。這就是 exporter 送出 `tenant_expected_exporter{tenant,db_type}`、讓 `TenantExporterAbsent` 逐租戶告警的那份宣告。⚠️ 租戶送了哪些閾值鍵（`mysql_`、`redis_`…）不算：內建層的鍵每個租戶都有列（[#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832)），以前照鍵名前綴判時，樹裡只要有一個租戶，那幾類 DB 就永遠不會是盲點。判決不讀任何時刻，執行時間、排程停用、`/metrics` 某時段收集不了都不影響結果。沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`。exporter 讀不到的檔或子目錄（例如權限不足、懸空 symlink、無法列出內容的子目錄）以結束碼 2 結束，`ERROR` 行指名該檔（或目錄）與原因（`stat_error`／`read_error`／`walk_error`／`special_file`）；例外是指向目錄的 symlink——exporter 本來就不跟進（k8s ConfigMap 的巢狀路徑會掛成這種 symlink），只跳過、不影響結束碼。da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加前綴 `da-guard|`（前面兩個空格、後面一個空格）、經控制字元跳脫（檔名裡的換行會讓 da-guard 印成兩行，轉印時無法還原，但不會出現在行首）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
 
 **範例**
 
@@ -2562,7 +2563,7 @@ da-tools lint --rule-pack-dir <DIR> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`）。只收內建政策的鍵（`denied_functions`、`denied_patterns`、`required_labels`、`max_range_duration`、`max_evaluation_interval`、`file_overrides`），其他鍵結束碼 `2`；部署端 policy 的鍵（`allowed_domains` 等）會指向 `generate-routes`／`validate-config --policy`（⚠️ Breaking，[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。`file_overrides` 的 entry 寫錯，不論有沒有檔案匹配，結束碼 `2`（⚠️ Breaking，[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)；格式見 custom-rule-governance §4.1） | 內建政策 |
+| `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`）。只收內建政策的鍵（`denied_functions`、`denied_patterns`、`required_labels`、`max_range_duration`、`max_evaluation_interval`、`file_overrides`），其他鍵結束碼 `2`；部署端 policy 的鍵（`allowed_domains` 等）會指向 `generate-routes`／`validate-config --policy`（⚠️ Breaking，[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。`file_overrides` 的 entry 寫錯，不論有沒有檔案匹配，結束碼 `2`（⚠️ Breaking，[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)）；頂層的值型別不符（清單寫成字串、時長不是 Prometheus 時長）同樣結束碼 `2`（⚠️ Breaking，[#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)；格式見 custom-rule-governance §4.1） | 內建政策 |
 | `--ci` | 有 ERROR 級違規時以結束碼 1 結束；一個檔都沒選到時結束碼 2（見下方） | false |
 | `--rule-pack-dir <DIR>` | 依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不 lint：這份 policy 管的是租戶 pack，平台告警本來就沒有租戶（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。選到的 pack 讀不到（判定後被刪、權限）⇒ 結束碼 2、一行點名旗標與檔（⚠️ **行為變更**，先前記成一條 ERROR、不帶 `--ci` 時 rc 0；位置參數給的檔仍是一條 ERROR，[#3724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3724)）。取代 `<path...>`，不能與 `--exclude` 併用 | — |
 | `--exclude <GLOB>` | 排除符合的檔（可重複；被排除的檔不讀）。不含 `/` 的樣式比對檔名、任何深度都算（`Chart.yaml`、`*-values.yaml`）；含 `/` 的樣式比對相對於所給目錄的路徑（`recipes/*`；直接給的檔則比對給的路徑）。以 Python `fnmatch.fnmatchcase` 比對：分大小寫，`*` 也跨 `/`。`lint`、`silencer-drift-check`、`onboard` 三者語意相同（共用 `_lib_consumer_read.files_to_read`） | — |
@@ -3696,7 +3697,7 @@ spec:
 ### Q: blind-spot 與 analyze-gaps 有什麼區別？
 
 **A**:
-- **blind-spot**：比對「叢集基礎設施 vs tenant 配置」，找出有 exporter 但無對應 tenant 配置的盲區。
+- **blind-spot**：比對「叢集基礎設施 vs 租戶宣告的 `_metadata.db_type`」，找出有 exporter 但沒有租戶宣告那類 DB 的盲區。
 - **analyze-gaps**：比對「custom rule vs Rule Pack」，評估 Rule Pack 的涵蓋度。
 
 兩者互補，建議遷移後同時執行。

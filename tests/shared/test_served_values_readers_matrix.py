@@ -1,7 +1,8 @@
 """讀取端語意矩陣：值寫在哪裡，讀取端的答案都要與 Go 的 served-values 一致（#2115 0-B／B1）。
 
-讀取端：`blind_spot_discovery.load_monitored_db_types`、
-`analyze_rule_pack_gaps.load_tenant_configs(config_dir=...)`（目錄模式）。
+讀取端：`analyze_rule_pack_gaps.load_tenant_configs(config_dir=...)`（目錄模式），以及
+`blind_spot_discovery.load_monitored_db_types`——後者自 #4026 起只讀 `_metadata.db_type`
+的宣告（--config-facts），所以它那幾格斷言的是「送了鍵也不算」。
 
 同一個值（`custom_mysql_slow: 5`）只寫在四個位置之一：根 `defaults:`、平台檔
 `tenants:`、租戶檔、子樹 `_defaults.yaml`。tenant-a 是受測租戶；tenant-b 是對照組，
@@ -113,26 +114,61 @@ def test_analyze_gaps_dir_mode_matches_served_values(where, tmp_path):
 
 
 @pytest.mark.parametrize("where", sorted(POSITIONS))
-def test_blind_spot_monitored_set_matches_served_values(where, tmp_path):
+def test_blind_spot_monitored_set_is_the_declared_db_type(where, tmp_path):
+    """#4026：已監控＝Go 讀到的 `_metadata.db_type` 宣告（--config-facts），與
+    /metrics 送了哪些鍵無關。這棵樹沒有人宣告：繼承來的 mysql_connections、
+    四個位置的 custom_mysql_slow、內建層的鍵都不讓任何 DB 類型算已監控。"""
     conf_d = _tree(tmp_path, POSITIONS[where])
-    served = tv.load_served_values(conf_d)
     want: dict[str, set[str]] = {}
-    for tenant, t in served.items():
-        for key in t.severities:
-            db = bsd._infer_db_type_from_metric(key)
-            if db:
-                want.setdefault(db, set()).add(tenant)
+    for tenant, f in tv.load_served_facts(conf_d).tenants.items():
+        for db in f.metadata["db_type"]:
+            want.setdefault(db, set()).add(tenant)
     got = bsd.load_monitored_db_types(str(conf_d))
-    assert got == want, where
-    # 繼承來的 mysql_connections：兩個租戶在四個位置都算 mariadb 已監控。
-    # #3832：內建層的鍵每個租戶都有列，它們推得出的 db 類型也算已監控。
-    both = {"tenant-a", "tenant-b"}
-    builtin = {db for k in BUILTIN_DEFAULTS if (db := bsd._infer_db_type_from_metric(k))}
-    assert got == {db: both for db in {"mariadb"} | builtin}, where
+    assert got == want == {}, where
+    assert tv.load_served_values(conf_d)["tenant-a"].severities, where  # 鍵確實有列
+
+
+# #4026：宣告寫在哪裡，blind-spot 都照 Go 的讀法（--config-facts）。每格同時寫死期望值：
+# 光跟 Go 比會讓「兩邊都讀不到」也算過。子目錄 `_defaults.yaml` 的 `tenants:` 不是
+# 一層，Go 不讀，blind-spot 也不算。
+_A = "tenant-a.yaml"
+_DECLARED_AT = {
+    "租戶檔": ({_A: "tenants:\n  tenant-a:\n    _metadata: {db_type: redis}\n"},
+               {"redis": {"tenant-a"}}),
+    "子目錄租戶檔": ({"team/" + _A: "tenants:\n  tenant-a:\n    _metadata: {db_type: redis}\n"},
+                   {"redis": {"tenant-a"}}),
+    "根平台檔 tenants:": ({"_defaults.yaml": _BASE + "tenants:\n  tenant-a:\n"
+                                            "    _metadata: {db_type: redis}\n",
+                         _A: "tenants:\n  tenant-a:\n    _silent_mode: disable\n"},
+                        {"redis": {"tenant-a"}}),
+    "租戶檔換掉平台層": ({"_defaults.yaml": _BASE + "tenants:\n  tenant-a:\n"
+                                           "    _metadata: {db_type: [redis, oracle]}\n",
+                        _A: "tenants:\n  tenant-a:\n    _metadata: {db_type: kafka}\n"},
+                       {"kafka": {"tenant-a"}}),
+    "profile": ({"_defaults.yaml": _BASE + "profiles:\n  p1:\n    _metadata: {db_type: redis}\n",
+                 _A: "tenants:\n  tenant-a:\n    _profile: p1\n"},
+                {"redis": {"tenant-a"}}),
+    "子目錄 _defaults.yaml（不算）": ({"team/_defaults.yaml": "tenants:\n  tenant-a:\n"
+                                                       "    _metadata: {db_type: redis}\n",
+                                    "team/" + _A: "tenants:\n  tenant-a:\n    _silent_mode: disable\n"},
+                                   {}),
+}
+
+
+@pytest.mark.parametrize("where", sorted(_DECLARED_AT))
+def test_blind_spot_reads_the_declaration_wherever_go_does(where, tmp_path):
+    files, expected = _DECLARED_AT[where]
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, **files})
+    want: dict[str, set[str]] = {}
+    for tenant, f in tv.load_served_facts(conf_d).tenants.items():
+        for db in f.metadata["db_type"]:
+            want.setdefault(db, set()).add(tenant)
+    assert bsd.load_monitored_db_types(str(conf_d)) == want == expected, where
 
 
 def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
-    """行為變更（changelog.d）：`disable` 的鍵與沒有預設值、Go 不發的鍵不算已監控。"""
+    """`disable` 的鍵與沒有預設值、Go 不發的鍵，analyze-gaps 都不列；blind-spot 只看
+    `_metadata.db_type` 的宣告（#4026），送了哪些鍵都不算。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  redis_memory: 1024\n",
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    redis_memory: disable\n",
@@ -141,11 +177,7 @@ def test_disabled_and_unserved_keys_are_not_monitored(tmp_path):
     served = tv.load_served_values(conf_d)
     assert "redis_memory" not in served["tenant-a"].values
     assert "mysql_slow_queries" not in served["tenant-b"].values
-    # #3832：內建層的鍵每個租戶都有列；這裡驗的是 disable 與不送的鍵，把它們除開。
-    builtin = {db for k in BUILTIN_DEFAULTS if (db := bsd._infer_db_type_from_metric(k))}
-    got = bsd.load_monitored_db_types(str(conf_d))
-    assert {db: t for db, t in got.items() if db not in builtin} == {"redis": {"tenant-b"}}
-    assert "redis" not in builtin  # the control above would hide redis otherwise
+    assert bsd.load_monitored_db_types(str(conf_d)) == {}  # tenant-b 送 redis_memory，但沒宣告
     cfgs = arg.load_tenant_configs(config_dir=str(conf_d))
     assert {t: {k: v.as_json()[0]["value"] for k, v in c.items() if k not in BUILTIN_DEFAULTS}
             for t, c in cfgs.items()} == {"tenant-a": {}, "tenant-b": {"redis_memory": 1024.0}}
@@ -297,13 +329,20 @@ _RC0_SHAPES = {
 }
 
 
+# 直接呼叫 da-guard 時用工具實際走的模式。blind-spot 自 #4026 起讀 `--config-facts`：
+# 那個模式不解析 custom alert、不判 `expires`，所以有幾格 da-guard 什麼都不印——
+# 轉印出來的就要剛好是 da-guard 印的那幾行，一行不多。
+_GUARD_MODE = {"blind_spot_discovery.py": ("--config-facts",)}
+
+
 @pytest.mark.parametrize("shape", sorted(_RC0_SHAPES))
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
 def test_da_guard_stderr_is_passed_on_whole_at_rc_0(script, extra, shape, tmp_path):
     body, wants = _RC0_SHAPES[shape]
+    mode = _GUARD_MODE.get(script, ())
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B, "tenant-a.yaml": body})
     direct = subprocess.run([tv.guard_dispatch.DISPATCHER.resolve_binary(None), "served-values",
-                             "--config-dir", str(conf_d)],
+                             "--config-dir", str(conf_d), *mode],
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     assert direct.returncode == 0, direct.stderr  # 前提：da-guard 這格是 rc 0
     p = _cli(script, conf_d, *extra)
@@ -313,6 +352,10 @@ def test_da_guard_stderr_is_passed_on_whole_at_rc_0(script, extra, shape, tmp_pa
     passed_on = [ln[len(_P):] for ln in p.stderr.split("\n") if ln.startswith(_P)]
     got = [_DATE.sub("", ln) for ln in passed_on]
     da_lines = [_DATE.sub("", ln.rstrip()) for ln in direct.stderr.split("\n") if ln.strip()]
+    if mode:
+        assert got == da_lines, (da_lines, got)
+        json.loads(p.stdout)
+        return
     assert da_lines and all(ln in got for ln in da_lines), (da_lines, got)
     for want in wants:  # 以及每個形狀該有的那幾行
         assert any(want in ln for ln in got), (want, got)

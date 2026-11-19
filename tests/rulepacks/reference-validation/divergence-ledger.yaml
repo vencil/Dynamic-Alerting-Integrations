@@ -52,6 +52,11 @@ absent_from_candidate:
       reason: >-
         讀 threshold-exporter 的 user_threshold_unset（#1200 D-A A3）：平台沒有出貨值的
         key 尚未設定時的 info 提醒；candidate 是 inline 出貨值的參考檔，沒有這個訊號可對照。
+    - alert: OraclePGALimitNotSet
+      reason: >-
+        設定層的 info 提醒（#4044）：資料庫的 PGA_AGGREGATE_LIMIT 為 0、而租戶設了
+        oracle_pga_usage_percent 時發出。它讀的是「上限是否設定」這個組態事實，不是故障
+        波形；波形庫沒有這種 signature，harness 不建模。
     - alert: OracleHighActiveSessionsCritical
       reason: >-
         critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in（#3658；

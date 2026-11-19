@@ -311,9 +311,11 @@ RECEIVER_URL_FIELDS: Final[dict[str, list[str]]] = {
 # ============================================================
 # DB Type Inference Maps (Job name + Metric prefix → DB type)
 # ============================================================
-# 用於 blind_spot_discovery 和 onboard_platform 的 DB 類型推斷。
-# JOB_DB_MAP: Prometheus job name → DB type（完整比對 + 關鍵字比對）
-# METRIC_PREFIX_DB_MAP: Metric 名稱前綴 → DB type
+# JOB_DB_MAP: Prometheus job name → DB type（完整比對 + 關鍵字比對）；
+#   blind_spot_discovery 用它判 live target 的 DB 類型。值集合必須等於
+#   tenant-config schema 的 dbTypeValue enum（租戶 `_metadata.db_type` 能宣告的值，
+#   #4026；tests/ops/test_blind_spot_discovery.py 守著）。
+# METRIC_PREFIX_DB_MAP: Metric 名稱前綴 → DB type；onboard_platform 用。
 JOB_DB_MAP: Final[dict[str, str]] = {
     # MariaDB / MySQL
     "mysql": "mariadb", "mariadb": "mariadb", "mysqld": "mariadb",

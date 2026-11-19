@@ -1425,7 +1425,13 @@ def am_duration_seconds(value: Any) -> Optional[float]:
         return 0.0
     total = 0
     for digits, unit in _AM_DURATION_TOKEN_RE.findall(value):
-        v, mult = int(digits), _AM_DURATION_UNIT_NS[unit]
+        # #4061: more than 19 significant digits is past int64 for every unit
+        # (10**19 > 2**63) — refused before int(), which raises ValueError
+        # past Python's 4300-digit limit instead of answering.
+        significant = digits.lstrip("0") or "0"
+        if len(significant) > 19:
+            return None
+        v, mult = int(significant), _AM_DURATION_UNIT_NS[unit]
         if v > (1 << 63) // mult:
             return None
         total += v * mult

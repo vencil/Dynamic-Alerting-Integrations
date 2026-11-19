@@ -203,6 +203,13 @@ required_labels:
 max_range_duration: 1h     # Prohibit excessively long range vectors (e.g., [7d])
 max_evaluation_interval: 60s  # Custom Rule Group interval cap
 
+# Every value is judged when the policy is loaded (#4061); a wrong one exits 2,
+# naming the key and why: denied_functions / denied_patterns / required_labels
+# are lists (possibly empty) of non-empty strings (a single string is refused,
+# no longer matched character by character); the two durations are positive
+# Prometheus durations, Prometheus' ParseDuration grammar (90m, 1h30m, 2w; not
+# 1.5h, not an unquoted 5). A group's interval is read with the same grammar.
+
 # This file is lint's alone (`lint --policy`, `validate-config --lint-policy`);
 # the webhook domain allowlist `allowed_domains` lives in the deployment policy
 # (another file, for --policy of generate-routes / validate-config). Each
@@ -233,7 +240,7 @@ file_overrides:
 > alike, nor two that can match the same file such as `a.yaml` and
 > `sub/a.yaml`), `require_generated_marker` (a bool) and `policy`;
 > `denied_functions` is a list (it may be empty) of non-empty strings and
-> `max_range_duration` a positive single-unit duration (`90m`, not `1h30m`). Anything
+> `max_range_duration` a positive duration. Anything
 > else is exit `2`, naming the entry and why. CI separately guards against a hand-written
 > file posing as a compiled pack via the `compile_custom_alerts.py --check`
 > drift gate.
