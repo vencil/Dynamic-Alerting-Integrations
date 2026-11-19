@@ -898,3 +898,152 @@ tests:
               owner: ""
               tier: ""
         # t-b, t-c, t-d, t-x and t-m's limited m2 produce NO alert.
+
+  # ── OracleHighHardParseTime (#1174, warning, for: 10m) ──
+  # Share of DB time spent hard parsing, threshold 20 (the registry's reference
+  # value). Counters grow per 15s by AAS*15 (DB time) and AAS*15*share (hard
+  # parse). Shapes from the #1174 measurements on Oracle Free 23:
+  #   hp-storm     AAS 2,    50%                    → fires
+  #   hp-diluted   AAS 2.5,  38% (storm + batch)    → fires
+  #   hp-healthy   AAS 2,    1%                     → no
+  #   hp-stats     AAS 2,    12% (stats gathering)  → no
+  #   hp-idle      AAS 0.5,  100%                   → no (under the AAS >= 1 gate)
+  #   hp-floorhi   AAS 1.05, 47.6%                  → fires (just over the gate)
+  #   hp-floorlo   AAS 0.95, 52.6%                  → no (just under it)
+  #   hp-maint     storm in maintenance             → no
+  #   hp-multi     e1 AAS 20 at 1% + e2 AAS 1.2 at 50% → fires on e2's 50%;
+  #                summing before dividing reads 3.8% and goes red
+  #   hp-nothr     storm, no threshold              → no
+  # Asserted at 6m and 22m only: hp-floorhi clears the gate late under
+  # Prometheus' cold-start rate (window-extrapolated) and at once under
+  # MetricsQL, so their for: ends differ; 22m is past both. x120 = 30m.
+  - interval: 15s
+    input_series:
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-storm", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-storm", instance="e"}'
+        values: '0+15x120'
+      - series: 'user_threshold{tenant="hp-storm", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-diluted", instance="e"}'
+        values: '0+37.5x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-diluted", instance="e"}'
+        values: '0+14.25x120'
+      - series: 'user_threshold{tenant="hp-diluted", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-healthy", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-healthy", instance="e"}'
+        values: '0+0.3x120'
+      - series: 'user_threshold{tenant="hp-healthy", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-stats", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-stats", instance="e"}'
+        values: '0+3.6x120'
+      - series: 'user_threshold{tenant="hp-stats", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-idle", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-idle", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'user_threshold{tenant="hp-idle", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-floorhi", instance="e"}'
+        values: '0+15.75x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-floorhi", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'user_threshold{tenant="hp-floorhi", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-floorlo", instance="e"}'
+        values: '0+14.25x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-floorlo", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'user_threshold{tenant="hp-floorlo", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-maint", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-maint", instance="e"}'
+        values: '0+15x120'
+      - series: 'user_threshold{tenant="hp-maint", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'user_state_filter{tenant="hp-maint", filter="maintenance"}'
+        values: '1x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-multi", instance="e1"}'
+        values: '0+300x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-multi", instance="e1"}'
+        values: '0+3x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-multi", instance="e2"}'
+        values: '0+18x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-multi", instance="e2"}'
+        values: '0+9x120'
+      - series: 'user_threshold{tenant="hp-multi", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-nothr", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-nothr", instance="e"}'
+        values: '0+15x120'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OracleHighHardParseTime
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: OracleHighHardParseTime
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-storm
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-storm"
+              summary_zh: "hp-storm 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-storm: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-storm：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 50.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 50.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-diluted
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-diluted"
+              summary_zh: "hp-diluted 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-diluted: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-diluted：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 38.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 38.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-floorhi
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-floorhi"
+              summary_zh: "hp-floorhi 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-floorhi: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-floorhi：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 47.6% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 47.6%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-multi
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-multi"
+              summary_zh: "hp-multi 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-multi: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-multi：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 50.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 50.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # hp-healthy, hp-stats, hp-idle, hp-floorlo, hp-maint and hp-nothr produce NO alert.

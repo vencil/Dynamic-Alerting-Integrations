@@ -32,6 +32,7 @@ var unsetThresholdKeys = []unsetThresholdKey{
 	{"nginx_connections", "nginx"},
 	{"nginx_request_rate", "nginx"},
 	{"nginx_waiting", "nginx"},
+	{"oracle_hard_parse_time_percent", "oracle"},
 	{"oracle_pga_usage_percent", "oracle"},
 	{"oracle_sessions_active", "oracle"},
 	{"oracle_wait_time_rate", "oracle"},

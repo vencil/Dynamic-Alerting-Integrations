@@ -30,6 +30,12 @@
 #   oracle_wait_time_rate: 50   # s/s — Wait time rate (5m)
 #       未啟用（尚未量測，#1320）：尚無實測；#1320 在有訊號前維持宣告
 #       未啟用（依部署而定）：正常的等待輪廓因工作負載而異
+#   oracle_hard_parse_time_percent: 20
+#       % of DB time — Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a
+#       share of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest
+#       per tenant; only while the database averages at least one active session (AAS >= 1)
+#       未啟用（尚未量測，#1174）：沒有 vendor 預設值（Oracle EM 的 parse 指標閾值為 Not Defined）。20 落在 #1174 於 Oracle Free
+#       23 實測的區間：健康負載 0.2–1.5%、字典統計收集 12%、被遞迴批次稀釋的 hard parse 風暴 38%、未稀釋 73%
 #   oracle_pga_usage_percent: 85
 #       % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
 #       PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant;
@@ -137,6 +143,23 @@ groups:
             / (oracledb_pga_aggregate_limit_bytes > 0)
           )
 
+      # Hard parse time, % of DB time (#1174): v$sys_time_model "hard parse
+      # elapsed time" over "DB time" — the AWR Time Model "% of DB Time" row.
+      # Chosen over soft parse % (it reads 90% or 4% for one workload depending
+      # on the client's statement cache) and hard parses per execute (a
+      # recursive PL/SQL batch running beside a storm dilutes it ~97x); this
+      # share only falls by the batch's share of time. Measured on Oracle Free
+      # 23 (#1174): healthy 0.2-1.5%, stats gathering 12%, storm 38-73%.
+      # Computed only while DB time grows by at least 1 s/s (AAS >= 1, one
+      # session busy on average): an idle database's few ad-hoc parses read
+      # ~100% of almost no DB time. Divided per exporter before the max.
+      - record: tenant:oracle_hard_parse_time:percent
+        expr: |
+          max by(tenant) (
+            100 * rate(oracledb_hard_parse_elapsed_seconds_total[5m])
+            / (rate(oracledb_db_time_seconds_total[5m]) >= 1)
+          )
+
       # Session utilization ratio: sessions counted against the SESSIONS parameter
       # of the container the exporter is connected to, over that parameter — all
       # sessions, idle ones included (a leaked pool holds idle sessions), not just
@@ -179,6 +202,9 @@ groups:
 
       - record: tenant:alert_threshold:oracle_pga_usage_percent
         expr: max by(tenant) (user_threshold{component="oracle", metric="pga_usage_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:oracle_hard_parse_time_percent
+        expr: max by(tenant) (user_threshold{component="oracle", metric="hard_parse_time_percent", severity="warning"})
 
   # -------------------------------------------------------
   # Alert Rules: Oracle
@@ -462,6 +488,31 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle PGA 逼近 PGA_AGGREGATE_LIMIT — 超過時會終止 session"
           description: "PGA allocated: {{ $value | printf \"%.1f\" }}% of PGA_AGGREGATE_LIMIT"
           description_zh: "配置的 PGA：PGA_AGGREGATE_LIMIT 的 {{ $value | printf \"%.1f\" }}%"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      - alert: OracleHighHardParseTime
+        expr: |
+          (
+            tenant:oracle_hard_parse_time:percent
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_hard_parse_time_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 10m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Oracle hard parsing takes a high share of DB time on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 Oracle hard parse 佔 DB time 比例過高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle hard parse share of DB time high — look for SQL without bind variables"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+          description: "Hard parse time: {{ $value | printf \"%.1f\" }}% of DB time"
+          description_zh: "Hard parse 耗時：DB time 的 {{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
