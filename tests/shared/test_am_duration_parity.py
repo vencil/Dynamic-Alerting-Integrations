@@ -174,3 +174,16 @@ def test_clamp_writes_what_alertmanager_reads(row, param):
     assert _lib_validation.am_duration_seconds(out) is not None, (row, out)
     if not warnings:
         assert out == row["value"]   # within bounds: unchanged
+
+
+@pytest.mark.parametrize("value, seconds", [
+    ("9" * 5000 + "h", None),                 # past Python's int() digit limit
+    ("1" + "0" * 19 + "ms", None),            # 20 significant digits: past int64
+    ("0" * 30 + "5m", 300.0),                 # leading zeros are not significant
+    ("9223372036854775807ms", None),          # 19 digits, over int64 ns once scaled
+])
+def test_an_overlong_number_is_refused_not_a_crash(value, seconds):
+    """#4061 review: a 5000-digit count raised ValueError out of int() (CPython's
+    4300-digit limit) — a crash where Alertmanager / Prometheus answer "duration
+    out of range"."""
+    assert _lib_validation.am_duration_seconds(value) == seconds

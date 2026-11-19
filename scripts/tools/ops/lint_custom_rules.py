@@ -57,7 +57,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import parse_duration_seconds  # noqa: E402
+from _lib_validation import am_duration_seconds  # noqa: E402  (#4061: Prometheus' ParseDuration)
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
@@ -142,25 +142,36 @@ def _string_list_problem(value) -> "str | None":
     return None
 
 
+def duration_seconds(value) -> "float | None":
+    """Seconds of the Prometheus duration *value* (``90m``, ``1h30m``, ``2w``),
+    or None when Prometheus' ``model.ParseDuration`` refuses it (#4061: the
+    one grammar of every duration this lint reads — policy values, ranges,
+    group intervals; ``_lib_validation.am_duration_seconds``, pinned to Go by
+    tests/shared/am_duration_matrix.json). Only a str is a duration: an
+    unquoted ``5`` has no unit."""
+    return am_duration_seconds(value) if isinstance(value, str) else None
+
+
 def _duration_problem(value) -> "str | None":
-    """Why *value* is not a positive single-unit duration (``90m``), or None:
-    what the range check reads (``parse_duration_seconds``; ``1h30m`` is not
-    — the grammar is #4061's to settle). ⛔ One it cannot read (``banana``,
-    ``0s``, ``1h30m``) turned that check off for the files it covered (#3977)."""
-    try:
-        seconds = parse_duration_seconds(value) if isinstance(value, str) else None
-    except (OverflowError, ValueError):   # a number too large to be seconds
-        seconds = None
-    if not seconds:
-        return "must be a positive single-unit duration such as 90m"
+    """Why *value* is not a positive Prometheus duration (``90m``, ``1h30m``),
+    or None. ⛔ One the checks cannot read (``banana``, ``0s``, ``1.5h``, an
+    unquoted ``5``) turned the check off for the files it covered (#3977,
+    #4061)."""
+    if not duration_seconds(value):
+        return "must be a positive Prometheus duration such as 90m or 1h30m"
     return None
 
 
-#: How each overridable key's value is judged (#3977). ⛔ The one definition:
-#: #4061 judges the top-level values with these.
+#: How each policy value is judged — top level (#4061) and an override's
+#: (#3977). ⛔ The one definition: a value none of these reads as it is
+#: meant (a string where a list is, ``banana`` for a duration) turned its
+#: check off, or crashed the run.
 POLICY_VALUE_PROBLEMS = {
     "denied_functions": _string_list_problem,
+    "denied_patterns": _string_list_problem,
+    "required_labels": _string_list_problem,
     "max_range_duration": _duration_problem,
+    "max_evaluation_interval": _duration_problem,
 }
 assert set(POLICY_VALUE_PROBLEMS) >= OVERRIDABLE_POLICY_KEYS
 
@@ -283,10 +294,10 @@ def lint_expr(expr, policy, filepath, rule_name):
     # Check range vector duration
     max_range = policy.get("max_range_duration")
     if max_range:
-        max_secs = parse_duration_seconds(max_range)
+        max_secs = duration_seconds(max_range)
         if max_secs:
             for m in re.finditer(r"\[(\d+[smhd])\]", expr):
-                range_secs = parse_duration_seconds(m.group(1))
+                range_secs = duration_seconds(m.group(1))
                 if range_secs and range_secs > max_secs:
                     results.append(LintResult(
                         filepath, rule_name, None, "ERROR",
@@ -322,8 +333,8 @@ def lint_group_interval(interval, policy, filepath, group_name):
     if not max_interval or not interval:
         return results
 
-    max_secs = parse_duration_seconds(max_interval)
-    actual_secs = parse_duration_seconds(interval)
+    max_secs = duration_seconds(max_interval)
+    actual_secs = duration_seconds(interval)
     if max_secs and actual_secs and actual_secs > max_secs:
         results.append(LintResult(
             filepath, f"group:{group_name}", None, "WARN",
@@ -567,9 +578,11 @@ def load_policy(custom, path=None):
     merged = copy.deepcopy(DEFAULT_POLICY)
     if custom is not None:
         merged.update(custom)   # custom overrides defaults, key by key
-    # #3977: the file_overrides read below are judged here, the built-in
+    # #4061 / #3977: every value read below is judged here, the built-in
     # ones too — matched or not, the same answer.
-    problems = file_overrides_problems(merged["file_overrides"])
+    problems = [f"{key} {why}" for key, judge in POLICY_VALUE_PROBLEMS.items()
+                for why in [judge(merged[key])] if why]
+    problems += file_overrides_problems(merged["file_overrides"])
     if problems:
         source = f"--policy {safe_label(path)}" if custom is not None else "the built-in policy"
         raise _lib_exitcodes.CallerError(f"{source}: " + "; ".join(problems), "policy_invalid")
