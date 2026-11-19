@@ -28,7 +28,11 @@ from test_output_path_write_failure import ROWS, TOOLS_DIR, Ctx
 
 #: (tool, flag) — the same strings as the rows of the write gate.
 ARTIFACT_FILE_FLAGS = [
+    ("dx/compile_custom_alerts.py", "--out"),  # #3982, owner 2026-11-18
     ("dx/generate_tenant_metadata.py", "--output"),  # #3982, owner 2026-11-18
+    ("dx/sync_glossary_abbr.py", "--output"),  # #3107 ④
+    ("../ops/configmap_assemble.py", "--output"),  # #3107 ④, owner 2026-10-24
+    ("ops/state_reconcile.py", "--manifest-path"),  # #3107 ④, owner 2026-11-15
     ("ops/generate_alertmanager_routes.py", "-o/--output"),
 ]
 
@@ -132,13 +136,17 @@ def test_dot_dash_is_a_file_called_dash(tool, flag, tmp_path):
     cwd = tmp_path / "cwd"
     cwd.mkdir()
     marker = tmp_path / "@OUT@"
-    argv = ["./-" if a == str(marker) else a
-            for a in row.build(Ctx(tmp_path, "http://127.0.0.1:1"), marker)]
+    ctx = Ctx(tmp_path, "http://127.0.0.1:1")
+    argv = ["./-" if a == str(marker) else a for a in row.build(ctx, marker)]
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:  # a row's fake executable (configmap_assemble's kubectl)
+        if os.name == "nt":  # as the write gate's `_run`: a POSIX launcher
+            pytest.skip(f"{row.id}: its fake executable is a POSIX launcher")
+        env.update(row.env(ctx))
     proc = subprocess.run(
         [sys.executable, str(TOOLS_DIR / tool), *argv],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=300, cwd=cwd,
-        env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+        timeout=300, cwd=cwd, env=env)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert [p.name for p in cwd.iterdir()] == ["-"]
     assert (cwd / "-").stat().st_size > 0

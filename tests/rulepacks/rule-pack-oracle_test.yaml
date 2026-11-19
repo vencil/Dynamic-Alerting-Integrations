@@ -815,3 +815,318 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
+
+  # ── OraclePGALimitNotSet (#4044, info, for: 30m) ──
+  # Fires per database (instance) whose PGA_AGGREGATE_LIMIT reads 0 while the
+  # tenant set a warning threshold for oracle_pga_usage_percent. Without that
+  # threshold this alert stays quiet; the platform's unset notice
+  # (OracleThresholdNotConfigured) speaks then only if the tenant subscribed to
+  # the unset_thresholds filter, which is off by default.
+  #   t-a: limit 0, threshold set                         → fires (a1)
+  #   t-b: limit 0, no threshold                          → no
+  #   t-c: limit 10 GiB, threshold set                    → no
+  #   t-d: limit 0, threshold set, maintenance            → no
+  #   t-m: m1 limit 0 + m2 limit 10 GiB, threshold set    → fires for m1 only
+  #        (pins the per-database `== 0` inside the max: `max(limit) == 0`
+  #        or `min by(tenant)` would read the tenant as limited, or name no
+  #        database)
+  #   t-x: limit 0, only a critical threshold             → no (the PGA alert
+  #        reads the warning row only, so nothing is left unmeasured)
+  - interval: 1m
+    input_series:
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-a", instance="a1"}'
+        values: '0x45'
+      - series: 'user_threshold{tenant="t-a", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-b", instance="b1"}'
+        values: '0x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-c", instance="c1"}'
+        values: '10737418240x45'
+      - series: 'user_threshold{tenant="t-c", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-d", instance="d1"}'
+        values: '0x45'
+      - series: 'user_threshold{tenant="t-d", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'user_state_filter{tenant="t-d", filter="maintenance"}'
+        values: '1x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-m", instance="m1"}'
+        values: '0x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-m", instance="m2"}'
+        values: '10737418240x45'
+      - series: 'user_threshold{tenant="t-m", component="oracle", metric="pga_usage_percent", severity="warning"}'
+        values: '85x45'
+      - series: 'oracledb_pga_aggregate_limit_bytes{tenant="t-x", instance="x1"}'
+        values: '0x45'
+      - series: 'user_threshold{tenant="t-x", component="oracle", metric="pga_usage_percent", severity="critical"}'
+        values: '85x45'
+    alert_rule_test:
+      - eval_time: 25m          # for: 30m not yet served
+        alertname: OraclePGALimitNotSet
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: OraclePGALimitNotSet
+        exp_alerts:
+          - exp_labels:
+              instance: a1
+              maintenance: mute
+              severity: info
+              tenant: t-a
+            exp_annotations:
+              summary: "Oracle PGA_AGGREGATE_LIMIT is not set on t-a: the PGA alert stays silent"
+              summary_zh: "t-a 的 Oracle 沒有設定 PGA_AGGREGATE_LIMIT：PGA 告警不會響"
+              platform_summary: "t-a: PGA_AGGREGATE_LIMIT is 0, so oracle_pga_usage_percent has nothing to measure against"
+              platform_summary_zh: "t-a：PGA_AGGREGATE_LIMIT 為 0，oracle_pga_usage_percent 沒有可比的上限"
+              description: "Database a1 of this tenant runs with PGA_AGGREGATE_LIMIT = 0 (no limit), so its PGA share is not computed and OracleHighPGAUsage cannot fire for it, although oracle_pga_usage_percent is set. Set PGA_AGGREGATE_LIMIT, or write \"disable\" for oracle_pga_usage_percent to end this notice."
+              description_zh: "這個租戶的資料庫 a1 的 PGA_AGGREGATE_LIMIT 為 0（沒有上限），所以不計算它的 PGA 比例，即使設了 oracle_pga_usage_percent，OracleHighPGAUsage 也不會為它而響。設定 PGA_AGGREGATE_LIMIT，或把 oracle_pga_usage_percent 寫成 \"disable\" 就會結束這則提醒。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              instance: m1
+              maintenance: mute
+              severity: info
+              tenant: t-m
+            exp_annotations:
+              summary: "Oracle PGA_AGGREGATE_LIMIT is not set on t-m: the PGA alert stays silent"
+              summary_zh: "t-m 的 Oracle 沒有設定 PGA_AGGREGATE_LIMIT：PGA 告警不會響"
+              platform_summary: "t-m: PGA_AGGREGATE_LIMIT is 0, so oracle_pga_usage_percent has nothing to measure against"
+              platform_summary_zh: "t-m：PGA_AGGREGATE_LIMIT 為 0，oracle_pga_usage_percent 沒有可比的上限"
+              description: "Database m1 of this tenant runs with PGA_AGGREGATE_LIMIT = 0 (no limit), so its PGA share is not computed and OracleHighPGAUsage cannot fire for it, although oracle_pga_usage_percent is set. Set PGA_AGGREGATE_LIMIT, or write \"disable\" for oracle_pga_usage_percent to end this notice."
+              description_zh: "這個租戶的資料庫 m1 的 PGA_AGGREGATE_LIMIT 為 0（沒有上限），所以不計算它的 PGA 比例，即使設了 oracle_pga_usage_percent，OracleHighPGAUsage 也不會為它而響。設定 PGA_AGGREGATE_LIMIT，或把 oracle_pga_usage_percent 寫成 \"disable\" 就會結束這則提醒。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # t-b, t-c, t-d, t-x and t-m's limited m2 produce NO alert.
+
+  # ── OracleHighHardParseTime (#1174, warning, for: 10m) ──
+  # Share of DB time spent hard parsing, threshold 20 (the registry's reference
+  # value). Counters grow per 15s by AAS*15 (DB time) and AAS*15*share (hard
+  # parse). Shapes from the #1174 measurements on Oracle Free 23:
+  #   hp-storm     AAS 2,    50%                    → fires
+  #   hp-diluted   AAS 2.5,  38% (storm + batch)    → fires
+  #   hp-healthy   AAS 2,    1%                     → no
+  #   hp-stats     AAS 2,    12% (stats gathering)  → no
+  #   hp-idle      AAS 0.5,  100%                   → no (under the AAS >= 1 gate)
+  #   hp-floorhi   AAS 1.05, 47.6%                  → fires (just over the gate)
+  #   hp-floorlo   AAS 0.95, 52.6%                  → no (just under it)
+  #   hp-maint     storm in maintenance             → no
+  #   hp-multi     e1 AAS 20 at 1% + e2 AAS 1.2 at 50% → fires on e2's 50%;
+  #                summing before dividing reads 3.8% and goes red
+  #   hp-nothr     storm, no threshold              → no
+  # Asserted at 6m and 22m only: hp-floorhi clears the gate late under
+  # Prometheus' cold-start rate (window-extrapolated) and at once under
+  # MetricsQL, so their for: ends differ; 22m is past both. x120 = 30m.
+  - interval: 15s
+    input_series:
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-storm", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-storm", instance="e"}'
+        values: '0+15x120'
+      - series: 'user_threshold{tenant="hp-storm", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-diluted", instance="e"}'
+        values: '0+37.5x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-diluted", instance="e"}'
+        values: '0+14.25x120'
+      - series: 'user_threshold{tenant="hp-diluted", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-healthy", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-healthy", instance="e"}'
+        values: '0+0.3x120'
+      - series: 'user_threshold{tenant="hp-healthy", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-stats", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-stats", instance="e"}'
+        values: '0+3.6x120'
+      - series: 'user_threshold{tenant="hp-stats", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-idle", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-idle", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'user_threshold{tenant="hp-idle", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-floorhi", instance="e"}'
+        values: '0+15.75x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-floorhi", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'user_threshold{tenant="hp-floorhi", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-floorlo", instance="e"}'
+        values: '0+14.25x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-floorlo", instance="e"}'
+        values: '0+7.5x120'
+      - series: 'user_threshold{tenant="hp-floorlo", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-maint", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-maint", instance="e"}'
+        values: '0+15x120'
+      - series: 'user_threshold{tenant="hp-maint", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'user_state_filter{tenant="hp-maint", filter="maintenance"}'
+        values: '1x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-multi", instance="e1"}'
+        values: '0+300x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-multi", instance="e1"}'
+        values: '0+3x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-multi", instance="e2"}'
+        values: '0+18x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-multi", instance="e2"}'
+        values: '0+9x120'
+      - series: 'user_threshold{tenant="hp-multi", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-nothr", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-nothr", instance="e"}'
+        values: '0+15x120'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: OracleHighHardParseTime
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: OracleHighHardParseTime
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-storm
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-storm"
+              summary_zh: "hp-storm 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-storm: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-storm：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 50.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 50.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-diluted
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-diluted"
+              summary_zh: "hp-diluted 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-diluted: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-diluted：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 38.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 38.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-floorhi
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-floorhi"
+              summary_zh: "hp-floorhi 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-floorhi: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-floorhi：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 47.6% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 47.6%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-multi
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-multi"
+              summary_zh: "hp-multi 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-multi: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-multi：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 50.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 50.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # hp-healthy, hp-stats, hp-idle, hp-floorlo, hp-maint and hp-nothr produce NO alert.
+
+  # ── OracleHighHardParseTime: for: and threshold edges (#1174 review F1) ──
+  # The group above holds every series at one rate from t=0, so it cannot tell
+  # for: 5m from 15m, or 20 from 30. Here:
+  #   hp-late  idle (flat counters) until 8m, then AAS 2 at 50%. Flat history
+  #            means no cold start: both engines see the DB-time rate ramp from
+  #            0 at 8m to 2 at 13m, clear the AAS >= 1 gate at ~10.5m, and
+  #            for: 10m ends ~20.5m — pending at 19m, firing at 23m. for: 5m
+  #            fires by 19m, for: 15m not yet at 23m.
+  #   hp-t21   AAS 2 at 21% → fires;  hp-t19  AAS 2 at 19% → no. Both sit one
+  #            point from the threshold 20, so a moved or loosened comparison
+  #            turns one of them red.
+  - interval: 15s
+    input_series:
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-late", instance="e"}'
+        values: '0x32 0+30x88'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-late", instance="e"}'
+        values: '0x32 0+15x88'
+      - series: 'user_threshold{tenant="hp-late", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-t21", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-t21", instance="e"}'
+        values: '0+6.3x120'
+      - series: 'user_threshold{tenant="hp-t21", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+      - series: 'oracledb_db_time_seconds_total{tenant="hp-t19", instance="e"}'
+        values: '0+30x120'
+      - series: 'oracledb_hard_parse_elapsed_seconds_total{tenant="hp-t19", instance="e"}'
+        values: '0+5.7x120'
+      - series: 'user_threshold{tenant="hp-t19", component="oracle", metric="hard_parse_time_percent", severity="warning"}'
+        values: '20x120'
+    alert_rule_test:
+      - eval_time: 19m
+        alertname: OracleHighHardParseTime
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-t21
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-t21"
+              summary_zh: "hp-t21 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-t21: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-t21：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 21.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 21.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # hp-late is still pending (for: 10m ends ~20.5m); hp-t19 is under 20.
+      - eval_time: 23m
+        alertname: OracleHighHardParseTime
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-late
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-late"
+              summary_zh: "hp-late 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-late: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-late：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 50.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 50.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: hp-t21
+            exp_annotations:
+              summary: "Oracle hard parsing takes a high share of DB time on hp-t21"
+              summary_zh: "hp-t21 上 Oracle hard parse 佔 DB time 比例過高"
+              platform_summary: "[] hp-t21: Oracle hard parse share of DB time high — look for SQL without bind variables"
+              platform_summary_zh: "[] hp-t21：Oracle hard parse 佔 DB time 比例過高 — 查沒有使用 bind variable 的 SQL"
+              description: "Hard parse time: 21.0% of DB time"
+              description_zh: "Hard parse 耗時：DB time 的 21.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+        # hp-t19 (19% < 20) produces NO alert.

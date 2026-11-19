@@ -82,6 +82,7 @@ _TOOLS = _THIS_DIR.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: kubectl's own manifest, read kubectl's way)
 import _lib_io  # noqa: E402
+from _lib_validation import artifact_file_type  # noqa: E402  (#3107 ④)
 from _lib_kubectl import (  # noqa: E402  (#3539; the k8s limits, #3900)
     ANNOTATION_TOTAL_LIMIT_BYTES,
     CONFIGMAP_DATA_LIMIT_BYTES,
@@ -260,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
                     "(#1603 / #1792 / #1796 / #1797).")
     ap.add_argument("--config-dir", required=True,
                     help="conf.d directory the ConfigMap is assembled from")
-    ap.add_argument("--output", default=str(DEFAULT_OUTPUT),
+    # #3107 ④: an artifact (owner 2026-10-24) — `-` and "" refused here.
+    ap.add_argument("--output", default=str(DEFAULT_OUTPUT), type=artifact_file_type(),
                     help=f"where to write the manifest (default: {DEFAULT_OUTPUT})")
     ap.add_argument("--namespace", default=DEFAULT_NAMESPACE,
                     help=f"ConfigMap namespace (default: {DEFAULT_NAMESPACE})")

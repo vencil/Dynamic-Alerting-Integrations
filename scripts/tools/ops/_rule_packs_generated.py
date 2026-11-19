@@ -354,6 +354,23 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                              'unit': 's/s',
                                                              'desc': 'Wait time rate (5m)',
                                                              'metric_class': 'latency'},
+                                   'oracle_hard_parse_time_percent': {'value': 20,
+                                                                      'unit': '% of DB time',
+                                                                      'desc': 'Hard parse time '
+                                                                              'warning: '
+                                                                              'v$sys_time_model '
+                                                                              '"hard parse elapsed '
+                                                                              'time" as a share of '
+                                                                              '"DB time" over 5m '
+                                                                              '(the AWR Time Model '
+                                                                              '"% of DB Time" '
+                                                                              'row), per exporter, '
+                                                                              'busiest per tenant; '
+                                                                              'only while the '
+                                                                              'database averages '
+                                                                              'at least one active '
+                                                                              'session (AAS >= 1)',
+                                                                      'metric_class': 'latency'},
                                    'oracle_pga_usage_percent': {'value': 85,
                                                                 'unit': '% of PGA_AGGREGATE_LIMIT',
                                                                 'desc': 'PGA usage warning: '

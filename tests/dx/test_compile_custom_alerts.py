@@ -1804,3 +1804,77 @@ def test_both_paths_named_compile_with_no_tree_root(tmp_path, monkeypatch):
 def test_no_rerun_command_names_a_default_out_with_no_tree_root(monkeypatch):
     monkeypatch.setattr(cc, "_repo_root", lambda: None)
     assert cc._rerun_command(_Args(None, None)) == ""
+
+
+# ── #3982 (owner 2026-11-18): `--out` is an artifact ──────────────────────
+@pytest.mark.skipif(os.name != "posix", reason="RLIMIT_FSIZE")
+def test_a_failed_write_leaves_the_previous_pack_whole(tmp_path):
+    """The pack is replaced whole: a write stopped half way (EFBIG) leaves
+    the previous pack as it was — it used to leave a truncated one that
+    `--check` then read as an older, valid pack."""
+    import signal
+    import subprocess
+    resource = pytest.importorskip("resource")
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    tool = [sys.executable, cc.__file__, "--config-dir", str(src), "--out", str(out)]
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("COV_CORE_", "COVERAGE_"))}
+    assert subprocess.run(tool, capture_output=True, timeout=300, env=env).returncode == 0
+    before = out.read_bytes()
+    (src / "b.yaml").write_text(_ONE_RECIPE_SOURCE["a.yaml"].replace("ta:", "tb:"),
+                                encoding="utf-8")
+
+    def limit():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (64, 64))
+
+    r = subprocess.run(tool, capture_output=True, timeout=300, env=env, preexec_fn=limit)
+    err = r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 2, err
+    assert f"ERROR: cannot write {out}: " in err and "check the value given to --out" in err
+    assert "Traceback" not in err
+    assert out.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pack.yaml", "src"], "a tmp was left"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+@pytest.mark.parametrize("check", [False, True], ids=["write", "check"])
+def test_a_fifo_out_is_refused_before_it_is_read(tmp_path, monkeypatch, capsys, check):
+    """The erase guard and `--check` read the pack back: a FIFO with no
+    writer blocked that read forever. Refused first, rc 2, named."""
+    import threading
+    src, out = tmp_path / "src", tmp_path / "pack.fifo"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    os.mkfifo(out)
+    done = threading.Event()
+
+    def unblock():  # a guard: if the refusal is gone, the run ends instead of hanging
+        wait = 10
+        while not done.wait(wait):
+            os.close(os.open(out, os.O_RDWR))
+            wait = 1
+    threading.Thread(target=unblock, daemon=True).start()
+    try:
+        with pytest.raises(SystemExit) as ei:
+            _compile_into(src, out, monkeypatch, extra=(("--check",) if check else ()))
+    finally:
+        done.set()
+    assert ei.value.code == cc.EXIT_CALLER_ERROR
+    assert f"ERROR: cannot write {out}: not a regular file — check the value given " \
+           "to --out" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
+@pytest.mark.parametrize("existing", [None, 0o600, 0o664])
+def test_the_pack_keeps_a_checkouts_mode(tmp_path, monkeypatch, existing):
+    """A tracked file: 0644 as a checkout leaves it, whatever mode the pack
+    had (the in-place write kept 0600 / 0664 — independent review)."""
+    import stat
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    _write_tree(src, _ONE_RECIPE_SOURCE)
+    if existing is not None:
+        out.write_text("groups: []\n", encoding="utf-8")
+        out.chmod(existing)
+    assert _compile_into(src, out, monkeypatch) == cc.EXIT_OK
+    assert stat.S_IMODE(out.stat().st_mode) == 0o644

@@ -436,7 +436,8 @@ class TestGenDefaultsDeclaredList:
     def test_selected_pack_declares_its_flat_optional_keys(self):
         config = yaml.safe_load(ip._gen_defaults_yaml(['oracle'], 'monitoring'))
         assert config['optional_overrides'] == [
-            'oracle_wait_time_rate', 'oracle_pga_usage_percent',
+            'oracle_wait_time_rate', 'oracle_hard_parse_time_percent',
+            'oracle_pga_usage_percent',
         ]
 
     def test_list_of_strings_never_a_mapping(self):

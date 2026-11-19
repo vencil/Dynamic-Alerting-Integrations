@@ -277,6 +277,11 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:nginx_connections_waiting:max
+  oracle_hard_parse_time_percent:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_hard_parse_time:percent
   oracle_pga_usage_percent:
     pack: rule-pack-oracle.yaml
     scope: tenant

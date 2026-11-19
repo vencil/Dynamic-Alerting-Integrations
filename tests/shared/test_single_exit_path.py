@@ -1376,14 +1376,14 @@ def test_a_lost_stdout_caught_by_the_tools_own_handler(tmp_path, exit_fn, buffer
 
 
 def test_or_die_writers_follow_the_caller_error_code(tmp_path, monkeypatch):
-    """`write_*_or_die` / `ensure_dir_or_die` default to the process
-    caller-error code, like every other caller-error exit."""
+    """`write_operator_output_or_die` / `ensure_dir_or_die` default to the
+    process caller-error code, like every other caller-error exit."""
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
     import _lib_io  # noqa: E402
     monkeypatch.setattr(ec, "_caller_error_code", 1)
-    for call in (lambda: _lib_io.write_text_or_die(str(tmp_path / "absent" / "f"), "x"),
-                 lambda: _lib_io.write_json_or_die(str(tmp_path / "absent" / "f"), {}),
+    for call in (lambda: _lib_io.write_operator_output_or_die(
+                     str(tmp_path / "absent" / "f"), "x", flag=None),
                  lambda: _lib_io.ensure_dir_or_die(tmp_path / "file" / "sub")):
         (tmp_path / "file").write_text("", encoding="utf-8")
         with pytest.raises(SystemExit) as exc_info:

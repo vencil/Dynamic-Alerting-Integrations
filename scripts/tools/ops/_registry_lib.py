@@ -2988,13 +2988,18 @@ def _confd_batches(confd: "list[tuple[str, str]]"):
     import tempfile  # noqa: PLC0415
 
     import _lib_confedit  # noqa: PLC0415  (scripts/tools, on the path above)
-    from _lib_io import write_text_secure  # noqa: PLC0415  (LF kept, 0600)
     by_root: "dict[str, list[dict]]" = {}
     with tempfile.TemporaryDirectory(prefix="da-regen-surface-") as stage:
         for n, (path, text) in enumerate(confd):
             src = os.path.join(stage, str(n), os.path.basename(path))
             os.mkdir(os.path.dirname(src), 0o700)
-            write_text_secure(src, text)
+            # A process-private intermediate (owner 2026-11-15: stays a bare
+            # write, under the write gate's temp-directory rule): created
+            # here, 0600 and LF, as the retired `write_text_secure` wrote it.
+            fd = os.open(src, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.fchmod(fd, 0o600)  # the umask does not decide it (da-guard must read it)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
             by_root.setdefault(os.path.dirname(path), []).append(
                 _lib_confedit.copy_entry(os.path.basename(path), src, replace=True))
         yield list(by_root.items())

@@ -316,10 +316,12 @@ def main() -> "int | Report":
         n_decl = len(result["declared"])
         print(f"RETIRE gate (#869): {n_decl} tenant(s) declare db_type; "
               f"{len(result['k8s_targets'])} K8s target(s).")
+        # #1538: a tenant id is the tree's, so a line carrying one is escaped
+        # here, where it meets the terminal (--json keeps the raw text).
         for w in result["warnings"]:
-            print(f"  ⚠️  WARN: {w}")
+            print(f"  ⚠️  WARN: {safe_label(w)}")
         for v in result["violations"]:
-            print(f"  ❌ VIOLATION: {v}")
+            print(f"  ❌ VIOLATION: {safe_label(v)}")
         if not result["violations"]:
             print("  ✅ No retire-ordering violations.")
 

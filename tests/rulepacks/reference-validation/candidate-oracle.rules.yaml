@@ -9,7 +9,10 @@
 # divergence-ledger.yaml).
 #
 # NOT covered here (deliberate — surfaces as MISS/FN in the report = coverage gaps):
-#   - oracledb_activity_parse_count_total  → no shipped alert (exported-but-unalerted probe)
+#   - oracledb_activity_parse_count_total  → the hard-parse-storm signature is written on
+#     parse counts, which the exporter does not serve; OracleHighHardParseTime (#1174)
+#     reads v$sys_time_model time instead (hard parse time / DB time), so it MISSes
+#     here. Re-review when that signature is re-authored on the time-model metrics.
 #   - oracledb_pga_allocated_bytes fault signatures (pga-bloat-exporter-starved,
 #     pga-runaway-query) → their descriptions state no PGA_AGGREGATE_LIMIT, so no
 #     denominator companion and no share: OracleHighPGAUsage cannot fire on them
@@ -28,6 +31,8 @@
 # Threshold 0.85 is HARD-CODED in the shipped rule (not user_threshold). The shipped
 # denominator guard `> 0` is reproduced (a zero session limit would otherwise divide
 # to +Inf and over-fire; shipped drops the series instead).
+# OracleHighHardParseTime (#1174): the shipped share with its AAS >= 1 gate on the DB
+# time rate; 20 is the registry's reference value (operator key, no shipped value).
 # OracleHighProcessCount / OracleHighPGAUsage (#1320): the same shape, a share of
 # PROCESSES / PGA_AGGREGATE_LIMIT with the same `> 0` guard; 85 is the shipped
 # default (process) and the registry's reference value (PGA). A signature with no
@@ -58,6 +63,10 @@ groups:
         labels: {severity: warning}
       - alert: OracleHighPGAUsage
         expr: 100 * oracledb_pga_allocated_bytes / (oracledb_pga_aggregate_limit_bytes > 0) > 85
+        for: 10m
+        labels: {severity: warning}
+      - alert: OracleHighHardParseTime
+        expr: 100 * rate(oracledb_hard_parse_elapsed_seconds_total[5m]) / (rate(oracledb_db_time_seconds_total[5m]) >= 1) > 20
         for: 10m
         labels: {severity: warning}
       - alert: OracleHighSessionUtilization

@@ -1450,3 +1450,103 @@ class TestReviewFollowUps:
         assert e.value.reason == 'file_unreadable'
         assert f"--config-dir {conf / 'db-a.yaml'}" in str(e.value)
         assert not (tmp_path / '.da-history').exists()
+
+
+# ── #3982 (owner 2026-11-18): the history is read back, so it is replaced whole ──
+def _history_tree(tmp_path, n):
+    """A conf.d of one small file and *n* snapshots, so history.json is the
+    largest file a snapshot writes."""
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'tools' / 'ops' / 'config_history.py'
+    confd = tmp_path / 'conf.d'
+    confd.mkdir()
+    shard = confd / 't1.yaml'
+    shard.write_text('tenants:\n  t1:\n    cpu: "80"\n', encoding='utf-8')
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('COV_CORE_', 'COVERAGE_'))}
+
+    def run(*argv, preexec=None):
+        return subprocess.run([sys.executable, str(script), '--config-dir', str(confd), *argv],
+                              capture_output=True, text=True, encoding='utf-8', timeout=120,
+                              env=env, preexec_fn=preexec)
+    for i in range(n):
+        with shard.open('a', encoding='utf-8') as fh:
+            fh.write(f'# {i}\n')
+        assert run('snapshot', '-m', f'm{i}').returncode == 0
+    return confd, shard, run
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='RLIMIT_FSIZE')
+def test_a_failed_index_write_leaves_the_previous_index_and_log_still_reads_it(tmp_path):
+    """Measured on main before #3982: the index cut at 4096 bytes, and every
+    later run — `log` included — died on JSONDecodeError."""
+    import signal
+    resource = pytest.importorskip('resource')
+    confd, shard, run = _history_tree(tmp_path, 12)
+    index = tmp_path / '.da-history' / 'history.json'
+    before = index.read_bytes()
+    assert len(before) > 4096, len(before)
+    with shard.open('a', encoding='utf-8') as fh:
+        fh.write('# last\n')
+
+    def limit():
+        signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE, (4096, 4096))
+
+    r = run('snapshot', '-m', 'fails', preexec=limit)
+    assert r.returncode == 2, r.stderr
+    assert 'cannot write' in r.stderr and 'history.json' in r.stderr
+    assert 'Traceback' not in r.stderr
+    assert index.read_bytes() == before
+    log = run('log')
+    assert log.returncode == 0, log.stderr
+    assert 'm11' in log.stdout
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX modes')
+def test_the_index_keeps_its_mode_and_the_copies_are_0600(tmp_path):
+    """The index's mode is what it was (a new one: 0666 less the umask), so a
+    `.da-history` shared through a group stays usable by the group; the
+    copies, which hold the config, are 0600 (#3982 independent review)."""
+    import stat
+    confd, shard, run = _history_tree(tmp_path, 1)
+    hdir = tmp_path / '.da-history'
+    index = hdir / 'history.json'
+    assert stat.S_IMODE((hdir / 'snap-1' / 't1.yaml').stat().st_mode) == 0o600
+    index.chmod(0o664)
+    with shard.open('a', encoding='utf-8') as fh:
+        fh.write('# again\n')
+    assert run('snapshot', '-m', 'again').returncode == 0
+    assert stat.S_IMODE(index.stat().st_mode) == 0o664
+    assert stat.S_IMODE((hdir / 'snap-2' / 't1.yaml').stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX modes')
+def test_a_new_index_follows_the_umask(tmp_path):
+    import stat
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'tools' / 'ops' / 'config_history.py'
+    confd = tmp_path / 'conf.d'
+    confd.mkdir()
+    (confd / 't1.yaml').write_text('tenants:\n  t1:\n    cpu: "80"\n', encoding='utf-8')
+    r = subprocess.run([sys.executable, str(script), '--config-dir', str(confd), 'snapshot'],
+                       capture_output=True, text=True, encoding='utf-8', timeout=120,
+                       preexec_fn=lambda: os.umask(0o002))
+    assert r.returncode == 0, r.stderr
+    assert stat.S_IMODE((tmp_path / '.da-history' / 'history.json').stat().st_mode) == 0o664
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='hard links')
+def test_an_index_the_writer_cannot_replace_is_written_in_place_with_a_warn(tmp_path):
+    """The shared writer's way out where a replace would lose something — a
+    hard link here; another user's index in a group directory takes the same
+    path (#3982 independent review: `atomic_only` closed it, and the index
+    changed owner). Every name sees the new index; one WARN line says why."""
+    confd, shard, run = _history_tree(tmp_path, 1)
+    index = tmp_path / '.da-history' / 'history.json'
+    other = tmp_path / 'index-link.json'
+    os.link(index, other)
+    with shard.open('a', encoding='utf-8') as fh:
+        fh.write('# again\n')
+    r = run('snapshot', '-m', 'again')
+    assert r.returncode == 0, r.stderr
+    assert 'WARN' in r.stderr
+    assert os.stat(index).st_ino == os.stat(other).st_ino
+    assert len(json.loads(other.read_text(encoding='utf-8'))) == 2

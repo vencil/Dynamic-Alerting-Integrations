@@ -2810,10 +2810,13 @@ class TestRootDefaultsValues:
                    for x in g["details"]), g
 
     def test_non_finite_under_an_underscore_key_is_not_a_threshold(self, tmp_path):
-        """`_` keys are no threshold (#3045): `_x: .nan` is the dead-config WARN."""
+        """`_` keys are no threshold (#3045): `_x: .nan` is no refused value.
+        #4031: the key itself is the key verdict's (`routes`), not this row's."""
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n  _x: .nan\n")
         r = vc.check_root_defaults(str(d))
-        assert r["status"] == vc.WARN, r
+        assert r["status"] == vc.PASS, r
+        routes = vc.check_routes(str(d))
+        assert any("error: unread `_x` (unregistered)" in x for x in routes["details"]), routes
 
     def test_non_finite_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
         """#3140: validate-config 0 → 1 for a root `.nan` (#3387: through
@@ -2904,57 +2907,67 @@ class TestRootDefaultsValues:
 
 
 class TestRootDefaultsUnderscoreKeys:
-    """#3045: no `_` key under the root `defaults:` is a threshold, and no
-    other reader reads one there — a number written under one is dead config.
-    `_metadata: 1` there used to fail served-values (a reserved key owning
-    threshold rows) and now has no other signal."""
+    """#3045: no `_` key under the root `defaults:` is a threshold. #4031: what
+    is said of one is da-guard's alone — the key verdict's unread error (the
+    `routes` row) for a key no reader reads there, with or without a tenant
+    inheriting the root, and `guard_errors`' root_defaults_reserved_key for a
+    key the registry lists. This row used to WARN on every one of them too
+    (#3045), once with the opposite fix; it no longer judges `_` keys."""
 
     @staticmethod
-    def _tree(tmp_path, body):
+    def _tree(tmp_path, body, tenant=True):
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "_defaults.yaml").write_text("defaults:\n  container_cpu: 80\n" + body, encoding="utf-8")
-        (d / "tenant-x.yaml").write_text("tenants:\n  tenant-x:\n    container_cpu: \"70\"\n",
-                                         encoding="utf-8")
+        if tenant:
+            (d / "tenant-x.yaml").write_text("tenants:\n  tenant-x:\n    container_cpu: \"70\"\n",
+                                             encoding="utf-8")
         return d
 
-    @pytest.mark.parametrize("key", ["_metadata", "_myth"])
-    def test_a_number_under_an_underscore_key_warns(self, tmp_path, key):
-        r = vc.check_root_defaults(str(self._tree(tmp_path, f"  {key}: 1\n")))
-        assert r["status"] == vc.WARN, r
-        assert r["details"] == [f"_defaults.yaml: `defaults.{key}` is read by nothing — no `_` key "
-                                "is a threshold (threshold-exporter makes no row of one, #3045) and "
-                                "no other reader reads `_` keys under `defaults:`; delete it, or drop "
-                                "the `_` to make it a threshold"]
+    @pytest.mark.parametrize("tenant", [True, False], ids=["a tenant", "no tenant"])
+    @pytest.mark.parametrize("key, value, reason", [
+        ("_myth", "1", "unregistered"), ("_myth", "owner", "unregistered"),
+        ("_metadata", "1", "merge_dropped"), ("_metadata", "owner", "merge_dropped")])
+    def test_a_key_no_reader_reads_is_the_key_verdicts_error(self, tmp_path, key, value, reason, tenant):
+        """`_metadata: 1` used to have no signal but this row's WARN (#3250):
+        da-guard did not judge it. A tree with no tenant had no other signal
+        for an unregistered key either: the key verdict judged tenants."""
+        d = str(self._tree(tmp_path, f"  {key}: {value}\n", tenant))
+        assert vc.check_root_defaults(d)["status"] == vc.PASS
+        routes = vc.check_routes(d)
+        # A key the tenant inherits names it; `_metadata`, which the merge
+        # drops, reaches no tenant.
+        who = "tenant(s) tenant-x" if tenant and reason == "unregistered" else "no tenant"
+        want = f"_defaults.yaml: error: unread `{key}` ({reason}) — {who}"
+        assert routes["status"] == vc.FAIL, routes
+        assert [x for x in routes["details"] if f"`{key}`" in x] == [f"  ERROR: key verdict: {want}"], routes
 
     @pytest.mark.parametrize("body", ["  _namespaces: 1\n", "  _state_maintenance: 1\n",
-                                      "  _silent_mode: warning\n", "  _severity_dedup: disable\n"])
-    def test_a_registered_reserved_key_fails_in_guard_errors(self, tmp_path, body):
-        """#3250: a key the reserved-key registry lists reaches no tenant from the
-        root `defaults:` while /effective shows it as inherited — da-guard's
-        root_defaults_reserved_key (an error). #3387: that FAIL is the
-        `guard_errors` row's; this row keeps its #3045 dead-config WARN."""
+                                      "  _silent_mode: warning\n", "  _severity_dedup: disable\n",
+                                      "  _routingProfile: x\n"])
+    def test_a_registered_reserved_key_fails_in_guard_errors_alone(self, tmp_path, body):
+        """#3250: a key the registry lists reaches no tenant from the root
+        `defaults:` while /effective shows it as inherited — da-guard's
+        root_defaults_reserved_key. #4031: said once, with one fix.
+        `_routingProfile` is reserved by its `_routing` prefix but is no
+        routing key (the route generator's predicate), so the routing rule
+        does not take it."""
         key = body.split(":")[0].strip()
         d = str(self._tree(tmp_path, body))
-        r = vc.check_root_defaults(d)
-        assert r["status"] == vc.WARN, r
-        assert any(f"`defaults.{key}` is read by nothing" in x for x in r["details"]), r
+        assert vc.check_root_defaults(d)["status"] == vc.PASS
         g = vc.check_guard_errors(d)
         assert g["status"] == vc.FAIL, g
         assert any(x.startswith(f"error: root_defaults_reserved_key `_defaults.yaml:defaults.{key}`")
                    for x in g["details"]), g
 
-    def test_a_value_that_does_not_decode_keeps_its_fail_line_only(self, tmp_path):
+    def test_a_value_that_does_not_decode_keeps_its_fail_line(self, tmp_path):
         r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata:\n    owner: dba\n")))
         assert r["status"] == vc.FAIL, r
-        assert not any("read by nothing" in d for d in r["details"]), r
 
-    def test_a_string_value_is_dead_config_too(self, tmp_path):
-        """#3250: a scalar no longer drops the file, and a `_` key is no
-        threshold the exporter refuses: `_metadata: owner` is read by nothing."""
-        r = vc.check_root_defaults(str(self._tree(tmp_path, "  _metadata: owner\n")))
-        assert r["status"] == vc.WARN, r
-        assert any("read by nothing" in d for d in r["details"]), r
+    def test_a_routing_key_keeps_the_routing_rule(self, tmp_path):
+        r = vc.check_root_defaults(str(self._tree(tmp_path, "  _routing_profile: x\n")))
+        assert r["status"] == vc.FAIL, r
+        assert any("defaults._routing_profile" in x for x in r["details"]), r
 
     def test_control_no_underscore_key_passes(self, tmp_path):
         r = vc.check_root_defaults(str(self._tree(tmp_path, "")))

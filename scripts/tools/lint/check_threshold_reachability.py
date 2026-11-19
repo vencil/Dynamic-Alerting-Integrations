@@ -205,6 +205,7 @@ _A_DECLARED = (
 KNOWN_UNWIRED: dict[str, str] = {
     "oracle_wait_time_rate": _A_DECLARED,
     "oracle_pga_usage_percent": _A_DECLARED,
+    "oracle_hard_parse_time_percent": _A_DECLARED,
     "db2_log_usage_percent": _A_DECLARED,
     "db2_deadlock_rate": _A_DECLARED,
     "db2_tablespace_used_percent": _A_DECLARED,

@@ -505,6 +505,42 @@ def test_out_write_failure_exits_two(tmp_path, monkeypatch, capsys):
     assert "check the value given to --out" in err, err
 
 
+@pytest.mark.parametrize("value,why", [
+    ("-", "'-' is standard output, and this tool prints its report there"),
+    ("", "an empty value names no file"),
+])
+def test_out_refuses_dash_and_empty_at_parse_time(tmp_path, monkeypatch, capsys, value, why):
+    """#3107 ④: `--out` is operator output and the report (or --json) owns
+    stdout, so `-` is refused before anything runs; an empty value (an unset
+    variable) would otherwise read as "not given" and write nothing."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(iw, "run_pipeline", lambda a, p, r: pytest.fail("ran past parsing"))
+    monkeypatch.setattr(sys, "argv", [
+        "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
+        "--allow-selftest", "--json", "--out", value])
+    with pytest.raises(SystemExit) as ei:
+        iw.main()
+    assert ei.value.code == 2
+    out, err = capsys.readouterr()
+    assert f"error: argument --out: {why}" in err, err
+    assert out == "" and list(tmp_path.iterdir()) == []
+
+
+def test_out_writes_through_the_operator_entry(tmp_path, monkeypatch, capsys):
+    """The report lands in the named file (`./-` is a file called `-`), and
+    a new file is 0600: the operator entry's mode."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(iw, "run_pipeline", lambda a, p, r: {"stub": True})
+    monkeypatch.setattr(sys, "argv", [
+        "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
+        "--allow-selftest", "--json", "--out", "./-"])
+    iw.main()
+    capsys.readouterr()
+    assert json.loads((tmp_path / "-").read_text(encoding="utf-8")) == {"stub": True}
+    if os.name == "posix":
+        assert (tmp_path / "-").stat().st_mode & 0o777 == 0o600
+
+
 # ── T0/STEP 雙 pin tripwire（_waveform_lib 與 vm_harness 各自 pin，
 #    CLI 橋接兩者——任何一邊漂移，窗計算與物化時間軸就會靜默錯位） ─────
 

@@ -168,6 +168,11 @@ const (
 	// no reader reads it there, whatever its value or schedule. The name of
 	// da-guard's own finding on the same set (Input.SubtreeReserved).
 	ReasonSubtreeDefaultReservedKey = "subtree_default_reserved_key"
+	// ReasonMergeDropped (#4031): a key the defaults-chain merge drops at
+	// every level (config.IsMergeDroppedKey: `_metadata`), written under the
+	// root `defaults:` — which the exporter reads for thresholds only — so
+	// no reader reads it there.
+	ReasonMergeDropped = "merge_dropped"
 )
 
 // Disable effects (served-values' keys[].disable).
@@ -275,6 +280,10 @@ type Input struct {
 	// the file spells them (parse-tree's content), for the tenant files the
 	// caller judges. nil: none judged.
 	TenantFiles map[string][]string
+	// RootDefaults (#4031): the root carrier and the `_` keys of its
+	// `defaults:` no reader reads (config.RootDefaultsUnreadKeys). nil: not
+	// judged (no root carrier, or one the load drops).
+	RootDefaults *RootDefaultsKeys
 	// Retired (#3829): the hint for a retired threshold key, "" for any other
 	// key. nil: config.RetiredThresholdHint (the registry's `retired_keys:`).
 	Retired func(key string) string
@@ -283,6 +292,13 @@ type Input struct {
 	// only then is a profile no tenant binds known to be one
 	// (unboundProfileFindings).
 	Whole bool
+}
+
+// RootDefaultsKeys is Input.RootDefaults: File, the root carrier as a
+// tenant's DefaultsChain names it; Keys, sorted.
+type RootDefaultsKeys struct {
+	File string
+	Keys []string
 }
 
 // KeyVerdict is the verdict on one key of one tenant. The JSON is
@@ -466,6 +482,9 @@ func Judge(in Input) Tree {
 	findings = append(findings, valueFindings(in.Values, tenants, in.Effective)...)
 	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective)...)
 	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
+	if in.RootDefaults != nil {
+		findings = append(findings, rootDefaultsFindings(*in.RootDefaults, findings)...)
+	}
 	findings = append(findings, subtreeReservedFindings(in.SubtreeReserved, tenants)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
@@ -810,6 +829,37 @@ func tenantFileFindings(files map[string][]string) []Finding {
 			out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: key, File: optional(file),
 				Tenants: []string{}, Reason: optional(ReasonTenantFileTopLevel)})
 		}
+	}
+	return out
+}
+
+// rootDefaultsFindings (#4031) is one unread error on the root carrier per
+// `_` key of its `defaults:` no reader reads (Input.RootDefaults) that no
+// tenant's verdict row already reports there. A key a tenant inherits from
+// the root is such a row's finding already (findingsOf), naming the tenants
+// that take it; what is left reaches no tenant — `_metadata`, which the
+// merge drops, an unregistered key every tenant overrides, or one in a tree
+// with no tenant (or none read, its files dropped or set aside) — so it
+// names none, as a tenant file's stray top-level key does. The key is a
+// fault of the file, whoever reads the tree.
+func rootDefaultsFindings(rd RootDefaultsKeys, have []Finding) []Finding {
+	at := map[string]bool{}
+	for _, f := range have {
+		if f.File != nil && *f.File == rd.File {
+			at[f.Key] = true
+		}
+	}
+	var out []Finding
+	for _, key := range rd.Keys {
+		if at[key] {
+			continue
+		}
+		reason := ReasonUnregistered
+		if config.IsMergeDroppedKey(key) {
+			reason = ReasonMergeDropped
+		}
+		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: key, File: optional(rd.File),
+			Tenants: []string{}, Reason: optional(reason)})
 	}
 	return out
 }

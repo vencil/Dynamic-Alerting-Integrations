@@ -228,7 +228,9 @@ def _write_tree(root: pathlib.Path, *, upper: bool, tenants: bool) -> None:
     if tenants:
         (root / names["alpha"]).write_text(
             "tenants:\n  alpha:\n    pg_connections: 90\n"
-            "    _routing_profile: standard\n", encoding="utf-8")
+            "    _routing_profile: standard\n"
+            # blind-spot counts a DB type a tenant declares (#4026).
+            "    _metadata: {db_type: postgresql}\n", encoding="utf-8")
         (root / names["beta"]).write_text(
             "tenants:\n  beta:\n    pg_connections: 91\n", encoding="utf-8")
 
@@ -723,10 +725,14 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # wrote no threshold the tool governs, so it governed the same nothing with
 # or without them; every tenant is now served the built-in layer's
 # thresholds, so removing the tenant files changes what it governs.
+#
+# ⛔ `check_retire_drift.py` LEFT this set in #4026. It reads only the
+# tenants that declare `_metadata.db_type`, and the fixture declared none;
+# `alpha` now declares postgresql (what blind-spot counts), so removing the
+# tenant files changes its report.
 KNOWN_INSENSITIVE: set[str] = {
     "analyze_rule_pack_gaps.py",
     "backtest_threshold.py",
-    "check_retire_drift.py",
     "compile_custom_alerts.py",
     "config_history.py",
     "da_assembler.py",

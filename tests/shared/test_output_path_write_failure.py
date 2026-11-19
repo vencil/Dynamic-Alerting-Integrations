@@ -68,27 +68,34 @@ throw-away git repository with one conventional commit.
 
 THE TWO CLASSES (#3107) — ``Row.cls``
 -------------------------------------
-Every row says which kind of path its flag names. One rule, stated here and
-nowhere else:
+Every row says which kind of path its flag names. One rule (#3982, owner
+2026-11-18), stated here and nowhere else:
 
-* ``artifact`` — the path is a constant inside the repo or the flag's
-  DEFAULT, that file is tracked (``git ls-files``), and the tool or its
-  ``--check`` reads the previous version back. Written by atomic replace
-  (``_lib_io.write_repo_artifact``): a failed run leaves the old file whole.
-* ``operator`` — the path is the value of an argparse flag (or a file the
-  tool names under a directory flag), and the flag has no default or one
-  that is not a tracked file. Opened in place by the kernel
-  (``_lib_io.write_operator_output`` / ``open_operator_output``).
+* ``artifact`` — the tool reads the output back (measured: the control run,
+  then the same command again, its ``--check``, and the row's ``readers``,
+  under the audit hook logging reads), or its default is a file the repo
+  tracks, or another program loads it whole (``EXTERNAL_READERS``, the one
+  part no test can measure: only the owner adds to it, with the reason).
+  Written by atomic replace (``_lib_io.write_repo_artifact``): a failed run
+  leaves the old file whole.
+* ``operator`` — everything else: the output only a person or a pipe reads.
+  Opened in place by the kernel (``_lib_io.write_operator_output`` /
+  ``open_operator_output``). An append is always operator.
 
-Owner rulings that the rule alone would not give (#3107, 2026-10-24 and
-2026-11-15): ``generate-routes -o/--output``, ``configmap_assemble
---output`` and ``state-reconcile --manifest-path`` are artifacts — a half
-written one is a config some reader will load. #3982, 2026-11-18:
-``generate_tenant_metadata --output`` is an artifact (tenant-api reads it;
-``-`` is refused, stdout is the flag left out); ``audit_rules_drift --out``
-is an operator output (``-`` is stdout). A row carries the class its
-flag SHOULD have; where the tool does not write that way yet, the row is on
-one of the lists below, not reclassified to match.
+``test_the_class_follows_the_read_back`` holds both directions: an operator
+flag the tool reads back, and an artifact flag that neither the read-back
+nor ``EXTERNAL_READERS`` explains, are faults. The rule replaced one that
+asked for a tracked default and so needed five owner exceptions; every one
+of them reads its output back or is on ``EXTERNAL_READERS``.
+
+⚠️ NOT SEEN by the read-back measurement (independent review, #3982) — the
+threat model is an honest regression in a Python tool, as for the write
+audit: a read by a child that is not Python (``cat``, da-guard, git) or is
+Python run with ``-I`` (the hook is not loaded); an ``os.open`` relative to
+a ``dir_fd`` (the ``open`` event carries no ``dir_fd``); a read only on a
+path the reruns do not take (output-dependent, or a command no row's
+``readers`` names); a read through an ``a+`` open (logged as a write). A run
+argparse refuses is not counted, and every row must have one counted run.
 
 THE WRITE AUDIT (#3107) — WHICH ENTRY WROTE IT
 ----------------------------------------------
@@ -149,8 +156,8 @@ cannot see into:
   the output path: the audit says nothing about those, and the list says so
   by name.
 
-Tools that do not write that way YET are on three lists, each exact in both
-directions (``VIA_OLD_NAMES``, ``RAW_UNDER_OUT``, ``VIA_OTHER_CLASS``): they
+Tools that do not write that way YET are on two lists, each exact in both
+directions (``RAW_UNDER_OUT``, ``VIA_OTHER_CLASS``): they
 record what the control runs logged, and an entry that is no longer true is
 a failure telling you to remove it.
 
@@ -437,6 +444,17 @@ def _history_conf_d(out: Path) -> str:
     return str(out)
 
 
+def _history_readers(c: "Ctx", out: Path) -> list[list[str]]:
+    """`config_history`'s readers of its snapshots: `diff` reads the copies
+    only where the two snapshots differ, so the shard is changed first — the
+    rerun of the control argv then takes snapshot 2, and `diff 1 2` reads
+    snapshot 1's copy, which the control run wrote (#3982)."""
+    with (out / "alpha.yaml").open("a", encoding="utf-8") as fh:
+        fh.write("# changed after the control run\n")
+    return [["--config-dir", str(out), "diff", "1", "2"],
+            ["--config-dir", str(out), "log"]]
+
+
 def _inject_report(tmp: Path) -> str:
     """A synthetic `inject_waveform` report for `dx/waveform_score`.
 
@@ -648,6 +666,10 @@ class Row:
     # named so the cases are strict xfails instead of a missing row: when the
     # tool is fixed they pass, the xfail turns red, and this comes off.
     known_defect: str | None = None
+    # The tool's OTHER commands that read this output back, as argv for the
+    # same tool (#3982 read-back rule): the control run and its rerun cannot
+    # reach them (`config_history`'s `show` / `diff` read the snapshots).
+    readers: Callable[[Ctx, Path], list[list[str]]] | None = None
 
     @property
     def id(self) -> str:
@@ -676,7 +698,7 @@ ROWS: list[Row] = [
       # no shape here can make the write fail while the mkdir succeeds for
       # a FILE-shaped output flag.
       shapes=("parent_is_file",)),
-    R("dx/compile_custom_alerts.py", "--out", "file", "operator",
+    R("dx/compile_custom_alerts.py", "--out", "file", "artifact",
       lambda c, out: ["--config-dir", _custom_alerts_conf_d(c.tmp), "--out", str(out)],
       reach="tmp conf.d with one _custom_alerts threshold recipe",
       out_name="rule-pack-custom-alerts.yaml"),
@@ -837,25 +859,33 @@ ROWS: list[Row] = [
     # unwritable also makes it unreadable, and the deliberately unguarded READ
     # at `_load_history` dies first (measured: rc=1 traceback at that line).
     # It is wrapped; the static pin is the only evidence for it.
-    R("ops/config_history.py", "--config-dir", "dir", "operator",
+    # #3982 (owner 2026-11-18): artifact — `history.json` is read back on
+    # every run and the `snap-N/` copies by `show` / `diff`; both through
+    # `write_repo_artifact(mode=0o600)`, the directories through `ensure_dir`.
+    R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="a one-shard conf.d built in place; `snapshot` is what writes",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history", variant="history-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/config_history.py", "--config-dir", "dir", "operator",
+    R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot subdirectory blocked",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history/snap-1", variant="snapshot-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/config_history.py", "--config-dir", "dir", "operator",
+    R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot COPY of alpha.yaml blocked",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history/snap-1/alpha.yaml",
       variant="snapshot-file", shapes=("sibling_is_dir",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/da_assembler.py", "--config-dir", "dir", "operator",
+    # #3982: artifact by the read-back rule — the next run reads the files
+    # this one rendered to decide which are its own (`_rendered_cr_id`).
+    R("ops/da_assembler.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--render-cr", _example_cr_for_a_rootless_dir(c.tmp),
                       "--config-dir", str(out)],
       reach="in-repo example ThresholdConfig CR (minus its operator key, #3832) through --render-cr; the "
@@ -985,10 +1015,17 @@ ROWS: list[Row] = [
       out_name="secrets", artifact="da-alpha.yaml",
       shapes=("target_is_file", "artifact_is_dir"),
       wording="own", control_rc=1),
-    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+    # #3982: artifact by the read-back rule — a `--force` run reads the
+    # ownership ledger (`.da-init.yaml`) and the files the last run wrote.
+    # Still written through the operator entry: VIA_OTHER_CLASS.
+    R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb"],
       reach="non-interactive flags only",
+      # Its rerun is refused (the path is occupied); `--force` is the run
+      # that reads the last one's ledger back.
+      readers=lambda c, out: [["-o", str(out), "--non-interactive", "--tenants", "alpha",
+                               "--rule-packs", "mariadb", "--force"]],
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
       shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
     # #3107: the two mkdir shapes above die at `ensure_dir_or_die`, so they
@@ -996,7 +1033,7 @@ ROWS: list[Row] = [
     # the scaffold goes through). A directory where a file goes is only
     # reached with `--force`: without it init refuses a path that is already
     # occupied in a pre-check of its own (rc 1).
-    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+    R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb", "--force"],
       reach="the same flags with --force, so an occupied path is written over",
@@ -1180,6 +1217,7 @@ def _run(row: Row, ctx: Ctx, out: Path, *,
         timeout=TIMEOUT_S, env=env, cwd=cwd,
     )
     proc.files_before = before
+    proc.run_cwd = cwd
     return proc
 
 
@@ -1424,20 +1462,12 @@ def _entry_frames() -> dict[str, str]:
 
 def _via(event: dict, frames: dict[str, str]) -> str:
     """The kind of the INNERMOST entry on the event's stack, or ``raw``.
-    Innermost: `write_yaml_crd` → `write_text_secure` is a legacy write, and
-    stays one whatever is above it."""
+    Innermost: `write_yaml_crd` → `write_operator_output` is an operator
+    write, and stays one whatever is above it."""
     for frame in event["stack"]:
         if frame in frames:
             return frames[frame]
     return "raw"
-
-
-def _writer_frames() -> frozenset[str]:
-    """Every function `_lib_io.OUTPUT_ENTRY_POINTS` names (wrappers and the
-    flag-only two included), as a stack frame."""
-    import _lib_io
-    return frozenset(f"scripts/tools/{name.split('.')[0]}.py:{name.split('.')[1]}"
-                     for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names)
 
 
 #: The two functions that DO the write of each class, below the public
@@ -1537,12 +1567,19 @@ class Audit:
     spawned: tuple[tuple[str, ...], ...]      # argv of every process spawned
     unlogged: tuple[str, ...] = ()            # files the run left that no logged write made
     faults: tuple[str, ...] = ()              # events that are wrong in themselves
-    # "<caller frame> <old name it called> ×<distinct calling lines>"
-    old_name_calls: tuple[str, ...] = ()
     # (file, line) of every frame of every event under the scope
     reached: frozenset[tuple[str, int]] = frozenset()
     # `_program` of every spawn, marked GIVEN_THE_OUTPUT_PATH where it was
     programs: tuple[str, ...] = ()
+
+
+def _tool_loaded(events: list[dict], tool: Path) -> bool:
+    """Did the hook load in THE TOOL's process — not only in a Python child
+    of it, whose `loaded` line lands in the same log?"""
+    tool_path = os.path.realpath(tool)
+    return any(e.get("ev") == "loaded"
+               and any(os.path.realpath(a) == tool_path for a in e.get("argv", [])[:3])
+               for e in events)
 
 
 def _audit(events: list[dict] | None, scope: Path, tool: Path,
@@ -1553,16 +1590,11 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
     if events is None:
         return Audit(False, False, {}, ())
     frames = _entry_frames()
-    writer_frames = _writer_frames()
-    tool_path = os.path.realpath(tool)
-    loaded = any(e["ev"] == "loaded"
-                 and any(os.path.realpath(a) == tool_path for a in e["argv"][:3])
-                 for e in events)
+    loaded = _tool_loaded(events, tool)
     sites: dict[str, list[tuple[str, str]]] = {}
     spawned = []
     faults: list[str] = []
     programs: set[str] = set()
-    old_calls: dict[tuple[str, str], set[int]] = {}
     reached: set[tuple[str, int]] = set()
     for event in events:
         if event["ev"] == "loaded":
@@ -1619,11 +1651,6 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
             if not any(frame.startswith(_ATOMIC_WRITER) for frame in stack):
                 faults.append(f"{event['ev']} {rel} came through the artifact entry but "
                               "not through `_lib_atomic_write`: not the atomic writer")
-        elif kind == "legacy":
-            outer = max(i for i, frame in enumerate(stack) if frame in writer_frames)
-            caller = stack[outer + 1] if outer + 1 < len(stack) else "<no caller in scripts/>"
-            line = lines[outer + 1] if outer + 1 < len(lines) else 0
-            old_calls.setdefault((caller, stack[outer].rpartition(":")[2]), set()).add(line)
         bucket = sites.setdefault(kind, [])
         if site not in bucket:
             bucket.append(site)
@@ -1631,15 +1658,12 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
               if event in _FILE_EVENTS}
     return Audit(True, loaded, {k: tuple(v) for k, v in sites.items()}, tuple(spawned),
                  tuple(sorted(made - logged)), tuple(faults),
-                 tuple(sorted(f"{caller} {name} ×{len(at)}"
-                              for (caller, name), at in old_calls.items())),
                  frozenset(reached), tuple(sorted(programs)))
 
 
 @dataclass(frozen=True)
 class Seen:
     faults: list[str]            # wrong whatever any list says
-    old_names: tuple[str, ...]   # the calls that wrote through an old name (Audit.old_name_calls)
     raw: tuple[str, ...]         # "<event> <path under the scope>" of each raw site, sorted
     raw_is_all: bool             # no write under the scope came through any entry
     other_class: str | None      # the OTHER class's entry wrote here
@@ -1704,26 +1728,17 @@ def _verdict(row: Row, audit: Audit) -> Seen:
             for event, rel in sites:
                 if event != "os.mkdir":
                     faults.append(f"{event} {rel} under ensure_dir: it makes directories only")
-        elif kind == "legacy" and row.kind == "file" and row.produces is None:
-            # VIA_OLD_NAMES lists the CALL, not the files: a second file out
-            # of the same line is the same entry. For a single-file flag the
-            # one file an old name may write is the flag's value.
-            for event, rel in sites:
-                if rel != row.out_name:
-                    faults.append(f"{event} {rel} through an old name: {row.flag} names "
-                                  f"one file ({row.out_name}), and this is another")
     raw = tuple(sorted(f"{event} {rel}" for event, rel in audit.sites.get("raw", ())))
     through_an_entry = any(sites for kind, sites in audit.sites.items() if kind != "raw")
-    return Seen(faults, audit.old_name_calls, raw, bool(raw) and not through_an_entry, other,
+    return Seen(faults, raw, bool(raw) and not through_an_entry, other,
                 audit.programs)
 
 
 def _is_clean(row: Row) -> bool:
-    """On none of the three write lists: the row claims every write under
-    its output path came through its class's entry."""
+    """On neither write list: the row claims every write under its output
+    path came through its class's entry."""
     key = (row.tool, row.flag)
-    return (key not in VIA_OLD_NAMES and key not in RAW_UNDER_OUT
-            and key not in VIA_OTHER_CLASS)
+    return key not in RAW_UNDER_OUT and key not in VIA_OTHER_CLASS
 
 
 def _mode_faults(row: Row, scope: Path, made: frozenset[str]) -> list[str]:
@@ -1758,31 +1773,43 @@ def _mode_faults(row: Row, scope: Path, made: frozenset[str]) -> list[str]:
 # exact both ways; it says why.
 Key = tuple[str, str]
 
-#: Rows whose output is written through an old name (`write_text_secure`,
-#: `write_json_secure`, their `_or_die` forms — also when reached through
-#: `write_yaml_crd` / `write_onboard_hints`), and each CALL that does it: the
-#: function that calls the old name (or its wrapper), which one, and from how
-#: many distinct lines. By call, not by file written: a tool that writes one
-#: file per rule pack from one line stays one entry however many packs there
-#: are, and a second call beside it is a second line. Emptied by the
-#: migration to the two classes (#3107 steps ①–③).
-VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
-}
-
 #: Rows with a write under the output path that came through NO entry: each
 #: site as "<event> <path under the control run's output directory>", and
 #: whether that is all the run wrote there ("all") or it also wrote through
 #: an entry ("some"). A `mkdir` counts — `ensure_dir` is the entry for it.
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
-    ("dx/compile_custom_alerts.py", "--out"): ("all", ("open rule-pack-custom-alerts.yaml",)),
-    ("ops/config_history.py", "--config-dir"): (
-        "some", ("open .da-history/history.json", "os.mkdir .da-history",
-                 "os.mkdir .da-history/snap-1")),
 }
+
+#: THE CLASS RULE, MECHANICAL HALF (#3982, owner 2026-11-18). A flag is an
+#: artifact iff (a) the tool reads its output back — measured by
+#: `test_the_class_follows_the_read_back`: the control run, then the same
+#: command again, its `--check`, and the row's `readers`, under the audit
+#: hook logging reads; or (b) its default is a file the repo tracks; or (c)
+#: another program loads it whole (EXTERNAL_READERS: the half no test can
+#: measure, so only the owner adds to it, and the reason is kept here).
+#: Otherwise operator. Both directions are faults: an operator flag the tool
+#: reads back, and an artifact flag (a) and (c) do not explain.
+#: ⚠️ (b) has no list here: every row whose default is tracked
+#: (generate_adr_index / generate_planning_index --target, sync_glossary_abbr
+#: --output) also reads it back, so an entry would explain nothing (a)
+#: does not — measured: removing one changed no outcome. A row that needs
+#: (b) adds the list then, held to `git ls-files`. It stays the static
+#: trigger for constant-path writers this gate does not run.
+EXTERNAL_READERS: dict[Key, str] = {
+    ("ops/generate_alertmanager_routes.py", "-o/--output"):
+        "Alertmanager loads it as its configuration (owner 2026-11-15)",
+    ("../ops/configmap_assemble.py", "--output"):
+        "kubectl applies it as the ConfigMap manifest (owner 2026-10-24)",
+}
+
 
 #: Rows whose output came through the entry of the OTHER class than the row
 #: declares, and which one. Each is a tool to move or a row to reclassify.
 VIA_OTHER_CLASS: dict[Key, str] = {
+    # #3982: the read-back rule makes it an artifact (its `--force` run reads
+    # the `.da-init.yaml` ledger it wrote); the move to `write_repo_artifact`
+    # is its own change (#4085).
+    ("ops/init_project.py", "-o/--output-dir"): "operator",
 }
 
 
@@ -1838,11 +1865,6 @@ SPAWNS: dict[Key, tuple[str, ...]] = {
 def _list_faults(row: Row, seen: Seen) -> list[str]:
     key = (row.tool, row.flag)
     out = []
-    if (seen.old_names or None) != VIA_OLD_NAMES.get(key):
-        out.append(f"writes through an old name under the output path of {key}: the run "
-                   f"made {seen.old_names or None}, VIA_OLD_NAMES says "
-                   f"{VIA_OLD_NAMES.get(key)} — a new one goes through the entry of "
-                   "the row's class; shrink or drop the entry for one that is gone")
     listed = RAW_UNDER_OUT.get(key)
     found = (("all" if seen.raw_is_all else "some"), seen.raw) if seen.raw else None
     if found != listed:
@@ -1982,6 +2004,114 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     seen = _verdict(row, audit)
     problems = seen.faults + _list_faults(row, seen) + _mode_faults(row, out.parent, made)
     assert not problems, _fail(row, proc, "write audit:\n  " + "\n  ".join(problems))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The class rule: does the tool read its output back? (#3982)
+# ═══════════════════════════════════════════════════════════════════════════
+def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
+    """(files of the control run's output that a later run read, the runs
+    made). The control run first; then, under the hook logging reads under
+    `good/`: the same argv again, its `--check` where the tool has one, and
+    the row's `readers`. The argv is the control run's own — a row's `build`
+    makes its fixtures, so it is not called again."""
+    proc, out, _audit_, made = _control_run(row, tmp, stub)
+    argv = list(proc.args[2:])
+    runs = [argv]
+    if '"--check"' in (TOOLS_DIR / row.tool).read_text(encoding="utf-8") and "--check" not in argv:
+        runs.append([*argv, "--check"])
+    if row.readers is not None:
+        runs.extend(row.readers(Ctx(tmp, stub), out))
+    ctx = Ctx(tmp, stub)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    # What the control run wrote: the files it made, and for a file flag the
+    # output path itself — a fixture may have made it first (an index
+    # generator rewrites a doc that is already there), so it is not "made".
+    made_abs = {os.path.realpath(out.parent / m) for m in made}
+    if row.kind == "file":
+        made_abs.add(os.path.realpath(out))
+    read: set[str] = set()
+    measured: list[str] = []
+    for i, run in enumerate(runs):
+        log = tmp / f"read-audit-{i}.jsonl"
+        run_env = {**env, **_audit_env(log, tmp), "DA_WRITE_AUDIT_READS": str(out.parent)}
+        done = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *run],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=TIMEOUT_S, env=run_env,
+                              cwd=proc.run_cwd)
+        # A run argparse refused measured nothing (an added `--check` the
+        # tool's flags exclude): it is not counted.
+        if done.returncode == 2 and "usage:" in done.stderr:
+            continue
+        measured.append(" ".join(run))
+        # A measurement that did not happen is not "no reads" (CodeRabbit):
+        # the hook must have loaded, and must not have failed.
+        events = _read_audit_log(log)
+        assert events is not None and _tool_loaded(events, TOOLS_DIR / row.tool), (
+            f"{row.id}: the audit hook did not load in the tool's process for the "
+            f"rerun {' '.join(run)!r}")
+        failed = [e for e in events if e.get("ev") == "hook-error"]
+        assert not failed, f"{row.id}: the audit hook failed in the rerun: {failed[:3]}"
+        for ev in events:
+            if ev.get("ev") == "read" and ev.get("path") in made_abs:
+                read.add(ev["path"])
+    return sorted(read), measured
+
+
+@pytest.mark.parametrize("row", ROWS, ids=[r.id for r in ROWS])
+def test_the_class_follows_the_read_back(row, tmp_path, stub_url):
+    """#3982 (owner 2026-11-18): artifact iff the tool reads the output
+    back, or its default is tracked, or another program loads it whole —
+    both directions, so neither class can be chosen against the rule."""
+    _skip_if_unavailable(row)
+    key = (row.tool, row.flag)
+    read, runs = _read_back(row, tmp_path, stub_url)
+    # Every row of a flag is measured (its argv decides what a rerun can
+    # reach: `init_project`'s `--force` row reads, the other is refused), and
+    # each must have measured something.
+    assert runs, f"{row.id}: no rerun was measured — every one was refused by argparse"
+    explained = bool(read) or key in EXTERNAL_READERS
+    if row.cls == "operator":
+        assert not read, (f"{row.id}: the tool reads its output back ({read}) through "
+                          f"{runs} — an artifact by the rule, written in place")
+        assert key not in EXTERNAL_READERS, row.id
+    else:
+        assert explained, (f"{row.id}: an artifact that no run read back ({runs}) and "
+                           f"that EXTERNAL_READERS does not name — an operator output by "
+                           f"the rule")
+        if row.artifact and key not in EXTERNAL_READERS:
+            # A row that names its sink is held to THAT sink: another file of
+            # the same tool read back does not make this one an artifact.
+            # Where `_expected_fragment` puts it: beside the output for a
+            # sibling shape, inside it for `artifact_is_dir`.
+            out = tmp_path / "good" / row.out_name
+            base = out.parent if {"sibling_is_file", "sibling_is_dir"} & set(row.shapes) else out
+            sink = os.path.realpath(out_sink := (base / row.artifact))
+            assert any(r == sink or r.startswith(sink + os.sep) for r in read), (
+                f"{row.id}: its sink {out_sink} was not read back by {runs} (read: {read})")
+    if key in EXTERNAL_READERS:
+        assert not read, (f"{row.id}: on EXTERNAL_READERS but the tool reads it back "
+                          f"itself ({read}) — the measured half explains it; take it off")
+
+
+def test_only_the_tools_own_loaded_line_counts():
+    """A Python child's `loaded` line is in the same log; it does not say the
+    tool's own process was measured (CodeRabbit, #4086)."""
+    tool = TOOLS_DIR / "dx" / "describe_tenant.py"
+    child = {"ev": "loaded", "argv": [sys.executable, "-c", "pass"]}
+    own = {"ev": "loaded", "argv": [sys.executable, str(tool), "-o", "x"]}
+    assert not _tool_loaded([child], tool)
+    assert _tool_loaded([child, own], tool)
+    assert not _tool_loaded([], tool)
+
+
+def test_the_external_readers_are_artifact_rows_with_a_reason():
+    rows = {(r.tool, r.flag): r for r in ROWS}
+    for key, why in EXTERNAL_READERS.items():
+        assert key in rows and rows[key].cls == "artifact", key
+        assert "owner" in why and why.strip(), key
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2450,13 +2580,13 @@ def _flags_at_writers(module: ast.Module) -> set[str]:
 def test_a_flag_expression_that_resolves_to_nothing_is_unresolved_not_absent():
     def flags(source: str) -> set[str]:
         return _flags_at_writers(ast.parse(source))
-    assert flags("write_text_secure(p, t, flag=None)") == set()
-    assert flags("write_text_secure(p, t, flag='--out')") == {"--out"}
-    assert flags("F = '--out' if given else None\nwrite_text_secure(p, t, flag=F)") == {"--out"}
+    assert flags("write_operator_output(p, t, flag=None)") == set()
+    assert flags("write_operator_output(p, t, flag='--out')") == {"--out"}
+    assert flags("F = '--out' if given else None\nwrite_operator_output(p, t, flag=F)") == {"--out"}
     # Bound, and to nothing this scan can read: that is not "names no flag".
-    assert flags("F = None\nwrite_text_secure(p, t, flag=F)") == {
+    assert flags("F = None\nwrite_operator_output(p, t, flag=F)") == {
         _UNRESOLVED.format("F")}
-    assert flags("write_text_secure(p, t, flag=pick())") == {_UNRESOLVED.format("pick()")}
+    assert flags("write_operator_output(p, t, flag=pick())") == {_UNRESOLVED.format("pick()")}
     assert flags("ensure_dir(p, flag=args.flag)") == {_UNRESOLVED.format("args.flag")}
     assert flags("unrelated(p, flag='--x')") == set()
 
@@ -2482,9 +2612,10 @@ NO_ROW: dict[Key, str] = {
         "gets as far as the write needs both. A `requires=` row would be a "
         "permanent skip that reads as a pass — and would still be wrong on a "
         "host that has `vmalert` but no vmsingle. #1789 gave it the shared "
-        "`flag=\"--out\"` message anyway. What speaks for it instead: "
-        "test_write_failure_class statically (its writer is "
-        "`write_text_secure`), and behaviourally its own "
+        "`flag=\"--out\"` message anyway, and since #3107 ④ it writes "
+        "through the operator entry and its parser refuses `-` and \"\" "
+        "(tests/dx/test_inject_waveform.py `test_out_*`). What speaks for the "
+        "write failure: its own "
         "`test_out_write_failure_exits_two`, which stubs out the injection "
         "pipeline, calls `main()` IN PROCESS and asserts rc=2 plus the "
         "standard line. That is a weaker pair than a row — no subprocess, no "
@@ -2556,6 +2687,38 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
 _ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 2
 
 
+def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
+    """Whether every call of an entry in *module* names a flag, and only
+    flags in *flags* (an empty *flags*: never)."""
+    if not flags:
+        return False
+    parents = {child: node for node in ast.walk(module)
+               for child in ast.iter_child_nodes(node)}
+    for node in ast.walk(module):
+        if not (isinstance(node, ast.Call) and _called_name(node) in entries):
+            continue
+        kw = next((k for k in node.keywords if k.arg == "flag"), None)
+        if kw is None or (isinstance(kw.value, ast.Constant) and kw.value.value is None):
+            return False
+        named = _flag_values(kw.value, module, parents)
+        if not named or not named <= flags:
+            return False
+    return True
+
+
+def test_a_no_row_flag_excuses_only_calls_that_name_it():
+    entries = {"write_operator_output"}
+    def ok(source: str) -> bool:
+        return _entry_calls_name_only(ast.parse(source), entries, {"--out"})
+    assert ok("write_operator_output(p, t, flag='--out')")
+    assert not ok("write_operator_output(p, t, flag='--out')\n"
+                  "write_operator_output(q, t, flag=None)")
+    assert not ok("write_operator_output(p, t, flag='--out')\nwrite_operator_output(q, t)")
+    assert not ok("write_operator_output(p, t, flag='--other')")
+    assert not _entry_calls_name_only(ast.parse("write_operator_output(p, t, flag='--out')"),
+                                      entries, set())
+
+
 def test_every_caller_of_a_two_class_entry_has_a_row():
     """File level, and regardless of ``flag=``: a module under the CLI roots
     — a library too — that CALLS one of `_lib_io`'s operator or artifact
@@ -2563,7 +2726,8 @@ def test_every_caller_of_a_two_class_entry_has_a_row():
     and skips libraries; a call that names no flag, or sits in a library, is
     still a write through an entry that some control run has to exercise
     (carried over from the file-level audit this table replaced). The callers
-    no row can be written for are `ENTRY_CALLERS_WITH_NO_FLAG`."""
+    no row can be written for are `ENTRY_CALLERS_WITH_NO_FLAG` (no flag at
+    the writer) and the tools of `NO_ROW` (a flag, and a measured reason)."""
     import _lib_io
     entries = {name.split(".")[1] for kind in CLASSES
                for name in _lib_io.OUTPUT_ENTRY_POINTS[kind] if name.startswith("_lib_io.")}
@@ -2573,7 +2737,14 @@ def test_every_caller_of_a_two_class_entry_has_a_row():
                       for node in ast.walk(tree))}
     assert callers, "no caller of an operator/artifact entry found — the scan measured nothing"
     rowed = {r.tool for r in ROWS}
-    missing = sorted(callers - rowed - set(ENTRY_CALLERS_WITH_NO_FLAG))
+    # A tool whose EVERY entry call names a flag in NO_ROW is accounted for
+    # there, with its reason (#3107 ④: inject_waveform --out reached this
+    # population when it moved off the old names). One more call beside it —
+    # `flag=None`, or another flag — is not, and still needs a row.
+    no_row = {tool for tool in callers
+              if _entry_calls_name_only(modules[tool], entries,
+                                        {flag for t, flag in NO_ROW if t == tool})}
+    missing = sorted(callers - rowed - no_row - set(ENTRY_CALLERS_WITH_NO_FLAG))
     assert not missing, f"module(s) calling an operator/artifact entry with no row: {missing}"
     stale = sorted(tool for tool in ENTRY_CALLERS_WITH_NO_FLAG
                    if tool not in callers or tool in rowed or _flags_at_writers(modules[tool]))
@@ -2766,8 +2937,6 @@ _OP = ["scripts/tools/_lib_io.py:_kernel_open_operator_output",
 _ART = ["scripts/tools/_lib_atomic_write.py:_try_atomic",
         "scripts/tools/_lib_atomic_write.py:atomic_write_text",
         "scripts/tools/_lib_io.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
-_OLD = ["scripts/tools/_lib_io.py:write_text_secure", "scripts/tools/_lib_yaml.py:write_yaml_crd",
-        "scripts/tools/ops/t.py:main"]
 _MKDIR = ["scripts/tools/_lib_io.py:ensure_dir", "scripts/tools/ops/t.py:main"]
 _RAW = ["scripts/tools/ops/t.py:main"]
 
@@ -2804,12 +2973,12 @@ class TestWriteAuditVerdict:
     def test_an_operator_write_through_the_operator_entry_is_clean(self, tmp_path):
         seen = _Log(tmp_path).add("os.mkdir", ".", _MKDIR).add("open", "o.json", _OP).seen(
             _audit_row())
-        assert seen == Seen([], (), (), False, None)
+        assert seen == Seen([], (), False, None)
 
     def test_an_artifact_replaced_through_the_artifact_entry_is_clean(self, tmp_path):
         log = _Log(tmp_path).add("open", ".o.json.tmp", _ART)
         log.add("os.rename", "o.json", _ART, src=str(tmp_path / ".o.json.tmp"))
-        assert log.seen(_audit_row("artifact")) == Seen([], (), (), False, None)
+        assert log.seen(_audit_row("artifact")) == Seen([], (), False, None)
 
     def test_the_wrong_class_is_seen(self, tmp_path):
         """Both directions: the row's class is an assertion about the entry."""
@@ -2825,42 +2994,6 @@ class TestWriteAuditVerdict:
         assert seen.raw == ("open extra.json", "os.mkdir sub") and not seen.raw_is_all
         only_raw = _Log(tmp_path).add("open", "o.json", _RAW).seen(_audit_row())
         assert only_raw.raw == ("open o.json",) and only_raw.raw_is_all
-
-    def test_an_old_name_is_the_innermost_entry(self, tmp_path):
-        """`write_yaml_crd` → `write_text_secure`: legacy, whatever is above."""
-        seen = _Log(tmp_path).add("open", "o.yaml", _OLD).add("os.chmod", "o.yaml", _OLD).seen(
-            _audit_row(out_name="o.yaml"))
-        assert seen.old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×1",)
-        assert not seen.raw and not seen.faults
-
-    def test_an_old_name_is_listed_by_the_call_that_reaches_it(self, tmp_path):
-        """One call writing many files is one entry; a second call — another
-        line, another function, another name — is a second."""
-        direct = ["scripts/tools/_lib_io.py:write_text_secure", "scripts/tools/_lib_io.py:"
-                  "write_text_or_die", "scripts/tools/ops/t.py:emit"]
-        log, row = _Log(tmp_path), _audit_row(kind="dir")
-        for n in range(3):
-            log.add("open", f"{n}.yaml", _OLD, lines=[10, 20, 30])
-        assert log.seen(row).old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×1",)
-        log.add("open", "extra.yaml", _OLD, lines=[10, 20, 31])
-        assert log.seen(row).old_names == ("scripts/tools/ops/t.py:main write_yaml_crd ×2",)
-        log.add("open", "report.txt", direct, lines=[10, 5, 40])
-        assert log.seen(row).old_names == (
-            "scripts/tools/ops/t.py:emit write_text_or_die ×1",
-            "scripts/tools/ops/t.py:main write_yaml_crd ×2")
-        assert not log.seen(row).faults
-
-    def test_an_old_name_writes_a_file_flags_one_file_and_no_other(self, tmp_path):
-        """The call is what VIA_OLD_NAMES lists, so a second file out of the
-        same line (`; write(out + ".second")`, a loop) is the same entry. A
-        single-file flag has one file; a directory flag has as many as it has."""
-        log = _Log(tmp_path).add("open", "o.json", _OLD).add("os.chmod", "o.json", _OLD)
-        assert not log.seen(_audit_row(out_name="o.json")).faults
-        log.add("open", "o.json.second", _OLD)
-        faults = log.seen(_audit_row(out_name="o.json")).faults
-        assert faults == ["open o.json.second through an old name: --out names one file "
-                          "(o.json), and this is another"]
-        assert not log.seen(_audit_row(kind="dir", out_name="o.json")).faults
 
     def test_a_rename_out_of_the_output_path_is_a_write_there(self, tmp_path):
         """The destination is elsewhere, the name taken away is not: moving
@@ -2915,7 +3048,7 @@ class TestWriteAuditVerdict:
         wrap = [f for f in _OP if f != _OPERATOR_OPENER]
         log = _Log(tmp_path).add("open", "o.json", _OP).add("open", "o.json", wrap, fd=5)
         log.add("os.chmod", "o.json", _OP, fd=5)
-        assert log.seen(_audit_row()) == Seen([], (), (), False, None)
+        assert log.seen(_audit_row()) == Seen([], (), False, None)
         outside = _Log(tmp_path).add("open", "o.json", _OP).add("os.chmod", "o.json", wrap, fd=5)
         assert any("outside its opener" in f for f in outside.seen(_audit_row()).faults)
         later = _Log(tmp_path).add("open", "o.json", _OP).add("os.chmod", "o.json", _RAW, fd=5)
@@ -2947,13 +3080,19 @@ class TestWriteAuditVerdict:
         assert log.seen(_audit_row()).spawned == ("cp", "da-guard", "git", "python")
 
     def test_the_innermost_entry_decides(self, tmp_path):
-        """What is asked is who opened the file. Were an old name made a thin
-        wrapper over the operator entry, the write would be the operator
-        entry's — and one entry calling another must not count twice."""
-        nested = [*_OP[:3], "scripts/tools/_lib_io.py:write_text_secure",
+        """What is asked is who opened the file. A wrapper over the operator
+        entry (`write_yaml_crd`) leaves the write the operator entry's — and
+        one entry calling another must not count twice."""
+        nested = [*_OP[:3], "scripts/tools/_lib_yaml.py:write_yaml_crd",
                   "scripts/tools/ops/t.py:main"]
         seen = _Log(tmp_path).add("open", "o.json", nested).seen(_audit_row())
-        assert seen == Seen([], (), (), False, None)
+        assert seen == Seen([], (), False, None)
+        # Two classes on one stack: the inner one is the write's. Read from
+        # the outside in, this would be the artifact entry's.
+        inside_artifact = [*_OP[:3], "scripts/tools/_lib_io.py:write_repo_artifact",
+                           "scripts/tools/ops/t.py:main"]
+        seen = _Log(tmp_path).add("open", "o.json", inside_artifact).seen(_audit_row())
+        assert seen == Seen([], (), False, None)
 
     def test_no_log_is_a_fault_not_a_pass(self, tmp_path):
         seen = _verdict(_audit_row(), _audit(None, tmp_path, TOOLS_DIR / "ops" / "t.py"))
@@ -3088,7 +3227,6 @@ import os, subprocess, sys, tempfile
 out = sys.argv[1]
 sys.path.insert(0, os.path.join(sys.argv[2], "ops", ".."))   # how a tool under ops/ finds it
 import _lib_io
-_lib_io.write_text_secure(os.path.join(out, "old.txt"), "x")
 _lib_io.write_operator_output(os.path.join(out, "op.txt"), "x", flag=None)
 _lib_io.write_repo_artifact(os.path.join(out, "art.txt"), "x")
 _lib_io.ensure_dir(os.path.join(out, "sub"))
@@ -3126,7 +3264,6 @@ class TestTheHookItself:
         events, good, script = _hooked(tmp_path, _HOOK_SNIPPET, args=(str(TOOLS_DIR),))
         audit = _audit(events, good, script)
         assert audit.logged and audit.loaded and not audit.faults
-        assert audit.sites["legacy"] == (("open", "old.txt"), ("os.chmod", "old.txt"))
         assert audit.sites["operator"] == (("open", "op.txt"),)
         assert ("os.rename", "art.txt") in audit.sites["artifact"]
         assert ("open", "art.txt") not in audit.sites["artifact"]
@@ -3135,8 +3272,6 @@ class TestTheHookItself:
         # land under the output path, raw; the read-mode open does not.
         assert set(audit.sites["raw"]) == {("open", "raw.txt"), ("open", "child.txt")}
         assert (Path(sys.executable).name, "-c", "pass") in audit.spawned
-        assert audit.old_name_calls == (
-            f"{'<no caller in scripts/>'} write_text_secure ×1",)
 
     def test_the_scratch_file_and_its_cleanup_are_not_under_the_output_path(self, tmp_path):
         events, _good, _script = _hooked(tmp_path, _HOOK_SNIPPET, args=(str(TOOLS_DIR),))
@@ -3316,77 +3451,63 @@ threads = [threading.Thread(target=work, args=(i,)) for i in range(8)]
 
 class TestTheLists:
     """`_list_faults` on a row that is on no list, and on one that is on each."""
-    _CLEAN = Seen([], (), (), False, None)
+    _CLEAN = Seen([], (), False, None)
 
     def test_a_clean_row_on_no_list_has_no_fault(self):
         assert _list_faults(_audit_row(), self._CLEAN) == []
 
     def test_an_unlisted_write_or_program_is_a_fault(self):
         row = _audit_row()
-        assert len(_list_faults(row, Seen([], ("f g ×1",), (), False, None))) == 1
-        assert len(_list_faults(row, Seen([], (), ("open x",), True, None))) == 1
-        assert len(_list_faults(row, Seen([], (), (), False, "artifact"))) == 1
-        assert len(_list_faults(row, Seen([], (), (), False, None, ("cp",)))) == 1
-
-    def test_an_old_name_call_more_or_fewer_than_listed_is_a_fault(self, monkeypatch):
-        # A hand-made entry: no row left on the list has more than one call
-        # (#3107 batch 2 took `migrate_rule`, the one this used to read, off it).
-        key = ("ops/synthetic.py", "-o/--output-dir")
-        row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
-        calls = ("scripts/tools/ops/synthetic.py:write_outputs write_text_or_die ×3",
-                 "scripts/tools/ops/synthetic.py:write_csv write_text_or_die ×1")
-        monkeypatch.setitem(VIA_OLD_NAMES, key, calls)
-        started = ()
-        assert _list_faults(row, Seen([], calls, (), False, None, started)) == []
-        assert _list_faults(row, Seen([], calls[1:], (), False, None, started))
-        assert _list_faults(row, Seen([], (*calls, "x.py:f write_text_secure ×1"), (), False,
-                                      None, started))
-        more_lines = (calls[0].replace("×3", "×4"), *calls[1:])
-        assert more_lines != calls
-        assert _list_faults(row, Seen([], more_lines, (), False, None, started))
+        assert len(_list_faults(row, Seen([], ("open x",), True, None))) == 1
+        assert len(_list_faults(row, Seen([], (), False, "artifact"))) == 1
+        assert len(_list_faults(row, Seen([], (), False, None, ("cp",)))) == 1
 
     def test_a_program_that_is_not_listed_is_a_fault_and_one_not_started_is_not(self):
         row = next(r for r in ROWS if r.id == "federation_keygen[--jwks-out]")
         listed = SPAWNS[(row.tool, row.flag)]
         assert listed == ("openssl",)
-        assert _list_faults(row, Seen([], (), (), False, None, listed)) == []
-        assert _list_faults(row, Seen([], (), (), False, None, (*listed, "sh")))
-        assert _list_faults(row, Seen([], (), (), False, None,
+        assert _list_faults(row, Seen([], (), False, None, listed)) == []
+        assert _list_faults(row, Seen([], (), False, None, (*listed, "sh")))
+        assert _list_faults(row, Seen([], (), False, None,
                                       ("openssl" + GIVEN_THE_OUTPUT_PATH,)))
         # One direction only — see SPAWNS for why.
-        assert _list_faults(row, Seen([], (), (), False, None, ())) == []
+        assert _list_faults(row, Seen([], (), False, None, ())) == []
 
     def test_a_listed_row_that_is_clean_now_must_come_off(self, monkeypatch):
         """Each list, on its own first entry: clean ⇒ red. A list the
-        migration has emptied (#3107 ③c: VIA_OLD_NAMES; #3982: VIA_OTHER_CLASS) still has its
-        judgement until ④ removes the old names: it is held on a synthetic
-        entry."""
-        synthetic = ("dx/zz_synthetic.py", "--out")
-        if not VIA_OLD_NAMES:
-            monkeypatch.setitem(VIA_OLD_NAMES, synthetic,
-                                ("scripts/tools/dx/zz_synthetic.py:main write_text_or_die ×1",))
+        migration has emptied (#3982: VIA_OTHER_CLASS, RAW_UNDER_OUT) still has
+        its judgement while the list exists: it is held on a synthetic entry."""
+        # Two keys, not one: on a shared key either list's fault would answer
+        # for the other.
         if not VIA_OTHER_CLASS:  # emptied by #3982 (owner 2026-11-18)
-            monkeypatch.setitem(VIA_OTHER_CLASS, synthetic, "artifact")
-        for key in (sorted(VIA_OLD_NAMES)[0], sorted(RAW_UNDER_OUT)[0],
-                    sorted(VIA_OTHER_CLASS)[0]):
+            monkeypatch.setitem(VIA_OTHER_CLASS, ("dx/zz_other_class.py", "--out"), "artifact")
+        if not RAW_UNDER_OUT:  # emptied by #3982 (the last key, config_history)
+            monkeypatch.setitem(RAW_UNDER_OUT, ("dx/zz_raw.py", "--out"),
+                                ("all", ("open zz.json",)))
+        for key in (sorted(RAW_UNDER_OUT)[0], sorted(VIA_OTHER_CLASS)[0]):
             row = Row(key[0], key[1], "file", "operator", lambda c, out: [], reach="synthetic",
                       variant="synthetic")
             assert _list_faults(row, self._CLEAN), key
 
-    def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self):
-        key = ("ops/config_history.py", "--config-dir")
+    def test_a_raw_site_more_or_fewer_than_listed_is_a_fault(self, monkeypatch):
+        # A synthetic entry: #3982 emptied RAW_UNDER_OUT, and its judgement
+        # stays until the list itself is retired.
+        key = ("dx/zz_synthetic.py", "--out-dir")
+        monkeypatch.setitem(RAW_UNDER_OUT, key, ("some", ("open zz/a.json", "os.mkdir zz")))
         row = Row(key[0], key[1], "dir", "operator", lambda c, out: [], reach="synthetic")
         how, sites = RAW_UNDER_OUT[key]
-        started = SPAWNS[key]
-        assert _list_faults(row, Seen([], (), sites, how == "all", None, started)) == []
-        assert _list_faults(row, Seen([], (), (*sites, "open out/zz.json"), True, None,
+        started = SPAWNS.get(key, ())
+        assert _list_faults(row, Seen([], sites, how == "all", None, started)) == []
+        # One site more, one fewer — with the listed all/some, so only the
+        # sites differ; the next line differs in all/some alone.
+        assert _list_faults(row, Seen([], (*sites, "open out/zz.json"), how == "all", None,
                                       started))
-        assert _list_faults(row, Seen([], (), sites[1:], True, None, started))
-        assert _list_faults(row, Seen([], (), sites, how != "all", None, started))
+        assert _list_faults(row, Seen([], sites[1:], how == "all", None, started))
+        assert _list_faults(row, Seen([], sites, how != "all", None, started))
 
     def test_every_list_entry_is_a_row(self):
         rowed = {(r.tool, r.flag) for r in ROWS}
-        for name, listed in (("VIA_OLD_NAMES", VIA_OLD_NAMES), ("RAW_UNDER_OUT", RAW_UNDER_OUT),
+        for name, listed in (("RAW_UNDER_OUT", RAW_UNDER_OUT),
                              ("VIA_OTHER_CLASS", VIA_OTHER_CLASS)):
             assert not sorted(set(listed) - rowed), (
                 f"{name} names (tool, flag) no row runs: {sorted(set(listed) - rowed)}")
@@ -3395,7 +3516,7 @@ class TestTheLists:
         assert not sorted({tool for tool, _f, _n in UNREACHED_WRITER_CALLS}
                           - {r.tool for r in ROWS})
 
-    def test_the_mode_of_a_clean_operator_rows_files_is_held(self, tmp_path):
+    def test_the_mode_of_a_clean_operator_rows_files_is_held(self, tmp_path, monkeypatch):
         """What an `fchmod` after the entry, or a `chmod` in a child, leaves
         behind: the audit names who opened the file, the disk says its mode."""
         if not has_posix_modes():
@@ -3409,7 +3530,9 @@ class TestTheLists:
         out.chmod(0o666)
         assert len(_mode_faults(clean, tmp_path, frozenset({"findings.json"}))) == 1
         # Not asked of a row on a list, nor of an artifact.
-        listed = next(r for r in ROWS if (r.tool, r.flag) in RAW_UNDER_OUT)
+        listed = Row("dx/zz_synthetic.py", "--out", "file", "operator", lambda c, out: [],
+                     reach="synthetic")
+        monkeypatch.setitem(RAW_UNDER_OUT, (listed.tool, listed.flag), ("all", ("open zz",)))
         artifact = next(r for r in ROWS if r.cls == "artifact" and _is_clean(r))
         for row in (listed, artifact):
             assert _mode_faults(row, tmp_path, frozenset({"findings.json"})) == []
@@ -3599,7 +3722,7 @@ def _writer_names_used_as_values() -> dict[tuple[str, str], int]:
             elif isinstance(node, ast.Attribute) and id(node) not in called:
                 name = node.attr
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                name = node.value  # getattr(_lib_io, "write_text_secure"), a dispatch table
+                name = node.value  # getattr(_lib_io, "write_operator_output"), a dispatch table
             if name in writers and not (isinstance(node, ast.Name)
                                         and isinstance(node.ctx, ast.Store)):
                 found[(tool, name)] = found.get((tool, name), 0) + 1

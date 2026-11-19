@@ -91,6 +91,14 @@ const RULE_PACK_DATA = window.__PLATFORM_DATA?.rulePacks
 const PACK_ORDER = window.__PLATFORM_DATA?.packOrder
   || RULE_PACKS_FALLBACK.packOrder;
 
+// Alerts a tenant can select — every pack but the declared platform packs.
+// It is the row count of rule-packs/ALERT-REFERENCE.md (count-literals-drift
+// pins the two). The generator computes it from PLATFORM_PACKS and writes it to
+// totals.tenantAlertRules and to the offline fallback, so this file restates
+// neither the number nor which pack is the platform one (#4012).
+const TENANT_ALERT_COUNT = window.__PLATFORM_DATA?.totals?.tenantAlertRules
+  ?? RULE_PACKS_FALLBACK.tenantAlertRules;
+
 const CATEGORY_LABELS = {
   database: () => t('資料庫', 'Databases'),
   messaging: () => t('訊息佇列', 'Messaging'),
@@ -142,6 +150,7 @@ const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
   ],
   oracle: [
     { key: 'oracle_wait_time_rate', value: 50, unit: 's/s', desc: 'Wait time rate (5m)' },
+    { key: 'oracle_hard_parse_time_percent', value: 20, unit: '% of DB time', desc: 'Hard parse time warning: v$sys_time_model "hard parse elapsed time" as a share of "DB time" over 5m (the AWR Time Model "% of DB Time" row), per exporter, busiest per tenant; only while the database averages at least one active session (AAS >= 1)' },
     { key: 'oracle_pga_usage_percent', value: 85, unit: '% of PGA_AGGREGATE_LIMIT', desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a database with no limit set (0) has no share. Replaces the absolute-bytes key oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)' },
   ],
   db2: [
@@ -167,6 +176,18 @@ function getDeclaredKeys(selectedPacks) {
     for (const row of rows) keys.push({ pack: packId, label, ...row });
   }
   return keys;
+}
+
+/**
+ * Labels of the packs that have at least one declared-without-value key — the
+ * thresholds a tenant must set themselves, silent until they do (#4012, from
+ * #1175's onboarding advice). Derived from DECLARED_KEYS, so the onboarding
+ * checklist names exactly the packs the registry says, in pack order.
+ */
+function silentByDefaultPacks() {
+  return PACK_ORDER
+    .filter((packId) => (DECLARED_KEYS[packId] || []).length > 0)
+    .map((packId) => RULE_PACK_DATA[packId]?.label || packId);
 }
 
 /**
@@ -347,8 +368,8 @@ function sameNumber(rawScalar, value) {
 }
 
 export {
-  RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER,
-  DECLARED_KEYS, getDeclaredKeys, getValueCounterexample,
+  RULE_PACK_DATA, CATEGORY_LABELS, getAllMetricKeys, PACK_ORDER, TENANT_ALERT_COUNT,
+  DECLARED_KEYS, getDeclaredKeys, silentByDefaultPacks, getValueCounterexample,
   counterexampleVerdict, counterexampleComment, counterexampleLabel,
   counterexampleObserved, annotateCounterexamples,
 };

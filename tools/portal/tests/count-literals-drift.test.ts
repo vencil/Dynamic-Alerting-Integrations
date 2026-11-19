@@ -9,7 +9,8 @@
  *
  *   PACK_COUNT   `(__PD.packOrder || []).length || N` — the `|| N` offline arm
  *                in cost-estimator / self-service-portal / the wizard fixtures.
- *   ALERT_COUNT  the wizard's ALERT-REFERENCE.md summary count.
+ *   ALERT_COUNT  the wizard's ALERT-REFERENCE.md summary count — derived from
+ *                the platform data since #4012; checked here as derived.
  *
  * These are the same rot class the epic exists to kill, just too small to
  * justify an import. So they get a gate instead.
@@ -24,7 +25,7 @@
  *   docs/assets/platform-data.json   packOrder  -> PACK_COUNT
  *   rule-packs/ALERT-REFERENCE.md    table rows -> ALERT_COUNT
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,14 +97,45 @@ describe('portal count literals — drift gate vs generated sources', () => {
     ).toBe(PACK_COUNT_SSOT);
   });
 
-  it('wizard ALERT_COUNT matches the ALERT-REFERENCE.md row count', () => {
-    const declared = literal('tools/portal/src/getting-started/wizard/fixtures.js', /const ALERT_COUNT = (\d+);/);
+  it('wizard ALERT_COUNT is derived, not a hand-written literal (#4012)', () => {
+    // A literal here needed a hand edit on every alert added or removed.
+    const src = read('tools/portal/src/getting-started/wizard/fixtures.js');
+    expect(src).not.toMatch(/const ALERT_COUNT = \d+/);
+    expect(src).toMatch(/const ALERT_COUNT = TENANT_ALERT_COUNT;/);
+  });
+
+  it('TENANT_ALERT_COUNT (offline arm) matches the ALERT-REFERENCE.md row count', async () => {
+    // No window.__PLATFORM_DATA here, so rule-packs.js resolves the generated
+    // fallback — the offline arm. The online arm reads the same generated data.
+    vi.resetModules();
+    (window as any).__PLATFORM_DATA = undefined;
+    const { TENANT_ALERT_COUNT } = await import(
+      '../src/interactive/tools/_common/data/rule-packs.js'
+    );
     expect(
-      declared,
-      `fixtures.js ALERT_COUNT (${declared}) drifted from rule-packs/ALERT-REFERENCE.md ` +
-        `(${ALERT_COUNT_SSOT} rows). This constant is unconditional — a stale value ships ` +
-        `a wrong alert count to every onboarding user, not just offline ones.`,
+      TENANT_ALERT_COUNT,
+      `TENANT_ALERT_COUNT (${TENANT_ALERT_COUNT}) differs from rule-packs/ALERT-REFERENCE.md ` +
+        `(${ALERT_COUNT_SSOT} rows): the fallback is stale (run \`make platform-data\`) ` +
+        `or the "every pack but platform" rule no longer matches the reference doc.`,
     ).toBe(ALERT_COUNT_SSOT);
+  });
+
+  it('TENANT_ALERT_COUNT (online arm) reads window.__PLATFORM_DATA, not the fallback', async () => {
+    // The fallback and platform-data agree by construction, so an unmodified
+    // platform-data cannot tell the two arms apart: move the online value.
+    vi.resetModules();
+    const pd = JSON.parse(JSON.stringify(platformData));
+    pd.totals.tenantAlertRules = 9999;
+    (window as any).__PLATFORM_DATA = pd;
+    const { TENANT_ALERT_COUNT } = await import(
+      '../src/interactive/tools/_common/data/rule-packs.js'
+    );
+    (window as any).__PLATFORM_DATA = undefined;
+    expect(TENANT_ALERT_COUNT).toBe(9999);
+  });
+
+  it('platform-data totals.tenantAlertRules is the ALERT-REFERENCE.md row count', () => {
+    expect(platformData.totals.tenantAlertRules).toBe(ALERT_COUNT_SSOT);
   });
 
   it('ALERT_COUNT and platform-data totals differ by exactly the platform pack', () => {

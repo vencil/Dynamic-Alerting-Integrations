@@ -95,6 +95,11 @@ RECOMMENDED_ACTIONS = {
         "zh": "看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 \"disable\"，提醒隨之結束",
         "en": "Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write \"disable\" if the alert is not wanted, which also ends the notice",
     },
+    # Oracle PGA_AGGREGATE_LIMIT unset (#4044): a configuration notice, not a fault
+    "PGALimitNotSet": {
+        "zh": "替 instance 標籤指出的資料庫設定 PGA_AGGREGATE_LIMIT，PGA 比例就會開始計算；不需要 PGA 告警就把 oracle_pga_usage_percent 寫成 \"disable\"，提醒隨之結束",
+        "en": "Set PGA_AGGREGATE_LIMIT on the database the instance label names, and its PGA share is computed again; write \"disable\" for oracle_pga_usage_percent if the PGA alert is not wanted, which also ends the notice",
+    },
     # RabbitMQ resource alarms (#3973): publishers are blocked
     "MemoryAlarm": {
         "zh": "釋放記憶體（消化佇列、增加 consumer）或調高 vm_memory_high_watermark；watermark 為 0 時本來就會擋住所有 publisher",
@@ -636,12 +641,10 @@ def main():
     try:
         with open(file_zh, "w", encoding="utf-8", newline="\n") as f:
             f.write(content_zh)
-        os.chmod(file_zh, 0o644)
         print(f"Generated {file_zh}")
 
         with open(file_en, "w", encoding="utf-8", newline="\n") as f:
             f.write(content_en)
-        os.chmod(file_en, 0o644)
         print(f"Generated {file_en}")
 
     except IOError as e:
