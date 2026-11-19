@@ -2526,8 +2526,11 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       tenant's effective ``_routing`` — a view of routing that never ships.
 
     The owner's ruling on #2291 is to refuse the shape rather than teach any
-    reader to accept it, so every ``_routing``-prefixed key FAILs whatever its
-    value, and the detail line says how bad the value makes it.
+    reader to accept it, so every routing key (``_is_routing_key``) FAILs
+    whatever its value, and the detail line says how bad the value makes it.
+    A spelling with the ``_routing`` prefix that is no routing key
+    (``_routingProfile``) is no reader's: da-guard's
+    root_defaults_reserved_key says so, with its fix (#4031).
 
     ⛔ ROOT ONLY, and the file is the one the exporter selects. A subtree
     ``_defaults.yaml`` is merged by the hierarchical plane, which tolerates

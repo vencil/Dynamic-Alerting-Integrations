@@ -482,8 +482,8 @@ func Judge(in Input) Tree {
 	findings = append(findings, valueFindings(in.Values, tenants, in.Effective)...)
 	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective)...)
 	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
-	if in.RootDefaults != nil && in.Whole {
-		findings = append(findings, rootDefaultsFindings(*in.RootDefaults, findings, rootDefaults)...)
+	if in.RootDefaults != nil {
+		findings = append(findings, rootDefaultsFindings(*in.RootDefaults, findings)...)
 	}
 	findings = append(findings, subtreeReservedFindings(in.SubtreeReserved, tenants)...)
 	if in.RootProfiles != nil {
@@ -835,21 +835,14 @@ func tenantFileFindings(files map[string][]string) []Finding {
 
 // rootDefaultsFindings (#4031) is one unread error on the root carrier per
 // `_` key of its `defaults:` no reader reads (Input.RootDefaults) that no
-// tenant's verdict row already reports there — a key every tenant inheriting
-// the root reads as unread is that finding already (findingsOf), so this one
-// is what is left: an unregistered key in a tree with no tenant, and a key
-// the merge drops (no tenant's config holds it, so no row carries it). It
-// names the tenants that inherit the root, none when there is none — the
-// key is a fault of the file, whoever reads it. Judged over the whole tree
-// only (Input.Whole): with a subset, a tenant the subset leaves out may be
-// the one whose row reports the key.
-func rootDefaultsFindings(rd RootDefaultsKeys, have []Finding, rootOf map[string]string) []Finding {
-	reached := []string{}
-	for _, t := range sortedKeys(rootOf) {
-		if rootOf[t] == rd.File {
-			reached = append(reached, t)
-		}
-	}
+// tenant's verdict row already reports there. A key a tenant inherits from
+// the root is such a row's finding already (findingsOf), naming the tenants
+// that take it; what is left reaches no tenant — `_metadata`, which the
+// merge drops, an unregistered key every tenant overrides, or one in a tree
+// with no tenant (or none read, its files dropped or set aside) — so it
+// names none, as a tenant file's stray top-level key does. The key is a
+// fault of the file, whoever reads the tree.
+func rootDefaultsFindings(rd RootDefaultsKeys, have []Finding) []Finding {
 	at := map[string]bool{}
 	for _, f := range have {
 		if f.File != nil && *f.File == rd.File {
@@ -866,7 +859,7 @@ func rootDefaultsFindings(rd RootDefaultsKeys, have []Finding, rootOf map[string
 			reason = ReasonMergeDropped
 		}
 		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: key, File: optional(rd.File),
-			Tenants: reached, Reason: optional(reason)})
+			Tenants: []string{}, Reason: optional(reason)})
 	}
 	return out
 }

@@ -24,13 +24,24 @@ func TestKeyVerdict_RootDefaultsUnreadKeyWithOrWithoutATenant(t *testing.T) {
 		}},
 		"a tenant": {map[string]string{"_defaults.yaml": defaults,
 			"ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}, []string{
+			// A key the tenant inherits is its row's finding, naming it;
+			// `_metadata` the merge drops reaches no tenant.
 			"error unread _bogus _defaults.yaml unregistered [ta]",
-			"error unread _metadata _defaults.yaml merge_dropped [ta]",
+			"error unread _metadata _defaults.yaml merge_dropped []",
 		}},
+		// The load drops the root carrier (a mapping as a threshold's
+		// value): its parse_failed speaks for the file and the root's own
+		// findings are not given — `_metadata` is absent. (`_bogus` is the
+		// tenant row's: effective still reads a dropped root's values.)
+		"a root the load drops": {map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: {a: 1}\n  _bogus: 1\n  _metadata: x\n",
+			"ta.yaml":        "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"},
+			[]string{"error unread _bogus _defaults.yaml unregistered [ta]"}},
 	} {
 		dir := writeReservedConfD(t, c.files)
 		var out, errOut bytes.Buffer
-		if code := run([]string{keyVerdictCmd, "--config-dir", dir}, &out, &errOut); code != exitOK {
+		if code := run([]string{keyVerdictCmd, "--config-dir", dir}, &out, &errOut); code != exitOK &&
+			!(name == "a root the load drops" && code == exitParseFailed) {
 			t.Fatalf("%s: exit %d: %s", name, code, errOut.String())
 		}
 		var doc struct {
@@ -91,5 +102,39 @@ func TestGuard_RootReservedKeyFixByShape(t *testing.T) {
 		if strings.Contains(msg[k], "To have it take effect, set") {
 			t.Errorf("%s fix = %q; tells a tenant entry it is unread in", k, msg[k])
 		}
+	}
+}
+
+// #4031 review: the root's unread `_` keys are a fault of the file, judged
+// whether or not every tenant is read — a write that brings a dropped or set
+// aside file back while editing the root is not refused for a key the tree
+// already had; one that adds such a key is.
+func TestWrite_RootDefaultsUnreadKeyIsTheTreesNotTheWrites(t *testing.T) {
+	t.Parallel()
+	const root = "defaults:\n  mysql_connection_usage_percent: 80\n  _metadata: x\n"
+	setRoot := `{"path":"_defaults.yaml","ops":[{"op":"set","path":["defaults","mysql_connection_usage_percent"],` +
+		`"value":{"int":"85"}}]}`
+	for name, c := range map[string]struct {
+		files map[string]string
+		fix   string
+	}{
+		"a duplicate tenant set aside": {map[string]string{"_defaults.yaml": root,
+			"ta.yaml":  "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n",
+			"tb1.yaml": "tenants:\n  tb:\n    mysql_connection_usage_percent: 70\n",
+			"tb2.yaml": "tenants:\n  tb:\n    mysql_connection_usage_percent: 71\n"},
+			`{"path":"tb2.yaml","delete":true}`},
+	} {
+		dir := writeTree(t, c.files)
+		code, res := runBatch(t, writeCmd, `{"files":[`+c.fix+`,`+setRoot+`]}`, "--config-dir", dir, "--dry-run")
+		if code != exitOK || len(worsenedOf(res)) != 0 {
+			t.Errorf("%s: exit %d worsened %v; the tree had `_metadata` before the write", name, code, worsenedOf(res))
+		}
+	}
+	// No tenant, a new `_bogus` under the root `defaults:`: the write's.
+	dir := writeTree(t, map[string]string{"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"})
+	in := `{"files":[{"path":"_defaults.yaml","ops":[{"op":"set","path":["defaults","_bogus"],"value":{"int":"1"}}]}]}`
+	if code, res := runBatch(t, writeCmd, in, "--config-dir", dir, "--dry-run"); code != exitFindings ||
+		!reflect.DeepEqual(worsenedOf(res), []string{"unread _defaults.yaml "}) {
+		t.Errorf("a new root `_bogus` with no tenant: exit %d worsened %v", code, worsenedOf(res))
 	}
 }

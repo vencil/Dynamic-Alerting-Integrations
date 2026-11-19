@@ -7,9 +7,11 @@ import (
 )
 
 // #4031: a `_` key of the root `defaults:` no reader reads is one unread
-// error on the root carrier — naming the tenants that inherit the root, none
-// when no tenant does — unless a tenant's verdict row already reports it
-// there (an unregistered key every inheriting tenant reads as unread).
+// error on the root carrier, naming no tenant — none takes its value —
+// unless a tenant's verdict row already reports it there (a key a tenant
+// inherits from the root). Whether every tenant was read does not change
+// it (#4031 review: a write that brought a dropped file back would read a
+// finding the tree always had as new).
 func TestJudge_RootDefaultsUnreadKeysAreErrorsOnTheRootFile(t *testing.T) {
 	t.Parallel()
 	rd := &RootDefaultsKeys{File: "_defaults.yaml", Keys: []string{"_bogus", "_metadata"}}
@@ -17,69 +19,57 @@ func TestJudge_RootDefaultsUnreadKeysAreErrorsOnTheRootFile(t *testing.T) {
 		return strings.Join([]string{f.Severity, f.Kind, f.Key, deref(f.File), deref(f.Reason), boolStr(f.Blocks)}, " ") +
 			" [" + strings.Join(f.Tenants, ",") + "]"
 	}
-	t.Run("no tenant", func(t *testing.T) {
-		tree := Judge(Input{RootDefaults: rd, Whole: true})
+	want := []string{
+		"error unread _bogus _defaults.yaml unregistered true []",
+		"error unread _metadata _defaults.yaml merge_dropped true []",
+	}
+	for name, in := range map[string]Input{
+		"no tenant": {RootDefaults: rd, Whole: true},
+		"a tenant": {RootDefaults: rd, Whole: true, Served: map[string]ServedTenant{"ta": {}},
+			Effective: map[string]EffectiveTenant{"ta": {DefaultsChain: []string{"_defaults.yaml"}}}},
+		"a subset": {RootDefaults: rd},
+	} {
+		tree := Judge(in)
 		var got []string
 		for _, f := range tree.Findings {
 			got = append(got, line(f))
 			if f.Tenants == nil {
-				t.Errorf("%s: tenants is nil, want [] (the document writes [])", f.Key)
+				t.Errorf("%s: %s: tenants is nil, want [] (the document writes [])", name, f.Key)
 			}
 		}
-		want := []string{
-			"error unread _bogus _defaults.yaml unregistered true []",
-			"error unread _metadata _defaults.yaml merge_dropped true []",
-		}
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("findings %q, want %q", got, want)
+			t.Errorf("%s: findings %q, want %q", name, got, want)
 		}
 		if !tree.Blocks {
-			t.Fatal("tree.Blocks false")
+			t.Errorf("%s: tree.Blocks false", name)
 		}
-	})
-	t.Run("a tenant inherits the root", func(t *testing.T) {
-		in := Input{
-			RootDefaults: rd, Whole: true,
-			Effective: map[string]EffectiveTenant{"ta": {DefaultsChain: []string{"_defaults.yaml"}}},
-			Served:    map[string]ServedTenant{"ta": {}},
+	}
+	t.Run("once per file", func(t *testing.T) {
+		// The root's key is reported by a tenant row on the root: not again.
+		// The same key a tenant writes in its own file is that file's, and
+		// the root's is still reported.
+		have := []Finding{
+			{Severity: SeverityError, Kind: KindUnread, Key: "_bogus", File: optional("_defaults.yaml"),
+				Tenants: []string{"tb"}, Reason: optional(ReasonUnregistered)},
+			{Severity: SeverityError, Kind: KindUnread, Key: "_metadata", File: optional("ta.yaml"),
+				Tenants: []string{"ta"}, Reason: optional(ReasonUnregistered)},
 		}
-		var got []string
-		for _, f := range Judge(in).Findings {
-			got = append(got, line(f))
-		}
-		want := []string{
-			"error unread _bogus _defaults.yaml unregistered true [ta]",
-			"error unread _metadata _defaults.yaml merge_dropped true [ta]",
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("findings %q, want %q", got, want)
-		}
-	})
-	t.Run("not twice", func(t *testing.T) {
-		have := []Finding{{Severity: SeverityError, Kind: KindUnread, Key: "_bogus",
-			File: optional("_defaults.yaml"), Tenants: []string{"ta"}, Reason: optional(ReasonUnregistered)}}
-		got := rootDefaultsFindings(*rd, have, map[string]string{"ta": "_defaults.yaml"})
-		if len(got) != 1 || got[0].Key != "_metadata" {
-			t.Fatalf("findings %+v, want _metadata's alone", got)
-		}
-	})
-	t.Run("a subset", func(t *testing.T) {
-		// A tenant left out may be the one whose row reports the key.
-		if fs := Judge(Input{RootDefaults: rd}).Findings; len(fs) != 0 {
-			t.Fatalf("findings %+v over a subset, want none", fs)
+		got := rootDefaultsFindings(*rd, have)
+		if len(got) != 1 || got[0].Key != "_metadata" || deref(got[0].File) != "_defaults.yaml" {
+			t.Fatalf("findings %+v, want the root's _metadata alone", got)
 		}
 	})
 	t.Run("a write", func(t *testing.T) {
 		// The unit is the file and the key: adding one is a new block,
-		// leaving it is none.
+		// leaving it is none — whether or not every tenant was read.
 		before := Judge(Input{RootDefaults: &RootDefaultsKeys{File: "_defaults.yaml"}, Whole: true})
 		after := Judge(Input{RootDefaults: rd, Whole: true})
 		all := func(string) bool { return true }
 		if nb := NewBlocks(before, after, all); len(nb) != 2 {
 			t.Fatalf("new blocks %+v, want two", nb)
 		}
-		if nb := NewBlocks(after, after, all); len(nb) != 0 {
-			t.Fatalf("an unchanged tree has new blocks %+v", nb)
+		if nb := NewBlocks(Judge(Input{RootDefaults: rd}), after, all); len(nb) != 0 {
+			t.Fatalf("a tree that had the keys has new blocks %+v once every tenant is read", nb)
 		}
 	})
 }

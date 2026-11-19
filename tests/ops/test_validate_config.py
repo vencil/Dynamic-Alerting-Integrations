@@ -2935,7 +2935,9 @@ class TestRootDefaultsUnderscoreKeys:
         d = str(self._tree(tmp_path, f"  {key}: {value}\n", tenant))
         assert vc.check_root_defaults(d)["status"] == vc.PASS
         routes = vc.check_routes(d)
-        who = "tenant(s) tenant-x" if tenant else "no tenant"
+        # A key the tenant inherits names it; `_metadata`, which the merge
+        # drops, reaches no tenant.
+        who = "tenant(s) tenant-x" if tenant and reason == "unregistered" else "no tenant"
         want = f"_defaults.yaml: error: unread `{key}` ({reason}) — {who}"
         assert routes["status"] == vc.FAIL, routes
         assert [x for x in routes["details"] if f"`{key}`" in x] == [f"  ERROR: key verdict: {want}"], routes
