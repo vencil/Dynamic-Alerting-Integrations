@@ -2034,7 +2034,12 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     if row.env is not None:
         env.update(row.env(ctx))
+    # What the control run wrote: the files it made, and for a file flag the
+    # output path itself — a fixture may have made it first (an index
+    # generator rewrites a doc that is already there), so it is not "made".
     made_abs = {os.path.realpath(out.parent / m) for m in made}
+    if row.kind == "file":
+        made_abs.add(os.path.realpath(out))
     read: set[str] = set()
     for i, run in enumerate(runs):
         log = tmp / f"read-audit-{i}.jsonl"
