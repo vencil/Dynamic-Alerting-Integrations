@@ -2085,7 +2085,14 @@ def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
         if done.returncode == 2 and "usage:" in done.stderr:
             continue
         measured.append(" ".join(run))
-        for ev in _read_audit_log(log) or []:
+        # A measurement that did not happen is not "no reads" (CodeRabbit):
+        # the hook must have loaded, and must not have failed.
+        events = _read_audit_log(log)
+        assert events is not None and any(e.get("ev") == "loaded" for e in events), (
+            f"{row.id}: the audit hook did not load in the rerun {' '.join(run)!r}")
+        failed = [e for e in events if e.get("ev") == "hook-error"]
+        assert not failed, f"{row.id}: the audit hook failed in the rerun: {failed[:3]}"
+        for ev in events:
             if ev.get("ev") == "read" and ev.get("path") in made_abs:
                 read.add(ev["path"])
     return sorted(read), measured
