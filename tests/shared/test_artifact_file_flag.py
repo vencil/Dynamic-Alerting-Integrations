@@ -140,6 +140,8 @@ def test_dot_dash_is_a_file_called_dash(tool, flag, tmp_path):
     argv = ["./-" if a == str(marker) else a for a in row.build(ctx, marker)]
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     if row.env is not None:  # a row's fake executable (configmap_assemble's kubectl)
+        if os.name == "nt":  # as the write gate's `_run`: a POSIX launcher
+            pytest.skip(f"{row.id}: its fake executable is a POSIX launcher")
         env.update(row.env(ctx))
     proc = subprocess.run(
         [sys.executable, str(TOOLS_DIR / tool), *argv],
