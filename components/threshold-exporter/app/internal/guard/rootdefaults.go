@@ -521,12 +521,6 @@ func checkRootDimensionsCriticalBase(input CheckInput) []Finding {
 	return out
 }
 
-// checkRootReservedKeys reports findingkind.FindingRootDefaultsReservedKey for
-// each `_` key under the root carrier's `defaults:` mapping that reaches no
-// tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a
-// routing key is the route generator's to judge; a file in ParseFailed is
-// skipped, as checkRootCriticalKeys does. The fix is subtree_default_reserved_key's
-// (reservedKeyFixAt, worded for the root): where the key's reader reads it.
 // rootReservedKeyFix (#4031) is root_defaults_reserved_key's fix, by the
 // key's shape as subtree defaults word it (reservedKeyShape): only a
 // recognised key takes effect in a tenant's own entry. A reserved-looking
@@ -551,6 +545,13 @@ func rootReservedKeyFix(k string, declared map[string]bool) string {
 	return reservedKeyFixAt(k, true)
 }
 
+// checkRootReservedKeys reports findingkind.FindingRootDefaultsReservedKey for
+// each `_` key under the root carrier's `defaults:` mapping that reaches no
+// tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a
+// routing key is the route generator's to judge; a file in ParseFailed is
+// skipped, as checkRootCriticalKeys does. The fix is subtree_default_reserved_key's
+// (rootReservedKeyFix, worded for the root): where the key's reader reads it,
+// or delete it when none would.
 func checkRootReservedKeys(input CheckInput) []Finding {
 	failed := make(map[string]bool, len(input.ParseFailed))
 	for _, pf := range input.ParseFailed {
