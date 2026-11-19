@@ -555,7 +555,6 @@ func TestValidateWrites_KeyVerdictNotCompletedOrNotReportedRefuses(t *testing.T)
 		"preempted":     {map[string]any{"status": "not_completed", "reason": "preempted"}, ReasonKeyVerdictDeadline, true},
 		"memory":        {map[string]any{"status": "not_completed", "reason": "memory", "tenants": 4, "seconds": 1.5, "message": secret}, ReasonKeyVerdictMemory, false},
 		"error":         {map[string]any{"status": "not_completed", "reason": "error", "message": secret}, ReasonKeyVerdictError, false},
-		"undecidable":   {map[string]any{"status": "not_completed", "reason": "undecidable"}, ReasonKeyVerdictUndecidable, false},
 		"platform_file": {map[string]any{"status": "not_completed", "reason": "platform_file", "message": secret}, ReasonKeyVerdictPlatformFile, false},
 		// A reason, or a status, this tenant-api does not know: no complete
 		// verdict, refused as an error.

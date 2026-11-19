@@ -12,10 +12,10 @@ generator container's write check) in one shape, and formats the lines they
 print.
 
 A key is `read` when some reader reads it in some part of the UTC day,
-`unread` when none does all day (#3835: the verdict is the whole day's, and
-`--at` decides only what has expired — `expires:` — never the time of day),
-and `undecidable` when no root platform file was read (a threshold key's exporter
-half cannot be judged; `_` keys are judged as usual, decision 7). Severities
+and `unread` when none does all day (#3835: the verdict is the whole day's,
+and `--at` decides only what has expired — `expires:` — never the time of
+day). A tree with no root platform file is judged as any other: the
+built-in layer gives the default-armed keys their value (#3832). Severities
 describe the defect (decision 4); whether a whole-tree gate refuses the
 tree is the document's `blocks`, Go's one rule (#3016) — callers read it,
 none restates "an error blocks". A finding is a tenant's own key, or a platform
@@ -46,15 +46,17 @@ from _lib_validation import ShapeError, shown_file, shown_key, shown_value  # no
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
-SCHEMA = "da-guard.key-verdict/v5"
+SCHEMA = "da-guard.key-verdict/v6"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: the ERROR layer only; v2: judged at one instant, each row
 #: with what /metrics served then — #3835; v3: `key_checks` as sentences
-#: that quoted the key — #3703; v4: no `gate_kind` — #3996).
+#: that quoted the key — #3703; v4: no `gate_kind` — #3996; v5: with
+#: `undecidable` and `undecidable_blocks`, which no key had been since the
+#: built-in layer — #3832).
 OLDER_SCHEMAS = ("da-guard.key-verdict/v1", "da-guard.key-verdict/v2", "da-guard.key-verdict/v3",
-                 "da-guard.key-verdict/v4")
+                 "da-guard.key-verdict/v4", "da-guard.key-verdict/v5")
 
-READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
+READ, UNREAD = "read", "unread"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
 
 
@@ -68,7 +70,7 @@ class KeyVerdict(NamedTuple):
     layer: str | None              # da-guard effective's layer, None when it has no source
     file: str | None               # the file whose value the tenant gets
     read_by: tuple[str, ...]       # sorted reader names; () for none
-    verdict: str                   # READ / UNREAD / UNDECIDABLE
+    verdict: str                   # READ / UNREAD
     severity: str | None           # ERROR / WARNING / NOTICE; None for READ
     reason: str | None             # the whole day's reason (never a value's, #3835), "disable_noop", or None
     disable: str | None            # "effective" / "noop" / None
@@ -105,19 +107,15 @@ class Finding(NamedTuple):
 class TreeVerdict(NamedTuple):
     keys: dict[str, list[KeyVerdict]]   # tenant → its keys, sorted by key
     findings: list[Finding]
-    undecidable: bool                   # no root platform file was read
     # ADR-038 §11: per tenant, the exporter's own checks on its keys'
     # `version` labels and retired spellings (served-values' key_checks,
     # `tv.KeyCheck` records), which a CI reader prints with
     # `key_check_line`. Not part of the verdict on whether a key is read.
     key_checks: "dict[str, tuple[tv.KeyCheck, ...]]" = {}
-    # A gate that judges the whole tree refuses it: some finding blocks, or
-    # some key is undecidable (Go's keyverdict.Blocks, #3016). The one
-    # answer validate-config and the route generator's `--validate` read.
+    # A gate that judges the whole tree refuses it: some finding blocks
+    # (Go's keyverdict.Blocks, #3016). The one answer validate-config and the
+    # route generator's `--validate` read.
     blocks: bool = False
-    # Some key is undecidable, and so blocks (Go's Tree.UndecidableBlocks):
-    # what the line of undecidable keys says, read, never inferred.
-    undecidable_blocks: bool = False
 
 
 def key_check_lines(verdict: TreeVerdict) -> "list[tuple[str, tv.KeyCheck]]":
@@ -185,7 +183,7 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
                                      else _reader_for(conf_d, None))
 
 
-_VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
+_VERDICTS = frozenset({READ, UNREAD})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
 _KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread",
                     "dead_entry", "schedule_unread"})
@@ -246,7 +244,7 @@ def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
     w = f"tenants.{shown_key(tenant)}"
     verdict = _one_of(r["verdict"], f"{w}.verdict", _VERDICTS)
     severity = _optional(r["severity"], f"{w}.severity", _SEVERITIES)
-    # A read key has no severity; an unread one has one (undecidable: none).
+    # A read key has no severity; an unread one has one.
     if (verdict == UNREAD) != (severity is not None):
         raise ShapeError(f"{w}: verdict {shown_value(verdict)} with severity {shown_value(severity)}")
     return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
@@ -285,10 +283,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     reports as such) — never read as some other answer: a verdict this
     module cannot read is not "nothing unread"."""
     tv._subset_absent(doc, requested)
-    if not isinstance(doc["undecidable"], bool):
-        raise ShapeError(f"undecidable: {shown_value(doc['undecidable'])}")
     blocks = _bool(doc["blocks"], "blocks")
-    undecidable_blocks = _bool(doc["undecidable_blocks"], "undecidable_blocks")
     keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{shown_key(t)}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
@@ -299,7 +294,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
         raise ShapeError(f"key_checks is a {type(doc['key_checks']).__name__}, not an object")
     checks = {t: tv._key_checks(c, f"key_checks.{shown_key(t)}")
               for t, c in doc["key_checks"].items()}
-    return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks, undecidable_blocks)
+    return TreeVerdict(keys, findings, checks, blocks)
 
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,
@@ -382,11 +377,3 @@ def finding_line(f: Finding, limit: int) -> str:
     return f"{shown_file(f.file) or '?'}: {f.severity}: {f.kind} `{shown_key(f.key)}`{why} — {who}"
 
 
-def undecidable_line(verdict: TreeVerdict) -> str | None:
-    """The line saying the threshold keys were not judged (decision 7), or
-    None when a root platform file was read."""
-    if not verdict.undecidable:
-        return None
-    n = sum(v.verdict == UNDECIDABLE for vs in verdict.keys.values() for v in vs)
-    return (f"no root platform file was read: {n} threshold key(s) cannot be judged "
-            "(undecidable)")

@@ -38,7 +38,6 @@ var rejectionAboutTheWrite = map[string]bool{
 	generator.ReasonTooLarge:               true,
 	generator.ReasonInvalidRequest:         true,
 	generator.ReasonNormalized:             true,
-	generator.ReasonKeyVerdictUndecidable:  true,
 	generator.ReasonKeyVerdictPlatformFile: true,
 }
 

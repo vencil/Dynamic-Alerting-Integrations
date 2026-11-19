@@ -1,6 +1,6 @@
 // Package keyverdict is the one verdict on "does any reader read this key"
-// (ADR-038 decisions 4–7): for every key of every tenant, read / unread /
-// undecidable with a severity and a reason, and the findings a report
+// (ADR-038 decisions 4–7): for every key of every tenant, read / unread
+// with a severity and a reason, and the findings a report
 // prints — deduplicated by file and key, the profile-layer judgment.
 //
 // ⛔ NO READING OF ITS OWN. Judge joins readings the caller hands it, each
@@ -13,10 +13,10 @@
 // reserved-key registry declares in the key's layer, a Policy-as-Code rule
 // that names it) in some part of the UTC day; unread when none does all day
 // (#3835: the served reading is the whole day's, ServedKey; only what has
-// expired — `expires:` — depends on the instant it is read at);
-// undecidable when no root platform file was read (Input.Undecidable) and
-// the key is a threshold key — `_` keys are judged as usual (decision 7). A `_` key the registry does not
-// list is read by no reader (#3045).
+// expired — `expires:` — depends on the instant it is read at). A tree
+// with no root platform file is judged as any other: the built-in layer
+// gives the default-armed keys their value (#3832, decision 7). A `_` key
+// the registry does not list is read by no reader (#3045).
 //
 // Every unread key is an error, wherever it is written — a tenant file, a
 // profile, a subtree `_defaults.yaml`, a root platform file's `tenants:`
@@ -73,9 +73,8 @@ import (
 
 // Verdicts.
 const (
-	Read        = "read"
-	Unread      = "unread"
-	Undecidable = "undecidable"
+	Read   = "read"
+	Unread = "unread"
 )
 
 // Severities: those decision 4 gives the gates once they block.
@@ -247,8 +246,6 @@ type Input struct {
 	Served    map[string]ServedTenant
 	Effective map[string]EffectiveTenant
 	Heads     []PolicyHead
-	// Undecidable: no root platform file was read (decision 7).
-	Undecidable bool
 	// RootProfiles: root platform file → its `profiles:` mapping (profile
 	// name → body), for the root platform files that have one and a reader
 	// reads. nil: the profile layer is not judged.
@@ -366,15 +363,11 @@ type Finding struct {
 // Tree is the verdict on a tree.
 type Tree struct {
 	// Keys: tenant → its keys, sorted by key.
-	Keys        map[string][]KeyVerdict
-	Findings    []Finding
-	Undecidable bool
-	// Blocks: some finding blocks, or some key is undecidable — a gate that
-	// judges the whole tree refuses it (len(Blocks(tree)) > 0).
+	Keys     map[string][]KeyVerdict
+	Findings []Finding
+	// Blocks: some finding blocks — a gate that judges the whole tree
+	// refuses it (len(Blocks(tree)) > 0).
 	Blocks bool
-	// UndecidableBlocks: some key is undecidable, and so blocks (Blocks
-	// with Kind Undecidable) — what a report of the undecidable keys says.
-	UndecidableBlocks bool
 }
 
 // registryLayers maps KeySource.Layer to the registry's layer. The root
@@ -461,7 +454,7 @@ func Judge(in Input) Tree {
 				value = ef.Config[key]
 			}
 			v := judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, held, hasRows,
-				in.Heads, in.Undecidable, policy, retired)
+				in.Heads, policy, retired)
 			v.GateKind = optional(gateKindOf(key, in.Undeliverable[tenant], ef.NotServed))
 			rows = append(rows, v)
 		}
@@ -470,8 +463,8 @@ func Judge(in Input) Tree {
 		keys[tenant] = rows
 	}
 	findings := findingsOf(keys, rootDefaults)
-	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
-	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective, in.Undecidable)...)
+	findings = append(findings, valueFindings(in.Values, tenants, in.Effective)...)
+	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective)...)
 	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
 	findings = append(findings, subtreeReservedFindings(in.SubtreeReserved, tenants)...)
 	if in.RootProfiles != nil {
@@ -484,19 +477,15 @@ func Judge(in Input) Tree {
 	for i := range findings {
 		findings[i].Blocks = Blocking(findings[i].Severity)
 	}
-	t := Tree{Keys: keys, Findings: findings, Undecidable: in.Undecidable}
-	bs := Blocks(t)
-	t.Blocks = len(bs) > 0
-	for _, b := range bs {
-		t.UndecidableBlocks = t.UndecidableBlocks || b.Kind == Undecidable
-	}
+	t := Tree{Keys: keys, Findings: findings}
+	t.Blocks = len(Blocks(t)) > 0
 	return t
 }
 
 // judgeKey is the verdict on one key (the module doc's rules). held: the
 // served reading's Values holds the key (ServedTenant.Values).
 func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource, hasSrc bool,
-	value any, held, hasRows bool, heads []PolicyHead, undecidable bool,
+	value any, held, hasRows bool, heads []PolicyHead,
 	policy func(string) string, retired func(string) string) KeyVerdict {
 	layer := ""
 	if hasSrc {
@@ -580,8 +569,6 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		verdict, severity, reason = Unread, SeverityError, ReasonRetired
 	case len(readBy) > 0:
 		verdict, reason = Read, ""
-	case undecidable && !reserved:
-		verdict = Undecidable
 	default:
 		verdict = Unread
 		switch {
@@ -771,16 +758,11 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 // tenant's entry; in a root platform file's `tenants:` entry a notice on
 // that tenant; in a profile a notice naming the judged tenants that bind it
 // ([] for none). Never charged to a tenant through a layer it inherits
-// (config.LayerValueProblems). With no root platform file read
-// (undecidable), a name the root files would define (`_profile`) is not
-// judged: which profiles exist is not known (decision 7).
+// (config.LayerValueProblems).
 func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
-	effective map[string]EffectiveTenant, undecidable bool) []Finding {
+	effective map[string]EffectiveTenant) []Finding {
 	var out []Finding
 	for _, v := range values {
-		if undecidable && v.RefersToRoot {
-			continue
-		}
 		file, reason := v.File, v.Problem
 		kind := KindValueUnread
 		if v.Schedule {

@@ -131,13 +131,15 @@ def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, t
 def test_a_tree_with_no_root_platform_file_is_judged(tmp_path):
     """#3832 (ADR-038 decision 7): a tree with no root platform file is
     judged as any other; a threshold key no layer declares is unread and
-    fails the row. The platform declares nothing, so the advice is
-    NO_DECLARED_DEFAULTS_HINT's."""
+    fails the row. A typo and a key the platform does not declare read the
+    same (ADR-038's known limits), so the one advice names both fixes and
+    advises removal only when it is neither."""
     r = vc.check_routes(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
     assert r["status"] == vc.FAIL and not r["caller_error"]
     assert any("unread `mysql_conections` (no_row)" in d for d in _key_lines(r)), r["details"]
     assert not any("undecidable" in d for d in r["details"]), r["details"]
-    assert r["hint"] == vc.NO_DECLARED_DEFAULTS_HINT
+    assert r["hint"] == vc.KEY_VERDICT_ROUTES_HINT
+    assert "declare at the root" in r["hint"] and "only when it is neither" in r["hint"]
 
 
 def test_a_finding_gets_the_key_advice(tmp_path):
@@ -257,71 +259,14 @@ def test_the_exporters_key_checks_are_printed_from_their_fields(tmp_path):
     assert not any("V2!" in d for d in r["details"]), r["details"]
 
 
-class TestAPlatformDeclaringNothingIsNotAdvisedAway:
-    """⛔ With no platform defaults declared, the verdict reads every tenant
-    threshold key as unread, and the generic key advice — remove a key
-    nothing reads — would delete a working config. The row says the
-    platform side is missing instead (the hint the `unread_keys` row carried
-    until #3873, and the `schema` row until ADR-038 §11)."""
-
-    @pytest.mark.parametrize("body", [
-        "_routing_defaults:\n  group_wait: 30s\n",  # no `defaults:` key
-        "defaults: {}\n",
-    ], ids=["no-defaults-key", "empty-defaults"])
-    def test_the_destructive_hint_is_replaced(self, tmp_path, body):
-        r = vc.check_routes(_tree(tmp_path, {
-            "_defaults.yaml": body,
-            "db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"90\"\n"}))
-        assert r["status"] == vc.FAIL, r
-        # no-defaults-key: its `_routing_defaults` without a receiver is a
-        # routing line too, whose advice comes first.
-        assert r["hint"].endswith(vc.NO_DECLARED_DEFAULTS_HINT), r
-        assert vc.KEY_VERDICT_ROUTES_HINT not in r["hint"], r
-
-    def test_the_hint_survives_a_routing_finding_beside_it(self, tmp_path):
-        """A routing line in the same row gets its own advice; the ⛔ one is
-        still there after it."""
-        r = vc.check_routes(_tree(tmp_path, {
-            "_defaults.yaml": "defaults: {}\n",
-            "db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"90\"\n" + _BAD_RECEIVER}))
-        assert r["status"] == vc.FAIL, r
-        assert r["hint"] == f"{vc._CHECK_HINTS['routes'][0]} {vc.NO_DECLARED_DEFAULTS_HINT}", r
-
-    def test_a_real_typo_keeps_the_normal_advice(self, tmp_path):
-        """Must-still-fire control: a platform that declares defaults gets
-        the generic key advice — always returning the hint would pass above."""
-        r = vc.check_routes(_tree(tmp_path, {
-            "_defaults.yaml": _DEFAULTS,
-            "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: \"70\"\n"}))
-        assert r["status"] == vc.FAIL and r["hint"] == vc.KEY_VERDICT_ROUTES_HINT, r
-
-    def test_declared_optional_overrides_count_as_declared(self, tmp_path):
-        """A platform declaring keys without values declares something."""
-        r = vc.check_routes(_tree(tmp_path, {
-            "_defaults.yaml": "optional_overrides:\n  - mysql_threads_running\n",
-            "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: \"70\"\n"}))
-        assert r["hint"] != vc.NO_DECLARED_DEFAULTS_HINT, r
-
-    def test_the_helper_survives_a_tree_gone_mid_run(self, tmp_path, monkeypatch):
-        """`_parse_config_files` exits the process when the directory is gone
-        (a ConfigMap volume swapped mid-run): the helper degrades to the
-        generic advice, never takes the run with it."""
-        import generate_alertmanager_routes as gen
-
-        def gone(_d):
-            sys.exit(2)
-        monkeypatch.setattr(gen, "_parse_config_files", gone)
-        assert vc._no_declared_defaults_hint(str(tmp_path)) is None
-
-
 def test_a_rename_line_beside_an_unread_key_in_a_tree_with_no_root_file(tmp_path):
     """#3832: no root platform file and a renamed key — the tree is judged,
     so the retired spelling no layer declares is unread beside its rename
-    line, and the advice is the platform-declares-nothing one."""
+    line, and the advice is the key advice."""
     r = vc.check_routes(_tree(tmp_path, {"t-a.yaml": "tenants:\n  t-a:\n    mysql_cpu: \"40\"\n"}))
     assert any("renamed" in d for d in r["details"]), r["details"]
     assert any("unread `mysql_cpu` (no_row)" in d for d in r["details"]), r["details"]
-    assert r["hint"] == vc.NO_DECLARED_DEFAULTS_HINT, r
+    assert r["hint"] == vc.KEY_VERDICT_ROUTES_HINT, r
 
 
 def test_an_unbound_profiles_threshold_key_is_a_notice_not_a_failure(tmp_path):

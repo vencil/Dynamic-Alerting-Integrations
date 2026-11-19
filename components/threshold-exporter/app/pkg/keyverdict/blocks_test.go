@@ -25,15 +25,14 @@ func TestBlocking_OnlyAnErrorBlocks(t *testing.T) {
 	}
 }
 
-// An undecidable key blocks a whole-tree gate (decision 7, #3016 option A):
-// the verdict cannot say no reader reads it, nor that one does.
-func TestBlocks_AnUndecidableKeyBlocks(t *testing.T) {
+// Only a blocking finding blocks: a warning does not, and a key row alone
+// (whatever its verdict) is no block — every block is a finding's.
+func TestBlocks_OnlyABlockingFindingBlocks(t *testing.T) {
 	t.Parallel()
 	file := "a.yaml"
-	tree := Tree{Keys: map[string][]KeyVerdict{"t1": {{Tenant: "t1", Key: "k", File: &file, Verdict: Undecidable}}}}
-	got := Blocks(tree)
-	if len(got) != 1 || got[0].Kind != Undecidable || got[0].Tenant != "t1" || got[0].File != file {
-		t.Fatalf("blocks %+v", got)
+	tree := Tree{Keys: map[string][]KeyVerdict{"t1": {{Tenant: "t1", Key: "k", File: &file, Verdict: Unread}}}}
+	if got := Blocks(tree); len(got) != 0 {
+		t.Fatalf("a key row with no finding blocked: %+v", got)
 	}
 	if bs := Blocks(Tree{Findings: []Finding{finding(SeverityWarning, "k", "a.yaml", "t1")}}); len(bs) != 0 {
 		t.Fatalf("a warning blocked: %+v", bs)

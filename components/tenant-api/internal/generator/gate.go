@@ -210,8 +210,6 @@ var keyVerdictReasons = map[string]struct{ reason, message string }{
 	"preempted": {ReasonKeyVerdictDeadline, "the key verdict yielded to another write; retry"},
 	"memory":    {ReasonKeyVerdictMemory, "the key verdict ran out of memory"},
 	"error":     {ReasonKeyVerdictError, "the key verdict failed"},
-	"undecidable": {ReasonKeyVerdictUndecidable, "no root platform file was read, so the write's " +
-		"threshold keys cannot be judged: the conf.d tree needs a root platform file such as _defaults.yaml"},
 	"platform_file": {ReasonKeyVerdictPlatformFile, "the write changes a platform file, whose keys " +
 		"only a whole-tree verdict judges"},
 }

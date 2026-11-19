@@ -94,21 +94,21 @@ func TestValueFindings_NewOnItsOwnEntry(t *testing.T) {
 	}
 }
 
-// With no root platform file read, which profiles exist is not known: a
-// `_profile` naming one is not judged (decision 7) — every other value is.
-func TestValueFindings_ProfileNotJudgedWithoutTheRoot(t *testing.T) {
+// Every value is judged, a `_profile` naming a profile no root platform
+// file defines included: since the built-in layer (#3832) a tree with no
+// root platform file is judged as any other, so there is no tree whose
+// profiles are "not known" (decision 7).
+func TestValueFindings_ProfileJudgedAsEveryValue(t *testing.T) {
 	t.Parallel()
 	in := valueInput(
-		config.LayerValueProblem{File: "t1.yaml", Layer: config.ValueLayerTenant, Owner: "t1", Key: "_profile",
-			Problem: "p", RefersToRoot: true},
+		config.LayerValueProblem{File: "t1.yaml", Layer: config.ValueLayerTenant, Owner: "t1", Key: "_profile", Problem: "p"},
 		config.LayerValueProblem{File: "t1.yaml", Layer: config.ValueLayerTenant, Owner: "t1", Key: "_silent_mode", Problem: "p"},
 	)
-	in.Undecidable = true
 	var keys []string
 	for _, r := range valueRows(Judge(in)) {
 		keys = append(keys, r.Key)
 	}
-	if !reflect.DeepEqual(keys, []string{"_silent_mode"}) {
-		t.Errorf("judged %v, want only _silent_mode", keys)
+	if !reflect.DeepEqual(keys, []string{"_profile", "_silent_mode"}) {
+		t.Errorf("judged %v, want _profile and _silent_mode", keys)
 	}
 }

@@ -44,7 +44,7 @@ type KeyVerdict struct {
 	// Status is KeyVerdictComplete or KeyVerdictNotCompleted.
 	Status string
 	// Reason is why a verdict did not complete: the generator's reasons
-	// (no_time, deadline, memory, error, undecidable, platform_file; an
+	// (no_time, deadline, memory, error, platform_file; an
 	// older generator's preempted) or
 	// KeyVerdictNotReported.
 	Reason string
@@ -126,7 +126,6 @@ var verdictReasons = map[string]string{
 	"preempted":           "it yielded to another write waiting for the generator", // a generator before ADR-038's 2026-10-30 revision
 	"memory":              "it ran out of memory",
 	"error":               "it failed",
-	"undecidable":         "no root platform file was read, so threshold keys cannot be judged",
 	"platform_file":       "the write changes a platform file, which only a whole-tree verdict judges",
 	KeyVerdictNotReported: "the generator container did not report one; it predates ADR-038 decision 5",
 }

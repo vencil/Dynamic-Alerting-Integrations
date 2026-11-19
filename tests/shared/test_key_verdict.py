@@ -61,7 +61,6 @@ def test_the_adr_example(tmp_path):
     assert kinds == {("unread", "mysql_conections", "error"), ("unread", "_routng", "error"),
                      ("disable_noop", "mysql_slave_lagg", "warning"),
                      ("disable_cascade", "redis_memory_critical", "warning")}
-    assert not t.undecidable
 
 
 def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path):
@@ -155,15 +154,13 @@ def test_no_root_platform_file_is_judged_as_any_tree(tmp_path):
     got = {k: (v.verdict, v.severity) for k, v in _by_key(t, "ta").items()}
     assert got == {"mysql_conections": ("unread", "error"), "_routng": ("unread", "error"),
                    "_namespaces": ("read", None)}
-    assert not t.undecidable
 
 
 def test_a_root_platform_file_without_thresholds_still_decides(tmp_path):
-    """只有 profiles 的樹也讀到了根平台檔：照常判，不降級成無從判斷（決定 7）。"""
+    """只有 profiles 的樹也讀到了根平台檔：照常判（決定 7）。"""
     t = kv.judge_tree(_tree(tmp_path, {"_profiles.yaml": "profiles:\n  p1: {}\n",
                                        "ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
     assert _by_key(t, "ta")["mysql_conections"].verdict == "unread"
-    assert not t.undecidable
 
 
 @pytest.mark.parametrize("target", ["owner_tag", "owner_tag.sub"])
@@ -415,9 +412,14 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     ' "reason": null, "disable": null, "hint": null, "switched_off_with": null, "dead_entries": [],'
     ' "value": "70", "served": 70}]}, "findings": [], "key_checks": {}, "parse_failed": [],'
     ' "unreadable": [], "blocks": false, "undecidable_blocks": false}',
+    # #3832: the last v5 — with `undecidable` and `undecidable_blocks`,
+    # which no key had been since the built-in layer.
+    '{"schema": "da-guard.key-verdict/v5", "config_hash": null, "at": "x", "undecidable": false,'
+    ' "blocks": false, "undecidable_blocks": false, "tenants": {}, "findings": [], "key_checks": {},'
+    ' "parse_failed": [], "unreadable": []}',
 ], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks",
         "partial-disable", "disable_partial-finding", "v2-without-dead_entries", "v2-without-hint",
-        "v3-key-checks-as-sentences", "v2-at-one-instant"])
+        "v3-key-checks-as-sentences", "v2-at-one-instant", "v5-with-undecidable"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
@@ -446,19 +448,19 @@ def _v3(tenant_row: "dict | None" = None, finding: "dict | None" = None, drop: s
     `hint`, a `partial` disable …) under a schema that never lacks them."""
     row = dict(_ROW, **(tenant_row or {}))
     fnd = dict(_FINDING, **(finding or {}))
-    doc = {"schema": kv.SCHEMA, "config_hash": None, "at": "x", "undecidable": False, "tenants": {"t": [row]},
+    doc = {"schema": kv.SCHEMA, "config_hash": None, "at": "x", "tenants": {"t": [row]},
            "findings": [fnd], "key_checks": {"t": []},
-           "parse_failed": [], "unreadable": [], "blocks": True, "undecidable_blocks": False}
+           "parse_failed": [], "unreadable": [], "blocks": True}
     for where in (doc, row, fnd):
         where.pop(drop, None)
     return json.dumps(doc)
 
 
 @pytest.mark.parametrize("document", [
-    _v3(drop="parse_failed"), _v3(drop="blocks"), _v3(drop="undecidable_blocks"),
+    _v3(drop="parse_failed"), _v3(drop="blocks"),
     _v3(drop="hint"), _v3(drop="dead_entries"), _v3(drop="switched_off_with"), _v3(drop="base"),
     _v3(tenant_row={"disable": "partial"}), _v3(finding={"kind": "disable_partial"}),
-], ids=["no-parse_failed", "no-blocks", "no-undecidable_blocks", "no-hint", "no-dead_entries",
+], ids=["no-parse_failed", "no-blocks", "no-hint", "no-dead_entries",
         "no-switched_off_with", "no-base", "partial-disable", "disable_partial-finding"])
 def test_a_v3_document_missing_what_v3_writes_is_broken_not_older(tmp_path, document):
     """#3835 審查：v1／v2 的那些形狀（缺 `blocks`、缺 `hint`、`partial` 等）只出現在舊
@@ -473,9 +475,8 @@ def test_a_v3_document_missing_what_v3_writes_is_broken_not_older(tmp_path, docu
 
 
 def _doc(**over):
-    doc = {"undecidable": False, "tenants": {"t": [dict(_ROW)]}, "findings": [dict(_FINDING)],
-           "key_checks": {"t": []}, "blocks": True,
-           "undecidable_blocks": False}
+    doc = {"tenants": {"t": [dict(_ROW)]}, "findings": [dict(_FINDING)],
+           "key_checks": {"t": []}, "blocks": True}
     doc.update(over)
     return doc
 
@@ -502,9 +503,7 @@ def _doc(**over):
     _doc(tenants={"t": [dict(_ROW, disable="off")]}),
     _doc(findings=[dict(_FINDING, severity=None)]),
     _doc(findings=[dict(_FINDING, kind="typo")]),
-    _doc(undecidable="no"),
     _doc(blocks="yes"),
-    _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
     _doc(findings=[dict(_FINDING, hint=1)]),  # #3829: a hint is text or null
     _doc(findings=[dict(_FINDING, gate_kind=1)]),  # #3996: the gate's kind is text or null
@@ -522,7 +521,7 @@ def _doc(**over):
 ], ids=lambda d: next(iter(k for k in d if d[k] != _doc()[k]), "?"))
 def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answer(doc):
     """#3489 審查：讀不懂的值不能被讀成「判完、沒有 error」——產生器容器以
-    `verdict == undecidable`、`severity == error` 決定擋不擋。"""
+    finding 的 `blocks` 決定擋不擋。"""
     assert kv._read(_doc(), None).findings  # the valid document reads
     with pytest.raises((TypeError, ValueError, KeyError)):
         kv._read(doc, None)
