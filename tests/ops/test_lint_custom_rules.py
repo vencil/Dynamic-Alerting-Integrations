@@ -42,33 +42,15 @@ def policy():
 
 # ── 1. Duration parsing ──────────────────────────────────────────
 
-def test_duration_seconds():
-    """測試秒數解析。"""
-    assert lint_custom_rules.parse_duration_seconds("30s") == 30
-
-def test_duration_minutes():
-    """測試分鐘解析。"""
-    assert lint_custom_rules.parse_duration_seconds("5m") == 300
-
-def test_duration_hours():
-    """測試小時解析。"""
-    assert lint_custom_rules.parse_duration_seconds("1h") == 3600
-
-def test_duration_days():
-    """測試天數解析。"""
-    assert lint_custom_rules.parse_duration_seconds("2d") == 172800
-
-def test_duration_integer_passthrough():
-    """測試整數直通。"""
-    assert lint_custom_rules.parse_duration_seconds(60) == 60
-
-def test_duration_invalid_returns_none():
-    """測試無效字串回傳 None。"""
-    assert lint_custom_rules.parse_duration_seconds("abc") is None
-
-def test_duration_empty_returns_none():
-    """測試空字串回傳 None。"""
-    assert lint_custom_rules.parse_duration_seconds("") is None
+@pytest.mark.parametrize("value, seconds", [
+    ("30s", 30), ("5m", 300), ("1h", 3600), ("2d", 172800),
+    # #4061: Prometheus' grammar (model.ParseDuration), not single-unit only
+    ("1h30m", 5400), ("2w", 1209600), ("1y", 31536000), ("500ms", 0.5),
+    # what Prometheus refuses: no unit, a fraction, units out of order, text
+    (60, None), ("60", None), ("1.5h", None), ("1m1h", None), ("abc", None), ("", None),
+])
+def test_durations_are_read_as_prometheus_reads_them(value, seconds):
+    assert lint_custom_rules.duration_seconds(value) == seconds
 
 
 def test_lint_holt_winters_detected(policy):
@@ -773,16 +755,16 @@ def test_override_cannot_relax_non_whitelisted_check():
     ([{"path": "a.yaml", "policy": {"denied_functions": "holt_winters"}}],
      "file_overrides[0].policy.denied_functions must be a list of non-empty strings"),
     ([{"path": "a.yaml", "policy": {"max_range_duration": "banana"}}],
-     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
-    ([{"path": "a.yaml", "policy": {"max_range_duration": "1h30m"}}],
-     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
+     "file_overrides[0].policy.max_range_duration must be a positive Prometheus duration such as 90m or 1h30m"),
+    ([{"path": "a.yaml", "policy": {"max_range_duration": "1.5h"}}],
+     "file_overrides[0].policy.max_range_duration must be a positive Prometheus duration such as 90m or 1h30m"),
     ([{"path": "a.yaml", "policy": {"max_range_duration": "9" * 400 + "h"}}],
-     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
+     "file_overrides[0].policy.max_range_duration must be a positive Prometheus duration such as 90m or 1h30m"),
     ([{"path": "a.yaml"}, {"path": "sub/a.yaml"}],
      "file_overrides[1].path sub/a.yaml and a.yaml can match the same file: which entry "
      "applies would depend on their order"),
     ([{"path": "a.yaml", "policy": {"max_range_duration": "0s"}}],
-     "file_overrides[0].policy.max_range_duration must be a positive single-unit duration such as 90m"),
+     "file_overrides[0].policy.max_range_duration must be a positive Prometheus duration such as 90m or 1h30m"),
 ])
 def test_a_malformed_file_override_is_refused_when_the_policy_is_loaded(overrides, said):
     """#3977: one shape for an entry, judged in load_policy — matched or not."""
@@ -802,6 +784,55 @@ def test_a_key_in_a_refusal_cannot_print_a_line_of_its_own(custom):
     with pytest.raises(_lib_exitcodes.CallerError) as exc:
         lint_custom_rules.load_policy(custom, "p.yaml")
     assert "\n" not in str(exc.value), str(exc.value)
+
+
+@pytest.mark.parametrize("key, value, said", [
+    # #4061: each of these was a check turned off (rc 0), a value matched
+    # character by character, or a crash — now the policy is refused.
+    ("denied_functions", "predict_linear", "must be a list of non-empty strings"),
+    ("denied_functions", {"a": 1}, "must be a list of non-empty strings"),
+    ("denied_functions", None, "must be a list of non-empty strings"),
+    ("denied_patterns", '=~".*"', "must be a list of non-empty strings"),
+    ("denied_patterns", 5, "must be a list of non-empty strings"),
+    ("required_labels", "team", "must be a list of non-empty strings"),
+    ("required_labels", [5], "must be a list of non-empty strings"),
+    ("max_range_duration", "banana", "must be a positive Prometheus duration such as 90m or 1h30m"),
+    ("max_range_duration", "0s", "must be a positive Prometheus duration such as 90m or 1h30m"),
+    ("max_range_duration", 5, "must be a positive Prometheus duration such as 90m or 1h30m"),
+    ("max_range_duration", None, "must be a positive Prometheus duration such as 90m or 1h30m"),
+    ("max_range_duration", "9" * 5000 + "h",
+     "must be a positive Prometheus duration such as 90m or 1h30m"),
+    ("max_evaluation_interval", ["1m"], "must be a positive Prometheus duration such as 90m or 1h30m"),
+])
+def test_a_malformed_top_level_value_is_refused_when_the_policy_is_loaded(key, value, said):
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({key: value}, "p.yaml")
+    assert exc.value.reason == "policy_invalid"
+    assert str(exc.value) == f"--policy p.yaml: {key} {said}"
+
+
+@pytest.mark.parametrize("key, value", [
+    ("max_range_duration", "1h30m"), ("max_range_duration", "2w"),
+    ("max_evaluation_interval", "90s"), ("denied_functions", []), ("required_labels", []),
+])
+def test_a_well_formed_top_level_value_loads(key, value):
+    assert lint_custom_rules.load_policy({key: value}, "p.yaml")[key] == value
+
+
+def test_a_compound_range_max_is_enforced(tmp_path):
+    """#4061: `max_range_duration: 1h30m` read as None turned the range
+    check off; read as Prometheus does, a [2h] range is over it."""
+    policy = lint_custom_rules.load_policy({"max_range_duration": "1h30m"}, "p.yaml")
+    found = lint_custom_rules.lint_expr('rate(x{tenant="t"}[2h]) > 1', policy, "f.yaml", "A")
+    assert any("exceeds max allowed [1h30m]" in r.message for r in found), found
+
+
+def test_a_compound_group_interval_is_judged(tmp_path):
+    """#4061: a group `interval: 1h30m` was skipped (unreadable); read as
+    Prometheus does, it is over a 60s maximum."""
+    found = lint_custom_rules.lint_group_interval("1h30m", lint_custom_rules.DEFAULT_POLICY,
+                                                  "f.yaml", "g")
+    assert any("exceeds recommended max" in r.message for r in found), found
 
 
 def test_every_problem_of_the_overrides_is_named_at_once():
