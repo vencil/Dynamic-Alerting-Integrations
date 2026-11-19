@@ -7,6 +7,9 @@ One JSON line per event, in the order raised:
 * ``loaded`` — once per process, at start-up (``argv`` = ``sys.orig_argv``).
   The gate requires it: an absent line is "the hook did not load", which is
   a failure of the run and never "nothing was written".
+* ``read`` (#3982) — only when DA_WRITE_AUDIT_READS names a directory: an
+  open that does not write, of a path under it (absolute, resolved). The
+  gate's read-back measurement for the class rule; imports are never there.
 * every filesystem change raised as an audit event: a write-mode ``open`` /
   ``os.open``, ``os.rename`` (``os.replace`` too), ``os.chmod``, ``os.chown``,
   ``os.mkdir``, ``os.link``, ``os.symlink``, ``os.truncate``, ``os.remove``,
@@ -57,6 +60,12 @@ import threading
 _LOG = os.environ.get("DA_WRITE_AUDIT_LOG")
 _HERE = os.path.dirname(os.path.realpath(__file__))
 _WRITE_BITS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+# #3982: when set, an open of a path under this directory that does NOT write
+# is logged too (`"ev": "read"`, the path made absolute and resolved) — the
+# write gate's read-back measurement. Only there: every import is an `open`.
+_READS_UNDER = os.environ.get("DA_WRITE_AUDIT_READS")
+if _READS_UNDER:
+    _READS_UNDER = os.path.realpath(_READS_UNDER) + os.sep
 # event -> (index of the path it changes, index of its dir_fd or None)
 _PATH_EVENTS = {
     "os.rename": (1, 3),
@@ -177,6 +186,11 @@ if _LOG:
             if (mode and any(c in mode for c in "wax+")) or (mode is None and flags & _WRITE_BITS):
                 rec = {"ev": "open", "path": _text(path), "flags": flags}
                 os_open = mode is None
+            elif _READS_UNDER and not isinstance(path, int):
+                full = os.path.realpath(os.path.join(os.getcwd(), _text(path)))
+                if full.startswith(_READS_UNDER):
+                    _emit({"ev": "read", "path": full})
+                return
         elif event in _PATH_EVENTS:
             at, fd_at = _PATH_EVENTS[event]
             rec = {"ev": event, "path": _text(args[at])}

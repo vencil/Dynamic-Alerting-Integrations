@@ -68,29 +68,34 @@ throw-away git repository with one conventional commit.
 
 THE TWO CLASSES (#3107) — ``Row.cls``
 -------------------------------------
-Every row says which kind of path its flag names. One rule, stated here and
-nowhere else:
+Every row says which kind of path its flag names. One rule (#3982, owner
+2026-11-18), stated here and nowhere else:
 
-* ``artifact`` — the path is a constant inside the repo or the flag's
-  DEFAULT, that file is tracked (``git ls-files``), and the tool or its
-  ``--check`` reads the previous version back. Written by atomic replace
-  (``_lib_io.write_repo_artifact``): a failed run leaves the old file whole.
-* ``operator`` — the path is the value of an argparse flag (or a file the
-  tool names under a directory flag), and the flag has no default or one
-  that is not a tracked file. Opened in place by the kernel
-  (``_lib_io.write_operator_output`` / ``open_operator_output``).
+* ``artifact`` — the tool reads the output back (measured: the control run,
+  then the same command again, its ``--check``, and the row's ``readers``,
+  under the audit hook logging reads), or its default is a file the repo
+  tracks, or another program loads it whole (``EXTERNAL_READERS``, the one
+  part no test can measure: only the owner adds to it, with the reason).
+  Written by atomic replace (``_lib_io.write_repo_artifact``): a failed run
+  leaves the old file whole.
+* ``operator`` — everything else: the output only a person or a pipe reads.
+  Opened in place by the kernel (``_lib_io.write_operator_output`` /
+  ``open_operator_output``). An append is always operator.
 
-Owner rulings that the rule alone would not give (#3107, 2026-10-24 and
-2026-11-15): ``generate-routes -o/--output``, ``configmap_assemble
---output`` and ``state-reconcile --manifest-path`` are artifacts — a half
-written one is a config some reader will load. #3982, 2026-11-18:
-``generate_tenant_metadata --output`` is an artifact (tenant-api reads it;
-``-`` is refused, stdout is the flag left out); ``audit_rules_drift --out``
-is an operator output (``-`` is stdout); ``compile_custom_alerts --out`` is an
-artifact (the tracked pack Prometheus loads, read back by the erase guard and
-``--check``). A row carries the class its
-flag SHOULD have; where the tool does not write that way yet, the row is on
-one of the lists below, not reclassified to match.
+``test_the_class_follows_the_read_back`` holds both directions: an operator
+flag the tool reads back, and an artifact flag that neither the read-back
+nor ``EXTERNAL_READERS`` explains, are faults. The rule replaced one that
+asked for a tracked default and so needed five owner exceptions; every one
+of them reads its output back or is on ``EXTERNAL_READERS``.
+
+⚠️ NOT SEEN by the read-back measurement (independent review, #3982) — the
+threat model is an honest regression in a Python tool, as for the write
+audit: a read by a child that is not Python (``cat``, da-guard, git) or is
+Python run with ``-I`` (the hook is not loaded); an ``os.open`` relative to
+a ``dir_fd`` (the ``open`` event carries no ``dir_fd``); a read only on a
+path the reruns do not take (output-dependent, or a command no row's
+``readers`` names); a read through an ``a+`` open (logged as a write). A run
+argparse refuses is not counted, and every row must have one counted run.
 
 THE WRITE AUDIT (#3107) — WHICH ENTRY WROTE IT
 ----------------------------------------------
@@ -439,6 +444,17 @@ def _history_conf_d(out: Path) -> str:
     return str(out)
 
 
+def _history_readers(c: "Ctx", out: Path) -> list[list[str]]:
+    """`config_history`'s readers of its snapshots: `diff` reads the copies
+    only where the two snapshots differ, so the shard is changed first — the
+    rerun of the control argv then takes snapshot 2, and `diff 1 2` reads
+    snapshot 1's copy, which the control run wrote (#3982)."""
+    with (out / "alpha.yaml").open("a", encoding="utf-8") as fh:
+        fh.write("# changed after the control run\n")
+    return [["--config-dir", str(out), "diff", "1", "2"],
+            ["--config-dir", str(out), "log"]]
+
+
 def _inject_report(tmp: Path) -> str:
     """A synthetic `inject_waveform` report for `dx/waveform_score`.
 
@@ -650,6 +666,10 @@ class Row:
     # named so the cases are strict xfails instead of a missing row: when the
     # tool is fixed they pass, the xfail turns red, and this comes off.
     known_defect: str | None = None
+    # The tool's OTHER commands that read this output back, as argv for the
+    # same tool (#3982 read-back rule): the control run and its rerun cannot
+    # reach them (`config_history`'s `show` / `diff` read the snapshots).
+    readers: Callable[[Ctx, Path], list[list[str]]] | None = None
 
     @property
     def id(self) -> str:
@@ -845,22 +865,27 @@ ROWS: list[Row] = [
     R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="a one-shard conf.d built in place; `snapshot` is what writes",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history", variant="history-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
     R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot subdirectory blocked",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history/snap-1", variant="snapshot-dir",
       shapes=("sibling_is_file",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
     R("ops/config_history.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--config-dir", _history_conf_d(out), "snapshot", "-m", "x"],
       reach="same, with the snapshot COPY of alpha.yaml blocked",
+      readers=_history_readers,
       out_name="conf.d", artifact=".da-history/snap-1/alpha.yaml",
       variant="snapshot-file", shapes=("sibling_is_dir",),
       produces=lambda out: out.parent / ".da-history" / "history.json"),
-    R("ops/da_assembler.py", "--config-dir", "dir", "operator",
+    # #3982: artifact by the read-back rule — the next run reads the files
+    # this one rendered to decide which are its own (`_rendered_cr_id`).
+    R("ops/da_assembler.py", "--config-dir", "dir", "artifact",
       lambda c, out: ["--render-cr", _example_cr_for_a_rootless_dir(c.tmp),
                       "--config-dir", str(out)],
       reach="in-repo example ThresholdConfig CR (minus its operator key, #3832) through --render-cr; the "
@@ -990,10 +1015,17 @@ ROWS: list[Row] = [
       out_name="secrets", artifact="da-alpha.yaml",
       shapes=("target_is_file", "artifact_is_dir"),
       wording="own", control_rc=1),
-    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+    # #3982: artifact by the read-back rule — a `--force` run reads the
+    # ownership ledger (`.da-init.yaml`) and the files the last run wrote.
+    # Still written through the operator entry: VIA_OTHER_CLASS.
+    R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb"],
       reach="non-interactive flags only",
+      # Its rerun is refused (the path is occupied); `--force` is the run
+      # that reads the last one's ledger back.
+      readers=lambda c, out: [["-o", str(out), "--non-interactive", "--tenants", "alpha",
+                               "--rule-packs", "mariadb", "--force"]],
       # The conf.d files in it are `da-guard write`'s; the rest is Python's.
       shapes=("parent_is_file", "target_is_file"), writer="python+da-guard"),
     # #3107: the two mkdir shapes above die at `ensure_dir_or_die`, so they
@@ -1001,7 +1033,7 @@ ROWS: list[Row] = [
     # the scaffold goes through). A directory where a file goes is only
     # reached with `--force`: without it init refuses a path that is already
     # occupied in a pre-check of its own (rc 1).
-    R("ops/init_project.py", "-o/--output-dir", "dir", "operator",
+    R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb", "--force"],
       reach="the same flags with --force, so an occupied path is written over",
@@ -1185,6 +1217,7 @@ def _run(row: Row, ctx: Ctx, out: Path, *,
         timeout=TIMEOUT_S, env=env, cwd=cwd,
     )
     proc.files_before = before
+    proc.run_cwd = cwd
     return proc
 
 
@@ -1550,6 +1583,15 @@ class Audit:
     programs: tuple[str, ...] = ()
 
 
+def _tool_loaded(events: list[dict], tool: Path) -> bool:
+    """Did the hook load in THE TOOL's process — not only in a Python child
+    of it, whose `loaded` line lands in the same log?"""
+    tool_path = os.path.realpath(tool)
+    return any(e.get("ev") == "loaded"
+               and any(os.path.realpath(a) == tool_path for a in e.get("argv", [])[:3])
+               for e in events)
+
+
 def _audit(events: list[dict] | None, scope: Path, tool: Path,
            made: frozenset[str] = frozenset()) -> Audit:
     """*made*: the files under *scope* that are there after the run and were
@@ -1559,10 +1601,7 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
         return Audit(False, False, {}, ())
     frames = _entry_frames()
     writer_frames = _writer_frames()
-    tool_path = os.path.realpath(tool)
-    loaded = any(e["ev"] == "loaded"
-                 and any(os.path.realpath(a) == tool_path for a in e["argv"][:3])
-                 for e in events)
+    loaded = _tool_loaded(events, tool)
     sites: dict[str, list[tuple[str, str]]] = {}
     spawned = []
     faults: list[str] = []
@@ -1781,9 +1820,36 @@ VIA_OLD_NAMES: dict[Key, tuple[str, ...]] = {
 RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
 }
 
+#: THE CLASS RULE, MECHANICAL HALF (#3982, owner 2026-11-18). A flag is an
+#: artifact iff (a) the tool reads its output back — measured by
+#: `test_the_class_follows_the_read_back`: the control run, then the same
+#: command again, its `--check`, and the row's `readers`, under the audit
+#: hook logging reads; or (b) its default is a file the repo tracks; or (c)
+#: another program loads it whole (EXTERNAL_READERS: the half no test can
+#: measure, so only the owner adds to it, and the reason is kept here).
+#: Otherwise operator. Both directions are faults: an operator flag the tool
+#: reads back, and an artifact flag (a) and (c) do not explain.
+#: ⚠️ (b) has no list here: every row whose default is tracked
+#: (generate_adr_index / generate_planning_index --target, sync_glossary_abbr
+#: --output) also reads it back, so an entry would explain nothing (a)
+#: does not — measured: removing one changed no outcome. A row that needs
+#: (b) adds the list then, held to `git ls-files`. It stays the static
+#: trigger for constant-path writers this gate does not run.
+EXTERNAL_READERS: dict[Key, str] = {
+    ("ops/generate_alertmanager_routes.py", "-o/--output"):
+        "Alertmanager loads it as its configuration (owner 2026-11-15)",
+    ("../ops/configmap_assemble.py", "--output"):
+        "kubectl applies it as the ConfigMap manifest (owner 2026-10-24)",
+}
+
+
 #: Rows whose output came through the entry of the OTHER class than the row
 #: declares, and which one. Each is a tool to move or a row to reclassify.
 VIA_OTHER_CLASS: dict[Key, str] = {
+    # #3982: the read-back rule makes it an artifact (its `--force` run reads
+    # the `.da-init.yaml` ledger it wrote); the move to `write_repo_artifact`
+    # is its own change (#4085).
+    ("ops/init_project.py", "-o/--output-dir"): "operator",
 }
 
 
@@ -1983,6 +2049,114 @@ def test_control_writable_path_is_rc0_and_writes(row, tmp_path, stub_url):
     seen = _verdict(row, audit)
     problems = seen.faults + _list_faults(row, seen) + _mode_faults(row, out.parent, made)
     assert not problems, _fail(row, proc, "write audit:\n  " + "\n  ".join(problems))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The class rule: does the tool read its output back? (#3982)
+# ═══════════════════════════════════════════════════════════════════════════
+def _read_back(row: Row, tmp: Path, stub: str) -> tuple[list[str], list[str]]:
+    """(files of the control run's output that a later run read, the runs
+    made). The control run first; then, under the hook logging reads under
+    `good/`: the same argv again, its `--check` where the tool has one, and
+    the row's `readers`. The argv is the control run's own — a row's `build`
+    makes its fixtures, so it is not called again."""
+    proc, out, _audit_, made = _control_run(row, tmp, stub)
+    argv = list(proc.args[2:])
+    runs = [argv]
+    if '"--check"' in (TOOLS_DIR / row.tool).read_text(encoding="utf-8") and "--check" not in argv:
+        runs.append([*argv, "--check"])
+    if row.readers is not None:
+        runs.extend(row.readers(Ctx(tmp, stub), out))
+    ctx = Ctx(tmp, stub)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        env.update(row.env(ctx))
+    # What the control run wrote: the files it made, and for a file flag the
+    # output path itself — a fixture may have made it first (an index
+    # generator rewrites a doc that is already there), so it is not "made".
+    made_abs = {os.path.realpath(out.parent / m) for m in made}
+    if row.kind == "file":
+        made_abs.add(os.path.realpath(out))
+    read: set[str] = set()
+    measured: list[str] = []
+    for i, run in enumerate(runs):
+        log = tmp / f"read-audit-{i}.jsonl"
+        run_env = {**env, **_audit_env(log, tmp), "DA_WRITE_AUDIT_READS": str(out.parent)}
+        done = subprocess.run([sys.executable, str(TOOLS_DIR / row.tool), *run],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=TIMEOUT_S, env=run_env,
+                              cwd=proc.run_cwd)
+        # A run argparse refused measured nothing (an added `--check` the
+        # tool's flags exclude): it is not counted.
+        if done.returncode == 2 and "usage:" in done.stderr:
+            continue
+        measured.append(" ".join(run))
+        # A measurement that did not happen is not "no reads" (CodeRabbit):
+        # the hook must have loaded, and must not have failed.
+        events = _read_audit_log(log)
+        assert events is not None and _tool_loaded(events, TOOLS_DIR / row.tool), (
+            f"{row.id}: the audit hook did not load in the tool's process for the "
+            f"rerun {' '.join(run)!r}")
+        failed = [e for e in events if e.get("ev") == "hook-error"]
+        assert not failed, f"{row.id}: the audit hook failed in the rerun: {failed[:3]}"
+        for ev in events:
+            if ev.get("ev") == "read" and ev.get("path") in made_abs:
+                read.add(ev["path"])
+    return sorted(read), measured
+
+
+@pytest.mark.parametrize("row", ROWS, ids=[r.id for r in ROWS])
+def test_the_class_follows_the_read_back(row, tmp_path, stub_url):
+    """#3982 (owner 2026-11-18): artifact iff the tool reads the output
+    back, or its default is tracked, or another program loads it whole —
+    both directions, so neither class can be chosen against the rule."""
+    _skip_if_unavailable(row)
+    key = (row.tool, row.flag)
+    read, runs = _read_back(row, tmp_path, stub_url)
+    # Every row of a flag is measured (its argv decides what a rerun can
+    # reach: `init_project`'s `--force` row reads, the other is refused), and
+    # each must have measured something.
+    assert runs, f"{row.id}: no rerun was measured — every one was refused by argparse"
+    explained = bool(read) or key in EXTERNAL_READERS
+    if row.cls == "operator":
+        assert not read, (f"{row.id}: the tool reads its output back ({read}) through "
+                          f"{runs} — an artifact by the rule, written in place")
+        assert key not in EXTERNAL_READERS, row.id
+    else:
+        assert explained, (f"{row.id}: an artifact that no run read back ({runs}) and "
+                           f"that EXTERNAL_READERS does not name — an operator output by "
+                           f"the rule")
+        if row.artifact and key not in EXTERNAL_READERS:
+            # A row that names its sink is held to THAT sink: another file of
+            # the same tool read back does not make this one an artifact.
+            # Where `_expected_fragment` puts it: beside the output for a
+            # sibling shape, inside it for `artifact_is_dir`.
+            out = tmp_path / "good" / row.out_name
+            base = out.parent if {"sibling_is_file", "sibling_is_dir"} & set(row.shapes) else out
+            sink = os.path.realpath(out_sink := (base / row.artifact))
+            assert any(r == sink or r.startswith(sink + os.sep) for r in read), (
+                f"{row.id}: its sink {out_sink} was not read back by {runs} (read: {read})")
+    if key in EXTERNAL_READERS:
+        assert not read, (f"{row.id}: on EXTERNAL_READERS but the tool reads it back "
+                          f"itself ({read}) — the measured half explains it; take it off")
+
+
+def test_only_the_tools_own_loaded_line_counts():
+    """A Python child's `loaded` line is in the same log; it does not say the
+    tool's own process was measured (CodeRabbit, #4086)."""
+    tool = TOOLS_DIR / "dx" / "describe_tenant.py"
+    child = {"ev": "loaded", "argv": [sys.executable, "-c", "pass"]}
+    own = {"ev": "loaded", "argv": [sys.executable, str(tool), "-o", "x"]}
+    assert not _tool_loaded([child], tool)
+    assert _tool_loaded([child, own], tool)
+    assert not _tool_loaded([], tool)
+
+
+def test_the_external_readers_are_artifact_rows_with_a_reason():
+    rows = {(r.tool, r.flag): r for r in ROWS}
+    for key, why in EXTERNAL_READERS.items():
+        assert key in rows and rows[key].cls == "artifact", key
+        assert "owner" in why and why.strip(), key
 
 
 # ═══════════════════════════════════════════════════════════════════════════
