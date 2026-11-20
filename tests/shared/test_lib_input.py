@@ -579,12 +579,11 @@ def test_a_recursion_error_while_parsing_is_a_document_error(fmt, monkeypatch):
     the Python build's business, so the error is forced here."""
     import json
 
-    import yaml
-
     def deep(*_a, **_k):
         raise RecursionError("maximum recursion depth exceeded")
-    monkeypatch.setattr(json if fmt == "json" else yaml, "loads" if fmt == "json" else "load",
-                        deep)
+    import _lib_yaml_strict
+    monkeypatch.setattr(json if fmt == "json" else _lib_yaml_strict,
+                        "loads" if fmt == "json" else "strict_safe_load", deep)
     with pytest.raises(_lib_input.DocumentError) as exc:
         _lib_input.decode_bytes(b"[1]", fmt=fmt, name="x")
     assert str(exc.value) == f"not valid {fmt.upper()}: nested too deeply to read"
@@ -1038,3 +1037,74 @@ def test_a_many_input_is_not_called_undeclared(tmp_path, call):
     is told so, not that add_input never declared it."""
     with pytest.raises(TypeError, match="paths is a many=True input"):
         call(_many([str(tmp_path)]))
+
+
+# ── #4064: a key or a name given twice is refused ────────────────────────
+
+@pytest.mark.parametrize("fmt, raw, said", [
+    ("yaml", b"a: 1\na: 2\n",
+     "the key 'a' at line 2 is given again (first at line 1); a mapping takes a key once"),
+    ("yaml", b"x:\n  - b: 1\n    c: 2\n    b: 3\n",
+     "the key 'b' at line 4 is given again (first at line 2); a mapping takes a key once"),
+    # yaml.v3's key identity (#2123): the text, not the value it builds
+    ("yaml", b"'1': a\n1: b\n",
+     "the key '1' at line 2 is given again (first at line 1); a mapping takes a key once"),
+    ("yaml", b"b: &b {a: 1}\nd: &d {a: 3}\nc:\n  <<: *b\n  <<: *d\n",
+     "the key '<<' at line 5 is given again (first at line 4); a mapping takes a key once"),
+    # one line: a flow mapping's two keys share it
+    ("yaml", b"{a: 1, a: 2}\n",
+     "the key 'a' at line 1 is given again (first at line 1); a mapping takes a key once"),
+    # an alias as a key is the anchored node: its marks are the anchor's, so
+    # the mapping's line is named, never a line the key is not on
+    ("yaml", b"x: &k foo\n*k : 1\nfoo: 2\n",
+     "the key 'foo' is given twice (through an alias) in the mapping at line 1; "
+     "a mapping takes a key once"),
+    ("yaml", b"k: &a foo\nm:\n  *a : 1\n  *a : 2\n",
+     "the key 'foo' is given twice (through an alias) in the mapping at line 3; "
+     "a mapping takes a key once"),
+    ("json", b'{"a": 1, "a": 2}', "the name 'a' is given twice in one object"),
+    ("json", b'[{"x": {"a": 1, "a": 2}}]', "the name 'a' is given twice in one object"),
+])
+def test_a_key_given_twice_is_refused(fmt, raw, said):
+    """Both parsers kept the last value without a word: a lint policy's
+    `denied_functions: [x]` followed by `denied_functions: []` linted
+    nothing, a deployment policy's second `allowed_domains` opened it."""
+    with pytest.raises(_lib_input.DocumentError) as exc:
+        _lib_input.decode_bytes(raw, fmt=fmt, name="p")
+    assert str(exc.value) == f"not valid {fmt.upper()}: {said}"
+
+
+@pytest.mark.parametrize("fmt, raw, read", [
+    # a `<<` merge's keys are not the mapping's own: an explicit key
+    # overrides one merged in, at any depth of merging (#4064 review: a
+    # check after PyYAML flattened the merge refused this)
+    ("yaml", b"b: &b {a: 1}\nc:\n  <<: *b\n  a: 2\n", {"b": {"a": 1}, "c": {"a": 2}}),
+    ("yaml", b"defs:\n  a: &a\n    <<: {k: 1}\n    k: 2\nuse: {<<: *a}\n",
+     {"defs": {"a": {"k": 2}}, "use": {"k": 2}}),
+    ("yaml", b"a: &a {k: 1}\nb: *a\nc: *a\n", {"a": {"k": 1}, "b": {"k": 1}, "c": {"k": 1}}),
+    ("json", b'{"a": {"k": 1}, "b": {"k": 1}}', {"a": {"k": 1}, "b": {"k": 1}}),
+])
+def test_what_is_no_key_given_twice_reads(fmt, raw, read):
+    assert _lib_input.decode_bytes(raw, fmt=fmt, name="p") == read
+
+
+def test_reading_yaml_leaves_the_crash_hook_alone(tmp_path):
+    """The strict loader is `_lib_yaml_strict` (PyYAML only), not `_lib_io`,
+    which imports `_lib_exitcodes` and so installs the crash hook: reading a
+    YAML document — accepted or refused — must not (#4064 review)."""
+    import subprocess
+    probe = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(REPO / 'scripts' / 'tools')!r})\n"
+        "hook = sys.excepthook\n"
+        "import _lib_input as li\n"
+        "li.decode_bytes(b'a: 1\\n', fmt='yaml', name='x')\n"
+        "try:\n"
+        "    li.decode_bytes(b'a: 1\\na: 2\\n', fmt='yaml', name='x')\n"
+        "except li.DocumentError:\n"
+        "    pass\n"
+        "print('_lib_exitcodes' in sys.modules, '_lib_io' in sys.modules, sys.excepthook is hook)\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                          encoding="utf-8", check=False, timeout=60)
+    assert (proc.returncode, proc.stdout.strip()) == (0, "False False True"), proc.stderr

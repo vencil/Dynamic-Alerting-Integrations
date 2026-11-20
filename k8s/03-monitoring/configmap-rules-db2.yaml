@@ -19,8 +19,8 @@ data:
     n  rate(db2_bufferpool_pages_found_total[5m])\\n  / (rate(db2_bufferpool_logical_reads_total[5m])\
     \ >= 200 / 300)\\n)\\n\"\n  - record: tenant:db2_log_usage_percent:max\n    expr:\
     \ \"max by(tenant) (\\n  100 * db2_log_used_bytes\\n  / ((db2_log_used_bytes +\
-    \ db2_log_available_bytes) > 0)\\n)\\n\"\n  - record: tenant:db2_deadlocks:rate5m\n\
-    \    expr: sum by(tenant) (rate(db2_deadlocks_total[5m]))\n  - record: tenant:db2_tablespace_used_percent:max\n\
+    \ db2_log_available_bytes) > 0)\\n)\\n\"\n  - record: tenant:db2_deadlocks:increase5m\n\
+    \    expr: sum by(tenant) (increase(db2_deadlocks_total[5m]))\n  - record: tenant:db2_tablespace_used_percent:max\n\
     \    expr: max by(tenant) (db2_tablespace_used_percent)\n  - record: tenant:db2_lock_wait_time:rate5m\n\
     \    expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))\n  - record:\
     \ tenant:db2_sort_overflow_ratio:avg\n    expr: 'sum by(tenant) (rate(db2_sort_overflows_total[5m]))\n\
@@ -33,8 +33,8 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"bufferpool_hit_ratio\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_log_usage_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"log_usage_percent\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_deadlock_rate\n\
-    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"deadlock_rate\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_deadlocks_per_5m\n\
+    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"deadlocks_per_5m\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_tablespace_used_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"tablespace_used_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_lock_wait_time\n\
@@ -181,32 +181,33 @@ data:
     \ high transaction log usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 上 DB2 交易日誌使用率過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: DB2HighDeadlockRate\n    expr: \"(\\n  tenant:db2_deadlocks:rate5m\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:db2_deadlock_rate\\n)\\\
+    \  - alert: DB2HighDeadlockRate\n    expr: \"(\\n  tenant:db2_deadlocks:increase5m\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:db2_deadlocks_per_5m\\n)\\\
     nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\
-    \n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \n    for: 1m\n    labels:\n      maintenance: mute\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
-    \ $value | printf \"%.1f\" }} deadlocks/sec'\n      description_zh: '{{ $value\
-    \ | printf \"%.1f\" }} 個死鎖/秒'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: DB2 deadlock rate elevated — application contention review'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：DB2 死鎖率升高 — 應用程式爭用審查'\n      runbook_url: '{{ with query\
+    \ $value | printf \"%.0f\" }} deadlocks in the last 5 minutes'\n      description_zh:\
+    \ 過去 5 分鐘 {{ $value | printf \"%.0f\" }} 個死鎖\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ DB2 deadlocks elevated — application contention review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：DB2 死鎖次數升高 — 應用程式爭用審查'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
+    \ }}{{ end }}{{ end }}'\n      summary: DB2 deadlocks on {{ $labels.tenant }}\n\
+    \      summary_zh: '{{ $labels.tenant }} 上 DB2 死鎖次數過高'\n      tier: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: DB2\
-    \ high deadlock rate on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 上 DB2 死鎖率過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: DB2TablespaceAlmostFull\n    expr: \"(\\n  tenant:db2_tablespace_used_percent:max\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:db2_tablespace_used_percent\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Tablespace\
-    \ usage: {{ $value | printf \"%.1f\" }}%'\n      description_zh: Tablespace 使用率：{{\
-    \ $value | printf \"%.1f\" }}%\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: DB2TablespaceAlmostFull\n\
+    \    expr: \"(\\n  tenant:db2_tablespace_used_percent:max\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:db2_tablespace_used_percent\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
+    \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: 'Tablespace usage: {{ $value | printf\
+    \ \"%.1f\" }}%'\n      description_zh: Tablespace 使用率：{{ $value | printf \"%.1f\"\
+    \ }}%\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\

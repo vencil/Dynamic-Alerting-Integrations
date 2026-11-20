@@ -26,8 +26,6 @@ uncovered:
   - ElasticsearchPendingTasks
   - ElasticsearchUnassignedShards
   rule-pack-jvm.yaml:
-  - JVMHighGCPause
-  - JVMHighGCPauseCritical
   - JVMMemoryPressure
   - JVMMemoryPressureCritical
   - JVMPerformanceDegraded

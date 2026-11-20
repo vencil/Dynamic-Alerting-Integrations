@@ -111,7 +111,7 @@ def test_read_state_invalid_json(state_dir):
     data, err = sr.read_state(p)
     assert data is None
     assert err is not None
-    assert "invalid JSON" in err
+    assert err.startswith("not valid JSON: ")   # #4064: decoded as every caller file is
 
 
 def test_read_state_missing_file(state_dir):
