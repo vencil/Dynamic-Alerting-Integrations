@@ -3903,12 +3903,18 @@ def test_the_artifact_key_floor_owns_erosion_that_empties_no_root(monkeypatch):
     # The cheapest way to green either was to weaken this very line. Matching
     # the floor's own stable phrase and naming the alternative keeps the claim
     # about which floor answered without pinning the sentence it says it in.
-    assert "conf.d root" in reported and "artifact(s) /" in reported, (
+    # #3832 moved the biggest group off the shipped tree (the exporter conf.d
+    # stopped copying the built-in keys) onto a golden fixture, so the floor
+    # that answers is the shipped-root one only while the biggest root ships.
+    shipped = biggest_root in gate._SHIPPED_CONFD_ROOTS
+    owner = ("artifact(s) /" if shipped
+             else "contribute ZERO threshold keys")
+    assert "conf.d root" in reported and owner in reported, (
         "the table beside the key floors says the biggest conf.d root going "
         "to zero is reported by the SHIPPED-ROOT floor (the one that prints "
-        "an artifact/key pair). Something else answered first — most likely "
-        "the biggest group is no longer a shipped tree — so update that row "
-        f"rather than this assertion: {reported}")
+        "an artifact/key pair) when that root ships, and by the FIFTH floor "
+        "otherwise. Something else answered first — update that row rather "
+        f"than this assertion (biggest={biggest_root}): {reported}")
     monkeypatch.undo()
 
     # 2. Inside the blind band this floor is silent. Asserted on the floor's own
@@ -4059,17 +4065,17 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (8, 16), (
-        f"the HEADROOM note beside the key floors says artifacts +8 / generators "
+    assert (up_art, up_gen) == (3, 16), (
+        f"the HEADROOM note beside the key floors says artifacts +3 / generators "
         f"+16 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
     # DOWN: how many keys may disappear before the floor itself speaks.
     down_gen = g_total - gate._DEFAULTS_GENERATOR_KEYS_FLOOR
     down_art = a_total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
-    assert (down_art, down_gen) == (12, 11), (
-        f"the note says artifacts 12 / generators 11 downward — and the fifth "
-        f"floor's own comment repeats the artifact one as '12 keys of slack'; "
+    assert (down_art, down_gen) == (9, 11), (
+        f"the note says artifacts 9 / generators 11 downward — and the fifth "
+        f"floor's own comment repeats the artifact one as '9 keys of slack'; "
         f"measured {down_art} / {down_gen}. Both places move together.")
 
     # ⛔ and they must not collide. ⚠️ NOT because they once did: at `188cfb17`,

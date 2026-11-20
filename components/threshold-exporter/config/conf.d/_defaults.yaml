@@ -4,68 +4,12 @@
 # Loaded first (underscore prefix sorts before letters).
 # Only this file should contain 'defaults', 'state_filters', and '_routing_defaults'.
 #
-# defaults 為生成段（#1200 WS1a PR-2）：內容＝threshold-registry 的
-# arming: default 的 key，與 helm/threshold-exporter/values.yaml 出貨預設同源
-# （本範本先前多帶 pg_connections/pg_replication_lag＝helm↔dev 漂移，
-# 改生成後歸一；pg_* 是否升 arming: default 屬 D4 家族 owner 拍板）。
-# 改值走 rule-packs/threshold-registry.yaml ＋ check_threshold_registry.py --regen。
+# defaults 不寫平台預設啟用的閾值（threshold-registry 的 arming: default）：
+# 讀取端內建它們，省略就拿平台值、跟著平台日後的校準走（#3832）。整棵樹不要
+# 某個鍵就在這裡寫 `<鍵>: disable`；要改數字就寫那個數字。現在的內建值與摘要
+# 看 `da-tools validate-config` 的 platform_defaults 列。
+# 下方生成段改值走 rule-packs/threshold-registry.yaml ＋ check_threshold_registry.py --regen。
 defaults:
-  # >>> GENERATED:threshold-registry:dev-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-  # ── kubernetes：Kubernetes (cAdvisor + KSM) ──
-  # % — Container CPU % of limit (weakest link)（critical 加嚴 opt-in：container_cpu_critical，registry
-  # 建議 95）
-  container_cpu: 80
-  # % — Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier
-  # opt-in via container_cpu_throttle_critical, declared in optional_overrides; #944)（critical 加嚴
-  # opt-in：container_cpu_throttle_critical，registry 建議 50）
-  container_cpu_throttle: 25
-  # % — Container memory % of limit (weakest link)（critical 加嚴
-  # opt-in：container_memory_critical，registry 建議 95）
-  container_memory: 85
-  # ── postgresql：PostgreSQL (postgres_exporter) ──
-  # % of max_connections — Connection usage % warning（critical 加嚴
-  # opt-in：pg_connections_critical，registry 建議 90）
-  pg_connections: 80
-  # seconds — Replication lag warning（critical 加嚴 opt-in：pg_replication_lag_critical，registry 建議 60）
-  pg_replication_lag: 30
-  # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
-  # % of max_connections — Connection usage warning: threads_connected as a share of
-  # max_connections, per instance, busiest instance per tenant; 80 = PMM "MySQL connections in use"
-  # template / awesome-prometheus-alerts. Replaces the absolute-count key mysql_connections (#3778:
-  # a unit change is a removal plus an addition, no alias)（critical 加嚴
-  # opt-in：mysql_connection_usage_percent_critical，registry 建議 90）
-  mysql_connection_usage_percent: 80
-  # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
-  # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
-  # lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical
-  # 加嚴 opt-in：mysql_replication_lag_critical，registry 建議 120）
-  mysql_replication_lag: 30
-  # ── elasticsearch：Elasticsearch (elasticsearch_exporter) ──
-  # % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert
-  # demands es_heap_usage_percent) — unwired dead key, no alias（critical 加嚴
-  # opt-in：es_heap_usage_percent_critical，registry 建議 90）
-  es_heap_usage_percent: 85
-  # % — Disk USAGE % warning (used = 1 - available/size, recording rule
-  # tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
-  # tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %)
-  # — carrying 15 into a used-% rule would fire permanently（critical 加嚴
-  # opt-in：es_disk_usage_percent_critical，registry 建議 90）
-  es_disk_usage_percent: 85
-  # ── oracle：Oracle Database (query-exporter) ──
-  # % — Tablespace usage warning（critical 加嚴 opt-in：oracle_tablespace_used_percent_critical，registry
-  # 建議 95）
-  oracle_tablespace_used_percent: 85
-  # % of PROCESSES — Process usage warning: v$process rows as a share of the PROCESSES parameter,
-  # per exporter, busiest per tenant; 85 = awesome-prometheus-alerts "Oracle DB processes reaching
-  # limit". Replaces the absolute-count key oracle_process_count (#1320: a unit change is a removal
-  # plus an addition, no alias)
-  oracle_process_usage_percent: 85
-  # ── rabbitmq：RabbitMQ (kbudde/rabbitmq_exporter) ──
-  # % — Node memory warning: resident memory as % of the memory high watermark, fullest node (#3929:
-  # 80 → 90, measured per node)（critical 加嚴 opt-in：rabbitmq_node_mem_percent_critical，registry 建議
-  # 95）
-  rabbitmq_node_mem_percent: 90
-  # <<< GENERATED:threshold-registry:dev-defaults
   # 以下是 examples/ 子目錄租戶所用 pack 的 defaults（#3014）。不放在
   # examples/ 自己的 _defaults.yaml：只有子樹 carrier 宣告的 key 送不上 /metrics（#1976）。
   # >>> GENERATED:threshold-registry:dev-example-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）

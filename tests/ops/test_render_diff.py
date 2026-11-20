@@ -86,7 +86,9 @@ def test_a_duration_respelled_is_not_a_change(tmp_path, da_guard):
 
 
 def test_adr_example_container_memory_reaches_the_four_tenants_not_overriding_it(tmp_path, da_guard):
-    d = _diff(tmp_path, da_guard, lambda c: _edit(c, "  container_memory: 85", "  container_memory: 999"))
+    # #3832: the root no longer copies container_memory (built in at 85), so
+    # raising it is adding it.
+    d = _diff(tmp_path, da_guard, lambda c: _edit(c, "\ndefaults:\n", "\ndefaults:\n  container_memory: 999\n"))
     got = {c.tenant: (c.base, c.pr) for c in d.served.changes if c.field == "values"}
     assert got == {"db-a": (85, 999), "es-prod": (85, 999), "mongo-prod": (85, 999), "redis-prod": (85, 999)}
     assert d.routes.status == "computed" and d.routes.changes == ()
@@ -95,7 +97,8 @@ def test_adr_example_container_memory_reaches_the_four_tenants_not_overriding_it
 
 def test_control_comment_only_change_is_no_change(tmp_path, da_guard):
     """對照組：只改註解，兩個面向都沒有差異、結束碼 0。"""
-    d = _diff(tmp_path, da_guard, lambda c: _edit(c, "  container_memory: 85", "  container_memory: 85  # note"))
+    d = _diff(tmp_path, da_guard, lambda c: _edit(c, "  redis_memory_used_bytes: 4294967296\n",
+                                                   "  redis_memory_used_bytes: 4294967296  # note\n"))
     assert (d.served.status, d.routes.status) == ("computed", "computed")
     assert d.served.changes == () and d.routes.changes == ()
     assert d.exit_code == 0

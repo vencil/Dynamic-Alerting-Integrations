@@ -2141,8 +2141,9 @@ def _dev_example_keep(pack: str, entry: dict) -> bool:
 # The two topologies a pack header speaks for, and the defaults blocks each
 # one's generated `defaults:` mapping carries — by the very keep predicates
 # `regen_surfaces` renders those blocks with (helm values: the chart-default
-# block; the repo's dev conf.d `_defaults.yaml`: the same block plus the
-# example tenants' `dev-example-defaults` block). A header never asks one
+# block; the repo's dev conf.d `_defaults.yaml`: the example tenants'
+# `dev-example-defaults` block, its chart-default keys valued by the readers'
+# built-in layer instead of a copy, #3832). A header never asks one
 # topology and speaks for the other (#3730);
 # `test_topology_keeps_are_what_the_surfaces_carry` holds this table to the
 # generated files.
@@ -2788,17 +2789,13 @@ def surface_specs(doc: dict) -> list[dict]:
             "indent": " " * 4,
             "body": render_unarmed_lines(doc, 4),
         },
+        # The dev template carries no block of the chart-default keys: they
+        # are the readers' built-in layer (#3832 decision 7, as `da-tools
+        # init` writes no copy of them either), so the template serves them
+        # without a copy that would pin today's numbers.
         {
-            "id": "dev-defaults",
-            "path": DEV_DEFAULTS_PATH,
-            "indent": " " * 2,
-            "body": render_chart_defaults_lines(doc, 2),
-            "confd": _confd_mapping(doc, _chart_default_keep),
-        },
-        {
-            # The example tenants' packs (#3014): a second block in the same
-            # `defaults:` mapping, so the chart-default block above stays
-            # byte-identical to helm's.
+            # The example tenants' packs (#3014): the keys the chart does not
+            # arm, so the readers build none of them in.
             "id": "dev-example-defaults",
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
