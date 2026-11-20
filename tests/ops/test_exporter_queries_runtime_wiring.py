@@ -74,6 +74,7 @@ def _script_packs() -> list[str]:
     return out.stdout.split()
 
 
+@pytest.mark.skipif(BASH is None, reason="bash is not on PATH")
 def test_the_script_runs_exactly_the_registry_packs_with_a_queries_file() -> None:
     registry = _registry_packs()
     assert len(registry) >= 2, f"only {sorted(registry)} name a queries file — did the registry read change?"
@@ -197,6 +198,8 @@ if [[ "$sub" == run ]]; then
   done
 fi
 if [[ "${FAIL:-}" == "$sub" ]]; then echo "docker: simulated failure of $sub" >&2; exit 125; fi
+# The exporter's log cannot be read (the daemon went away after the scrape).
+if [[ "$1" == logs && -n "${FAIL_EXPORTER_LOGS:-}" && "$2" == qe-exp-* ]]; then exit 125; fi
 case "$1" in
   logs)    if [[ -z "${NEVER_READY:-}" ]]; then
              echo "DATABASE IS READY TO USE / Setup has completed"
@@ -327,6 +330,13 @@ def test_the_exit_code_is_the_checkers(stubbed, rc) -> None:
     assert proc.returncode == rc, proc.stderr
 
 
+@pytest.mark.skipif(BASH is None, reason="bash is not on PATH")
+def test_an_unreadable_exporter_log_does_not_replace_the_checkers_exit_code(stubbed) -> None:
+    """After a finding the script prints the exporter's log; failing to is not the verdict."""
+    proc, _read = stubbed(sorted(_registry_packs())[0], CHECKER_RC="1", FAIL_EXPORTER_LOGS="1")
+    assert proc.returncode == 1, (proc.returncode, proc.stderr)
+
+
 def _copy_with_header(tmp_path: Path, pack: str, edit) -> Path:
     """The tree's script next to *pack*'s queries file with its header edited."""
     root = tmp_path / "repo"
@@ -363,10 +373,12 @@ def test_a_header_whose_grants_cannot_all_be_read_cannot_run(stubbed, tmp_path, 
     ({"FAIL": "network"}, "could not create the docker network"),
     ({"FAIL": "run-db"}, "could not start the"),
     ({"NEVER_READY": "1"}, "did not become ready"),
+    ({"FAIL": "logs"}, "did not become ready"),
     ({"FAIL": "exec"}, "could not set up the"),
     ({"FAIL": "run-exporter"}, "could not start query-exporter"),
     ({"FAIL": "port"}, "query-exporter is not listening"),
-], ids=["pull", "network", "db-container", "never-ready", "setup", "exporter-container", "exporter-port"])
+], ids=["pull", "network", "db-container", "never-ready", "logs-unreadable", "setup", "exporter-container",
+        "exporter-port"])
 def test_failing_infrastructure_is_exit_2_by_name(stubbed, env, message) -> None:
     for pack in sorted(_registry_packs()):
         proc, read = stubbed(pack, **env)

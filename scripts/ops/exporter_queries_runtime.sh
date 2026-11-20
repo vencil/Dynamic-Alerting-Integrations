@@ -72,6 +72,12 @@ cannot_run() {
   echo "exporter_queries_runtime: $*" >&2
   exit 2
 }
+# The last lines of a container's log, for the reader of a failure. Never the
+# reason this script ends: with the docker daemon gone `docker logs` fails too,
+# and under errexit + pipefail that would replace the exit code being reported.
+show_logs() {
+  docker logs "$1" 2>&1 | tail -n "$2" >&2 || true
+}
 
 QE_VERSION=$(sed -n 's/^query-exporter==\([^[:space:]#]*\).*/\1/p' "$ROOT/requirements/ci-constraints.txt")
 [[ -n "$QE_VERSION" ]] || cannot_run "no query-exporter pin in requirements/ci-constraints.txt"
@@ -128,7 +134,7 @@ for _ in $(seq 1 180); do
   sleep 5
 done
 if [[ -z "$ready" ]]; then
-  docker logs "$DB" 2>&1 | tail -n 20 >&2
+  show_logs "$DB" 20
   cannot_run "$PACK did not become ready"
 fi
 
@@ -185,7 +191,7 @@ docker run -d --name "$EXP" --network "$NET" -p 127.0.0.1::9560 \
   "$QE_IMAGE" --config /config/databases.yaml --config /config/queries.yaml >/dev/null \
   || cannot_run "could not start query-exporter"
 exporter_gone() {
-  docker logs "$EXP" 2>&1 | tail -n 30 >&2
+  show_logs "$EXP" 30
   cannot_run "$1"
 }
 # An exporter that exits at startup (a config it refuses) has no port to report.
@@ -197,13 +203,15 @@ PORT=$(docker port "$EXP" 9560/tcp 2>/dev/null | head -n1 | sed 's/.*://') || tr
 # left to --compare-served below, which names it.
 echo "waiting for $want queries to run…"
 for _ in $(seq 1 60); do
-  curl -fsS "http://127.0.0.1:$PORT/metrics" > "$WORK/scrape.txt" 2>/dev/null || true
+  curl -fsS --max-time 20 "http://127.0.0.1:$PORT/metrics" > "$WORK/scrape.txt" 2>/dev/null || true
   got=$(grep -E '^queries_total\{' "$WORK/scrape.txt" | grep -oE 'query="[^"]+"' | sort -u | wc -l || true)
   [[ "$got" -ge "$want" ]] && break
   sleep 5
 done
 sleep 20   # one more round of the 15s queries, so a counter has moved once
-curl -fsS "http://127.0.0.1:$PORT/metrics" > "$WORK/scrape.txt" \
+# --max-time: an exporter that accepts the connection and never answers is
+# "did not answer", not a job that hangs until its timeout.
+curl -fsS --max-time 20 "http://127.0.0.1:$PORT/metrics" > "$WORK/scrape.txt" \
   || exporter_gone "query-exporter did not answer /metrics"
 
 set +e
@@ -211,6 +219,6 @@ set +e
 rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then
-  docker logs "$EXP" 2>&1 | tail -n 30 >&2
+  show_logs "$EXP" 30
 fi
 exit $rc
