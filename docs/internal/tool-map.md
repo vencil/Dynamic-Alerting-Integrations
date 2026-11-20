@@ -48,6 +48,7 @@ lang: zh
 | `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
+| `migrate_builtin_defaults.py` | migrate-builtin-defaults — remove copies of the platform's built-in thresholds. |
 | `migrate_credentials.py` | find receiver credentials written out in conf.d and |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
 | `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |

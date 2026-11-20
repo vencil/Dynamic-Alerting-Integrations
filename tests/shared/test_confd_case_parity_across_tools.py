@@ -730,6 +730,12 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # tenants that declare `_metadata.db_type`, and the fixture declared none;
 # `alpha` now declares postgresql (what blind-spot counts), so removing the
 # tenant files changes its report.
+#
+# ⚠️ `migrate_builtin_defaults.py` entered with the tool (#3832). It reports
+# copies of built-in thresholds: values equal to the platform's built-in one.
+# The fixture's tenant writes `pg_connections: 90` (the built-in is 80) and no
+# root copy, so every tree has none and the report is the same with the tenant
+# files removed. A tenant writing the built-in value would make it visible.
 KNOWN_INSENSITIVE: set[str] = {
     "analyze_rule_pack_gaps.py",
     "backtest_threshold.py",
@@ -737,6 +743,7 @@ KNOWN_INSENSITIVE: set[str] = {
     "config_history.py",
     "da_assembler.py",
     "generate_tenant_mapping_rules.py",
+    "migrate_builtin_defaults.py",
     "migrate_credentials.py",
     "tenant_verify.py",
 }

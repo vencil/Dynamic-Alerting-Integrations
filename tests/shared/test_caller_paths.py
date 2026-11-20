@@ -173,6 +173,8 @@ OPS_SITES = [
      ["--config-dir", "{D}", "--dry-run", "--json"], "--config-dir", "dir_not_accessible"),
     ("explain-keys --config-dir", "explain_keys.py", ["--config-dir", "{D}", "--json"],
      "--config-dir", None),
+    ("migrate-builtin-defaults --config-dir", "migrate_builtin_defaults.py",
+     ["--config-dir", "{D}"], "--config-dir", None),
     ("migrate-credentials --config-dir", "migrate_credentials.py",
      ["--config-dir", "{D}", "--json"], "--config-dir", None),
     ("migrate-credentials --policy", "migrate_credentials.py",
@@ -1414,6 +1416,8 @@ JUDGED_DECLARATIONS = {
     # #3695 / #3751 (owner 2026-11-11): an empty conf.d was already rc 2
     # (da-guard's "no .yaml files found"); now named by the flag.
     "explain-keys --config-dir": ("refused", None, "refused"),
+    # #3832: declared as explain-keys' (an empty conf.d is refused naming the flag).
+    "migrate-builtin-defaults --config-dir": ("refused", None, "refused"),
     # #3751: an empty directory was a run over nothing (rc 0), and stays one.
     "drift-detect --dirs": ("allowed", None, "refused"),
     # #3751: as explain-keys; the dx tool the declared rows reach (DX_SITES).

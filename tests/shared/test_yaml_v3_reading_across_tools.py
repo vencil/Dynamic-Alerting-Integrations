@@ -285,6 +285,7 @@ _NOT_PROBED: dict[str, str] = {
     "ops/backtest_threshold.py": _GO, "ops/batch_diagnose.py": _NAMES,
     "ops/config_history.py": _NAMES, "ops/da_assembler.py": _GO_WRITER,
     "ops/deprecate_rule.py": _GO_EDIT, "ops/diagnose.py": _GO,
+    "ops/migrate_builtin_defaults.py": _GO_EDIT,
     "ops/drift_detect.py": _NAMES, "ops/explain_keys.py": _GO,
     "ops/gitops_check.py": _GO_KEYS,
     "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _GO_WRITER,

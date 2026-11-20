@@ -311,6 +311,11 @@ KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {}
 
 # Population files that list a directory themselves but get no cell here.
 NOT_A_CELL: dict[str, str] = {
+    "ops/migrate_builtin_defaults.py":
+        "its one listing picks the root defaults carrier among parse-tree's "
+        "selected depth-0 entries (#3832); every tenant and the file each value "
+        "comes from is da-guard effective's (key_sources), the exporter's own "
+        "walk — no Python enumeration of the tree to probe",
     "_lib_validation.py":
         "lists no directory: the call the derivation counts is `walk`, a local "
         "recursion over a receiver mapping; in the population only through "

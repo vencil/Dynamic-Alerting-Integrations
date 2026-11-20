@@ -228,6 +228,11 @@ _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
         "one directory) for the files a RULE_SOURCES entry names as rule "
         "files (#3471) — repo-shipped rule packs copied beside the tools, "
         "never a tenant conf.d; nothing below that directory is a rule pack",
+    ("migrate_builtin_defaults.py", "_root"):
+        "finds the ROOT defaults carrier — the one file whose `defaults:` and "
+        "`optional_overrides:` the built-in layer sits under (#3832); nothing "
+        "below the root is that file by definition. Tenant files at every "
+        "depth come from da-guard effective's key_sources, not this listing",
     ("_lib_parse_tree.py", "root_platform_file"):
         "a predicate on ONE entry, not a listing: whether that entry is a "
         "root platform file (Go's isRootPlatformKey, #2743) — a `_` file "
