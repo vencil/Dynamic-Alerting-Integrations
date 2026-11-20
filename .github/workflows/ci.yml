@@ -897,6 +897,15 @@ jobs:
       - name: Install query-exporter (the version the runtime check derives names with)
         run: pip install query-exporter -c requirements/ci-constraints.txt
 
+      # #4043: the tests of check_exporter_queries.py that derive names with
+      # query-exporter's own code skip where it is not installed — and the Python
+      # Tests job does not install it. Here it is, so they run here, and
+      # QUERY_EXPORTER_REQUIRED=1 turns a missing package into a failure.
+      - name: "check_exporter_queries tests with query-exporter present (HARD gate — #4043)"
+        env:
+          QUERY_EXPORTER_REQUIRED: "1"
+        run: python -m pytest tests/lint/test_check_exporter_queries.py -q -p no:cacheprovider
+
       # ⛔ One command, nothing around it: tests/ops/test_exporter_queries_runtime_wiring.py
       # refuses anything else in this `run:` (a pipe, `||`, a condition, a second
       # line), because each is a way for the step to pass without the check.

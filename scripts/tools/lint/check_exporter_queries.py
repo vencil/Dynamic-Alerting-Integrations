@@ -17,6 +17,8 @@ so an upgrade that renames something shows up here. Then, per pack:
 
   * every raw metric the pack reads — not a recording rule output (no ``:``), not a
     platform metric (``_lib_metric_sources.resolve_family``) — is a served name;
+  * every metric the file declares is listed by a query (a metric no query lists is
+    never served, and is not counted as served here);
   * every gauge in the file has ``expiration`` (query-exporter keeps a gauge's last
     value while the database is unreachable; expiration drops it);
   * no metric sets ``increment: true`` (a counter must carry the database's own
@@ -104,8 +106,30 @@ def load_queries(path: Path) -> dict:
     return doc
 
 
+def unattached_metrics(doc: dict) -> set[str]:
+    """Metrics the file declares that no query lists under its `metrics:`.
+
+    Read off the YAML, so it answers without query-exporter installed; a shape
+    query-exporter would refuse (a query's `metrics` that is not a list of
+    names) is "cannot run" by name here too, not a traceback."""
+    attached: set[str] = set()
+    for qname, q in (doc.get("queries") or {}).items():
+        listed = (q or {}).get("metrics") if isinstance(q, dict) else None
+        if listed is None:
+            continue
+        if not isinstance(listed, list) or not all(isinstance(m, str) for m in listed):
+            raise CannotRun(f"query {qname}: `metrics` must be a list of metric names")
+        attached |= set(listed)
+    return set(doc.get("metrics") or {}) - attached
+
+
 def served_names(path: Path, doc: dict) -> set[str]:
-    """The metric names query-exporter serves for *path*, from its own code."""
+    """The metric names query-exporter serves for *path*, from its own code.
+
+    Only the metrics a query lists: query-exporter sets a metric from a query's
+    result columns, so one that is declared and attached to no query is never
+    served (it logs `unused config entries`), whatever the declaration says
+    (#4043)."""
     try:
         from prometheus_aioexporter import MetricsRegistry
         from prometheus_client import generate_latest
@@ -125,9 +149,18 @@ def served_names(path: Path, doc: dict) -> set[str]:
             config = load_config([stub, path])
         except Exception as e:  # query-exporter's own validation error
             raise CannotRun(f"{path}: query-exporter rejects it: {e}") from e
+    # config.metrics also holds query-exporter's built-ins (query_interval, …),
+    # which no query lists and which are served all the same: only a metric of
+    # the FILE that no loaded query lists is left out.
+    # As query-exporter does it: every metric is created, only one a query
+    # lists is ever set — and a metric that was never set exposes no sample.
+    attached = {m.name for q in config.queries.values() for m in q.metrics}
+    unserved = set(doc.get("metrics") or {}) - attached
     registry = MetricsRegistry()
     registry.create_metrics(config.metrics.values())
     for name, metric in config.metrics.items():
+        if name in unserved:
+            continue
         labels = {label: "x" for label in metric.labels} or None
         m = registry.get_metric(name, labels=labels)
         if metric.type in ("histogram", "summary"):
@@ -345,6 +378,9 @@ def findings_for(pack: str, rule_pack: Path, queries: Path) -> list[str]:
         if spec.get("increment"):
             out.append(f"{rel}: {name} sets increment: true — a counter must carry the "
                        "database's own cumulative value")
+    for name in sorted(unattached_metrics(doc)):
+        out.append(f"{rel}: metric {name} is declared but no query lists it under "
+                   "`metrics:` — query-exporter never serves it")
     # One connection per database by default (connection-pool size 1, one worker):
     # a query without a timeout that hangs holds it and every other query on
     # that database waits. The timeout must also end before the next run is due.
@@ -434,6 +470,11 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
             out.append(f"query {q} failed {int(bad)} time(s)")
     # Only the names the file's own metrics expose: query-exporter's built-ins
     # such as database_errors_total appear only after a first error.
+    # A declared metric no query lists is not expected on /metrics; say so here
+    # as the static half does, so this half alone does not pass over it (#4043).
+    for name in sorted(unattached_metrics(doc)):
+        out.append(f"metric {name} is declared but no query lists it under `metrics:` — "
+                   "query-exporter never serves it")
     declared = set(doc.get("metrics") or {})
     expected = {n for n in served_names(queries, doc)
                 if any(n == m or n.startswith(m + "_") for m in declared)}
@@ -466,12 +507,12 @@ def compare_served(pack: str, scrape: Path) -> list[str]:
 def main() -> "int | Report":
     ap = argparse.ArgumentParser(description=i18n_text(
         "rule pack 讀的原始指標必須由它在 registry 登記的 query-exporter 查詢設定產生；"
-        "名稱以 query-exporter 自己的程式推導（#3833）。另查 gauge 有 expiration、"
-        "沒有 increment: true、沒有對 gauge 做 rate()。",
+        "名稱以 query-exporter 自己的程式推導（#3833）。另查宣告的 metric 都有 query "
+        "列出、gauge 有 expiration、沒有 increment: true、沒有對 gauge 做 rate()。",
         "A rule pack's raw metrics must be served by the query-exporter config its "
         "registry entry names; names are derived with query-exporter's own code "
-        "(#3833). Also: every gauge has an expiration, no increment: true, no rate() "
-        "of a gauge."))
+        "(#3833). Also: every declared metric is listed by a query, every gauge has an "
+        "expiration, no increment: true, no rate() of a gauge."))
     ap.add_argument("--ci", action="store_true",
                     help=i18n_text("CI 模式（有發現時 exit 1）", "CI mode (exit 1 on a finding)"))
     ap.add_argument("--json", action="store_true",
