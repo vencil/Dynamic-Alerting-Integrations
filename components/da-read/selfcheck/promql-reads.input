@@ -1,0 +1,1 @@
+["max_over_time(rate(x{a=\"[2h]\"}[5m])[3h:1m] offset 1w)", "topk by (tenant) (1, predict_linear(y[1h30m], 60))"]

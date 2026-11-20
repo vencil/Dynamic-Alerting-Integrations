@@ -103,8 +103,8 @@ func TestServedSchedulesOnly_TimeOfDayDoesNotChangeTheDocument(t *testing.T) {
 				t.Fatal(err)
 			}
 			for tenant, fields := range only.Tenants {
-				if len(fields) != 1 || fields["schedules"] == nil {
-					t.Errorf("tenant %s carries %v, want schedules only", tenant, keysOf(fields))
+				if len(fields) != 2 || fields["schedules"] == nil || fields["unserved_thresholds"] == nil {
+					t.Errorf("tenant %s carries %v, want schedules and unserved_thresholds only", tenant, keysOf(fields))
 				}
 			}
 
@@ -181,8 +181,8 @@ func TestServedSchedulesOnly_Subset(t *testing.T) {
 		!reflect.DeepEqual(doc.Absent, []string{"nope"}) {
 		t.Errorf("tenants %v, requested %v, absent %v", keysOf(doc.Tenants), doc.Requested, doc.Absent)
 	}
-	if fields := doc.Tenants["tenant-a"]; len(fields) != 1 || fields["schedules"] == nil {
-		t.Errorf("tenant-a carries %v, want schedules only", keysOf(fields))
+	if fields := doc.Tenants["tenant-a"]; len(fields) != 2 || fields["schedules"] == nil || fields["unserved_thresholds"] == nil {
+		t.Errorf("tenant-a carries %v, want schedules and unserved_thresholds only", keysOf(fields))
 	}
 }
 

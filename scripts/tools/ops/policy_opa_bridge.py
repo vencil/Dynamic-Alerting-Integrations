@@ -140,14 +140,8 @@ except ImportError:
         exit_on_yaml_file_error,
     )
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
-    ServedValuesError,
     exit_on_served_values_error,
-    load_effective,
-    load_served_facts,
-    load_served_schedules,
-    print_load_warnings,
-    ungathered_refusal,
-    written_config,
+    load_whole_day,
 )
 # A file parse-tree cannot read raises YamlFileError (rc 2 via
 # exit_on_yaml_file_error, naming it); no usable parse-tree is rc 2 too.
@@ -200,20 +194,8 @@ def load_tenant_inputs(config_dir: str, at: Optional[str] = None,
     and `ServedValuesError` when a part of the day cannot be gathered
     (`ungathered_refusal`) or the readings disagree on the tenants; `main`
     turns each into exit 2 (`exit_on_served_values_error`)."""
-    days = load_served_schedules(config_dir, at=at)
-    print_load_warnings(days)
-    refusal = ungathered_refusal(days.ungathered)
-    if refusal is not None:
-        raise ServedValuesError(f"da-guard served-values: {refusal}", None, "")
-    facts = load_served_facts(config_dir)
-    effective = load_effective(config_dir)
-    if not set(effective) == set(days.tenants) == set(facts.tenants):
-        raise ServedValuesError(
-            "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
-            f"{sorted((set(effective) | set(days.tenants) | set(facts.tenants)) - (set(effective) & set(days.tenants) & set(facts.tenants)))}",
-            None, "")
-    tenants = {t: written_config(e, facts.tenants[t].metadata)
-               for t, e in sorted(effective.items())}
+    whole = load_whole_day(config_dir, at=at)
+    days, tenants = whole.days, whole.tenants
     served = {t: {k: day.as_json() for k, day in sorted(d.items())}
               for t, d in sorted(days.tenants.items())}
     for t, d in sorted(days.tenants.items()):

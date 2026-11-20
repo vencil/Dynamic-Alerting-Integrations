@@ -47,8 +47,9 @@ const servedValuesCmd = "served-values"
 // relies on is a new value here (ADR-037), and a reader names an earlier
 // value as a da-guard older than itself. v1 wrote each tenant's key_checks
 // as sentences that quoted the key; v2 writes records (#3703); v3 adds
-// `ungathered` beside the schedules (#3991).
-const servedValuesSchema = "da-guard.served-values/v3"
+// `ungathered` beside the schedules (#3991); v4 adds each --schedules-only
+// tenant's `unserved_thresholds` (#4073).
+const servedValuesSchema = "da-guard.served-values/v4"
 
 // customAlertsKey is the reserved key whose rows are the tenant's custom
 // alerts; its value is the list of those rows rather than one number.
@@ -1043,6 +1044,17 @@ type scheduleFiller func(cfg *config.ThresholdConfig, at time.Time, tenants map[
 // its schedules, as --schedules writes them, and nothing read at --at alone.
 type servedTenantDay struct {
 	Schedules map[string]servedSchedule `json:"schedules"`
+	// UnservedThresholds (#4073): the threshold keys (no `_` prefix) the
+	// default mode's Unserved would list at every minute of the day — keys
+	// of the tenant's merged config, root `defaults:` dimensional defaults
+	// and the build's undeliverable keys, keyed and valued as Unserved —
+	// judged on Schedules: a key in none of whose segments the tenant has a
+	// row. An `expires:` is judged at --at, as Schedules judges it. Null
+	// when the document's Ungathered is not empty: in such a part of the day
+	// nothing is served, so whether a key would have been is not known (its
+	// schedule may even be missing). Not Unserved: a `_` key's reading is
+	// Keys' and --config-facts', not the day's.
+	UnservedThresholds *map[string]any `json:"unserved_thresholds"`
 }
 
 // servedTenantFacts is one tenant of the --config-facts document (#3918):
@@ -1086,7 +1098,14 @@ func servedSchedulesOnly(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, fill scheduleFiller,
 	written map[string]map[string]string, refusedTexts map[string]string,
 ) (map[string]servedTenantDay, error) {
-	tenants, err := servedValuesFilled(cfg, at, undeliverable, fill, written, refusedTexts, false)
+	var parts []ungatheredPart
+	recorded := func(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
+		expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool) ([]ungatheredPart, error) {
+		p, err := fill(cfg, at, tenants, expiries, name, instantGathered)
+		parts = p
+		return p, err
+	}
+	tenants, err := servedValuesFilled(cfg, at, undeliverable, recorded, written, refusedTexts, false)
 	// Only the reading at `at` itself returns a bare *notGatherableError
 	// (keyedRowsWith); the schedule readings name their pieces' failures as
 	// segments, and wrap any error of their own.
@@ -1098,20 +1117,59 @@ func servedSchedulesOnly(cfg *config.ThresholdConfig, at time.Time,
 		}
 		// The expiry reading the collector's scrape made (Hooks.Observe),
 		// resolved again silently: that scrape already wrote its WARN lines.
-		_, err = fill(cfg, at, tenants, cfg.ResolveThresholdExpiriesAtLogf(at, nil), name, false)
+		_, err = recorded(cfg, at, tenants, cfg.ResolveThresholdExpiriesAtLogf(at, nil), name, false)
 	}
 	if err != nil {
 		return nil, err
 	}
-	spellAsWritten(tenants, written)
-	out := make(map[string]servedTenantDay, len(tenants))
+	// Both ways of reading meet here, so Unserved is the day's whichever
+	// one ran: the reading at `at` filled it at that instant, and the
+	// ungathered one not at all.
+	rootRefused := cfg.RefusedRootDefaults()
 	for tenant, tv := range tenants {
 		if tv.Schedules == nil {
 			return nil, fmt.Errorf("internal: tenant %s: no schedules were read", tenant)
 		}
-		out[tenant] = servedTenantDay{Schedules: *tv.Schedules}
+		day := *tv.Schedules
+		tv.Unserved = map[string]any{}
+		unservedOf(tv.Unserved, cfg, cfg.Tenants[tenant], rootRefused, refusedTexts,
+			func(canon string) bool { return servesARow(day[canon]) })
+		for k := range tv.Unserved {
+			if strings.HasPrefix(k, "_") {
+				delete(tv.Unserved, k)
+			}
+		}
+		for k, sv := range undeliverable[tenant] {
+			tv.Unserved[k] = rawScheduledValue(sv)
+		}
+		tenants[tenant] = tv
+	}
+	spellAsWritten(tenants, written)
+	out := make(map[string]servedTenantDay, len(tenants))
+	for tenant, tv := range tenants {
+		d := servedTenantDay{Schedules: *tv.Schedules}
+		if len(parts) == 0 {
+			unserved := tv.Unserved
+			d.UnservedThresholds = &unserved
+		}
+		out[tenant] = d
 	}
 	return out, nil
+}
+
+// servesARow says whether the key has a /metrics row in some segment of its
+// day: a segment with a value, not null (no row) nor an Error.
+func servesARow(s servedSchedule) bool {
+	for _, seg := range s.Segments {
+		if seg.Error != "" || seg.Value == nil {
+			continue
+		}
+		if raw, null := seg.Value.(json.RawMessage); null && string(raw) == "null" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // servedValuesFilled is servedValuesWith with withSchedules, when not nil,
@@ -1306,6 +1364,17 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 // and refusedTextsOf.
 func addUnserved(tv servedTenantValues, cfg *config.ThresholdConfig, overrides map[string]config.ScheduledValue,
 	rootRefused map[string]string, refusedTexts map[string]string) {
+	unservedOf(tv.Unserved, cfg, overrides, rootRefused, refusedTexts, func(canon string) bool {
+		_, served := tv.Values[canon]
+		return served || (canon == "_routing" && tv.Routing != nil)
+	})
+}
+
+// unservedOf is addUnserved's rule, with served saying whether the tenant
+// is served the key under its canonical spelling (#4073: at one instant, or
+// at some minute of the day); it writes into dst.
+func unservedOf(dst map[string]any, cfg *config.ThresholdConfig, overrides map[string]config.ScheduledValue,
+	rootRefused map[string]string, refusedTexts map[string]string, served func(canon string) bool) {
 	for k, sv := range overrides {
 		canon, isAlias := config.CanonicalKeyFor(k)
 		// A retired spelling whose canonical key the same tenant also
@@ -1313,13 +1382,10 @@ func addUnserved(tv servedTenantValues, cfg *config.ThresholdConfig, overrides m
 		// served, so the alias's own value is not.
 		_, canonWritten := overrides[canon]
 		shadowed := isAlias && canonWritten
-		if _, served := tv.Values[canon]; served && !shadowed {
+		if served(canon) && !shadowed {
 			continue
 		}
-		if canon == "_routing" && tv.Routing != nil {
-			continue
-		}
-		tv.Unserved[k] = rawScheduledValue(sv)
+		dst[k] = rawScheduledValue(sv)
 	}
 	// #2031: a root dimensional default the tenant does not write is the
 	// tenant's labelled series; one with no row is unserved. #3045: so is
@@ -1333,16 +1399,16 @@ func addUnserved(tv servedTenantValues, cfg *config.ThresholdConfig, overrides m
 			// In Keys instead (addRootRefused): its value is no number to show.
 			continue
 		}
-		if _, served := tv.Values[canon]; served || own || !perTenant {
+		if served(canon) || own || !perTenant {
 			continue
 		}
 		// #3250: a refused `_` key's value is the text the file wrote,
 		// as for a tenant's (rawScheduledValue): JSON has no NaN.
 		if _, refused := config.RefusedDefault(v); refused {
-			tv.Unserved[k] = refusedTexts[k]
+			dst[k] = refusedTexts[k]
 			continue
 		}
-		tv.Unserved[k] = v
+		dst[k] = v
 	}
 }
 

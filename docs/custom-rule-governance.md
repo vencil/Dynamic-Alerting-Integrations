@@ -253,6 +253,15 @@ file_overrides:
       max_range_duration: 96h        # forecast lookback 上限 = max(lookback_factor·最大 horizon, lookback_floor)，由 recipe 契約產生
 ```
 
+> **範圍與函式照 Prometheus 的讀法判定**（[#4080](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4080)）：運算式由 Prometheus 的 PromQL parser 讀，不比對文字。
+> `max_range_duration` 比的是每個 selector 讀取的時間窗寬度：自身 range 加上外層每個子查詢的
+> range（`[1w]`、`[1h30m]`、`[(30d)]` 這類運算式都以實際時長計），所以在 1h 上限下
+> `max_over_time(rate(x[5m])[1h:1m])` 讀 1h5m，會被擋。`offset` 只平移時間窗，不計入；
+> 帶 `@` 的 selector 只計自身 range，帶 `@` 的子查詢不計它外層的子查詢（同 Prometheus）；lookback delta 是伺服器設定，也不計入。多個 selector
+> 的總查詢量不在此檢查範圍，由 Prometheus 的 `--query.max-samples` 限制。
+> `denied_functions` 以名字比對函式與聚合運算子：`topk by (a) (…)` 是 `topk`；標籤值、
+> 註解、指標名裡出現同名文字都不算。Prometheus 無法求值的運算式（如 `rate(x[step()])`）是 ERROR。
+
 > **豁免不是跳過（四層護欄）**：(1) `path` 錨在掃描樹頂層（精確路徑、非
 > suffix），巢狀 `rule-packs/*/rule-packs/<file>` 不取得豁免；(2) 須帶
 > GENERATED 檔頭，否則 ERROR + 全檢（`require_generated_marker` 省略或為

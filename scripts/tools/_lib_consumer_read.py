@@ -831,6 +831,59 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     return docs[0]
 
 
+def _is_reads(entry) -> bool:
+    """*entry* has the shape of one ``promql-reads`` answer."""
+    return (isinstance(entry, dict)
+            and isinstance(entry.get("selectors"), list)
+            and isinstance(entry.get("calls"), list)
+            and "problem" in entry
+            and (entry["problem"] is None or isinstance(entry["problem"], str))
+            and all(isinstance(s, dict)
+                    and all(isinstance(s.get(k), int) for k in ("start", "end", "range_ms", "window_ms"))
+                    and all(isinstance(s.get(k), str) for k in ("selector", "range", "window"))
+                    and isinstance(s.get("subqueries_ms"), list)
+                    and isinstance(s.get("subqueries"), list)
+                    for s in entry["selectors"])
+            and all(isinstance(c, dict) and isinstance(c.get("name"), str)
+                    for c in entry["calls"]))
+
+
+def promql_reads(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
+    """⛔ THE one reading of what a PromQL expression reads (#4080): per
+    expression of *exprs*, as Prometheus evaluates it in a rule
+    (``da-read promql-reads``) —
+
+    * ``selectors``: every vector selector, ``"selector"`` (as Prometheus
+      prints it, with its range and modifiers: one line, label values
+      quoted — the spelling to name it by), ``{"start", "end"}`` (byte
+      offsets into the expression's UTF-8 encoding), ``"window_ms"`` / ``"window"`` (the width of the window it
+      reads: its range plus the subqueries around it — a duration expression
+      such as ``[(30d)]`` at its value, ``offset`` and the lookback delta
+      not counted), ``"range_ms"`` and ``"subqueries_ms"`` (its parts);
+      ``"window"``, ``"range"`` and ``"subqueries"`` are the same as
+      Prometheus spells a duration;
+    * ``calls``: every function and aggregation, ``{"name", "kind":
+      "function"|"aggregation", "start", "end"}`` — read off the parse, so a
+      name in a label value is none and ``topk by (a) (…)`` is ``topk``;
+    * ``problem``: None, or why Prometheus cannot evaluate it (a duration
+      expression that is not positive), when it has no selectors.
+
+    An expression Prometheus' parser refuses raises ``InputRefused``.
+    No tool reads ranges or function names off the text of an expression."""
+    resolved = da_read_binary(binary)
+    data = json.dumps(list(exprs)).encode("utf-8")
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-reads", "-"], data)
+    docs = out["documents"]
+    if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
+            or not all(_is_reads(e) for e in docs[0])):
+        _fault(DA_READ_BINARY_NAME, ["promql-reads"], "stale")
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one reading per expression "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""
