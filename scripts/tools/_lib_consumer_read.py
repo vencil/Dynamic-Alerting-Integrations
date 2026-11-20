@@ -836,7 +836,8 @@ def _is_reads(entry) -> bool:
     return (isinstance(entry, dict)
             and isinstance(entry.get("selectors"), list)
             and isinstance(entry.get("calls"), list)
-            and (entry.get("problem") is None or isinstance(entry.get("problem"), str))
+            and "problem" in entry
+            and (entry["problem"] is None or isinstance(entry["problem"], str))
             and all(isinstance(s, dict)
                     and all(isinstance(s.get(k), int) for k in ("start", "end", "range_ms", "window_ms"))
                     and all(isinstance(s.get(k), str) for k in ("selector", "range", "window"))

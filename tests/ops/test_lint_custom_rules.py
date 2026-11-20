@@ -947,6 +947,32 @@ def test_a_function_name_that_is_no_call_is_no_finding(expr):
     assert not [r for r in found if "denied function" in r.message], found
 
 
+_FULL_SELECTOR = {"selector": "x[5m]", "start": 5, "end": 10, "range_ms": 300000,
+                  "range": "5m", "subqueries_ms": [], "subqueries": [], "window_ms": 300000,
+                  "window": "5m"}
+
+
+@pytest.mark.parametrize("entry", [
+    {"selectors": [], "calls": []},                                   # no problem key
+    {"selectors": [], "calls": [], "problem": 5},
+    {"selectors": [{k: v for k, v in _FULL_SELECTOR.items() if k != "window_ms"}],
+     "calls": [], "problem": None},
+    {"selectors": [], "calls": [{"kind": "function"}], "problem": None},
+], ids=["no-problem", "problem-not-text", "selector-no-window", "call-no-name"])
+def test_a_reading_not_of_the_promql_reads_shape_is_a_reader_fault(tmp_path, entry):
+    """An incomplete answer (an older or broken da-read) is a ConsumerReadError
+    before lint reads a field of it — never a KeyError in lint_expr."""
+    fake = tmp_path / "da-read"
+    fake.write_text("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '"
+                    + json.dumps({"documents": [[entry]]}) + "'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    import _lib_consumer_read
+    assert _lib_consumer_read._is_reads({"selectors": [_FULL_SELECTOR], "calls": [],
+                                         "problem": None})
+    with pytest.raises(_lib_consumer_read.ConsumerReadError):
+        _lib_consumer_read.promql_reads(["rate(x[5m])"], binary=str(fake))
+
+
 def test_an_expression_prometheus_cannot_evaluate_is_an_error(policy):
     """`[step()]` parses, and the rule fails every evaluation."""
     found = lint_custom_rules.lint_expr("rate(x[step()])", policy, "f.yaml", "A")
