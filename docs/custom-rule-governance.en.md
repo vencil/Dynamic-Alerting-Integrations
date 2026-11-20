@@ -232,7 +232,8 @@ file_overrides:
 > range plus the range of every subquery around it (`[1w]`, `[1h30m]` and expressions such as
 > `[(30d)]` count at their value), so under a 1h maximum `max_over_time(rate(x[5m])[1h:1m])`
 > reads 1h5m and is refused. `offset` only moves the window and is not counted; a selector with
-> `@` counts its own range only; the lookback delta is the server's setting and is not counted
+> `@` counts its own range only, and a subquery with `@` drops the subqueries outside it (as
+> Prometheus does); the lookback delta is the server's setting and is not counted
 > either. The total a query reads across selectors is not this check's: Prometheus'
 > `--query.max-samples` bounds it.
 > `denied_functions` matches functions and aggregation operators by name: `topk by (a) (…)` is

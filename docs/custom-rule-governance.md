@@ -257,7 +257,7 @@ file_overrides:
 > `max_range_duration` 比的是每個 selector 讀取的時間窗寬度：自身 range 加上外層每個子查詢的
 > range（`[1w]`、`[1h30m]`、`[(30d)]` 這類運算式都以實際時長計），所以在 1h 上限下
 > `max_over_time(rate(x[5m])[1h:1m])` 讀 1h5m，會被擋。`offset` 只平移時間窗，不計入；
-> 帶 `@` 的 selector 只計自身 range；lookback delta 是伺服器設定，也不計入。多個 selector
+> 帶 `@` 的 selector 只計自身 range，帶 `@` 的子查詢不計它外層的子查詢（同 Prometheus）；lookback delta 是伺服器設定，也不計入。多個 selector
 > 的總查詢量不在此檢查範圍，由 Prometheus 的 `--query.max-samples` 限制。
 > `denied_functions` 以名字比對函式與聚合運算子：`topk by (a) (…)` 是 `topk`；標籤值、
 > 註解、指標名裡出現同名文字都不算。Prometheus 無法求值的運算式（如 `rate(x[step()])`）是 ERROR。

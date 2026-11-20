@@ -318,11 +318,9 @@ def lint_expr(expr, policy, filepath, rule_name, reading=None):
     if max_range:
         max_secs = duration_seconds(max_range)
         if max_secs:
-            encoded = expr.encode("utf-8")
             for sel in reading["selectors"]:
                 if sel["window_ms"] <= _ms(max_secs):
                     continue
-                text = encoded[sel["start"]:sel["end"]].decode("utf-8", "replace")
                 parts = ""
                 if sel["subqueries"]:
                     parts = (" (" + " + ".join(
@@ -330,7 +328,7 @@ def lint_expr(expr, policy, filepath, rule_name, reading=None):
                         + [f"subquery {d}" for d in sel["subqueries"]]) + ")")
                 results.append(LintResult(
                     filepath, rule_name, None, "ERROR",
-                    f"range vector {text} reads [{sel['window']}]{parts}, "
+                    f"selector {sel['selector']} reads [{sel['window']}]{parts}, "
                     f"exceeds max allowed [{max_range}]"
                 ))
 
@@ -747,10 +745,17 @@ def main():
         die_caller_error(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}")
 
     for filepath in files:
-        results, count = lint_file(
-            filepath, policy, readings[filepath],
-            flag="--rule-pack-dir" if args.rule_pack_dir is not None else None,
-            selected=True)
+        try:
+            results, count = lint_file(
+                filepath, policy, readings[filepath],
+                flag="--rule-pack-dir" if args.rule_pack_dir is not None else None,
+                selected=True)
+        except _lib_consumer_read.ConsumerReadError as exc:
+            # #4080: da-read cannot read the file's expressions (missing,
+            # older than lint, a fault): the reader's problem, named — no
+            # traceback read as a defect of lint
+            die_caller_error(f"ERROR: {safe_label(filepath)}: expressions: "
+                             f"{_lib_consumer_read.error_text(exc)}")
         all_results.extend(results)
         files_checked += 1
         rules_checked += count

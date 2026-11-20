@@ -839,7 +839,7 @@ def _is_reads(entry) -> bool:
             and (entry.get("problem") is None or isinstance(entry.get("problem"), str))
             and all(isinstance(s, dict)
                     and all(isinstance(s.get(k), int) for k in ("start", "end", "range_ms", "window_ms"))
-                    and all(isinstance(s.get(k), str) for k in ("range", "window"))
+                    and all(isinstance(s.get(k), str) for k in ("selector", "range", "window"))
                     and isinstance(s.get("subqueries_ms"), list)
                     and isinstance(s.get("subqueries"), list)
                     for s in entry["selectors"])
@@ -852,9 +852,10 @@ def promql_reads(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
     expression of *exprs*, as Prometheus evaluates it in a rule
     (``da-read promql-reads``) —
 
-    * ``selectors``: every vector selector, ``{"start", "end"}`` (byte
-      offsets into the expression's UTF-8 encoding, the selector with its
-      range), ``"window_ms"`` / ``"window"`` (the width of the window it
+    * ``selectors``: every vector selector, ``"selector"`` (as Prometheus
+      prints it, with its range and modifiers: one line, label values
+      quoted — the spelling to name it by), ``{"start", "end"}`` (byte
+      offsets into the expression's UTF-8 encoding), ``"window_ms"`` / ``"window"`` (the width of the window it
       reads: its range plus the subqueries around it — a duration expression
       such as ``[(30d)]`` at its value, ``offset`` and the lookback delta
       not counted), ``"range_ms"`` and ``"subqueries_ms"`` (its parts);

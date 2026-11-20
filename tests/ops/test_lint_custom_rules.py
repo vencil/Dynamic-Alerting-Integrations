@@ -133,7 +133,7 @@ def test_lint_exceeds_max_range(policy):
     results = lint_custom_rules.lint_expr(
         "rate(my_metric[7d])", policy, "test.yaml", "TestRule"
     )
-    range_errors = [r for r in results if "range vector" in r.message]
+    range_errors = [r for r in results if "exceeds max allowed" in r.message]
     assert len(range_errors) == 1
 
 def test_lint_within_max_range(policy):
@@ -141,7 +141,7 @@ def test_lint_within_max_range(policy):
     results = lint_custom_rules.lint_expr(
         "rate(my_metric[30m])", policy, "test.yaml", "TestRule"
     )
-    range_errors = [r for r in results if "range vector" in r.message]
+    range_errors = [r for r in results if "exceeds max allowed" in r.message]
     assert len(range_errors) == 0
 
 def test_lint_exact_max_range_passes(policy):
@@ -149,7 +149,7 @@ def test_lint_exact_max_range_passes(policy):
     results = lint_custom_rules.lint_expr(
         "rate(my_metric[1h])", policy, "test.yaml", "TestRule"
     )
-    range_errors = [r for r in results if "range vector" in r.message]
+    range_errors = [r for r in results if "exceeds max allowed" in r.message]
     assert len(range_errors) == 0
 
 
@@ -686,7 +686,9 @@ def test_override_keeps_other_checks_live(tmp_path):
         )
         return [r.message for r in results if r.severity == "ERROR"]
 
-    assert any(f"range vector my_metric[{over}] reads" in m and "exceeds max allowed" in m
+    # Prometheus prints the range as it spells durations (345601s is 4d1s)
+    assert any(m.startswith("selector my_metric[")
+               and m.endswith(f"exceeds max allowed [{FORECAST_MAX_LOOKBACK}]")
                for m in errors(
         "  - record: custom:metric:y\n"
         f"    expr: avg_over_time(my_metric[{over}])\n"))
@@ -876,7 +878,37 @@ def test_a_window_message_names_the_selector_and_its_parts(policy):
     found = lint_custom_rules.lint_expr("max_over_time(rate(x[5m])[3h:1m])",
                                         {**policy, **_RANGE_1H}, "f.yaml", "A")
     assert [r.message for r in found] == [
-        "range vector x[5m] reads [3h5m] (range 5m + subquery 3h), exceeds max allowed [1h]"]
+        "selector x[5m] reads [3h5m] (range 5m + subquery 3h), exceeds max allowed [1h]"]
+
+
+def test_a_multi_line_selector_is_named_on_one_line(policy):
+    """The finding names the selector as Prometheus prints it: one line,
+    label values quoted — never the text as typed, which put a label value
+    at the start of a line of the report."""
+    expr = 'rate(x{\n  tenant="t",\n  note="WARN: [5m]"\n}[2h] offset 1d)'
+    found = lint_custom_rules.lint_expr(expr, {**policy, **_RANGE_1H}, "f.yaml", "A")
+    assert [r.message for r in found] == [
+        'selector x{note="WARN: [5m]",tenant="t"}[2h] offset 1d reads [2h], '
+        "exceeds max allowed [1h]"]
+
+
+def test_a_reader_that_cannot_read_the_expressions_is_named_not_a_crash(
+        tmp_path, monkeypatch, capsys):
+    """#4080: da-read failing on promql-reads (older than lint, say) is a
+    caller error naming the file — not lint's own crash."""
+    f = tmp_path / "r.yaml"
+    f.write_text("groups:\n- name: g\n  rules:\n  - {record: 'a:x', expr: 'rate(x[5m])'}\n",
+                 encoding="utf-8")
+
+    def stale(exprs, *a, **k):
+        raise lint_custom_rules._lib_consumer_read.ConsumerReadError(
+            "da-read printed JSON without one reading per expression")
+
+    monkeypatch.setattr(lint_custom_rules._lib_consumer_read, "promql_reads", stale)
+    assert _run_main([str(f), "--ci"], monkeypatch) == 2
+    err = capsys.readouterr().err
+    assert "r.yaml: expressions: da-read printed JSON" in err, err
+    assert "internal error" not in err and "Traceback" not in err, err
 
 
 def test_the_window_is_compared_in_whole_milliseconds(policy):
