@@ -170,3 +170,105 @@ signatures:
     labels:
       instance: oracle-neg-01
       wait_class: Commit
+
+  # 6) 良性瞬態 —— 改版部署使 cursor 失效／shared pool flush 之後的重新 parse 隆起，
+  #    幾分鐘內自行消退（counter 速率為原生單位）。（#4088：6–8 另派 agent 盲寫，
+  #    未讀任何告警規則或門檻。）
+  - description: >-
+      計畫內的改版部署：schema 變更（DDL）讓相依的 cursor 全數失效，DBA 也
+      順手做了一次 shared pool flush。接下來幾分鐘，應用程式那幾千支使用
+      bind variable 的語句各自要重新 hard parse 一次（dictionary cache 也是
+      冷的，recursive SQL 一併重 parse），"hard parse elapsed time" 從平時約
+      占 DB time 的 1% 短暫升到約四分之一。每支語句只需 parse 一次，library
+      cache 回溫後約 4 分鐘內就回到基線 —— 這是 cold shared pool 的正常
+      物理現象，不是拿掉 bind variable 的風暴，不該叫人。
+    source: vendor-doc
+    normal_level: 0.04
+    fault_level: 1
+    onset_duration: 30s
+    hold_duration: 4m
+    typical_wobble: 0.02
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_hard_parse_elapsed_seconds_total
+    metric_kind: counter
+    # companion 只能帶單一常數 level：部署前後業務負載不變，DB time 約每秒 4 秒
+    # （平均 active session 約 4），基線與隆起期間皆適用。
+    companion_series:
+      - metric: oracledb_db_time_seconds_total
+        role: denominator
+        metric_kind: counter
+        level: 4
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: post-deploy-cold-shared-pool-reparse
+    labels:
+      instance: oracle-neg-01
+
+  # 7) 計畫性維護 —— 夜間自動統計收集視窗，hard parse 占比溫和偏高，
+  #    視窗結束後自行回復（counter 速率為原生單位）。
+  - description: >-
+      夜間維護視窗內的自動 optimizer 統計收集（DBMS_STATS）：收集作業本身
+      對每個物件發出大量各不相同的 recursive SQL，全部都是 hard parse；
+      統計更新後相依的 cursor 也會陸續失效、下次執行時重新 parse。夜間
+      業務負載很輕，DB time 大約只有每秒 1.5 秒，所以 hard parse elapsed
+      time 的占比在視窗內從約 1% 升到約 8%，並維持到收集結束（約一個半
+      小時）。這是預期中、計畫內的行為，絕對量極小，使用者毫無感覺。
+    source: vendor-doc
+    normal_level: 0.015
+    fault_level: 0.12
+    onset_duration: 5m
+    hold_duration: 90m
+    typical_wobble: 0.008
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_hard_parse_elapsed_seconds_total
+    metric_kind: counter
+    # companion 只能帶單一常數 level：取統計收集視窗內的 DB time 速率（輕度夜間
+    # 負載加上收集作業，約每秒 1.5 秒）；視窗外實際略低（約 1.2）。
+    companion_series:
+      - metric: oracledb_db_time_seconds_total
+        role: denominator
+        metric_kind: counter
+        level: 1.5
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: nightly-stats-gather-reparse
+    labels:
+      instance: oracle-neg-01
+
+  # 8) 幾乎閒置的資料庫 —— 少量 ad-hoc 查詢的 hard parse 在極小的 DB time 裡
+  #    占掉一半；比例很高、絕對量微不足道。對比例型告警是最銳利的精確度探針。
+  - description: >-
+      週末幾乎閒置的實例：沒有業務流量，DB time 只剩排程作業與監控查詢，
+      每秒不到 0.1 秒。一位開發人員用 SQL 工具瀏覽 schema、跑了幾支帶
+      literal 的多表 ad-hoc 查詢，每支都是全新的語句、需要 hard parse
+      （複雜 join 的最佳化各花零點幾秒到一兩秒），查詢本身執行很快。
+      大約 15 分鐘內 hard parse elapsed time 占掉這段極小 DB time 的約
+      一半 —— 比例看起來嚇人，但整個資料庫的負載連一個 active session
+      的十分之一都不到，沒有任何競爭、沒有任何人受影響，不該叫人。
+    source: vendor-doc
+    normal_level: 0.002
+    fault_level: 0.03
+    onset_duration: 30s
+    hold_duration: 15m
+    typical_wobble: 0.001
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: oracledb_hard_parse_elapsed_seconds_total
+    metric_kind: counter
+    # companion 只能帶單一常數 level：取 ad-hoc 查詢期間的 DB time 速率（每秒
+    # 約 0.06 秒）；之前的閒置基線實際約 0.03。
+    companion_series:
+      - metric: oracledb_db_time_seconds_total
+        role: denominator
+        metric_kind: counter
+        level: 0.06
+    shape_class: spike
+    noise_kind: gaussian
+    fault_class: idle-db-adhoc-parse-dominates
+    labels:
+      instance: oracle-neg-01
