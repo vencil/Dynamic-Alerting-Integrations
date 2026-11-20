@@ -201,9 +201,12 @@ PORT=$(docker port "$EXP" 9560/tcp 2>/dev/null | head -n1 | sed 's/.*://') || tr
 # Every query has run once when each has a queries_total sample; the longest
 # interval in a file is 60s, so allow a few. A query that never reports is
 # left to --compare-served below, which names it.
+# --max-time 5 per poll: 60 polls of an exporter that accepts the connection and
+# never answers are 10 minutes, inside the CI job's timeout with the database's
+# setup in front, so the named error below is still reached.
 echo "waiting for $want queries to run…"
 for _ in $(seq 1 60); do
-  curl -fsS --max-time 20 "http://127.0.0.1:$PORT/metrics" > "$WORK/scrape.txt" 2>/dev/null || true
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/metrics" > "$WORK/scrape.txt" 2>/dev/null || true
   got=$(grep -E '^queries_total\{' "$WORK/scrape.txt" | grep -oE 'query="[^"]+"' | sort -u | wc -l || true)
   [[ "$got" -ge "$want" ]] && break
   sleep 5
