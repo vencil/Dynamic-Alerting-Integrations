@@ -7065,7 +7065,7 @@ class TestStaleFiles:
         target = out / self._P
         target.unlink()
         if shape == 'device':
-            target.symlink_to('/dev/null')
+            symlink_or_skip('/dev/null', target)
         elif shape == 'fifo':
             os.mkfifo(target)
         else:
