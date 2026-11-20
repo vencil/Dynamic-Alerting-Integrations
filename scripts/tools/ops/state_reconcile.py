@@ -104,22 +104,20 @@ STATE_FILES = _lib_input.TopLevel("*.json")
 def read_state(filepath: Path) -> tuple[dict | None, str | None]:
     """Read a state file. Returns (data, error_message)."""
     try:
-        with filepath.open(encoding="utf-8") as f:
-            return json.load(f), None
+        raw = filepath.read_bytes()
     except OSError as exc:
         return None, f"cannot read: {exc}"
-    except json.JSONDecodeError as exc:
-        return None, f"invalid JSON: {exc}"
+    return _decode_state(raw)
 
 
 def _decode_state(raw: bytes) -> tuple[dict | None, str | None]:
-    """A state file's bytes as `read_state` reads its text: (data, error)."""
+    """A state file's bytes as every caller file is decoded
+    (`_lib_input.decode_bytes`, #4064: strict UTF-8, a name given twice in
+    one object refused): (data, error)."""
     try:
-        return json.loads(raw.decode("utf-8")), None
-    except UnicodeDecodeError as exc:
-        return None, f"not UTF-8: {exc}"
-    except json.JSONDecodeError as exc:
-        return None, f"invalid JSON: {exc}"
+        return _lib_input.decode_bytes(raw, fmt="json", name="state file"), None
+    except _lib_input.DocumentError as exc:
+        return None, str(exc)
 
 
 def normalize_schema_version(value) -> str | None:

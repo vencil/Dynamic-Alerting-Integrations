@@ -35,6 +35,7 @@ import pytest
 import yaml
 
 import _lib_io
+import _lib_yaml_strict  # noqa: E402  (#4064: the definitions; _lib_io re-exports)
 from _lib_io import (
     DuplicateKeyError,
     find_duplicate_key,
@@ -125,12 +126,12 @@ def test_the_walk_visits_each_node_once_under_alias_fan_out():
         f"l{i}: &l{i} [{', '.join([f'*l{i - 1}'] * 10)}]" for i in range(1, 7)]
     root = yaml.compose("\n".join(levels) + "\n")
     calls = []
-    real = _lib_io.duplicate_in_mapping
+    real = _lib_yaml_strict.duplicate_in_mapping
     try:
-        _lib_io.duplicate_in_mapping = lambda n: calls.append(id(n)) or real(n)
+        _lib_yaml_strict.duplicate_in_mapping = lambda n: calls.append(id(n)) or real(n)
         assert find_duplicate_key(root) is None
     finally:
-        _lib_io.duplicate_in_mapping = real
+        _lib_yaml_strict.duplicate_in_mapping = real
     assert len(calls) == len(set(calls)) == 2  # the root mapping + l0
 
 

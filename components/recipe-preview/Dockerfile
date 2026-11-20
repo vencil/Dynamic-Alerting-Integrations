@@ -128,6 +128,8 @@ COPY scripts/tools/_lib_label.py                ./core/_lib_label.py
 COPY scripts/tools/_lib_paths.py                ./core/_lib_paths.py
 # #3446: _lib_consumer_read → _lib_input (the one directory listing).
 COPY scripts/tools/_lib_input.py                ./core/_lib_input.py
+# #4064: _lib_io / _lib_input → _lib_yaml_strict (the one strict YAML loader).
+COPY scripts/tools/_lib_yaml_strict.py          ./core/_lib_yaml_strict.py
 COPY scripts/tools/_lib_constants.py            ./core/_lib_constants.py
 COPY scripts/tools/_lib_tenant_values.py        ./core/_lib_tenant_values.py
 COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py

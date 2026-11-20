@@ -171,18 +171,6 @@ modules:
       _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
       exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
       find_metric_dictionary: "Filesystem probe over two fixed candidate paths (issue 1513); the answer is which file exists on disk, not a value law — example-pinned for both layouts and the none-found case in tests/ops/test_metric_dictionary_inputs.py"
-      # #2123 strict YAML reading. The key-identity rule is a closed matrix
-      # measured against yaml.v3 (one row per branch of the rule), which a
-      # generator would only re-derive from the implementation under test.
-      _key_identity: "yaml.v3 uniqueKeys identity (kind + raw text, #2123); example-pinned row by row against the measured yaml.v3 matrix in tests/shared/test_yaml_strict_loader.py"
-      duplicate_in_mapping: "One-mapping scan over _key_identity (#2123); same matrix in tests/shared/test_yaml_strict_loader.py"
-      find_duplicate_key: "Whole-tree walk over duplicate_in_mapping (#2123); matrix + visit-once (alias fan-out) pins in tests/shared/test_yaml_strict_loader.py"
-      raise_on_duplicate_key: "Raise-wrapper over find_duplicate_key (#2123); no value computation of its own"
-      reject_equal_constructed_keys: "Legacy constructed-key identity kept for two lints (#2123); pinned by the no-widening tests in tests/shared/test_yaml_strict_loader.py"
-      RejectDuplicateKeys.construct_document: "Loader hook calling raise_on_duplicate_key then PyYAML (#2123); exercised through strict_safe_load"
-      _strict_loader_class: "Loader-class selector + type guard (#2123); example-pinned (TypeError on a non-strict loader)"
-      strict_safe_load: "I/O-free but a thin driver over a PyYAML loader (#2123); matrix, parser-preservation and python/object refusal pinned in tests/shared/test_yaml_strict_loader.py"
-      strict_safe_load_all: "Lazy multi-document driver (#2123); laziness and refusal pinned in tests/shared/test_yaml_strict_loader.py"
       load_confd_file: "A conf.d file through da-guard parse-tree (ADR-036 step 4, #2906); I/O and subprocess-bound, contract pinned in tests/ops/test_lib_parse_cache.py and across tools in tests/shared/test_yaml_v3_reading_across_tools.py"
       # #2164 → #2906 quoting of string fields. The verdict is yaml.v3's tag (da-guard
       # parse-tree) × the repo's JSON Schemas; a generator would re-derive both from
@@ -207,6 +195,24 @@ modules:
       same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
       find_yaml11_bool_words: "parse-tree nodes × schema walk (#2509 → #2906); word set (_lib_validation.yaml_bool_literals minus yaml.v3's six), quoted and unquoted alike, quiet controls (true/false, string field) and the Go reading (da-guard effective) in tests/shared/test_yaml11_bool_word_warning.py"
       YamlBoolWord.message: "Operator-facing text (#2509); suggestion shapes pinned in tests/shared/test_yaml11_bool_word_warning.py"
+
+  scripts/tools/_lib_yaml_strict.py:
+    # #4064: moved from _lib_io (re-exported there) so _lib_input reads every
+    # declared YAML input with it without importing _lib_exitcodes.
+    excluded:
+      # #2123 strict YAML reading. The key-identity rule is a closed matrix
+      # measured against yaml.v3 (one row per branch of the rule), which a
+      # generator would only re-derive from the implementation under test.
+      _key_identity: "yaml.v3 uniqueKeys identity (kind + raw text, #2123); example-pinned row by row against the measured yaml.v3 matrix in tests/shared/test_yaml_strict_loader.py"
+      duplicate_in_mapping: "One-mapping scan over _key_identity (#2123); same matrix in tests/shared/test_yaml_strict_loader.py"
+      find_duplicate_key: "Whole-tree walk over duplicate_in_mapping (#2123); matrix + visit-once (alias fan-out) pins in tests/shared/test_yaml_strict_loader.py"
+      raise_on_duplicate_key: "Raise-wrapper over find_duplicate_key (#2123); no value computation of its own"
+      _aliased_keys: "#4064 which keys of one mapping are aliases (a key starting before the previous value ends); example-pinned by the alias rows of tests/shared/test_lib_input.py::test_a_key_given_twice_is_refused"
+      reject_equal_constructed_keys: "Legacy constructed-key identity kept for two lints (#2123); pinned by the no-widening tests in tests/shared/test_yaml_strict_loader.py"
+      RejectDuplicateKeys.construct_document: "Loader hook calling raise_on_duplicate_key then PyYAML (#2123); exercised through strict_safe_load"
+      _strict_loader_class: "Loader-class selector + type guard (#2123); example-pinned (TypeError on a non-strict loader)"
+      strict_safe_load: "I/O-free but a thin driver over a PyYAML loader (#2123); matrix, parser-preservation and python/object refusal pinned in tests/shared/test_yaml_strict_loader.py"
+      strict_safe_load_all: "Lazy multi-document driver (#2123); laziness and refusal pinned in tests/shared/test_yaml_strict_loader.py"
 
   scripts/tools/_lib_yaml.py:
     excluded:
