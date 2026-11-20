@@ -194,6 +194,7 @@ docker run --rm \
 |------|------|----------|
 | `offboard` | 下架 tenant 配置（含預檢） | `<tenant>` |
 | `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔刪除其 key | `<metric_keys...>` |
+| `migrate-builtin-defaults` | 刪除平台內建閾值的複製品，把用 `null`／列名關掉的內建鍵改寫成 `"disable"`（[#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832)） | `--config-dir` |
 
 ### 4.10 Bridge（外掛整合）
 

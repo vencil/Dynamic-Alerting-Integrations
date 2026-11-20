@@ -98,6 +98,8 @@ EDITS_THE_SERVED_TREE = {
                                   "the rewrite itself is an edit of that tree",
     "ops/offboard_tenant.py": "removes a tenant from the conf.d it is given (--execute)",
     "ops/deprecate_rule.py": "edits the conf.d it is given in place (--execute)",
+    "ops/migrate_builtin_defaults.py": "edits the conf.d it is given in place (--apply); its "
+                                      "proof edits a scratch copy of that tree",
     "ops/patch_config.py": "patches a tenant's keys in the conf.d it is given",
     "ops/_registry_lib.py": "writes back the conf.d files the threshold registry generates "
                             "in the repo (`write_planned`)",
