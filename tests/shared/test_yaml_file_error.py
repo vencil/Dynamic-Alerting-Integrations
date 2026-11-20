@@ -595,7 +595,10 @@ _LIB_ROOTS = {"load_yaml_file",
               "load_served_tree", "load_served_values",
               # #4026: "same exceptions as load_served_tree", ParseFailedError
               # (a YamlFileError) among them.
-              "load_served_facts"}
+              "load_served_facts",
+              # #4073: the whole-day readers' (OPA bridge, evaluate-policy)
+              # one load, which raises what load_served_facts raises.
+              "load_whole_day"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python",
                 "_lib_tenant_values", "scripts.tools._lib_tenant_values"}
 # Handler spellings that catch YamlFileError (a yaml.YAMLError). Matched on

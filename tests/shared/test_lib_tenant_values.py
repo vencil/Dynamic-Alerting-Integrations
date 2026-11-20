@@ -516,7 +516,7 @@ def test_ungathered_not_of_its_shape_is_broken_output_and_recorded(tmp_path, ung
     import _lib_tool_fault
     head = _WHOLE_SV_HEAD.replace('"ungathered": [], ', '' if ungathered == "missing"
                                   else f'"ungathered": {ungathered}, ')
-    fake = _old_da_guard(tmp_path, head + '"tenants": {"t": {"schedules": {}}}}')
+    fake = _old_da_guard(tmp_path, head + '"tenants": {"t": {"schedules": {}, "unserved_thresholds": {}}}}')
     _lib_tool_fault.clear()
     try:
         with pytest.raises(tv.ServedValuesError) as ei:
@@ -528,8 +528,46 @@ def test_ungathered_not_of_its_shape_is_broken_output_and_recorded(tmp_path, ung
         _lib_tool_fault.clear()
     # control: the same document with a well-formed `ungathered` is read.
     ok = _WHOLE_SV_HEAD.replace('"ungathered": [], ', '"ungathered": [{"from": "01:00", "to": "03:00", "error": "e"}], ')
-    got = tv.load_served_schedules(tmp_path, binary=_old_da_guard(tmp_path, ok + '"tenants": {"t": {"schedules": {}}}}'))
+    got = tv.load_served_schedules(tmp_path, binary=_old_da_guard(
+        tmp_path, ok + '"tenants": {"t": {"schedules": {}, "unserved_thresholds": null}}}'))
     assert got.ungathered == (tv.UngatheredPart("01:00", "03:00", "e"),)
+
+
+def test_served_schedules_carry_the_days_unserved_thresholds(tmp_path, da_guard):
+    """#4073：`unserved_thresholds` 是整天任一段都沒送出的門檻鍵，值照寫法；只在某時窗送出的
+    鍵不在其中，`_` 鍵也不在。`--at` 落在時窗內外結果相同。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  redis_memory: 90\n  mysql_connections: 80\n",
+        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    redis_memory: disable\n"
+                          "    mysql_connections:\n      default: disable\n      overrides:\n"
+                          "        - window: \"02:00-03:00\"\n          value: \"60\"\n"
+                          "    _namespaces: [\"a\"]\n"),
+    })
+    for at in ("2026-07-01T02:30:00Z", "2026-07-01T12:00:00Z"):
+        day = tv.load_served_schedules(conf_d, at=at, binary=da_guard)
+        assert day.unserved_thresholds == {"tenant-a": {"redis_memory": "disable"}}, (at, day)
+
+
+@pytest.mark.parametrize("ungathered,unserved,ok", [
+    ("[]", "{}", True),
+    ('[{"from": "01:00", "to": "03:00", "error": "e"}]', "null", True),
+    ("[]", "null", False),
+    ('[{"from": "01:00", "to": "03:00", "error": "e"}]', "{}", False),
+    ("[]", "[]", False),
+], ids=["set", "null-ungathered", "null-gathered", "set-ungathered", "list"])
+def test_unserved_thresholds_follow_ungathered(tmp_path, ungathered, unserved, ok):
+    """#4073：`unserved_thresholds` 只在 `ungathered` 非空時是 null（那段送出什麼無從得知），
+    否則是 object。對不上就是壞掉的輸出（broken），不是「沒有鍵」：null 不能讀成空集合。"""
+    head = _WHOLE_SV_HEAD.replace('"ungathered": [], ', f'"ungathered": {ungathered}, ')
+    fake = _old_da_guard(tmp_path, head + '"tenants": {"t": {"schedules": {}, "unserved_thresholds": '
+                         + unserved + '}}}')
+    if ok:
+        got = tv.load_served_schedules(tmp_path, binary=fake)
+        assert got.unserved_thresholds == {"t": json.loads(unserved)}, got
+        return
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_schedules(tmp_path, binary=fake)
+    assert ei.value.broken and not ei.value.stale, ei.value
 
 
 def test_served_schedules_judge_expiry_at_the_given_instant(tmp_path, da_guard):
@@ -549,11 +587,12 @@ def test_served_schedules_judge_expiry_at_the_given_instant(tmp_path, da_guard):
 
 
 def test_served_schedules_refuse_a_document_with_instant_fields(tmp_path):
-    """`--schedules-only` 的租戶只有 `schedules`；帶了在單一時刻讀的欄位就不是它的輸出。"""
+    """`--schedules-only` 的租戶只有 `schedules` 與 `unserved_thresholds`；帶了在單一時刻讀的
+    欄位就不是它的輸出。"""
     fake = _old_da_guard(tmp_path, _ARGV_DOC)
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_schedules(tmp_path, binary=fake)
-    assert ei.value.binary_fault and "not schedules alone" in str(ei.value)
+    assert ei.value.binary_fault and "not the day alone" in str(ei.value)
 
 
 def test_a_field_name_da_guard_wrote_is_counted_not_named(tmp_path):
@@ -565,10 +604,10 @@ def test_a_field_name_da_guard_wrote_is_counted_not_named(tmp_path):
         tv._key_checks([rec])
     assert "has 1 other(s)" in str(ei.value) and _CANARY not in str(ei.value), ei.value
     doc = json.loads(_ARGV_DOC)
-    doc["tenants"]["t"] = {"schedules": {}, _CANARY: 1}
+    doc["tenants"]["t"] = {"schedules": {}, "unserved_thresholds": {}, _CANARY: 1}
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_schedules(tmp_path, binary=_old_da_guard(tmp_path, json.dumps(doc)))
-    assert "not schedules alone: 1 other field(s)" in str(ei.value), ei.value
+    assert "not the day alone: 1 other field(s)" in str(ei.value), ei.value
     assert _CANARY not in str(ei.value), ei.value
 
 
@@ -868,7 +907,7 @@ def test_real_da_guard_names_the_schema_this_reader_reads(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: disable\n"})
     proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
                           capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
-    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v3"
+    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v4"
     assert tv.load_served_values(conf_d, binary=da_guard)["t"].state_filters == {}
 
 
@@ -883,30 +922,32 @@ def test_output_without_schema_is_refused_as_older(tmp_path):
 
 
 def test_output_with_an_unknown_schema_is_refused(tmp_path):
-    """認不得的 schema（例如未來的 v4）：raise 並寫出兩個值，不當成舊版、也不照 v3 讀。"""
-    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v4"))
+    """認不得的 schema（例如未來的 v5）：raise 並寫出兩個值，不當成舊版、也不照 v4 讀。"""
+    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v5"))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     msg = str(ei.value)
-    assert "da-guard.served-values/v4" in msg and tv.SERVED_VALUES_SCHEMA in msg
+    assert "da-guard.served-values/v5" in msg and tv.SERVED_VALUES_SCHEMA in msg
     assert "older than this tool" not in msg
     assert ei.value.binary_fault and not ei.value.stale
 
 
 # A literal, not SERVED_VALUES_OLDER_SCHEMAS: emptying that tuple must turn
 # these cells red, not leave nothing to parametrize over.
-@pytest.mark.parametrize("schema", ["da-guard.served-values/v1", "da-guard.served-values/v2"])
+@pytest.mark.parametrize("schema", ["da-guard.served-values/v1", "da-guard.served-values/v2",
+                                    "da-guard.served-values/v3"])
 @pytest.mark.parametrize("load", [tv.load_served_tree, tv.load_served_schedules])
 def test_output_with_an_older_schema_is_refused_as_older(tmp_path, schema, load):
     """#3703：較舊的 schema（v1：key_checks 是引用鍵的整句；v2：schedules 旁沒有
-    `ungathered`，#3991）一律由 schema 本身指出要升級
+    `ungathered`，#3991；v3：`--schedules-only` 的租戶沒有 `unserved_thresholds`，#4073）一律由 schema 本身指出要升級
     da-guard——stale、不是 broken，訊息寫出兩個值；不逐一辨認舊形狀。文件其餘部分照
     這支工具讀的形狀寫，證明判定只來自 schema。"""
     assert tv.SERVED_VALUES_SCHEMA not in tv.SERVED_VALUES_OLDER_SCHEMAS
     tenant = ', "state_filters": {}' if load is tv.load_served_tree else ''
     doc = _sv_doc(schema, tenant)
     if load is tv.load_served_schedules:
-        doc = doc.replace(_SV_TENANT, '"schedules": {}').replace('"tenants"', '"ungathered": [], "tenants"')
+        doc = doc.replace(_SV_TENANT, '"schedules": {}, "unserved_thresholds": {}').replace(
+            '"tenants"', '"ungathered": [], "tenants"')
     fake = _old_da_guard(tmp_path, doc)
     with pytest.raises(tv.ServedValuesError) as ei:
         load(tmp_path, binary=fake)
@@ -945,7 +986,7 @@ def test_state_filters_not_of_their_shape_are_refused(tmp_path, extra):
 
 def test_schema_refusal_exits_2_through_the_cli_decorator(tmp_path, capsys):
     """讀取端的 CLI 一律經 exit_on_served_values_error：schema 缺少或認不得都是 rc 2、一行 ERROR。"""
-    for schema in (None, "da-guard.served-values/v4", *tv.SERVED_VALUES_OLDER_SCHEMAS):
+    for schema in (None, "da-guard.served-values/v5", *tv.SERVED_VALUES_OLDER_SCHEMAS):
         fake = _old_da_guard(tmp_path, _sv_doc(schema))
 
         @tv.exit_on_served_values_error

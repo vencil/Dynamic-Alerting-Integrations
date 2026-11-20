@@ -362,11 +362,13 @@ __all__ = [
 
 SUBCOMMAND = "served-values"
 # The `schema` value load_served_tree reads; any other is refused (ADR-037).
-SERVED_VALUES_SCHEMA = "da-guard.served-values/v3"
+SERVED_VALUES_SCHEMA = "da-guard.served-values/v4"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: `key_checks` as sentences that quoted the key — #3703;
-#: v2: no `ungathered` beside the schedules — #3991).
-SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1", "da-guard.served-values/v2")
+#: v2: no `ungathered` beside the schedules — #3991; v3: no
+#: `unserved_thresholds` beside a --schedules-only tenant's schedules — #4073).
+SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1", "da-guard.served-values/v2",
+                               "da-guard.served-values/v3")
 #: The fields of every --config-facts tenant (`custom_alerts_error` only
 #: beside a block that does not decode; #3918).
 _FACTS_FIELDS = frozenset({"custom_alerts", "custom_alerts_finding", "metadata"})
@@ -698,6 +700,10 @@ def ungathered_refusal(parts: "tuple[UngatheredPart, ...]") -> "str | None":
             f"is judged: {spans}")
 
 
+#: The fields of every --schedules-only tenant (#3877, #4073).
+_DAY_FIELDS = frozenset({"schedules", "unserved_thresholds"})
+
+
 class ServedSchedules(NamedTuple):
     """`load_served_schedules`' answer (#3877): `ServedTree` with each
     tenant's schedules alone — no field read at an instant exists to be
@@ -705,7 +711,12 @@ class ServedSchedules(NamedTuple):
     be gathered in, in order, for the whole tree: a key's segments carry
     such a part only where its tenant serves the key, so a tenant serving
     no key there — or a tree that cannot be gathered all day, every
-    tenant's schedules then empty — is known from it alone."""
+    tenant's schedules then empty — is known from it alone.
+    `unserved_thresholds` (#4073) is each tenant's threshold keys served at
+    no minute of the day — written or inherited, keyed and valued as
+    `TenantValues.unserved` (an `expires:` judged at `at`) — or None for
+    every tenant when `ungathered` is not empty: what would have been served
+    in such a part is not known."""
     tenants: dict[str, dict[str, KeySchedule]]
     skipped: list[SkippedFile]
     stderr_lines: list[str]
@@ -713,6 +724,7 @@ class ServedSchedules(NamedTuple):
     parse_failed: "tuple[str, ...] | list[str]" = ()
     unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
     absent: "tuple[str, ...]" = ()
+    unserved_thresholds: "dict[str, dict[str, Any] | None]" = {}
 
 
 class RootDefaultRefused(NamedTuple):
@@ -1606,19 +1618,32 @@ def load_served_schedules(
             f"da-guard {SUBCOMMAND}: `ungathered` is not of its shape ({error_text(e)})",
             returncode, stderr, broken=True) from e
     out: dict[str, dict[str, KeySchedule]] = {}
+    unserved: dict[str, dict[str, Any] | None] = {}
     for tenant_id, tv in days.items():
         try:
-            if set(tv) != {"schedules"}:
+            if set(tv) != _DAY_FIELDS:
                 # A document of --schedules instead (a binary that ignores the
                 # flag would not exit 0 on it): never read as the day alone.
-                raise _ShapeError(f"not schedules alone: {len(set(tv) - {'schedules'})} other field(s)"
-                                  f"{'' if 'schedules' in tv else ', and no schedules'}")
+                missing = sorted(_DAY_FIELDS - set(tv))
+                raise _ShapeError(f"not the day alone: {len(set(tv) - _DAY_FIELDS)} other field(s)"
+                                  f"{f', and no {missing}' if missing else ''}")
             out[tenant_id] = {str(k): _key_schedule(sch) for k, sch in tv["schedules"].items()}
+            day_unserved = tv["unserved_thresholds"]
+            if day_unserved is None:
+                if not parts:
+                    raise _ShapeError("unserved_thresholds is null with nothing in ungathered")
+                unserved[tenant_id] = None
+            elif parts:
+                raise _ShapeError("unserved_thresholds is set although part of the day is ungathered")
+            elif not isinstance(day_unserved, dict):
+                raise _ShapeError(f"unserved_thresholds is a {type(day_unserved).__name__}, not an object")
+            else:
+                unserved[tenant_id] = {str(k): v for k, v in day_unserved.items()}
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries a schedule that is not of its shape ({error_text(e)})",
                 returncode, stderr, broken=True) from e
-    return ServedSchedules(out, skipped, _nonempty_lines(stderr), parts, *dropped, absent)
+    return ServedSchedules(out, skipped, _nonempty_lines(stderr), parts, *dropped, absent, unserved)
 
 
 class TenantFacts(NamedTuple):
@@ -2354,6 +2379,43 @@ def written_config(effective: TenantEffective, metadata: Any) -> dict[str, Any]:
         if written:
             out["_metadata"] = written
     return out
+
+
+class WholeDay(NamedTuple):
+    """`load_whole_day`'s answer (#4073): what a reader of a tenant's whole
+    day takes, nothing read at one instant of it. `days` is
+    `load_served_schedules`' (its `ungathered` empty, so every tenant's
+    `unserved_thresholds` is set); `tenants` is each tenant's
+    `written_config`, `_metadata` from `load_served_facts`."""
+    days: ServedSchedules
+    tenants: dict[str, dict[str, Any]]
+
+
+@_records_output_faults(SUBCOMMAND)
+def load_whole_day(conf_d: str | Path, at: str | None = None) -> WholeDay:
+    """The tree at *conf_d* as the readers of the whole day read it (#4025,
+    #4073: the OPA bridge, evaluate-policy): `da-guard served-values
+    --schedules-only` (*at*: the instant an `expires:` is judged at, None =
+    now), `--config-facts` and `da-guard effective`. Prints da-guard's
+    stderr and one WARN per file the load serves no tenant from
+    (`print_load_warnings`). Raises what the loads raise, and
+    `ServedValuesError` when a part of the day cannot be gathered
+    (`ungathered_refusal`: in it nothing is known, so the rest of the day is
+    not judged as the day) or the three readings disagree on the tenants."""
+    days = load_served_schedules(conf_d, at=at)
+    print_load_warnings(days)
+    refusal = ungathered_refusal(days.ungathered)
+    if refusal is not None:
+        raise ServedValuesError(f"da-guard {SUBCOMMAND}: {refusal}", None, "")
+    facts = load_served_facts(conf_d)
+    effective = load_effective(conf_d)
+    readings = (set(effective), set(days.tenants), set(facts.tenants))
+    if not readings[0] == readings[1] == readings[2]:
+        raise ServedValuesError(
+            "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
+            f"{sorted(set.union(*readings) - set.intersection(*readings))}", None, "")
+    return WholeDay(days, {t: written_config(e, facts.tenants[t].metadata)
+                           for t, e in sorted(effective.items())})
 
 
 # #3387: da-guard's own check (no subcommand, `--format json`) — its findings

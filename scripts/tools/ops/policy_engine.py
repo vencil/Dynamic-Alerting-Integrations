@@ -109,11 +109,8 @@ from _lib_tenant_values import (  # noqa: E402
     ParseFailedError,
     ServedValuesError,
     key_spellings,
-    load_effective,
-    load_served_tree,
+    load_whole_day,
     print_load_error,
-    print_load_warnings,
-    written_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -607,10 +604,10 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
     (#2115 (c), by kind of key):
 
     * a threshold (no `_` prefix) — `ServedThreshold`, what /metrics serves
-      over the whole day (`da-guard served-values --schedules`), canonical
-      spelling; a key /metrics serves at no minute of the day is absent;
-      a threshold key the config carries but /metrics never serves is an
-      `Unserved` (its value as written);
+      over the whole day (`da-guard served-values --schedules-only`),
+      canonical spelling; a key /metrics serves at no minute of the day is
+      absent, or an `Unserved` (its value as written) when the config
+      carries it (served-values' `unserved_thresholds`, #4073);
     * a reserved key (`_` prefix) other than `_routing` — as written plus
       inherited (`_lib_tenant_values.written_config`: `da-guard effective`'s
       `effective_config`, only the reserved keys a tenant may carry, and
@@ -619,18 +616,14 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
     * `_routing` — only with `routing=True`: the route generator's resolved
       routing (`_resolved_routing`); absent otherwise.
 
-    Prints da-guard's stderr and one WARN per file the load serves no tenant
-    from (`print_load_warnings`). Raises what `load_served_tree` /
-    `load_effective` raise; `ServedValuesError` when the two disagree on the
-    tenants or a segment of the day cannot be gathered; `RoutingTreeRefused`.
+    Nothing is read at one instant of the day: only whether an `expires:`
+    has passed depends on when it runs. Prints and raises what
+    `load_whole_day` does — `ServedValuesError` naming the parts of the day
+    /metrics cannot be gathered in, whatever time it is — and
+    `RoutingTreeRefused`.
     """
-    tree = load_served_tree(config_dir, schedules=True)
-    print_load_warnings(tree)
-    effective = load_effective(config_dir)
-    if set(effective) != set(tree.tenants):
-        raise ServedValuesError(
-            "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
-            f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
+    whole = load_whole_day(config_dir)
+    days = whole.days
     if routing:
         # Raises ParseTreeError here, not as the generator's exit below.
         _lib_parse_cache.reader_for(config_dir).require()
@@ -638,25 +631,19 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
 
     # The exporter's canonical spelling of every unserved threshold key, in
     # one `da-guard key-spellings` run (#3556).
-    spellings = key_spellings(str(k) for served in tree.tenants.values()
-                              for k in served.unserved if not str(k).startswith("_"))
+    # load_whole_day refused a day with an ungathered part, the only one
+    # whose lists are null.
+    unserved = days.unserved_thresholds
+    spellings = key_spellings(str(k) for u in unserved.values() for k in u)
     views: dict[str, dict[str, Any]] = {}
-    for tenant, served in tree.tenants.items():
+    for tenant, schedules in days.tenants.items():
         view: dict[str, Any] = {
-            k: v for k, v in written_config(effective[tenant], served.values.get("_metadata")).items()
-            if k.startswith("_") and k != _ROUTING}
-        for key, raw in served.unserved.items():
-            if not str(key).startswith("_"):
-                view[spellings.canonical(str(key))] = Unserved(raw)
+            k: v for k, v in whole.tenants[tenant].items() if k.startswith("_") and k != _ROUTING}
+        for key, raw in unserved[tenant].items():
+            view[spellings.canonical(str(key))] = Unserved(raw)
         if tenant in routed:
             view[_ROUTING] = routed[tenant]
-        for key, day in (served.schedules or {}).items():
-            for seg in day.segments:
-                if seg.error is not None:
-                    raise ServedValuesError(
-                        f"da-guard served-values: tenant {tenant!r}: /metrics cannot be gathered "
-                        f"in {seg.start}-{seg.end} UTC, so no rule can be checked there ({seg.error})",
-                        None, "")
+        for key, day in schedules.items():
             segments = tuple((seg.start, seg.end, seg.value) for seg in day.segments)
             if any(v is not None for _s, _e, v in segments):
                 view[key] = ServedThreshold(segments)
