@@ -231,6 +231,9 @@ TOOL_FILES=(
     # imported by state_reconcile, migrate_to_operator and _lib_consumer_read.
     # Imports _lib_paths / _lib_label (above).
     _lib_input.py
+    # #4064 — PyYAML only: the one strict YAML loader (a key given twice is an
+    # error); imported lazily by _lib_input, re-exported by _lib_io.
+    _lib_yaml_strict.py
     # #3662 — stdlib only: the one definition of validation-report.csv
     # (columns, timestamp format); written by validate, read by shadow-verify.
     _lib_shadow_report.py
