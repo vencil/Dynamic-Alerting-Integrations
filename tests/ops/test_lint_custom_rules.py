@@ -53,12 +53,13 @@ def test_durations_are_read_as_prometheus_reads_them(value, seconds):
     assert lint_custom_rules.duration_seconds(value) == seconds
 
 
-def test_lint_holt_winters_detected(policy):
-    """測試 holt_winters 函數偵測。"""
+def test_lint_quantile_over_time_detected(policy):
+    """測試 quantile_over_time 函數偵測（holt_winters 在 Prometheus 3 已不是函式，
+    parser 直接拒收，見 test_override_keeps_other_checks_live）。"""
     results = lint_custom_rules.lint_expr(
-        "holt_winters(my_metric[1h], 0.3, 0.7)", policy, "test.yaml", "TestRule"
+        "quantile_over_time(0.9, my_metric[1h])", policy, "test.yaml", "TestRule"
     )
-    errors = [r for r in results if "holt_winters" in r.message]
+    errors = [r for r in results if "quantile_over_time" in r.message]
     assert len(errors) == 1
 
 def test_lint_predict_linear_detected(policy):
@@ -132,7 +133,7 @@ def test_lint_exceeds_max_range(policy):
     results = lint_custom_rules.lint_expr(
         "rate(my_metric[7d])", policy, "test.yaml", "TestRule"
     )
-    range_errors = [r for r in results if "range vector" in r.message]
+    range_errors = [r for r in results if "exceeds max allowed" in r.message]
     assert len(range_errors) == 1
 
 def test_lint_within_max_range(policy):
@@ -140,7 +141,7 @@ def test_lint_within_max_range(policy):
     results = lint_custom_rules.lint_expr(
         "rate(my_metric[30m])", policy, "test.yaml", "TestRule"
     )
-    range_errors = [r for r in results if "range vector" in r.message]
+    range_errors = [r for r in results if "exceeds max allowed" in r.message]
     assert len(range_errors) == 0
 
 def test_lint_exact_max_range_passes(policy):
@@ -148,7 +149,7 @@ def test_lint_exact_max_range_passes(policy):
     results = lint_custom_rules.lint_expr(
         "rate(my_metric[1h])", policy, "test.yaml", "TestRule"
     )
-    range_errors = [r for r in results if "range vector" in r.message]
+    range_errors = [r for r in results if "exceeds max allowed" in r.message]
     assert len(range_errors) == 0
 
 
@@ -685,7 +686,10 @@ def test_override_keeps_other_checks_live(tmp_path):
         )
         return [r.message for r in results if r.severity == "ERROR"]
 
-    assert any(f"range vector [{over}]" in m for m in errors(
+    # Prometheus prints the range as it spells durations (345601s is 4d1s)
+    assert any(m.startswith("selector my_metric[")
+               and m.endswith(f"exceeds max allowed [{FORECAST_MAX_LOOKBACK}]")
+               for m in errors(
         "  - record: custom:metric:y\n"
         f"    expr: avg_over_time(my_metric[{over}])\n"))
     refused = errors("  - record: custom:metric:x\n"
@@ -825,6 +829,178 @@ def test_a_compound_range_max_is_enforced(tmp_path):
     policy = lint_custom_rules.load_policy({"max_range_duration": "1h30m"}, "p.yaml")
     found = lint_custom_rules.lint_expr('rate(x{tenant="t"}[2h]) > 1', policy, "f.yaml", "A")
     assert any("exceeds max allowed [1h30m]" in r.message for r in found), found
+
+
+# ── #4080: ranges and function names as Prometheus reads them ────────────
+
+_RANGE_1H = {"max_range_duration": "1h"}
+
+
+@pytest.mark.parametrize("expr, window", [
+    # spellings the regex `\[(\d+[smhd])\]` did not see
+    ("rate(x[1w])", "1w"),
+    ("rate(x[1y])", "1y"),
+    ("rate(x[1h30m])", "1h30m"),
+    ("rate(x[7200000ms])", "2h"),
+    ("rate(x[ 2h ])", "2h"),
+    ("rate(x[(30d)])", "30d"),
+    ("rate(x[2h*100])", "8d8h"),
+    # a subquery widens the window of every selector in it
+    ("max_over_time(rate(x[5m])[3h:1m])", "3h5m"),
+    ("max_over_time(rate(x[5m])[3h:])", "3h5m"),
+    ("max_over_time(rate(x[5m])[1h*24:])", "1d5m"),
+    ("max_over_time(x[2h:])", "2h"),
+    ("max_over_time(rate(x[5m])[1h:1m])", "1h5m"),
+    ("max_over_time(max_over_time(rate(x[5m])[50m:1m])[50m:1m])", "1h45m"),
+])
+def test_a_window_over_the_max_is_an_error_however_it_is_spelt(policy, expr, window):
+    found = lint_custom_rules.lint_expr(expr, {**policy, **_RANGE_1H}, "f.yaml", "A")
+    msgs = [r.message for r in found if "exceeds max allowed [1h]" in r.message]
+    assert len(msgs) == 1 and f"reads [{window}]" in msgs[0], found
+
+
+@pytest.mark.parametrize("expr", [
+    "rate(x[1h])",                               # at the max
+    "rate(x[5m] offset 1w)",                     # offset moves the window only
+    "rate(x[30m] offset -2h)",
+    'rate(x{a="[2h]"}[5m])',                     # a label value is no range
+    "max_over_time((x @ end())[30d:1m])",        # a selector at a fixed time
+    "max_over_time(max_over_time(x[1h:1m] @ 100)[30d:1m])",  # @ drops the outer subquery
+    "max_over_time(rate(x[5m])[55m:1m])",
+    "max_over_time(vector(1)[3h:])",             # reads no series
+])
+def test_a_window_within_the_max_passes(policy, expr):
+    found = lint_custom_rules.lint_expr(expr, {**policy, **_RANGE_1H}, "f.yaml", "A")
+    assert not [r for r in found if "exceeds max allowed" in r.message], found
+
+
+def test_a_window_message_names_the_selector_and_its_parts(policy):
+    found = lint_custom_rules.lint_expr("max_over_time(rate(x[5m])[3h:1m])",
+                                        {**policy, **_RANGE_1H}, "f.yaml", "A")
+    assert [r.message for r in found] == [
+        "selector x[5m] reads [3h5m] (range 5m + subquery 3h), exceeds max allowed [1h]"]
+
+
+def test_a_multi_line_selector_is_named_on_one_line(policy):
+    """The finding names the selector as Prometheus prints it: one line,
+    label values quoted — never the text as typed, which put a label value
+    at the start of a line of the report."""
+    expr = 'rate(x{\n  tenant="t",\n  note="WARN: [5m]"\n}[2h] offset 1d)'
+    found = lint_custom_rules.lint_expr(expr, {**policy, **_RANGE_1H}, "f.yaml", "A")
+    assert [r.message for r in found] == [
+        'selector x{note="WARN: [5m]",tenant="t"}[2h] offset 1d reads [2h], '
+        "exceeds max allowed [1h]"]
+
+
+def test_a_reader_that_cannot_read_the_expressions_is_named_not_a_crash(
+        tmp_path, monkeypatch, capsys):
+    """#4080: da-read failing on promql-reads (older than lint, say) is a
+    caller error naming the file — not lint's own crash."""
+    f = tmp_path / "r.yaml"
+    f.write_text("groups:\n- name: g\n  rules:\n  - {record: 'a:x', expr: 'rate(x[5m])'}\n",
+                 encoding="utf-8")
+
+    def stale(exprs, *a, **k):
+        raise lint_custom_rules._lib_consumer_read.ConsumerReadError(
+            "da-read printed JSON without one reading per expression")
+
+    monkeypatch.setattr(lint_custom_rules._lib_consumer_read, "promql_reads", stale)
+    assert _run_main([str(f), "--ci"], monkeypatch) == 2
+    err = capsys.readouterr().err
+    assert "r.yaml: expressions: da-read printed JSON" in err, err
+    assert "internal error" not in err and "Traceback" not in err, err
+
+
+def test_the_window_is_compared_in_whole_milliseconds(policy):
+    """1001ms against a 1.001s max: 1.001 * 1000 is 1000.9999999999999 in
+    floating point, so a float comparison called it over."""
+    at = lint_custom_rules.lint_expr("rate(x[1001ms])", {**policy, "max_range_duration": "1s1ms"},
+                                     "f.yaml", "A")
+    over = lint_custom_rules.lint_expr("rate(x[1002ms])", {**policy, "max_range_duration": "1s1ms"},
+                                       "f.yaml", "A")
+    assert not [r for r in at if "exceeds" in r.message], at
+    assert [r for r in over if "exceeds" in r.message], over
+
+
+@pytest.mark.parametrize("expr, name", [
+    ("topk(3, x)", "topk"),
+    ("topk by (a) (3, x)", "topk"),              # the regex saw no `topk(` here
+    ("topk without (a) (3, x)", "topk"),
+    ("quantile by (a) (0.9, x)", "quantile"),
+    ("predict_linear\n(x[5m], 60)", "predict_linear"),
+])
+def test_a_denied_function_or_aggregation_is_found_however_it_is_spelt(expr, name):
+    policy = {**lint_custom_rules.DEFAULT_POLICY, "denied_functions": [name]}
+    found = lint_custom_rules.lint_expr(expr, policy, "f.yaml", "A")
+    assert [r.message for r in found] == [f"denied function '{name}' in expr"]
+
+
+@pytest.mark.parametrize("expr", [
+    'x{a="predict_linear("}',                    # a label value
+    "x # predict_linear(\n",                     # a comment
+    "predict_linear_total",                      # a metric name
+    "sum by (predict_linear) (x)",               # a grouping label
+])
+def test_a_function_name_that_is_no_call_is_no_finding(expr):
+    policy = {**lint_custom_rules.DEFAULT_POLICY, "denied_functions": ["predict_linear"]}
+    found = lint_custom_rules.lint_expr(expr, policy, "f.yaml", "A")
+    assert not [r for r in found if "denied function" in r.message], found
+
+
+_FULL_SELECTOR = {"selector": "x[5m]", "start": 5, "end": 10, "range_ms": 300000,
+                  "range": "5m", "subqueries_ms": [], "subqueries": [], "window_ms": 300000,
+                  "window": "5m"}
+
+
+@pytest.mark.parametrize("entry", [
+    {"selectors": [], "calls": []},                                   # no problem key
+    {"selectors": [], "calls": [], "problem": 5},
+    {"selectors": [{k: v for k, v in _FULL_SELECTOR.items() if k != "window_ms"}],
+     "calls": [], "problem": None},
+    {"selectors": [], "calls": [{"kind": "function"}], "problem": None},
+], ids=["no-problem", "problem-not-text", "selector-no-window", "call-no-name"])
+def test_a_reading_not_of_the_promql_reads_shape_is_a_reader_fault(tmp_path, entry):
+    """An incomplete answer (an older or broken da-read) is a ConsumerReadError
+    before lint reads a field of it — never a KeyError in lint_expr."""
+    fake = tmp_path / "da-read"
+    fake.write_text("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '"
+                    + json.dumps({"documents": [[entry]]}) + "'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    import _lib_consumer_read
+    assert _lib_consumer_read._is_reads({"selectors": [_FULL_SELECTOR], "calls": [],
+                                         "problem": None})
+    with pytest.raises(_lib_consumer_read.ConsumerReadError):
+        _lib_consumer_read.promql_reads(["rate(x[5m])"], binary=str(fake))
+
+
+def test_an_expression_prometheus_cannot_evaluate_is_an_error(policy):
+    """`[step()]` parses, and the rule fails every evaluation."""
+    found = lint_custom_rules.lint_expr("rate(x[step()])", policy, "f.yaml", "A")
+    assert [r.severity for r in found] == ["ERROR"]
+    assert "Prometheus cannot evaluate the expression" in found[0].message
+    assert "greater than 0" in found[0].message
+
+
+def test_a_file_is_read_by_prometheus_in_one_call(tmp_path, monkeypatch):
+    """lint_file hands every expression of the file to da-read at once, each
+    rule judged on its own reading."""
+    calls = []
+    real = lint_custom_rules._lib_consumer_read.promql_reads
+
+    def spy(exprs, *a, **k):
+        calls.append(list(exprs))
+        return real(exprs, *a, **k)
+
+    monkeypatch.setattr(lint_custom_rules._lib_consumer_read, "promql_reads", spy)
+    f = tmp_path / "r.yaml"
+    f.write_text("groups:\n- name: g\n  rules:\n"
+                 "  - {record: 'a:x', expr: 'rate(x[5m])'}\n"
+                 "  - {record: 'b:x', expr: 'rate(y[1w])'}\n"
+                 "  - {record: 'c:x', expr: 'rate(z[1m])'}\n", encoding="utf-8")
+    results, count = lint_custom_rules.lint_file(str(f), lint_custom_rules.DEFAULT_POLICY)
+    assert calls == [["rate(x[5m])", "rate(y[1w])", "rate(z[1m])"]] and count == 3
+    over = [r for r in results if "exceeds max allowed" in r.message]
+    assert [r.rule_name for r in over] == ["b:x"], results
 
 
 def test_a_compound_group_interval_is_judged(tmp_path):
