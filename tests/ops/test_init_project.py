@@ -6976,13 +6976,15 @@ class TestStaleFiles:
         out = tmp_path / 'repo'
         assert self._cli(out, *self._FIRST).returncode == 0
         assert self._DROPPED <= self._files(out)
-        # #3107: what the Python side writes is an operator output, 0600;
-        # conf.d/ is `da-guard write`'s and is not judged here.
+        # #4085: what the Python side writes is an artifact the customer
+        # commits — the mode a checkout gives it, 0644, whatever the umask
+        # (it was an operator output, 0600, #3107). conf.d/ is `da-guard
+        # write`'s and is not judged here.
         if os.name == 'posix':
             modes = {rel: os.stat(out / rel).st_mode & 0o777
                      for rel in self._files(out) if not rel.startswith('conf.d/')}
             assert len(modes) >= 5, modes
-            assert set(modes.values()) == {0o600}, modes
+            assert set(modes.values()) == {0o644}, modes
         run = self._cli(out, *self._SECOND)
         assert run.returncode == 0, run.stderr[-800:]
         assert not (self._DROPPED & self._files(out)), self._files(out)
@@ -6992,6 +6994,35 @@ class TestStaleFiles:
             assert f'{rel} (stale: no longer generated; unchanged since init ' \
                    f'wrote it → removed)' in run.stdout, rel
         assert (out / 'environments' / 'prod' / 'values.yaml').is_file()
+
+    @pytest.mark.skipif(os.name != 'posix', reason='RLIMIT_FSIZE is POSIX')
+    def test_a_forced_rerun_stopped_mid_write_keeps_the_previous_file(self, tmp_path):
+        """#4085: each file is replaced whole. A `--force` re-run whose write
+        fails part-way (a file-size limit standing in for a full disk) is
+        rc 2 and leaves every file as the last run wrote it — written in
+        place, the first file it reached was left empty."""
+        import resource
+        import subprocess
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        before = {rel: (out / rel).read_bytes() for rel in self._files(out)}
+        assert all(before.values()), 'control: no file starts out empty'
+
+        def _limit():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        run = subprocess.run(
+            [sys.executable, _TOOL, '-o', str(out), '--non-interactive',
+             *self._FIRST, '--force'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            env=env, timeout=300, preexec_fn=_limit)
+        assert run.returncode == 2, (run.returncode, run.stderr[-800:])
+        assert 'cannot write' in run.stderr and '-o/--output-dir' in run.stderr
+        after = {rel: (out / rel).read_bytes() for rel in self._files(out)}
+        assert after == before, sorted(k for k in before.keys() | after.keys()
+                                       if before.get(k) != after.get(k))
 
     def test_control_the_same_configuration_has_nothing_stale(self, tmp_path):
         """Same flags again: nothing stale — including the root .gitlab-ci.yml,

@@ -49,8 +49,9 @@ from _lib_compat import read_shipped_da_tools_version, try_utf8_stdout  # noqa: 
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
-    detect_cli_lang, ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
+    detect_cli_lang, ensure_dir_or_die, exit_on_output_write_error, output_dir_type,
 )
+from _lib_io import write_repo_artifact  # noqa: E402  (#4085)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
@@ -3608,8 +3609,17 @@ def _ensure_dir(path: str) -> None:
     ensure_dir_or_die(path, flag="-o/--output-dir")
 
 
+@exit_on_output_write_error  # a path the writer refuses: rc 2, one line, at the write
 def _write_file(path: str, content: str, created_files: list[str]) -> None:
-    """Write file with SAST-compliant writer, track in list.
+    """Write one scaffold file through the artifact entry, track it in the list.
+
+    #4085: `-o/--output-dir` is an ARTIFACT by the read-back rule — a
+    `--force` run reads the `.da-init.yaml` ledger and the files the last run
+    wrote — so each file is replaced whole (`write_repo_artifact`): a re-run
+    stopped part-way leaves the previous file, never a prefix of the new one.
+    No `mode=`: nothing init generates holds a secret (flags in, YAML out),
+    and these are files the customer commits, so they get what a checkout
+    would give them (0644).
 
     ⛔ Exactly one trailing newline, normalised here rather than in each
     generator. Two of the ten templates ended with a blank line, so the two CI
@@ -3620,7 +3630,7 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
     write path means a future generator cannot reintroduce it.
     """
     _ensure_dir(str(Path(path).parent))
-    write_operator_output_or_die(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
+    write_repo_artifact(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
     created_files.append(path)
 
 
