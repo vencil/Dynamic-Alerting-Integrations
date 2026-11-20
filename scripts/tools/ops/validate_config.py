@@ -2210,7 +2210,9 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
       falls back to the default; the others set a number or `disable` in a
       subtree, a profile or their own file);
     * `overridden` — the root `defaults:` gives it a number, every tenant's
-      unless it writes its own; noted when the number is the platform's.
+      unless it writes its own; when the number is the platform's, noted as a
+      copy `migrate-builtin-defaults` removes (#3832 decision 7: this note is
+      the hint, so da-guard adds no finding that could change an exit code).
     * `opted_out` — the root `defaults:` writes it as `disable`: every
       tenant inherits the opt-out (the key's whole family off), except where
       a subdirectory `_defaults.yaml`, a profile or its own file gives the
@@ -2260,7 +2262,9 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
             details.append(f"builtin `{key}` = {value} — the root platform file does not give it a "
                            f"value; the built-in layer serves {entry.tenants} of {total} tenant(s)")
         elif entry.state == "overridden":
-            same = " (the platform's value)" if entry.root_value == entry.value else ""
+            same = (" (the platform's value: a copy, which pins today's number; deleting it "
+                    "follows the platform's later recalibrations — `da-tools "
+                    "migrate-builtin-defaults`)" if entry.root_value == entry.value else "")
             details.append(f"overridden `{key}` = {_fmt_threshold(entry.root_value)}{same} — set "
                            f"under `defaults:` of the root platform file; platform value {value}")
         elif entry.state == "opted_out":

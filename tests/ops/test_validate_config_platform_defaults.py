@@ -82,7 +82,9 @@ def test_a_tree_that_writes_no_default_lists_every_key_as_builtin(tmp_path, file
 
 
 def test_a_number_under_the_root_defaults_is_overridden(tmp_path):
-    """根層給了數字的鍵是 `overridden`，印出那個數與平台值；與平台值相同時註明。"""
+    """根層給了數字的鍵是 `overridden`，印出那個數與平台值；與平台值相同時註明它是
+    複製品、指向 migrate-builtin-defaults（#3832 決策 7 的提示就是這一句，PASS 列，
+    不改任何結束碼）。"""
     other, same = _KEYS[0], _KEYS[1]
     row = vc.check_platform_defaults(_tree(tmp_path, {
         "_defaults.yaml": f"defaults:\n  {other}: 7\n  {same}: {_fmt(BUILTIN_DEFAULTS[same])}\n",
@@ -92,8 +94,11 @@ def test_a_number_under_the_root_defaults_is_overridden(tmp_path):
     assert _line(row, other) == (f"overridden `{other}` = 7 — set under `defaults:` of the root "
                                  f"platform file; platform value {_fmt(BUILTIN_DEFAULTS[other])}"), row
     assert _line(row, same) == (f"overridden `{same}` = {_fmt(BUILTIN_DEFAULTS[same])} (the platform's "
-                                "value) — set under `defaults:` of the root platform file; platform value "
+                                "value: a copy, which pins today's number; deleting it follows the "
+                                "platform's later recalibrations — `da-tools migrate-builtin-defaults`) — "
+                                "set under `defaults:` of the root platform file; platform value "
                                 f"{_fmt(BUILTIN_DEFAULTS[same])}"), row
+    assert "migrate-builtin-defaults" not in _line(row, other), row
     assert _line(row, _KEYS[2]).startswith(f"builtin `{_KEYS[2]}`"), row
 
 

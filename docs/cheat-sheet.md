@@ -37,6 +37,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `validate-config` | 一站式配置驗證：YAML 格式、schema、routing、policy、版本一致性 | --config-dir <PATH>, --policy <FILE>, --json | `da-tools validate-config --help` |
 | `offboard` | 下架 tenant 配置與相關資源 | --config-dir <PATH>, --state <PATH>, --execute | `da-tools offboard --help` |
 | `deprecate` | 下架指標：從 `defaults:`／`optional_overrides:`／租戶檔刪除其 key | --config-dir <PATH>, --execute, --subtree <DIR> | `da-tools deprecate --help` |
+| `migrate-builtin-defaults` | 刪除平台內建閾值的複製品（根層與租戶檔裡等於內建值的值），並把用 `null` 或 `optional_overrides:` 關掉的內建鍵改寫成 `"disable"`；預設只預覽 | --config-dir <PATH>, --apply, --exporter-digest <DIGEST>, --keep <KEY> | `da-tools migrate-builtin-defaults --help` |
 | `lint` | 依平台治理政策（deny-list）檢查租戶自訂的 Prometheus 規則檔 | --policy <FILE>, --ci | `da-tools lint --help` |
 | `onboard` | 分析既有 Alertmanager 或 Prometheus 配置，產出遷移提示 | --alertmanager-config <FILE>, -o <DIR> | `da-tools onboard --help` |
 | `analyze-gaps` | 比對 custom rule 與 Rule Pack，找出重複/缺口 | --tenant-config <PATH>, --output <FILE>, --json | `da-tools analyze-gaps --help` |

@@ -26,6 +26,7 @@
 #       ├── onboard_platform.py
 #       ├── offboard_tenant.py
 #       ├── deprecate_rule.py
+#       ├── migrate_builtin_defaults.py
 #       ├── cutover_tenant.py
 #       ├── blind_spot_discovery.py
 #       ├── lint_custom_rules.py
@@ -116,6 +117,7 @@ TOOL_FILES=(
     ops/onboard_platform.py
     ops/offboard_tenant.py
     ops/deprecate_rule.py
+    ops/migrate_builtin_defaults.py
     ops/lint_custom_rules.py
     # #2744 — validate-config's json_schema row CALLS this module's verdict
     # (ops/validate_config.py check_json_schema); without it beside the tool

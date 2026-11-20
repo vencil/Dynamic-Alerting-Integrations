@@ -46,6 +46,7 @@ def _build_help_text(lang):
     scaffold          互動式生成租戶配置
     offboard          租戶配置預檢和移除
     deprecate         下架指標：從設定中刪除其 key
+    migrate-builtin-defaults  刪除平台內建閾值的複製品（#3832）
     lint              針對治理禁止列表驗證自訂規則
     onboard           分析現有 Alertmanager/Prometheus 配置以供遷移
     validate-config   一站式配置驗證 (YAML + schema + routing + policy)
@@ -136,6 +137,7 @@ Commands (File System — offline):
     scaffold          Generate tenant configuration interactively
     offboard          Pre-check and remove a tenant configuration
     deprecate         Deprecate metrics: delete their keys from the config
+    migrate-builtin-defaults  Remove copies of the platform's built-in thresholds (#3832)
     lint              Validate custom rules against governance deny-list
     onboard           Analyze existing Alertmanager/Prometheus configs for migration
     validate-config   One-stop config validation (YAML + schema + routing + policy)
@@ -347,6 +349,7 @@ COMMAND_MAP = {
     "scaffold": "scaffold_tenant.py",
     "offboard": "offboard_tenant.py",
     "deprecate": "deprecate_rule.py",
+    "migrate-builtin-defaults": "migrate_builtin_defaults.py",
     "lint": "lint_custom_rules.py",
     "onboard": "onboard_platform.py",
     "validate-config": "validate_config.py",
