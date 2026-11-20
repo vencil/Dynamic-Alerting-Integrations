@@ -6976,13 +6976,15 @@ class TestStaleFiles:
         out = tmp_path / 'repo'
         assert self._cli(out, *self._FIRST).returncode == 0
         assert self._DROPPED <= self._files(out)
-        # #3107: what the Python side writes is an operator output, 0600;
-        # conf.d/ is `da-guard write`'s and is not judged here.
+        # #4085: what the Python side writes is an artifact the customer
+        # commits — the mode a checkout gives it, 0644, whatever the umask
+        # (it was an operator output, 0600, #3107). conf.d/ is `da-guard
+        # write`'s and is not judged here.
         if os.name == 'posix':
             modes = {rel: os.stat(out / rel).st_mode & 0o777
                      for rel in self._files(out) if not rel.startswith('conf.d/')}
             assert len(modes) >= 5, modes
-            assert set(modes.values()) == {0o600}, modes
+            assert set(modes.values()) == {0o644}, modes
         run = self._cli(out, *self._SECOND)
         assert run.returncode == 0, run.stderr[-800:]
         assert not (self._DROPPED & self._files(out)), self._files(out)
@@ -6992,6 +6994,128 @@ class TestStaleFiles:
             assert f'{rel} (stale: no longer generated; unchanged since init ' \
                    f'wrote it → removed)' in run.stdout, rel
         assert (out / 'environments' / 'prod' / 'values.yaml').is_file()
+
+    @pytest.mark.skipif(os.name != 'posix', reason='RLIMIT_FSIZE is POSIX')
+    def test_a_forced_rerun_stopped_mid_write_keeps_the_previous_file(self, tmp_path):
+        """#4085: a file the entry can replace is replaced whole (these are;
+        the in-place fallbacks are not covered here). A `--force` re-run whose write
+        fails (a file-size limit standing in for a full disk) is rc 2 and
+        the file it failed on is still what the last run wrote — written in
+        place, that file was left empty. The guarantee is per file, not a
+        rollback: this run uses the same flags, so the files written before
+        the failure are byte-identical anyway and the whole tree compares."""
+        import resource
+        import subprocess
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        before = {rel: (out / rel).read_bytes() for rel in self._files(out)}
+        assert all(before.values()), 'control: no file starts out empty'
+
+        def _limit():
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        run = subprocess.run(
+            [sys.executable, _TOOL, '-o', str(out), '--non-interactive',
+             *self._FIRST, '--force'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            env=env, timeout=300, preexec_fn=_limit)
+        assert run.returncode == 2, (run.returncode, run.stderr[-800:])
+        assert 'cannot write' in run.stderr and '-o/--output-dir' in run.stderr
+        after = {rel: (out / rel).read_bytes() for rel in self._files(out)}
+        assert after == before, sorted(k for k in before.keys() | after.keys()
+                                       if before.get(k) != after.get(k))
+
+    # ── #4085: the artifact entry's contract, as init's own behaviour ──────
+    _P = '.pre-commit-config.da.yaml'
+    _BASE = ('--tenants', 'acme-a', '--rule-packs', 'mariadb', '--ci', 'github',
+             '--deploy', 'helm')
+
+    def _tree(self, root):
+        return {rel: (root / rel).read_bytes() for rel in self._files(root)}
+
+    @pytest.mark.skipif(os.name != 'posix', reason='POSIX modes')
+    def test_the_mode_is_a_checkouts_whatever_the_umask_and_keeps_the_exec_bit(
+            self, tmp_path):
+        out = tmp_path / 'repo'
+        old = os.umask(0o077)
+        try:
+            assert self._cli(out, *self._BASE).returncode == 0
+            assert os.stat(out / self._P).st_mode & 0o777 == 0o644
+            os.chmod(out / self._P, 0o750)
+            assert self._cli(out, *self._BASE, '--force').returncode == 0
+        finally:
+            os.umask(old)
+        # git tracks the owner's execute bit and nothing else.
+        assert os.stat(out / self._P).st_mode & 0o777 == 0o755
+        assert os.stat(out / '.da-init.yaml').st_mode & 0o777 == 0o644
+
+    @pytest.mark.skipif(os.name != 'posix', reason='/dev/null, FIFOs')
+    @pytest.mark.parametrize('shape', ['device', 'fifo', 'directory'])
+    def test_a_target_the_entry_refuses_is_rc2_before_anything_is_written(
+            self, tmp_path, shape):
+        """A path the artifact entry will not replace is refused before the
+        FIRST write of the run: with flags that change every file, the tree
+        is byte-identical afterwards. Refused at its own write, the files
+        before it were already new and the ledger still old — the next run
+        called init's own workflow "edited since init wrote it"."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._BASE).returncode == 0
+        target = out / self._P
+        target.unlink()
+        if shape == 'device':
+            symlink_or_skip('/dev/null', target)
+        elif shape == 'fifo':
+            os.mkfifo(target)
+        else:
+            target.mkdir()
+        before = {rel: (out / rel).read_bytes() for rel in self._files(out)
+                  if rel != self._P}
+        run = self._cli(out, *self._BASE, '--force', '--namespace', 'elsewhere')
+        assert run.returncode == 2, (run.returncode, run.stderr[-600:])
+        errors = [ln for ln in run.stderr.splitlines() if ln.strip()]
+        assert len(errors) == 1 and errors[0].startswith('ERROR: cannot write'), errors
+        assert 'not a regular file' in errors[0] and '-o/--output-dir' in errors[0]
+        assert 'Traceback' not in run.stderr and run.stdout == ''
+        after = {rel: (out / rel).read_bytes() for rel in self._files(out)
+                 if rel != self._P}
+        assert after == before, sorted(k for k in before.keys() | after.keys()
+                                       if before.get(k) != after.get(k))
+
+    @pytest.mark.skipif(os.name != 'posix', reason='fd redirection')
+    def test_a_target_that_is_this_runs_stdout_is_rc2_before_anything_is_written(
+            self, tmp_path):
+        import subprocess
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._BASE).returncode == 0
+        workflow = (out / '.github/workflows/dynamic-alerting.yaml').read_bytes()
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        with open(out / self._P, 'ab') as fh:  # `>> D/<a file init writes>`
+            run = subprocess.run(
+                [sys.executable, _TOOL, '-o', str(out), '--non-interactive',
+                 *self._BASE, '--force', '--namespace', 'elsewhere'],
+                stdout=fh, stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                errors='replace', env=env, timeout=300)
+        assert run.returncode == 2, (run.returncode, run.stderr[-600:])
+        assert "is this process's standard stream" in run.stderr
+        assert (out / '.github/workflows/dynamic-alerting.yaml').read_bytes() == workflow
+
+    @pytest.mark.skipif(os.name != 'posix', reason='hard links')
+    def test_a_hard_linked_file_keeps_its_other_name(self, tmp_path):
+        """Replacing it would detach the other name without a word: it is
+        written in place, said so on stderr, and the run is still rc 0."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._BASE).returncode == 0
+        other = tmp_path / 'other-name'
+        os.link(out / self._P, other)
+        run = self._cli(out, *self._BASE, '--force', '--namespace', 'elsewhere')
+        assert run.returncode == 0, run.stderr[-600:]
+        assert os.stat(out / self._P).st_nlink == 2
+        assert os.path.samefile(out / self._P, other)
+        warns = [ln for ln in run.stderr.splitlines() if ln.startswith('WARN:')]
+        assert len(warns) == 1 and 'hard links' in warns[0], run.stderr[-600:]
 
     def test_control_the_same_configuration_has_nothing_stale(self, tmp_path):
         """Same flags again: nothing stale — including the root .gitlab-ci.yml,

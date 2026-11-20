@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -49,7 +50,10 @@ from _lib_compat import read_shipped_da_tools_version, try_utf8_stdout  # noqa: 
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
-    detect_cli_lang, ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
+    detect_cli_lang, ensure_dir_or_die, exit_on_output_write_error, output_dir_type,
+)
+from _lib_io import (  # noqa: E402  (#4085)
+    OutputWriteError, check_repo_artifact, write_repo_artifact,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
@@ -3608,8 +3612,21 @@ def _ensure_dir(path: str) -> None:
     ensure_dir_or_die(path, flag="-o/--output-dir")
 
 
+@exit_on_output_write_error  # a path the writer refuses: rc 2, one line, at the write
 def _write_file(path: str, content: str, created_files: list[str]) -> None:
-    """Write file with SAST-compliant writer, track in list.
+    """Write one scaffold file through the artifact entry, track it in the list.
+
+    #4085: `-o/--output-dir` is an ARTIFACT by the read-back rule — a
+    `--force` run reads the `.da-init.yaml` ledger and the files the last run
+    wrote — so each file is replaced whole (`write_repo_artifact`): the file a
+    re-run stops at keeps its previous content, never a prefix of the new one
+    (where the entry can replace it — a hard-linked file, someone else's, one
+    in a directory that takes no new file is written in place, with a WARN).
+    Per file only — `run_init` has no rollback, so the files written before
+    the failure are already the new ones.
+    No `mode=`: nothing init generates holds a secret (flags in, YAML out),
+    and these are files the customer commits, so they get what a checkout
+    would give them (0644).
 
     ⛔ Exactly one trailing newline, normalised here rather than in each
     generator. Two of the ten templates ended with a blank line, so the two CI
@@ -3620,8 +3637,34 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
     write path means a future generator cannot reintroduce it.
     """
     _ensure_dir(str(Path(path).parent))
-    write_operator_output_or_die(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
+    write_repo_artifact(path, content.rstrip('\n') + '\n', flag="-o/--output-dir")
     created_files.append(path)
+
+
+@exit_on_output_write_error
+def _refuse_unwritable_targets(config: dict, output_dir: str,
+                               plan: "Optional[_ConfdPlan]") -> None:
+    """#4085: the artifact entry's preconditions, for EVERY file Python will
+    write, before the first write of the run (conf.d's batch included).
+
+    The entry refuses a path that is a device, a FIFO, a directory or one of
+    this process's standard streams. Met at the write, that refusal came
+    after the files before it were already rewritten and before the ledger
+    was — the next run then called init's own files "edited since init wrote
+    it". Met here, the run ends at rc 2 with the tree as it was. What can
+    only fail DURING a write (a full disk) still stops part-way: a replaced
+    file is whole, the run is not rolled back.
+    """
+    conf_d = (Path(output_dir) / 'conf.d').as_posix() + '/'
+    for path in _preview_files(config, output_dir, plan):
+        if path.startswith(conf_d):
+            continue  # `da-guard write` judges its own batch
+        try:
+            check_repo_artifact(path, flag="-o/--output-dir")
+        except OutputWriteError as exc:
+            # A parent that is a file: `ensure_dir` names it, at the write.
+            if exc.errno != errno.ENOTDIR:
+                raise
 
 
 # ============================================================
@@ -4619,6 +4662,7 @@ def run_init(config: dict, output_dir: str,
         raise ValueError(_conflict_message(plan, is_zh=False))
     # Issue 1465: read before step 1 — the marker is rewritten in step 5.
     previous = _read_ownership(output_dir)
+    _refuse_unwritable_targets(config, output_dir, plan)
 
     # ── 1. conf.d/ ─────────────────────────────────────────
     # #1942: only the carriers the plan leaves to init. A tenant another file

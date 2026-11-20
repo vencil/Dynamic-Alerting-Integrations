@@ -1017,7 +1017,7 @@ ROWS: list[Row] = [
       wording="own", control_rc=1),
     # #3982: artifact by the read-back rule — a `--force` run reads the
     # ownership ledger (`.da-init.yaml`) and the files the last run wrote.
-    # Still written through the operator entry: VIA_OTHER_CLASS.
+    # Written through `write_repo_artifact` since #4085.
     R("ops/init_project.py", "-o/--output-dir", "dir", "artifact",
       lambda c, out: ["-o", str(out), "--non-interactive", "--tenants", "alpha",
                       "--rule-packs", "mariadb"],
@@ -1806,10 +1806,6 @@ EXTERNAL_READERS: dict[Key, str] = {
 #: Rows whose output came through the entry of the OTHER class than the row
 #: declares, and which one. Each is a tool to move or a row to reclassify.
 VIA_OTHER_CLASS: dict[Key, str] = {
-    # #3982: the read-back rule makes it an artifact (its `--force` run reads
-    # the `.da-init.yaml` ledger it wrote); the move to `write_repo_artifact`
-    # is its own change (#4085).
-    ("ops/init_project.py", "-o/--output-dir"): "operator",
 }
 
 
