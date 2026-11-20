@@ -1603,14 +1603,17 @@ def _named_on_the_command_line(argv: list[str], scratch: Path) -> tuple[str, ...
             *(os.path.realpath(v) for v in values if os.path.isabs(v)))
 
 
-def _is_named(path: str, named: tuple[str, ...]) -> bool:
+def _is_named(path: str, named: tuple[str, ...], stack: list[str]) -> bool:
     """*path* is a named path, under one, or the atomic writer's private tmp
-    beside one (``.<name>.<random>.tmp``, renamed onto it)."""
+    beside one. The tmp is known by WHO made it — a frame of
+    ``_lib_atomic_write`` on the stack — not by its name: the writer caps the
+    name it embeds (64 bytes), and a tool's own ``.<name>.backup`` beside a
+    named file has that shape too."""
+    by_the_atomic_writer = any(frame.startswith(_ATOMIC_WRITER) for frame in stack)
     for root in named:
         if path == root or path.startswith(root + os.sep):
             return True
-        folder, name = os.path.split(root)
-        if os.path.dirname(path) == folder and os.path.basename(path).startswith(f".{name}."):
+        if by_the_atomic_writer and os.path.dirname(path) == os.path.dirname(root):
             return True
     return False
 
@@ -1671,7 +1674,7 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
         if rel is None:
             if (named is not None and placed is not None and placed != os.devnull
                     and "__pycache__" not in placed.split(os.sep)
-                    and not _is_named(placed, named)):
+                    and not _is_named(placed, named, stack)):
                 where = stack[0] if stack else "<no scripts/ frame>"
                 faults.append(f"{event['ev']} {placed} from {where}: neither under the "
                               "output path nor at a path the command line names — a "
@@ -3334,9 +3337,10 @@ class TestTheHookItself:
         in the scratch directory the gate gave it, or at a path its own
         command line names. One that lands anywhere else — here a default
         resolved against the working directory, and a fixed path beside the
-        script — is a fault that names it. A second output flag's path, the
-        atomic writer's tmp beside it, `/dev/null` and a `__pycache__` are
-        not."""
+        script — is a fault that names it, and so is a file of the tool's
+        own beside a named one. A second output flag's path, the atomic
+        writer's tmp beside it (whatever its name), `/dev/null` and a
+        `__pycache__` are not."""
         other, fixed = tmp_path / "second.json", tmp_path / "fixed-place.txt"
         cwd = tmp_path / "cwd"
         (cwd / "__pycache__").mkdir(parents=True)
@@ -3351,17 +3355,29 @@ open(os.devnull, "w").close()
 open(os.path.join("__pycache__", "m.pyc"), "wb").close()
 with tempfile.NamedTemporaryFile("w"):                        # TMPDIR
     pass
+_lib_io.write_repo_artifact(sys.argv[4], "x\\n")              # named, name > 64 bytes
 open("report.json", "w").close()                              # cwd default
 open({str(fixed)!r}, "w").close()                              # fixed path
+open(os.path.join(os.path.dirname(sys.argv[2]), ".second.json.backup"), "w").close()
 """
-        events, good, script = _hooked(tmp_path, code, args=(str(other), str(TOOLS_DIR)))
-        named = _named_on_the_command_line([str(good), f"--second={other}"],
-                                           tmp_path / "tool-tmp")
+        long_named = tmp_path / ("長檔名" * 12 + "-" + "n" * 60 + ".json")
+        events, good, script = _hooked(
+            tmp_path, code, args=(str(other), str(TOOLS_DIR), str(long_named)))
+        named = _named_on_the_command_line(
+            [str(good), f"--second={other}", "--third", str(long_named)],
+            tmp_path / "tool-tmp")
+        assert long_named.is_file(), "control: the long-named artifact was written"
+        tmp_names = {os.path.basename(e["path"]) for e in events
+                     if e.get("ev") == "open" and str(e.get("path", "")).endswith(".tmp")}
+        assert any(long_named.name not in n for n in tmp_names), (
+            "control: the writer's tmp did not embed the whole long name", tmp_names)
         assert other.read_text(encoding="utf-8") == "x\n", "control: the artifact was written"
         faults = _audit(events, good, script, named=named).faults
-        assert len(faults) == 2, faults
+        assert len(faults) == 3, faults
         assert any(str(cwd / "report.json") in f for f in faults), faults
         assert any(str(fixed) in f for f in faults), faults
+        # The tool's own file beside a named one is not the atomic writer's.
+        assert any(".second.json.backup" in f for f in faults), faults
         # Not judged without a command line (the hand-made logs above).
         assert not _audit(events, good, script).faults
 
