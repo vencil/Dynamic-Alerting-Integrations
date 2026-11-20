@@ -136,8 +136,9 @@ row's temporary directory (another output flag of the same command, a tmp
 conf.d it was told to rewrite). Anything else is a fault naming the path —
 a default resolved against the working directory (the repository, here), a
 sidecar in a repository conf.d the run only reads, a fixed path no flag
-gave. Not judged: a name that keeps nothing (``/dev/null``, ``/dev/stderr``)
-and the interpreter's byte code. No list: on this tree no such run writes
+gave. Not judged: a name that keeps nothing (``/dev/null``, ``/dev/stderr``),
+the interpreter's byte code, and the coverage tracer's data files when this
+pytest run measures subprocesses (``--cov``). No list: on this tree no such run writes
 anywhere else. NOT SEEN, as for everything else here: the bad-path runs
 (they carry no hook), a write that raises no audit event (``sqlite3``,
 ``os.mkfifo``), and what a listed non-Python child (``SPAWNS``) writes.
@@ -1637,6 +1638,33 @@ def _is_byte_code(path: str) -> bool:
                                      and ".pyc" in name)
 
 
+def _coverage_data_file() -> str | None:
+    """Where the children of this pytest run keep their coverage data, or
+    None when they are not measured. `tests/conftest.py` hands them the
+    parent's configuration in ``COVERAGE_PROCESS_CONFIG`` (#1885); the data
+    file is read from it with coverage's own reader, so the answer is the
+    one the children act on."""
+    blob = os.environ.get("COVERAGE_PROCESS_CONFIG")
+    if not blob:
+        return None
+    from coverage.config import CoverageConfig
+    return os.path.realpath(CoverageConfig.deserialize(blob).data_file)
+
+
+def _is_coverage_data(event: dict, path: str) -> bool:
+    """A data file the coverage tracer leaves when THIS pytest run measures
+    subprocesses (`pytest --cov`, CI's advisory coverage job): every child
+    writes ``<data file>.<host>.pid<n>.<random>`` beside the parent's — in
+    the repository, from inside the tool's process, with no ``scripts/``
+    frame on the stack. All three must hold: measurement is on, the path is
+    that file's, and no frame of the tool's own code raised the event — a
+    tool that itself wrote ``.coverage.x`` would carry one."""
+    if event.get("stack"):
+        return False
+    data = _coverage_data_file()
+    return data is not None and path.startswith(data + ".")
+
+
 def _is_named(event: dict, path: str, named: tuple[str, ...]) -> bool:
     """*path* is a named path, under one, or the atomic writer's private tmp
     beside one.
@@ -1672,6 +1700,7 @@ def _landing_faults(events: list[dict], scope: Path, named: tuple[str, ...]) -> 
         stack = event.get("stack") or []
         if (placed is None or _under(placed, scope) is not None
                 or placed in _KEEPS_NOTHING or _is_byte_code(placed)
+                or _is_coverage_data(event, placed)
                 or _is_named(event, placed, named)):
             continue
         where = stack[0] if stack else "<no scripts/ frame>"
@@ -3448,6 +3477,26 @@ _lib_io.write_repo_artifact({str(unnamed)!r}, "x\\n")          # atomic, but no 
         assert any(".second.json.backup" in f for f in faults), faults
         # Not judged without a command line (the hand-made logs above).
         assert not _audit(events, good, script).faults
+
+    def test_the_coverage_tracers_data_file_is_not_the_tools_write(self, monkeypatch):
+        """Under `pytest --cov` every child leaves `.coverage.<host>.pid<n>.<x>`
+        beside the data file — in the repository, with no frame of the tool's
+        code. Not a fault then; a fault when coverage is off, when the path is
+        not that file's, and when the tool's own code raised the event."""
+        data = REPO_ROOT / ".coverage"
+        leaf = {"ev": "os.rename", "path": f"{data}.host.pid7.Xabc", "stack": []}
+        own = {**leaf, "stack": ["scripts/tools/ops/t.py:main"]}
+        other = {**leaf, "path": str(REPO_ROOT / "report.json")}
+        scope, named = REPO_ROOT / "nowhere" / "good", ()
+        from coverage.config import CoverageConfig
+        config = CoverageConfig()
+        config.data_file = str(data)
+        monkeypatch.delenv("COVERAGE_PROCESS_CONFIG", raising=False)
+        assert len(_landing_faults([leaf], scope, named)) == 1
+        monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", config.serialize())
+        assert _landing_faults([leaf], scope, named) == []
+        assert len(_landing_faults([own], scope, named)) == 1
+        assert len(_landing_faults([other], scope, named)) == 1
 
     def test_without_the_hook_on_the_path_there_is_no_log(self, tmp_path):
         """The environment minus PYTHONPATH: the run succeeds, nothing is
