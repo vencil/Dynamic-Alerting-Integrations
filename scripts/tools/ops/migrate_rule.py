@@ -61,7 +61,7 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     ensure_dir_or_die, output_dir_type, write_operator_output_or_die,
 )
-from _lib_io import find_metric_dictionary  # noqa: E402
+from _lib_io import exit_on_yaml_file_error, find_metric_dictionary, load_yaml_file  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#4040: the rule file is read once, here)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
@@ -272,8 +272,10 @@ def load_metric_dictionary(script_dir=None):
     else:
         dict_path = str(Path(script_dir) / "metric-dictionary.yaml")
     if dict_path and os.path.exists(dict_path):
-        with open(dict_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f) or {}
+        # #4064: the one reading of a YAML file (strict: a key given twice
+        # is refused, YamlFileError naming the file), as analyze-gaps and
+        # generate-tenant-mapping read the same dictionary.
+        return load_yaml_file(dict_path, default={}) or {}
     return {}
 
 
@@ -1628,6 +1630,7 @@ def print_triage(results):
 # Main
 # ============================================================
 
+@exit_on_yaml_file_error  # #4064: an unreadable metric dictionary → rc 2, named
 def main():
     """CLI entry point: 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。."""
     try_utf8_stdout()

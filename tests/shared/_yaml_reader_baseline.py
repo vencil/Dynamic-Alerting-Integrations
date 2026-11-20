@@ -179,6 +179,10 @@ ALLOWED = {
         (1, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/grafana_import.py', 'main'):
         (1, "a Grafana dashboard (--dashboard), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/grafana_import.py', 'import_dashboard'):
+        (1, "a dashboard file of --dashboard-dir, read by _lib_input.decode_bytes as JSON (#4064): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/grafana_import.py', 'verify_dashboards'):
+        (1, "a dashboard held in a ConfigMap, read by _lib_input.decode_bytes as JSON (#4064): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/lint_custom_rules.py', 'main'):
         (1, "the custom-rule lint policy (--policy), this tool's own input"),
     ('scripts/tools/ops/rule_pack_diff.py', 'main'):

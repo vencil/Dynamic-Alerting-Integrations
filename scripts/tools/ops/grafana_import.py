@@ -32,7 +32,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 import tempfile
@@ -110,17 +109,26 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
 
     dashboard_p = Path(dashboard_path)
 
-    # Validate JSON
+    # Validate JSON: #4064 the one decoding of a dashboard file, as
+    # --dashboard reads it (`_lib_input.decode_bytes`: strict UTF-8, a name
+    # given twice in one object refused, a nesting too deep named).
     try:
         if dashboard is None:
-            dashboard = json.loads(raw.decode("utf-8"))
+            dashboard = _lib_input.decode_bytes(raw, fmt="json", name=str(dashboard_path))
         title = dashboard.get("title", dashboard_p.name)
-    # UnicodeDecodeError is a ValueError; a nesting too deep, a RecursionError.
-    except (ValueError, AttributeError, RecursionError) as e:
+    except _lib_input.DocumentError as e:
         results.append({
             "action": "import",
             "status": "fail",
             "caller_error": True,  # malformed input file = caller-error (exit 2)
+            "detail": f"Invalid JSON: {str(e.info if e.problem == 'json' else e)[:80]}",
+        })
+        return results
+    except AttributeError as e:   # not an object at the top
+        results.append({
+            "action": "import",
+            "status": "fail",
+            "caller_error": True,
             "detail": f"Invalid JSON: {str(e)[:60]}",
         })
         return results
@@ -251,7 +259,9 @@ def verify_dashboards(namespace):
         for key in data_keys:
             raw = item.get("data", {}).get(key, "")
             try:
-                dashboard = json.loads(raw)
+                # #4064: read as a dashboard file is read (a name twice refused)
+                dashboard = _lib_input.decode_bytes(raw.encode("utf-8"), fmt="json",
+                                                    name=f"cm/{name}/{key}")
                 title = dashboard.get("title", "untitled")
                 panel_count = len(dashboard.get("panels", []))
                 checks.append({
@@ -259,7 +269,7 @@ def verify_dashboards(namespace):
                     "status": "pass",
                     "detail": f"Valid dashboard: \"{title}\" ({panel_count} panels)",
                 })
-            except json.JSONDecodeError:
+            except (_lib_input.DocumentError, AttributeError):
                 checks.append({
                     "check": f"cm/{name}/{key}",
                     "status": "fail",
