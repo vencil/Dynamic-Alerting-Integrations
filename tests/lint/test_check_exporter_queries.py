@@ -13,6 +13,17 @@ Pinned contracts
 6. with query-exporter installed: a counter is served as <name>_total and
    <name>_created (the derivation uses query-exporter's own code), and the
    shipped tree is clean.
+7. a metric the file declares and no query lists is never served (#4043): it
+   is a finding by itself in both halves, and — with query-exporter installed
+   — it is not derived as served, so a pack reading it gets the headline
+   finding. A query whose `metrics` is not a list of names is "cannot run".
+
+The tests of 6 and 7 that need query-exporter skip without it — and the
+Python Tests job does not install it. They are not left to that: ci.yml's
+Lint Rule Packs job installs query-exporter and runs this module with
+QUERY_EXPORTER_REQUIRED=1, under which a missing package is a failure, not a
+skip (`test_ci_runs_this_module_where_query_exporter_is_installed` holds that
+step in place).
 """
 from __future__ import annotations
 
@@ -27,6 +38,18 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "too
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_exporter_queries as ceq  # noqa: E402
+
+_REAL_SERVED_NAMES = ceq.served_names   # the `tree` fixture replaces it
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_THIS = "tests/lint/test_check_exporter_queries.py"
+
+
+def _need_query_exporter() -> None:
+    """Skip without query-exporter — unless the caller said it must be there."""
+    if os.environ.get("QUERY_EXPORTER_REQUIRED") == "1":
+        import query_exporter  # noqa: F401,PLC0415  (a missing package fails the test)
+        return
+    pytest.importorskip("query_exporter")
 
 QUERIES = {
     "metrics": {
@@ -130,7 +153,7 @@ def test_compare_served(tree, tmp_path):
 
 
 def test_derivation_uses_query_exporter(tmp_path):
-    pytest.importorskip("query_exporter")
+    _need_query_exporter()
     q = tmp_path / "q.yaml"
     q.write_text(yaml.safe_dump(QUERIES), encoding="utf-8")
     names = ceq.served_names(q, QUERIES)
@@ -138,8 +161,96 @@ def test_derivation_uses_query_exporter(tmp_path):
     assert "x_waits" not in names
 
 
+def _unattached(queries: dict) -> dict:
+    """*queries* with x_sessions taken off the query that serves it (still declared)."""
+    doc = yaml.safe_load(yaml.safe_dump(queries))
+    doc["queries"]["x_main"]["metrics"] = ["x_waits"]
+    doc["queries"]["x_main"]["sql"] = "SELECT 2 AS x_waits"
+    return doc
+
+
+def test_a_metric_no_query_lists_is_not_derived_as_served(tmp_path):
+    """#4043: query-exporter serves a metric only from a query's result; one
+    that is declared and attached to no query never appears on /metrics."""
+    _need_query_exporter()
+    doc = _unattached(QUERIES)
+    q = tmp_path / "q.yaml"
+    q.write_text(yaml.safe_dump(doc), encoding="utf-8")
+    names = ceq.served_names(q, doc)
+    assert "x_sessions" not in names
+    assert {"x_up", "x_waits_total"} <= names
+    # query-exporter's built-ins are listed by no query and served all the same.
+    assert {"query_interval", "query_timestamp", "queries_total"} <= names
+
+
+def test_a_declared_metric_no_query_lists_is_a_finding(tree):
+    """Without query-exporter too: the declaration alone is the finding."""
+    assert ceq.unattached_metrics(QUERIES) == set()
+    doc = _unattached(QUERIES)
+    assert ceq.unattached_metrics(doc) == {"x_sessions"}
+    found = tree(["x_up == 0"], queries=doc)
+    assert any("x_sessions is declared but no query lists it" in f for f in found), found
+
+
+def test_a_pack_reading_an_unattached_metric_fails_with_the_real_derivation(tree, monkeypatch):
+    """The headline of #4043, end to end with query-exporter's own code: the
+    pack reads x_sessions, the file declares it, no query serves it."""
+    _need_query_exporter()
+    monkeypatch.setattr(ceq, "served_names", _REAL_SERVED_NAMES)
+    found = tree(["x_sessions > 3"])
+    assert found == [], found            # attached: served, nothing to say
+    found = tree(["x_sessions > 3"], queries=_unattached(QUERIES))
+    assert any("reads x_sessions, which" in f and "does not serve" in f for f in found), found
+
+
+@pytest.mark.parametrize("listed", [[{"x_up": None}], 5, [["x_up"]], "x_up"],
+                         ids=["dict-item", "int", "nested-list", "string"])
+def test_a_query_whose_metrics_is_not_a_list_of_names_cannot_run(listed):
+    doc = yaml.safe_load(yaml.safe_dump(QUERIES))
+    doc["queries"]["x_main"]["metrics"] = listed
+    with pytest.raises(ceq.CannotRun, match="x_main"):
+        ceq.unattached_metrics(doc)
+
+
+def test_the_runtime_half_names_an_unattached_metric_too(tree, tmp_path):
+    doc = _unattached(QUERIES)
+    tree(["x_up == 0"], queries=doc)
+    lines = ['queries_total{query="%s",status="success"} 1' % q for q in doc["queries"]]
+    lines += ["x_up 1", "x_waits_total 1", "x_waits_created 1"]
+    scrape = tmp_path / "scrape.txt"
+    scrape.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    found = ceq.compare_served("x", scrape)
+    assert any("x_sessions is declared but no query lists it" in f for f in found), found
+
+
+def test_ci_runs_this_module_where_query_exporter_is_installed():
+    """The Python Tests job has no query-exporter, so the tests above that need
+    it skip there. Some job must install it and then run this module with
+    QUERY_EXPORTER_REQUIRED=1 (a skip would be a failure), in that order."""
+    ci = yaml.safe_load((_REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    for job in ci["jobs"].values():
+        steps = job.get("steps") or []
+        installs = [i for i, s in enumerate(steps)
+                    if "pip install" in (s.get("run") or "") and "query-exporter" in (s.get("run") or "")]
+        runs = [i for i, s in enumerate(steps)
+                if "pytest" in (s.get("run") or "") and _THIS in (s.get("run") or "")
+                and str((s.get("env") or {}).get("QUERY_EXPORTER_REQUIRED")) == "1"
+                and "if" not in s and not s.get("continue-on-error")]
+        if installs and runs and min(installs) < min(runs) and "if" not in job:
+            return
+    pytest.fail(f"no ci.yml job installs query-exporter and then runs {_THIS} "
+                "with QUERY_EXPORTER_REQUIRED=1")
+
+
+def test_required_means_a_missing_query_exporter_fails(monkeypatch):
+    monkeypatch.setenv("QUERY_EXPORTER_REQUIRED", "1")
+    monkeypatch.setitem(sys.modules, "query_exporter", None)
+    with pytest.raises(ImportError):
+        _need_query_exporter()
+
+
 def test_shipped_tree_is_clean():
-    pytest.importorskip("query_exporter")
+    _need_query_exporter()
     for pack, rule_pack, queries in ceq.bindings():
         assert ceq.findings_for(pack, rule_pack, queries) == [], pack
 

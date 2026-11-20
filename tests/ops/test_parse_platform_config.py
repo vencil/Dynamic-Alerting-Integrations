@@ -77,10 +77,10 @@ class TestParsePlatformConfig:
 
     def test_optional_overrides_extracted_from_platform_file(self):
         result = _empty_result()
-        data = {"optional_overrides": ["oracle_wait_time_rate", "db2_deadlock_rate"]}
+        data = {"optional_overrides": ["oracle_wait_time_rate", "db2_deadlocks_per_5m"]}
         _parse_platform_config(data, "_defaults.yaml", result)
         assert result["optional_override_keys"] == {
-            "oracle_wait_time_rate", "db2_deadlock_rate"}
+            "oracle_wait_time_rate", "db2_deadlocks_per_5m"}
 
     def test_optional_overrides_ignored_from_tenant_file(self):
         """⛔ 平台範疇：租戶自有檔列 key＝自我授權繞過寫入閘門。"""

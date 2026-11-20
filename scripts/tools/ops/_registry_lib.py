@@ -1468,7 +1468,8 @@ def _arming_note_lines(entry: dict, cont: str) -> list[str]:
 
 # The two directions are NOT interchangeable, and a single blanket caveat would
 # be false for one of them: over_fire means a benign scenario crossed the
-# threshold, under_fire means a real fault stayed under it. #1176 has both.
+# threshold, under_fire means a real fault stayed under it. #1176 measured both
+# (its one under_fire key, db2_deadlock_rate, was re-derived and retired in #1320).
 #
 # ⛔ ONE source for the verdict wording, in both languages, for every surface —
 # Python and JS alike (the JS copy lives in `_common/data/rule-packs.js` and is

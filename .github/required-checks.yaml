@@ -72,6 +72,11 @@ required:
   # 別的檢查重複擋；而它的網路依賴只有拉映像，runner 會先重試拉取，拉不到時以
   # exit 2 與點名「拉映像失敗」的訊息結束，不會讀成測試失敗。
   - {name: Federation E2E (ADR-020 IV-2j), kind: job}
+  # Owner 裁決 2026-11-20（#3833）：DB2 的查詢設定每支 PR 都對真的 DB2 實跑一次。
+  # 它要拉約 4 GB 的映像，拉不到時腳本重試三次後以 exit 2 與點名「image pull
+  # failed」的訊息結束，不會讀成檢查失敗。`pending`：job 合進 main 並回報過一次後，
+  # owner 到設定加上它，再把這個旗標拿掉（見檔頭「改法」）。
+  - {name: Exporter Queries Runtime (DB2), kind: job, pending: true}
 
 # 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
 # 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證

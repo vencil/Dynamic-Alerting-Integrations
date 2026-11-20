@@ -888,14 +888,80 @@ jobs:
       # #3833: the runtime half of check_exporter_queries.py. The static half
       # (pre-commit `exporter-queries-check`, run in the Lint job) derives the
       # names query-exporter serves for rule-packs/exporters/oracle.yaml; this
-      # runs that file against Oracle Database Free and fails when a query does
+      # runs that file against Oracle Database Free, as a monitor user holding
+      # only the grants the file's header documents, and fails when a query does
       # not succeed or a derived name is not served. query-exporter's version is
       # the requirements/ci-constraints.txt pin, for the package and the image.
+      # The DB2 pack's turn is the exporter-queries-db2 job below (its database
+      # takes ~4 minutes to come up, so it does not sit in this job's path).
+      - name: Install query-exporter (the version the runtime check derives names with)
+        run: pip install query-exporter -c requirements/ci-constraints.txt
+
+      # #4043: the tests of check_exporter_queries.py that derive names with
+      # query-exporter's own code skip where it is not installed — and the Python
+      # Tests job does not install it. Here it is, so they run here, and
+      # QUERY_EXPORTER_REQUIRED=1 turns a missing package into a failure.
+      - name: "check_exporter_queries tests with query-exporter present (HARD gate — #4043)"
+        env:
+          QUERY_EXPORTER_REQUIRED: "1"
+        run: python -m pytest tests/lint/test_check_exporter_queries.py -q -p no:cacheprovider
+
+      # ⛔ One command, nothing around it: tests/ops/test_exporter_queries_runtime_wiring.py
+      # refuses anything else in this `run:` (a pipe, `||`, a condition, a second
+      # line), because each is a way for the step to pass without the check.
+      # The comparison reads the rule pack the way Prometheus does (da-read).
       - name: "Oracle queries run against a real Oracle and serve the derived names (HARD gate — #3833)"
-        run: |
-          pip install query-exporter -c requirements/ci-constraints.txt
-          # The comparison reads the rule pack the way Prometheus does (da-read).
-          bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_queries_oracle_runtime.sh
+        run: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_queries_runtime.sh oracle
+
+  exporter-queries-db2:
+    # #3833: the runtime half of check_exporter_queries.py for the DB2 pack —
+    # rule-packs/exporters/db2.yaml run against Db2 Community Edition, as a
+    # monitor user holding only the grants that file's header documents.
+    #
+    # A job of its own, on every PR (owner ruling 2026-11-20): the database
+    # needs a privileged container and ~4 minutes to set itself up, which in
+    # Lint Rule Packs would lengthen a required check every PR waits for; in
+    # parallel it costs runner minutes, not wall time. No path gate (#3756) —
+    # what this reads (the queries file, the rule pack, the registry, the
+    # checker, query-exporter's pin, the image) is not a list to keep by hand.
+    #
+    # Its required-check status is in .github/required-checks.yaml.
+    # tests/ops/test_exporter_queries_runtime_wiring.py holds "every registry
+    # pack with a `queries:` file is run by a CI step" — deleting this job, or
+    # adding a third such pack without a step, fails there.
+    name: Exporter Queries Runtime (DB2)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # Measured on a 4-core container, not on a hosted runner: ~4 min database
+    # setup + ~2 min queries; the image is ~4 GB to pull. The script exits 2 by
+    # name when the pull fails 3 times.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install dependencies
+        run: pip install pyyaml query-exporter -c requirements/ci-constraints.txt
+
+      - name: Set up Go (da-read / da-crdecode)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: |
+            components/threshold-exporter/app/go.sum
+            components/da-read/go.sum
+
+      # ⛔ One command, nothing around it (see the Oracle step in Lint Rule Packs).
+      # The comparison reads the rule pack the way Prometheus does (da-read).
+      - name: "DB2 queries run against a real DB2 and serve the derived names (HARD gate — #3833)"
+        run: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/exporter_queries_runtime.sh db2
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).

@@ -51,6 +51,7 @@ BUILD_EXEMPT = frozenset({
     # #3446 — what a caller-given value selects + the one directory listing.
     # Library, not CLI.
     "_lib_input.py",
+    "_lib_yaml_strict.py",  # #4064: the one strict YAML loader
     # #3662 — the one definition of validation-report.csv. Library, not CLI.
     "_lib_shadow_report.py",
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
