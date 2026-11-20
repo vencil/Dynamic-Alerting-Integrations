@@ -1119,7 +1119,7 @@ def test_real_registry_optional_list_is_the_flat_keys():
         "mysql_threads_running",
         "oracle_wait_time_rate", "oracle_hard_parse_time_percent",
         "oracle_pga_usage_percent",
-        "db2_log_usage_percent", "db2_deadlock_rate",
+        "db2_log_usage_percent", "db2_deadlocks_per_5m",
         "db2_tablespace_used_percent",
         "clickhouse_max_part_count", "clickhouse_replication_queue",
     ]

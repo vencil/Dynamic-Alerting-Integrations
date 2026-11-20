@@ -41,7 +41,7 @@ lang: zh
 | DB2HighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: DB2 connections at critical level  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:db2_connections_active:max |
 | DB2LowBufferpoolHitRatio | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 bufferpool hit ratio low  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_bufferpool_hit_ratio:min |
 | DB2HighLogUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 transaction log usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_log_usage_percent:max |
-| DB2HighDeadlockRate | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 deadlock rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_deadlocks:rate5m |
+| DB2HighDeadlockRate | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 deadlocks elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_deadlocks:increase5m |
 | DB2TablespaceAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_tablespace_used_percent:max |
 | DB2HighLockWaitTime | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 lock wait time high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_lock_wait_time:rate5m |
 | DB2HighLockWaitTimeCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: DB2 lock waits at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_lock_wait_time:rate5m |

@@ -286,10 +286,10 @@ db2_log_usage_percent:
   note: "Transaction log 使用率 — max by(tenant) 聚合"
 
 db2_deadlocks_total:
-  maps_to: db2_deadlock_rate
+  maps_to: db2_deadlocks_per_5m
   golden_rule: DB2HighDeadlockRate
   rule_pack: db2
-  note: "Deadlocks — rate() 指標, sum by(tenant) 聚合"
+  note: "Deadlocks — increase() over 5m（次／5 分鐘）, sum by(tenant) 聚合"
 
 db2_tablespace_used_percent:
   maps_to: db2_tablespace_used_percent

@@ -449,28 +449,44 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                           'unit': '%',
                                                           'desc': 'Transaction log usage warning',
                                                           'metric_class': 'capacity'},
-                                'db2_deadlock_rate': {'value': 5,
-                                                      'unit': 'count/s',
-                                                      'desc': 'Deadlock rate (5m)',
-                                                      'metric_class': 'errors',
-                                                      'value_counterexample': {'issue': 1176,
-                                                                               'direction': 'under_fire',
-                                                                               'observed': 'a real '
-                                                                                           '~90/min '
-                                                                                           'deadlock '
-                                                                                           'storm '
-                                                                                           'stays '
-                                                                                           'under '
-                                                                                           '5/s '
-                                                                                           '(=300/min) '
-                                                                                           'and is '
-                                                                                           'missed',
-                                                                               'observed_zh': '真實的 '
-                                                                                              '~90/min '
-                                                                                              'deadlock '
-                                                                                              'storm '
-                                                                                              '低於 '
-                                                                                              '5/s（＝300/min），因此接不到'}},
+                                'db2_deadlocks_per_5m': {'value': 5,
+                                                         'unit': 'count/5m',
+                                                         'desc': 'Deadlocks in the last 5 minutes, '
+                                                                 "summed over the tenant's "
+                                                                 'exporters; 5 is the threshold of '
+                                                                 "the grafana ibm-db2 mixin's "
+                                                                 'IBMDB2HighNumberOfDeadlocks '
+                                                                 '(increase over 5m > 5, per '
+                                                                 'database, for 5m). Replaces the '
+                                                                 'per-second key db2_deadlock_rate '
+                                                                 '(#1320: a unit change is a '
+                                                                 'removal plus an addition, no '
+                                                                 'alias)',
+                                                         'metric_class': 'errors',
+                                                         'value_counterexample': {'issue': 1176,
+                                                                                  'direction': 'over_fire',
+                                                                                  'observed': 'one '
+                                                                                              'reference '
+                                                                                              "library's "
+                                                                                              'normal '
+                                                                                              'level '
+                                                                                              'is '
+                                                                                              'about '
+                                                                                              '6 '
+                                                                                              'deadlocks '
+                                                                                              'per '
+                                                                                              '5 '
+                                                                                              'minutes '
+                                                                                              '(0.02/s), '
+                                                                                              'above '
+                                                                                              '5',
+                                                                                  'observed_zh': '其中一個參考庫的正常水位約每 '
+                                                                                                 '5 '
+                                                                                                 '分鐘 '
+                                                                                                 '6 '
+                                                                                                 '次 '
+                                                                                                 'deadlock（0.02/s），高於 '
+                                                                                                 '5'}},
                                 'db2_tablespace_used_percent': {'value': 85,
                                                                 'unit': '%',
                                                                 'desc': 'Tablespace usage warning',
