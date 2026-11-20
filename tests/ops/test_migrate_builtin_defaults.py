@@ -129,14 +129,15 @@ def test_one_matching_digest_does_not_cover_a_cluster_that_differs(tmp_path):
 
 def test_a_value_that_overrides_another_layer_is_not_a_copy(tmp_path, capsys):
     """t1's 80 equals the built-in value, but it overrides team/_defaults.yaml's
-    70: deleting it would change t1's row, so it is kept and named (rc 1)."""
+    70: deleting it would change t1's row, so it is kept and named — an
+    override, not a failure (rc 0)."""
     conf = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  redis_connected_clients: 200\n",
         "team/_defaults.yaml": "defaults:\n  pg_connections: 70\n",
         "team/t1.yaml": "tenants:\n  t1:\n    pg_connections: \"80\"\n",
     })
     before = _served(conf)
-    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 1
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 0
     assert "kept team/t1.yaml: tenants.t1.pg_connections" in capsys.readouterr().out
     assert _load(conf, "team/t1.yaml")["tenants"]["t1"]["pg_connections"] == "80"
     assert _served(conf) == before
@@ -169,4 +170,75 @@ def test_a_tree_with_nothing_to_do_writes_nothing(tmp_path, capsys):
 
 
 def test_a_missing_config_dir_is_a_caller_error(tmp_path):
-    assert mig.main(["--config-dir", str(tmp_path / "nope")]) == 2
+    """Refused naming the flag (`_lib_exitcodes.run` turns it into rc 2)."""
+    import _lib_exitcodes
+    with pytest.raises(_lib_exitcodes.CallerError, match="--config-dir"):
+        mig.main(["--config-dir", str(tmp_path / "nope")])
+
+
+@pytest.mark.parametrize("root", [
+    "optional_overrides:\n  - pg_connections\n",
+    "defaults:\n  pg_connections: null\n",
+], ids=["listed", "null"])
+def test_a_tenant_value_that_keeps_a_switched_off_key_on_is_not_a_copy(tmp_path, root):
+    """Review finding: the root switched the key off and t1 turned it back on with
+    its own 80 (the platform's value). In the same run the root becomes "disable",
+    so deleting t1's 80 would switch t1 off: the proof runs on top of the
+    rewrites, and t1's value is kept."""
+    conf = _tree(tmp_path, {"_defaults.yaml": root,
+                            "t1.yaml": "tenants:\n  t1:\n    pg_connections: \"80\"\n"})
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 0
+    assert _load(conf, "t1.yaml")["tenants"]["t1"]["pg_connections"] == "80"
+    assert _load(conf, "_defaults.yaml")["defaults"]["pg_connections"] == "disable"
+    assert "pg_connections" in _served(conf)["t1"]
+
+
+def test_one_candidate_that_is_not_a_copy_does_not_keep_the_others(tmp_path, capsys):
+    """Review finding: t2's 80 overrides a subdirectory's 70 (not a copy), but the
+    root's 80 and t1's 80 are copies on their own: those are deleted, t2's kept."""
+    conf = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  pg_connections: 80\n",
+        "t1.yaml": "tenants:\n  t1:\n    pg_connections: \"80\"\n",
+        "team/_defaults.yaml": "defaults:\n  pg_connections: 70\n",
+        "team/t2.yaml": "tenants:\n  t2:\n    pg_connections: \"80\"\n",
+    })
+    before = _served(conf)
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 0
+    assert "pg_connections" not in (_load(conf, "_defaults.yaml").get("defaults") or {})
+    assert "pg_connections" not in _load(conf, "t1.yaml")["tenants"]["t1"]
+    assert _load(conf, "team/t2.yaml")["tenants"]["t2"]["pg_connections"] == "80"
+    assert "kept team/t2.yaml: tenants.t2.pg_connections" in capsys.readouterr().out
+    assert _served(conf) == before
+
+
+def test_a_symlinked_tenant_file_is_named_not_a_crash(tmp_path, capsys):
+    """Review finding: da-guard write does not write through a symlink, so a copy
+    in a symlinked file is kept and named; the preview and the run still work."""
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("tenants:\n  t1:\n    pg_connections: \"80\"\n", encoding="utf-8")
+    conf = _tree(tmp_path, {"_defaults.yaml": "defaults:\n  pg_connections: 80\n"})
+    (conf / "t1.yaml").symlink_to(outside)
+    assert mig.main(["--config-dir", str(conf)]) == 0
+    out = capsys.readouterr().out
+    assert "kept t1.yaml: tenants.t1.pg_connections" in out and "symlink" in out
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 0
+    assert "pg_connections" not in (_load(conf, "_defaults.yaml").get("defaults") or {})
+    assert outside.read_text(encoding="utf-8").count("80") == 1
+
+
+def test_the_other_listed_items_are_never_retyped(tmp_path, capsys):
+    """Review finding: the list used to be rewritten through Python `str()`, so a
+    `1e2` item came back as `100.0`. The kept items are now re-emitted as the
+    reader read them; one the edit cannot write back exactly as written is a
+    named refusal (rc 2, nothing written), never a silent respelling."""
+    conf = _tree(tmp_path, {"_defaults.yaml":
+                            "optional_overrides:\n  - pg_connections\n  - mysql_threads_running\n"})
+    assert mig.main(["--config-dir", str(conf), "--apply"]) == 0
+    text = (conf / "_defaults.yaml").read_text(encoding="utf-8")
+    assert "- pg_connections" not in text and "mysql_threads_running" in text, text
+    odd = _tree(tmp_path / "odd", {"_defaults.yaml":
+                                   "optional_overrides:\n  - pg_connections\n  - 1e2\n"})
+    before = (odd / "_defaults.yaml").read_bytes()
+    assert mig.main(["--config-dir", str(odd), "--apply"]) == 2
+    assert "1e2" in capsys.readouterr().err
+    assert (odd / "_defaults.yaml").read_bytes() == before

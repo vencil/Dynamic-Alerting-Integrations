@@ -2590,8 +2590,8 @@ da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest 
 
 | Code | Meaning |
 |------|---------|
-| `0` | Previewed or written |
-| `1` | An exporter digest differs from this command's built-in table and deletions were refused; or a value equals the built-in one but removing it would change what is served (named, not deleted) |
+| `0` | Previewed or written. A value equal to the built-in one whose removal would change what is served (it overrides another layer) is no copy: named, not deleted, and no failure |
+| `1` | An exporter digest differs from this command's built-in table and deletions were refused; the rewrites to `"disable"` are still written |
 | `2` | Invalid config directory, unreadable tree, unusable da-guard, or `da-guard write` refused |
 
 ---

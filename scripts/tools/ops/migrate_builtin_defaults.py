@@ -16,37 +16,37 @@ switch it off (decision 4; da-guard reports the listing as
 
 ⛔ Every judgement is a reader's, none is this tool's:
   * which keys are built in, their values and what the root does with each:
-    `da-guard effective`'s `builtin_defaults`;
+    `da-guard effective`'s `builtin_defaults`; which file a tenant's value
+    comes from: its `key_sources`; which root items are listed: the
+    parse-tree node's scalar text (what the exporter reads), re-emitted as
+    read when the list is rewritten;
   * whether a deletion only removes a copy: the batch is applied to a scratch
-    copy of the tree and `da-guard served-values` compared before and after;
-    a candidate whose key serves anything different for any tenant (for
-    example a tenant value that overrides a subdirectory's) is kept and named.
-The rewrites to "disable" are meant to change what is served, so they are not
-put through that comparison.
+    copy of the tree on top of the rewrites, and `da-guard served-values`
+    compared with the rewrites alone. A key whose served state changes has
+    each of its candidates tried on its own; one that still changes something
+    (for example a tenant value that overrides a subdirectory's, or a tenant
+    value that keeps a key on under a root switched off) is kept and named.
 
 Deleting a copy is the one step that makes a tree depend on the built-in layer:
 a reader without the table then serves nothing for that key. So deletions need
 `--exporter-digest`, the built-in table digest of every deployed exporter
 (`da_config_builtin_defaults_info{digest}`, one per cluster the conf.d feeds),
 and are refused when any differs from this tool's table. The rewrites are not
-gated (decision 9 does them before the upgrade).
+gated (decision 9 does them before the upgrade) and are written either way.
 
 A number equal to the platform's may be pinned on purpose, so nothing is written
 without `--apply`, and `--keep <key>` leaves a key alone.
 
-Usage:
-  da-tools migrate-builtin-defaults --config-dir conf.d
-  da-tools migrate-builtin-defaults --config-dir conf.d --apply \\
-      --exporter-digest 522437716e2a [--exporter-digest …] [--keep pg_connections]
-
-Exit codes: 0 previewed or written; 1 deletions refused (an exporter digest
-differs from this tool's table) or a deletion the batch would make is not a
-copy is reported; 2 caller error (unreadable tree, da-guard unusable, bad flag).
+Exit codes: 0 previewed or written (a value equal to the built-in one that is
+not a copy — it overrides another layer — is named and kept, which is no
+failure); 1 deletions refused because an exporter digest differs (the rewrites
+are still written); 2 caller error.
 """
 from __future__ import annotations
 
 import argparse
 import math
+import os
 import shutil
 import sys
 import tempfile
@@ -58,15 +58,44 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, str(_THIS_DIR.parent))
 
 import _lib_confedit  # noqa: E402  (ADR-036 §2: conf.d goes to da-guard write)
+import _lib_exitcodes  # noqa: E402
+import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+import _lib_parse_tree  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
-from _lib_io import YamlFileError  # noqa: E402  (a tree the readers drop files of)
+from _lib_io import YamlFileError, exit_on_yaml_file_error  # noqa: E402  (#1654)
+from _lib_python import detect_cli_lang  # noqa: E402
 
 DISABLE = "disable"
-#: Served at one fixed instant on both sides of the comparison, so a schedule
-#: cannot read as a change; `schedules=True` compares the whole day too.
+#: Served at one fixed instant on both sides of the comparison, with the whole
+#: day's schedules, so a time-of-day cannot read as a change.
 _AT = "2026-01-01T12:00:00Z"
+
+_LANG = detect_cli_lang()
+_HELP = {
+    "description": {
+        "en": "Remove copies of the platform's built-in thresholds from a conf.d tree, and "
+              "rewrite built-in keys switched off with null or optional_overrides to "
+              "\"disable\" (#3832). Preview unless --apply.",
+        "zh": "刪除 conf.d 樹裡平台內建閾值的複製品，並把用 null 或 optional_overrides 關掉的"
+              "內建鍵改寫成 \"disable\"（#3832）。預設只預覽，--apply 才寫入。",
+    },
+    "config_dir": {"en": "the conf.d tree", "zh": "conf.d 目錄"},
+    "apply": {"en": "write the changes (default: preview)", "zh": "寫入（預設只預覽）"},
+    "exporter_digest": {
+        "en": "built-in table digest of a deployed exporter (da_config_builtin_defaults_info); "
+              "once per cluster; required to delete",
+        "zh": "部署中 exporter 的內建表摘要（da_config_builtin_defaults_info）；每個叢集給一次；"
+              "刪除複製品時必填",
+    },
+    "keep": {"en": "leave this key's values alone (pinned on purpose); repeatable",
+             "zh": "這個鍵的值不動（刻意釘住的數字）；可重複"},
+}
+
+
+def _h(key: str) -> str:
+    return _HELP[key].get(_LANG, _HELP[key]["en"])
 
 
 class Deletion(NamedTuple):
@@ -81,18 +110,24 @@ class Rewrite(NamedTuple):
     why: str                # "null" or "optional_overrides"
 
 
+class Root(NamedTuple):
+    rel: Optional[str]      # the root defaults carrier, as parse-tree names it
+    data: dict
+    node: dict
+
+
 class Plan(NamedTuple):
-    root: Optional[str]     # the root defaults carrier, as parse-tree names it
+    root: Root
     deletions: list[Deletion]
     rewrites: list[Rewrite]
-    not_copies: list[tuple[Deletion, str]]
+    kept: list[tuple[Deletion, str]]
     digest: str
 
 
 def _number(value: Any) -> Optional[float]:
     """*value* as a finite number when it is a plain scalar threshold, else None
     (a schedule, a mapping, `disable`, text that is no number)."""
-    if isinstance(value, bool) or isinstance(value, (dict, list)):
+    if isinstance(value, bool) or isinstance(value, (dict, list)) or value is None:
         return None
     try:
         out = float(value)
@@ -101,17 +136,32 @@ def _number(value: Any) -> Optional[float]:
     return out if math.isfinite(out) else None
 
 
-def _root_carrier(config_dir: str) -> tuple[Optional[str], dict]:
-    """The root defaults carrier the exporter reads (parse-tree's choice) and its
-    data; (None, {}) when the tree has none."""
+def _root(config_dir: str) -> Root:
+    """The root defaults carrier the exporter reads (parse-tree's choice): its
+    data and its parse-tree node; Root(None, {}, {}) when the tree has none."""
     reader = _lib_parse_cache.reader_for(config_dir)
     selected = reader.tree().selected
     names = sorted(e.path for e in reader.listing().entries
                    if e.depth == 0 and e.config_file and e.cls == "defaults" and e.path in selected)
     if not names:
-        return None, {}
-    data = reader.read(names[0])
-    return names[0], data if isinstance(data, dict) else {}
+        return Root(None, {}, {})
+    data, node = reader.read(names[0]), reader.node(names[0])
+    return Root(names[0], data if isinstance(data, dict) else {},
+                node if isinstance(node, dict) and not _lib_parse_tree.is_scalar(node) else {})
+
+
+def _listed(root: Root) -> list:
+    items = root.node.get("optional_overrides")
+    return items if isinstance(items, list) else []
+
+
+def _listed_text(item: Any) -> Optional[str]:
+    return item["text"] if _lib_parse_tree.is_scalar(item) else None
+
+
+def _symlinked(config_dir: str, rel: str) -> bool:
+    path = os.path.join(config_dir, rel)
+    return os.path.realpath(path) != os.path.abspath(path)
 
 
 def _candidates(config_dir: str, keep: set[str]) -> Plan:
@@ -119,33 +169,55 @@ def _candidates(config_dir: str, keep: set[str]) -> Plan:
     builtin = tree.builtin_defaults
     if builtin is None:
         raise tv.DaGuardError("da-guard ran no build of this tree (no builtin_defaults)")
-    root, root_data = _root_carrier(config_dir)
-    deletions: list[Deletion] = []
-    rewrites: list[Rewrite] = []
+    root = _root(config_dir)
+    found: list[Deletion] = []
     for key, entry in sorted(builtin.keys.items()):
         if entry.state == "overridden" and entry.root_value == entry.value and key not in keep:
-            deletions.append(Deletion(root, ("defaults", key), key, entry.root_value))
-    defaults = root_data.get("defaults") if isinstance(root_data.get("defaults"), dict) else {}
-    listed = root_data.get("optional_overrides")
-    listed = [str(x) for x in listed if isinstance(x, (str, int, float))] if isinstance(listed, list) else []
-    for key in sorted(builtin.keys):
-        if key in defaults and defaults[key] is None:
-            rewrites.append(Rewrite(key, "null"))
-        elif key in listed and key not in defaults:
-            rewrites.append(Rewrite(key, "optional_overrides"))
+            found.append(Deletion(root.rel, ("defaults", key), key, entry.root_value))
     for tenant, te in sorted(tree.tenants.items()):
         for key, entry in sorted(builtin.keys.items()):
             src = te.key_sources.get(key)
             if src is None or src.layer != "tenant" or key in keep:
                 continue
             if _number(te.effective_config.get(key)) == entry.value:
-                deletions.append(Deletion(src.file, ("tenants", tenant, key), key,
-                                          te.effective_config[key]))
-    return Plan(root, deletions, rewrites, [], builtin.digest)
+                found.append(Deletion(src.file, ("tenants", tenant, key), key,
+                                      te.effective_config[key]))
+    deletions, kept = [], []
+    for d in found:
+        if _symlinked(config_dir, d.file):
+            kept.append((d, "its file is a symlink, which da-guard write does not write through"))
+        else:
+            deletions.append(d)
+    defaults = root.data.get("defaults") if isinstance(root.data.get("defaults"), dict) else {}
+    listed = {_listed_text(i) for i in _listed(root)}
+    rewrites: list[Rewrite] = []
+    for key in sorted(builtin.keys):
+        if key in defaults and defaults[key] is None:
+            rewrites.append(Rewrite(key, "null"))
+        elif key in listed and key not in defaults:
+            rewrites.append(Rewrite(key, "optional_overrides"))
+    return Plan(root, deletions, rewrites, kept, builtin.digest)
 
 
-def _served(config_dir: str) -> dict:
-    return tv.load_served_values(config_dir, at=_AT, schedules=True)
+def _edits(deletions: list[Deletion], rewrites: list[Rewrite],
+           root: Root) -> list[tuple[str, list[dict]]]:
+    by_file: dict[str, list[dict]] = {}
+    for d in deletions:
+        by_file.setdefault(d.file, []).append(_lib_confedit.unset_op(list(d.path)))
+    if rewrites and root.rel is not None:
+        ops = by_file.setdefault(root.rel, [])
+        ops.append(_lib_confedit.ensure_map_op(["defaults"]))
+        for r in rewrites:
+            ops.append(_lib_confedit.set_op(["defaults", r.key], _lib_confedit.str_value(DISABLE)))
+        drop = {r.key for r in rewrites}
+        items = _listed(root)
+        if any(_listed_text(i) in drop for i in items):
+            # The other items are re-emitted as the reader read them, never
+            # re-typed here (a `1e2` stays `1e2`).
+            kept = [i for i in items if _listed_text(i) not in drop]
+            ops.append(_lib_confedit.set_op(["optional_overrides"], _lib_confedit.node_value(kept))
+                       if kept else _lib_confedit.unset_op(["optional_overrides"]))
+    return sorted(by_file.items())
 
 
 def _key_state(tenant: tv.TenantValues, key: str) -> tuple:
@@ -170,48 +242,43 @@ def _changed_keys(before: dict, after: dict) -> set[str]:
     return out
 
 
-def _edits(deletions: list[Deletion], rewrites: list[Rewrite], root: Optional[str],
-           root_data: dict) -> list[tuple[str, list[dict]]]:
-    by_file: dict[str, list[dict]] = {}
-    for d in deletions:
-        by_file.setdefault(d.file, []).append(_lib_confedit.unset_op(list(d.path)))
-    if rewrites and root is not None:
-        ops = by_file.setdefault(root, [])
-        ops.append(_lib_confedit.ensure_map_op(["defaults"]))
-        for r in rewrites:
-            ops.append(_lib_confedit.set_op(["defaults", r.key], _lib_confedit.str_value(DISABLE)))
-        listed = root_data.get("optional_overrides")
-        drop = {r.key for r in rewrites} & {str(x) for x in listed} if isinstance(listed, list) else set()
-        if drop and isinstance(listed, list):
-            kept = [x for x in listed if str(x) not in drop]
-            ops.append(_lib_confedit.set_op(["optional_overrides"], _lib_confedit.seq_value(
-                [_lib_confedit.str_value(str(x)) for x in kept])) if kept
-                else _lib_confedit.unset_op(["optional_overrides"]))
-    return sorted(by_file.items())
+def _served_after(config_dir: str, deletions: list[Deletion], rewrites: list[Rewrite],
+                  root: Root) -> dict:
+    """served-values of a scratch copy of the tree with *rewrites* and
+    *deletions* applied (symlinks followed: the copy holds their content)."""
+    with tempfile.TemporaryDirectory(prefix="migrate-builtin-") as scratch:
+        copy = Path(scratch) / "conf.d"
+        shutil.copytree(config_dir, copy, symlinks=False)
+        edits = _edits(deletions, rewrites, root)
+        if edits:
+            _lib_confedit.edit_all(copy, edits)
+        return tv.load_served_values(copy, at=_AT, schedules=True)
 
 
 def _prove_copies(config_dir: str, plan: Plan) -> Plan:
-    """Keep only the deletions that change nothing served: apply them to a
-    scratch copy, compare served-values, drop every candidate of a key that
-    changed, repeat until the batch changes nothing."""
-    deletions = list(plan.deletions)
-    not_copies: list[tuple[Deletion, str]] = []
-    if not deletions:
+    """Keep only the deletions that change nothing served, judged on top of
+    the rewrites the same run writes."""
+    if not plan.deletions:
         return plan
-    before = _served(config_dir)
-    root_data = _root_carrier(config_dir)[1]
-    for _ in range(len(deletions) + 1):
-        with tempfile.TemporaryDirectory(prefix="migrate-builtin-") as scratch:
-            copy = Path(scratch) / "conf.d"
-            shutil.copytree(config_dir, copy, symlinks=True)
-            _lib_confedit.edit_all(copy, _edits(deletions, [], plan.root, root_data))
-            changed = _changed_keys(before, _served(str(copy)))
+    base = _served_after(config_dir, [], plan.rewrites, plan.root)
+    deletions, kept = list(plan.deletions), list(plan.kept)
+    for _ in range(len(plan.deletions) + 1):
+        changed = _changed_keys(base, _served_after(config_dir, deletions, plan.rewrites, plan.root))
         if not changed:
+            return plan._replace(deletions=deletions, kept=kept)
+        suspects = [d for d in deletions if d.key in changed]
+        if not suspects:
             break
-        for d in [d for d in deletions if d.key in changed]:
-            deletions.remove(d)
-            not_copies.append((d, "removing it changes what /metrics serves"))
-    return plan._replace(deletions=deletions, not_copies=not_copies)
+        for d in suspects:
+            if _changed_keys(base, _served_after(config_dir, [d], plan.rewrites, plan.root)):
+                deletions.remove(d)
+                kept.append((d, "removing it changes what /metrics serves"))
+        if all(d in deletions for d in suspects):
+            # Each is a copy alone but not together: keep them all, named.
+            for d in suspects:
+                deletions.remove(d)
+                kept.append((d, "removing it together with the others changes what /metrics serves"))
+    raise tv.DaGuardError("the deletions could not be proven to change nothing served")
 
 
 def _show(d: Deletion) -> str:
@@ -226,12 +293,12 @@ def run(config_dir: str, *, apply: bool, digests: list[str], keep: set[str]) -> 
         print(f"  delete {_show(d)}")
     print(f"switched off the old way, rewritten to \"{DISABLE}\" ({len(plan.rewrites)}):")
     for r in plan.rewrites:
-        print(f"  {plan.root}: defaults.{r.key} = \"{DISABLE}\" (was {r.why})")
-    for d, why in plan.not_copies:
+        print(f"  {plan.root.rel}: defaults.{r.key} = \"{DISABLE}\" (was {r.why})")
+    for d, why in plan.kept:
         print(f"  kept {_show(d)} — equal to the built-in value, but {why}")
     if keep:
         print(f"kept by --keep: {', '.join(sorted(keep))}")
-    rc = EXIT_VIOLATION if plan.not_copies else EXIT_OK
+    rc = EXIT_OK
     if not apply:
         print("preview only: nothing written (--apply writes)")
         return rc
@@ -239,15 +306,15 @@ def run(config_dir: str, *, apply: bool, digests: list[str], keep: set[str]) -> 
     if deletions:
         wrong = sorted({d for d in digests if d != plan.digest})
         if not digests:
-            print(f"not deleted: deleting a copy needs --exporter-digest for every deployed "
-                  f"exporter (da_config_builtin_defaults_info), and none was given", file=sys.stderr)
+            print("not deleted: deleting a copy needs --exporter-digest for every deployed "
+                  "exporter (da_config_builtin_defaults_info), and none was given", file=sys.stderr)
             deletions = []
         elif wrong:
             print(f"refused: exporter digest(s) {', '.join(wrong)} differ from this tool's built-in "
                   f"table {plan.digest}; an exporter without this table serves nothing for a key "
                   f"whose copy is deleted (upgrade it first)", file=sys.stderr)
             deletions, rc = [], EXIT_VIOLATION
-    edits = _edits(deletions, plan.rewrites, plan.root, _root_carrier(config_dir)[1])
+    edits = _edits(deletions, plan.rewrites, plan.root)
     if not edits:
         print("nothing written")
         return rc
@@ -257,31 +324,33 @@ def run(config_dir: str, *, apply: bool, digests: list[str], keep: set[str]) -> 
     return rc
 
 
+@exit_on_yaml_file_error  # #1654: an unreadable YAML file → rc 2, named
 def main(argv: Optional[list[str]] = None) -> int:
-    p = argparse.ArgumentParser(
-        prog="migrate-builtin-defaults",
-        description="Remove copies of the platform's built-in thresholds from a conf.d tree, "
-                    "and rewrite keys switched off with null or optional_overrides to "
-                    "\"disable\" (#3832). Preview unless --apply.")
-    p.add_argument("--config-dir", required=True, help="the conf.d tree")
-    p.add_argument("--apply", action="store_true", help="write the changes (default: preview)")
+    p = argparse.ArgumentParser(prog="migrate-builtin-defaults", description=_h("description"))
+    # An empty conf.d is refused naming the flag (#3751), as explain-keys'.
+    _lib_input.add_input(p, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True, help=_h("config_dir"))
+    p.add_argument("--apply", action="store_true", help=_h("apply"))
     p.add_argument("--exporter-digest", action="append", default=[], metavar="DIGEST",
-                   help="built-in table digest of a deployed exporter "
-                        "(da_config_builtin_defaults_info); once per cluster; required to delete")
-    p.add_argument("--keep", action="append", default=[], metavar="KEY",
-                   help="leave this key's values alone (pinned on purpose); repeatable")
+                   help=_h("exporter_digest"))
+    p.add_argument("--keep", action="append", default=[], metavar="KEY", help=_h("keep"))
     args = p.parse_args(argv)
-    if not Path(args.config_dir).is_dir():
-        print(f"error: --config-dir {args.config_dir}: not a directory", file=sys.stderr)
-        return EXIT_CALLER_ERROR
     try:
-        return run(args.config_dir, apply=args.apply, digests=args.exporter_digest,
-                   keep=set(args.keep))
+        # One reader of --config-dir for the run (the tree the parser judged).
+        with _lib_parse_cache.session():
+            # #3751: judged once — the path, a root da-guard cannot list, an
+            # empty tree — each refusal naming --config-dir (CallerError: rc 2).
+            [conf_d] = _lib_parse_cache.declared_trees(args, "config_dir", lang=_LANG)
+            return run(str(conf_d), apply=args.apply, digests=args.exporter_digest,
+                       keep=set(args.keep))
     except (tv.DaGuardError, tv.DaGuardNotFoundError, YamlFileError, _lib_confedit.EditError,
-            _lib_confedit.EditsRefused, _lib_confedit.PartialWrite, OSError) as exc:
+            _lib_confedit.EditsRefused, _lib_confedit.PartialWrite, OSError, ValueError,
+            _lib_parse_tree.ParseTreeError) as exc:
+        # ValueError: a kept `optional_overrides:` item the edit cannot write back
+        # exactly as written (`_lib_confedit.node_value`) — named, nothing written.
         print(f"error: {' '.join(str(exc).split())}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _lib_exitcodes.run(main)

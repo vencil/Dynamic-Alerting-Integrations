@@ -81,6 +81,9 @@ commands:
   deprecate:
     "--subtree": not_path
     metrics: not_path
+  migrate-builtin-defaults:
+    "--exporter-digest": not_path
+    "--keep": not_path
   diagnose:
     "--prometheus": url
     tenant: not_path
