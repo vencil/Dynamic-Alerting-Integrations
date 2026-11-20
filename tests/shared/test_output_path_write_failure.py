@@ -1637,19 +1637,24 @@ def _is_byte_code(path: str) -> bool:
                                      and ".pyc" in name)
 
 
-def _is_named(path: str, named: tuple[str, ...], stack: list[str]) -> bool:
+def _is_named(event: dict, path: str, named: tuple[str, ...]) -> bool:
     """*path* is a named path, under one, or the atomic writer's private tmp
-    beside one. The tmp is known by WHO made it — a frame of
-    ``_lib_atomic_write`` on the stack — not by its name: the writer caps the
-    name it embeds (64 bytes), and a tool's own ``.<name>.backup`` beside a
-    named file has that shape too."""
-    by_the_atomic_writer = any(frame.startswith(_ATOMIC_WRITER) for frame in stack)
+    beside one.
+
+    The tmp is known by WHO made it and WHAT the event is, not by its name
+    (the writer caps the name it embeds at 64 bytes, and a tool's own
+    ``.<name>.backup`` beside a named file has that shape too): an event
+    raised inside ``_lib_atomic_write._try_atomic`` — the one function that
+    touches the tmp — that is not the rename's DESTINATION. Where the bytes
+    end up (``os.rename``) must itself be named: an atomic write to a path
+    no flag gave is still a write to a path no flag gave, whichever
+    directory it shares."""
     for root in named:
         if path == root or path.startswith(root + os.sep):
             return True
-        if by_the_atomic_writer and os.path.dirname(path) == os.path.dirname(root):
-            return True
-    return False
+    if event["ev"] == "os.rename" or f"{_ATOMIC_WRITER}_try_atomic" not in (event.get("stack") or []):
+        return False
+    return any(os.path.dirname(path) == os.path.dirname(root) for root in named)
 
 
 def _landing_faults(events: list[dict], scope: Path, named: tuple[str, ...]) -> list[str]:
@@ -1667,7 +1672,7 @@ def _landing_faults(events: list[dict], scope: Path, named: tuple[str, ...]) -> 
         stack = event.get("stack") or []
         if (placed is None or _under(placed, scope) is not None
                 or placed in _KEEPS_NOTHING or _is_byte_code(placed)
-                or _is_named(placed, named, stack)):
+                or _is_named(event, placed, named)):
             continue
         where = stack[0] if stack else "<no scripts/ frame>"
         faults.append(f"{event['ev']} {placed} from {where}: neither under the output "
@@ -3396,6 +3401,7 @@ class TestTheHookItself:
         writer's tmp beside it (whatever its name), `/dev/null` and a
         `__pycache__` are not."""
         other, fixed = tmp_path / "second.json", tmp_path / "fixed-place.txt"
+        unnamed = tmp_path / "unnamed-artifact.txt"   # beside `other` and the TMPDIR
         cwd = tmp_path / "cwd"
         (cwd / "__pycache__").mkdir(parents=True)
         code = f"""
@@ -3413,6 +3419,7 @@ _lib_io.write_repo_artifact(sys.argv[4], "x\\n")              # named, name > 64
 open("report.json", "w").close()                              # cwd default
 open({str(fixed)!r}, "w").close()                              # fixed path
 open(os.path.join(os.path.dirname(sys.argv[2]), ".second.json.backup"), "w").close()
+_lib_io.write_repo_artifact({str(unnamed)!r}, "x\\n")          # atomic, but no flag gave it
 """
         long_named = tmp_path / ("長檔名" * 12 + "-" + "n" * 60 + ".json")
         events, good, script = _hooked(
@@ -3430,7 +3437,11 @@ open(os.path.join(os.path.dirname(sys.argv[2]), ".second.json.backup"), "w").clo
             "control: the writer's tmp did not embed the whole long name", tmp_names)
         assert other.read_text(encoding="utf-8") == "x\n", "control: the artifact was written"
         faults = _audit(events, good, script, named=named).faults
-        assert len(faults) == 3, faults
+        assert len(faults) == 4, faults
+        # ... and neither is where an atomic write ENDS UP, when no flag gave it:
+        # its tmp beside a named path passes, its destination does not.
+        assert sum(str(unnamed) in f for f in faults) == 1, faults
+        assert any(f.startswith(f"os.rename {unnamed} ") for f in faults), faults
         assert any(str(cwd / "report.json") in f for f in faults), faults
         assert any(str(fixed) in f for f in faults), faults
         # The tool's own file beside a named one is not the atomic writer's.
