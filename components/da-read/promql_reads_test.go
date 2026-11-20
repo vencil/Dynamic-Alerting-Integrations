@@ -41,6 +41,10 @@ var singleSelector = []string{
 	`max_over_time((x @ end())[30d:1m])`,
 	`max_over_time(max_over_time(x[1h:1m] @ 100)[30d:1m])`,
 	`max_over_time(max_over_time(rate(x[5m] @ 100)[1h:1m])[30d:1m])`,
+	// `@` on a subquery drops every subquery outside it, not only the next
+	`max_over_time(max_over_time(max_over_time(rate(x[5m])[1h:] @ 100)[2h:])[3h:])`,
+	`max_over_time(max_over_time(max_over_time(max_over_time(rate(x[5m])[10m:])[1h:] @ 100)[2h:])[3h:])`,
+	`max_over_time(max_over_time(max_over_time(rate(x[5m])[1h:] @ end())[2h:] @ 50)[3h:])`,
 	`sum by (a) (rate(x{a="[2h]"}[5m])) > 0`,
 }
 
@@ -134,21 +138,33 @@ func TestWindowsOfTheSpellingsATextCheckMisses(t *testing.T) {
 	}
 }
 
-// TestSelectorSpanIsTheTextItReads: start/end name the selector with its
-// range, so a caller quotes `x[2h]`, never a label value that looks like one.
-func TestSelectorSpanIsTheTextItReads(t *testing.T) {
+// TestSelectorIsPrometheusSpellingOnOneLine: the selector is named as
+// Prometheus prints it — with its range and modifiers, label values quoted,
+// on one line however it was typed — and start/end span it in the text, so a
+// label value that looks like a range is never taken for one.
+func TestSelectorIsPrometheusSpellingOnOneLine(t *testing.T) {
 	t.Parallel()
-	e := `sum(rate(x{a="[2h]"}[5m])) + y`
+	e := "sum(rate(x{a=\"[2h]\"}[5m])) + y\n + rate(z{\n  b=\"WARN: c\\nd\"\n}[1h] smoothed offset 1d) + w @ end()"
 	r, err := promqlReads(e)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []string
+	var got, spans []string
 	for _, s := range r.Selectors {
-		got = append(got, e[s.Start:s.End]+"="+s.Window)
+		got = append(got, s.Selector+"="+s.Window)
+		spans = append(spans, e[s.Start:s.End])
 	}
-	if want := []string{`x{a="[2h]"}[5m]=5m`, `y=0s`}; !slices.Equal(got, want) {
-		t.Fatalf("selectors %v, want %v", got, want)
+	want := []string{`x{a="[2h]"}[5m]=5m`, `y=0s`, `z{b="WARN: c\nd"}[1h] smoothed offset 1d=1h`, `w @ end()=0s`}
+	if !slices.Equal(got, want) {
+		t.Fatalf("selectors %q, want %q", got, want)
+	}
+	for _, s := range got {
+		if strings.Contains(s, "\n") {
+			t.Fatalf("selector %q spans lines", s)
+		}
+	}
+	if spans[0] != `x{a="[2h]"}[5m]` || spans[1] != "y" {
+		t.Fatalf("spans %q", spans)
 	}
 }
 

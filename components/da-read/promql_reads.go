@@ -77,6 +77,12 @@ type exprReads struct {
 }
 
 type selectorWindow struct {
+	// Selector is how Prometheus prints the selector, its range and
+	// modifiers with it (MatrixSelector / VectorSelector String, as
+	// written: before `@ start()` / `end()` and duration expressions are
+	// resolved) — one line, label values quoted, never the text as typed
+	// (#4080: a multi-line selector would break a finding into lines).
+	Selector     string  `json:"selector"`
 	Start        int     `json:"start"`
 	End          int     `json:"end"`
 	RangeMs      int64   `json:"range_ms"`
@@ -109,10 +115,18 @@ func promqlReads(e string) (exprReads, error) {
 		return exprReads{}, err
 	}
 	r := exprReads{Selectors: []selectorWindow{}, Calls: []callHit{}}
-	// Calls before PreprocessExpr: it folds the query-context functions of
-	// duration expressions and rewrites nodes in place.
-	parser.Inspect(node, func(n parser.Node, _ []parser.Node) error {
+	// Calls and spellings before PreprocessExpr: it folds the query-context
+	// functions of duration expressions and rewrites nodes in place.
+	spelling := map[*parser.VectorSelector]string{}
+	parser.Inspect(node, func(n parser.Node, path []parser.Node) error {
 		switch x := n.(type) {
+		case *parser.VectorSelector:
+			spelling[x] = x.String()
+			if len(path) > 0 {
+				if ms, ok := path[len(path)-1].(*parser.MatrixSelector); ok {
+					spelling[x] = ms.String()
+				}
+			}
 		case *parser.Call:
 			pr := x.PositionRange()
 			r.Calls = append(r.Calls, callHit{x.Func.Name, callFunction, int(pr.Start), int(pr.End)})
@@ -137,7 +151,9 @@ func promqlReads(e string) (exprReads, error) {
 		if !ok {
 			return nil
 		}
-		r.Selectors = append(r.Selectors, selectorWindowOf(vs, path))
+		w := selectorWindowOf(vs, path)
+		w.Selector = spelling[vs]
+		r.Selectors = append(r.Selectors, w)
 		return nil
 	})
 	return r, nil
