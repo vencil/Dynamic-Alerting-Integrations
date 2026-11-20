@@ -79,6 +79,9 @@ def _at(tmp_path: Path, monkeypatch, at: str, files: dict[str, str], capsys):
 
 
 def test_the_violations_are_the_same_at_every_time_of_day(tmp_path, monkeypatch, capsys):
+    """整天都收集得到的樹：三個時刻的違規逐筆相同。這在舊的讀法下也成立——某一刻的 Unserved
+    只要那天某段有送出，就被整天的值蓋掉——所以這支守的不是「改讀整天」本身（那由下一支守），
+    而是整天模式沒有一般模式的 `unserved` 之後，整天都不發的鍵仍報「已配置」而不是「未配置」。"""
     first, *rest = [_at(tmp_path, monkeypatch, at, _GATHERED, capsys) for at in _AT]
     rc, doc, _err, row = first
     for at, (o_rc, o_doc, _e, o_row) in zip(_AT[1:], rest):
@@ -86,7 +89,7 @@ def test_the_violations_are_the_same_at_every_time_of_day(tmp_path, monkeypatch,
         assert row == o_row, (_AT[0], at)
     assert rc == 1, doc
     by_rule = {v["rule_name"]: v["message"] for v in doc["violations"]}
-    # 整天 disable 的鍵是「有設定但不發」，不是「沒設定」：讀的是整天的 unserved_thresholds。
+    # 整天 disable 的鍵是「有設定但不發」，不是「沒設定」（unserved_thresholds）。
     assert "已配置（值: disable）但 exporter 不發出" in by_rule["nodecl-required"], by_rule
     # 只在 01:30-01:59 送出的鍵，其餘時段沒有列。
     assert "00:00-01:30" in by_rule["ch-required"] and "01:59-24:00" in by_rule["ch-required"], by_rule
