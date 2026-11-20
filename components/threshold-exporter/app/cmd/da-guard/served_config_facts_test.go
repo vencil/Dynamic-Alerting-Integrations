@@ -29,12 +29,14 @@ var configFactsTree = map[string]string{
 		"        window: 5m\n        threshold: \"1000:warning\"\n",
 	"tbad.yaml":  "tenants:\n  tbad:\n    _custom_alerts: \"oops\"\n",
 	"tmeta.yaml": "tenants:\n  tmeta:\n    _metadata:\n      owner:\n        x: y\n",
+	"tr.yaml": "tenants:\n  tr:\n    _routing:\n      receiver:\n        type: webhook\n" +
+		"        url: \"https://hooks.example.com/tr\"\n      group_wait: 10s\n",
 }
 
 // factsFields are the fields --config-facts writes for a tenant, compared
 // with the default mode's: custom_alerts_error appears only beside a block
 // that does not decode, so it is compared as present-or-absent too.
-var factsFields = []string{"custom_alerts", "custom_alerts_error", "custom_alerts_finding", "metadata"}
+var factsFields = []string{"custom_alerts", "custom_alerts_error", "custom_alerts_finding", "routing", "metadata"}
 
 func factsTenants(t *testing.T, stdout string) map[string]map[string]json.RawMessage {
 	t.Helper()
@@ -83,7 +85,7 @@ func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		theirs := map[string]json.RawMessage{"metadata": vals.Metadata}
-		for _, field := range factsFields[:3] {
+		for _, field := range factsFields[:4] {
 			theirs[field] = values[tenant][field]
 		}
 		for _, field := range factsFields {
@@ -111,7 +113,8 @@ func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 	// not decode, and a `_metadata` read as written.
 	if !strings.Contains(string(facts["tc"]["custom_alerts"]), `"served"`) ||
 		facts["tbad"]["custom_alerts_error"] == nil ||
-		!strings.Contains(string(facts["tc"]["metadata"]), `"mariadb"`) {
+		!strings.Contains(string(facts["tc"]["metadata"]), `"mariadb"`) ||
+		!strings.Contains(string(facts["tr"]["routing"]), `"https://hooks.example.com/tr"`) {
 		t.Fatalf("fixture did not exercise what it is for: %s", stdout)
 	}
 }

@@ -362,16 +362,19 @@ __all__ = [
 
 SUBCOMMAND = "served-values"
 # The `schema` value load_served_tree reads; any other is refused (ADR-037).
-SERVED_VALUES_SCHEMA = "da-guard.served-values/v4"
+SERVED_VALUES_SCHEMA = "da-guard.served-values/v5"
 #: Earlier versions of the document: a da-guard writing one is older than
 #: this tool (v1: `key_checks` as sentences that quoted the key — #3703;
 #: v2: no `ungathered` beside the schedules — #3991; v3: no
-#: `unserved_thresholds` beside a --schedules-only tenant's schedules — #4073).
+#: `unserved_thresholds` beside a --schedules-only tenant's schedules — #4073;
+#: v4: no `routing` among a --config-facts tenant's fields — #4109).
 SERVED_VALUES_OLDER_SCHEMAS = ("da-guard.served-values/v1", "da-guard.served-values/v2",
-                               "da-guard.served-values/v3")
-#: The fields of every --config-facts tenant (`custom_alerts_error` only
-#: beside a block that does not decode; #3918).
+                               "da-guard.served-values/v3", "da-guard.served-values/v4")
+#: The fields of every --config-facts tenant (#3918), and those it may lack:
+#: `custom_alerts_error` only beside a block that does not decode, `routing`
+#: when the resolver accepts no `_routing` (#4109).
 _FACTS_FIELDS = frozenset({"custom_alerts", "custom_alerts_finding", "metadata"})
+_FACTS_OPTIONAL = frozenset({"custom_alerts_error", "routing"})
 EFFECTIVE_SUBCOMMAND = "effective"
 # The `schema` value load_effective reads; any other is refused.
 EFFECTIVE_SCHEMA = "da-guard.effective/v1"
@@ -1652,11 +1655,14 @@ class TenantFacts(NamedTuple):
     `custom_alerts_finding` as `TenantValues` carries them (a custom alert's
     `status` is the exporter's walk of the entry, not whether /metrics can be
     gathered); `metadata` is `_metadata` as the exporter's resolver reads it,
-    as `TenantValues.values["_metadata"]`."""
+    as `TenantValues.values["_metadata"]`; `routing` (#4109) the tenant's
+    `_routing` as the exporter module's routing resolver reads it, as
+    `TenantValues.routing` (None when it accepts none)."""
     custom_alerts: "tuple[CustomAlertEntry, ...]"
     custom_alerts_error: str | None
     custom_alerts_finding: str | None
     metadata: dict[str, Any]
+    routing: "dict[str, Any] | None" = None
 
 
 class ServedFacts(NamedTuple):
@@ -1695,16 +1701,19 @@ def load_served_facts(
     out: dict[str, TenantFacts] = {}
     for tenant_id, tv in facts.items():
         try:
-            if not _FACTS_FIELDS <= set(tv) <= _FACTS_FIELDS | {"custom_alerts_error"}:
+            if not _FACTS_FIELDS <= set(tv) <= _FACTS_FIELDS | _FACTS_OPTIONAL:
                 # Another mode's document (a binary that ignores the flag
                 # would not exit 0 on it): never read as these facts.
-                raise _ShapeError(f"not a --config-facts tenant: {len(set(tv) - _FACTS_FIELDS - {'custom_alerts_error'})} "
+                raise _ShapeError(f"not a --config-facts tenant: {len(set(tv) - _FACTS_FIELDS - _FACTS_OPTIONAL)} "
                                   f"other field(s), {len(_FACTS_FIELDS - set(tv))} missing")
             custom_alerts, error, finding = _custom_alerts_fields(tv)
             metadata = tv["metadata"]
             if not isinstance(metadata, dict):
                 raise _ShapeError(f"metadata is a {type(metadata).__name__}")
-            out[tenant_id] = TenantFacts(custom_alerts, error, finding, metadata)
+            routing = tv.get("routing")
+            if "routing" in tv and not isinstance(routing, dict):
+                raise _ShapeError(f"routing is a {type(routing).__name__}")
+            out[tenant_id] = TenantFacts(custom_alerts, error, finding, metadata, routing)
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant '{shown_key(tenant_id)}' carries config facts that are not of their shape ({error_text(e)})",
@@ -2386,9 +2395,11 @@ class WholeDay(NamedTuple):
     day takes, nothing read at one instant of it. `days` is
     `load_served_schedules`' (its `ungathered` empty, so every tenant's
     `unserved_thresholds` is set); `tenants` is each tenant's
-    `written_config`, `_metadata` from `load_served_facts`."""
+    `written_config`, `_metadata` from `facts` (`load_served_facts`'s,
+    #4109: what the exporter reads at no instant)."""
     days: ServedSchedules
     tenants: dict[str, dict[str, Any]]
+    facts: "ServedFacts"
 
 
 @_records_output_faults(SUBCOMMAND)
@@ -2415,7 +2426,7 @@ def load_whole_day(conf_d: str | Path, at: str | None = None) -> WholeDay:
             "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
             f"{sorted(set.union(*readings) - set.intersection(*readings))}", None, "")
     return WholeDay(days, {t: written_config(e, facts.tenants[t].metadata)
-                           for t, e in sorted(effective.items())})
+                           for t, e in sorted(effective.items())}, facts)
 
 
 # #3387: da-guard's own check (no subcommand, `--format json`) — its findings
