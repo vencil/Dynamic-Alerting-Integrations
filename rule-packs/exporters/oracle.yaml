@@ -44,9 +44,11 @@
 # ⛔ The metric names here are a contract with the rule pack, checked by
 # scripts/tools/lint/check_exporter_queries.py: it derives the exposed names
 # with query-exporter's own code (a counter is exposed as <name>_total) and
-# fails when the pack reads a name this file does not produce, when a gauge
-# has no `expiration` (a gauge keeps its last value while the database is
-# unreachable; expiration drops it), or when the pack rate()s a gauge.
+# fails when the pack reads a name this file does not produce, when a metric
+# is declared below and no query lists it (it is then never served), when a
+# gauge has no `expiration` (a gauge keeps its last value while the database is
+# unreachable; expiration drops it), or when the pack rate()s a gauge. The
+# checker's docstring has the whole list.
 # A CI job also runs this file against a real Oracle (gvenzl/oracle-free), as a
 # monitor user holding only the grants above, and compares what it serves with
 # the derived names.
