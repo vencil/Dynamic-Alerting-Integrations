@@ -41,52 +41,55 @@ data:
     \ tenant:alert_threshold:jvm_gc_pause\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
     \      metric_group: jvm_gc_pause\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: GC pause rate {{ $value\
-    \ }}s/5m exceeds threshold\n      description_zh: GC pause 速率 {{ $value }}秒/5分鐘\
-    \ 超出閾值\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: GC pause elevated — JVM tuning review'\n      platform_summary_zh:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}：GC pause 升高 — JVM 調優審查'\n      runbook_url: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
-    \ }}{{ end }}{{ end }}'\n      summary: JVMHighGCPause on {{ $labels.tenant }}\n\
-    \      summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 過高'\n      tier: '{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: JVMHighGCPauseCritical\n\
-    \    expr: \"(\\n  tenant:jvm_gc_pause:rate5m\\n  > on(tenant) group_left\\n \
-    \ tenant:alert_threshold:jvm_gc_pause_critical\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 3m\n    labels:\n      maintenance: mute\n\
-    \      metric_group: jvm_gc_pause\n      severity: critical\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: GC pause rate {{ $value\
-    \ }}s/5m exceeds critical threshold\n      description_zh: GC pause 速率 {{ $value\
-    \ }}秒/5分鐘 超出嚴重閾值\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: critical GC pause — application performance impacted'\n\
+    \ $labels.tenant }}'\n    annotations:\n      description: GC pause {{ $value\
+    \ | printf \"%.3f\" }} s/s (seconds paused per second, all JVMs of the tenant)\
+    \ exceeds threshold\n      description_zh: GC pause {{ $value | printf \"%.3f\"\
+    \ }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出閾值\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: GC pause elevated — JVM tuning review'\n\
     \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：嚴重 GC pause — 應用程式效能受影響'\n      runbook_url: '{{ with query\
+    \ {{ $labels.tenant }}：GC pause 升高 — JVM 調優審查'\n      runbook_url: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: JVMHighGCPauseCritical\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: JVMHighGCPause\
     \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM GC pause\
-    \ 嚴重過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ 過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: JVMMemoryPressure\n    expr: \"(\\n  tenant:jvm_memory_used:percent\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:jvm_memory\\n)\\nunless\
-    \ on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n   \
-    \ for: 5m\n    labels:\n      maintenance: mute\n      metric_group: jvm_memory\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: Heap usage {{ $value }}% exceeds threshold\n      description_zh:\
-    \ Heap 使用率 {{ $value }}% 超出閾值\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: heap memory pressure — JVM sizing review'\n      platform_summary_zh:\
+    \  - alert: JVMHighGCPauseCritical\n    expr: \"(\\n  tenant:jvm_gc_pause:rate5m\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:jvm_gc_pause_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 3m\n    labels:\n      maintenance: mute\n      metric_group: jvm_gc_pause\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: GC pause {{ $value | printf \"%.3f\" }} s/s (seconds paused\
+    \ per second, all JVMs of the tenant) exceeds critical threshold\n      description_zh:\
+    \ GC pause {{ $value | printf \"%.3f\" }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出嚴重閾值\n   \
+    \   owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: critical GC pause — application performance impacted'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：嚴重 GC pause — 應用程式效能受影響'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
+    \ }}{{ end }}{{ end }}'\n      summary: JVMHighGCPauseCritical on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM GC pause 嚴重過高'\n      tier:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: JVMMemoryPressure\n\
+    \    expr: \"(\\n  tenant:jvm_memory_used:percent\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:jvm_memory\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
+    \      metric_group: jvm_memory\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: Heap usage {{ $value }}% exceeds threshold\n\
+    \      description_zh: Heap 使用率 {{ $value }}% 超出閾值\n      owner: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: heap memory pressure — JVM sizing review'\n      platform_summary_zh: '[{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
     \ }}：heap 記憶體壓力 — JVM 大小調整審查'\n      runbook_url: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\

@@ -8,7 +8,10 @@
 #
 # >>> GENERATED:threshold-registry:pack-jvm — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
-#   jvm_gc_pause: 0.5   # seconds/5m — GC pause duration rate warning
+#   jvm_gc_pause: 0.5
+#       s/s — GC pause warning: seconds of GC pause accrued per second (rate over 5m of
+#       jvm_gc_pause_seconds_sum, summed over the tenant's JVMs); for one JVM 0.5 = half of every
+#       second spent paused, and ten JVMs at 5% each read 0.5 too. Not seconds per 5 minutes (#4032)
 #       未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
 #   jvm_memory: 80
 #       % — Heap memory warning: the whole heap as % of its max, fullest JVM (#3928: pools summed
@@ -29,7 +32,8 @@
 # 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
 # critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
 # 一格裝飾（#1311）。
-#   jvm_gc_pause_critical: 1.0   # seconds/5m — GC pause critical
+#   jvm_gc_pause_critical: 1.0
+#       s/s — GC pause critical: seconds of GC pause accrued per second (see jvm_gc_pause)
 #   jvm_memory_critical: 95   # % — Heap memory critical
 #   jvm_threads_critical: 800   # count — Thread count critical
 # <<< GENERATED:threshold-registry:pack-jvm
@@ -48,7 +52,12 @@ groups:
   - name: jvm-normalization
     interval: 15s
     rules:
-      # GC pause duration rate — 5m rate of total GC pause seconds
+      # GC pause accrual RATE — seconds of GC pause accrued PER SECOND, averaged
+      # over a 5m window and summed over the tenant's JVMs. ⚠️ NOT "seconds per 5m":
+      # rate() divides by the window, so the unit is s/s (1.0 = one JVM paused
+      # full-time). The registry and this pack's header said seconds/5m until
+      # #4032 — the same number scaled by 300; a threshold sized from that reading
+      # is 300x too high and the alert never fires.
       - record: tenant:jvm_gc_pause:rate5m
         expr: |
           sum by(tenant) (
@@ -161,8 +170,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 過高"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: GC pause elevated — JVM tuning review"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：GC pause 升高 — JVM 調優審查"
-          description: "GC pause rate {{ $value }}s/5m exceeds threshold"
-          description_zh: "GC pause 速率 {{ $value }}秒/5分鐘 超出閾值"
+          description: "GC pause {{ $value | printf \"%.3f\" }} s/s (seconds paused per second, all JVMs of the tenant) exceeds threshold"
+          description_zh: "GC pause {{ $value | printf \"%.3f\" }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出閾值"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
@@ -187,8 +196,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 嚴重過高"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical GC pause — application performance impacted"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：嚴重 GC pause — 應用程式效能受影響"
-          description: "GC pause rate {{ $value }}s/5m exceeds critical threshold"
-          description_zh: "GC pause 速率 {{ $value }}秒/5分鐘 超出嚴重閾值"
+          description: "GC pause {{ $value | printf \"%.3f\" }} s/s (seconds paused per second, all JVMs of the tenant) exceeds critical threshold"
+          description_zh: "GC pause {{ $value | printf \"%.3f\" }} 秒/秒（每秒暫停的秒數，租戶所有 JVM 加總）超出嚴重閾值"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
