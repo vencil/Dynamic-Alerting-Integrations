@@ -159,6 +159,11 @@ def _listed_text(item: Any) -> Optional[str]:
     return item["text"] if _lib_parse_tree.is_scalar(item) else None
 
 
+class ProofError(RuntimeError):
+    """The copy proof did not settle (the tree changed under the run, or the
+    deletions keep changing what is served): nothing is written, rc 2."""
+
+
 def _symlinked(config_dir: str, rel: str) -> bool:
     path = os.path.join(config_dir, rel)
     return os.path.realpath(path) != os.path.abspath(path)
@@ -168,7 +173,9 @@ def _candidates(config_dir: str, keep: set[str]) -> Plan:
     tree = tv.load_effective_tree(config_dir)
     builtin = tree.builtin_defaults
     if builtin is None:
-        raise tv.DaGuardError("da-guard ran no build of this tree (no builtin_defaults)")
+        # A da-guard older than the built-in layer: the binary's fault (stale).
+        raise tv.DaGuardError("da-guard ran no build of this tree (no builtin_defaults)",
+                              None, "", stale=True)
     root = _root(config_dir)
     found: list[Deletion] = []
     for key, entry in sorted(builtin.keys.items()):
@@ -278,7 +285,7 @@ def _prove_copies(config_dir: str, plan: Plan) -> Plan:
             for d in suspects:
                 deletions.remove(d)
                 kept.append((d, "removing it together with the others changes what /metrics serves"))
-    raise tv.DaGuardError("the deletions could not be proven to change nothing served")
+    raise ProofError("the deletions could not be proven to change nothing served")
 
 
 def _show(d: Deletion) -> str:
@@ -335,6 +342,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help=_h("exporter_digest"))
     p.add_argument("--keep", action="append", default=[], metavar="KEY", help=_h("keep"))
     args = p.parse_args(argv)
+    # Every refusal names the tree it was about (a file of it may have gone
+    # mid-run, and da-guard names that file relative to the tree).
+    where = f"--config-dir {args.config_dir}"
     try:
         # One reader of --config-dir for the run (the tree the parser judged).
         with _lib_parse_cache.session():
@@ -343,12 +353,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             [conf_d] = _lib_parse_cache.declared_trees(args, "config_dir", lang=_LANG)
             return run(str(conf_d), apply=args.apply, digests=args.exporter_digest,
                        keep=set(args.keep))
-    except (tv.DaGuardError, tv.DaGuardNotFoundError, YamlFileError, _lib_confedit.EditError,
+    except (ProofError, tv.DaGuardError, tv.DaGuardNotFoundError, YamlFileError,
+            _lib_confedit.EditError,
             _lib_confedit.EditsRefused, _lib_confedit.PartialWrite, OSError, ValueError,
             _lib_parse_tree.ParseTreeError) as exc:
         # ValueError: a kept `optional_overrides:` item the edit cannot write back
         # exactly as written (`_lib_confedit.node_value`) — named, nothing written.
-        print(f"error: {' '.join(str(exc).split())}", file=sys.stderr)
+        print(f"error: {where}: {' '.join(str(exc).split())}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
 

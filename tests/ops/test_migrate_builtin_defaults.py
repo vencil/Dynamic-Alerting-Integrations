@@ -24,6 +24,7 @@ sys.path.insert(0, str(_REPO / "tests"))
 import _lib_tenant_values as tv  # noqa: E402
 import migrate_builtin_defaults as mig  # noqa: E402
 from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _DIGEST = None
 
@@ -217,7 +218,7 @@ def test_a_symlinked_tenant_file_is_named_not_a_crash(tmp_path, capsys):
     outside = tmp_path / "outside.yaml"
     outside.write_text("tenants:\n  t1:\n    pg_connections: \"80\"\n", encoding="utf-8")
     conf = _tree(tmp_path, {"_defaults.yaml": "defaults:\n  pg_connections: 80\n"})
-    (conf / "t1.yaml").symlink_to(outside)
+    symlink_or_skip(outside, conf / "t1.yaml")
     assert mig.main(["--config-dir", str(conf)]) == 0
     out = capsys.readouterr().out
     assert "kept t1.yaml: tenants.t1.pg_connections" in out and "symlink" in out
