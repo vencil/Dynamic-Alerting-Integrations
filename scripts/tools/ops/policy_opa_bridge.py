@@ -43,6 +43,10 @@ OPA Input JSON format:
       },
       ...
     },
+    "unserved": {
+      "tenant-a": { "redis_memory": "disable" },
+      ...
+    },
     "defaults": { "defaults": { "mysql_connection_usage_percent": 80 } },
     "rule_packs": ["mariadb", "kubernetes"],
     "platform_version": "v2.3.0"
@@ -75,6 +79,15 @@ reads it here, every segment: it is the number that alerts. A rego guards
 read is exit 2, as is a tree da-guard refuses; a file it reads but serves no
 tenant from is a WARN line.
 
+`unserved` (#4108): per tenant, the threshold keys its config carries
+(written or inherited, root `defaults:` dimensional defaults, keys the
+build cannot deliver) that /metrics serves at no minute of the day —
+da-guard's `unserved_thresholds`, keyed and valued as written, like
+`tenants` (a retired spelling stays retired), `_` keys not included. It
+tells "configured but never served" (in `unserved`) from "not configured"
+(in neither): a key served in some part of the day is in `served`, not
+here. Only an `expires:` is judged at `--at`, as for `served`.
+
 `_routing` in `tenants` is as written plus inherited, NOT the route
 generator's resolution (#2724): `_routing_defaults` is not applied and
 `{{tenant}}` is not substituted, so a tenant that relies on the defaults
@@ -104,7 +117,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 from http.client import HTTPException
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.error import HTTPError
@@ -182,13 +195,21 @@ class PolicyResult:
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
-def load_tenant_inputs(config_dir: str, at: Optional[str] = None,
-                       ) -> tuple[dict[str, dict], dict[str, dict]]:
-    """`(tenants, served)` for the OPA input (#2115 0-B, #4025; see the
-    module docstring): `tenants` from `da-guard effective` with `_metadata`
-    from served-values' facts, `served` the whole day from `da-guard
-    served-values --schedules-only` (*at*: the instant an `expires:` is
-    judged at, None = now) — nothing read at one instant of the day. Prints
+class TenantInputs(NamedTuple):
+    """`load_tenant_inputs`' answer: the input's `tenants`, `served` and
+    `unserved` (see the module docstring)."""
+    tenants: dict[str, dict]
+    served: dict[str, dict]
+    unserved: dict[str, dict]
+
+
+def load_tenant_inputs(config_dir: str, at: Optional[str] = None) -> TenantInputs:
+    """`tenants`, `served` and `unserved` for the OPA input (#2115 0-B,
+    #4025, #4108; see the module docstring): `tenants` from `da-guard
+    effective` with `_metadata` from served-values' facts, `served` and
+    `unserved` the whole day from `da-guard served-values --schedules-only`
+    (*at*: the instant an `expires:` is judged at, None = now) — nothing
+    read at one instant of the day. Prints
     da-guard's stderr, one WARN per file the load serves no tenant from, and
     one NOTE per time-boxed key not yet expired. Raises what the loads raise,
     and `ServedValuesError` when a part of the day cannot be gathered
@@ -204,7 +225,10 @@ def load_tenant_inputs(config_dir: str, at: Optional[str] = None,
                 print(f"NOTE: {safe_label(t)}: {safe_label(k)} is time-boxed by "
                       f"`expires: {safe_label(day.expires)}`; its served day holds until then",
                       file=sys.stderr)
-    return tenants, served
+    # load_whole_day refused a day with an ungathered part, the only one
+    # whose lists are null.
+    unserved = {t: dict(sorted(u.items())) for t, u in sorted(days.unserved_thresholds.items())}
+    return TenantInputs(tenants, served, unserved)
 
 
 def load_defaults(config_dir: str) -> dict[str, Any]:
@@ -257,6 +281,7 @@ def build_opa_input(
     rule_packs: Optional[list[str]] = None,
     platform_version: str = "v2.3.0",
     served: Optional[dict[str, dict]] = None,
+    unserved: Optional[dict[str, dict]] = None,
 ) -> dict[str, Any]:
     """Build OPA input JSON from tenant configs.
 
@@ -269,6 +294,9 @@ def build_opa_input(
         served: {tenant_name: {threshold_key: [segment, ...]}}, what /metrics
             serves over the whole day (`load_tenant_inputs`, #4025); `{}` when
             omitted
+        unserved: {tenant_name: {threshold_key: value as written}}, the
+            keys served at no minute of the day (`load_tenant_inputs`,
+            #4108); `{}` when omitted
 
     Returns:
         OPA input dict ready for JSON serialization
@@ -286,6 +314,7 @@ def build_opa_input(
     return {
         "tenants": tenant_configs,
         "served": served if served is not None else {},
+        "unserved": unserved if unserved is not None else {},
         "defaults": defaults_thresholds,
         "rule_packs": rule_packs,
         "platform_version": platform_version,
@@ -734,7 +763,8 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
         print("ERROR: --at takes an RFC3339 instant (e.g. 2026-10-10T03:00:00Z)",
               file=sys.stderr)
         return EXIT_CALLER_ERROR
-    tenant_configs, served = load_tenant_inputs(args.config_dir, at=args.at)
+    inputs = load_tenant_inputs(args.config_dir, at=args.at)
+    tenant_configs = inputs.tenants
     defaults = load_defaults(args.config_dir)
 
     if not tenant_configs:
@@ -772,7 +802,8 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
         defaults,
         rule_packs=None,
         platform_version="v2.3.0",
-        served=served,
+        served=inputs.served,
+        unserved=inputs.unserved,
     )
 
     # Dry-run mode

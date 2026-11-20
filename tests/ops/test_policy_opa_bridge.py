@@ -95,7 +95,7 @@ class TestLoadTenantInputs:
             "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_cpu: '500'\n    _silent_mode: disable\n",
             "team/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
         })
-        tenants, served = pob.load_tenant_inputs(str(d))
+        tenants, served, unserved = pob.load_tenant_inputs(str(d))
         tenants, served = _without_builtin(tenants), _without_builtin(served)  # #3832
         # tenants: 原形狀（寫法，舊拼法照寫），加上繼承；Go 自動補的不在。
         # #2720 之後 effective 是逐閾值 view：同一閾值跨層新舊拼法只留勝出那一層，
@@ -114,7 +114,7 @@ class TestLoadTenantInputs:
             "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
             "flat-a.yaml": "mysql_connections: '70'\n",
         })
-        assert pob.load_tenant_inputs(str(d)) == ({}, {})
+        assert pob.load_tenant_inputs(str(d)) == pob.TenantInputs({}, {}, {})
         assert "WARN: flat-a.yaml: declares no tenant" in capsys.readouterr().err
 
 
@@ -618,7 +618,7 @@ class TestMain:
         # Stub load_tenant_inputs to return one tenant.
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})
         rc = emit_result(pob.main(["--config-dir", str(tmp_path), "--dry-run"]))
         assert rc == 0
@@ -626,13 +626,13 @@ class TestMain:
         payload = json.loads(out)
         assert "tenants" in payload
         assert payload["tenants"]["tenant-a"] == {"x": 1}
-        assert payload["served"] == {}
+        assert payload["served"] == {} and payload["unserved"] == {}
 
     def test_no_url_no_path_returns_caller_error(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == EXIT_CALLER_ERROR
@@ -643,7 +643,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -670,7 +670,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -697,7 +697,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "bad", "severity": "error",
@@ -716,7 +716,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "soft", "severity": "warning",
@@ -733,7 +733,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [])
         rc = emit_result(pob.main([
@@ -758,7 +758,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
         _no_tenant_tree(tmp_path)  # #3902: --config-dir is judged for real
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d, at=None: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d, at=None: pob.TenantInputs({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == EXIT_CALLER_ERROR
@@ -1268,6 +1268,31 @@ class TestServedWholeDay:
         ]
         # _metadata comes from facts (read at no instant), as /metrics inherits it.
         assert docs[0]["tenants"]["ta"]["_metadata"]["owner"] == "team-a"
+
+    def test_unserved_is_the_keys_served_at_no_minute_as_written(self, tmp_path, capsys):
+        # #4108: "configured but never served" is Go's answer, not a rego's
+        # difference of `tenants` and `served`. A key served in some part of
+        # the day is not in it; nor is a `_` key; a retired spelling stays
+        # as written, as in `tenants`; a disable time-boxed by an `expires:`
+        # not yet passed is in it (judged at --at, as `served` is).
+        conf_d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: 70\n",
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_cpu: disable\n    _namespaces: [\"a\"]\n"
+                        "    mysql_connection_usage_percent:\n      default: disable\n      overrides:\n"
+                        "        - window: \"01:00-03:00\"\n          value: \"60\"\n"
+                        "    redis_memory:\n      default: disable\n"
+                        "      expires: \"2026-11-13T06:00:00Z\"\n"),
+        })
+        docs = []
+        for at in _AT_HOURS:
+            rc, out, err = _dry_run(conf_d, capsys, "--at", at)
+            assert rc == 0, err
+            docs.append(json.loads(out)["unserved"])
+        assert docs[0] == {"ta": {"mysql_cpu": "disable",
+                                  "redis_memory": {"default": "disable", "expires": "2026-11-13T06:00:00Z",
+                                                   "reason": ""}}}, docs[0]
+        # 12:00 is past the expiry: redis_memory falls back to the root's 70, served.
+        assert docs[1] == {"ta": {"mysql_cpu": "disable"}}, docs[1]
 
     def test_a_part_of_the_day_not_gathered_is_exit_2_at_any_hour(self, tmp_path, capsys):
         # #4025: rc 2 inside the window, rc 0 outside it.
