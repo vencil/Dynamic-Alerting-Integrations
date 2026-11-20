@@ -1307,12 +1307,15 @@ class TestServedWholeDay:
         # KeyError traceback.
         conf_d = _write_tree(tmp_path, {**_SCHEDULED,
                                         "tb.yaml": "tenants:\n  tb: {}\n"})
-        real = pob.load_served_facts
+        # The three are read in `_lib_tenant_values.load_whole_day` (#4073),
+        # which evaluate-policy shares.
+        import _lib_tenant_values as tvl
+        real = tvl.load_served_facts
 
         def short(*a, **k):
             facts = real(*a, **k)
             return facts._replace(tenants={t: v for t, v in facts.tenants.items() if t != "tb"})
-        monkeypatch.setattr(pob, "load_served_facts", short)
+        monkeypatch.setattr(tvl, "load_served_facts", short)
         with pytest.raises(SystemExit) as exc:
             _dry_run(conf_d, capsys)
         out, err = capsys.readouterr()
