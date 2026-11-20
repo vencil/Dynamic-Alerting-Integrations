@@ -117,6 +117,7 @@ UNIT_DIMENSION: dict[str, str] = {
     "count": "count",
     "threads": "count",
     "messages": "count",
+    "count/5m": "count",  # db2_deadlocks_per_5m (#1320) — increase() over a 5m window
     "seconds": "duration",
     "seconds/5m": "duration",
     "ms": "duration",  # es_search_latency_ms (#1196 D) — millisecond latency threshold

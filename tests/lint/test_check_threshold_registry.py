@@ -792,8 +792,11 @@ def test_the_two_directions_do_not_share_wording():
                                   "observed": "X"}})
     assert over and under
     assert "\n".join(over) != "\n".join(under)
-    # and the repo really does ship both, so the distinction is load-bearing
-    assert {e["direction"] for e in _ce_keys().values()} == {"over_fire", "under_fire"}
+    # The repo shipped both until #1320 re-derived the one under_fire key
+    # (db2_deadlock_rate, retired); what it ships today must stay inside the enum
+    # and must not be empty, or the wording above is exercised by nothing.
+    shipped = {e["direction"] for e in _ce_keys().values()}
+    assert shipped and shipped <= {"over_fire", "under_fire"}
 
 
 def test_absence_renders_nothing_at_all():

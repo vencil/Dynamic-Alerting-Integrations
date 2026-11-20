@@ -277,34 +277,28 @@ tests:
       - series: 'user_threshold{tenant="db-d", component="db2", metric="log_usage_percent", severity="warning"}'
         values: '70x48'
 
-      # Deadlock counter: +300/15s ⇒ steady rate5m = 20/s > 5 (db-a/b/c/e); db-d +30/15s ⇒ 2.0.
-      # ⚠️ rate() cold-start (#946): with series starting at t=0, Prometheus'
-      # extrapolatedRate divides by the FULL 5m window, so the Prom rate ramps with
-      # window coverage — a steady rate close to the threshold would cross very late.
-      # 20 vs 5 crosses at ~1m30s on Prom (⇒ for: 5m fires at ~6m30s); MetricsQL uses
-      # the actual data span and reads 20 from the first ticks (⇒ fires at ~5m15s). The
-      # firing assertion below sits at 9m — past BOTH engines' fire point with wide
-      # margin against promtool extrapolation-math drift, window fully covered ⇒ $value
-      # is exactly 20.0 on both — so the known cold-start divergence axis is avoided by
-      # construction instead of catalogued. Soak expectation: at a REAL cold-start
-      # (new tenant / exporter restart / counter reset) VM's first fire leads Prometheus
-      # by up to one window — expected engine math, NOT a false positive; see
-      # docs/integration/victoriametrics-integration.md §3.1.
+      # Deadlock counter (#1320: the alert compares increase() over 5m, a COUNT):
+      # +1/15s ⇒ 20 deadlocks per 5m > 5 (db-a/b/c/e); db-d one per 75s ⇒ 4 per 5m < 5.
+      # ⚠️ increase() cold-start (#946): with series starting at t=0 the window is not
+      # covered until 5m, so the value ramps (and the two engines extrapolate
+      # differently) — it crosses 5 at ~1m15s–1m30s, for: 1m fires by ~2m30s. The
+      # firing assertion sits at 6m: window fully covered ⇒ $value is exactly 20 on
+      # both engines, and a `for:` put back to 5m is still pending there.
       - series: 'db2_deadlocks_total{tenant="db-a"}'
-        values: '0+300x48'
+        values: '0+1x48'
       - series: 'db2_deadlocks_total{tenant="db-b"}'
-        values: '0+300x48'
+        values: '0+1x48'
       - series: 'db2_deadlocks_total{tenant="db-c"}'
-        values: '0+300x48'
+        values: '0+1x48'
       - series: 'db2_deadlocks_total{tenant="db-d"}'
-        values: '0+30x48'
-      - series: 'user_threshold{tenant="db-a", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '0x4 1x4 2x4 3x4 4x4 5x4 6x4 7x4 8x4 9x4'
+      - series: 'user_threshold{tenant="db-a", component="db2", metric="deadlocks_per_5m", severity="warning"}'
         values: '5x48'
-      - series: 'user_threshold{tenant="db-b", component="db2", metric="deadlock_rate", severity="warning"}'
+      - series: 'user_threshold{tenant="db-b", component="db2", metric="deadlocks_per_5m", severity="warning"}'
         values: '5x48'
-      - series: 'user_threshold{tenant="db-c", component="db2", metric="deadlock_rate", severity="warning"}'
+      - series: 'user_threshold{tenant="db-c", component="db2", metric="deadlocks_per_5m", severity="warning"}'
         values: '5x48'
-      - series: 'user_threshold{tenant="db-d", component="db2", metric="deadlock_rate", severity="warning"}'
+      - series: 'user_threshold{tenant="db-d", component="db2", metric="deadlocks_per_5m", severity="warning"}'
         values: '5x48'
 
       # Tablespace usage: 92 > 85 warning; db-d 70 < 85.
@@ -416,8 +410,8 @@ tests:
       - series: 'user_threshold{tenant="db-e", component="db2", metric="log_usage_percent", severity="warning"}'
         values: '70x48'
       - series: 'db2_deadlocks_total{tenant="db-e"}'
-        values: '0+300x48'
-      - series: 'user_threshold{tenant="db-e", component="db2", metric="deadlock_rate", severity="warning"}'
+        values: '0+1x48'
+      - series: 'user_threshold{tenant="db-e", component="db2", metric="deadlocks_per_5m", severity="warning"}'
         values: '5x48'
       - series: 'db2_tablespace_used_percent{tenant="db-e", tablespace="USERSPACE1"}'
         values: '92x48'
@@ -548,12 +542,12 @@ tests:
               tier: ""
         # db-c/db-e (maintenance, with / without metadata) and db-d (below threshold) produce NO alert.
 
-      # ── DB2HighDeadlockRate (for: 5m, rate-based — firing eval at 9m, see the
-      #    cold-start note on the input series; 3m is inside BOTH engines' pending window) ──
-      - eval_time: 3m
+      # ── DB2HighDeadlockRate (for: 1m, increase over 5m — see the cold-start note on
+      #    the input series; at 45s only 3 deadlocks have been counted on either engine) ──
+      - eval_time: 45s
         alertname: DB2HighDeadlockRate
         exp_alerts: []
-      - eval_time: 9m
+      - eval_time: 6m
         alertname: DB2HighDeadlockRate
         exp_alerts:
           - exp_labels:
@@ -561,12 +555,12 @@ tests:
               severity: warning
               tenant: db-a
             exp_annotations:
-              summary: "DB2 high deadlock rate on db-a"
-              summary_zh: "db-a 上 DB2 死鎖率過高"
-              platform_summary: "[gold] db-a: DB2 deadlock rate elevated — application contention review"
-              platform_summary_zh: "[gold] db-a：DB2 死鎖率升高 — 應用程式爭用審查"
-              description: "20.0 deadlocks/sec"
-              description_zh: "20.0 個死鎖/秒"
+              summary: "DB2 deadlocks on db-a"
+              summary_zh: "db-a 上 DB2 死鎖次數過高"
+              platform_summary: "[gold] db-a: DB2 deadlocks elevated — application contention review"
+              platform_summary_zh: "[gold] db-a：DB2 死鎖次數升高 — 應用程式爭用審查"
+              description: "20 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 20 個死鎖"
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
@@ -575,16 +569,16 @@ tests:
               severity: warning
               tenant: db-b
             exp_annotations:
-              summary: "DB2 high deadlock rate on db-b"
-              summary_zh: "db-b 上 DB2 死鎖率過高"
-              platform_summary: "[] db-b: DB2 deadlock rate elevated — application contention review"
-              platform_summary_zh: "[] db-b：DB2 死鎖率升高 — 應用程式爭用審查"
-              description: "20.0 deadlocks/sec"
-              description_zh: "20.0 個死鎖/秒"
+              summary: "DB2 deadlocks on db-b"
+              summary_zh: "db-b 上 DB2 死鎖次數過高"
+              platform_summary: "[] db-b: DB2 deadlocks elevated — application contention review"
+              platform_summary_zh: "[] db-b：DB2 死鎖次數升高 — 應用程式爭用審查"
+              description: "20 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 20 個死鎖"
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, with / without metadata) and db-d (rate 2.0 < 5) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (4 per 5m < 5) produce NO alert.
 
       # ── DB2TablespaceAlmostFull (for: 5m) ──
       - eval_time: 3m
@@ -1105,3 +1099,99 @@ tests:
       - eval_time: 3m
         alertname: DB2DatabaseDown
         exp_alerts: []
+
+  # ── DB2HighDeadlockRate counts the DATABASE's deadlocks (#1320): one exporter
+  #    per member, so a pureScale / DPF tenant's count is the SUM over its
+  #    exporters. Two members at 4 per 5m each (a linear 0.2 per 15s, so the value does
+  #    not depend on where a step falls in the window) are 8 > 5 together
+  #    and fire; a rule taking the busiest member (4) would stay quiet. A second
+  #    tenant with one member at 4 per 5m stays quiet. ──
+  - interval: 15s
+    input_series:
+      - series: 'db2_deadlocks_total{tenant="db-n", instance="qe-n1:9560"}'
+        values: '0+0.2x48'
+      - series: 'db2_deadlocks_total{tenant="db-n", instance="qe-n2:9560"}'
+        values: '0+0.2x48'
+      - series: 'user_threshold{tenant="db-n", component="db2", metric="deadlocks_per_5m", severity="warning"}'
+        values: '5x48'
+      - series: 'db2_deadlocks_total{tenant="db-o", instance="qe-o1:9560"}'
+        values: '0+0.2x48'
+      - series: 'user_threshold{tenant="db-o", component="db2", metric="deadlocks_per_5m", severity="warning"}'
+        values: '5x48'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DB2HighDeadlockRate
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-n
+            exp_annotations:
+              summary: "DB2 deadlocks on db-n"
+              summary_zh: "db-n 上 DB2 死鎖次數過高"
+              platform_summary: "[] db-n: DB2 deadlocks elevated — application contention review"
+              platform_summary_zh: "[] db-n：DB2 死鎖次數升高 — 應用程式爭用審查"
+              description: "8 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 8 個死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── DB2HighDeadlockRate on WARM series (#1320): the window is fully covered
+  #    before anything happens, so the two engines read the same samples.
+  #    db-p: 8 deadlocks between 6m15s and 8m, then quiet. The count passes 5 at
+  #    7m15s–7m30s; at 7m45s the expr is true and the alert still pending
+  #    (for: 1m — a `for:` of 0 fires here), at 9m it fires (a `for:` of 2m does
+  #    not yet) with the 8 it counted.
+  #    db-q: the database is deactivated mid-burst and its counter restarts
+  #    (403 → 0): 3 deadlocks before, 4 after. increase() counts 7; a rule
+  #    reading the plain difference (delta) would see a negative number.
+  #    ⚠️ Counts stay below 10 on purpose: Prometheus extrapolates a burst
+  #    inside the window by ~300/285, VictoriaMetrics does not
+  #    (docs/integration/victoriametrics-integration.md §3.1), and `%.0f`
+  #    renders both the same only while that factor stays under half an event. ──
+  - interval: 15s
+    input_series:
+      - series: 'db2_deadlocks_total{tenant="db-p"}'
+        values: '10x24 11 12 13 14 15 16 17 18x20'
+      - series: 'user_threshold{tenant="db-p", component="db2", metric="deadlocks_per_5m", severity="warning"}'
+        values: '5x48'
+      - series: 'db2_deadlocks_total{tenant="db-q"}'
+        values: '400x24 401 402 403 0 1 2 3 4x20'
+      - series: 'user_threshold{tenant="db-q", component="db2", metric="deadlocks_per_5m", severity="warning"}'
+        values: '5x48'
+    alert_rule_test:
+      - eval_time: 7m45s
+        alertname: DB2HighDeadlockRate
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DB2HighDeadlockRate
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-p
+            exp_annotations:
+              summary: "DB2 deadlocks on db-p"
+              summary_zh: "db-p 上 DB2 死鎖次數過高"
+              platform_summary: "[] db-p: DB2 deadlocks elevated — application contention review"
+              platform_summary_zh: "[] db-p：DB2 死鎖次數升高 — 應用程式爭用審查"
+              description: "8 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 8 個死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: db-q
+            exp_annotations:
+              summary: "DB2 deadlocks on db-q"
+              summary_zh: "db-q 上 DB2 死鎖次數過高"
+              platform_summary: "[] db-q: DB2 deadlocks elevated — application contention review"
+              platform_summary_zh: "[] db-q：DB2 死鎖次數升高 — 應用程式爭用審查"
+              description: "7 deadlocks in the last 5 minutes"
+              description_zh: "過去 5 分鐘 7 個死鎖"
+              runbook_url: ""
+              owner: ""
+              tier: ""
