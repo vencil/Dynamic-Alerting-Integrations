@@ -610,8 +610,13 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
          'default_on': False,
          'rule_pack_file': 'rule-packs/rule-pack-jvm.yaml',
          'defaults': {'jvm_gc_pause': {'value': 0.5,
-                                       'unit': 'seconds/5m',
-                                       'desc': 'GC pause duration rate warning',
+                                       'unit': 's/s',
+                                       'desc': 'GC pause warning: seconds of GC pause accrued per '
+                                               'second (rate over 5m of jvm_gc_pause_seconds_sum, '
+                                               "summed over the tenant's JVMs); for one JVM 0.5 = "
+                                               'half of every second spent paused, and ten JVMs at '
+                                               '5% each read 0.5 too. Not seconds per 5 minutes '
+                                               '(#4032)',
                                        'metric_class': 'latency'},
                       'jvm_memory': {'value': 80,
                                      'unit': '%',
@@ -623,8 +628,10 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                       'desc': 'Active thread count warning',
                                       'metric_class': 'saturation'}},
          'optional_overrides': {'jvm_gc_pause_critical': {'value': 1.0,
-                                                          'unit': 'seconds/5m',
-                                                          'desc': 'GC pause critical',
+                                                          'unit': 's/s',
+                                                          'desc': 'GC pause critical: seconds of '
+                                                                  'GC pause accrued per second '
+                                                                  '(see jvm_gc_pause)',
                                                           'metric_class': 'latency'},
                                 'jvm_memory_critical': {'value': 95,
                                                         'unit': '%',
