@@ -6998,9 +6998,11 @@ class TestStaleFiles:
     @pytest.mark.skipif(os.name != 'posix', reason='RLIMIT_FSIZE is POSIX')
     def test_a_forced_rerun_stopped_mid_write_keeps_the_previous_file(self, tmp_path):
         """#4085: each file is replaced whole. A `--force` re-run whose write
-        fails part-way (a file-size limit standing in for a full disk) is
-        rc 2 and leaves every file as the last run wrote it — written in
-        place, the first file it reached was left empty."""
+        fails (a file-size limit standing in for a full disk) is rc 2 and
+        the file it failed on is still what the last run wrote — written in
+        place, that file was left empty. The guarantee is per file, not a
+        rollback: this run uses the same flags, so the files written before
+        the failure are byte-identical anyway and the whole tree compares."""
         import resource
         import subprocess
         out = tmp_path / 'repo'

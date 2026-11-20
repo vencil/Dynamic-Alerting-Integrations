@@ -3615,8 +3615,10 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
 
     #4085: `-o/--output-dir` is an ARTIFACT by the read-back rule — a
     `--force` run reads the `.da-init.yaml` ledger and the files the last run
-    wrote — so each file is replaced whole (`write_repo_artifact`): a re-run
-    stopped part-way leaves the previous file, never a prefix of the new one.
+    wrote — so each file is replaced whole (`write_repo_artifact`): the file a
+    re-run stops at keeps its previous content, never a prefix of the new one.
+    Per file only — `run_init` has no rollback, so the files written before
+    the failure are already the new ones.
     No `mode=`: nothing init generates holds a secret (flags in, YAML out),
     and these are files the customer commits, so they get what a checkout
     would give them (0644).
