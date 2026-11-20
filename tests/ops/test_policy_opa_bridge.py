@@ -1272,9 +1272,9 @@ class TestServedWholeDay:
     def test_unserved_is_the_keys_served_at_no_minute_as_written(self, tmp_path, capsys):
         # #4108: "configured but never served" is Go's answer, not a rego's
         # difference of `tenants` and `served`. A key served in some part of
-        # the day is not in it; nor is a `_` key; a retired spelling stays
-        # as written, as in `tenants`; a disable time-boxed by an `expires:`
-        # not yet passed is in it (judged at --at, as `served` is).
+        # the day is not in it; nor is a `_` key; a retired spelling is keyed
+        # by its current one, as `served` is; a disable time-boxed by an
+        # `expires:` not yet passed is in it (judged at --at, as `served` is).
         conf_d = _write_tree(tmp_path, {
             "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: 70\n",
             "ta.yaml": ("tenants:\n  ta:\n    mysql_cpu: disable\n    _namespaces: [\"a\"]\n"
@@ -1288,11 +1288,36 @@ class TestServedWholeDay:
             rc, out, err = _dry_run(conf_d, capsys, "--at", at)
             assert rc == 0, err
             docs.append(json.loads(out)["unserved"])
-        assert docs[0] == {"ta": {"mysql_cpu": "disable",
+        assert docs[0] == {"ta": {"mysql_threads_running": "disable",
                                   "redis_memory": {"default": "disable", "expires": "2026-11-13T06:00:00Z",
                                                    "reason": ""}}}, docs[0]
         # 12:00 is past the expiry: redis_memory falls back to the root's 70, served.
-        assert docs[1] == {"ta": {"mysql_cpu": "disable"}}, docs[1]
+        assert docs[1] == {"ta": {"mysql_threads_running": "disable"}}, docs[1]
+
+    def test_a_key_served_under_its_current_spelling_is_not_unserved(self, tmp_path, capsys):
+        # #4108 review: a retired spelling the tenant shadows by also writing
+        # the current one is unserved as written; keyed canonically it would
+        # sit in `unserved` and `served` at once. Served wins.
+        conf_d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_threads_running: 50\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_cpu: disable\n    mysql_threads_running: \"40\"\n",
+        })
+        rc, out, err = _dry_run(conf_d, capsys, "--at", _AT_HOURS[0])
+        assert rc == 0, err
+        doc = json.loads(out)
+        assert doc["served"]["ta"]["mysql_threads_running"][0]["value"] == 40.0, doc["served"]
+        assert doc["unserved"] == {"ta": {}}, doc["unserved"]
+
+    def test_two_spellings_of_one_unserved_key_keep_the_current_one(self, tmp_path, capsys):
+        # #4108: both spellings unserved (no root default: no row), keyed by
+        # one canonical key — the value written under the current spelling.
+        conf_d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_cpu: \"1\"\n    mysql_threads_running: disable\n",
+        })
+        rc, out, err = _dry_run(conf_d, capsys, "--at", _AT_HOURS[0])
+        assert rc == 0, err
+        assert json.loads(out)["unserved"] == {"ta": {"mysql_threads_running": "disable"}}, out
 
     def test_a_part_of_the_day_not_gathered_is_exit_2_at_any_hour(self, tmp_path, capsys):
         # #4025: rc 2 inside the window, rc 0 outside it.

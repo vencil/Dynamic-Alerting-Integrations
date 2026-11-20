@@ -82,11 +82,16 @@ tenant from is a WARN line.
 `unserved` (#4108): per tenant, the threshold keys its config carries
 (written or inherited, root `defaults:` dimensional defaults, keys the
 build cannot deliver) that /metrics serves at no minute of the day —
-da-guard's `unserved_thresholds`, keyed and valued as written, like
-`tenants` (a retired spelling stays retired), `_` keys not included. It
-tells "configured but never served" (in `unserved`) from "not configured"
-(in neither): a key served in some part of the day is in `served`, not
-here. Only an `expires:` is judged at `--at`, as for `served`.
+da-guard's `unserved_thresholds` — keyed by the exporter's canonical
+spelling, as `served` is (`da-guard key-spellings`: a retired spelling is
+asked about under its current one), `_` keys not included. A key some
+segment of `served` gives a value is not here, so a rego asks one key
+three ways: served (a value in `served`), configured but never served (in
+`unserved`), or neither. The value is da-guard's rendering of the key as
+written — a scalar's text (`"9"`, `"disable"`), a scheduled key as
+`{default, overrides | expires, reason}` — not the typed value
+`tenants` holds. Only an `expires:` is judged at `--at`, as for `served`.
+A value that is no threshold (`true`) is in neither.
 
 `_routing` in `tenants` is as written plus inherited, NOT the route
 generator's resolution (#2724): `_routing_defaults` is not applied and
@@ -154,6 +159,7 @@ except ImportError:
     )
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
     exit_on_served_values_error,
+    key_spellings,
     load_whole_day,
 )
 # A file parse-tree cannot read raises YamlFileError (rc 2 via
@@ -225,10 +231,30 @@ def load_tenant_inputs(config_dir: str, at: Optional[str] = None) -> TenantInput
                 print(f"NOTE: {safe_label(t)}: {safe_label(k)} is time-boxed by "
                       f"`expires: {safe_label(day.expires)}`; its served day holds until then",
                       file=sys.stderr)
-    # load_whole_day refused a day with an ungathered part, the only one
-    # whose lists are null.
-    unserved = {t: dict(sorted(u.items())) for t, u in sorted(days.unserved_thresholds.items())}
-    return TenantInputs(tenants, served, unserved)
+    return TenantInputs(tenants, served, _canonical_unserved(days.unserved_thresholds, served))
+
+
+def _canonical_unserved(per_tenant: dict[str, Any], served: dict[str, dict]) -> dict[str, dict]:
+    """da-guard's `unserved_thresholds`, keyed canonically as `served` is
+    (#4108): one `da-guard key-spellings` run. A key `served` gives a value
+    in some segment is left out — a retired spelling the tenant shadows by
+    also writing the current one is unserved as written, while the current
+    one is served. When two spellings land on one key, the one written in
+    the current spelling is kept. `load_whole_day` refused a day with an
+    ungathered part, the only one whose lists are null."""
+    spellings = key_spellings(str(k) for u in per_tenant.values() for k in u)
+    out: dict[str, dict] = {}
+    for tenant, unserved in sorted(per_tenant.items()):
+        has_value = {k for k, segs in served.get(tenant, {}).items()
+                     if any(s.get("value") is not None for s in segs)}
+        mine: dict[str, Any] = {}
+        for key, value in sorted(unserved.items()):
+            canon = spellings.canonical(str(key))
+            if canon in has_value or (canon in mine and key != canon):
+                continue
+            mine[canon] = value
+        out[tenant] = dict(sorted(mine.items()))
+    return out
 
 
 def load_defaults(config_dir: str) -> dict[str, Any]:
