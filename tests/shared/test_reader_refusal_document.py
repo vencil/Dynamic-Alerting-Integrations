@@ -64,6 +64,9 @@ REFUSALS = [
     ("read-promql-label-flow", cr.DA_READ_ENV, cr.DA_READ_BINARY_NAME,
      ["promql-label-flow", "tenant", "-"], json.dumps({"expressions": [f"{MARKER} +"]}),
      lambda t: cr.promql_label_flow("tenant", [f"{MARKER} +"])),
+    ("read-promql-reads", cr.DA_READ_ENV, cr.DA_READ_BINARY_NAME,
+     ["promql-reads", "-"], json.dumps([f"{MARKER} +"]),
+     lambda t: cr.promql_reads([f"{MARKER} +"])),
 ]
 
 
@@ -150,9 +153,12 @@ def test_a_usage_error_is_no_refusal(row) -> None:
      json.dumps({"expressions": ["up"], "records": {"r": [{"expr": None}]}})),
     (["promql-label-flow", "tenant", "-"],
      json.dumps({"expressions": ["up"], "aliases": ["namespace", None]})),
+    (["promql-reads", "-"], "null"),
+    (["promql-reads", "-"], json.dumps(["up", None])),
+    (["promql-reads", "-"], json.dumps({"expressions": ["up +"]})),
 ], ids=["series-no-metric", "series-regex", "label-flow-framing", "selectors-null",
         "selectors-null-element", "label-flow-null-element", "label-flow-null-record-expr",
-        "label-flow-null-alias"])
+        "label-flow-null-alias", "reads-null", "reads-null-element", "reads-framing"])
 def test_the_callers_argument_is_no_refusal(args, stdin) -> None:
     """The <series> argument and the JSON framing of standard input are the
     caller's: wrong, they are a caller error (no refusal document), even

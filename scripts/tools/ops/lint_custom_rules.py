@@ -254,19 +254,40 @@ class LintResult:
         return f"{self.severity}: {loc}{name} - {self.message}"
 
 
-def lint_expr(expr, policy, filepath, rule_name):
-    """Check a PromQL expr string against policy. Returns list of LintResult."""
+def _ms(seconds) -> int:
+    """A duration's seconds (``duration_seconds``, Prometheus' ParseDuration:
+    whole milliseconds) as whole milliseconds, to compare with da-read's
+    ``window_ms`` without float rounding (#4080)."""
+    return round(seconds * 1000)
+
+
+def lint_expr(expr, policy, filepath, rule_name, reading=None):
+    """Check a PromQL expr string against policy. Returns list of LintResult.
+
+    *reading* is the expression's ``_lib_consumer_read.promql_reads`` entry
+    (``lint_file`` reads a file's expressions in one call); read here when not
+    given. ⛔ Ranges and function names are Prometheus' reading of the
+    expression, never its text (#4080): a regex did not see ``[1w]``,
+    ``[1h30m]``, ``[(30d)]``, a subquery or ``topk by (a) (…)``, and saw
+    ``[2h]`` in a label value."""
     results = []
     if not expr:
         return results
+    if reading is None:
+        reading = _lib_consumer_read.promql_reads([expr])[0]
+    if reading["problem"] is not None:
+        results.append(LintResult(
+            filepath, rule_name, None, "ERROR",
+            f"Prometheus cannot evaluate the expression: {reading['problem']}"
+        ))
 
-    # Check denied functions
-    for func in policy.get("denied_functions", []):
-        pattern = re.compile(r"\b" + re.escape(func) + r"\s*\(")
-        if pattern.search(expr):
+    # Check denied functions: a function or an aggregation, by name
+    denied = set(policy.get("denied_functions", []))
+    for name in dict.fromkeys(c["name"] for c in reading["calls"]):
+        if name in denied:
             results.append(LintResult(
                 filepath, rule_name, None, "ERROR",
-                f"denied function '{func}' in expr"
+                f"denied function '{name}' in expr"
             ))
 
     # Check denied patterns (whitespace-tolerant matching)
@@ -291,18 +312,27 @@ def lint_expr(expr, policy, filepath, rule_name):
                 f"denied pattern '{pat}' in expr"
             ))
 
-    # Check range vector duration
+    # Check the window each selector reads: its range plus the subqueries
+    # around it (#4080; offset and the lookback delta only move it)
     max_range = policy.get("max_range_duration")
     if max_range:
         max_secs = duration_seconds(max_range)
         if max_secs:
-            for m in re.finditer(r"\[(\d+[smhd])\]", expr):
-                range_secs = duration_seconds(m.group(1))
-                if range_secs and range_secs > max_secs:
-                    results.append(LintResult(
-                        filepath, rule_name, None, "ERROR",
-                        f"range vector [{m.group(1)}] exceeds max allowed [{max_range}]"
-                    ))
+            encoded = expr.encode("utf-8")
+            for sel in reading["selectors"]:
+                if sel["window_ms"] <= _ms(max_secs):
+                    continue
+                text = encoded[sel["start"]:sel["end"]].decode("utf-8", "replace")
+                parts = ""
+                if sel["subqueries"]:
+                    parts = (" (" + " + ".join(
+                        [f"range {sel['range']}"] * bool(sel["range_ms"])
+                        + [f"subquery {d}" for d in sel["subqueries"]]) + ")")
+                results.append(LintResult(
+                    filepath, rule_name, None, "ERROR",
+                    f"range vector {text} reads [{sel['window']}]{parts}, "
+                    f"exceeds max allowed [{max_range}]"
+                ))
 
     return results
 
@@ -442,6 +472,11 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False):
     if not groups:
         return results, rule_count
 
+    # #4080: every expression of the file read by Prometheus in one call
+    exprs = [rule.get("expr", "") for group in groups if isinstance(group, dict)
+             for rule in group.get("rules", []) if isinstance(rule, dict)]
+    readings = iter(_lib_consumer_read.promql_reads([e for e in exprs if e]))
+
     for group in groups:
         if not isinstance(group, dict):
             continue
@@ -464,7 +499,8 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False):
             labels = rule.get("labels", {})
 
             # Core checks
-            results.extend(lint_expr(expr, policy, filepath, rule_name))
+            results.extend(lint_expr(expr, policy, filepath, rule_name,
+                                     next(readings) if expr else None))
             results.extend(lint_labels(labels, policy, filepath, rule_name, is_recording))
 
             # Governance checks (Tier 3 best practices)

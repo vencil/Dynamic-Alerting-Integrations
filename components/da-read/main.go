@@ -16,6 +16,7 @@
 //	da-read prometheus-rules <file|->...
 //	da-read promql-selectors <series> -
 //	da-read promql-label-flow <label> -
+//	da-read promql-reads -
 //	da-read self-check
 //
 // `self-check` runs every subcommand of the dispatch table on a fixture
@@ -64,6 +65,12 @@
 // (promql_label_flow.go) — and prints, per expression, every `and` /
 // `unless` matching on <label> and whether its left side keeps <label>:
 // {"documents": [[[{"op", "start", "end", "lhs"}, …], …]]}.
+//
+// `promql-reads` reads a JSON array of PromQL expressions on standard input
+// and prints, per expression, the width of the window each vector selector
+// reads and the functions and aggregations it calls, as Prometheus evaluates
+// it in a rule (promql_reads.go): {"documents": [[{"selectors", "calls",
+// "problem"}, …]]}.
 //
 // `-` reads standard input — how a file held in a ConfigMap is handed over
 // once its outer layer is read the Kubernetes way (da-crdecode); for
@@ -154,6 +161,7 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s prometheus-rules <file|->...\n", programName)
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
 	say(stderr, "       %s promql-label-flow <label> -\n", programName)
+	say(stderr, "       %s promql-reads -\n", programName)
 	say(stderr, "       %s %s\n", programName, selfCheckCmd)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
 		"their consumer's own loader and prints the reading as JSON, keeping only the keys "+
@@ -162,7 +170,9 @@ func usage(stderr io.Writer) int {
 		"(at most once). promql-selectors reads a JSON array of PromQL expressions on "+
 		"standard input and prints, per expression, the selectors that could select "+
 		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether the left side of "+
-		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when the input is refused, "+
+		"each `and`/`unless on(<label>)` keeps <label>; promql-reads reads a JSON array of "+
+		"PromQL expressions and prints, per expression, the window each selector reads and "+
+		"the functions and aggregations it calls. Exit 2 when the input is refused, "+
 		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+
 		"exit 2 without it when da-read could not answer (bad arguments, a file that cannot be "+
 		"opened, an I/O error). A refusal by Alertmanager's loader leaves the loader's reason "+
@@ -190,6 +200,7 @@ var subcommands = map[string]subcommand{
 	"prometheus-rules":  runRules,
 	"promql-selectors":  runSelectors,
 	"promql-label-flow": runLabelFlow,
+	"promql-reads":      runReads,
 }
 
 func isFileArg(a string) bool {
@@ -232,6 +243,30 @@ func runLabelFlow(operands []string, stdin io.Reader, stdout, stderr io.Writer) 
 		return exitCallerErr
 	}
 	out, err := readPromQLLabelFlow(operands[0], req)
+	if err != nil {
+		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
+		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runReads is `promql-reads -`.
+func runReads(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 1 || operands[0] != "-" {
+		return usage(stderr)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	exprs, err := jsonStrings(data)
+	if err != nil {
+		// the caller's framing: no answer about the input
+		say(stderr, "%s: standard input is not a JSON array of strings: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLReads(exprs)
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 		return refuse(stdout, stderr)

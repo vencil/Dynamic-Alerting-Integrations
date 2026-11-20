@@ -227,6 +227,18 @@ file_overrides:
       max_range_duration: 96h        # forecast lookback cap = max(lookback_factor·largest horizon, lookback_floor), generated from the recipe contract
 ```
 
+> **Ranges and functions are judged as Prometheus reads them** ([#4080](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4080)): the expression is read by Prometheus' PromQL parser, never matched as text.
+> `max_range_duration` is compared with the width of the window each selector reads: its own
+> range plus the range of every subquery around it (`[1w]`, `[1h30m]` and expressions such as
+> `[(30d)]` count at their value), so under a 1h maximum `max_over_time(rate(x[5m])[1h:1m])`
+> reads 1h5m and is refused. `offset` only moves the window and is not counted; a selector with
+> `@` counts its own range only; the lookback delta is the server's setting and is not counted
+> either. The total a query reads across selectors is not this check's: Prometheus'
+> `--query.max-samples` bounds it.
+> `denied_functions` matches functions and aggregation operators by name: `topk by (a) (…)` is
+> `topk`; the same text in a label value, a comment or a metric name is none. An expression
+> Prometheus cannot evaluate (such as `rate(x[step()])`) is an ERROR.
+
 > **An exemption is not a skip (four guard rails)**: (1) `path` is anchored at
 > the top of the scanned tree (exact path, not a suffix), so a nested
 > `rule-packs/*/rule-packs/<file>` gets no exemption; (2) the GENERATED header
