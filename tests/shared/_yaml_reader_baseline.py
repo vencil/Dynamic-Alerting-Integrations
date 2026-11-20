@@ -183,6 +183,8 @@ ALLOWED = {
         (1, "a dashboard file of --dashboard-dir, read by _lib_input.decode_bytes as JSON (#4064): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/grafana_import.py', 'verify_dashboards'):
         (1, "a dashboard held in a ConfigMap, read by _lib_input.decode_bytes as JSON (#4064): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/state_reconcile.py', '_decode_state'):
+        (1, "a state file of --state-dir, read by _lib_input.decode_bytes as JSON (#4064): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/lint_custom_rules.py', 'main'):
         (1, "the custom-rule lint policy (--policy), this tool's own input"),
     ('scripts/tools/ops/rule_pack_diff.py', 'main'):

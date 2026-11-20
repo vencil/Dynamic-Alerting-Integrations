@@ -121,7 +121,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
             "action": "import",
             "status": "fail",
             "caller_error": True,  # malformed input file = caller-error (exit 2)
-            "detail": f"Invalid JSON: {str(e.info if e.problem == 'json' else e)[:80]}",
+            "detail": f"Invalid JSON in {dashboard_p.name}: {e}",
         })
         return results
     except AttributeError as e:   # not an object at the top

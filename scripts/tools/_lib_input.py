@@ -317,9 +317,13 @@ def decode_bytes(raw: bytes, *, fmt: str, name: str) -> Any:
     except RecursionError as exc:
         raise DocumentError("yaml", _TOO_DEEP, exc) from exc
     except _lib_yaml_strict.DuplicateKeyError as exc:
-        raise DocumentError("yaml", (
-            f"the key {exc.key!r} at line {exc.problem_mark.line + 1} is given again "
-            f"(first at line {exc.first_line}); a mapping takes a key once"), exc) from exc
+        if exc.through_alias:   # its marks are the anchor's: name the mapping's line
+            said = (f"the key {exc.key!r} is given twice (through an alias) in the mapping "
+                    f"at line {exc.context_mark.line + 1}")
+        else:
+            said = (f"the key {exc.key!r} at line {exc.problem_mark.line + 1} is given again "
+                    f"(first at line {exc.first_line})")
+        raise DocumentError("yaml", f"{said}; a mapping takes a key once", exc) from exc
     except (yaml.YAMLError, ValueError) as exc:
         # ValueError: a value SafeLoader's constructors cannot build — a
         # timestamp like 2020-99-99 — raised past PyYAML's own error class.

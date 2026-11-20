@@ -20,7 +20,7 @@ PyYAML. This module is that read, by path and by tree:
   (:class:`~_lib_parse_tree.BinaryMissing` for no binary). Callers give
   those last two exit 2, as for any missing or failing da-guard.
 
-⛔ The older PyYAML stream readers (``_lib_io.strict_safe_load`` and
+⛔ The older PyYAML stream readers (``_lib_yaml_strict.strict_safe_load`` and
 friends) read only files that are not conf.d; nothing on the routing
 tools' conf.d path calls them. (The exporter-key readers that imitated
 yaml.v3 were deleted in ADR-036 §7 step 13, #3206.)

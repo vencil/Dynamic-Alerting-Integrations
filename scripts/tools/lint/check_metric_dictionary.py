@@ -31,9 +31,9 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-# #4064: the dictionary is read as every other reader of it reads it — a key
-# given twice is an error, never the last value kept silently.
-from _lib_io import strict_safe_load  # noqa: E402
+# #4064: the dictionary is read as every other reader of it reads it
+# (`load_yaml_file`: a key given twice is an error, naming the file).
+from _lib_io import exit_on_yaml_file_error, load_yaml_file  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "ops"))
@@ -57,7 +57,7 @@ def load_dictionary_metrics(path: Path) -> Set[str]:
     if not path.is_file():
         return set()
 
-    data = strict_safe_load(path.read_text(encoding="utf-8"))
+    data = load_yaml_file(path)
     if not isinstance(data, dict):
         return set()
 
@@ -75,7 +75,7 @@ def load_dictionary_golden_rules(path: Path) -> Set[str]:
     if not path.is_file():
         return set()
 
-    data = strict_safe_load(path.read_text(encoding="utf-8"))
+    data = load_yaml_file(path)
     if not isinstance(data, dict):
         return set()
 
@@ -182,8 +182,7 @@ def check_dictionary_coverage(
     # Only check legacy keys (left side of dictionary)
     dict_data = {}
     if METRIC_DICT.is_file():
-        dict_data = strict_safe_load(
-            METRIC_DICT.read_text(encoding="utf-8")) or {}
+        dict_data = load_yaml_file(METRIC_DICT) or {}
 
     for legacy_key in sorted(dict_data.keys()):
         # Check if legacy key or its maps_to target appears in Rule Packs
@@ -270,6 +269,7 @@ def check_dictionary_contract(dict_data, alert_names, readers_of) -> List[Dict]:
     return issues
 
 
+@exit_on_yaml_file_error  # #4064: an unreadable dictionary → rc 2, the file named
 def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -305,7 +305,7 @@ def main():
 
         issues += check_dictionary_coverage(dict_metrics, dict_rules, rule_pack_metrics)
         issues += check_dictionary_contract(
-            strict_safe_load(METRIC_DICT.read_text(encoding="utf-8")) or {},
+            load_yaml_file(METRIC_DICT) or {},
             rule_pack_alert_names(), alerts_reading_key)
     except _lib_consumer_read.ConsumerReadError as exc:
         # no da-read / da-crdecode (or a pack refused while indexing readers)

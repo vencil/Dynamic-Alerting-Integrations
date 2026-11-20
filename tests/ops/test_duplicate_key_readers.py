@@ -10,7 +10,9 @@ that kept the last value in silence — one file, two answers:
   `onboard`) and the `check_metric_dictionary` lint read it with
   `yaml.safe_load`, while analyze-gaps and generate-tenant-mapping refused it;
 * a dashboard: `grafana-import --dashboard` refused it, `--dashboard-dir` and
-  the ConfigMap check (`verify_dashboards`) read it with `json.loads`.
+  the ConfigMap check (`verify_dashboards`) read it with `json.loads`;
+* a state file of `state-reconcile --state-dir` (selected `*.json`, as
+  `--dashboard-dir`), read with `json.load`.
 """
 from __future__ import annotations
 
@@ -43,8 +45,31 @@ def test_migrate_rule_refuses_a_dictionary_with_a_key_twice(tmp_path):
 def test_the_dictionary_lint_refuses_a_key_twice(tmp_path, load):
     path = tmp_path / "metric-dictionary.yaml"
     path.write_text(DUP_DICTIONARY, encoding="utf-8")
-    with pytest.raises(_lib_io.DuplicateKeyError):
+    with pytest.raises(_lib_io.YamlFileError) as exc:
         getattr(check_metric_dictionary, load)(path)
+    assert exc.value.path == str(path)
+
+
+def test_the_dictionary_lint_names_the_file_not_a_crash(tmp_path, monkeypatch, capsys):
+    """The lint's own run: rc 2, one line naming the dictionary — not a
+    traceback with `<unicode string>` for the file (#4064 review)."""
+    from _lib_exitcodes import CallerError, exit_on_crash
+    path = tmp_path / "metric-dictionary.yaml"
+    path.write_text(DUP_DICTIONARY, encoding="utf-8")
+    monkeypatch.setattr(check_metric_dictionary, "METRIC_DICT", path)
+    monkeypatch.setattr(sys, "argv", ["check_metric_dictionary", "--ci"])
+    with pytest.raises((SystemExit, CallerError)) as exc:
+        check_metric_dictionary.main()
+    if isinstance(exc.value, CallerError):
+        with pytest.raises(SystemExit) as done:
+            exit_on_crash(exc.value)
+        code = done.value.code
+    else:
+        code = exc.value.code
+    err = capsys.readouterr().err
+    assert code == 2, err
+    assert str(path) in err and "duplicate key 'mysql_up'" in err, err
+    assert "Traceback" not in err and "unexpected internal error" not in err, err
 
 
 def test_a_dashboard_file_of_a_directory_with_a_name_twice_is_refused(tmp_path):
@@ -53,7 +78,8 @@ def test_a_dashboard_file_of_a_directory_with_a_name_twice_is_refused(tmp_path):
     [result] = grafana_import.import_dashboard(str(path), "cm", "monitoring", dry_run=True,
                                                raw=DUP_DASHBOARD)
     assert (result["status"], result["caller_error"]) == ("fail", True), result
-    assert "the name 'title' is given twice in one object" in result["detail"], result
+    assert result["detail"] == ("Invalid JSON in d.json: not valid JSON: "
+                                "the name 'title' is given twice in one object"), result
 
 
 def test_a_dashboard_in_a_configmap_with_a_name_twice_fails_the_check(monkeypatch):
@@ -61,3 +87,14 @@ def test_a_dashboard_in_a_configmap_with_a_name_twice_fails_the_check(monkeypatc
     monkeypatch.setattr(grafana_import, "kubectl_list", lambda *a, **k: [item])
     checks = grafana_import.verify_dashboards("monitoring")
     assert [(c["check"], c["status"]) for c in checks] == [("cm/cm/d.json", "fail")], checks
+
+
+def test_a_state_file_with_a_name_twice_is_refused(tmp_path):
+    """`state-reconcile --state-dir` selects `*.json` as `--dashboard-dir`
+    does; its files are decoded as every caller file is (#4064 review)."""
+    import state_reconcile
+    path = tmp_path / "c1.json"
+    path.write_text('{"schema_version": "0.1", "schema_version": "1.0"}', encoding="utf-8")
+    data, err = state_reconcile.read_state(path)
+    assert data is None
+    assert err == "not valid JSON: the name 'schema_version' is given twice in one object"

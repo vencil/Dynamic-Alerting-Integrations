@@ -65,6 +65,10 @@ class DuplicateKeyError(yaml.constructor.ConstructorError):
                  context_mark: Any = None) -> None:
         self.key = dup.value if isinstance(dup, yaml.ScalarNode) else "<non-scalar>"
         self.first_line = first.start_mark.line + 1
+        #: #4064: a key written as an alias (`*a : 1`) is the anchored node
+        #: itself to PyYAML, so its marks are the anchor's — not a line the
+        #: key is on. Set by raise_on_duplicate_key when either key is one.
+        self.through_alias = False
         super().__init__(
             "while constructing a mapping", context_mark,
             f"found duplicate key {self.key!r} (first defined at line "
@@ -127,7 +131,21 @@ def raise_on_duplicate_key(root: Optional["yaml.Node"]) -> None:
     hit = find_duplicate_key(root)
     if hit is not None:
         dup, first, mapping = hit
-        raise DuplicateKeyError(dup, first, mapping.start_mark)
+        exc = DuplicateKeyError(dup, first, mapping.start_mark)
+        exc.through_alias = bool(_aliased_keys(mapping) & {id(dup), id(first)})
+        raise exc
+
+
+def _aliased_keys(mapping: "yaml.MappingNode") -> "set[int]":
+    """The ids of *mapping*'s keys written as an alias: a key written in
+    the mapping starts after the previous entry's value ends; an alias is
+    the anchored node, which starts where the anchor is (#4064)."""
+    out, end = set(), mapping.start_mark.index
+    for key, value in mapping.value:
+        if key.start_mark.index < end:
+            out.add(id(key))
+        end = max(end, value.end_mark.index)
+    return out
 
 
 class RejectDuplicateKeys:

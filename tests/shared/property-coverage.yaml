@@ -207,6 +207,7 @@ modules:
       duplicate_in_mapping: "One-mapping scan over _key_identity (#2123); same matrix in tests/shared/test_yaml_strict_loader.py"
       find_duplicate_key: "Whole-tree walk over duplicate_in_mapping (#2123); matrix + visit-once (alias fan-out) pins in tests/shared/test_yaml_strict_loader.py"
       raise_on_duplicate_key: "Raise-wrapper over find_duplicate_key (#2123); no value computation of its own"
+      _aliased_keys: "#4064 which keys of one mapping are aliases (a key starting before the previous value ends); example-pinned by the alias rows of tests/shared/test_lib_input.py::test_a_key_given_twice_is_refused"
       reject_equal_constructed_keys: "Legacy constructed-key identity kept for two lints (#2123); pinned by the no-widening tests in tests/shared/test_yaml_strict_loader.py"
       RejectDuplicateKeys.construct_document: "Loader hook calling raise_on_duplicate_key then PyYAML (#2123); exercised through strict_safe_load"
       _strict_loader_class: "Loader-class selector + type guard (#2123); example-pinned (TypeError on a non-strict loader)"

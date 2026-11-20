@@ -1051,6 +1051,17 @@ def test_a_many_input_is_not_called_undeclared(tmp_path, call):
      "the key '1' at line 2 is given again (first at line 1); a mapping takes a key once"),
     ("yaml", b"b: &b {a: 1}\nd: &d {a: 3}\nc:\n  <<: *b\n  <<: *d\n",
      "the key '<<' at line 5 is given again (first at line 4); a mapping takes a key once"),
+    # one line: a flow mapping's two keys share it
+    ("yaml", b"{a: 1, a: 2}\n",
+     "the key 'a' at line 1 is given again (first at line 1); a mapping takes a key once"),
+    # an alias as a key is the anchored node: its marks are the anchor's, so
+    # the mapping's line is named, never a line the key is not on
+    ("yaml", b"x: &k foo\n*k : 1\nfoo: 2\n",
+     "the key 'foo' is given twice (through an alias) in the mapping at line 1; "
+     "a mapping takes a key once"),
+    ("yaml", b"k: &a foo\nm:\n  *a : 1\n  *a : 2\n",
+     "the key 'foo' is given twice (through an alias) in the mapping at line 3; "
+     "a mapping takes a key once"),
     ("json", b'{"a": 1, "a": 2}', "the name 'a' is given twice in one object"),
     ("json", b'[{"x": {"a": 1, "a": 2}}]', "the name 'a' is given twice in one object"),
 ])
