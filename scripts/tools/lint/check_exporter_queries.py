@@ -28,9 +28,10 @@ so an upgrade that renames something shows up here. Then, per pack:
     `query=~"<re>"` matches at least one (a renamed query would leave those
     selectors empty: OracleDatabaseDown silent, TenantExporterAbsent paging).
 
-Whether the SQL runs, and serves what is derived, is not a static question: a step
-of CI's Lint Rule Packs job (scripts/ops/exporter_queries_oracle_runtime.sh) runs the
-Oracle file against gvenzl/oracle-free and calls --compare-served.
+Whether the SQL runs, and serves what is derived, is not a static question: CI runs
+scripts/ops/exporter_queries_runtime.sh <pack> for every pack with a queries file
+(Oracle against gvenzl/oracle-free, DB2 against Db2 Community Edition), which calls
+--compare-served.
 
 Usage:
   check_exporter_queries.py          # check (0 ok / 1 finding / 2 cannot run)
