@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -51,7 +52,9 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     detect_cli_lang, ensure_dir_or_die, exit_on_output_write_error, output_dir_type,
 )
-from _lib_io import write_repo_artifact  # noqa: E402  (#4085)
+from _lib_io import (  # noqa: E402  (#4085)
+    OutputWriteError, check_repo_artifact, write_repo_artifact,
+)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
@@ -3636,6 +3639,32 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
     created_files.append(path)
 
 
+@exit_on_output_write_error
+def _refuse_unwritable_targets(config: dict, output_dir: str,
+                               plan: "Optional[_ConfdPlan]") -> None:
+    """#4085: the artifact entry's preconditions, for EVERY file Python will
+    write, before the first write of the run (conf.d's batch included).
+
+    The entry refuses a path that is a device, a FIFO, a directory or one of
+    this process's standard streams. Met at the write, that refusal came
+    after the files before it were already rewritten and before the ledger
+    was — the next run then called init's own files "edited since init wrote
+    it". Met here, the run ends at rc 2 with the tree as it was. What can
+    only fail DURING a write (a full disk) still stops part-way: each file is
+    whole, the run is not rolled back.
+    """
+    conf_d = (Path(output_dir) / 'conf.d').as_posix() + '/'
+    for path in _preview_files(config, output_dir, plan):
+        if path.startswith(conf_d):
+            continue  # `da-guard write` judges its own batch
+        try:
+            check_repo_artifact(path, flag="-o/--output-dir")
+        except OutputWriteError as exc:
+            # A parent that is a file: `ensure_dir` names it, at the write.
+            if exc.errno != errno.ENOTDIR:
+                raise
+
+
 # ============================================================
 # conf.d ownership (#1942)
 # ============================================================
@@ -4631,6 +4660,7 @@ def run_init(config: dict, output_dir: str,
         raise ValueError(_conflict_message(plan, is_zh=False))
     # Issue 1465: read before step 1 — the marker is rewritten in step 5.
     previous = _read_ownership(output_dir)
+    _refuse_unwritable_targets(config, output_dir, plan)
 
     # ── 1. conf.d/ ─────────────────────────────────────────
     # #1942: only the carriers the plan leaves to init. A tenant another file
