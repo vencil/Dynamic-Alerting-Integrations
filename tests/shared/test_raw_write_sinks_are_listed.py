@@ -11,11 +11,12 @@ never calls a writer by name: a generator that rewrites a tracked file with
 ``Path.write_text``, a ``--fix`` mode, a linter's scratch file. This gate is
 for those, and it runs no tool.
 
-Population: every Python file of the repository under ``scripts/`` —
-derived, no tool is named — minus the modules the entries themselves live in (read off
-``OUTPUT_ENTRY_POINTS``). Sinks: the vocabulary of
-``test_output_write_sites_stay_guarded`` (a write-mode ``open``,
-``write_text`` / ``write_bytes``, ``mkdir``, ``chmod``, ``shutil.*``,
+Population: every ``.py`` file of the repository under ``scripts/`` —
+derived, no tool is named, nothing excluded: the modules the entries live
+in are in it too, their own sinks listed as ``entry``. Sinks: the
+vocabulary of ``test_output_write_sites_stay_guarded`` (a write-mode
+``open``, ``write_text`` / ``write_bytes``, ``mkdir``, ``touch``, ``chmod``,
+``os.makedirs`` / ``os.fdopen``, ``shutil``'s copies and ``move``,
 ``os.replace`` / ``os.rename``, ``tempfile.mkstemp``, a direct
 ``atomic_write_text``). A call of an entry is not a sink.
 
@@ -31,29 +32,45 @@ is gone.
   through an entry yet: a tracked repo file (``artifact``), a path a flag
   named (``operator``), a CI-provided file such as ``$GITHUB_OUTPUT``
   (``ci_env_file``: append, so operator), a working directory a flag named
-  or that sits in the repo (``work_dir``). ⛔ SHRINK-ONLY, to zero:
+  or that sits in the repo (``work_dir``). Meant to shrink to zero:
   ``_DEBT_CEILING`` is its size, and it moves down as sites move to an entry.
   A new write of these kinds goes through an entry, not onto this list.
+  ⚠️ What holds that is the ceiling being a second line a reviewer sees
+  move — a raise, or an entry moved to ``REGISTERED`` with the code
+  unchanged, passes this file. A check against the base commit is #3981's
+  open item.
 * ``REGISTERED`` — a write the contract does not cover: an intermediate
   file under a temporary directory the code itself made (``scratch``), a
   marker / lock / cache / log / git-internal file (``state``), a call the
-  vocabulary matches that writes no file (``not_a_file``). NOT shrink-only:
+  vocabulary matches that writes no file (``not_a_file``), the entries' own
+  writes in the modules they live in (``entry``). NOT shrink-only:
   a new tool that uses ``tempfile`` adds a line here, in the diff, with its
   class.
 
 WHAT IT DOES NOT SEE
 --------------------
 * **The class is a person's judgement.** Nothing checks that a site labelled
-  ``scratch`` is under a temporary directory; a mislabelled entry passes.
-  The seed was classified by reading where each path comes from (#3981).
+  ``scratch`` is under a temporary directory; a mislabelled entry passes
+  (only that its file mentions a temporary location at all). The seed was
+  classified by reading where each path comes from (#3981).
+* **A swap that keeps the count**: one raw write replaced by another of the
+  same kind in the same function.
 * **Another function with the same name** in the same file shares a key:
   the count is per (file, enclosing function chain, sink).
 * **What a sink's path is.** ``open(p, "w")`` is one sink whatever ``p`` is.
 * **Code that is not Python, and child processes**: shell scripts, Go
   generators, a ``subprocess`` that writes.
 * **A write the vocabulary does not name** — ``Path.replace`` /
-  ``Path.rename`` (measured: mostly ``str.replace``), ``os.open``,
-  ``sqlite3``; the vocabulary's own docstring says why.
+  ``Path.rename`` (measured: mostly ``str.replace``), ``os.open`` +
+  ``os.write``, ``Path(p).open(mode)`` with a variable positional mode,
+  ``zipfile.ZipFile(p, "w")``, ``tempfile.NamedTemporaryFile`` /
+  ``mkdtemp``, ``logging.FileHandler``, ``sqlite3``, a writer reached
+  through a variable (``w = Path.write_text``) or ``getattr``; the
+  vocabulary's own docstring says why for the first two.
+* **Deletions**: ``unlink`` / ``os.remove`` / ``shutil.rmtree`` are not
+  sinks — the gate is about what a tool writes, and one that removes a
+  tracked file (``gen_agent_adapters``) is not held here.
+* **A file that is Python without the suffix** (a shebang script).
 """
 from __future__ import annotations
 
@@ -74,13 +91,14 @@ from _tree import repo_files  # noqa: E402
 import test_output_write_sites_stay_guarded as _floor  # noqa: E402  (the sink vocabulary)
 
 DEBT_CLASSES = ("artifact", "operator", "ci_env_file", "work_dir")
-REGISTERED_CLASSES = ("scratch", "state", "not_a_file")
+REGISTERED_CLASSES = ("scratch", "state", "not_a_file", "entry")
 
 
 def entry_homes() -> frozenset[str]:
-    """The files the output entries are implemented in: their raw sinks ARE
-    the entries. Read off ``OUTPUT_ENTRY_POINTS``, so a new entry module is
-    excluded by being registered there and by nothing else."""
+    """The files the output entries are implemented in: a raw sink there may
+    be the entry itself (class ``entry``), and nowhere else. Read off
+    ``OUTPUT_ENTRY_POINTS``. They are in the population like any other
+    file: a helper added to one with a bare write is unlisted, and red."""
     import _lib_io
     modules = {name.split(".")[0] for names in _lib_io.OUTPUT_ENTRY_POINTS.values()
                for name in names}
@@ -113,12 +131,11 @@ def raw_sinks(source: str, label: str = "<snippet>") -> Counter[str]:
 
 
 def population() -> list[str]:
-    """Every Python file of the repository under ``scripts/`` (tracked, or
+    """Every ``.py`` file of the repository under ``scripts/`` (tracked, or
     new and not ignored — ``_tree.repo_files``, so a worktree copy is not
-    this tree), minus the entries' own modules."""
-    homes = entry_homes()
+    this tree; a scratch script left untracked there is in it)."""
     rels = (path.relative_to(REPO_ROOT).as_posix() for path in repo_files(".py"))
-    return sorted(rel for rel in rels if rel.startswith("scripts/") and rel not in homes)
+    return sorted(rel for rel in rels if rel.startswith("scripts/"))
 
 
 def scan_tree() -> dict[str, Counter[str]]:
@@ -165,8 +182,7 @@ def verdict(scanned: dict[str, Counter[str]], want: dict[str, Counter[str]]) -> 
 
 
 # ── The lists ──────────────────────────────────────────────────────────────
-# Seeded 2026-11-20 from main efd02e901 (#3981: 213 sinks read one by one;
-# the 10 inside the entries' own modules are not here).
+# Seeded 2026-11-20 from main efd02e901 (#3981: 213 sinks read one by one).
 
 #: Writes the contract covers, not through an entry yet. Shrink-only.
 DEBT: dict[str, dict[str, int]] = {
@@ -219,6 +235,8 @@ DEBT: dict[str, dict[str, int]] = {
         "write_file_content open(w) [artifact]": 1,
     },
     "scripts/tools/dx/analyze_bench_history.py": {
+        "download_artifact .mkdir [work_dir]": 1,
+        "download_artifact .write_text [work_dir]": 1,
         "main .mkdir [operator]": 1,
     },
     "scripts/tools/dx/bench_verdict.py": {
@@ -381,13 +399,28 @@ DEBT: dict[str, dict[str, int]] = {
     },
 }
 
-#: How many sinks DEBT holds. It only goes DOWN: a site that moves to an
-#: entry lowers it, and nothing is added (a new tracked-file or flag-named
-#: write goes through an entry from the start).
-_DEBT_CEILING = 117
+#: How many sinks DEBT holds. Meant to go DOWN only: a site that moves to
+#: an entry lowers it, and nothing is added (a new tracked-file or
+#: flag-named write goes through an entry from the start). It is a second
+#: line for a reviewer to see move, not a lock — see the module docstring.
+_DEBT_CEILING = 119
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
+    "scripts/tools/_lib_atomic_write.py": {
+        "_try_atomic os.chmod [entry]": 1,
+        "_try_atomic os.fdopen [entry]": 1,
+        "_try_atomic os.replace [entry]": 1,
+        "_try_atomic tempfile.mkstemp [entry]": 1,
+        "_write_in_place .write_text [entry]": 1,
+        "_write_in_place os.chmod [entry]": 1,
+    },
+    "scripts/tools/_lib_io.py": {
+        "_kernel_open_operator_output os.chmod [entry]": 1,
+        "ensure_dir .mkdir [entry]": 1,
+        "open_operator_output io.open(w) [entry]": 1,
+        "write_repo_artifact atomic_write_text() [entry]": 1,
+    },
     "scripts/ops/bench_synth_tenants.py": {
         "apply_merge_patch os.fdopen [scratch]": 1,
         "apply_merge_patch tempfile.mkstemp [scratch]": 1,
@@ -451,10 +484,6 @@ REGISTERED: dict[str, dict[str, int]] = {
         "judge .write_text [scratch]": 1,
         "preview_recipe .mkdir [scratch]": 1,
         "preview_recipe .write_text [scratch]": 2,
-    },
-    "scripts/tools/dx/analyze_bench_history.py": {
-        "download_artifact .mkdir [state]": 1,
-        "download_artifact .write_text [state]": 1,
     },
     "scripts/tools/dx/check_release_immutable.py": {
         "_helm_show_chart open(w) [scratch]": 1,
@@ -553,7 +582,10 @@ def test_every_raw_write_sink_is_listed_and_every_entry_is_real():
     assert not faults, "raw write sinks and the lists disagree:\n  " + "\n  ".join(faults)
 
 
-def test_debt_only_shrinks():
+def test_the_debt_ceiling_is_the_size_of_the_debt_list():
+    """One number for a reviewer to watch. It does not stop a raise made in
+    the same diff as a new entry (nothing in this file can: that needs the
+    base commit) — it makes one visible as a second changed line."""
     size = sum(count for sites in DEBT.values() for count in sites.values())
     assert size == _DEBT_CEILING, (
         f"DEBT holds {size} sink(s) and _DEBT_CEILING says {_DEBT_CEILING}: lower the "
@@ -592,13 +624,55 @@ def test_no_key_of_either_list_is_written_twice():
     assert seen == 2, "the two list literals were not found: this test measured nothing"
 
 
-def test_the_entries_own_modules_are_out_and_nothing_else_is():
+def test_an_entry_class_site_is_in_an_entry_module_and_only_there():
+    """``entry`` says "this raw write IS the entry": true only in the modules
+    ``OUTPUT_ENTRY_POINTS`` names. Those modules are in the population like
+    any other file, so a helper added to one with a bare write is unlisted."""
     homes = entry_homes()
-    assert "scripts/tools/_lib_io.py" in homes and "scripts/tools/_lib_atomic_write.py" in homes
-    for rel in homes:
-        assert (REPO_ROOT / rel).is_file(), f"{rel}: an entry module that is not there"
-    assert not homes & set(population())
-    assert not (set(DEBT) | set(REGISTERED)) & homes
+    assert {"scripts/tools/_lib_io.py", "scripts/tools/_lib_atomic_write.py"} <= homes
+    assert homes <= set(population()), "an entry module is missing from the population"
+    for rel, sites in REGISTERED.items():
+        classes = {_split(key)[1] for key in sites}
+        if rel in homes:
+            assert classes == {"entry"}, f"{rel}: an entry module lists {classes}"
+        else:
+            assert "entry" not in classes, f"{rel} is not an entry module"
+    assert not set(DEBT) & homes
+
+
+def test_no_file_reaches_a_sink_module_under_another_name():
+    """The vocabulary knows ``os.replace`` and ``shutil.copy2`` by the
+    module's own name. ``import os as _os`` or ``from shutil import move``
+    would put every such call out of its sight — measured: none of them is
+    caught — so no file of the population may spell a sink module, or a
+    sink taken from one, any other way."""
+    modules = set(_floor.MODULE_SINKS) | set(_floor.OPEN_MODULE_NAMES)
+    names = ({name for sinks in _floor.MODULE_SINKS.values() for name in sinks}
+             | {name for opens in _floor.OPEN_MODULE_NAMES.values() for name in opens})
+    renamed = []
+    for rel in population():
+        for node in ast.walk(ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"), rel)):
+            if isinstance(node, ast.Import):
+                renamed += [f"{rel}:{node.lineno} import {a.name} as {a.asname}"
+                            for a in node.names
+                            if a.name in modules and a.asname not in (None, a.name)]
+            elif isinstance(node, ast.ImportFrom) and node.module in modules:
+                renamed += [f"{rel}:{node.lineno} from {node.module} import {a.name}"
+                            for a in node.names if a.name in names]
+    assert not renamed, ("a sink module under another name hides its writes from this "
+                         "gate — import the module plainly:\n  " + "\n  ".join(renamed))
+
+
+def test_a_file_with_a_scratch_site_names_a_temporary_location():
+    """The cheap half of "is it really scratch": a file that lists one says
+    ``tempfile`` or ``tmp`` somewhere. It cannot tell which write goes
+    there — a generator with no temporary location at all cannot hide a
+    tracked-file write under this class, and that is all it holds."""
+    for rel, sites in REGISTERED.items():
+        if any(_split(key)[1] == "scratch" for key in sites):
+            text = (REPO_ROOT / rel).read_text(encoding="utf-8").lower()
+            assert "tempfile" in text or "tmp" in text, (
+                f"{rel} lists a scratch write and names no temporary location")
 
 
 # ── Controls: the scanner and the verdict, on hand-made input ──────────────
