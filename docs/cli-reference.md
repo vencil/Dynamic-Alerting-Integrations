@@ -2568,7 +2568,7 @@ da-tools migrate-builtin-defaults --config-dir <PATH> [--apply] [--exporter-dige
 # 預覽
 da-tools migrate-builtin-defaults --config-dir conf.d
 # 所有叢集的 exporter 都升級完之後才刪
-da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <摘要>
+da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <DIGEST>
 ```
 
 **結束碼**

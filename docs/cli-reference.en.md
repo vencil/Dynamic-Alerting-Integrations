@@ -2583,7 +2583,7 @@ da-tools migrate-builtin-defaults --config-dir <PATH> [--apply] [--exporter-dige
 # Preview
 da-tools migrate-builtin-defaults --config-dir conf.d
 # Delete only after every cluster's exporter is upgraded
-da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <digest>
+da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <DIGEST>
 ```
 
 **Exit codes**
