@@ -37,7 +37,9 @@
 # Keep query-exporter's built-in metrics on (do not set `builtin_metrics: false`):
 # OracleDatabaseDown, OracleQueryStalled and the platform's presence check read
 # query_interval / query_timestamp / queries_total.
-# The monitor user needs SELECT_CATALOG_ROLE (v$ / dba_* views).
+# The monitor user logs in and reads v$ / dba_* views; it needs exactly:
+#   GRANT CREATE SESSION TO monitor
+#   GRANT SELECT_CATALOG_ROLE TO monitor
 #
 # ⛔ The metric names here are a contract with the rule pack, checked by
 # scripts/tools/lint/check_exporter_queries.py: it derives the exposed names
@@ -45,8 +47,9 @@
 # fails when the pack reads a name this file does not produce, when a gauge
 # has no `expiration` (a gauge keeps its last value while the database is
 # unreachable; expiration drops it), or when the pack rate()s a gauge.
-# A CI job also runs this file against a real Oracle (gvenzl/oracle-free)
-# and compares what it serves with the derived names.
+# A CI job also runs this file against a real Oracle (gvenzl/oracle-free), as a
+# monitor user holding only the grants above, and compares what it serves with
+# the derived names.
 #
 # Liveness: query-exporter keeps serving when the database is down. It does
 # not report 0; `oracledb_up` expires and query_timestamp{query="oracle_liveness"}
