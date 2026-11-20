@@ -127,6 +127,15 @@ What is not counted, each for a stated reason and each with a test
   ``good/``: pytest's ``tmp_path`` is itself under the system temp
   directory, so "it is a temp file" can never stand in for "it is elsewhere".
 
+WHERE A WRITE MAY LAND (#3981). Which entry a write came through is judged
+under ``good/`` only; WHERE it landed is judged for every write of a control
+run: under ``good/``, in the ``TMPDIR`` the gate set, or at a path the run's
+own command line names (another output flag of the same command, a conf.d
+it was told to rewrite). Anything else is a fault naming the path — a
+default resolved against the working directory (the repository, here), a
+fixed path no flag gave. ``/dev/null`` and a ``__pycache__`` are not judged.
+No list: on this tree no control run writes anywhere else.
+
 An event on a descriptor that IS a file (``fchmod``, ``ftruncate``,
 ``open(fd)``) or relative to a ``dir_fd`` is resolved by the hook and lands
 where the file is. One the hook cannot place — an unresolvable descriptor, a
@@ -1218,6 +1227,7 @@ def _run(row: Row, ctx: Ctx, out: Path, *,
     )
     proc.files_before = before
     proc.run_cwd = cwd
+    proc.argv = argv
     return proc
 
 
@@ -1582,11 +1592,43 @@ def _tool_loaded(events: list[dict], tool: Path) -> bool:
                for e in events)
 
 
+def _named_on_the_command_line(argv: list[str], scratch: Path) -> tuple[str, ...]:
+    """Where a run may write besides its output path (#3981): the scratch
+    directory the gate gave it as ``TMPDIR``, and every absolute path its
+    own command line names — another output flag of the same command
+    (`generate_alertmanager_routes --findings-json F -o A`), a conf.d it was
+    told to rewrite. ``--flag=/abs`` counts as ``/abs``."""
+    values = [a.partition("=")[2] if a.startswith("-") and "=" in a else a for a in argv]
+    return (os.path.realpath(scratch),
+            *(os.path.realpath(v) for v in values if os.path.isabs(v)))
+
+
+def _is_named(path: str, named: tuple[str, ...]) -> bool:
+    """*path* is a named path, under one, or the atomic writer's private tmp
+    beside one (``.<name>.<random>.tmp``, renamed onto it)."""
+    for root in named:
+        if path == root or path.startswith(root + os.sep):
+            return True
+        folder, name = os.path.split(root)
+        if os.path.dirname(path) == folder and os.path.basename(path).startswith(f".{name}."):
+            return True
+    return False
+
+
 def _audit(events: list[dict] | None, scope: Path, tool: Path,
-           made: frozenset[str] = frozenset()) -> Audit:
+           made: frozenset[str] = frozenset(),
+           named: tuple[str, ...] | None = None) -> Audit:
     """*made*: the files under *scope* that are there after the run and were
     not before it. One with no logged write to its path was put there by
-    something the hook did not see."""
+    something the hook did not see.
+
+    *named* (#3981; `_named_on_the_command_line`): when given, a write that
+    lands neither under *scope* nor at a named path is a fault — a default
+    resolved against the working directory, a fixed path in the repository
+    or the home directory, written with no flag saying so. Not judged:
+    ``/dev/null`` (it keeps nothing) and a ``__pycache__`` (the import
+    system's, on a checkout that has none yet). ``None``: not judged — the
+    harness controls that hand-make a log name no command line."""
     if events is None:
         return Audit(False, False, {}, ())
     frames = _entry_frames()
@@ -1627,6 +1669,13 @@ def _audit(events: list[dict] | None, scope: Path, tool: Path,
         placed = _placed(event)
         rel = _under(placed, scope) if placed is not None else None
         if rel is None:
+            if (named is not None and placed is not None and placed != os.devnull
+                    and "__pycache__" not in placed.split(os.sep)
+                    and not _is_named(placed, named)):
+                where = stack[0] if stack else "<no scripts/ frame>"
+                faults.append(f"{event['ev']} {placed} from {where}: neither under the "
+                              "output path nor at a path the command line names — a "
+                              "write to a location no flag gave (#3981)")
             continue
         kind = _via(event, frames)
         reached.update((frame.rpartition(":")[0], line) for frame, line in zip(stack, lines))
@@ -1887,7 +1936,9 @@ def _control_run(row: Row, tmp: Path, stub: str):
     log = tmp / "write-audit.jsonl"
     proc = _run(row, Ctx(tmp, stub), out, audit_log=log)
     made = _files_under(out.parent) - proc.files_before
-    return proc, out, _audit(_read_audit_log(log), out.parent, TOOLS_DIR / row.tool, made), made
+    named = _named_on_the_command_line(proc.argv, tmp / "tool-tmp")
+    return proc, out, _audit(_read_audit_log(log), out.parent, TOOLS_DIR / row.tool, made,
+                             named), made
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3277,6 +3328,42 @@ class TestTheHookItself:
         for event in scratch:
             assert _under(_placed(event), tmp_path / "tool-tmp") is not None, event
         assert any(e.get("path") == "/dev/null" for e in events)
+
+    def test_a_write_no_flag_named_is_a_fault(self, tmp_path):
+        """#3981: every write of a control run lands under its output path,
+        in the scratch directory the gate gave it, or at a path its own
+        command line names. One that lands anywhere else — here a default
+        resolved against the working directory, and a fixed path beside the
+        script — is a fault that names it. A second output flag's path, the
+        atomic writer's tmp beside it, `/dev/null` and a `__pycache__` are
+        not."""
+        other, fixed = tmp_path / "second.json", tmp_path / "fixed-place.txt"
+        cwd = tmp_path / "cwd"
+        (cwd / "__pycache__").mkdir(parents=True)
+        code = f"""
+import os, sys, tempfile
+sys.path.insert(0, sys.argv[3])
+import _lib_io
+os.chdir({str(cwd)!r})
+open(os.path.join(sys.argv[1], "out.txt"), "w").close()      # the output path
+_lib_io.write_repo_artifact(sys.argv[2], "x\\n")              # a path argv names
+open(os.devnull, "w").close()
+open(os.path.join("__pycache__", "m.pyc"), "wb").close()
+with tempfile.NamedTemporaryFile("w"):                        # TMPDIR
+    pass
+open("report.json", "w").close()                              # cwd default
+open({str(fixed)!r}, "w").close()                              # fixed path
+"""
+        events, good, script = _hooked(tmp_path, code, args=(str(other), str(TOOLS_DIR)))
+        named = _named_on_the_command_line([str(good), f"--second={other}"],
+                                           tmp_path / "tool-tmp")
+        assert other.read_text(encoding="utf-8") == "x\n", "control: the artifact was written"
+        faults = _audit(events, good, script, named=named).faults
+        assert len(faults) == 2, faults
+        assert any(str(cwd / "report.json") in f for f in faults), faults
+        assert any(str(fixed) in f for f in faults), faults
+        # Not judged without a command line (the hand-made logs above).
+        assert not _audit(events, good, script).faults
 
     def test_without_the_hook_on_the_path_there_is_no_log(self, tmp_path):
         """The environment minus PYTHONPATH: the run succeeds, nothing is
