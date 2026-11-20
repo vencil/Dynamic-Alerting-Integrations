@@ -325,7 +325,7 @@ class TestNoShellTrue:
 #    `unsafe_load` / `full_load`，以及自己建 loader 再 `.get_single_data()`。
 #    唯一的反向例外是 `Loader=<SafeLoader 子類>`：兩者都**誤紅**。
 #    本 repo 的活實例（今天安全，但改壞了沒有人會看見）：
-#      `_lib_io.strict_safe_load()` / `strict_safe_load_all()`
+#      `_lib_yaml_strict.strict_safe_load()` / `strict_safe_load_all()`（`_lib_io` re-export）
 #      （自己建 loader 再 `.get_single_data()`／`.get_data()`）。
 #    它的安全性質由**行為級**測試釘住（`tests/shared/test_yaml_strict_loader.py::
 #    test_the_loader_cannot_construct_python_objects`，對兩個入口都餵真的

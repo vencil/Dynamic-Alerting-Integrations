@@ -62,9 +62,12 @@ when a refusal is raised, as in `_lib_paths`.
   A positional ``decode=`` input (#4040) is named by its path alone.
 * ``decode_bytes(raw, *, fmt, name)`` — ⛔ with ``read_bytes``, the one reading
   of a caller's input file: strict UTF-8, then JSON (``json.loads``) or
-  YAML (PyYAML's pure-Python ``SafeLoader``, see ``_lib_io``'s
-  ``load_yaml_file``, which decodes through it) or nothing (``text``).
-  Raises :class:`DocumentError` with a one-line detail.
+  YAML (``_lib_yaml_strict.strict_safe_load``, PyYAML's pure-Python
+  ``SafeLoader``; see ``_lib_io``'s ``load_yaml_file``, which decodes
+  through it) or nothing (``text``). ⛔ A name or key given twice in one
+  object or mapping is refused (#4064): the reader would keep the last
+  silently, and the author may have meant the first. Raises
+  :class:`DocumentError` with a one-line detail.
   ``refuse_top(label, got, wanted, *, lang)`` is the one wording of a top
   level of the wrong type, for a reader that is not ``document`` (a file
   da-guard reads).
@@ -273,6 +276,14 @@ def decode_bytes(raw: bytes, *, fmt: str, name: str) -> Any:
     UTF-8 first; then ``json.loads``, PyYAML's pure-Python ``SafeLoader``
     (never the C one: see the comment above ``_lib_io.load_yaml_file``) on
     a stream named *name* so its marks name the file, or nothing (text).
+
+    ⛔ A key twice in one mapping (YAML) or a name twice in one object
+    (JSON) is refused (#4064): both parsers keep the last value without a
+    word, so `denied_functions: [x]` followed by `denied_functions: []`
+    linted nothing. YAML: the YAML rule as `_lib_yaml_strict` reads it
+    (#2123: keys compared as yaml.v3 does, a `<<` merge's keys not compared).
+    JSON: RFC 8259 leaves a repeated name to the reader; I-JSON (RFC 7493)
+    and Go's encoding/json/v2 refuse it, and so does this.
     Raises :class:`DocumentError`; the parser's message is one line."""
     if fmt not in FORMATS:
         raise ValueError(f"fmt must be one of {FORMATS}, not {fmt!r}")
@@ -292,23 +303,43 @@ def decode_bytes(raw: bytes, *, fmt: str, name: str) -> Any:
             raise DocumentError("csv", " ".join(str(exc).split()), exc) from exc
     if fmt == "json":
         try:
-            return json.loads(text)
+            return json.loads(text, object_pairs_hook=_unique_names)
         except RecursionError as exc:
             raise DocumentError("json", _TOO_DEEP, exc) from exc
         except ValueError as exc:  # json.JSONDecodeError is one
             raise DocumentError("json", " ".join(str(exc).split()), exc) from exc
     import yaml  # noqa: PLC0415  (lazy: the module stays standard-library only)
+    import _lib_yaml_strict  # noqa: PLC0415  (lazy, and PyYAML only: no crash hook)
     stream = io.StringIO(text)
     stream.name = name
     try:
-        return yaml.load(stream, Loader=yaml.SafeLoader)  # noqa: S506  (SafeLoader, pure parser)
+        return _lib_yaml_strict.strict_safe_load(stream)
     except RecursionError as exc:
         raise DocumentError("yaml", _TOO_DEEP, exc) from exc
+    except _lib_yaml_strict.DuplicateKeyError as exc:
+        if exc.through_alias:   # its marks are the anchor's: name the mapping's line
+            said = (f"the key {exc.key!r} is given twice (through an alias) in the mapping "
+                    f"at line {exc.context_mark.line + 1}")
+        else:
+            said = (f"the key {exc.key!r} at line {exc.problem_mark.line + 1} is given again "
+                    f"(first at line {exc.first_line})")
+        raise DocumentError("yaml", f"{said}; a mapping takes a key once", exc) from exc
     except (yaml.YAMLError, ValueError) as exc:
         # ValueError: a value SafeLoader's constructors cannot build — a
         # timestamp like 2020-99-99 — raised past PyYAML's own error class.
         raise DocumentError("yaml", " ".join(str(exc).split()) or exc.__class__.__name__,
                             exc) from exc
+
+
+def _unique_names(pairs: "list[tuple[str, Any]]") -> "dict[str, Any]":
+    """``json.loads``' ``object_pairs_hook``: one object's members, a name
+    given twice refused (#4064, see ``decode_bytes``)."""
+    out: "dict[str, Any]" = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"the name {key!r} is given twice in one object")
+        out[key] = value
+    return out
 
 
 class InputSpec(NamedTuple):

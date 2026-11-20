@@ -19,7 +19,8 @@ constant `getattr(yaml, "safe_load")` are counted under the canonical name
 (`tests/shared/_ast_refs.py`, shared with `test_rewrite_layer_is_gone.py`).
 `except yaml.YAMLError` and `yaml.dump` / `yaml.safe_dump` are not points (a
 writer is not a reader). The readers in `_lib_io` (`WRAPPER_HOMES`;
-`_lib_yaml_keys` was deleted in step 13; `_lib_input`, #3445) — every top-level function, class or assignment there whose
+`_lib_yaml_keys` was deleted in step 13; `_lib_input`, #3445; `_lib_yaml_strict`,
+#4064) — every top-level function, class or assignment there whose
 definition reaches an entry, directly or through another one — are entries
 themselves, computed from the AST (`wrappers()`): where they are defined is
 not a point, where they are used is. A module that re-exports an entry
@@ -96,7 +97,9 @@ RUAMEL_ENTRIES = frozenset({
 #: `_lib_io.load_yaml_file` decodes through it — so `decode_bytes` and
 #: `document` are entries, and where a tool reads a declared input file
 #: (`document`) is a point, whatever its format: the scan reads names.
-WRAPPER_HOMES = ("scripts/tools/_lib_io.py", "scripts/tools/_lib_input.py")
+WRAPPER_HOMES = ("scripts/tools/_lib_io.py", "scripts/tools/_lib_input.py",
+                 # #4064: the strict loader, re-exported by _lib_io
+                 "scripts/tools/_lib_yaml_strict.py")
 
 Key = "tuple[str, str]"
 
@@ -189,7 +192,8 @@ def test_the_files_are_read(found: Scan) -> None:
                  "scripts/ops/ci_flake_retry.py", "scripts/dx/generate_adr_index.py"):
         assert must in paths, must
     # the wrappers are derived, not listed: the two everyone uses must be among them
-    assert {"load_yaml_file", "strict_safe_load"} <= found.wrappers["_lib_io"]
+    assert {"load_yaml_file"} <= found.wrappers["_lib_io"]
+    assert {"strict_safe_load", "StrictSafeLoader"} <= found.wrappers["_lib_yaml_strict"]
     assert {"decode_bytes", "document"} <= found.wrappers["_lib_input"]
     assert not (REPO / "scripts/tools/_lib_yaml_keys.py").exists()
 
