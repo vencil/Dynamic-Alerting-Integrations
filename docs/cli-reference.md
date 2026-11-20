@@ -2546,7 +2546,9 @@ docker run --rm \
 
 判斷都來自讀取端，本指令不自己算：內建表與每個鍵在樹裡的狀態取自 `da-guard effective`；一個值算不算複製品，是把刪除套到樹的暫存複本上、比對 `da-guard served-values` 前後送出的列——刪掉會讓任何租戶送出的東西改變的值（例如蓋過子目錄值的租戶值）不刪，逐一點名。
 
-刪除複製品後，樹就依賴內建層：沒有內建表的 exporter 對那些鍵什麼都不送。所以刪除要用 `--exporter-digest` 給每個部署中 exporter 的內建表摘要（它的 `da_config_builtin_defaults_info{digest}`），任何一個與本指令的不同就拒絕刪除。改寫成 `"disable"` 不受限制，升級前就可以做。
+兩種寫入都要 exporter 帶著內建表：刪掉複製品後，沒有內建表的 exporter 對那些鍵什麼都不送；已發布、沒有內建表的 exporter 讀到根層 `"disable"`，會丟掉整份根 `_defaults.yaml`，每個租戶的根層預設列一起消失。所以 `--apply` 要用 `--exporter-digest` 給每個讀這棵樹的 exporter 的內建表摘要（它的 `da_config_builtin_defaults_info{digest}`），沒給或任何一個與本指令的不同，就什麼都不寫。改寫要和升級 exporter 放在同一個變更裡做，刪除要等全部升級完（見漸進遷移 playbook 的[升級平台版本前的檢查](scenarios/incremental-migration-playbook.md#升級平台版本前的檢查)）。
+
+寫入的檔會被 `da-guard write` 重排版面（縮排、行尾註解前的空格、空行），值與註解不變；套用前先在版本控制裡看 diff。
 
 **語法**
 
@@ -2560,7 +2562,7 @@ da-tools migrate-builtin-defaults --config-dir <PATH> [--apply] [--exporter-dige
 |------|------|--------|
 | `--config-dir <PATH>` | conf.d 目錄（必填） | — |
 | `--apply` | 寫入（預設只預覽，什麼都不寫） | false |
-| `--exporter-digest <DIGEST>` | 部署中 exporter 的內建表摘要；conf.d 供給幾個叢集就給幾次。刪除複製品時必填 | — |
+| `--exporter-digest <DIGEST>` | 讀這棵樹的 exporter 的內建表摘要；conf.d 供給幾個叢集就給幾次。`--apply` 有東西要寫時必填 | — |
 | `--keep <KEY>` | 這個鍵的值不動（刻意釘住的數字）；可重複 | — |
 
 **範例**
@@ -2577,8 +2579,8 @@ da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest 
 | 代碼 | 說明 |
 |------|------|
 | `0` | 預覽或寫入完成。等於內建值、但刪掉會改變送出內容的值（它蓋過了別層）不是複製品，列出、不刪，不算失敗 |
-| `1` | 有 exporter 摘要與本指令的內建表不同，刪除被拒；改寫成 `"disable"` 照樣寫入 |
-| `2` | 配置目錄無效、樹讀不了、da-guard 不可用，或 `da-guard write` 拒絕 |
+| `1` | 有 exporter 摘要與本指令的內建表不同：刪除與改寫都不寫 |
+| `2` | 配置目錄無效、樹讀不了、da-guard 不可用、`da-guard write` 拒絕，或 `--apply` 有東西要寫卻沒給 `--exporter-digest` |
 
 ---
 

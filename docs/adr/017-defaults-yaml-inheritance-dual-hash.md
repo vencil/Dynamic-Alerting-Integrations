@@ -378,7 +378,7 @@ tenants:
 
 **執行中的元件送出的訊號**：exporter 送 `da_config_builtin_defaults_info{digest}`（它編譯進去的表的摘要），以及每個預設啟用鍵的 `da_config_builtin_default_state{key,state}`，不帶租戶標籤；`state` 除了上面三種，還有 `withheld`（根目錄 `_defaults.yaml` 讀不了，內建層撤掉）。每個鍵的狀態與 `da-guard effective` 的 `builtin_defaults` 出自同一個推導。tenant-api 送 `tenant_api_builtin_defaults_info{digest}`。平台規則包帶一條記錄規則 `rule_pack_builtin_defaults_info{rulepack_digest}`，是生成它的那份登錄表的摘要（`--regen` 寫入，`--ci` 在它過期時失敗），並出貨告警 `BuiltinDefaultsDigestMismatch`：被 scrape 的 exporter 或 tenant-api 的摘要與它不同、或沒送摘要（內建層之前的版本，標為 `digest="none"`），持續 30 分鐘就觸發（依元件與摘要分組，pod 換了 IP 不重算）。告警文字寫出兩邊的摘要，並依上表說明哪一邊較新會怎樣。同一個 Prometheus 載入了兩份摘要不同的平台規則包（例如舊的 ConfigMap 與新的 PrometheusRule 並存）時，上一條對符合任一份的元件不響，改由 `BuiltinDefaultsRulePackDigestsDiffer` 觸發。⚠️ 這條告警只隨平台規則包出貨：threshold-exporter 的 Helm chart 不出貨規則包，沒有部署平台規則包的環境沒有這條告警，要自己比對這兩個指標與 `da-guard effective` 的摘要。
 
-升級與回退時要注意同一件事：還沒有內建層的舊版讀取端，讀到一棵只放覆寫的樹，那些鍵就沒有值。所以要先把讀取端都升級完，才刪掉根目錄裡與平台相同的數字；要回退到舊版，先把它們放回去。
+升級與回退時要注意同一件事：還沒有內建層的舊版讀取端，讀到一棵只放覆寫的樹，那些鍵就沒有值。所以要先把讀取端都升級完，才刪掉根目錄裡與平台相同的數字；要回退到舊版，先把它們放回去。根目錄的 `"disable"` 也不能早於升級：已發布的舊版 exporter 讀到它會丟掉整份根目錄 `_defaults.yaml`，所以要和升級讀取端放在同一個變更裡寫。
 
 ## 後果
 

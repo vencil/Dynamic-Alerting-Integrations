@@ -2561,7 +2561,9 @@ Remove copies of the platform's built-in thresholds ([#3832](https://github.com/
 
 Every judgement is a reader's: the built-in table and each key's state in the tree come from `da-guard effective`; whether a value is a copy is decided by applying the deletions to a scratch copy of the tree and comparing what `da-guard served-values` serves before and after — a value whose removal would change anything served to any tenant (for example a tenant value overriding a subdirectory's) is kept and named.
 
-After its copies are removed a tree depends on the built-in layer: an exporter without the table serves nothing for those keys. So deletions need `--exporter-digest`, the built-in table digest of every deployed exporter (its `da_config_builtin_defaults_info{digest}`), and are refused when any differs from this command's. The rewrites to `"disable"` are not gated and can be done before the upgrade.
+Both writes need the exporters to carry the built-in table: once its copies are removed, an exporter without the table serves nothing for those keys; a released exporter without it that reads a root `"disable"` drops the whole root `_defaults.yaml`, and every tenant's root rows go with it. So `--apply` needs `--exporter-digest`, the built-in table digest of every exporter that reads the tree (its `da_config_builtin_defaults_info{digest}`), and writes nothing when it is missing or any differs from this command's. Do the rewrites in the same change that upgrades the exporters, and the deletions only once all of them are upgraded (see the incremental migration playbook's [Checks before upgrading the platform](scenarios/incremental-migration-playbook.en.md#checks-before-upgrading-the-platform)).
+
+The files written are re-laid out by `da-guard write` (indentation, the space before an end-of-line comment, blank lines); values and comments stay. Review the diff in version control before applying.
 
 **Syntax**
 
@@ -2575,7 +2577,7 @@ da-tools migrate-builtin-defaults --config-dir <PATH> [--apply] [--exporter-dige
 |--------|-------------|---------|
 | `--config-dir <PATH>` | The conf.d directory (required) | — |
 | `--apply` | Write (default: preview, nothing written) | false |
-| `--exporter-digest <DIGEST>` | A deployed exporter's built-in table digest; once per cluster the conf.d feeds. Required to delete copies | — |
+| `--exporter-digest <DIGEST>` | The built-in table digest of an exporter that reads this tree; once per cluster the conf.d feeds. Required when `--apply` has anything to write | — |
 | `--keep <KEY>` | Leave this key's values alone (a number pinned on purpose); repeatable | — |
 
 **Examples**
@@ -2592,8 +2594,8 @@ da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest 
 | Code | Meaning |
 |------|---------|
 | `0` | Previewed or written. A value equal to the built-in one whose removal would change what is served (it overrides another layer) is no copy: named, not deleted, and no failure |
-| `1` | An exporter digest differs from this command's built-in table and deletions were refused; the rewrites to `"disable"` are still written |
-| `2` | Invalid config directory, unreadable tree, unusable da-guard, or `da-guard write` refused |
+| `1` | An exporter digest differs from this command's built-in table: neither the deletions nor the rewrites are written |
+| `2` | Invalid config directory, unreadable tree, unusable da-guard, `da-guard write` refused, or `--apply` with something to write and no `--exporter-digest` |
 
 ---
 

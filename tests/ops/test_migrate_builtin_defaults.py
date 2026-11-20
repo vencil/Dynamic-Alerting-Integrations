@@ -107,9 +107,11 @@ def test_keep_leaves_a_key_alone(tmp_path):
     assert _load(conf, "t1.yaml")["tenants"]["t1"]["pg_connections"] == "80"
 
 
-@pytest.mark.parametrize("digests,rc", [(["0000deadbeef"], 1), ([], 0)],
+@pytest.mark.parametrize("digests,rc", [(["0000deadbeef"], 1), ([], 2)],
                          ids=["a-differing-digest", "no-digest"])
-def test_deletions_need_every_exporters_digest(tmp_path, capsys, digests, rc):
+def test_writes_need_every_exporters_digest(tmp_path, capsys, digests, rc):
+    """Deletions and rewrites alike (#3832 decisions 5, 7): _OLD has both, and
+    neither is written without the digest of every exporter."""
     conf = _tree(tmp_path, _OLD)
     texts = {p: p.read_bytes() for p in conf.rglob("*.yaml")}
     args = ["--config-dir", str(conf), "--apply"]
@@ -119,6 +121,18 @@ def test_deletions_need_every_exporters_digest(tmp_path, capsys, digests, rc):
     assert {p: p.read_bytes() for p in conf.rglob("*.yaml")} == texts
     err = capsys.readouterr().err
     assert ("differ from this tool's built-in table" if digests else "needs --exporter-digest") in err
+
+
+def test_a_rewrite_alone_is_gated_too(tmp_path, capsys):
+    """A released exporter without the built-in table drops the whole root
+    _defaults.yaml over a root "disable" (v2.9.0: entire block dropped), so a
+    tree with only a rewrite to do is refused like a deletion."""
+    conf = _tree(tmp_path, {"_defaults.yaml": "defaults:\n  pg_connections: null\n",
+                            "t1.yaml": "tenants:\n  t1:\n    container_cpu: \"70\"\n"})
+    before = (conf / "_defaults.yaml").read_bytes()
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", "0000deadbeef"]) == 1
+    assert "drops the whole root _defaults.yaml" in capsys.readouterr().err
+    assert (conf / "_defaults.yaml").read_bytes() == before
 
 
 def test_one_matching_digest_does_not_cover_a_cluster_that_differs(tmp_path):
@@ -149,13 +163,12 @@ def test_a_value_that_overrides_another_layer_is_not_a_copy(tmp_path, capsys):
     "optional_overrides:\n  - pg_connections\n  - mysql_threads_running\n",
 ], ids=["root-null", "optional-overrides-listing"])
 def test_the_old_ways_of_switching_off_become_disable(tmp_path, root):
-    """Without a digest (before the upgrade, decision 9): the rewrite is not
-    gated. After it the key is off for every tenant, and a declared key that is
-    not built in stays on the list."""
+    """After the rewrite the key is off for every tenant, and a declared key
+    that is not built in stays on the list."""
     conf = _tree(tmp_path, {"_defaults.yaml": root,
                             "t1.yaml": "tenants:\n  t1:\n    container_cpu: \"70\"\n"})
     assert "pg_connections" in _served(conf)["t1"]            # the built-in layer serves it
-    assert mig.main(["--config-dir", str(conf), "--apply"]) == 0
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 0
     data = _load(conf, "_defaults.yaml")
     assert data["defaults"]["pg_connections"] == "disable"
     assert "pg_connections" not in (data.get("optional_overrides") or [])
@@ -234,12 +247,12 @@ def test_the_other_listed_items_are_never_retyped(tmp_path, capsys):
     named refusal (rc 2, nothing written), never a silent respelling."""
     conf = _tree(tmp_path, {"_defaults.yaml":
                             "optional_overrides:\n  - pg_connections\n  - mysql_threads_running\n"})
-    assert mig.main(["--config-dir", str(conf), "--apply"]) == 0
+    assert mig.main(["--config-dir", str(conf), "--apply", "--exporter-digest", _digest(conf)]) == 0
     text = (conf / "_defaults.yaml").read_text(encoding="utf-8")
     assert "- pg_connections" not in text and "mysql_threads_running" in text, text
     odd = _tree(tmp_path / "odd", {"_defaults.yaml":
                                    "optional_overrides:\n  - pg_connections\n  - 1e2\n"})
     before = (odd / "_defaults.yaml").read_bytes()
-    assert mig.main(["--config-dir", str(odd), "--apply"]) == 2
+    assert mig.main(["--config-dir", str(odd), "--apply", "--exporter-digest", _digest(odd)]) == 2
     assert "1e2" in capsys.readouterr().err
     assert (odd / "_defaults.yaml").read_bytes() == before
