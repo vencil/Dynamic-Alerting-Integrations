@@ -3619,7 +3619,9 @@ def _write_file(path: str, content: str, created_files: list[str]) -> None:
     #4085: `-o/--output-dir` is an ARTIFACT by the read-back rule — a
     `--force` run reads the `.da-init.yaml` ledger and the files the last run
     wrote — so each file is replaced whole (`write_repo_artifact`): the file a
-    re-run stops at keeps its previous content, never a prefix of the new one.
+    re-run stops at keeps its previous content, never a prefix of the new one
+    (where the entry can replace it — a hard-linked file, someone else's, one
+    in a directory that takes no new file is written in place, with a WARN).
     Per file only — `run_init` has no rollback, so the files written before
     the failure are already the new ones.
     No `mode=`: nothing init generates holds a secret (flags in, YAML out),
@@ -3650,8 +3652,8 @@ def _refuse_unwritable_targets(config: dict, output_dir: str,
     after the files before it were already rewritten and before the ledger
     was — the next run then called init's own files "edited since init wrote
     it". Met here, the run ends at rc 2 with the tree as it was. What can
-    only fail DURING a write (a full disk) still stops part-way: each file is
-    whole, the run is not rolled back.
+    only fail DURING a write (a full disk) still stops part-way: a replaced
+    file is whole, the run is not rolled back.
     """
     conf_d = (Path(output_dir) / 'conf.d').as_posix() + '/'
     for path in _preview_files(config, output_dir, plan):
