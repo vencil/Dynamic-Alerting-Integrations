@@ -179,3 +179,38 @@ signatures:
     labels:
       instance: db2-neg-01
       database: SAMPLE
+
+  # 6) 良性低度訊號 —— 偶發的單一死結（背景值每小時約 2 次），夜間批次與
+  #    OLTP 重疊時短暫升高後自行回落。日常監控檢視，不叫人。
+  #    （counter 速率為原生單位：每秒死結次數。另派 agent 盲寫，未讀任何告警
+  #    規則或門檻，#1320。）
+  - description: >-
+      忙碌但管理良好的 OLTP 資料庫，死結並不是零：偶爾會有兩支交易以相反
+      順序取得列鎖定，死結偵測器（DLCHKTIME 預設 10 秒）在一個偵測週期內
+      選出受害者並回滾（SQL0911N reason code 2），應用程式重試後成功，
+      使用者無感。背景值約每小時 2 次（每秒約 0.00056）。夜間批次窗口與
+      線上交易重疊時，批次以不同的存取順序更新同一批資料列，死結在約
+      5 分鐘內升到約每小時 12 次（每秒約 0.0033），持續約 30 分鐘 ——
+      整個窗口合計約 6 次 —— 批次 commit 完成後直接回到背景值。每一次
+      都是單一受害者、單次重試即消解，沒有重試風暴、沒有鎖定等待堆積、
+      也沒有逾時（reason code 68）伴隨出現。這是 DBA 在每日或每週的鎖定
+      事件報表中檢視、必要時排進應用程式調校（統一存取順序、補索引）的
+      事項，不是該叫人的事故。
+    source: vendor-doc
+    normal_level: 0.00056
+    fault_level: 0.0033
+    onset_duration: 5m
+    hold_duration: 30m
+    typical_wobble: 0.0003
+    dips_back: false
+    agent_keeps_reporting: true
+    must_detect: false
+    metric: db2_deadlocks_total
+    metric_kind: counter
+    shape_class: plateau
+    noise_kind: gaussian
+    fault_class: benign-occasional-deadlock
+    labels:
+      instance: db2-neg-01
+      database: SAMPLE
+    min_value: 0

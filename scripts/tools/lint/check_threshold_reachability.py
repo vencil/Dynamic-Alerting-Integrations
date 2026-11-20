@@ -207,7 +207,7 @@ KNOWN_UNWIRED: dict[str, str] = {
     "oracle_pga_usage_percent": _A_DECLARED,
     "oracle_hard_parse_time_percent": _A_DECLARED,
     "db2_log_usage_percent": _A_DECLARED,
-    "db2_deadlock_rate": _A_DECLARED,
+    "db2_deadlocks_per_5m": _A_DECLARED,
     "db2_tablespace_used_percent": _A_DECLARED,
     "clickhouse_max_part_count": _A_DECLARED,
     "clickhouse_replication_queue": _A_DECLARED,
