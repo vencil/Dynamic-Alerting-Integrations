@@ -139,6 +139,10 @@ const (
 	// StateFull: the write would push the state store past its size budget
 	// (#2856).
 	StateFull Kind = "state_full"
+	// StateReloadFailed: a write to tenant-api's state store succeeded, but
+	// re-reading the in-memory snapshot that serves the record failed, so
+	// reads do not show the write yet (#1073).
+	StateReloadFailed Kind = "state_reload_failed"
 	// ConfigFileParse: a shared config file (_groups.yaml, _views.yaml) does
 	// not decode.
 	ConfigFileParse Kind = "config_file_parse"
