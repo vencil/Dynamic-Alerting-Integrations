@@ -19,6 +19,20 @@ on:
     paths:
       - "components/tenant-api/**"
       - ".github/workflows/forge-e2e-github.yaml"
+      # #3756: whatever else the job reads, from what it was measured to read
+      # by access time (.github/path-traces/forge-e2e-github.yaml.json), less
+      # what a pattern above already covers. The job's assert step fails,
+      # naming the file, when it reads something this list does not cover.
+      # The `push` list below is hand-written and not held to the
+      # measurement. Do not edit between the markers.
+      # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/path-traces/forge-e2e-github.yaml.json"
+      - "scripts/ops/atime_trace.py"
+      - "scripts/ops/paths_filter_glob.py"
+      - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_compat.py"
+      - "scripts/tools/_lib_exitcodes.py"
+      # END GENERATED path-trace
   push:
     branches: [main]
     paths:
@@ -49,6 +63,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
+      # BEGIN GENERATED path-trace-env job=github-e2e
+      - name: Set access times back, to measure what this job reads (#3756)
+        run: python3 -I scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime-trace.json" --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"
+      # END GENERATED path-trace-env
       - uses: actions/setup-go@v6
         with:
           go-version-file: components/tenant-api/go.mod
@@ -92,3 +110,26 @@ jobs:
           E2E_GITHUB_RO_TOKEN: ${{ secrets.E2E_GITHUB_RO_TOKEN }}
           E2E_GITHUB_JANITOR: "1"
         run: go test -tags forge_e2e -count=1 -run TestForgeE2E_GitHub_Janitor ./test/forgee2e/... -v
+
+      # #3756: every tracked file this job read must be in
+      # `on.pull_request.paths` above. After the post-sweep, so that its reads
+      # are measured too; it does not run when the job is cancelled (the
+      # post-sweep does). No token is in this step's environment. Only
+      # artifact uploads may follow (`generate --check` refuses anything
+      # else). Generated.
+      # BEGIN GENERATED path-trace-assert job=github-e2e
+      - name: Path filter covers everything this job read (#3756)
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && python3 scripts/ops/workflow_path_filter.py assert --workflow forge-e2e-github.yaml --job github-e2e --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json" --leg "${{ strategy.job-index }}/${{ strategy.job-total }}"
+      # END GENERATED path-trace-assert
+
+      # What `assert --out` wrote: on a red run, `workflow_path_filter.py
+      # merge` this file into .github/path-traces/forge-e2e-github.yaml.json.
+      # File names only.
+      - name: Upload the trace
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-forge-e2e-github-github-e2e
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn

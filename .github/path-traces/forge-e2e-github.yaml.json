@@ -1,0 +1,9 @@
+{
+  "jobs": {
+    "github-e2e": {
+      "files": [],
+      "import_dirs": []
+    }
+  },
+  "workflow": "forge-e2e-github.yaml"
+}
