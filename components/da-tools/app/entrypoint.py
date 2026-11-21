@@ -482,6 +482,45 @@ def print_usage():
     _exit_flushed(0)
 
 
+def _silence_stderr():
+    """Point stderr's fd at the null device (best effort), so what
+    sys.stderr still buffers after a failed write is dropped there: the
+    interpreter's own last flush would fail on it and turn the exit code
+    into 120 (#3821). A closed fd is the lowest free one, which os.open may
+    hand back: keep it then."""
+    try:
+        fd = sys.stderr.fileno()
+        null = os.open(os.devnull, os.O_WRONLY)
+        if null != fd:
+            os.dup2(null, fd)
+            os.close(null)
+    except Exception:  # noqa: BLE001 — best effort
+        pass
+
+
+def _to_stderr(*lines):
+    """Print the dispatcher's own *lines* to stderr — best effort (#3821).
+
+    A write that fails (the reader left: EPIPE; `2>/dev/full`: ENOSPC)
+    loses the text, not the exit code: the rest is dropped and stderr's fd
+    goes to the null device, so neither an exception (rc 1) nor the
+    interpreter's failing last flush (rc 120) replaces the code the caller
+    exits with. The same rule _lib_exitcodes gives a tool (#3599), inline
+    because this module is zero-import from _lib_* (see EXIT_CALLER_ERROR).
+    """
+    try:
+        for line in lines:
+            print(line, file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001 — the exit code still says it
+        _silence_stderr()
+
+
+def _exit_caller_error(*lines):
+    """Report *lines* on stderr (best effort) and exit EXIT_CALLER_ERROR."""
+    _to_stderr(*lines)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
 def _exit_stdout_failed(exc):
     """stdout failed (EPIPE, ENOSPC, `>&-`'s EBADF): one stderr line and
     EXIT_CALLER_ERROR, never 0 — the exit _lib_exitcodes gives a tool
@@ -493,12 +532,7 @@ def _exit_stdout_failed(exc):
         os.close(null)
     except Exception:  # noqa: BLE001 — best effort
         pass
-    try:
-        print(f"ERROR: cannot write to stdout: {exc.strerror or exc}",
-              file=sys.stderr, flush=True)
-    except Exception:  # noqa: BLE001 — the exit code still says it
-        pass
-    sys.exit(EXIT_CALLER_ERROR)
+    _exit_caller_error(f"ERROR: cannot write to stdout: {exc.strerror or exc}")
 
 
 def _exit_flushed(code):
@@ -515,12 +549,11 @@ def run_tool(script_name, args):
     script_path, searched = _resolve_script_path(script_name)
 
     if script_path is None:
-        print(_t(f"錯誤: 找不到工具腳本 {script_name}",
-                 f"Error: Tool script not found: {script_name}"), file=sys.stderr)
-        print(_t("已搜尋以下路徑：", "Searched paths:"), file=sys.stderr)
-        for path in searched:
-            print(f"  {path}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        _exit_caller_error(
+            _t(f"錯誤: 找不到工具腳本 {script_name}",
+               f"Error: Tool script not found: {script_name}"),
+            _t("已搜尋以下路徑：", "Searched paths:"),
+            *(f"  {path}" for path in searched))
 
     # Rewrite sys.argv so argparse in each tool sees correct arguments
     sys.argv = [script_name] + args
@@ -585,8 +618,12 @@ def _exit_on_tool_crash(exc):
         sys.stdout.flush()
     except Exception:  # noqa: BLE001
         pass
-    traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
-    print(_crash_message(exc), file=sys.stderr, flush=True)
+    try:
+        traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
+    except Exception:  # noqa: BLE001 — stderr failed: _to_stderr's rule (#3821)
+        _silence_stderr()
+    else:
+        _to_stderr(_crash_message(exc))
     override = _crash_exit_code_from_env()
     sys.exit(EXIT_CALLER_ERROR if override is None else override)
 
@@ -707,13 +744,13 @@ def main():
 
     if command not in COMMAND_MAP:
         commands = ', '.join(sorted(COMMAND_MAP.keys()))
-        print(_t(f"錯誤: 未知命令 '{command}'",
-                 f"Error: Unknown command '{command}'"), file=sys.stderr)
-        print(_t(f"可用命令: {commands}",
-                 f"Available commands: {commands}"), file=sys.stderr)
-        print(_t("執行 'da-tools --help' 以查看用法。",
-                 "Run 'da-tools --help' for usage."), file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        _exit_caller_error(
+            _t(f"錯誤: 未知命令 '{command}'",
+               f"Error: Unknown command '{command}'"),
+            _t(f"可用命令: {commands}",
+               f"Available commands: {commands}"),
+            _t("執行 'da-tools --help' 以查看用法。",
+               "Run 'da-tools --help' for usage."))
 
     run_tool(COMMAND_MAP[command], args)
 
