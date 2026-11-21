@@ -979,7 +979,7 @@ def test_working_directory_resolves_step_relative_scripts() -> None:
 # ⚠️ The "reached indirectly through a script" blind spot above is closed a
 # different way, per workflow (#3756): a workflow that carries the `GENERATED
 # path-trace` block has its list derived from what its jobs were MEASURED to
-# load, and its last step fails on a load the list does not cover
+# read (by access time), and its last step fails on a read the list does not cover
 # (scripts/ops/workflow_path_filter.py; tests/ops/test_workflow_path_filter.py).
 # This static invariant stays for every workflow, traced or not — it reads the
 # steps without running them, so it also sees a step the traced run skipped —
@@ -1031,7 +1031,7 @@ WORKFLOW_PATHS_NOT_TRIGGERED: dict[tuple[str, str],
 
 # ⛔ The gate's extraction and GitHub's ordered `!` rule are NOT defined here
 # any more (#3756). scripts/ops/workflow_path_filter.py asks the same two
-# questions at run time, inside the workflow, of the files a job really loaded
+# questions at run time, inside the workflow, of the files a job really read
 # — and a second copy of "what is this workflow's gate" / "does it cover this
 # path" would be a second answer. Both live beside the matcher and are bound
 # here by name, so every assertion below grades with the functions CI runs.

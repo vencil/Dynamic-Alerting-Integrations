@@ -407,6 +407,23 @@ REGISTERED: dict[str, dict[str, int]] = {
         "open_operator_output io.open(w) [entry]": 1,
         "write_repo_artifact atomic_write_text() [entry]": 1,
     },
+    # #3756. The state file and the per-segment list beside it are the
+    # measurement's own working files (in CI under $RUNNER_TEMP); the canaries
+    # live in the git directory; `semantics` writes only under the
+    # tempfile.mkdtemp directory it makes.
+    "scripts/ops/atime_trace.py": {
+        "_collect open(w) [state]": 1,
+        "make_canaries .mkdir [state]": 1,
+        "make_canaries open(w) [state]": 2,
+        "measure_semantics open(w) [scratch]": 1,
+        "measure_semantics os.chmod [scratch]": 1,
+        "measure_semantics os.replace [scratch]": 1,
+        "measure_semantics.in_place open(w) [scratch]": 1,
+        "measure_semantics.make open(w) [scratch]": 1,
+        "measure_semantics.make os.makedirs [scratch]": 1,
+        "save_state open(w) [state]": 1,
+        "save_state os.replace [state]": 1,
+    },
     "scripts/ops/bench_synth_tenants.py": {
         "apply_merge_patch os.fdopen [scratch]": 1,
         "apply_merge_patch tempfile.mkstemp [scratch]": 1,
@@ -419,9 +436,6 @@ REGISTERED: dict[str, dict[str, int]] = {
         "plumbing_commit .mkdir [state]": 1,
         "plumbing_commit .write_text [state]": 1,
         "plumbing_commit shutil.copy [state]": 1,
-    },
-    "scripts/ops/path_trace/sitecustomize.py": {
-        "_install os.makedirs [state]": 1,
     },
     "scripts/session-guards/_guardlib.py": {
         "append_jsonl .mkdir [state]": 1,
