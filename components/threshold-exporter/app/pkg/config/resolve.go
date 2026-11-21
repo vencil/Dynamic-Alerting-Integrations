@@ -437,10 +437,22 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // to the platform default); every other head — a declared key, a base only
 // `dimensions:` names — keeps its value, as resolveDeclaredRows does.
 func headLive(base string, defaults map[string]float64, sv ScheduledValue, now time.Time) bool {
-	if _, valued := defaults[base]; valued {
+	if expiryHonoured(base, defaults) {
 		return !isThresholdExpired(sv, now)
 	}
 	return true
+}
+
+// expiryHonoured reports whether a tenant value of key may lapse at its
+// `expires:` (PREVENT #656) — the one rule the resolver (headLive), the
+// expiry event (ResolveThresholdExpiriesAt) and the write check
+// (ValidateTenantKeys) share: the root `defaults:` (canonical) values key,
+// and not with the built-in layer's off (BuiltinOffDefault, #4163). A value
+// lapsing to off would take the threshold away in silence, so such a key
+// keeps its value past `expires:`, as a declared key does.
+func expiryHonoured(key string, defaults map[string]float64) bool {
+	v, valued := defaults[key]
+	return valued && !BuiltinOffDefault(v)
 }
 
 // familyHeadOff reports whether the tenant switches family base off at now
@@ -1423,7 +1435,7 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf fun
 			}
 			// A `_` key is no base row wherever it is declared
 			// (baseRowsSkipKey, #3045): nothing reverts.
-			if _, isDefault := canonDefaults[canonKey]; !isDefault || baseRowsSkipKey(canonKey) {
+			if !expiryHonoured(canonKey, canonDefaults) || baseRowsSkipKey(canonKey) {
 				continue
 			}
 			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
@@ -1822,11 +1834,18 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				// ResolveThresholdExpiriesAt (which gates on canonDefaults
 				// alone) still emitted its expiry event, splitting the very
 				// pair the contract test below exists to hold together.
-				if _, isDefault := canonDefaults[canonKey]; isDefault && !baseRowsSkipKey(canonKey) {
+				if expiryHonoured(canonKey, canonDefaults) && !baseRowsSkipKey(canonKey) {
 					if _, err := time.Parse(time.RFC3339, sv.Expiry.Expires); err != nil {
 						v.Errors = append(v.Errors, fmt.Sprintf(
 							"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
 					}
+				} else if BuiltinOffDefault(canonDefaults[canonKey]) {
+					// #4163: the built-in layer values the key off — the
+					// declared key's case, reached through the layer instead of
+					// the list, refused for the reason given below.
+					v.Errors = append(v.Errors, fmt.Sprintf(
+						"WARN: tenant=%s: `expires:` on %q is refused — the platform ships no value for %q, so there is no default to revert to: on expiry the threshold would have NO value and the alert would go silent. Remove `expires:`; delete the override itself when you want it gone.",
+						tenant, canonKey, canonKey))
 				} else if _, isDeclared := canonOptional[canonKey]; isDeclared {
 					// ⛔ Declared keys are refused their OWN message rather than
 					// folded into the generic out-of-scope one below, because

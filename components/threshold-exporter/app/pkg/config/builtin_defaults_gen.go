@@ -23,6 +23,7 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 	{"rabbitmq_node_mem_percent", 90},
 }
 
-// builtinDefaultsDigest names this table: the first 12 hex digits of the
-// SHA-256 of its `key=value` lines, sorted by key.
-const builtinDefaultsDigest = "3f4ed6d06f1b"
+// builtinDefaultsDigest names the built-in layer: the first 12 hex digits
+// of the SHA-256 of this table's `key=value` lines and a `key=off` line per
+// key of unsetThresholdKeys (#4163), sorted by key.
+const builtinDefaultsDigest = "968ca3d1c003"

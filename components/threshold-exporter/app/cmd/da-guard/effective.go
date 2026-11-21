@@ -110,6 +110,30 @@ type builtinDefaultsDoc struct {
 	Digest string `json:"digest"`
 	// Keys: every key of the table, always all of them.
 	Keys map[string]builtinDefaultKey `json:"keys"`
+	// Off: every key of the layer's off table (#4163: a key the platform
+	// ships no value for, valued off so a tenant may set it), always all of
+	// them. Added without a schema bump, as this document was: a reader
+	// that needs it names a document without it as an older da-guard.
+	Off map[string]builtinOffKey `json:"off"`
+}
+
+// builtinOffKey is one key of builtinDefaultsDoc.Off.
+type builtinOffKey struct {
+	// Pack is the rule pack whose rules read the key.
+	Pack string `json:"pack"`
+	// State: `off` (the tree's `defaults:` gives the key no value: no
+	// default row, a tenant's value or `_critical` is read), `overridden`
+	// (it gives the number in RootValue), `opted_out` (`disable`, which every
+	// tenant inherits) or `withheld` (the root carrier cannot be read).
+	State string `json:"state"`
+	// RootValue is the number the tree's `defaults:` gives the key; present
+	// for `overridden` only.
+	RootValue *float64 `json:"root_value,omitempty"`
+	// Configured: how many tenants serve the key a threshold (its base,
+	// `_critical` or a dimensional key) or switch it off themselves at some
+	// part of the run's UTC day — the unset notice's reading, every tenant
+	// asked.
+	Configured int `json:"configured"`
 }
 
 // builtinDefaultKey is one key of builtinDefaultsDoc.Keys.
@@ -133,9 +157,9 @@ type builtinDefaultKey struct {
 	Tenants *int `json:"tenants,omitempty"`
 }
 
-// builtinDefaultsOf is the document's builtin_defaults for tree; nil when
-// no build ran.
-func builtinDefaultsOf(tree *config.ScopedTenants) *builtinDefaultsDoc {
+// builtinDefaultsOf is the document's builtin_defaults for tree, the off
+// table's tenant counts read at at; nil when no build ran.
+func builtinDefaultsOf(tree *config.ScopedTenants, at time.Time) *builtinDefaultsDoc {
 	states := tree.BuiltinDefaultStates()
 	if states == nil {
 		return nil
@@ -149,6 +173,11 @@ func builtinDefaultsOf(tree *config.ScopedTenants) *builtinDefaultsDoc {
 			e.Tenants = &n
 		}
 		doc.Keys[k] = e
+	}
+	off := tree.BuiltinOffStatesAt(at)
+	doc.Off = make(map[string]builtinOffKey, len(off))
+	for k, st := range off {
+		doc.Off[k] = builtinOffKey{Pack: st.Pack, State: st.State, RootValue: st.Root, Configured: st.Configured}
 	}
 	return doc
 }
@@ -295,7 +324,8 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 	// The run's one instant (#3368): not_served reads `expires:` at it.
-	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), opts, time.Now().UTC())
+	now := time.Now().UTC()
+	tree, err := config.EffectiveTreeWith(configDir, log.New(errOut, "", 0), opts, now)
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, tree.RootListErr)
@@ -307,7 +337,7 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		doc.ConfigHash = configHashField(tree.TreeIdentity)
 	}
 	if err == nil {
-		doc.BuiltinDefaults = builtinDefaultsOf(tree)
+		doc.BuiltinDefaults = builtinDefaultsOf(tree, now)
 	}
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, err)

@@ -148,7 +148,7 @@ def check_builtin_digest_announced(
     release, the digest with it). The digest binds the announcement to the
     exact table: the next change moves it, and the fragment naming the old
     one no longer counts."""
-    digest = registry_lib.builtin_defaults_digest(registry_lib.builtin_defaults(doc))
+    digest = registry_lib.builtin_layer_digest(doc)
     fdir = fragments_dir or CHANGELOG_FRAGMENTS_DIR
     if fdir and os.path.isdir(fdir):
         # The fragments as the changelog tool itself enumerates them

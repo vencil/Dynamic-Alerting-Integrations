@@ -226,7 +226,7 @@ tenant-api 從這些欄位推出兩份清單，不再各自手寫：形狀是 `m
 |---|---|---|
 | `_profile` 指向不存在的 profile | `read` | 擋 |
 | `expires:` 不是 RFC3339 時間 | `read` | 擋 |
-| `expires:` 加在只宣告於 `optional_overrides`、沒有平台預設值的鍵上 | `read` | 擋 |
+| `expires:` 加在只宣告於 `optional_overrides`、沒有平台預設值的鍵上，或內建層給 off 的鍵上（[ADR-017](017-defaults-yaml-inheritance-dual-hash.md) 決策 11） | `read` | 擋 |
 | `expires:` 加在 `_critical` 鍵、維度鍵或保留鍵上（不會生效、也不會回復） | `read` | 擋 |
 
 值的檢查之後也走這條路：登錄表 `check` 指名的判斷式由 Go 寫入檢查呼叫（決定 1）。例如 `_silent_mode: purple`，exporter 讀了它（判決是 `read`），只是不認得這個值、什麼都不靜音；擋下它的是這個值檢查，不是鍵名判決。磁碟上已經有的錯值怎麼處理見決定 12。

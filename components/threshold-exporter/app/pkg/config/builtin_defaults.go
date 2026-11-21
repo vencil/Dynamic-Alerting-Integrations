@@ -19,6 +19,19 @@ package config
 // every rule that holds for a root-valued key (a subtree or tenant `disable`,
 // a tenant's `<key>_critical` row, the key verdict) holds for it.
 //
+// THE OFF TABLE (#4163). Every key the platform ships no value for
+// (`arming: operator`, the generated unsetThresholdKeys) is in the layer too,
+// with the value off (builtinOffDefault): the key is valued at the root, so
+// a tenant may set it, a profile or a subtree may give it a value and a
+// tenant's `<key>_critical` row is served (even with no base value of its
+// own), exactly as for a key the root gives a number — but the base serves
+// no row of its own, and off switches no family off. A customer tree no
+// longer lists these keys to make them settable. Two rules differ from a
+// valued key: `expires:` is not honoured (expiryHonoured: lapsing to off
+// would take the threshold away in silence, PREVENT #656), and the table of
+// values (BuiltinDefaults, BuiltinStatesOf, the generic chain) does not hold
+// them — off is a typed-Defaults value only.
+//
 // THE ROOT OPT-OUT (#3832 decision 3). The root `defaults:` may write a key
 // of the table as `disable` (RootDisableText: that word only, no alias, no
 // schedule): the layer gives it nothing, and every tenant inherits the
@@ -101,19 +114,31 @@ func BuiltinDefault(key string) (float64, bool) {
 	return v, ok
 }
 
-// BuiltinDefaultsDigest names the built-in table this binary was compiled
-// with (builtinDefaultsDigestOf of it).
+// BuiltinDefaultsDigest names the built-in layer this binary was compiled
+// with (builtinDefaultsDigestOf of its table of values and its off table).
 func BuiltinDefaultsDigest() string { return builtinDefaultsDigest }
 
-// builtinDefaultsDigestOf is the digest of a table: the first 12 hex digits
+// builtinDefaultsDigestOf is the digest of a layer: the first 12 hex digits
 // of the SHA-256 of its `key=value` lines, sorted by key, each ended by a
-// newline. A value is written without a fraction when it is integral (`80`),
-// otherwise in the shortest form that reads back as the same number (`0.5`)
-// — the text the generator writes, so the generated constant and this
-// function agree on every table (TestBuiltinDefaultsDigest_IsOfTheTable).
-func builtinDefaultsDigestOf(table map[string]float64) string {
-	keys := make([]string, 0, len(table))
-	for k := range table {
+// newline — one line per key of table, and `key=off` per key of off (#4163;
+// the two never share a key). A value is written without a fraction when it
+// is integral (`80`), otherwise in the shortest form that reads back as the
+// same number (`0.5`) — the text the generator writes, so the generated
+// constant and this function agree on every layer
+// (TestBuiltinDefaultsDigest_IsOfTheTable).
+func builtinDefaultsDigestOf(table map[string]float64, off []string) string {
+	text := make(map[string]string, len(table)+len(off))
+	for k, v := range table {
+		if v == 0 {
+			v = 0 // a negative zero is written as the generator writes it: `0`
+		}
+		text[k] = strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	for _, k := range off {
+		text[k] = "off"
+	}
+	keys := make([]string, 0, len(text))
+	for k := range text {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
@@ -121,11 +146,7 @@ func builtinDefaultsDigestOf(table map[string]float64) string {
 	for _, k := range keys {
 		b.WriteString(k)
 		b.WriteByte('=')
-		v := table[k]
-		if v == 0 {
-			v = 0 // a negative zero is written as the generator writes it: `0`
-		}
-		b.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+		b.WriteString(text[k])
 		b.WriteByte('\n')
 	}
 	sum := sha256.Sum256([]byte(b.String()))
@@ -149,8 +170,63 @@ func seedBuiltinDefaults(d map[string]float64) []string {
 		d[k] = v
 		seeded = append(seeded, k)
 	}
+	seedBuiltinOff(d)
 	sort.Strings(seeded)
 	return seeded
+}
+
+// builtinOffKeys is the built-in layer's off table (#4163): every threshold
+// key the platform ships no value for (`arming: operator`), the keys of the
+// generated unsetThresholdKeys — one table, so the keys the unset notice
+// names and the keys the layer values off cannot differ.
+var builtinOffKeys = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(unsetThresholdKeys))
+	for _, e := range unsetThresholdKeys {
+		out[e.key] = struct{}{}
+	}
+	return out
+}()
+
+// BuiltinOff reports whether key is in the built-in layer's off table.
+// key is matched exactly, as BuiltinDefault matches it.
+func BuiltinOff(key string) bool {
+	_, ok := builtinOffKeys[key]
+	return ok
+}
+
+// BuiltinOffKeys is the off table's keys, sorted.
+func BuiltinOffKeys() []string {
+	keys := make([]string, 0, len(builtinOffKeys))
+	for k := range builtinOffKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// seedBuiltinOff lays the off table under d in place: every off key d holds
+// no number and no root `disable` for, under ANY #1231 spelling, gets the off
+// value (builtinOffNaN). Unlike the table of values, a key of this table may
+// have a retired spelling (`mysql_cpu` → `mysql_threads_running`): a root
+// that values the retired spelling values the key, and an off value under
+// the canonical spelling beside it would take its place when the defaults
+// are canonicalised. A value the root decode refused falls to off, as one
+// falls to the platform's number above: the refusal is still reported, from
+// the file's bytes.
+func seedBuiltinOff(d map[string]float64) {
+	held := make(map[string]bool, len(d))
+	for k, v := range d {
+		if finiteThreshold(v) || RootDisabledDefault(v) {
+			canon, _ := CanonicalKeyFor(k)
+			held[canon] = true
+		}
+	}
+	for k := range builtinOffKeys {
+		if held[k] {
+			continue
+		}
+		d[k] = builtinOffDefault()
+	}
 }
 
 // SeedBuiltinDefaults is seedBuiltinDefaults, for package main's flat
@@ -251,6 +327,68 @@ func BuiltinStatesOf(cfg *ThresholdConfig, seeded []string, withheld bool) map[s
 			st.State, st.Root = BuiltinStateOverridden, &root
 		}
 		out[k] = st
+	}
+	return out
+}
+
+// BuiltinStateOff: the tree's `defaults:` gives a key of the off table no
+// value (not written, null, or a value the root decode refuses), so the
+// built-in layer values it off (#4163).
+const BuiltinStateOff = "off"
+
+// BuiltinOffState is one key of ScopedTenants.BuiltinOffStatesAt (#4163).
+type BuiltinOffState struct {
+	// Pack is the rule pack whose rules read the key.
+	Pack string
+	// State is BuiltinStateOff, BuiltinStateOverridden (the root gives it a
+	// number, in Root), BuiltinStateOptedOut (the root writes `disable`) or
+	// BuiltinStateWithheld (the root carrier cannot be read).
+	State string
+	// Root is the number `defaults:` gives the key; BuiltinStateOverridden
+	// only.
+	Root *float64
+	// Configured is how many tenants of the build serve the key a threshold
+	// or switch it off themselves at some part of the UTC day of at — the
+	// unset notice's own reading (UnsetThresholdsAt), every tenant asked.
+	Configured int
+}
+
+// BuiltinOffStatesAt is, per key of the off table, what the exporter's own
+// build of the tree does with it and how many of its tenants configure it at
+// at: the tree-level answer beneath validate-config's platform_defaults row
+// for the keys the platform ships no value for. nil when no build ran.
+func (s *ScopedTenants) BuiltinOffStatesAt(at time.Time) map[string]BuiltinOffState {
+	if s == nil || s.built == nil {
+		return nil
+	}
+	cfg := &s.built.Config
+	everyone := make(map[string]bool, len(cfg.Tenants))
+	for t := range cfg.Tenants {
+		everyone[t] = true
+	}
+	unset := map[string]int{}
+	if !s.built.BuiltinWithheld {
+		for _, u := range cfg.UnsetThresholdsAt(at, everyone) {
+			unset[u.Key]++
+		}
+	}
+	out := make(map[string]BuiltinOffState, len(unsetThresholdKeys))
+	for _, e := range unsetThresholdKeys {
+		st := BuiltinOffState{Pack: e.pack, State: BuiltinStateWithheld}
+		if !s.built.BuiltinWithheld {
+			v := cfg.Defaults[e.key]
+			switch {
+			case RootDisabledDefault(v):
+				st.State = BuiltinStateOptedOut
+			case finiteThreshold(v):
+				root := v
+				st.State, st.Root = BuiltinStateOverridden, &root
+			default:
+				st.State = BuiltinStateOff
+			}
+			st.Configured = len(cfg.Tenants) - unset[e.key]
+		}
+		out[e.key] = st
 	}
 	return out
 }

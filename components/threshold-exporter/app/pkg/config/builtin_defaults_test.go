@@ -104,7 +104,7 @@ func TestBuiltinDefaultEntries_AreSortedAndUnique(t *testing.T) {
 // generator and this binary compute it the same way.
 func TestBuiltinDefaultsDigest_IsOfTheTable(t *testing.T) {
 	t.Parallel()
-	if got, want := BuiltinDefaultsDigest(), builtinDefaultsDigestOf(BuiltinDefaults()); got != want {
+	if got, want := BuiltinDefaultsDigest(), builtinDefaultsDigestOf(BuiltinDefaults(), BuiltinOffKeys()); got != want {
 		t.Fatalf("generated digest %q, digest of the generated table %q", got, want)
 	}
 }
@@ -116,7 +116,7 @@ func TestBuiltinDefaultsDigestOf(t *testing.T) {
 	t.Parallel()
 	base := map[string]float64{"fixture_a": 80, "fixture_b": 0.5}
 	same := map[string]float64{"fixture_b": 0.5, "fixture_a": 80}
-	if builtinDefaultsDigestOf(base) != builtinDefaultsDigestOf(same) {
+	if builtinDefaultsDigestOf(base, nil) != builtinDefaultsDigestOf(same, nil) {
 		t.Error("the digest depends on map order")
 	}
 	for name, other := range map[string]map[string]float64{
@@ -125,18 +125,25 @@ func TestBuiltinDefaultsDigestOf(t *testing.T) {
 		"a key added":     {"fixture_a": 80, "fixture_b": 0.5, "fixture_c": 1},
 		"a key renamed":   {"fixture_a2": 80, "fixture_b": 0.5},
 	} {
-		if builtinDefaultsDigestOf(base) == builtinDefaultsDigestOf(other) {
+		if builtinDefaultsDigestOf(base, nil) == builtinDefaultsDigestOf(other, nil) {
 			t.Errorf("%s: the digest did not move", name)
 		}
 	}
 	// sha256("fixture_a=80\nfixture_b=0.5\n")[:12], computed by the generator
 	// (scripts/tools/ops/_registry_lib.py builtin_defaults_digest).
 	const want = "04515815be57"
-	if got := builtinDefaultsDigestOf(base); got != want {
+	if got := builtinDefaultsDigestOf(base, nil); got != want {
 		t.Errorf("digest of the fixture table = %q, want %q (the generator's)", got, want)
 	}
-	if got, want := builtinDefaultsDigestOf(map[string]float64{"fixture_small": 1e-7, "fixture_big": 1e20}), "ff25ac41be7f"; got != want {
+	if got, want := builtinDefaultsDigestOf(map[string]float64{"fixture_small": 1e-7, "fixture_big": 1e20}, nil), "ff25ac41be7f"; got != want {
 		t.Errorf("digest of the extreme-value table = %q, want %q (the generator's)", got, want)
+	} // #4163: the off table is a line `key=off` each, sorted with the rest:
+	// sha256("fixture_a=80\nfixture_b=0.5\nfixture_o=off\n")[:12].
+	if got, want := builtinDefaultsDigestOf(base, []string{"fixture_o"}), "eebfa434bc86"; got != want {
+		t.Errorf("digest of the fixture layer with an off key = %q, want %q (the generator's)", got, want)
+	}
+	if builtinDefaultsDigestOf(base, nil) == builtinDefaultsDigestOf(base, []string{"fixture_o"}) {
+		t.Error("an off key added: the digest did not move")
 	}
 }
 
@@ -207,8 +214,10 @@ func TestSeedBuiltinDefaults(t *testing.T) {
 		if !slices.IsSorted(seeded) {
 			t.Errorf("%s: seeded %v not sorted", name, seeded)
 		}
-		if len(tc.in) != len(builtinDefaults) && name == "absent" {
-			t.Errorf("%s: %d keys seeded, want %d", name, len(tc.in), len(builtinDefaults))
+		// #4163: the off table is laid too, and not reported as seeded
+		// (BuiltinSeeded is the table of values' `builtin` state).
+		if len(tc.in) != len(builtinDefaults)+len(builtinOffKeys) && name == "absent" {
+			t.Errorf("%s: %d keys seeded, want %d", name, len(tc.in), len(builtinDefaults)+len(builtinOffKeys))
 		}
 	}
 }
@@ -284,7 +293,10 @@ func TestRootDisableText(t *testing.T) {
 		{"pg_connections", "disable:critical", false},
 		{"pg_connections_critical", "disable", false},
 		{`pg_connections{db="a"}`, "disable", false},
-		{"redis_connected_clients", "disable", false},
+		// #4163: a key of the off table is in the built-in layer too.
+		{"redis_connected_clients", "disable", true},
+		{"redis_connected_clients_critical", "disable", false},
+		{"my_own_threshold", "disable", false},
 	} {
 		if got := RootDisableText(tc.key, tc.text); got != tc.want {
 			t.Errorf("RootDisableText(%q, %q) = %v, want %v", tc.key, tc.text, got, tc.want)
@@ -295,7 +307,7 @@ func TestRootDisableText(t *testing.T) {
 // A root `disable` is decoded as itself, not as a refusal, and the built-in
 // layer leaves it in place.
 func TestRootDisable_DecodeAndSeed(t *testing.T) {
-	d, refused, err := readRootDefaults(mustYAMLNode(t, "pg_connections: disable\nredis_connected_clients: disable\n"))
+	d, refused, err := readRootDefaults(mustYAMLNode(t, "pg_connections: disable\nredis_connected_clients: disable\nmy_own_threshold: disable\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,12 +317,19 @@ func TestRootDisable_DecodeAndSeed(t *testing.T) {
 	if _, r := RefusedDefault(d["pg_connections"]); r {
 		t.Error("RefusedDefault reports a root disable refused")
 	}
-	if refused["redis_connected_clients"] != "disable" {
-		t.Errorf("redis_connected_clients: refused %q, want its text: no built-in value to switch off", refused["redis_connected_clients"])
+	// #4163: a key of the off table is switched off the same way.
+	if !RootDisabledDefault(d["redis_connected_clients"]) || refused["redis_connected_clients"] != "" {
+		t.Errorf("redis_connected_clients: %v refused %q, want the root disable", d["redis_connected_clients"], refused["redis_connected_clients"])
+	}
+	if refused["my_own_threshold"] != "disable" {
+		t.Errorf("my_own_threshold: refused %q, want its text: not in the built-in layer, nothing to switch off", refused["my_own_threshold"])
 	}
 	seeded := seedBuiltinDefaults(d)
 	if !RootDisabledDefault(d["pg_connections"]) || slices.Contains(seeded, "pg_connections") {
 		t.Errorf("seedBuiltinDefaults replaced the root disable: %v, seeded %v", d["pg_connections"], seeded)
+	}
+	if !RootDisabledDefault(d["redis_connected_clients"]) {
+		t.Errorf("seedBuiltinDefaults replaced the root disable of an off key: %v", d["redis_connected_clients"])
 	}
 }
 
@@ -383,3 +402,28 @@ func TestInheritedRootDisables_ReadsEveryPartOfTheDay(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// builtinLayer is the whole built-in layer as seedBuiltinDefaults lays it
+// under an empty root: the table of values and the off table (#4163).
+func builtinLayer() map[string]float64 {
+	d := BuiltinDefaults()
+	for _, k := range BuiltinOffKeys() {
+		d[k] = builtinOffDefault()
+	}
+	return d
+}
+
+// sameDefaults is a Defaults map compared by bits: a NaN (refused, root
+// disable, built-in off) is never == itself, and the bits are the verdict.
+func sameDefaults(a, b map[string]float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, av := range a {
+		bv, ok := b[k]
+		if !ok || math.Float64bits(av) != math.Float64bits(bv) {
+			return false
+		}
+	}
+	return true
+}

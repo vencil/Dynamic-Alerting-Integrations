@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-18
-updated_at: 2026-11-16
+updated_at: 2026-11-21
 ---
 # ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載
 
@@ -36,6 +36,7 @@ updated_at: 2026-11-16
 | 2026-10-28 | 子目錄才寫、根目錄沒宣告的閾值：da-guard 報 error（結束碼 1） | 決策 3 |
 | 2026-11-15 | 平台預設啟用的閾值由讀取端內建，排在根目錄 `_defaults.yaml` 之下：根目錄沒寫、寫 `null` 或寫了讀不了的值，都拿平台值；最終設定與 `merged_hash` 涵蓋它；`validate-config` 印出內建表摘要與每個鍵的處理 | 決策 1、2、3、4、7、11 |
 | 2026-11-16 | 根目錄 `defaults:` 可以對內建層給值的鍵寫 `"disable"`，整棵樹關掉那一族；只收這個字 | 決策 4、11 |
+| 2026-11-21 | 平台不給值的鍵也進內建層，值是 off：根目錄不必再宣告，租戶的值、`<鍵>_critical` 與 profile 的值都送出 | 決策 11 |
 
 ## 名詞
 
@@ -148,7 +149,7 @@ tenants:
 讀這個範例要注意兩件事：
 
 - **租戶的值加引號，`defaults:` 裡不加。** 租戶的閾值是字串或帶排程的物件，未加引號的數字會被 `check_confd_schema.py` 擋下；平台預設只收數字。
-- **子目錄只能改根目錄已宣告的閾值；內建層給值的鍵算已宣告。** 子目錄寫 `pg_connections: 60`，即使根目錄沒寫它，`/metrics` 也送 60。把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值，或由內建層給值（exporter 只為這種基底送 critical 列），只在 `optional_overrides:` 宣告或根目錄寫成 null 都不算，同樣標 `undeliverable`；根目錄 `defaults:` 直接給了該 `_critical` key 的值時例外（它被當成一個獨立的閾值讀）。
+- **子目錄只能改根目錄已宣告的閾值；內建層給值的鍵算已宣告。** 子目錄寫 `pg_connections: 60`，即使根目錄沒寫它，`/metrics` 也送 60。把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 以 `subtree_default_undeliverable` 報錯，結束碼 1。修法是在根目錄 `_defaults.yaml` 或 `optional_overrides:` 宣告這個閾值。子目錄寫的 `<base>_critical` 條件更嚴：基底要在根目錄 `defaults:` 有值，或由內建層給值（包括 off，見決策 11；exporter 只為這種基底送 critical 列），內建層以外的基底只在 `optional_overrides:` 宣告或根目錄寫成 null 都不算，同樣標 `undeliverable`；根目錄 `defaults:` 直接給了該 `_critical` key 的值時例外（它被當成一個獨立的閾值讀）。
 
 ### 4. 閾值寫 `null` 等於這一層沒寫
 
@@ -314,7 +315,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 ### 11. 內建層：平台預設啟用的閾值由讀取端自己帶著
 
-閾值登錄表（`rule-packs/threshold-registry.yaml`，平台所有閾值鍵的唯一來源）把平台出貨即啟用的鍵標為 `arming: default`。這些鍵與它們的平台值編譯在 exporter、da-guard 與 tenant-api 裡（三者共用同一套 Go 程式庫，`da-tools validate-config` 經 da-guard 取得答案），排在根目錄 `_defaults.yaml` 之下，叫做內建層。登錄表標為 `operator`（平台不主張值、要部署方自己校準）的鍵與所有 `_critical` 鍵不在內建層。
+閾值登錄表（`rule-packs/threshold-registry.yaml`，平台所有閾值鍵的唯一來源）把平台出貨即啟用的鍵標為 `arming: default`。這些鍵與它們的平台值編譯在 exporter、da-guard 與 tenant-api 裡（三者共用同一套 Go 程式庫，`da-tools validate-config` 經 da-guard 取得答案），排在根目錄 `_defaults.yaml` 之下，叫做內建層。登錄表標為 `operator`（平台不主張值、要部署方自己校準）的鍵也在內建層，值是 off（見下方「平台不給值的鍵」）；`_critical` 鍵不在內建層。
 
 **為什麼**：在此之前，平台的預設值要由 `da-tools init` 連數字複製進客戶的根目錄 `_defaults.yaml`。那份檔案之後歸客戶所有，平台新增的預設啟用鍵與重新校準的值都進不來，對應的告警不會響，也沒有錯誤訊息。Helm chart 的值隨 chart 升級、客戶只寫差異，conf.d 這一側沒有同樣的機制。現在客戶的樹只放覆寫與退出，預設值跟著讀取端出貨：`da-tools init` 與 `da-tools scaffold` 產生的根 `_defaults.yaml` 不寫這些鍵，註解只說明下表的寫法、不列數字（寫進註解的數字一樣會過期；現值由 `da-tools validate-config` 的 `platform_defaults` 列回答）。既有的樹裡與內建值相同的數字是複製品，那一列會註明；`da-tools migrate-builtin-defaults` 刪掉它們，判斷一個值是不是複製品的方式是刪掉後各租戶送出的列不變。
 
@@ -337,13 +338,28 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 內建層對每個租戶都給值，不看部署裡有沒有裝對應的規則包：多一列不等於多一條告警，告警要響還需要規則包已部署、指標存在。Helm chart 的 `thresholdConfig.defaults` 照舊渲染這些值，它們在 ConfigMap 裡算根目錄寫的數字。
 
+**平台不給值的鍵：內建層給 off。** 登錄表標 `operator` 的鍵在內建層的值是 off：它算「根目錄 `defaults:` 有值」，所以上面那條規則照樣適用——租戶、profile、子目錄給的值都送出，租戶寫的 `<鍵>_critical` 也送 critical 列，即使租戶沒給基底值；但 off 本身不送基底列，也不關掉整族。客戶的根目錄因此不必再把這些鍵寫進 `defaults:` 或列在 `optional_overrides:`，租戶才寫得動它們。根目錄給數字照舊蓋過 off，寫 `"disable"` 照下方「根目錄的 `"disable"`」整族關閉。兩點與有數字的鍵不同：這些鍵的 `expires:` 不生效（過期等於退回 off，告警會悄悄消失，所以值過了 `expires:` 照送；tenant-api 寫入時擋下，已在磁碟上的由 exporter 每次載入設定時記一行 WARN）；`validate-config` 的 `platform_defaults` 列把它們按規則包分行列出，附設定了門檻或 `disable` 的租戶數（`0/N` 表示這個鍵的告警對所有租戶都不會響）。
+
+例：根目錄 `_defaults.yaml` 只寫 `defaults: {jvm_threads: "disable"}`，租戶檔：
+
+```yaml
+tenants:
+  t1:
+    redis_connected_clients: "200"
+    redis_replication_lag_critical: "60"
+    jvm_threads: "500"
+  t2: {}
+```
+
+`da-guard served-values` 給 `t1` 的 redis 與 jvm 鍵（節錄）：`redis_connected_clients` 200、severity `warning`；`redis_replication_lag_critical` 60、severity `critical`（基底沒有值，critical 照送）；`jvm_threads` 500（根目錄整族關閉，租戶給了值就回來）。`t2` 這兩個規則包的鍵一列都沒有。da-guard 結束碼 0。
+
 **根目錄的 `"disable"`**：「關掉」在每一層都是同一個寫法。根目錄寫 `<鍵>: "disable"`，每個租戶都繼承它，與子目錄 `_defaults.yaml` 寫 `"disable"` 的效果相同，只是往上一層：整族關閉（基底、`<鍵>_critical`、維度鍵，[ADR-038](038-unread-keys-judged-by-readers.md) 決定 8）；子目錄、profile 或租戶自己給了值，那個範圍的整族就回來，包括租戶寫的 `<鍵>_critical`；租戶自己的 `"disable"` 過期後，落回繼承來的根目錄 `"disable"`，不是平台值。租戶檔裡的 `<鍵>_critical` 或維度鍵因此被關掉時，da-guard 的鍵判決報 `disable_cascade` 警告，不擋。`validate-config` 的 `platform_defaults` 列把這個鍵標為 `opted_out`。
 
 根目錄的 `"disable"` 比子目錄嚴格：
 
 - **只收 `disable` 這個字**（大小寫不拘）。子目錄把 `false`、`off`、`disabled` 也讀成停用；根目錄收這些別名的話，`helm --set …=false` 會靜靜關掉整棵樹的一族。在根目錄它們是讀不了的值：da-guard 以 `root_default_refused` 報錯（結束碼 1），該鍵照送平台值。
 - **不收排程與 `expires:`**。根目錄的值只能是純量；寫成排程的根目錄檔整份讀不了，內建層撤掉（上表）。限時關閉寫在子目錄或租戶檔。
-- **只對內建層給值的鍵有效**。其他鍵照決策 4 是讀不了的值。
+- **只對內建層裡的鍵有效**（有數字的鍵與 off 的鍵）。其他鍵照決策 4 是讀不了的值。
 - **根目錄不得同時給同一族的值**。根目錄寫了 `<鍵>: "disable"`，又給 `<鍵>{…}` 值時，那個值跟著基底一起關掉，送不到任何沒自己給基底值的租戶；又給 `<鍵>_critical` 值時，它在根目錄是一個獨立的閾值（決策 3），基底關掉了它照送。兩種都是自相矛盾，da-guard 以 `root_disable_family_value` 報錯，結束碼 1。
 
 根目錄的 `optional_overrides:`（宣告「平台認得這個鍵、但不給值」的鍵名清單）不影響內建層。根目錄 `defaults:` 沒寫這個預設啟用鍵（或寫 `null`）卻把它列在裡面時，da-guard 以 `root_optional_builtin` 報錯，結束碼 1：列名關不掉這條告警，要整棵樹關掉就在根目錄 `defaults:` 寫 `"disable"`。
@@ -362,7 +378,7 @@ tenants:
 
 全平台退出：在同一個根目錄 `defaults:` 加一行 `pg_replication_lag: "disable"`，`t1` 的 `pg_replication_lag` 與 `pg_replication_lag_critical` 兩列消失（租戶的 critical 跟著基底一起關），其餘的列不變，da-guard 結束碼 0。
 
-**內建表怎麼產生**：`scripts/tools/lint/check_threshold_registry.py --regen` 從登錄表生成 Go 原始碼（`components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go`），三個讀取端從同一份原始碼編譯；登錄表改了沒有重新生成時，`--ci` 檢查失敗。這張表以摘要命名：它每一行 `鍵=值` 依鍵排序後的 SHA-256 前 12 個十六進位字元。
+**內建表怎麼產生**：`scripts/tools/lint/check_threshold_registry.py --regen` 從登錄表生成 Go 原始碼（`components/threshold-exporter/app/pkg/config/builtin_defaults_gen.go`），三個讀取端從同一份原始碼編譯；登錄表改了沒有重新生成時，`--ci` 檢查失敗。這張表以摘要命名：有數字的鍵每個一行 `鍵=值`、off 的鍵每個一行 `鍵=off`，依鍵排序後的 SHA-256 前 12 個十六進位字元。
 
 **改動內建表是 breaking change。** 改值、新增或移除預設啟用鍵，都會在客戶的 repo 沒有任何 diff 的情況下改變告警行為。所以 `check_threshold_registry.py --ci` 要求新表的摘要出現在一份標 `⚠️ breaking` 的 `changelog.d/` 片段裡（或已發布的 `CHANGELOG.md`），摘要變了，舊片段就不算數。
 
@@ -374,7 +390,7 @@ tenants:
 | exporter 比規則包新 | 新增的鍵多出沒有規則讀的列；重新校準過的值由舊規則照讀 |
 | CI 的 da-guard 或 tenant-api 比部署中的 exporter 新 | 靠內建層的樹或寫入在檢查端通過，exporter 卻不送那些列（[ADR-036](036-single-parser-effective-config.md) §6） |
 
-**摘要與每個鍵的處理在哪裡讀得到**：`da-tools validate-config` 的 `platform_defaults` 列第一行印出 da-tools 帶的內建表摘要，之後每個預設啟用鍵一行，寫出這棵樹怎麼處理它：`builtin`（根目錄沒給值，由內建層給平台值，附 `/metrics` 送這個值的租戶數）、`overridden`（根目錄給了數字，附那個數與平台值）或 `opted_out`（根目錄寫了 `"disable"`）。答案取自 `da-guard effective` 輸出的 `builtin_defaults`，validate-config 不另讀登錄表。
+**摘要與每個鍵的處理在哪裡讀得到**：`da-tools validate-config` 的 `platform_defaults` 列第一行印出 da-tools 帶的內建表摘要，之後每個預設啟用鍵一行，寫出這棵樹怎麼處理它：`builtin`（根目錄沒給值，由內建層給平台值，附 `/metrics` 送這個值的租戶數）、`overridden`（根目錄給了數字，附那個數與平台值）或 `opted_out`（根目錄寫了 `"disable"`）；再來每個規則包一行，列出 off 的鍵（見上方「平台不給值的鍵」）。答案取自 `da-guard effective` 輸出的 `builtin_defaults`，validate-config 不另讀登錄表。
 
 **執行中的元件送出的訊號**：exporter 送 `da_config_builtin_defaults_info{digest}`（它編譯進去的表的摘要），以及每個預設啟用鍵的 `da_config_builtin_default_state{key,state}`，不帶租戶標籤；`state` 除了上面三種，還有 `withheld`（根目錄 `_defaults.yaml` 讀不了，內建層撤掉）。每個鍵的狀態與 `da-guard effective` 的 `builtin_defaults` 出自同一個推導。tenant-api 送 `tenant_api_builtin_defaults_info{digest}`。平台規則包帶一條記錄規則 `rule_pack_builtin_defaults_info{rulepack_digest}`，是生成它的那份登錄表的摘要（`--regen` 寫入，`--ci` 在它過期時失敗），並出貨告警 `BuiltinDefaultsDigestMismatch`：被 scrape 的 exporter 或 tenant-api 的摘要與它不同、或沒送摘要（內建層之前的版本，標為 `digest="none"`），持續 30 分鐘就觸發（依元件與摘要分組，pod 換了 IP 不重算）。告警文字寫出兩邊的摘要，並依上表說明哪一邊較新會怎樣。同一個 Prometheus 載入了兩份摘要不同的平台規則包（例如舊的 ConfigMap 與新的 PrometheusRule 並存）時，上一條對符合任一份的元件不響，改由 `BuiltinDefaultsRulePackDigestsDiffer` 觸發。⚠️ 這條告警只隨平台規則包出貨：threshold-exporter 的 Helm chart 不出貨規則包，沒有部署平台規則包的環境沒有這條告警，要自己比對這兩個指標與 `da-guard effective` 的摘要。
 

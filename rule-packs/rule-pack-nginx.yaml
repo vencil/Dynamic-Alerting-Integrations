@@ -258,7 +258,7 @@ groups:
   # The platform ships no value for some keys this pack reads; until the
   # tenant (or the platform's conf.d) writes one, the alert comparing against
   # it never fires. threshold-exporter serves user_threshold_unset{tenant,
-  # pack, key, fix} for each such key that serves no threshold and is not
+  # pack, key} for each such key that serves no threshold and is not
   # disabled, for tenants whose state filter unset_thresholds is on (off by
   # default); this names them for a tenant whose nginx exporter is answering.
   # The expr is generated from scripts/tools/_lib_exporter_presence.py —
@@ -283,10 +283,10 @@ groups:
         annotations:
           summary: "{{ $labels.key }} has no threshold for {{ $labels.tenant }}: the alert on it stays silent"
           summary_zh: "{{ $labels.tenant }} 沒有設定 {{ $labels.key }}：讀它的告警不會響"
-          platform_summary: "{{ $labels.key }}: no threshold, so its alert never fires (fix: {{ $labels.fix }})"
-          platform_summary_zh: "{{ $labels.key }}：沒有門檻值，讀它的告警不會響（處理方：{{ $labels.fix }}）"
-          description: "{{ if eq $labels.fix \"platform\" }}The platform does not declare {{ $labels.key }}, so a tenant value for it is not read and the {{ $labels.pack }} alert that reads it never fires. The platform must add it to the root defaults or optional_overrides; write \"disable\" to end this notice.{{ else }}No threshold is served for {{ $labels.key }}, so the {{ $labels.pack }} alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice.{{ end }}"
-          description_zh: "{{ if eq $labels.fix \"platform\" }}平台沒有宣告 {{ $labels.key }}，租戶寫的值不會被讀，{{ $labels.pack }} 讀它的告警因此永遠不會響。要由平台把它加進根層的 defaults 或 optional_overrides；寫 \"disable\" 可結束這則提醒。{{ else }}{{ $labels.key }} 沒有送出任何門檻值，{{ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。{{ end }}"
+          platform_summary: "{{ $labels.key }}: no threshold, so its alert never fires"
+          platform_summary_zh: "{{ $labels.key }}：沒有門檻值，讀它的告警不會響"
+          description: "No threshold is served for {{ $labels.key }}, so the {{ $labels.pack }} alert that reads it never fires. Write a threshold to arm it, or \"disable\" to keep it off and end this notice."
+          description_zh: "{{ $labels.key }} 沒有送出任何門檻值，{{ $labels.pack }} 讀它的告警因此永遠不會響。寫一個門檻值就會啟用；寫 \"disable\" 則維持關閉並結束這則提醒。"
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

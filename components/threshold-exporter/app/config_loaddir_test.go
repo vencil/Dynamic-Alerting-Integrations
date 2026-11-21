@@ -110,7 +110,7 @@ tenants:
 	cfg := mgr.GetConfig()
 
 	// The root's 3, plus the built-in keys (#3832) it does not write.
-	if want := 3 + builtinKeysNotIn("container_cpu"); len(cfg.Defaults) != want {
+	if want := 3 + layerKeysNotIn("container_cpu", "mysql_threads_running"); len(cfg.Defaults) != want {
 		t.Errorf("expected %d defaults, got %d", want, len(cfg.Defaults))
 	}
 	if len(cfg.StateFilters) != 2 {

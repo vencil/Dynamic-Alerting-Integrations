@@ -481,14 +481,15 @@ func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []conf
 	}
 }
 
-// collectUnsetThresholds emits user_threshold_unset{tenant, pack, key, fix}=1
+// collectUnsetThresholds emits user_threshold_unset{tenant, pack, key}=1
 // for every operator-supplied threshold key that serves a subscribed tenant
 // no threshold (#1200 D-A A3, #1175; the judgement and the subscription are
 // config.UnsetThresholdsAt). Each rule pack joins its own keys with the
 // presence of its exporter for the tenant and raises
 // <Pack>ThresholdNotConfigured (info, e.g. RedisThresholdNotConfigured): the
-// alert on that key has no threshold and stays silent. `fix` says who can arm
-// it: the tenant (the root declares the key) or the platform (it does not).
+// alert on that key has no threshold and stays silent. The tenant arms it:
+// the built-in layer values every such key off, so a tenant value is read
+// (#4163).
 //
 // Not counted against max_metrics_per_tenant (that cap is on user_threshold
 // rows): at most one series per generated key per subscribed tenant.
@@ -500,12 +501,12 @@ func (c *Collector) collectUnsetThresholds(ch chan<- prometheus.Metric, unset []
 		"user_threshold_unset",
 		"Always 1: a threshold key the platform ships no value for that serves this tenant no threshold and that it "+
 			"does not disable; only tenants whose state filter unset_thresholds is on. The alert reading it stays "+
-			"silent; fix names who can arm it (#1200 D-A A3).",
-		[]string{"tenant", "pack", "key", "fix"},
+			"silent until the tenant writes a threshold or disable (#1200 D-A A3, #4163).",
+		[]string{"tenant", "pack", "key"},
 		nil,
 	)
 	for _, u := range unset {
-		m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, 1.0, u.Tenant, u.Pack, u.Key, u.Fix)
+		m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, 1.0, u.Tenant, u.Pack, u.Key)
 		if err != nil {
 			c.logf("WARN: failed to create user_threshold_unset metric for tenant=%s key=%s: %v", u.Tenant, u.Key, err)
 			continue

@@ -174,6 +174,26 @@ func TestValidate_TenantOnlyMetricBody(t *testing.T) {
 	}
 }
 
+// TestValidate_RefusesExpiresOnAKeyValuedOffByTheBuiltinLayer (#4163): a key
+// the platform ships no value for is in the built-in layer, valued off, so a
+// tenant writes it with no listing at the root — but its `expires:` would
+// lapse to off and take the alert away in silence, so the write check that
+// Writer.Write blocks on refuses it, as it refuses one on a declared key. The
+// same key without `expires:` is a clean write.
+func TestValidate_RefusesExpiresOnAKeyValuedOffByTheBuiltinLayer(t *testing.T) {
+	t.Parallel()
+	dir := pilotDefaultsDir(t) // the root writes no redis key
+	ok := "tenants:\n  db-a:\n    redis_connected_clients: \"200\"\n"
+	if errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), ok); len(errs) != 0 {
+		t.Fatalf("a value for a key the built-in layer values off should validate, got: %v", errs)
+	}
+	bad := "tenants:\n  db-a:\n    redis_connected_clients:\n      default: \"200\"\n      expires: \"2099-01-01T00:00:00Z\"\n"
+	errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), bad)
+	if joined := strings.Join(errs, "; "); !strings.Contains(joined, "`expires:` on \"redis_connected_clients\" is refused") {
+		t.Fatalf("expires on an off key: errors %v, want the refusal naming the key", errs)
+	}
+}
+
 // TestValidate_RejectsNonTenantRootKeys is the #705 fold-in guard: a body that
 // carries any top-level key other than `tenants` (a stray defaults/state_filters/
 // profiles block, or a typo) must be rejected at the write boundary, so the API

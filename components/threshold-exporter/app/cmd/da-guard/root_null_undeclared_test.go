@@ -163,10 +163,13 @@ func TestGuard_RootNullOneFindingPerCause(t *testing.T) {
 			"_defaults.yaml": rootNullDefaults,
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections: disable\n",
 		}, findingkind.Kind{}, "", ""},
+		// #4163: a root null is no write, so a key of the built-in layer
+		// keeps the layer's value — off for the alias pair — and the
+		// tenant's value is read: nothing for the root null to cause.
 		{"root legacy null, tenant canonical", map[string]string{
 			"_defaults.yaml": "defaults:\n  " + aliasLegacy + ": null\n  mysql_slow_queries: 5\n",
 			"tx.yaml":        "tenants:\n  tx:\n    " + aliasCanon + ": 50\n",
-		}, findingkind.FindingRootDefaultNullUndeclared, aliasCanon, "tx"},
+		}, findingkind.Kind{}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -185,14 +188,13 @@ func TestGuard_RootNullOneFindingPerCause(t *testing.T) {
 }
 
 // The critical tier (#2518): a tenant-side `<base>_critical` is served as
-// <base>'s critical row only when the root `_defaults.yaml` holds <base>. A
-// root null on the base (either spelling) therefore drops it, and the finding
-// names it — from the resolver's own entry test and base lookup, not a guard
-// string rule. The fix is a number for the base at the root (that also serves
-// the base at warning severity); optional_overrides does not serve the row.
-// A `_critical` whose base the root never wrote is not root-null-caused and
-// is not reported. The product: root base state × the tenant key's spelling
-// × where the tenant side gets it (tenant file, platform entry, profile).
+// <base>'s critical row only when the root defaults hold <base>. #4163: the
+// built-in layer values the alias pair's base off, so whatever the root
+// writes for it — a number, null (no write), nothing, a listing under
+// optional_overrides — the critical row is served and no root null is the
+// cause of anything. The product: root base state × the tenant key's
+// spelling × where the tenant side gets it (tenant file, platform entry,
+// profile). The root-null finding itself is TestGuard_RootNullCriticalFixServesTheRow's.
 func TestGuard_RootNullCriticalRow(t *testing.T) {
 	t.Parallel()
 	C, L := aliasCanon, aliasLegacy
@@ -203,10 +205,10 @@ func TestGuard_RootNullCriticalRow(t *testing.T) {
 	}{
 		{"rC30", "  " + C + ": 30\n", false, true},
 		{"rL30", "  " + L + ": 30\n", false, true},
-		{"rCnull", "  " + C + ": null\n", true, false},
-		{"rLnull", "  " + L + ": null\n", true, false},
-		{"r-", "", false, false},
-		{"rCnull+oo", "  " + C + ": null\noptional_overrides: [" + C + "]\n", true, false},
+		{"rCnull", "  " + C + ": null\n", true, true},
+		{"rLnull", "  " + L + ": null\n", true, true},
+		{"r-", "", false, true},
+		{"rCnull+oo", "  " + C + ": null\noptional_overrides: [" + C + "]\n", true, true},
 	}
 	for _, r := range roots {
 		for _, key := range []string{C + "_critical", L + "_critical"} {
@@ -251,12 +253,8 @@ func TestGuard_RootNullCriticalRow(t *testing.T) {
 					if src == "profile" {
 						field = C + "_critical"
 					}
-					if r.null {
-						if len(named) != 1 || named[0].Field != field || named[0].TenantID != "tx" {
-							t.Errorf("root_default_null_undeclared = %+v, want one for tx / %s", named, field)
-						}
-					} else if len(named) != 0 {
-						t.Errorf("root_default_null_undeclared = %+v, want none (no root null)", named)
+					if len(named) != 0 {
+						t.Errorf("root_default_null_undeclared = %+v, want none (the built-in layer values %s's base; root null %v)", named, field, r.null)
 					}
 				})
 			}
@@ -294,37 +292,34 @@ func TestGuard_RootNullCriticalFixServesTheRow(t *testing.T) {
 	}
 }
 
-// The message quotes what the root file holds (blind review B2): with the
-// root writing one spelling as null and the tenant the other, it names the
-// root's spelling — a grep of the root for the quoted text finds it.
+// The message quotes what the root file holds (blind review B2): it names
+// the root's spelling, so a grep of the root for the quoted text finds it.
+// #4163: the one alias pair is a key of the built-in layer, so a root null of
+// either spelling is no cause (the layer values it off and the tenant's value
+// is read) and no message names "the other spelling" any more; the
+// same-spelling message is kept on a key outside the layer.
 func TestGuard_RootNullMessageNamesTheRootSpelling(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		name, root, tenant, field, want, deny string
-	}{
-		{"root canonical, tenant legacy",
-			"  " + aliasCanon + ": null\n", "    " + aliasLegacy + ": 70\n", aliasLegacy,
-			"writes `" + aliasCanon + "` (the other spelling of `" + aliasLegacy + "`) as null", "writes `" + aliasLegacy + "`"},
-		{"root legacy, tenant canonical critical",
-			"  " + aliasLegacy + ": null\n", "    " + aliasCanon + "_critical: 90\n", aliasCanon + "_critical",
-			"writes `" + aliasLegacy + "` (the other spelling of `" + aliasCanon + "`) as null", "writes `" + aliasCanon + "` as null"},
-		{"same spelling",
-			"  " + aliasCanon + ": null\n", "    " + aliasCanon + ": 70\n", aliasCanon,
-			"writes `" + aliasCanon + "` as null", "other spelling"},
+	_, got := guardFindingsOf(t, map[string]string{
+		"_defaults.yaml": rootNullDefaults,
+		"sub/tx.yaml":    "tenants:\n  tx:\n    mysql_connections: 70\n",
+	})
+	if len(got) != 1 || got[0].Kind != findingkind.FindingRootDefaultNullUndeclared.String() || got[0].Field != "mysql_connections" {
+		t.Fatalf("findings = %+v, want one root_default_null_undeclared for mysql_connections", got)
+	}
+	if m := got[0].Message; !strings.Contains(m, "writes `mysql_connections` as null") || strings.Contains(m, "other spelling") {
+		t.Errorf("message = %q; want it to name the root's spelling", m)
+	}
+	for name, tc := range map[string]struct{ root, tenant string }{
+		"root canonical, tenant legacy":          {"  " + aliasCanon + ": null\n", "    " + aliasLegacy + ": 70\n"},
+		"root legacy, tenant canonical critical": {"  " + aliasLegacy + ": null\n", "    " + aliasCanon + "_critical: 90\n"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			_, got := guardFindingsOf(t, map[string]string{
-				"_defaults.yaml": "defaults:\n  mysql_slow_queries: 5\n" + tc.root,
-				"sub/tx.yaml":    "tenants:\n  tx:\n" + tc.tenant,
-			})
-			if len(got) != 1 || got[0].Kind != findingkind.FindingRootDefaultNullUndeclared.String() || got[0].Field != tc.field {
-				t.Fatalf("findings = %+v, want one root_default_null_undeclared for %s", got, tc.field)
-			}
-			if m := got[0].Message; !strings.Contains(m, tc.want) || strings.Contains(m, tc.deny) {
-				t.Errorf("message = %q; want it to contain %q and not %q", m, tc.want, tc.deny)
-			}
-		})
+		if _, got := guardFindingsOf(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_slow_queries: 5\n" + tc.root,
+			"sub/tx.yaml":    "tenants:\n  tx:\n" + tc.tenant,
+		}); len(got) != 0 {
+			t.Errorf("%s: findings = %+v, want none (#4163: the layer values the alias pair)", name, got)
+		}
 	}
 }
 

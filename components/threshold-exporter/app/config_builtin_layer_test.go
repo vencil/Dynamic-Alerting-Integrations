@@ -149,8 +149,9 @@ func TestBuiltinLayer_FlatIncrementalReloadWithholdsIt(t *testing.T) {
 		if err := m.Load(); err != nil {
 			t.Fatal(err)
 		}
-		if d := defaultsOf(m); len(d) != len(config.BuiltinDefaults()) {
-			t.Fatalf("cold load: %d Defaults, want the built-in %d", len(d), len(config.BuiltinDefaults()))
+		// #4163: the whole layer — the table of values and the off table.
+		if d := defaultsOf(m); len(d) != layerKeysNotIn() {
+			t.Fatalf("cold load: %d Defaults, want the built-in layer's %d", len(d), layerKeysNotIn())
 		}
 		if err := os.Symlink("nowhere.yaml", filepath.Join(dir, "_defaults.yaml")); err != nil {
 			t.Skipf("symlink: %v", err)

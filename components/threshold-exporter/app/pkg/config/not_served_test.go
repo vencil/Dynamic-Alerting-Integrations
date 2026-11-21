@@ -173,12 +173,14 @@ func TestNotServed_Table(t *testing.T) {
 			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  " + retiredCPU + ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
 			"sub/tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
 			"sub/tw.yaml":        "tenants:\n  tw:\n    mysql_connections: \"70\"\n",
-			// #3378: the root declares no spelling of mysql_threads_running,
-			// so no row phase reads tx's value of it — unconsumed, under both
-			// spellings the effective config shows; still no value_rejected.
+			// #4163: the root writes no spelling of mysql_threads_running, but
+			// the built-in layer values it off, so the base phase reads tx's
+			// value and drops it as unreadable (no default to fall back to) —
+			// under both spellings the effective config shows; still no
+			// value_rejected.
 		}, want: map[string]NotServedKey{
-			"mysql_threads_running": ns(NotServedUnconsumed, "_platform.yaml"),
-			retiredCPU:              ns(NotServedUnconsumed, "sub/_defaults.yaml"),
+			"mysql_threads_running": ns(NotServedValueUnparsedDropped, "_platform.yaml"),
+			retiredCPU:              ns(NotServedValueUnparsedDropped, "sub/_defaults.yaml"),
 		}},
 		{name: "F3 retired spelling in the tenant", files: map[string]string{
 			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_threads_running: 80\n",

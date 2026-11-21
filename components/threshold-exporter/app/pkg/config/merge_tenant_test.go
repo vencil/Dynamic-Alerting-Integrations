@@ -51,8 +51,8 @@ func TestMergeTenantWithRootDefaults_NoDefaultsFile(t *testing.T) {
 	body := []byte("tenants:\n  db-a:\n    container_cpu: \"70\"\n")
 	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
 
-	if !reflect.DeepEqual(merged.Defaults, BuiltinDefaults()) {
-		t.Errorf("Defaults without a _defaults.yaml = %v, want the built-in table %v", merged.Defaults, BuiltinDefaults())
+	if !sameDefaults(merged.Defaults, builtinLayer()) {
+		t.Errorf("Defaults without a _defaults.yaml = %v, want the built-in layer %v", merged.Defaults, builtinLayer())
 	}
 	if warnings := merged.ValidateTenantKeys().Errors; len(warnings) != 0 { // #1231 c2 accessor
 		t.Errorf("a key name is judged here: %q", warnings)
@@ -270,7 +270,11 @@ func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
 			}
 			parsed := MergeParsedTenantWithRootDefaults(dir, tcfg)
 			bytewise := MergeTenantWithRootDefaults(dir, tt.tenantID, []byte(tt.body))
-			if !reflect.DeepEqual(parsed, bytewise) {
+			// The config by sameConfig: the built-in layer's off value
+			// (#4163) is a NaN, never == itself; the rest by DeepEqual.
+			p, b := parsed, bytewise
+			p.ThresholdConfig, b.ThresholdConfig = ThresholdConfig{}, ThresholdConfig{}
+			if !sameConfig(parsed.ThresholdConfig, bytewise.ThresholdConfig) || !reflect.DeepEqual(p, b) {
 				t.Errorf("parsed variant diverged from byte variant:\n parsed = %+v\n bytes  = %+v", parsed, bytewise)
 			}
 			// Absolute pins on the parsed result itself (independent of the byte

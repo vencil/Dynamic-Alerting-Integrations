@@ -25,24 +25,21 @@ package config
 //   - the resolver serves a row for it (its base or a dimensional spelling,
 //     any severity — an inline `5:critical` arms the critical alert) at some
 //     part of the tenant's UTC day, judged before the max_metrics_per_tenant
-//     cut: a value the resolver refuses ("abc", `disable:critical`), a value
-//     for a key the root does not declare, or only a `_critical` serves
-//     nothing and is NOT configured; or
+//     cut — a `<key>_critical` row included, which arms the critical alert
+//     (#4163: the built-in layer values every key of the table, so a
+//     tenant's `_critical` is served even with no base value). A value the
+//     resolver refuses ("abc", `disable:critical`) or a value for a key the
+//     root does not declare serves nothing and is NOT configured; or
 //   - the tenant writes `disable` for it (in any window): the tenant does not
-//     want that alert, and the notice for it ends. A root `disable` is no
-//     opt-out: the root keeps it as the same NaN as any value it refuses
-//     (root_defaults.go), so the two cannot be told apart here.
+//     want that alert, and the notice for it ends; or
+//   - the root `defaults:` writes it `disable` (RootDisabledDefault, legal
+//     for every key of the built-in layer since #4163): the platform switched
+//     it off for every tenant that gives it no value.
 //
 // Cost: only the generated keys are resolved — the defaults and the tenant
 // keys whose base is one of them — so a subscribed tenant costs its own
 // operator keys, at now and at each window start of those keys, not a
 // second resolve of everything it writes (BenchmarkUnsetThresholdsAt).
-//
-// Each notice says who can fix it (`fix`): `tenant` when the root declares
-// the key (in `defaults:`, `optional_overrides:` or `dimensions:` — under the
-// last only a labelled value is read), so a tenant value is read; `platform`
-// when it does not, so a tenant value is not read until the platform declares
-// the key.
 
 import (
 	"sort"
@@ -52,12 +49,6 @@ import (
 
 // UnsetThresholdsFilter is the state filter that switches the notice on.
 const UnsetThresholdsFilter = "unset_thresholds"
-
-// Who can arm an unset key (the `fix` label).
-const (
-	UnsetFixTenant   = "tenant"
-	UnsetFixPlatform = "platform"
-)
 
 // unsetThresholdKey is one line of the generated table: a key the platform
 // does not ship a value for, and the pack whose rules read it.
@@ -71,7 +62,6 @@ type UnsetThreshold struct {
 	Tenant string
 	Pack   string
 	Key    string
-	Fix    string // UnsetFixTenant or UnsetFixPlatform
 }
 
 // UnsetThresholdKeys is a copy of the generated table as key → pack.
@@ -129,7 +119,7 @@ func (c *ThresholdConfig) UnsetThresholdsAt(now time.Time, subscribed map[string
 		all, _ := canonicalizeOverrides(c.Tenants[t])
 		overrides := map[string]ScheduledValue{}
 		for k, sv := range all {
-			if inTable[keyBase(k)] {
+			if inTable[unsetFamilyBase(k)] {
 				overrides[k] = sv
 			}
 		}
@@ -141,20 +131,15 @@ func (c *ThresholdConfig) UnsetThresholdsAt(now time.Time, subscribed map[string
 			c.resolveBaseRows(t, defaults, overrides, at, sink, quiet, nil)
 			c.resolveDimensionalRows(t, defaults, overrides, at, sink, quiet, nil)
 			c.resolveDeclaredRows(t, defaults, canonOptional, overrides, at, sink, quiet, nil)
+			// #4163: a `<key>_critical` row arms the critical alert — the
+			// sink is handed its base key, so it counts as configured.
+			c.resolveCriticalRows(t, defaults, overrides, at, sink, quiet, nil)
 		}
 		for _, e := range unsetThresholdKeys {
-			if configured[e.key] || switchedOffKey(overrides, e.key) {
+			if configured[e.key] || switchedOffKey(overrides, e.key) || RootDisabledDefault(defaults[e.key]) {
 				continue
 			}
-			fix := UnsetFixPlatform
-			if _, declared := canonOptional[e.key]; declared {
-				fix = UnsetFixTenant
-			} else if _, valued := defaults[e.key]; valued {
-				fix = UnsetFixTenant
-			} else if _, dimensioned := c.Dimensions[e.key]; dimensioned {
-				fix = UnsetFixTenant // a labelled value (`key{label="v"}`) is read
-			}
-			out = append(out, UnsetThreshold{Tenant: t, Pack: e.pack, Key: e.key, Fix: fix})
+			out = append(out, UnsetThreshold{Tenant: t, Pack: e.pack, Key: e.key})
 		}
 	}
 	if len(out) == 0 {
@@ -183,6 +168,17 @@ func dayInstants(now time.Time, overrides map[string]ScheduledValue) []time.Time
 		}
 	}
 	return out
+}
+
+// unsetFamilyBase is the base key of key's family: its head before `{`,
+// without a `_critical` suffix — so a tenant's `<key>_critical` reaches the
+// critical phase beside its base (#4163).
+func unsetFamilyBase(key string) string {
+	head := keyBase(key)
+	if base, critical := criticalRowBase(head); critical {
+		return base
+	}
+	return head
 }
 
 // keyBase is the key a config key serves: its head before `{`.

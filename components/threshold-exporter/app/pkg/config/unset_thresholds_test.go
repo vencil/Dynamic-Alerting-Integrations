@@ -8,14 +8,14 @@ import (
 	"testing"
 )
 
-// unsetOf is key → fix of the notices UnsetThresholdsAt gives tenant at
+// unsetOf is key → pack of the notices UnsetThresholdsAt gives tenant at
 // fixedNow, the subscription read from cfg's own state filters.
 func unsetOf(cfg *ThresholdConfig, tenant string) map[string]string {
 	subs := UnsetThresholdsSubscribed(cfg.resolveStateFiltersAt(fixedNow, nil))
 	out := map[string]string{}
 	for _, u := range cfg.UnsetThresholdsAt(fixedNow, subs) {
 		if u.Tenant == tenant {
-			out[u.Key] = u.Fix
+			out[u.Key] = u.Pack
 		}
 	}
 	return out
@@ -140,12 +140,14 @@ func TestUnsetThresholds_WhatCountsAsConfigured(t *testing.T) {
 			"    oracle_wait_time_rate:\n      default: \"abc\"\n      overrides:\n        - window: \"01:00-02:00\"\n          value: \"disable\"\n", false},
 		{"a value the resolver refuses", decl, "    oracle_wait_time_rate: \"abc\"\n", true},
 		{"disable:critical is not a disable", decl, "    oracle_wait_time_rate: \"disable:critical\"\n", true},
-		{"only the _critical", decl, "    oracle_wait_time_rate_critical: \"9\"\n", true},
+		// #4163: the built-in layer values the key off, so a `_critical`
+		// alone is served and arms the critical alert.
+		{"only the _critical", decl, "    oracle_wait_time_rate_critical: \"9\"\n", false},
 		{"root defaults serves it", "defaults:\n  oracle_wait_time_rate: 5\n", "    redis_x: \"1\"\n", false},
 		{"an inline critical serves a row", decl, "    oracle_wait_time_rate: \"5:critical\"\n", false},
-		// A root disable is kept as the same NaN as a value the root refuses,
-		// so it is no opt-out; the tenant opts out with its own disable.
-		{"a root disable is no opt-out", decl + "defaults:\n  oracle_wait_time_rate: disable\n", "    redis_x: \"1\"\n", true},
+		// #4163: a root disable of a key of the built-in layer switches it
+		// off for every tenant that gives it no value: no notice.
+		{"a root disable switches it off", decl + "defaults:\n  oracle_wait_time_rate: disable\n", "    redis_x: \"1\"\n", false},
 		{"a root value it refuses", decl + "defaults:\n  oracle_wait_time_rate: abc\n", "    redis_x: \"1\"\n", true},
 	}
 	for _, tc := range cases {
@@ -162,23 +164,23 @@ func TestUnsetThresholds_WhatCountsAsConfigured(t *testing.T) {
 	}
 }
 
-// A key the root does not declare is not read from the tenant: writing a
-// value leaves it unset, with fix=platform; a declared one is fix=tenant.
-func TestUnsetThresholds_FixSaysWhoCanArmIt(t *testing.T) {
+// #4163: the built-in layer values every key of the table off, so a key the
+// root neither values nor declares is read from the tenant: a flat value
+// serves it, and only a key nothing serves is unset.
+func TestUnsetThresholds_TheBuiltinLayerMakesEveryKeySettable(t *testing.T) {
 	t.Parallel()
 	cfg := loadTree(t, map[string]string{
-		"_defaults.yaml": rootWith("disable", "optional_overrides: [oracle_wait_time_rate]\n"+
-			"dimensions:\n  jvm_memory: [instance]\n"),
-		"ta.yaml": tenantFile("    redis_replication_lag: \"30\"\n    jvm_memory: \"85\"\n"),
+		"_defaults.yaml": rootWith("disable", ""),
+		"ta.yaml":        tenantFile("    redis_replication_lag: \"30\"\n    jvm_memory_critical: \"95\"\n"),
 	})
 	got := unsetOf(cfg, "ta")
-	for key, want := range map[string]string{
-		"redis_replication_lag": UnsetFixPlatform, // written, not declared: not read
-		"jvm_memory":            UnsetFixTenant,   // dimensions declared: a labelled value is read (a flat one is not)
-		"oracle_wait_time_rate": UnsetFixTenant,
+	for key, wantUnset := range map[string]bool{
+		"redis_replication_lag": false, // flat value, nothing declared at the root: served
+		"jvm_memory":            false, // only its `_critical`: served
+		"oracle_wait_time_rate": true,  // nothing written
 	} {
-		if got[key] != want {
-			t.Errorf("%s fix = %q, want %q (unset %v)", key, got[key], want, got)
+		if _, unset := got[key]; unset != wantUnset {
+			t.Errorf("%s unset = %v, want %v (unset %v)", key, unset, wantUnset, got)
 		}
 	}
 }

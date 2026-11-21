@@ -553,7 +553,9 @@ def test_the_builtin_table_renders_armed_keys_only_sorted(tmp_path):
             '\t{"aa", 80},\n'
             '\t{"zz_long_key_name", 0.5},\n}\n') in text, text
     assert "mm_operator" not in text
-    digest = lib.builtin_defaults_digest({"aa": "80", "zz_long_key_name": "0.5"})
+    # #4163: the digest names the whole layer — the operator key is an
+    # `off` line of it, though not an entry of this table.
+    digest = lib.builtin_defaults_digest({"aa": "80", "mm_operator": "off", "zz_long_key_name": "0.5"})
     assert f'const builtinDefaultsDigest = "{digest}"\n' in text
     go = tmp_path / "gen.go"
     go.write_text(text, encoding="utf-8")
@@ -570,7 +572,7 @@ def test_the_platform_pack_carries_the_digest_the_components_are_built_with():
     components are compiled with names — so a pack and a component built
     from one registry compare equal in BuiltinDefaultsDigestMismatch."""
     doc = lib.load_registry()
-    digest = lib.builtin_defaults_digest(lib.builtin_defaults(doc))
+    digest = lib.builtin_layer_digest(doc)
     spec = next(s for s in lib.surface_specs(doc) if s["id"] == lib.PLATFORM_DIGEST_SURFACE_ID)
     assert f'rulepack_digest: "{digest}"' in spec["block"], spec["block"]
     with open(spec["path"], encoding="utf-8") as fh:
@@ -598,7 +600,7 @@ def test_the_promtool_test_digest_is_checked_and_rewritten(tmp_path):
     rewrite replaces the stale digest everywhere in the file while a made-up
     component digest stays."""
     doc = lib.load_registry()
-    digest = lib.builtin_defaults_digest(lib.builtin_defaults(doc))
+    digest = lib.builtin_layer_digest(doc)
     test = tmp_path / "t_test.yaml"
     stale = ('rulepack_digest: "aaaaaaaaaaaa"\n'
              "series: 'x{digest=\"aaaaaaaaaaaa\"}'\n"
@@ -709,6 +711,9 @@ def test_the_digest_names_the_table_content():
     for other in ({"fixture_a": n(81), "fixture_b": n(0.5)}, {"fixture_a": n(80)},
                   {"fixture_a2": n(80), "fixture_b": n(0.5)}):
         assert lib.builtin_defaults_digest(other) != "04515815be57"
+    # #4163: an off key is a `key=off` line, sorted with the rest — the
+    # literal the Go test pins for the same layer.
+    assert lib.builtin_defaults_digest({**base, "fixture_o": "off"}) == "eebfa434bc86"
 
 
 # ── value_counterexample (#1176) ──────────────────────────────────────────
@@ -823,7 +828,7 @@ def _announce_dirs(tmp_path, fragment: str | None, changelog: str = ""):
     frag = tmp_path / "changelog.d"
     frag.mkdir()
     (frag / "README.md").write_text(
-        "⚠️ breaking " + lib.builtin_defaults_digest(lib.builtin_defaults(lib.load_registry())),
+        "⚠️ breaking " + lib.builtin_layer_digest(lib.load_registry()),
         encoding="utf-8")  # the README never counts, whatever it says
     if fragment is not None:
         (frag / "3832-x.md").write_text(fragment, encoding="utf-8")
@@ -833,7 +838,7 @@ def _announce_dirs(tmp_path, fragment: str | None, changelog: str = ""):
 
 
 def _digest(doc=None):
-    return lib.builtin_defaults_digest(lib.builtin_defaults(doc or lib.load_registry()))
+    return lib.builtin_layer_digest(doc or lib.load_registry())
 
 
 def test_builtin_digest_unannounced_is_an_error(tmp_path):

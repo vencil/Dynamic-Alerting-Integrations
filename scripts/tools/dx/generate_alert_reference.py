@@ -92,8 +92,8 @@ RECOMMENDED_ACTIONS = {
     },
     # Unconfigured threshold (#1200 D-A A3)
     "ThresholdNotConfigured": {
-        "zh": "看標籤 fix：tenant＝在租戶設定寫入該 key 的門檻值即可啟用；platform＝請平台先在根層宣告這個 key。不需要這條告警就寫 \"disable\"，提醒隨之結束",
-        "en": "Check the fix label: tenant = write a threshold for the key in the tenant config to arm it; platform = the platform must declare the key at the root first. Write \"disable\" if the alert is not wanted, which also ends the notice",
+        "zh": "在租戶設定寫入該 key 的門檻值即可啟用，根層不必先宣告（#4163）。不需要這條告警就寫 \"disable\"，提醒隨之結束",
+        "en": "Write a threshold for the key in the tenant config to arm it; the root need not declare it first (#4163). Write \"disable\" if the alert is not wanted, which also ends the notice",
     },
     # Oracle PGA_AGGREGATE_LIMIT unset (#4044): a configuration notice, not a fault
     "PGALimitNotSet": {

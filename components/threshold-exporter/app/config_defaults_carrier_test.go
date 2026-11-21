@@ -74,7 +74,7 @@ profiles:
 	// the explanation for the smuggled keys' absence.
 	// The built-in layer (#3832) lies under the carrier's values; the
 	// question is which file's values joined it.
-	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 50}); !reflect.DeepEqual(cfg.Defaults, want) {
+	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 50}); !sameDefaults(cfg.Defaults, want) {
 		t.Errorf("GetConfig().Defaults = %v, want %v — only the defaults carrier may feed the global map", cfg.Defaults, want)
 	}
 	if _, ok := cfg.StateFilters["smuggled_filter"]; ok {
@@ -127,7 +127,7 @@ func TestRootCarrierPairIsOneFileOnEveryPlane(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 50, "disk_pct": 4}); !reflect.DeepEqual(m.GetConfig().Defaults, want) {
+	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 50, "disk_pct": 4}); !sameDefaults(m.GetConfig().Defaults, want) {
 		t.Errorf("flat Defaults = %v, want %v (the chain's carrier only)", m.GetConfig().Defaults, want)
 	}
 	if n := strings.Count(logBuf.String(), "defaults carriers"); n != 1 {
@@ -173,7 +173,7 @@ func TestRootCarrierPairIsOneFileOnEveryPlane(t *testing.T) {
 	if _, _, err := m.diffAndReload(); err != nil {
 		t.Fatalf("diffAndReload: %v", err)
 	}
-	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 90, "mem_pct": 70}); !reflect.DeepEqual(m.GetConfig().Defaults, want) {
+	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 90, "mem_pct": 70}); !sameDefaults(m.GetConfig().Defaults, want) {
 		t.Errorf("after removing _defaults.yaml, flat Defaults = %v, want %v", m.GetConfig().Defaults, want)
 	}
 }
@@ -289,7 +289,7 @@ func TestEditingTheUnselectedRootCarrierChangesNothing(t *testing.T) {
 	if err := watchReload(m); err != nil {
 		t.Fatalf("reload (after editing _defaults.yml): %v", err)
 	}
-	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 50}); !reflect.DeepEqual(m.GetConfig().Defaults, want) {
+	if want := withBuiltinDefaults(map[string]float64{"cpu_pct": 50}); !sameDefaults(m.GetConfig().Defaults, want) {
 		t.Errorf("after editing the unselected _defaults.yml, Defaults = %v, want %v", m.GetConfig().Defaults, want)
 	}
 }

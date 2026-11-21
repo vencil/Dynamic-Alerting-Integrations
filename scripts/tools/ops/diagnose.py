@@ -349,7 +349,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
         and one with neither is left out
       - profile_name: the profile the tenant is bound to, or None
       - declared: key NAMES the platform recognises but assigns no value to
-        (`optional_overrides:`, #1310; see `_declared_keys`)
+        (`optional_overrides:`, #1310; see `_declared_keys`), and the keys the
+        built-in layer values off that the tenant has no value for (#4163)
 
     ⛔ Two answers, side by side, never reconciled here: `resolved` is what
     /metrics serves (#2421 — a value it cannot read as a number, or whose
@@ -506,8 +507,26 @@ def chain_for(tenant: str, source: ChainSource) -> dict[str, object]:
         "resolved": resolved,
         "profile_name": te.profile,
         # settable, but with no platform value — see the docstring
-        "declared": _declared_keys(base, te.defaults_chain),
+        "declared": _declared_with_builtin_off(_declared_keys(base, te.defaults_chain),
+                                               tree, resolved),
     }
+
+
+def _declared_with_builtin_off(listed: list[str], tree, resolved: dict[str, object]) -> list[str]:
+    """*listed* (the root's `optional_overrides:`), then every key the
+    built-in layer values off (#4163: settable with no listing, no platform
+    value) that this tenant has no value for and the root neither lists nor
+    gives a number or `disable` — `da-guard effective`'s
+    `builtin_defaults.off`, state `off`. Empty for the off part when the
+    build gave no answer (builtin_defaults null)."""
+    out = list(listed)
+    seen = set(listed)
+    builtin = getattr(tree, "builtin_defaults", None)
+    for key, off in sorted(((builtin.off or {}) if builtin else {}).items()):
+        if off.state == "off" and key not in seen and key not in resolved:
+            out.append(key)
+            seen.add(key)
+    return out
 
 
 def _format_chain_summary(inheritance):

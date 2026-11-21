@@ -239,7 +239,11 @@ func TestGuard_NullOverrideIsNoWriteOnEveryLayer(t *testing.T) {
 									break
 								}
 							}
-							_, rootDeclares := root.writes()
+							// #4163: the built-in layer values the alias pair off,
+							// so the root declares it whatever it writes: a root
+							// null or nothing falls to off, and the topmost
+							// non-null layer is served.
+							rootDeclares := true
 
 							bad := false
 							if o.walker != want {
@@ -256,12 +260,11 @@ func TestGuard_NullOverrideIsNoWriteOnEveryLayer(t *testing.T) {
 							case !rootDeclares && want != noRow && !o.named:
 								bad = true
 								t.Errorf("%s: effective shows %s, /metrics serves nothing, and nothing names it", name, want)
-							case root.value == "null" && want != noRow && o.findings != 1:
-								// The root null is the cause: exactly one finding names it
-								// (subtree_default_undeliverable for a subtree-only value,
-								// root_default_null_undeclared for a tenant-side one).
+							case root.value == "null" && o.findings != 0:
+								// #4163: a root null of a key of the built-in layer
+								// leaves the layer's value, so it causes nothing.
 								bad = true
-								t.Errorf("%s: root null with effective %s: %d findings name it, want exactly 1", name, want, o.findings)
+								t.Errorf("%s: root null with effective %s: %d findings name it, want none", name, want, o.findings)
 							}
 							if o.redundant && o.served != without {
 								bad = true

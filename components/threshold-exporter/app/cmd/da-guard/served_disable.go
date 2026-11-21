@@ -345,7 +345,7 @@ func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet boo
 	// #1200 D-A A3: a user_threshold_unset series is served output too, so a
 	// disable that ends a subscribed tenant's notice switches something off.
 	for _, u := range reserved.Unset {
-		parts[u.Tenant] = append(parts[u.Tenant], "unset\x00"+u.Key+"\x00"+u.Fix)
+		parts[u.Tenant] = append(parts[u.Tenant], "unset\x00"+u.Key)
 	}
 	for t, p := range parts {
 		sort.Strings(p)

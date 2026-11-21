@@ -8,8 +8,9 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-// unsetSeries gathers /metrics for cfg and returns tenant → key → fix of the
-// user_threshold_unset series (#1200 D-A A3), checking pack and value.
+// unsetSeries gathers /metrics for cfg and returns tenant → key → pack of the
+// user_threshold_unset series (#1200 D-A A3), checking pack, value and that
+// the series carries no label but tenant, pack and key (#4163: no `fix`).
 func unsetSeries(t *testing.T, cfg *config.ThresholdConfig) map[string]map[string]string {
 	t.Helper()
 	reg := prometheus.NewRegistry()
@@ -29,13 +30,13 @@ func unsetSeries(t *testing.T, cfg *config.ThresholdConfig) map[string]map[strin
 			for _, lp := range m.GetLabel() {
 				l[lp.GetName()] = lp.GetValue()
 			}
-			if m.GetGauge().GetValue() != 1 || packs[l["key"]] != l["pack"] {
+			if m.GetGauge().GetValue() != 1 || packs[l["key"]] != l["pack"] || len(l) != 3 {
 				t.Errorf("%v: value %v / pack, want 1 / %q", l, m.GetGauge().GetValue(), packs[l["key"]])
 			}
 			if out[l["tenant"]] == nil {
 				out[l["tenant"]] = map[string]string{}
 			}
-			out[l["tenant"]][l["key"]] = l["fix"]
+			out[l["tenant"]][l["key"]] = l["pack"]
 		}
 	}
 	return out
@@ -43,7 +44,7 @@ func unsetSeries(t *testing.T, cfg *config.ThresholdConfig) map[string]map[strin
 
 // /metrics serves user_threshold_unset only for a tenant whose state filter
 // unset_thresholds is on, one series per key that serves it no threshold and
-// that it does not disable, with fix naming who can arm it.
+// that it does not disable.
 func TestCollector_ServesUnsetThresholdsToSubscribedTenants(t *testing.T) {
 	t.Parallel()
 	cfg := &config.ThresholdConfig{
@@ -64,8 +65,8 @@ func TestCollector_ServesUnsetThresholdsToSubscribedTenants(t *testing.T) {
 		t.Errorf("tb did not subscribe: no series, got %v", all["tb"])
 	}
 	got := all["ta"]
-	if got["redis_replication_lag"] != config.UnsetFixPlatform {
-		t.Errorf("redis_replication_lag (not declared): fix %q, want platform", got["redis_replication_lag"])
+	if _, ok := got["redis_replication_lag"]; !ok {
+		t.Errorf("redis_replication_lag (nothing written): want a series, got %v", got)
 	}
 	for _, configured := range []string{"oracle_wait_time_rate", "oracle_pga_usage_percent", "container_cpu"} {
 		if _, ok := got[configured]; ok {

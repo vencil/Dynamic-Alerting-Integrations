@@ -2221,6 +2221,14 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
     and the first line names the built-in table by its digest, which is how
     the exporter, tenant-api and da-tools are known to hold the same table.
 
+    Then one line per rule pack for the keys the platform ships no value for
+    (#4163), which the built-in layer values off: a tenant writes such a key
+    with no listing at the root. Each key shows how many tenants serve it a
+    threshold or switch it off, of all — `0/N` names a key whose alerts are
+    silent for every tenant; a pack the tree does not deploy reads that way
+    too, since which packs are deployed is decided where the rules are — or
+    the number or `disable` the root `defaults:` writes for it.
+
     Every answer is the reader's own, from one `da-guard effective` run
     (its `builtin_defaults`): this tool reads no registry and works out
     nothing itself.
@@ -2277,6 +2285,26 @@ def check_platform_defaults(config_dir: str) -> dict[str, object]:
             # contract); a state this row has no sentence for is not guessed at.
             return not_checked(f"da-guard gives `{key}` the state {entry.state!r} on a tree whose "
                                "root platform file reads")
+    # #4163: the keys the platform ships no value for, which the built-in
+    # layer values off — one line per rule pack, each key with how many
+    # tenants serve it a threshold or switch it off. A pack this tree does
+    # not deploy reads 0 of N for every key, and that is no fault: which
+    # packs a tree deploys is the rule deployment's, not conf.d's.
+    by_pack: dict[str, list[str]] = {}
+    for key, off in sorted((builtin.off or {}).items()):
+        if off.state == "off":
+            item = f"`{key}` {off.configured}/{total}"
+        elif off.state == "overridden":
+            item = f"`{key}` = {_fmt_threshold(off.root_value)} (root)"
+        elif off.state == "opted_out":
+            item = f"`{key}` disable (root)"
+        else:
+            return not_checked(f"da-guard gives `{key}` the state {off.state!r} on a tree whose "
+                               "root platform file reads")
+        by_pack.setdefault(off.pack, []).append(item)
+    for pack, items in sorted(by_pack.items()):
+        details.append(f"pack {pack}, no platform value (tenants that set a threshold or disable / all; "
+                       f"a tenant writes it with no listing at the root): {', '.join(items)}")
     return _make_result("platform_defaults", PASS, details)
 
 
