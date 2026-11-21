@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 OPS = ROOT / "scripts" / "ops"
@@ -490,7 +491,9 @@ def test_a_canary_directory_holding_someone_elses_files_is_refused_untouched(tmp
 
 
 @pytest.mark.parametrize("shape", ["top-level file", "file in listed-dir",
-                                   "inner replaced by a directory"])
+                                   "inner replaced by a directory",
+                                   "listed-dir linked elsewhere",
+                                   "a canary name with other content"])
 def test_a_marked_canary_directory_keeps_what_somebody_added_to_it(tmp_path, shape):
     """The mark says who made the directory, not who owns everything in it.
     Nothing is deleted recursively: the tool unlinks its own files by name and
@@ -505,16 +508,30 @@ def test_a_marked_canary_directory_keeps_what_somebody_added_to_it(tmp_path, sha
         theirs = canary / "znotes.txt"
     elif shape == "file in listed-dir":
         theirs = canary / at.CANARY_DIR / "zmore.txt"
-    else:
+    elif shape == "inner replaced by a directory":
         (canary / at.CANARY_INNER).unlink()
         (canary / at.CANARY_INNER).mkdir()
         theirs = canary / at.CANARY_INNER / "zdeep.txt"
+    elif shape == "listed-dir linked elsewhere":
+        # The cleanup would follow the link and unlink `inner` out there.
+        outside = tmp_path / "zoutside"
+        outside.mkdir()
+        (canary / at.CANARY_INNER).unlink()
+        (canary / at.CANARY_DIR).rmdir()
+        symlink_or_skip(outside, canary / at.CANARY_DIR, target_is_directory=True)
+        theirs = outside / "inner"
+    else:
+        # A name proves nothing about who wrote the file.
+        theirs = canary / at.CANARY_READ
     theirs.write_text("theirs\n", encoding="utf-8")
+    kept = sorted(p.name for p in canary.iterdir())
     state.unlink()
     proc = _tool(repo, "reset", "--state", str(state))
     assert proc.returncode == 2 and "did not put there" in proc.stderr, proc.stderr
     assert "Traceback" not in proc.stderr
     assert theirs.read_text(encoding="utf-8") == "theirs\n"
+    # Refused whole: the tool's own canaries are still there too.
+    assert sorted(p.name for p in canary.iterdir()) == kept
     assert _local_trustctime(repo) is None  # the failed reset left no setting behind
 
 

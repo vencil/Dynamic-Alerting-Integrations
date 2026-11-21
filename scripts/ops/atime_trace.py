@@ -155,6 +155,7 @@ import json  # noqa: E402
 import mmap  # noqa: E402
 import platform  # noqa: E402
 import shutil  # noqa: E402
+import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
@@ -332,27 +333,71 @@ def _nearest_existing(path: Path) -> Path:
     return path
 
 
+_CANARY_TEXT = "atime canary (#3756)\n"
+_MARK_TEXT = "written by scripts/ops/atime_trace.py reset (#3756)\n"
+
+
+def _foreign_in(directory: Path) -> list[str]:
+    """What in an earlier run's canary directory is NOT what this tool wrote
+    there. Nothing is followed: a symlink is foreign whatever it points at
+    (a `listed-dir` linked to another directory would lead the cleanup out of
+    this one), and a file is this tool's only with the exact text it writes —
+    a name proves nothing about who put the file there."""
+    def ours(path: Path, text: str) -> bool:
+        try:
+            if not stat.S_ISREG(os.lstat(path).st_mode):
+                return False
+            with open(path, "rb") as handle:
+                return handle.read(len(text) + 1) == text.encode("utf-8")
+        except OSError:
+            return False
+
+    foreign = []
+    files = {CANARY_MARK: _MARK_TEXT, CANARY_READ: _CANARY_TEXT,
+             CANARY_UNTOUCHED: _CANARY_TEXT}
+    for entry in sorted(directory.iterdir()):
+        if entry.name in files:
+            if not ours(entry, files[entry.name]):
+                foreign.append(entry.name)
+        elif entry.name == CANARY_DIR:
+            if entry.is_symlink() or not entry.is_dir():
+                foreign.append(entry.name)
+                continue
+            for child in sorted(entry.iterdir()):
+                rel = f"{CANARY_DIR}/{child.name}"
+                if rel != CANARY_INNER or not ours(child, _CANARY_TEXT):
+                    foreign.append(rel)
+        else:
+            foreign.append(entry.name)
+    return foreign
+
+
 def _remove_own_canaries(directory: Path) -> None:
-    """Take an earlier run's canaries away WITHOUT a recursive delete: unlink
-    the files this tool creates, by name and only when they are files, then
-    `rmdir` the two directories — which the kernel refuses while anything
-    else is in them. A file somebody added, or a directory put where a canary
-    file was, is therefore left exactly as it is, whatever it is called.
-    (Two rounds of "check the names, then rmtree" each missed a shape.)"""
+    """Take an earlier run's canaries away. Checked whole first
+    (`_foreign_in`): with anything foreign in the directory NOTHING is
+    removed. Then no recursive delete — unlink the files this tool wrote,
+    `rmdir` the two directories, which the kernel refuses while anything is
+    left in them. (Review, four rounds on this one function: emptied before
+    it was checked; a marked directory with a stranger's file; `inner`
+    replaced by a directory; `listed-dir` linked to somewhere else.)"""
+    foreign = _foreign_in(directory)
+    if foreign:
+        raise _caller_error(
+            f"the canary directory {directory} holds something this tool did not "
+            f"put there ({', '.join(foreign[:5])}); nothing in it was removed. "
+            "Name an empty or absent directory.")
     try:
         for name in (CANARY_INNER, CANARY_READ, CANARY_UNTOUCHED, CANARY_MARK):
             path = directory / name
-            if path.is_symlink() or path.is_file():
+            if os.path.lexists(path):
                 path.unlink()
-        inner = directory / CANARY_DIR
-        if inner.is_dir() and not inner.is_symlink():
-            inner.rmdir()
+        if os.path.lexists(directory / CANARY_DIR):
+            (directory / CANARY_DIR).rmdir()
         directory.rmdir()
     except OSError as exc:
         raise _caller_error(
-            f"the canary directory {directory} holds something this tool did not "
-            f"put there ({exc.filename or exc}: {exc.strerror}); only this tool's "
-            "own canaries were removed. Name an empty or absent directory.") from exc
+            f"the canary directory {directory} could not be cleared "
+            f"({exc.filename or exc}: {exc.strerror}).") from exc
 
 
 def make_canaries(directory: Path, root: Path) -> dict:
@@ -368,20 +413,22 @@ def make_canaries(directory: Path, root: Path) -> dict:
             f"{root}: its canaries would say nothing about the tracked files.")
     if directory.exists() and not directory.is_dir():
         raise _caller_error(f"the canary directory {directory} is not a directory.")
+    if directory.is_symlink():
+        raise _caller_error(f"the canary directory {directory} is a symbolic link.")
     if directory.is_dir() and any(directory.iterdir()):
-        if not (directory / CANARY_MARK).is_file():
+        if not os.path.lexists(directory / CANARY_MARK):
             raise _caller_error(
                 f"the canary directory {directory} holds something this tool did "
-                f"not put there (no {CANARY_MARK}); it is not emptied. Name an "
-                "empty or absent directory.")
+                f"not put there (no {CANARY_MARK}); nothing in it was removed. "
+                "Name an empty or absent directory.")
         _remove_own_canaries(directory)
     try:
         (directory / CANARY_DIR).mkdir(parents=True)
         with open(directory / CANARY_MARK, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write("written by scripts/ops/atime_trace.py reset (#3756)\n")
+            handle.write(_MARK_TEXT)
         for name in (CANARY_READ, CANARY_UNTOUCHED, CANARY_INNER):
             with open(directory / name, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write("atime canary (#3756)\n")
+                handle.write(_CANARY_TEXT)
         for name in (CANARY_READ, CANARY_UNTOUCHED, CANARY_INNER, CANARY_DIR):
             _set_past(str(directory / name))
     except OSError as exc:
