@@ -1169,7 +1169,10 @@ def _stale(rel, old, new):
     return text.replace(old, new)
 
 
-_DEV_STALE = ("  container_cpu: 80\n", "  container_cpu: 81\n  gone_key: 1\n")
+# A key of the dev template's generated `defaults:` block (#3832: the
+# built-in keys are no longer copied there, so not container_cpu).
+_DEV_STALE = ("  redis_memory_used_bytes: 4294967296\n",
+              "  redis_memory_used_bytes: 4294967297\n  gone_key: 1\n")
 _SEED_STALE = ("  - oracle_wait_time_rate   # s/s — Wait time rate (5m)\n",
                "  - oracle_wait_time_rate   # s/s — Wait time rate (5m)\n  - gone_key\n")
 
@@ -1196,10 +1199,10 @@ def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
                                   _stale(_SEED_REL, *_SEED_STALE))
     before = _bytes(tmp_path / "repo")
     doc = lib.build_registry_doc()
-    doc["keys"]["container_cpu"]["value"] = float("inf")
+    doc["keys"]["redis_memory_used_bytes"]["value"] = float("inf")
     with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(doc)
-    assert f"{dev.parent}/(the tree): worsens_tree: finding: _defaults.yaml: `container_cpu: inf`" in str(exc.value)
+    assert f"{dev.parent}/(the tree): worsens_tree: finding: _defaults.yaml: `redis_memory_used_bytes: inf`" in str(exc.value)
     assert str(seed) not in str(exc.value)
     assert _bytes(tmp_path / "repo") == before
 
@@ -1411,9 +1414,9 @@ def test_threshold_registry_regen_judges_the_value_by_yaml_v3(tmp_path, monkeypa
     # number), a string to PyYAML's YAML 1.1 — written.
     lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
     doc = lib.build_registry_doc()
-    doc["keys"]["container_cpu"]["value"] = 1e20
+    doc["keys"]["redis_memory_used_bytes"]["value"] = 1e20
     lib.regen_surfaces(doc)
-    assert "  container_cpu: 1e+20\n" in dev.read_text(encoding="utf-8")
+    assert "  redis_memory_used_bytes: 1e+20\n" in dev.read_text(encoding="utf-8")
 
 
 def test_threshold_registry_regen_refused_writes_not_even_the_registry(

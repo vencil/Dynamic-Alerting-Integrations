@@ -188,7 +188,7 @@ def test_deleted_markers_are_a_hard_error(tmp_path):
 
 def test_missing_surface_file_is_a_violation(tmp_path):
     result = gate.run_check(
-        surface_paths={"dev-defaults": str(tmp_path / "gone.yaml")})
+        surface_paths={"dev-example-defaults": str(tmp_path / "gone.yaml")})
     assert any("stale-surface" in e and "does not exist" in e
                for e in result["errors"]), result
 

@@ -636,7 +636,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # time (that hides the call order):
 #
 #   scenario                                              reported by
-#   biggest conf.d root zeroed                            shipped-root floor
+#   biggest conf.d root zeroed                            shipped-root floor if
+#                                                         that root ships, else
+#                                                         the fifth floor (today:
+#                                                         full-l0-l3, the fifth)
 #   `total - floor` keys eroded, no root emptied          nobody
 #   one key more than that, no root emptied               THIS floor, alone
 #
@@ -658,7 +661,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +10, generators +16. Red here means RAISE the floor.
+#     tolerate +3, generators +16. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -730,11 +733,19 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      db2_tablespace_used_percent: the same `_defaults.yaml` gained both, the
 #      artifact floor went 77 -> 79 (DOWN stays 12), and with the biggest
 #      group two larger UP is +10.)
+#     (#3832 took the 14 built-in keys out of the exporter's conf.d
+#      `_defaults.yaml` (decision 7: the readers serve them from their
+#      built-in layer, as they do for any tree), 23 -> 9, total 91 -> 77. A
+#      deliberate removal. The biggest group is now the full-l0-l3 golden
+#      fixture (13 keys), so the floor must stay above 77 - 13 = 64 and UP +
+#      DOWN is only 12 now: it went 79 -> 68, UP is +3 and DOWN is 9. A
+#      whole-root vanish of that fixture is the fifth floor's to report, not
+#      the shipped-root floor's.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
-#     is the floor doing its job. Today the slack is total − floor: artifacts 12
+#     is the floor doing its job. Today the slack is total − floor: artifacts 9
 #     keys, generators 11 (was 22 until issue 1196 retired init's 9 surplus
 #     keys — dead ones, so no floor edit). Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
@@ -765,7 +776,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 60
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 79
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 68
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -794,10 +805,12 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
         "`_defaults.yaml` declares the demo tenant's keys under "
         "`optional_overrides:` only — the artifact count is what guards it."),
     "components/threshold-exporter/config/conf.d": (
-        1, 15,
+        1, 5,
         "the exporter's own conf.d: the dev/template tree every doc points at. "
         "Its one `_defaults.yaml` also carries the base of every key the "
-        "examples/ tenants write (#3014)."),
+        "examples/ tenants write (#3014). 15 -> 5 in #3832: the template "
+        "stopped copying the 12 built-in keys (decision 7), the readers serve "
+        "them from their built-in layer — measured 19 -> 9, slack kept at 4."),
     "try-local/seed/conf.d": (
         1, 2,
         "the one-command demo stack a reader runs first; its _defaults.yaml is "
@@ -812,10 +825,10 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # ── FIFTH floor: every conf.d root, not just the shipped three (#1411) ───────
 #
 # The four floors above leave a measured gap: with the shipped roots covered by
-# the table above and the rest covered only by a GLOBAL key floor with 12 keys
-# of DOWNWARD slack (today's COUNTED artifact total 87 − the floor of 75: how
+# the table above and the rest covered only by a GLOBAL key floor with 9 keys
+# of DOWNWARD slack (today's COUNTED artifact total 77 − the floor of 68: how
 # many keys may disappear before that floor speaks), a whole fixture tree can
-# stop yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note —
+# stop yielding in silence. ⛔ Not the +3 in that floor's own HEADROOM note —
 # that one is UPWARD, measured against "biggest root gone", and asks for a
 # HIGHER floor. Same word, opposite directions, different baselines.
 #
@@ -1214,9 +1227,10 @@ def _is_loader_readable_defaults(name: str) -> bool:
 # — so they get two floors instead of one compromise.
 #
 # The numbers are the loader-readable subset, with the same kind of slack the
-# sibling table carries (exporter 19 vs 15). Measured per root after #3014:
+# sibling table carries (exporter 9 vs 5). Measured per root after #3014
+# (the exporter root 19 -> 9 when #3832 took the built-in keys out of it):
 #
-#     components/threshold-exporter/config/conf.d   1 artifact / 19 keys
+#     components/threshold-exporter/config/conf.d   1 artifact /  9 keys
 #     try-local/seed/conf.d                         1 artifact /  4 keys
 #     rule-packs/recipes/examples/conf.d            2 artifacts / 0 keys
 #
@@ -1228,7 +1242,7 @@ def _is_loader_readable_defaults(name: str) -> bool:
 # ⛔ Same rule as the sibling table: LOWERING A NUMBER HERE IS NOT A REMEDY.
 _LOADER_READABLE_FLOORS: dict[str, tuple[int, int, str]] = {
     "components/threshold-exporter/config/conf.d": (
-        1, 15,
+        1, 5,
         "the exporter's own conf.d. Entirely loader-readable since #3014 "
         "deleted the `examples/_defaults-multidb.yaml` the loader skipped, so "
         "this floor mirrors its sibling entry."),

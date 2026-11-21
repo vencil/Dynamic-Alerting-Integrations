@@ -1009,9 +1009,14 @@ def test_topology_keeps_are_what_the_surfaces_carry():
     dev = yaml.safe_load(
         (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
          / "_defaults.yaml").read_text(encoding="utf-8")) or {}
+    dev_written = set(dev.get("defaults") or {})
+    builtin = lib.builtin_default_keys()
+    # #3832: the dev template copies no built-in key — the readers value
+    # those from their built-in layer, as they do any conf.d's.
+    assert not dev_written & builtin, sorted(dev_written & builtin)
     carried = {
         "helm": set((chart.get("thresholdConfig") or {}).get("defaults") or {}),
-        "dev": set(dev.get("defaults") or {}),
+        "dev": dev_written | builtin,
     }
     assert set(carried) == set(lib.TOPOLOGY_DEFAULTS_KEEPS)
     for topo, keeps in lib.TOPOLOGY_DEFAULTS_KEEPS.items():
@@ -1303,24 +1308,24 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     # the mappings above (#1310), plus the try-local seed, which stopped being
     # a hand-maintained third copy in #1176/#1344 (its only gate compared the
     # PARSED list, so it never saw the per-key counter-example comments).
-    # `dev-example-defaults` (#3014) is the dev template's second `defaults`
-    # block — the example tenants' packs — on the same file as `dev-defaults`.
+    # `dev-example-defaults` (#3014) is the dev template's only `defaults`
+    # block — the example tenants' packs; the chart-default keys it used to
+    # copy are the readers' built-in layer (#3832).
     # The `dimensions:` blocks (#3475) follow, one per runtime carrier.
-    assert ids[:10] == [
-        "helm-defaults", "helm-unarmed", "dev-defaults", "dev-example-defaults",
+    assert ids[:9] == [
+        "helm-defaults", "helm-unarmed", "dev-example-defaults",
         "helm-optional", "dev-optional", "try-local-optional",
         "helm-dimensions", "dev-dimensions", "try-local-dimensions"]
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
     # #3831: the platform pack's digest recording rule, between the file-level
     # surfaces and the pack headers.
-    assert ids[10] == "platform-builtin-digest"
-    assert len(ids) == 10 + 1 + 13  # 13 threshold packs, non-threshold packs none
+    assert ids[9] == "platform-builtin-digest"
+    assert len(ids) == 9 + 1 + 13  # 13 threshold packs, non-threshold packs none
     # the two surfaces per file must target the same path but distinct blocks
     by_id = {s["id"]: s for s in specs}
     assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]
     assert by_id["helm-unarmed"]["path"] == by_id["helm-defaults"]["path"]
-    assert by_id["dev-defaults"]["path"] == by_id["dev-optional"]["path"]
-    assert by_id["dev-example-defaults"]["path"] == by_id["dev-defaults"]["path"]
+    assert by_id["dev-example-defaults"]["path"] == by_id["dev-optional"]["path"]
     assert by_id["try-local-optional"]["path"] not in {
         by_id["helm-optional"]["path"], by_id["dev-optional"]["path"]}
     for carrier in ("helm", "dev", "try-local"):

@@ -66,7 +66,7 @@ NESTED_CARRIER = "examples/_defaults.yaml"
 CASES = [
     # the root defaults carrier
     ("root-carrier.defaults", "_defaults.yaml", "defaults", None,
-     lambda d: _sub(d / "_defaults.yaml", "container_memory: 85", "container_memory: 86"), True),
+     lambda d: _sub(d / "_defaults.yaml", "\ndefaults:\n", "\ndefaults:\n  container_memory: 86\n"), True),
     ("root-carrier.state_filters", "_defaults.yaml", "state_filters", None,
      lambda d: _sub(d / "_defaults.yaml", 'reasons: ["CrashLoopBackOff"]\n    severity: "critical"',
                     'reasons: ["CrashLoopBackOff"]\n    severity: "warning"'), True),

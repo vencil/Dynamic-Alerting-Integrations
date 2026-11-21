@@ -76,7 +76,7 @@ FINANCE = "examples/_routing_profiles.yaml"
 # (case id, carrier, views it must change, setup on both sides, edit on the PR side)
 CASES = [
     ("defaults", "defaults", {SERVED}, None,
-     lambda d: _sub(d / "_defaults.yaml", "container_memory: 85", "container_memory: 86")),
+     lambda d: _sub(d / "_defaults.yaml", "\ndefaults:\n", "\ndefaults:\n  container_memory: 86\n")),
     ("optional_overrides", "optional_overrides", {SERVED}, _optional_override_in_use,
      lambda d: _sub(d / "_defaults.yaml", "  - oracle_pga_usage_percent", "  - oracle_pga_usage_percentx")),
     ("dimensions", "dimensions", {SERVED},

@@ -90,6 +90,13 @@ extraEnvFrom: []
 # 史料：mysql_cpu 80→30 校準（#944）時本 chart 副本是最後被漏掉的一份
 # （#1200 WS1a 反向稽核補正）；改為生成段後該類漂移由 gate 根除。該 key 已於
 # #1231 改名為 mysql_threads_running（毒名退役，2-release alias 過渡窗）。
+#
+# 生成段裡的鍵同時內建在 exporter 裡（#3832）：chart 照樣把數字寫進 ConfigMap，
+# 數字跟著 chart 升級。整個平台不要某個鍵（exporter 映像要帶內建層：舊版讀到根層
+# disable 會丟掉整份根檔，所以和換映像放在同一次 helm upgrade）：
+#   --set thresholdConfig.defaults.<鍵>=disable   # 只收 disable；false／off 會被拒收、照送平台值
+# ⚠️ `=null` 不是關掉：Helm 把 null 的鍵從 values 刪掉，ConfigMap 裡沒有這個鍵，
+# exporter 就送它內建的平台值。把鍵列進 optional_overrides 也關不掉它。
 thresholdConfig:
   defaults:
     # >>> GENERATED:threshold-registry:helm-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）

@@ -594,7 +594,7 @@ EOF
 
 ## Checks before upgrading the platform
 
-A new platform version may read conf.d differently from the old one: all YAML is read by Go (yaml.v3), so unquoted `yes` / `no` / `on` / `off` are strings rather than booleans, and the exporter does not serve a file it cannot read ([ADR-036](../adr/036-single-parser-effective-config.en.md) §8). So before every upgrade of da-tools and threshold-exporter, run these two checks on your own conf.d in CI, with the **new** version's tools. The commands are written as `da-tools`; run each with the image of the version being compared (for the `docker run` form see [Docker Usage Pattern](../cli-reference.en.md#docker-usage-pattern)).
+A new platform version may read conf.d differently from the old one: all YAML is read by Go (yaml.v3), so unquoted `yes` / `no` / `on` / `off` are strings rather than booleans, and the exporter does not serve a file it cannot read ([ADR-036](../adr/036-single-parser-effective-config.en.md) §8). So before every upgrade of da-tools and threshold-exporter, run the checks below on your own conf.d in CI, with the **new** version's tools. The commands are written as `da-tools`; run each with the image of the version being compared (for the `docker run` form see [Docker Usage Pattern](../cli-reference.en.md#docker-usage-pattern)).
 
 ### Check 1: validate conf.d with the new da-guard
 
@@ -672,6 +672,46 @@ When running with `docker run`, mount the temporary directory into the container
 - **A difference**: the example only asks `diff -q` whether the outputs differ and fails the job; it does not print the full diff into the CI log, because the output holds the webhook URLs of tenants' `_routing.receiver` (a Slack `api_url`, for example), and printing it writes them into the log. To see the full diff, run the same two `generate-routes` commands with the two images on your machine or in an access-controlled environment, then `diff -u`. The output files hold those URLs too: do not upload them as public CI artifacts.
 
 The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
+
+### Check 3: the threshold rows the old and new exporters serve
+
+From [#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832) on, the readers build in the thresholds the platform arms by default: a key the tree does not write is served at the platform's value, so after the upgrade the same conf.d may serve a few more rows per tenant. Read the same tree once with each exporter image and compare the `user_threshold` rows of `/metrics` (their labels are tenant, component, metric and severity, plus the labels of the tenants' dimensional keys and their `_re` regex labels — no webhook URLs, but the dimension values land in the CI log):
+
+```bash
+set -e
+out="$(mktemp -d)"
+trap 'docker rm -f exp-current exp-new > /dev/null 2>&1; rm -rf "$out"' EXIT
+docker run -d --name exp-current -p 18080:8080 -v "$PWD/conf.d:/conf.d:ro" \
+  ghcr.io/vencil/threshold-exporter:<current version> -config-dir /conf.d
+docker run -d --name exp-new -p 18081:8080 -v "$PWD/conf.d:/conf.d:ro" \
+  ghcr.io/vencil/threshold-exporter:<new version> -config-dir /conf.d
+for side in current:18080 new:18081; do
+  name="${side%%:*}"; port="${side##*:}"
+  # the exporter answers /metrics only once it has loaded conf.d
+  for i in $(seq 1 60); do
+    curl -sf "http://127.0.0.1:$port/metrics" > "$out/$name.prom" && break
+    sleep 1
+  done
+  [ -s "$out/$name.prom" ] || { echo "the $name exporter did not answer: docker logs exp-$name" >&2; exit 1; }
+  grep '^user_threshold{' "$out/$name.prom" | sort > "$out/$name.txt" || true
+done
+echo "rows the new version adds (or serves at another value):"; comm -13 "$out/current.txt" "$out/new.txt"
+echo "rows the new version drops (or serves at another value):"; comm -23 "$out/current.txt" "$out/new.txt"
+```
+
+Each line is a series with its value, so a row whose value changed shows up once on each side. An added row is not an added alert: an alert also needs its rule pack deployed and its metric present. Handle unwanted keys in step 2 of the upgrade order below.
+
+### Upgrade order for the built-in thresholds
+
+Coming from a version without the built-in layer (for example v2.9.0), work in this order ([#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832) decision 9):
+
+1. Run the three checks above and confirm the added rows; then run `da-tools migrate-builtin-defaults --config-dir conf.d` with the new da-tools (no `--apply`, preview only): it lists the keys that the root switches off today with `null` or an `optional_overrides:` listing, which the new version starts serving at the platform's value.
+2. In **one change**, do three things: upgrade threshold-exporter, the platform rule pack and tenant-api; move CI to the new da-tools; and handle the default-armed keys you do not want — for the whole platform write `<key>: disable` in the root `_defaults.yaml`'s `defaults:` (Helm: `--set thresholdConfig.defaults.<key>=disable`), for one tenant write `disable` in its file, and change the keys step 1 listed the same way (a Helm `null` becomes `disable` too). With GitOps that is one commit changing the image tags and conf.d; with Helm, one `helm upgrade`. When one conf.d feeds several clusters, they upgrade together in that change.
+3. Only **once everything is upgraded**, with every cluster's exporter `da_config_builtin_defaults_info{digest}` equal to da-tools', remove the copies: `da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <cluster A digest> --exporter-digest <cluster B digest>`, one flag per cluster in a single command (run separately with one digest each, the gate cannot see the other clusters; see [`migrate-builtin-defaults`](../cli-reference.en.md#migrate-builtin-defaults)). A deployment whose ConfigMap the chart builds has no such step: the chart keeps writing these numbers and they move with the chart.
+
+Step 2 cannot be split. A released older exporter that reads a root `disable` drops the whole root `_defaults.yaml` (measured on v2.9.0) and every tenant's threshold rows go with it, so a root `disable` cannot come before the exporter upgrade; the new da-guard reports a default-armed key that the root `optional_overrides:` only lists as `root_optional_builtin` (exit 1), so a tree written that way does not pass the new CI unchanged; and upgrading the exporter first and the tree later lets the unwanted alerts fire before the tree changes. What remains is the minute or two of the rolling update, during which a pod not yet replaced may read the new ConfigMap. The platform rule pack's `BuiltinDefaultsDigestMismatch` alert fires while an exporter has not been upgraded (without the platform rule pack, compare the components' digest metrics yourself).
+
+Step 3 cannot come earlier: an older reader without the built-in layer that reads a tree with the copies removed finds no value for those keys, and the alerts stay silent without an error. To roll back to an older version, first put the copies back; take the root `disable` out in the same change that rolls the image back (taken out earlier, the still-running new exporter serves the platform's value), and switch the keys you want off back to the older version's spelling (a root `null` or an `optional_overrides:` listing).
 
 ---
 
