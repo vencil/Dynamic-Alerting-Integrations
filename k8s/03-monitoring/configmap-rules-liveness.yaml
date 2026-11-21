@@ -84,7 +84,7 @@ data:
     \ }} 停機（同租戶仍有其他 tenant-exporters target 為 up）\n      tier: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: TenantExporterUndeclared\n\
-    \    expr: \"group by(tenant, db_type) (\\n  label_replace(max_over_time(mysql_up{job=\\\
+    \    expr: \"group by(tenant, da_cluster, db_type) (\\n  label_replace(max_over_time(mysql_up{job=\\\
     \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"mariadb\\\", \\\"\\\", \\\"\
     \\\")\\n  or label_replace(max_over_time(pg_up{job=\\\"tenant-exporters\\\"}[1h]),\
     \ \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(redis_up{job=\\\

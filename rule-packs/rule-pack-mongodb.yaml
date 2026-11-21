@@ -50,28 +50,28 @@ groups:
     rules:
       # Active connections
       - record: tenant:mongodb_connections_current:max
-        expr: max by(tenant) (mongodb_connections{state="current"})
+        expr: max by(tenant, da_cluster) (mongodb_connections{state="current"})
 
       # Connection usage ratio
       - record: tenant:mongodb_connection_usage:ratio
         expr: |
-          max by(tenant) (mongodb_connections{state="current"})
+          max by(tenant, da_cluster) (mongodb_connections{state="current"})
           / (
-            max by(tenant) (mongodb_connections{state="current"})
-            + min by(tenant) (mongodb_connections{state="available"})
+            max by(tenant, da_cluster) (mongodb_connections{state="current"})
+            + min by(tenant, da_cluster) (mongodb_connections{state="available"})
           )
 
       # Replication lag (seconds behind primary)
       - record: tenant:mongodb_replication_lag:max
-        expr: max by(tenant) (mongodb_mongod_replset_member_replication_lag)
+        expr: max by(tenant, da_cluster) (mongodb_mongod_replset_member_replication_lag)
 
       # Operations per second
       - record: tenant:mongodb_opcounters:rate5m
-        expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))
+        expr: sum by(tenant, da_cluster) (rate(mongodb_opcounters_total[5m]))
 
       # Page faults
       - record: tenant:mongodb_page_faults:rate5m
-        expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))
+        expr: sum by(tenant, da_cluster) (rate(mongodb_extra_info_page_faults_total[5m]))
 
   # -------------------------------------------------------
   # Threshold normalization: MongoDB
@@ -151,7 +151,7 @@ groups:
       # (that is MongoDBNoPrimary's for:2m) — keeps time-to-critical near the
       # pre-#875 15s rather than regressing it to 1m.
       - alert: MongoDBClusterDown
-        expr: max by(tenant) (mongodb_up{job="tenant-exporters"}) == 0
+        expr: max by(tenant, da_cluster) (mongodb_up{job="tenant-exporters"}) == 0
         for: 30s
         labels:
           severity: critical
@@ -192,9 +192,9 @@ groups:
       # VALUE (percona <0.42); newer exporters may encode state as a label.
       - alert: MongoDBNoPrimary
         expr: |
-          count by(tenant) (mongodb_mongod_replset_member_state{job="tenant-exporters"})
+          count by(tenant, da_cluster) (mongodb_mongod_replset_member_state{job="tenant-exporters"})
           unless
-          count by(tenant) (mongodb_mongod_replset_member_state{job="tenant-exporters"} == 1)
+          count by(tenant, da_cluster) (mongodb_mongod_replset_member_state{job="tenant-exporters"} == 1)
         for: 2m
         labels:
           severity: critical

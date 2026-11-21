@@ -106,15 +106,15 @@ groups:
     rules:
       # Active sessions
       - record: tenant:oracle_sessions_active:max
-        expr: max by(tenant) (oracledb_sessions_active)
+        expr: max by(tenant, da_cluster) (oracledb_sessions_active)
 
       # Tablespace usage percentage (key dimensional metric)
       - record: tenant:oracle_tablespace_used_percent:max
-        expr: max by(tenant) (oracledb_tablespace_used_percent)
+        expr: max by(tenant, da_cluster) (oracledb_tablespace_used_percent)
 
       # Wait time rate (seconds per second over 5m window)
       - record: tenant:oracle_wait_time:rate5m
-        expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))
+        expr: sum by(tenant, da_cluster) (rate(oracledb_wait_time_seconds_total[5m]))
 
       # Process usage, % of the PROCESSES parameter (#1320). PROCESSES is an
       # instance-wide limit and counts background processes too, so the
@@ -125,7 +125,7 @@ groups:
       # read as 0 drops out of the share instead of dividing to +Inf.
       - record: tenant:oracle_process_usage:percent
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             100 * oracledb_process_count
             / (oracledb_processes_limit > 0)
           )
@@ -138,7 +138,7 @@ groups:
       # the share is a lower bound. Divided per exporter before the max.
       - record: tenant:oracle_pga_usage:percent
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             100 * oracledb_pga_allocated_bytes
             / (oracledb_pga_aggregate_limit_bytes > 0)
           )
@@ -155,7 +155,7 @@ groups:
       # ~100% of almost no DB time. Divided per exporter before the max.
       - record: tenant:oracle_hard_parse_time:percent
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             100 * rate(oracledb_hard_parse_elapsed_seconds_total[5m])
             / (rate(oracledb_db_time_seconds_total[5m]) >= 1)
           )
@@ -172,7 +172,7 @@ groups:
       # not mixed (#3833).
       - record: tenant:oracle_session_utilization:ratio
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             oracledb_sessions_current / (oracledb_sessions_limit > 0)
           )
 
@@ -237,7 +237,7 @@ groups:
       # share an IP:port after federation.
       - alert: OracleDatabaseDown
         expr: |
-          max by(tenant, instance) (
+          max by(tenant, instance, da_cluster) (
             changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) == 0
             and
             count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s]) > 1
@@ -245,13 +245,13 @@ groups:
             query_timestamp{job="tenant-exporters", query="oracle_liveness"} offset 90s
           )
           or
-          max by(tenant, instance) (
+          max by(tenant, instance, da_cluster) (
             (
               query_interval{job="tenant-exporters", query="oracle_liveness"}
-              unless on(tenant, instance)
+              unless on(tenant, instance, da_cluster)
               count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[90s])
             )
-            and on(tenant, instance)
+            and on(tenant, instance, da_cluster)
             query_interval{job="tenant-exporters", query="oracle_liveness"} offset 90s
           )
         for: 15s
@@ -279,20 +279,20 @@ groups:
       - alert: OracleQueryStalled
         expr: |
           (
-            max by(tenant, instance, query) (
+            max by(tenant, instance, query, da_cluster) (
               increase(queries_total{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness", status="success"}[5m]) == 0
               and
               count_over_time(queries_total{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness", status="success"}[5m]) > 1
             )
             or
-            max by(tenant, instance, query) (
+            max by(tenant, instance, query, da_cluster) (
               query_interval{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness"}
-              unless on(tenant, instance, query)
+              unless on(tenant, instance, query, da_cluster)
               queries_total{job="tenant-exporters", query=~"oracle_.+", query!="oracle_liveness", status="success"}
             )
           )
-          unless on(tenant, instance)
-          max by(tenant, instance) (
+          unless on(tenant, instance, da_cluster)
+          max by(tenant, instance, da_cluster) (
             (
               changes(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[5m]) == 0
               and
@@ -300,7 +300,7 @@ groups:
             )
             or
             (query_interval{job="tenant-exporters", query="oracle_liveness"}
-             unless on(tenant, instance)
+             unless on(tenant, instance, da_cluster)
              count_over_time(query_timestamp{job="tenant-exporters", query="oracle_liveness"}[5m]))
           )
           unless on(tenant)
@@ -537,7 +537,7 @@ groups:
       - alert: OraclePGALimitNotSet
         expr: |
           (
-            max by(tenant, instance) (oracledb_pga_aggregate_limit_bytes == 0)
+            max by(tenant, instance, da_cluster) (oracledb_pga_aggregate_limit_bytes == 0)
             and on(tenant)
             tenant:alert_threshold:oracle_pga_usage_percent
           )

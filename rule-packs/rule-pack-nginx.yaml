@@ -47,21 +47,21 @@ groups:
       # Active connections — max across instances
       - record: tenant:nginx_connections_active:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             nginx_connections_active
           )
 
       # Request rate — 5m rate of total requests
       - record: tenant:nginx_requests:rate5m
         expr: |
-          sum by(tenant) (
+          sum by(tenant, da_cluster) (
             rate(nginx_http_requests_total[5m])
           )
 
       # Waiting connections (backlog)
       - record: tenant:nginx_connections_waiting:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             nginx_connections_waiting
           )
 

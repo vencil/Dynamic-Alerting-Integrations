@@ -121,6 +121,12 @@ var kindTable = []KindSpec{
 	{Kind: errkind.StateConflict, Status: http.StatusConflict, Code: errcode.Conflict, Retryable: true},
 	{Kind: errkind.StateUnavailable, Status: http.StatusServiceUnavailable, Code: errcode.Upstream, Retryable: true, RetryAfterS: 5},
 	{Kind: errkind.StateFull, Status: http.StatusInsufficientStorage, Code: errcode.StateFull},
+	// 503, not 500 and not a 2xx (#1073): the write is saved, but reads do
+	// not show it until a reload succeeds. A 2xx (or 207, which a client's
+	// res.ok also reads as success) is the silent no-op the issue is about;
+	// 503 + Retry-After says the condition is temporary and a resend — safe
+	// for these replace/delete-by-id writes — loads it.
+	{Kind: errkind.StateReloadFailed, Status: http.StatusServiceUnavailable, Code: errcode.StateReloadFailed, Retryable: true, RetryAfterS: 5},
 	{Kind: errkind.ConfigFileParse, Status: http.StatusInternalServerError, Code: errcode.ConfigDecode},
 
 	{Kind: errkind.ForgeForbidden, Status: http.StatusForbidden, Code: errcode.ForgeForbidden, Fault: true},
@@ -267,6 +273,7 @@ var kindRules = []kindRule{
 	sentinelKind(errkind.MergeFailed, gitops.ErrMergeFailed),
 	sentinelKind(errkind.TenantGitManagedUnnamed, gitops.ErrTenantGitManaged),
 	sentinelKind(errkind.TenantFileNotRegular, confd.ErrNotRegularFile),
+	typedKind(errkind.StateReloadFailed),
 	sentinelKind(errkind.StateConflict, statestore.ErrConflict),
 	sentinelKind(errkind.StateUnavailable, statestore.ErrUnavailable),
 	sentinelKind(errkind.StateFull, statestore.ErrTooLarge),
@@ -439,5 +446,5 @@ var (
 		errkind.MergeFailed, errkind.TenantGitManagedUnnamed, errkind.TenantConfigNotLoadable,
 		errkind.PreviewRejected)
 	// kindsState: tenant-api's state store (#2856).
-	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull)
+	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull, errkind.StateReloadFailed)
 )

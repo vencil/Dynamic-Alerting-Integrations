@@ -84,6 +84,8 @@ groups:
 
 **Key:** Use `max by(tenant)` rather than `sum` to prevent HA double-counting (see section 4.3)
 
+The shipped rules also keep the cluster label `da_cluster` in these groupings (`by(tenant, da_cluster)`), so a tenant that runs in several clusters is evaluated per cluster; the threshold layer stays `by(tenant)`. The examples above leave it out for readability; the contract is in [ADR-006](../adr/006-tenant-mapping-topologies.en.md).
+
 #### Part 3: Alert Rules
 ```yaml
 groups:

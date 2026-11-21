@@ -3,8 +3,10 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/statestore"
 )
 
@@ -18,7 +20,13 @@ import (
 // (reloadState) according to what the outcome says about the store (#1535):
 //
 //   - Success: reload synchronously, before the caller answers, so a GET that
-//     follows the 2xx sees the write.
+//     follows the 2xx sees the write. When that reload fails, the write is
+//     saved but reads do not show it: mutateState returns a
+//     *stateReloadError (503 STATE_RELOAD_FAILED, committed: true — #1073)
+//     instead of nil, so the caller does not answer 2xx for a write the
+//     server is not serving. The snapshot keeps its last good content until
+//     a later reload succeeds: a resend of the request, or the next
+//     WatchLoop tick.
 //   - An error that proves the store was not changed: no reload. These are
 //     the transform's own error (the handler's validation refusal — 404, 409,
 //     a parse error: both backends return it before any write), ErrConflict
@@ -55,7 +63,9 @@ func (d *Deps) mutateState(ctx context.Context, key, entity, author string, tran
 		})
 	switch {
 	case err == nil:
-		d.reloadState(key)
+		if rerr := d.reloadState(key); rerr != nil {
+			return &stateReloadError{key: key, err: rerr}
+		}
 	case notApplied(err, transformErr):
 		// The store is as it was; the snapshot needs nothing.
 	default:
@@ -85,22 +95,48 @@ func notApplied(err, transformErr error) bool {
 // reloadState re-reads the in-memory snapshot that serves key, when one does:
 // groups, views and the federation whitelist. A federation subset and the
 // AccountID registry are read from the store on every request and have none.
-// The error is the reload metrics' to report (configwatcher.ReloadObserver);
-// on failure the snapshot keeps its last good content, as on a WatchLoop tick.
+// It returns the reload's error (nil for a key with no snapshot); the reload
+// metrics record it too (configwatcher.ReloadObserver). On failure the
+// snapshot keeps its last good content, as on a WatchLoop tick.
 // It is safe to call from several goroutines at once, and beside a
 // background reload: Reload holds the watcher's mutex for the whole read, so
 // concurrent reloads run one after another and each reads the store as it is
 // when its turn comes.
-func (d *Deps) reloadState(key string) {
+func (d *Deps) reloadState(key string) error {
 	switch {
 	case key == statestore.KeyGroups && d.Groups != nil:
-		_ = d.Groups.Reload()
+		return d.Groups.Reload()
 	case key == statestore.KeyViews && d.Views != nil:
-		_ = d.Views.Reload()
+		return d.Views.Reload()
 	case key == statestore.KeyFederationPolicy && d.FederationPolicy != nil:
-		_ = d.FederationPolicy.Reload()
+		return d.FederationPolicy.Reload()
 	}
+	return nil
 }
+
+// stateReloadError is mutateState's answer to a write that the store applied
+// and whose snapshot reload then failed (#1073): errkind.StateReloadFailed.
+// It deliberately does not unwrap to the reload's error: that error may carry
+// a state-store sentinel (statestore.ErrUnavailable from the reload's read),
+// and the write must not be answered as one of those — they say nothing was
+// written, or that the outcome is unknown, and this write IS saved. The
+// reload's error is in Error() for the server log only; the client text is
+// msgStateReloadFailed.
+type stateReloadError struct {
+	key string
+	err error
+}
+
+func (e *stateReloadError) Error() string {
+	return fmt.Sprintf("state record %q written, but reloading the snapshot that serves it failed: %v", e.key, e.err)
+}
+
+// ErrorKind is errkind.StateReloadFailed.
+func (e *stateReloadError) ErrorKind() errkind.Kind { return errkind.StateReloadFailed }
+
+// msgStateReloadFailed is the fixed client text of STATE_RELOAD_FAILED.
+const msgStateReloadFailed = "the change was saved, but this server could not load it yet, so reads may not show it until the next reload; " +
+	"it needs no resend (a resend loads it at once, but a resent DELETE answers 404 once a reload has loaded it)"
 
 // reloadStateAsync is reloadState in the background, coalesced per record
 // (configwatcher.ReloadAsync: a call while a background reload of the same
@@ -127,6 +163,8 @@ func (d *Deps) MutateState(ctx context.Context, key, entity, author string, tran
 //   - statestore.ErrUnavailable → 503 + Retry-After / retry_after_s
 //     (Kubernetes API or the state directory unreachable)
 //   - statestore.ErrTooLarge    → 507 (the ConfigMap's size budget)
+//   - *stateReloadError         → 503 STATE_RELOAD_FAILED + Retry-After,
+//     committed: true (saved, not yet served — #1073)
 //
 // The bodies are fixed strings: err names the ConfigMap (namespace/name)
 // and its byte counts, which are for the operator's log, not the caller.

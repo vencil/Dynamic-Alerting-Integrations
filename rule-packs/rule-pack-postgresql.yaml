@@ -41,26 +41,26 @@ groups:
       # Connection usage ratio: active connections / max_connections (0-100 %)
       - record: tenant:pg_connection_usage:ratio
         expr: |
-          100 * max by(tenant) (pg_stat_activity_count)
-          / on(tenant)
-          clamp_min(max by(tenant) (pg_settings_max_connections), 1)
+          100 * max by(tenant, da_cluster) (pg_stat_activity_count)
+          / on(tenant, da_cluster)
+          clamp_min(max by(tenant, da_cluster) (pg_settings_max_connections), 1)
 
       # Replication lag in seconds (max across replicas)
       - record: tenant:pg_replication_lag:max
-        expr: max by(tenant) (pg_replication_lag)
+        expr: max by(tenant, da_cluster) (pg_replication_lag)
 
       # Deadlock rate (5m window)
       - record: tenant:pg_deadlocks:rate5m
-        expr: sum by(tenant) (rate(pg_stat_database_deadlocks[5m]))
+        expr: sum by(tenant, da_cluster) (rate(pg_stat_database_deadlocks[5m]))
 
       # Rollback ratio: rollbacks / total transactions (0 when idle)
       - record: tenant:pg_rollback_ratio:rate5m
         expr: |
-          sum by(tenant) (rate(pg_stat_database_xact_rollback[5m]))
-          / on(tenant)
+          sum by(tenant, da_cluster) (rate(pg_stat_database_xact_rollback[5m]))
+          / on(tenant, da_cluster)
           clamp_min(
-            sum by(tenant) (rate(pg_stat_database_xact_commit[5m]))
-            + sum by(tenant) (rate(pg_stat_database_xact_rollback[5m])),
+            sum by(tenant, da_cluster) (rate(pg_stat_database_xact_commit[5m]))
+            + sum by(tenant, da_cluster) (rate(pg_stat_database_xact_rollback[5m])),
             1
           )
 

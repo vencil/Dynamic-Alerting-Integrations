@@ -21,6 +21,13 @@ going red on a single-cluster fixture:
                        rule yields nothing; with one, the result silently
                        loses `da_cluster`.
 
+  on-cluster-with-flat-side
+                       `x > on (tenant, da_cluster) group_left threshold`:
+                       the threshold has no `da_cluster`, so once x carries
+                       one the two never match — the alert goes silent (and
+                       an `unless on (tenant, da_cluster) maintenance` stops
+                       muting). Per-tenant series are matched `on (tenant)`.
+
 What is judged, and how it is read
 ----------------------------------
 Each rule's expression is read as Prometheus' parser builds it
@@ -53,12 +60,33 @@ Not judged (say so rather than look covered)
     metric a name is, and it is read as is.
   * only the FIRST place the label is dropped is reported; fixing an inner
     grouping can surface the one around it.
+  * a flat left side: `expected unless on (tenant) count by (tenant, da_cluster) (seen)`
+    is the same hiding as the first point (CustomRecipeDiskInert,
+    VersionAwareThresholdInert) — the left side has no cluster to keep.
+  * a per-tenant series compared with NO `on (...)` at all, or pulled in with
+    `group_left (da_cluster)`: only `on (..., da_cluster)` against a flat side
+    is reported.
   * rules compiled from a tenant's own recipes at deploy time are not in
     this tree.
 
 A `by (...)` / `on (...)` is judged only when it names an identity label
 (tenant, instance, pod, namespace, node): `count(x)` or `sum by (db_type)`
 is a deliberate fleet-wide figure and says so by naming none.
+
+A deliberate tenant-wide read
+-----------------------------
+A rule that MEANS to look across a tenant's clusters says so where the rule
+is, in the comment block directly above it:
+
+    # da_cluster: tenant-wide by-drops-cluster (tenant) — <why>
+    - alert: MariaDBNoPrimary
+
+The declaration names the exact finding it stands for (kind and labels) and
+carries a reason; that finding is then not reported for that rule — once per
+declaration, and nothing else in the rule is excused. A declaration with no
+reason, or one the rule no longer has a finding for, is itself a failure, so
+it cannot outlive the grouping it was written for. There is no list of
+exempt rules anywhere else.
 
 The baseline
 ------------
@@ -74,6 +102,7 @@ Exit codes: 0 the tree equals the baseline; 1 it does not; 2 could not run.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -133,6 +162,7 @@ _SELECTING_AGGREGATIONS = frozenset({"topk", "bottomk", "limitk", "limit_ratio"}
 BY_DROPS, ON_DROPS = "by-drops-cluster", "on-drops-cluster"
 WITHOUT_CLUSTER, IGNORING_CLUSTER = "without-cluster", "ignoring-cluster"
 ONE_SIDE = "one-side-needs-group"
+ON_FLAT = "on-cluster-with-flat-side"
 
 
 class CannotRun(Exception):
@@ -229,6 +259,8 @@ def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]")
             keeps = CLUSTER_LABEL in labels
             if both and not keeps and IDENTITY_LABELS & set(labels):
                 found.append((ON_DROPS, ",".join(labels)))
+            if keeps and {lhs, rhs} == {CLUSTER, FLAT} and node["op"] != "or":
+                found.append((ON_FLAT, ",".join(labels)))
         elif CLUSTER_LABEL in labels:
             keeps = False
             if both:
@@ -268,18 +300,10 @@ def _rules(root: Path) -> "list[tuple[str, str, str, str, bool]]":
     return out
 
 
-def findings(root: "Path | None" = None) -> "dict[str, list[str]]":
-    """{file: [finding, …]} — a finding is `<group> / <rule>: <kind> (<labels>)`,
-    repeated `×N` when one rule has the same one N times."""
-    rules = _rules(root or PROJECT_ROOT)
-    if not rules:
-        raise CannotRun("the rule-pack tree has no rules")
-    try:
-        trees = _lib_consumer_read.promql_shape([r[3] for r in rules])
-    except _lib_consumer_read.InputRefused as e:
-        raise CannotRun(f"Prometheus' parser refuses an expression: {e}") from e
-    # A recorded name's scope is its expression's; rules read each other, so
-    # settle to a fixed point (a name not settled yet reads as an exporter's).
+def _record_scopes(rules: list, trees: list) -> "dict[str, str]":
+    """{recorded name: scope}. A recorded name's scope is its expression's;
+    rules read each other, so settle to a fixed point (a name not settled yet
+    reads as an exporter's)."""
     recorded = [(r[2], tree) for r, tree in zip(rules, trees) if r[4]]
     records: "dict[str, str]" = {}
     for _round in range(len(recorded) + 1):
@@ -293,15 +317,135 @@ def findings(root: "Path | None" = None) -> "dict[str, list[str]]":
         records = nxt
     else:
         raise CannotRun("recorded-series scopes did not settle")
+    return records
+
+
+def rule_scopes(root: "Path | None" = None) -> "tuple[dict[str, str], dict[str, set[str]]]":
+    """({recorded name: scope}, {alert name: the scopes of the rules of that
+    name}) for the rule-pack tree — what a test needs to know which series
+    and which alerts carry `da_cluster`."""
+    rules = _rules(root or PROJECT_ROOT)
+    trees = _lib_consumer_read.promql_shape([r[3] for r in rules])
+    records = _record_scopes(rules, trees)
+    alerts: "dict[str, set[str]]" = {}
+    for (_f, _g, name, _e, is_record), tree in zip(rules, trees):
+        if not is_record:
+            alerts.setdefault(name, set()).add(judge(tree, records, []) or FLAT)
+    return records, alerts
+
+
+#: A comment that sets out to be a declaration; one that then does not read
+#: as one is reported, not skipped.
+_DECLARATION_START = re.compile(r"^\s*#\s*da_cluster\s*:\s*tenant-wide\b")
+_DECLARATION = re.compile(
+    r"^\s*#\s*da_cluster:\s*tenant-wide\s+(?P<kind>[a-z-]+)\s*\((?P<labels>[^)]*)\)\s*(?:[—-]+\s*(?P<why>.*))?$")
+_RULE_LINE = re.compile(r"^\s*-\s+(?:alert|record):\s*(?P<name>\S+)\s*$")
+#: What a rule may declare: looking across clusters. `on-cluster-with-flat-side`
+#: and `one-side-needs-group` are rules that do not work, not rules that mean
+#: something else — there is nothing to declare about them.
+DECLARABLE = frozenset({BY_DROPS, ON_DROPS})
+
+
+def declarations(root: "Path | None" = None) -> "tuple[dict[tuple[str, int], Counter], list[str]]":
+    """({(file, n): Counter of (kind, labels)}, [malformed declaration, …]) —
+    the `# da_cluster: tenant-wide …` comments of the tree (module docstring),
+    each attached to the n-th rule of its file: the rule right below it, and
+    not another rule of the same name. Read off the text: a comment is not in
+    what the rule loader returns."""
+    declared: "dict[tuple[str, int], Counter]" = {}
+    malformed: "list[str]" = []
+    for path in _lib_consumer_read.RULE_PACKS.files_under(root or PROJECT_ROOT):
+        file, nth, pending = Path(path).name, -1, []
+        for n, line in enumerate(Path(path).read_text(encoding="utf-8").split("\n"), 1):
+            if _DECLARATION_START.match(line):
+                m = _DECLARATION.match(line)
+                if m is None:
+                    malformed.append(f"{file}:{n}: not read as a declaration — write "
+                                     "`# da_cluster: tenant-wide <kind> (<labels>) — <why>`")
+                elif m["kind"] not in DECLARABLE:
+                    malformed.append(f"{file}:{n}: `{m['kind']}` cannot be declared tenant-wide "
+                                     f"(only {', '.join(sorted(DECLARABLE))})")
+                elif not (m["why"] or "").strip():
+                    malformed.append(f"{file}:{n}: a `da_cluster: tenant-wide` declaration "
+                                     "needs a reason after the dash")
+                else:
+                    pending.append((n, m))
+                continue
+            r = _RULE_LINE.match(line)
+            if r:
+                nth += 1
+                for _at, d in pending:
+                    labels = ",".join(x.strip() for x in d["labels"].split(","))
+                    declared.setdefault((file, nth), Counter())[(d["kind"], labels)] += 1
+            if not line.strip().startswith("#"):
+                if pending and not r:
+                    malformed += [f"{file}:{at}: a `da_cluster: tenant-wide` declaration must sit "
+                                  "in the comment block directly above its rule" for at, _d in pending]
+                pending = []
+    return declared, malformed
+
+
+def _judged(root: Path) -> "list[tuple[str, int, str, str, Counter]]":
+    """[(file, n, group, rule, Counter of (kind, labels))] — every rule of the
+    tree with what it was found to do, declared or not; n is the rule's place
+    in its file."""
+    rules = _rules(root)
+    if not rules:
+        raise CannotRun("the rule-pack tree has no rules")
+    try:
+        trees = _lib_consumer_read.promql_shape([r[3] for r in rules])
+    except _lib_consumer_read.InputRefused as e:
+        raise CannotRun(f"Prometheus' parser refuses an expression: {e}") from e
+    records = _record_scopes(rules, trees)
+    out, place = [], Counter()
+    for (file, group, name, _expr, _rec), tree in zip(rules, trees):
+        found: "list[tuple[str, str]]" = []
+        judge(tree, records, found)
+        out.append((file, place[file], group, name, Counter(found)))
+        place[file] += 1
+    return out
+
+
+def _declared_for(root: Path, judged: list) -> "tuple[dict[tuple[str, int], Counter], list[str]]":
+    declared, malformed = declarations(root)
+    rules_in = Counter(file for file, *_ in judged)
+    for (file, nth) in declared:
+        if nth >= rules_in[file]:
+            raise CannotRun(f"{file}: the text has more rule lines than the loader read rules — "
+                            "a declaration cannot be attached")
+    return declared, malformed
+
+
+def stale_declarations(root: "Path | None" = None) -> "list[str]":
+    """Declarations that excuse nothing: malformed, or naming a finding the
+    rule below them does not have (any more)."""
+    root = root or PROJECT_ROOT
+    judged = _judged(root)
+    declared, malformed = _declared_for(root, judged)
+    out = list(malformed)
+    for file, nth, group, name, found in judged:
+        for (kind, labels), n in sorted(declared.get((file, nth), Counter()).items()):
+            if found[(kind, labels)] < n:
+                out.append(f"{file}: {group} / {name}: {kind} ({labels}) is declared tenant-wide "
+                           f"{n} time(s) and the rule has {found[(kind, labels)]} such finding(s) "
+                           "— drop the declaration")
+    return out
+
+
+def findings(root: "Path | None" = None) -> "dict[str, list[str]]":
+    """{file: [finding, …]} — a finding is `<group> / <rule>: <kind> (<labels>)`,
+    repeated `×N` when one rule has the same one N times. A finding a rule
+    declares as a deliberate tenant-wide read is left out, once per declaration."""
+    root = root or PROJECT_ROOT
+    judged = _judged(root)
+    declared, _malformed = _declared_for(root, judged)
     # Counted per file, not per rule: two rules of one name in one group (a
     # warning and a critical alert) with the same finding are `×2`, so fixing
     # one of them changes the entry instead of hiding behind the other.
     counts: "dict[str, Counter]" = {}
-    for (file, group, name, _expr, _rec), tree in zip(rules, trees):
-        found: "list[tuple[str, str]]" = []
-        judge(tree, records, found)
-        for kind, labels in found:
-            counts.setdefault(file, Counter())[f"{group} / {name}: {kind} ({labels})"] += 1
+    for file, nth, group, name, found in judged:
+        for (kind, labels), n in (found - declared.get((file, nth), Counter())).items():
+            counts.setdefault(file, Counter())[f"{group} / {name}: {kind} ({labels})"] += n
     return {f: sorted(t + (f" ×{n}" if n > 1 else "") for t, n in c.items())
             for f, c in sorted(counts.items())}
 
@@ -359,6 +503,12 @@ def generate() -> int:
 def check() -> int:
     now, base = _flat(findings()), _flat(load_baseline())
     new, gone = sorted(now - base), sorted(base - now)
+    stale = stale_declarations()
+    if stale:
+        print("check_cluster_identity: `da_cluster: tenant-wide` declaration(s) that excuse nothing:")
+        for x in stale:
+            print(f"    ! {x}")
+        return EXIT_VIOLATION
     if not new and not gone:
         print(f"check_cluster_identity: OK — {len(now)} finding(s), all baselined (== the tree).")
         return EXIT_OK

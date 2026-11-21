@@ -267,12 +267,14 @@ def alert_exprs() -> dict[tuple[Path, str], str]:
         'unless on() absent(up{job="tenant-exporters"})',
     ])
     # Per (tenant, db_type) (#3771 review): a tenant declaring [mariadb] while
-    # it also runs a redis exporter is named for redis. The guard joins on
+    # it also runs a redis exporter is named for redis. And per cluster
+    # (ADR-006, #4097): the declaration is the tenant's, the exporter is in a
+    # cluster, and the alert says which. The guard joins on
     # tenant: threshold-exporter down (no tenant_metadata_info at all) and a
     # de-provisioned tenant (its config gone, the lookback's memory of its
     # exporter not yet) both stay silent.
     undeclared = "\n".join([
-        "group by(tenant, db_type) (",
+        "group by(tenant, da_cluster, db_type) (",
         _indent(presence_over_time_expr(), 1),
         ")",
         "unless on(tenant, db_type) tenant_expected_exporter",

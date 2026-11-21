@@ -653,7 +653,8 @@ const msgGitPushFailed = "pushing the change to the config repository failed; no
 // writes go through the state store (Deps.mutateState, #2856), never the git
 // Writer, so no gitops error reaches here. It ALWAYS writes a response:
 //
-//   - a state-store error           → kindsState (409 / 503 + Retry-After / 507)
+//   - a state-store error           → kindsState (409 / 503 + Retry-After / 507; 503
+//     STATE_RELOAD_FAILED for a write saved but not yet served, #1073)
 //   - *configFileParseError         → 500 CONFIG_DECODE_ERROR with the decoder's
 //     text: the shared file on disk does not decode, the operator has to fix
 //     it, and the text (no path) says what is wrong

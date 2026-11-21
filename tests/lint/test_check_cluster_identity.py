@@ -30,6 +30,8 @@ Pinned contracts
 from __future__ import annotations
 
 import json
+
+import yaml
 import os
 import sys
 from pathlib import Path
@@ -339,6 +341,116 @@ def test_same_named_rules_are_counted_together(tmp_path, monkeypatch):
 def test_repeats_in_one_rule_are_counted(tmp_path):
     root = _tree(tmp_path, [("XDown", "max by (tenant) (x_a) + on (tenant) max by (tenant) (x_b)")])
     assert cid.findings(root) == {"rule-pack-x.yaml": ["g / XDown: by-drops-cluster (tenant) ×2"]}
+
+
+@pytest.mark.parametrize("expr, want", [
+    ("max by (tenant, da_cluster) (x_up) > on (tenant, da_cluster) group_left user_threshold",
+     [("on-cluster-with-flat-side", "tenant,da_cluster")]),
+    ("max by (tenant, da_cluster) (x_up) unless on (tenant, da_cluster) (user_state_filter == 1)",
+     [("on-cluster-with-flat-side", "tenant,da_cluster")]),
+    ("max by (tenant, da_cluster) (x_up) > on (tenant) group_left user_threshold", []),
+    ("max by (tenant, da_cluster) (x_a) and on (tenant, da_cluster) max by (tenant, da_cluster) (x_b)", []),
+    ("user_threshold and on (tenant, da_cluster) user_state_filter", []),
+], ids=["threshold-join", "maintenance-unless", "on-tenant-is-right", "both-per-cluster", "both-flat"])
+def test_a_per_tenant_series_is_not_matched_on_the_cluster_label(expr, want):
+    found = []
+    cid.judge(_lib_consumer_read.promql_shape([expr])[0], {}, found)
+    assert found == want
+
+
+def _declared_tree(tmp_path: Path, comment: str, expr: str, between: str = "") -> Path:
+    packs = tmp_path / "rule-packs"
+    packs.mkdir()
+    (packs / "rule-pack-x.yaml").write_text(
+        "groups:\n  - name: g\n    rules:\n"
+        f"      {comment}\n{between}      - alert: XNoPrimary\n        expr: {json.dumps(expr)}\n",
+        encoding="utf-8")
+    return tmp_path
+
+
+_TENANT_WIDE = "count by (tenant, da_cluster) (x_a) and on (tenant) count by (tenant) (x_b)"
+
+
+def test_a_declared_tenant_wide_read_is_not_a_finding(tmp_path):
+    root = _declared_tree(
+        tmp_path, "# da_cluster: tenant-wide by-drops-cluster (tenant) — asked of all clusters on purpose",
+        _TENANT_WIDE)
+    assert cid.findings(root) == {} and cid.stale_declarations(root) == []
+    # … and without the comment the same rule is one
+    plain = _tree(tmp_path / "plain", [("XNoPrimary", _TENANT_WIDE)]) if (tmp_path / "plain").mkdir() is None else None
+    assert cid.findings(plain) == {"rule-pack-x.yaml": ["g / XNoPrimary: by-drops-cluster (tenant)"]}
+
+
+def test_a_declaration_excuses_only_the_finding_it_names(tmp_path):
+    root = _declared_tree(
+        tmp_path, "# da_cluster: tenant-wide by-drops-cluster (tenant) — on purpose",
+        "max by (tenant, instance) (x_a) and on (tenant) count by (tenant) (x_b)")
+    assert cid.findings(root) == {
+        "rule-pack-x.yaml": ["g / XNoPrimary: by-drops-cluster (tenant,instance)"]}
+
+
+def test_a_declaration_is_counted_once(tmp_path):
+    root = _declared_tree(
+        tmp_path, "# da_cluster: tenant-wide by-drops-cluster (tenant) — on purpose",
+        "count by (tenant) (x_a) and on (tenant) count by (tenant) (x_b)")
+    assert cid.findings(root) == {"rule-pack-x.yaml": ["g / XNoPrimary: by-drops-cluster (tenant)"]}
+
+
+@pytest.mark.parametrize("comment, expr, between, says", [
+    ("# da_cluster: tenant-wide by-drops-cluster (tenant) — on purpose",
+     "count by (tenant, da_cluster) (x_a)", "", "has 0 such finding"),
+    ("# da_cluster: tenant-wide by-drops-cluster (tenant)", _TENANT_WIDE, "", "needs a reason"),
+    ("# da_cluster: tenant-wide by-drops-cluster (tenant) —", _TENANT_WIDE, "", "needs a reason"),
+    ("# da_cluster: tenant-wide by-drops-cluster (tenant) — on purpose", _TENANT_WIDE,
+     "      - alert: Other\n        expr: vector(1)\n", "has 0 such finding"),
+], ids=["nothing-to-excuse", "no-reason", "empty-reason", "above-another-rule"])
+def test_a_declaration_that_excuses_nothing_fails(tmp_path, monkeypatch, capsys, comment, expr, between, says):
+    root = _declared_tree(tmp_path, comment, expr, between)
+    assert any(says in x for x in cid.stale_declarations(root))
+    monkeypatch.setattr(cid, "PROJECT_ROOT", root)
+    monkeypatch.setattr(cid, "BASELINE", root / "baseline.yaml")
+    (root / "baseline.yaml").write_text(
+        yaml.safe_dump({"findings": cid.findings(root)}), encoding="utf-8")
+    assert cid.check() == cid.EXIT_VIOLATION
+    assert "excuse nothing" in capsys.readouterr().out
+
+
+def test_a_declaration_belongs_to_the_rule_below_it_not_to_its_namesake(tmp_path):
+    """Two rules of one name (warning, critical): the declaration above the
+    first does not excuse the second."""
+    packs = tmp_path / "rule-packs"
+    packs.mkdir()
+    (packs / "rule-pack-x.yaml").write_text(
+        "groups:\n  - name: g\n    rules:\n"
+        "      # da_cluster: tenant-wide by-drops-cluster (tenant) — on purpose\n"
+        "      - alert: X\n        expr: max by (tenant, da_cluster) (x_up) == 0\n"
+        "      - alert: X\n        expr: max by (tenant) (x_up) == 0\n", encoding="utf-8")
+    assert cid.findings(tmp_path) == {"rule-pack-x.yaml": ["g / X: by-drops-cluster (tenant)"]}
+    assert any("has 0 such finding" in x for x in cid.stale_declarations(tmp_path))
+
+
+@pytest.mark.parametrize("comment, says", [
+    ("# da_cluster: tenant-wide on-cluster-with-flat-side (tenant,da_cluster) — on purpose",
+     "cannot be declared"),
+    ("# da_cluster: tenant-wide one-side-needs-group (tenant) — on purpose", "cannot be declared"),
+    ("# da_cluster: tenant-wide by-drops-cluster tenant — on purpose", "not read as a declaration"),
+    ("# da_cluster : tenant-wide by-drops-cluster (tenant) — on purpose", "not read as a declaration"),
+], ids=["a-rule-that-does-not-work", "needs-group", "no-parentheses", "stray-space"])
+def test_a_declaration_that_is_not_one_is_reported_and_excuses_nothing(tmp_path, comment, says):
+    root = _declared_tree(tmp_path, comment, _TENANT_WIDE)
+    assert any(says in x for x in cid.stale_declarations(root))
+    assert cid.findings(root) == {"rule-pack-x.yaml": ["g / XNoPrimary: by-drops-cluster (tenant)"]}
+
+
+def test_a_declaration_not_directly_above_a_rule_fails(tmp_path):
+    packs = tmp_path / "rule-packs"
+    packs.mkdir()
+    (packs / "rule-pack-x.yaml").write_text(
+        "groups:\n  - name: g\n    # da_cluster: tenant-wide by-drops-cluster (tenant) — on purpose\n"
+        "    rules:\n      - alert: XNoPrimary\n"
+        f"        expr: {json.dumps(_TENANT_WIDE)}\n", encoding="utf-8")
+    assert any("directly above its rule" in x for x in cid.stale_declarations(tmp_path))
+    assert cid.findings(tmp_path) == {"rule-pack-x.yaml": ["g / XNoPrimary: by-drops-cluster (tenant)"]}
 
 
 def test_baseline_is_a_two_way_ratchet(tmp_path, monkeypatch, capsys):

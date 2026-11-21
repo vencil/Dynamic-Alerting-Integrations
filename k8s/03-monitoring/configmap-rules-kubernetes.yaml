@@ -15,94 +15,101 @@ metadata:
 data:
   kubernetes-recording.yml: "groups:\n- name: kubernetes-container-normalization\n\
     \  interval: 15s\n  rules:\n  - record: tenant:container_cpu_percent:by_container\n\
-    \    expr: \"label_replace(\\n  (\\n    (\\n      sum by(namespace, pod, container)\
-    \ (\\n        rate(container_cpu_usage_seconds_total{namespace=~\\\"db-.+\\\"\
-    , container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n      )\\n      /\\n   \
-    \   sum by(namespace, pod, container) (\\n        kube_pod_container_resource_limits{resource=\\\
+    \    expr: \"label_replace(\\n  (\\n    (\\n      sum by(namespace, pod, container,\
+    \ da_cluster) (\\n        rate(container_cpu_usage_seconds_total{namespace=~\\\
+    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n      )\\n  \
+    \    /\\n      sum by(namespace, pod, container, da_cluster) (\\n        kube_pod_container_resource_limits{resource=\\\
     \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n      )\\n      * 100\\n    )\\n    * on(namespace,\
-    \ pod) group_left(version)\\n      label_replace(\\n        kube_pod_labels{namespace=~\\\
+    \ pod, da_cluster) group_left(version)\\n      label_replace(\\n        kube_pod_labels{namespace=~\\\
     \"db-.+\\\"},\\n        \\\"version\\\", \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\
     \", \\\"(.+)\\\"\\n      )\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
     \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_cpu_node_share:limitless\n \
     \   expr: \"label_replace(\\n  (\\n    (\\n      (\\n        sum by(namespace,\
-    \ pod) (\\n          sum by(namespace, pod, container) (\\n            rate(container_cpu_usage_seconds_total{namespace=~\\\
-    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n          )\\\
-    n          unless on(namespace, pod, container)\\n          sum by(namespace,\
-    \ pod, container) (\\n            kube_pod_container_resource_limits{resource=\\\
+    \ pod, da_cluster) (\\n          sum by(namespace, pod, container, da_cluster)\
+    \ (\\n            rate(container_cpu_usage_seconds_total{namespace=~\\\"db-.+\\\
+    \", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n          )\\n       \
+    \   unless on(namespace, pod, container, da_cluster)\\n          sum by(namespace,\
+    \ pod, container, da_cluster) (\\n            kube_pod_container_resource_limits{resource=\\\
     \"cpu\\\", namespace=~\\\"db-.+\\\"}\\n          )\\n        )\\n      )\\n  \
-    \    /\\n      max by(namespace, pod) (\\n        max by(node) (kube_node_status_allocatable{resource=\\\
-    \"cpu\\\"})\\n        * on(node) group_right()\\n          kube_pod_info{namespace=~\\\
-    \"db-.+\\\"}\\n      )\\n      * 100\\n    )\\n    * on(namespace, pod) group_left(version)\\\
+    \    /\\n      max by(namespace, pod, da_cluster) (\\n        max by(node, da_cluster)\
+    \ (kube_node_status_allocatable{resource=\\\"cpu\\\"})\\n        * on(node, da_cluster)\
+    \ group_right()\\n          kube_pod_info{namespace=~\\\"db-.+\\\"}\\n      )\\\
+    n      * 100\\n    )\\n    * on(namespace, pod, da_cluster) group_left(version)\\\
     n      label_replace(\\n        kube_pod_labels{namespace=~\\\"db-.+\\\"},\\n\
     \        \\\"version\\\", \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\"\
     , \\\"(.+)\\\"\\n      )\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
     \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:container_memory_percent:by_container\n\
-    \    expr: \"label_replace(\\n  (\\n    (\\n      sum by(namespace, pod, container)\
-    \ (\\n        container_memory_working_set_bytes{namespace=~\\\"db-.+\\\", container!=\\\
-    \"\\\", container!=\\\"POD\\\"}\\n      )\\n      /\\n      sum by(namespace,\
-    \ pod, container) (\\n        kube_pod_container_resource_limits{resource=\\\"\
-    memory\\\", namespace=~\\\"db-.+\\\"}\\n      )\\n      * 100\\n    )\\n    *\
-    \ on(namespace, pod) group_left(version)\\n      label_replace(\\n        kube_pod_labels{namespace=~\\\
-    \"db-.+\\\"},\\n        \\\"version\\\", \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\
-    \", \\\"(.+)\\\"\\n      )\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
-    \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_weakest_cpu_percent:max\n  \
-    \  expr: \"max by(tenant, pod, version) (\\n  tenant:container_cpu_percent:by_container\\\
-    n  or\\n  tenant:pod_cpu_node_share:limitless\\n)\\n\"\n  - record: tenant:pod_weakest_memory_percent:max\n\
-    \    expr: max by(tenant, pod, version) (tenant:container_memory_percent:by_container)\n\
+    \    expr: \"label_replace(\\n  (\\n    (\\n      sum by(namespace, pod, container,\
+    \ da_cluster) (\\n        container_memory_working_set_bytes{namespace=~\\\"db-.+\\\
+    \", container!=\\\"\\\", container!=\\\"POD\\\"}\\n      )\\n      /\\n      sum\
+    \ by(namespace, pod, container, da_cluster) (\\n        kube_pod_container_resource_limits{resource=\\\
+    \"memory\\\", namespace=~\\\"db-.+\\\"}\\n      )\\n      * 100\\n    )\\n   \
+    \ * on(namespace, pod, da_cluster) group_left(version)\\n      label_replace(\\\
+    n        kube_pod_labels{namespace=~\\\"db-.+\\\"},\\n        \\\"version\\\"\
+    , \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\", \\\"(.+)\\\"\\n      )\\\
+    n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\
+    \n  - record: tenant:pod_weakest_cpu_percent:max\n    expr: \"max by(tenant, pod,\
+    \ version, da_cluster) (\\n  tenant:container_cpu_percent:by_container\\n  or\\\
+    n  tenant:pod_cpu_node_share:limitless\\n)\\n\"\n  - record: tenant:pod_weakest_memory_percent:max\n\
+    \    expr: max by(tenant, pod, version, da_cluster) (tenant:container_memory_percent:by_container)\n\
     \  - record: tenant:container_cpu_throttle_percent:by_container\n    expr: \"\
-    label_replace(\\n  (\\n    (\\n      sum by(namespace, pod, container) (\\n  \
-    \      rate(container_cpu_cfs_throttled_periods_total{namespace=~\\\"db-.+\\\"\
-    , container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n      )\\n      /\\n   \
-    \   (\\n        sum by(namespace, pod, container) (\\n          rate(container_cpu_cfs_periods_total{namespace=~\\\
-    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n        ) > 0\\\
-    n      )\\n      * 100\\n    )\\n    * on(namespace, pod) group_left(version)\\\
-    n      label_replace(\\n        kube_pod_labels{namespace=~\\\"db-.+\\\"},\\n\
-    \        \\\"version\\\", \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\"\
-    , \\\"(.+)\\\"\\n      )\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
-    \", \\\"(.*)\\\"\\n)\\n\"\n  - record: tenant:pod_weakest_cpu_throttle_percent:max\n\
-    \    expr: \"max by(tenant, pod, version) (\\n  tenant:container_cpu_throttle_percent:by_container\\\
-    n  and on(namespace, pod, container)\\n  (tenant:container_cpu_percent:by_container\
+    label_replace(\\n  (\\n    (\\n      sum by(namespace, pod, container, da_cluster)\
+    \ (\\n        rate(container_cpu_cfs_throttled_periods_total{namespace=~\\\"db-.+\\\
+    \", container!=\\\"\\\", container!=\\\"POD\\\"}[5m])\\n      )\\n      /\\n \
+    \     (\\n        sum by(namespace, pod, container, da_cluster) (\\n         \
+    \ rate(container_cpu_cfs_periods_total{namespace=~\\\"db-.+\\\", container!=\\\
+    \"\\\", container!=\\\"POD\\\"}[5m])\\n        ) > 0\\n      )\\n      * 100\\\
+    n    )\\n    * on(namespace, pod, da_cluster) group_left(version)\\n      label_replace(\\\
+    n        kube_pod_labels{namespace=~\\\"db-.+\\\"},\\n        \\\"version\\\"\
+    , \\\"$1\\\", \\\"label_app_kubernetes_io_version\\\", \\\"(.+)\\\"\\n      )\\\
+    n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\
+    \n  - record: tenant:pod_weakest_cpu_throttle_percent:max\n    expr: \"max by(tenant,\
+    \ pod, version, da_cluster) (\\n  tenant:container_cpu_throttle_percent:by_container\\\
+    n  and on(namespace, pod, container, da_cluster)\\n  (tenant:container_cpu_percent:by_container\
     \ > 20)\\n)\\n\"\n- name: kubernetes-oom-normalization\n  interval: 1m\n  rules:\n\
     \  - record: tenant:container_oom_events_1h:by_container\n    expr: \"label_replace(\\\
-    n  sum by(namespace, pod, container) (\\n    max_over_time(container_oom_events_total{namespace=~\\\
+    n  sum by(namespace, pod, container, da_cluster) (\\n    max_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n    -\\n    min_over_time(container_oom_events_total{namespace=~\\\
     \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"}[1h])\\n  ),\\n  \\\"\
     tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-restart-normalization\n\
     \  interval: 1m\n  rules:\n  - record: tenant:container_restart_loop:by_container\n\
-    \    expr: \"label_replace(\\n  (\\n    sum by(namespace, pod, container) (\\\
-    n      max by(namespace, pod, uid, container) (\\n        (\\n          max_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
+    \    expr: \"label_replace(\\n  (\\n    sum by(namespace, pod, container, da_cluster)\
+    \ (\\n      max by(namespace, pod, uid, container, da_cluster) (\\n        (\\\
+    n          max_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
     \"db-.+\\\"}[1h])\\n          -\\n          min_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
     \"db-.+\\\"}[1h])\\n          unless\\n          resets(kube_pod_container_status_restarts_total{namespace=~\\\
     \"db-.+\\\"}[1h]) > 0\\n        )\\n        or\\n        (\\n          last_over_time(kube_pod_container_status_restarts_total{namespace=~\\\
     \"db-.+\\\"}[1h])\\n          and\\n          resets(kube_pod_container_status_restarts_total{namespace=~\\\
     \"db-.+\\\"}[1h]) > 0\\n        )\\n      )\\n    ) >= 3\\n  )\\n  and on(namespace,\
-    \ pod, container)\\n  (max by(namespace, pod, container) (changes(kube_pod_container_status_restarts_total{namespace=~\\\
-    \"db-.+\\\"}[20m])) > 0),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\
-    \"(.*)\\\"\\n)\\n\"\n- name: kubernetes-state-matching\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:container_waiting_reason:count\n    expr: \"label_replace(\\\
-    n  count by(namespace, reason) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
+    \ pod, container, da_cluster)\\n  (max by(namespace, pod, container, da_cluster)\
+    \ (changes(kube_pod_container_status_restarts_total{namespace=~\\\"db-.+\\\"}[20m]))\
+    \ > 0),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\\
+    n\"\n- name: kubernetes-state-matching\n  interval: 15s\n  rules:\n  - record:\
+    \ tenant:container_waiting_reason:count\n    expr: \"label_replace(\\n  count\
+    \ by(namespace, reason, da_cluster) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
     \"db-.+\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
     (.*)\\\"\\n)\\n\"\n  - record: tenant:container_crashloop_waiting:by_container\n\
-    \    expr: \"label_replace(\\n  max by(namespace, pod, container) (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\
-    \"db-.+\\\", reason=\\\"CrashLoopBackOff\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\
-    \"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-threshold-normalization\n\
-    \  interval: 15s\n  rules:\n  - record: tenant_version:alert_threshold:container_cpu\n\
-    \    expr: \"label_replace(\\n  max by(tenant, version, severity) (\\n    user_threshold{component=\\\
+    \    expr: \"label_replace(\\n  max by(namespace, pod, container, da_cluster)\
+    \ (\\n    kube_pod_container_status_waiting_reason{namespace=~\\\"db-.+\\\", reason=\\\
+    \"CrashLoopBackOff\\\"} > 0\\n  ),\\n  \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
+    \", \\\"(.*)\\\"\\n)\\n\"\n- name: kubernetes-threshold-normalization\n  interval:\
+    \ 15s\n  rules:\n  - record: tenant_version:alert_threshold:container_cpu\n  \
+    \  expr: \"label_replace(\\n  max by(tenant, version, severity) (\\n    user_threshold{component=\\\
     \"container\\\", metric=\\\"cpu\\\"}\\n  ),\\n  \\\"version\\\", \\\"default\\\
     \", \\\"version\\\", \\\"^$\\\"\\n)\\n\"\n  - record: tenant_version:pod_weakest_cpu_percent:vlabeled\n\
-    \    expr: \"label_replace(\\n  max by(tenant, version) (tenant:pod_weakest_cpu_percent:max),\\\
+    \    expr: \"label_replace(\\n  max by(tenant, version, da_cluster) (tenant:pod_weakest_cpu_percent:max),\\\
     n  \\\"version\\\", \\\"default\\\", \\\"version\\\", \\\"^$\\\"\\n)\\n\"\n  -\
     \ record: tenant_version:alert_threshold:container_memory\n    expr: \"label_replace(\\\
     n  max by(tenant, version, severity) (\\n    user_threshold{component=\\\"container\\\
     \", metric=\\\"memory\\\"}\\n  ),\\n  \\\"version\\\", \\\"default\\\", \\\"version\\\
     \", \\\"^$\\\"\\n)\\n\"\n  - record: tenant_version:pod_weakest_memory_percent:vlabeled\n\
-    \    expr: \"label_replace(\\n  max by(tenant, version) (tenant:pod_weakest_memory_percent:max),\\\
+    \    expr: \"label_replace(\\n  max by(tenant, version, da_cluster) (tenant:pod_weakest_memory_percent:max),\\\
     n  \\\"version\\\", \\\"default\\\", \\\"version\\\", \\\"^$\\\"\\n)\\n\"\n  -\
     \ record: tenant_version:alert_threshold:container_cpu_throttle\n    expr: \"\
     label_replace(\\n  max by(tenant, version, severity) (\\n    user_threshold{component=\\\
     \"container\\\", metric=\\\"cpu_throttle\\\"}\\n  ),\\n  \\\"version\\\", \\\"\
     default\\\", \\\"version\\\", \\\"^$\\\"\\n)\\n\"\n  - record: tenant_version:pod_weakest_cpu_throttle_percent:vlabeled\n\
-    \    expr: \"label_replace(\\n  max by(tenant, version) (tenant:pod_weakest_cpu_throttle_percent:max),\\\
+    \    expr: \"label_replace(\\n  max by(tenant, version, da_cluster) (tenant:pod_weakest_cpu_throttle_percent:max),\\\
     n  \\\"version\\\", \\\"default\\\", \\\"version\\\", \\\"^$\\\"\\n)\\n\"\n  -\
     \ record: rule_pack_kubernetes:pod_container_high_cpu_warning:core\n    expr:\
     \ \"(\\n  (\\n    tenant_version:pod_weakest_cpu_percent:vlabeled\\n    > on(tenant,\
@@ -141,9 +148,9 @@ data:
     n      unless on(tenant, version)\\n        tenant_version:alert_threshold:container_cpu_throttle{severity=\\\
     \"critical\\\"}\\n    )\\n    > on(tenant) group_left()\\n      tenant_version:alert_threshold:container_cpu_throttle{version=\\\
     \"default\\\", severity=\\\"critical\\\"}\\n  )\\n)\\n\"\n  - record: rule_pack_kubernetes:container_oom_killed_warning:core\n\
-    \    expr: \"(\\n  max by(tenant) (tenant:container_oom_events_1h:by_container)\
+    \    expr: \"(\\n  max by(tenant, da_cluster) (tenant:container_oom_events_1h:by_container)\
     \ > 0\\n)\\n\"\n  - record: rule_pack_kubernetes:container_oom_killed_critical:core\n\
-    \    expr: \"(\\n  max by(tenant) (tenant:container_oom_events_1h:by_container)\
+    \    expr: \"(\\n  max by(tenant, da_cluster) (tenant:container_oom_events_1h:by_container)\
     \ >= 3\\n)\\n\"\n"
   kubernetes-alert.yml: "groups:\n- name: kubernetes-container-alerts\n  rules:\n\
     \  - alert: PodContainerHighCPU\n    expr: 'rule_pack_kubernetes:pod_container_high_cpu_warning:core\n\
@@ -325,19 +332,19 @@ data:
     \    summary_zh: '{{ $labels.tenant }} 反覆遭 OOM 終止達臨界'\n      tier: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
     \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n- name: kubernetes-pod-state-alerts\n\
-    \  rules:\n  - alert: ContainerCrashLoop\n    expr: \"(\\n  count by(tenant) (\\\
-    n    tenant:container_crashloop_waiting:by_container\\n    or on(namespace, pod,\
-    \ container)\\n    tenant:container_restart_loop:by_container\\n  )\\n  * on(tenant)\
-    \ group_left\\n  max by(tenant) (user_state_filter{filter=\\\"container_crashloop\\\
-    \"})\\n) > 0\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n\"\n    for: 30s\n    keep_firing_for: 10m\n    labels:\n      maintenance:\
-    \ mute\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: '{{ $value }} container(s) crash-looping: in CrashLoopBackOff\
-    \ now, or restarted >=3 times in the last hour (once within 20m) — per container\
-    \ in tenant:container_crashloop_waiting:by_container and tenant:container_restart_loop:by_container'\n\
-    \      description_zh: '{{ $value }} 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟\
-    \ >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container 與\
-    \ tenant:container_restart_loop:by_container'\n      owner: '{{ with query (printf\
+    \  rules:\n  - alert: ContainerCrashLoop\n    expr: \"(\\n  count by(tenant, da_cluster)\
+    \ (\\n    tenant:container_crashloop_waiting:by_container\\n    or on(namespace,\
+    \ pod, container, da_cluster)\\n    tenant:container_restart_loop:by_container\\\
+    n  )\\n  * on(tenant) group_left\\n  max by(tenant) (user_state_filter{filter=\\\
+    \"container_crashloop\\\"})\\n) > 0\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    keep_firing_for: 10m\n    labels:\n\
+    \      maintenance: mute\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: '{{ $value }} container(s) crash-looping:\
+    \ in CrashLoopBackOff now, or restarted >=3 times in the last hour (once within\
+    \ 20m) — per container in tenant:container_crashloop_waiting:by_container and\
+    \ tenant:container_restart_loop:by_container'\n      description_zh: '{{ $value\
+    \ }} 個容器處於崩潰迴圈：目前在 CrashLoopBackOff，或過去一小時內重啟 >=3 次（最近 20 分鐘內仍有重啟）— 逐容器見 tenant:container_crashloop_waiting:by_container\
+    \ 與 tenant:container_restart_loop:by_container'\n      owner: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
@@ -373,11 +380,11 @@ data:
     \ }} 偵測到映像檔案拉取失敗'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     - name: kubernetes-version-aware-sentinel\n  rules:\n  - record: tenant:kube_pod_info:count\n\
-    \    expr: \"count by(tenant) (\\n  label_replace(kube_pod_info{namespace=~\\\"\
-    db-.+\\\"}, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\\
-    n\"\n  - record: tenant:kube_pod_labels:count\n    expr: \"count by(tenant) (\\\
-    n  label_replace(kube_pod_labels{namespace=~\\\"db-.+\\\"}, \\\"tenant\\\", \\\
-    \"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\n\"\n  - alert: VersionAwareThresholdInert\n\
+    \    expr: \"count by(tenant, da_cluster) (\\n  label_replace(kube_pod_info{namespace=~\\\
+    \"db-.+\\\"}, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\\
+    n\"\n  - record: tenant:kube_pod_labels:count\n    expr: \"count by(tenant, da_cluster)\
+    \ (\\n  label_replace(kube_pod_labels{namespace=~\\\"db-.+\\\"}, \\\"tenant\\\"\
+    , \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\n\"\n  - alert: VersionAwareThresholdInert\n\
     \    expr: '(count(max by(tenant, version, severity) (user_threshold{component=\"\
     container\", metric=\"cpu\", version=~\".+\"})) or vector(0)) > 0\n\n      and\n\
     \n      (count(tenant:kube_pod_info:count) or vector(0)) > 0\n\n      and\n\n\
@@ -459,11 +466,12 @@ data:
     \ }} 的容器在跑，卻沒有 Pod 狀態指標 — Pod 狀態類告警看不到它'\n      tier: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
     \ }}{{ end }}{{ end }}'\n- name: kubernetes-custom-disk-recipe-sentinel\n  rules:\n\
-    \  - record: tenant:kube_pods_running:count\n    expr: \"count by(tenant) (\\\
-    n  label_replace(kube_pod_status_phase{namespace=~\\\"db-.+\\\", phase=\\\"Running\\\
-    \"} == 1, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\n\"\
-    \n  - record: tenant:kubelet_volume_stats:count\n    expr: 'count by(tenant) (kubelet_volume_stats_available_bytes{tenant=~\"\
-    .+\"})\n\n      and on(tenant)\n\n      count by(tenant) (kubelet_volume_stats_capacity_bytes{tenant=~\"\
+    \  - record: tenant:kube_pods_running:count\n    expr: \"count by(tenant, da_cluster)\
+    \ (\\n  label_replace(kube_pod_status_phase{namespace=~\\\"db-.+\\\", phase=\\\
+    \"Running\\\"} == 1, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\
+    \")\\n)\\n\"\n  - record: tenant:kubelet_volume_stats:count\n    expr: 'count\
+    \ by(tenant, da_cluster) (kubelet_volume_stats_available_bytes{tenant=~\".+\"\
+    })\n\n      and on(tenant, da_cluster)\n\n      count by(tenant, da_cluster) (kubelet_volume_stats_capacity_bytes{tenant=~\"\
     .+\"})\n\n      '\n  - alert: CustomRecipeDiskInert\n    expr: \"(\\n  max by(tenant)\
     \ (\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_available_bytes\\\
     \"}\\n    or\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_used_bytes\\\
@@ -493,12 +501,12 @@ data:
     \     summary_zh: 已設定磁碟告警，但偵測不到 {{ $labels.tenant }} 的磁碟資料\n      tier: '{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
     \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n- name: kubernetes-node-health\n\
-    \  rules:\n  - record: tenant:node_owner:info\n    expr: \"max by(node, tenant)\
-    \ (\\n  label_replace(\\n    kube_pod_info{namespace=~\\\"db-.+\\\"}\\n    and\
-    \ on(namespace, pod, uid)\\n      (kube_pod_status_phase{phase=\\\"Running\\\"\
-    } == 1),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.*)\\\"\\n\
-    \  )\\n)\\n\"\n  - record: rule_pack_kubernetes:node_not_ready:core\n    expr:\
-    \ \"(\\n  tenant:node_owner:info\\n  and on(node)\\n    (kube_node_status_condition{condition=\\\
+    \  rules:\n  - record: tenant:node_owner:info\n    expr: \"max by(node, tenant,\
+    \ da_cluster) (\\n  label_replace(\\n    kube_pod_info{namespace=~\\\"db-.+\\\"\
+    }\\n    and on(namespace, pod, uid, da_cluster)\\n      (kube_pod_status_phase{phase=\\\
+    \"Running\\\"} == 1),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"\
+    (.*)\\\"\\n  )\\n)\\n\"\n  - record: rule_pack_kubernetes:node_not_ready:core\n\
+    \    expr: \"(\\n  tenant:node_owner:info\\n  and on(node, da_cluster)\\n    (kube_node_status_condition{condition=\\\
     \"Ready\\\", status=\\\"true\\\"} == 0)\\n)\\n\"\n  - alert: NodeNotReady\n  \
     \  expr: 'rule_pack_kubernetes:node_not_ready:core\n\n      unless on(tenant)\n\
     \n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for:\
@@ -522,48 +530,52 @@ data:
     \ — 影響 {{ $labels.tenant }}\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     - name: kubernetes-ha-replicas\n  rules:\n  - record: rule_pack_kubernetes:ha_replicas_degraded:by_kind\n\
-    \    expr: \"(\\n  max by(tenant, workload_kind) (\\n    label_replace(\\n   \
-    \   label_replace(\\n        (\\n          kube_statefulset_status_replicas_ready{namespace=~\\\
+    \    expr: \"(\\n  max by(tenant, workload_kind, da_cluster) (\\n    label_replace(\\\
+    n      label_replace(\\n        (\\n          kube_statefulset_status_replicas_ready{namespace=~\\\
     \"db-.+\\\"}\\n          < kube_statefulset_status_replicas{namespace=~\\\"db-.+\\\
-    \"}\\n        )\\n        and on(namespace, statefulset)\\n          (changes(kube_statefulset_status_replicas_updated{namespace=~\\\
-    \"db-.+\\\"}[10m]) == 0)\\n        and on(namespace, statefulset)\\n         \
-    \ (kube_statefulset_replicas{namespace=~\\\"db-.+\\\"} >= 2),\\n        \\\"tenant\\\
-    \", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n      ),\\n      \\\"workload_kind\\\
-    \", \\\"statefulset\\\", \\\"\\\", \\\"\\\"\\n    )\\n  )\\n  or\\n  max by(tenant,\
-    \ workload_kind) (\\n    label_replace(\\n      label_replace(\\n        (\\n\
-    \          kube_deployment_status_replicas_available{namespace=~\\\"db-.+\\\"\
-    }\\n          < kube_deployment_spec_replicas{namespace=~\\\"db-.+\\\"}\\n   \
-    \     )\\n        and on(namespace, deployment)\\n          (changes(kube_deployment_status_replicas_updated{namespace=~\\\
-    \"db-.+\\\"}[10m]) == 0)\\n        and on(namespace, deployment)\\n          (kube_deployment_spec_replicas{namespace=~\\\
-    \"db-.+\\\"} >= 2),\\n        \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\
-    \"(.+)\\\"\\n      ),\\n      \\\"workload_kind\\\", \\\"deployment\\\", \\\"\\\
-    \", \\\"\\\"\\n    )\\n  )\\n)\\n\"\n  - alert: TenantHAReplicasDegraded\n   \
-    \ expr: 'max by(tenant) (rule_pack_kubernetes:ha_replicas_degraded:by_kind)\n\n\
-    \      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"} ==\
-    \ 1)\n\n      '\n    for: 15m\n    labels:\n      maintenance: mute\n      severity:\
-    \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      degraded_workload_kinds:\
-    \ '{{ range $i, $s := query (printf `rule_pack_kubernetes:ha_replicas_degraded:by_kind{tenant=%q}`\
-    \ $labels.tenant) | sortByLabel `workload_kind` }}{{ if $i }}, {{ end }}{{ $s.Labels.workload_kind\
-    \ }}{{ end }}'\n      description: Your HA database has fewer ready replicas than\
-    \ desired — redundancy is reduced or lost (at zero ready the workload is down,\
-    \ with a critical alert also firing). A node/pod failure or a stuck reschedule\
-    \ is the usual cause; one more failure could take the service down.\n      description_zh:\
-    \ 您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod\
-    \ 故障或排程卡住；再壞一個就可能導致服務中斷。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2) — a replica\
-    \ is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to\
-    \ the value-based DB liveness rules (#875), so this is the K8s-layer complement.\
-    \ Check kube_statefulset/deployment status + node health / scheduling.'\n    \
-    \  platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based\
-    \ DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。'\n\
-    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: HA workload for {{ $labels.tenant }} is running with reduced\
-    \ redundancy\n      summary_zh: '{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行'\n\
-    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
+    \"}\\n        )\\n        and on(namespace, statefulset, da_cluster)\\n      \
+    \    (changes(kube_statefulset_status_replicas_updated{namespace=~\\\"db-.+\\\"\
+    }[10m]) == 0)\\n        and on(namespace, statefulset, da_cluster)\\n        \
+    \  (kube_statefulset_replicas{namespace=~\\\"db-.+\\\"} >= 2),\\n        \\\"\
+    tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n      ),\\n      \\\"\
+    workload_kind\\\", \\\"statefulset\\\", \\\"\\\", \\\"\\\"\\n    )\\n  )\\n  or\\\
+    n  max by(tenant, workload_kind, da_cluster) (\\n    label_replace(\\n      label_replace(\\\
+    n        (\\n          kube_deployment_status_replicas_available{namespace=~\\\
+    \"db-.+\\\"}\\n          < kube_deployment_spec_replicas{namespace=~\\\"db-.+\\\
+    \"}\\n        )\\n        and on(namespace, deployment, da_cluster)\\n       \
+    \   (changes(kube_deployment_status_replicas_updated{namespace=~\\\"db-.+\\\"\
+    }[10m]) == 0)\\n        and on(namespace, deployment, da_cluster)\\n         \
+    \ (kube_deployment_spec_replicas{namespace=~\\\"db-.+\\\"} >= 2),\\n        \\\
+    \"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n      ),\\n      \\\
+    \"workload_kind\\\", \\\"deployment\\\", \\\"\\\", \\\"\\\"\\n    )\\n  )\\n)\\\
+    n\"\n  - alert: TenantHAReplicasDegraded\n    expr: 'max by(tenant, da_cluster)\
+    \ (rule_pack_kubernetes:ha_replicas_degraded:by_kind)\n\n      unless on(tenant)\n\
+    \n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for:\
+    \ 15m\n    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      degraded_workload_kinds: '{{\
+    \ range $i, $s := query (printf `rule_pack_kubernetes:ha_replicas_degraded:by_kind{tenant=%q,\
+    \ da_cluster=%q}` $labels.tenant $labels.da_cluster) | sortByLabel `workload_kind`\
+    \ }}{{ if $i }}, {{ end }}{{ $s.Labels.workload_kind }}{{ end }}'\n      description:\
+    \ Your HA database has fewer ready replicas than desired — redundancy is reduced\
+    \ or lost (at zero ready the workload is down, with a critical alert also firing).\
+    \ A node/pod failure or a stuck reschedule is the usual cause; one more failure\
+    \ could take the service down.\n      description_zh: 您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為\
+    \ 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。\n      owner:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready.\
+    \ A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness\
+    \ rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment\
+    \ status + node health / scheduling.'\n      platform_summary_zh: '[{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數\
+    \ < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查\
+    \ kube_statefulset/deployment 狀態 + 節點健康 / 排程。'\n      runbook_url: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: HA\
+    \ workload for {{ $labels.tenant }} is running with reduced redundancy\n     \
+    \ summary_zh: '{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行'\n      tier: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
