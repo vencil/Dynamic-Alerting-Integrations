@@ -55,7 +55,8 @@ from _lib_python import (  # noqa: E402
 from _lib_io import (  # noqa: E402  (#4085)
     OutputWriteError, check_repo_artifact, write_repo_artifact,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError  # noqa: E402
+from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906)
 import _lib_parse_tree  # noqa: E402
@@ -3462,6 +3463,21 @@ def _gen_da_init_marker(
 # Interactive prompts
 # ============================================================
 
+# #3822: what an interactive run that cannot read stdin is told to do instead.
+_NO_PROMPT_REMEDY = {
+    'zh': '不經提示執行：--non-interactive --tenants <name>[,<name>...]'
+          '（可再加 --ci / --deploy / --rule-packs）。',
+    'en': 'To run without prompts: --non-interactive --tenants <name>[,<name>...] '
+          '(plus --ci / --deploy / --rule-packs as needed).',
+}
+
+
+def _ask(prompt: str) -> str:
+    """One interactive answer (#3822): `prompt_line`, naming --non-interactive."""
+    lang = 'zh' if _LANG == 'zh' else 'en'
+    return prompt_line(prompt, remedy=_NO_PROMPT_REMEDY[lang], lang=lang)
+
+
 def _prompt_choice(prompt_text: str, choices: list[str], default: str) -> str:
     """Prompt user to choose from a list."""
     while True:
@@ -3469,7 +3485,7 @@ def _prompt_choice(prompt_text: str, choices: list[str], default: str) -> str:
         for i, c in enumerate(choices, 1):
             marker = ' (default)' if c == default else ''
             print(f"  {i}. {c}{marker}")
-        raw = input(f"\n> ").strip()
+        raw = _ask(f"\n> ").strip()
         if not raw:
             return default
         if raw in choices:
@@ -3517,7 +3533,7 @@ def _prompt_multi(prompt_text: str, choices: list[str], defaults: Optional[list[
     else:
         hint = ""
 
-    raw = input(f"\nEnter numbers or names, comma-separated{hint}\n> ").strip()
+    raw = _ask(f"\nEnter numbers or names, comma-separated{hint}\n> ").strip()
     if not raw and defaults:
         return defaults
 
@@ -3539,7 +3555,7 @@ def _prompt_multi(prompt_text: str, choices: list[str], defaults: Optional[list[
 def _prompt_text(prompt_text: str, default: str = '') -> str:
     """Prompt for free-text input."""
     hint = f" [{default}]" if default else ""
-    raw = input(f"\n{prompt_text}{hint}\n> ").strip()
+    raw = _ask(f"\n{prompt_text}{hint}\n> ").strip()
     return raw or default
 
 
@@ -5627,8 +5643,10 @@ def _prompt_missing_tenants(parser: argparse.ArgumentParser) -> list[str]:
     else:
         text = "Enter tenant names (comma-separated; you can pass --tenants next time):"
     try:
-        raw = input(f"\n{text}\n> ")
-    except (EOFError, KeyboardInterrupt):
+        raw = prompt_line(f"\n{text}\n> ", remedy="pass --tenants")
+    except (CallerError, KeyboardInterrupt):
+        # #3822: the read is `prompt_line`'s; the message stays this prompt's
+        # own, which names the one flag a flagged run lacks.
         print(file=sys.stderr)
         parser.error("未讀到租戶名稱；請用 --tenants 帶入（未寫入任何檔案）"
                      if _LANG == 'zh' else

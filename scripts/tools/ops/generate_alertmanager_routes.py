@@ -74,6 +74,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, die_caller_error,
     effective_crash_exit_code)
 import _lib_input  # noqa: E402  (#3751: --config-dir is a declared input)
+from _lib_prompt import prompt_line  # noqa: E402  (#3822: the one stdin read)
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
@@ -417,17 +418,20 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
         # RuntimeError, not EOFError — so an EOFError-only handler left exactly
         # the traceback-at-rc-1 that #1617 exists to remove. Catch the failure
         # by its effect, not by one of its spellings, and put the type in the
-        # message so the next unanticipated one is still diagnosable.
+        # message so the next unanticipated one is still diagnosable. Both are
+        # `_lib_prompt.prompt_line`'s now (#3822), the one read of an answer.
         try:
-            confirm = input("Proceed? [y/N] ").strip().lower()
-        except (EOFError, RuntimeError, OSError) as exc:
-            die_caller_error(
-                f"\n--apply needs an interactive confirmation, but stdin could "
-                f"not be read ({type(exc).__name__}: {exc}). CI, cron, a pipe, "
-                f"a redirect, or a closed stdin all land here.\n"
-                "  Pass --yes to confirm non-interactively.\n"
-                "  ⛔ Do not drop --apply to clear this — that stops applying "
-                "anything to the cluster, which is not what you asked for.")
+            confirm = prompt_line(
+                "Proceed? [y/N] ",
+                remedy="--apply needs an interactive confirmation; CI, cron, a "
+                       "pipe, a redirect, or a closed stdin all land here.\n"
+                       "  Pass --yes to confirm non-interactively.\n"
+                       "  ⛔ Do not drop --apply to clear this — that stops "
+                       "applying anything to the cluster, which is not what "
+                       "you asked for.").strip().lower()
+        except CallerError as exc:
+            # A SystemExit here, as before: the findings file is written on it.
+            die_caller_error(f"\n{exc.error_line}", exc.reason)
         if confirm not in ("y", "yes"):
             print("Aborted.")
             sys.exit(EXIT_OK)
