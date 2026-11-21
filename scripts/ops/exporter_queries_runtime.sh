@@ -152,8 +152,8 @@ elif [[ "$PACK" == db2 ]]; then
   # DB2 authenticates against the operating system: the monitor user is an OS
   # user of the container, with no instance authority (not SYSMON).
   # A new database's automatic-storage tablespaces have no maximum size, which
-  # db2_tablespace leaves out (#4093), so it would serve no row. One tablespace
-  # per served shape: auto-resize with a maximum, and a fixed-size DMS one.
+  # db2_tablespace leaves out (db2_storage_path serves their file system, #4093),
+  # so it would serve no row. One tablespace per served shape: auto-resize with a maximum, and a fixed-size DMS one.
   # Last, each monitoring table function is called once as the instance owner:
   # the first call on a database that has just been created is slow, and the
   # queries' 8s timeouts would turn that into a finding about the SQL.
@@ -166,7 +166,8 @@ elif [[ "$PACK" == db2 ]]; then
       "CREATE TABLESPACE CI_TS_FIX MANAGED BY DATABASE USING (FILE '/database/data/ci_ts_fix.dat' 2000) AUTORESIZE NO" \
       "SELECT COUNT(*) FROM TABLE(MON_GET_DATABASE(-1))" \
       "SELECT COUNT(*) FROM TABLE(MON_GET_TRANSACTION_LOG(-1))" \
-      "SELECT COUNT(*) FROM TABLE(MON_GET_TABLESPACE(NULL, -1))"
+      "SELECT COUNT(*) FROM TABLE(MON_GET_TABLESPACE(NULL, -1))" \
+      "SELECT COUNT(*) FROM TABLE(ADMIN_GET_STORAGE_PATHS(NULL, -1))"
   } >"$WORK/setup.sh"
   docker cp "$WORK/setup.sh" "$DB:/tmp/ci_setup.sh" >/dev/null \
     || cannot_run "could not copy the setup script into the db2 container"

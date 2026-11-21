@@ -1,0 +1,234 @@
+# promtool unit test — DB2StoragePathAlmostFull (#4093): the file system of the
+# automatic-storage paths, % used, the fullest path of the tenant.
+#
+# Pinned here:
+#   * the share is used / total PER PATH, then the fullest path wins: t-max has
+#     one path at 90 % and one at 40 % and fires with 90; `min` reads 40 and
+#     `avg` 65, both silent; `sum` of the two shares reads 130.
+#   * the share is taken per path BEFORE aggregating: t-mix's paths are 85 % of
+#     a small file system and 10 % of a huge one — the fullest is 85 % (fires),
+#     while used-summed over total-summed reads about 10 % (silent).
+#   * a path that reports a zero-size file system has no share and does not
+#     fire (the `> 0` guard), and does not hide the tenant's other path.
+#   * maintenance mutes it; a tenant below the threshold is silent, and so is
+#     one exactly AT it (t-edge, 80 against 80: the comparison is `>`).
+#   * second block: `for: 5m` from both sides (pending at 4m45s, firing by
+#     5m30s); two exporters reporting the same (storage_group, path) and one
+#     path listed under two storage groups both evaluate (no many-to-many), the
+#     fullest still wins; only filter="maintenance" with value 1 mutes.
+#   * one tenant in two clusters (ADR-006, da_cluster on the scrape): each
+#     cluster keeps its own figure, and only the full one fires — a quiet
+#     cluster does not hide it and is not blamed for it.
+rule_files:
+  - ../../rule-packs/rule-pack-db2.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-max", instance="db-0", storage_group="IBMSTOGROUP", path="/data1"}'
+        values: '900x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-max", instance="db-0", storage_group="IBMSTOGROUP", path="/data1"}'
+        values: '1000x60'
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-max", instance="db-0", storage_group="IBMSTOGROUP", path="/data2"}'
+        values: '400x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-max", instance="db-0", storage_group="IBMSTOGROUP", path="/data2"}'
+        values: '1000x60'
+
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-mix", instance="db-0", storage_group="SG_SMALL", path="/small"}'
+        values: '85x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-mix", instance="db-0", storage_group="SG_SMALL", path="/small"}'
+        values: '100x60'
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-mix", instance="db-0", storage_group="SG_BIG", path="/big"}'
+        values: '10000x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-mix", instance="db-0", storage_group="SG_BIG", path="/big"}'
+        values: '100000x60'
+
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-zero", instance="db-0", storage_group="IBMSTOGROUP", path="/gone"}'
+        values: '500x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-zero", instance="db-0", storage_group="IBMSTOGROUP", path="/gone"}'
+        values: '0x60'
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-zero", instance="db-0", storage_group="IBMSTOGROUP", path="/ok"}'
+        values: '500x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-zero", instance="db-0", storage_group="IBMSTOGROUP", path="/ok"}'
+        values: '1000x60'
+
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-low", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '790x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-low", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-edge", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '800x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-edge", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'user_threshold{tenant="t-edge", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-maint", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '950x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-maint", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'user_state_filter{tenant="t-maint", filter="maintenance"}'
+        values: '1x60'
+
+      - series: 'user_threshold{tenant="t-max", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-mix", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-zero", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-low", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+      - series: 'user_threshold{tenant="t-maint", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+
+    promql_expr_test:
+      - expr: tenant:db2_storage_path_used_percent:max
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-max"}'
+            value: 90
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-mix"}'
+            value: 85
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-zero"}'
+            value: 50
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-low"}'
+            value: 79
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-edge"}'
+            value: 80
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-maint"}'
+            value: 95
+
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DB2StoragePathAlmostFull
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DB2StoragePathAlmostFull
+        exp_alerts:
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: t-max
+            exp_annotations:
+              summary: "DB2 storage path file system nearing capacity on t-max"
+              summary_zh: "t-max 上 DB2 storage path 的檔案系統即將滿容"
+              platform_summary: "[] t-max: DB2 storage path file system nearing capacity — automatic-storage tablespaces cannot grow once it is full — storage review"
+              platform_summary_zh: "[] t-max：DB2 storage path 的檔案系統即將滿容 — 滿了之後自動儲存的 tablespace 無法再擴充 — 儲存審查"
+              description: "Storage path file system usage (fullest path; the file system may be shared with other data): 90.0%"
+              description_zh: "Storage path 檔案系統使用率（最滿的那個路徑；該檔案系統可能與其他資料共用）：90.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              maintenance: mute
+              severity: warning
+              tenant: t-mix
+            exp_annotations:
+              summary: "DB2 storage path file system nearing capacity on t-mix"
+              summary_zh: "t-mix 上 DB2 storage path 的檔案系統即將滿容"
+              platform_summary: "[] t-mix: DB2 storage path file system nearing capacity — automatic-storage tablespaces cannot grow once it is full — storage review"
+              platform_summary_zh: "[] t-mix：DB2 storage path 的檔案系統即將滿容 — 滿了之後自動儲存的 tablespace 無法再擴充 — 儲存審查"
+              description: "Storage path file system usage (fullest path; the file system may be shared with other data): 85.0%"
+              description_zh: "Storage path 檔案系統使用率（最滿的那個路徑；該檔案系統可能與其他資料共用）：85.0%"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  - interval: 15s
+    input_series:
+      # two exporters (pureScale: one per member) see the same path
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-two", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '900x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-two", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-two", instance="db-1", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '500x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-two", instance="db-1", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      # one path listed under two storage groups
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-two", instance="db-0", storage_group="SG_B", path="/data"}'
+        values: '900x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-two", instance="db-0", storage_group="SG_B", path="/data"}'
+        values: '1000x60'
+      - series: 'user_threshold{tenant="t-two", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+
+      # one tenant, two clusters: one full, one not
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-cl", da_cluster="east", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '900x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-cl", da_cluster="east", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-cl", da_cluster="west", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '500x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-cl", da_cluster="west", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'user_threshold{tenant="t-cl", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+
+      # a state filter that is not maintenance does not mute
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-other", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '950x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-other", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'user_state_filter{tenant="t-other", filter="silent"}'
+        values: '1x60'
+      - series: 'user_threshold{tenant="t-other", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+
+      # maintenance present with value 0 does not mute
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-off", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '950x60'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-off", instance="db-0", storage_group="IBMSTOGROUP", path="/data"}'
+        values: '1000x60'
+      - series: 'user_state_filter{tenant="t-off", filter="maintenance"}'
+        values: '0x60'
+      - series: 'user_threshold{tenant="t-off", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x60'
+
+    promql_expr_test:
+      - expr: tenant:db2_storage_path_used_percent:max
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-two"}'
+            value: 90
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-other"}'
+            value: 95
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-off"}'
+            value: 95
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-cl", da_cluster="east"}'
+            value: 90
+          - labels: 'tenant:db2_storage_path_used_percent:max{tenant="t-cl", da_cluster="west"}'
+            value: 50
+      - expr: count by(tenant, da_cluster) (ALERTS{alertname="DB2StoragePathAlmostFull", alertstate="firing", tenant="t-cl"})
+        eval_time: 10m
+        exp_samples:
+          - labels: '{tenant="t-cl", da_cluster="east"}'
+            value: 1
+      - expr: count by(tenant) (ALERTS{alertname="DB2StoragePathAlmostFull", alertstate="pending"})
+        eval_time: 4m45s
+        exp_samples:
+          - labels: '{tenant="t-two"}'
+            value: 1
+          - labels: '{tenant="t-cl"}'
+            value: 1
+          - labels: '{tenant="t-other"}'
+            value: 1
+          - labels: '{tenant="t-off"}'
+            value: 1
+      - expr: count by(tenant) (ALERTS{alertname="DB2StoragePathAlmostFull", alertstate="firing"})
+        eval_time: 4m45s
+        exp_samples: []
+      - expr: count by(tenant) (ALERTS{alertname="DB2StoragePathAlmostFull", alertstate="firing"})
+        eval_time: 5m30s
+        exp_samples:
+          - labels: '{tenant="t-two"}'
+            value: 1
+          - labels: '{tenant="t-cl"}'
+            value: 1
+          - labels: '{tenant="t-other"}'
+            value: 1
+          - labels: '{tenant="t-off"}'
+            value: 1

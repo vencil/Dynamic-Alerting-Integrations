@@ -283,7 +283,8 @@ _DB_SETUP = {
                   " (FILE '/database/data/ci_ts_fix.dat' 2000) AUTORESIZE NO\"",
                   'db2 "SELECT COUNT(*) FROM TABLE(MON_GET_DATABASE(-1))"',
                   'db2 "SELECT COUNT(*) FROM TABLE(MON_GET_TRANSACTION_LOG(-1))"',
-                  'db2 "SELECT COUNT(*) FROM TABLE(MON_GET_TABLESPACE(NULL, -1))"'],
+                  'db2 "SELECT COUNT(*) FROM TABLE(MON_GET_TABLESPACE(NULL, -1))"',
+                  'db2 "SELECT COUNT(*) FROM TABLE(ADMIN_GET_STORAGE_PATHS(NULL, -1))"'],
     },
 }
 

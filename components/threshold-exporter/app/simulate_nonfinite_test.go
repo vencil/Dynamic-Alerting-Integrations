@@ -55,7 +55,7 @@ func TestSimulateHandler_NonFiniteFloat_ReadableWithPythonHash(t *testing.T) {
 	// ensure_ascii=False) of the same tenant body with the built-in table
 	// (#3832) laid under it, first 16 hex (same fixture as pkg/config's
 	// RoutingOverrideInf test).
-	if resp.MergedHash != "487e10b578be6600" {
-		t.Errorf("merged_hash = %q, want Python's 487e10b578be6600", resp.MergedHash)
+	if resp.MergedHash != "9faaef91e3c5b555" {
+		t.Errorf("merged_hash = %q, want Python's 9faaef91e3c5b555", resp.MergedHash)
 	}
 }

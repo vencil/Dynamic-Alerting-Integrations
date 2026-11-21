@@ -91,6 +91,11 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:db2_tablespace_used_percent:max
+  db2_storage_path_used_percent:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_storage_path_used_percent:max
   es_disk_usage_percent:
     pack: rule-pack-elasticsearch.yaml
     scope: tenant

@@ -163,6 +163,14 @@ thresholdConfig:
     # the auto-resize form, which reuses 80 here). The health monitor itself is deprecated; the
     # number is what is borrowed
     db2_tablespace_used_percent: 80
+    # % — Storage path file system usage warning: bytes used over the size of the file system an
+    # automatic-storage path is on, fullest path per tenant — what a tablespace with no MAXSIZE runs
+    # out of (#4093). 80 is the warning threshold of Zabbix's Linux template and equals
+    # db2_tablespace_used_percent; Db2's own indicator for the LOG file system (db.log_fs_util, the
+    # same used / total) warns at 75 — Db2 publishes none for storage paths. Zabbix leaves
+    # root-reserved blocks out of its total, so its figure reads a few points higher than this one.
+    # The file system may hold other data too
+    db2_storage_path_used_percent: 80
     # ── rabbitmq：RabbitMQ (kbudde/rabbitmq_exporter) ──
     # % — Node memory warning: resident memory as % of the memory high watermark, fullest node
     # (#3929: 80 → 90, measured per node)（critical 加嚴

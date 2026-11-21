@@ -21,7 +21,9 @@ data:
     \ \"max by(tenant) (\\n  100 * db2_log_used_bytes\\n  / ((db2_log_used_bytes +\
     \ db2_log_available_bytes) > 0)\\n)\\n\"\n  - record: tenant:db2_deadlocks:increase5m\n\
     \    expr: sum by(tenant) (increase(db2_deadlocks_total[5m]))\n  - record: tenant:db2_tablespace_used_percent:max\n\
-    \    expr: max by(tenant) (db2_tablespace_used_percent)\n  - record: tenant:db2_lock_wait_time:rate5m\n\
+    \    expr: max by(tenant) (db2_tablespace_used_percent)\n  - record: tenant:db2_storage_path_used_percent:max\n\
+    \    expr: \"max by(tenant, da_cluster) (\\n  100 * db2_storage_path_fs_used_bytes\\\
+    n  / (db2_storage_path_fs_total_bytes > 0)\\n)\\n\"\n  - record: tenant:db2_lock_wait_time:rate5m\n\
     \    expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))\n  - record:\
     \ tenant:db2_sort_overflow_ratio:avg\n    expr: 'sum by(tenant) (rate(db2_sort_overflows_total[5m]))\n\
     \n      / (sum by(tenant) (rate(db2_sorts_total[5m])) >= 200 / 300)\n\n      '\n\
@@ -37,6 +39,8 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"deadlocks_per_5m\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_tablespace_used_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"tablespace_used_percent\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_storage_path_used_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"storage_path_used_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_lock_wait_time\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"lock_wait_time\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_lock_wait_time_critical\n\
@@ -220,7 +224,29 @@ data:
     \ DB2 tablespace nearing capacity on {{ $labels.tenant }}\n      summary_zh: '{{\
     \ $labels.tenant }} 上 DB2 tablespace 即將滿容'\n      tier: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: DB2HighLockWaitTime\n\
+    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: DB2StoragePathAlmostFull\n\
+    \    expr: \"(\\n  tenant:db2_storage_path_used_percent:max\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:db2_storage_path_used_percent\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
+    \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: 'Storage path file system usage (fullest\
+    \ path; the file system may be shared with other data): {{ $value | printf \"\
+    %.1f\" }}%'\n      description_zh: Storage path 檔案系統使用率（最滿的那個路徑；該檔案系統可能與其他資料共用）：{{\
+    \ $value | printf \"%.1f\" }}%\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: DB2 storage path file system nearing capacity — automatic-storage\
+    \ tablespaces cannot grow once it is full — storage review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：DB2 storage path 的檔案系統即將滿容 — 滿了之後自動儲存的 tablespace 無法再擴充 — 儲存審查'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ DB2 storage path file system nearing capacity on {{ $labels.tenant }}\n    \
+    \  summary_zh: '{{ $labels.tenant }} 上 DB2 storage path 的檔案系統即將滿容'\n      tier:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: DB2HighLockWaitTime\n\
     \    expr: \"(\\n  tenant:db2_lock_wait_time:rate5m\\n  > on(tenant) group_left\\\
     n  tenant:alert_threshold:db2_lock_wait_time\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\

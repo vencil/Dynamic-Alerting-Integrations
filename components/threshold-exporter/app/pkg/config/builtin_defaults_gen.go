@@ -10,6 +10,7 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 	{"container_cpu_throttle", 25},
 	{"container_memory", 85},
 	{"db2_log_usage_percent", 75},
+	{"db2_storage_path_used_percent", 80},
 	{"db2_tablespace_used_percent", 80},
 	{"es_disk_usage_percent", 85},
 	{"es_heap_usage_percent", 85},
@@ -24,4 +25,4 @@ var builtinDefaultEntries = []builtinDefaultEntry{
 
 // builtinDefaultsDigest names this table: the first 12 hex digits of the
 // SHA-256 of its `key=value` lines, sorted by key.
-const builtinDefaultsDigest = "791716cf1182"
+const builtinDefaultsDigest = "3f4ed6d06f1b"
