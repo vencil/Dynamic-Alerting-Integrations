@@ -1,6 +1,6 @@
 {
   "at": "2026-11-13T12:00:00Z",
   "violations": [
-    {"tenant": "ta", "field": "mysql_connection_usage_percent", "severity": "error"}
+    {"tenant": "ta", "field": "mysql_connection_usage_percent", "severity": "warning"}
   ]
 }
