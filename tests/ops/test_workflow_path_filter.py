@@ -711,6 +711,66 @@ def test_a_go_file_is_recorded_even_when_a_hand_written_pattern_covers_it() -> N
     assert record["files"] == ["zgo/za.go"] and record["import_dirs"] == []
 
 
+def _out_file(path: Path, files: list[str], dirs: list[str], *, workflow: str = WORKFLOW,
+              job: str = "zjob") -> Path:
+    path.write_text(json.dumps({"workflow": workflow, "jobs": {
+        job: {"files": files, "import_dirs": dirs}}}), encoding="utf-8")
+    return path
+
+
+def test_merge_replaces_a_jobs_record_with_the_union_of_its_legs(
+        repo: Path, tmp_path: Path) -> None:
+    """A matrix job's legs each read their own part and each write an
+    `--out` file. `record` takes one measurement and would keep the last leg
+    only; `merge` takes them all. It REPLACES the entry, so a re-recording
+    still shrinks the list — a leg left out is left out."""
+    _record_and_generate(repo, tmp_path / "t")
+    a = _out_file(tmp_path / "a.json", ["zlib/zcat.txt", "ztool/zmain.py"], ["ztool"])
+    b = _out_file(tmp_path / "b.json", ["zlib/zdirect.py"], ["zlib"])
+    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(a), str(b)) == 0
+    job = json.loads((repo / ".github/path-traces" / f"{WORKFLOW}.json").read_text(
+        encoding="utf-8"))["jobs"]["zjob"]
+    assert job == {"files": ["zlib/zcat.txt", "zlib/zdirect.py", "ztool/zmain.py"],
+                   "import_dirs": ["zlib", "ztool"]}
+    # The order of the legs is not part of the answer, and one leg alone is
+    # that leg alone.
+    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(b), str(a)) == 0
+    assert json.loads((repo / ".github/path-traces" / f"{WORKFLOW}.json").read_text(
+        encoding="utf-8"))["jobs"]["zjob"] == job
+    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(b)) == 0
+    assert json.loads((repo / ".github/path-traces" / f"{WORKFLOW}.json").read_text(
+        encoding="utf-8"))["jobs"]["zjob"] == {"files": ["zlib/zdirect.py"],
+                                               "import_dirs": ["zlib"]}
+
+
+@pytest.mark.parametrize("make, message", [
+    (lambda p: _out_file(p, ["a"], [], workflow="zother.yaml"), "it is a trace of `zother.yaml`"),
+    (lambda p: _out_file(p, ["a"], [], job="zelse"), "KeyError"),
+    (lambda p: (p.write_text('{"workflow": "zflow.yaml", "jobs": {"zjob": {"files": "a", '
+                             '"import_dirs": []}}}', encoding="utf-8"), p)[1],
+     "`files` is not a list of strings"),
+    (lambda p: (p.write_text('{"workflow": "zflow.yaml", "jobs": {"zjob": {"files": [], '
+                             '"import_dirs": [], "go": []}}}', encoding="utf-8"), p)[1],
+     "pre-atime"),
+    (lambda p: (p.write_text("{not json", encoding="utf-8"), p)[1], "JSONDecodeError"),
+    (lambda p: p, "FileNotFoundError"),
+])
+def test_merge_refuses_a_file_that_is_not_this_jobs_measurement_and_writes_nothing(
+        repo: Path, tmp_path: Path, make, message: str) -> None:
+    """One bad leg among good ones: nothing is written — a union with a hole
+    in it would look like a complete record."""
+    _record_and_generate(repo, tmp_path / "t")
+    trace = repo / ".github/path-traces" / f"{WORKFLOW}.json"
+    before = trace.read_bytes()
+    good = _out_file(tmp_path / "good.json", ["zlib/zcat.txt"], [])
+    bad = make(tmp_path / "bad.json")
+    with pytest.raises(CallerError, match=message):
+        _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(good), str(bad))
+    assert trace.read_bytes() == before
+    with pytest.raises(CallerError, match="has no job `znone`"):
+        _main(repo, "merge", "--workflow", WORKFLOW, "--job", "znone", str(good))
+
+
 def test_the_read_set_is_the_union_of_every_segment(
         repo: Path, tmp_path: Path, capsys) -> None:
     """A read collected in an earlier segment is the job's as much as one in
@@ -1310,14 +1370,14 @@ def test_the_real_ledger_holds_both_kinds_and_the_ruled_members() -> None:
     assert wpf.ADVISORY_KINDS == (wpf.DIFF_DRIVEN, wpf.AWAITS_READ_ASSERTION)
     by_kind = {kind: sorted(n for n, (k, _w) in wpf.ADVISORY_PATH_GATES.items() if k == kind)
                for kind in wpf.ADVISORY_KINDS}
-    assert by_kind[wpf.AWAITS_READ_ASSERTION] == [
-        "backtest.yaml", "component-docker-build.yaml", "forge-e2e-github.yaml"]
+    # component-docker-build.yaml left this list when it was wired (#3756
+    # stage 3, second of four).
+    assert by_kind[wpf.AWAITS_READ_ASSERTION] == ["backtest.yaml", "forge-e2e-github.yaml"]
     assert by_kind[wpf.DIFF_DRIVEN] == [
         "bench-gate-pr.yaml", "bench-probe-write-latency.yaml",
         "bench-workload-effect.yaml", "bench-workload-record.yaml",
         "config-diff-advisory.yml", "guard-defaults-impact.yml"]
-    assert wpf.READ_ASSERTION_ORDER == (
-        "component-docker-build.yaml", "backtest.yaml", "forge-e2e-github.yaml")
+    assert wpf.READ_ASSERTION_ORDER == ("backtest.yaml", "forge-e2e-github.yaml")
 
 
 def _all_real_patterns() -> list[str]:

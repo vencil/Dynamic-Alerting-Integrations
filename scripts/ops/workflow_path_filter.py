@@ -45,6 +45,12 @@ times (owner ruling on #3756). Three pieces:
         comparison of the parsed step plus a check of WHERE it sits (see
         `Traced.wiring_errors`), not a search for a command name.
 
+A MATRIX job is one job id with several legs, each reading its own part
+(component-docker-build.yaml: eight images). Every leg runs the same two
+generated steps and is asserted on its own reads; the committed record of the
+job is the UNION of the legs — `merge`, given every leg's `--out` file, since
+`record` takes one measurement and would keep the last leg only.
+
 `generate --check` also holds, for EVERY workflow (traced or not):
 
   * no dead entry — each positive pattern of each `on.<event>.paths` list
@@ -124,6 +130,8 @@ Usage:
         --job resolve --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json"
     python3 scripts/ops/workflow_path_filter.py record --workflow image-ref-resolve.yaml \\
         --job resolve --state /var/tmp/atime-trace.json
+    python3 scripts/ops/workflow_path_filter.py merge --workflow component-docker-build.yaml \\
+        --job build leg-1/path-trace.json leg-2/path-trace.json …
     python3 scripts/ops/workflow_path_filter.py generate [--check]
 """
 from __future__ import annotations
@@ -252,10 +260,6 @@ ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
     "bench-workload-record.yaml": (
         DIFF_DRIVEN,
         "the benchmark test files whose workload it records"),
-    "component-docker-build.yaml": (
-        AWAITS_READ_ASSERTION,
-        "the reads happen inside `docker build`: whether the daemon's reads "
-        "of the build context move access times is not measured yet"),
     "config-diff-advisory.yml": (
         DIFF_DRIVEN,
         "the conf.d tree whose base/head pair it diffs; what it loads depends "
@@ -271,11 +275,10 @@ ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
 }
 
 # The order the AWAITS_READ_ASSERTION workflows are wired in (ruling point 4;
-# image-ref-resolve.yaml, already traced, is converted first). Kept beside the
-# ledger and compared with it both ways, so the queue cannot name a workflow
-# the ledger has dropped or miss one it has gained.
+# image-ref-resolve.yaml and component-docker-build.yaml went first and are
+# traced). Kept beside the ledger and compared with it both ways, so the queue
+# cannot name a workflow the ledger has dropped or miss one it has gained.
 READ_ASSERTION_ORDER: tuple[str, ...] = (
-    "component-docker-build.yaml",
     "backtest.yaml",
     "forge-e2e-github.yaml",
 )
@@ -599,6 +602,20 @@ def trace_path(root: Path, workflow: str) -> Path:
 TRACE_JOB_KEYS = ("files", "import_dirs")
 
 
+def _check_job_record(job: object) -> None:
+    """Raises unless *job* is one job's record as this tool writes it."""
+    if not isinstance(job, dict):
+        raise TypeError("a job's record is not a mapping")
+    other = sorted(set(job) - set(TRACE_JOB_KEYS))
+    if other:
+        raise TypeError(
+            f"a job holds {', '.join(f'`{k}`' for k in other)}, which this tool "
+            "does not write (a `go` key is the pre-atime format)")
+    for key in TRACE_JOB_KEYS:
+        if not (isinstance(job[key], list) and all(isinstance(v, str) for v in job[key])):
+            raise TypeError(f"`{key}` is not a list of strings")
+
+
 def load_trace(root: Path, workflow: str) -> dict:
     """The committed trace; an absent file is an empty one (a workflow being
     wired for the first time), a malformed one is no answer. So is one in the
@@ -609,16 +626,7 @@ def load_trace(root: Path, workflow: str) -> dict:
         doc = json.loads(path.read_text(encoding="utf-8"))
         jobs = doc["jobs"]
         for job in jobs.values():
-            other = sorted(set(job) - set(TRACE_JOB_KEYS))
-            if other:
-                raise TypeError(
-                    f"a job holds {', '.join(f'`{k}`' for k in other)}, which "
-                    "this tool does not write (a `go` key is the pre-atime "
-                    "format)")
-            for key in TRACE_JOB_KEYS:
-                if not (isinstance(job[key], list)
-                        and all(isinstance(v, str) for v in job[key])):
-                    raise TypeError(f"`{key}` is not a list of strings")
+            _check_job_record(job)
     except FileNotFoundError:
         return {"workflow": workflow, "jobs": {}}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -1056,6 +1064,49 @@ def cmd_record(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_merge(args: argparse.Namespace) -> int:
+    """One job's record from several measurements of it — the legs of a
+    matrix job, each of which read its own part. REPLACES the job's entry
+    with the union of the given `--out` files, so a re-recording still
+    shrinks the list; a leg left out of the command line is left out of the
+    record, and its `assert` step names what that costs."""
+    tracked = tracked_files(args.root)
+    path = args.root / WORKFLOWS / args.workflow
+    if not path.is_file():
+        raise _caller_error(f"{WORKFLOWS}/{args.workflow} does not exist.")
+    traced = Traced(args.root, path, tracked)
+    if args.job not in traced.job_ids():
+        raise _caller_error(
+            f"{args.workflow} has no job `{args.job}` (it has: "
+            f"{', '.join(traced.job_ids()) or 'none'}).")
+    files: set[str] = set()
+    dirs: set[str] = set()
+    for name in args.out_files:
+        try:
+            doc = json.loads(Path(name).read_text(encoding="utf-8"))
+            if doc.get("workflow") != traced.name:
+                raise ValueError(f"it is a trace of `{doc.get('workflow')}`")
+            job = doc["jobs"][args.job]
+            _check_job_record(job)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise _caller_error(
+                f"{name} is not a trace `assert --out` wrote for {traced.name} "
+                f"job `{args.job}` ({type(exc).__name__}: {exc}). Nothing was "
+                "written.") from exc
+        files |= set(job["files"])
+        dirs |= set(job["import_dirs"])
+    doc = traced.trace
+    doc["workflow"] = traced.name
+    doc["jobs"][args.job] = {"files": sorted(files), "import_dirs": sorted(dirs)}
+    out = trace_path(args.root, traced.name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(dump_trace(doc), encoding="utf-8", newline="\n")
+    print(f"merged {len(args.out_files)} measurement(s) of job `{args.job}`: "
+          f"{len(files)} file(s) in {out.relative_to(args.root).as_posix()}; now "
+          "run `workflow_path_filter.py generate`.")
+    return EXIT_OK
+
+
 def _ledger_findings(traced_names: set[str], gated: set[str],
                      seen: set[tuple[str, str, str]]) -> list[str]:
     findings = []
@@ -1212,6 +1263,14 @@ def main(argv: list[str] | None = None) -> int:
         if name == "assert":
             p.add_argument("--out", help="write this job's trace here (JSON)")
         p.set_defaults(func=func)
+
+    p = sub.add_parser("merge", help="replace a job's record with the union of several "
+                                     "`assert --out` files (the legs of a matrix job)")
+    p.add_argument("--workflow", required=True, help="workflow file name")
+    p.add_argument("--job", required=True, help="job id")
+    p.add_argument("out_files", nargs="+", metavar="OUT",
+                   help="a file `assert --out` wrote for this job")
+    p.set_defaults(func=cmd_merge)
 
     p = sub.add_parser("generate", help="write the generated regions of every traced workflow")
     p.add_argument("--check", action="store_true",

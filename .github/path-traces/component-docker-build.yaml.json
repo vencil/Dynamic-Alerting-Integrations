@@ -1,0 +1,9 @@
+{
+  "jobs": {
+    "build": {
+      "files": [],
+      "import_dirs": []
+    }
+  },
+  "workflow": "component-docker-build.yaml"
+}
