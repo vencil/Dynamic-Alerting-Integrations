@@ -24,12 +24,17 @@ from pathlib import Path
 
 import pytest
 
+from _tree import repo_files  # noqa: E402  (tests/ on sys.path: conftest)
+
 ROOT = Path(__file__).resolve().parents[2]
 DOCS = (ROOT / "docs" / "cli-reference.md", ROOT / "docs" / "cli-reference.en.md")
 FIXTURES = ROOT / "tests" / "fixtures" / "opa"
 BRIDGE = ROOT / "scripts" / "tools" / "ops" / "policy_opa_bridge.py"
 
 _MARKER = re.compile(r"<!-- rego-example: ([a-z0-9-]+) -->\n```rego\n(.*?)\n```", re.S)
+#: A fenced block of Rego by any spelling of its info string, and the line before it.
+_FENCE = re.compile(r"^(.*)\n```[ \t]*(rego|opa)\b", re.M | re.I)
+_ANY_MARKER = re.compile(r"rego-example:", re.I)
 
 
 def _examples(doc: Path) -> dict[str, str]:
@@ -62,6 +67,26 @@ def test_every_example_has_a_fixture_and_every_fixture_an_example():
     assert sorted(ZH) == FIXTURE_NAMES
     for name in FIXTURE_NAMES:
         assert (FIXTURES / name / "conf.d").is_dir() and (FIXTURES / name / "expected.json").is_file(), name
+
+
+def test_every_rego_block_in_the_docs_is_a_checked_example():
+    """A Rego block anywhere under docs/ is one of the examples evaluated here:
+    marked, spelt ```rego, and in the two pages this test reads — never an
+    unchecked copy beside them."""
+    unchecked = []
+    for doc in repo_files(".md"):
+        rel = doc.relative_to(ROOT).as_posix()
+        if not rel.startswith("docs/"):
+            continue
+        text = doc.read_text(encoding="utf-8")
+        for m in _FENCE.finditer(text):
+            line = text[:m.start()].count("\n") + 2
+            if doc not in DOCS or not re.fullmatch(r"<!-- rego-example: [a-z0-9-]+ -->", m.group(1)) \
+                    or m.group(2) != "rego":
+                unchecked.append(f"{rel}:{line}")
+        if doc not in DOCS and _ANY_MARKER.search(text):
+            unchecked.append(f"{rel}: a rego-example marker outside {[d.name for d in DOCS]}")
+    assert not unchecked, unchecked
 
 
 def test_the_pin_is_one_version_and_one_checksum():

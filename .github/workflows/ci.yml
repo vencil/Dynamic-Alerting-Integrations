@@ -2861,6 +2861,8 @@ jobs:
       - name: Evaluate the documented rego examples on OPA
         env:
           OPA_REQUIRED: "1"
+          # da-guard was built and exported above (DA_GUARD_BINARY).
+          VIBE_TEST_GO_BINARIES: skip
         run: python3 -m pytest -p no:cacheprovider -q tests/ops/test_rego_examples.py
 
   federation-e2e:
