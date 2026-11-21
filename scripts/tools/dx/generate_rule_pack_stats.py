@@ -13,7 +13,6 @@
 import argparse
 import os
 import re
-import stat
 import sys
 from pathlib import Path
 
@@ -26,8 +25,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_atomic_write import atomic_write_text  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import ensure_dir, exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION, Report  # noqa: E402
 
@@ -443,14 +441,11 @@ def main():
             # #2128: internal paths (flag=None); a write failure is rc 2 +
             # one line naming the file, not a traceback.
             if kind == "fragment":
-                with output_write(INCLUDE_DIR, flag=None, action="create directory"):
-                    INCLUDE_DIR.mkdir(parents=True, exist_ok=True)
-                with output_write(path, flag=None):
-                    atomic_write_text(path, updated)
+                ensure_dir(INCLUDE_DIR, flag=None)
+                write_repo_artifact(path, updated)
                 print(f"✅ Generated {rel}")
             elif updated != current:
-                with output_write(path, flag=None):
-                    atomic_write_text(path, updated)
+                write_repo_artifact(path, updated)
                 print(f"✅ Injected table into {rel}")
         elif args.check:
             if current is None:

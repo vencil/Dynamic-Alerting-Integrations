@@ -66,7 +66,7 @@ def _setup_doc_map(mod, mp, root, target):
     mp.setattr(mod, "REPO_ROOT", root)
     mp.setattr(mod, "_get_map_path", lambda lang: target)
     mp.setattr(mod, "generate_doc_map", lambda lang, include_adr=True: NEW)
-    return _argv_runner(mod, mp, ["generate_doc_map.py", "--generate", "--lang", "zh", "--safe"])
+    return _argv_runner(mod, mp, ["generate_doc_map.py", "--generate", "--lang", "zh"])
 
 
 def _setup_tool_map(mod, mp, root, target):
@@ -74,7 +74,7 @@ def _setup_tool_map(mod, mp, root, target):
     mp.setattr(mod, "TOOL_MAP", target)
     mp.setattr(mod, "gather_tools", lambda: {c: [] for c in mod.CATEGORY_ORDER})
     mp.setattr(mod, "generate_tool_map", lambda categorized, lang: NEW)
-    return _argv_runner(mod, mp, ["generate_tool_map.py", "--generate", "--lang", "zh", "--safe"])
+    return _argv_runner(mod, mp, ["generate_tool_map.py", "--generate", "--lang", "zh"])
 
 
 def _rule_pack_stats_common(mod, mp, root):
@@ -139,16 +139,16 @@ CALLERS: dict[str, Caller] = {
         "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:445",
         None, _setup_rule_pack_stats_fragment),
     "rule_pack_stats_inject": Caller(
-        "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:449",
+        "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:448",
         None, _setup_rule_pack_stats_inject),
     "tool_map": Caller(
-        "generate_tool_map", "scripts/tools/dx/generate_tool_map.py:374", None,
+        "generate_tool_map", "scripts/tools/dx/generate_tool_map.py:370", None,
         _setup_tool_map),
     "doc_map": Caller(
-        "generate_doc_map", "scripts/tools/dx/generate_doc_map.py:507", None,
+        "generate_doc_map", "scripts/tools/dx/generate_doc_map.py:506", None,
         _setup_doc_map),
     "byo_rulepack_table": Caller(
-        "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:279",
+        "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:284",
         None, _setup_byo),
     "adr_index": Caller(
         "generate_adr_index", "scripts/dx/generate_adr_index.py:260", "--target",

@@ -36,8 +36,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_atomic_write import atomic_write_text  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Deployment, read kubectl's way)
@@ -282,8 +281,7 @@ def main() -> int:
                 print(f"✅ {rel}：無變更")
             else:
                 # #2128: internal path; a failure is rc 2 + one line.
-                with output_write(doc, flag=None):
-                    atomic_write_text(doc, updated)
+                write_repo_artifact(doc, updated)
                 print(f"✅ 已更新 {rel}")
 
     if has_drift:

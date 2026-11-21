@@ -11,17 +11,14 @@ docs/internal/tool-map.md，確保工具清單與實際檔案同步。
 """
 import argparse
 import ast
-import os
 import re
-import stat
 import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent))
-from _lib_atomic_write import atomic_write_text  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_VIOLATION,
@@ -346,9 +343,6 @@ def main():
                              "tool-map.en.md is outdated")
     parser.add_argument("--lang", choices=["zh", "en", "all"], default="all",
                         help="Language: all (default), zh, or en")
-    parser.add_argument("--safe", action="store_true",
-                        help="Write via a private temp file + atomic os.replace "
-                             "(FUSE interruption safety; v2.8.0 Trap #60)")
 
     args = parser.parse_args()
 
@@ -369,20 +363,11 @@ def main():
         target = TOOL_MAP if lang == "zh" else TOOL_MAP_EN
 
         if args.generate:
-            # #2128: an internal path (flag=None); either writer's failure is
-            # rc 2 + one line naming the map, not a traceback.
-            with output_write(target, flag=None):
-                if args.safe:
-                    # Keep atomic_write_text's newline="\n" default — passing
-                    # newline=None here opted back into Python's platform-default
-                    # translation, so --safe regens emitted CRLF on Windows hosts
-                    # while CI emitted LF (same generator, different bytes).
-                    atomic_write_text(target, content)
-                else:
-                    target.write_text(content, encoding="utf-8", newline="\n")
-                os.chmod(target,
-                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                         | stat.S_IROTH)
+            # #3981: a tracked file this tool owns — the artifact entry, on
+            # every run (the atomic replace `--safe` used to opt into; LF on
+            # every host). An internal path (flag=None): a failure is rc 2 +
+            # one line naming the map, not a traceback (#2128).
+            write_repo_artifact(target, content)
             print(f"✅ Generated {_shown(target)} "
                   f"({total} tools, {lang})")
 
