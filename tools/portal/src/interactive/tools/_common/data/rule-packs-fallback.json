@@ -18,7 +18,7 @@
     "operational",
     "platform"
   ],
-  "tenantAlertRules": 146,
+  "tenantAlertRules": 148,
   "rulePacks": {
     "mariadb": {
       "label": "MariaDB/MySQL",
@@ -601,8 +601,8 @@
       "category": "infrastructure",
       "exporter": "cAdvisor + kube-state-metrics",
       "configMap": "prometheus-rules-kubernetes",
-      "recordingRules": 32,
-      "alertRules": 14,
+      "recordingRules": 35,
+      "alertRules": 16,
       "required": false,
       "defaults": {
         "container_cpu": {

@@ -2,7 +2,7 @@
 """lint_custom_rules.py — Custom Rule deny-list linter。
 
 掃描 Prometheus rule YAML 檔案，檢查是否違反平台治理規範：
-  1. 禁止使用高成本 PromQL 函式 (holt_winters, predict_linear 等)
+  1. 禁止使用高成本 PromQL 函式 (predict_linear 等；名字須是 Prometheus 認得的，#4099)
   2. 每條 alert 的結果保留 tenant（preserved_labels，依 Prometheus 語法樹判定；#4098）
   3. 強制要求 tenant label
   4. 限制 range vector duration
@@ -57,7 +57,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import am_duration_seconds  # noqa: E402  (#4061: Prometheus' ParseDuration)
-from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
+from _lib_compat import find_project_root  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
@@ -66,71 +66,61 @@ import _threshold_alerts  # noqa: E402  (#4098: the rule packs this layout ships
 from _lib_label import safe_label  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Defaults (used when no policy file is provided)
+# The built-in policy (used when no policy file is provided)
 # ---------------------------------------------------------------------------
-DEFAULT_POLICY = {
-    "denied_functions": [
-        "holt_winters",
-        "predict_linear",
-        "quantile_over_time",
-    ],
-    # #4098: every alert's result keeps these labels, judged on Prometheus'
-    # parse tree (`da-read promql-label-flow`) — never a pattern over the
-    # text, which `without(tenant, b)` or `sum by (a)` walked past.
-    "preserved_labels": [
-        "tenant",
-    ],
-    "required_labels": [
-        "tenant",
-    ],
-    "max_range_duration": "1h",
-    "max_evaluation_interval": "60s",
-    # Per-file overrides for platform-COMPILED packs (kept in sync with
-    # .github/custom-rule-policy.yaml so the no-policy path — e.g.
-    # validate_config.py without --lint-policy — behaves identically). The deny-list
-    # governs tenant-authored raw PromQL; a compiled pack's recipes are
-    # platform-vetted with cost mitigations baked in at compile time
-    # (e.g. forecast: platform-derived lookback + cold-start sample gate),
-    # so selected denials don't apply. Guard rails: the override is honored
-    # only when the file header carries the GENERATED marker (missing marker
-    # → ERROR), and only the listed keys are overridden — every other check
-    # still runs on the file. CI separately drift-checks the pack via
-    # compile_custom_alerts.py --check.
-    "file_overrides": [
-        {
-            "path": "rule-packs/rule-pack-custom-alerts.yaml",
-            "require_generated_marker": True,
-            "policy": {
-                "denied_functions": [
-                    "holt_winters",
-                    "quantile_over_time",
-                ],
-                # The longest lookback a compiled forecast reads, generated
-                # from pkg/config/recipe_contract.json into _lib_constants
-                # (tests/ops/test_lint_custom_rules.py compiles that case).
-                "max_range_duration": FORECAST_MAX_LOOKBACK,
-            },
-        },
-    ],
-}
+#: ⛔ THE built-in policy is a file, not a dict here (#4099): the repo's own
+#: lint policy, .github/custom-rule-policy.yaml, which the da-tools image
+#: ships beside this module (build.sh REPO_DATA_FILES). It was written three
+#: times — this module, that file, the docs' copy — and `holt_winters`, gone in
+#: Prometheus 3, outlived the rename in all three. The docs include the file
+#: (pymdownx.snippets); gen_recipe_contract.py writes its compiled-pack
+#: `max_range_duration` line. Its per-file override for the platform-COMPILED
+#: pack is honored only when the file header carries the GENERATED marker
+#: (missing marker → ERROR), and only the listed keys are overridden; CI
+#: separately drift-checks the pack via compile_custom_alerts.py --check.
+BUILTIN_POLICY_NAME = "custom-rule-policy.yaml"
+_BUILTIN_POLICY_IN_REPO = (".github", BUILTIN_POLICY_NAME)
+_BUILTIN_POLICY: "dict | None" = None
 
-#: The keys of the custom-rule lint policy (#3797): those of the built-in
-#: policy, which a --policy is merged over. Any other key is refused — the
-#: deployment policy's keys (allowed_domains …) in this file were silently
-#: unused, and a misspelt key here silently linted by the default.
-POLICY_KEYS = frozenset(DEFAULT_POLICY)
 
-#: Keys this policy had and no longer reads, with what replaced them: a
-#: policy carrying one is refused naming the replacement (#4098), not with
-#: the bare "no key" a typo gets.
-RETIRED_POLICY_KEYS = {
-    "denied_patterns": (
-        "denied_patterns was removed (#4098): it matched text, which `=~'.*'` or "
-        "`without(tenant, b)` walked past. Its tenant-isolation check is "
-        "preserved_labels (every alert's result keeps the labels listed, judged "
-        "on Prometheus' parse tree); its `=~\".*\"` selects what the selector "
-        "without that matcher selects, so it guarded nothing. Delete the key."),
-}
+def builtin_policy_path() -> "Path | None":
+    """The built-in policy file in THIS layout: beside this module (the
+    image), else under this tree's root (``find_project_root``); None when
+    neither has it."""
+    flat = Path(_THIS_DIR) / BUILTIN_POLICY_NAME
+    if flat.is_file():
+        return flat
+    root = find_project_root(Path(_THIS_DIR))
+    if root is not None and (root.joinpath(*_BUILTIN_POLICY_IN_REPO)).is_file():
+        return root.joinpath(*_BUILTIN_POLICY_IN_REPO)
+    return None
+
+
+def builtin_policy() -> dict:
+    """The built-in policy, as written in its file (``builtin_policy_path``),
+    read once. ⛔ A missing or unreadable file is a CallerError naming it —
+    never a lint by no policy at all."""
+    global _BUILTIN_POLICY
+    if _BUILTIN_POLICY is None:
+        path = builtin_policy_path()
+        if path is None:
+            raise _lib_exitcodes.CallerError(
+                f"the built-in policy {BUILTIN_POLICY_NAME} is in neither {_THIS_DIR} nor "
+                f"{'/'.join(_BUILTIN_POLICY_IN_REPO)} of this tree: give a --policy that "
+                f"sets every key ({', '.join(sorted(POLICY_KEYS))}), or reinstall da-tools",
+                "builtin_policy_missing")
+        # the one decoding of a policy document, a --policy's (_lib_input)
+        try:
+            data = _lib_input.decode_bytes(path.read_bytes(), fmt="yaml", name=str(path))
+        except (OSError, _lib_input.DocumentError) as exc:
+            raise _lib_exitcodes.CallerError(
+                f"the built-in policy {path} cannot be read: {exc}", "builtin_policy_missing")
+        if not isinstance(data, dict):
+            raise _lib_exitcodes.CallerError(
+                f"the built-in policy {path} is not a mapping", "builtin_policy_missing")
+        _BUILTIN_POLICY = data
+    return copy.deepcopy(_BUILTIN_POLICY)
+
 
 # A file_overrides entry with require_generated_marker only applies when this
 # token appears in the file's first few lines (compile_custom_alerts._render
@@ -188,6 +178,26 @@ POLICY_VALUE_PROBLEMS = {
     "max_evaluation_interval": _duration_problem,
 }
 assert set(POLICY_VALUE_PROBLEMS) >= OVERRIDABLE_POLICY_KEYS
+
+#: The keys of the custom-rule lint policy (#3797): the values judged above
+#: and the per-file overrides. ⛔ Defined by what this module reads, not by
+#: the built-in policy's file (#4099): a --policy, the built-in one included,
+#: with any other key is refused — the deployment policy's keys
+#: (allowed_domains …) in this file were silently unused, and a misspelt key
+#: here silently linted by the default.
+POLICY_KEYS = frozenset(POLICY_VALUE_PROBLEMS) | {"file_overrides"}
+
+#: Keys this policy had and no longer reads, with what replaced them: a
+#: policy carrying one is refused naming the replacement (#4098), not with
+#: the bare "no key" a typo gets.
+RETIRED_POLICY_KEYS = {
+    "denied_patterns": (
+        "denied_patterns was removed (#4098): it matched text, which `=~'.*'` or "
+        "`without(tenant, b)` walked past. Its tenant-isolation check is "
+        "preserved_labels (every alert's result keeps the labels listed, judged "
+        "on Prometheus' parse tree); its `=~\".*\"` selects what the selector "
+        "without that matcher selects, so it guarded nothing. Delete the key."),
+}
 
 #: The keys of a ``file_overrides`` entry (``path`` required).
 OVERRIDE_ENTRY_KEYS = ("path", "require_generated_marker", "policy")
@@ -723,12 +733,22 @@ def load_policy(custom, path=None):
                 f"--policy {safe_label(path)}: the custom-rule lint policy has no key(s) "
                 f"{', '.join(unknown)} "
                 f"(it has {', '.join(sorted(POLICY_KEYS))}).{hint}", "policy_unknown_key")
-    # ⛔ deepcopy, not `.copy()`: the latter is shallow, so a caller
-    # appending to one of the nested lists reaches into the module default
-    # and changes what every later call in the process returns. Same shape
-    # as #1616's load_base_config fix; fixed here for symmetry rather than
-    # because a mutating caller exists today.
-    merged = copy.deepcopy(DEFAULT_POLICY)
+    # A fresh copy of the built-in policy (builtin_policy deep-copies: a
+    # caller appending to a nested list must not reach the cached one, #1616),
+    # its keys judged like a --policy's: the file is the default, not code.
+    # A --policy that sets every key needs no built-in one (#4099 review: it
+    # was read, and refused when missing, under a complete --policy too).
+    if custom is not None and POLICY_KEYS <= set(custom):
+        merged = copy.deepcopy(custom)
+    else:
+        merged = builtin_policy()
+    unknown = sorted(safe_label(str(k)) for k in merged if k not in POLICY_KEYS)
+    missing = sorted(POLICY_KEYS - set(merged))
+    if unknown or missing:
+        raise _lib_exitcodes.CallerError(
+            f"the built-in policy {builtin_policy_path()}: "
+            + "; ".join([f"has no key(s) {', '.join(unknown)}"] * bool(unknown)
+                        + [f"lacks {', '.join(missing)}"] * bool(missing)), "policy_invalid")
     if custom is not None:
         merged.update(custom)   # custom overrides defaults, key by key
     # #4061 / #3977: every value read below is judged here, the built-in
@@ -740,6 +760,26 @@ def load_policy(custom, path=None):
         source = f"--policy {safe_label(path)}" if custom is not None else "the built-in policy"
         raise _lib_exitcodes.CallerError(f"{source}: " + "; ".join(problems), "policy_invalid")
     return merged
+
+
+def denied_function_problems(policy, names_of=None) -> "list[str]":
+    """Every ``denied_functions`` entry of *policy* (top level and each
+    ``file_overrides[].policy``) that no rule can call (#4099): a name the
+    rule loader's parser does not accept as a function or an aggregation
+    (``_lib_consumer_read.promql_names``) — a typo, ``holt_winters`` (gone in
+    Prometheus 3), an experimental function the deployed Prometheus does not
+    enable. ⛔ Such a deny denied nothing, silently. Judged once the run lints
+    a file (it asks da-read); *names_of* defaults to ``promql_names``."""
+    where = [("denied_functions", n) for n in policy.get("denied_functions", [])]
+    for i, ov in enumerate(policy.get("file_overrides", [])):
+        where += [(f"file_overrides[{i}].policy.denied_functions", n)
+                  for n in (ov.get("policy") or {}).get("denied_functions", [])]
+    if not where:
+        return []
+    verdicts = (names_of or _lib_consumer_read.promql_names)([n for _, n in where])
+    return [f"{key} has {safe_label(name)!r}, which no rule can call: Prometheus' parser "
+            f"(as it loads rule files, no experimental features) has no function or "
+            f"aggregation of that name" for (key, name), ok in zip(where, verdicts) if not ok]
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +893,17 @@ def main():
         print("No YAML files found under: "
               + ", ".join(repr(p) for p in (args.paths or [args.rule_pack_dir])))
         sys.exit(EXIT_OK)
+
+    # #4099: a deny of a name no rule can call denies nothing — judged now
+    # that a file is linted (it asks da-read), before any is read
+    try:
+        names = denied_function_problems(policy)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(f"ERROR: denied_functions: {_lib_consumer_read.error_text(exc)}")
+    if names:
+        source = (f"--policy {safe_label(args.policy)}" if args.policy is not None
+                  else "the built-in policy")
+        raise _lib_exitcodes.CallerError(f"{source}: " + "; ".join(names), "policy_invalid")
 
     all_results = []
     files_checked = 0

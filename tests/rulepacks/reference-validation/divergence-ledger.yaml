@@ -110,6 +110,17 @@ absent_from_candidate:
       reason: 平台設定失誤哨兵（user_threshold/kube_pod_labels meta series），非故障偵測謂詞，harness 不建模。
     - alert: CustomRecipeDiskInert
       reason: 平台/租戶設定失誤哨兵（#692 P0③），非故障偵測謂詞，harness 不建模。
+    - alert: ContainerMetricsMissing
+      reason: >-
+        來源哨兵（#1177）：KSM 說容器在跑、cAdvisor 卻 5 分鐘沒有它的樣本。波形庫的
+        cadvisor-scrape-stale signature 只注入容器序列，沒有
+        kube_pod_container_status_running 這個見證者，harness 無法建模「兩個來源
+        互相對照」；出貨規則由
+        rule-pack-kubernetes-metric-sources_test.yaml 對真規則測。
+      tracking: "#1177"
+    - alert: PodStateMetricsMissing
+      reason: 同 ContainerMetricsMissing——反方向（cAdvisor 有容器、KSM 沒有 Pod），波形庫無對應 signature。
+      tracking: "#1177"
     - alert: TenantHAReplicasDegraded
       reason: KSM replica gauge 的 vanish 偵測（#875/#888），波形庫無 replica-degradation signature。
 

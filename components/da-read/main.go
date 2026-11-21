@@ -79,6 +79,11 @@
 // call and selector, each holding its operands (promql_shape.go):
 // {"documents": [[<node>, …]]}.
 //
+// `promql-names` reads a JSON array of names on standard input and prints,
+// per name, whether a rule's expression can call it — a function or an
+// aggregation operator the rule loader's parser accepts (promql_names.go):
+// {"documents": [[true|false, …]]}.
+//
 // `-` reads standard input — how a file held in a ConfigMap is handed over
 // once its outer layer is read the Kubernetes way (da-crdecode); for
 // `prometheus-rules` at most once.
@@ -169,6 +174,7 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
 	say(stderr, "       %s promql-label-flow <label> -\n", programName)
 	say(stderr, "       %s promql-reads -\n", programName)
+	say(stderr, "       %s promql-names -\n", programName)
 	say(stderr, "       %s promql-shape -\n", programName)
 	say(stderr, "       %s %s\n", programName, selfCheckCmd)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
@@ -182,7 +188,9 @@ func usage(stderr io.Writer) int {
 		"PromQL expressions and prints, per expression, the window each selector reads and "+
 		"the functions and aggregations it calls; promql-shape reads the same input and prints, "+
 		"per expression, its tree: every aggregation, binary operator, call and selector with "+
-		"its grouping and matching labels. Exit 2 when the input is refused, "+
+		"its grouping and matching labels; promql-names reads a JSON array of names and prints, "+
+		"per name, whether a rule can call it (a function or aggregation the rule loader's "+
+		"parser accepts). Exit 2 when the input is refused, "+
 		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+
 		"exit 2 without it when da-read could not answer (bad arguments, a file that cannot be "+
 		"opened, an I/O error). A refusal by Alertmanager's loader leaves the loader's reason "+
@@ -211,6 +219,7 @@ var subcommands = map[string]subcommand{
 	"promql-selectors":  runSelectors,
 	"promql-label-flow": runLabelFlow,
 	"promql-reads":      runReads,
+	"promql-names":      runNames,
 	"promql-shape":      runShape,
 }
 
@@ -281,6 +290,30 @@ func runReads(operands []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runNames is `promql-names -`.
+func runNames(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 1 || operands[0] != "-" {
+		return usage(stderr)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	names, err := jsonStrings(data)
+	if err != nil {
+		// the caller's framing: no answer about the input
+		say(stderr, "%s: standard input is not a JSON array of strings: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLNames(names)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
 	}
 	return write(stdout, stderr, append(out, '\n'), exitOK)
 }

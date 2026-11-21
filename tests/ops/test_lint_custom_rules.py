@@ -28,16 +28,19 @@ import yaml
 
 import lint_custom_rules  # noqa: E402
 import _lib_exitcodes  # noqa: E402
-from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_python import parse_duration_seconds  # noqa: E402
 
 
 # ── Shared Fixture ────────────────────────────────────────────────
 
+#: The compiled pack's lookback cap: the override in the built-in policy
+#: (#4099: written once, by gen_recipe_contract, into the policy file).
+FORECAST_MAX_LOOKBACK = lint_custom_rules.builtin_policy()["file_overrides"][0]["policy"]["max_range_duration"]
+
 @pytest.fixture
 def policy():
     """提供預設 lint 政策。"""
-    return lint_custom_rules.DEFAULT_POLICY.copy()
+    return lint_custom_rules.builtin_policy()
 
 
 # ── 1. Duration parsing ──────────────────────────────────────────
@@ -99,7 +102,7 @@ def _lint_alert(tmp_path, expr, tenant="{{ $labels.tenant }}", records=None, nam
     rules.append({"alert": "A", "expr": expr, "labels": labels})
     f = tmp_path / name
     f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": rules}]}), encoding="utf-8")
-    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.DEFAULT_POLICY)
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy())
     return [r.message for r in results if r.severity == "ERROR"]
 
 
@@ -212,7 +215,7 @@ def test_group_labels_are_the_alerts_labels_too(tmp_path):
         f = tmp_path / "g.yaml"
         f.write_text(yaml.safe_dump({"groups": [{"name": "g", "labels": group_labels,
                                                  "rules": [rule]}]}), encoding="utf-8")
-        policy = dict(lint_custom_rules.DEFAULT_POLICY, required_labels=[])
+        policy = dict(lint_custom_rules.builtin_policy(), required_labels=[])
         results, _ = lint_custom_rules.lint_file(str(f), policy)
         return [r.message for r in results if r.severity == "ERROR"]
     assert any("is a template that does not copy" in m
@@ -232,6 +235,67 @@ def test_a_records_group_labels_reach_it(tmp_path):
     recs = lint_custom_rules.rule_records(lint_custom_rules.read_rule_files([str(f)])[str(f)])
     assert recs["tenant:x:max"][0]["labels"] == {"tenant": ""}
     assert recs["tenant:y:max"][0]["labels"] == {"tenant": "t1", "a": "b"}
+
+
+# ── #4099: denied_functions names a function a rule can call ─────────────
+
+@pytest.mark.parametrize("name, ok", [
+    ("predict_linear", True), ("topk", True), ("count_values", True), ("limitk", False),
+    ("predict_lineer", False),                 # a typo denied nothing
+    ("holt_winters", False),                   # gone in Prometheus 3
+    ("double_exponential_smoothing", False),   # experimental, not enabled
+    ("step", False),                           # spelt as `step()` in a range, never a call
+    ("SUM", False), ("and", False),
+])
+def test_a_denied_name_no_rule_can_call_is_refused(name, ok):
+    problems = lint_custom_rules.denied_function_problems({"denied_functions": [name]})
+    assert (problems == []) is ok, problems
+    if not ok:
+        assert problems == [f"denied_functions has {name!r}, which no rule can call: "
+                            "Prometheus' parser (as it loads rule files, no experimental "
+                            "features) has no function or aggregation of that name"]
+
+
+def test_an_overrides_denied_names_are_judged_too():
+    policy = {"denied_functions": ["rate"], "file_overrides": [
+        {"path": "a.yaml", "policy": {"denied_functions": ["quantile_over_time", "nope"]}}]}
+    assert lint_custom_rules.denied_function_problems(policy) == [
+        "file_overrides[0].policy.denied_functions has 'nope', which no rule can call: "
+        "Prometheus' parser (as it loads rule files, no experimental features) has no "
+        "function or aggregation of that name"]
+
+
+def test_the_built_in_policy_denies_only_names_a_rule_can_call():
+    assert lint_custom_rules.denied_function_problems(lint_custom_rules.load_policy(None)) == []
+
+
+def test_a_policy_denying_an_uncallable_name_is_rc_2_before_any_file_is_read(
+        tmp_path, monkeypatch, capsys):
+    pol = tmp_path / "p.yaml"
+    pol.write_text("denied_functions: [predict_lineer]\n", encoding="utf-8")
+    (tmp_path / "r").mkdir()
+    (tmp_path / "r" / "a.yaml").write_text(_OK_RULE, encoding="utf-8")
+    read = []
+    monkeypatch.setattr(lint_custom_rules, "read_rule_files", lambda files: read.append(files))
+    assert _run_main([str(tmp_path / "r"), "--policy", str(pol), "--ci"], monkeypatch) == 2
+    assert "predict_lineer" in capsys.readouterr().err
+    assert read == []
+
+
+def test_no_da_read_for_the_names_is_a_caller_error_not_a_crash(tmp_path, monkeypatch, capsys):
+    (tmp_path / "a.yaml").write_text(_OK_RULE, encoding="utf-8")
+    def gone(names):
+        raise lint_custom_rules._lib_consumer_read.ConsumerReadError("da-read was not found")
+    monkeypatch.setattr(lint_custom_rules._lib_consumer_read, "promql_names", gone)
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 2
+    err = capsys.readouterr().err
+    assert "denied_functions: da-read was not found" in err and "internal error" not in err
+
+
+def test_a_run_over_no_file_does_not_ask_for_the_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(lint_custom_rules, "denied_function_problems",
+                        lambda policy: pytest.fail("asked da-read for a run over nothing"))
+    assert _run_main([str(tmp_path)], monkeypatch) == 0
 
 
 def test_preserved_labels_cannot_be_relaxed_by_an_override():
@@ -350,7 +414,7 @@ def test_lint_file_direct_rule_format():
         fpath = f.name
     try:
         results, count = lint_custom_rules.lint_file(
-            fpath, lint_custom_rules.DEFAULT_POLICY
+            fpath, lint_custom_rules.builtin_policy()
         )
         assert count == 1
         # Should not have errors (clean rule)
@@ -380,7 +444,7 @@ def test_lint_file_configmap_wrapper():
         fpath = f.name
     try:
         results, count = lint_custom_rules.lint_file(
-            fpath, lint_custom_rules.DEFAULT_POLICY
+            fpath, lint_custom_rules.builtin_policy()
         )
         assert count == 1
         errors = [r for r in results if r.severity == "ERROR"]
@@ -399,7 +463,7 @@ def test_lint_file_empty_file():
         fpath = f.name
     try:
         results, count = lint_custom_rules.lint_file(
-            fpath, lint_custom_rules.DEFAULT_POLICY
+            fpath, lint_custom_rules.builtin_policy()
         )
         assert count == 0
         assert [r.severity for r in results] == ["ERROR"], [str(r) for r in results]
@@ -410,7 +474,7 @@ def test_lint_file_empty_file():
 def test_lint_file_nonexistent_file():
     """測試不存在的檔案應回傳 ERROR。"""
     results, count = lint_custom_rules.lint_file(
-        "/nonexistent/path.yaml", lint_custom_rules.DEFAULT_POLICY
+        "/nonexistent/path.yaml", lint_custom_rules.builtin_policy()
     )
     assert count == 0
     assert len(results) == 1
@@ -420,7 +484,7 @@ def test_lint_file_nonexistent_file():
 def test_load_policy_no_policy_uses_defaults():
     """測試無政策時使用預設值。"""
     policy = lint_custom_rules.load_policy(None)
-    assert policy == lint_custom_rules.DEFAULT_POLICY
+    assert policy == lint_custom_rules.builtin_policy()
 
 def _read_policy(path):
     """--policy *path* as the tool reads it (#3445: `_lib_input.document`)."""
@@ -452,7 +516,7 @@ def test_load_policy_unreadable_policy_is_caller_error(tmp_path, monkeypatch, ca
     """讀不到的 --policy 必須 exit 2，不可回退到內建預設。
 
     ⛔ 這條原本叫 `test_load_policy_invalid_policy_falls_back`，斷言
-    `== DEFAULT_POLICY`（#1556）。「回退」的實際後果是：`lint --policy <打錯的路徑>`
+    `== 內建政策`（#1556）。「回退」的實際後果是：`lint --policy <打錯的路徑>`
     拿內建規則去 lint、印一行沒人在 CI 裡讀的 stderr 警告、然後 exit 0——
     操作者以為自己的政策生效了。dev-rules #13 把「檔案/路徑不存在」歸在
     EXIT_CALLER_ERROR。#3445：讀取改由 `_lib_input.document`（CallerError，
@@ -495,7 +559,7 @@ def test_an_empty_policy_is_no_override(tmp_path, content):
     old `or {}` meant it for."""
     policy = tmp_path / "policy.yaml"
     policy.write_text(content, encoding="utf-8")
-    assert lint_custom_rules.load_policy(_read_policy(policy)) == lint_custom_rules.DEFAULT_POLICY
+    assert lint_custom_rules.load_policy(_read_policy(policy)) == lint_custom_rules.builtin_policy()
 
 
 # ── #1618: scan targets that do not exist / files that cannot be decoded ──
@@ -620,7 +684,7 @@ def test_lint_file_non_utf8_is_one_error_result(tmp_path):
     """
     bad = tmp_path / "aa_bad.yaml"
     bad.write_bytes(_CP950_BYTES)
-    results, count = lint_custom_rules.lint_file(str(bad), lint_custom_rules.DEFAULT_POLICY)
+    results, count = lint_custom_rules.lint_file(str(bad), lint_custom_rules.builtin_policy())
     assert count == 0
     assert len(results) == 1
     assert results[0].severity == "ERROR"
@@ -689,7 +753,7 @@ def test_collect_single_file():
 # Regression for the latent CI conflict found while reviewing #819: the policy
 # denies predict_linear + ranges >1h for tenant raw rules, but the forecast
 # recipe (ADR-024 能力 B) legitimately compiles to predict_linear with a
-# platform-derived lookback of up to FORECAST_MAX_LOOKBACK (96h today) inside the GENERATED
+# platform-derived lookback of up to FORECAST_MAX_LOOKBACK (the compiled-pack override's max_range_duration) inside the GENERATED
 # rule-packs/rule-pack-custom-alerts.yaml. The `file_overrides` exemption must
 # let the compiled forecast shape through while keeping every other check live.
 
@@ -753,9 +817,9 @@ def test_forecast_in_generated_pack_passes_real_policy(compiled_forecast_pack):
 
 
 def test_forecast_in_generated_pack_passes_default_policy(compiled_forecast_pack):
-    """validate_config 無 --policy 時走 DEFAULT_POLICY，行為須一致。"""
+    """validate_config 無 --policy 時走內建政策（即 repo 的政策檔），行為須一致。"""
     results, _ = lint_custom_rules.lint_file(
-        str(compiled_forecast_pack), lint_custom_rules.DEFAULT_POLICY
+        str(compiled_forecast_pack), lint_custom_rules.builtin_policy()
     )
     errors = [r for r in results if r.severity == "ERROR"]
     assert errors == [], [str(r) for r in errors]
@@ -769,7 +833,7 @@ def test_generated_pack_without_marker_stays_denied(compiled_forecast_pack):
     )
     compiled_forecast_pack.write_text(stripped, encoding="utf-8")
     results, _ = lint_custom_rules.lint_file(
-        str(compiled_forecast_pack), lint_custom_rules.DEFAULT_POLICY
+        str(compiled_forecast_pack), lint_custom_rules.builtin_policy()
     )
     messages = [r.message for r in results if r.severity == "ERROR"]
     assert any("GENERATED" in m for m in messages)
@@ -783,7 +847,7 @@ def test_override_scoped_to_path_only(compiled_forecast_pack, tmp_path):
         compiled_forecast_pack.read_text(encoding="utf-8"), encoding="utf-8"
     )
     results, _ = lint_custom_rules.lint_file(
-        str(other), lint_custom_rules.DEFAULT_POLICY
+        str(other), lint_custom_rules.builtin_policy()
     )
     messages = [r.message for r in results if r.severity == "ERROR"]
     assert any("predict_linear" in m for m in messages)
@@ -804,7 +868,7 @@ def test_override_keeps_other_checks_live(tmp_path):
     def errors(rules):
         fpath.write_text(header + rules, encoding="utf-8")
         results, _ = lint_custom_rules.lint_file(
-            str(fpath), lint_custom_rules.DEFAULT_POLICY
+            str(fpath), lint_custom_rules.builtin_policy()
         )
         return [r.message for r in results if r.severity == "ERROR"]
 
@@ -819,16 +883,66 @@ def test_override_keeps_other_checks_live(tmp_path):
     assert any("rule loader refuses" in m and "holt_winters" in m for m in refused), refused
 
 
-def test_committed_pack_and_policy_in_sync():
-    """釘住三方同步：committed pack 帶 GENERATED 標記、真 policy 檔與
-    DEFAULT_POLICY 的 file_overrides 等價（避免 validate_config 路徑漂移）。"""
+def test_committed_pack_carries_the_generated_marker():
+    """The committed compiled pack carries the GENERATED marker its override
+    needs."""
     committed = os.path.join(_REPO_ROOT, _GENERATED_PACK_RELPATH)
     with open(committed, encoding="utf-8") as f:
         head = list(itertools.islice(f, lint_custom_rules.GENERATED_MARKER_SCAN_LINES))
     assert any(lint_custom_rules.GENERATED_MARKER in line for line in head)
 
-    real = lint_custom_rules.load_policy(_read_policy(_REAL_POLICY))
-    assert real["file_overrides"] == lint_custom_rules.DEFAULT_POLICY["file_overrides"]
+
+def test_the_built_in_policy_is_the_repository_policy_file():
+    """#4099: one policy, not three copies — the built-in policy is read
+    from .github/custom-rule-policy.yaml (the image ships it beside the
+    tool), so no copy can keep a name the file dropped."""
+    assert os.path.samefile(lint_custom_rules.builtin_policy_path(), _REAL_POLICY)
+    assert lint_custom_rules.load_policy(None) == lint_custom_rules.load_policy(
+        _read_policy(_REAL_POLICY), _REAL_POLICY)
+
+
+def test_a_missing_built_in_policy_is_a_caller_error(monkeypatch):
+    monkeypatch.setattr(lint_custom_rules, "builtin_policy_path", lambda: None)
+    monkeypatch.setattr(lint_custom_rules, "_BUILTIN_POLICY", None)
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy(None)
+    assert exc.value.reason == "builtin_policy_missing"
+
+
+def test_a_complete_policy_needs_no_built_in_one(monkeypatch):
+    full = lint_custom_rules.builtin_policy()
+    monkeypatch.setattr(lint_custom_rules, "builtin_policy_path", lambda: None)
+    monkeypatch.setattr(lint_custom_rules, "_BUILTIN_POLICY", None)
+    assert lint_custom_rules.load_policy(full, "p.yaml") == full
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"denied_functions": []}, "p.yaml")
+    assert "give a --policy that sets every key" in str(exc.value)
+
+
+def test_the_image_reads_the_policy_beside_the_tool(tmp_path, monkeypatch):
+    """The da-tools image ships the policy file beside the tool (build.sh
+    REPO_DATA_FILES): the flat layout is read first."""
+    (tmp_path / lint_custom_rules.BUILTIN_POLICY_NAME).write_text(
+        open(_REAL_POLICY, encoding="utf-8").read(), encoding="utf-8")
+    monkeypatch.setattr(lint_custom_rules, "_THIS_DIR", str(tmp_path))
+    assert lint_custom_rules.builtin_policy_path() == tmp_path / lint_custom_rules.BUILTIN_POLICY_NAME
+
+
+def test_a_built_in_policy_lacking_a_key_is_refused(monkeypatch):
+    lacking = lint_custom_rules.builtin_policy()
+    del lacking["max_evaluation_interval"]
+    monkeypatch.setattr(lint_custom_rules, "_BUILTIN_POLICY", lacking)
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy(None)
+    assert exc.value.reason == "policy_invalid" and "lacks max_evaluation_interval" in str(exc.value)
+
+
+def test_a_built_in_policy_with_a_key_lint_does_not_read_is_refused(monkeypatch):
+    monkeypatch.setattr(lint_custom_rules, "_BUILTIN_POLICY",
+                        {**lint_custom_rules.builtin_policy(), "denied_patterns": []})
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy(None)
+    assert exc.value.reason == "policy_invalid" and "denied_patterns" in str(exc.value)
 
 
 def test_nested_path_does_not_get_exemption(compiled_forecast_pack, tmp_path):
@@ -840,7 +954,7 @@ def test_nested_path_does_not_get_exemption(compiled_forecast_pack, tmp_path):
     nested.parent.mkdir(parents=True)
     nested.write_text(text, encoding="utf-8")
     results, _ = lint_custom_rules.lint_file(
-        str(nested), lint_custom_rules.DEFAULT_POLICY
+        str(nested), lint_custom_rules.builtin_policy()
     )
     messages = [r.message for r in results if r.severity == "ERROR"]
     assert any("predict_linear" in m for m in messages), \
@@ -1053,7 +1167,7 @@ def test_the_window_is_compared_in_whole_milliseconds(policy):
     ("predict_linear\n(x[5m], 60)", "predict_linear"),
 ])
 def test_a_denied_function_or_aggregation_is_found_however_it_is_spelt(expr, name):
-    policy = {**lint_custom_rules.DEFAULT_POLICY, "denied_functions": [name]}
+    policy = {**lint_custom_rules.builtin_policy(), "denied_functions": [name]}
     found = lint_custom_rules.lint_expr(expr, policy, "f.yaml", "A")
     assert [r.message for r in found] == [f"denied function '{name}' in expr"]
 
@@ -1065,7 +1179,7 @@ def test_a_denied_function_or_aggregation_is_found_however_it_is_spelt(expr, nam
     "sum by (predict_linear) (x)",               # a grouping label
 ])
 def test_a_function_name_that_is_no_call_is_no_finding(expr):
-    policy = {**lint_custom_rules.DEFAULT_POLICY, "denied_functions": ["predict_linear"]}
+    policy = {**lint_custom_rules.builtin_policy(), "denied_functions": ["predict_linear"]}
     found = lint_custom_rules.lint_expr(expr, policy, "f.yaml", "A")
     assert not [r for r in found if "denied function" in r.message], found
 
@@ -1120,7 +1234,7 @@ def test_a_file_is_read_by_prometheus_in_one_call(tmp_path, monkeypatch):
                  "  - {record: 'a:x', expr: 'rate(x[5m])'}\n"
                  "  - {record: 'b:x', expr: 'rate(y[1w])'}\n"
                  "  - {record: 'c:x', expr: 'rate(z[1m])'}\n", encoding="utf-8")
-    results, count = lint_custom_rules.lint_file(str(f), lint_custom_rules.DEFAULT_POLICY)
+    results, count = lint_custom_rules.lint_file(str(f), lint_custom_rules.builtin_policy())
     assert calls == [["rate(x[5m])", "rate(y[1w])", "rate(z[1m])"]] and count == 3
     over = [r for r in results if "exceeds max allowed" in r.message]
     assert [r.rule_name for r in over] == ["b:x"], results
@@ -1129,7 +1243,7 @@ def test_a_file_is_read_by_prometheus_in_one_call(tmp_path, monkeypatch):
 def test_a_compound_group_interval_is_judged(tmp_path):
     """#4061: a group `interval: 1h30m` was skipped (unreadable); read as
     Prometheus does, it is over a 60s maximum."""
-    found = lint_custom_rules.lint_group_interval("1h30m", lint_custom_rules.DEFAULT_POLICY,
+    found = lint_custom_rules.lint_group_interval("1h30m", lint_custom_rules.builtin_policy(),
                                                   "f.yaml", "g")
     assert any("exceeds recommended max" in r.message for r in found), found
 
@@ -1142,10 +1256,10 @@ def test_every_problem_of_the_overrides_is_named_at_once():
 
 
 def test_the_built_in_overrides_are_of_the_shape_judged():
-    """DEFAULT_POLICY is judged as a --policy is (#3977)."""
+    """The built-in policy is judged as a --policy is (#3977)."""
     assert lint_custom_rules.file_overrides_problems(
-        lint_custom_rules.DEFAULT_POLICY["file_overrides"]) == []
-    assert lint_custom_rules.load_policy(None) == lint_custom_rules.DEFAULT_POLICY
+        lint_custom_rules.builtin_policy()["file_overrides"]) == []
+    assert lint_custom_rules.load_policy(None) == lint_custom_rules.builtin_policy()
 
 
 def test_an_entry_a_file_matches_relaxes_only_its_listed_keys(tmp_path):
@@ -1313,7 +1427,7 @@ def test_rule_file_kubectl_refuses_but_prometheus_loads_is_linted(tmp_path):
     import _lib_consumer_read
     with pytest.raises(_lib_consumer_read.InputRefused):
         _lib_consumer_read.kubernetes_documents(str(rule))
-    results, count = lint_custom_rules.lint_file(str(rule), lint_custom_rules.DEFAULT_POLICY)
+    results, count = lint_custom_rules.lint_file(str(rule), lint_custom_rules.builtin_policy())
     assert count == 1
     assert any(r.severity == "ERROR" and "predict_linear" in r.message
                for r in results), [str(r) for r in results]
@@ -1462,12 +1576,15 @@ def test_a_key_the_lint_policy_does_not_have_is_refused():
     assert "denied_function" in str(exc.value) and "deployment policy" not in str(exc.value)
 
 
-def test_the_lint_policy_keys_are_the_built_in_ones():
-    """The keys are read off the built-in policy a --policy is merged over —
-    one list, not a second one beside it."""
-    assert lint_custom_rules.POLICY_KEYS == frozenset(lint_custom_rules.DEFAULT_POLICY)
-    assert lint_custom_rules.load_policy(dict(lint_custom_rules.DEFAULT_POLICY), "p") \
-        == lint_custom_rules.DEFAULT_POLICY
+def test_the_lint_policy_keys_are_the_ones_it_reads():
+    """The keys are what this module judges (#4099: not read off the
+    built-in file, which is judged by them) — and the built-in policy has
+    each of them."""
+    assert lint_custom_rules.POLICY_KEYS == (
+        frozenset(lint_custom_rules.POLICY_VALUE_PROBLEMS) | {"file_overrides"})
+    assert set(lint_custom_rules.builtin_policy()) == lint_custom_rules.POLICY_KEYS
+    assert lint_custom_rules.load_policy(lint_custom_rules.builtin_policy(), "p") \
+        == lint_custom_rules.builtin_policy()
 
 
 def test_the_repository_lint_policy_holds_lint_keys_only():

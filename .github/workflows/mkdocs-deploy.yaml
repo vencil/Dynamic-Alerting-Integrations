@@ -38,6 +38,10 @@ on:
       # portal source never redeploys, and Pages keeps serving the old
       # bundles. Pinned by tests/ops/test_portal_dist_consumers_build.py.
       - 'tools/portal/**'
+      # docs/custom-rule-governance §4.1 includes this file as it is (#4099:
+      # pymdownx.snippets); a push that changes only it must redeploy.
+      # Pinned by tests/ops/test_docs_snippet_sources_deploy.py.
+      - '.github/custom-rule-policy.yaml'
       - '.github/workflows/mkdocs-deploy.yaml'
   workflow_dispatch:  # manual trigger
 

@@ -225,7 +225,7 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 | ConfigMap 名稱 | 內容 | 規則數 |
 |----------------|------|--------|
 | `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 11R + 18A |
-| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 32R + 14A |
+| `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 35R + 16A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 10A |
 | `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 11A |
 | `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 14R + 12A |

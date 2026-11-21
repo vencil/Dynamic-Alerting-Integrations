@@ -165,6 +165,18 @@ class TestKubernetesGoldenPreservation:
         ]
         assert rules_for(central, "kubernetes-custom-disk-recipe-sentinel", "record") == []
 
+        # #1177: the metric-source sentinels follow the same split — the
+        # namespace / pod / container joins are edge recordings.
+        assert rules_for(edge, "kubernetes-metric-source-sentinels", "record") == [
+            "tenant:containers_without_metrics:count",
+            "tenant:container_metrics:count",
+            "tenant:pod_state_metrics:count",
+        ]
+        assert rules_for(central, "kubernetes-metric-source-sentinels", "alert") == [
+            "ContainerMetricsMissing", "PodStateMetricsMissing",
+        ]
+        assert rules_for(central, "kubernetes-metric-source-sentinels", "record") == []
+
     def test_mixed_groups_split_recordings_to_edge_alerts_to_central(self):
         # Correctness fix (per-rule data-locality): node-health / ha-replicas
         # recordings read namespace-labeled raw kube_* → MUST land on edge (where

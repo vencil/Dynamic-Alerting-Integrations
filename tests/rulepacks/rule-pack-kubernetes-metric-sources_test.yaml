@@ -1,0 +1,396 @@
+# promtool unit test — ContainerMetricsMissing / PodStateMetricsMissing (#1177):
+# the pack's two metric sources, each watched through the other.
+#
+# Pinned here:
+#   * cAdvisor going stale under a running container fires
+#     ContainerMetricsMissing: five minutes without a sample (in the recording)
+#     plus `for: 1m` — pending at 15m30s, firing by 16m15s for a last sample at
+#     10m — and it resolves when the samples return.
+#   * the match is per CONTAINER: a sidecar, the tenant's other pod, another
+#     tenant's pod of the same name, the same pod in another cluster and the
+#     pod-level series (container="" / "POD") do not stand in for it.
+#   * it does NOT fire for: a container in CrashLoopBackOff (not `running`
+#     between attempts), a rollout of short-lived pods each missing for two
+#     minutes (no relay across containers), a container whose first sample is
+#     a minute late, a container that stopped or only just left `waiting`,
+#     a namespace that is not a tenant's.
+#   * kube-state-metrics going stale while containers report fires
+#     PodStateMetricsMissing and NOT ContainerMetricsMissing (no witness left
+#     for that one); a tenant scaled to zero fires neither.
+#   * maintenance mutes both; a filter of another name, or value 0, does not.
+#   * one tenant in two clusters: only the cluster that lost the source fires.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── cAdvisor side ─────────────────────────────────────────────────────
+  - interval: 15s
+    input_series:
+      # db-ok: healthy throughout.
+      - series: 'kube_pod_container_status_running{namespace="db-ok", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-ok", pod="app-0"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-ok", pod="app-0", container="app"}'
+        values: '100x120'
+
+      # db-stale: cAdvisor answers for 10m, then nothing (stale) until 25m,
+      # then it is back.
+      - series: 'kube_pod_container_status_running{namespace="db-stale", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-stale", pod="app-0"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-stale", pod="app-0", container="app"}'
+        values: '100x40 stale _x58 100x20'
+
+      # db-two: two pods; app-1 never has a sample. app-0's series must not
+      # cover it.
+      - series: 'kube_pod_container_status_running{namespace="db-two", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-two", pod="app-0"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-two", pod="app-1", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-two", pod="app-1"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-two", pod="app-0", container="app"}'
+        values: '100x120'
+
+      # db-side: one pod, two containers; only the sidecar is sampled, next to
+      # the pod-level series a kubelet also serves.
+      - series: 'kube_pod_container_status_running{namespace="db-side", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-side", pod="app-0"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-side", pod="app-0", container="sidecar"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-side", pod="app-0", container="sidecar"}'
+        values: '100x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-side", pod="app-0", container="POD"}'
+        values: '100x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-side", pod="app-0", container=""}'
+        values: '100x120'
+
+      # db-late: the first sample arrives a minute after the container starts.
+      - series: 'kube_pod_container_status_running{namespace="db-late", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-late", pod="app-0"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-late", pod="app-0", container="app"}'
+        values: '_x4 100x116'
+
+      # db-crash: CrashLoopBackOff with nothing ever sampled — `running` for one
+      # scrape every five minutes (so "now" and "5m ago" do line up), waiting
+      # in between.
+      - series: 'kube_pod_container_status_running{namespace="db-crash", pod="app-0", container="app"}'
+        values: '1 0x18 1 0x18 1 0x18 1 0x18 1 0x18 1 0x18'
+      - series: 'kube_pod_info{namespace="db-crash", pod="app-0"}'
+        values: '1x120'
+
+      # db-churn: a rollout — each pod runs four minutes, unsampled for its
+      # first two, and the next one starts as it gets its first sample.
+      - series: 'kube_pod_container_status_running{namespace="db-churn", pod="app-0", container="app"}'
+        values: '1x16 stale'
+      - series: 'kube_pod_info{namespace="db-churn", pod="app-0"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-churn", pod="app-0", container="app"}'
+        values: '_x8 100x8 stale'
+      - series: 'kube_pod_container_status_running{namespace="db-churn", pod="app-1", container="app"}'
+        values: '_x8 1x16 stale'
+      - series: 'kube_pod_info{namespace="db-churn", pod="app-1"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-churn", pod="app-1", container="app"}'
+        values: '_x16 100x8 stale'
+      - series: 'kube_pod_container_status_running{namespace="db-churn", pod="app-2", container="app"}'
+        values: '_x16 1x16 stale'
+      - series: 'kube_pod_info{namespace="db-churn", pod="app-2"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-churn", pod="app-2", container="app"}'
+        values: '_x24 100x8 stale'
+      - series: 'kube_pod_container_status_running{namespace="db-churn", pod="app-3", container="app"}'
+        values: '_x24 1x16 stale'
+      - series: 'kube_pod_info{namespace="db-churn", pod="app-3"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-churn", pod="app-3", container="app"}'
+        values: '_x32 100x8 stale'
+      - series: 'kube_pod_container_status_running{namespace="db-churn", pod="app-4", container="app"}'
+        values: '_x32 1x16 stale'
+      - series: 'kube_pod_info{namespace="db-churn", pod="app-4"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-churn", pod="app-4", container="app"}'
+        values: '_x40 100x8 stale'
+      - series: 'kube_pod_container_status_running{namespace="db-churn", pod="app-5", container="app"}'
+        values: '_x40 1x16 stale'
+      - series: 'kube_pod_info{namespace="db-churn", pod="app-5"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-churn", pod="app-5", container="app"}'
+        values: '_x48 100x8 stale'
+
+      # db-gone: ran three unsampled minutes, then stopped. "Running 5m ago"
+      # alone must not count it.
+      - series: 'kube_pod_container_status_running{namespace="db-gone", pod="app-0", container="app"}'
+        values: '1x12 0x108'
+      - series: 'kube_pod_info{namespace="db-gone", pod="app-0"}'
+        values: '1x120'
+
+      # db-wait: waiting (image pull) for six minutes, then running, first
+      # sample three minutes later. "A series existed 5m ago" must not count it.
+      - series: 'kube_pod_container_status_running{namespace="db-wait", pod="app-0", container="app"}'
+        values: '0x23 1x96'
+      - series: 'kube_pod_info{namespace="db-wait", pod="app-0"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-wait", pod="app-0", container="app"}'
+        values: '_x36 100x84'
+
+      # kube-system is not a tenant namespace.
+      - series: 'kube_pod_container_status_running{namespace="kube-system", pod="coredns-0", container="coredns"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="kube-system", pod="coredns-0"}'
+        values: '1x120'
+
+      # db-maint / db-other / db-off: never sampled; maintenance filter variants.
+      - series: 'kube_pod_container_status_running{namespace="db-maint", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-maint", pod="app-0"}'
+        values: '1x120'
+      - series: 'user_state_filter{tenant="db-maint", filter="maintenance"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-other", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-other", pod="app-0"}'
+        values: '1x120'
+      - series: 'user_state_filter{tenant="db-other", filter="silent"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-off", pod="app-0", container="app"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-off", pod="app-0"}'
+        values: '1x120'
+      - series: 'user_state_filter{tenant="db-off", filter="maintenance"}'
+        values: '0x120'
+
+      # db-cl: one tenant in two clusters, same namespace and pod name; only
+      # east is scraped.
+      - series: 'kube_pod_container_status_running{namespace="db-cl", pod="app-0", container="app", da_cluster="east"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-cl", pod="app-0", da_cluster="east"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-cl", pod="app-0", container="app", da_cluster="west"}'
+        values: '1x120'
+      - series: 'kube_pod_info{namespace="db-cl", pod="app-0", da_cluster="west"}'
+        values: '1x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-cl", pod="app-0", container="app", da_cluster="east"}'
+        values: '100x120'
+
+    promql_expr_test:
+      # Nothing can be counted before a container has been running 5m.
+      - expr: tenant:containers_without_metrics:count
+        eval_time: 4m45s
+        exp_samples: []
+      - expr: tenant:containers_without_metrics:count
+        eval_time: 8m
+        exp_samples:
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-two"}'
+            value: 1
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-side"}'
+            value: 1
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-maint"}'
+            value: 1
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-other"}'
+            value: 1
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-off"}'
+            value: 1
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-cl", da_cluster="west"}'
+            value: 1
+      # db-crash lines up for single evaluations (5m, 10m, …) and never holds.
+      - expr: tenant:containers_without_metrics:count{tenant="db-crash"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'tenant:containers_without_metrics:count{tenant="db-crash"}'
+            value: 1
+      - expr: max_over_time(ALERTS{alertname="ContainerMetricsMissing", alertstate="firing", tenant=~"db-crash|db-churn|db-late|db-ok|db-gone|db-wait|kube-system"}[30m])
+        eval_time: 30m
+        exp_samples: []
+      # db-stale: last sample at 10m.
+      - expr: count by(tenant, alertstate) (ALERTS{alertname="ContainerMetricsMissing", tenant="db-stale"})
+        eval_time: 14m45s
+        exp_samples: []
+      - expr: count by(tenant, alertstate) (ALERTS{alertname="ContainerMetricsMissing", tenant="db-stale"})
+        eval_time: 15m30s
+        exp_samples:
+          - labels: '{tenant="db-stale", alertstate="pending"}'
+            value: 1
+      - expr: count by(tenant, alertstate) (ALERTS{alertname="ContainerMetricsMissing", tenant="db-stale"})
+        eval_time: 16m15s
+        exp_samples:
+          - labels: '{tenant="db-stale", alertstate="firing"}'
+            value: 1
+      - expr: count by(tenant, alertstate) (ALERTS{alertname="ContainerMetricsMissing", tenant="db-stale"})
+        eval_time: 25m30s
+        exp_samples: []
+      # No pod-state alert in this block: KSM reports every tenant that has containers.
+      - expr: ALERTS{alertname="PodStateMetricsMissing"}
+        eval_time: 20m
+        exp_samples: []
+
+    alert_rule_test:
+      - eval_time: 5m45s
+        alertname: ContainerMetricsMissing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ContainerMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-two}
+            exp_annotations:
+              summary: "No container metrics for running container(s) of db-two — container alerts are blind"
+              summary_zh: "db-two 有運行中的容器沒有容器指標 — 容器告警看不到它們"
+              platform_summary: "[] db-two: 1 running container(s) with no cAdvisor sample for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead, or a relabel dropping the series)"
+              platform_summary_zh: "[] db-two：1 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet 死亡，或 relabel 把序列丟掉）"
+              description: "1 container(s) are running according to kube-state-metrics but have had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts cannot fire for them until the metrics return."
+              description_zh: "kube-state-metrics 回報 1 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-side}
+            exp_annotations:
+              summary: "No container metrics for running container(s) of db-side — container alerts are blind"
+              summary_zh: "db-side 有運行中的容器沒有容器指標 — 容器告警看不到它們"
+              platform_summary: "[] db-side: 1 running container(s) with no cAdvisor sample for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead, or a relabel dropping the series)"
+              platform_summary_zh: "[] db-side：1 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet 死亡，或 relabel 把序列丟掉）"
+              description: "1 container(s) are running according to kube-state-metrics but have had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts cannot fire for them until the metrics return."
+              description_zh: "kube-state-metrics 回報 1 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-other}
+            exp_annotations:
+              summary: "No container metrics for running container(s) of db-other — container alerts are blind"
+              summary_zh: "db-other 有運行中的容器沒有容器指標 — 容器告警看不到它們"
+              platform_summary: "[] db-other: 1 running container(s) with no cAdvisor sample for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead, or a relabel dropping the series)"
+              platform_summary_zh: "[] db-other：1 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet 死亡，或 relabel 把序列丟掉）"
+              description: "1 container(s) are running according to kube-state-metrics but have had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts cannot fire for them until the metrics return."
+              description_zh: "kube-state-metrics 回報 1 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-off}
+            exp_annotations:
+              summary: "No container metrics for running container(s) of db-off — container alerts are blind"
+              summary_zh: "db-off 有運行中的容器沒有容器指標 — 容器告警看不到它們"
+              platform_summary: "[] db-off: 1 running container(s) with no cAdvisor sample for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead, or a relabel dropping the series)"
+              platform_summary_zh: "[] db-off：1 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet 死亡，或 relabel 把序列丟掉）"
+              description: "1 container(s) are running according to kube-state-metrics but have had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts cannot fire for them until the metrics return."
+              description_zh: "kube-state-metrics 回報 1 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-cl, da_cluster: west}
+            exp_annotations:
+              summary: "No container metrics for running container(s) of db-cl — container alerts are blind"
+              summary_zh: "db-cl 有運行中的容器沒有容器指標 — 容器告警看不到它們"
+              platform_summary: "[] db-cl: 1 running container(s) with no cAdvisor sample for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead, or a relabel dropping the series)"
+              platform_summary_zh: "[] db-cl：1 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet 死亡，或 relabel 把序列丟掉）"
+              description: "1 container(s) are running according to kube-state-metrics but have had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts cannot fire for them until the metrics return."
+              description_zh: "kube-state-metrics 回報 1 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── kube-state-metrics side ───────────────────────────────────────────
+  - interval: 15s
+    input_series:
+      # db-ksm: containers report throughout; KSM answers for 10m, then goes
+      # stale — status and info together, as a dead KSM does. The pod-level
+      # series do not count as containers (value 2, not 4).
+      - series: 'container_memory_working_set_bytes{namespace="db-ksm", pod="app-0", container="app"}'
+        values: '100x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-ksm", pod="app-0", container="sidecar"}'
+        values: '100x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-ksm", pod="app-0", container="POD"}'
+        values: '100x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-ksm", pod="app-0", container=""}'
+        values: '100x120'
+      - series: 'kube_pod_info{namespace="db-ksm", pod="app-0"}'
+        values: '1x40 stale'
+      - series: 'kube_pod_container_status_running{namespace="db-ksm", pod="app-0", container="app"}'
+        values: '1x40 stale'
+
+      # db-fine: both sources throughout.
+      - series: 'container_memory_working_set_bytes{namespace="db-fine", pod="app-0", container="app"}'
+        values: '100x120'
+      - series: 'kube_pod_info{namespace="db-fine", pod="app-0"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-fine", pod="app-0", container="app"}'
+        values: '1x120'
+
+      # db-km: KSM never reports; in maintenance.
+      - series: 'container_memory_working_set_bytes{namespace="db-km", pod="app-0", container="app"}'
+        values: '100x120'
+      - series: 'user_state_filter{tenant="db-km", filter="maintenance"}'
+        values: '1x120'
+
+      # db-kc: two clusters, KSM answers in east only.
+      - series: 'container_memory_working_set_bytes{namespace="db-kc", pod="app-0", container="app", da_cluster="east"}'
+        values: '100x120'
+      - series: 'container_memory_working_set_bytes{namespace="db-kc", pod="app-0", container="app", da_cluster="west"}'
+        values: '100x120'
+      - series: 'kube_pod_info{namespace="db-kc", pod="app-0", da_cluster="east"}'
+        values: '1x120'
+      - series: 'kube_pod_container_status_running{namespace="db-kc", pod="app-0", container="app", da_cluster="east"}'
+        values: '1x120'
+
+      # kube-system: containers reporting, no KSM series — not a tenant.
+      - series: 'container_memory_working_set_bytes{namespace="kube-system", pod="coredns-0", container="coredns"}'
+        values: '100x120'
+
+      # db-zero is scaled to zero: no series of either source. Nothing to assert
+      # on but its absence from every result below.
+
+    promql_expr_test:
+      - expr: count by(tenant, da_cluster, alertstate) (ALERTS{alertname="PodStateMetricsMissing"})
+        eval_time: 9m
+        exp_samples:
+          - labels: '{tenant="db-kc", da_cluster="west", alertstate="firing"}'
+            value: 1
+      - expr: count by(tenant, alertstate) (ALERTS{alertname="PodStateMetricsMissing", tenant="db-ksm"})
+        eval_time: 14m45s
+        exp_samples:
+          - labels: '{tenant="db-ksm", alertstate="pending"}'
+            value: 1
+      - expr: count by(tenant, alertstate) (ALERTS{alertname="PodStateMetricsMissing", tenant="db-ksm"})
+        eval_time: 15m30s
+        exp_samples:
+          - labels: '{tenant="db-ksm", alertstate="firing"}'
+            value: 1
+      # With KSM gone there is no running container to miss metrics for.
+      - expr: ALERTS{alertname="ContainerMetricsMissing"}
+        eval_time: 20m
+        exp_samples: []
+
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: PodStateMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-ksm}
+            exp_annotations:
+              summary: "No pod state metrics for db-ksm while its containers run — pod-state alerts are blind"
+              summary_zh: "db-ksm 的容器在跑，卻沒有 Pod 狀態指標 — Pod 狀態類告警看不到它"
+              platform_summary: "[] db-ksm: 2 container(s) reporting but kube-state-metrics shows no pod of this tenant — check kube-state-metrics and its scrape"
+              platform_summary_zh: "[] db-ksm：2 個容器有回報，但 kube-state-metrics 沒有這個租戶的任何 Pod — 請查 kube-state-metrics 與它的抓取"
+              description: "cAdvisor reports 2 container(s) for this tenant, but kube-state-metrics reports no pod. Crash-loop, image-pull, node and replica alerts cannot fire until it returns."
+              description_zh: "cAdvisor 回報這個租戶有 2 個容器，但 kube-state-metrics 沒有回報任何 Pod。它回來之前，重啟迴圈、映像拉取、節點與副本類告警都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels: {severity: warning, maintenance: mute, tenant: db-kc, da_cluster: west}
+            exp_annotations:
+              summary: "No pod state metrics for db-kc while its containers run — pod-state alerts are blind"
+              summary_zh: "db-kc 的容器在跑，卻沒有 Pod 狀態指標 — Pod 狀態類告警看不到它"
+              platform_summary: "[] db-kc: 1 container(s) reporting but kube-state-metrics shows no pod of this tenant — check kube-state-metrics and its scrape"
+              platform_summary_zh: "[] db-kc：1 個容器有回報，但 kube-state-metrics 沒有這個租戶的任何 Pod — 請查 kube-state-metrics 與它的抓取"
+              description: "cAdvisor reports 1 container(s) for this tenant, but kube-state-metrics reports no pod. Crash-loop, image-pull, node and replica alerts cannot fire until it returns."
+              description_zh: "cAdvisor 回報這個租戶有 1 個容器，但 kube-state-metrics 沒有回報任何 Pod。它回來之前，重啟迴圈、映像拉取、節點與副本類告警都不會響。"
+              runbook_url: ""
+              owner: ""
+              tier: ""

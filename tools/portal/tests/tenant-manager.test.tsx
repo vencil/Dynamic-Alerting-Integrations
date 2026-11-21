@@ -142,7 +142,7 @@ describe('TenantManager — last-mile activation', () => {
       'sentinel-01': {
         environment: 'production', region: 'x', tier: 'tier-1',
         domain: 'zzz-sentinel-domain', db_type: 'zzz-sentinel-db',
-        rule_packs: [], owner: 'x', routing_channel: 'x',
+        owner: 'x', routing_channel: 'x',
         operational_mode: 'normal', metric_count: 0,
         last_config_commit: 'x', tags: [], groups: [],
       },

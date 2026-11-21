@@ -397,12 +397,73 @@ data:
     \ exposes no pod labels — feature inert\n      summary_zh: 已宣告版本專屬閾值，但 kube-state-metrics\
     \ 未暴露 pod 標籤 — 功能靜默失效\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    - name: kubernetes-custom-disk-recipe-sentinel\n  rules:\n  - record: tenant:kube_pods_running:count\n\
-    \    expr: \"count by(tenant) (\\n  label_replace(kube_pod_status_phase{namespace=~\\\
-    \"db-.+\\\", phase=\\\"Running\\\"} == 1, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\
-    \", \\\"(.+)\\\")\\n)\\n\"\n  - record: tenant:kubelet_volume_stats:count\n  \
-    \  expr: 'count by(tenant) (kubelet_volume_stats_available_bytes{tenant=~\".+\"\
-    })\n\n      and on(tenant)\n\n      count by(tenant) (kubelet_volume_stats_capacity_bytes{tenant=~\"\
+    - name: kubernetes-metric-source-sentinels\n  rules:\n  - record: tenant:containers_without_metrics:count\n\
+    \    expr: \"count by(tenant, da_cluster) (\\n  label_replace(\\n    (\\n    \
+    \  (kube_pod_container_status_running{namespace=~\\\"db-.+\\\"} == 1)\\n     \
+    \ and on(namespace, pod, container, da_cluster)\\n        (kube_pod_container_status_running{namespace=~\\\
+    \"db-.+\\\"} offset 5m == 1)\\n    )\\n    unless on(namespace, pod, container,\
+    \ da_cluster)\\n      last_over_time(container_memory_working_set_bytes{namespace=~\\\
+    \"db-.+\\\"}[5m]),\\n    \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\
+    \"\\n  )\\n)\\n\"\n  - record: tenant:container_metrics:count\n    expr: \"count\
+    \ by(tenant, da_cluster) (\\n  label_replace(\\n    container_memory_working_set_bytes{namespace=~\\\
+    \"db-.+\\\", container!=\\\"\\\", container!=\\\"POD\\\"},\\n    \\\"tenant\\\"\
+    , \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\"\\n  )\\n)\\n\"\n  - record: tenant:pod_state_metrics:count\n\
+    \    expr: \"count by(tenant, da_cluster) (\\n  label_replace(kube_pod_info{namespace=~\\\
+    \"db-.+\\\"}, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\\
+    n\"\n  - alert: ContainerMetricsMissing\n    expr: '(tenant:containers_without_metrics:count\
+    \ > 0)\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\
+    } == 1)\n\n      '\n    for: 1m\n    labels:\n      maintenance: mute\n      severity:\
+    \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
+    \ '{{ $value }} container(s) are running according to kube-state-metrics but have\
+    \ had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts\
+    \ cannot fire for them until the metrics return.'\n      description_zh: kube-state-metrics\
+    \ 回報 {{ $value }} 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。\n \
+    \     owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: {{ $value }} running container(s) with no cAdvisor sample\
+    \ for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead,\
+    \ or a relabel dropping the series)'\n      platform_summary_zh: '[{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：{{ $value\
+    \ }} 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet\
+    \ 死亡，或 relabel 把序列丟掉）'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: No container metrics for running container(s) of {{ $labels.tenant\
+    \ }} — container alerts are blind\n      summary_zh: '{{ $labels.tenant }} 有運行中的容器沒有容器指標\
+    \ — 容器告警看不到它們'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: PodStateMetricsMissing\n    expr: \"(\\n  tenant:container_metrics:count\\\
+    n  unless on(tenant, da_cluster)\\n  tenant:pod_state_metrics:count\\n)\\nunless\
+    \ on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n   \
+    \ for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n   \
+    \   tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: cAdvisor\
+    \ reports {{ $value }} container(s) for this tenant, but kube-state-metrics reports\
+    \ no pod. Crash-loop, image-pull, node and replica alerts cannot fire until it\
+    \ returns.\n      description_zh: cAdvisor 回報這個租戶有 {{ $value }} 個容器，但 kube-state-metrics\
+    \ 沒有回報任何 Pod。它回來之前，重啟迴圈、映像拉取、節點與副本類告警都不會響。\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ {{ $value }} container(s) reporting but kube-state-metrics shows no pod of this\
+    \ tenant — check kube-state-metrics and its scrape'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：{{ $value }} 個容器有回報，但 kube-state-metrics 沒有這個租戶的任何 Pod — 請查 kube-state-metrics\
+    \ 與它的抓取'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: No pod state metrics for {{ $labels.tenant }} while its\
+    \ containers run — pod-state alerts are blind\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的容器在跑，卻沒有 Pod 狀態指標 — Pod 狀態類告警看不到它'\n      tier: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}'\n- name: kubernetes-custom-disk-recipe-sentinel\n  rules:\n\
+    \  - record: tenant:kube_pods_running:count\n    expr: \"count by(tenant) (\\\
+    n  label_replace(kube_pod_status_phase{namespace=~\\\"db-.+\\\", phase=\\\"Running\\\
+    \"} == 1, \\\"tenant\\\", \\\"$1\\\", \\\"namespace\\\", \\\"(.+)\\\")\\n)\\n\"\
+    \n  - record: tenant:kubelet_volume_stats:count\n    expr: 'count by(tenant) (kubelet_volume_stats_available_bytes{tenant=~\"\
+    .+\"})\n\n      and on(tenant)\n\n      count by(tenant) (kubelet_volume_stats_capacity_bytes{tenant=~\"\
     .+\"})\n\n      '\n  - alert: CustomRecipeDiskInert\n    expr: \"(\\n  max by(tenant)\
     \ (\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_available_bytes\\\
     \"}\\n    or\\n    user_threshold{component=\\\"custom\\\", metric=\\\"kubelet_volume_stats_used_bytes\\\

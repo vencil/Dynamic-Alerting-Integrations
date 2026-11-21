@@ -113,6 +113,8 @@ lang: zh
 | ContainerCrashLoop | critical | 靜音 | [tier] {{ $labels.tenant }}: crash loop detected  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_crashloop_waiting:by_container |
 | ContainerImagePullFailure | warning | 靜音 | [tier] {{ $labels.tenant }}: image pull failing  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_waiting_reason:count |
 | VersionAwareThresholdInert | warning | 照常觸發 | {{ $value \| printf "%.0f" }} version-specific container CPU threshold(s) declared and tenant pods ar | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
+| ContainerMetricsMissing | warning | 靜音 | [tier] {{ $labels.tenant }}: {{ $value }} running container(s) with no cAdvisor sample for 5m  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:containers_without_metrics:count |
+| PodStateMetricsMissing | warning | 靜音 | [tier] {{ $labels.tenant }}: {{ $value }} container(s) reporting but kube-state-metrics shows no pod | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:container_metrics:count |
 | CustomRecipeDiskInert | warning | 靜音 | [SRE] {{ $labels.tenant }} disk recipe inert  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | user_threshold |
 | NodeNotReady | warning | 靜音 | [tier] {{ $labels.tenant }}: node {{ $labels.node }} NotReady  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:node_not_ready:core |
 | TenantHAReplicasDegraded | warning | 靜音 | [tier] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | rule_pack_kubernetes:ha_replicas_degraded:by_kind |

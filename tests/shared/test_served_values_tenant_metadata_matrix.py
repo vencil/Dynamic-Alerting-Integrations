@@ -1,7 +1,7 @@
 """租戶元資料語意矩陣：值寫在哪裡，generate_tenant_metadata 的答案都要與 Go 的 served-values 一致（#2115 0-B／B4）。
 
 讀取端：`generate_tenant_metadata.build_tenant_metadata`（platform-data.json 內嵌的
-租戶清單與 `_metadata`、rule_packs 推斷、db_type）與其 CLI。
+租戶清單與 `_metadata`、db_type）與其 CLI。
 
 同一組值（`_metadata.owner` 與 `redis_connected_clients: 5`）寫在四個位置之一：根
 `defaults:`、平台檔 `tenants:`、租戶檔、子目錄（子樹 `_defaults.yaml` 的
@@ -12,8 +12,7 @@ tenant-b 是對照組，值永遠寫在自己的租戶檔，四個位置下答�
 fail-closed 的測試），所以「defaults」那格只放閾值鍵，owner 依 Go 為空。
 
 根 `defaults:` 宣告的鍵（`mysql_connections`、`redis_connected_clients`）每個租戶都會
-收到：rule_packs 的推斷看 Go 實際發出的鍵（含繼承），不看租戶檔自己寫了什麼——這是
-owner 接受的行為變更（changelog.d）。db_type 不推斷，只取 Go 的 `_metadata.db_type`：
+收到：列數（`metric_count`）看 Go 實際發出的鍵（含繼承），不看租戶檔自己寫了什麼。db_type 不推斷，只取 Go 的 `_metadata.db_type`：
 tenant-a 沒宣告，鍵再像 mysql 也是空字串；tenant-b 宣告 redis，就是 redis。
 
 舊讀取端（ee778a42 以前）只平鋪讀根目錄租戶檔本身：平台 `tenants:` 的 owner 讀成空字串、
@@ -137,14 +136,13 @@ def test_matches_served_values(where, tmp_path):
     # #3771：db_type 是列表（字串宣告＝一元素），沒宣告是 []。
     assert meta["tenant-a"]["db_type"] == [], where
     assert meta["tenant-b"]["db_type"] == ["redis"], where
-    # #3832：內建層的鍵每個租戶都有列，推得出的規則包與列數一併算進來。
-    builtin_packs = set(gtm.infer_rule_packs(dict.fromkeys(BUILTIN_DEFAULTS)))
+    # #3832：內建層的鍵每個租戶都有列，列數一併算進來。
     for tenant in ("tenant-a", "tenant-b"):
         # 繼承的 mysql_connections 與 redis_connected_clients 都算數。
-        assert meta[tenant]["rule_packs"] == sorted(
-            {"mariadb", "operational", "platform", "redis"} | builtin_packs), (
-            where, tenant, meta[tenant]["rule_packs"])
         assert meta[tenant]["metric_count"] == 2 + len(BUILTIN_DEFAULTS), (where, tenant)
+        # #4141：不輸出 rule_packs——由發出的鍵推得的包每個租戶都一樣（內建層），
+        # 租戶宣告的是 db_type。
+        assert "rule_packs" not in meta[tenant], (where, tenant, meta[tenant])
 
 
 @pytest.mark.parametrize("where", sorted(POSITIONS))

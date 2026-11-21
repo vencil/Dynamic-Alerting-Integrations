@@ -855,6 +855,27 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     return docs[0]
 
 
+def promql_names(names: "list[str]", binary: str | None = None) -> "list[bool]":
+    """⛔ THE one answer to "can a rule's expression call this name" (#4099):
+    per name of *names*, whether it is a function or an aggregation operator
+    the parser Prometheus loads rule files with accepts (``da-read
+    promql-names``: the parser's own feature registry). A name it does not
+    know (``holt_winters``, a typo) or has not enabled (an experimental
+    function) is never called, so denying it denies nothing. Names are spelt
+    as ``promql_reads`` reports a call."""
+    resolved = da_read_binary(binary)
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-names", "-"], json.dumps(list(names)).encode("utf-8"))
+    docs = out["documents"]
+    if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(names)
+            or not all(isinstance(v, bool) for v in docs[0])):
+        _fault(DA_READ_BINARY_NAME, ["promql-names"], "stale")
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one verdict per name "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 def _is_reads(entry) -> bool:
     """*entry* has the shape of one ``promql-reads`` answer."""
     return (isinstance(entry, dict)
