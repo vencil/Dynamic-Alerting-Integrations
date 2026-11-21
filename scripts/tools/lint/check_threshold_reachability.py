@@ -206,9 +206,7 @@ KNOWN_UNWIRED: dict[str, str] = {
     "oracle_wait_time_rate": _A_DECLARED,
     "oracle_pga_usage_percent": _A_DECLARED,
     "oracle_hard_parse_time_percent": _A_DECLARED,
-    "db2_log_usage_percent": _A_DECLARED,
     "db2_deadlocks_per_5m": _A_DECLARED,
-    "db2_tablespace_used_percent": _A_DECLARED,
     "clickhouse_max_part_count": _A_DECLARED,
     "clickhouse_replication_queue": _A_DECLARED,
     # #3778: a healthy running-thread count scales with the host's CPU count,
@@ -660,7 +658,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +8, generators +16. Red here means RAISE the floor.
+#     tolerate +10, generators +16. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -728,6 +726,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      exporter's conf.d `_defaults.yaml` gained it, 20 -> 21, total 88 -> 89,
 #      the artifact floor went 76 -> 77 (one-key margin kept, DOWN stays 12),
 #      and with the biggest group one larger again UP is +8.)
+#     (#1320 then promoted the two DB2 % keys, db2_log_usage_percent and
+#      db2_tablespace_used_percent: the same `_defaults.yaml` gained both, the
+#      artifact floor went 77 -> 79 (DOWN stays 12), and with the biggest
+#      group two larger UP is +10.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -755,12 +757,15 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     `defaults:` both onboarding generators write: scaffold and init 40 -> 28
 #     each, total 93 -> 69 (chart 12, onboard 1 unchanged). The floor went
 #     82 -> 58 so DOWN stays 11; with the biggest group 28, UP is +16.
+#     #1320 promoted the two DB2 % keys: the chart ships 14, total 69 -> 71
+#     (scaffold and init unchanged — built-in keys are not written to the root
+#     `defaults:`). The floor went 58 -> 60 so DOWN stays 11 and UP stays +16.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 58
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 77
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 60
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 79
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -1063,6 +1068,14 @@ _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS: dict[str, str] = {
         "point is a conf.d holding a single `tenants:` file with no "
         "`_defaults.yaml` above it, so growing one would change the very "
         "shape the fixture characterises.",
+    "tests/fixtures/opa/configured-never-served/conf.d":
+        "a tree the documented rego examples are evaluated on (#4110): it "
+        "reads the key from the built-in defaults layer, so a `_defaults.yaml` "
+        "here would only restate a platform default.",
+    "tests/fixtures/opa/served-over-threshold/conf.d":
+        "a tree the documented rego examples are evaluated on (#4110): it "
+        "reads the key from the built-in defaults layer, so a `_defaults.yaml` "
+        "here would only restate a platform default.",
 }
 
 # Display prefix for artifact labels. ⛔ DISPLAY ONLY — it carries no meaning to

@@ -15,8 +15,6 @@ var unsetThresholdKeys = []unsetThresholdKey{
 	{"db2_connections_active", "db2"},
 	{"db2_deadlocks_per_5m", "db2"},
 	{"db2_lock_wait_time", "db2"},
-	{"db2_log_usage_percent", "db2"},
-	{"db2_tablespace_used_percent", "db2"},
 	{"es_pending_tasks", "elasticsearch"},
 	{"es_search_latency_ms", "elasticsearch"},
 	{"jvm_gc_pause", "jvm"},

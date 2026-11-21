@@ -1,9 +1,10 @@
 # Reference candidate rules — DB2. DIRECT-PREDICATE form of the shipped
 # rule-pack-db2.yaml alerting logic (see candidate-oracle.rules.yaml header for
-# rationale). Thresholds are the DOCUMENTED rule-pack-header example values inlined
-# (Oracle/DB2 ship no _defaults — #1175): connections 200 / bufferpool 0.95
-# (LOW-is-bad, `<`) / log 70 / deadlocks_per_5m 5 (a count, increase over 5m) /
-# tablespace 85 / lock_wait_time 10. `for:` are shipped values (sync-gated by
+# rationale). Thresholds are the rule-pack-header values inlined — the shipped
+# default where the platform ships one (log 75, tablespace 80 — #1320), the
+# documented example value otherwise: connections 200 / bufferpool 0.95
+# (LOW-is-bad, `<`) / log 75 / deadlocks_per_5m 5 (a count, increase over 5m) /
+# tablespace 80 / lock_wait_time 10. `for:` are shipped values (sync-gated by
 # tests/rulepacks/test_reference_validation_sync.py; deliberate divergences live in
 # divergence-ledger.yaml).
 #
@@ -51,7 +52,7 @@ groups:
         for: 10m
         labels: {severity: warning}
       - alert: DB2HighLogUsage
-        expr: 100 * db2_log_used_bytes / ((db2_log_used_bytes + db2_log_available_bytes) > 0) > 70
+        expr: 100 * db2_log_used_bytes / ((db2_log_used_bytes + db2_log_available_bytes) > 0) > 75
         for: 5m
         labels: {severity: warning}
       - alert: DB2HighDeadlockRate

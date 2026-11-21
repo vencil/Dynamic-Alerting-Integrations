@@ -9,7 +9,7 @@
       "tenant_id": "t1",
       "source_file": "team/t1.yaml",
       "source_hash": "dbaf121294522b16",
-      "merged_hash": "e6ce8e592fb7fd26",
+      "merged_hash": "2c5dd7e816e7a951",
       "defaults_chain": [
         "_defaults.yaml"
       ],
@@ -28,6 +28,8 @@
         "container_cpu": 80,
         "container_cpu_throttle": 25,
         "container_memory": 85,
+        "db2_log_usage_percent": 75,
+        "db2_tablespace_used_percent": 80,
         "es_disk_usage_percent": 85,
         "es_heap_usage_percent": 85,
         "mysql_connection_usage_percent": "70",
@@ -56,6 +58,12 @@
           "layer": "builtin"
         },
         "container_memory": {
+          "layer": "builtin"
+        },
+        "db2_log_usage_percent": {
+          "layer": "builtin"
+        },
+        "db2_tablespace_used_percent": {
           "layer": "builtin"
         },
         "es_disk_usage_percent": {
@@ -99,7 +107,7 @@
   "root_defaults_refused": [],
   "root_defaults_reserved": [],
   "builtin_defaults": {
-    "digest": "522437716e2a",
+    "digest": "791716cf1182",
     "keys": {
       "container_cpu": {
         "value": 80,
@@ -113,6 +121,16 @@
       },
       "container_memory": {
         "value": 85,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "db2_log_usage_percent": {
+        "value": 75,
+        "state": "builtin",
+        "tenants": 1
+      },
+      "db2_tablespace_used_percent": {
+        "value": 80,
         "state": "builtin",
         "tenants": 1
       },

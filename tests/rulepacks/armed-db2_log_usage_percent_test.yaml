@@ -1,0 +1,40 @@
+# promtool unit test — the shipped default of db2_log_usage_percent.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-db2.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # Active log 70 % used for 10m, then 80 %: used / (used + available).
+      - series: 'db2_log_used_bytes{tenant="t-armed", instance="db-0"}'
+        values: '700x40 800x40'
+      - series: 'db2_log_available_bytes{tenant="t-armed", instance="db-0"}'
+        values: '300x40 200x40'
+      - series: 'user_threshold{tenant="t-armed", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '75x81'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="DB2HighLogUsage"})
+        eval_time: 8m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="DB2HighLogUsage"})
+        eval_time: 12m
+        exp_samples:
+          - labels: '{alertname="DB2HighLogUsage", tenant="t-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="DB2HighLogUsage"})
+        eval_time: 12m
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="DB2HighLogUsage"})
+        eval_time: 17m
+        exp_samples:
+          - labels: '{alertname="DB2HighLogUsage", tenant="t-armed"}'
+            value: 1

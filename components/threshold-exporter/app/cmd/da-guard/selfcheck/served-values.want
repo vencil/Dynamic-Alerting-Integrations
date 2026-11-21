@@ -36,6 +36,8 @@
         "container_cpu": 80,
         "container_cpu_throttle": 25,
         "container_memory": 85,
+        "db2_log_usage_percent": 75,
+        "db2_tablespace_used_percent": 80,
         "es_disk_usage_percent": 85,
         "es_heap_usage_percent": 85,
         "mysql_connection_usage_percent": 70,
@@ -50,6 +52,8 @@
         "container_cpu": "warning",
         "container_cpu_throttle": "warning",
         "container_memory": "warning",
+        "db2_log_usage_percent": "warning",
+        "db2_tablespace_used_percent": "warning",
         "es_disk_usage_percent": "warning",
         "es_heap_usage_percent": "warning",
         "mysql_connection_usage_percent": "warning",
@@ -101,6 +105,36 @@
               "tenant": "t1"
             },
             "metric_key": "container_memory",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "db2_log_usage_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "db2",
+              "metric": "log_usage_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "db2_log_usage_percent",
+            "legacy_twin": false,
+            "dimensions": {},
+            "dimensions_regex": {}
+          }
+        ],
+        "db2_tablespace_used_percent": [
+          {
+            "name": "user_threshold",
+            "labels": {
+              "component": "db2",
+              "metric": "tablespace_used_percent",
+              "severity": "warning",
+              "tenant": "t1"
+            },
+            "metric_key": "db2_tablespace_used_percent",
             "legacy_twin": false,
             "dimensions": {},
             "dimensions_regex": {}

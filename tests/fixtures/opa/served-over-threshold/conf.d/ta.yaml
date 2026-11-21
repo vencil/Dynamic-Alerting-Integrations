@@ -1,0 +1,7 @@
+tenants:
+  ta:
+    mysql_connection_usage_percent:
+      default: "70"
+      overrides:
+        - window: "01:00-02:00"
+          value: "95"
