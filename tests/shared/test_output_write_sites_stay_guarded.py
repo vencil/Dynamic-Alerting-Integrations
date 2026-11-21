@@ -30,7 +30,9 @@ the code looks like (a renamed import, ``getattr``, a temp file). What this
 file adds is static and shape-only: it reads code no control run reaches,
 and the raw sinks in ``GUARDED_FILES`` that write somewhere no row's output
 path covers. Neither sees a tool with no row (``NO_ROW`` names the ones that
-cannot have one) nor a write to a fixed repo path with no flag (#3981).
+cannot have one) nor a write to a fixed repo path with no flag: those are
+``test_raw_write_sinks_are_listed`` (#3981), which lists every raw sink
+under ``scripts/`` with this file's vocabulary.
 
 WHAT COUNTS AS GUARDED
 ----------------------

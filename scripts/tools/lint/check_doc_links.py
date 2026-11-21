@@ -557,8 +557,6 @@ class DocLinkChecker:
         Returns:
             (resolved_path, is_valid) - resolved_path 可能不存在，is_valid 表示路徑是否有效
         """
-        import os as _os
-
         # 移除 anchor 和 query string (e.g. jsx-loader.html?component=...)
         file_part = link.split("#")[0].split("?")[0]
 
@@ -576,7 +574,7 @@ class DocLinkChecker:
 
         # 用 lexical normpath 先做一次路徑計算（不 follow symlink），
         # 這樣才能偵測 docs/rule-packs/... 這種跨 symlink 的路徑。
-        lexical = Path(_os.path.normpath(str(joined)))
+        lexical = Path(os.path.normpath(str(joined)))
         lexical_rel = ""
         try:
             lexical_rel = lexical.relative_to(self.repo_root).as_posix()
