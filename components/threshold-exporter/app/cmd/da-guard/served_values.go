@@ -48,8 +48,9 @@ const servedValuesCmd = "served-values"
 // value as a da-guard older than itself. v1 wrote each tenant's key_checks
 // as sentences that quoted the key; v2 writes records (#3703); v3 adds
 // `ungathered` beside the schedules (#3991); v4 adds each --schedules-only
-// tenant's `unserved_thresholds` (#4073).
-const servedValuesSchema = "da-guard.served-values/v4"
+// tenant's `unserved_thresholds` (#4073); v5 adds each --config-facts
+// tenant's `routing` (#4109).
+const servedValuesSchema = "da-guard.served-values/v5"
 
 // customAlertsKey is the reserved key whose rows are the tenant's custom
 // alerts; its value is the list of those rows rather than one number.
@@ -1071,19 +1072,42 @@ type servedTenantFacts struct {
 	// Metadata: the tenant's `_metadata` as the exporter's resolver reads it
 	// (metadataReading) — the default mode's `values._metadata`.
 	Metadata map[string]any `json:"metadata"`
+	// Routing (#4109): the default mode's `routing` (routingReading) — the
+	// resolver takes no instant. Absent when it accepts no `_routing`.
+	Routing map[string]any `json:"routing,omitempty"`
 }
 
-// servedConfigFacts is --config-facts' tenants (#3918). The resolver's
-// `_metadata` WARN lines are printed here once, as the collector's scrape
-// prints them in the other modes (#2374: never twice in one run).
+// servedConfigFacts is --config-facts' tenants (#3918). The resolvers'
+// `_metadata` and `_routing` WARN lines are printed here once, as the
+// default mode prints them (#2374: never twice in one run).
 func servedConfigFacts(cfg *config.ThresholdConfig) map[string]servedTenantFacts {
 	out := make(map[string]servedTenantFacts, len(cfg.Tenants))
+	routing := map[string]config.RoutingConfig{}
+	for _, r := range cfg.ResolveRoutingLogf(log.Printf) {
+		routing[r.Tenant] = r
+	}
 	for _, m := range cfg.ResolveMetadataLogf(log.Printf) {
 		f := servedTenantFacts{Metadata: metadataReading(m)}
 		f.CustomAlerts, f.CustomAlertsError, f.CustomAlertsFinding = customAlertsOf(m.Tenant, cfg.Tenants[m.Tenant])
+		if rc, ok := routing[m.Tenant]; ok {
+			f.Routing = routingReading(rc)
+		}
 		out[m.Tenant] = f
 	}
 	return out
+}
+
+// routingReading is a tenant's `_routing` as the default mode's `routing`
+// and --config-facts' write it.
+func routingReading(rc config.RoutingConfig) map[string]any {
+	return map[string]any{
+		"receiver_type":   rc.ReceiverType,
+		"receiver":        rc.ReceiverConfig,
+		"group_by":        nonNilStrings(rc.GroupBy),
+		"group_wait":      rc.GroupWait,
+		"group_interval":  rc.GroupInterval,
+		"repeat_interval": rc.RepeatInterval,
+	}
 }
 
 // servedSchedulesOnly is --schedules-only's tenants (#3877). The tree is
@@ -1307,14 +1331,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 			reserved["_state_"+name] = on
 		}
 		if rc, ok := routing[tenant]; ok {
-			tv.Routing = map[string]any{
-				"receiver_type":   rc.ReceiverType,
-				"receiver":        rc.ReceiverConfig,
-				"group_by":        nonNilStrings(rc.GroupBy),
-				"group_wait":      rc.GroupWait,
-				"group_interval":  rc.GroupInterval,
-				"repeat_interval": rc.RepeatInterval,
-			}
+			tv.Routing = routingReading(rc)
 		}
 		for k, v := range reserved {
 			if _, clash := tv.Values[k]; clash {

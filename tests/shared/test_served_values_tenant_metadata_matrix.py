@@ -52,6 +52,9 @@ _BASE = "defaults:\n  mysql_connections: 80\n  redis_connected_clients: 100\n"
 _A_PLAIN = "tenants:\n  tenant-a:\n    _silent_mode: disable\n"
 _B = ("tenants:\n  tenant-b:\n    redis_connected_clients: 7\n"
       "    _metadata:\n      owner: team-b\n      db_type: redis\n")
+#: `redis_connected_clients` 關到 {expires} 為止，之後回落成根的 100（送出）。
+_EXPIRING_DISABLE = ("tenants:\n  tenant-a:\n    redis_connected_clients:\n      default: disable\n"
+                     "      expires: \"{expires}\"\n")
 
 POSITIONS = {
     "defaults": {
@@ -250,46 +253,78 @@ def test_a_numeric_tenant_id_is_its_source_text(tmp_path):
     assert meta["010"]["owner"] == served["010"].values["_metadata"]["owner"] == "team-n"
 
 
-# ── operational_mode：讀 Go 的判定，不讀寫法 ─────────────────────────────
+# ── 整天：沒有任何欄位是某一刻的狀態（#4109） ─────────────────────────────
 
 _STATE_FILTERS = ("state_filters:\n  maintenance:\n    reasons: []\n    severity: info\n"
                   "    default_state: disable\n")
 
+#: 01:00-02:00 送出、其餘時段關掉的鍵；以及每週固定時窗的維護。
+_WINDOWED = ("tenants:\n  tenant-a:\n    pg_connections:\n      default: disable\n"
+             "      overrides:\n        - window: \"01:00-02:00\"\n          value: \"60\"\n"
+             "    _state_maintenance:\n      recurring:\n        - weekdays: [fri]\n"
+             "          window: \"01:00-02:00\"\n")
 
-def test_operational_mode_follows_the_exporters_verdict(tmp_path):
-    """寫了 `_state_maintenance` 但時間盒已過期：Go 判定不在維護中（normal）。
-    `_silent_mode: warning` 寫在平台 `tenants:`：Go 發出靜音的 severity 清單（silent）。"""
+
+def test_the_metadata_is_the_same_at_every_time_of_day(tmp_path):
+    """#4109：同一棵樹在時窗內、時窗外、另一個星期幾產生的元資料逐欄相同（`generated`
+    除外）。只在某時窗送出的鍵整天都算送出；維護、靜音是某一刻的狀態，不在元資料裡
+    （tenant-api 的 config_derived 在被問的那一刻推算）。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": _BASE + _STATE_FILTERS + (
+        "_defaults.yaml": _BASE + "  pg_connections: 80\n" + _STATE_FILTERS + (
             "tenants:\n  tenant-b:\n    _silent_mode: warning\n"),
-        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    _state_maintenance:\n"
-                          "      target: enable\n      expires: \"2020-01-01T00:00:00Z\"\n"),
-        "tenant-c.yaml": "tenants:\n  tenant-c:\n    _state_maintenance: enable\n",
+        "tenant-a.yaml": _WINDOWED,
+        "tenant-b.yaml": _B,
+    })
+    # 前提：一般模式在 01:30（週五）與 12:00、週六 01:30 讀到的確實不同。
+    inside = tv.load_served_values(conf_d, at="2026-11-20T01:30:00Z")["tenant-a"]
+    outside = tv.load_served_values(conf_d, at="2026-11-21T01:30:00Z")["tenant-a"]
+    assert inside.values["_state_maintenance"] is True and outside.values["_state_maintenance"] is False
+    assert "pg_connections" in inside.values
+    assert "pg_connections" not in tv.load_served_values(conf_d, at="2026-11-20T12:00:00Z")["tenant-a"].values
+    runs = [gtm.build_tenant_metadata(conf_d, at=at)["tenant_metadata"]
+            for at in ("2026-11-20T01:30:00Z", "2026-11-20T12:00:00Z", "2026-11-21T01:30:00Z")]
+    assert runs[0] == runs[1] == runs[2], runs
+    for tenant, entry in runs[0].items():
+        assert "operational_mode" not in entry, (tenant, entry)
+    # 對照：同一個鍵整天都關掉時少算一個——只在時窗內送出的鍵確實算進去了。
+    off = _tree(tmp_path / "off", {
+        "_defaults.yaml": _BASE + "  pg_connections: 80\n" + _STATE_FILTERS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    pg_connections: disable\n",
+    })
+    assert gtm.build_tenant_metadata(off)["tenant_metadata"]["tenant-a"]["metric_count"] == \
+        runs[0]["tenant-a"]["metric_count"] - 1, runs[0]["tenant-a"]
+
+
+def test_routing_channel_is_the_exporters_routing_read_at_no_instant(tmp_path):
+    """#4109：`_routing` 取自 `--config-facts`（exporter 模組的 routing resolver，不吃
+    時刻），與一般模式的 `routing` 同一份讀法。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _BASE,
+        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    _routing:\n      receiver:\n        type: webhook\n"
+                          "        url: \"https://hooks.example.com/a\"\n"),
         "tenant-b.yaml": _B,
     })
     served = tv.load_served_values(conf_d)
-    assert served["tenant-a"].values["_state_maintenance"] is False   # 前提
-    assert served["tenant-c"].values["_state_maintenance"] is True    # 前提
-    assert served["tenant-b"].values["_silent_mode"] == ["warning"]   # 前提
+    assert served["tenant-a"].routing["receiver"]["url"] == "https://hooks.example.com/a"   # 前提
     meta = gtm.build_tenant_metadata(conf_d)["tenant_metadata"]
-    assert {t: m["operational_mode"] for t, m in meta.items()} == {
-        "tenant-a": "normal", "tenant-b": "silent", "tenant-c": "maintenance"}
+    assert meta["tenant-a"]["routing_channel"] == "webhook:https://hooks.example.com/a", meta["tenant-a"]
+    assert meta["tenant-b"]["routing_channel"] == "", meta["tenant-b"]
 
 
 def test_check_evaluates_at_the_recorded_instant(tmp_path):
-    """`--check` 以檔案記下的 `generated` 時刻重讀，不以現在：維護時間盒在兩者之間
-    到期時，檔案沒變就不能轉紅（#2115 B4）。對照組：同一棵樹在兩個時刻答案不同。"""
+    """`--check` 以檔案記下的 `generated` 時刻重讀，不以現在：限時的 disable 在兩者
+    之間到期時，檔案沒變就不能轉紅（#2115 B4）。對照組：同一棵樹在兩個時刻答案不同
+    （#4109 起元資料只有 `expires:` 依時刻）。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": _BASE + _STATE_FILTERS,
-        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    _state_maintenance:\n"
-                          "      target: enable\n      expires: \"2020-01-01T00:00:00Z\"\n"),
+        "_defaults.yaml": _BASE,
+        "tenant-a.yaml": _EXPIRING_DISABLE.format(expires="2020-01-01T00:00:00Z"),
     })
     before = "2019-12-31T00:00:00Z"
     data = gtm.build_tenant_metadata(conf_d, at=before)
     assert data["generated"] == before
-    assert data["tenant_metadata"]["tenant-a"]["operational_mode"] == "maintenance"  # 前提
+    then = data["tenant_metadata"]["tenant-a"]["metric_count"]
     now = gtm.build_tenant_metadata(conf_d)["tenant_metadata"]["tenant-a"]
-    assert now["operational_mode"] == "normal"                                       # 前提
+    assert now["metric_count"] == then + 1                                           # 前提
 
     out = tmp_path / "meta.json"
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -315,17 +350,16 @@ def test_check_evaluates_at_the_recorded_instant(tmp_path):
 
 
 def test_check_ignores_a_generated_in_the_future(tmp_path):
-    """檔案是在維護結束後的時刻產的（normal），`generated` 再挪到更遠的未來：
-    若 --check 照收那個時刻，答案仍是 normal、過關；應退回現在（還在維護中）→ 紅。"""
+    """檔案是在限時 disable 到期後的時刻產的（鍵已送出），`generated` 再挪到更遠的
+    未來：若 --check 照收那個時刻，答案不變、過關；應退回現在（還關著）→ 紅。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": _BASE + _STATE_FILTERS,
-        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    _state_maintenance:\n"
-                          "      target: enable\n      expires: \"2099-01-01T00:00:00Z\"\n"),
+        "_defaults.yaml": _BASE,
+        "tenant-a.yaml": _EXPIRING_DISABLE.format(expires="2099-01-01T00:00:00Z"),
     })
     data = gtm.build_tenant_metadata(conf_d, at="2099-06-01T00:00:00Z")
-    assert data["tenant_metadata"]["tenant-a"]["operational_mode"] == "normal"       # 前提
+    after = data["tenant_metadata"]["tenant-a"]["metric_count"]
     now = gtm.build_tenant_metadata(conf_d)["tenant_metadata"]["tenant-a"]
-    assert now["operational_mode"] == "maintenance"                                  # 前提
+    assert now["metric_count"] == after - 1                                          # 前提
     data["generated"] = "2100-01-01T00:00:00Z"
     out = tmp_path / "meta.json"
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -349,9 +383,10 @@ def test_recorded_at_takes_only_a_past_instant_in_the_written_format(generated, 
 
 
 def test_no_value_is_read_from_the_yaml_itself():
-    """結構釘：本工具不再自己讀租戶 YAML（`_groups.yaml` 除外，那不是租戶值）。"""
+    """結構釘：本工具不再自己讀租戶 YAML（`_groups.yaml` 除外，那不是租戶值），也不讀
+    served-values 某一刻的值（#4109：整天讀，`load_served_tree` 是某一刻的讀者）。"""
     src = TOOL.read_text(encoding="utf-8")
-    assert "load_served_tree(" in src
-    for gone in ("strict_load_exporter_keys", "yaml.safe_load", "iterdir("):
+    assert "load_whole_day(" in src
+    for gone in ("strict_load_exporter_keys", "yaml.safe_load", "iterdir(", "load_served_tree("):
         assert gone not in src, gone
     assert os.environ.get("DA_GUARD_BINARY"), "fixture did not set DA_GUARD_BINARY"

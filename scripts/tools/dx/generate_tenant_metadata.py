@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""租戶元資料產生器 — 讀 exporter 實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
+"""租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
 
 The tenants and every value read here come from `da-guard served-values`
 (#2115 0-B/B4), so the tool needs da-guard: `$DA_GUARD_BINARY`, else
@@ -52,9 +52,8 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #327
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
     exit_on_served_values_error,
-    load_served_tree,
+    load_whole_day,
     now_at,
-    print_load_warnings,
     recorded_at,
 )
 from _lib_io import (  # noqa: E402  (#1789; #3982: the artifact entry)
@@ -110,10 +109,10 @@ RESERVED_PACKS = {"operational", "platform"}
 def infer_rule_packs(tenant_config: dict) -> list[str]:
     """Infer rule packs from metric key prefixes.
 
-    `tenant_config` is the tenant's served values (`TenantValues.values`), so
-    a key inherited from `defaults:` counts as if the tenant had written it
-    (#2115 0-B/B4); a key /metrics does not serve (switched off, no default)
-    is not there."""
+    `tenant_config` holds the threshold keys /metrics serves for the tenant
+    in some part of the day (#4109), so a key inherited from `defaults:`
+    counts as if the tenant had written it (#2115 0-B/B4); a key /metrics
+    serves at no minute (switched off, no default) is not there."""
     packs = set(RESERVED_PACKS)
 
     for key in tenant_config.keys():
@@ -252,23 +251,11 @@ def extract_routing_channel(tenant_config: dict) -> str:
     return ""
 
 
-def detect_operational_mode(tenant_config: dict) -> str:
-    """Detect operational mode: normal (default), silent, or maintenance.
-
-    Reads the served values (#2115 0-B/B4): `_state_maintenance` is the
-    exporter's verdict, `true` while maintenance is on (an expired time-box
-    already reads `false`); `_silent_mode` is the list of severities it
-    silences, empty when off."""
-    if tenant_config.get("_state_maintenance") is True:
-        return "maintenance"
-    if tenant_config.get("_silent_mode"):
-        return "silent"
-    return "normal"
-
 
 def count_metrics(tenant_config: dict) -> int:
     """Count non-reserved metric keys: the threshold keys /metrics serves
-    for the tenant, inherited ones included (#2115 0-B/B4)."""
+    for the tenant in some part of the day, inherited ones included (#2115
+    0-B/B4, #4109)."""
     count = 0
     for key in tenant_config.keys():
         if not key.startswith("_"):
@@ -298,9 +285,12 @@ def get_git_head_commit() -> str:
 # ---------------------------------------------------------------------------
 def build_tenant_metadata(config_dir: Path, at: str | None = None,
                           state: Any = None) -> dict[str, Any]:
-    """Build the metadata structure from what the exporter serves at `at`
-    (RFC3339; None = now). `generated` records that instant, so `--check`
-    can re-evaluate at it (`recorded_at`).
+    """Build the metadata structure from what the exporter serves over the
+    whole UTC day (#4109): `at` (RFC3339; None = now) only says whether an
+    `expires:` has passed, and `generated` records it, so `--check` can
+    re-evaluate at it (`recorded_at`). No field is a state at one instant:
+    a tenant's operational mode (silence, maintenance — `recurring:` windows
+    included) is tenant-api's `config_derived`, derived when it is asked.
 
     #2115 0-B/B4: the tenants, their `_metadata` and every key the inference
     reads are `da-guard served-values` (/metrics), not this tool's own read
@@ -308,10 +298,11 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
     `tenants:`, `_metadata` inherited there, threshold keys inherited from
     `defaults:` — all as the exporter resolves them. Nothing is merged here.
 
-    Raises what `load_served_tree` raises (da-guard missing or failing, a file
-    the exporter's load drops); a caller must not turn that into an empty
-    result. Files the load serves no tenant from, and every line da-guard
-    wrote to stderr, are printed to stderr (`print_load_warnings`).
+    Raises what `load_whole_day` raises (da-guard missing or failing, a file
+    the exporter's load drops, a part of the day /metrics cannot be gathered
+    in — named, whatever time it is); a caller must not turn that into an
+    empty result. Files the load serves no tenant from, and every line da-guard
+    wrote to stderr, are printed to stderr (by `load_whole_day`).
 
     `state` is a `_lib_tenant_state.TenantState` (custom_groups come from it,
     #2883), or None: custom_groups is then empty.
@@ -321,12 +312,19 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
 
     if at is None:
         at = now_at()
-    tree = load_served_tree(config_dir, at=at)
-    print_load_warnings(tree)
-    # `_routing` is not a key /metrics serves: served-values carries the
-    # exporter module's reading of it apart (TenantValues.routing).
-    tenant_configs = {tid: {**tv.values, **({"_routing": tv.routing} if tv.routing is not None else {})}
-                      for tid, tv in tree.tenants.items()}
+    whole = load_whole_day(config_dir, at=at)
+    # The threshold keys served in some part of the day, `_metadata` as the
+    # exporter's resolver reads it, and `_routing` as the exporter module's
+    # routing resolver reads it (`--config-facts`: read at no instant).
+    tenant_configs = {}
+    for tid, day in whole.days.tenants.items():
+        facts = whole.facts.tenants[tid]
+        config: dict[str, Any] = {k: sch for k, sch in day.items()
+                                  if any(seg.value is not None for seg in sch.segments)}
+        config["_metadata"] = facts.metadata
+        if facts.routing is not None:
+            config["_routing"] = facts.routing
+        tenant_configs[tid] = config
 
     # Process each tenant
     for tenant_name, tenant_config in sorted(tenant_configs.items()):
@@ -354,7 +352,6 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
             "rule_packs": infer_rule_packs(tenant_config),
             "owner": extract_owner(tenant_config),
             "routing_channel": extract_routing_channel(tenant_config),
-            "operational_mode": detect_operational_mode(tenant_config),
             "metric_count": count_metrics(tenant_config),
             "last_config_commit": get_git_head_commit(),
             "tags": tags,

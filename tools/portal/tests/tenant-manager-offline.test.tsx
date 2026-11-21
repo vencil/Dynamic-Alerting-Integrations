@@ -119,6 +119,28 @@ describe('TenantManager — offline copy (#3306)', () => {
     expect(sidebar.querySelector('[aria-label="Create new group"]')).toBeNull();
   });
 
+  it('shows no operational mode from the offline copy: unknown, never normal (#4109)', async () => {
+    // A copy written before #4109 still carries the mode it was generated
+    // with; a state at one instant is not shown as the state now.
+    stubAssign();
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      const u = String(url);
+      if (u.includes('platform-data.json')) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+          tenant_metadata: {
+            't-old': { environment: 'production', operational_mode: 'normal' },
+            't-none': { environment: 'production' },
+          },
+        }) } as any);
+      }
+      return Promise.reject(new Error('no API on this host'));
+    }));
+    render(<TenantManager />);
+    expect(await screen.findByLabelText('Tenant: t-old — production unknown')).toBeTruthy();
+    expect(screen.getByLabelText('Tenant: t-none — production unknown')).toBeTruthy();
+    expect(screen.queryByLabelText(/Tenant: t-(old|none) — production normal/)).toBeNull();
+  });
+
   it('offers no group delete over the offline copy, even with /api/v1/me granting write', async () => {
     stubAssign();
     const deletes: string[] = [];
