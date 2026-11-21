@@ -351,9 +351,11 @@ func TestRootDisable_ATenantValueThatDoesNotApplyLeavesTheFamilyToIt(t *testing.
 	}
 }
 
-// A root `_critical` beside a root disable is served on its own: the error
-// says so instead of claiming it reaches no tenant.
-func TestRootDisable_ARootCriticalBesideItIsServedAndNamed(t *testing.T) {
+// #4173: a root `_critical` beside a root disable of its base is that
+// family's critical default, so the disable switches it off with the family:
+// no tenant is served it, and the error names the line as serving none.
+// (Before #4173 the root `_critical` was a warning row of its own, served.)
+func TestRootDisable_ARootCriticalBesideItIsOffAndNamed(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
 		"_defaults.yaml": "defaults:\n  pg_replication_lag: disable\n  pg_replication_lag_critical: 90\n",
@@ -361,9 +363,11 @@ func TestRootDisable_ARootCriticalBesideItIsServedAndNamed(t *testing.T) {
 	}
 	code, doc, dir, stderr := servedWith(t, files, "")
 	mustOK(t, code, stderr)
-	wantValue(t, doc, "t1", "pg_replication_lag_critical", 90)
+	if v, has := doc.Tenants["t1"].Values["pg_replication_lag_critical"]; has {
+		t.Errorf("t1 served pg_replication_lag_critical = %v; want none (its family is off at the root)", v)
+	}
 	_, out, _ := runOnce(t, "--config-dir", dir)
-	if !strings.Contains(out, "served to every tenant while `pg_replication_lag` is switched off") {
-		t.Errorf("root_disable_family_value does not say the root _critical is served:\n%s", out)
+	if !strings.Contains(out, "`pg_replication_lag_critical` included, so its value here is served to none of them") {
+		t.Errorf("root_disable_family_value does not name the root _critical as served to none:\n%s", out)
 	}
 }

@@ -170,15 +170,15 @@ def test_a_da_guard_killed_by_a_signal_is_not_classified(tmp_path):
 
 @pytest.mark.parametrize("row", sorted(_ROWS))
 def test_control_a_tree_a_working_da_guard_refuses_stays_the_trees(row, tmp_path):
-    """對照組：可用的 da-guard（`-h` 回 0）拒收的樹（F0，exit 2）仍是樹的問題。"""
+    """對照組：可用的 da-guard（`-h` 回 0）拒收的樹（同一個租戶宣告兩次，exit 2）仍是樹的問題。
+    （#4173 前用的是只有 served-values 拒收的 F0 樹；那棵樹現在讀得到，改用三列都拒收的。）"""
     conf_d = str(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_connections_critical: 95\n",
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n",
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-a-again.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 60\n",
     }))
     got = _ROWS[row](conf_d, _policy(tmp_path))
-    # effective（profiles）與 da-guard 的檢查（guard_errors：F0 只是 warning）不拒收 F0；
-    # served-values（policy_dsl）拒收。
-    assert (got["status"] == vc.FAIL) is (row == "policy_dsl"), got
+    assert got["status"] == vc.FAIL, got
     assert got["caller_error"] is False, got
     # getattr：對照組在沒有這兩個提示的版本上也要能跑（反事實時它須綠）。
     binary_hints = (getattr(vc, "_DA_GUARD_BROKEN_HINT", None), vc._DA_GUARD_TOO_OLD_HINT)

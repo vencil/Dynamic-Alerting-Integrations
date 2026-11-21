@@ -60,11 +60,12 @@
 //     any level whose `defaults:` mapping leaves top-level keys out of
 //     the defaults merge.
 //
-//  6. Root `_critical` keys (#2544; see rootdefaults.go), warn: a
-//     `<metric>_critical` key under the conf.d root `defaults:` is served
-//     as a threshold of its own, never as `<metric>`'s critical row, so it is
-//     no fallback for that row and check 2 does not judge a tenant's key
-//     against it (config.EffectiveConfig.MergedDefaults leaves it out).
+//  6. Root `_critical` keys (#4173; see rootdefaults.go), warn: a
+//     `<metric>_critical` key under the conf.d root `defaults:` is every
+//     tenant's critical default, served only over a valued base; one whose
+//     base has no value at the root or from the built-in layer serves
+//     nothing. Over a valued base it is a fallback like any root threshold,
+//     and check 2 judges a tenant's key against it.
 //
 //  7. Undeliverable subtree defaults (#1976; see subtree.go), error:
 //     a tenant inherits a threshold key only a subtree `_defaults.yaml`

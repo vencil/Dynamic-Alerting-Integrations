@@ -535,12 +535,11 @@ func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[
 // key is skipped before any verdict.
 func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 	if base, critical := criticalRowBase(key); critical {
-		// Two readers of a `<base>_critical` key on the output plane:
-		// resolveCriticalRows (a critical row, over a valued base) and
-		// resolveBaseRows, when the root `defaults:` values the
-		// `_critical` key itself (it then walks the key as a base key of
-		// its own and serves the tenant's value of it).
-		return criticalBaseValued(cfg, base) || rootDefaultsHold(cfg, key)
+		// One reader of a `<base>_critical` key on the output plane:
+		// resolveCriticalRows, over a valued base (#4173: a root
+		// `defaults:` that values the `_critical` key itself gives that
+		// phase its default; resolveBaseRows no longer walks it).
+		return criticalBaseValued(cfg, base)
 	}
 	if isDimensionalKey(key) {
 		// resolveDimensionalRows' entry condition (ADR-038 §11, #3475):
@@ -575,9 +574,9 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // ⛔ A `_critical` KEY IS NOT ANSWERED HERE (#3378): resolveCriticalRows'
 // entry condition is not the suffix but `defaults[base]` — a base the root
 // `defaults:` holds a value for — and keyCanReachTheOutputPlane asks exactly
-// that (criticalBaseValued) before this function, beside the other reader of
-// such a key (resolveBaseRows, when the root values the `_critical` key
-// itself: rootDefaultsHold). This arm used to pass every
+// that (criticalBaseValued) before this function — the one reader of such a
+// key since #4173 (resolveBaseRows no longer walks a root-valued
+// `_critical`). This arm used to pass every
 // `_critical` on the suffix alone, on the ground that the resolver WARNs when
 // the base is missing; but that WARN is a log line on every scrape, while a
 // subtree value written into the tenant's map then reached no row and no

@@ -73,41 +73,43 @@ func hasSig(rows []ResolvedThreshold, want rowSig) bool {
 	return false
 }
 
-// TestCriticalKeyUnderDefaultsProducesNoCriticalTier is the measurement the
-// #1218 fix rests on: a platform that writes `<base>_critical` into `defaults:`
-// gets a WARNING row whose metric label carries the suffix — a series no
-// recording rule joins — and no critical row at all.
+// TestCriticalKeyUnderDefaultsIsThePlatformsCriticalTier (#4173): a platform
+// that writes `<base>_critical` into the root `defaults:` gives every tenant
+// that critical value — a severity=critical row of `<base>`, the one
+// `tenant:alert_threshold:<base>_critical` reads — and no suffixed warning
+// series. (Before #4173 the key was served as a warning row of its own,
+// metric `connections_critical`, which no rule read: the #1218 measurement.)
 //
-// The whole resolved set is asserted, not just the presence of one row: the
-// claim being pinned is an ABSENCE ("no critical tier"), and an absence that is
-// only spot-checked is the shape that quietly stops holding.
-func TestCriticalKeyUnderDefaultsProducesNoCriticalTier(t *testing.T) {
+// The whole resolved set is asserted: the claim includes an ABSENCE (no
+// suffixed series), and an absence only spot-checked quietly stops holding.
+func TestCriticalKeyUnderDefaultsIsThePlatformsCriticalTier(t *testing.T) {
 	t.Parallel()
 	cfg := ThresholdConfig{
 		Defaults: map[string]float64{
 			placementBase:     80,
-			placementCritical: 90, // ← what init_project used to emit
+			placementCritical: 90,
 		},
-		Tenants: map[string]map[string]ScheduledValue{"t-1": {}},
+		Tenants: map[string]map[string]ScheduledValue{"t-1": {}, "t-2": {placementCritical: {Default: "95"}}},
 	}
 
 	rows := cfg.ResolveAt(fixedNow)
 
-	if len(rows) != 2 {
-		t.Fatalf("want exactly 2 rows (both from resolveBaseRows), got %d: %+v", len(rows), sigs(rows))
-	}
-	if !hasSig(rows, rowSig{"pg", "connections", "warning", 80}) {
-		t.Errorf("base key must still emit its warning row: %+v", sigs(rows))
-	}
-	// parseMetricKey splits on the FIRST underscore, so the `_critical` suffix
-	// survives into the metric label instead of becoming a severity.
-	if !hasSig(rows, rowSig{"pg", "connections_critical", "warning", 90}) {
-		t.Errorf("a _critical key in defaults: emits a suffixed WARNING series: %+v", sigs(rows))
+	if len(rows) != 4 {
+		t.Fatalf("want exactly 4 rows (a warning and a critical per tenant), got %d: %+v", len(rows), sigs(rows))
 	}
 	for _, r := range rows {
+		if r.Metric != "connections" {
+			t.Errorf("a suffixed series is served: %+v", sigs(rows))
+		}
+		want := 80.0
 		if r.Severity == "critical" {
-			t.Errorf("defaults: cannot produce a critical tier — resolveCriticalRows "+
-				"iterates tenant overrides, not defaults; got %+v", sigs(rows))
+			want = 90 // the platform's critical value
+			if r.Tenant == "t-2" {
+				want = 95 // the tenant's own replaces it
+			}
+		}
+		if r.Value != want {
+			t.Errorf("%s %s = %v, want %v", r.Tenant, r.Severity, r.Value, want)
 		}
 	}
 }

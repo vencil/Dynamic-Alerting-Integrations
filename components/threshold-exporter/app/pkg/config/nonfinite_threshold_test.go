@@ -209,7 +209,7 @@ func TestNonFiniteThresholdWrites(t *testing.T) {
 // #3267: every other value RefusedValueAt refuses.
 func TestRefusedThresholdWrites(t *testing.T) {
 	t.Parallel()
-	got := refusedThresholdWrites(nil, map[string]ScheduledValue{
+	got := refusedThresholdWrites(map[string]ScheduledValue{
 		"mysql_connections":          {Default: "NaN"},
 		"mysql_connections_critical": {Default: "+Inf"},
 		"container_cpu":              {Default: "70"},
@@ -255,7 +255,7 @@ func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
 			sv := ScheduledValue{Default: v}
 			refused := RefusedValueAt(key, sv, fixedNow) != ""
 			nf := len(NonFiniteThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
-			other := len(refusedThresholdWrites(nil, map[string]ScheduledValue{key: sv})) > 0
+			other := len(refusedThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
 			if nf && other {
 				t.Errorf("%s=%q: both predicates report it", key, v)
 			}

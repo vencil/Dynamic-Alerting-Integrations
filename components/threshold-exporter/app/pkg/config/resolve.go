@@ -74,8 +74,9 @@ type ResolveStats struct {
 // there is no State 2 for it: omitted means no value and no row. See
 // resolveDeclaredRows.
 //
-// Multi-tier severity: tenants can set <metric>_critical in their overrides
-// to expose a separate critical-severity threshold for the same metric.
+// Multi-tier severity: <metric>_critical — a tenant's, or the root
+// `defaults:`' as every tenant's default (#4173) — exposes a separate
+// critical-severity threshold for the same metric (resolveCriticalRows).
 // The base metric retains severity=warning; the _critical variant gets severity=critical.
 // PromQL can then use `unless` to suppress warning when critical fires.
 //
@@ -601,6 +602,9 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 		if baseRowsSkipKey(metricKey) || isDimensionalKey(metricKey) {
 			continue // a dimensional default is resolveDimensionalRows' (#2031)
 		}
+		if _, critical := criticalRowBase(metricKey); critical {
+			continue // #4173: a root `<base>_critical` is resolveCriticalRows' default
+		}
 
 		// Parse metric key: "mysql_connections" → component="mysql", metric="connections"
 		component, metric := parseMetricKey(metricKey)
@@ -863,10 +867,15 @@ func criticalRowBase(key string) (string, bool) {
 	return strings.TrimSuffix(key, "_critical"), true
 }
 
-// resolveCriticalRows resolves a tenant's <metric>_critical override variants,
-// each producing an additional severity=critical threshold for an existing
-// default metric. Extracted verbatim from the ResolveAtWithStats per-tenant
-// loop (multi-tier severity scan).
+// resolveCriticalRows resolves a tenant's <metric>_critical tier: one
+// severity=critical row per `<base>_critical` whose base the root defaults
+// value, from the tenant's own value — or, when the tenant gives none, from
+// the root `defaults:` `<base>_critical` (#4173): the platform's critical
+// value for every tenant, which a tenant's value (its file, a subtree level,
+// a profile, a root platform `tenants:` entry) replaces and its `disable`
+// switches off. A tenant value the reader refuses falls back to the root's,
+// as resolveBaseRows falls back to the root default. Extracted from the
+// ResolveAtWithStats per-tenant loop (multi-tier severity scan).
 //
 // #1231: both maps arrive pre-canonicalized, so an old-spelled
 // `mysql_cpu_critical` is already `mysql_threads_running_critical` here and
@@ -883,19 +892,19 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 			// #3378: claimed only when the base lookup below can pass. With
 			// no base value the row is dropped ("has no matching default"),
 			// and the key is left for noteUnclaimed to record as
-			// NotServedUnconsumed — unless another phase reads it (a root
-			// `defaults:` that values the `_critical` key itself is walked by
-			// resolveBaseRows), which an unconditional note here could not
-			// see.
+			// NotServedUnconsumed. (Since #4173 no other phase reads a
+			// `_critical` key: resolveBaseRows skips one the root values.)
 			if read {
 				rec.claim(key)
 			}
 		}
 
 		// PREVENT #656 v1: `expires:` is intentionally NOT honored on _critical
-		// overrides — they have no platform default to fail-safe back to (reverting
-		// would go SILENT, the very thing PREVENT avoids). expires here is a no-op;
-		// ValidateTenantKeys warns the author. Honored only in resolveBaseRows.
+		// overrides — most have no platform default to fail-safe back to (reverting
+		// would go SILENT, the very thing PREVENT avoids). A root
+		// `<base>_critical` is one since #4173, but the reading stays one for
+		// every `_critical`: expires here is a no-op; ValidateTenantKeys warns
+		// the author. Honored only in resolveBaseRows.
 		override := sv.resolveValue(now, logf)
 		if rec != nil {
 			rec.noteInvalidWindows(tenant, key, sv)
@@ -916,11 +925,21 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		// critical), read by the one threshold-number reader (#3140).
 		v, ok := parseThresholdNumber(strings.TrimSpace(override))
 		if !ok {
-			logf("WARN: invalid critical threshold %q for tenant=%s key=%s%s", override, tenant, key, suffixedHint(suffixedOff, key))
-			if rec != nil {
-				rec.note(tenant, key, NotServedValueUnparsedDropped)
+			// #4173: the root's critical value, when it gives one, is the
+			// fallback, as the root default is the base phase's.
+			if rv, has := defaults[key]; has && finiteThreshold(rv) {
+				logf("WARN: invalid critical threshold %q for tenant=%s key=%s, using the root default%s", override, tenant, key, suffixedHint(suffixedOff, key))
+				if rec != nil {
+					rec.note(tenant, key, NotServedValueUnparsed)
+				}
+				v = rv
+			} else {
+				logf("WARN: invalid critical threshold %q for tenant=%s key=%s%s", override, tenant, key, suffixedHint(suffixedOff, key))
+				if rec != nil {
+					rec.note(tenant, key, NotServedValueUnparsedDropped)
+				}
+				continue
 			}
-			continue
 		}
 		// #3046: the base switched off switches its critical tier off. Asked
 		// after the value is read, so an unreadable value is reported
@@ -935,6 +954,33 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 			Tenant:    tenant,
 			Metric:    metric,
 			Value:     v,
+			Severity:  "critical",
+			Component: component,
+		}, sink, key)
+	}
+	// #4173: the root's critical value, for every `<base>_critical` the
+	// tenant gives no value of its own (any #1231 spelling: both maps are
+	// canonical). Its base must be valued as for a tenant's key; a root value
+	// the decode refused serves nothing (root_default_refused names it).
+	for key, rv := range defaults {
+		baseKey, critical := criticalRowBase(key)
+		if !critical {
+			continue
+		}
+		if _, own := overrides[key]; own {
+			continue
+		}
+		if _, read := criticalRowRead(key, defaults); !read || !finiteThreshold(rv) {
+			continue
+		}
+		if familyHeadOff(baseKey, defaults, overrides, now) {
+			continue
+		}
+		component, metric := parseMetricKey(baseKey)
+		rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
+			Tenant:    tenant,
+			Metric:    metric,
+			Value:     rv,
 			Severity:  "critical",
 			Component: component,
 		}, sink, key)
@@ -1917,13 +1963,12 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			}
 
 			// #3267: a threshold value the row resolvers refuse (`abc`,
-			// `70:high`, `1e999`; thresholdRefusalIn, in this tree's root
-			// `defaults:` — not a non-finite
+			// `70:high`, `1e999`; thresholdRefusalIn — not a non-finite
 			// number, which #3140 refuses strictly elsewhere) is refused
 			// where it is written. Errors AND Values, as a reserved value:
 			// an unchanged one already on disk is a notice (Ratchet, by the
 			// resolver's reading — readAlike).
-			if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+			if f, ok := newThresholdFinding(tenant, canonKey, sv); ok {
 				v.Errors = append(v.Errors, f.Message)
 				v.Values = append(v.Values, f)
 			}

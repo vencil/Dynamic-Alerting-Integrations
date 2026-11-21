@@ -172,16 +172,16 @@ func TestValidate_RefusedThresholdRatchet(t *testing.T) {
 }
 
 // #3267 review: a `<key>_critical` is judged as the tree's resolvers read it.
-// A root `defaults:` valuing `foo_critical` itself has resolveBaseRows read
-// it by the shared grammar — `90:critical` is served, the write taken; one
-// valuing the base `foo` has resolveCriticalRows read the whole value —
-// `90:critical` is dropped, the write refused.
+// #4173: resolveCriticalRows alone reads a `_critical` key — a root
+// `defaults:` valuing `foo_critical` is its critical default, no longer a key
+// resolveBaseRows reads by the shared grammar — so `90:critical` is dropped
+// and the write refused whatever the root values.
 func TestValidate_CriticalKeyReadAsTheTreeReadsIt(t *testing.T) {
 	for _, c := range []struct {
 		defaults string
 		refused  bool
 	}{
-		{"defaults:\n  foo_critical: 100\n  mysql_slow_queries: 5\n", false},
+		{"defaults:\n  foo_critical: 100\n  mysql_slow_queries: 5\n", true},
 		{"defaults:\n  foo: 80\n  mysql_slow_queries: 5\n", true},
 		{"defaults:\n  foo: 80\n  foo_critical: 100\n  mysql_slow_queries: 5\n", true},
 	} {

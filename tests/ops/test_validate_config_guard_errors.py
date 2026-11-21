@@ -447,10 +447,11 @@ def test_exit_2_from_a_da_guard_that_accepts_the_flags_is_not_the_binarys(tmp_pa
 
 
 def test_warnings_are_not_this_rows(tmp_path):
-    """da-guard 的 warning（這裡是 F0 的一筆）不在本列：PASS，只說有幾筆。"""
+    """da-guard 的 warning（這裡是 root_defaults_critical_key 的一筆：根的 `_critical` 底下
+    沒有基礎值）不在本列：PASS，只說有幾筆。"""
     r = vc.check_guard_errors(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_connections_critical: 95\n",
-        "t.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n"}))
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  app_queue_depth_critical: 95\n",
+        "t.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"}))
     assert r["status"] == vc.PASS, r
     assert r["details"] == ["no error finding from da-guard (1 warning(s), not this row's)"], r
 
