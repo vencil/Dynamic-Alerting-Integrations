@@ -35,10 +35,10 @@ is gone.
   or that sits in the repo (``work_dir``). Meant to shrink to zero:
   ``_DEBT_CEILING`` is its size, and it moves down as sites move to an entry.
   A new write of these kinds goes through an entry, not onto this list.
-  ⚠️ What holds that is the ceiling being a second line a reviewer sees
-  move — a raise, or an entry moved to ``REGISTERED`` with the code
-  unchanged, passes this file. A check against the base commit is #3981's
-  open item.
+  SHRINK-ONLY, held against the merge base with the target branch
+  (``test_debt_does_not_grow_since_the_base_commit``): the list may not
+  hold more than it did there, and no site may leave it in a change that
+  adds a ``scratch`` / ``state`` site to ``REGISTERED``.
 * ``REGISTERED`` — a write the contract does not cover: an intermediate
   file under a temporary directory the code itself made (``scratch``), a
   marker / lock / cache / log / git-internal file (``state``), a call the
@@ -75,6 +75,8 @@ WHAT IT DOES NOT SEE
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -172,7 +174,9 @@ def verdict(scanned: dict[str, Counter[str]], want: dict[str, Counter[str]]) -> 
                     f"{rel}: {have[site] - said[site]} unlisted raw write(s) at `{site}` — "
                     "write a tracked file or a flag-named path through its entry "
                     "(_lib_io.write_repo_artifact / write_operator_output); only a "
-                    "scratch or state write is added, to REGISTERED, with its class")
+                    "write under a temporary directory the code made, or a marker / "
+                    "lock / cache, is added to REGISTERED, with its class — a tracked "
+                    "file listed there is a mislabel nothing here catches")
             elif have[site] < said[site]:
                 faults.append(
                     f"{rel}: `{site}` is listed {said[site]} time(s) and the file has "
@@ -279,17 +283,9 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/generate_alert_reference.py": {
         "main open(w) [artifact]": 2,
     },
-    "scripts/tools/dx/generate_byo_rulepack_table.py": {
-        "main atomic_write_text() [artifact]": 1,
-    },
     "scripts/tools/dx/generate_crd_schemas.py": {
         "run .mkdir [artifact]": 1,
         "run .write_text [artifact]": 2,
-    },
-    "scripts/tools/dx/generate_doc_map.py": {
-        "main atomic_write_text() [artifact]": 1,
-        "main open(w) [artifact]": 1,
-        "main os.chmod [artifact]": 1,
     },
     "scripts/tools/dx/generate_platform_data.py": {
         "main .mkdir [artifact]": 2,
@@ -299,20 +295,11 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/generate_rule_pack_readme.py": {
         "main open(w) [artifact]": 1,
     },
-    "scripts/tools/dx/generate_rule_pack_stats.py": {
-        "main .mkdir [artifact]": 1,
-        "main atomic_write_text() [artifact]": 2,
-    },
     "scripts/tools/dx/generate_rulepack_configmaps.py": {
         "main .write_text [artifact]": 1,
     },
     "scripts/tools/dx/generate_rulepack_derived.py": {
         "main .write_text [artifact]": 1,
-    },
-    "scripts/tools/dx/generate_tool_map.py": {
-        "main .write_text [artifact]": 1,
-        "main atomic_write_text() [artifact]": 1,
-        "main os.chmod [artifact]": 1,
     },
     "scripts/tools/dx/measure_judgement_budget.py": {
         "judge os.mkdir [work_dir]": 1,
@@ -399,11 +386,10 @@ DEBT: dict[str, dict[str, int]] = {
     },
 }
 
-#: How many sinks DEBT holds. Meant to go DOWN only: a site that moves to
-#: an entry lowers it, and nothing is added (a new tracked-file or
-#: flag-named write goes through an entry from the start). It is a second
-#: line for a reviewer to see move, not a lock — see the module docstring.
-_DEBT_CEILING = 119
+#: How many sinks DEBT holds: one number to read. A site that moves to an
+#: entry lowers it. What stops it going UP is not this line (it is edited in
+#: the same diff as the list) but the comparison with the base commit below.
+_DEBT_CEILING = 109
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
@@ -583,13 +569,185 @@ def test_every_raw_write_sink_is_listed_and_every_entry_is_real():
 
 
 def test_the_debt_ceiling_is_the_size_of_the_debt_list():
-    """One number for a reviewer to watch. It does not stop a raise made in
-    the same diff as a new entry (nothing in this file can: that needs the
-    base commit) — it makes one visible as a second changed line."""
+    """One number to read. It does not stop a raise made in the same diff as
+    a new entry — `test_debt_does_not_grow_since_the_base_commit` does."""
     size = sum(count for sites in DEBT.values() for count in sites.values())
     assert size == _DEBT_CEILING, (
         f"DEBT holds {size} sink(s) and _DEBT_CEILING says {_DEBT_CEILING}: lower the "
-        "ceiling with the entries you removed; a raise needs the owner (#3981)")
+        "ceiling with the entries you removed (it cannot go up: the comparison "
+        "with the base commit refuses a larger DEBT)")
+
+
+# ── Shrink-only, against the merge base with the default branch ────────────
+_SELF = "tests/shared/test_raw_write_sinks_are_listed.py"
+
+
+def lists_in(source: str) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    """(DEBT, REGISTERED) as *source* — a revision of this file — writes
+    them. Read as literals, never executed: the base commit's code is not
+    this run's code."""
+    found = {node.target.id: ast.literal_eval(node.value)
+             for node in ast.parse(source).body
+             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+             and node.target.id in ("DEBT", "REGISTERED")}
+    assert set(found) == {"DEBT", "REGISTERED"}, (
+        f"the two list literals were not both found ({sorted(found)}): they are "
+        "annotated assignments of dict literals at module level, and stay that")
+    return found["DEBT"], found["REGISTERED"]
+
+
+def _total(one: dict[str, dict[str, int]], classes: tuple[str, ...]) -> int:
+    return sum(count for sites in one.values() for key, count in sites.items()
+               if _split(key)[1] in classes)
+
+
+def debt_regressions(base: tuple[dict, dict], head: tuple[dict, dict]) -> list[str]:
+    """What *head*'s lists do that a shrink-only DEBT forbids, against
+    *base*'s.
+
+    1. DEBT holds more sinks than it did.
+    2. A site left DEBT in the same change in which REGISTERED gained a
+       ``scratch`` / ``state`` site. That is what a relabel looks like, under
+       whatever key the site ends up — renamed function, other sink kind,
+       other file — and the room it frees in DEBT can take a new debt with
+       the total unchanged. It is also what "pay one debt and add a scratch
+       file" looks like: the two cannot be told apart from the lists, so
+       they go in separate changes."""
+    faults = []
+    was, now = _total(base[0], DEBT_CLASSES), _total(head[0], DEBT_CLASSES)
+    if now > was:
+        faults.append(f"DEBT grew from {was} to {now} sink(s): a new tracked-file or "
+                      "flag-named write goes through an entry, not onto the list")
+    debt_was, debt_now = listed(base[0]), listed(head[0])
+    left = sorted(f"{rel}: {site}" for rel, sites in debt_was.items()
+                  for site, count in sites.items()
+                  if debt_now.get(rel, Counter())[site] < count)
+    kept = ("scratch", "state")
+    reg_was, reg_now = _total(base[1], kept), _total(head[1], kept)
+    if left and reg_now > reg_was:
+        faults.append(
+            f"REGISTERED gained {reg_now - reg_was} scratch/state site(s) in the same "
+            f"change in which DEBT lost {left}: from the lists that is a relabel. Debt is "
+            "paid by moving the write to an entry; a new scratch or state write, or a "
+            "rename of a function that holds debt, goes in its own change")
+    return faults
+
+
+def base_commit() -> str:
+    """The merge base of HEAD and the branch this change targets — resolved
+    by the repo's one resolver (``$LINT_DIFF_BASE``, else
+    ``origin/$GITHUB_BASE_REF``, else ``origin/main``). On a pull request's
+    CI checkout (the merge commit) that is the tip of the target branch;
+    locally it is where the branch forked. On the default branch itself it
+    is HEAD, and the comparison is of a list with itself: the growth was
+    stopped on the pull request.
+
+    ⛔ Fails — never skips — when it cannot be resolved: a comparison that
+    was not made is not a comparison that passed. ``fetch-depth: 0`` does
+    not guarantee an ``origin/<base>`` ref; the CI jobs that run this fetch
+    it in a step of their own."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "lint"))
+    from _lint_helpers import DiffBaseMissingError, resolve_diff_base_ref
+    try:
+        _ref, commit = resolve_diff_base_ref()
+    except DiffBaseMissingError as exc:
+        pytest.fail(f"the shrink-only comparison of DEBT was NOT made:\n{exc}")
+    return commit
+
+
+def lists_at(commit: str) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    """The two lists as *commit* holds them. ⛔ No "that commit has no such
+    file, so pass": every commit a change can be based on holds it (it
+    arrived with the lists, #4124), so one without it is a comparison that
+    could not be made — a failure, like an unresolved base."""
+    shown = subprocess.run(["git", "show", f"{commit}:{_SELF}"], cwd=REPO_ROOT,
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    if shown.returncode != 0:
+        pytest.fail(f"cannot read {_SELF} at the base commit {commit} "
+                    f"({shown.stderr.strip()}): the shrink-only comparison of DEBT was "
+                    "NOT made. A base older than the lists is a stale base ref — "
+                    "`git fetch origin main`, or set $LINT_DIFF_BASE.")
+    return lists_in(shown.stdout)
+
+
+def test_debt_does_not_grow_since_the_base_commit():
+    """`_DEBT_CEILING` and the list are edited in one diff, so this file's
+    own text cannot hold "shrink-only" — measured: a new entry with the
+    ceiling raised, and an entry moved to REGISTERED with the code unchanged,
+    both passed. The lists of the base commit can."""
+    base = base_commit()
+    faults = debt_regressions(lists_at(base), (DEBT, REGISTERED))
+    assert not faults, f"against the base commit {base[:9]}:\n  " + "\n  ".join(faults)
+
+
+def test_the_base_comparison_says_no():
+    base = ({"scripts/x.py": {"main .write_text [artifact]": 2}},
+            {"scripts/x.py": {"main open(w) [scratch]": 1},
+             "scripts/tools/_lib_io.py": {"ensure_dir .mkdir [entry]": 1}})
+    assert debt_regressions(base, base) == []
+    # paid: one site moved to an entry
+    paid = {"scripts/x.py": {"main .write_text [artifact]": 1}}
+    assert debt_regressions(base, (paid, base[1])) == []
+    # a function that holds debt renamed, nothing else: the total holds
+    assert debt_regressions(base, ({"scripts/x.py": {"run .write_text [artifact]": 2}},
+                                   base[1])) == []
+    # a new scratch site, debt untouched
+    more = {**base[1], "scripts/y.py": {"f open(w) [scratch]": 1}}
+    assert debt_regressions(base, (base[0], more)) == []
+    # one more debt entry
+    grown = {**base[0], "scripts/y.py": {"f open(w) [operator]": 1}}
+    assert len(debt_regressions(base, (grown, base[1]))) == 1
+    # relabelled, same key
+    same_key = {"scripts/x.py": {"main open(w) [scratch]": 1, "main .write_text [scratch]": 1}}
+    assert len(debt_regressions(base, (paid, {**base[1], **same_key}))) == 1
+    # relabelled under another key: renamed function, other sink kind, other file
+    for key in ("run .write_text [scratch]", "main open(w) [state]"):
+        moved = {**base[1], "scripts/z.py": {key: 1}}
+        assert len(debt_regressions(base, (paid, moved))) == 1, key
+    # relabelled, and the room it freed taken by a new debt: the total holds
+    swapped = {"scripts/x.py": {"main .write_text [artifact]": 1},
+               "scripts/new.py": {"f .write_text [artifact]": 1}}
+    assert len(debt_regressions(base, (swapped, {**base[1], "scripts/z.py":
+                                                 {"run .write_text [scratch]": 1}}))) == 1
+    # an entry module's own sink added while debt is paid is not a relabel
+    entry = {**base[1], "scripts/tools/_lib_io.py": {"ensure_dir .mkdir [entry]": 2}}
+    assert debt_regressions(base, (paid, entry)) == []
+
+
+def test_the_lists_are_read_back_from_this_files_own_source():
+    """`lists_in` is what reads the base commit: on this revision it must
+    read exactly the lists this module holds."""
+    assert lists_in(Path(__file__).read_text(encoding="utf-8")) == (DEBT, REGISTERED)
+    with pytest.raises(AssertionError, match="not both found"):
+        lists_in("DEBT: dict = {}\nREGISTERED = {}\n")
+
+
+def _how_it_ends(call) -> str:
+    """``"failed: <message>"``, ``"skipped"`` or ``"returned"``. A skip is
+    caught here on purpose: ``pytest.raises(pytest.fail.Exception)`` lets one
+    through, and the test around it would then be SKIPPED, which a CI run
+    reads as green — measured, on the first version of this control."""
+    try:
+        call()
+    except pytest.fail.Exception as exc:
+        return f"failed: {exc}"
+    except pytest.skip.Exception:
+        return "skipped"
+    return "returned"
+
+
+def test_a_comparison_that_cannot_be_made_is_a_failure(monkeypatch):
+    """Not a skip, not a pass: a base ref that does not resolve, and a base
+    that does not hold this file. Softened to either, this is what turns red."""
+    assert base_commit(), "control: the base resolves on this checkout"
+    roots = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=REPO_ROOT,
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    root = roots.stdout.split()[0]
+    unreadable = _how_it_ends(lambda: lists_at(root))
+    assert unreadable.startswith("failed:") and "NOT made" in unreadable, unreadable
+    monkeypatch.setenv("LINT_DIFF_BASE", "origin/no-such-branch-3981")
+    unresolved = _how_it_ends(base_commit)
+    assert unresolved.startswith("failed:") and "NOT made" in unresolved, unresolved
 
 
 def test_every_entry_names_a_class_of_its_list_and_a_tracked_file():
@@ -721,7 +879,7 @@ def test_the_two_lists_sum_per_site():
     assert listed(debt, registered) == {"scripts/x.py": Counter({"main .write_text": 3})}
 
 
-@pytest.mark.parametrize("rel", ["scripts/tools/dx/generate_tool_map.py",
+@pytest.mark.parametrize("rel", ["scripts/tools/dx/gen_adr_checks.py",
                                  "scripts/tools/lint/check_iac_helm.py",
                                  "scripts/session-guards/session-init.py"])
 def test_the_scan_reaches_each_kind_of_tree(rel):

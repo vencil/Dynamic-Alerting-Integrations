@@ -22,6 +22,18 @@
 #       ⚠ 參考庫實測反例（#1176）：良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml） ——
 #       此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #       未啟用（依部署而定）：可容忍的鎖等待累積量取決於工作負載與延遲預算
+#   db2_log_usage_percent: 75   [chart-default]
+#       % — Transaction log usage warning: used over used plus available active log space, fullest
+#       database per tenant; 75 = the warning value IBM's GET ALERT CONFIGURATION page shows as the
+#       default of the db.log_util health indicator, which has the same formula (the health monitor
+#       itself is deprecated; the number is what is borrowed)
+#   db2_tablespace_used_percent: 80   [chart-default]
+#       % — Tablespace usage warning: share of the space a tablespace can grow to, fullest
+#       tablespace per tenant; 80 = the default warning threshold IBM states for the ts.ts_util
+#       health indicator (used over usable pages — the form served for a tablespace that does not
+#       auto-resize; that indicator is not evaluated for an auto-resizing one, and the pages cited
+#       state no default for the auto-resize form, which reuses 80 here). The health monitor itself
+#       is deprecated; the number is what is borrowed
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
@@ -30,8 +42,6 @@
 # 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 # 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
-#   db2_log_usage_percent: 70   # % — Transaction log usage warning
-#       未啟用（可攜，僅宣告）：這個值可跨部署沿用，但鍵在 optional_overrides 層、平台不給值；要出貨得先升到 defaults 層，再通過出貨驗證
 #   db2_deadlocks_per_5m: 5
 #       count/5m — Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the
 #       threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5,
@@ -40,8 +50,6 @@
 #       ⚠ 參考庫實測反例（#1176）：其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5 ——
 #       此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #       未啟用（依部署而定）：可容忍的 deadlock 次數取決於工作負載
-#   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
-#       未啟用（可攜，僅宣告）：這個值可跨部署沿用，但鍵在 optional_overrides 層、平台不給值；要出貨得先升到 defaults 層，再通過出貨驗證
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
@@ -58,19 +66,25 @@
 #   db2_lock_wait_time_critical: 20   # s/s — Lock wait accumulation rate critical
 # <<< GENERATED:threshold-registry:pack-db2
 #
-# ⚠️ 上列都是「Day 0 起始範例」不是通用安全值，每個 key 都須依該租戶實際 baseline
+# ⚠️ 上列標 [chart-default] 以外的都是「Day 0 起始範例」不是通用安全值，每個 key 都
+# 須依該租戶實際 baseline
 # 校準（校準工作流見下方 db2_lock_wait_time 段，**適用上列每一個 key、不只
 # lock_wait_time**）。閾值是 per-tenant 的，沒有通用解。相關：#1176（precision 校準）
 #
 # 失效模式**依方向而不同**，別一概而論：
-#   • 5 個「越高越糟」的 key（connections_active / log_usage_percent /
-#     tablespace_used_percent / lock_wait_time / deadlocks_per_5m）—— 忙碌 / 大型庫的正常水位常高於
-#     範例值，照抄會 over-fire。這是**方向性風險**，適用這五個；至於哪幾個已經被
+#   • 3 個「越高越糟」且平台不給值的 key（connections_active / lock_wait_time /
+#     deadlocks_per_5m）—— 忙碌 / 大型庫的正常水位常高於
+#     範例值，照抄會 over-fire。這是**方向性風險**，適用這三個；至於哪幾個已經被
 #     ADR-030 參考庫（tests/rulepacks/reference-validation/ 的 DB2 各檔）
 #     實際量到反例，**逐條標在上方生成區塊該 key 底下**——這裡刻意不再重述清單，
 #     手抄一份就是下一個漂移源（本行原本自己就違反了這句：它把其中一個 key 的
 #     實測數字又抄了一遍）。⚠️ 另外注意持續時間：那些良性高原動輒數小時，遠長於
 #     任何一條的 `for:`，所以 `for:` 擋不掉它們——這一點與數值無關，故留在這裡。
+#   • log_usage_percent / tablespace_used_percent 是平台出貨的預設值（#1320，取自
+#     IBM health indicator 的預設 warning 門檻），兩者都是「佔上限的 %」，不隨庫的
+#     大小變動。仍有一種會常駐告警的情況：刻意配成固定大小、長期高於 80% 的
+#     tablespace（靜態資料）。告警取租戶內最滿的那個 tablespace，無法逐個排除——
+#     這種租戶請調高該 key 或設 "disable"。
 #   • bufferpool_hit_ratio 方向相反（`<`，越低越糟）—— 正常水位高於 0.95 只會讓它
 #     更不發射；它的 over-fire 是良性維護（如 REORG）短暫跌破門檻。
 #

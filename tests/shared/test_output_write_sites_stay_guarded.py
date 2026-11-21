@@ -111,6 +111,9 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _tree import repo_files  # noqa: E402
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 
 # Handler names that CAN catch what a raw sink raises — a plain ``OSError``.
@@ -158,12 +161,12 @@ PATH_METHOD_SINKS = frozenset({"write_text", "write_bytes", "mkdir", "chmod", "t
 # also match readers and predicates, and nobody would audit the next one.
 # #2128: `generate_tenant_metadata.atomic_replace_output` was folded into the
 # shared `_atomic_write.atomic_write_text`, so one name is left — and every
-# file that calls it is pinned (`test_every_shared_atomic_writer_caller_is_pinned`).
+# file that calls it is pinned (`test_no_tool_calls_the_shared_atomic_writer_itself`).
 NAMED_WRITER_SINKS = frozenset({"atomic_write_text"})
 # The module those names come from. `from _lib_atomic_write import
 # atomic_write_text as w` makes `w(...)` a sink too (scan_source resolves the
 # alias), and ANY import of it makes a file a caller for
-# `test_every_shared_atomic_writer_caller_is_pinned` (#2128 S3).
+# `test_no_tool_calls_the_shared_atomic_writer_itself` (#2128 S3).
 SHARED_WRITER_MODULE = "_lib_atomic_write"
 # `open` and its aliases; only a WRITE mode is a sink.
 OPEN_NAMES = frozenset({"open"})
@@ -232,7 +235,7 @@ _STOPPING_CODE = 2
 # pinning is by repo-relative path, so they are scanned like any other; only
 # the anti-vacuity walk (`scan_tools_tree`) is rooted at `TOOLS_DIR`. What
 # keeps the helper's caller population from growing unpinned is
-# `test_every_shared_atomic_writer_caller_is_pinned`, which walks the whole
+# `test_no_tool_calls_the_shared_atomic_writer_itself`, which walks the whole
 # `scripts/` tree.
 GUARDED_FILES: tuple[str, ...] = (
     "scripts/ops/audit_rules_drift.py",
@@ -1225,27 +1228,20 @@ class TestSharedWriterCallerDetection:
         assert shared_writer_caller_lines(src) == []
 
 
-def test_every_shared_atomic_writer_caller_is_pinned(monkeypatch):
-    """#2128. The shared atomic writer raises ``OutputWriteError`` and may
-    fall back in place with a WARN. What the gate below checks statically,
-    and only for files in ``GUARDED_FILES``, is that each call site sits in
-    a ``with output_write(...)`` (or a ``try`` whose handler ends the run
-    at rc 2). It does NOT check that ``main`` carries
-    ``exit_on_output_write_error`` — that part is exercised behaviourally,
-    per caller, by ``tests/dx/test_shared_atomic_write_callers.py`` (rc 2,
-    one line, no traceback). So the CALLER population is closed here: any
-    file under ``scripts/`` (``scripts/dx`` and ``scripts/ops`` included,
-    where the ``TOOLS_DIR`` walk never looks) that imports ``_atomic_write``
-    must join ``GUARDED_FILES`` in the same diff, or this is red.
-
-    A specific break that reddens this: drop any caller file from
-    ``GUARDED_FILES`` (the ceiling test goes red too — this one says which).
+def test_no_tool_calls_the_shared_atomic_writer_itself(monkeypatch):
+    """#2128, closed by #3981. The shared atomic writer has one caller: its
+    entry, ``_lib_io.write_repo_artifact``. The four generators that called
+    it directly (and had to be pinned in ``GUARDED_FILES`` for it) go
+    through the entry now, so the caller population this test used to close
+    is EMPTY, and it holds it there: any file under ``scripts/`` that
+    imports ``_lib_atomic_write`` again is red — write the artifact through
+    its entry (``test_raw_write_sinks_are_listed`` lists a direct call as a
+    raw sink too; this says which import brought it back).
     """
-    # Anti-vacuity: the walk sees callers under TOOLS_DIR, and it READS the
-    # files outside it too. Since #3982 moved `audit_rules_drift` to the
-    # operator entry, no caller is left outside TOOLS_DIR to show that, so
-    # the second half is held on what the walk hands the detector: every
-    # file it reads is recorded, and some must lie outside TOOLS_DIR.
+    # Anti-vacuity, now that the answer is "none": the walk still READS the
+    # tree — every file it hands the detector is recorded, some under
+    # TOOLS_DIR and some outside it — and the detector still says yes on a
+    # caller (`TestSharedWriterCallerDetection`).
     read: list[str] = []
     detect = shared_writer_caller_lines
 
@@ -1254,14 +1250,51 @@ def test_every_shared_atomic_writer_caller_is_pinned(monkeypatch):
         return detect(source, label)
     monkeypatch.setattr(sys.modules[__name__], "shared_writer_caller_lines", recording)
     callers = shared_writer_callers()
-    assert any(f.startswith("scripts/tools/") for f in callers), sorted(callers)
+    assert any(r.startswith("scripts/tools/") for r in read), "the walk read no tool"
     assert any(not r.startswith(("scripts/tools/", "<")) for r in read), \
         "the walk read no file outside scripts/tools/"
-    unpinned = sorted(f"  {f}:{','.join(map(str, lines))}"
-                      for f, lines in callers.items() if f not in GUARDED_FILES)
-    assert not unpinned, (
-        "callers of the shared atomic writer that GUARDED_FILES does not pin:\n"
-        + "\n".join(unpinned))
+    assert not callers, (
+        "the shared atomic writer is called outside its entry — use "
+        "_lib_io.write_repo_artifact:\n"
+        + "\n".join(f"  {f}:{','.join(map(str, lines))}" for f, lines in sorted(callers.items())))
+
+
+#: The files under ``scripts/`` that may NAME the atomic writer's module at
+#: all (the module does not name itself): its entry, and three that mention the file name in a message
+#: or a not-a-CLI list. Anything else spelling it is on its way to a call the
+#: AST detector above cannot follow (``importlib.import_module(...)`` bound
+#: to a name first — an adversarial review walked through that).
+#: ⚠️ A module name assembled at run time ("_lib_" + "atomic_write") is not
+#: seen by this either; it is not a mistake anyone makes by accident.
+_MAY_NAME_THE_ATOMIC_WRITER = frozenset({
+    "scripts/tools/_lib_io.py",
+    "scripts/tools/lint/_lint_helpers.py",
+    "scripts/tools/lint/check_structure.py",
+    "scripts/session-guards/preflight_bash.py",
+})
+
+
+def atomic_writer_namers(root: Path = SCRIPTS_DIR) -> set[str]:
+    # Tracked files only (tests/_tree.py): an ignored .py on disk is not the
+    # repository's.
+    return {p.relative_to(REPO_ROOT).as_posix() for p in sorted(repo_files(".py"))
+            if p.is_relative_to(root)
+            and "_lib_atomic_write" in p.read_text(encoding="utf-8", errors="replace")}
+
+
+def test_only_the_listed_files_name_the_atomic_writers_module(tmp_path):
+    namers = atomic_writer_namers()
+    assert namers == _MAY_NAME_THE_ATOMIC_WRITER, (
+        "names _lib_atomic_write without being listed (write through "
+        f"_lib_io.write_repo_artifact): {sorted(namers - _MAY_NAME_THE_ATOMIC_WRITER)}; "
+        f"listed but no longer naming it: {sorted(_MAY_NAME_THE_ATOMIC_WRITER - namers)}")
+    # The reader says yes on the shape the AST detector misses.
+    (tmp_path / "x.py").write_text(
+        'import importlib\n_aw = importlib.import_module("_lib_atomic_write")\n'
+        "_w = _aw.atomic_write_text\n_w('a', 'b')\n", encoding="utf-8")
+    assert shared_writer_caller_lines((tmp_path / "x.py").read_text(encoding="utf-8")) == []
+    assert [p.name for p in tmp_path.rglob("*.py")
+            if "_lib_atomic_write" in p.read_text(encoding="utf-8")] == ["x.py"]
 
 
 def test_not_guarded_entries_point_at_real_unguarded_sinks():

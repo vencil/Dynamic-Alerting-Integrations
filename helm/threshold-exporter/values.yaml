@@ -150,6 +150,19 @@ thresholdConfig:
     # limit". Replaces the absolute-count key oracle_process_count (#1320: a unit change is a
     # removal plus an addition, no alias)
     oracle_process_usage_percent: 85
+    # ── db2：IBM DB2 (query-exporter) ──
+    # % — Transaction log usage warning: used over used plus available active log space, fullest
+    # database per tenant; 75 = the warning value IBM's GET ALERT CONFIGURATION page shows as the
+    # default of the db.log_util health indicator, which has the same formula (the health monitor
+    # itself is deprecated; the number is what is borrowed)
+    db2_log_usage_percent: 75
+    # % — Tablespace usage warning: share of the space a tablespace can grow to, fullest tablespace
+    # per tenant; 80 = the default warning threshold IBM states for the ts.ts_util health indicator
+    # (used over usable pages — the form served for a tablespace that does not auto-resize; that
+    # indicator is not evaluated for an auto-resizing one, and the pages cited state no default for
+    # the auto-resize form, which reuses 80 here). The health monitor itself is deprecated; the
+    # number is what is borrowed
+    db2_tablespace_used_percent: 80
     # ── rabbitmq：RabbitMQ (kbudde/rabbitmq_exporter) ──
     # % — Node memory warning: resident memory as % of the memory high watermark, fullest node
     # (#3929: 80 → 90, measured per node)（critical 加嚴
@@ -243,7 +256,6 @@ thresholdConfig:
       # a database with no limit set (0) has no share. Replaces the absolute-bytes key
       # oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)
     # ── db2：IBM DB2 (query-exporter) ──
-    - db2_log_usage_percent   # % — Transaction log usage warning
     - db2_deadlocks_per_5m
       # count/5m — Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the
       # threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5,
@@ -251,7 +263,6 @@ thresholdConfig:
       # is a removal plus an addition, no alias)
       # ⚠ 參考庫實測反例（#1176）：其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5 ——
       # 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-    - db2_tablespace_used_percent   # % — Tablespace usage warning
     # ── clickhouse：ClickHouse (built-in /metrics) ──
     - clickhouse_max_part_count   # count — Max part count per partition
     - clickhouse_replication_queue   # count — Replication queue size

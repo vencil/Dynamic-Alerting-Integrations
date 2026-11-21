@@ -417,14 +417,23 @@ class TestMain:
         out = capsys.readouterr().out
         assert "0001-x" not in out
 
-    def test_safe_flag_uses_atomic_write(self, fake_repo, monkeypatch, capsys, cli_argv):
-        called = {"atomic": False, "regular": False}
+    def test_every_generate_goes_through_the_artifact_entry(self, fake_repo, monkeypatch,
+                                                           capsys, cli_argv):
+        """#3981: no flag chooses the writer any more — `--generate` alone
+        replaces the map through `write_repo_artifact` (it was `--safe`)."""
+        written = []
 
-        def fake_atomic(path, content, newline=None):
-            called["atomic"] = True
+        def fake_artifact(path, content, **kwargs):
+            written.append((Path(path).name, kwargs))
             Path(path).parent.mkdir(parents=True, exist_ok=True)
             Path(path).write_text(content, encoding="utf-8")
-        monkeypatch.setattr(gdm, "atomic_write_text", fake_atomic)
-        cli_argv('generate_doc_map.py', '--generate', '--safe')
+        monkeypatch.setattr(gdm, "write_repo_artifact", fake_artifact)
+        cli_argv('generate_doc_map.py', '--generate')
         gdm.main()
-        assert called["atomic"] is True
+        assert written and all(kwargs == {} for _name, kwargs in written), written
+
+    def test_the_safe_flag_is_gone(self, fake_repo, cli_argv, capsys):
+        cli_argv('generate_doc_map.py', '--generate', '--safe')
+        with pytest.raises(SystemExit) as exc:
+            gdm.main()
+        assert exc.value.code == 2

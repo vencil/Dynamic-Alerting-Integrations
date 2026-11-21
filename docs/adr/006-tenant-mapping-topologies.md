@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-16
-updated_at: 2026-05-13
+updated_at: 2026-11-21
 ---
 # ADR-006: 租戶映射拓撲 (1:1, N:1, 1:N)
 
@@ -19,6 +19,7 @@ updated_at: 2026-05-13
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
 📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
+🧭 **修訂** (2026-11-21) — 多叢集同租戶的叢集身分 `da_cluster` 與逐叢集的告警粒度，見下方「多叢集同租戶」；實作進行中
 
 ## 背景
 
@@ -161,6 +162,86 @@ groups:
 **殘留**：
 - 在實際多 schema Oracle 環境驗證端到端流程（待生產環境回饋）
 - Schema validation（`_instance_mapping.yaml` JSON Schema）排入後續
+
+## 多叢集同租戶：叢集身分與告警粒度
+
+**決策：同一個租戶可以出現在多個叢集。每條來自租戶 exporter 的序列都帶平台專屬的 label `da_cluster`，由抓取階段的 relabel 寫入；凡是以這些序列為輸入的規則，聚合與比對都以 (tenant, da_cluster) 為單位，告警也逐叢集各發一次。**
+
+這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為；撰寫時尚未生效**，rule pack 仍假設一個租戶只在一個叢集。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+
+### 為什麼需要
+
+規則裡有兩類寫法在同租戶跨叢集時會出錯：
+
+- **互相遮蔽。** 存活判定寫成「預期存在的實例，扣掉有成功回報的實例」，兩邊以 `on(tenant, instance)` 配對。兩個叢集各有一台位址相同的實例時（各叢集內部網段重複很常見），健康的那台會把故障的那台消掉，故障的叢集不告警。
+- **悄悄合併。** `sum by(tenant)` 會把兩個叢集加在一起，`max by(tenant)` 只留下較大的那個。值班人員看不出是哪個叢集，數值也不再對應任何一個資料庫。
+
+### 契約
+
+1. **叢集身分的來源。** 每個 Prometheus 在抓取租戶 exporter 的 job（以及 kubernetes 規則讀取的容器與 Pod 狀態指標的 job）用 `relabel_configs` 寫入 `da_cluster=<叢集 ID>`；中央 Prometheus 若自己也抓租戶 exporter，那些 job 同樣要寫。抓 threshold-exporter 的 job 不寫（見第 3 點）。單一叢集的部署也要寫，值固定即可。
+2. **叢集 ID。** 在整個平台內唯一，每個叢集一個、不隨時間改變。已經照 [Federation 整合指南](../integration/federation-integration.md) 設了 `external_labels.cluster` 的部署，建議沿用同一個值；`external_labels` 本身不必更動。
+3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 這些由 threshold-exporter 送出的序列不帶 `da_cluster`。規則用 `on(tenant) group_left` 把它們套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條）。
+4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。
+5. **告警帶 `da_cluster`。** 帶這個 label 的告警，Alertmanager 的分組與 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）都把它納入，兩個叢集的同名告警互不壓制。不帶的告警（例如「租戶沒設定閾值」這類只跟設定有關的）維持現在的分組與去重。
+6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。
+7. **缺 `da_cluster` 的抓取設定在部署前被擋下。** 檢查抓取設定的 lint（今天檢查「租戶 exporter 的 job 必須寫出 `tenant`」的那一支）會加上這一條，不讓部署靜默退回「不分叢集」。
+
+### 範例
+
+抓取設定（每個叢集各自的值）：
+
+```yaml
+scrape_configs:
+  - job_name: tenant-exporters
+    relabel_configs:
+      - target_label: da_cluster
+        replacement: edge-a
+```
+
+同一個租戶 `t1` 在 `edge-a`、`edge-b` 各有一台位址同為 `10.0.0.5:50000` 的資料庫，`edge-a` 那台故障。輸入序列：
+
+```text
+db_expected{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
+db_expected{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}  1
+db_up{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}        0
+db_up{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}        1
+```
+
+配對不含叢集身分——沒有結果，不告警（`edge-b` 的成功把 `edge-a` 遮掉）：
+
+```promql
+max by(tenant, instance) (db_expected)
+  unless on(tenant, instance)
+max by(tenant, instance) (db_up == 1)
+```
+
+配對含叢集身分——一筆結果 `{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}`：
+
+```promql
+max by(tenant, da_cluster, instance) (db_expected)
+  unless on(tenant, da_cluster, instance)
+max by(tenant, da_cluster, instance) (db_up == 1)
+```
+
+`db_expected` 與 `db_up` 是為了說明而取的名字，不是平台的指標。
+
+### 後果與已知限制
+
+- **升級順序：先寫 relabel，再升級 rule pack。** 反過來時規則照樣運作，但所有序列的 `da_cluster` 是空的，等同不分叢集。
+- **升級當下每條告警會重新觸發一次。** 告警多了一個 label，Alertmanager 視為新的告警：正在響的會解除，新的要重新等滿規則的 `for:` 才響，中間有一段空窗。
+- **既有的 silence 仍然有效。** silence 以它列出的 label 比對，告警多一個 label 不影響。
+- **recording rule 的歷史不連續。** 帶 `da_cluster` 的是新序列，升級前的資料留在舊的序列上。
+- **序列數不變。** 單一叢集的部署只是每條序列多一個固定值的 label。
+- **加總是逐叢集的。** 「該租戶所有實例加總」的規則（例如鎖等待、deadlock 次數）在每個叢集各自加總、各自比對閾值。
+- **維護模式是整個租戶。** 無法只對一個叢集進維護。
+- **各叢集不能有不同的閾值。** 同一個租戶在所有叢集用同一組閾值。
+
+### 考慮過的替代方案
+
+- **沿用 `cluster` 這個名字。** RabbitMQ、Elasticsearch 的 exporter 自己就輸出 `cluster`（該服務自己的叢集名），而 Prometheus 遇到同名 label 有兩種行為，兩種都會出錯。預設情況下保留抓取設定寫的值、把 exporter 的改名為 `exported_cluster`，讀 exporter 那個 `cluster` 的規則就讀到平台的叢集 ID。設了 `honor_labels: true` 時（中央從邊緣拉資料的 federation job 就是）保留 exporter 的值，叢集身分被換成服務自己的叢集名。所以用平台專屬的名字。
+- **用 Prometheus 的 `external_labels`。** external label 是在資料送出 Prometheus 時才加上的（federation、remote write、送往 Alertmanager 的告警），規則評估時看不到。規則在邊緣叢集評估時就拿不到叢集身分。
+- **只在已經帶 `instance` 這類 label 的地方加 `da_cluster`，租戶層級的聚合維持跨叢集一份。** 要改的地方少得多。但規則分層部署時（[ADR-004](./004-federation-central-exporter-first.md)、[Federation 整合指南](../integration/federation-integration.md) 的「邊緣評估」一節），租戶層級的 recording rule 是在各邊緣叢集算的：兩個邊緣各送一條同名序列到中央，結果與「全部在中央評估」時不同。逐叢集是兩種部署方式下結果一致的最粗粒度。比值類的規則也無法把各邊緣的比值再合成整個租戶的比值。
+- **不支援，並擋下跨叢集的租戶。** 要擋也得先有叢集身分；而 DR 對與多地部署正是 N:1 列出的典型場景。
 
 ## Addendum：基礎設施指標的租戶歸屬 (v2.10.0)
 

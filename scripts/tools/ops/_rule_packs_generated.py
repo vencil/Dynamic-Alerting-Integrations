@@ -444,12 +444,38 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                                      'lock-wait '
                                                                                      '短暫維持 18 s/s '
                                                                                      '達 7 '
-                                                                                     '分鐘（negative-db2.yaml）'}}},
-         'optional_overrides': {'db2_log_usage_percent': {'value': 70,
-                                                          'unit': '%',
-                                                          'desc': 'Transaction log usage warning',
-                                                          'metric_class': 'capacity'},
-                                'db2_deadlocks_per_5m': {'value': 5,
+                                                                                     '分鐘（negative-db2.yaml）'}},
+                      'db2_log_usage_percent': {'value': 75,
+                                                'unit': '%',
+                                                'desc': 'Transaction log usage warning: used over '
+                                                        'used plus available active log space, '
+                                                        'fullest database per tenant; 75 = the '
+                                                        "warning value IBM's GET ALERT "
+                                                        'CONFIGURATION page shows as the default '
+                                                        'of the db.log_util health indicator, '
+                                                        'which has the same formula (the health '
+                                                        'monitor itself is deprecated; the number '
+                                                        'is what is borrowed)',
+                                                'metric_class': 'capacity'},
+                      'db2_tablespace_used_percent': {'value': 80,
+                                                      'unit': '%',
+                                                      'desc': 'Tablespace usage warning: share of '
+                                                              'the space a tablespace can grow to, '
+                                                              'fullest tablespace per tenant; 80 = '
+                                                              'the default warning threshold IBM '
+                                                              'states for the ts.ts_util health '
+                                                              'indicator (used over usable pages — '
+                                                              'the form served for a tablespace '
+                                                              'that does not auto-resize; that '
+                                                              'indicator is not evaluated for an '
+                                                              'auto-resizing one, and the pages '
+                                                              'cited state no default for the '
+                                                              'auto-resize form, which reuses 80 '
+                                                              'here). The health monitor itself is '
+                                                              'deprecated; the number is what is '
+                                                              'borrowed',
+                                                      'metric_class': 'capacity'}},
+         'optional_overrides': {'db2_deadlocks_per_5m': {'value': 5,
                                                          'unit': 'count/5m',
                                                          'desc': 'Deadlocks in the last 5 minutes, '
                                                                  "summed over the tenant's "
@@ -487,10 +513,6 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                                                  '次 '
                                                                                                  'deadlock（0.02/s），高於 '
                                                                                                  '5'}},
-                                'db2_tablespace_used_percent': {'value': 85,
-                                                                'unit': '%',
-                                                                'desc': 'Tablespace usage warning',
-                                                                'metric_class': 'capacity'},
                                 'db2_connections_active_critical': {'value': 400,
                                                                     'unit': 'count',
                                                                     'desc': 'Active connections '
@@ -671,4 +693,4 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                              'desc': 'Waiting connections critical',
                                                              'metric_class': 'saturation'}}}}
 
-BUILTIN_DEFAULT_KEYS = frozenset({'container_cpu', 'container_cpu_throttle', 'container_memory', 'es_disk_usage_percent', 'es_heap_usage_percent', 'mysql_connection_usage_percent', 'mysql_replication_lag', 'oracle_process_usage_percent', 'oracle_tablespace_used_percent', 'pg_connections', 'pg_replication_lag', 'rabbitmq_node_mem_percent'})
+BUILTIN_DEFAULT_KEYS = frozenset({'container_cpu', 'container_cpu_throttle', 'container_memory', 'db2_log_usage_percent', 'db2_tablespace_used_percent', 'es_disk_usage_percent', 'es_heap_usage_percent', 'mysql_connection_usage_percent', 'mysql_replication_lag', 'oracle_process_usage_percent', 'oracle_tablespace_used_percent', 'pg_connections', 'pg_replication_lag', 'rabbitmq_node_mem_percent'})

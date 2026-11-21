@@ -14,6 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.1.0) — Toolchain completed, 1:N end-to-end integration pending production validation
 📎 **Addendum** (v2.10.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
+🧭 **Revision** (2026-11-21) — cluster identity `da_cluster` and per-cluster alert granularity for a tenant in several clusters, see "One tenant in several clusters" below; implementation in progress
 
 ## Background
 
@@ -156,6 +157,86 @@ groups:
 **Remaining**:
 - End-to-end validation in real multi-schema Oracle environments (pending production feedback)
 - Schema validation (`_instance_mapping.yaml` JSON Schema) deferred to next cycle
+
+## One tenant in several clusters: cluster identity and alert granularity
+
+**Decision: one tenant may appear in several clusters. Every series that comes from a tenant exporter carries the platform's own label `da_cluster`, written by a relabel step at scrape time; every rule whose input is such series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
+
+This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete; at the time of writing none of it is in effect** and the rule packs still assume a tenant lives in one cluster. It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
+
+### Why it is needed
+
+Two shapes of rule go wrong when a tenant spans clusters:
+
+- **Masking.** Liveness is written as "instances expected to exist, minus instances that reported success", the two sides paired with `on(tenant, instance)`. When two clusters each have an instance at the same address (overlapping internal ranges are common), the healthy one cancels the failed one and the failed cluster raises no alert.
+- **Silent merging.** `sum by(tenant)` adds the two clusters together and `max by(tenant)` keeps only the larger. The on-call engineer cannot tell which cluster it is, and the value no longer corresponds to any one database.
+
+### Contract
+
+1. **Where cluster identity comes from.** Every Prometheus writes `da_cluster=<cluster id>` with `relabel_configs` on the job that scrapes tenant exporters (and on the jobs that scrape the container and Pod state metrics the kubernetes rules read); if the central Prometheus scrapes tenant exporters itself, those jobs write it too. The job that scrapes threshold-exporter does not (see point 3). A single-cluster deployment writes it as well, with one fixed value.
+2. **The cluster id.** Unique across the platform, one per cluster, and stable over time. A deployment that already sets `external_labels.cluster` as the [Federation integration guide](../integration/federation-integration.en.md) describes should reuse that value; `external_labels` itself needs no change.
+3. **Thresholds stay one per tenant.** Thresholds, maintenance state and tenant metadata — the series threshold-exporter serves — carry no `da_cluster`. Rules apply them to each of the tenant's clusters with `on(tenant) group_left` (`group_left` lets one series on the right pair with several on the left).
+4. **How rules are written.** In an aggregation over tenant-exporter series, a `by(...)` that contains any of `tenant`, `instance`, `pod`, `namespace`, `node` must also contain `da_cluster`. The same holds for a pairing (`on(...)`) whose two sides are both such series.
+5. **Alerts carry `da_cluster`.** For alerts that carry the label, Alertmanager grouping and warning/critical dedup ([ADR-001](./001-severity-dedup-via-inhibit.en.md)) both include it, so the same alert in two clusters does not inhibit its counterpart. Alerts without it (for example "tenant has not configured a threshold", which concern configuration only) keep today's grouping and dedup.
+6. **"Expected but absent" is judged per cluster.** A tenant may declare in its configuration which clusters it is expected in; when it does, any declared cluster that reports nothing raises an alert. Without a declaration, appearing in at least one cluster counts as present.
+7. **A scrape configuration without `da_cluster` is stopped before deployment.** The lint that checks scrape configuration (the one that today checks "a tenant-exporter job must write `tenant`") gains this rule, so a deployment cannot silently fall back to "no cluster distinction".
+
+### Example
+
+Scrape configuration (each cluster with its own value):
+
+```yaml
+scrape_configs:
+  - job_name: tenant-exporters
+    relabel_configs:
+      - target_label: da_cluster
+        replacement: edge-a
+```
+
+Tenant `t1` has one database at `10.0.0.5:50000` in each of `edge-a` and `edge-b`, and the one in `edge-a` is down. Input series:
+
+```text
+db_expected{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
+db_expected{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}  1
+db_up{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}        0
+db_up{tenant="t1", da_cluster="edge-b", instance="10.0.0.5:50000"}        1
+```
+
+Pairing without cluster identity — no result, no alert (the success in `edge-b` masks `edge-a`):
+
+```promql
+max by(tenant, instance) (db_expected)
+  unless on(tenant, instance)
+max by(tenant, instance) (db_up == 1)
+```
+
+Pairing with cluster identity — one result, `{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}`:
+
+```promql
+max by(tenant, da_cluster, instance) (db_expected)
+  unless on(tenant, da_cluster, instance)
+max by(tenant, da_cluster, instance) (db_up == 1)
+```
+
+`db_expected` and `db_up` are names made up for the illustration, not platform metrics.
+
+### Consequences and known limits
+
+- **Upgrade order: write the relabel first, then upgrade the rule packs.** The other way round the rules still work, but every series has an empty `da_cluster`, which is the same as no cluster distinction.
+- **Every alert re-fires once at upgrade.** An alert gains a label, so Alertmanager sees a new alert: one that is firing resolves, and the new one has to wait out the rule's `for:` again before it fires, leaving a gap in between.
+- **Existing silences still apply.** A silence matches on the labels it lists; one more label on the alert does not affect it.
+- **Recording-rule history is not continuous.** Series with `da_cluster` are new series; data from before the upgrade stays on the old ones.
+- **The number of series does not change.** A single-cluster deployment only gains one label with a fixed value on each series.
+- **Sums are per cluster.** Rules that sum "all of the tenant's instances" (for example lock wait and deadlock counts) sum within each cluster and compare each against the threshold.
+- **Maintenance mode is the whole tenant.** One cluster cannot be put into maintenance alone.
+- **Clusters cannot have different thresholds.** A tenant uses one set of thresholds in all its clusters.
+
+### Alternatives considered
+
+- **Reuse the name `cluster`.** The RabbitMQ and Elasticsearch exporters emit their own `cluster` (that service's own cluster name), and Prometheus has two behaviours for a label of the same name, both of which go wrong. By default it keeps the value the scrape configuration writes and renames the exporter's to `exported_cluster`, so a rule that reads the exporter's `cluster` reads the platform's cluster id. With `honor_labels: true` (which the central job that federates from the edges sets) it keeps the exporter's value, and cluster identity becomes the service's own cluster name. Hence a platform-specific name.
+- **Use Prometheus `external_labels`.** External labels are attached only when data leaves Prometheus (federation, remote write, alerts sent to Alertmanager); rule evaluation does not see them. Rules evaluated in an edge cluster would have no cluster identity.
+- **Add `da_cluster` only where a label like `instance` is already present, and keep tenant-level aggregates one per tenant across clusters.** Far fewer places to change. But when rules are deployed in layers ([ADR-004](./004-federation-central-exporter-first.en.md), and the "edge evaluation" section of the [Federation integration guide](../integration/federation-integration.en.md)) the tenant-level recording rules are computed in each edge cluster: two edges each send a series of the same name to the centre, and the result differs from "everything evaluated centrally". Per cluster is the coarsest granularity at which both deployment modes agree. Ratio rules also cannot have per-edge ratios recombined into a whole-tenant ratio.
+- **Do not support it, and reject tenants that span clusters.** Rejecting them needs cluster identity first; and DR pairs and multi-site deployments are exactly what the N:1 row lists.
 
 ## Addendum: Tenant Attribution for Infrastructure Metrics (v2.10.0)
 

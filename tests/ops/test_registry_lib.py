@@ -609,7 +609,10 @@ def test_real_registry_chart_default_set():
     assert "oracle_process_usage_percent" in tagged
     assert "oracle_pga_usage_percent" not in tagged
     assert "jvm_memory" not in tagged
-    assert len(tagged) == 12
+    # #1320: the two DB2 % keys rest on the default warning thresholds of Db2's
+    # own health indicators, db.log_util 75 and ts.ts_util 80 (12 -> 14).
+    assert {"db2_log_usage_percent", "db2_tablespace_used_percent"} <= tagged
+    assert len(tagged) == 14
 
 
 def test_every_real_key_states_its_arming():
@@ -1110,22 +1113,22 @@ def test_optional_override_list_is_a_yaml_string_array():
 
 
 def test_real_registry_optional_list_is_the_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 43 the
+    """#1310/#1311 pin: the shipped list is the 7 FLAT keys, never the 41 the
     tier holds (both asserted below; #3778 added mysql_threads_running, #1320
-    replaced the two absolute Oracle keys with one share and armed the other). Most
+    replaced the two absolute Oracle keys with one share and armed the other, then
+    armed the two DB2 % keys). Most
     of the tier is `_critical` keys;
     listing them would make the shipped list mostly decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 43
+    assert len(tier) == 41
     assert shipped == [
         "mysql_threads_running",
         "oracle_wait_time_rate", "oracle_hard_parse_time_percent",
         "oracle_pga_usage_percent",
-        "db2_log_usage_percent", "db2_deadlocks_per_5m",
-        "db2_tablespace_used_percent",
+        "db2_deadlocks_per_5m",
         "clickhouse_max_part_count", "clickhouse_replication_queue",
     ]
     assert not [k for k in shipped if k.endswith("_critical")]
@@ -1259,8 +1262,8 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
                 f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 43, (
-        f"expected all 43 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 41, (
+        f"expected all 41 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():

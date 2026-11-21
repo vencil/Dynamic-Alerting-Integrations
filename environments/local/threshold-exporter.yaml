@@ -49,6 +49,9 @@ thresholdConfig:
     rabbitmq_node_mem_percent: 90   # % of the memory high watermark
     # #1320：process 數佔 PROCESSES 參數的百分比，逐 exporter 量、取最滿的一台。
     oracle_process_usage_percent: 85   # % of the PROCESSES parameter
+    # #1320：兩個 DB2 容量類百分比升 arming: default，值取自 IBM health indicator 的預設 warning 門檻。
+    db2_log_usage_percent: 75   # % of the active log space used
+    db2_tablespace_used_percent: 80   # % of the space the tablespace can grow to
   state_filters:
     container_crashloop:
       reasons: ["CrashLoopBackOff"]
