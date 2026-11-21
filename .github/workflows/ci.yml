@@ -1204,6 +1204,14 @@ jobs:
           # takes the full history.
           fetch-depth: 0
 
+      - name: Fetch the PR base (the raw-write DEBT list is compared with its merge base, #3981)
+        # tests/shared/test_raw_write_sinks_are_listed.py holds DEBT to the
+        # list at `git merge-base origin/<base> HEAD` and FAILS when that
+        # cannot be resolved. fetch-depth: 0 does not guarantee an
+        # origin/<base> ref — see the same step in the `lint` job. Unconditional
+        # and defaulted, for the reason given there.
+        run: git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -1606,6 +1614,14 @@ jobs:
           # instead of quietly degrading. Same reason the `lint` job above
           # takes the full history.
           fetch-depth: 0
+
+      - name: Fetch the PR base (the raw-write DEBT list is compared with its merge base, #3981)
+        # tests/shared/test_raw_write_sinks_are_listed.py holds DEBT to the
+        # list at `git merge-base origin/<base> HEAD` and FAILS when that
+        # cannot be resolved. fetch-depth: 0 does not guarantee an
+        # origin/<base> ref — see the same step in the `lint` job. Unconditional
+        # and defaulted, for the reason given there.
+        run: git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
 
       - name: Set up Python
         uses: actions/setup-python@v6
