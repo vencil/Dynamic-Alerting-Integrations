@@ -125,7 +125,7 @@ func BenchmarkMergeTenantWithRootDefaults_1000Files(b *testing.B) {
 	body := []byte("tenants:\n  tenant-001:\n    metric_001: \"70\"\n")
 	b.ReportAllocs()
 	b.ResetTimer()
-	want := 100 + len(builtinDefaults) // #3832: the root's 100 plus the built-in layer's
+	want := 100 + len(builtinDefaults) + len(builtinOffKeys) // #3832, #4163: the root's 100 plus the whole built-in layer
 	for i := 0; i < b.N; i++ {
 		if merged := MergeTenantWithRootDefaults(dir, "tenant-001", body); len(merged.Defaults) != want {
 			b.Fatalf("Defaults = %d keys, want %d", len(merged.Defaults), want)

@@ -85,6 +85,7 @@ on:
       - "scripts/tools/_lib_parse_tree.py"
       - "scripts/tools/_lib_paths.py"
       - "scripts/tools/_lib_prometheus.py"
+      - "scripts/tools/_lib_prompt.py"
       - "scripts/tools/_lib_python.py"
       - "scripts/tools/_lib_tool_fault.py"
       - "scripts/tools/_lib_write_check.py"
