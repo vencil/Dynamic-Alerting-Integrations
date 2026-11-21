@@ -860,8 +860,11 @@ def _step(repo: Path, runner_temp: Path, script: str) -> subprocess.CompletedPro
     """A `run:` the way a runner starts it: `bash -eo pipefail`, in the
     workspace."""
     env = dict(_ENV, RUNNER_TEMP=str(runner_temp), GITHUB_WORKSPACE=str(repo))
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("no bash on PATH: a workflow `run:` step cannot be started here")
     return subprocess.run(
-        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], cwd=repo,
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", "-c", script], cwd=repo,
         env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
         stdin=subprocess.DEVNULL, timeout=120)
 
