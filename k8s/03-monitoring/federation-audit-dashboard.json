@@ -5,7 +5,7 @@
   "graphTooltip": 1,
   "id": null,
   "links": [],
-  "description": "ADR-020 IV-2f (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the audit-metrics sidecar (Vector) in helm/federation-gateway from the Envoy audit access log.",
+  "description": "ADR-020 §稽核日誌與指標 (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the audit-metrics sidecar (Vector) in helm/federation-gateway from the Envoy audit access log.",
   "panels": [
     {
       "title": "Federation Requests /s (5m)",
@@ -140,7 +140,7 @@
     },
     {
       "title": "3-Layer Rejection Rate",
-      "description": "Where federation requests are rejected, by ADR-020 defence layer: Layer 2 gateway (429 rate-limited), auth / request rejected (401/403 + other 4xx), Layer 1 storage backend (5xx).",
+      "description": "Where federation requests are rejected, by ADR-020 §三層資源防護 layer: Layer 2 gateway (429 rate-limited), auth / request rejected (401/403 + other 4xx), Layer 1 storage backend (5xx).",
       "type": "timeseries",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "targets": [

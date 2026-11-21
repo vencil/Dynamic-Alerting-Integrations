@@ -1,4 +1,4 @@
-# Tenant-projection gate image for the helm/vector log shipper (ADR-021 Phase 2(a), #908).
+# Tenant-projection gate image for the helm/vector log shipper (ADR-021 §平台副本與租戶副本, #908).
 #
 # Runs as a Vector INIT-CONTAINER: before Vector starts it validates the deployed
 # tenantProjections against the authoritative _account_registry.yaml (a read-only

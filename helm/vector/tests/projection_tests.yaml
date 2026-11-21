@@ -1,4 +1,4 @@
-# Vector unit tests — ADR-021 Phase 1 (b) tenant-sanitized projection / #609
+# Vector unit tests — ADR-021 §平台副本與租戶副本 tenant-sanitized projection / #609
 #
 # These tests are MERGED with the helm-rendered Vector config at `vector test`
 # time, so they assert against the SAME transforms that ship (no VRL is

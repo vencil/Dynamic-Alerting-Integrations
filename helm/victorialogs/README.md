@@ -4,7 +4,7 @@ Central log store for the platform log-aggregation pipeline ([#539](https://gith
 
 Built on **VictoriaLogs** (`victoriametrics/victoria-logs:v1.53.0`) — single binary, no object-storage ring / compactor / memcached. The operational-simplicity choice over Loki / ELK is recorded in the source issue §3.
 
-Consumer #1: federation-gateway audit log (ADR-020 IV-2f, [#511](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511)).
+Consumer #1: federation-gateway audit log (ADR-020 §稽核日誌與指標, [#511](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511)).
 Consumer #2: chargeback query log ([#552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/552)).
 
 ## Architecture (Phase 1)

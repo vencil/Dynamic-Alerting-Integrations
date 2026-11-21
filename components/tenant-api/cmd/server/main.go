@@ -206,13 +206,13 @@ func main() {
 	// #2856: tenant-api's own records (groups, views, federation whitelist and
 	// subsets, AccountID registry) live in a state store, not in conf.d.
 
-	// v2.9.0 ADR-020 IV-2d: tenant federation token endpoint.
+	// v2.9.0 ADR-020 §Token: tenant federation token endpoint.
 	// An empty --federation-key disables the endpoint entirely.
 	ff := registerFederationStoreFlags(flag.CommandLine)
 	federationTTL := flag.Duration("federation-token-ttl",
 		parseDurationOrDefault(os.Getenv("TA_FEDERATION_TOKEN_TTL"), token.DefaultTTL),
-		"Federation token lifetime (default 4h; ADR-020 §Token model)")
-	// v2.9.0 ADR-020 IV-2e: federation admission validator backend.
+		"Federation token lifetime (default 4h; ADR-020 §Token)")
+	// v2.9.0 ADR-020 §白名單收錄檢查: federation admission validator backend.
 	federationPrometheusURL := flag.String("federation-prometheus-url",
 		envOrDefault("TA_FEDERATION_PROMETHEUS_URL", ""),
 		"Base URL of the Prometheus/VictoriaMetrics backend the federation admission validator queries (Series API). Empty disables admission.")
@@ -447,12 +447,12 @@ func main() {
 	// v2.5.0: Saved Views for tenant-manager UI
 	viewMgr := views.NewManager(stateStore)
 
-	// v2.9.0 ADR-020 IV-2e: federation 2-tier policy — the platform
+	// v2.9.0 ADR-020 §隔離與治理的分界: federation 2-tier policy — the platform
 	// metric whitelist (`_federation_policy.yaml`). Per-tenant subsets
 	// live in separate files, read on demand by the handler.
 	federationPolicyMgr := fedpolicy.NewManager(stateStore)
 
-	// v2.9.0 ADR-020 IV-2e: federation admission validator. nil when
+	// v2.9.0 ADR-020 §白名單收錄檢查: federation admission validator. nil when
 	// --federation-prometheus-url is unset — admission is then disabled
 	// and whitelist edits are schema-checked only.
 	federationValidator := fedpolicy.NewAdmissionValidator(*federationPrometheusURL)
@@ -487,7 +487,7 @@ func main() {
 		ReloadInterval: *reloadInterval,
 	})
 
-	// v2.9.0 ADR-020 IV-2d: federation token signer. Optional — when
+	// v2.9.0 ADR-020 §Token: federation token signer. Optional — when
 	// --federation-key is unset wireFederation returns nil and the
 	// /federation routes below stay unregistered. Posture B: token
 	// records live in a Kubernetes ConfigMap so tenant-api stays

@@ -42,7 +42,7 @@ listenPort: 9428
 # operators override per environment via Helm values.
 retentionPeriod: "30d"
 
-# ── Layer-1 query guardrails — ADR-021 §Blast radius Layer 1 / #609 ─────────
+# ── Layer-1 query guardrails — ADR-021 §儲存後端的查詢上限 / #609 ─────────
 # Tenant log query (ADR-021) puts a NEW read load on this single-pod store
 # (#539 sized it for ingestion only). LogsQL has no Prometheus-style sample
 # cap, so the primary blast-radius primitive is a TIME-RANGE limit plus an
@@ -73,7 +73,7 @@ search:
 
 # Extra command-line flags. VictoriaLogs has "sane defaults" for most
 # knobs (per upstream); the chart only sets retention + listen + data
-# path + the ADR-021 Layer-1 search guardrails above. Add overrides here
+# path + the ADR-021 §儲存後端的查詢上限 search guardrails above. Add overrides here
 # without forking the deployment template.
 # Example: ["-loggerLevel=WARN", "-storage.minFreeDiskSpaceBytes=10GB"]
 extraArgs: []

@@ -56,7 +56,7 @@ func (d *storeDoc) newerSchema() bool {
 }
 
 // configMapStore is a RecordStore backed by a single Kubernetes
-// ConfigMap shared across tenant-api replicas (ADR-020 Posture B).
+// ConfigMap shared across tenant-api replicas (ADR-020 §Token).
 // tenant-api stays stateless — the ConfigMap is the only state.
 //
 // Layout — two data keys:

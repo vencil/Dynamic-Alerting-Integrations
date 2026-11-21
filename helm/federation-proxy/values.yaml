@@ -1,5 +1,5 @@
 # federation-proxy Helm values
-# Reference: ADR-020 — Tenant Federation, Layer 3 (read-path isolation)
+# Reference: ADR-020 §代理注入租戶標籤 — read-path isolation
 #
 # This chart deploys prom-label-proxy as the federation read proxy. It
 # fronts ANY Prometheus-HTTP-API-compatible backend (Prometheus, Thanos
@@ -95,7 +95,7 @@ networkPolicy:
 # Horizontal autoscaling. prom-label-proxy parses PromQL into an AST,
 # injects the matcher, and re-serialises — a CPU-bound operation. On a
 # shared pod a tenant sending complex queries within its rate limit can
-# still starve neighbours, so scale on CPU (ADR-020 Gemini round-6).
+# still starve neighbours, so scale on CPU (ADR-020 §三層資源防護).
 autoscaling:
   enabled: true
   minReplicas: 2
@@ -119,7 +119,7 @@ resources:
 # heap; the binary's own RSS sits on top.
 goMemLimit: "230MiB"
 
-# Graceful shutdown. A federation query may run up to 30s (ADR-020 Layer 1
+# Graceful shutdown. A federation query may run up to 30s (ADR-020 §儲存後端的查詢上限
 # cap). On scale-down / rollout the pod must drain in-flight queries, not
 # be SIGKILLed mid-query (which surfaces to Grafana as a 502).
 #   preStopSleepSeconds — pod sleeps this long after SIGTERM before the

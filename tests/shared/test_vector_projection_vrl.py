@@ -1,4 +1,4 @@
-"""test_vector_projection_vrl.py — ADR-021 Phase 1 (b) projection / #609
+"""test_vector_projection_vrl.py — ADR-021 §平台副本與租戶副本 projection / #609
 
 Pins the Vector tenant-sanitized projection: the fan-out that writes each
 tenant's federation_audit rows, SANITIZED, into its own VictoriaLogs
@@ -18,7 +18,7 @@ Two tiers (each independently gated on a binary being on PATH):
     copies, gateway_operational stays 0:0). Mirrors the runbook §4.4 manual
     `vector validate` step, now codified.
 
-Maps to ADR-021 implementation-plan AC (L224-226) and §Ingestion fan-out.
+Maps to ADR-021 §寫入時只留白名單欄位 and §平台副本與租戶副本.
 """
 from __future__ import annotations
 

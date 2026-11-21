@@ -1,6 +1,6 @@
 # federation-gateway Helm chart
 
-Layer 2 of the ADR-020 tenant-federation defence: the API gateway that
+The gateway layer of the ADR-020 tenant-federation defence (ADR-020 §Gateway): the API gateway that
 fronts the Layer 3 proxy. It is the **compensating control** for issuing
 federation tokens without a server-side revocation list — a leaked 4h
 token is contained here by rate limiting and the revoked-set check.
@@ -173,7 +173,7 @@ All three limiters are `local_ratelimit` — **per-Envoy-instance**. With N
 replicas the effective ceiling is N × the configured value. This is
 deliberate: the gateway rate limit is an *approximate* control. The **hard**
 blast-radius cap is Layer 1 — the storage backend's `--query.max-samples` /
-`-search.maxUniqueTimeseries` (ADR-020 §Blast radius). Keep the per-token
+`-search.maxUniqueTimeseries` (ADR-020 §三層資源防護). Keep the per-token
 default low (15 r/m; corridor 15–60) for multi-replica headroom.
 
 ## Emergency global block
@@ -194,7 +194,7 @@ cannot wait, `kubectl scale deploy/<release>-federation-gateway
 and is not recorded in Git — prefer the value flip, and reconcile the
 replica count afterwards.
 
-## Audit log & metrics (ADR-020 IV-2f)
+## Audit log & metrics (ADR-020 §稽核日誌與指標)
 
 Envoy writes one JSON line per federation request to **two sinks** of
 identical shape (`ts` / `tenant_id` / `token_id` / `account_id` / `method` /

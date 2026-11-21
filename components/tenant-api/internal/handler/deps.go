@@ -112,7 +112,7 @@ type Deps struct {
 	// PREVIEW_NOT_CONFIGURED.
 	RecipePreview RecipePreviewer
 
-	// Federation signs tenant federation tokens (ADR-020 IV-2d).
+	// Federation signs tenant federation tokens (ADR-020 §Token).
 	// Optional — nil when no signing key is configured, in which case
 	// main.go leaves the /federation/tokens routes unregistered, so
 	// handlers reading it are never reached with a nil value.
@@ -127,7 +127,7 @@ type Deps struct {
 	Accounts *account.Allocator
 
 	// FederationPolicy holds the platform federation whitelist
-	// (ADR-020 IV-2e, `_federation_policy.yaml`). Always wired — the
+	// (ADR-020 §隔離與治理的分界, `_federation_policy.yaml`). Always wired — the
 	// 2-tier policy is independent of token signing.
 	FederationPolicy *fedpolicy.Manager
 

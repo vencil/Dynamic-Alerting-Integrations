@@ -1,4 +1,4 @@
-# Audit-log logrotate sidecar image for the federation-gateway (ADR-020 IV-2f, #511).
+# Audit-log logrotate sidecar image for the federation-gateway (ADR-020 §稽核日誌與指標, #511).
 #
 # Caps the gateway's audit-log emptyDir mirror (Envoy access-log sink 2) so it
 # can never grow large enough to evict the pod. The durable audit trail is the

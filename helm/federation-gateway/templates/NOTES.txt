@@ -1,4 +1,4 @@
-federation-gateway installed — ADR-020 Layer 2 (federation API gateway).
+federation-gateway installed — ADR-020 §Gateway (federation API gateway).
 
   Mode    : {{ .Values.mode }}
   Service : {{ include "federation-gateway.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
@@ -21,4 +21,4 @@ revoked token stops working within that window + the ConfigMap sync lag.
 
 The rate limits are per-Envoy-instance — with N replicas the effective
 ceiling is N x the configured value. They are a SOFT control; the hard
-blast-radius cap is Layer-1 storage (ADR-020 §Blast radius).
+blast-radius cap is Layer-1 storage (ADR-020 §三層資源防護).

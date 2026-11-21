@@ -1,5 +1,5 @@
 # federation-gateway Helm values
-# Reference: ADR-020 — Tenant Federation, Layer 2 (API gateway)
+# Reference: ADR-020 §Gateway — Tenant Federation API gateway
 #
 # The gateway sits in front of the Layer 3 proxy (IV-2a federation-proxy)
 # and is the compensating control for not having a server-side token
@@ -58,7 +58,7 @@ image:
   digest: "sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
   pullPolicy: IfNotPresent
 
-# ── JWT verification (ADR-020 §Token model) ──────────────────────────
+# ── JWT verification (ADR-020 §Token) ──────────────────────────
 # The gateway verifies the federation RS256 JWT with the PUBLIC half of
 # tenant-api's signing key, supplied as a JWKS document. issuer/audience
 # MUST match what tenant-api signs (internal/federation: iss=tenant-api,
@@ -69,7 +69,7 @@ jwt:
   audience: tenant-federation
   # Clock-skew leeway — tenant-api may sign a few seconds ahead of the
   # gateway's clock; without leeway a just-issued token's iat lands in
-  # the verifier's future and 401s (ADR-020 round-7).
+  # the verifier's future and 401s (ADR-020 §Token).
   clockSkewSeconds: 60
   # Verified-JWT cache size — repeat presentations of the same token skip
   # the RSA signature check (the expensive step).
@@ -122,7 +122,7 @@ victorialogs:
   # `/select/logsql/tail`, `/insert/*`, and any unknown/future endpoint)
   # gets a catch-all 403. This is an allowlist, NOT a denylist: a new
   # VictoriaLogs endpoint stays denied until a maintainer adds it here on
-  # purpose (ADR-021 §Blast radius Layer 3). `/tail` is intentionally
+  # purpose (ADR-021 §查詢端點白名單). `/tail` is intentionally
   # ABSENT — a live long-lived connection bypasses -search.maxQueryDuration
   # and squats a concurrency slot; audit-log queries do not need it.
   # Matched exactly, with an optional trailing slash: a sub-path
@@ -143,7 +143,7 @@ victorialogs:
     - /select/logsql/field_names
     - /select/logsql/field_values
 
-# ── Revoked set (ADR-020 Posture B) ──────────────────────────────────
+# ── Revoked set (ADR-020 §Token) ──────────────────────────────────
 # tenant-api writes revoked.txt into the tenant-federation-store ConfigMap
 # (#520). The gateway mounts that key as a (tmpfs-backed) projected volume
 # and the Lua filter checks token_id against it. Eventually consistent:
@@ -278,7 +278,7 @@ preflight:
 # the effective ceiling is N x the value. This is deliberate — the rate
 # limit is a SOFT / approximate control; the HARD cap is Layer-1 storage
 # (--query.max-samples / -search.maxUniqueTimeseries). Keep defaults low
-# for multi-replica headroom (ADR-020 round-3).
+# for multi-replica headroom (ADR-020 §Gateway).
 rateLimit:
   # Coarse per-source-IP anti-flood, evaluated before JWT crypto so a
   # garbage-JWT flood is dropped without spending an RSA verify.
@@ -288,7 +288,7 @@ rateLimit:
     fillInterval: "1s"
     maxDynamicDescriptors: 10000
   # Per-token: the per-leaked-token abuse ceiling. Tuning corridor
-  # 15-60 r/m (ADR-020 §Blast radius Layer 2).
+  # 15-60 r/m (ADR-020 §Gateway).
   perToken:
     maxTokens: 10           # burst — opening a ~10-panel dashboard
     tokensPerFill: 15       # 15 r/m sustained
@@ -407,14 +407,14 @@ podSecurityContext:
   # fsGroup so the audit-log emptyDir is group-writable by every
   # container: Envoy (uid 101) writes it, the audit-metrics / logrotate sidecars
   # read and rotate it. Without fsGroup the sidecars cannot touch a file
-  # Envoy created (ADR-020 IV-2f).
+  # Envoy created (ADR-020 §稽核日誌與指標).
   fsGroup: 101
   seccompProfile:
     type: RuntimeDefault
 
 podAnnotations: {}
 
-# ── Audit log + anomaly metric (ADR-020 IV-2f, #511) ─────────────────
+# ── Audit log + anomaly metric (ADR-020 §稽核日誌與指標, #511) ─────────────────
 # Envoy writes one JSON line per federation request to TWO sinks
 # (files/envoy.yaml access_log):
 #   * stdout         — the durable, collector-ready compliance trail.

@@ -41,7 +41,7 @@ spec:
             # way in. The Service port belongs to vmauth.
             - "-httpListenAddr=127.0.0.1:{{ .Values.auth.backendPort }}"
             - "-retentionPeriod={{ .Values.retentionPeriod }}"
-            # Layer-1 query guardrails (ADR-021 §Blast radius Layer 1 / #609).
+            # Layer-1 query guardrails (ADR-021 §儲存後端的查詢上限 / #609).
             # Rendered from .Values.search; only emit a flag when its value is
             # set so an operator can null any single knob back to the
             # VictoriaLogs default. extraArgs below comes AFTER these, so a

@@ -1,5 +1,5 @@
 // Package account implements monotonic per-tenant AccountID allocation
-// for tenant log federation (ADR-021 Phase 1 / #609).
+// for tenant log federation (ADR-021 §平台副本與租戶副本 / #609).
 //
 // Each tenant is assigned a stable, immutable uint32 AccountID. The id is
 // embedded in a tenant's *logs* federation JWT (audience

@@ -1,4 +1,4 @@
-# federation-gateway audit metrics (ADR-020 IV-2f; ADR-021 PR-4).
+# federation-gateway audit metrics (ADR-020 §稽核日誌與指標; ADR-021 PR-4).
 #
 # Tails the gateway's audit-log mirror (Envoy access-log sink 2, JSON lines —
 # files/envoy.yaml `json_format: &audit_json`) and exposes three metrics on
@@ -70,7 +70,7 @@ transforms:
       # tenant_id is required and must be a JSON string. Envoy writes `null` when
       # the JWT carried no tenant (a forged/expired token rejected before the
       # claim is read); those requests have no tenant to bucket (ADR-020
-      # "Metric 邊界").
+      # §稽核日誌與指標).
       if is_string(p.tenant_id) && bucket != null {
         .fed_tenant = p.tenant_id
         .fed_status = bucket
