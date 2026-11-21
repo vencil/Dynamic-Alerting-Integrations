@@ -541,7 +541,7 @@ data:
     \       identity-based controls (#926 audit) cannot see. ACTION: query\n\n   \
     \     VictoriaLogs for `event:\"federation_token_revoked\"` for the opaque\n\n\
     \        token_id(s) (resolve the tenant from the store''s records at IR time,\n\
-    \n        ADR-028 D3), diff against the live store, and if malicious restore\n\
+    \n        ADR-028 §事件不帶租戶識別碼), diff against the live store, and if malicious restore\n\
     \n        the revocation from git. Details:\n\n        docs/adr/028-federation-revocation-tamper-evidence.md.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
     \      summary: Federation token un-revoke suspected — reconciler found a revoked-but-live\

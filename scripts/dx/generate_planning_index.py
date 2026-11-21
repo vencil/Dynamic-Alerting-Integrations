@@ -69,7 +69,7 @@ SENTINEL_END = "<!-- PLANNING_INDEX_END -->"
 # (`docs/` tree). Edit if forking.
 GITHUB_BLOB_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main"
 
-# Per ADR-019 §Frontmatter Contract.
+# Per ADR-019 §第一層 (frontmatter contract).
 TRACKING_KINDS = {"tech-debt", "feature", "dx", "regression", "adr", "sprint"}
 STATUSES = {
     "proposed", "accepted", "in-progress", "done", "abandoned", "superseded",
@@ -410,7 +410,7 @@ def render_index(entries: List[PlanningEntry]) -> str:
     """Render the index body that lives between the sentinel markers."""
     if not entries:
         return (
-            "_目前 discovery 沒有任何 entry。各 source 加上 ADR-019 §Frontmatter Contract_\n"
+            "_目前 discovery 沒有任何 entry。各 source 加上 ADR-019 §第一層（frontmatter 契約）_\n"
             "_要求的 `tracking_kind:` / `id:` / `status:` 欄位後會自動出現於此。_\n"
         )
     # Group by status, preserving STATUS_ORDER.
@@ -455,7 +455,7 @@ def replace_sentinel_block(content: str, body: str) -> str:
 @exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Generate the unified planning index (ADR-019 Layer 2).",
+        description="Generate the unified planning index (ADR-019, discovery-based index layer).",
     )
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="exit 1 if rendered output drifts")

@@ -114,7 +114,7 @@ lang: zh
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
-| `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
+| `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證） |
 | `list_subprocess_only_modules.py` | 每個模組被哪一種進入點執行到（以 coverage 實測為準）。 |
 | `measure_judgement_budget.py` | Measure one generator-container judgement against ADR-036 §3's budget (#3206). |
 | `migrate_conf_d.py` | Migrate flat conf.d/ to hierarchical domain/region/env/ layout. |
@@ -135,8 +135,8 @@ lang: zh
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
 | `verify_diff.py` | diff-scoped Python test selector (rule mapping + fail-closed; testing-ROI W6-E MVP) |
-| `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1） |
-| `waveform_score.py` | temporal-match + episode 對帳 + catch-rate 報告器（ADR-030 PR-3） |
+| `waveform_compile.py` | fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證） |
+| `waveform_score.py` | temporal-match + episode 對帳 + catch-rate 報告器（ADR-030） |
 
 ## 文件 Lint / CI 工具
 
@@ -290,7 +290,7 @@ lang: zh
 - `scripts/tools/_lib_write_check.py`：a writer's check of the tree it writes into (#3206).
 - `scripts/tools/_lib_yaml.py`：Minimal CRD YAML serialization helpers for operator tooling.
 - `scripts/tools/_lib_yaml_strict.py`：Strict YAML reading: a duplicate mapping key is an error (#2123).
-- `scripts/tools/ops/_federation_revocation_reconciler.py`：Federation revocation reconciler — ADR-028 D1 detective control (#924).
+- `scripts/tools/ops/_federation_revocation_reconciler.py`：Federation revocation reconciler — ADR-028 §偵測主體 detective control (#924).
 - `scripts/tools/ops/_grar_merge.py`：Routing-config merging + tenant substitution + receiver building.
 - `scripts/tools/ops/_grar_parse.py`：Configuration loading + parsing for generate_alertmanager_routes.
 - `scripts/tools/ops/_grar_render.py`：Output rendering + Alertmanager ConfigMap operations.
@@ -304,7 +304,7 @@ lang: zh
 - `scripts/tools/ops/_rule_packs_generated.py`：GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.
 - `scripts/tools/ops/_threshold_alerts.py`：Which alerts read a threshold key — looked up in the rule packs, not guessed.
 - `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).
-- `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）
+- `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證，純函式庫）
 - `scripts/tools/lint/_lint_helpers.py`：Shared utilities for lint tools.
 - `scripts/tools/lint/_rule_tree.py`：Rule-tree reader — what alerting rules this repo actually ships.
 - `scripts/tools/lint/_rule_tripwire.py`：Coverage tripwire: rule-shaped YAML outside the rule-source declaration (#3438).

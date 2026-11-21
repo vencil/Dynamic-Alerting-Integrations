@@ -55,7 +55,7 @@ victorialogs:
 # ⛔ ADR-028 / #1234 widened this to a SET selector so tenant-api is tailed too.
 # tenant-api is the producer of the federation revocation evidence events
 # (`federation_token_revoked` / `federation_revocation_channel_heartbeat`) that
-# the federation-reconciler queries. ADR-028 §D3 assumed those already reached
+# the federation-reconciler queries. Before #1234 the design assumed those reached
 # VictoriaLogs "via the existing Vector pipeline"; they did not — this selector
 # did not match tenant-api, so the reconciler's evidence query returned zero
 # rows forever and the un-revoke tamper-evidence control was a silent no-op.
@@ -109,7 +109,7 @@ source:
 # or its field keep-list (`evidenceChannel.keepFields`). Its rows land, whole
 # and unfiltered, in the 30-day 0:0 store — for tenant-api that means `caller`
 # (the operator's EMAIL) and `remote` (client IP) on EVERY request, exactly
-# what ADR-028 §D3 exists to exclude — and, worse, they become reachable from
+# what ADR-028 §事件不帶租戶識別碼 exists to exclude — and, worse, they become reachable from
 # `tenant_project`, i.e. eligible for a TENANT partition.
 # ⚠️ The paragraph above ("use this to tail pods whose labels don't unify
 # with the primary selector") is the trap: a differing label key is precisely
@@ -243,7 +243,7 @@ additionalSinks: []
 audit:
   gatewayPodOwnerPrefix: "federation-gateway-"
 
-# ── Federation revocation EVIDENCE channel (ADR-028 D1 / #1234) ─────────────
+# ── Federation revocation EVIDENCE channel (ADR-028 §證據通道 / #1234) ─────────────
 # The `origin_split` route splits the source stream BEFORE `demux`, and this
 # block is the SSOT for that split plus the PII filter on the evidence branch.
 #
@@ -259,7 +259,7 @@ audit:
 # tenant-api's request middleware logs `caller` (the operator's EMAIL address)
 # and `remote` (client IP) on EVERY request. Everything on the evidence branch
 # that is not one of these events is DROPPED, so the 30-day audit store never
-# becomes a store of operator identities (ADR-028 §D3 PII minimisation).
+# becomes a store of operator identities (ADR-028 §事件不帶租戶識別碼 PII minimisation).
 # Adding an entry here is a SECURITY-REVIEWED action: confirm the event's field
 # set carries no operator/tenant identifier before listing it. An empty list is
 # a render-time {{ fail }}.

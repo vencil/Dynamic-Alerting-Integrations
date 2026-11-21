@@ -49,7 +49,7 @@ lang: zh
 | `ADR-016` | adr | ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略 | exporter | — | [docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) |
 | `ADR-017` | adr | ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載 | exporter | — | [docs/adr/017-defaults-yaml-inheritance-dual-hash.md](../adr/017-defaults-yaml-inheritance-dual-hash.md) |
 | `ADR-018` | adr | ADR-018: Profile-as-Directory-Default | tools | — | [docs/adr/018-profile-as-directory-default.md](../adr/018-profile-as-directory-default.md) |
-| `ADR-019` | adr | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index | docs | — | [docs/adr/019-planning-ssot.md](../adr/019-planning-ssot.md) |
+| `ADR-019` | adr | ADR-019: 計畫追蹤的單一來源 — 各條目自帶 frontmatter，索引自動產生 | docs | — | [docs/adr/019-planning-ssot.md](../adr/019-planning-ssot.md) |
 | `ADR-020` | adr | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/020-tenant-federation.md](../adr/020-tenant-federation.md) |
 | `ADR-021` | adr | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled | tenant-api | — | [docs/adr/021-tenant-log-query-federation.md](../adr/021-tenant-log-query-federation.md) |
 | `ADR-022` | adr | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment | tenant-api | — | [docs/adr/022-dev-auth-bypass-four-layer-containment.md](../adr/022-dev-auth-bypass-four-layer-containment.md) |
@@ -57,9 +57,9 @@ lang: zh
 | `ADR-024` | adr | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts | threshold-exporter | — | [docs/adr/024-version-aware-threshold-via-dimensional-label.md](../adr/024-version-aware-threshold-via-dimensional-label.md) |
 | `ADR-025` | adr | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 | observability | — | [docs/adr/025-alerting-plane-self-liveness.md](../adr/025-alerting-plane-self-liveness.md) |
 | `ADR-027` | adr | ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分 | tenant-api | — | [docs/adr/027-tenant-api-caller-identity.md](../adr/027-tenant-api-caller-identity.md) |
-| `ADR-028` | adr | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 | tenant-api | — | [docs/adr/028-federation-revocation-tamper-evidence.md](../adr/028-federation-revocation-tamper-evidence.md) |
+| `ADR-028` | adr | ADR-028: 偵測聯邦 token 撤銷被偷偷撤回 — 以叢集外的日誌對帳為主 | tenant-api | — | [docs/adr/028-federation-revocation-tamper-evidence.md](../adr/028-federation-revocation-tamper-evidence.md) |
 | `ADR-029` | adr | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 | threshold-exporter | — | [docs/adr/029-custom-alert-cross-tenant-query-scoping.md](../adr/029-custom-alert-cross-tenant-query-scoping.md) |
-| `ADR-030` | adr | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 | rule-packs | — | [docs/adr/030-decision-layer-migration-validation.md](../adr/030-decision-layer-migration-validation.md) |
+| `ADR-030` | adr | ADR-030: 告警遷移驗證：注入人造故障，量新規則接住多少 | rule-packs | — | [docs/adr/030-decision-layer-migration-validation.md](../adr/030-decision-layer-migration-validation.md) |
 | `ADR-031` | adr | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 | threshold-exporter | — | [docs/adr/031-slo-burn-rate-recipe.md](../adr/031-slo-burn-rate-recipe.md) |
 | `ADR-032` | adr | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 | dx | — | [docs/adr/032-paired-interleaved-bench-measurement.md](../adr/032-paired-interleaved-bench-measurement.md) |
 | `ADR-033` | adr | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 | integration | — | [docs/adr/033-ops-execution-plane-interface.md](../adr/033-ops-execution-plane-interface.md) |
@@ -122,7 +122,7 @@ SSOT 永遠在 source（各 backlog / yaml / code），index 是 grep + render �
 
 ## 關聯
 
-- [ADR-019 §三層設計（Layer 2 — Discovery-based Index Generator）](../adr/019-planning-ssot.md#三層設計) — 本工具的 design rationale
+- [ADR-019 §第二層（自動發現的索引產生器）](../adr/019-planning-ssot.md#第二層自動發現的索引產生器) — 本工具的 design rationale
 - [`planning-id-mapping.md`](planning-id-mapping.md) — legacy ID → TRK 對映表
 - [`dev-rules.md` §P1](dev-rules.md) — commit trailer 規範
 - [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) — Planning SSOT system implementation epic（本工具為 chunk 2a）

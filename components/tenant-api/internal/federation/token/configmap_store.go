@@ -139,7 +139,7 @@ func (s *configMapStore) load(ctx context.Context) (*corev1.ConfigMap, *storeDoc
 		return nil, nil, err
 	}
 	// Surfaced, never acted on — see countInvalidRevokedIDs. Count only: the
-	// entry itself is never logged (ADR-028 D3; the content is the sensitive
+	// entry itself is never logged (ADR-028 §事件不帶租戶識別碼; the content is the sensitive
 	// part). Edge-triggered — see lastContractViolations for why, including
 	// why a rate limit would be the wrong instrument here.
 	n := int64(countInvalidRevokedIDs(doc))
@@ -334,7 +334,7 @@ func (s *configMapStore) listAll(now time.Time) ([]Record, error) {
 // already gone (it may have been pruned while the JWT is still live).
 //
 // On a newly-added revocation it emits a structured `federation_token_revoked`
-// event to the log (ADR-028 D1): an off-store, append-only tamper-evidence
+// event to the log (ADR-028 §偵測主體): an off-store, append-only tamper-evidence
 // anchor that the revocation reconciler later checks against the live set to
 // detect an un-revoke. The event is emitted AFTER mutate() commits — never
 // inside the RetryOnConflict closure, which may run several times — and only
@@ -386,7 +386,7 @@ func (s *configMapStore) revoke(tokenID string, expiresAt time.Time) (bool, erro
 		// absurd over-engineering for a 4h-TTL revocation, so the risk (crash in
 		// the gap AND a precisely-targeted un-revoke) is accepted (ADR-028).
 		//
-		// ADR-028 D3 (PII minimization): opaque token_id + expires_at only —
+		// ADR-028 §事件不帶租戶識別碼 (PII minimization): opaque token_id + expires_at only —
 		// NO tenant identifier, so the audit sink never becomes a store of
 		// customer identifiers. The reconciler correlates on token_id and, if a
 		// human needs the tenant at IR time, resolves it from the store.

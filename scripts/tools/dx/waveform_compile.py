@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""waveform_compile.py — fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證 PR-1）
+"""waveform_compile.py — fault-waveform pack 驗證 / 回讀 / 物化編譯器（ADR-030 決策層驗證）
 
 Single tool, three modes (P2):
 
@@ -20,7 +20,7 @@ Governance gates:
   * `source: self-test-seed` without --allow-selftest → exit 1 (seeds must
     never enter catch-rate material).
   * `independent_of_rule_conversion` must be literally true (blind-write
-    attestation, ADR-030 D2 anti-tautology).
+    attestation, ADR-030 §2 anti-tautology).
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  OK
@@ -98,7 +98,7 @@ def _compile_one(pack: dict, out_dir: str, seed: int, fanout: int) -> list[str]:
 def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="fault-waveform pack 驗證/回讀/物化編譯器（ADR-030 PR-1；"
+        description="fault-waveform pack 驗證/回讀/物化編譯器（ADR-030；"
                     "schema: docs/schemas/waveform-pack.schema.json）")
     parser.add_argument("packs", nargs="+", help="waveform pack YAML path(s)")
     mode = parser.add_mutually_exclusive_group(required=True)

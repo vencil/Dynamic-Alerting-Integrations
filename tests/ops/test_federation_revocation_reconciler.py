@@ -1,4 +1,4 @@
-"""Tests for federation_revocation_reconciler.py (ADR-028 D1, #924).
+"""Tests for federation_revocation_reconciler.py (ADR-028 §偵測主體, #924).
 
 The reconcile logic is pure (events + live set + now -> suspected list), so the
 correctness core — un-revoke detection, clock-skew tolerance, expiry skip,
@@ -534,7 +534,7 @@ def _query_router(*, events=(), failopen=(), heartbeats=(), rejected=(), missing
 
 
 class TestEvidenceChannelCanary:
-    """ADR-028 D1 / #1234: `channel_up` distinguishes 'no revocations happened'
+    """ADR-028 §證據通道 / #1234: `channel_up` distinguishes 'no revocations happened'
     from 'the evidence path is severed' — the two states the reconciler otherwise
     observes identically (zero rows), the severed one publishing a clean
     all-clear."""
@@ -696,7 +696,7 @@ class TestReconcileOnceFailClosed:
         # Schema drift: rows carry the event marker but can't be parsed. They must
         # be COUNTED (events_dropped), not silently absorbed — a fully-drifted feed
         # would otherwise reconcile to a clean, healthy zero while a real un-revoke
-        # went unseen and last_reconcile_ts kept refreshing (ADR-028 D3).
+        # went unseen and last_reconcile_ts kept refreshing (ADR-028 §後果與已知限制).
         cfg = _cfg(tmp_path)
         (tmp_path / "revoked.txt").write_text("", encoding="utf-8")
         m = rec.Metrics()

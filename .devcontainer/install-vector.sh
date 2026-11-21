@@ -7,7 +7,7 @@
 # TestVectorValidateAndTest — `vector validate` ×3 + `vector test` over
 # helm/vector/tests/projection_tests.yaml) SKIPPED locally. That suite is the
 # only place the shipped VRL is EXECUTED rather than string-matched: tenant
-# fail-closed routing, the ADR-028 §D3 PII drop, and the #1293 origin-spoof
+# fail-closed routing, the ADR-028 §事件不帶租戶識別碼 PII drop, and the #1293 origin-spoof
 # truth table all live there. Without the binary a VRL change could only be
 # validated by pushing and waiting for CI — and #1293 (a guard that silently
 # misclassified 100% of real gateway audit rows for two months) is what that

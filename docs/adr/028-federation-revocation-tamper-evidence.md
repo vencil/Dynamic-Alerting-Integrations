@@ -1,5 +1,5 @@
 ---
-title: "ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控"
+title: "ADR-028: 偵測聯邦 token 撤銷被偷偷撤回 — 以叢集外的日誌對帳為主"
 tags: [adr, tenant-api, federation, security, audit]
 audience: [platform-engineers, security, sre]
 version: v2.9.0
@@ -9,152 +9,242 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-07-04
-updated_at: 2026-11-07
+updated_at: 2026-11-21
 ---
-# ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控
+# ADR-028: 偵測聯邦 token 撤銷被偷偷撤回 — 以叢集外的日誌對帳為主
 
 ## 狀態
 
-✅ **Accepted**（2026-07-04）。owner ratify（設計 PR [#995](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/995) merged）+ MVP 實作落地（producer PR [#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)；reconciler + 告警本 PR）。Refs [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)（自 [#903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/903) RFC 拆出），設計經兩輪外部 adversarial review（Gemini：架構收斂 + 實作邊角護欄）+ CodeRabbit。實作階段三處 impl-time refinement 見 §Action Items。
+✅ **Accepted**（2026-07-04）。
 
-**2026-11-07 修訂**：日誌庫前方加上依消費端授權的 vmauth、預設強制，只有 Vector 能寫入；偽造門檻因此從「能在日誌庫所在 namespace 建 pod」移到 Vector 的輸入面（見 Consequences、D3 誠實邊界）。
+- 2026-11-07 修訂：日誌庫前方的 vmauth 預設強制授權，只有 Vector 能寫入日誌庫；偽造證據的門檻因此移到 Vector 的輸入面（見「後果與已知限制」）。
 
 > 依語言政策，ADR 自 ADR-019 起不另製 `.en.md`。
 
-## TL;DR
+## 決策摘要
 
-- **問題**：federation 撤銷集（`tenant-federation-store` ConfigMap 的 `revoked.txt` / `store.json`）**依設計 runtime-mutable**——tenant-api 的 SA 執行期寫它。偷了該 SA token、或 tenant-api pod RCE 的攻擊者，能刪掉一個 `token_id`（**un-revoke**、把已撤銷 token 復活），且寫入帶**合法身份** → 身分控制（RBAC / VAP / [#926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/926) 的 out-of-band 告警）全看不到。
-- **重定框**：這是 **Certificate Transparency 類問題**（偵測一個**有合法權限者**濫用權限），業界正典是 **append-only + 獨立觀察者**，**不是**原地放 checksum——同一個可寫位置內的 keyless hash，攻擊者刪一項後可重算整條（[#569](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/569) chargeback runbook §7.3 自承「非 compliance-grade WORM」）。且本平台已用 **4h token TTL** 把窗口壓短（短憑證 > 複雜撤銷，對齊 SPIFFE/CT 業界走向）——**本 ADR 是替這個 4h 窗加一層偵測，不是造 revocation 帝國。**
-- **三條決策**：
-  1. **主控 = off-cluster 對帳（detective）**：`revoke()` 發一則結構化撤銷事件，走**既有** Vector→VictoriaLogs（append-only、在 ConfigMap 之外）；一支**離線 verifier** 直讀 ConfigMap 真相源對帳——「log 曾撤銷、且未到期、卻不在 live set」＝ un-revoke → `critical` 告警。
-  2. **輔助 = in-CM digest（沿用 #569）**：只抓意外損毀 / 懶得重算的手改，**明講非主控**。
-  3. **honest boundary**：tamper-**evident** 非 tamper-**proof**；錨定的是 tenant-api 範圍威脅，被更大的（VictoriaLogs / 全叢集）compromise 打穿 → 密碼學層列 defer-with-trigger。
-- **一項顯式風險接受**：gateway `revoked_check.lua` 讀撤銷清單失敗時 **fail-open**（4h TTL 上限）。這是**刻意的**可用性權衡（同檔對「跨租戶外洩」是 fail-closed 為證）→ 本 ADR 記為**具名 Risk Acceptance + 便宜偵測**，真正的 fail-closed 降級另立 issue（defer-with-trigger）。
+聯邦 token（federation token，租戶用來跨叢集查詢的短效 JWT，預設效期 4 小時）被撤銷後，撤銷紀錄存在 ConfigMap 裡，而 tenant-api 依設計在執行期改寫這份 ConfigMap。本 ADR 決定：
 
-## 背景：威脅面與現況
+1. **主要防線是偵測，不是阻止。** 每次撤銷都另外寫一筆結構化日誌，送進 ConfigMap 以外、只能追加的日誌庫（VictoriaLogs）。一支常駐的對帳程式（reconciler）定期比對「日誌說撤銷過、還沒過期的 token」與「ConfigMap 裡現存的撤銷集」，缺一個就發 critical 告警。
+2. **不在 ConfigMap 內放校驗碼當主要防線。** 有寫入權的人改了內容可以順手重算校驗碼。
+3. **gateway 讀不到撤銷清單時放行（fail-open），是明說的風險接受**，配上偵測告警；讀不到就擋（fail-closed）的降級另案設計。
 
-撤銷儲存的形狀（[ADR-020](020-tenant-federation.md) Posture B、`configmap_store.go`）：
-- `store.json` = 真相（records + revoked set），只由 tenant-api 讀寫；`revoked.txt` = 衍生投影（每次寫重生），gateway 以 projected volume 唯讀掛載、每 30s reload。
-- 撤銷 = `revoke()` 把 `token_id` append 進 revoked set；`pruneDoc()` 每次寫會**剪掉已過期**的 revoked 項（為守 ConfigMap ~1MiB 上限）。
+這是「讓竄改看得見」（tamper-evident），不是「讓竄改做不到」（tamper-proof）。
 
-**威脅（#924）**：直接編輯 store 把一個**未過期**的 `token_id` 從 revoked set 拿掉 = un-revoke，讓一個本該失效的 federation JWT 在其 TTL 剩餘時間內復活，**無任何 failed-auth 訊號**。
+## 背景
 
-**為什麼身分控制擋不住**：真實 compromise 路徑（偷 SA token / pod RCE）產生的寫入帶**合法 tenant-api SA 身份**，通過任何「誰可以寫」的檢查。這正是專案反覆踩的 *single-writer ≠ trusted-writer*。
+### 撤銷資料怎麼存
 
-**為什麼 pruning 讓它更隱蔽**：撤銷集本來就會因過期而縮小，un-revoke 混在正常 prune 裡難以區分——所以「偵測 set 縮小」不能只看大小，要看**內容**（哪個特定 token 該在卻不在）。
+聯邦撤銷存放在 `tenant-federation-store` ConfigMap（見 [ADR-020](020-tenant-federation.md)）：
 
-**與 [#926](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/926) 的關係（互補、非重疊）**：#926 Part B 的 out-of-band 告警抓「**非平台身份**」寫 ConfigMap、且只到 `Metadata` level（不知改了哪個 key）。#924 的威脅寫入帶**合法身份**（#926 剛好漏）＋需要**內容級**判斷（哪個 token 被 un-revoke）。兩者咬合：#926 管「誰在寫」，#924 管「合法者寫了什麼」。
+- `store.json` 是真相來源（已簽發的 token 紀錄與撤銷集），只有 tenant-api 讀寫。
+- `revoked.txt` 是從 `store.json` 衍生的清單，一行一個 `token_id`。tenant-api 每次寫入都從撤銷集逐字重新產生它，只寫入還沒過期的項目。
+- federation-gateway 以唯讀 volume 掛載 `revoked.txt`，每 30 秒（`revokedSet.reloadIntervalSeconds`）重讀一次；token 在清單裡就回 403。
+- tenant-api 每次寫入時會刪掉已過期的撤銷項，避免 ConfigMap 超過約 1 MiB 的上限。過期的 token 本來就會被 JWT 的到期檢查擋下，刪掉安全。
+
+### 威脅：用合法身分撤回撤銷
+
+偷到 tenant-api 的 ServiceAccount token，或在 tenant-api pod 裡取得執行權的攻擊者，可以從撤銷集裡刪掉一個還沒過期的 `token_id`。這等於撤回撤銷（下文稱 un-revoke）：一個本該失效的 token 在剩餘效期內恢復可用，而且不會產生任何認證失敗的訊號。
+
+身分類的控制擋不住這件事：RBAC、admission policy、「非平台身分寫入 ConfigMap」的告警，問的都是「誰在寫」，而這筆寫入的身分正是合法的 tenant-api。要抓它，得判斷「寫了什麼」，也就是哪個特定 token 該在卻不在。只看撤銷集變小也不夠，因為撤銷集本來就會因過期清理而縮小。
+
+這類問題的業界做法是「只能追加的紀錄 + 獨立的觀察者」，例如憑證透明度（Certificate Transparency）：把紀錄放到攻擊者改不了的地方，由別人來比對。在同一個可寫位置放不帶金鑰的雜湊沒有用，攻擊者刪掉一項後可以重算。
 
 ## 決策
 
-### D1（主控）off-cluster 對帳
+### 偵測主體：撤銷日誌與現存撤銷集對帳
 
-**寫端**：`revoke()`（及任何改動 revoked set 的路徑）發一則結構化事件到 stdout，經既有 Vector→VictoriaLogs 落 append-only 日誌：
+**寫入端（tenant-api）**：撤銷寫進 ConfigMap 成功之後，tenant-api 以 Info 等級寫一筆結構化日誌：
 
 ```json
-{ "event": "federation_token_revoked", "token_id": "<opaque>", "expires_at": "<rfc3339>", "ts": "<rfc3339>" }
+{ "event": "federation_token_revoked", "token_id": "ftk_…", "expires_at": "<RFC3339>" }
 ```
 
-**驗端（load-bearing）**：一支週期 reconciler（CronJob）：
-1. **直讀 ConfigMap 真相源**（唯讀 RBAC，`get` 該一個 resourceName）——**不經 tenant-api API**：若 tenant-api 已被 compromise，它可回傳偽造的 API response 騙過 verifier；直接讀 API server 上的 ConfigMap 收窄攻擊面（外審採納）。
-2. 查 VictoriaLogs 取「窗口內所有 `federation_token_revoked` 事件」（#1237 起以 `log_type:"federation_evidence"` 限定串流，與 heartbeat canary 同一串流類別；見 D3 §偵測查詢的來源限定）。
-3. **對帳**：凡事件中 `now < expires_at` 的 `token_id`，斷言它仍在 live revoked set。缺一個 → un-revoke → 發 gauge + 告警 `FederationRevocationTamperSuspected`（`critical`）。
-4. **verifier 自我 liveness**：每輪發 heartbeat；逾 N 輪未對帳 → `FederationRevocationReconcileStale`（防偵測機制被靜默拔除，對齊本專案 codify-trigger 紀律）。
+只有新增的撤銷才寫；同一個 token 重複撤銷不再寫。寫入前先檢查 `token_id` 符合 `^ftk_[0-9a-f]+$`，不符合的直接拒絕，不會進入撤銷集。
 
-**Trade-off（明寫）**：detective（偵測非阻止，un-revoke 到偵測有分鐘級 lag，« 4h TTL）＋ in-cluster 錨點（非真 off-cluster WORM）＋ keyless（靠 sink 的 append-only 特性 + 攻擊者搆不到 sink，非密碼學不可偽造）。攻擊者能從 ConfigMap 刪掉，但**收不回已 ship 出去的 log line**。
+**偵測端（reconciler）**：`helm/federation-reconciler` 部署一支常駐 Deployment，每 300 秒跑一輪：
 
-### D2（輔助）in-CM digest
+1. 讀撤銷集：直接以唯讀 volume 掛載同一份 `revoked.txt`。不經 tenant-api 的 API（被入侵的 tenant-api 可以回假資料），也不需要任何 RBAC。
+2. 查日誌：向 VictoriaLogs 查過去 24 小時內的撤銷事件。太新的事件先不比對：事件要比 `max(settleSeconds, projectionGraceSeconds)`（預設 60 與 180 秒）更舊才進入比對，讓日誌寫入延遲和 reconciler 自己那份 volume 的更新延遲都過去，避免把剛撤銷的 token 誤判成被撤回。
+3. 比對：日誌裡每個離到期還超過 120 秒（時鐘誤差的緩衝）的 `token_id`，都必須在現存撤銷集裡。缺幾個，`federation_revocation_tamper_suspected` 就是幾。
+4. 自身存活：只有整輪成功才更新 `federation_revocation_last_reconcile_timestamp_seconds`。任何查詢或讀檔失敗，這一輪不更新任何結果，也不回報「沒問題」；連續失敗會讓 `FederationRevocationReconcileStale` 觸發。
 
-沿用 #569 形狀：store 每次寫時，附一個 revoked set 的 digest（如另一個 ConfigMap key）。**只**抓意外損毀 / 懶得同步 digest 的手改。**明講非主控**：有寫入權的蓄意攻擊者可同時更新 digest（#569 runbook §7.3 已承認），故它不進威脅模型的主線，僅為便宜的 defense-in-depth。
+reconciler 的 pod 不掛 ServiceAccount token、沒有任何 Role，網路只能出到 DNS 與 VictoriaLogs。它刻意比一個被入侵的 tenant-api 權限更小。
 
-### D3 honest boundary + PII 最小化
+攻擊者能從 ConfigMap 刪掉撤銷項，但收不回已經送出去的日誌。
 
-- **honest boundary**：tamper-**evident** 非 proof。錨點強度取決於「攻擊者的 ConfigMap 寫入權**不**延伸到改 VictoriaLogs」——對 tenant-api 範圍威脅成立（偷 SA token 不等於能改 log sink）；全叢集 / VictoriaLogs compromise 則打穿 → 見 defer-with-trigger 的密碼學層。
-- **dual-write gap（accepted risk，外審 Gemini 補）**：producer 在 ConfigMap commit **之後**才發事件，若 tenant-api pod 在這奈秒間隙硬死（OOMKill／node crash），撤銷已生效但事件**丟失** → 該 token 失去 tamper-evidence 錨點，未來針對它的 un-revoke 抓不到。徹底封需 **Outbox pattern**（先寫 CM、另一 process 派發事件），但對 4h-TTL 撤銷是荒謬的過度工程 → **接受此風險**（需 crash 剛好落在間隙 ∧ 攻擊者剛好精準針對該 token，雙巧合）。**不改邏輯**、記錄於此。
-- **large-payload / OOM 邊界（外審 Gemini 補）**：對帳每輪把 24h 窗撤銷事件整包讀入記憶體（`urlopen().read()` → `json.loads`）。有寫入權的攻擊者狂灌撤銷（或極大合法量）→ payload 撐破 reconciler Pod 記憶體上限（`resources.limits.memory`）→ OOMKill。**安全**（非新破口）：fail-closed → 反覆 OOM 使 `last_reconcile_ts` 停滯 → `FederationRevocationReconcileStale`(critical) 觸發（被攻擊致瞎＝立即告警，非靜默 all-clear）。streaming／逐行 decode 或調高記憶體只為**降噪** → **defer-with-trigger**（見下表）。
-- **schema-drift 靜默盲點（本 PR 對抗式 review 補）**：帶 `event:"federation_token_revoked"` 標記卻缺欄位／時間壞掉的 row 被 `parse_events` 丟棄。若 tenant-api 事件 schema 漂移使**全部** row 不可解析 → 對帳出 0 事件、`last_reconcile_ts` 照刷（看似健康）→ Stale **不**觸發、真 un-revoke 漏報。**緩解**：暴露 `federation_revocation_events_dropped` gauge 令漂移**可見**（非零＝有標記卻解不出＝schema drift）；專屬解析錯誤告警 → **defer-with-trigger**（實務觀察到持續 > 0 再加，避免 alert-count churn）。
-- **⛔ 證據通道從未接上（本 ADR 的前提錯誤，#1234 事後補記）**：本 ADR 通篇假設撤銷事件「重用既有 Vector→VictoriaLogs 管線」即可抵達偵測端（見上方〈選項與取捨〉的「成本近乎零（重用既有管線）」）。**該前提當時不成立**：`helm/vector` 的 `source.extraLabelSelector` 只 tail `federation-gateway`，**tenant-api 根本不在採集範圍內**，所以 D1 的查詢從上線第一天就**永遠回零筆**。這不是實作 bug，是設計時未驗證的假設——**低成本的「重用既有管線」正是它沒被驗證的原因**：改用新管線會被迫寫設定、寫設定會撞到 selector；宣稱重用則什麼都不必碰，於是也什麼都沒檢查。
-  - **為何沒有任何告警抓到**：`zero rows` 同時是**健康狀態的合法觀測**（「這段時間沒有撤銷」），所以對帳每輪都「成功」、`last_reconcile_ts` 照刷、`TamperSuspected` 因無事件可比對而恆為 0、`ReconcileStale` 保持綠。三條告警**全綠**，控制**完全無效**。
-  - ⚠️ **今日的實際狀態是「大聲壞掉」而非靜默全綠**（勿以「三條告警都綠」描述現況）：reconciler 釘的 `da-tools:v2.9.0` image **不含** `_federation_revocation_reconciler.py`（#1240 image-pin EXEMPTIONS 列管，修法＝下一個 `tools/v*` release），且在 #1234 §D 落地前 VictoriaLogs 的 NetworkPolicy 會丟掉 reconciler 的查詢——兩者都讓 `ReconcileStale` 觸發。**靜默偽綠是那兩項修好之後才會出現的狀態**，而那正是 canary 要防的東西。
-  - **封法只能在來源端**：任何純偵測端的推論都封不住「零筆」（撤銷集合法為空時證明不了任何事，且部署後 ≤4h ramp 會誤報）。故 tenant-api 每 ~5m 發一筆 content-free `federation_revocation_channel_heartbeat`，**走與真實證據完全相同的 transform 與 sink**，`federation_revocation_channel_up` 斷言它到得了，缺席即 `FederationRevocationEvidenceChannelDown`（critical）。canary 走**不同**路徑就什麼都證不到，這是它的核心約束。
-  - **教訓（可轉移）**：「重用既有管線」在 ADR 裡要當成**待驗證的可達性主張**，不是零成本前提；而任何「空集合＝健康」的偵測面，都需要一個**已知訊號的 canary**才有 liveness。
-- **⛔ 執行端與偵測端的解析契約（#1235 / TRK-349，2026-07 補）**：本 ADR 的偵測論證預設「gateway 看到的撤銷集合 ＝ reconciler 看到的撤銷集合」，但 `revoked.txt` 有**兩個獨立實作**的讀取端（gateway Lua / reconciler Python），兩者對「一行的邊界」與「什麼算空白」語意不同 → **同一份檔案可解析出不同的 token 集合**，前提無任何機制保證。修法是把契約**顯式化並三邊一致**：合法行必須逐位元組符合 `^ftk_[0-9a-f]+$`（只容忍行尾單一 CR，讓 CRLF 檔在兩端一致），任何正規化都被移除——**正規化本身就是分岔來源**。契約值由 chart（`revokedSet.tokenIdPattern`）注入 Lua，不在腳本內手抄；寫入端（`revoke()`）先驗 charset 讓非法 id 進不了 store。
-  - **⛔ 兩端刻意不對稱，勿「統一」**：gateway 遇到違反契約的行 → **作廢整輪 reload、沿用前一份 set**（那份是竄改前載入的，仍含真正的 token_id ＝ 攻擊被擋）；reconciler **不得**比照，它必須讓該 id **不出現在 live set**——那個「缺席」正是 `TamperSuspected` 的觸發條件。把兩端和諧化會**把偵測本身悄悄刪掉**，而所有元件仍顯示健康。程式碼兩處各有註解釘住這件事。
-  - **⛔ load 時偵測到不合法 entry 只計數、絕不剔除**：`revokedText()` 每次寫入都從 store 文件**逐字重生** `revoked.txt`，所以「載入時順手清掉髒 entry」會在下一次任意寫入把該 token 徹底移出撤銷集——**由平台親手完成攻擊者要做的 un-revoke**。這是「FIX 移除附帶防護」家族的實例，測試已釘住 round-trip 存活。
-  - **⛔「逐位元組」是關於 BYTES 的主張，所以讀取路徑也在契約內**：pattern 只管「這串位元組是不是 id」，管不到「哪串位元組才算一行」。兩端原本的讀法各自都會在解析器看到任何東西之前改寫它看到的位元組，於是 reload 可以**成功**而解析出與偵測端不同的集合——分歧在 pattern 檢查的**下面一層**。故兩端的讀取都改為**長度基底**、整份讀入自行切行，Python 端明確關掉解碼層的行終止符轉換。**驗契約時務必從 production 入口驗**（讀檔那一段），字串層測試對這一層結構性失明。
-  - **驗證面的誠實邊界（#1235 收尾修正）**：三處 pattern 字面值相等由 `tests/ops/test_revoked_set_contract.py` 機械比對，但**字面相等 ≠ 語意相等**——它只擋得住「手抄的 pattern 漂移」。**其餘三件事各有各的護欄，不可互相代替**：(a) **pattern 方言漂移**（同一個字面值在三個引擎意思不同）→ federation-e2e **S11** 正向等價案；(b) **讀取語意漂移**（誰算一行）→ federation-e2e **S10** 負向案，⚠️ **S11 對此毫無阻力**（舊讀法與新讀法都能通過 S11）；(c) **位元組空間覆蓋** → `tests/ops/test_revoked_set_contract.py` 的**機械窮舉一致性矩陣**（每個位元組 × 每個相對位置，跑 production 入口，與一份直接寫在 bytes 上的獨立 oracle 比對，並自帶「這個矩陣真的抓得到正規化讀取器」的 meta-guard）。**本 ADR 現在靠的是矩陣＋行為場景，而不是三個字面值彼此相等。**
-  - **新增可觀測性：兩個 gauge ＋ 兩條 critical 告警（推翻本 PR 早先「刻意不加 metric」的決定）**：早先的理由是「被拒行意味該 id 不在 live set，若它確實被撤銷過 `TamperSuspected` 就會觸發」。⛔ **該推理只涵蓋壞行上的那一個 id**。gateway 的處置是作廢**整輪** reload、沿用前一份 set，所以**壞行出現之後發出的每一筆撤銷都沒有被載入、沒有生效**，而 audit log 與檔案對這些新撤銷的認知**完全一致**，`tamper_suspected` 因此維持 0；再者，**首次載入就撞到壞行的 worker 沒有前值可留、什麼都不擋**。`revoked.txt` **不見**一直是大聲的（偵測端讀到空集合、全部缺席），**被拒**卻是無聲的——本 ADR 的論證從未計入這個不對稱。故新增 `federation_revocation_live_set_rejected_lines`（本行程讀到的檔案，看得到成因）與 `federation_gateway_revoked_set_reload_rejected`（從 gateway 自己的 log stream 讀回、以 `log_type:"gateway_operational"` 限定串流，是執行面自述），各配一條 critical 告警（`> 0`, `for:10m` ＝一個 reconcile 週期加等量餘裕；條件持久，窗長無成本。⚠️ 其中 `FederationGatewayRevokedSetReloadRejected` 之後改成鎖存的 `max_over_time(…[1h]) > 0`，見下方「取樣式偵測的固有盲區」(a)）。**兩個而非一個**：前者讀的是自己那份 kubelet 投影、未必等於 gateway 當下載到的；後者不受投影／時間差影響，但對「沒產生那句 warn 的成因」是啞的。IR 見 [runbook](../internal/federation-revocation-reconciler-runbook.md)。
-  - **仍未涵蓋（誠實邊界）**：(a) **收不到流量的 worker 永遠不會 reload**——reload 掛在請求路徑的時間閘上，一個閒置 worker 既不會產生拒載 warn、也不會更新它手上的集合，兩個 gauge 對它都是沉默的；(b) **兩端讀的是同一份 ConfigMap 的不同 kubelet 投影、時間點也不同**，所以「我這邊的檔案看起來乾淨」不等於「gateway 載進去了」——這正是**兩個** gauge 而非一個的原因，但它縮小差距、不消除差距；(c) gauge 是**計數**，永不回報行內容（ADR-028 D3），所以定位壞行仍是 IR 的人工步驟。
-- **⛔ 偵測查詢的來源限定（#1237 / TRK-351，2026-07 補）**：D1 的三支 LogsQL 查詢（撤銷事件、fail-open、reload-rejected）原本只比對**內容**（欄位值或訊息片語）、不限定來源——任何能把一行日誌寫進同一個 VictoriaLogs 的來源都能灌入假訊號（製造假警 → 告警疲勞 → 真警被消音，即偵測失能）。修法在查詢端加上**平台寫入、payload 無法偽造的分類欄位**：事件查詢加 `log_type:"federation_evidence"`（與 heartbeat canary **同一串流**，兩者由測試釘死一致——分歧會製造「事件查詢瞎掉回零、canary 仍綠」的靜默全綠）；fail-open / reload-rejected 兩支加 `log_type:"gateway_operational"` + `app:"envoy"`（`app` 把類別收窄到 Envoy 容器，排除同 pod 的 audit-metrics / logrotate sidecar 的非 JSON stderr；容器名以跨檔測試釘回 chart）。
-  - **實測佐證（fail-open 那半確實有效）**：租戶請求內容經 `audit_extract.lua` 進 access log 的 `query` 欄位，但那行是 JSON、會 parse 成 `federation_audit`（有 top-level `query`），永遠到不了 `gateway_operational`；對真 Envoy（`distroless-v1.38.0`）探測確認**任何注入位元組**（含控制字元、非法 UTF-8）都被編碼成單行合法 JSON，不會拆行或落錯類。
-  - **誠實邊界（這一步擋什麼、不擋什麼）**：`log_type` 綁的是「Vector 把它歸為哪一類」，**不是「哪個 producer 產的」**——evidence 分支的入場券**在 chart 0.10.0（[#1288](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1288)）之前只有 pod label**，故能在受採集範圍建立帶對應 label 之 pod 的主體即可偽造事件（含偽造 heartbeat 讓 canary 說謊）。**0.10.0 起入場券為「pod label ＋ 設定的 namespace」**（`evidenceChannel.podNamespace` / `.gatewayNamespace`，設 `""` 回到僅 label），門檻因而升到「能在**該 namespace** 建 pod 者」——**但這仍不是 producer 身分驗證**：該 namespace 內 label 依舊是自宣告的。查詢端欄位把偽造門檻從「任何能寫入日誌庫者」**升到**「能在受採集範圍建 pod 者」，但**未跨過來源身分驗證這條線**。**`gateway_operational` 那半（fail-open／rejected）共享同一邊界，不因加了 `app` 而不同**：`app` 值等於 k8s container_name，攻擊者在自己的 pod spec 裡可任意設為 `envoy`，故 `app:"envoy"` 只排除同 pod **合法** sidecar（audit-metrics／logrotate）的噪音、不提供來源身分驗證；且 `origin_split.gateway` 的路由條件同樣只看 pod label，而 demux 的 pod_owner spoof 檢查**只套用在 `federation_audit` 分支、不涵蓋 `gateway_operational`**（見 `helm/vector/templates/configmap.yaml` demux）。真正封死需在 evidence 與 gateway **兩條** origin 分支都補 producer 綁定（demux 現有的 pod_owner 檢查僅及 `federation_audit`）＋收緊 `evidenceChannel.events`/`keepFields` 的成員檢查——**兩項已於 [#1288](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1288) 落地（chart 0.10.0）**，但綁的是 **namespace 不是 pod_owner**：pod_owner 只是工作負載的**名字**，攻擊者把自己的 Deployment 取名 `federation-gateway` 即可通過前綴比對（實測），所以它與 pod label 屬同一個信任等級；namespace 由控制面指派、pod 無法自選，是這組 metadata 裡唯一不可自宣告的。⚠️ **這是門檻提升，不是來源身分驗證**：綁定後的門檻是「能在該 namespace 建 pod」，而 gateway 那一半的 namespace 是**共用的**（prometheus／grafana／alertmanager／KSM 都在）：能在其中建 pod 者，讓自己的 pod 帶上 gateway 的 label，其 stdout 就會被 Vector 採集並歸為 `gateway_operational`——對該主體此綁定不增加成本，它關掉的是「叢集他處帶著該 label 的工作負載」這個較廣的情境。（直接寫入日誌庫、繞過 Vector 的那條路已經關掉：日誌庫前方的 vmauth 依消費端授權，只有 Vector 能寫入，見下方 Consequences。）真正的來源身分驗證仍需 producer 端簽章（本 ADR 保留的 `audit_signature` seam）或 admission control。業界共識（MITRE CTID《Summiting the Pyramid》、Sigma `logsource` 官方定位）一致：查詢端來源限定是「選對資料」，信任邊界須在攝取端建立。⚠️ **本段描述的邊界在 [#1294](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1294) 之前其實比寫的更弱**：`app` / `k8s_namespace` / `pod_name` 與 demux 的 `pod_owner` spoof 檢查全都在「把 producer 自己的 JSON deep-merge 進事件」**之後**才讀，因此攻擊者連「把自己的 container 取名 `envoy`」都不必——payload 裡塞一個 `kubernetes` 物件即可覆蓋平台記錄的來源，spoof 檢查也一併失效。#1294 把這些欄位改為只從 **merge 前的快照**讀取，本段敘述才與實作相符；同理 evidence 列的 `timestamp`（sink 的 `_time_field`、reconciler `_time:` 視窗依據）先前亦可被 payload 決定，屬 ADR 自身威脅模型（tenant-api RCE）可觸及的範圍。
-- **⛔ 取樣式偵測的固有盲區（#1238 / TRK-352，2026-08 補）——本 ADR 最重要的一條誠實邊界**：D1 的偵測端是一支**週期輪詢**的 reconciler（300s 一輪），而它發出的 gauge **每輪從頭重算**。這產生兩個**性質不同**的缺口，先前被混為一談：
-  - **(a) 已取樣到的偵測會被丟掉（已修）**：`tamper_suspected` 的非零狀態只維持一輪（300s），而 `FederationRevocationTamperSuspected` 的 `for:` **恰好也是 5m**，於是單輪偵測**結構上永遠撐不到門檻**（promtool 實測：任何 eval 時點都不觸發）。同型病在另外兩條上更隱蔽：`federation_gateway_revoked_set_reload_rejected` 是 ~600s 窗的列數、每 300s 重寫，單次拒載最多非零 600s ＝ `for: 10m`，**同樣永不觸發**；`federation_gateway_revoked_set_missing` 則視輪次對齊而定（600s 觸發／300s 不觸發），**同一個事件會不會 page 取決於排程巧合**。三條均改為 `max_over_time(...[1h]) > 0` **鎖存**，把「是否曾經偵測到」與「此刻是否仍成立」拆開——對 tamper-evidence 而言只有前者有意義。
-  - **(b) 取樣本身可能從未發生（未修，且無法用告警式修法修）**：un-revoke 的最小可行窗遠短於一輪。gateway 的 reload 掛在**請求路徑**上（Envoy Lua filter 無 timer API），攻擊者自己的請求即可觸發 reload 並在同一個請求被放行，所以攻擊時長 ≈ kubelet 投影延遲 ＋ ≤`reloadIntervalSeconds`。**攻擊窗短於取樣週期時，偵測器根本沒看到任何東西，任何 expr 都救不了。** 鎖存把「必然逃脫」改成「每次使用擲一次骰子」（重複使用會累積），這是它買到的全部——**不是關洞**。
-  - **為何 reconciler 這個形狀天生如此**：Kubernetes 官方設計文件對 level-based reconciler 的定位是「**regardless of how many intermediate state updates may have been missed**」，並明文把 edge-triggered 降為最佳化——也就是說「漏掉中間狀態」是這個模式**被接受的性質**，因為它的目標是**收斂**而非**偵測**。真正的結構解是讓偵測事件驅動（watch／API-server audit stream），追蹤於 [#1322](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1322)（TRK-357）；⛔ 該方案在本 chart 上**不是**單純加一個 watch：reconciler 今天刻意**沒有 SA token、沒有任何 RBAC、egress 只開 DNS + VictoriaLogs**（`serviceaccount.yaml` 自述「deliberately less privileged than a compromised tenant-api」），而 RBAC 的 `resourceNames` **限制不了 `list`/`watch`**，故加 watch 等於同時放寬三道並給出全 namespace 的 ConfigMap 讀取權。此權衡須與偵測收益一起評估，不可當成純增益。
-  - **⛔ 鎖存移除了一個原本免費的偽陽性吸收器，故同時在來源端補上 `projectionGraceSeconds`**：舊的 `for: 5m` 順帶擋掉了「合法撤銷剛寫入、但 reconciler 自己那份 kubelet 投影還沒更新 → 該 token 讀起來不在 live set → 誤判 tamper」這種單輪假陽性。鎖存之後它會直接 page，所以改在**事件年齡**這個維度處理：事件必須老於 `max(settleSeconds, projectionGraceSeconds)` 才進對帳。⛔ **不可改用「連續兩輪缺席才算」**——攻擊窗短於一輪，結構上不可能被取樣兩次，那種規則會把 (a) 原封不動地裝回去。⛔ 也**不可**改成調大共用的 `settleSeconds`：它同時是 gateway 三支查詢的窗近端，調大會**縮小**那個 600s 窗，讓 reload-rejected 更難觸發。
-  - **reset time 是刻意付出的代價**：鎖存窗 W = 1h 同時是告警的最短復歸時間（Google SRE 把 reset time 列為告警四屬性之一）。條件修好之後告警仍會續燒至多 1h，**這是設計而非 bug**——對一條 critical 安全訊號，寧可讓人確認過再消失。
-- **PII 最小化（去識別化，外審採納）**：對帳只用 **opaque `token_id`**（非 PII）；**不**把 `<tenant>` 之類客戶識別碼寫進事件——否則 audit sink（VictoriaLogs/SIEM）反而成為客戶機敏資料的外洩庫。IR 時要知道是哪個租戶，從 store 的 records 以 `token_id` 反查即可（映射本就在 store，不必進 log）。
+### 證據通道與它的存活訊號
 
-## 選項與取捨
+撤銷事件要經 Vector（平台的日誌採集器，讀節點上各容器的日誌檔、分類後送進日誌庫）採集才進得了 VictoriaLogs，所以 Vector 的採集範圍必須包含 tenant-api（`source.extraLabelSelector` 涵蓋 `tenant-api` 與 `federation-gateway`）。Vector 把 tenant-api 的這類事件分到專用的 `federation_evidence` 處理段：只放行列名的事件、只保留列名的欄位，標上 `log_type:"federation_evidence"`，且只寫入平台自己的分區，租戶查不到。
 
-| 選項 | 複雜度 | 防的威脅 | 判定 |
+只看撤銷事件無法判斷通道是否通：「查到零筆」可能是這段時間沒人撤銷，也可能是通道斷了。所以 tenant-api 每 5 分鐘再送一筆不含任何內容的心跳 `federation_revocation_channel_heartbeat`，走與撤銷事件完全相同的處理段與目的地。reconciler 查最近 30 分鐘的心跳，查到就把 `federation_revocation_channel_up` 設為 1，否則為 0；持續 15 分鐘為 0 就觸發 `FederationRevocationEvidenceChannelDown`。心跳必須走同一條路，走別條路就證明不了撤銷事件到得了。
+
+兩件事刻意不做：`FederationRevocationEvidenceChannelDown` 不加 `or absent(...)`，因為指標整個不見的情況已由 `ReconcileStale` 的 `absent()` 分支涵蓋；也不用 Vector 的丟棄計數（`vector_component_discarded_events_total`）做速率告警，因為這個處理段設計上就丟掉絕大多數列，量到的是 tenant-api 的請求量而不是設定失配（理由見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8.7）。
+
+心跳查詢與其他查詢在同一個失敗即放棄的區塊裡：VictoriaLogs 暫時連不上時，`channel_up` 保留前一輪的值，不會誤報通道斷線（那種情況已由 `ReconcileStale` 回報）。
+
+這三個數字互相牽動，不要只調一個：心跳間隔 5 分鐘、查詢窗 30 分鐘、告警等待 15 分鐘。查詢窗遠大於間隔，漏一筆心跳才不會被讀成斷線。
+
+### `revoked.txt` 的逐位元組契約
+
+`revoked.txt` 有兩個獨立實作的讀取端：gateway 的 Lua 與 reconciler 的 Python。兩者必須從同一份檔案讀出同一組 token，否則偵測端看到的撤銷集不是執行端在用的那份。契約如下，兩端與 tenant-api 一致：
+
+- 只有 LF 分行；每行可以帶一個行尾 CR（讓 CRLF 寫成的檔案讀出相同結果），除此之外不做任何正規化。
+- 非空行必須整行符合 `^ftk_[0-9a-f]+$`。這個 pattern 由 gateway chart 的 `revokedSet.tokenIdPattern` 注入 Lua，不在腳本裡手抄。
+- 兩端都把整份檔案讀進來自己切行（以長度為準），不用逐行讀取的 API；Python 端以 `newline=""` 關掉解碼層的換行轉換。逐行 API 會在解析器之前改寫位元組，讓 pattern 檢查通過、讀出的集合卻不同。
+
+兩端遇到違反契約的行，**刻意採取不同處置，不要統一**：
+
+| 讀取端 | 遇到違反契約的行 | 為什麼 |
+|---|---|---|
+| gateway（執行端） | 整輪重讀作廢，沿用前一份撤銷集 | 前一份是竄改前載入的，仍含真正的 `token_id`，攻擊因此無效 |
+| reconciler（偵測端） | 只丟掉那一行，讓它的 `token_id` 不出現在現存撤銷集 | 這個「不在」正是 `TamperSuspected` 的觸發條件；比照 gateway 會讓偵測消失，而各元件仍顯示健康 |
+
+tenant-api 載入時遇到不合契約的撤銷項只計數、不剔除：`revoked.txt` 每次寫入都從撤銷集逐字重生，剔除等於在下一次寫入時替攻擊者完成 un-revoke。
+
+gateway 作廢整輪重讀之後，之後新增的撤銷也都不會生效，而日誌與檔案對這些撤銷的認知一致，`tamper_suspected` 維持 0。所以另外有兩個指標與兩條 critical 告警：
+
+- `federation_revocation_live_set_rejected_lines`：reconciler 讀自己那份 `revoked.txt` 時被拒的行數。看得到成因，但讀的是自己那份 volume，未必等於 gateway 當下載入的。
+- `federation_gateway_revoked_set_reload_rejected`：從 gateway 自己的日誌數「重讀被拒」的警告。反映執行端實況，但看不到成因。
+
+指標只回報行數，不回報行內容；定位哪一行壞掉是事件處理時的人工步驟。
+
+三方的 pattern 字面值由 `tests/ops/test_revoked_set_contract.py` 比對；字面值相同不代表三個 regex 引擎語意相同，所以同一支測試另外窮舉每個位元組在每個相對位置的讀法，從實際讀檔的入口跑，與一份直接定義在位元組上的獨立判準比對。
+
+### 偵測查詢只認平台標記的串流
+
+三類日誌查詢都以平台寫入的分類欄位限定來源，不只比對內容：
+
+- 撤銷事件與心跳：`log_type:"federation_evidence"`。兩者必須同一個串流，否則可能出現「事件查詢讀不到、心跳仍正常」的假健康。
+- gateway 的三種重讀警告：`log_type:"gateway_operational"` 加 `app` 限定。讀取失敗與內容被拒只認 `app:"envoy"`；檔案不存在另外也認 `app:"federation-store-preflight"`，那是 gateway pod 啟動時檢查掛載的 init-container，每次 pod 啟動寫一筆同樣的警告；它補的是沒收到流量、Lua 從不重讀的 gateway。`app` 只用來排除同一個 pod 裡其他 sidecar 的雜訊。沒有流量時只有啟動時那一筆，`FederationGatewayRevokedSetMissing` 會在最後一筆之後一小時解除，告警解除不代表掛載已經修好。
+
+`log_type` 由 Vector 依來源 pod 的 label 與 namespace 決定：撤銷證據只收 `tenant-api` namespace（`evidenceChannel.podNamespace`），gateway 警告只收 `monitoring` namespace（`evidenceChannel.gatewayNamespace`）。namespace 由控制面指派，pod 無法自選；pod label 與容器名則可以自己宣告。Vector 讀這些來源欄位時，用的是合併 producer 自己 JSON 之前的值，所以日誌內容蓋不掉它們。
+
+這是提高偽造門檻，不是驗證來源身分：能在上述 namespace 建 pod 的人，仍可以讓自己的輸出被歸進這兩個串流。`monitoring` namespace 還跑著 Prometheus、Grafana、Alertmanager 等元件，對能在那裡建 pod 的人，這道綁定不增加成本。真正的來源身分驗證需要 producer 端簽章，或 admission control（Kubernetes 在建立 pod 時依政策放行或拒絕的機制）。
+
+### 鎖存告警與取樣盲區
+
+reconciler 每輪從頭重算指標，非零只維持一輪。若告警寫成「`> 0` 持續 5 分鐘」，單輪偵測撐不到門檻，永遠不觸發。所以會因單次事件而非零的三條告警改成鎖存：`max_over_time(<指標>[1h]) > 0`，問的是「過去一小時內是否偵測到過」，而不是「此刻是否仍成立」。
+
+| 告警 | 條件 | 等待 | 等級 |
 |---|---|---|---|
-| **A. off-cluster 對帳（本 ADR）** | 低（重用既有管線） | 有寫入權的蓄意 un-revoke（tenant-api 範圍） | ✅ **採用** |
-| B. 同 ConfigMap 內 hash-chain / `.sha256` | 低 | 只防意外 / 懶得重算者 | ❌ 對本威脅是 theater（可重算），降為 D2 輔助 |
-| C. Merkle / 透明度 log（Rekor / Trillian） | 高（整套 log 服務） | 密碼學不可否認 | ⏸️ defer（見下） |
-| D. keyed / forward-secure MAC（RFC 5848 類） | 中高（金鑰管理） | 連 log sink 被改也防 | ⏸️ defer（見下） |
+| `FederationRevocationTamperSuspected` | `max_over_time(federation_revocation_tamper_suspected[1h]) > 0` | 5m | critical |
+| `FederationGatewayRevokedSetMissing` | `max_over_time(federation_gateway_revoked_set_missing[1h]) > 0` | 5m | critical |
+| `FederationGatewayRevokedSetReloadRejected` | `max_over_time(federation_gateway_revoked_set_reload_rejected[1h]) > 0` | 10m | critical |
+| `FederationRevocationLiveSetRejected` | `federation_revocation_live_set_rejected_lines > 0` | 10m | critical |
+| `FederationRevocationReconcileStale` | 上次成功對帳超過 1800 秒；或 Deployment 有副本卻沒有這個指標 | 10m | critical |
+| `FederationRevocationEvidenceChannelDown` | `federation_revocation_channel_up == 0` | 15m | critical |
+| `FederationGatewayRevocationLoadFailure` | `federation_gateway_revocation_load_errors > 0` | 2m | warning |
 
-**核心取捨**：A 用「把紀錄外置到攻擊者搆不到的 append-only sink」買到對本威脅的偵測，成本近乎零（重用 Vector→VictoriaLogs + gateway audit metrics／rules）；B 看似對（issue 原文建議沿用 #569）但對「有寫入權的攻擊者」無效，只能當輔助；C/D 是「真 tamper-proof」但成本與本威脅（4h 窗）不成比例。
+鎖存的代價：條件消失後，告警仍會再燒最多一小時。對一條 critical 安全訊號，這是刻意的，寧可讓人確認過再消失。
 
-## 與既有不變式的關係
+鎖存之後，「合法撤銷剛寫入、reconciler 自己那份 volume 還沒更新」這種一輪的假警報會直接發出，所以偵測端查日誌時才多等 `projectionGraceSeconds`，只比對夠舊的事件。不能改成「連續兩輪缺席才算」：攻擊窗短於一輪，不可能被取樣兩次。也不能改成調大共用的 `settleSeconds`：它同時是 gateway 警告查詢窗（過去 600 秒）的近端，調大會縮小那個窗。
 
-- **[ADR-023](023-write-plane-single-writer-invariant.md) 單一寫者**：撤銷寫入序列化在單副本上 → 事件與 append **天然有序**，無並發 append 複雜度。verifier 是**唯讀**、無寫平面、不觸碰單寫者不變式。
-- **[ADR-020](020-tenant-federation.md) store posture**：ConfigMap 為唯一狀態、`revoked.txt` 每次寫重生——D2 的 digest 附加為另一個 key，不改真相源結構；append-only 完整紀錄放 **off-store**（VictoriaLogs），避開 ConfigMap ~1MiB 上限與 prune 衝突（append-only 與 self-prune 在同一 CM 內互斥）。
+**鎖存只保證「被取樣到的偵測會送到人手上」，不保證偵測會發生。** gateway 的重讀發生在請求路徑上（Envoy 的 Lua filter 沒有計時器），攻擊者自己的請求就能觸發重讀並在同一個請求被放行，所以攻擊時長約為 kubelet 更新 volume 的延遲加上最多 30 秒。這比 reconciler 的 300 秒一輪短，攻擊可以完整落在兩次取樣之間。週期性對帳的目標是讓狀態收斂，本來就允許漏看中間狀態；要補這個洞得讓偵測由事件驅動，追蹤於 [#1322](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1322)。那不是單純加一個 watch：reconciler 現在沒有 token、沒有 RBAC、連不到 API server，而 RBAC 的 `resourceNames` 限制不了 `list`／`watch`，加 watch 等於給它整個 namespace 的 ConfigMap 讀取權。
 
-## 相鄰破口：gateway fail-open 的顯式風險接受
+### 事件不帶租戶識別碼
 
-`revoked_check.lua`（[ADR-020](020-tenant-federation.md) Layer 2）讀 `revoked.txt` 失敗時 **fail-open**：檔案 missing → 空集（全放行）；mid-read raise → 保留上次 set；一律不 500。
+撤銷事件與心跳只帶不透明的 `token_id` 與到期時間，不帶租戶或任何客戶識別碼；指標也只回報計數。否則稽核日誌庫本身會變成客戶識別資料的外洩點。代價是事件處理時查不回租戶：tenant-api 撤銷時會把該 token 的簽發紀錄從 `store.json` 移除，只留下 `token_id` 與到期時間，所以撤銷之後無法再以 `token_id` 從 store 查出它屬於哪個租戶。
 
-**攻擊者視角（外審 escalate）**：當 #924/#926 封住「改 store」與「偽造撤銷」，攻擊者的下一步是 **DoS 防禦本身**——弄壞 gateway 對 `revoked.txt` 的讀取（刪/卸載 projected-volume key、打滿相關資源、讓 Lua 逾時），fail-open 的後果依破壞方式而定：刪／卸載 key 讓撤銷集變空，放行**所有**本該撤銷的 token，最長 4h；讀取中途失敗則凍結在上次成功載入的 set，之後發出的撤銷不生效，而首次載入就失敗的 worker 同樣沒有任何撤銷可執行。
+### 範例
 
-**判定：顯式 Risk Acceptance + 便宜偵測，不趕工 fail-closed**：
-- 這是**刻意權衡**：撤銷檢查套用**全部** federation 流量，天真 fail-closed = 任何 ConfigMap sync 抖動 / 新 pod 首載前 / volume remount 都造成**整個 federation 斷線**（自我 DoS）。同一支 Lua 對「跨租戶外洩」（VictoriaLogs mode 的 account_id）是 fail-**closed** ——證明 fail-open 是針對「撤銷 staleness ≤ 4h 可接受」的**局部、經思考**的選擇，非疏漏。
-- 本 ADR 把它從 code inline 註解**升為具名 Risk Acceptance**，並加**便宜偵測**：gateway 讀撤銷清單失敗 / 檔案 missing 時發 metric → 告警（fail-open 被觸發＝可見事件，零可用性風險，吻合本 ADR 的 detective thesis）。
-  - ⚠️ **勘誤（#1236 / TRK-350）**：上面這句自 MVP 起就寫著「**/ 檔案 missing**」，但實作只涵蓋了「讀取失敗」那一半。missing 分支在 Lua 的 pcall 內**正常 return**，於是 `ok` 為 true、兩個 `logWarn` 都不執行——而它是三條路徑中**唯一會清空執行面**的那條（另兩條保留前一份 set、仍在擋）。也就是說：本節點名的攻擊「刪／卸載 projected key」，其補償控制在出貨版本裡對它結構上無聲。#1236 補上第三句警告與 `federation_gateway_revoked_set_missing` gauge，告警 `FederationGatewayRevokedSetMissing`（`> 0 for 5m`, **critical**——它與另外三條 gateway 告警的差別是「正在放行」而非「凍結在舊集合」）。
-- 真正的 fail-closed 降級（區分 missing vs empty、定義降級範圍、測抖動邊界）是它自己的 mini-design → **另立 issue，defer-with-trigger**。
+reconciler 的比對邏輯是純函式，可以直接餵輸入。設現在是 `2026-11-21T10:00:00Z`，日誌裡有三筆撤銷事件，現存撤銷集只有 `ftk_a1`：
 
-## Defer-with-trigger（Future Work）
+```text
+日誌事件：
+  ftk_a1  expires_at 2026-11-21T12:00:00Z
+  ftk_b2  expires_at 2026-11-21T13:30:00Z
+  ftk_c3  expires_at 2026-11-21T10:01:00Z
+revoked.txt：
+  ftk_a1
+```
 
-| 項目 | Reopen trigger |
+輸出：
+
+```text
+checked 2 suspected ['ftk_b2'] tamper_suspected 1
+```
+
+`ftk_b2` 還有 3.5 小時才到期卻不在撤銷集，判為疑似撤回。`ftk_c3` 離到期不到 120 秒，視為正常的過期清理，不比對。
+
+讀取契約的效果：`revoked.txt` 內容為 `ftk_a1\nFTK_B2\nftk_c3\r\n` 時，reconciler 讀出 `{ftk_a1, ftk_c3}`，被拒 1 行（大寫不合 pattern；行尾的 CR 被容忍）。同一份檔案，gateway 會整輪作廢、沿用前一份撤銷集。
+
+## 相鄰破口：gateway fail-open 的風險接受
+
+gateway 讀 `revoked.txt` 失敗時不回 500，依失敗方式有三種結果，各發一句不同的警告：
+
+| 情況 | gateway 的撤銷集 | 指標 → 告警 |
+|---|---|---|
+| 讀取中途出錯 | 沿用前一份，仍在擋 | `federation_gateway_revocation_load_errors` → `FederationGatewayRevocationLoadFailure`（warning） |
+| 內容違反契約 | 沿用前一份，仍在擋 | `federation_gateway_revoked_set_reload_rejected` → `FederationGatewayRevokedSetReloadRejected`（critical） |
+| 檔案不存在 | **變成空集合，所有已撤銷的 token 都放行到到期** | `federation_gateway_revoked_set_missing` → `FederationGatewayRevokedSetMissing`（critical） |
+
+三句警告的文字互不為子字串，reconciler 才能分開計數。把其中兩種讀成同一個訊號，事件處理會對「現在有沒有在放行」得出相反結論。首次載入就失敗的 worker 沒有前一份可沿用，什麼都不擋。
+
+攻擊者封不住儲存、也偽造不了撤銷時，下一步會是弄壞防線本身：刪掉或卸載 volume 裡的 `revoked.txt`，讓 gateway 放行所有已撤銷的 token，最長到 token 效期結束（4 小時）。
+
+**判定：接受這個風險，配偵測，不趕做 fail-closed。** 撤銷檢查套用在全部聯邦流量上，天真的 fail-closed 會讓任何 ConfigMap 同步抖動、新 pod 首次載入前、volume 重新掛載都變成整個聯邦斷線。同一支 Lua 對另一件事是 fail-closed 的：VictoriaLogs 模式下 token 缺少合法的租戶帳號 claim 就拒絕，因為那裡的失敗後果是跨租戶外洩。可見這裡的 fail-open 是針對「撤銷最多晚 4 小時生效可以接受」的局部選擇。
+
+真正的 fail-closed 降級（區分「不存在」與「空」、界定降級範圍、測抖動邊界）是另一份設計，追蹤於 [#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)。
+
+## 後果與已知限制
+
+- **變容易**：un-revoke 從完全無聲變成通常幾分鐘內可偵測；撤銷有了獨立於寫入者的稽核紀錄。
+- **新增的運維面**：多一支要顧存活的 reconciler；VictoriaLogs 的保留期要大於 token 效期加事件處理所需的時間（4 小時 + 約 72 小時，預設保留 30 天足夠）。
+- **tenant-api 的日誌等級必須是 Info 或更詳細。** 撤銷事件是 Info 等級，`TA_LOG_LEVEL` 設成 warn 或 error 會把它濾掉，偵測就失效。
+- **偵測錨點的強度，取決於攻擊者的 ConfigMap 寫入權不延伸到日誌庫。** 對 tenant-api 範圍的入侵成立；整個叢集或 VictoriaLogs 本身被入侵時就打穿。
+- **日誌庫的寫入權只給 Vector。** VictoriaLogs 前方的 vmauth（VictoriaMetrics 家族的認證代理）依「消費端 × 路徑」授權：只有 Vector 能寫入（`/insert`），reconciler、gateway、Grafana、chargeback 只能查詢（`/select`），沒帶帳密的請求只能存取健康檢查與指標（victorialogs chart 預設 `auth.mode: enforce`，見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §1.2）。剩下的偽造路徑都經過 Vector：在受採集的 namespace 建 pod，或寫入節點上 Vector 讀的容器日誌檔。
+- **寫入與日誌之間的縫隙。** 撤銷寫進 ConfigMap 之後才寫日誌；若 pod 剛好在兩者之間被強制終止，這筆撤銷生效但沒有日誌，之後針對它的 un-revoke 抓不到。要封住得用 outbox 模式（先寫一份待送清單，另一個程序負責送出），對 4 小時效期的撤銷是過度設計。接受此風險：需要「剛好在縫隙崩潰」且「攻擊者剛好針對那個 token」兩件事同時發生。
+- **大量撤銷事件可能讓 reconciler 記憶體不足。** 每輪把 24 小時窗的事件整包讀進記憶體。大量撤銷會讓 pod 因記憶體不足被終止，結果是 `ReconcileStale` 觸發，被打瞎會立即告警，不會靜默。
+- **事件格式漂移會靜默縮小覆蓋。** 帶撤銷事件標記但缺欄位或時間無法解析的列會被丟掉，數量記在 `federation_revocation_events_dropped`。全部列都解析不了時，對帳結果是零事件、看似健康；目前沒有對應的告警，只有這個指標。
+- **閒置的 gateway worker 不會重讀。** 重讀掛在請求上，收不到流量的 worker 既不更新撤銷集，也不產生任何警告。
+- **兩端讀的是同一份 ConfigMap 的不同 volume、時間點也不同。** 所以「reconciler 這邊乾淨」不等於「gateway 載入了」；兩個拒絕指標縮小這個落差，但不消除它。
+- **目前 chart 釘的映像跑不了 reconciler。** `helm/federation-reconciler` 釘 `da-tools:v2.9.0`，而那個映像不含 `_federation_revocation_reconciler.py`；部署後 `ReconcileStale` 會觸發，直到下一個 `tools/v*` 版本更新釘版。`check_image_pin_capability.py` 列管這個例外，釘版一變就要求移除。
+
+## 考慮過的替代方案
+
+| 做法 | 防得住有寫入權的蓄意撤回嗎 | 代價 | 判定 |
+|---|---|---|---|
+| **叢集外日誌對帳（本 ADR）** | 能偵測（tenant-api 範圍內） | 一支 reconciler、一條證據通道 | 採用 |
+| 在同一份 ConfigMap 放雜湊鏈或 `.sha256` | 不能：有寫入權就能重算 | 低 | 只能抓意外損毀或忘了同步的手改，未實作；需要時當輔助，不當主要防線 |
+| Merkle 樹或透明度日誌服務（例如 Rekor、Trillian） | 能，且密碼學上不可否認 | 高：整套日誌服務 | 延後 |
+| 帶金鑰、具前向安全的訊息驗證碼（MAC；金鑰會定期演進，舊金鑰洩漏也偽造不了新紀錄，例如 RFC 5848 的做法） | 能，連日誌庫被改也防得住 | 中高：金鑰管理 | 延後 |
+| reconciler 改用 CronJob | — | 平台沒有 Pushgateway 這類收短命程序指標的元件，CronJob 的結果無法被 Prometheus 抓取 | 不採用，改為常駐 Deployment 並暴露 `/metrics` |
+| reconciler 經 Kubernetes API 讀撤銷集 | — | 需要 ServiceAccount token、RBAC 與通往 API server 的網路 | 不採用，改為掛載 `revoked.txt`，reconciler 因此不需要任何 Kubernetes 權限 |
+| reconciler 經 tenant-api 的 API 讀撤銷集 | — | 被入侵的 tenant-api 可以回假資料騙過偵測 | 不採用 |
+
+## 待觸發才做的項目
+
+| 項目 | 觸發條件 |
 |---|---|
-| Merkle / 透明度 log（Rekor/Trillian，選項 C） | 客戶 RFP 要密碼學不可否認證明；或 token TTL 被調高到遠超 4h（撤銷窗變長） |
-| keyed / forward-secure MAC（選項 D） | 威脅模型擴到「攻擊者也能改 VictoriaLogs」（＝全叢集 compromise 進 scope） |
-| 真·off-cluster WORM / SIEM（[#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) X-2 / 把 #926 audit ship 外部） | PCI/SOC 要求叢集外不可變留存 |
-| gateway fail-closed 降級模式 | 獨立 issue（本 ADR 相鄰破口節）；trigger = 非 HA 單實例 / 高合規客戶要求撤銷讀取失敗即阻斷 |
-| reconciler streaming／逐行 parse 或調高記憶體 | 大 payload 令 reconciler 實務中反覆 OOM→Stale（噪音），或正常撤銷量逼近 24h 窗記憶體容量 |
-| reconciler 事件解析錯誤（schema drift）專屬告警 | `federation_revocation_events_dropped` 在實務中觀察到持續 > 0（tenant-api 事件 schema 變更） |
+| Merkle 樹或透明度日誌 | 客戶要求密碼學上不可否認的證明；或 token 效期調到遠超 4 小時 |
+| 帶金鑰的訊息驗證碼 | 威脅模型擴大到「攻擊者也能改 VictoriaLogs」 |
+| 叢集外不可變留存（寫入後不可改的儲存，或外部的安全事件分析平台） | PCI、SOC 等稽核要求叢集外不可變留存 |
+| gateway fail-closed 降級（[#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)） | 沒有多副本備援的單實例部署，或高合規客戶要求讀不到撤銷清單就阻斷 |
+| 事件驅動的偵測（[#1322](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1322)） | 出現一次真實的 un-revoke；token 效期大幅下修；平台開始收集 API server 稽核日誌；或相關 namespace 引入 admission control |
+| reconciler 逐行解析或調高記憶體 | reconciler 實務上反覆因記憶體不足重啟，或正常撤銷量逼近 24 小時窗的記憶體上限 |
+| 事件格式漂移的專屬告警 | `federation_revocation_events_dropped` 在實務上持續大於 0 |
+| ConfigMap 內的撤銷集校驗碼（只當輔助，抓意外損毀或忘了同步的手改） | 延後，未設觸發條件 |
 
-## Consequences
+## 與其他決策的關係
 
-- **變容易**：un-revoke 從「無聲」變「分鐘內可偵測」；撤銷有了獨立於寫者的稽核跡；與 #926 合體覆蓋「誰寫×寫什麼」。
-- **變難 / 新增運維面**：多一支 reconciler Deployment（要顧它的 liveness）；VictoriaLogs 需保留期 ≥ token TTL + IR 窗（4h + ~72h « 預設 30d，確認即可）。
-- **要回訪**：defer 的密碼學層 / fail-closed 由上表 trigger 帶回，不主動預建。
-- **日誌庫的寫入權只給 Vector，偽造門檻因此落在 Vector 的輸入面**：VictoriaLogs 前方的 vmauth 依「消費端 × 路徑」授權——只有 Vector 能寫入（`/insert`），reconciler、gateway、Grafana、chargeback 只能查詢（`/select`），沒帶帳密的請求只剩健康檢查與指標（victorialogs chart 預設強制，見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §1.2）。所以「能在日誌庫所在 namespace 建 pod」**不再**足以寫入任意 `log_type`。剩下的偽造路徑都經過 Vector：能在受採集的 producer namespace（evidence 是 tenant-api 所在的 namespace）建 pod，或能寫入節點上 Vector 讀取的容器 log 檔。這是門檻提升，不是來源身分驗證；根治仍需 producer 端簽章（本 ADR 保留的 `audit_signature` seam）。
+- [ADR-023](023-write-plane-single-writer-invariant.md)（單一寫入者）：撤銷寫入在單一副本上序列化，事件天然有序。reconciler 只讀，不碰寫入面。
+- [ADR-020](020-tenant-federation.md)（聯邦儲存）：ConfigMap 仍是唯一狀態；只能追加的完整紀錄放在儲存之外，避開 ConfigMap 大小上限與過期清理的衝突。
 
-## Action Items（MVP 實作）
+## 實作位置
 
-> **實作落地 + impl-time refinements**：MVP 分兩段交付——**producer（[#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)）** + **reconciler + 告警（本 PR）**。三處偏離原設計，皆有依據：
-> - **reconciler 改長駐 Deployment + `/metrics`（非 CronJob）**：平台無 Pushgateway／textfile-collector／vmalert（親驗），短命 CronJob 無法被 scrape；exporter + `up` liveness 才 Prometheus-native。實作為 da-tools image 內的 `_federation_revocation_reconciler.py`（`_`-prefix、`BUILD_EXEMPT`＝baked 但非 dispatched CLI），Deployment 直接 invoke——仍 reuse da-tools、不新增 release 線。
-> - **live 集改「mount `revoked.txt`」直讀（非 API + RBAC）**：kubelet projection＝真·直讀，**免 RBAC**、比 API-read 更難被 compromise 的 tenant-api 欺騙（G3 更純）。
-> - **fail-open counter 由 reconciler 從 VictoriaLogs 查發（非 audit-metrics sidecar）**：gateway 讀取失敗 warn 去 Envoy stderr，audit-metrics sidecar（原 mtail）只 tail audit access-log 檔、看不到。
+| 部分 | 位置 |
+|---|---|
+| 撤銷寫入、事件、`token_id` 檢查、載入時計數 | `components/tenant-api/internal/federation/token/configmap_store.go`、`manager.go` |
+| 心跳 | `components/tenant-api/internal/federation/token/heartbeat.go` |
+| gateway 重讀與三種警告 | `helm/federation-gateway/files/revoked_check.lua` |
+| reconciler | `scripts/tools/ops/_federation_revocation_reconciler.py`、`helm/federation-reconciler/` |
+| 證據通道 | `helm/vector/values.yaml`（`evidenceChannel`）、`helm/vector/templates/configmap.yaml` |
+| 告警 | `rule-packs/rule-pack-platform.yaml` |
+| 讀取契約測試 | `tests/ops/test_revoked_set_contract.py` |
+| 事件處理手冊 | [`federation-revocation-reconciler-runbook.md`](../internal/federation-revocation-reconciler-runbook.md) |
 
-1. [x] producer（[#997](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/997)）：`revoke()` 在**新增撤銷**時發 `federation_token_revoked`（opaque `token_id` + `expires_at`、**無租戶**、mutate() commit 後才發、idempotent 不重發、per-instance logger seam）。⚠️ **約束**：tenant-api 須跑 **log level ≤ Info**（事件 Info 級，Warn+ 會靜默過濾掉、令 tamper-evidence 失效）。
-2. [x] reconciler（見上 refinements）：pure `reconcile()` + **fail-closed**（查詢／讀取失敗增 error counter、**不刷 `last_reconcile_ts`**、絕不誤報 all-clear）+ clock-skew margin + settled 窗 + `events_dropped` gauge（有標記卻解不出的 row 計數＝schema-drift 可見性，本 PR 對抗式 review 補）；`helm/federation-reconciler`（Deployment + SA〔免 RBAC／token〕 + NetworkPolicy〔egress VictoriaLogs〕 + CM-mount + scrape）。
-3. [x] 3 告警（`FederationRevocationTamperSuspected` crit／`…ReconcileStale` crit〔staleness `time()-ts>30m` **or** `absent()`〕／`FederationGatewayRevocationLoadFailure` warn）+ promtool 契約測試（7 案）。
-4. [x] fail-open 偵測：reconciler 暴露 `federation_gateway_revocation_load_errors` **gauge**（近 ~10m 窗、非 24h），告警 `> 0 for: 2m`。⚠️ 只涵蓋「讀取失敗」；「檔案 missing」那一半見下一項。
-4b. [x] **檔案 missing 偵測（#1236 / TRK-350）**：gateway 的 missing 分支發第三句與另兩句**互不為子字串**的警告，reconciler 以同窗查詢暴露 `federation_gateway_revoked_set_missing` gauge，告警 `> 0 for: 5m` **critical**。之所以是獨立 gauge 而非併入上一項：那一項的兩條路徑都保留前一份撤銷集（stale but enforcing），missing 則是執行面**空集合**（nothing enforced），合併會讓 IR 對「現在有沒有在放行」讀出相反結論。
-5. [ ] （D2 輔助）in-CM revoked-set digest——**defer**（明標非主控，小 follow-up）。
-6. [x] runbook：[`federation-revocation-reconciler-runbook.md`](../internal/federation-revocation-reconciler-runbook.md)。
-7. [x] 相鄰 fail-open issue 已開：[#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)（fail-closed 降級，defer-with-trigger）。
-8. [x] **證據通道接通 + liveness canary（[#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234) / TRK-348）**——修 §D3 那條前提錯誤。兩半：(a) **通道**：`helm/vector` source selector 改集合式涵蓋 tenant-api，並在 `demux` **之前**插 `origin_split` 分流到專屬 `federation_evidence` transform（PII row-allowlist ＋ field keep-list 重建），rows 只進 0:0 平台 store、**結構上**到不了任何租戶分區；VictoriaLogs netpol 補 `federation-reconciler`。(b) **canary**：tenant-api 每 5m 發 `federation_revocation_channel_heartbeat`（無租戶識別碼、走同一 transform/sink），reconciler 新增 `federation_revocation_channel_up` / `federation_revocation_heartbeats_seen` 兩個 gauge（心跳查詢在**既有 fail-closed try 內**——VictoriaLogs 短暫不可用須保留前值，不得偽報通道死亡），第 4 條告警 `FederationRevocationEvidenceChannelDown`（critical，`== 0 for 15m` ≈ 3 個心跳週期，**不加** `or absent()`——該成因已由 `ReconcileStale` 的 `absent()` 涵蓋）。⛔ **刻意不做**：`vector_component_discarded_events_total{component_id="federation_evidence"}` 的 rate-based tripwire——該通道設計上就近乎 100% 丟棄，任何 floor 量到的是 tenant-api 請求量而非 allowlist 失配（詳述與 dynamic-threshold 也不可行的理由見 platform-log-aggregation-runbook §8.7）；canary 才是對的偵測器。
+## 相關
+
+- [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)：本決策的原始議題
+- [ADR-020](020-tenant-federation.md)、[ADR-023](023-write-plane-single-writer-invariant.md)

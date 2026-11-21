@@ -8,7 +8,7 @@ lang: zh
 
 # Planning ID Mapping — Legacy → TRK Redirect
 
-> **本文件用途**：[ADR-019](../adr/019-planning-ssot.md) 採 **Option C refined hybrid**——把舊的 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 四個 namespace 統一為單一 `TRK-NNN`。本文是 **redirect 表**：當你在 commit / PR / 文件 / external citation 看到舊 ID，到這裡查對應的現代 `TRK-NNN`。
+> **本文件用途**：[ADR-019](../adr/019-planning-ssot.md) 把舊的 `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NNN` 四個 namespace 統一為單一 `TRK-NNN`。本文是 **redirect 表**：當你在 commit / PR / 文件 / external citation 看到舊 ID，到這裡查對應的現代 `TRK-NNN`。
 >
 > **這不是 backlog**，只是 ID 翻譯表。Backlog 本體（current status / pr_ref / owner）放在各自 source frontmatter，最終透過 `scripts/dx/generate_planning_index.py`（issue [#379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) chunk 2a）匯出 `planning-index.md`。
 
@@ -133,7 +133,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 > 此區段**不是 redirect**（無舊 ID 來源），而是 v2.8.1+ 直接以 `TRK-NNN` 新登錄的 tracking entry 索引。backlog 本體（status / owner / pr_ref）在各 issue body + frontmatter；本表給 `TRK ↔ GitHub issue` 快查。
 >
-> ⛔ **本表凍結在 TRK-392，不再新增列。** 新條目一律 `TRK-<issue 號>`（issue #2150 → `TRK-2150`），號碼本身就指向 issue，不需要登記，也不會撞號（[ADR-019](../adr/019-planning-ssot.md) §TD-NN / HA-NN / REG-NN → TRK-NNN 遷移）。**不要**再看本表取「下一號」，也不要再加列：表上沒有的三位數新號、以及凍結時表上沒有的任何列（含補 legacy 區段的洞），都會被 `check_trk_index_coverage.py` 擋下。
+> ⛔ **本表凍結在 TRK-392，不再新增列。** 新條目一律 `TRK-<issue 號>`（issue #2150 → `TRK-2150`），號碼本身就指向 issue，不需要登記，也不會撞號（[ADR-019](../adr/019-planning-ssot.md) §編號政策）。**不要**再看本表取「下一號」，也不要再加列：表上沒有的三位數新號、以及凍結時表上沒有的任何列（含補 legacy 區段的洞），都會被 `check_trk_index_coverage.py` 擋下。
 
 | TRK | Issue | 主題 | Epic |
 |---|---|---|---|
@@ -249,7 +249,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 | 工具 | 狀態 |
 |---|---|
-| ~~`scripts/tools/lint/check_techdebt_drift.py`~~ | **已移除** — `known-regressions.md` 撤除後成 phantom no-op；繼任者 `check_planning_status_sync.py`（chunk 2b，ADR-019 Layer 3）已上線 |
+| ~~`scripts/tools/lint/check_techdebt_drift.py`~~ | **已移除** — `known-regressions.md` 撤除後成 phantom no-op；繼任者 `check_planning_status_sync.py`（ADR-019 §第三層）已上線 |
 | `scripts/dx/generate_planning_index.py` | chunk 2a 新增，掃 frontmatter 產 `planning-index.md` |
 | Pre-commit hooks | 暫不擋舊 ID（過渡期）；chunk 5 收編後正式 deprecate |
 

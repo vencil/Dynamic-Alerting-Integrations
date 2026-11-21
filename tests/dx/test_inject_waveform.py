@@ -1,4 +1,4 @@
-"""test_inject_waveform.py — waveform 注入執行器（ADR-030 PR-2）測試。
+"""test_inject_waveform.py — waveform 注入執行器（ADR-030）測試。
 
 單元（免 VM）：CLI 契約 / 0-1-2 exit-code 語義 / 純函式
 （rules 解析、ts 平移、window slot、紀錄組裝、identity 歸因、resolve 計算、
@@ -8,7 +8,7 @@ e2e（需 VM + vmalert）：skip-if-no-VM + ``WAVEFORM_INJECT_REQUIRE=1`` 旋鈕
 （語義照抄 #968 ``VM_REPLAY_REQUIRE``：REQUIRE 時缺依賴 = FAIL 非 skip，
 防 CI/守門永遠 skip-to-green）。CI 的 Python Tests job 無 VM → e2e 乾淨 auto-skip。
 
-poison teeth（D8.4 自證）：
+poison teeth（ADR-030 §8 第 4 道 自證）：
   (1) 藏 vmalert binary（--vmalert 指向不存在路徑）→ exit 2 非綠（免 VM）；
   (2) 必不 fire 的候選規則 → fired:false + exit 0（「沒接住」是資料、非錯誤）；
   (3) should-fire seed 配對應規則 → fired:true + offset 合理 + 跨 run 決定性；
@@ -203,7 +203,7 @@ def test_sentinel_masquerade_via_alertname_label_exits_two(tmp_path):
 
 
 # ── poison (1)：藏 vmalert binary → exit 2 非綠（免 VM——binary 檢查在
-#    任何 VM 接觸之前，D8.4 fail-loud） ─────────────────────────────────
+#    任何 VM 接觸之前，ADR-030 §8 第 4 道 fail-loud） ─────────────────────────────────
 
 def test_missing_vmalert_binary_exits_two(tmp_path):
     r = _run(str(_DISK), "--rules", str(_RULES), "--allow-selftest",

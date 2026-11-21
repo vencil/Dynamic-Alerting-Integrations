@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ── ADR-028 D1 evidence-channel liveness canary (#1234) ───────────────────────
+// ── ADR-028 §證據通道 evidence-channel liveness canary (#1234) ───────────────────────
 //
 // WHY THIS EXISTS. ADR-028's un-revoke detection rests on a chain the reconciler
 // cannot see the far end of: tenant-api logs `federation_token_revoked` → Vector
@@ -88,7 +88,7 @@ func (h *Heartbeater) log() *slog.Logger {
 //     `time`, and Vector's own event timestamp is what the sink uses as
 //     `_time`. A second, hand-rolled one would be a third clock to keep
 //     consistent.
-//   - NO tenant identifier, and nothing tenant-derived (ADR-028 §D3 PII
+//   - NO tenant identifier, and nothing tenant-derived (ADR-028 §事件不帶租戶識別碼 PII
 //     minimisation): this event lands in a 30-day audit store, so the canary
 //     must not be the thing that turns that store into a customer-identifier
 //     store. heartbeat_test.go pins the absence.

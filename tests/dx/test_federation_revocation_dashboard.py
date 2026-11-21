@@ -1,7 +1,7 @@
 """promtool regression goldens for the Federation Revocation Reconciler dashboard (#1002).
 
 The dashboard (`k8s/03-monitoring/federation-revocation-dashboard.json`) is the
-operational field view for the ADR-028 D1 un-revoke tamper-evidence control (#924).
+operational field view for the ADR-028 §偵測主體 un-revoke tamper-evidence control (#924).
 It consumes the ten platform-global reconciler metrics emitted by
 `_federation_revocation_reconciler.py` (six from #924, the #1234 evidence-channel
 canary pair `channel_up` / `heartbeats_seen`, and the #1235 enforcement-plane
@@ -320,7 +320,7 @@ def test_dashboard_is_valid_grafana_shape():
 def test_metric_names_are_the_reconciler_contract():
     """Pin the exact source-metric names the reconciler emits — a rename on either
     side (_federation_revocation_reconciler.py or this dashboard) breaks the data
-    flow silently. These are the eleven ADR-028 D1 metrics (the #1236 missing-set gauge, six from #924, the #1234
+    flow silently. These are the eleven ADR-028 §偵測主體 metrics (the #1236 missing-set gauge, six from #924, the #1234
     evidence-channel canary pair, and the #1235 enforcement-plane staleness
     pair)."""
     import json

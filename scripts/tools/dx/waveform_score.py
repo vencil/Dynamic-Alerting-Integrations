@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""waveform_score.py — temporal-match + episode 對帳 + catch-rate 報告器（ADR-030 PR-3）
+"""waveform_score.py — temporal-match + episode 對帳 + catch-rate 報告器（ADR-030）
 
-吃 PR-2 ``inject_waveform.py`` 的 JSON 報告（1..N 份）+ 容差矩陣檔（D5 兩段式）→
+吃 ``inject_waveform.py`` 的 JSON 報告（1..N 份）+ 容差矩陣檔（ADR-030 §5 兩段式）→
 逐 injected case 做 temporal-match → episode×alert-class 對帳 → catch-rate +
-FN 清單 + indeterminate 清單 + fan-out ratio → verdict（D8.1）+ 結構化報告保存
+FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1 道）+ 結構化報告保存
 （R2-4 baseline；``schema_version`` 欄）。**不做**：通知送達／post-inhibition 層
-（D7 邊界）、divergence 自動歸因敘事、跨 run 趨勢比對（defer）。
+（ADR-030 §7 邊界）、divergence 自動歸因敘事、跨 run 趨勢比對（defer）。
 
 計分模型（設計稿 §2 逐條映射 ADR 條文，無新裁量）：
   * injected case（分母單位）= ``(signature, variant)`` × ``expects==must_detect``；
     probe / informational / companion 不入分母（只回報）。
-  * episode = 一 case 一 episode（合成場景，D7 A2）。
+  * episode = 一 case 一 episode（合成場景，ADR-030 §7）。
   * temporal hit = 該 case 至少一筆歸因 alert 的 ``fire_offset_s`` ∈
-    ``[fault_start, fault_end + tolerance]``；晚於天花板 = miss（D5：FN 不可被
+    ``[fault_start, fault_end + tolerance]``；晚於天花板 = miss（ADR-030 §5：FN 不可被
     放寬窗洗成「晚但接住」）。fault window 血緣 = inject 報告 metadata 的
     ``fault_window_s``（PR-1 合成期導出；absence 變體上界開放 → 以該報告窗長收尾）。
   * FN = must_detect case 無 temporal hit 且該報告 **有效** ``unattributed_alerts``
@@ -25,23 +25,23 @@ FN 清單 + indeterminate 清單 + fan-out ratio → verdict（D8.1）+ 結構�
     遮蔽**（未知雜音仍 INDETERMINATE、絕不重開 CRITICAL 防線）；drain 到剩空 →
     遮蔽解除 → no-hit case 正確變 FN（真 miss 浮現、絕不洗成 PASS）。全部 /
     被 drain / 剩下觸發遮蔽的三清單顯性列出（no-silent-caps）。
-  * verdict 三態（D8.1 + 契約修正 (b)）：**FAIL** = FN>0（exit 1；FN 優先於
+  * verdict 三態（ADR-030 §8 第 1 道 + 契約修正 (b)）：**FAIL** = FN>0（exit 1；FN 優先於
     indeterminate）；**INDETERMINATE** = FN==0 且 indeterminate>0（exit 1——
     歸因被聚合規則剝 label 遮蔽時不得偽裝 PASS；診斷逃生門＝驗證期把
     waveform_signature 加入該規則的 by() 子句〔修改後規則 ≠ 生產規則〕）；
     **PASS** = FN==0 且 indeterminate==0（exit 0）。
-  * carve-out（D1/OQ1）：容差檔 ``carve_outs``（鍵 = case 的 ``fault_class``——
+  * carve-out（ADR-030 §1）：容差檔 ``carve_outs``（鍵 = case 的 ``fault_class``——
     分母排除必須在開火前可決定的 case 側身分）→ 從分母排除 + 獨立列出（dual-
     control 人工審軌）。
   * fan-out ratio（D7/R3-1）= 每 episode 的 series-level 命中筆數；報告分位數
     （p50/p90/max）、只揭露不 gate、無魔術閾值。
-  * no-silent-caps 守恆（D8.4）：``scored 分母 + indeterminate + carve-out 排除
+  * no-silent-caps 守恆（ADR-030 §8 第 2 道）：``scored 分母 + indeterminate + carve-out 排除
     == 總 must_detect case 數`` 且 ``hits + FN == scored 分母``——違反 = 工具自身
     bug → exit 2；分母的每一次縮小都顯性計數。零分母分流：**carve-out 致零分母
     → exit 2**（設定面問題）；**indeterminate 致零分母 → verdict INDETERMINATE
     （exit 1）**（偵測面真相、非 operational error）。
 
-容差矩陣（D5 防 gerrymandering 機械化）：
+容差矩陣（ADR-030 §5 防 gerrymandering 機械化）：
   * ``defaults:`` severity→ceiling 天花板矩陣（pre-commitment；``default`` 鍵
     必填 = 無/未知 severity 的 fallback row）。
   * ``overrides:`` per alert-class 例外——``severity``（宣告天花板 row）+
@@ -56,7 +56,7 @@ FN 清單 + indeterminate 清單 + fan-out ratio → verdict（D8.1）+ 結構�
 
 Exit codes（與 waveform_compile / inject_waveform 的 0/1/2 契約對齊）:
   0  verdict PASS（FN == 0 且 indeterminate == 0）
-  1  verdict FAIL（任一 FN——D8.1 硬門檻）或 INDETERMINATE（FN==0 且
+  1  verdict FAIL（任一 FN——ADR-030 §8 第 1 道 硬門檻）或 INDETERMINATE（FN==0 且
      indeterminate>0——需人工覆核、不得偽裝 PASS；報告照常輸出）
   2  operational（報告/容差檔缺或壞、schema 違規、override>ceiling、報告版本
      不容〔缺 fault_window_s→用新版 inject 重產〕、對帳守恆違反=工具 bug）
@@ -65,7 +65,7 @@ Usage:
   python3 scripts/tools/dx/waveform_score.py report1.json [report2.json ...] \
       --tolerances tolerances.yaml [--json] [--out score.json]
 
-D8.2/D8.3 邊界（報告內建 disclaimer）：verdict 僅涵蓋 injected fault set，對未
+ADR-030 §8 第 2、3 道邊界（報告內建 disclaimer）：verdict 僅涵蓋 injected fault set，對未
 注入 long tail 零保證；永不宣稱等價；單獨不得作為「可切換」go-signal（須配
 passive soak）。fire-edge 入計分、resolve-edge 只揭露不計分（設計稿 §5）。
 """
@@ -102,13 +102,13 @@ SCHEMA_VERSION = 1              # score 報告格式版本（R2-4 結構化 base
 DEFAULT_SEVERITY_ROW = "default"
 
 SCOPE_DISCLAIMER = (
-    "verdict 僅涵蓋 injected fault set（D8.1）——對未注入 long tail 零保證；"
-    "永不宣稱等價（D8.2）；本報告單獨不得作為「可切換」go-signal，"
-    "須配 passive soak（D8.3 HARD-BLOCK）")
+    "verdict 僅涵蓋 injected fault set（ADR-030 §8 第 1 道）——對未注入 long tail 零保證；"
+    "永不宣稱等價（ADR-030 §8 第 2 道）；本報告單獨不得作為「可切換」go-signal，"
+    "須配 passive soak（ADR-030 §8 第 3 道 HARD-BLOCK）")
 NOT_COVERED = [
     "未注入的 long-tail 故障（D2 限制）",
-    "通知送達／post-inhibition 層（Alertmanager group_by/inhibit/silence，D7）",
-    "資料平面波形忠實度（DTW，遷移方自管，D7）",
+    "通知送達／post-inhibition 層（Alertmanager group_by/inhibit/silence，ADR-030 §7）",
+    "資料平面波形忠實度（DTW，遷移方自管，ADR-030 §7）",
     "resolve-edge 保真（只揭露 resolve_offset_s、不計分；action-plane 線）",
 ]
 
@@ -121,7 +121,7 @@ class ScoreToolBug(Exception):
     """對帳守恆違反 = scorer 自身 bug — exit 2（絕不靜默出報告）。"""
 
 
-# ── tolerances loading（D5 機械化） ──────────────────────────────────
+# ── tolerances loading（ADR-030 §5 機械化） ──────────────────────────────────
 
 def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
     """載入 + schema 驗證 + 語義檢查（override≤ceiling / severity row 存在 /
@@ -133,12 +133,12 @@ def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
             text = fh.read()
         # 重複 key 偵測走共用 strict loader（#2123；原本的 compose + 自寫遞迴
         # 併入 `_lib_io`）：`yaml.safe_load` 靜默取最後、偷塞的重複
-        # `critical:` 能悄悄抬高 D5 天花板（CodeRabbit #1045）。
+        # `critical:` 能悄悄抬高 ADR-030 §5 天花板（CodeRabbit #1045）。
         doc = strict_safe_load(text)
     except DuplicateKeyError as exc:
         raise ScoreInputError(
             f"容差矩陣檔讀取失敗 {path}: 重複 key {exc.key!r}（會靜默覆蓋、"
-            f"D5 天花板可被繞）第 {exc.problem_mark.line + 1} 行") from exc
+            f"ADR-030 §5 天花板可被繞）第 {exc.problem_mark.line + 1} 行") from exc
     except (OSError, yaml.YAMLError) as exc:
         raise ScoreInputError(f"容差矩陣檔讀取失敗 {path}: {exc}") from exc
     # 頂層形狀 code 層自驗（非 mapping YAML—`[]`/`42`/`null`—在寬鬆 --schema 下
@@ -173,7 +173,7 @@ def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
             if not str(o.get(fld) or "").strip():
                 raise ScoreInputError(
                     f"容差矩陣檔 {path}: override {o.get('alert_class')!r} 缺非空 "
-                    f"{fld}——審計軌跡必填（D5）；code 層強制、schema 只是縱深")
+                    f"{fld}——審計軌跡必填（ADR-030 §5）；code 層強制、schema 只是縱深")
         cls = o["alert_class"]
         if cls in overrides:
             raise ScoreInputError(
@@ -187,7 +187,7 @@ def load_tolerances(path: str, schema: dict, jsonschema_mod) -> dict:
         if o["tolerance_s"] > ceiling:
             raise ScoreInputError(
                 f"容差矩陣檔 {path}: override {cls!r} tolerance_s={o['tolerance_s']} "
-                f"超過 severity {o['severity']!r} 的天花板 {ceiling}——D5 防 "
+                f"超過 severity {o['severity']!r} 的天花板 {ceiling}——ADR-030 §5 防 "
                 f"gerrymandering 硬限制，FN 不得被放寬窗洗成「晚但接住」；"
                 f"要更寬的容差請走天花板矩陣重新協商（審計軌跡）")
         overrides[cls] = o
@@ -453,7 +453,7 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
           tolerances_path: str | None = None, schema_path: str | None = None) -> dict:
     """全量計分 → score 報告 dict（verdict 由 caller 讀 summary 判 exit）。
 
-    守恆（no-silent-caps，D8.4）：任何 case 不得靜默蒸發——違反丟 ScoreToolBug。"""
+    守恆（no-silent-caps，ADR-030 §8 第 2 道）：任何 case 不得靜默蒸發——違反丟 ScoreToolBug。"""
     cases: list[dict] = []
     carved: list[dict] = []
     seen_case_keys: set[tuple] = set()
@@ -553,7 +553,7 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
     if fns:
         verdict = "FAIL"                       # FN 優先於 indeterminate
         verdict_reason = (f"{len(fns)} 筆 must_detect case 漏接"
-                          f"（D8.1 FN=0 硬門檻）")
+                          f"（ADR-030 §8 第 1 道 FN=0 硬門檻）")
     elif indeterminate:
         verdict = "INDETERMINATE"
         verdict_reason = (
@@ -769,13 +769,13 @@ class _RedactAwareParser(argparse.ArgumentParser):
 def main() -> "int | Report":
     try_utf8_stdout()
     parser = _RedactAwareParser(
-        description="waveform catch-rate 計分器（ADR-030 PR-3）：inject JSON 報告 + "
+        description="waveform catch-rate 計分器（ADR-030）：inject JSON 報告 + "
                     "容差矩陣 → temporal-match → catch-rate + FN + verdict"
                     "（0=PASS / 1=FAIL / 2=operational）")
     parser.add_argument("reports", nargs="+",
                         help="inject_waveform.py 產出的 JSON 報告路徑（1..N 份）")
     parser.add_argument("--tolerances", required=True,
-                        help="容差矩陣 YAML（D5 兩段式：defaults 天花板 + overrides "
+                        help="容差矩陣 YAML（ADR-030 §5 兩段式：defaults 天花板 + overrides "
                              "+ carve_outs；schema: "
                              "docs/schemas/waveform-tolerances.schema.json）")
     parser.add_argument("--schema", default=_DEFAULT_SCHEMA,

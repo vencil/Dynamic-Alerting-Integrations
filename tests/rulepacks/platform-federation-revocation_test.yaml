@@ -1,5 +1,5 @@
 # promtool behavioural tests for the federation-revocation reconciler alerts
-# (ADR-028 D1 / #924). Contract:
+# (ADR-028 §偵測主體 / #924). Contract:
 #   1-2) TamperSuspected fires on a sustained suspected un-revoke (>0 for 5m),
 #        never at 0.
 #   3-5) ReconcileStale fires when the reconciler stops SUCCEEDING — last_reconcile
@@ -63,7 +63,7 @@ tests:
                 identity-based controls (#926 audit) cannot see. ACTION: query
                 VictoriaLogs for `event:"federation_token_revoked"` for the opaque
                 token_id(s) (resolve the tenant from the store's records at IR time,
-                ADR-028 D3), diff against the live store, and if malicious restore
+                ADR-028 §事件不帶租戶識別碼), diff against the live store, and if malicious restore
                 the revocation from git. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
@@ -486,7 +486,7 @@ tests:
                 identity-based controls (#926 audit) cannot see. ACTION: query
                 VictoriaLogs for `event:"federation_token_revoked"` for the opaque
                 token_id(s) (resolve the tenant from the store's records at IR time,
-                ADR-028 D3), diff against the live store, and if malicious restore
+                ADR-028 §事件不帶租戶識別碼), diff against the live store, and if malicious restore
                 the revocation from git. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
@@ -509,7 +509,7 @@ tests:
                 identity-based controls (#926 audit) cannot see. ACTION: query
                 VictoriaLogs for `event:"federation_token_revoked"` for the opaque
                 token_id(s) (resolve the tenant from the store's records at IR time,
-                ADR-028 D3), diff against the live store, and if malicious restore
+                ADR-028 §事件不帶租戶識別碼), diff against the live store, and if malicious restore
                 the revocation from git. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
@@ -696,7 +696,7 @@ tests:
                 identity-based controls (#926 audit) cannot see. ACTION: query
                 VictoriaLogs for `event:"federation_token_revoked"` for the opaque
                 token_id(s) (resolve the tenant from the store's records at IR time,
-                ADR-028 D3), diff against the live store, and if malicious restore
+                ADR-028 §事件不帶租戶識別碼), diff against the live store, and if malicious restore
                 the revocation from git. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"

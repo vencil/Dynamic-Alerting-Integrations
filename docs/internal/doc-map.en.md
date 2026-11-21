@@ -30,7 +30,7 @@ lang: en
 | `docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-016: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy |
 | `docs/adr/017-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: Multi-Level _defaults.yaml Inheritance and Dual-Hash Hot Reload |
 | `docs/adr/018-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: Profile-as-Directory-Default |
-| `docs/adr/019-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index |
+| `docs/adr/019-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-019: 計畫追蹤的單一來源 — 各條目自帶 frontmatter，索引自動產生 |
 | `docs/adr/020-tenant-federation.md` | Platform Engineers, contributors | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |
 | `docs/adr/021-tenant-log-query-federation.md` | Platform Engineers, contributors | ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled |
 | `docs/adr/022-dev-auth-bypass-four-layer-containment.md` | Platform Engineers, contributors | ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment |
@@ -39,9 +39,9 @@ lang: en
 | `docs/adr/025-alerting-plane-self-liveness.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-025: Alerting-Plane Self-Liveness — Detecting When the Alerting System Itself Dies |
 | `docs/adr/026-node-maintenance-liveness-suppression.md` | Platform Engineers, SREs | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 |
 | `docs/adr/027-tenant-api-caller-identity.md` (.en.md) | Platform Engineers, contributors | ADR-027: tenant-api establishes caller identity only inside its own pod; human identity is never relayed over the network |
-| `docs/adr/028-federation-revocation-tamper-evidence.md` | Platform Engineers, Security & Compliance, SREs | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 |
+| `docs/adr/028-federation-revocation-tamper-evidence.md` | Platform Engineers, Security & Compliance, SREs | ADR-028: 偵測聯邦 token 撤銷被偷偷撤回 — 以叢集外的日誌對帳為主 |
 | `docs/adr/029-custom-alert-cross-tenant-query-scoping.md` | Platform Engineers, Security & Compliance, SREs | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 |
-| `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |
+| `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 告警遷移驗證：注入人造故障，量新規則接住多少 |
 | `docs/adr/031-slo-burn-rate-recipe.md` | Platform Engineers, SREs, domain-experts | ADR-031: slo_burn_rate recipe — 宣告式 SLO 告警編譯 |
 | `docs/adr/032-paired-interleaved-bench-measurement.md` | Platform Engineers, contributors | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 |
 | `docs/adr/033-ops-execution-plane-interface.md` | Platform Engineers, SREs | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 |

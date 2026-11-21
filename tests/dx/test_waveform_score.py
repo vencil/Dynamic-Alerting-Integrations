@@ -1,4 +1,4 @@
-"""test_waveform_score.py — catch-rate 計分器（ADR-030 PR-3）測試。
+"""test_waveform_score.py — catch-rate 計分器（ADR-030）測試。
 
 單元（免 VM）：temporal-match 邊界三態（窗內／窗尾+tolerance 內／超天花板）、
 FN / indeterminate / carve-out 分類、override>ceiling fail-loud、守恆檢查、
@@ -121,7 +121,7 @@ def test_hit_within_tolerance_after_window_end():
 
 
 def test_miss_beyond_tolerance_ceiling_is_fn():
-    # 9871 > 窗尾+tolerance —— D5：晚於天花板 = miss，不得洗成「晚但接住」
+    # 9871 > 窗尾+tolerance —— ADR-030 §5：晚於天花板 = miss，不得洗成「晚但接住」
     out = _score_one(_record(alerts=[_alert(fire=9871)]), _meta())
     case = out["cases"][0]
     assert case["status"] == "fn"
@@ -388,7 +388,7 @@ def test_old_report_without_fault_window_exits_two(tmp_path):
 
 
 def test_cli_fn_exit1_report_still_emitted(tmp_path):
-    """verdict FAIL = exit 1（D8.1 violation 語義）且報告照常輸出、非 crash。"""
+    """verdict FAIL = exit 1（ADR-030 §8 第 1 道 violation 語義）且報告照常輸出、非 crash。"""
     p = _write_report(tmp_path, _report([_record(alerts=[])], [_meta()]))
     out_file = tmp_path / "score.json"
     r = _run_score(str(p), "--tolerances", str(_TOL), "--json",
@@ -450,7 +450,7 @@ def test_all_indeterminate_zero_denominator_is_indeterminate_exit1(tmp_path):
 
 
 def test_fn_takes_priority_over_indeterminate():
-    """FN 與 indeterminate 並存 → FAIL（FN 優先；D8.1 硬門檻不被遮蔽稀釋）。"""
+    """FN 與 indeterminate 並存 → FAIL（FN 優先；ADR-030 §8 第 1 道 硬門檻不被遮蔽稀釋）。"""
     rep_clean = _report([_record(sig=0, alerts=[])], [_meta(sig=0)])   # FN
     rep_shadow = _report([_record(sig=1, alerts=[])], [_meta(sig=1)],
                          unattributed=[{"alertname": "Agg", "labels": {}}])
@@ -532,7 +532,7 @@ def test_carve_out_missing_approved_by_fails_loud(tmp_path):
 
 def test_duplicate_defaults_key_rejected(tmp_path):
     """CR-1(a)：defaults 重複 severity key 被 yaml.safe_load 靜默取最後、可悄悄
-    抬高 D5 天花板 → strict loader 拒重複 key（exit 2）。"""
+    抬高 ADR-030 §5 天花板 → strict loader 拒重複 key（exit 2）。"""
     p = tmp_path / "dup.yaml"
     p.write_text("defaults:\n  default: 300\n  critical: 300\n  critical: 999\n",
                  encoding="utf-8")
@@ -840,7 +840,7 @@ def test_e2e_inject_then_score_pass(tmp_path):
 @_needs_vm
 def test_e2e_late_fire_tolerance_ceiling_bites(tmp_path):
     """poison：同一份 inject 報告、兩套容差——寬容差=晚但接住（hit）、
-    tolerance 0 = FN（釘「天花板真的咬」、D5 不可洗綠）。"""
+    tolerance 0 = FN（釘「天花板真的咬」、ADR-030 §5 不可洗綠）。"""
     _require_deps_or_fail()
     late_rules = tmp_path / "late.rules.yaml"
     late_rules.write_text(

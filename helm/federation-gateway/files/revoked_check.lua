@@ -167,7 +167,7 @@ local function reload_revoked(handle, now)
     -- An IR that reads any two of them as the same signal draws the opposite
     -- conclusion about the current posture. The reconciler asserts all three
     -- literals are pairwise non-substrings, in both directions.
-    -- The offending line is NOT logged (ADR-028 D3 + the private advisory).
+    -- The offending line is NOT logged (ADR-028 §事件不帶租戶識別碼 + the private advisory).
     handle:logWarn(
       "federation: revoked-set rejected: line does not match the token-id contract; " ..
       "keeping the previously loaded set")
