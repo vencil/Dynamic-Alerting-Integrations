@@ -75,7 +75,7 @@ rule {
 # caught). No explicit `^...$` needed.
 rule {
   match {
-    name = "(.+ExporterAbsent|VersionAwareThresholdInert)"
+    name = ".+ExporterAbsent"
   }
   disable = ["alerts/template"]
 }

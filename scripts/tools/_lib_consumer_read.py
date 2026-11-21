@@ -804,29 +804,53 @@ def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None)
     return docs[0]
 
 
+#: ⛔ THE labels whose whole value IS another label's (#4098: one table for
+#: every reader of label flow — the maintenance-clause check and the
+#: custom-rule lint's preserved_labels). Prometheus writes `tenant` from the
+#: namespace (k8s/03-monitoring/configmap-prometheus.yaml, `target_label:
+#: tenant` from `__meta_kubernetes_namespace`), so a `label_replace` copying
+#: `namespace` into `tenant` whole keeps the tenant. A copy from any other
+#: label proves nothing.
+LABEL_ALIASES: "dict[str, tuple[str, ...]]" = {"tenant": ("namespace",)}
+
+
+def _is_label_flow(entry) -> bool:
+    """*entry* has the shape of one ``promql-label-flow`` answer."""
+    verdicts = ("kept", "dropped", "unknown")
+    return (isinstance(entry, dict) and entry.get("result") in verdicts
+            and isinstance(entry.get("set_matches"), list)
+            and all(isinstance(h, dict) and h.get("lhs") in verdicts
+                    and h.get("op") in ("and", "unless")
+                    and all(isinstance(h.get(k), int) for k in ("start", "end"))
+                    for h in entry["set_matches"]))
+
+
 def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None,
-                      aliases: "list[str] | tuple[str, ...]" = (),
-                      binary: str | None = None) -> "list[list[dict]]":
-    """Per expression of *exprs*, every ``and`` / ``unless`` that matches
-    ``on(… label …)`` and whether its left side keeps *label*, read on
-    Prometheus' parse tree (``da-read promql-label-flow``, #3678). *records*
-    ({name: [expr, …]}, the recording rules of the same files) are followed
-    where a selector names one ({name: [{"expr": str, "labels": {…}}, …]}:
-    a rule's own ``labels:`` set or, with "", remove the label). *aliases*
-    are the labels a ``label_replace`` may copy into *label* whole. Each hit is
-    ``{"op": "and"|"unless", "start": int, "end": int, "lhs":
-    "kept"|"dropped"|"unknown"}`` (byte offsets into the UTF-8 encoding)."""
+                      binary: str | None = None) -> "list[dict]":
+    """Per expression of *exprs*, whether the series it yields keep *label*,
+    and every ``and`` / ``unless`` that matches ``on(… label …)`` with whether
+    its left side keeps it — read on Prometheus' parse tree (``da-read
+    promql-label-flow``, #3678, #4098). *records* ({name: [{"expr": str,
+    "labels": {…}}, …]}, the recording rules of the same files) are followed
+    where a selector names one (a rule's own ``labels:`` set or, with "",
+    remove the label); a recording rule named but not given is ``unknown``.
+    The labels a ``label_replace`` may copy into *label* whole are
+    ``LABEL_ALIASES``'. Each entry is ``{"result": V, "set_matches": [{"op":
+    "and"|"unless", "start": int, "end": int, "lhs": V}, …]}``, V one of
+    ``"kept"`` / ``"dropped"`` / ``"unknown"`` (byte offsets into the UTF-8
+    encoding). ⛔ The series a raw metric's selector reads are TAKEN to carry
+    *label*: whether the metric has it is the scrape's business."""
     resolved = da_read_binary(binary)
     data = json.dumps({"expressions": list(exprs), "records": dict(records or {}),
-                       "aliases": list(aliases)}).encode("utf-8")
+                       "aliases": list(LABEL_ALIASES.get(label, ()))}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-label-flow", label, "-"], data)
     docs = out["documents"]
     if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
-            or not all(isinstance(h, list) for h in docs[0])):
+            or not all(_is_label_flow(e) for e in docs[0])):
         _fault(DA_READ_BINARY_NAME, ["promql-label-flow"], "stale")
         raise ConsumerReadError(
-            f"{DA_READ_BINARY_NAME} printed JSON without one list per expression "
+            f"{DA_READ_BINARY_NAME} printed JSON without one verdict per expression "
             "(an older da-read? rebuild it)")
     return docs[0]
 

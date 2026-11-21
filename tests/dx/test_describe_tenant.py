@@ -1512,7 +1512,7 @@ DEFAULTS_SHAPES = {
 # 10df64d4… / 409d2d72…). A carrier the exporter drops withholds the layer
 # too, so those rows keep dc8202df….
 DEFAULTS_DOCUMENTS = {
-    'control': ('defaults:\n  mysql_connections: 80\n', '39b3c7dd6e16e1ec'),
+    'control': ('defaults:\n  mysql_connections: 80\n', 'ddcc0f4e96a902ea'),
     # The multi-document rows, and the `!!binary` one below, hashed the first
     # document (664e2553…) until ADR-036 step 6 (#3206): parse-tree refuses
     # them (multiple_documents, tag_not_allowed), the exporter drops the
@@ -1521,13 +1521,13 @@ DEFAULTS_DOCUMENTS = {
     'multi-doc-later-unparseable': ('defaults:\n  mysql_connections: 80\n---\n: : [\n', 'dc8202dfc4683b17'),
     'multi-doc-later-bad-shape': ('defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n', 'dc8202dfc4683b17'),
     'multi-doc-empty-first': ('---\n---\ndefaults:\n  mysql_connections: 80\n', 'dc8202dfc4683b17'),
-    'defaults-null': ('defaults: ~\n', '0fc5b66d034d54ee'),
-    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', '39b3c7dd6e16e1ec'),
+    'defaults-null': ('defaults: ~\n', '2e9c3c5a94ab7c03'),
+    'defaults-null-with-sibling': ('defaults: ~\nmysql_connections: 80\n', 'ddcc0f4e96a902ea'),
     # #3250: a threshold YAML types as a bool is its text in the merge (the
     # exporter reads the text and refuses it), so the two spellings, one
     # hash before, are two now.
-    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '85323f0ba79adb6a'),
-    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '4b48b16226d5772b'),
+    'tagged-bool-true': ('defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n', '7b3221761b7e7a65'),
+    'tagged-bool-quoted': ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n', '96e8993f6f89ab70'),
     'tagged-binary-block': ('defaults:\n  mysql_connections: 80\n  x: !!binary |\n    aGVs\n    bG8=\n', 'dc8202dfc4683b17'),
 }
 NOT_A_MAPPING = {'list': '- 1\n- 2\n', 'scalar': 'hello\n', 'false': 'false\n'}
@@ -1646,7 +1646,7 @@ class TestShowsGoValuesVerbatim:
     def test_a_subdirectory_defaults_not_a_mapping_is_served_as_go_serves_it(self, tmp_path):
         """In a sub-directory the exporter serves `defaults: [1]` beside
         `mysql_connections: 81` (both planes take the whole document;
-        merged_hash 6994983e… since #1320 armed the two DB2 % keys; c94eb444… since it armed oracle_process_usage_percent; d4033b70… before that, cef3dbb6… before the built-in layer, #3832). This tool used to refuse it (rc 2, "an
+        merged_hash 15be108b… since #4093 armed db2_storage_path_used_percent; 6994983e… since #1320 armed the two DB2 % keys; c94eb444… since it armed oracle_process_usage_percent; d4033b70… before that, cef3dbb6… before the built-in layer, #3832). This tool used to refuse it (rc 2, "an
         unsupported shape"); it now shows Go's answer."""
         conf_d = _write(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
                                    "team/_defaults.yaml": "defaults: [1]\nmysql_connections: 81\n",
@@ -1656,7 +1656,7 @@ class TestShowsGoValuesVerbatim:
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert out["effective_config"]["mysql_connections"] == 81
-        assert out["merged_hash"].startswith("6994983e"), out["merged_hash"]
+        assert out["merged_hash"].startswith("15be108b"), out["merged_hash"]
 
     @pytest.mark.parametrize("files", [
         {"_defaults.yaml": _DEFAULTS, "t1.yaml": "tenants:\n  t1:\n    _x:\n      at: 2026-12-31T10:20:30+08:00\n"},

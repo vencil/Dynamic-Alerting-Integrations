@@ -860,6 +860,35 @@ keys:
         quote: "This example uses the default warning of 80% and alarm thresholds of 90%."
         value: 80
         tier: warning
+  db2_storage_path_used_percent:
+    pack: db2
+    tier: defaults
+    value: 80
+    unit: '%'
+    desc: 'Storage path file system usage warning: bytes used over the size of the file
+      system an automatic-storage path is on, fullest path per tenant — what a tablespace
+      with no MAXSIZE runs out of (#4093). 80 is the warning threshold of Zabbix''s Linux
+      template and equals db2_tablespace_used_percent; Db2''s own indicator for the LOG
+      file system (db.log_fs_util, the same used / total) warns at 75 — Db2 publishes none
+      for storage paths. Zabbix leaves root-reserved blocks out of its total, so its
+      figure reads a few points higher than this one. The file system may hold other
+      data too'
+    metric_class: capacity
+    arming: default
+    portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "IBM"
+        url: https://www.ibm.com/docs/api/v1/content/SSEPGG_11.5.0/com.ibm.db2.luw.admin.cmd.doc/doc/r0008744.html
+        quote: "Indicator Name = db.log_fs_util Default = Yes Type = Threshold-based Warning = 75 Alarm = 85 Unit = %"
+        value: 75
+        tier: warning
+      - org: "Zabbix"
+        url: https://raw.githubusercontent.com/zabbix/zabbix/release/7.0/templates/os/linux/README.md
+        quote: "|{$VFS.FS.PUSED.MAX.WARN}|<p>The warning threshold of the filesystem utilization.</p>|`80`|"
+        value: 80
+        tier: warning
   db2_connections_active_critical:
     pack: db2
     tier: optional_overrides

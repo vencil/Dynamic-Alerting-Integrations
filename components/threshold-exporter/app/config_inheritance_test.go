@@ -282,7 +282,7 @@ func TestComputeMergedHash_NoDefaults(t *testing.T) {
 	// (#3832) under the tenant even with no chain, so the hash is that of the
 	// tenant body plus the built-in table: Python's json.dumps(sort_keys=True,
 	// separators=(",", ":"), ensure_ascii=False) of that dict, first 16 hex.
-	want := "3e2c8a4527623406"
+	want := "61ebf63a8360c8c7"
 	if got != want {
 		t.Errorf("got %q, want %q (flat scenario)", got, want)
 	}

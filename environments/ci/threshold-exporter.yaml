@@ -52,6 +52,8 @@ thresholdConfig:
     # #1320：兩個 DB2 容量類百分比升 arming: default，值取自 IBM health indicator 的預設 warning 門檻。
     db2_log_usage_percent: 75   # % of the active log space used
     db2_tablespace_used_percent: 80   # % of the space the tablespace can grow to
+    # #4093：自動儲存路徑所在檔案系統的使用率，逐路徑量、取最滿的一個。
+    db2_storage_path_used_percent: 80   # % of the storage path's file system used
   state_filters:
     container_crashloop:
       reasons: ["CrashLoopBackOff"]

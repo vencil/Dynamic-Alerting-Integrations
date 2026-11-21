@@ -222,9 +222,8 @@ denied_functions:
   - predict_linear         # 大範圍回溯查詢
   - quantile_over_time     # 高記憶體消耗
 
-denied_patterns:
-  - '=~".*"'              # 全通配 regex（效能殺手）
-  - 'without(tenant)'     # 破壞 tenant 隔離
+preserved_labels:
+  - tenant                 # 每條 alert 的結果必須保留 tenant（依 Prometheus 語法樹判定）
 
 required_labels:
   - tenant                 # 所有 Custom Rule 必須帶 tenant label
@@ -233,7 +232,7 @@ max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
 max_evaluation_interval: 60s  # Custom Rule group interval 上限
 
 # 每個值在載入政策時判定（#4061），不符即結束碼 2、點名鍵與原因：
-# denied_functions／denied_patterns／required_labels 是清單（可為空），每項是
+# denied_functions／preserved_labels／required_labels 是清單（可為空），每項是
 # 非空字串（寫成單一字串會被拒，不再逐字元比對）；兩個時長是正的 Prometheus
 # 時長，語法同 Prometheus 的 ParseDuration（90m、1h30m、2w 可；1.5h、不加
 # 引號的 5 不可）。group 的 interval 也照這個語法讀。
@@ -261,6 +260,31 @@ file_overrides:
 > 的總查詢量不在此檢查範圍，由 Prometheus 的 `--query.max-samples` 限制。
 > `denied_functions` 以名字比對函式與聚合運算子：`topk by (a) (…)` 是 `topk`；標籤值、
 > 註解、指標名裡出現同名文字都不算。Prometheus 無法求值的運算式（如 `rate(x[step()])`）是 ERROR。
+
+> **租戶隔離看的是結果，不是寫法**（[#4098](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4098)）：
+> 每條 alert 都寫 `tenant: "{{ $labels.tenant }}"`，所以運算式的結果一旦丟掉 `tenant`，告警的 tenant 就是空的、
+> 送不到租戶。`preserved_labels` 列的每個 label，都依 Prometheus 的語法樹判定 alert 的結果是否保留它
+> （`da-read promql-label-flow`）：`without(tenant)`、`without(tenant, b)`、`sum by (a)`、不帶分組的 `sum(x)`、
+> 不以 tenant 配對的一對一運算（`ignoring(tenant)`、`on(a)`）、`vector(…)` 都是丟掉；
+> `label_replace`／`label_join` 寫入 tenant、`group_left(tenant)` 從不以 tenant 配對的另一側抄值、
+> 名稱含冒號卻既不在本次 lint 的檔案、也不在工具內附的 rule pack 裡的 recording rule、以正規式比對的指標名，
+> 都是「無法證明」，同樣是 ERROR。讀 recording rule 時會追進它的運算式與 `labels:`（含 group 的 `labels:`）；
+> 可追的 record 是本次 lint 的檔案加上工具內附的租戶 rule pack（da-tools 映像內附、repo 裡是 `rule-packs/`），
+> 所以只 lint `rule-packs/custom/` 時，讀 `tenant:…` 這類 pack record 的規則照樣判定。
+>
+> 依 alert 自己的 `tenant`（rule 的 `labels:` 蓋過 group 的 `labels:`，同 Prometheus）怎麼寫來分流：沒寫，或寫 `{{ $labels.tenant }}`（照抄 series 的值）時才判定；
+> 寫字面值（單一租戶的規則寫 `tenant: db-a`，刻意不帶 tenant 的平台訊號寫 `tenant: ""`）時告警自己定了值，
+> 不判定；其他模板（例如 `{{ $labels.namespace }}`）是 ERROR。
+>
+> ⚠️ 判定不到的事：原始指標本身有沒有 `tenant` 是 scrape 決定的，判定時一律當作有（直接讀
+> `up{job="…"}` 這類平台指標的規則會通過，但告警沒有 tenant）；規則能不能讀到別的租戶的 series
+> （`x{tenant=~".*"}`）也不在此檢查。只依 Prometheus 的語意判定，vmalert 的行為沒有另外驗證。
+> 名稱不含冒號、又不在可追範圍內的 recording rule，會被當成原始指標（Prometheus 不強制 record 名稱帶冒號）：
+> 規則讀自己寫的 record 時，把定義它的檔一起列進路徑。
+>
+> 舊鍵 `denied_patterns` 已移除（breaking）：它比對文字，`=~'.*'`、`without(tenant, b)` 就繞過了。
+> 其中 `=~".*"` 選到的 series 和拿掉這個 matcher 完全相同（比對空字串的 matcher 也會選到沒有該 label 的 series），
+> 所以那一條什麼也沒擋。政策檔還寫著它時結束碼 `2`，訊息指向 `preserved_labels`。
 
 > **豁免不是跳過（四層護欄）**：(1) `path` 錨在掃描樹頂層（精確路徑、非
 > suffix），巢狀 `rule-packs/*/rule-packs/<file>` 不取得豁免；(2) 須帶

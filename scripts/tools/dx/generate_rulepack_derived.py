@@ -110,12 +110,6 @@ VALUES = (MUTE, PAGE)
 #: The series the maintenance clause reads, as a selector (check 4).
 MAINTENANCE_SERIES = 'user_state_filter{filter="maintenance"}'
 
-#: Labels whose whole value IS the tenant (check 6): Prometheus writes
-#: `tenant` from the namespace (k8s/03-monitoring/configmap-prometheus.yaml,
-#: `target_label: tenant` from `__meta_kubernetes_namespace`), so a
-#: `label_replace` copying `namespace` into `tenant` keeps the tenant.
-TENANT_ALIASES = ("namespace",)
-
 #: The series Prometheus derives from firing alerts (check 5).
 ALERT_SERIES = ("ALERTS", "ALERTS_FOR_STATE")
 
@@ -551,8 +545,8 @@ def clause_flow_problems(rules: "list[tuple[str, str, str]]", flow_of=None,
     promql-label-flow tenant``) maps a list of exprs to, per expr, its
     ``and``/``unless on(tenant)`` matches."""
     if flow_of is None:
-        flow_of = lambda exprs: _lib_consumer_read.promql_label_flow(  # noqa: E731
-            "tenant", exprs, records, TENANT_ALIASES)
+        flow_of = lambda exprs: [e["set_matches"] for e in  # noqa: E731
+                                 _lib_consumer_read.promql_label_flow("tenant", exprs, records)]
     with_clause = [(p, n, e) for p, n, e in rules if _clauses(e)]
     if not with_clause:
         return []

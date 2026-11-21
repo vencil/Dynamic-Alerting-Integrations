@@ -78,6 +78,12 @@ absent_from_candidate:
         盲寫函式庫沒有 tablespace 故障 signature（anti-circularity：不回頭照規則
         補寫），規則放進 candidate 也永遠 inert；維持為 coverage-gap finding。
       tracking: "#1174"
+    - alert: DB2StoragePathAlmostFull
+      reason: >-
+        盲寫函式庫沒有 storage path 檔案系統的故障 signature（#4093 新增的指標，
+        anti-circularity：不回頭照規則補寫），規則放進 candidate 也永遠 inert；
+        維持為 coverage-gap finding。
+      tracking: "#1174"
     - alert: DB2HighConnectionsCritical
       reason: >-
         critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in（#3658；

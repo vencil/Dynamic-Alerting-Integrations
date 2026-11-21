@@ -3,10 +3,9 @@
 
 掃描 Prometheus rule YAML 檔案，檢查是否違反平台治理規範：
   1. 禁止使用高成本 PromQL 函式 (holt_winters, predict_linear 等)
-  2. 禁止危險 regex pattern (全通配 =~".*")
+  2. 每條 alert 的結果保留 tenant（preserved_labels，依 Prometheus 語法樹判定；#4098）
   3. 強制要求 tenant label
   4. 限制 range vector duration
-  5. 禁止破壞 tenant 隔離的語法
 
 平台 COMPILED pack（如 rule-pack-custom-alerts.yaml，帶 GENERATED 檔頭）可由
 policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 predict_linear），
@@ -63,6 +62,7 @@ import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#3462: the one wording of "selected nothing")
+import _threshold_alerts  # noqa: E402  (#4098: the rule packs this layout ships)
 from _lib_label import safe_label  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -74,9 +74,11 @@ DEFAULT_POLICY = {
         "predict_linear",
         "quantile_over_time",
     ],
-    "denied_patterns": [
-        '=~".*"',
-        "without(tenant)",
+    # #4098: every alert's result keeps these labels, judged on Prometheus'
+    # parse tree (`da-read promql-label-flow`) — never a pattern over the
+    # text, which `without(tenant, b)` or `sum by (a)` walked past.
+    "preserved_labels": [
+        "tenant",
     ],
     "required_labels": [
         "tenant",
@@ -118,6 +120,18 @@ DEFAULT_POLICY = {
 #: unused, and a misspelt key here silently linted by the default.
 POLICY_KEYS = frozenset(DEFAULT_POLICY)
 
+#: Keys this policy had and no longer reads, with what replaced them: a
+#: policy carrying one is refused naming the replacement (#4098), not with
+#: the bare "no key" a typo gets.
+RETIRED_POLICY_KEYS = {
+    "denied_patterns": (
+        "denied_patterns was removed (#4098): it matched text, which `=~'.*'` or "
+        "`without(tenant, b)` walked past. Its tenant-isolation check is "
+        "preserved_labels (every alert's result keeps the labels listed, judged "
+        "on Prometheus' parse tree); its `=~\".*\"` selects what the selector "
+        "without that matcher selects, so it guarded nothing. Delete the key."),
+}
+
 # A file_overrides entry with require_generated_marker only applies when this
 # token appears in the file's first few lines (compile_custom_alerts._render
 # writes "# GENERATED from ... — DO NOT EDIT." into the header block).
@@ -125,7 +139,7 @@ GENERATED_MARKER = "GENERATED"
 GENERATED_MARKER_SCAN_LINES = 10
 
 # An override may relax ONLY these policy keys. The deny-list's structural
-# integrity checks (tenant-isolation patterns, required labels, group interval)
+# integrity checks (preserved labels, required labels, group interval)
 # must NEVER be disable-able via a per-file override, even for a compiled pack —
 # those guard against compiler bugs, not just tenant misuse. Anything outside
 # this set in an override's `policy` block is refused when the policy is
@@ -168,7 +182,7 @@ def _duration_problem(value) -> "str | None":
 #: check off, or crashed the run.
 POLICY_VALUE_PROBLEMS = {
     "denied_functions": _string_list_problem,
-    "denied_patterns": _string_list_problem,
+    "preserved_labels": _string_list_problem,
     "required_labels": _string_list_problem,
     "max_range_duration": _duration_problem,
     "max_evaluation_interval": _duration_problem,
@@ -290,28 +304,6 @@ def lint_expr(expr, policy, filepath, rule_name, reading=None):
                 f"denied function '{name}' in expr"
             ))
 
-    # Check denied patterns (whitespace-tolerant matching)
-    for pat in policy.get("denied_patterns", []):
-        # Build regex: escape each character for literal match, then insert
-        # optional \s* after operator chars and before/after parens.
-        # This tolerates '=~ ".*"' matching '=~".*"' and
-        # 'without (tenant)' matching 'without(tenant)'.
-        regex_parts = []
-        for ch in pat:
-            # Insert optional whitespace before opening/closing parens
-            if ch in ('(', ')'):
-                regex_parts.append(r'\s*')
-            regex_parts.append(re.escape(ch))
-            # Insert optional whitespace after operator chars and parens
-            if ch in ('=', '~', '!', '<', '>', '(', ')'):
-                regex_parts.append(r'\s*')
-        ws_regex = ''.join(regex_parts)
-        if re.search(ws_regex, expr):
-            results.append(LintResult(
-                filepath, rule_name, None, "ERROR",
-                f"denied pattern '{pat}' in expr"
-            ))
-
     # Check the window each selector reads: its range plus the subqueries
     # around it (#4080; offset and the lookback delta only move it)
     max_range = policy.get("max_range_duration")
@@ -333,6 +325,111 @@ def lint_expr(expr, policy, filepath, rule_name, reading=None):
                 ))
 
     return results
+
+
+def _copies_own_value(value, label) -> bool:
+    """Whether the alert label value *value* is the template that copies the
+    series' own *label* (``{{ $labels.tenant }}``, ``{{ .Labels.tenant }}``,
+    with or without spaces or trim markers)."""
+    return re.fullmatch(r"\{\{-?\s*(?:\$labels|\.Labels)\.%s\s*-?\}\}" % re.escape(label),
+                        value) is not None
+
+
+def preserved_label_targets(alerts, policy, filepath):
+    """Which of *alerts* (``[(rule_name, expr, labels)]``) need the label
+    flow of which preserved label, and the findings no flow is needed for
+    (#4098). By the alert's own value of the label: none, or the template
+    copying the series' own value → the result must keep it (judged by
+    ``lint_preserved``); a literal (a single-tenant rule, or "" for none) →
+    the alert sets it whatever the result holds, nothing to judge; any other
+    template → an ERROR, it writes the label from something else.
+    Returns ({label: [(rule_name, expr)]}, [LintResult])."""
+    targets, results = {}, []
+    for label in policy.get("preserved_labels", []):
+        for name, expr, labels in alerts:
+            value = (labels or {}).get(label)
+            if value is None or (isinstance(value, str) and _copies_own_value(value, label)):
+                targets.setdefault(label, []).append((name, expr))
+            elif isinstance(value, str) and "{{" in value:
+                results.append(LintResult(
+                    filepath, name, None, "ERROR",
+                    f"label '{label}' is a template that does not copy the series' own "
+                    f"'{label}' ({{{{ $labels.{label} }}}}): it writes the label from something "
+                    f"else, so the alert can reach another {label}"))
+    return targets, results
+
+
+def lint_preserved(targets, records, filepath, flow_of=None):
+    """ERRORs for the alerts of *targets* (``preserved_label_targets``) whose
+    result does not keep the label, read on Prometheus' parse tree (``da-read
+    promql-label-flow``, following *records* — the recording rules of the
+    run, ``{name: [{"expr", "labels"}]}``). *flow_of(label, exprs, records)*
+    defaults to ``_lib_consumer_read.promql_label_flow``. ⛔ "unknown" is an
+    ERROR too: a check that passes what it cannot prove is fail-open."""
+    if flow_of is None:
+        flow_of = _lib_consumer_read.promql_label_flow
+    results = []
+    for label, rules in targets.items():
+        verdicts = flow_of(label, [e for _, e in rules], records)
+        for (name, _), v in zip(rules, verdicts):
+            if v["result"] == "dropped":
+                results.append(LintResult(
+                    filepath, name, None, "ERROR",
+                    f"the result drops label '{label}' (an aggregation without it, "
+                    f"without({label}), a one-to-one match not on it, a function with no "
+                    f"labels…), so the alert's {label} is empty: keep '{label}' in every "
+                    f"aggregation and match"))
+            elif v["result"] != "kept":
+                results.append(LintResult(
+                    filepath, name, None, "ERROR",
+                    f"cannot prove the result keeps label '{label}' (a label_replace or "
+                    f"group_left that writes it from another series, a recording rule — "
+                    f"its name has a colon — neither in this run nor in a shipped rule pack, "
+                    f"a metric name that is not an equality): keep '{label}' from the series "
+                    f"it was read from, and lint the rule files it reads together with it"))
+    return results
+
+
+def shipped_pack_paths(linted=()):
+    """The tenant rule packs this layout ships (``_threshold_alerts.
+    find_rule_pack_paths``: beside this module in the image, ``rule-packs/``
+    in the repo), less the declared platform packs and the files of the run
+    (*linted*). Their recording rules are what a custom rule may read without
+    them being linted with it (#4098: the generated CI lints
+    ``rule-packs/custom/`` alone, and its rules read ``tenant:…`` records)."""
+    seen = {os.path.realpath(f) for f in linted}
+    return [str(p) for p in _threshold_alerts.find_rule_pack_paths()
+            if not _lib_consumer_read.is_platform_pack(_lib_consumer_read.RULE_PACKS.member(p))
+            and os.path.realpath(p) not in seen]
+
+
+def context_records(linted_rule_files, linted=()):
+    """The recording rules the preserved-label check follows: those of the
+    run (*linted_rule_files*, ``RuleFile``s) and of the shipped tenant packs
+    not in it (``shipped_pack_paths``)."""
+    shipped = shipped_pack_paths(linted)
+    extra = [rf for rfs in read_rule_files(shipped).values() for rf in rfs] if shipped else []
+    return rule_records(list(linted_rule_files) + extra)
+
+
+def rule_records(rule_files):
+    """The recording rules of *rule_files* (``RuleFile``s, the ones
+    Prometheus would load) as label flow reads them: ``{name: [{"expr",
+    "labels"}]}``, the labels Prometheus writes — the group's, then the
+    rule's (which win)."""
+    out = {}
+    for rf in rule_files:
+        if rf.problem is not None:
+            continue
+        for g in rf.groups:
+            if not isinstance(g, dict):
+                continue
+            for r in g.get("rules") or []:
+                if isinstance(r, dict) and "record" in r:
+                    out.setdefault(r["record"], []).append(
+                        {"expr": r.get("expr", ""),
+                         "labels": {**(g.get("labels") or {}), **(r.get("labels") or {})}})
+    return out
 
 
 def lint_labels(labels, policy, filepath, rule_name, is_recording):
@@ -410,10 +507,13 @@ def read_rule_files(files):
     return _lib_consumer_read.rule_files_in(files, keep_refusals=True)
 
 
-def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False):
+def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, records=None):
     """Lint a single YAML rule file (or a ConfigMap holding rule files).
     *rule_files* is its reading from ``read_rule_files``; read here when not
-    given. Returns (list of LintResult, rule_count).
+    given. *records* are the recording rules the preserved-label check
+    follows (``context_records``); this file's and the shipped packs' when
+    not given.
+    Returns (list of LintResult, rule_count).
 
     *selected*: the file was selected from a declared input (`_lib_input`:
     ``--rule-pack-dir``, named by *flag*, or the scan paths, a positional
@@ -474,6 +574,7 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False):
     exprs = [rule.get("expr", "") for group in groups if isinstance(group, dict)
              for rule in group.get("rules", []) if isinstance(rule, dict)]
     readings = iter(_lib_consumer_read.promql_reads([e for e in exprs if e]))
+    alerts = []
 
     for group in groups:
         if not isinstance(group, dict):
@@ -500,11 +601,25 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False):
             results.extend(lint_expr(expr, policy, filepath, rule_name,
                                      next(readings) if expr else None))
             results.extend(lint_labels(labels, policy, filepath, rule_name, is_recording))
+            if not is_recording and expr:
+                # The labels Prometheus writes on the alert: the group's,
+                # then the rule's (rules/manager.go), each a template.
+                alerts.append((rule_name, expr,
+                               {**(group.get("labels") or {}), **(labels or {})}))
 
             # Governance checks (Tier 3 best practices)
             if not is_recording:
                 results.extend(check_expiry_label(labels, filepath, rule_name))
                 results.extend(check_owner_label(labels, filepath, rule_name))
+
+    # #4098: every alert's result keeps the preserved labels (records are
+    # followed, not judged themselves: one is read by the alerts that read it)
+    targets, found = preserved_label_targets(alerts, policy, filepath)
+    results.extend(found)
+    if targets:
+        results.extend(lint_preserved(
+            targets, context_records(rule_files, [filepath]) if records is None else records,
+            filepath))
 
     return results, rule_count
 
@@ -592,6 +707,10 @@ def load_policy(custom, path=None):
     and refused there, never taken for "not given".
     """
     if custom is not None:
+        retired = [RETIRED_POLICY_KEYS[k] for k in sorted(RETIRED_POLICY_KEYS) if k in custom]
+        if retired:
+            raise _lib_exitcodes.CallerError(
+                f"--policy {safe_label(path)}: " + " ".join(retired), "policy_unknown_key")
         unknown = sorted(safe_label(str(k)) for k in custom if k not in POLICY_KEYS)
         if unknown:
             from _grar_validate import POLICY_KEYS as deployment_keys  # noqa: PLC0415
@@ -743,13 +862,19 @@ def main():
         readings = read_rule_files(files)
     except _lib_consumer_read.ConsumerReadError as exc:
         die_caller_error(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}")
+    # #4098: an alert may read a record of another file of the run, or of a
+    # rule pack this layout ships
+    try:
+        records = context_records([rf for f in files for rf in readings[f]], files)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(f"ERROR: shipped rule packs: {_lib_consumer_read.error_text(exc)}")
 
     for filepath in files:
         try:
             results, count = lint_file(
                 filepath, policy, readings[filepath],
                 flag="--rule-pack-dir" if args.rule_pack_dir is not None else None,
-                selected=True)
+                selected=True, records=records)
         except _lib_consumer_read.ConsumerReadError as exc:
             # #4080: da-read cannot read the file's expressions (missing,
             # older than lint, a fault): the reader's problem, named — no

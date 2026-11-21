@@ -74,6 +74,23 @@
         "gate_kind": null
       },
       {
+        "key": "db2_storage_path_used_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80,
+        "gate_kind": null
+      },
+      {
         "key": "db2_tablespace_used_percent",
         "layer": "builtin",
         "file": null,
@@ -360,6 +377,23 @@
         "switched_off_with": null,
         "dead_entries": [],
         "value": 75,
+        "gate_kind": null
+      },
+      {
+        "key": "db2_storage_path_used_percent",
+        "layer": "builtin",
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 80,
         "gate_kind": null
       },
       {

@@ -18,7 +18,7 @@
     "operational",
     "platform"
   ],
-  "tenantAlertRules": 145,
+  "tenantAlertRules": 146,
   "rulePacks": {
     "mariadb": {
       "label": "MariaDB/MySQL",
@@ -300,8 +300,8 @@
       "category": "database",
       "exporter": "query-exporter",
       "configMap": "prometheus-rules-db2",
-      "recordingRules": 15,
-      "alertRules": 12,
+      "recordingRules": 17,
+      "alertRules": 13,
       "required": false,
       "defaults": {
         "db2_connections_active": {
@@ -344,6 +344,12 @@
           "value": 80,
           "unit": "%",
           "desc": "Tablespace usage warning: share of the space a tablespace can grow to, fullest tablespace per tenant; 80 = the default warning threshold IBM states for the ts.ts_util health indicator (used over usable pages — the form served for a tablespace that does not auto-resize; that indicator is not evaluated for an auto-resizing one, and the pages cited state no default for the auto-resize form, which reuses 80 here). The health monitor itself is deprecated; the number is what is borrowed",
+          "metricClass": "capacity"
+        },
+        "db2_storage_path_used_percent": {
+          "value": 80,
+          "unit": "%",
+          "desc": "Storage path file system usage warning: bytes used over the size of the file system an automatic-storage path is on, fullest path per tenant — what a tablespace with no MAXSIZE runs out of (#4093). 80 is the warning threshold of Zabbix's Linux template and equals db2_tablespace_used_percent; Db2's own indicator for the LOG file system (db.log_fs_util, the same used / total) warns at 75 — Db2 publishes none for storage paths. Zabbix leaves root-reserved blocks out of its total, so its figure reads a few points higher than this one. The file system may hold other data too",
           "metricClass": "capacity"
         }
       },

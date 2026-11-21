@@ -43,6 +43,7 @@ lang: zh
 | DB2HighLogUsage | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 transaction log usage high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_log_usage_percent:max |
 | DB2HighDeadlockRate | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 deadlocks elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_deadlocks:increase5m |
 | DB2TablespaceAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 tablespace nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_tablespace_used_percent:max |
+| DB2StoragePathAlmostFull | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 storage path file system nearing capacity  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_storage_path_used_percent:max |
 | DB2HighLockWaitTime | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 lock wait time high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_lock_wait_time:rate5m |
 | DB2HighLockWaitTimeCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: DB2 lock waits at critical level  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_lock_wait_time:rate5m |
 | DB2HighSortOverflow | warning | 靜音 | [tier] {{ $labels.tenant }}: DB2 sort overflow ratio high  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:db2_sort_overflow_ratio:avg |

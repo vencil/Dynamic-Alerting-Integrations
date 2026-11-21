@@ -771,11 +771,14 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     #1320 promoted the two DB2 % keys: the chart ships 14, total 69 -> 71
 #     (scaffold and init unchanged — built-in keys are not written to the root
 #     `defaults:`). The floor went 58 -> 60 so DOWN stays 11 and UP stays +16.
+#     #4093 added a fifteenth chart default (db2_storage_path_used_percent):
+#     the chart ships 15, total 71 -> 72, the floor went 60 -> 61 (DOWN 11,
+#     UP +16).
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 60
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 61
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 68
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
