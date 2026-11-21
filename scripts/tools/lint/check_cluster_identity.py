@@ -112,6 +112,7 @@ import yaml
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402
@@ -130,8 +131,10 @@ IDENTITY_LABELS = frozenset({"tenant", "instance", "pod", "namespace", "node"})
 
 CLUSTER, FLAT = "cluster", "flat"
 
-#: The scrape jobs ADR-006 has write `da_cluster`: the tenant-exporter job and
-#: the Kubernetes state / container jobs the kubernetes rules read.
+#: The scrape jobs whose series are per cluster (ADR-006): the tenant-exporter
+#: job and the Kubernetes state / container jobs the kubernetes rules read.
+#: Their series carry `da_cluster` wherever two clusters' data meet — the
+#: label is the external label of the Prometheus they came through.
 CLUSTER_JOBS = frozenset({"tenant-exporters", "kube-state-metrics",
                           "kubelet-cadvisor", "kubelet-volume-stats"})
 #: Scrape jobs of the platform's own components: their `up` / `scrape_*` do
@@ -481,7 +484,7 @@ _BASELINE_HEADER = """\
 def load_baseline() -> "dict[str, list[str]]":
     if not BASELINE.exists():
         return {}
-    data = yaml.safe_load(BASELINE.read_text(encoding="utf-8")) or {}
+    data = strict_safe_load(BASELINE.read_text(encoding="utf-8")) or {}
     return {f: sorted(v or []) for f, v in (data.get("findings") or {}).items()}
 
 

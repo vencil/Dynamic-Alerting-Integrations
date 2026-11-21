@@ -49,6 +49,7 @@ import yaml
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
 
@@ -180,7 +181,7 @@ class PlanningParseError(ValueError):
 def _safe_yaml_load(text: str, *, where: str) -> Optional[dict]:
     """Parse YAML; on failure return None and let caller skip the entry."""
     try:
-        loaded = yaml.safe_load(text)
+        loaded = strict_safe_load(text)
     except yaml.YAMLError as e:
         raise PlanningParseError(f"{where}: YAML parse error: {e}") from e
     return loaded if isinstance(loaded, dict) else None
@@ -301,7 +302,7 @@ def _discover_flaky_tests(flaky_path: Path, repo_root: Path) -> Iterable[Plannin
     except (OSError, UnicodeDecodeError):
         return
     try:
-        loaded = yaml.safe_load(text)
+        loaded = strict_safe_load(text)
     except yaml.YAMLError:
         return
     if not isinstance(loaded, list):

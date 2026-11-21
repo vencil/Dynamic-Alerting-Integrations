@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.1.0) — Toolchain completed, 1:N end-to-end integration pending production validation
 📎 **Addendum** (v2.10.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
-🧭 **Revision** (2026-11-21) — cluster identity `da_cluster` and per-cluster alert granularity for a tenant in several clusters, see "One tenant in several clusters" below; implementation in progress
+🧭 **Revision** (2026-11-21) — cluster identity `da_cluster` (one external label per Prometheus) and per-cluster alert granularity for a tenant in several clusters, see "One tenant in several clusters" below; implementation in progress
 
 ## Background
 
@@ -160,9 +160,9 @@ groups:
 
 ## One tenant in several clusters: cluster identity and alert granularity
 
-**Decision: one tenant may appear in several clusters. Every series that comes from a tenant exporter carries the platform's own label `da_cluster`, written by a relabel step at scrape time; every rule whose input is such series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
+**Decision: one tenant may appear in several clusters. Each Prometheus says which cluster it is in with one external label, `da_cluster`; every rule whose input is tenant-exporter series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
 
-This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete; at the time of writing none of it is in effect** and the rule packs still assume a tenant lives in one cluster. It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
+This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete, and only part of it is in place**: the rule packs already evaluate per cluster; per-cluster presence (point 6) and Alertmanager grouping and dedup (point 5) are not done yet. It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
 
 ### Why it is needed
 
@@ -173,27 +173,25 @@ Two shapes of rule go wrong when a tenant spans clusters:
 
 ### Contract
 
-1. **Where cluster identity comes from.** Every Prometheus writes `da_cluster=<cluster id>` with `relabel_configs` on the job that scrapes tenant exporters (and on the jobs that scrape the container and Pod state metrics the kubernetes rules read); if the central Prometheus scrapes tenant exporters itself, those jobs write it too. The job that scrapes threshold-exporter does not (see point 3). A single-cluster deployment writes it as well, with one fixed value.
-2. **The cluster id.** Unique across the platform, one per cluster, and stable over time. A deployment that already sets `external_labels.cluster` as the [Federation integration guide](../integration/federation-integration.en.md) describes should reuse that value; `external_labels` itself needs no change.
-3. **Thresholds stay one per tenant.** Thresholds, maintenance state and tenant metadata — the series threshold-exporter serves — carry no `da_cluster`. Rules apply them to each of the tenant's clusters with `on(tenant) group_left` (`group_left` lets one series on the right pair with several on the left).
+1. **Where cluster identity comes from.** Each Prometheus sets `da_cluster: <cluster id>` under `global.external_labels` — one line per Prometheus, and nothing in any scrape job. Prometheus attaches external labels to data as it leaves: alerts sent to Alertmanager, `/federate` and remote write all carry them. So wherever two clusters' series or alerts meet (a central Prometheus, Alertmanager) the data already tells the clusters apart; a Prometheus that evaluates only its own cluster has no such label on its series, and the rules' grouping then reads as per tenant. A single-cluster deployment sets it as well, with one fixed value.
+2. **The cluster id.** Unique across the platform, one per cluster, and stable over time; the Prometheus replicas of one cluster (an HA pair) share one value. A deployment that already sets `external_labels.cluster` as the [Federation integration guide](../integration/federation-integration.en.md) describes gives `da_cluster` the same value, next to it.
+3. **Thresholds stay one per tenant.** Thresholds, maintenance state and tenant metadata come from threshold-exporter: one set per tenant, not per cluster. When these series arrive federated from another cluster they carry `da_cluster` too; the rules always collapse them `by(tenant)` first and then apply them to each of the tenant's clusters with `on(tenant) group_left` (`group_left` lets one series on the right match several on the left), so the result is the same either way — provided every cluster sends the same thresholds.
 4. **How rules are written.** In an aggregation over tenant-exporter series, a `by(...)` that contains any of `tenant`, `instance`, `pod`, `namespace`, `node` must also contain `da_cluster`. The same holds for a pairing (`on(...)`) whose two sides are both such series.
-5. **Alerts carry `da_cluster`.** For alerts that carry the label, Alertmanager grouping and warning/critical dedup ([ADR-001](./001-severity-dedup-via-inhibit.en.md)) both include it, so the same alert in two clusters does not inhibit its counterpart. Alerts without it (for example "tenant has not configured a threshold", which concern configuration only) keep today's grouping and dedup. Whether an alert carries it follows from the series it reads, not from its subject: one that reads only threshold-exporter series does not; one that reads a tenant exporter's series does — including "an exporter is running that the configuration does not declare", which names the cluster the exporter is in.
+5. **Alerts carry `da_cluster`.** Every alert that reaches Alertmanager has the label: an alert the rules computed with it (the cluster its series came from) keeps that value; one without gets the external label of the Prometheus that sends it — "the cluster of the Prometheus that evaluated this rule". Alertmanager grouping and warning/critical dedup ([ADR-001](./001-severity-dedup-via-inhibit.en.md)) both include it, so the same alert in two clusters does not inhibit its counterpart. An alert that reads only threshold-exporter series (for example "tenant has not configured a threshold") is of the second kind: it is about the whole tenant, and the cluster on its label only says which Prometheus computed it.
 6. **"Expected but absent" is judged per cluster.** A tenant may declare in its configuration which clusters it is expected in; when it does, any declared cluster that reports nothing raises an alert. Without a declaration, appearing in at least one cluster counts as present.
-7. **A scrape configuration without `da_cluster` is stopped before deployment.** The lint that checks scrape configuration (the one that today checks "a tenant-exporter job must write `tenant`") gains this rule, so a deployment cannot silently fall back to "no cluster distinction".
+7. **A Prometheus without `da_cluster` is pointed out when it goes live.** `da-tools federation-check edge` reads the running Prometheus' configuration and fails when `external_labels.da_cluster` has no value; the repo's own configuration is held to the same by the scrape-configuration lint. Both look in one place, with no relabelling to work out.
 
 ### Example
 
-Scrape configuration (each cluster with its own value):
+Each Prometheus' configuration (its own value):
 
 ```yaml
-scrape_configs:
-  - job_name: tenant-exporters
-    relabel_configs:
-      - target_label: da_cluster
-        replacement: edge-a
+global:
+  external_labels:
+    da_cluster: edge-a
 ```
 
-Tenant `t1` has one database at `10.0.0.5:50000` in each of `edge-a` and `edge-b`, and the one in `edge-a` is down. Input series:
+Tenant `t1` has one database at `10.0.0.5:50000` in each of `edge-a` and `edge-b`, and the one in `edge-a` is down. The series a central Prometheus receives from the two clusters:
 
 ```text
 db_expected{tenant="t1", da_cluster="edge-a", instance="10.0.0.5:50000"}  1
@@ -222,11 +220,13 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 
 ### Consequences and known limits
 
-- **Upgrade order: write the relabel first, then upgrade the rule packs.** The other way round the rules still work, but every series has an empty `da_cluster`, which is the same as no cluster distinction.
-- **Every alert re-fires once at upgrade.** An alert gains a label, so Alertmanager sees a new alert: one that is firing resolves, and the new one has to wait out the rule's `for:` again before it fires, leaving a gap in between.
+- **Upgrade order does not matter.** The rules work on series without `da_cluster` exactly as they did before clusters were told apart; once the external label is set, data leaving that Prometheus starts to carry it.
+- **Alerts gain a label on the Alertmanager side.** Once the external label is set, Alertmanager treats an alert carrying it as a different alert: the new one appears and notifies at once, the old one stays until it expires, and the two coexist in between.
 - **Existing silences still apply.** A silence matches on the labels it lists; one more label on the alert does not affect it.
-- **Recording-rule history is not continuous.** Series with `da_cluster` are new series; data from before the upgrade stays on the old ones.
-- **The number of series does not change.** A single-cluster deployment only gains one label with a fixed value on each series.
+- **The cluster is not visible locally in an edge cluster.** Queries against an edge Prometheus, its `ALERTS` series and `$labels.da_cluster` in alert annotations are all empty; the value exists once the data has reached Alertmanager or the central Prometheus.
+- **It does not cover one Prometheus that scrapes several clusters directly.** An external label has one value. Such a deployment writes `da_cluster` on each cluster's scrape jobs itself (a value already on a series wins over the external label), and the lint does not check that.
+- **Thresholds must agree across clusters.** When each cluster runs its own threshold-exporter and federates it to the centre, the centre collapses the copies `by(tenant)` and takes the larger value; if they differ, the centre uses a set that is no single cluster's own.
+- **Some scrape agents add external labels at scrape time** (Prometheus itself does not). Series then carry `da_cluster` locally as well, and the rules give the same result.
 - **Sums are per cluster.** Rules that sum "all of the tenant's instances" (for example lock wait and deadlock counts) sum within each cluster and compare each against the threshold.
 - **Maintenance mode is the whole tenant.** One cluster cannot be put into maintenance alone.
 - **Clusters cannot have different thresholds.** A tenant uses one set of thresholds in all its clusters.
@@ -234,7 +234,7 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 ### Alternatives considered
 
 - **Reuse the name `cluster`.** The RabbitMQ and Elasticsearch exporters emit their own `cluster` (that service's own cluster name), and Prometheus has two behaviours for a label of the same name, both of which go wrong. By default it keeps the value the scrape configuration writes and renames the exporter's to `exported_cluster`, so a rule that reads the exporter's `cluster` reads the platform's cluster id. With `honor_labels: true` (which the central job that federates from the edges sets) it keeps the exporter's value, and cluster identity becomes the service's own cluster name. Hence a platform-specific name.
-- **Use Prometheus `external_labels`.** External labels are attached only when data leaves Prometheus (federation, remote write, alerts sent to Alertmanager); rule evaluation does not see them. Rules evaluated in an edge cluster would have no cluster identity.
+- **Write `da_cluster` with a relabel step on every scrape job.** This was the first form of this section; its appeal is that series carry the value at rule-evaluation time. But there are four places to write it (tenant exporters, container metrics, volume metrics, Pod state metrics), one of them limited to a single Service; with only some of them written, the container alerts that match two of those sources find no match and go silent. Stopping such a configuration before deployment means a checker has to work out statically what the relabelling leaves — redoing Prometheus' own behaviour, with no end to the cases. And the only place the rules need cluster identity is where two clusters' data meet, where the data already carries the external label.
 - **Add `da_cluster` only where a label like `instance` is already present, and keep tenant-level aggregates one per tenant across clusters.** Far fewer places to change. But when rules are deployed in layers ([ADR-004](./004-federation-central-exporter-first.en.md), and the "edge evaluation" section of the [Federation integration guide](../integration/federation-integration.en.md)) the tenant-level recording rules are computed in each edge cluster: two edges each send a series of the same name to the centre, and the result differs from "everything evaluated centrally". Per cluster is the coarsest granularity at which both deployment modes agree. Ratio rules also cannot have per-edge ratios recombined into a whole-tenant ratio.
 - **Do not support it, and reject tenants that span clusters.** Rejecting them needs cluster identity first; and DR pairs and multi-site deployments are exactly what the N:1 row lists.
 

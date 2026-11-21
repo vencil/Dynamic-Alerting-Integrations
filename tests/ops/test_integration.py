@@ -18,7 +18,15 @@ pytestmark = pytest.mark.integration
 
 from factories import make_am_config, make_am_receiver, write_yaml
 
-from _lib_python import write_onboard_hints, read_onboard_hints
+import pathlib
+
+import _lib_input
+from _lib_python import write_onboard_hints
+
+
+def read_onboard_hints(path):
+    """The hints as `scaffold --from-onboard` reads them (`_lib_input`)."""
+    return _lib_input.decode_bytes(pathlib.Path(path).read_bytes(), fmt="json", name=str(path))
 from scaffold_tenant import (
     CONFD_DIR,
     generate_defaults,

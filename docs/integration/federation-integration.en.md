@@ -78,6 +78,7 @@ global:
   scrape_interval: 15s
   external_labels:
     cluster: "edge-asia-1"     # Unique cluster identifier
+    da_cluster: "edge-asia-1"  # the platform's cluster identity (ADR-006), same value as cluster; rules evaluate per (tenant, cluster)
     environment: "production"   # Optional: environment label
 ```
 
@@ -297,6 +298,7 @@ prometheus:
   prometheusSpec:
     externalLabels:
       cluster: "central-prod"
+      da_cluster: "central-prod"   # ADR-006: same value as cluster
       region: "us-east-1"
 ```
 

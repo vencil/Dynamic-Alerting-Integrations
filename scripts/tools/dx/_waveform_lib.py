@@ -56,6 +56,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import yaml
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 # ── Explicit semantic constants ──────────────────────────────────────
 T0 = 1_700_000_000          # fixed epoch origin (seconds); sample i sits at T0 + i*STEP
@@ -108,7 +109,7 @@ def load_pack(path: str) -> dict:
     """Load a waveform pack YAML file. Raises WaveformInputError on unreadable/malformed input."""
     try:
         with open(path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh)
+            data = strict_safe_load(fh)
     except (OSError, yaml.YAMLError) as exc:
         raise WaveformInputError(f"cannot read/parse pack YAML {path}: {exc}") from exc
     if not isinstance(data, dict):

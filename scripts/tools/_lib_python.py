@@ -44,7 +44,6 @@ from _lib_io import (  # noqa: F401
     output_write,
     exit_on_output_write_error,
     write_onboard_hints,
-    read_onboard_hints,
     safe_label,
     add_config_dir_arg,
     add_json_arg,

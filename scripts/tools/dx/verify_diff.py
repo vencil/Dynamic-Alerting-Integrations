@@ -169,15 +169,20 @@ def _require(entry: dict, keys, where: str) -> None:
 
 def load_rules(path: Path) -> dict:
     """載入並驗證 verify_diff_rules.yaml。schema 錯誤 → RulesError。"""
-    import yaml
+    import _lib_input  # noqa: PLC0415  (#4111: the one decoding of a caller's input file)
     # #3276: the shared judgement of a caller-given path ("any", as `exists()`
     # was) — `exists()` raised on one under a parent the caller cannot enter.
     problem = classify_path(path, "any", lang="zh", flag="--rules")
     if problem is not None:
         raise RulesError(f"rules 檔{'不存在' if problem.missing else '無法使用'}: "
                          f"{problem.message}")
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        data = _lib_input.decode_bytes(path.read_bytes(), fmt="yaml", name=str(path))
+    except OSError as exc:
+        raise RulesError(f"rules 檔無法讀取: {exc}") from exc
+    except _lib_input.DocumentError as exc:
+        # a duplicate key included (#4064): the last one silently won
+        raise RulesError(f"rules 檔讀不了: {exc.detail('zh')}") from exc
     if not isinstance(data, dict):
         raise RulesError("rules YAML 頂層必須是 mapping")
     if data.get("version") != 1:

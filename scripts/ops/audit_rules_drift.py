@@ -42,6 +42,7 @@ import yaml
 # which lives in scripts/tools/ beside _lib_io (#3107).
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
 sys.path.insert(0, str(_TOOLS))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_io import (  # noqa: E402  (#2128; #3982: the operator entry)
     ensure_dir, exit_on_output_write_error, targets_stdout, write_operator_output)
 from _lib_validation import operator_file_type  # noqa: E402  (#3982)
@@ -95,7 +96,7 @@ def _frontmatter(text: str) -> tuple[dict, str]:
     if not m:
         return {}, text
     try:
-        meta = yaml.safe_load(m.group(1)) or {}
+        meta = strict_safe_load(m.group(1)) or {}
     except yaml.YAMLError:
         meta = {}
     return (meta if isinstance(meta, dict) else {}), m.group(2)
@@ -119,7 +120,7 @@ def load_dev_rules() -> list[dict]:
 
 def load_hooks() -> list[dict]:
     """Parse .pre-commit-config.yaml → [{id, name, stage}]. stage in auto|manual|pre-push."""
-    data = yaml.safe_load(_read(PRECOMMIT)) or {}
+    data = strict_safe_load(_read(PRECOMMIT)) or {}
     hooks: list[dict] = []
     for repo in data.get("repos", []):
         for hook in repo.get("hooks", []) or []:
