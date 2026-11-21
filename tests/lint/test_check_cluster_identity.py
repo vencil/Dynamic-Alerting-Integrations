@@ -24,8 +24,8 @@ Pinned contracts
    match as soon as there are two clusters.
 10. two rules of one name with the same finding are counted, so fixing one
     changes the entry.
-11. the shipped tree equals its baseline, and the baseline still holds the
-   rule #4097 was opened for (so the check is not vacuous on the real tree).
+11. the shipped tree equals its baseline, and the scan read the real rule
+    packs (the baseline is meant to end empty, so it cannot be the evidence).
 """
 from __future__ import annotations
 
@@ -72,6 +72,16 @@ def test_masking_join_is_the_headline_finding():
     ("count(db_up)", []),
     ("sum by (db_type) (db_up)", []),
     ("topk by (tenant) (3, db_up)", [(cid.BY_DROPS, "tenant")]),
+    # a selecting aggregation returns its input's series, labels and all: the
+    # aggregation around it is where the label goes
+    ("sum by (tenant) (topk(3, db_up))", [(cid.BY_DROPS, "tenant")]),
+    ("max by (tenant) (bottomk(1, db_up))", [(cid.BY_DROPS, "tenant")]),
+    ("sum by (tenant, da_cluster) (topk(3, db_up))", []),
+    ("sum by (tenant) (topk by (tenant) (3, db_up))",
+     [(cid.BY_DROPS, "tenant"), (cid.BY_DROPS, "tenant")]),
+    # a date function over a vector keeps the vector's labels
+    ("sum by (tenant) (month(db_last_backup_timestamp))", [(cid.BY_DROPS, "tenant")]),
+    ("sum by (tenant) (db_up * month())", [(cid.BY_DROPS, "tenant")]),
 ])
 def test_grouping(expr, want):
     assert found(expr) == want
@@ -101,6 +111,11 @@ def test_only_the_first_drop_is_reported():
 def test_recorded_series_take_their_rules_scope():
     assert found("tenant:x:max > on (tenant) group_left tenant:alert_threshold:x",
                  {"tenant:x:max": cid.FLAT, "tenant:alert_threshold:x": cid.FLAT}) == []
+    # `{__name__="x"}` is the same series as `x`: the parser leaves the name in the matcher
+    assert found('sum by (tenant) ({__name__="tenant:x:max"})', {"tenant:x:max": cid.FLAT}) == []
+    assert found('sum by (tenant) ({__name__="db_up"})') == [(cid.BY_DROPS, "tenant")]
+    assert found('sum by (tenant) ({__name__=~"tenant:x:.*"})', {"tenant:x:max": cid.FLAT}) == [
+        (cid.BY_DROPS, "tenant")]      # a pattern is nobody's name: held to the contract
     both = {"a:b": cid.CLUSTER, "c:d": cid.CLUSTER}
     assert found("a:b unless on (tenant, instance) c:d", both) == [(cid.ON_DROPS, "tenant,instance")]
 
@@ -119,7 +134,6 @@ def test_up_follows_its_job_and_the_unclassified_are_held():
     assert scope("kube_pod_info") == cid.CLUSTER
     assert scope('ALERTS{alertstate="firing"}') == cid.FLAT
     assert scope("absent(db_up)") == cid.FLAT
-    assert scope("vector(1)") is None
 
 
 @pytest.mark.parametrize("label", sorted(cid.IDENTITY_LABELS))
@@ -158,6 +172,13 @@ def test_every_identity_label_is_one(label):
     ("sum without (pod) (user_threshold)", cid.FLAT),
     ("absent(db_up)", cid.FLAT),
     ("scalar(db_up) * user_threshold", cid.FLAT),
+    ("topk(3, db_up)", cid.CLUSTER), ("bottomk(2, db_up)", cid.CLUSTER),
+    ("topk without (da_cluster) (3, db_up)", cid.CLUSTER),
+    ("sum(db_up)", cid.FLAT),
+    ("month(db_ts)", cid.CLUSTER), ("day_of_week(user_threshold)", cid.FLAT),
+    ("month()", None), ("time()", None), ("pi()", None),
+    ("vector(1)", cid.FLAT),
+    ('label_replace(vector(1), "tenant", "t", "__name__", ".*")', cid.FLAT),
 ])
 def test_scope_of_each_shape(expr, want):
     assert scope(expr) == want
@@ -184,6 +205,8 @@ def test_what_is_under_a_node_is_judged_too():
     ("max by (tenant) (user_threshold) < on (tenant) group_right max by (tenant, da_cluster) (db_x)", []),
     ("max by (tenant, da_cluster) (db_x) and on (tenant) user_state_filter", []),
     ("count by (da_cluster) (db_x) > on () group_left count(user_threshold)", []),
+    ('max by (tenant, da_cluster) (db_x) > on (tenant) label_replace(vector(1), "tenant", "t", "", "")',
+     [(cid.ONE_SIDE, "tenant")]),
 ])
 def test_a_per_cluster_side_must_be_the_many_side(expr, want):
     assert found(expr) == want
@@ -204,8 +227,16 @@ def _good_tree() -> dict:
     lambda t: t["lhs"]["expr"]["args"][0].__setitem__("range", 1),  # a selector's range flag
     lambda t: t["rhs"].__setitem__("param", "1"),                 # a parameter that is no node
     lambda t: t["lhs"].__setitem__("expr", {"kind": "paren", "start": 0, "end": 1}),  # a child cut short
+    lambda t: t.__setitem__("kind", []),                          # a kind that is no string
+    lambda t: t["lhs"]["expr"].__setitem__("name", []),           # a call whose name is no string
+    lambda t: t.__setitem__("op", 1),                             # an operator that is no string
+    lambda t: t.__setitem__("bool", "false"),                     # `bool` that is no bool
+    lambda t: t["lhs"].__setitem__("labels", ["tenant", 1]),      # a label that is no string
+    lambda t: t["matching"].__setitem__("include", [None]),       # a carried label that is no string
+    lambda t: t["lhs"]["expr"]["args"][0].__setitem__("matchers", [{"name": "a"}]),  # a matcher cut short
 ], ids=["missing-key", "unknown-kind", "offset", "labels", "without", "args", "range",
-        "param", "truncated-child"])
+        "param", "truncated-child", "kind-type", "name-type", "op-type", "bool-type",
+        "label-type", "include-type", "matcher"])
 def test_a_tree_of_another_shape_is_not_taken(break_it, monkeypatch):
     """A da-read older or newer than this reader prints another shape: that
     is "could not read" by name, never a tree with a hole a check would read
@@ -341,11 +372,15 @@ def test_an_empty_tree_cannot_run(tmp_path):
         cid.findings(tmp_path)
 
 
-def test_shipped_tree_equals_its_baseline_and_holds_the_original_case():
+def test_shipped_tree_equals_its_baseline_and_the_scan_is_not_vacuous():
+    """The baseline is meant to end empty (#4097), so "the list holds rule X"
+    cannot be what shows the check looked at the real tree: the number of
+    rules it read is."""
     assert cid.check() == cid.EXIT_OK
-    base = cid.load_baseline()
-    assert any("DB2DatabaseDown: on-drops-cluster (tenant,instance)" in x
-               for x in base.get("rule-pack-db2.yaml", [])), "the #4097 rule is no longer listed"
+    rules = cid._rules(cid.PROJECT_ROOT)
+    assert len(rules) > 300, f"only {len(rules)} rules read from the rule packs"
+    assert {r[0] for r in rules} >= {"rule-pack-db2.yaml", "rule-pack-kubernetes.yaml",
+                                     "rule-pack-liveness.yaml", "rule-pack-platform.yaml"}
 
 
 def test_every_job_the_shipped_rules_read_up_under_is_classified():

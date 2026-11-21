@@ -900,31 +900,37 @@ _SHAPE_KEYS = {
 
 def _is_shape(node) -> bool:
     """*node* has the shape of one ``promql-shape`` tree, all the way down."""
-    if not isinstance(node, dict) or node.get("kind") not in _SHAPE_KEYS:
+    if (not isinstance(node, dict) or not isinstance(node.get("kind"), str)
+            or node["kind"] not in _SHAPE_KEYS):
         return False
     if not all(isinstance(node.get(k), int) for k in ("start", "end")):
         return False
     if not all(k in node for k in _SHAPE_KEYS[node["kind"]]):
         return False
     kind = node["kind"]
+    strs = lambda v: isinstance(v, list) and all(isinstance(x, str) for x in v)  # noqa: E731
     if kind == "aggregate":
-        return (isinstance(node["without"], bool) and isinstance(node["labels"], list)
-                and _is_shape(node["expr"])
+        return (isinstance(node["op"], str) and isinstance(node["without"], bool)
+                and strs(node["labels"]) and _is_shape(node["expr"])
                 and (node["param"] is None or _is_shape(node["param"])))
     if kind == "binary":
         m = node["matching"]
-        return ((m is None or (isinstance(m, dict) and isinstance(m.get("on"), bool)
-                               and isinstance(m.get("labels"), list)
-                               and isinstance(m.get("include"), list)
-                               and isinstance(m.get("card"), str)))
+        return (isinstance(node["op"], str) and isinstance(node["bool"], bool)
+                and (m is None or (isinstance(m, dict) and isinstance(m.get("on"), bool)
+                                   and strs(m.get("labels")) and strs(m.get("include"))
+                                   and isinstance(m.get("card"), str)))
                 and _is_shape(node["lhs"]) and _is_shape(node["rhs"]))
     if kind == "call":
-        return isinstance(node["args"], list) and all(_is_shape(a) for a in node["args"])
+        return (isinstance(node["name"], str) and isinstance(node["args"], list)
+                and all(_is_shape(a) for a in node["args"]))
     if kind == "selector":
-        return (isinstance(node["name"], str) and isinstance(node["matchers"], list)
-                and isinstance(node["range"], bool))
+        return (isinstance(node["name"], str) and isinstance(node["range"], bool)
+                and isinstance(node["matchers"], list)
+                and all(isinstance(m, dict)
+                        and all(isinstance(m.get(k), str) for k in ("name", "type", "value"))
+                        for m in node["matchers"]))
     if kind in ("subquery", "paren", "unary"):
-        return _is_shape(node["expr"])
+        return (kind != "unary" or isinstance(node["op"], str)) and _is_shape(node["expr"])
     return True
 
 

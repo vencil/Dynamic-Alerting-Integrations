@@ -114,10 +114,18 @@ PLATFORM_JOBS = frozenset({"prometheus", "alertmanager", "threshold-exporter",
 #: Prometheus' own synthetic series about alerts: they carry whatever the
 #: alert carried, so they are no evidence either way.
 _ALERT_SERIES = frozenset({"ALERTS", "ALERTS_FOR_STATE"})
-#: Calls whose result does not carry the operand's labels.
-_LABELLESS_CALLS = frozenset({"absent", "absent_over_time", "scalar", "vector", "time",
-                              "pi", "month", "year", "hour", "minute", "day_of_week",
-                              "day_of_month", "day_of_year", "days_in_month"})
+#: Calls that return a vector without the operand's labels: `absent` keeps
+#: only what its equality matchers name, `vector(s)` has none.
+_FLAT_CALLS = frozenset({"absent", "absent_over_time", "vector"})
+#: Calls that return a scalar.
+_SCALAR_CALLS = frozenset({"scalar", "time", "pi"})
+#: The date functions: a scalar with no argument (`month()` is of `time()`),
+#: and with a vector argument that vector, labels kept.
+_DATE_CALLS = frozenset({"month", "year", "hour", "minute", "day_of_week",
+                         "day_of_month", "day_of_year", "days_in_month"})
+#: Aggregations that SELECT series rather than combine them: what comes out
+#: keeps every label it came in with, whatever the grouping.
+_SELECTING_AGGREGATIONS = frozenset({"topk", "bottomk", "limitk", "limit_ratio"})
 
 BY_DROPS, ON_DROPS = "by-drops-cluster", "on-drops-cluster"
 WITHOUT_CLUSTER, IGNORING_CLUSTER = "without-cluster", "ignoring-cluster"
@@ -143,6 +151,10 @@ def is_per_target(name: str) -> bool:
 def selector_scope(node: dict, records: "dict[str, str]") -> str:
     """The scope of one selector (see the module docstring)."""
     name = node["name"]
+    if not name:   # `{__name__="x", …}`: the parser leaves the name in the matcher
+        exact = [m["value"] for m in node["matchers"]
+                 if m["name"] == "__name__" and m["type"] == "="]
+        name = exact[0] if len(exact) == 1 else ""
     job = _job_of(node)
     if job is not None and job in CLUSTER_JOBS:
         return CLUSTER
@@ -174,8 +186,10 @@ def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]")
         return judge(node["expr"], records, found)
     if kind == "call":
         scopes = [judge(a, records, found) for a in node["args"]]
-        if node["name"] in _LABELLESS_CALLS:
-            return FLAT if node["name"].startswith("absent") else None
+        if node["name"] in _FLAT_CALLS:
+            return FLAT
+        if node["name"] in _SCALAR_CALLS or (node["name"] in _DATE_CALLS and not node["args"]):
+            return None
         # PromQL's functions take one vector; the other arguments are scalars or strings
         return next((sc for sc in scopes if sc is not None), None)
     if kind == "aggregate":
@@ -185,16 +199,20 @@ def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]")
         labels = list(node["labels"])
         if inner != CLUSTER:
             return inner
+        # A selecting aggregation's grouping says what it ranks WITHIN — a
+        # ranking per tenant across the tenant's clusters is the same merge —
+        # but the series it returns still carry the label.
+        selecting = node["op"] in _SELECTING_AGGREGATIONS
         if node["without"]:
             if CLUSTER_LABEL in labels:
                 found.append((WITHOUT_CLUSTER, ",".join(labels)))
-                return FLAT
+                return CLUSTER if selecting else FLAT
             return CLUSTER
         if CLUSTER_LABEL in labels:
             return CLUSTER
         if IDENTITY_LABELS & set(labels):
             found.append((BY_DROPS, ",".join(labels)))
-        return FLAT
+        return CLUSTER if selecting else FLAT
     if kind == "binary":
         lhs = judge(node["lhs"], records, found)
         rhs = judge(node["rhs"], records, found)
