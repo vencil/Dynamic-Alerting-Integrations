@@ -591,7 +591,7 @@ EOF
 
 ## 升級平台版本前的檢查
 
-新版平台讀 conf.d 的方式可能和舊版不同：YAML 一律由 Go（yaml.v3）讀，未加引號的 `yes`／`no`／`on`／`off` 是字串而不是布林，exporter 也不服務它讀不了的檔（[ADR-036](../adr/036-single-parser-effective-config.md) §8）。所以每次升級 da-tools 與 threshold-exporter 之前，在 CI 上用**新版**的工具對自己的 conf.d 做下面兩件事。指令以 `da-tools` 表示，實際以要比對的那個版本的映像執行（`docker run` 的寫法見 [Docker 使用模式](../cli-reference.md#docker-使用模式)）。
+新版平台讀 conf.d 的方式可能和舊版不同：YAML 一律由 Go（yaml.v3）讀，未加引號的 `yes`／`no`／`on`／`off` 是字串而不是布林，exporter 也不服務它讀不了的檔（[ADR-036](../adr/036-single-parser-effective-config.md) §8）。所以每次升級 da-tools 與 threshold-exporter 之前，在 CI 上用**新版**的工具對自己的 conf.d 做下面的檢查。指令以 `da-tools` 表示，實際以要比對的那個版本的映像執行（`docker run` 的寫法見 [Docker 使用模式](../cli-reference.md#docker-使用模式)）。
 
 ### 檢查一：用新版 da-guard 驗 conf.d
 
@@ -669,6 +669,46 @@ fi
 - **有差異**：範例只以 `diff -q` 判斷有沒有差異，並讓 job 失敗，不把完整差異印進 CI 日誌，因為輸出含租戶 `_routing.receiver` 的 webhook URL（例如 Slack 的 `api_url`），印出來就等於把它們寫進日誌。要看完整差異，請在本機或有權限控管的環境，以兩版映像跑同樣兩條 `generate-routes` 後再 `diff -u`。輸出檔同樣含這些 URL，不要上傳成公開的 CI artifact。
 
 比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。
+
+### 檢查三：新舊兩版 exporter 送出的閾值列
+
+讀取端從 [#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832) 那一版起內建平台預設啟用的閾值：樹裡沒寫的鍵改送平台值，所以同一棵 conf.d 升級後每個租戶可能多出幾列。用兩版 exporter 映像各讀一次同一棵樹，比對 `/metrics` 的 `user_threshold` 列（只有租戶、元件、指標與 severity 這些 label，沒有 webhook URL，可以印在 CI 日誌）：
+
+```bash
+set -e
+out="$(mktemp -d)"
+trap 'docker rm -f exp-current exp-new > /dev/null 2>&1; rm -rf "$out"' EXIT
+docker run -d --name exp-current -p 18080:8080 -v "$PWD/conf.d:/conf.d:ro" \
+  ghcr.io/vencil/threshold-exporter:<目前版本> -config-dir /conf.d
+docker run -d --name exp-new -p 18081:8080 -v "$PWD/conf.d:/conf.d:ro" \
+  ghcr.io/vencil/threshold-exporter:<新版本> -config-dir /conf.d
+for side in current:18080 new:18081; do
+  name="${side%%:*}"; port="${side##*:}"
+  # exporter 載入完 conf.d 才開始回應 /metrics
+  for i in $(seq 1 60); do
+    curl -sf "http://127.0.0.1:$port/metrics" > "$out/$name.prom" && break
+    sleep 1
+  done
+  [ -s "$out/$name.prom" ] || { echo "$name 版的 exporter 沒有回應：docker logs exp-$name" >&2; exit 1; }
+  grep '^user_threshold{' "$out/$name.prom" | sort > "$out/$name.txt" || true
+done
+echo "新版多出（或值不同）的列："; comm -13 "$out/current.txt" "$out/new.txt"
+echo "新版少掉（或值不同）的列："; comm -23 "$out/current.txt" "$out/new.txt"
+```
+
+每一行是一條 series 連同它的值，所以值變了的列會在兩邊各出現一次。多出的列不等於多出的告警：告警要響，還需要對應的規則包已部署、指標存在。不想要的鍵照下方的升級順序第 2 步處理。
+
+### 內建閾值的升級順序
+
+從沒有內建層的版本（例如 v2.9.0）升上來，照這個順序做（[#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832) 決策 9）：
+
+1. 做完上面三項檢查，確認多出的列；再以新版 da-tools 跑 `da-tools migrate-builtin-defaults --config-dir conf.d`（不加 `--apply`，只預覽），它列出哪些鍵今天靠根層 `null` 或 `optional_overrides:` 列名關掉、在新版會開始送平台值。
+2. 在**同一個變更**裡做三件事：升級 threshold-exporter、平台規則包與 tenant-api；CI 換成新版 da-tools；處理不想要的預設啟用鍵——整個平台不要就在根 `_defaults.yaml` 的 `defaults:` 寫 `<鍵>: disable`（Helm：`--set thresholdConfig.defaults.<鍵>=disable`），某個租戶不要就在它的檔裡寫 `disable`，第 1 步預覽列出的鍵一併照改（Helm 的 `null` 也改成 `disable`）。GitOps 是同一個 commit 換映像 tag 與 conf.d；Helm 是同一次 `helm upgrade`。同一份 conf.d 供給多個叢集時，這些叢集要在同一個變更裡一起升級。
+3. **全部升級完**、每個叢集 exporter 的 `da_config_builtin_defaults_info{digest}` 都與 da-tools 相同之後，才刪複製品：`da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <摘要>`，每個叢集各給一次（見 [`migrate-builtin-defaults`](../cli-reference.md#migrate-builtin-defaults)）。Helm 自建 ConfigMap 的部署沒有這一步：chart 照樣寫出這些數字，跟著 chart 升級。
+
+第 2 步不能拆開。已發布的舊版 exporter 讀到根層的 `disable` 會丟掉整份根 `_defaults.yaml`（v2.9.0 實測），每個租戶的閾值列一起消失，所以根層的 `disable` 不能早於 exporter 升級；新版 da-guard 對根層 `optional_overrides:` 只列名的預設啟用鍵報 `root_optional_builtin`（結束碼 1），所以有這種寫法的樹不改就過不了新版 CI；而先升級 exporter、晚改樹，不想要的告警會在改樹之前先響。剩下的窗口是滾動更新那一兩分鐘：還沒被替換的舊 pod 可能讀到新的 ConfigMap。平台規則包的 `BuiltinDefaultsDigestMismatch` 告警會在有 exporter 沒升上去時觸發（沒部署平台規則包的環境，自己比對各元件的摘要指標）。
+
+第 3 步不能提前：舊版讀取端沒有內建層，讀到刪掉複製品的樹，那些鍵就沒有值，告警不響也不報錯。要回退到舊版，先把複製品放回去、根層的 `disable` 拿掉。
 
 ---
 
