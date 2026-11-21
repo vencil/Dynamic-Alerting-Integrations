@@ -25,7 +25,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_io import ensure_dir, exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
+from _lib_io import (  # noqa: E402  (#2128, #3981)
+    check_repo_artifact, ensure_dir, exit_on_output_write_error, write_repo_artifact)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION, Report  # noqa: E402
 
@@ -403,6 +404,13 @@ def main():
     # 1——與「有 drift，跑 --generate 就好」同碼，但 --generate 同樣會炸。
     # 姊妹生成器 generate_byo_rulepack_table.py 在 #1267 已建立「非零退出 ⇒
     # 什麼都沒改」的性質，這支當時漏了。外審實測抓到。
+    if args.generate:
+        # #3981: the entry's preconditions, BEFORE the first read — a FIFO or
+        # the process's own stdout named as a target would block (or be
+        # truncated under) the read below and never reach the write.
+        for lang in langs:
+            for target in (_get_stats_file(lang), _arch_doc(lang), _design_doc(lang)):
+                check_repo_artifact(target)
     plan = []          # (kind, path, rel, current, updated)
     try:
         for lang in langs:

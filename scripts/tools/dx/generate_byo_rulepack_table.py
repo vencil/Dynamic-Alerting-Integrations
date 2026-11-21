@@ -36,7 +36,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
+from _lib_io import check_repo_artifact, exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Deployment, read kubectl's way)
@@ -254,6 +254,10 @@ def main() -> int:
     plan = []
     for lang in langs:
         doc = _doc_path(lang)
+        if args.generate:
+            # #3981: the entry's preconditions before the read — a FIFO
+            # target would block it and never reach the write.
+            check_repo_artifact(doc)
         try:
             current = doc.read_text(encoding="utf-8")
         except OSError as exc:

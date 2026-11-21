@@ -1256,6 +1256,42 @@ def test_no_tool_calls_the_shared_atomic_writer_itself(monkeypatch):
         + "\n".join(f"  {f}:{','.join(map(str, lines))}" for f, lines in sorted(callers.items())))
 
 
+#: The files under ``scripts/`` that may NAME the atomic writer's module at
+#: all (the module does not name itself): its entry, and three that mention the file name in a message
+#: or a not-a-CLI list. Anything else spelling it is on its way to a call the
+#: AST detector above cannot follow (``importlib.import_module(...)`` bound
+#: to a name first — an adversarial review walked through that).
+#: ⚠️ A module name assembled at run time ("_lib_" + "atomic_write") is not
+#: seen by this either; it is not a mistake anyone makes by accident.
+_MAY_NAME_THE_ATOMIC_WRITER = frozenset({
+    "scripts/tools/_lib_io.py",
+    "scripts/tools/lint/_lint_helpers.py",
+    "scripts/tools/lint/check_structure.py",
+    "scripts/session-guards/preflight_bash.py",
+})
+
+
+def atomic_writer_namers(root: Path = SCRIPTS_DIR) -> set[str]:
+    return {p.relative_to(REPO_ROOT).as_posix() for p in sorted(root.rglob("*.py"))
+            if "__pycache__" not in p.parts
+            and "_lib_atomic_write" in p.read_text(encoding="utf-8", errors="replace")}
+
+
+def test_only_the_listed_files_name_the_atomic_writers_module(tmp_path):
+    namers = atomic_writer_namers()
+    assert namers == _MAY_NAME_THE_ATOMIC_WRITER, (
+        "names _lib_atomic_write without being listed (write through "
+        f"_lib_io.write_repo_artifact): {sorted(namers - _MAY_NAME_THE_ATOMIC_WRITER)}; "
+        f"listed but no longer naming it: {sorted(_MAY_NAME_THE_ATOMIC_WRITER - namers)}")
+    # The reader says yes on the shape the AST detector misses.
+    (tmp_path / "x.py").write_text(
+        'import importlib\n_aw = importlib.import_module("_lib_atomic_write")\n'
+        "_w = _aw.atomic_write_text\n_w('a', 'b')\n", encoding="utf-8")
+    assert shared_writer_caller_lines((tmp_path / "x.py").read_text(encoding="utf-8")) == []
+    assert [p.name for p in tmp_path.rglob("*.py")
+            if "_lib_atomic_write" in p.read_text(encoding="utf-8")] == ["x.py"]
+
+
 def test_not_guarded_entries_point_at_real_unguarded_sinks():
     """Exit-lock on the exceptions: every entry must name a site that is
     (a) inside a pinned file and (b) actually still unguarded. An entry that

@@ -1,4 +1,7 @@
-"""Every caller of the shared ``_atomic_write.atomic_write_text`` (#2128).
+"""Every generator that rewrites a repo artifact in place (#2128, #3981).
+
+They all reach the shared ``atomic_write_text`` through its entry,
+``_lib_io.write_repo_artifact``, since #3981.
 
 The helper now writes symlinks through, keeps hard links and a user's
 ``<out>.tmp``, and falls back in place (with a WARN) when the directory
@@ -9,7 +12,7 @@ tool as rc 2 plus one line naming the target — not a traceback at rc 1.
 
 Each call site is driven through its real ``main`` with only its INPUTS
 stubbed (what to render, where the target is), so the write path — the
-``with output_write(...)`` wrapper, the helper, ``exit_on_output_write_error``
+artifact entry, the helper, ``exit_on_output_write_error``
 — is the code that ships. ``CALLERS`` holds the sites (#2128's eight, less
 ``audit_rules_drift`` since #3982); every test is
 parametrized over all of them.
@@ -25,6 +28,8 @@ import errno
 import importlib
 import io
 import os
+import signal
+import stat
 import sys
 import tempfile
 import traceback
@@ -364,6 +369,73 @@ def test_enospc_mid_write_is_rc2_and_keeps_the_previous_file(name, root, monkeyp
     assert "previous file is unchanged" in err, err
     assert target.read_text(encoding="utf-8") == OLD
     assert sorted(p.name for p in target.parent.iterdir()) == ["target.md"]
+
+
+@pytest.mark.parametrize("name", _NAMES)
+@pytest.mark.parametrize("mode", [0o755, 0o644])
+def test_the_execute_bit_is_kept_and_nothing_else_of_the_mode(name, mode, root, monkeypatch):
+    """#3981: a generator passes no ``mode=`` — the entry keeps the execute
+    bit of the file it replaces and does not read the umask."""
+    target = _target(root)
+    os.chmod(target, mode)
+    old = os.umask(0o077)
+    try:
+        rc, err = run_caller(name, monkeypatch, root, target)
+    finally:
+        os.umask(old)
+    assert (rc, target.read_text(encoding="utf-8")) == (0, NEW), err
+    assert stat.S_IMODE(os.stat(target).st_mode) == mode
+
+
+_READS_ITS_TARGET_FIRST = ["rule_pack_stats_fragment", "rule_pack_stats_inject",
+                           "byo_rulepack_table", "tool_map", "doc_map"]
+
+
+@pytest.mark.parametrize("name", _READS_ITS_TARGET_FIRST)
+def test_a_fifo_target_is_rc2_before_anything_reads_it(name, root, monkeypatch):
+    """#3981: the two injectors read the document they rewrite; a FIFO there
+    blocked the read forever. An alarm stands in for the hang."""
+    if not hasattr(os, "mkfifo") or not hasattr(signal, "SIGALRM"):
+        pytest.skip("no FIFO / SIGALRM on this platform")
+    target = _target(root)
+    target.unlink()
+    os.mkfifo(target)
+
+    def hung(signum, frame):
+        raise AssertionError("blocked on the FIFO")
+
+    prev = signal.signal(signal.SIGALRM, hung)
+    signal.alarm(20)
+    try:
+        rc, err = run_caller(name, monkeypatch, root, target)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, prev)
+    assert rc == 2 and "Traceback" not in err, err
+    assert str(target) in err and len(err.strip().splitlines()) == 1, err
+    assert stat.S_ISFIFO(os.stat(target).st_mode)
+
+
+def test_the_stats_fragment_directory_is_created_when_absent(root, monkeypatch):
+    target = root / "fresh" / "target.md"
+    rc, err = run_caller("rule_pack_stats_fragment", monkeypatch, root, target)
+    assert (rc, target.read_text(encoding="utf-8")) == (0, NEW), err
+
+
+@pytest.mark.parametrize("name", ["tool_map", "doc_map"])
+def test_the_safe_flag_is_a_usage_error(name, root, monkeypatch):
+    """#3981: ``--safe`` is gone from both map generators — argparse refuses
+    it (rc 2) and the map is not rewritten."""
+    target = _target(root)
+    caller = CALLERS[name]
+    mod = importlib.import_module(caller.module)
+    run = caller.setup(mod, monkeypatch, root, target)
+    monkeypatch.setattr(sys, "argv", sys.argv + ["--safe"])
+    with pytest.raises(SystemExit) as exc, contextlib.redirect_stderr(io.StringIO()):
+        mod.main()
+    assert exc.value.code == 2
+    assert target.read_text(encoding="utf-8") == OLD
+    del run
 
 
 def test_the_caller_table_is_the_surveyed_population():
