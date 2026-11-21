@@ -17,7 +17,7 @@
 #     workflow 裡，每個 job 都落在「名稱登記於本檔（required 或 advisory）的某個
 #     job」的 needs 遞移閉包內。所以「這個 job 紅了為什麼不擋」只寫在下面的
 #     advisory 理由，測試檔裡沒有第二份例外清單。
-#   * .github/workflows/required-checks-drift.yml（每日排程＋改到本檔的 PR）——拿
+#   * .github/workflows/required-checks-drift.yml（每日排程＋每支 PR）——拿
 #     GitHub 的實際設定比對本檔；不一致就紅，排程失敗開票。它本身是 advisory：
 #     owner 一改設定，所有開著的 PR 不能因此同時轉紅。
 #
@@ -91,9 +91,9 @@ advisory:
       bench 診斷工具的 self-test；結果是估計值、不做判定（ADR-032 揭露、不介入）。
   - name: Python SAST (bandit -ll -ii)
     reason: >-
-      workflow 層的 on.pull_request.paths 讓範圍外的 PR 根本不啟動它，設成必要會讓
-      那些 PR 永遠等不到回報。改成每支 PR 都跑之後，還要先補 fail-closed 的
-      aggregate gate，否則跳過即綠（兩步的順序見 security-audit.yaml 檔頭）。
+      自 #3756 起不帶 paths，每支 PR 都跑；結構上已能設為必要，owner 尚未啟用。
+      ⛔ 不要改成在 job 上用 paths 判斷要不要跑：跳過的 job 回報 skipped，會滿足
+      必要檢查（見 security-audit.yaml 檔頭）。
   - name: TRK index covers issue/PR titles
     reason: >-
       規劃索引的覆蓋檢查；漏列是文件債，不是會壞掉產品的變更。
@@ -115,8 +115,8 @@ advisory:
       升級時把這一筆搬到 required 並標 `pending: true`。
   - name: E2E Spec Lint (A-13)
     reason: >-
-      playwright.yml 帶 workflow 層的 paths 過濾，結構上不能是必要檢查；A-13 的必要
-      執行點是 pre-commit hook（#1428）。
+      A-13 的必要執行點是 pre-commit hook（#1428）；CI 這一腿是第二道。playwright.yml
+      自 #3756 起不帶 paths，每支 PR 都跑，要不要升為必要由 owner 決定。
   - name: I-4 Runbook Smoke Test
     reason: >-
       會下載 amtool／promtool／yq，網路失敗就紅；沒有 aggregate gate 擁有它的名稱，

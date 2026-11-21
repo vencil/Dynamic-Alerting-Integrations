@@ -8,8 +8,10 @@ name: Required checks drift
 #
 # ⛔ ADVISORY on purpose, and listed so under `advisory:` in that file: the
 # moment the owner edits the settings, every open PR would turn red at once if
-# this blocked merges. It runs daily and on PRs that touch the file or this
-# check; a scheduled failure opens (or comments on) one tracking issue.
+# this blocked merges. It runs daily and on every PR (no `paths:` — #3756,
+# owner ruling 2026-11-14: a cheap verification job does not keep a list of
+# what it reads); a scheduled failure opens (or comments on) one tracking
+# issue.
 #
 # Reads `GET /repos/{owner}/{repo}/branches/main`, which needs only read
 # access — `/branches/main/protection` needs admin, which `github.token` never
@@ -23,10 +25,6 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main]
-    paths:
-      - '.github/required-checks.yaml'
-      - '.github/workflows/required-checks-drift.yml'
-      - 'scripts/ops/required_checks_drift.py'
 
 permissions:
   contents: read

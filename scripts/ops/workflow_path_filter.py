@@ -52,7 +52,8 @@ The list is now measured, not chased. Three pieces, one file each:
     trigger that may be working;
   * every workflow that gates on paths for a pull request
     (`on.pull_request.paths`) either carries
-    the generated regions or is named in NOT_YET_TRACED, with the reason;
+    the generated regions or is named in ADVISORY_PATH_GATES, with its kind
+    (what its `paths` list is) and the reason;
   * no workflow gates a JOB on paths with a path-filter action
     (PATH_FILTER_ACTIONS: dorny/paths-filter and its like, in any letter
     case). ci.yml, docs-ci.yaml and validate.yaml did until #3756 retired
@@ -172,43 +173,88 @@ _TRACE_ENV_TOUCH = re.compile(
     r"|\benv\b[^\n;|&]*\s-u\s*(?:PYTHONPATH|DA_PATH_TRACE_DIR)\b"
     r"|\benv\b[^\n;|&]*\s(?:-i|--ignore-environment|-)(?:\s|$)")
 
-# ⛔ Only shrinks. A workflow that gates on paths for a pull request and does
-# not carry the generated regions yet, and what stands between it and a trace.
-# `generate --check` fails when such a workflow is in neither state, and when
-# an entry here names a workflow that has since gained the regions (or lost
-# its gate) — a stale entry would excuse the same workflow if it regressed.
-# Its dead and unmodelled patterns are checked all the same.
-NOT_YET_TRACED: dict[str, str] = {
-    "backtest.yaml":
+# The advisory workflows that gate on paths for a pull request and do not carry
+# the generated regions, by KIND (#3756, owner ruling 2026-11-14). The kind
+# says what the workflow's `paths` list IS, and so what may be asked of it:
+#
+#   DIFF_DRIVEN   the list is meant to be the workflow's SUBJECT — the files
+#                 whose change is what the job reports on (a defaults file, a
+#                 conf.d tree, a benchmark's own inputs) — and is never
+#                 compared with what the job reads: no read assertion, now or
+#                 later. A change to the tool's own code is held by the pytest
+#                 legs, which run on every PR.
+#                 ⚠️ Not there yet: the ruling (point 2) has the list
+#                 GENERATED from the glob the tool picks its work items with.
+#                 Today the lists of guard-defaults-impact and
+#                 config-diff-advisory are hand-written and still name tool
+#                 code beside the subject; nothing here generates or checks
+#                 them. That step is open on #3756.
+#   AWAITS_READ_ASSERTION
+#                 the list is meant to be everything the job reads, and the
+#                 job is too expensive to run on every PR. It gets the read
+#                 assertion (atime, ruling point 4) in the order of
+#                 READ_ASSERTION_ORDER, and leaves this ledger when it does.
+#
+# There is no third kind (tests/ops/test_workflow_path_filter.py pins the two). A cheap verification job carries no `paths` at all
+# (security-audit, required-checks-drift and the E2E spec lint dropped theirs
+# with this ledger's kinds), and neither does a job that scans the whole tree;
+# such a workflow is not here, and gaining a `paths` list without an entry is
+# the UNTRACED finding below.
+#
+# `generate --check` fails when a gated workflow is in neither state, when an
+# entry names a workflow that has since gained the regions (or lost its gate)
+# — a stale entry would excuse the same workflow if it regressed — when a kind
+# is not one of the two, and when the AWAITS_READ_ASSERTION entries and
+# READ_ASSERTION_ORDER are not the same set. Dead and unmodelled patterns of
+# these workflows are checked all the same.
+DIFF_DRIVEN = "diff-driven"
+AWAITS_READ_ASSERTION = "awaits-read-assertion"
+ADVISORY_KINDS = (DIFF_DRIVEN, AWAITS_READ_ASSERTION)
+
+ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
+    "backtest.yaml": (
+        AWAITS_READ_ASSERTION,
         "its Python step queries a Prometheus; without one it returns before "
-        "the comparison, so a run that can be reproduced records a partial list",
-    "bench-gate-pr.yaml":
-        "`go test -bench` through shell scripts — not a go_build.sh build, so "
-        "its Go inputs are not recorded",
-    "bench-probe-write-latency.yaml":
-        "builds with `go test -c`, which go_build.sh does not see",
-    "bench-workload-effect.yaml":
-        "builds with `go test -c`, which go_build.sh does not see",
-    "bench-workload-record.yaml":
-        "`go test -bench` through bench_gate_compare.sh",
-    "component-docker-build.yaml":
-        "the reads happen inside `docker build`, outside any traced process",
-    "config-diff-advisory.yml":
-        "traceable (Python + go_build.sh) but not traced yet: what it loads "
-        "depends on the PR's base/head conf.d pair",
-    "forge-e2e-github.yaml":
-        "`go test -tags forge_e2e`, which go_build.sh does not see",
-    "guard-defaults-impact.yml":
-        "traceable (Python + go_build.sh) but not traced yet: what it runs "
-        "depends on which defaults files the PR changes",
-    "playwright.yml":
-        "node and a browser do the reading",
-    "required-checks-drift.yml":
-        "traceable but not traced yet: its input is a GitHub API response "
-        "fetched with the workflow token",
-    "security-audit.yaml":
-        "bandit reads the trees it is pointed at; the gate is those trees",
+        "the comparison, so the Python tracer records a partial list"),
+    "bench-gate-pr.yaml": (
+        DIFF_DRIVEN,
+        "the benchmark's inputs: non-test Go of the exporter and the scripts "
+        "that interleave and compare. The short list is deliberate"),
+    "bench-probe-write-latency.yaml": (
+        DIFF_DRIVEN,
+        "a self-test of the probe: the probe's test file and its analyser"),
+    "bench-workload-effect.yaml": (
+        DIFF_DRIVEN,
+        "a self-test of the diagnostic: the two scripts it runs"),
+    "bench-workload-record.yaml": (
+        DIFF_DRIVEN,
+        "the benchmark test files whose workload it records"),
+    "component-docker-build.yaml": (
+        AWAITS_READ_ASSERTION,
+        "the reads happen inside `docker build`, outside any Python process"),
+    "config-diff-advisory.yml": (
+        DIFF_DRIVEN,
+        "the conf.d tree whose base/head pair it diffs; what it loads depends "
+        "on that pair, so one run's reads say nothing about the next"),
+    "forge-e2e-github.yaml": (
+        AWAITS_READ_ASSERTION,
+        "`go test -tags forge_e2e`, which neither the Python tracer nor "
+        "go_build.sh sees"),
+    "guard-defaults-impact.yml": (
+        DIFF_DRIVEN,
+        "the defaults files whose blast radius it reports; which scopes it "
+        "runs depends on the files the PR changes"),
 }
+
+# The order the AWAITS_READ_ASSERTION workflows are wired in (ruling point 4;
+# image-ref-resolve.yaml, already traced, is converted first). Kept beside the
+# ledger and compared with it both ways, so the queue cannot name a workflow
+# the ledger has dropped or miss one it has gained.
+READ_ASSERTION_ORDER: tuple[str, ...] = (
+    "component-docker-build.yaml",
+    "backtest.yaml",
+    "forge-e2e-github.yaml",
+)
 
 # The boundary set: files a traced job reads through something the tracer
 # cannot see, by workflow. `generate` writes them into the `path-trace` region
@@ -1044,19 +1090,38 @@ def cmd_record(args: argparse.Namespace) -> int:
 def _ledger_findings(tracked: tuple[str, ...], traced_names: set[str],
                      gated: set[str], seen: set[tuple[str, str, str]]) -> list[str]:
     findings = []
-    for name in sorted(gated - traced_names - set(NOT_YET_TRACED)):
+    for name in sorted(gated - traced_names - set(ADVISORY_PATH_GATES)):
         findings.append(
             f"UNTRACED    {name} gates on paths for a pull request but has "
             "neither the generated path-trace regions nor an entry in "
-            "NOT_YET_TRACED (scripts/ops/workflow_path_filter.py). Trace it; "
-            "add an entry only with what stands in the way")
-    for name in sorted(set(NOT_YET_TRACED) & traced_names
-                       | set(NOT_YET_TRACED) - gated):
+            "ADVISORY_PATH_GATES (scripts/ops/workflow_path_filter.py). A "
+            "cheap job drops its `paths`; otherwise trace it, or add an entry "
+            "with its kind")
+    for name in sorted(set(ADVISORY_PATH_GATES) & traced_names
+                       | set(ADVISORY_PATH_GATES) - gated):
         findings.append(
-            f"STALE       NOT_YET_TRACED names {name}, which "
+            f"STALE       ADVISORY_PATH_GATES names {name}, which "
             + ("carries the generated regions now" if name in traced_names
                else "has no path gate (or no longer exists)")
             + " — delete the entry")
+    for name, entry in sorted(ADVISORY_PATH_GATES.items()):
+        pair = entry if isinstance(entry, tuple) and len(entry) == 2 else (None, None)
+        if not (pair[0] in ADVISORY_KINDS and isinstance(pair[1], str) and pair[1].strip()):
+            findings.append(
+                f"UNCLASSIFIED ADVISORY_PATH_GATES[{name!r}] is not a "
+                f"(kind, why) tuple with a kind in {ADVISORY_KINDS} and a "
+                f"reason written down: {entry!r}")
+    awaiting = {name for name, entry in ADVISORY_PATH_GATES.items()
+                if isinstance(entry, tuple) and entry[:1] == (AWAITS_READ_ASSERTION,)}
+    for name in sorted(awaiting ^ set(READ_ASSERTION_ORDER)):
+        findings.append(
+            f"UNORDERED   {name} is "
+            + ("an awaits-read-assertion entry that READ_ASSERTION_ORDER does not place"
+               if name in awaiting else
+               "in READ_ASSERTION_ORDER without an awaits-read-assertion entry")
+            + " (scripts/ops/workflow_path_filter.py)")
+    if len(set(READ_ASSERTION_ORDER)) != len(READ_ASSERTION_ORDER):
+        findings.append("UNORDERED   READ_ASSERTION_ORDER names a workflow twice")
     for key in sorted(set(RESERVED_PATTERNS) - seen):
         findings.append(
             f"STALE       RESERVED_PATTERNS names {key[0]} {key[1]}: {key[2]!r}, "
