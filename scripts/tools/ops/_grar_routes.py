@@ -26,9 +26,10 @@ Functions:
     routing authors (main receiver, overrides[i], routes[i]), the receiver
     rendered for it or why none is
 
-  Severity-dedup inhibit rule (#3899: one rule for every tenant):
-    build_dedup_inhibit_rule / generate_inhibit_rules
-    (pre3899_dedup_inhibit_rule: the older per-tenant shape, recognition only)
+  Severity-dedup inhibit rules (#3899: for every tenant at once; #4097: per cluster):
+    build_dedup_inhibit_rules / generate_inhibit_rules
+    (pre3899_dedup_inhibit_rule / pre4097_dedup_inhibit_rule: older shapes,
+    recognition only)
 """
 from __future__ import annotations
 
@@ -1320,44 +1321,91 @@ def _matcher_quoted(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_dedup_inhibit_rule(excluded: "Iterable[str]") -> dict:
-    """Build THE severity dedup inhibit rule (#3899): one rule for every
-    tenant, however many there are.
+#: The label that says which cluster an alert is about (ADR-006): every
+#: Prometheus sets it under ``global.external_labels``, so an alert carries it
+#: by the time it reaches Alertmanager.
+CLUSTER_LABEL = "da_cluster"
 
-    A critical alert suppresses the warning alert of the SAME tenant and the
-    SAME metric_group — ``equal: ["tenant", "metric_group"]`` is the tenant
-    isolation, and both equal labels are presence-gated (``=~".+"``) on BOTH
-    sides (the #1132 invariant: a label missing from both alerts would read
-    as equal). A tenant opted out is named in the target's
-    ``tenant!~"<excluded>"``: its warnings are never targets, so both
-    notifications reach it.
+
+def build_dedup_inhibit_rules(excluded: "Iterable[str]") -> list[dict]:
+    """Build THE severity dedup inhibit rules (#3899, #4097): two rules for
+    every tenant, however many tenants there are.
+
+    A critical alert suppresses the warning alert of the SAME tenant, the
+    SAME metric_group and the SAME cluster. A tenant may run in several
+    clusters (ADR-006); a critical in one of them says nothing about another
+    cluster's warning, which is the only notification that cluster gets.
+
+    The two rules differ only in how they read the cluster label
+    (``CLUSTER_LABEL``):
+
+    1. both alerts carry it — ``equal`` holds it, next to tenant and
+       metric_group;
+    2. neither alert carries it (``da_cluster=""``: a Prometheus that has not
+       set the external label) — tenant and metric_group, as before clusters
+       were told apart.
+
+    An alert with the label and one without never pair. Every ``equal`` label
+    is presence-gated (``=~".+"``) on BOTH sides (the #1132 invariant: a
+    label missing from both alerts would read as equal), which is why the
+    second case is a rule of its own and not an ungated ``equal`` label.
+
+    A tenant opted out is named in each target's ``tenant!~"<excluded>"``:
+    its warnings are never targets, so both notifications reach it.
 
     Args:
-        excluded: the tenant ids whose warnings this rule must not suppress.
-            Sorted, each made a regex literal (``_regex_literal``), joined
-            with ``|``; Alertmanager anchors a regex matcher to the whole
-            value, so ``a`` never excludes ``ab``. Empty: no ``tenant!~``
-            matcher at all.
+        excluded: the tenant ids whose warnings these rules must not
+            suppress. Sorted, each made a regex literal (``_regex_literal``),
+            joined with ``|``; Alertmanager anchors a regex matcher to the
+            whole value, so ``a`` never excludes ``ab``. Empty: no
+            ``tenant!~`` matcher at all.
 
     Returns:
-        inhibit_rule dict with source_matchers, target_matchers, and equal.
+        the two inhibit_rule dicts (source_matchers, target_matchers, equal),
+        the per-cluster one first.
     """
-    target = [
-        'severity="warning"',
-        'metric_group=~".+"',
-        'tenant=~".+"',
-    ]
     names = sorted(set(excluded))
+    exclusion = []
     if names:
         alternation = "|".join(_regex_literal(t) for t in names)
-        target.append(f'tenant!~"{_matcher_quoted(alternation)}"')
+        exclusion.append(f'tenant!~"{_matcher_quoted(alternation)}"')
+
+    def rule(cluster_matcher: str, equal: list[str]) -> dict:
+        return {
+            "source_matchers": [
+                'severity="critical"',
+                'metric_group=~".+"',
+                'tenant=~".+"',
+                cluster_matcher,
+            ],
+            "target_matchers": [
+                'severity="warning"',
+                'metric_group=~".+"',
+                'tenant=~".+"',
+                cluster_matcher,
+                *exclusion,
+            ],
+            "equal": equal,
+        }
+
+    return [
+        rule(f'{CLUSTER_LABEL}=~".+"', ["tenant", "metric_group", CLUSTER_LABEL]),
+        rule(f'{CLUSTER_LABEL}=""', ["tenant", "metric_group"]),
+    ]
+
+
+def pre4097_dedup_inhibit_rule(excluded: "Iterable[str]") -> dict:
+    """The one severity dedup rule the generator wrote between #3899 and
+    #4097, which pairs a critical with a warning of ANOTHER cluster — ⛔ only
+    for recognising an older output (or a hand copy) fed back as a source
+    (``_grar_validate.is_generated_dedup_rule``); never rendered. Kept in a
+    source it would go on suppressing across clusters next to the rules
+    rendered now."""
+    labelled = build_dedup_inhibit_rules(excluded)[0]
+    gate = f'{CLUSTER_LABEL}=~".+"'
     return {
-        "source_matchers": [
-            'severity="critical"',
-            'metric_group=~".+"',
-            'tenant=~".+"',
-        ],
-        "target_matchers": target,
+        "source_matchers": [m for m in labelled["source_matchers"] if m != gate],
+        "target_matchers": [m for m in labelled["target_matchers"] if m != gate],
         "equal": ["tenant", "metric_group"],
     }
 
@@ -1384,17 +1432,19 @@ def pre3899_dedup_inhibit_rule(tenant: str) -> dict:
 
 
 def generate_inhibit_rules(dedup_configs: "dict[str, str | None]") -> tuple[list[dict], list[str]]:
-    """Generate the severity dedup inhibit rule (#3899: one, not one per tenant).
+    """Generate the severity dedup inhibit rules (#3899: not one per tenant).
 
     Severity Dedup Mechanism:
       When enabled (default), suppresses a tenant's warning alert when a
-      critical alert of the same tenant fires for the same metric_group. This
-      reduces alert fatigue while preserving critical visibility. Implemented
-      as ONE Alertmanager inhibit rule (``build_dedup_inhibit_rule``) whose
-      size does not grow with the tenant count.
+      critical alert of the same tenant fires for the same metric_group in the
+      same cluster (#4097). This reduces alert fatigue while preserving
+      critical visibility. Implemented
+      as TWO Alertmanager inhibit rules (``build_dedup_inhibit_rules``: alerts
+      that carry the cluster label, and alerts that do not) whose size does
+      not grow with the tenant count.
 
     Which tenants it covers is stated by exclusion: every alert that carries
-    a ``tenant`` label is deduped unless that tenant is in the rule's
+    a ``tenant`` label is deduped unless that tenant is in the rules'
     ``tenant!~`` list — so a tenant the generator never read is deduped
     too (#3899, accepted as breaking). The list is the tenants with
     ``_severity_dedup: "disable"`` (both notifications are sent) and those
@@ -1410,7 +1460,7 @@ def generate_inhibit_rules(dedup_configs: "dict[str, str | None]") -> tuple[list
 
     Returns:
         (inhibit_rules_list, warnings_list) where:
-        - inhibit_rules_list: ``[rule]`` or ``[]``, ready for alertmanager.yml
+        - inhibit_rules_list: the two rules or ``[]``, ready for alertmanager.yml
         - warnings_list: an INFO finding (``severity_dedup_excluded``) for each
           tenant that set ``disable``
     """
@@ -1435,4 +1485,4 @@ def generate_inhibit_rules(dedup_configs: "dict[str, str | None]") -> tuple[list
 
     if not enabled:
         return [], all_warnings
-    return [build_dedup_inhibit_rule(excluded)], all_warnings
+    return build_dedup_inhibit_rules(excluded), all_warnings

@@ -329,7 +329,7 @@ Validation: 5 route(s), 5 receiver(s), 1 inhibit rule(s)
 OK: all configs valid
 ```
 
-產出檔 `.output/alertmanager.yml` 是完整的 Alertmanager 設定。`route.routes` 最前面是平台的 4 條路由（Watchdog、`component="custom"`、synthetic probe、sentinel），之後每個租戶各有一段（`matchers: tenant="…"`）；`receivers` 除了 5 個 `tenant-…` 之外還有 base 的 `default` 與 4 個平台 receiver，`inhibit_rules` 有一條 severity dedup 規則，涵蓋全部 5 個租戶（沒有租戶設 `_severity_dedup: disable`，所以它沒有 `tenant!~` 排除清單）。對照練習 2 的設定：
+產出檔 `.output/alertmanager.yml` 是完整的 Alertmanager 設定。`route.routes` 最前面是平台的 4 條路由（Watchdog、`component="custom"`、synthetic probe、sentinel），之後每個租戶各有一段（`matchers: tenant="…"`）；`receivers` 除了 5 個 `tenant-…` 之外還有 base 的 `default` 與 4 個平台 receiver，`inhibit_rules` 有兩條 severity dedup 規則（帶 `da_cluster` 的告警一條、不帶的一條），涵蓋全部 5 個租戶（沒有租戶設 `_severity_dedup: disable`，所以它們沒有 `tenant!~` 排除清單）。對照練習 2 的設定：
 
 | 租戶 | receiver | group_wait | repeat_interval | 來自 |
 |---|---|---|---|---|

@@ -162,7 +162,7 @@ groups:
 
 **Decision: one tenant may appear in several clusters. Each Prometheus says which cluster it is in with one external label, `da_cluster`; every rule whose input is tenant-exporter series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
 
-This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete, and only part of it is in place**: the rule packs already evaluate per cluster; per-cluster presence (point 6) and Alertmanager grouping and dedup (point 5) are not done yet. It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
+This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete, and only part of it is in place**: the rule packs already evaluate per cluster, and Alertmanager's warning/critical dedup is per cluster too (point 5); per-cluster presence (point 6) and Alertmanager grouping (point 5) are not done yet. It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
 
 ### Why it is needed
 

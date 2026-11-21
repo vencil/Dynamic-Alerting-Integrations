@@ -38,9 +38,10 @@
 #
 # ⚠ Severity Dedup 不以 sentinel 為 inhibit source：sentinel 表達的是「該 tenant
 # 已啟用 dedup」而非「critical 已觸發」，當不了 dedup 的 source。實際規則是
-# 一條涵蓋所有 tenant 的直接 critical→warning（generate_alertmanager_routes.py
-# 依 _severity_dedup 產出，equal: [tenant, metric_group]；disable 的 tenant 列在
-# target 的 tenant!~ 排除清單 → 兩種通知都收到；#3899）；
+# 涵蓋所有 tenant 的直接 critical→warning（generate_alertmanager_routes.py
+# 依 _severity_dedup 產出兩條：帶 da_cluster 的告警 equal: [tenant, metric_group,
+# da_cluster]，不帶的 equal: [tenant, metric_group]；disable 的 tenant 列在
+# target 的 tenant!~ 排除清單 → 兩種通知都收到；#3899、#4097）；
 # TenantSeverityDedupEnabled 僅供 Grafana / AM UI 顯示各 tenant 的 dedup 狀態。
 # 規則範本與行為矩陣見 docs/design/config-driven.md §2.8。
 #

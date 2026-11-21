@@ -151,12 +151,13 @@ data:
         # pattern), not sentinel delivery.
 
     inhibit_rules:
-      # Severity Dedup (critical suppresses warning of the same tenant and
-      # metric_group) is NOT written here: the generator renders ONE rule
+      # Severity Dedup (critical suppresses warning of the same tenant,
+      # metric_group and cluster) is NOT written here: the generator renders
+      # its two rules (alerts that carry da_cluster / alerts that do not, #4097)
       # from conf.d into the OUTPUT (`generate_alertmanager_routes.py
       # --config-dir conf.d/ --output-configmap --base-config <this
       # alertmanager.yml>`, #1211), with `_severity_dedup: "disable"` tenants
-      # in its `tenant!~` list (#3899). This file is the SOURCE it merges
+      # in their `tenant!~` list (#3899). This file is the SOURCE it merges
       # into, and the generator's rule kept here would be merged as written —
       # deduping tenants whatever conf.d says — so the merge refuses a source
       # that holds the generator's own rule shape
@@ -189,7 +190,15 @@ data:
       # alert_source="platform" are excluded. Watchdog is unaffected either way —
       # severity=none never matched the warning/critical targets.
       #
-      # Only THESE TWO rules need it. The generated severity-dedup rule and the
+      # ⛔ Silent Mode stays TENANT-WIDE: `equal` is [tenant], never da_cluster.
+      # A sentinel is computed from threshold-exporter series, so the da_cluster
+      # it carries only says which Prometheus evaluated it, while the alert it
+      # silences carries the cluster its series came from (ADR-006). With
+      # da_cluster in `equal` a tenant's silence would hold in one cluster only.
+      # The same goes for CustomRecipeSilent below. Pinned by
+      # tests/alertmanager-inhibit (…_in_another_cluster).
+      #
+      # Only THESE TWO rules need it. The generated severity-dedup rules and the
       # CustomRecipeSilent rule below are already immune for structural reasons:
       # the dedup target requires metric_group=~".+" and ZERO platform alerts
       # carry metric_group; CustomRecipeSilent targets component="custom" and no

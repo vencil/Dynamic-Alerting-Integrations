@@ -378,7 +378,7 @@ user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percen
 
 #### 自動抑制 (Auto-Suppression) — Severity Dedup via Alertmanager Inhibit
 
-v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（詳見 §2.8）。Alert Rule 不再使用 `unless critical` 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由產生器產出的**一條** Alertmanager inhibit rule 控制（不隨租戶數增加；[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
+v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（詳見 §2.8）。Alert Rule 不再使用 `unless critical` 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由產生器產出的**兩條** Alertmanager inhibit rule 控制（帶 `da_cluster` 的告警一條、不帶的一條；不隨租戶數增加；[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)、[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）。
 
 ```yaml
 # Warning 和 Critical 獨立觸發，TSDB 完整保留
@@ -567,19 +567,35 @@ tenants:
 
 ```yaml
 inhibit_rules:
-  # Severity Dedup: 一條規則涵蓋所有租戶（由 generate_alertmanager_routes.py 產出，
-  # 不要寫進 base——base 裡有產生器寫出的這條規則會被拒收；#3899）
-  # _severity_dedup: "disable" 的 tenant 列在 target 的 tenant!~ 排除清單 → 兩種通知都收到
-  # 沒有任何 tenant 是 enable 時不產出這條規則
+  # Severity Dedup: 兩條規則涵蓋所有租戶（由 generate_alertmanager_routes.py 產出，
+  # 不要寫進 base——base 裡有產生器寫出的這兩條規則會被拒收；#3899、#4097）
+  # _severity_dedup: "disable" 的 tenant 列在兩條 target 的 tenant!~ 排除清單 → 兩種通知都收到
+  # 沒有任何 tenant 是 enable 時不產出這兩條規則
+  # (1) 兩邊都帶 da_cluster：同租戶、同 metric_group、同叢集才抑制
   - source_matchers:
       - severity="critical"
       - metric_group=~".+"
       - tenant=~".+"
+      - da_cluster=~".+"
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
       - tenant=~".+"
+      - da_cluster=~".+"
       - tenant!~"db-b"          # 排除清單：disable 的 tenant，排序後以 | 串接
+    equal: ["tenant", "metric_group", "da_cluster"]
+  # (2) 兩邊都不帶 da_cluster（Prometheus 沒設 external_labels.da_cluster）：同租戶、同 metric_group
+  - source_matchers:
+      - severity="critical"
+      - metric_group=~".+"
+      - tenant=~".+"
+      - da_cluster=""
+    target_matchers:
+      - severity="warning"
+      - metric_group=~".+"
+      - tenant=~".+"
+      - da_cluster=""
+      - tenant!~"db-b"
     equal: ["tenant", "metric_group"]
 
   # Silent Mode: 壓制 warning 通知
@@ -623,20 +639,24 @@ flowchart TD
     C["Prometheus<br/>critical alert 觸發"] --> D["TSDB 記錄 ✅"]
     B --> E{"Alertmanager<br/>inhibit_rules"}
     D --> E
-    E -->|"critical 存在<br/>same metric_group + tenant"| F["warning 通知 ❌ 被抑制"]
+    E -->|"critical 存在<br/>same metric_group + tenant + cluster"| F["warning 通知 ❌ 被抑制"]
     E -->|"只有 warning"| G["warning 通知 ✅"]
     E -->|"critical"| H["critical 通知 ✅"]
 ```
 
 **Per-Tenant 控制機制**
 
-可選化以**一條**全域 inhibit rule 加排除清單實現（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899) 起；之前是每個租戶一條，規則數隨租戶數成長）：
+可選化以**兩條**全域 inhibit rule 加排除清單實現（規則數不隨租戶數成長；[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)、[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)）：
 
 1. `generate_alertmanager_routes.py` 掃描所有 tenant YAML 的 `_severity_dedup` 設定
-2. 產出一條規則：source `severity="critical"`、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，`equal: ["tenant", "metric_group"]`——同租戶、同 `metric_group` 才抑制
-3. `_severity_dedup: "disable"` 的 tenant 列進 target 的 `tenant!~"<清單>"`（排序、逐一轉成 regex 字面值、以 `|` 串接；Alertmanager 的 regex matcher 錨定整串，`tb` 不會排除 `tbb`）→ 兩種通知都收到。清單為空時不寫這個 matcher；沒有任何 tenant 是 enable 時不產出規則。產生器為每個 disable 的 tenant 印一行 `INFO: <tenant>: severity_dedup disabled, excluded from the severity dedup inhibit rule`（finding kind `severity_dedup_excluded`，不擋）
+2. 產出兩條規則：source `severity="critical"`、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，差別只在怎麼讀叢集標籤 `da_cluster`（每個 Prometheus 的 `external_labels.da_cluster`，[ADR-006](../adr/006-tenant-mapping-topologies.md)）：
+    - 兩側都帶（`da_cluster=~".+"`）：`equal: ["tenant", "metric_group", "da_cluster"]`——同租戶、同 `metric_group`、同叢集才抑制；租戶跑在多個叢集時，一個叢集的 critical 不抑制另一個叢集的 warning
+    - 兩側都不帶（`da_cluster=""`，Prometheus 沒設這個 external label）：`equal: ["tenant", "metric_group"]`——同租戶、同 `metric_group` 就抑制，所以兩個都沒設標籤的叢集仍會互相抑制
+
+    帶標籤與不帶標籤的告警不會配對。分成兩條是因為 `equal` 的每個標籤都要有存在性條件（Alertmanager 把兩邊都沒有的標籤視為相等）。Silent Mode（`equal: ["tenant"]`）與 `CustomRecipeSilent`（`equal: ["tenant", "name"]`）刻意維持整個租戶：sentinel 由 threshold-exporter 序列算出，它的 `da_cluster` 只代表是哪一台 Prometheus 評估的
+3. `_severity_dedup: "disable"` 的 tenant 列進兩條規則 target 的 `tenant!~"<清單>"`（排序、逐一轉成 regex 字面值、以 `|` 串接；Alertmanager 的 regex matcher 錨定整串，`tb` 不會排除 `tbb`）→ 兩種通知都收到。清單為空時不寫這個 matcher；沒有任何 tenant 是 enable 時不產出規則。產生器為每個 disable 的 tenant 印一行 `INFO: <tenant>: severity_dedup disabled, excluded from the severity dedup inhibit rule`（finding kind `severity_dedup_excluded`，不擋）
 4. ⚠️ 規則寫的是「誰**不**參與」：告警帶 `tenant`、但該租戶不在 conf.d 裡（例如還沒納管的租戶），也會被 dedup
-5. dedup 只能由產生器產出：`--base-config`（或 `--apply` 的叢集來源）裡若有路由產生器自己寫出的 severity dedup 規則（現在的全域形狀，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的寫法不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重）），會被拒收（結束碼 1、不寫檔）——它會被原樣併進輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`），通常是舊版產物被當成來源傳回。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用
+5. dedup 只能由產生器產出：`--base-config`（或 `--apply` 的叢集來源）裡若有路由產生器自己寫出的 severity dedup 規則（現在的兩條之一、#3899 到 #4097 之間不比對 `da_cluster` 的單一全域規則，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的寫法不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重）），會被拒收（結束碼 1、不寫檔）——它會被原樣併進輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`），通常是舊版產物被當成來源傳回。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用
 6. Exporter 仍輸出 `user_severity_dedup{tenant, mode}` metric（只有 enable 的 tenant 有序列；disable 的 tenant 不送）→ Prometheus sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示各 tenant dedup 狀態
 
 **行為矩陣**
@@ -664,7 +684,7 @@ tenants:
 ```bash
 python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ \
   --output-alertmanager --base-config alertmanager.yml --dry-run
-# 預覽合併後的 alertmanager.yml：dedup inhibit rule（一條）已合併進你的 base
+# 預覽合併後的 alertmanager.yml：dedup inhibit rule（兩條）已合併進你的 base
 ```
 
 ### 2.9 Alert Routing 客製化 (Config-Driven Routing)

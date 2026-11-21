@@ -23,7 +23,7 @@ lang: zh
 |------|------|------|----------|
 | 備份/維護期間假陽性風暴 | **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知（TSDB 有紀錄） | `_silent_mode` |
 | 計畫性維護忘記關閉 | **Maintenance Mode** | `maintenance: mute` 的告警在 PromQL 層不觸發，不是全部（[範圍](../design/config-driven.md#27-三態運營模式-operational-modes)；可設 `expires` 自動失效） | `_state_maintenance` |
-| Warning + Critical 重複告警 | **Severity Dedup** | 一條涵蓋所有租戶的 inhibit rule（同租戶、同 `metric_group` 配對；`disable` 的租戶在排除清單） | `_severity_dedup` |
+| Warning + Critical 重複告警 | **Severity Dedup** | 兩條涵蓋所有租戶的 inhibit rule（同租戶、同 `metric_group`、同 `da_cluster` 配對；告警不帶 `da_cluster` 時同租戶、同 `metric_group` 配對；`disable` 的租戶在排除清單） | `_severity_dedup` |
 | 通知目的地寫死在中央 | **Alert Routing** | Per-tenant route + receiver（6 種 type） | `_routing` |
 
 Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`（RFC3339，如 `"2099-04-01T00:00:00Z"`；解析不了時印 WARN 並忽略這筆設定——不靜音、maintenance 不生效）自動失效和 `reason` 欄位，防止「設了忘記關」。
@@ -234,7 +234,7 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 
 ### 功能
 
-讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定（你自己的設定，即來源）後輸出完整、合法的 Alertmanager 設定，見 Step 5。⚠️ Severity dedup 的 inhibit rule 由本工具產生（一條，`_severity_dedup: disable` 的租戶在它的 `tenant!~` 排除清單裡），**不要**寫進 base：base 裡若有路由產生器自己寫出的 severity dedup 規則（現在的全域形狀，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的空白、順序、引號、一個元素寫多個 matcher、舊式 `*_match` 不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重））會被拒收（結束碼 1、不寫檔），因為它會原樣進到輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`）。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
+讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定（你自己的設定，即來源）後輸出完整、合法的 Alertmanager 設定，見 Step 5。⚠️ Severity dedup 的 inhibit rule 由本工具產生（兩條：帶 `da_cluster` 的告警同叢集才配對，不帶的整個租戶配對；`_severity_dedup: disable` 的租戶在兩條的 `tenant!~` 排除清單裡；[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)），**不要**寫進 base：base 裡若有路由產生器自己寫出的 severity dedup 規則（現在的兩條之一、#3899 到 #4097 之間不比對 `da_cluster` 的單一全域規則，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的空白、順序、引號、一個元素寫多個 matcher、舊式 `*_match` 不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重））會被拒收（結束碼 1、不寫檔），因為它會原樣進到輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`）。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
 
 ### 模式
 

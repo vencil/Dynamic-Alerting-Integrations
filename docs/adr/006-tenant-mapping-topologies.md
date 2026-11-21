@@ -167,7 +167,7 @@ groups:
 
 **決策：同一個租戶可以出現在多個叢集。每台 Prometheus 用一個 external label `da_cluster` 說明自己在哪個叢集；凡是以租戶 exporter 序列為輸入的規則，聚合與比對都以 (tenant, da_cluster) 為單位，告警也逐叢集各發一次。**
 
-這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算；逐叢集的存在判定（第 6 點）與 Alertmanager 的分組、去重（第 5 點）還沒做。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算，Alertmanager 的 warning／critical 去重也已經逐叢集（第 5 點）；逐叢集的存在判定（第 6 點）與 Alertmanager 的分組（第 5 點）還沒做。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
 
 ### 為什麼需要
 

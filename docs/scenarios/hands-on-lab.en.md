@@ -334,7 +334,7 @@ Validation: 5 route(s), 5 receiver(s), 1 inhibit rule(s)
 OK: all configs valid
 ```
 
-`.output/alertmanager.yml` is a complete Alertmanager config. `route.routes` starts with the platform's four routes (Watchdog, `component="custom"`, synthetic probe, sentinel), then each tenant gets its own block (`matchers: tenant="…"`); `receivers` holds the base's `default` and the four platform receivers besides the five `tenant-…` ones, and `inhibit_rules` one severity dedup rule covering all five tenants (none sets `_severity_dedup: disable`, so it has no `tenant!~` exclusion list). Against the Exercise 2 settings:
+`.output/alertmanager.yml` is a complete Alertmanager config. `route.routes` starts with the platform's four routes (Watchdog, `component="custom"`, synthetic probe, sentinel), then each tenant gets its own block (`matchers: tenant="…"`); `receivers` holds the base's `default` and the four platform receivers besides the five `tenant-…` ones, and `inhibit_rules` two severity dedup rules (one for alerts carrying `da_cluster`, one for alerts without it) covering all five tenants (none sets `_severity_dedup: disable`, so they have no `tenant!~` exclusion list). Against the Exercise 2 settings:
 
 | Tenant | receiver | group_wait | repeat_interval | From |
 |---|---|---|---|---|

@@ -239,10 +239,26 @@ inhibit_rules:
   - severity="critical"
   - metric_group=~".+"
   - tenant=~".+"
+  - da_cluster=~".+"
   target_matchers:
   - severity="warning"
   - metric_group=~".+"
   - tenant=~".+"
+  - da_cluster=~".+"
+  equal:
+  - tenant
+  - metric_group
+  - da_cluster
+- source_matchers:
+  - severity="critical"
+  - metric_group=~".+"
+  - tenant=~".+"
+  - da_cluster=""
+  target_matchers:
+  - severity="warning"
+  - metric_group=~".+"
+  - tenant=~".+"
+  - da_cluster=""
   equal:
   - tenant
   - metric_group`,
