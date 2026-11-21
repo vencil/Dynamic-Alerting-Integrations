@@ -127,6 +127,7 @@ def _setup_byo(mod, mp, root, target):
 def _setup_adr_index(mod, mp, root, target):
     mp.setattr(mod, "discover_adrs", lambda adr_dir: [root / "0001.md"])
     mp.setattr(mod, "parse_adr", lambda p: None)
+    mp.setattr(mod, "status_mismatches", lambda entries: [])
     mp.setattr(mod, "render_table", lambda entries, prefix="adr/", lang="zh": "")
     mp.setattr(mod, "replace_sentinel_block", lambda cur, table, tgt=None: NEW)
     return _argv_runner(mod, mp, ["generate_adr_index.py", "--write", "--target", str(target)])
@@ -157,7 +158,7 @@ CALLERS: dict[str, Caller] = {
         "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:284",
         None, _setup_byo),
     "adr_index": Caller(
-        "generate_adr_index", "scripts/dx/generate_adr_index.py:260", "--target",
+        "generate_adr_index", "scripts/dx/generate_adr_index.py:346", "--target",
         _setup_adr_index),
     "planning_index": Caller(
         "generate_planning_index", "scripts/dx/generate_planning_index.py:512", "--target",

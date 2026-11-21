@@ -26,7 +26,11 @@ Pinned contracts
 5. **Targets**: architecture-and-design.md + docs/adr/README.md + README.en.md.
    The EN table uses the `.en.md` sibling's title and link, else the ZH file.
 
-6. **Real-corpus integration**:
+6. **Status consistency** (#2664): frontmatter `status:`, the `## 狀態` line and
+   the `.en.md` `## Status` line name one status; a missing or disagreeing place
+   is a mismatch, and both `--check` and `--write` exit 1 without writing.
+
+7. **Real-corpus integration**:
    - The generator parses every shipped `docs/adr/[0-9]*-*.md` without error.
    - Every live target is in sync (post-merge consumer expectation).
 """
@@ -49,11 +53,22 @@ import generate_adr_index as gai  # noqa: E402
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _write_adr(path: Path, *, title: str, status_block: str) -> None:
-    """Write a synthetic ADR with the minimum frontmatter the generator needs."""
+def _write_adr(
+    path: Path, *, title: str, status_block: str, fm_status: str | None = "auto"
+) -> None:
+    """Write a synthetic ADR with the minimum frontmatter the generator needs.
+
+    `fm_status="auto"` writes the frontmatter `status:` the status block implies
+    (so fixtures are consistent unless a test says otherwise); `None` omits it.
+    """
+    if fm_status == "auto":
+        m = gai.STATUS_LINE_RE.search(status_block)
+        fm_status = gai._norm_status(m.group("name")) if m else None
+    status_line = f"status: {fm_status}\n" if fm_status is not None else ""
     text = (
         "---\n"
         f'title: "{title}"\n'
+        f"{status_line}"
         "tags: [adr, test]\n"
         "audience: [platform-engineers]\n"
         "version: v9.9.9\n"
@@ -373,6 +388,101 @@ class TestMainCli:
 
 
 # ---------------------------------------------------------------------------
+# Status consistency across frontmatter / `## 狀態` / `.en.md` (#2664)
+# ---------------------------------------------------------------------------
+def _write_en(path: Path, status_block: str) -> None:
+    path.write_text(
+        '---\ntitle: "ADR-001: Alpha"\nlang: en\n---\n\n# ADR-001: Alpha\n\n'
+        f"## Status\n\n{status_block}\n\n## Context\n\nbody\n",
+        encoding="utf-8",
+    )
+
+
+class TestStatusMismatches:
+    def _entries(self, adr_dir):
+        return [gai.parse_adr(p) for p in gai.discover_adrs(adr_dir)]
+
+    def test_consistent_zh_and_en_is_clean(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="✅ **Accepted** (v1.0.0)")
+        # Emoji is not compared: 🟢 vs ✅ both mean Accepted.
+        _write_en(tmp_path / "001-alpha.en.md", "🟢 **Accepted** (v1.0.0)")
+        assert gai.status_mismatches(self._entries(tmp_path)) == []
+
+    def test_frontmatter_disagrees_with_body(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="✅ **Accepted**", fm_status="proposed")
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "ADR-001" in line and "status: proposed" in line and "'Accepted'" in line
+
+    @pytest.mark.parametrize("fm", ["Accepted", "in progress"])
+    def test_frontmatter_not_spelled_as_planning_status(self, tmp_path, fm):
+        # Normalised it would match, but the planning index compares verbatim
+        # and silently drops the entry, so the gate must not normalise it.
+        block = "✅ **Accepted**" if fm == "Accepted" else "🔵 **In Progress**"
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block=block, fm_status=fm)
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "is not one of" in line and "planning index drops" in line
+
+    def test_status_outside_planning_vocabulary(self, tmp_path):
+        # All three places agree, but `extended` is not a planning status.
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="🔵 **Extended**", fm_status="extended")
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "status: extended" in line and "is not one of" in line
+
+    def test_frontmatter_missing(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="✅ **Accepted**", fm_status=None)
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "no frontmatter `status:`" in line
+
+    def test_en_disagrees_with_zh(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="✅ **Accepted**")
+        _write_en(tmp_path / "001-alpha.en.md", "🟡 **Proposed**")
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "001-alpha.en.md" in line and "'Proposed'" in line
+
+    def test_en_without_status_line(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="✅ **Accepted**")
+        _write_en(tmp_path / "001-alpha.en.md", "Accepted, without the marker")
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "no `<emoji> **Status**` line" in line
+
+    def test_zh_only_adr_needs_no_en(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="🟡 **Proposed**")
+        assert gai.status_mismatches(self._entries(tmp_path)) == []
+
+    def test_multiword_name_matches_hyphenated_frontmatter(self, tmp_path):
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="🔵 **In Progress**", fm_status="in-progress")
+        assert gai.status_mismatches(self._entries(tmp_path)) == []
+
+    @pytest.mark.parametrize("mode", ["--check", "--write"])
+    def test_cli_exits_1_and_writes_nothing(self, tmp_path, mode):
+        adr_dir = tmp_path / "adr"
+        adr_dir.mkdir()
+        _write_adr(adr_dir / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="✅ **Accepted**", fm_status="proposed")
+        target = tmp_path / "arch.md"
+        before = f"# Hub\n\n{gai.SENTINEL_START}\nstale\n{gai.SENTINEL_END}\n"
+        target.write_text(before, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(_DX_DIR / "generate_adr_index.py"), mode,
+             "--adr-dir", str(adr_dir), "--target", str(target)],
+            capture_output=True, text=True, encoding="utf-8", timeout=30,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        assert proc.returncode == 1, proc.stderr
+        assert "STATUS MISMATCH: ADR-001" in proc.stderr
+        assert target.read_text(encoding="utf-8") == before
+
+
+# ---------------------------------------------------------------------------
 # Real-corpus integration — guards the live drift gate
 # ---------------------------------------------------------------------------
 class TestRealCorpus:
@@ -384,6 +494,11 @@ class TestRealCorpus:
             assert entry.title, f"{f.name}: empty title"
             assert entry.status_emoji, f"{f.name}: empty emoji"
             assert entry.status_name, f"{f.name}: empty status name"
+
+    def test_shipped_adrs_state_one_status(self):
+        """If this fails, make the ADR's three status places agree (#2664)."""
+        entries = [gai.parse_adr(p) for p in gai.discover_adrs()]
+        assert gai.status_mismatches(entries) == []
 
     @pytest.mark.parametrize("target,prefix,lang", gai.DEFAULT_TARGETS,
                              ids=lambda v: v.name if isinstance(v, Path) else v)
