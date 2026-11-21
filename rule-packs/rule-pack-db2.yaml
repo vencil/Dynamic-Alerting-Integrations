@@ -142,7 +142,7 @@ groups:
     rules:
       # Connected applications (MON_GET_DATABASE.APPLS_CUR_CONS)
       - record: tenant:db2_connections_active:max
-        expr: max by(tenant) (db2_connections_current)
+        expr: max by(tenant, da_cluster) (db2_connections_current)
 
       # Bufferpool hit ratio over the last 5m, 0–1, IBM's formula: pages the
       # agents found in the pool (without prefetched ones) / logical reads, per
@@ -155,7 +155,7 @@ groups:
       # 它只保證比值可以解讀，不控制誤報。
       - record: tenant:db2_bufferpool_hit_ratio:min
         expr: |
-          min by(tenant) (
+          min by(tenant, da_cluster) (
             rate(db2_bufferpool_pages_found_total[5m])
             / (rate(db2_bufferpool_logical_reads_total[5m]) >= 200 / 300)
           )
@@ -165,7 +165,7 @@ groups:
       # gauge (DB2 reports available −1), so there is no share and no alert.
       - record: tenant:db2_log_usage_percent:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             100 * db2_log_used_bytes
             / ((db2_log_used_bytes + db2_log_available_bytes) > 0)
           )
@@ -180,11 +180,11 @@ groups:
       # database member (rule-packs/exporters/db2.yaml), so for one pureScale / DPF
       # database it is that database's total.
       - record: tenant:db2_deadlocks:increase5m
-        expr: sum by(tenant) (increase(db2_deadlocks_total[5m]))
+        expr: sum by(tenant, da_cluster) (increase(db2_deadlocks_total[5m]))
 
       # Tablespace usage percentage
       - record: tenant:db2_tablespace_used_percent:max
-        expr: max by(tenant) (db2_tablespace_used_percent)
+        expr: max by(tenant, da_cluster) (db2_tablespace_used_percent)
 
       # File system of the automatic-storage paths, % used, the fullest path
       # (#4093). An automatic-storage tablespace with no MAXSIZE — every
@@ -211,7 +211,7 @@ groups:
       # Aggregation note: sum by(tenant) ADDS across DB2 instances, so the threshold's
       # meaning scales with instance count (same convention as db2_deadlocks:increase5m).
       - record: tenant:db2_lock_wait_time:rate5m
-        expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
+        expr: sum by(tenant, da_cluster) (rate(db2_lock_wait_time_seconds_total[5m]))
 
       # Sort overflow ratio — RATE ratio, NOT lifetime-cumulative ratio (#1181).
       # db2_sort_overflows_total / db2_sorts_total are both CUMULATIVE counters. Dividing
@@ -234,8 +234,8 @@ groups:
       # 窗是 5m，所以寫成每秒 200 / 300 次。0.05 門檻本身仍待真實流量校準（#1176）。
       - record: tenant:db2_sort_overflow_ratio:avg
         expr: |
-          sum by(tenant) (rate(db2_sort_overflows_total[5m]))
-          / (sum by(tenant) (rate(db2_sorts_total[5m])) >= 200 / 300)
+          sum by(tenant, da_cluster) (rate(db2_sort_overflows_total[5m]))
+          / (sum by(tenant, da_cluster) (rate(db2_sorts_total[5m])) >= 200 / 300)
 
   # -------------------------------------------------------
   # Threshold normalization: DB2
@@ -301,7 +301,7 @@ groups:
       # share an IP:port after federation.
       - alert: DB2DatabaseDown
         expr: |
-          max by(tenant, instance) (
+          max by(tenant, instance, da_cluster) (
             changes(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s]) == 0
             and
             count_over_time(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s]) > 1
@@ -309,13 +309,13 @@ groups:
             query_timestamp{job="tenant-exporters", query="db2_liveness"} offset 90s
           )
           or
-          max by(tenant, instance) (
+          max by(tenant, instance, da_cluster) (
             (
               query_interval{job="tenant-exporters", query="db2_liveness"}
-              unless on(tenant, instance)
+              unless on(tenant, instance, da_cluster)
               count_over_time(query_timestamp{job="tenant-exporters", query="db2_liveness"}[90s])
             )
-            and on(tenant, instance)
+            and on(tenant, instance, da_cluster)
             query_interval{job="tenant-exporters", query="db2_liveness"} offset 90s
           )
         for: 15s
@@ -343,20 +343,20 @@ groups:
       - alert: DB2QueryStalled
         expr: |
           (
-            max by(tenant, instance, query) (
+            max by(tenant, instance, query, da_cluster) (
               increase(queries_total{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness", status="success"}[5m]) == 0
               and
               count_over_time(queries_total{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness", status="success"}[5m]) > 1
             )
             or
-            max by(tenant, instance, query) (
+            max by(tenant, instance, query, da_cluster) (
               query_interval{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness"}
-              unless on(tenant, instance, query)
+              unless on(tenant, instance, query, da_cluster)
               queries_total{job="tenant-exporters", query=~"db2_.+", query!="db2_liveness", status="success"}
             )
           )
-          unless on(tenant, instance)
-          max by(tenant, instance) (
+          unless on(tenant, instance, da_cluster)
+          max by(tenant, instance, da_cluster) (
             (
               changes(query_timestamp{job="tenant-exporters", query="db2_liveness"}[5m]) == 0
               and
@@ -364,7 +364,7 @@ groups:
             )
             or
             (query_interval{job="tenant-exporters", query="db2_liveness"}
-             unless on(tenant, instance)
+             unless on(tenant, instance, da_cluster)
              count_over_time(query_timestamp{job="tenant-exporters", query="db2_liveness"}[5m]))
           )
           unless on(tenant)

@@ -54,28 +54,28 @@ groups:
     rules:
       # Memory usage (absolute bytes)
       - record: tenant:redis_memory_used_bytes:max
-        expr: max by(tenant) (redis_memory_used_bytes)
+        expr: max by(tenant, da_cluster) (redis_memory_used_bytes)
 
       # Connected clients
       - record: tenant:redis_connected_clients:max
-        expr: max by(tenant) (redis_connected_clients)
+        expr: max by(tenant, da_cluster) (redis_connected_clients)
 
       # Key eviction rate
       - record: tenant:redis_evicted_keys:rate5m
-        expr: sum by(tenant) (rate(redis_evicted_keys_total[5m]))
+        expr: sum by(tenant, da_cluster) (rate(redis_evicted_keys_total[5m]))
 
       # Keyspace hit ratio
       - record: tenant:redis_keyspace_hit_ratio:avg
         expr: |
-          sum by(tenant) (rate(redis_keyspace_hits_total[5m]))
+          sum by(tenant, da_cluster) (rate(redis_keyspace_hits_total[5m]))
           / (
-            sum by(tenant) (rate(redis_keyspace_hits_total[5m]))
-            + sum by(tenant) (rate(redis_keyspace_misses_total[5m]))
+            sum by(tenant, da_cluster) (rate(redis_keyspace_hits_total[5m]))
+            + sum by(tenant, da_cluster) (rate(redis_keyspace_misses_total[5m]))
           )
 
       # Replication lag (for replicas)
       - record: tenant:redis_replication_lag:max
-        expr: max by(tenant) (redis_connected_slave_lag_seconds)
+        expr: max by(tenant, da_cluster) (redis_connected_slave_lag_seconds)
 
   # -------------------------------------------------------
   # Threshold normalization: Redis

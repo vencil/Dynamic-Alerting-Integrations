@@ -60,7 +60,7 @@ groups:
       # is 300x too high and the alert never fires.
       - record: tenant:jvm_gc_pause:rate5m
         expr: |
-          sum by(tenant) (
+          sum by(tenant, da_cluster) (
             rate(jvm_gc_pause_seconds_sum[5m])
           )
 
@@ -102,7 +102,7 @@ groups:
       #     sample when both carry the same label set.
       - record: tenant:jvm_memory_used:percent
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             label_replace(
               100 * sum without(id) (jvm_memory_used_bytes{area="heap"})
                 / sum without(id) (jvm_memory_max_bytes{area="heap", id!~"ZGC Young Generation|Shenandoah Young Gen"} > 0),
@@ -117,7 +117,7 @@ groups:
       # Active thread count
       - record: tenant:jvm_threads:current
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             jvm_threads_current
           )
 
@@ -313,7 +313,7 @@ groups:
         expr: |
           (
             tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
-            and on(tenant)
+            and on(tenant, da_cluster)
             tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
           )
           unless on(tenant)
