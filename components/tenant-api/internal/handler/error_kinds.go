@@ -123,10 +123,12 @@ var kindTable = []KindSpec{
 	{Kind: errkind.StateFull, Status: http.StatusInsufficientStorage, Code: errcode.StateFull},
 	// 503, not 500 and not a 2xx (#1073): the write is saved, but reads do
 	// not show it until a reload succeeds. A 2xx (or 207, which a client's
-	// res.ok also reads as success) is the silent no-op the issue is about;
-	// 503 + Retry-After says the condition is temporary and a resend — safe
-	// for these replace/delete-by-id writes — loads it.
-	{Kind: errkind.StateReloadFailed, Status: http.StatusServiceUnavailable, Code: errcode.StateReloadFailed, Retryable: true, RetryAfterS: 5},
+	// res.ok also reads as success) is the silent no-op the issue is about.
+	// Not retryable and no Retry-After: the code's remedy is refresh, as for
+	// BATCH_COMMITTED — the write is saved, so the client reloads and looks
+	// instead of resending (a resent PUT overwrites any change made in
+	// between; a resent DELETE answers 404 once a reload has loaded it).
+	{Kind: errkind.StateReloadFailed, Status: http.StatusServiceUnavailable, Code: errcode.StateReloadFailed},
 	{Kind: errkind.ConfigFileParse, Status: http.StatusInternalServerError, Code: errcode.ConfigDecode},
 
 	{Kind: errkind.ForgeForbidden, Status: http.StatusForbidden, Code: errcode.ForgeForbidden, Fault: true},

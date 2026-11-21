@@ -435,7 +435,7 @@ export default function TenantManager() {
       // #1073: STATE_RELOAD_FAILED is a write that WAS saved (committed:
       // true) and that reads show once this server reloads it. Not a failure
       // to undo: the caller keeps its optimistic state, and the toast is the
-      // server's own text, not the generic "resend later" advice.
+      // server's own text, not the generic advice of its remedy (refresh).
       if (body && body.code === 'STATE_RELOAD_FAILED' && body.committed === true) {
         showNotification('warning', body.error);
         return { ok: true, committed: true, data: {} };

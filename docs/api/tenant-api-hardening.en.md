@@ -184,10 +184,10 @@ The declarations cover every existing field, so existing answers are unchanged. 
 
 After `PUT` / `DELETE /api/v1/groups/{id}`, `PUT` / `DELETE /api/v1/views/{id}` and `PUT /api/v1/federation/policy` write to the state store, the server re-reads the in-memory snapshot that reads are served from, so that the next `GET` shows the write. When that re-read failed (a transient I/O error reading the state store, say), the answer used to be 200 anyway: the write was saved, but `GET` kept answering the old content until the next periodic reload (`--reload-interval`, default 30 seconds) succeeded, and the client had no way to know.
 
-It is now **503 `STATE_RELOAD_FAILED`** with `committed: true` and `Retry-After: 5` / `retry_after_s: 5`; the remedy is `retry_after`:
+It is now **503 `STATE_RELOAD_FAILED`** with `committed: true`; the remedy is `refresh` (no `Retry-After` / `retry_after_s`):
 
-- **The write is saved** — it is not a write that failed. `committed: true` means "saved" here as on `BATCH_COMMITTED`, but where `BATCH_COMMITTED` says not to resend, here a resend is not needed and is allowed.
-- **Resending the same request is safe**: these endpoints replace or delete by id, so a resend writes the same content and triggers another re-read (for a delete, the item is already gone from the store and the resend is a successful no-op). Without a resend, the write takes effect when the next periodic reload succeeds; if that reload has already happened, a resent `DELETE` answers 404, meaning the delete took effect. A resent `PUT` replaces the whole item: a change someone else made to it in between is overwritten.
+- **The write is saved** — it is not a write that failed. `committed: true` means "saved" here as on `BATCH_COMMITTED`, and the remedy is the same `refresh`: reload and look first, **do not resend blindly**.
+- **No resend is needed**: the write takes effect when the next periodic reload succeeds. A resend is not forbidden (these endpoints replace or delete by id, so it triggers another re-read), but it has a cost: a resent `PUT` replaces the whole item, overwriting a change someone else made to it in between; if the periodic reload has already happened, a resent `DELETE` answers 404 (meaning the delete took effect). So a client that gets it reloads with `GET` first, and if it still sees the old content waits for the next reload instead of resending the same request.
 - Not 207: an HTTP client reads 207 as success (`fetch`'s `res.ok` is true), which would change nothing.
 
 The failed re-read itself is still recorded in `tenant_api_config_reload_failures_total` and `tenant_api_config_last_reload_successful`.

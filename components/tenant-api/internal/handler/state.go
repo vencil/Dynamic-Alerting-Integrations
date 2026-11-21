@@ -163,8 +163,8 @@ func (d *Deps) MutateState(ctx context.Context, key, entity, author string, tran
 //   - statestore.ErrUnavailable → 503 + Retry-After / retry_after_s
 //     (Kubernetes API or the state directory unreachable)
 //   - statestore.ErrTooLarge    → 507 (the ConfigMap's size budget)
-//   - *stateReloadError         → 503 STATE_RELOAD_FAILED + Retry-After,
-//     committed: true (saved, not yet served — #1073)
+//   - *stateReloadError         → 503 STATE_RELOAD_FAILED, committed: true,
+//     no Retry-After (saved, not yet served; remedy refresh — #1073)
 //
 // The bodies are fixed strings: err names the ConfigMap (namespace/name)
 // and its byte counts, which are for the operator's log, not the caller.
