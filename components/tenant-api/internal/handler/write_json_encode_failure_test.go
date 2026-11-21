@@ -109,7 +109,7 @@ func TestGetTenantEffective_NonFiniteFloat_ReadableWithPythonHash(t *testing.T) 
 	// RoutingOverrideInf test). #3832: the merged config also holds the
 	// built-in layer, so the body is `_routing` beside the built-in keys; it
 	// was b35b4f8f5c95253c for `_routing` alone.
-	if ec.MergedHash != "9e68b00279ec3f5f" {
-		t.Errorf("merged_hash = %q, want 9e68b00279ec3f5f", ec.MergedHash)
+	if ec.MergedHash != "487e10b578be6600" {
+		t.Errorf("merged_hash = %q, want 487e10b578be6600", ec.MergedHash)
 	}
 }

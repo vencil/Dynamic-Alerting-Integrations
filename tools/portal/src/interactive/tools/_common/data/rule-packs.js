@@ -154,9 +154,7 @@ const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
     { key: 'oracle_pga_usage_percent', value: 85, unit: '% of PGA_AGGREGATE_LIMIT', desc: 'PGA usage warning: v$pgastat total PGA allocated as a share of PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant; a database with no limit set (0) has no share. Replaces the absolute-bytes key oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)' },
   ],
   db2: [
-    { key: 'db2_log_usage_percent', value: 70, unit: '%', desc: 'Transaction log usage warning' },
     { key: 'db2_deadlocks_per_5m', value: 5, unit: 'count/5m', desc: "Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5, per database, for 5m). Replaces the per-second key db2_deadlock_rate (#1320: a unit change is a removal plus an addition, no alias)", valueCounterexample: { issue: 1176, direction: 'over_fire', observed: "one reference library's normal level is about 6 deadlocks per 5 minutes (0.02/s), above 5", observed_zh: '其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5' } },
-    { key: 'db2_tablespace_used_percent', value: 85, unit: '%', desc: 'Tablespace usage warning' },
   ],
   clickhouse: [
     { key: 'clickhouse_max_part_count', value: 300, unit: 'count', desc: 'Max part count per partition' },

@@ -133,10 +133,12 @@ Last reload:   2026-03-12T10:05:30Z
 Config mode:   directory
 Resolve at:    2026-03-12T03:30:00Z (overridden)
 
-Defaults (12 metrics):
+Defaults (14 metrics):
   container_cpu: 80
   container_cpu_throttle: 25
   container_memory: 85
+  db2_log_usage_percent: 75
+  db2_tablespace_used_percent: 80
   es_disk_usage_percent: 85
   es_heap_usage_percent: 85
   mysql_connection_usage_percent: 80
@@ -157,6 +159,8 @@ Resolved thresholds:
   tenant=tenant-a metric=connection_usage_percent value=70 severity=warning component=mysql
   tenant=tenant-a metric=cpu_throttle value=25 severity=warning component=container
   tenant=tenant-a metric=memory value=85 severity=warning component=container
+  tenant=tenant-a metric=log_usage_percent value=75 severity=warning component=db2
+  tenant=tenant-a metric=tablespace_used_percent value=80 severity=warning component=db2
   tenant=tenant-a metric=disk_usage_percent value=85 severity=warning component=es
   tenant=tenant-a metric=heap_usage_percent value=85 severity=warning component=es
   tenant=tenant-a metric=replication_lag value=30 severity=warning component=mysql

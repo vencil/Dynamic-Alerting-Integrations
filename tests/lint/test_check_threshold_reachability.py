@@ -52,7 +52,7 @@ def test_grandfather_list_is_exactly_the_remaining_dead_keys():
     # Scoped by prefix since P1-C added a second info class (not-chart-armed) —
     # counting all infos would silently couple this pin to that ledger's size.
     unwired_infos = [m for m in result["infos"] if m.startswith("known-unwired ")]
-    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 9  # #1174 added oracle_hard_parse_time_percent; 9 + #3778's mysql_threads_running, - #1320's retired clickhouse_memory_tracking_bytes, - #1320's two absolute Oracle keys, + oracle_pga_usage_percent
+    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 7  # - #1320's two DB2 % keys, now shipped defaults; #1174 added oracle_hard_parse_time_percent; 9 + #3778's mysql_threads_running, - #1320's retired clickhouse_memory_tracking_bytes, - #1320's two absolute Oracle keys, + oracle_pga_usage_percent
     assert all(tag.startswith("A:") for tag in gate.KNOWN_UNWIRED.values())
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
@@ -4059,8 +4059,8 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (8, 16), (
-        f"the HEADROOM note beside the key floors says artifacts +8 / generators "
+    assert (up_art, up_gen) == (10, 16), (
+        f"the HEADROOM note beside the key floors says artifacts +10 / generators "
         f"+16 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
