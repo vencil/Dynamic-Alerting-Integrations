@@ -1000,6 +1000,9 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "try-local/seed/conf.d",
     "tests/fixtures/da-tools-smoke/new/conf.d",
     "tests/fixtures/da-tools-smoke/old/conf.d",
+    # #4110: the trees the documented rego examples are evaluated on.
+    "tests/fixtures/opa/configured-never-served/conf.d",
+    "tests/fixtures/opa/served-over-threshold/conf.d",
     "tests/golden/fixtures/array-replace/conf.d",
     "tests/golden/fixtures/full-l0-l3/conf.d",
     "tests/golden/fixtures/l0-only/conf.d",

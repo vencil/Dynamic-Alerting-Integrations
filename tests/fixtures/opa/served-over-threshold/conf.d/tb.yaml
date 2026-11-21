@@ -1,0 +1,3 @@
+tenants:
+  tb:
+    mysql_connection_usage_percent: "60"

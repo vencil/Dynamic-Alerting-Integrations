@@ -2953,7 +2953,47 @@ da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
 ```
 
-**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`；保留鍵與 `_metadata` 的取法同 `evaluate-policy`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。⚠️ 同一閾值跨層用新舊兩種拼法寫時，`input.tenants` 只留勝出那一層的值與拼法（[#2720](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2720) 之後的逐閾值 view），所以用現行拼法讀可能撲空；對閾值下判斷請讀 `input.served`。`input.served`：每個租戶整個 UTC 日在 `/metrics` 發出的閾值，key 為現行拼法（別名已正規化；寫成 `<key>_critical` 鍵的 critical 列在 `<key>_critical` 之下，寫成 `"95:critical"` 的值仍在 `<key>` 之下）。⚠️ 每個 key 一律是 segment 清單（[#4025](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4025)，之前是此刻的一個數字）：`[{"from": "00:00", "to": "24:00", "value": 70, "severity": "warning"}]`，值整天不變時只有一段；沒有列的段 `value` 為 `null`，da-guard 有給原因時帶 `reason`（例如 `disabled`）。同一棵樹不論幾點跑，`served` 都一樣；只有 `expires:` 依 `--at`（預設現在）判斷是否過期，尚未到期的限時鍵在 stderr 印一行 `NOTE` 點名期限。一天中有 `/metrics` 收集不了的時段時結束碼 2、點名時段。對閾值的值下判斷的 rego 請讀 `input.served`，逐段判，比較前先排除 `null`：`some seg in input.served[t].mysql_connection_usage_percent; seg.value != null; seg.value > 90`（`some … in` 在 OPA 0.x 需要 `import rego.v1`）。`input.unserved`（[#4108](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4108)）：每個租戶有寫或繼承、但一天中任一段都沒有送出的門檻鍵（da-guard 的 `unserved_thresholds`：根 `defaults:` 的維度預設與 build 送不出的鍵也在內），key 為現行拼法、同 `input.served`（舊拼法經 `da-guard key-spellings` 換成現行拼法），不含 `_` 鍵；`served` 某段有值的鍵不在其中，所以一個鍵只會落在三種之一：有送出（`input.served` 有值）、有設定但整天不發（`input.unserved`）、兩邊都沒有。值是 da-guard 對寫法的呈現：純量是它的文字（`"9"`、`"disable"`），帶排程的鍵是 `{default, overrides 或 expires, reason}`，不是 `input.tenants` 的型別值；不是門檻值的寫法（例如 `true`）兩邊都不在。`expires:` 同樣依 `--at` 判。要分辨「已配置但 exporter 不發」與「沒寫」時讀它，不必拿 `tenants` 與 `served` 自己相減。`input.tenants` 裡的 `_metadata` 取自 served-values 的 facts（不讀某一刻）。⚠️ 已知限制：`opa-evaluate` 的 `input.tenants` 裡的 `_routing` 是寫法＋繼承，不是路由產生器解析後的結果——不套 `_routing_defaults`、不代換 `{{tenant}}`，只靠 `_routing_defaults` 的租戶沒有 `_routing`；要讀解析後的路由請用 `evaluate-policy`（[#2724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2724)）。`input.defaults` 是根 defaults 載體的頂層鍵（去掉 `_` 開頭者）照寫法、不拆包：一般的 `_defaults.yaml` 把閾值寫在 `defaults:` 底下，rego 要讀 `input.defaults.defaults.<key>`。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
+**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`；保留鍵與 `_metadata` 的取法同 `evaluate-policy`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。⚠️ 同一閾值跨層用新舊兩種拼法寫時，`input.tenants` 只留勝出那一層的值與拼法（[#2720](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2720) 之後的逐閾值 view），所以用現行拼法讀可能撲空；對閾值下判斷請讀 `input.served`。`input.served`：每個租戶整個 UTC 日在 `/metrics` 發出的閾值，key 為現行拼法（別名已正規化；寫成 `<key>_critical` 鍵的 critical 列在 `<key>_critical` 之下，寫成 `"95:critical"` 的值仍在 `<key>` 之下）。⚠️ 每個 key 一律是 segment 清單（[#4025](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4025)，之前是此刻的一個數字）：`[{"from": "00:00", "to": "24:00", "value": 70, "severity": "warning"}]`，值整天不變時只有一段；沒有列的段 `value` 為 `null`，da-guard 有給原因時帶 `reason`（例如 `disabled`）。同一棵樹不論幾點跑，`served` 都一樣；只有 `expires:` 依 `--at`（預設現在）判斷是否過期，尚未到期的限時鍵在 stderr 印一行 `NOTE` 點名期限。一天中有 `/metrics` 收集不了的時段時結束碼 2、點名時段。對閾值的值下判斷的 rego 請讀 `input.served`，逐段判，比較前先排除 `null`（見下方範例；`some … in` 在 OPA 0.x 需要 `import rego.v1`）。`input.unserved`（[#4108](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4108)）：每個租戶有寫或繼承、但一天中任一段都沒有送出的門檻鍵（da-guard 的 `unserved_thresholds`：根 `defaults:` 的維度預設與 build 送不出的鍵也在內），key 為現行拼法、同 `input.served`（舊拼法經 `da-guard key-spellings` 換成現行拼法），不含 `_` 鍵；`served` 某段有值的鍵不在其中，所以一個鍵只會落在三種之一：有送出（`input.served` 有值）、有設定但整天不發（`input.unserved`）、兩邊都沒有。值是 da-guard 對寫法的呈現：純量是它的文字（`"9"`、`"disable"`），帶排程的鍵是 `{default, overrides 或 expires, reason}`，不是 `input.tenants` 的型別值；不是門檻值的寫法（例如 `true`）兩邊都不在。`expires:` 同樣依 `--at` 判。要分辨「已配置但 exporter 不發」與「沒寫」時讀它，不必拿 `tenants` 與 `served` 自己相減。`input.tenants` 裡的 `_metadata` 取自 served-values 的 facts（不讀某一刻）。⚠️ 已知限制：`opa-evaluate` 的 `input.tenants` 裡的 `_routing` 是寫法＋繼承，不是路由產生器解析後的結果——不套 `_routing_defaults`、不代換 `{{tenant}}`，只靠 `_routing_defaults` 的租戶沒有 `_routing`；要讀解析後的路由請用 `evaluate-policy`（[#2724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2724)）。`input.defaults` 是根 defaults 載體的頂層鍵（去掉 `_` 開頭者）照寫法、不拆包：一般的 `_defaults.yaml` 把閾值寫在 `defaults:` 底下，rego 要讀 `input.defaults.defaults.<key>`。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
+
+**rego 範例**（[#4110](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4110)）：下面兩段在 CI 上以真的 OPA（版本見 `tests/fixtures/opa/opa.env`）對 `tests/fixtures/opa/<名稱>/` 的樹跑 `--dry-run` 的 input 求值，結果須與同目錄 `expected.json` 相同；中英兩份文件的範例必須逐字相同。第一段在任一時段送出的值高於 90 時報 error，第二段對有設定但整天都沒送出的鍵報 warning。
+
+<!-- rego-example: served-over-threshold -->
+```rego
+package vibe.examples.served_over_threshold
+
+import rego.v1
+
+violations contains v if {
+	some t, keys in input.served
+	some seg in keys.mysql_connection_usage_percent
+	seg.value != null
+	seg.value > 90
+	v := {
+		"msg": sprintf("mysql_connection_usage_percent is over 90 in %s-%s UTC", [seg.from, seg.to]),
+		"severity": "error",
+		"tenant": t,
+		"field": "mysql_connection_usage_percent",
+	}
+}
+```
+
+<!-- rego-example: configured-never-served -->
+```rego
+package vibe.examples.configured_never_served
+
+import rego.v1
+
+violations contains v if {
+	some t, keys in input.unserved
+	some k, _ in keys
+	v := {
+		"msg": sprintf("%s is configured but never served", [k]),
+		"severity": "warning",
+		"tenant": t,
+		"field": k,
+	}
+}
+```
 
 ---
 

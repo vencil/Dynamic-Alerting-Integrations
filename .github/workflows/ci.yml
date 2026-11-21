@@ -2800,7 +2800,8 @@ jobs:
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
-        run: pip install pyyaml -c requirements/ci-constraints.txt
+        # pytest: the rego-examples step below (#4110).
+        run: pip install pyyaml pytest -c requirements/ci-constraints.txt
 
       # #2115 0-B/B4: platform-data.json embeds the tenant metadata, read
       # through `da-guard served-values`. Built once from this checkout and
@@ -2839,6 +2840,28 @@ jobs:
 
       - name: Lint documentation
         run: make lint-docs
+
+      # #4110: the rego examples in docs/cli-reference*.md are evaluated on a
+      # real OPA, here only. Version and checksum are read from the one pin,
+      # tests/fixtures/opa/opa.env; the download is verified before it runs.
+      - name: Install OPA (pinned)
+        run: |
+          set -euo pipefail
+          # shellcheck source=/dev/null
+          . tests/fixtures/opa/opa.env
+          DL="$RUNNER_TEMP/opa"
+          mkdir -p "$DL"
+          curl -fsSL -o "$DL/opa" \
+            "https://github.com/open-policy-agent/opa/releases/download/${OPA_VERSION}/opa_linux_amd64_static"
+          bash scripts/ops/_verify_download.sh "$DL/opa" "$OPA_SHA256"
+          chmod 0755 "$DL/opa"
+          echo "OPA_BINARY=$DL/opa" >> "$GITHUB_ENV"
+
+      # OPA_REQUIRED: an unset OPA_BINARY fails here instead of skipping.
+      - name: Evaluate the documented rego examples on OPA
+        env:
+          OPA_REQUIRED: "1"
+        run: python3 -m pytest -p no:cacheprovider -q tests/ops/test_rego_examples.py
 
   federation-e2e:
     name: Federation E2E (ADR-020 IV-2j)
