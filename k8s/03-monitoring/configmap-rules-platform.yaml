@@ -324,27 +324,32 @@ data:
     \n        tick (--reload-interval, 30s by default) and clears on the first\n\n\
     \        good one; groups, views and federation-policy are read from the\n\n \
     \       tenant-api-state ConfigMap, not conf.d. Unlike\n\n        TenantApiConfigReloadFailing\
-    \ (a failure-rate alert), this fires\n\n        however rarely the reload is retried.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
-    \      summary: tenant-api {{ $labels.component }} config is stale — last reload\
-    \ failed\n  - alert: TenantApiPolicyUnavailable\n    expr: tenant_api_policy_available{job=\"\
-    tenant-api\"} == 0\n    for: 2m\n    labels:\n      alert_source: platform\n \
-    \     severity: warning\n    annotations:\n      description: 'The generator container\
-    \ in the tenant-api pod cannot judge writes,\n\n        so tenant-api refuses\
-    \ every write that changes a conf.d file\n\n        (PUT /tenants/{id}, custom\
-    \ alerts, tenant and group batches, in\n\n        every write mode) with 503:\
-    \ POLICY_UNAVAILABLE when the deployment\n\n        policy file (generator.policy.existingConfigMap)\
-    \ cannot be read or\n\n        parsed, VALIDATOR_UNAVAILABLE when the container\
-    \ does not answer,\n\n        has no da-read or da-guard, or is older than the\
-    \ policy''s\n\n        min_generator_version. Reads are unaffected. The 503 body''s\n\
-    \n        `reason` and the generator container''s log say which; GET\n\n     \
-    \   /v1/status on its socket (the container''s probe) shows the\n\n        policy\
-    \ error. Repair the policy ConfigMap, or fix the container\n\n        (image with\
-    \ generator-service, da-read, da-guard), and the alert clears on\n\n        the\
-    \ next scrape. There is no escape hatch (ADR-036 §5): the\n\n        previous\
-    \ --policy-unavailable-open is removed, and this gauge no\n\n        longer reflects\
-    \ a _domain_policy.yaml in conf.d or \"its last good\n\n        version\".\n\n\
-    \        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
+    \ (a failure-rate alert), this fires\n\n        however rarely the reload is retried.\
+    \ A 0 can also mean the\n\n        component was never wired to the reload observer\
+    \ (the gauge starts\n\n        at 0 and only a wired manager''s replayed startup\
+    \ load moves it): if\n\n        the WARN log shows no reload failure for this\
+    \ component, it is a\n\n        tenant-api wiring bug, not a config problem —\
+    \ report it.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
+    \      summary: tenant-api {{ $labels.component }} config is stale or unconfirmed\
+    \ — last reload failed or never reported\n  - alert: TenantApiPolicyUnavailable\n\
+    \    expr: tenant_api_policy_available{job=\"tenant-api\"} == 0\n    for: 2m\n\
+    \    labels:\n      alert_source: platform\n      severity: warning\n    annotations:\n\
+    \      description: 'The generator container in the tenant-api pod cannot judge\
+    \ writes,\n\n        so tenant-api refuses every write that changes a conf.d file\n\
+    \n        (PUT /tenants/{id}, custom alerts, tenant and group batches, in\n\n\
+    \        every write mode) with 503: POLICY_UNAVAILABLE when the deployment\n\n\
+    \        policy file (generator.policy.existingConfigMap) cannot be read or\n\n\
+    \        parsed, VALIDATOR_UNAVAILABLE when the container does not answer,\n\n\
+    \        has no da-read or da-guard, or is older than the policy''s\n\n      \
+    \  min_generator_version. Reads are unaffected. The 503 body''s\n\n        `reason`\
+    \ and the generator container''s log say which; GET\n\n        /v1/status on its\
+    \ socket (the container''s probe) shows the\n\n        policy error. Repair the\
+    \ policy ConfigMap, or fix the container\n\n        (image with generator-service,\
+    \ da-read, da-guard), and the alert clears on\n\n        the next scrape. There\
+    \ is no escape hatch (ADR-036 §5): the\n\n        previous --policy-unavailable-open\
+    \ is removed, and this gauge no\n\n        longer reflects a _domain_policy.yaml\
+    \ in conf.d or \"its last good\n\n        version\".\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
     \      summary: tenant-api writes cannot be judged — the generator container or\
     \ its deployment policy is unavailable; writes answer 503\n  - alert: GeneratorJudgementMemoryNearLimit\n\
     \    expr: da_generator_judgement_peak_rss_bytes{job=\"tenant-api\"} / da_generator_judgement_memory_limit_bytes{job=\"\

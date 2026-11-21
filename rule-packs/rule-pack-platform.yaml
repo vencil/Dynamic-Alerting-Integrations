@@ -1042,8 +1042,12 @@ groups:
       # to 0 on ANY reload failure and stays 0 until a load succeeds, so `== 0`
       # fires for a stuck manager whatever the retry cadence, and without the
       # 15m-window masking. `for: 2m` debounces a transient mid-write blip
-      # (flips 0 one tick, back to 1 the next). The gauge defaults to 1 so a never-reloaded deployment
-      # does not false-alarm. Recovery: every manager clears on the next good
+      # (flips 0 one tick, back to 1 the next). The gauge STARTS at 0 ("not
+      # yet confirmed", #1073): wiring a manager to the reload observer
+      # replays its startup load before the server serves, so a wired healthy
+      # manager reads 1 from the first scrape, while a component tenant-api
+      # forgot to wire stays at 0 and this alert fires (starting at 1 made that
+      # omission permanently green). Recovery: every manager clears on the next good
       # WatchLoop tick (groups / views also run one since #2856), a successful
       # write-reload, or a pod restart (startup re-reads).
       - alert: TenantApiConfigReloadStale
@@ -1053,7 +1057,7 @@ groups:
           severity: warning
           alert_source: platform
         annotations:
-          summary: "tenant-api {{ $labels.component }} config is stale — last reload failed"
+          summary: "tenant-api {{ $labels.component }} config is stale or unconfirmed — last reload failed or never reported"
           description: |
             The tenant-api `{{ $labels.component }}` config manager's LAST
             reload FAILED, so it is serving the LAST-GOOD snapshot and the
@@ -1068,7 +1072,11 @@ groups:
             good one; groups, views and federation-policy are read from the
             tenant-api-state ConfigMap, not conf.d. Unlike
             TenantApiConfigReloadFailing (a failure-rate alert), this fires
-            however rarely the reload is retried.
+            however rarely the reload is retried. A 0 can also mean the
+            component was never wired to the reload observer (the gauge starts
+            at 0 and only a wired manager's replayed startup load moves it): if
+            the WARN log shows no reload failure for this component, it is a
+            tenant-api wiring bug, not a config problem — report it.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
       # --- tenant-api cannot have writes judged (ADR-036 §5, #2903) ---

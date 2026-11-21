@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/federation/orphan"
@@ -589,12 +590,8 @@ func main() {
 	// MUST be installed
 	// BEFORE the WatchLoop goroutines below start AND before the server serves
 	// (handlers reach the observer via Reload) — both hold at this point in startup.
-	reloadObs := handler.NewConfigReloadObserver()
-	rbacMgr.SetReloadObserver(reloadObs)
-	tenantOrgMgr.SetReloadObserver(reloadObs)
-	federationPolicyMgr.SetReloadObserver(reloadObs)
-	groupMgr.SetReloadObserver(reloadObs)
-	viewMgr.SetReloadObserver(reloadObs)
+	wireConfigReloadObserver(handler.NewConfigReloadObserver(),
+		rbacMgr, tenantOrgMgr, federationPolicyMgr, groupMgr, viewMgr)
 
 	// ── RBAC + policy hot-reload goroutines ───────────────────────────────────
 	stopCh := make(chan struct{})
@@ -1016,4 +1013,24 @@ func recipePreviewer(socket string) handler.RecipePreviewer {
 	}
 	slog.Info("recipe-preview container configured (ADR-027 §5)", "socket", socket)
 	return recipepreview.NewClient(socket)
+}
+
+// wireConfigReloadObserver installs the one shared reload observer into every
+// config manager. Each SetReloadObserver replays that manager's initial-load
+// outcome, which is what moves its last-reload-successful gauge off the
+// observer's starting 0 ("not yet confirmed", #1073). A manager left out here
+// keeps reading 0 and fires TenantApiConfigReloadStale — and
+// TestWireConfigReloadObserver_CoversEveryComponent fails first, comparing the
+// components this function wires against handler.ConfigReloadComponents().
+// Split out of main (and not inlined there) so that test can call the wiring
+// main actually runs.
+func wireConfigReloadObserver(obs configwatcher.ReloadObserver,
+	rbacMgr *rbac.Manager, tenantOrgMgr *tenantorg.Manager,
+	federationPolicyMgr *fedpolicy.Manager, groupMgr *groups.Manager, viewMgr *views.Manager,
+) {
+	rbacMgr.SetReloadObserver(obs)
+	tenantOrgMgr.SetReloadObserver(obs)
+	federationPolicyMgr.SetReloadObserver(obs)
+	groupMgr.SetReloadObserver(obs)
+	viewMgr.SetReloadObserver(obs)
 }
