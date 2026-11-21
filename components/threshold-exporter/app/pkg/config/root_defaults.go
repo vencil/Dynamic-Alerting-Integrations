@@ -50,9 +50,28 @@ func rootDisabledDefault() float64 { return math.Float64frombits(rootDisabledNaN
 // `disable` of a built-in key (RootDisableText).
 func RootDisabledDefault(v float64) bool { return math.Float64bits(v) == rootDisabledNaN }
 
+// builtinOffNaN is the quiet-NaN bit pattern of the built-in layer's value
+// for a key the platform ships no value for (`arming: operator`, #4163):
+// the key is valued at the root, so a tenant's, a profile's or a subtree's
+// value and its `<key>_critical` are read as for any root-valued key, but no
+// resolver serves a default row for it (no finite number), it is no refusal
+// (RefusedDefault), and it switches no family off (familyHeadOff reads
+// RootDisabledDefault only). It must equal neither refusedUnparsedNaN,
+// rootDisabledNaN nor math.NaN().
+const builtinOffNaN uint64 = 0x7ff8_0000_0000_0004
+
+// builtinOffDefault is the Defaults value the built-in layer gives a key of
+// its off table (builtinOffNaN).
+func builtinOffDefault() float64 { return math.Float64frombits(builtinOffNaN) }
+
+// BuiltinOffDefault reports whether v, a Defaults value, is the built-in
+// layer's off value (builtinOffNaN).
+func BuiltinOffDefault(v float64) bool { return math.Float64bits(v) == builtinOffNaN }
+
 // RootDisableText reports whether text, the value the conf.d root
 // `defaults:` writes for key, opts the whole tree out of key (#3832
-// decision 3): key is in the built-in table and text is the word `disable`
+// decision 3): key is in the built-in layer — its table of values or its
+// off table (BuiltinOff, #4163) — and text is the word `disable`
 // (any letter case, no `:<severity>`). Nothing else is a root opt-out:
 //
 //   - not the aliases a subtree level reads as off (`false`, `off`,
@@ -64,7 +83,7 @@ func RootDisabledDefault(v float64) bool { return math.Float64bits(v) == rootDis
 //   - not a schedule or an `expires:` — a mapping is no scalar, and the
 //     root decode reads none (readRootDefault).
 func RootDisableText(key, text string) bool {
-	if _, builtin := builtinDefaults[key]; !builtin {
+	if _, builtin := builtinDefaults[key]; !builtin && !BuiltinOff(key) {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(text), disabledSpelling)
@@ -92,9 +111,10 @@ func refusedReason(text string) string {
 // RefusedDefault reports, for a Defaults value, whether the resolver refuses
 // it, and why (RefusedNonFinite or RefusedUnparsed). A NaN or ±Inf set by
 // code, not decoded from a file, is RefusedNonFinite. A root `disable`
-// (RootDisabledDefault) is not refused.
+// (RootDisabledDefault) and the built-in off value (BuiltinOffDefault) are
+// not refused.
 func RefusedDefault(v float64) (reason string, refused bool) {
-	if finiteThreshold(v) || RootDisabledDefault(v) {
+	if finiteThreshold(v) || RootDisabledDefault(v) || BuiltinOffDefault(v) {
 		return "", false
 	}
 	if math.Float64bits(v) == refusedUnparsedNaN {

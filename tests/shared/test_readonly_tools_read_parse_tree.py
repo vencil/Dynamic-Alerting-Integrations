@@ -42,6 +42,7 @@ for _sub in ("", "ops", "lint"):
         sys.path.insert(0, _p)
 
 import _lib_parse_tree  # noqa: E402
+from _builtin_layer import BUILTIN_OFF  # noqa: E402  (#4163)
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -153,7 +154,8 @@ def test_diagnose_declared_keys_are_the_exporter_text(tmp_path):
     """Each entry's source text, as the exporter's `[]string` reads it."""
     dg = _tool("diagnose")
     chain = dg.resolve_inheritance_chain("tx", str(_write(tmp_path, _DIAG)))
-    assert chain["declared"] == ["yes", "010", "x"]
+    # #4163: then the built-in layer's off keys the tenant has no value for.
+    assert chain["declared"] == ["yes", "010", "x", *sorted(BUILTIN_OFF)]
 
 
 def test_diagnose_parses_no_yaml(tmp_path, no_yaml_parse):

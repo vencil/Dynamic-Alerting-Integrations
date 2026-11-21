@@ -259,14 +259,16 @@ def test_the_exporters_key_checks_are_printed_from_their_fields(tmp_path):
     assert not any("V2!" in d for d in r["details"]), r["details"]
 
 
-def test_a_rename_line_beside_an_unread_key_in_a_tree_with_no_root_file(tmp_path):
-    """#3832: no root platform file and a renamed key — the tree is judged,
-    so the retired spelling no layer declares is unread beside its rename
-    line, and the advice is the key advice."""
+def test_a_rename_line_beside_a_read_key_in_a_tree_with_no_root_file(tmp_path):
+    """#3832: no root platform file and a renamed key — the tree is judged.
+    #4163: the alias target is a key of the built-in layer (valued off), so
+    the retired spelling is read with no root file: the rename line is a
+    notice beside it, no key is unread, and the row passes with no key
+    advice."""
     r = vc.check_routes(_tree(tmp_path, {"t-a.yaml": "tenants:\n  t-a:\n    mysql_cpu: \"40\"\n"}))
-    assert any("renamed" in d for d in r["details"]), r["details"]
-    assert any("unread `mysql_cpu` (no_row)" in d for d in r["details"]), r["details"]
-    assert r["hint"] == vc.KEY_VERDICT_ROUTES_HINT, r
+    assert any("NOTICE: tenant=t-a: key check renamed: metric mysql_cpu" in d for d in r["details"]), r["details"]
+    assert not any("unread" in d for d in r["details"]), r["details"]
+    assert r["status"] == vc.PASS and r["hint"] is None, r
 
 
 def test_an_unbound_profiles_threshold_key_is_a_notice_not_a_failure(tmp_path):
@@ -353,17 +355,18 @@ def test_a_tenant_writing_mysql_threads_running_alone_is_served(tmp_path):
     assert r["status"] == vc.PASS, r["details"]
 
 
-def test_its_critical_tier_needs_a_base_in_the_defaults(tmp_path):
-    """The critical row is admitted on `defaults[<base>]` only: a tenant base
-    alone serves the warning row, not the critical one, until a defaults
-    carrier holds a base value (what the docs and changelog say)."""
+def test_its_critical_tier_is_served_with_no_base_in_the_defaults(tmp_path):
+    """The critical row is admitted on `defaults[<base>]`. #4163: the built-in
+    layer values `mysql_threads_running` off, so a tenant's critical is served
+    beside its base with no number in any defaults carrier — and still with
+    one."""
     defaults = _DEV_DEFAULTS.read_text(encoding="utf-8")
     tenant = ("tenants:\n  db-x:\n    mysql_threads_running: \"40\"\n"
               "    mysql_threads_running_critical: \"50\"\n")
     alone = _served(_tree(tmp_path / "alone", {"_defaults.yaml": defaults, "db-x.yaml": tenant}),
                     "db-x")
-    assert alone["keys"]["mysql_threads_running_critical"] == {
-        "exporter": False, "reason": "no_row"}, alone["keys"]
+    assert alone["keys"]["mysql_threads_running_critical"] == {"exporter": True}, alone["keys"]
+    assert alone["values"]["mysql_threads_running_critical"] == 50, alone["values"]
     based = _served(_tree(tmp_path / "based", {
         "_defaults.yaml": defaults.replace("\ndefaults:\n", "\ndefaults:\n  mysql_threads_running: 30\n", 1),
         "db-x.yaml": tenant}), "db-x")

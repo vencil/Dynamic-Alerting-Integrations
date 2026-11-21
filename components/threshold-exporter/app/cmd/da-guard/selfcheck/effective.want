@@ -111,7 +111,7 @@
   "root_defaults_refused": [],
   "root_defaults_reserved": [],
   "builtin_defaults": {
-    "digest": "3f4ed6d06f1b",
+    "digest": "968ca3d1c003",
     "keys": {
       "container_cpu": {
         "value": 80,
@@ -187,6 +187,183 @@
         "value": 90,
         "state": "builtin",
         "tenants": 1
+      }
+    },
+    "off": {
+      "clickhouse_active_connections": {
+        "pack": "clickhouse",
+        "state": "off",
+        "configured": 0
+      },
+      "clickhouse_max_part_count": {
+        "pack": "clickhouse",
+        "state": "off",
+        "configured": 0
+      },
+      "clickhouse_queries_rate": {
+        "pack": "clickhouse",
+        "state": "off",
+        "configured": 0
+      },
+      "clickhouse_replication_queue": {
+        "pack": "clickhouse",
+        "state": "off",
+        "configured": 0
+      },
+      "db2_bufferpool_hit_ratio": {
+        "pack": "db2",
+        "state": "off",
+        "configured": 0
+      },
+      "db2_connections_active": {
+        "pack": "db2",
+        "state": "off",
+        "configured": 0
+      },
+      "db2_deadlocks_per_5m": {
+        "pack": "db2",
+        "state": "off",
+        "configured": 0
+      },
+      "db2_lock_wait_time": {
+        "pack": "db2",
+        "state": "off",
+        "configured": 0
+      },
+      "es_pending_tasks": {
+        "pack": "elasticsearch",
+        "state": "off",
+        "configured": 0
+      },
+      "es_search_latency_ms": {
+        "pack": "elasticsearch",
+        "state": "off",
+        "configured": 0
+      },
+      "jvm_gc_pause": {
+        "pack": "jvm",
+        "state": "off",
+        "configured": 0
+      },
+      "jvm_memory": {
+        "pack": "jvm",
+        "state": "off",
+        "configured": 0
+      },
+      "jvm_threads": {
+        "pack": "jvm",
+        "state": "off",
+        "configured": 0
+      },
+      "kafka_broker_count": {
+        "pack": "kafka",
+        "state": "off",
+        "configured": 0
+      },
+      "kafka_consumer_lag": {
+        "pack": "kafka",
+        "state": "off",
+        "configured": 0
+      },
+      "kafka_under_replicated_partitions": {
+        "pack": "kafka",
+        "state": "off",
+        "configured": 0
+      },
+      "mongodb_connections_current": {
+        "pack": "mongodb",
+        "state": "off",
+        "configured": 0
+      },
+      "mongodb_opcounters_rate": {
+        "pack": "mongodb",
+        "state": "off",
+        "configured": 0
+      },
+      "mongodb_replication_lag": {
+        "pack": "mongodb",
+        "state": "off",
+        "configured": 0
+      },
+      "mysql_threads_running": {
+        "pack": "mariadb",
+        "state": "off",
+        "configured": 0
+      },
+      "nginx_connections": {
+        "pack": "nginx",
+        "state": "off",
+        "configured": 0
+      },
+      "nginx_request_rate": {
+        "pack": "nginx",
+        "state": "off",
+        "configured": 0
+      },
+      "nginx_waiting": {
+        "pack": "nginx",
+        "state": "off",
+        "configured": 0
+      },
+      "oracle_hard_parse_time_percent": {
+        "pack": "oracle",
+        "state": "off",
+        "configured": 0
+      },
+      "oracle_pga_usage_percent": {
+        "pack": "oracle",
+        "state": "off",
+        "configured": 0
+      },
+      "oracle_sessions_active": {
+        "pack": "oracle",
+        "state": "off",
+        "configured": 0
+      },
+      "oracle_wait_time_rate": {
+        "pack": "oracle",
+        "state": "off",
+        "configured": 0
+      },
+      "rabbitmq_connections": {
+        "pack": "rabbitmq",
+        "state": "off",
+        "configured": 0
+      },
+      "rabbitmq_consumers": {
+        "pack": "rabbitmq",
+        "state": "off",
+        "configured": 0
+      },
+      "rabbitmq_queue_messages": {
+        "pack": "rabbitmq",
+        "state": "off",
+        "configured": 0
+      },
+      "rabbitmq_unacked_messages": {
+        "pack": "rabbitmq",
+        "state": "off",
+        "configured": 0
+      },
+      "redis_connected_clients": {
+        "pack": "redis",
+        "state": "off",
+        "configured": 0
+      },
+      "redis_evicted_keys_rate": {
+        "pack": "redis",
+        "state": "off",
+        "configured": 0
+      },
+      "redis_memory_used_bytes": {
+        "pack": "redis",
+        "state": "off",
+        "configured": 0
+      },
+      "redis_replication_lag": {
+        "pack": "redis",
+        "state": "off",
+        "configured": 0
       }
     }
   }

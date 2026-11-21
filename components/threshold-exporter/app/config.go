@@ -1962,8 +1962,15 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 		}
 	}
 
+	// #4163: the built-in layer's off value is no default a reader can use.
+	defaultsCount := 0
+	for _, v := range cfg.Defaults {
+		if !config.BuiltinOffDefault(v) {
+			defaultsCount++
+		}
+	}
 	logger.Printf("%s: %d defaults, %d profiles, %d state_filters, %d tenants, ~%d threshold overrides, %d state entries, %d silent modes",
-		prefix, len(cfg.Defaults), len(cfg.Profiles), len(cfg.StateFilters), len(cfg.Tenants),
+		prefix, defaultsCount, len(cfg.Profiles), len(cfg.StateFilters), len(cfg.Tenants),
 		overrideCount, stateCount, silentCount)
 
 	// #1231 c2: Errors (blocking channel — same set the tenant-api write

@@ -790,12 +790,32 @@ class BuiltinDefault(NamedTuple):
     tenants: int | None = None
 
 
+#: The closed set of an off key's `state` in effective's
+#: `builtin_defaults.off` (pkg/config BuiltinStateOff and the shared states,
+#: #4163).
+BUILTIN_OFF_STATES = frozenset({"off", "overridden", "opted_out", "withheld"})
+
+
+class BuiltinOff(NamedTuple):
+    """One key of effective's `builtin_defaults.off` (#4163): a key the
+    platform ships no value for, which the built-in layer values off.
+    `pack` the rule pack that reads it, `state` one of BUILTIN_OFF_STATES,
+    `root_value` the tree's number (`overridden` only, else None),
+    `configured` how many tenants serve it a threshold or switch it off."""
+    pack: str
+    state: str
+    root_value: float | None
+    configured: int
+
+
 class BuiltinDefaults(NamedTuple):
-    """effective's `builtin_defaults` (#3832): the built-in table the
+    """effective's `builtin_defaults` (#3832): the built-in layer the
     da-guard was compiled with — `digest` names it — and, per key, what the
-    exporter's build of the tree does with it."""
+    exporter's build of the tree does with it: `keys` the table of values,
+    `off` the off table (#4163; None only where a test builds one by hand)."""
     digest: str
     keys: "dict[str, BuiltinDefault]"
+    off: "dict[str, BuiltinOff] | None" = None
 
 
 class KeySource(NamedTuple):
@@ -2137,10 +2157,34 @@ def _builtin_defaults(doc: Any, returncode: int, stderr: str) -> "BuiltinDefault
             out[str(key)] = BuiltinDefault(finite(e["value"], f"key '{shown_key(key)}' value"), state,
                                            None if root is None else finite(root, f"key '{shown_key(key)}' root_value"),
                                            tenants)
+        if "off" not in doc:
+            raise EffectiveError(
+                f"da-guard {EFFECTIVE_SUBCOMMAND} exited {returncode} without the expected JSON "
+                "('builtin_defaults.off') — this da-guard is older than this tool: upgrade or rebuild it",
+                returncode, stderr, stale=True)
+        off_doc = doc["off"]
+        if not isinstance(off_doc, dict):
+            raise _ShapeError(f"off {shown_value(off_doc)}")
+        off: dict[str, BuiltinOff] = {}
+        for key, e in off_doc.items():
+            pack, state, root, configured = e["pack"], e["state"], e.get("root_value"), e["configured"]
+            if not isinstance(pack, str) or not pack:
+                raise _ShapeError(f"off key '{shown_key(key)}': pack {shown_value(pack)}")
+            if state not in BUILTIN_OFF_STATES:
+                raise _ShapeError(f"off key '{shown_key(key)}': state {shown_value(state)} is none of "
+                                  f"{sorted(BUILTIN_OFF_STATES)}")
+            if (root is None) == (state == "overridden"):
+                raise _ShapeError(f"off key '{shown_key(key)}': state {shown_value(state)} with "
+                                  f"root_value {shown_value(root)}")
+            if isinstance(configured, bool) or not isinstance(configured, int) or configured < 0:
+                raise _ShapeError(f"off key '{shown_key(key)}': configured {shown_value(configured)}")
+            off[str(key)] = BuiltinOff(pack, state,
+                                       None if root is None else finite(root, f"off key '{shown_key(key)}' root_value"),
+                                       configured)
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise EffectiveError(f"da-guard {EFFECTIVE_SUBCOMMAND}: builtin_defaults is not of its shape "
                              f"({error_text(e)})", returncode, stderr, broken=True) from e
-    return BuiltinDefaults(digest, out)
+    return BuiltinDefaults(digest, out, off)
 
 
 def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, TenantEffective]:

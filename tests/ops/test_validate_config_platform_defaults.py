@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 import validate_config as vc
-from _builtin_layer import BUILTIN_DEFAULTS
+from _builtin_layer import BUILTIN_DEFAULTS, BUILTIN_OFF
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -78,7 +78,8 @@ def test_a_tree_that_writes_no_default_lists_every_key_as_builtin(tmp_path, file
         assert _line(row, key) == (f"builtin `{key}` = {_fmt(BUILTIN_DEFAULTS[key])} — the root "
                                    "platform file does not give it a value; the built-in layer "
                                    "serves 2 of 2 tenant(s)"), row
-    assert len(row["details"]) == 1 + len(_KEYS), row
+    # #4163: then one line per rule pack of the off table.
+    assert len(row["details"]) == 1 + len(_KEYS) + len(set(BUILTIN_OFF.values())), row
 
 
 def test_a_number_under_the_root_defaults_is_overridden(tmp_path):
@@ -250,3 +251,33 @@ def test_it_never_changes_the_exit_code(tmp_path):
     rc, row = _cli(_tree(tmp_path, {"t1.yaml": "tenants:\n  t1: {}\n"}))
     assert row["status"] == vc.PASS, row
     assert rc == 0, row
+
+
+def _pack_line(row: dict, pack: str) -> str:
+    hits = [d for d in row["details"] if d.startswith(f"pack {pack}, ")]
+    assert len(hits) == 1, (pack, row)
+    return hits[0]
+
+
+def test_the_keys_the_platform_ships_no_value_for_are_listed_per_pack(tmp_path):
+    """#4163：平台不給值的鍵由內建層以 off 值宣告，每個規則包一行，逐鍵列出「設了門檻
+    或 disable 的租戶數／全部」。只寫 `_critical` 的租戶算有設定；根層的數字與 `disable`
+    照寫出。根層什麼都沒宣告，租戶的值照樣被讀。"""
+    redis = sorted(k for k, p in BUILTIN_OFF.items() if p == "redis")
+    assert len(redis) >= 3, redis
+    by_root, off_root, crit_only = redis[0], redis[1], redis[2]
+    row = vc.check_platform_defaults(_tree(tmp_path, {
+        "_defaults.yaml": f"defaults:\n  {by_root}: 7\n  {off_root}: disable\n",
+        "t1.yaml": f"tenants:\n  t1:\n    {crit_only}_critical: \"9\"\n",
+        "t2.yaml": "tenants:\n  t2: {}\n",
+    }))
+    assert row["status"] == vc.PASS, row
+    line = _pack_line(row, "redis")
+    assert f"`{by_root}` = 7 (root)" in line, line
+    assert f"`{off_root}` disable (root)" in line, line
+    assert f"`{crit_only}` 1/2" in line, line
+    for key in redis[3:]:
+        assert f"`{key}` 0/2" in line, line
+    assert {d.split(",")[0] for d in row["details"] if d.startswith("pack ")} == {
+        f"pack {p}" for p in set(BUILTIN_OFF.values())}, row
+

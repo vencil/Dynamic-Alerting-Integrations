@@ -24,8 +24,10 @@ func TestKeyVerdict_GateKindNamesTheGatesFindingOfTheSameFact(t *testing.T) {
 		"subtree-reserved": {map[string]string{"_defaults.yaml": root, "team/_defaults.yaml": "_silent_mode: warning\n",
 			"team/ta.yaml": tenant}, "_silent_mode", "subtree_default_reserved_key", "subtree_default_reserved_key"},
 		"subtree-undeliverable": {map[string]string{"_defaults.yaml": root,
-			"team/_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n", "team/ta.yaml": tenant},
-			"mysql_threads_running", "undeliverable", "subtree_default_undeliverable"},
+			// #4163: a registry key is in the built-in layer, so the root
+			// declares it; a key outside the layer is what stays undeliverable.
+			"team/_defaults.yaml": "defaults:\n  my_own_threshold: 30\n", "team/ta.yaml": tenant},
+			"my_own_threshold", "undeliverable", "subtree_default_undeliverable"},
 		// The verdict's reason is `retired`; the gate's finding is the
 		// undeliverable one — paired by the set, never by the name.
 		"subtree-retired": {map[string]string{"_defaults.yaml": root,

@@ -195,10 +195,12 @@ func TestRootDisable_OnlyTheWordDisableOfABuiltinKeyIsAnOptOut(t *testing.T) {
 		line, key, says string
 		served          bool // the key keeps a row
 	}{
-		"false":                     {"container_memory: false", "container_memory", "write `container_memory: disable`", true},
-		"off":                       {"container_memory: \"off\"", "container_memory", "write `container_memory: disable`", true},
-		"disabled":                  {"container_memory: disabled", "container_memory", "write `container_memory: disable`", true},
-		"disable of a declared key": {"redis_connected_clients: disable", "redis_connected_clients", "is not one", false},
+		"false":    {"container_memory: false", "container_memory", "write `container_memory: disable`", true},
+		"off":      {"container_memory: \"off\"", "container_memory", "write `container_memory: disable`", true},
+		"disabled": {"container_memory: disabled", "container_memory", "write `container_memory: disable`", true},
+		// #4163: every registry key is in the layer; a key outside it has
+		// nothing to switch off.
+		"disable of a key outside the layer": {"my_own_threshold: disable", "my_own_threshold", "is not one", false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

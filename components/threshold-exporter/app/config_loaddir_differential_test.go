@@ -176,7 +176,7 @@ func TestLoadDirOperationalStatesMatchTheScrape(t *testing.T) {
 			}
 			// The states agreeing could hide two different configs that happen
 			// to resolve alike on this fixture; the config itself must match.
-			if !reflect.DeepEqual(managerCfg, loadedCfg) {
+			if !sameThresholdConfig(managerCfg, loadedCfg) {
 				t.Errorf("config.LoadDir built a different ThresholdConfig from ConfigManager.Load")
 			}
 			// Guard against a vacuous pass: the fixture must light up every
@@ -263,7 +263,7 @@ func TestLoadDirParseFailuresMatchTheExporterCounter(t *testing.T) {
 	}
 	// Skipped, not fatal: the rest of the tree still loads, and loads as the
 	// exporter loaded it.
-	if !reflect.DeepEqual(mgr.GetConfig(), cfg) {
+	if !sameThresholdConfig(mgr.GetConfig(), cfg) {
 		t.Errorf("config.LoadDir built a different ThresholdConfig from ConfigManager.Load on a tree with broken files")
 	}
 	if _, ok := cfg.Tenants["t-plain"]; !ok {

@@ -2779,7 +2779,7 @@ groups:
       - record: rule_pack_builtin_defaults_info
         expr: vector(1)
         labels:
-          rulepack_digest: "3f4ed6d06f1b"
+          rulepack_digest: "968ca3d1c003"
       # <<< GENERATED:threshold-registry:platform-builtin-digest
       # A component that serves no digest series is a release older than the
       # built-in layer (#3832): it has no built-in value at all, so it counts

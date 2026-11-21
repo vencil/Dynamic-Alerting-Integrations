@@ -220,7 +220,7 @@ Today's three reserved-key lists are instead generated from the registry. CI reg
 |---|---|---|
 | `_profile` names a profile that does not exist | `read` | blocks |
 | `expires:` is not an RFC3339 time | `read` | blocks |
-| `expires:` on a key declared only in `optional_overrides`, with no platform default | `read` | blocks |
+| `expires:` on a key declared only in `optional_overrides`, with no platform default, or on a key the built-in layer values off ([ADR-017](017-defaults-yaml-inheritance-dual-hash.en.md) decision 11) | `read` | blocks |
 | `expires:` on a `_critical` key, a dimension key or a reserved key (never takes effect, never reverts) | `read` | blocks |
 
 Value checks go the same way: the function a registry `check` names is called by the Go write check (decision 1). For example, the exporter reads `_silent_mode: purple` (the verdict is `read`) but does not know the value and silences nothing; what blocks it is this value check, not the key-name verdict. How a bad value already on disk is handled is decision 12.

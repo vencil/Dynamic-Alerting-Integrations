@@ -322,7 +322,9 @@ func TestBuiltinLayer_TheKeyVerdictJudgesATreeWithNoRootFile(t *testing.T) {
 	if got["pg_connections"] != "read" {
 		t.Errorf("pg_connections: verdict %q, want read (the built-in layer gives it a base)", got["pg_connections"])
 	}
-	if got["redis_connected_clients"] != "unread" {
-		t.Errorf("redis_connected_clients: verdict %q, want unread (no layer declares it)", got["redis_connected_clients"])
+	// #4163: a key the platform ships no value for is in the layer too,
+	// valued off, so a tenant value is read with no root file at all.
+	if got["redis_connected_clients"] != "read" {
+		t.Errorf("redis_connected_clients: verdict %q, want read (the built-in layer values it off)", got["redis_connected_clients"])
 	}
 }

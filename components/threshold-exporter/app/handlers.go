@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // healthHandler answers the K8s liveness probe. Always 200 once the
@@ -77,8 +79,20 @@ func configViewHandler(manager *ConfigManager) http.HandlerFunc {
 			}
 		}
 
-		fmt.Fprintf(w, "\nDefaults (%d metrics):\n", len(cfg.Defaults))
+		// #4163: the built-in layer's off value (a key the platform ships no
+		// value for) is no default a reader of this page can act on: not
+		// listed, as a key the root does not write was not before.
+		valued := 0
+		for _, v := range cfg.Defaults {
+			if !config.BuiltinOffDefault(v) {
+				valued++
+			}
+		}
+		fmt.Fprintf(w, "\nDefaults (%d metrics):\n", valued)
 		for k, v := range cfg.Defaults {
+			if config.BuiltinOffDefault(v) {
+				continue
+			}
 			fmt.Fprintf(w, "  %s: %.0f\n", k, v)
 		}
 

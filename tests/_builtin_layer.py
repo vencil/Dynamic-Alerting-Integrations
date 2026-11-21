@@ -31,6 +31,22 @@ def _load() -> dict[str, float]:
 #: the int da-guard's JSON decodes to).
 BUILTIN_DEFAULTS: dict[str, float] = _load()
 
+_OFF_GEN = _GEN.with_name("unset_threshold_keys_gen.go")
+
+
+def _load_off() -> dict[str, str]:
+    text = _OFF_GEN.read_text(encoding="utf-8")
+    out = dict(re.findall(r'\{"([^"]+)", "([^"]+)"\}', text))
+    if not out:
+        raise AssertionError(f"no off-table entries parsed from {_OFF_GEN}")
+    return out
+
+
+#: The layer's off table (#4163): key -> the rule pack that reads it. These
+#: keys hold no number in any reader's answer (served values, effective
+#: config) unless the tree writes one; a tenant value for one is read.
+BUILTIN_OFF: dict[str, str] = _load_off()
+
 
 def with_builtin(cfg: dict) -> dict:
     """*cfg* with every built-in key it does not hold laid under it."""

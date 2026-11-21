@@ -97,7 +97,7 @@ tenants:
 
 	cfg := mgr.GetConfig()
 	// #3832: the built-in layer goes under the file's own two defaults.
-	if want := 2 + builtinKeysNotIn(); len(cfg.Defaults) != want {
+	if want := 2 + layerKeysNotIn("mysql_threads_running"); len(cfg.Defaults) != want {
 		t.Errorf("expected %d defaults, got %d", want, len(cfg.Defaults))
 	}
 	if len(cfg.Tenants) != 2 {

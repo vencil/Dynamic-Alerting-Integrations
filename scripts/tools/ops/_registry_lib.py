@@ -1062,6 +1062,19 @@ def builtin_defaults_digest(table: dict[str, str]) -> str:
     return hashlib.sha256(lines.encode("utf-8")).hexdigest()[:12]
 
 
+def builtin_layer_digest(doc: dict) -> str:
+    """The digest of *doc*'s whole built-in layer (#4163): the table of
+    values (`builtin_defaults`) and the off table — every key the platform
+    ships no value for (`unset_notice_keys`), one ``key=off`` line each. The
+    readers lay both, so two components hold the same layer when this is
+    equal; it is the digest the generated Go table and the platform pack
+    carry. The two tables never share a key (an arming is one or the other)."""
+    table = dict(builtin_defaults(doc))
+    for key in unset_notice_keys(doc):
+        table[key] = "off"
+    return builtin_defaults_digest(table)
+
+
 def render_builtin_defaults_go(doc: dict) -> str:
     """The exact text of the generated Go table for *doc*'s default-armed keys.
 
@@ -1082,9 +1095,10 @@ def render_builtin_defaults_go(doc: dict) -> str:
         "var builtinDefaultEntries = []builtinDefaultEntry{"
         + (f"\n{entries}" if entries else "") + "}\n"
         "\n"
-        "// builtinDefaultsDigest names this table: the first 12 hex digits of the\n"
-        "// SHA-256 of its `key=value` lines, sorted by key.\n"
-        f"const builtinDefaultsDigest = {_go_str(builtin_defaults_digest(table))}\n")
+        "// builtinDefaultsDigest names the built-in layer: the first 12 hex digits\n"
+        "// of the SHA-256 of this table's `key=value` lines and a `key=off` line per\n"
+        "// key of unsetThresholdKeys (#4163), sorted by key.\n"
+        f"const builtinDefaultsDigest = {_go_str(builtin_layer_digest(doc))}\n")
 
 
 def check_builtin_defaults_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
@@ -1168,7 +1182,7 @@ def render_platform_digest_test(doc: dict, text: str) -> str:
     test feeds a component that is aligned with the pack the pack's own
     digest, so the digest appears in input series and annotations too; a
     made-up component digest differs from it and is left alone."""
-    digest = builtin_defaults_digest(builtin_defaults(doc))
+    digest = builtin_layer_digest(doc)
     for old in _platform_digest_test_digests(text):
         if old != digest:
             text = text.replace(old, digest)
@@ -1183,7 +1197,7 @@ def check_platform_digest_test(doc: dict, path: Optional[str] = None) -> Optiona
         return f"{p} (surface {PLATFORM_DIGEST_TEST_ID!r}) does not exist"
     with open(p, encoding="utf-8") as fh:
         text = fh.read()
-    digest = builtin_defaults_digest(builtin_defaults(doc))
+    digest = builtin_layer_digest(doc)
     found = _platform_digest_test_digests(text)
     if found != {digest}:
         return (f"{p} (surface {PLATFORM_DIGEST_TEST_ID!r}) expects the rule "
@@ -2057,7 +2071,7 @@ def render_platform_digest_lines(doc: dict, indent: int) -> list[str]:
     the same digest the components are compiled with when they are built
     from the same registry."""
     pad = " " * indent
-    digest = builtin_defaults_digest(builtin_defaults(doc))
+    digest = builtin_layer_digest(doc)
     return [
         f"{pad}- record: {PLATFORM_DIGEST_RECORD}",
         f"{pad}  expr: vector(1)",
