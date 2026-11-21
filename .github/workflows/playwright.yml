@@ -1,45 +1,18 @@
 name: Playwright E2E Tests
 
+# No `paths:` on either trigger (#3756, owner ruling 2026-11-14: a cheap
+# verification job runs on every PR rather than keep a hand-written list of
+# what it reads). Only the A-13 spec lint runs here; the smoke run moved to
+# ci.yml (#1428). The list this replaced had already missed the lint runner
+# once (#1428) and its behavioural test once (#1446).
 on:
   push:
     branches:
       - main
       - develop
-    paths:
-      # Only the A-13 spec lint runs here now; the smoke run moved to
-      # ci.yml (#1428), where it runs on every PR.
-      # These paths are the ones that can change what the lint reads or
-      # how it runs.
-      - 'tools/portal/**'
-      - 'docs/interactive/index.html'
-      - 'docs/assets/jsx-loader.html'
-      - 'tests/e2e/**'
-      - '.github/workflows/playwright.yml'
-      # The A-13 lint runner below. Without this entry, a pull request that
-      # ONLY edits the runner does not start this workflow, so the one CI leg
-      # that executes it never runs — and the local hook would be running the
-      # edited copy against itself. #1428.
-      - 'scripts/tools/lint/e2e_spec_lint.sh'
-      # The behavioural test the lint-specs job runs (#1446): a PR that only
-      # edits it must still run it, or a broken edit lands unexecuted.
-      - 'tests/lint/test_e2e_spec_lint_behaviour.py'
   pull_request:
     branches:
       - main
-    paths:
-      - 'tools/portal/**'
-      - 'docs/interactive/index.html'
-      - 'docs/assets/jsx-loader.html'
-      - 'tests/e2e/**'
-      - '.github/workflows/playwright.yml'
-      # The A-13 lint runner below. Without this entry, a pull request that
-      # ONLY edits the runner does not start this workflow, so the one CI leg
-      # that executes it never runs — and the local hook would be running the
-      # edited copy against itself. #1428.
-      - 'scripts/tools/lint/e2e_spec_lint.sh'
-      # The behavioural test the lint-specs job runs (#1446): a PR that only
-      # edits it must still run it, or a broken edit lands unexecuted.
-      - 'tests/lint/test_e2e_spec_lint_behaviour.py'
 
 # The smoke run's PR comment (the only write) moved to ci.yml with it (#1428).
 permissions:
@@ -61,11 +34,11 @@ jobs:
   #
   # The smoke run itself is no longer here (#1428). It is ci.yml's
   # `smoke-tests-run`, behind the `Smoke Tests (Chromium)` aggregate gate
-  # that branch protection requires: this workflow's top-level `paths:`
-  # filter suppressed it wholesale on a PR touching no portal file, and a
-  # required check that reports no status sits permanently pending. This job
-  # stays advisory (`advisory:` in .github/required-checks.yaml, which says
-  # why) and path-filtered.
+  # that branch protection requires: the top-level `paths:` filter this
+  # workflow had then suppressed it wholesale on a PR touching no portal file,
+  # and a required check that reports no status sits permanently pending. This
+  # job stays advisory (`advisory:` in .github/required-checks.yaml, which says
+  # why); it runs on every PR since the filter went (#3756).
   lint-specs:
     name: E2E Spec Lint (A-13)
     runs-on: ubuntu-24.04

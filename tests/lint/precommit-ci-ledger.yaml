@@ -157,7 +157,7 @@ hooks:
   evidence:
     workflow: .github/workflows/playwright.yml
     job: lint-specs
-    note: 'Runs the same e2e_spec_lint.sh; the workflow paths: cover every file the hook selects.'
+    note: 'Runs the same e2e_spec_lint.sh; the workflow has no paths: filter (#3756), so it runs on every PR.'
 - id: hardcode-tenant-check
   category: b
   evidence:

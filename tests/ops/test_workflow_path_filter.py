@@ -132,7 +132,8 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
     # The real ledgers name real workflows; this tree has its own.
-    monkeypatch.setattr(wpf, "NOT_YET_TRACED", {})
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {})
+    monkeypatch.setattr(wpf, "READ_ASSERTION_ORDER", ())
     monkeypatch.setattr(wpf, "BOUNDARY", {})
     monkeypatch.setattr(wpf, "RESERVED_PATTERNS", {})
     monkeypatch.setattr(wpf, "MACHINERY", ())
@@ -807,8 +808,8 @@ def test_a_dorny_job_gate_is_refused_not_left_unchecked(repo: Path, capsys,
         "on: [pull_request]\njobs:\n  zjob:\n    runs-on: x\n    steps:\n"
         "      - run: echo dorny/paths-filter\n", encoding="utf-8")
     _git(repo, "add", "-A")
-    for ledger in ({}, {"zdorny.yaml": "zwhy"}):
-        monkeypatch.setattr(wpf, "NOT_YET_TRACED", ledger)
+    for ledger in ({}, {"zdorny.yaml": (wpf.DIFF_DRIVEN, "zwhy")}):
+        monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", ledger)
         capsys.readouterr()
         assert _main(repo, "generate", "--check") == 1
         err = capsys.readouterr().err
@@ -879,20 +880,52 @@ def test_a_path_gated_workflow_is_traced_or_named(repo: Path, tmp_path: Path, ca
     err = capsys.readouterr().err
     assert f"UNTRACED    {name}" in err and "zfree.yaml" not in err
 
-    monkeypatch.setattr(wpf, "NOT_YET_TRACED", {name: "why"})
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {name: (wpf.DIFF_DRIVEN, "why")})
     assert _main(repo, "generate", "--check") == 0
 
     # Both stale directions: the named workflow is traced now, or is gone.
-    monkeypatch.setattr(wpf, "NOT_YET_TRACED",
-                        {name: "why", WORKFLOW: "why", "zgone.yaml": "why",
-                         "zfree.yaml": "why"})
+    why = (wpf.DIFF_DRIVEN, "why")
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES",
+                        {name: why, WORKFLOW: why, "zgone.yaml": why, "zfree.yaml": why})
     capsys.readouterr()
     assert _main(repo, "generate", "--check") == 1
     err = capsys.readouterr().err
-    assert f"NOT_YET_TRACED names {WORKFLOW}, which carries the generated regions" in err
-    assert "NOT_YET_TRACED names zgone.yaml, which has no path gate" in err
-    assert "NOT_YET_TRACED names zfree.yaml, which has no path gate" in err
+    assert f"ADVISORY_PATH_GATES names {WORKFLOW}, which carries the generated regions" in err
+    assert "ADVISORY_PATH_GATES names zgone.yaml, which has no path gate" in err
+    assert "ADVISORY_PATH_GATES names zfree.yaml, which has no path gate" in err
     assert name not in err
+
+    # #3756 phase 2 — the kind. An entry that is not a (kind, why) pair with
+    # a known kind is a finding, whatever else is right about it: the old
+    # free-text shape, a kind nobody defined, a pair of the wrong length.
+    for bad in ("the old free-text reason", ("cheap-verification", "why"),
+                (wpf.DIFF_DRIVEN,), (wpf.DIFF_DRIVEN, "why", "extra")):
+        monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {name: bad})
+        capsys.readouterr()
+        assert _main(repo, "generate", "--check") == 1, bad
+        err = capsys.readouterr().err
+        assert f"UNCLASSIFIED ADVISORY_PATH_GATES[{name!r}]" in err, (bad, err)
+
+    # The read-assertion queue and the entries awaiting it are one set, both
+    # ways, and the queue names nothing twice.
+    waits = (wpf.AWAITS_READ_ASSERTION, "why")
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {name: waits})
+    capsys.readouterr()
+    assert _main(repo, "generate", "--check") == 1
+    assert (f"UNORDERED   {name} is an awaits-read-assertion entry that "
+            "READ_ASSERTION_ORDER does not place") in capsys.readouterr().err
+    monkeypatch.setattr(wpf, "READ_ASSERTION_ORDER", (name,))
+    assert _main(repo, "generate", "--check") == 0
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {name: why})
+    capsys.readouterr()
+    assert _main(repo, "generate", "--check") == 1
+    assert (f"UNORDERED   {name} is in READ_ASSERTION_ORDER without an "
+            "awaits-read-assertion entry") in capsys.readouterr().err
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {name: waits})
+    monkeypatch.setattr(wpf, "READ_ASSERTION_ORDER", (name, name))
+    capsys.readouterr()
+    assert _main(repo, "generate", "--check") == 1
+    assert "READ_ASSERTION_ORDER names a workflow twice" in capsys.readouterr().err
 
 
 # ── the real tree ───────────────────────────────────────────────────────────
@@ -924,7 +957,7 @@ def test_the_motivating_files_are_in_the_generated_region() -> None:
 
 
 def test_every_real_ledger_entry_has_its_reason_written_down() -> None:
-    reasons = (list(wpf.NOT_YET_TRACED.items())
+    reasons = ([(name, why) for name, (_kind, why) in wpf.ADVISORY_PATH_GATES.items()]
                + [(k, why) for k, why in wpf.RESERVED_PATTERNS.items()]
                + [((wf, e), why) for wf, entries in wpf.BOUNDARY.items()
                   for e, why in entries.items()])
@@ -934,7 +967,38 @@ def test_every_real_ledger_entry_has_its_reason_written_down() -> None:
     # The required-check workflows carry no path gate since #3756, so a
     # ledger entry for one would be an excuse for a gate that must not exist.
     for name in ("ci.yml", "docs-ci.yaml", "validate.yaml"):
-        assert name not in wpf.NOT_YET_TRACED
+        assert name not in wpf.ADVISORY_PATH_GATES
+
+
+def test_the_cheap_verification_workflows_gate_on_nothing() -> None:
+    """#3756, owner ruling 2026-11-14: a cheap verification job does not keep
+    a list of what it reads — it runs on every PR. These three dropped their
+    `paths` with the ledger's kinds; one that grows a list again is UNTRACED
+    in `generate --check` (it has no entry), and this says which rule it broke.
+    """
+    for name in ("security-audit.yaml", "required-checks-drift.yml", "playwright.yml"):
+        assert name not in wpf.ADVISORY_PATH_GATES
+        doc = wpf.load_workflow(ROOT / ".github" / "workflows" / name)
+        triggers = doc.get(True) or doc.get("on") or {}
+        assert "pull_request" in triggers, name
+        for event, cfg in triggers.items():
+            assert not (isinstance(cfg, dict) and ("paths" in cfg or "paths-ignore" in cfg)), \
+                f"{name}: on.{event} gates on paths"
+
+
+def test_the_real_ledger_holds_both_kinds_and_the_ruled_members() -> None:
+    """The classification the ruling states by name, so a re-labelling is a
+    visible edit here and not a one-word change in the ledger."""
+    by_kind = {kind: sorted(n for n, (k, _w) in wpf.ADVISORY_PATH_GATES.items() if k == kind)
+               for kind in wpf.ADVISORY_KINDS}
+    assert by_kind[wpf.AWAITS_READ_ASSERTION] == [
+        "backtest.yaml", "component-docker-build.yaml", "forge-e2e-github.yaml"]
+    assert by_kind[wpf.DIFF_DRIVEN] == [
+        "bench-gate-pr.yaml", "bench-probe-write-latency.yaml",
+        "bench-workload-effect.yaml", "bench-workload-record.yaml",
+        "config-diff-advisory.yml", "guard-defaults-impact.yml"]
+    assert wpf.READ_ASSERTION_ORDER == (
+        "component-docker-build.yaml", "backtest.yaml", "forge-e2e-github.yaml")
 
 
 def _all_real_patterns() -> list[str]:

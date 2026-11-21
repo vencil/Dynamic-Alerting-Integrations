@@ -45,12 +45,12 @@ the skip into a failure. The execution point that sets it is the ``E2E Spec
 Lint (A-13)`` job in ``.github/workflows/playwright.yml``, right after its
 ``npm ci``; ``test_e2e_spec_lint.py`` (collected by Python Tests on every PR)
 asserts that step exists, carries the variable, has no ``if:`` /
-``continue-on-error`` and that this file is in the workflow's ``paths:``.
+``continue-on-error`` and that the workflow's triggers cover this file.
 
-Known gap, deliberately not closed here: ``playwright.yml`` is path-filtered,
-so a pull request that only edits ``.pre-commit-config.yaml`` or the Makefile
-does not start it. Those two entry points are not something this file can see
-anyway; ``test_all_three_entry_points_run_the_one_script`` guards them.
+``playwright.yml`` carries no ``paths:`` since #3756, so every pull request
+starts it — one that only edits ``.pre-commit-config.yaml`` or the Makefile
+included. Those two entry points are still not something this file can see;
+``test_all_three_entry_points_run_the_one_script`` guards them.
 """
 from __future__ import annotations
 
