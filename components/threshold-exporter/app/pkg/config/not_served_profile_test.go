@@ -74,13 +74,15 @@ var profileNotFilledCases = []struct {
 		"_profiles.yaml": "profiles:\n  gold:\n    kafka_lag: \"7\"\n",
 		"tx.yaml":        "tenants:\n  tx:\n    _profile:\n      default: gold\n",
 	}, want: map[string]NotServedKey{"kafka_lag": {Reason: NotServedProfileNotFilled, File: "_profiles.yaml"}}},
-	// The key is the canonical name, as the WARN names it — not the
-	// profile's spelling (profileFill runs over canonicalView).
-	{name: "a #1231 retired spelling: named under the canonical name", files: map[string]string{
+	// #4163: the one #1231 alias pair is a key of the built-in layer, valued
+	// off at the root, so its listing under optional_overrides: blocks
+	// nothing — the profile's retired spelling fills it in, served, named by
+	// nothing.
+	{name: "a #1231 retired spelling of a built-in-layer key: filled", files: map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides: [mysql_threads_running]\n",
 		"_profiles.yaml": "profiles:\n  gold:\n    mysql_cpu: \"7\"\n",
 		"tx.yaml":        "tenants:\n  tx:\n    _profile: gold\n",
-	}, want: map[string]NotServedKey{"mysql_threads_running": {Reason: NotServedProfileNotFilled, File: "_profiles.yaml"}}},
+	}},
 	{name: "a dimensional key on a declared base: named in canonical label form", files: map[string]string{
 		"_defaults.yaml": profileNotFilledRoot,
 		"_profiles.yaml": "profiles:\n  gold:\n    'kafka_lag{ topic = ''a'' , zone=\"b\"}': \"7\"\n",

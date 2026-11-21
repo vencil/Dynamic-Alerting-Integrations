@@ -326,6 +326,16 @@ func profileFill[V, O any](canonProfile map[string]V, own map[string]O, canonDec
 		if declared && strings.HasSuffix(key, criticalSuffix) {
 			declared = false
 		}
+		// #4163: a key of the built-in layer is valued at the root (a
+		// platform number, or off), so its listing under
+		// optional_overrides: is redundant and blocks nothing — a profile
+		// fills it as it fills any root-valued key. Without this a tree
+		// that still lists such a key (every tree generated before the
+		// layer) would refuse the profile value a tree that does not list
+		// it serves.
+		if declared && (BuiltinOff(declaredKey) || builtinValued(declaredKey)) {
+			declared = false
+		}
 		if hasAliasEquivalent(own, key) {
 			continue
 		}
@@ -646,4 +656,11 @@ func sortProfileRoutingKeys(keys []ProfileRoutingKey) {
 		}
 		return a.Key < b.Key
 	})
+}
+
+// builtinValued reports whether key is in the built-in layer's table of
+// values.
+func builtinValued(key string) bool {
+	_, ok := builtinDefaults[key]
+	return ok
 }

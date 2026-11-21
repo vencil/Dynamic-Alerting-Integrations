@@ -655,6 +655,13 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 				}
 				continue
 			}
+			if BuiltinOffDefault(defaultValue) {
+				logf("WARN: unknown value %q for tenant=%s metric=%s, and the platform ships no value for it, skipping%s", override, tenant, metricKey, hint)
+				if rec != nil {
+					rec.note(tenant, metricKey, NotServedValueUnparsedDropped)
+				}
+				continue
+			}
 			if !finiteThreshold(defaultValue) {
 				logf("WARN: unknown value %q for tenant=%s metric=%s, and the root default is not a finite number, skipping%s", override, tenant, metricKey, hint)
 				if rec != nil {

@@ -323,6 +323,10 @@ func TestDeclaredEmission_AliasTargetDualEmits(t *testing.T) {
 	}
 }
 
+// #4163: every registry key is in the built-in layer (valued at the root,
+// if only off), so its listing blocks nothing; the declared tier's rule below
+// is about a key outside the layer — `app_queue_depth`, the platform's own.
+//
 // ⛔ #1308 / F2. `_profiles.yaml` is platform-owned by enforcement, so a
 // profile value is a platform assertion — and the declared tier means the
 // platform asserts nothing. Filling one in would make resolveDeclaredRows emit
@@ -337,11 +341,11 @@ func TestApplyProfiles_DoesNotFillDeclaredKeys(t *testing.T) {
 
 	cfg := &ThresholdConfig{
 		Defaults:          map[string]float64{"mysql_connections": 80},
-		OptionalOverrides: []string{"oracle_wait_time_rate"},
+		OptionalOverrides: []string{"app_queue_depth"},
 		Profiles: map[string]map[string]ScheduledValue{
 			"standard": {
-				"mysql_connections":     {Default: "150"}, // valued key — fill-in as before
-				"oracle_wait_time_rate": {Default: "50"},  // declared key — must NOT fill in
+				"mysql_connections": {Default: "150"}, // valued key — fill-in as before
+				"app_queue_depth":   {Default: "50"},  // declared key — must NOT fill in
 			},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -351,7 +355,7 @@ func TestApplyProfiles_DoesNotFillDeclaredKeys(t *testing.T) {
 
 	cfg.ApplyProfiles()
 
-	if _, filled := cfg.Tenants["t-1"]["oracle_wait_time_rate"]; filled {
+	if _, filled := cfg.Tenants["t-1"]["app_queue_depth"]; filled {
 		t.Error("a profile must not supply a value for a declared-without-value key")
 	}
 	if sv, filled := cfg.Tenants["t-1"]["mysql_connections"]; !filled || sv.Default != "150" {
@@ -359,13 +363,13 @@ func TestApplyProfiles_DoesNotFillDeclaredKeys(t *testing.T) {
 	}
 	// Fail-loud: the platform operator who wrote that profile entry has to be
 	// able to find out it does nothing.
-	if !strings.Contains(buf.String(), "oracle_wait_time_rate") ||
+	if !strings.Contains(buf.String(), "app_queue_depth") ||
 		!strings.Contains(buf.String(), "optional_overrides") {
 		t.Errorf("the skip must be loud and name the key, log was: %q", buf.String())
 	}
 
 	// ...and the consequence that matters: no row for it.
-	if got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate"); len(got) != 0 {
+	if got := rowsFor(cfg.ResolveAt(fixedNow), "app_queue_depth"); len(got) != 0 {
 		t.Fatalf("a profile-supplied declared key must not emit, got %+v", got)
 	}
 }
@@ -423,10 +427,10 @@ func TestApplyProfiles_StillFillsCriticalTierEvenWhenDeclared(t *testing.T) {
 func TestApplyProfiles_BlocksDimensionalSpellingOfDeclaredBase(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Dimensions:        map[string][]string{"oracle_wait_time_rate": {"db"}},
-		OptionalOverrides: []string{"oracle_wait_time_rate"},
+		Dimensions:        map[string][]string{"app_queue_depth": {"db"}},
+		OptionalOverrides: []string{"app_queue_depth"},
 		Profiles: map[string]map[string]ScheduledValue{
-			"standard": {`oracle_wait_time_rate{db="ORCL"}`: {Default: "50"}},
+			"standard": {`app_queue_depth{db="ORCL"}`: {Default: "50"}},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
 			"t-1": {"_profile": {Default: "standard"}},

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -126,5 +127,44 @@ func TestBuiltinOff_IsNoRefusal(t *testing.T) {
 		if !BuiltinOffDefault(cfg.Defaults[k]) {
 			t.Errorf("%s: Defaults %v, want the off value", k, cfg.Defaults[k])
 		}
+	}
+}
+
+// A tree generated before the layer still lists its off keys under
+// optional_overrides: — redundant, and blocking nothing: a profile fills the
+// key as it fills any root-valued key, listed or not.
+func TestBuiltinOff_AListingUnderOptionalOverridesDoesNotBlockAProfile(t *testing.T) {
+	t.Parallel()
+	for name, root := range map[string]string{
+		"listed":     "optional_overrides: [redis_evicted_keys_rate]\n",
+		"not listed": "defaults: {}\n",
+	} {
+		cfg := loadTree(t, map[string]string{
+			"_defaults.yaml": root,
+			"_profiles.yaml": "profiles:\n  gold:\n    redis_evicted_keys_rate: \"5\"\n",
+			"t.yaml":         "tenants:\n  tx:\n    _profile: gold\n",
+		})
+		if got := offRows(cfg, "tx", "redis", fixedNow); strings.Join(got, "|") != "redis_evicted_keys_rate warning 5" {
+			t.Errorf("%s: rows %v, want the profile's 5", name, got)
+		}
+	}
+}
+
+// A tenant value the resolver cannot read, for a key the layer values off,
+// is dropped with a WARN that says the platform ships no value — not that
+// the root default is no finite number.
+func TestBuiltinOff_AnUnreadableTenantValueSaysThePlatformShipsNoValue(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{"t.yaml": "tenants:\n  tx:\n    kafka_consumer_lag: \"7O\"\n"})
+	var logs []string
+	cfg.resolveAtWithStats(fixedNow, nil, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}, nil)
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, `unknown value "7O" for tenant=tx metric=kafka_consumer_lag, and the platform ships no value for it, skipping`) {
+		t.Errorf("logs %q, want the off-key WARN", joined)
+	}
+	if strings.Contains(joined, "root default is not a finite number") {
+		t.Errorf("logs %q name a root default the tree never wrote", joined)
 	}
 }

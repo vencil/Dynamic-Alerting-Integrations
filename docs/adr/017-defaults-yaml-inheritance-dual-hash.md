@@ -338,7 +338,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 內建層對每個租戶都給值，不看部署裡有沒有裝對應的規則包：多一列不等於多一條告警，告警要響還需要規則包已部署、指標存在。Helm chart 的 `thresholdConfig.defaults` 照舊渲染這些值，它們在 ConfigMap 裡算根目錄寫的數字。
 
-**平台不給值的鍵：內建層給 off。** 登錄表標 `operator` 的鍵在內建層的值是 off：它算「根目錄 `defaults:` 有值」，所以上面那條規則照樣適用——租戶、profile、子目錄給的值都送出，租戶寫的 `<鍵>_critical` 也送 critical 列，即使租戶沒給基底值；但 off 本身不送基底列，也不關掉整族。客戶的根目錄因此不必再把這些鍵寫進 `defaults:` 或列在 `optional_overrides:`，租戶才寫得動它們。根目錄給數字照舊蓋過 off，寫 `"disable"` 照下方「根目錄的 `"disable"`」整族關閉。兩點與有數字的鍵不同：這些鍵的 `expires:` 不生效（過期等於退回 off，告警會悄悄消失，所以值過了 `expires:` 照送；tenant-api 寫入時擋下，已在磁碟上的由 exporter 每次載入設定時記一行 WARN）；`validate-config` 的 `platform_defaults` 列把它們按規則包分行列出，附設定了門檻或 `disable` 的租戶數（`0/N` 表示這個鍵的告警對所有租戶都不會響）。
+**平台不給值的鍵：內建層給 off。** 登錄表標 `operator` 的鍵在內建層的值是 off：它算「根目錄 `defaults:` 有值」，所以上面那條規則照樣適用——租戶、profile、子目錄給的值都送出，租戶寫的 `<鍵>_critical` 也送 critical 列，即使租戶沒給基底值；但 off 本身不送基底列，也不關掉整族。客戶的根目錄因此不必再把這些鍵寫進 `defaults:` 或列在 `optional_overrides:`，租戶才寫得動它們。根目錄給數字照舊蓋過 off，寫 `null` 等於沒寫（仍是 off，租戶的值照送），寫 `"disable"` 照下方「根目錄的 `"disable"`」整族關閉。根目錄 `optional_overrides:` 還列著這些鍵也無妨：列名對內建層裡的鍵是多餘的，不擋 profile 給值。兩點與有數字的鍵不同：這些鍵的 `expires:` 不生效（過期等於退回 off，告警會悄悄消失，所以值過了 `expires:` 照送；tenant-api 寫入時擋下，已在磁碟上的由 exporter 每次載入設定時記一行 WARN）；`validate-config` 的 `platform_defaults` 列把它們按規則包分行列出，附設定了門檻或 `disable` 的租戶數（`0/N` 表示這個鍵的告警對所有租戶都不會響）。
 
 例：根目錄 `_defaults.yaml` 只寫 `defaults: {jvm_threads: "disable"}`，租戶檔：
 
