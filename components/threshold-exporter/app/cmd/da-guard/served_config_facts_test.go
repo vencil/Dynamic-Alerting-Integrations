@@ -29,12 +29,16 @@ var configFactsTree = map[string]string{
 		"        window: 5m\n        threshold: \"1000:warning\"\n",
 	"tbad.yaml":  "tenants:\n  tbad:\n    _custom_alerts: \"oops\"\n",
 	"tmeta.yaml": "tenants:\n  tmeta:\n    _metadata:\n      owner:\n        x: y\n",
+	"tr.yaml": "tenants:\n  tr:\n    _routing:\n      receiver:\n        type: webhook\n" +
+		"        url: \"https://hooks.example.com/tr\"\n      group_wait: 10s\n",
+	// A `_routing` the resolver refuses (WARN, no routing).
+	"trej.yaml": "tenants:\n  trej:\n    _routing:\n      receiver:\n        type: nosuchtype\n",
 }
 
 // factsFields are the fields --config-facts writes for a tenant, compared
 // with the default mode's: custom_alerts_error appears only beside a block
 // that does not decode, so it is compared as present-or-absent too.
-var factsFields = []string{"custom_alerts", "custom_alerts_error", "custom_alerts_finding", "metadata"}
+var factsFields = []string{"custom_alerts", "custom_alerts_error", "custom_alerts_finding", "routing", "metadata"}
 
 func factsTenants(t *testing.T, stdout string) map[string]map[string]json.RawMessage {
 	t.Helper()
@@ -83,7 +87,7 @@ func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 			t.Fatal(err)
 		}
 		theirs := map[string]json.RawMessage{"metadata": vals.Metadata}
-		for _, field := range factsFields[:3] {
+		for _, field := range factsFields[:4] {
 			theirs[field] = values[tenant][field]
 		}
 		for _, field := range factsFields {
@@ -111,7 +115,8 @@ func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 	// not decode, and a `_metadata` read as written.
 	if !strings.Contains(string(facts["tc"]["custom_alerts"]), `"served"`) ||
 		facts["tbad"]["custom_alerts_error"] == nil ||
-		!strings.Contains(string(facts["tc"]["metadata"]), `"mariadb"`) {
+		!strings.Contains(string(facts["tc"]["metadata"]), `"mariadb"`) ||
+		!strings.Contains(string(facts["tr"]["routing"]), `"https://hooks.example.com/tr"`) {
 		t.Fatalf("fixture did not exercise what it is for: %s", stdout)
 	}
 }
@@ -134,8 +139,9 @@ func TestServedConfigFacts_RefusesFlagsItWouldNotRead(t *testing.T) {
 // TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant: --tenant
 // narrows --config-facts as it narrows the default mode (the same tenants,
 // tenants_requested and tenants_absent); the resolver's WARN on a
-// `_metadata` that does not decode is printed once, as the default mode
-// prints it; and the document carries no `at` — it reads no instant.
+// `_metadata` that does not decode, and the routing resolver's on a
+// `_routing` it refuses (#4109), are each printed once, as the default mode
+// prints them; and the document carries no `at` — it reads no instant.
 func TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant(t *testing.T) {
 	t.Parallel()
 	dir := writeConfD(t, configFactsTree)
@@ -174,6 +180,9 @@ func TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant(t *testing.T) {
 	}
 	if n := strings.Count(stderr.String(), "failed to parse _metadata"); n != 1 {
 		t.Errorf("the `_metadata` WARN printed %d times, want once:\n%s", n, stderr.String())
+	}
+	if n := strings.Count(stderr.String(), "_routing for tenant=trej"); n != 1 {
+		t.Errorf("the `_routing` WARN printed %d times, want once:\n%s", n, stderr.String())
 	}
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(stdout.String()), &doc); err != nil {

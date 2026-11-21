@@ -99,7 +99,12 @@ function useTenantData({ setApiNotification, t, q = '' }) {
               rule_packs: meta.rule_packs || [],
               owner: meta.owner || '',
               routing_channel: meta.routing_channel || '',
-              operational_mode: meta.operational_mode || 'normal',
+              // #4109: the offline copy holds no operational mode — a state
+              // at one instant (silences, maintenance and its `recurring:`
+              // windows) is tenant-api's config_derived, derived when asked.
+              // 'unknown', never 'normal': a tenant in maintenance must not
+              // read as normal because the API is down.
+              operational_mode: 'unknown',
               metric_count: meta.metric_count || 0,
               last_config_commit: meta.last_config_commit || '',
               tags: meta.tags || [],

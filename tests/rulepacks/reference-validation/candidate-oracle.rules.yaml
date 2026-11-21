@@ -9,10 +9,6 @@
 # divergence-ledger.yaml).
 #
 # NOT covered here (deliberate — surfaces as MISS/FN in the report = coverage gaps):
-#   - oracledb_activity_parse_count_total  → the hard-parse-storm signature is written on
-#     parse counts, which the exporter does not serve; OracleHighHardParseTime (#1174)
-#     reads v$sys_time_model time instead (hard parse time / DB time), so it MISSes
-#     here. Re-review when that signature is re-authored on the time-model metrics.
 #   - oracledb_pga_allocated_bytes fault signatures (pga-bloat-exporter-starved,
 #     pga-runaway-query) → their descriptions state no PGA_AGGREGATE_LIMIT, so no
 #     denominator companion and no share: OracleHighPGAUsage cannot fire on them
@@ -34,6 +30,15 @@
 # to +Inf and over-fire; shipped drops the series instead).
 # OracleHighHardParseTime (#1174): the shipped share with its AAS >= 1 gate on the DB
 # time rate; 20 is the registry's reference value (operator key, no shipped value).
+# What the libraries say about it (#4088; measured on the promtool
+# materialization with this file): it fires on the hard-parse-storm signature
+# (plateau: share ~50 %, AAS ~12) and on none of the three benign hard-parse
+# signatures of negative-oracle.yaml. Of those three, the idle-database one is
+# what the AAS gate is for (drop the gate and it fires) and the post-deploy
+# re-parse one is what the value 20 is for (at 5 it fires). NOT measured: `for:`
+# — no benign signature holds a share above 20 with AAS >= 1 for long, so
+# shortening `for:` to 2m changes nothing here; and the onset (the companion is
+# one constant level, see the signature's own comment).
 # OracleHighProcessCount / OracleHighPGAUsage (#1320): the same shape, a share of
 # PROCESSES / PGA_AGGREGATE_LIMIT with the same `> 0` guard; 85 is the shipped
 # default (process) and the registry's reference value (PGA). A signature with no
