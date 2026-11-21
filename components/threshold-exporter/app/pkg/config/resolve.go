@@ -458,7 +458,7 @@ func expiryHonoured(key string, defaults map[string]float64) bool {
 		return false
 	}
 	_, refused := RefusedDefault(v)
-	return !(refused && BuiltinOff(key))
+	return !refused || !BuiltinOff(key)
 }
 
 // familyHeadOff reports whether the tenant switches family base off at now
