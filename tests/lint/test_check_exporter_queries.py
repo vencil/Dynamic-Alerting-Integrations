@@ -17,8 +17,13 @@ Pinned contracts
    is a finding by itself in both halves, and — with query-exporter installed
    — it is not derived as served, so a pack reading it gets the headline
    finding. A query whose `metrics` is not a list of names is "cannot run".
+8. every metric a reference-validation waveform library of a query-exporter
+   pack is written on (tests/rulepacks/reference-validation/) is one the pack's
+   queries file serves (#4088): a signature on any other name can only MISS.
+   A library that names no single pack, or no metric, is a failure — not a
+   file the check stops reading.
 
-The tests of 6 and 7 that need query-exporter skip without it — and the
+The tests of 6, 7 and 8 that need query-exporter skip without it — and the
 Python Tests job does not install it. They are not left to that: ci.yml's
 Lint Rule Packs job installs query-exporter and runs this module with
 QUERY_EXPORTER_REQUIRED=1, under which a missing package is a failure, not a
@@ -247,6 +252,73 @@ def test_required_means_a_missing_query_exporter_fails(monkeypatch):
     monkeypatch.setitem(sys.modules, "query_exporter", None)
     with pytest.raises(ImportError):
         _need_query_exporter()
+
+
+# Waveform libraries of packs whose exporter is NOT query-exporter: nothing here
+# can say what those exporters serve (#3833 item 10 tracks their metric lists).
+_NOT_QUERY_EXPORTER_LIBRARIES = {"k8s-linux-reference.yaml"}
+
+
+def _waveform_libraries() -> dict[str, list[Path]]:
+    """Reference-validation libraries by query-exporter pack: the pack's name
+    is a `-`-separated word of the file name (oracle-reference-n2.yaml).
+
+    Every file carrying `signatures` must land on exactly one pack or be named
+    in _NOT_QUERY_EXPORTER_LIBRARIES — a renamed library is a failure here, not
+    a file this check quietly stops reading."""
+    packs = [pack for pack, _rule_pack, _queries in ceq.bindings()]
+    found: dict[str, list[Path]] = {pack: [] for pack in packs}
+    directory = _REPO_ROOT / "tests" / "rulepacks" / "reference-validation"
+    unplaced = []
+    for path in sorted(directory.iterdir()):
+        if path.suffix not in (".yaml", ".yml"):
+            continue
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict) or "signatures" not in doc:
+            continue
+        owners = [pack for pack in packs if pack in path.stem.split("-")]
+        if path.name in _NOT_QUERY_EXPORTER_LIBRARIES:
+            assert not owners, f"{path.name} is listed as not query-exporter but names {owners}"
+        elif len(owners) == 1:
+            found[owners[0]].append(path)
+        else:
+            unplaced.append(f"{path.name} -> {owners}")
+    assert not unplaced, f"waveform libraries that name no single pack: {unplaced}"
+    return found
+
+
+def waveform_metrics(doc: dict) -> set[str]:
+    """Every series name a waveform library is written on, companions included."""
+    names: set[str] = set()
+    for signature in doc.get("signatures") or []:
+        names.add(signature["metric"])
+        names |= {c["metric"] for c in signature.get("companion_series") or []}
+    return names
+
+
+def test_waveform_libraries_are_written_on_served_metrics():
+    """#4088: the hard-parse-storm signature sat on a parse-count metric the
+    exporter never served, so the alert written for that incident could only
+    MISS in the harness — and the miss read as a gap in the alert."""
+    _need_query_exporter()
+    libraries = _waveform_libraries()
+    assert all(libraries.values()), f"a pack has no waveform library: {libraries}"
+    problems = []
+    for pack, _rule_pack, queries in ceq.bindings():
+        served = _REAL_SERVED_NAMES(queries, ceq.load_queries(queries))
+        for path in libraries[pack]:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+            metrics = waveform_metrics(doc)
+            assert metrics, f"{path.name} names no metric at all"
+            for name in sorted(metrics - served):
+                problems.append(f"{path.name}: {name} is not served by {queries.name}")
+    assert not problems, "\n  ".join([""] + problems)
+
+
+def test_waveform_metrics_reads_companions():
+    doc = {"signatures": [{"metric": "a_total", "companion_series": [{"metric": "b_total"}]},
+                          {"metric": "c"}]}
+    assert waveform_metrics(doc) == {"a_total", "b_total", "c"}
 
 
 def test_shipped_tree_is_clean():

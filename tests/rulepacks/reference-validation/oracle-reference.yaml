@@ -180,25 +180,43 @@ signatures:
       instance: oracle-ref-01
     min_value: 0
 
-  # 7) Hard-parse 風暴 —— catalog 之外的 metric（activity parse count），快速尖峰。
+  # 7) Hard-parse 風暴 —— time model 的 hard parse elapsed time 相對 DB time，改版後數分鐘內升到高原。
+  #    （#4088：原本寫在 exporter 不送出的 parse count 上；另派 agent 盲寫，未讀
+  #    任何告警規則或門檻。）
   - description: >-
-      一次拿掉 bind variable 的改版讓每一次執行都變成 hard parse；
-      parse-count-total 以約 30 倍於基線的速率累積，library cache mutex
-      與 shared pool latch 競爭飆高，CPU 也隨之飽和。這個值由 activity
-      metric group 匯出，但經常沒有被納入告警 —— 對這套 harness 而言是
-      很有價值的覆蓋率探針。
+      一次拿掉 bind variable 的改版讓每一次執行都帶著不同的 literal、變成
+      hard parse：健康時使用 bind variable 的 OLTP 幾乎全是 soft parse，
+      "hard parse elapsed time" 只占 DB time 的 1% 上下；改版隨應用伺服器
+      滾動重啟在數分鐘內鋪開後，每一次呼叫都要重新最佳化並在 shared pool
+      配置新的 cursor，library cache mutex 與 shared pool latch 競爭飆高、
+      CPU 飽和，hard parse elapsed time（含 parse 期間的等待）吃掉約一半的
+      DB time，同時 session 堆積讓 DB time 本身也漲到平時的約 3 倍。不會
+      自行回落，直到回滾改版或以 CURSOR_SHARING=FORCE 止血為止。此處速率為
+      原生單位（每秒累積的秒數）。
     source: vendor-doc
-    normal_level: 60
-    fault_level: 1800
-    onset_duration: 2m
-    hold_duration: 45m
-    typical_wobble: 25
+    normal_level: 0.04
+    fault_level: 6
+    onset_duration: 3m
+    hold_duration: 40m
+    typical_wobble: 0.02
     dips_back: false
     agent_keeps_reporting: true
     must_detect: true
-    metric: oracledb_activity_parse_count_total
+    metric: oracledb_hard_parse_elapsed_seconds_total
     metric_kind: counter
-    shape_class: spike
+    # companion 只能帶單一常數 level，取的是故障期間的 DB time 累積速率
+    # （平均 active session 約 12）；健康時實際約 4，見描述。
+    # ⇒ 這條序列能回答的：高原期（占比約 50%、AAS 約 12）告警抓不抓得到。
+    #   不能回答的：故障前的占比（序列算出約 0.33%，描述的真實值約 1%）與
+    #   onset 途中何時越線 —— 分母在 onset 期間實際是從 4 漲到 12，這裡是常數。
+    # typical_wobble 套用在整條序列（含健康基線），所以以基線為準取 0.02；
+    #   高原因此比真實情況（約 ±0.3）平滑。
+    companion_series:
+      - metric: oracledb_db_time_seconds_total
+        role: denominator
+        metric_kind: counter
+        level: 12
+    shape_class: plateau
     noise_kind: gaussian
     fault_class: hard-parse-storm
     labels:
