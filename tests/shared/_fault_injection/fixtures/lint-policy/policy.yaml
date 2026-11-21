@@ -7,9 +7,8 @@ denied_functions:
   - quantile_over_time
   - absent
 
-denied_patterns:
-  - '=~".*"'
-  - 'without(tenant)'
+preserved_labels:
+  - tenant
 
 required_labels:
   - tenant

@@ -193,9 +193,8 @@ denied_functions:
   - predict_linear         # Large lookback queries
   - quantile_over_time     # High memory consumption
 
-denied_patterns:
-  - '=~".*"'              # Catch-all regex (performance killer)
-  - 'without(tenant)'     # Breaks tenant isolation
+preserved_labels:
+  - tenant                 # Every alert's result must keep tenant (judged on Prometheus' parse tree)
 
 required_labels:
   - tenant                 # All Custom Alert Rules must include tenant label
@@ -204,7 +203,7 @@ max_range_duration: 1h     # Prohibit excessively long range vectors (e.g., [7d]
 max_evaluation_interval: 60s  # Custom Rule Group interval cap
 
 # Every value is judged when the policy is loaded (#4061); a wrong one exits 2,
-# naming the key and why: denied_functions / denied_patterns / required_labels
+# naming the key and why: denied_functions / preserved_labels / required_labels
 # are lists (possibly empty) of non-empty strings (a single string is refused,
 # no longer matched character by character); the two durations are positive
 # Prometheus durations, Prometheus' ParseDuration grammar (90m, 1h30m, 2w; not
@@ -239,6 +238,33 @@ file_overrides:
 > `denied_functions` matches functions and aggregation operators by name: `topk by (a) (…)` is
 > `topk`; the same text in a label value, a comment or a metric name is none. An expression
 > Prometheus cannot evaluate (such as `rate(x[step()])`) is an ERROR.
+
+> **Tenant isolation is judged on the result, not the spelling** ([#4098](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4098)):
+> every alert writes `tenant: "{{ $labels.tenant }}"`, so once the expression's result loses `tenant`,
+> the alert's tenant is empty and reaches no tenant. For each label in `preserved_labels`, whether the
+> alert's result keeps it is judged on Prometheus' parse tree (`da-read promql-label-flow`):
+> `without(tenant)`, `without(tenant, b)`, `sum by (a)`, an ungrouped `sum(x)`, a one-to-one match not on
+> tenant (`ignoring(tenant)`, `on(a)`) and `vector(…)` drop it; a `label_replace` / `label_join` writing
+> tenant, a `group_left(tenant)` copying it from the other side matched on other labels, a recording rule
+> whose name has a colon but is not among the files linted, and a metric name matched by a regex cannot be
+> proven — an ERROR as well. A recording rule read is followed into its expression and its `labels:`, so a
+> record cannot hide a dropped tenant.
+>
+> What the alert itself writes as `tenant` decides: nothing, or `{{ $labels.tenant }}` (the series' own
+> value) is judged; a literal (`tenant: db-a` for a single-tenant rule, `tenant: ""` for a platform signal
+> with no tenant on purpose) sets the value whatever the result holds and is not judged; any other template
+> (such as `{{ $labels.namespace }}`) is an ERROR.
+>
+> ⚠️ What it cannot see: whether a raw metric has `tenant` at all is the scrape's business, and it is taken
+> to have it (a rule reading a platform metric such as `up{job="…"}` passes, with no tenant on the alert);
+> whether a rule reads other tenants' series (`x{tenant=~".*"}`) is not this check's either. It judges by
+> Prometheus' semantics; vmalert's behaviour is not verified separately. Linting `rule-packs/custom/` alone,
+> a rule reading a pack's recording rule cannot be proven: list the packs it reads among the paths.
+>
+> The former key `denied_patterns` is removed (breaking): it matched text, which `=~'.*'` or
+> `without(tenant, b)` walked past. Its `=~".*"` selects exactly what the selector without that matcher
+> selects (a matcher matching the empty string also selects the series without the label), so it guarded
+> nothing. A policy still carrying it exits `2`, pointing to `preserved_labels`.
 
 > **An exemption is not a skip (four guard rails)**: (1) `path` is anchored at
 > the top of the scanned tree (exact path, not a suffix), so a nested

@@ -3,7 +3,7 @@
 
 驗證 lint_custom_rules.py 的核心功能:
   1. Denied function 偵測
-  2. Denied pattern 偵測 (含 whitespace 變體)
+  2. preserved_labels：alert 的結果保留 tenant（#4098，Prometheus 語法樹）
   3. Required label 檢查
   4. Range vector duration 超限
   5. ConfigMap wrapper 解析
@@ -87,45 +87,110 @@ def test_lint_function_name_not_substring(policy):
     assert len(func_errors) == 0
 
 
-def test_lint_wildcard_regex_detected(policy):
-    """測試萬用字元正規表達式偵測。"""
-    results = lint_custom_rules.lint_expr(
-        'my_metric{job=~".*"} > 0', policy, "test.yaml", "TestRule"
-    )
-    pat_errors = [r for r in results if "denied pattern" in r.message]
-    assert len(pat_errors) >= 1
+# ── 2. preserved_labels (#4098) ───────────────────────────────────
 
-def test_lint_wildcard_regex_with_space_detected(policy):
-    """測試空格變體: =~ ".*"。"""
-    results = lint_custom_rules.lint_expr(
-        'my_metric{job=~ ".*"} > 0', policy, "test.yaml", "TestRule"
-    )
-    pat_errors = [r for r in results if "denied pattern" in r.message]
-    assert len(pat_errors) >= 1
+def _lint_alert(tmp_path, expr, tenant="{{ $labels.tenant }}", records=None, name="r.yaml"):
+    """lint_file of one alert *expr* (its `tenant` label *tenant*; None for
+    none) beside the recording rules *records* ({name: expr})."""
+    rules = [{"record": n, "expr": e} for n, e in (records or {}).items()]
+    labels = {"owner": "o", "expiry": "2099-01-01"}
+    if tenant is not None:
+        labels["tenant"] = tenant
+    rules.append({"alert": "A", "expr": expr, "labels": labels})
+    f = tmp_path / name
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": rules}]}), encoding="utf-8")
+    results, _ = lint_custom_rules.lint_file(str(f), lint_custom_rules.DEFAULT_POLICY)
+    return [r.message for r in results if r.severity == "ERROR"]
 
-def test_lint_without_tenant_detected(policy):
-    """測試 without(tenant) 偵測。"""
-    results = lint_custom_rules.lint_expr(
-        "sum without(tenant) (my_metric)", policy, "test.yaml", "TestRule"
-    )
-    pat_errors = [r for r in results if "without(tenant)" in r.message]
-    assert len(pat_errors) >= 1
 
-def test_lint_without_tenant_space_detected(policy):
-    """測試空格變體: without (tenant)。"""
-    results = lint_custom_rules.lint_expr(
-        "sum without (tenant) (my_metric)", policy, "test.yaml", "TestRule"
-    )
-    pat_errors = [r for r in results if "without(tenant)" in r.message]
-    assert len(pat_errors) >= 1
+DROPS = "the result drops label 'tenant'"
+UNPROVEN = "cannot prove the result keeps label 'tenant'"
 
-def test_lint_safe_pattern_passes(policy):
-    """測試安全 pattern 通過檢查。"""
-    results = lint_custom_rules.lint_expr(
-        'my_metric{job="mysql"} > 0', policy, "test.yaml", "TestRule"
-    )
-    pat_errors = [r for r in results if "denied pattern" in r.message]
-    assert len(pat_errors) == 0
+
+@pytest.mark.parametrize("expr", [
+    # every spelling the text match walked past (#4098), and the shapes it
+    # never named: the alert's `{{ $labels.tenant }}` renders empty for all
+    "sum without(tenant)(x)", "sum(x) without(tenant)", "sum without(tenant, b)(x)",
+    "sum without(b, tenant)(x)", 'sum without("tenant")(x)', "sum without(tenant,)(x)",
+    "sum by (a) (x)", "sum(x)", 'sum(x{tenant="t"}) by (a)', "x * ignoring(tenant) y",
+    "x * on(a) y", "vector(1)", "x or vector(0)", 'absent(nope{tenant="t1", tenant!="t2"})',
+    'count_values without(tenant) ("v", x)',
+])
+def test_a_result_that_drops_tenant_is_an_error(tmp_path, expr):
+    assert any(DROPS in m for m in _lint_alert(tmp_path, expr)), expr
+
+
+@pytest.mark.parametrize("expr", [
+    "x > 0", "sum by (tenant) (x)", "sum by (tenant, a) (x)", "topk without(tenant) (3, x)",
+    "max_over_time(x[5m])", "x * on() group_left y", "x / scalar(sum(y))",
+    "x and on() (count(y) > 0)", 'absent(nope{tenant="t1"})',
+    # #4098: `=~".*"` selects what the selector without it selects — it was a
+    # finding of the text match, not of anything the selector reads
+    'x{a=~".*"} > 0', "x{tenant=~'.*'} > 0",
+])
+def test_a_result_that_keeps_tenant_passes(tmp_path, expr):
+    assert _lint_alert(tmp_path, expr) == [], expr
+
+
+@pytest.mark.parametrize("expr", [
+    'label_replace(x, "tenant", "", "tenant", ".*")', 'label_join(x, "tenant", "", "a")',
+    'x{tenant!=""} * on() group_left(tenant) y', "tenant:not_in_this_run:sum > 0",
+    '{__name__=~"tenant:z:.*"} > 0',
+])
+def test_a_result_the_parse_tree_cannot_prove_is_an_error(tmp_path, expr):
+    assert any(UNPROVEN in m for m in _lint_alert(tmp_path, expr)), expr
+
+
+def test_a_record_that_dropped_tenant_cannot_hide_it(tmp_path):
+    assert any(DROPS in m for m in _lint_alert(
+        tmp_path, "job:x:sum > 0", records={"job:x:sum": "sum by (job) (x)"}))
+    assert _lint_alert(tmp_path, "tenant:x:sum > 0",
+                       records={"tenant:x:sum": "sum by (tenant) (x)"}) == []
+
+
+@pytest.mark.parametrize("tenant, finding", [
+    (None, DROPS),                              # no label: the series' own value
+    ("{{ $labels.tenant }}", DROPS),
+    ("{{$labels.tenant}}", DROPS),
+    ("{{ .Labels.tenant }}", DROPS),
+    ("db-a", None),                             # a literal: the alert sets it
+    ("", None),                                 # no tenant, written so
+    ("{{ $labels.namespace }}", "is a template that does not copy"),
+    ("x-{{ $labels.tenant }}", "is a template that does not copy"),
+])
+def test_what_the_alert_writes_as_tenant_decides_the_check(tmp_path, tenant, finding):
+    errors = _lint_alert(tmp_path, "sum(x) > 0", tenant=tenant)
+    if finding is None:
+        assert not any("tenant'" in m or "template" in m for m in errors), errors
+    else:
+        assert any(finding in m for m in errors), errors
+
+
+def test_a_record_of_another_file_of_the_run_is_followed(tmp_path, monkeypatch, capsys):
+    (tmp_path / "a.yaml").write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"record": "job:x:sum", "expr": "sum by (job) (x)"}]}]}), encoding="utf-8")
+    _lint_alert(tmp_path, "job:x:sum > 0", name="b.yaml")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    assert DROPS in capsys.readouterr().out
+    # alone, the record is unseen: not proven, never taken for a raw metric
+    assert _run_main([str(tmp_path / "b.yaml"), "--ci"], monkeypatch) == 1
+    assert UNPROVEN in capsys.readouterr().out
+
+
+def test_preserved_labels_cannot_be_relaxed_by_an_override():
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"file_overrides": [{
+            "path": "a.yaml", "policy": {"preserved_labels": []}}]}, "p.yaml")
+    assert exc.value.reason == "policy_invalid"
+    assert "not preserved_labels" in str(exc.value)
+
+
+def test_the_retired_denied_patterns_is_refused_naming_its_replacement():
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"denied_patterns": ['=~".*"']}, "p.yaml")
+    assert exc.value.reason == "policy_unknown_key"
+    assert "denied_patterns was removed (#4098)" in str(exc.value)
+    assert "preserved_labels" in str(exc.value)
 
 
 def test_lint_exceeds_max_range(policy):
@@ -796,8 +861,8 @@ def test_a_key_in_a_refusal_cannot_print_a_line_of_its_own(custom):
     ("denied_functions", "predict_linear", "must be a list of non-empty strings"),
     ("denied_functions", {"a": 1}, "must be a list of non-empty strings"),
     ("denied_functions", None, "must be a list of non-empty strings"),
-    ("denied_patterns", '=~".*"', "must be a list of non-empty strings"),
-    ("denied_patterns", 5, "must be a list of non-empty strings"),
+    ("preserved_labels", "tenant", "must be a list of non-empty strings"),
+    ("preserved_labels", [""], "must be a list of non-empty strings"),
     ("required_labels", "team", "must be a list of non-empty strings"),
     ("required_labels", [5], "must be a list of non-empty strings"),
     ("max_range_duration", "banana", "must be a positive Prometheus duration such as 90m or 1h30m"),
@@ -818,6 +883,7 @@ def test_a_malformed_top_level_value_is_refused_when_the_policy_is_loaded(key, v
 @pytest.mark.parametrize("key, value", [
     ("max_range_duration", "1h30m"), ("max_range_duration", "2w"),
     ("max_evaluation_interval", "90s"), ("denied_functions", []), ("required_labels", []),
+    ("preserved_labels", []),
 ])
 def test_a_well_formed_top_level_value_loads(key, value):
     assert lint_custom_rules.load_policy({key: value}, "p.yaml")[key] == value

@@ -62,9 +62,10 @@
 //
 // `promql-label-flow` reads a JSON object on standard input — the PromQL
 // "expressions", the "records" they may read and the "aliases" of <label>
-// (promql_label_flow.go) — and prints, per expression, every `and` /
-// `unless` matching on <label> and whether its left side keeps <label>:
-// {"documents": [[[{"op", "start", "end", "lhs"}, …], …]]}.
+// (promql_label_flow.go) — and prints, per expression, whether the series
+// it yields keep <label> and, for every `and` / `unless` matching on
+// <label>, whether its left side keeps it:
+// {"documents": [[{"result", "set_matches": [{"op", "start", "end", "lhs"}, …]}, …]]}.
 //
 // `promql-reads` reads a JSON array of PromQL expressions on standard input
 // and prints, per expression, the width of the window each vector selector
@@ -169,8 +170,8 @@ func usage(stderr io.Writer) int {
 		"{\"files\": [{\"path\", \"documents\", \"problem\"}]}. `-` reads standard input "+
 		"(at most once). promql-selectors reads a JSON array of PromQL expressions on "+
 		"standard input and prints, per expression, the selectors that could select "+
-		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether the left side of "+
-		"each `and`/`unless on(<label>)` keeps <label>; promql-reads reads a JSON array of "+
+		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether its series "+
+		"keep <label> and whether the left side of each `and`/`unless on(<label>)` keeps it; promql-reads reads a JSON array of "+
 		"PromQL expressions and prints, per expression, the window each selector reads and "+
 		"the functions and aggregations it calls. Exit 2 when the input is refused, "+
 		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+

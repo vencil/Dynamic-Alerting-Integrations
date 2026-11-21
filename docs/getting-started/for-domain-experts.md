@@ -231,7 +231,7 @@ lint 的對象是 Prometheus 規則檔，不是租戶配置（租戶配置用上
 
 檢查項目（內建 policy 的預設值，可用 `--policy` 覆寫）：
 - 禁用函式：`holt_winters`、`predict_linear`、`quantile_over_time`
-- 禁用樣式：全通配 `=~".*"`、`without(tenant)`；要禁止其他樣式，加進 policy 檔的 `denied_patterns`
+- 結果保留 tenant：每條 alert 的結果都要帶 `tenant`（`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等都會被擋），依 Prometheus 語法樹判定；policy 檔的 `preserved_labels`
 - 必備 label：`tenant`
 - range vector 最長 `1h`、rule group 的 `interval` 最長 `60s`
 - 缺 `owner` 或 `expiry` label 時出 WARN（不擋 CI）
