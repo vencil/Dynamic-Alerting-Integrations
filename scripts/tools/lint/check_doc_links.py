@@ -26,8 +26,6 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import (  # noqa: E402  (#3981: a tracked file rewritten in place is a repo artifact)
-    exit_on_output_write_error, write_repo_artifact)
 
 
 # ---------------------------------------------------------------------------
@@ -918,13 +916,15 @@ def _fix_broken_anchors(broken_anchors: list, repo_root: Path) -> int:
 
         if new_content != content:
             # #3981: atomic, through the artifact entry; a failure is rc 2,
-            # named (`exit_on_output_write_error` on `main`).
+            # named (`main` wraps the `--fix-anchors` run). Imported here, not at the top: `_lib_io` imports PyYAML,
+            # and the read-only modes run where there is none (a `language: python`
+            # hook with no additional_dependencies; docs-ci).
+            from _lib_io import write_repo_artifact  # noqa: E402, PLC0415
             write_repo_artifact(fpath, new_content)
 
     return fixed_count
 
 
-@exit_on_output_write_error
 def main():
     """CLI entry point: 文件間交叉引用一致性檢查."""
     try_utf8_stdout()
@@ -953,7 +953,15 @@ def main():
     )
     
     args = parser.parse_args()
-    
+    if args.fix_anchors:
+        # The one mode that writes; see `_fix_broken_anchors` for why the
+        # import is here.
+        from _lib_io import exit_on_output_write_error  # noqa: E402, PLC0415
+        return exit_on_output_write_error(_run)(args)
+    return _run(args)
+
+
+def _run(args):
     # 確定 repo 根目錄
     repo_root = Path(args.repo_root).resolve()
     if not (repo_root / "docs").exists() and not (repo_root / "README.md").exists():

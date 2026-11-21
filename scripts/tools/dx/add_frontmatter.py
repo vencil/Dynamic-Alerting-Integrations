@@ -26,8 +26,6 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_io import (  # noqa: E402  (#3981: a tracked file rewritten in place is a repo artifact)
-    exit_on_output_write_error, write_repo_artifact)
 
 # Files/paths excluded from front matter scanning.
 #
@@ -269,6 +267,9 @@ def write_file_content(filepath: str, content: str) -> None:
     """Write file content (UTF-8, LF), atomically, through the artifact
     entry (#3981). The file ends up with the mode git would check it out
     with — its owner-execute bit is kept, nothing else of the old mode."""
+    # Imported here, not at the top: `_lib_io` imports PyYAML, and the
+    # read-only modes run where there is none (docs-ci runs `--check`).
+    from _lib_io import write_repo_artifact  # noqa: E402, PLC0415
     write_repo_artifact(filepath, content)
 
 
@@ -394,7 +395,6 @@ def find_markdown_files(base_dir: str) -> List[str]:
     return sorted(set(str(Path(p).resolve()) for p in md_files))
 
 
-@exit_on_output_write_error
 def main():
     """CLI entry point: Add YAML front matter to documentation files for MkDocs/Docusaurus integration."""
     parser = argparse.ArgumentParser(
@@ -408,7 +408,15 @@ def main():
                        help='Base directory to scan (default: current directory)')
 
     args = parser.parse_args()
+    if not (args.check or args.dry_run):
+        # The one mode that writes; see `write_file_content` for why the
+        # import is here.
+        from _lib_io import exit_on_output_write_error  # noqa: E402, PLC0415
+        return exit_on_output_write_error(_run)(args)
+    return _run(args)
 
+
+def _run(args):
     # #3276: the shared judgement of a caller-given path — of the string the
     # caller gave (#3406): `Path('')` is `.`, so `''` (an unset shell
     # variable) judged after it was the current directory, scanned and
