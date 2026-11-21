@@ -114,9 +114,9 @@ jobs:
       # #3756: every tracked file this job read must be in
       # `on.pull_request.paths` above. After the post-sweep, so that its reads
       # are measured too; it does not run when the job is cancelled (the
-      # post-sweep does). No token is in this step's environment. Only
-      # artifact uploads may follow (`generate --check` refuses anything
-      # else). Generated.
+      # post-sweep does). The step is compared with the generated text key
+      # for key, so an `env:` added to it is refused by `generate --check`;
+      # so is anything after it that is not an artifact upload. Generated.
       # BEGIN GENERATED path-trace-assert job=github-e2e
       - name: Path filter covers everything this job read (#3756)
         if: ${{ !cancelled() }}
@@ -125,7 +125,6 @@ jobs:
 
       # What `assert --out` wrote: on a red run, `workflow_path_filter.py
       # merge` this file into .github/path-traces/forge-e2e-github.yaml.json.
-      # File names only.
       - name: Upload the trace
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
