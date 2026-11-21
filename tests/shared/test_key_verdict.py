@@ -432,7 +432,7 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
-        "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
+        "severity": "error", "reason": "no_row", "disable": None, "hint": None, "switched_off_with": None,
         "dead_entries": [], "value": 1, "gate_kind": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
             "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True,
