@@ -334,6 +334,10 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.StateFull:
 		slog.Error("tenant-api state store is full", "error", err)
 		return "tenant-api state is full; nothing was written (an operator must shrink groups, views or federation settings)", nil
+	case errkind.StateReloadFailed:
+		slog.Error("tenant-api state written, but reloading the snapshot that serves it failed",
+			"request_id", requestIDOf(r), "error", err)
+		return msgStateReloadFailed, map[string]any{"committed": true}
 
 	case errkind.ForgeForbidden:
 		// #3054: tenant-api's own token, not the caller, lacks the scope.

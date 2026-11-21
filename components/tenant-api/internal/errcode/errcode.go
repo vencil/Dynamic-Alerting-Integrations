@@ -90,6 +90,13 @@ const (
 	// StateFull marks an HTTP 507: the write would push tenant-api's state
 	// store past its size budget (#2856). Retrying does not help.
 	StateFull Code = "STATE_FULL"
+	// StateReloadFailed marks the 503 of a state-store write (groups, views,
+	// the federation whitelist) that WAS saved, but that this server could
+	// not load into the snapshot it serves reads from (#1073): reads miss the
+	// write until the next periodic reload. The envelope carries committed:
+	// true. Resending the same request is safe — these writes replace or
+	// delete by id — and loads it at once; so does waiting for Retry-After.
+	StateReloadFailed Code = "STATE_RELOAD_FAILED"
 	// GroupIDUnavailable marks the 409 of a PUT /groups/{id} whose id is
 	// held by a group the caller cannot see (#3123). It is NOT CONFLICT:
 	// retrying this one cannot succeed — the caller must pick another id.
@@ -407,6 +414,7 @@ var codeTable = []codeRow{
 	{ConfigDecode, RemedyFixInRepo},
 	{BaseRestoreFailed, RemedyOperator},
 	{StateFull, RemedyOperator},
+	{StateReloadFailed, RemedyRetryAfter},
 	{GroupIDUnavailable, RemedyChooseOther},
 	{Upstream, RemedyRetryAfter},
 	{NotImplemented, RemedyOperator},

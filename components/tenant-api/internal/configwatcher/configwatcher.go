@@ -63,13 +63,15 @@ type ReadFunc func() (data []byte, exists bool, err error)
 //
 // Why it exists: a reload FAILURE keeps serving the LAST-GOOD snapshot (load()
 // returns the error without Store-ing; a NewWithReader partial snapshot aside),
-// so a config an admin edited with a typo silently stops taking effect. BOTH reload paths are silent:
+// so a config an admin edited with a typo silently stops taking effect. Neither
+// reload path tells an operator:
 //   - WatchLoop (periodic tick) logs a WARN and moves on.
-//   - Reload (post-write refresh) returns the error, but its one production
-//     caller discards it — `_ = mgr.Reload()` in handler/state.go's
-//     reloadState, run after a groups / views / federation-policy write that
-//     succeeded or may have (#1535) — and the handler then answers, so the
-//     caller never learns the snapshot went stale.
+//   - Reload (post-write refresh) returns the error to its one production
+//     caller, handler/state.go's reloadState, run after a groups / views /
+//     federation-policy write that succeeded. Since #1073 the handler answers
+//     that writer 503 STATE_RELOAD_FAILED instead of 2xx — but only the writer
+//     learns of it; the background reload after an unknown outcome
+//     (ReloadAsync, #1535) tells no one at all.
 //
 // The observer records the outcome (ok) of each load so the handler can drive
 // TWO complementary metrics from one observation point:
@@ -219,12 +221,11 @@ func (w *Watcher[T]) Get() *T {
 // WatchLoop ticker fires.
 //
 // The outcome is recorded on the reload observer (by load()) as well as
-// returned: its production caller discards the error (`_ = mgr.Reload()` in
-// handler/state.go's reloadState) and the handler answers anyway — a 2xx, or
-// the error of a write whose outcome is unknown (ReloadAsync) — so without the
-// metric a post-write reload failure is just as silent as a WatchLoop tick
-// failure and leaves the manager serving the stale snapshot until a later
-// load succeeds.
+// returned. Its production caller (handler/state.go's reloadState) answers
+// the writer 503 STATE_RELOAD_FAILED on an error (#1073), but that reaches
+// the one client only; the metric is what tells an operator that the manager
+// is serving a stale snapshot until a later load succeeds — as for a failed
+// WatchLoop tick or background reload (ReloadAsync).
 func (w *Watcher[T]) Reload() error {
 	w.loadMu.Lock()
 	defer w.loadMu.Unlock()

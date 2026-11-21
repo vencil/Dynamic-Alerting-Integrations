@@ -2077,6 +2077,7 @@ const docTemplate = `{
                 "CONFIG_DECODE_ERROR",
                 "BASE_RESTORE_FAILED",
                 "STATE_FULL",
+                "STATE_RELOAD_FAILED",
                 "GROUP_ID_UNAVAILABLE",
                 "UPSTREAM_ERROR",
                 "NOT_IMPLEMENTED",
@@ -2126,6 +2127,7 @@ const docTemplate = `{
                 "ConfigDecode",
                 "BaseRestoreFailed",
                 "StateFull",
+                "StateReloadFailed",
                 "GroupIDUnavailable",
                 "Upstream",
                 "NotImplemented",
@@ -2185,7 +2187,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "committed": {
-                    "description": "Whether the batch was committed: true on BATCH_COMMITTED (do not resend it), false on a direct-mode batch's CONFLICT. Codes that carry it: BATCH_COMMITTED, CONFLICT.",
+                    "description": "Whether the write was committed: true on BATCH_COMMITTED (do not resend it) and on STATE_RELOAD_FAILED (saved, not yet served; resending the same request is safe), false on a direct-mode batch's CONFLICT. Codes that carry it: BATCH_COMMITTED, CONFLICT, STATE_RELOAD_FAILED.",
                     "type": "boolean"
                 },
                 "config_error": {
