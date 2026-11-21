@@ -115,6 +115,17 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
     try:
         if dashboard is None:
             dashboard = _lib_input.decode_bytes(raw, fmt="json", name=str(dashboard_path))
+        if not isinstance(dashboard, dict):
+            # the one wording of a top level of the wrong type, as --dashboard says it
+            refusal = _lib_input.refuse_top(dashboard_p.name, _lib_input.kind_of(dashboard),
+                                            dict, lang="en")
+            results.append({
+                "action": "import",
+                "status": "fail",
+                "caller_error": True,
+                "detail": f"Invalid JSON in {refusal}",
+            })
+            return results
         title = dashboard.get("title", dashboard_p.name)
     except _lib_input.DocumentError as e:
         results.append({
@@ -122,14 +133,6 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
             "status": "fail",
             "caller_error": True,  # malformed input file = caller-error (exit 2)
             "detail": f"Invalid JSON in {dashboard_p.name}: {e}",
-        })
-        return results
-    except AttributeError as e:   # not an object at the top
-        results.append({
-            "action": "import",
-            "status": "fail",
-            "caller_error": True,
-            "detail": f"Invalid JSON: {str(e)[:60]}",
         })
         return results
 

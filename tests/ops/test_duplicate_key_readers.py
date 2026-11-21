@@ -82,6 +82,26 @@ def test_a_dashboard_file_of_a_directory_with_a_name_twice_is_refused(tmp_path):
                                 "the name 'title' is given twice in one object"), result
 
 
+@pytest.mark.parametrize("raw, got", [(b"[]", "a list"), (b"1", "a number")])
+def test_a_dashboard_file_of_a_directory_that_is_no_object_is_refused(tmp_path, raw, got):
+    """The top level of the wrong type, in the words --dashboard uses
+    (`_lib_input.refuse_top`) — not Python's AttributeError text."""
+    path = tmp_path / "d.json"
+    path.write_bytes(raw)
+    [result] = grafana_import.import_dashboard(str(path), "cm", "monitoring", dry_run=True,
+                                               raw=raw)
+    assert (result["status"], result["caller_error"]) == ("fail", True), result
+    assert result["detail"] == f"Invalid JSON in d.json: the top level is not a mapping (got {got})"
+
+
+@pytest.mark.parametrize("value", ["[]", 5])
+def test_a_configmap_dashboard_that_is_no_object_fails_the_check(monkeypatch, value):
+    item = {"metadata": {"name": "cm"}, "data": {"d.json": value}}
+    monkeypatch.setattr(grafana_import, "kubectl_list", lambda *a, **k: [item])
+    checks = grafana_import.verify_dashboards("monitoring")
+    assert [(c["check"], c["status"]) for c in checks] == [("cm/cm/d.json", "fail")], checks
+
+
 def test_a_dashboard_in_a_configmap_with_a_name_twice_fails_the_check(monkeypatch):
     item = {"metadata": {"name": "cm"}, "data": {"d.json": DUP_DASHBOARD.decode()}}
     monkeypatch.setattr(grafana_import, "kubectl_list", lambda *a, **k: [item])
