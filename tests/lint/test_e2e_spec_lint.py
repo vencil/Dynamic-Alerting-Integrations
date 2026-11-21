@@ -1102,9 +1102,9 @@ def test_the_behavioural_test_runs_in_the_job_that_installs_eslint() -> None:
     Python Tests on every pull request; the behaviour module itself only runs
     when `playwright.yml` does.
 
-    ⛔ Known gap, not closed: `playwright.yml` is path-filtered, so a pull
-    request touching only `.pre-commit-config.yaml` or the Makefile does not
-    start it. Those two entry points are guarded by
+    `playwright.yml` carries no `paths:` since #3756, so a pull request
+    touching only `.pre-commit-config.yaml` or the Makefile starts it too.
+    Those two entry points are guarded by
     `test_all_three_entry_points_run_the_one_script`, which the behavioural
     module could not see anyway.
     """

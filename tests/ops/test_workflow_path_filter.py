@@ -899,7 +899,9 @@ def test_a_path_gated_workflow_is_traced_or_named(repo: Path, tmp_path: Path, ca
     # a known kind is a finding, whatever else is right about it: the old
     # free-text shape, a kind nobody defined, a pair of the wrong length.
     for bad in ("the old free-text reason", ("cheap-verification", "why"),
-                (wpf.DIFF_DRIVEN,), (wpf.DIFF_DRIVEN, "why", "extra")):
+                (wpf.DIFF_DRIVEN,), (wpf.DIFF_DRIVEN, "why", "extra"),
+                [wpf.DIFF_DRIVEN, "why"], (wpf.DIFF_DRIVEN, ""),
+                (wpf.DIFF_DRIVEN, "  "), (wpf.DIFF_DRIVEN, None)):
         monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {name: bad})
         capsys.readouterr()
         assert _main(repo, "generate", "--check") == 1, bad
@@ -984,11 +986,20 @@ def test_the_cheap_verification_workflows_gate_on_nothing() -> None:
         for event, cfg in triggers.items():
             assert not (isinstance(cfg, dict) and ("paths" in cfg or "paths-ignore" in cfg)), \
                 f"{name}: on.{event} gates on paths"
+        # "Every PR" has two more ways to stop being true without a `paths`
+        # key (an adversarial review walked through both): the trigger
+        # narrowed by branch or activity type, and the job switched off.
+        pr = triggers["pull_request"] or {}
+        assert set(pr) <= {"branches"} and "main" in pr.get("branches", ["main"]), \
+            f"{name}: on.pull_request is narrowed: {pr!r}"
+        for job_id, job in doc["jobs"].items():
+            assert "if" not in job, f"{name}: job {job_id} runs conditionally"
 
 
 def test_the_real_ledger_holds_both_kinds_and_the_ruled_members() -> None:
     """The classification the ruling states by name, so a re-labelling is a
     visible edit here and not a one-word change in the ledger."""
+    assert wpf.ADVISORY_KINDS == (wpf.DIFF_DRIVEN, wpf.AWAITS_READ_ASSERTION)
     by_kind = {kind: sorted(n for n, (k, _w) in wpf.ADVISORY_PATH_GATES.items() if k == kind)
                for kind in wpf.ADVISORY_KINDS}
     assert by_kind[wpf.AWAITS_READ_ASSERTION] == [

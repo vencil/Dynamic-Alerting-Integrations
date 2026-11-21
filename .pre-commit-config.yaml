@@ -1225,8 +1225,8 @@ repos:
         # this config still passed, and an
         # injected `test.fixme()` sailed through the hook. CI runs the SCRIPT,
         # never this hook — the single occurrence of `playwright-lint` under
-        # .github/ is a COMMENT describing this arrangement, and this file is
-        # not in playwright.yml's `paths:` either. (An earlier version of this
+        # .github/ is a COMMENT describing this arrangement. (playwright.yml
+        # has no `paths:` since #3756, so an edit here does start it.) (An earlier version of this
         # sentence said no workflow "names" it, which stopped being true in
         # the same commit that added the comment — mention is not execution,
         # which is the distinction this whole hook's twin is built on.) What

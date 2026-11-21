@@ -17,7 +17,7 @@
 #     workflow 裡，每個 job 都落在「名稱登記於本檔（required 或 advisory）的某個
 #     job」的 needs 遞移閉包內。所以「這個 job 紅了為什麼不擋」只寫在下面的
 #     advisory 理由，測試檔裡沒有第二份例外清單。
-#   * .github/workflows/required-checks-drift.yml（每日排程＋改到本檔的 PR）——拿
+#   * .github/workflows/required-checks-drift.yml（每日排程＋每支 PR）——拿
 #     GitHub 的實際設定比對本檔；不一致就紅，排程失敗開票。它本身是 advisory：
 #     owner 一改設定，所有開著的 PR 不能因此同時轉紅。
 #

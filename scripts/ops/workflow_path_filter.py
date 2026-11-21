@@ -177,19 +177,25 @@ _TRACE_ENV_TOUCH = re.compile(
 # the generated regions, by KIND (#3756, owner ruling 2026-11-14). The kind
 # says what the workflow's `paths` list IS, and so what may be asked of it:
 #
-#   DIFF_DRIVEN   the list is the workflow's SUBJECT — the files whose change
-#                 is what the job reports on (a defaults file, a conf.d tree,
-#                 a benchmark's own inputs). It is not a list of what the job
-#                 reads and is never compared with one: no read assertion, now
-#                 or later. A change to the tool's own code is held by the
-#                 pytest legs, which run on every PR.
+#   DIFF_DRIVEN   the list is meant to be the workflow's SUBJECT — the files
+#                 whose change is what the job reports on (a defaults file, a
+#                 conf.d tree, a benchmark's own inputs) — and is never
+#                 compared with what the job reads: no read assertion, now or
+#                 later. A change to the tool's own code is held by the pytest
+#                 legs, which run on every PR.
+#                 ⚠️ Not there yet: the ruling (point 2) has the list
+#                 GENERATED from the glob the tool picks its work items with.
+#                 Today the lists of guard-defaults-impact and
+#                 config-diff-advisory are hand-written and still name tool
+#                 code beside the subject; nothing here generates or checks
+#                 them. That step is open on #3756.
 #   AWAITS_READ_ASSERTION
 #                 the list is meant to be everything the job reads, and the
 #                 job is too expensive to run on every PR. It gets the read
 #                 assertion (atime, ruling point 4) in the order of
 #                 READ_ASSERTION_ORDER, and leaves this ledger when it does.
 #
-# There is no third kind. A cheap verification job carries no `paths` at all
+# There is no third kind (tests/ops/test_workflow_path_filter.py pins the two). A cheap verification job carries no `paths` at all
 # (security-audit, required-checks-drift and the E2E spec lint dropped theirs
 # with this ledger's kinds), and neither does a job that scans the whole tree;
 # such a workflow is not here, and gaining a `paths` list without an entry is
@@ -1099,11 +1105,12 @@ def _ledger_findings(tracked: tuple[str, ...], traced_names: set[str],
                else "has no path gate (or no longer exists)")
             + " — delete the entry")
     for name, entry in sorted(ADVISORY_PATH_GATES.items()):
-        kind = entry[0] if isinstance(entry, tuple) and len(entry) == 2 else None
-        if kind not in ADVISORY_KINDS:
+        pair = entry if isinstance(entry, tuple) and len(entry) == 2 else (None, None)
+        if not (pair[0] in ADVISORY_KINDS and isinstance(pair[1], str) and pair[1].strip()):
             findings.append(
                 f"UNCLASSIFIED ADVISORY_PATH_GATES[{name!r}] is not a "
-                f"(kind, why) pair with a kind in {ADVISORY_KINDS}: {entry!r}")
+                f"(kind, why) tuple with a kind in {ADVISORY_KINDS} and a "
+                f"reason written down: {entry!r}")
     awaiting = {name for name, entry in ADVISORY_PATH_GATES.items()
                 if isinstance(entry, tuple) and entry[:1] == (AWAITS_READ_ASSERTION,)}
     for name in sorted(awaiting ^ set(READ_ASSERTION_ORDER)):
