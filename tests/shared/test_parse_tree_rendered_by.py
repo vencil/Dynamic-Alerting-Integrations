@@ -81,10 +81,14 @@ CASES = [
     ("root-carrier.tenants", "_defaults.yaml", "tenants",
      _append("_defaults.yaml", "\ntenants:\n  db-a:\n    container_memory: \"60\"\n"),
      lambda d: _sub(d / "_defaults.yaml", 'container_memory: "60"', 'container_memory: "61"'), False),
+    # #4163: a registry key is in the built-in layer, so the list renders
+    # nothing for it; the list's own effect is on a key outside the registry.
     ("root-carrier.optional_overrides", "_defaults.yaml", "optional_overrides",
-     lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
-                    '    mysql_connection_usage_percent: "70"\n    oracle_pga_usage_percent: "100"\n'),
-     lambda d: _sub(d / "_defaults.yaml", "  - oracle_pga_usage_percent", "  - oracle_pga_usage_percentx"), True),
+     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                          '    mysql_connection_usage_percent: "70"\n    x_opt_root_2962: "100"\n'),
+           lambda d: _sub(d / "_defaults.yaml", "  - oracle_pga_usage_percent",
+                          "  - oracle_pga_usage_percent\n  - x_opt_root_2962")),
+     lambda d: _sub(d / "_defaults.yaml", "  - x_opt_root_2962", "  - x_opt_root_2962x"), True),
     ("root-carrier.dimensions", "_defaults.yaml", "dimensions",
      lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
                     '    mysql_connection_usage_percent: "70"\n    container_cpu{version="v2"}: "60"\n'),

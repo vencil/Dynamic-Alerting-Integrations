@@ -66,17 +66,19 @@ def test_a_key_with_no_base_is_reported_unserved(tmp_path, da_guard_binary):
 
     A tenant key whose base is in no defaults carrier — the #3014 shape — must
     come back in `unserved`, or every assertion above passes vacuously.
+    #4163: every registry key is in the built-in layer (a platform number or
+    off), so the shape needs a key outside it — the platform's own.
     """
     (tmp_path / "_defaults.yaml").write_text(
         "defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
     (tmp_path / "examples").mkdir()
     (tmp_path / "examples" / "_defaults-multidb.yaml").write_text(
-        "defaults:\n  redis_connected_clients: 200\n", encoding="utf-8")
+        "defaults:\n  my_own_threshold: 200\n", encoding="utf-8")
     (tmp_path / "t1.yaml").write_text(
         'tenants:\n  t1:\n    mysql_connection_usage_percent: "70"\n'
-        '    redis_connected_clients: "500"\n', encoding="utf-8")
+        '    my_own_threshold: "500"\n', encoding="utf-8")
     tv = load_served_values(tmp_path, binary=da_guard_binary)["t1"]
-    assert "redis_connected_clients" in tv.unserved
+    assert "my_own_threshold" in tv.unserved
     assert "mysql_connection_usage_percent" not in tv.unserved
 
 

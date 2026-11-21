@@ -345,7 +345,10 @@ def test_effective_root_defaults_null_is_not_judged(tmp_path):
 _BUILTIN_OK = {"digest": "abc123def456", "keys": {
     "cpu": {"value": 80, "state": "builtin", "tenants": 3},
     "mem": {"value": 85, "state": "overridden", "root_value": 70},
-    "lag": {"value": 30, "state": "withheld"}}}
+    "lag": {"value": 30, "state": "withheld"}},
+    # #4163: the off table — keys the platform ships no value for.
+    "off": {"redis_x": {"pack": "redis", "state": "off", "configured": 1},
+            "redis_y": {"pack": "redis", "state": "overridden", "root_value": 7, "configured": 2}}}
 
 
 def test_effective_tree_reads_builtin_defaults_and_refuses_output_without_it(tmp_path):
@@ -358,7 +361,15 @@ def test_effective_tree_reads_builtin_defaults_and_refuses_output_without_it(tmp
     assert got.builtin_defaults == tv.BuiltinDefaults("abc123def456", {
         "cpu": tv.BuiltinDefault(80.0, "builtin", None, 3),
         "mem": tv.BuiltinDefault(85.0, "overridden", 70.0),
-        "lag": tv.BuiltinDefault(30.0, "withheld", None)})
+        "lag": tv.BuiltinDefault(30.0, "withheld", None)}, {
+        "redis_x": tv.BuiltinOff("redis", "off", None, 1),
+        "redis_y": tv.BuiltinOff("redis", "overridden", 7.0, 2)})
+    # #4163: a da-guard without the off table is named older, not read as "no off key".
+    without_off = {k: v for k, v in _BUILTIN_OK.items() if k != "off"}
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective_tree(tmp_path, binary=_fake_da_guard(
+            tmp_path, json.dumps({**base, "builtin_defaults": without_off})))
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value) and "builtin_defaults.off" in str(ei.value)
     with pytest.raises(tv.EffectiveError) as ei:
         tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(base)))
     assert "older than this tool: upgrade or rebuild it" in str(ei.value) and "builtin_defaults" in str(ei.value)

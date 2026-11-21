@@ -112,8 +112,8 @@ func TestBuiltinOff_ExpiresDoesNotLapseToOff(t *testing.T) {
 	}
 }
 
-// A root value the decode refuses falls to off, and is no refusal of off's
-// own: RefusedRootDefaults names only what the file wrote.
+// Off is no refusal of its own: a tree whose root writes nothing has every
+// off key valued off, and RefusedRootDefaults names none of them.
 func TestBuiltinOff_IsNoRefusal(t *testing.T) {
 	t.Parallel()
 	if _, refused := RefusedDefault(builtinOffDefault()); refused {
@@ -166,5 +166,29 @@ func TestBuiltinOff_AnUnreadableTenantValueSaysThePlatformShipsNoValue(t *testin
 	}
 	if strings.Contains(joined, "root default is not a finite number") {
 		t.Errorf("logs %q name a root default the tree never wrote", joined)
+	}
+}
+
+// A root value the decode refuses, for a key of the off table, is kept in
+// off's place — reading as off (a tenant value is served, `expires:` does
+// not lapse) — and stays a refusal, so the mistake is still named.
+func TestBuiltinOff_ARefusedRootValueStaysARefusal(t *testing.T) {
+	t.Parallel()
+	cfg := loadTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  redis_connected_clients: abc\n",
+		"t.yaml": "tenants:\n  tx:\n    redis_connected_clients:\n      default: \"200\"\n      expires: \"2020-01-01T00:00:00Z\"\n" +
+			"  ty: {}\n",
+	})
+	if got := cfg.RefusedRootDefaults(); got["redis_connected_clients"] != RefusedUnparsed {
+		t.Errorf("refused root defaults %v, want redis_connected_clients unparsed", got)
+	}
+	if got := offRows(cfg, "tx", "redis", fixedNow); strings.Join(got, "|") != "redis_connected_clients warning 200" {
+		t.Errorf("tx: rows %v, want its own 200 past expires", got)
+	}
+	if got := offRows(cfg, "ty", "redis", fixedNow); len(got) != 0 {
+		t.Errorf("ty: rows %v, want none", got)
+	}
+	if errs := strings.Join(cfg.ValidateTenantKeys().Errors, "\n"); !strings.Contains(errs, "`expires:` on \"redis_connected_clients\" is refused — the platform ships no value") {
+		t.Errorf("write check: %q, want the off-key refusal", errs)
 	}
 }

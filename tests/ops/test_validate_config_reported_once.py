@@ -25,9 +25,11 @@ _TENANT = 'tenants:\n  ta:\n    mysql_connection_usage_percent: "70"\n'
 _CASES = [
     ("subtree-reserved", {"_defaults.yaml": _ROOT, "team/_defaults.yaml": "_silent_mode: warning\n",
                           "team/ta.yaml": _TENANT}, "_silent_mode", "subtree_default_reserved_key"),
+    # #4163: a registry key is in the built-in layer (valued off), so the root
+    # declares it; a key outside the layer is what stays undeliverable.
     ("subtree-undeliverable", {"_defaults.yaml": _ROOT, "team/ta.yaml": _TENANT,
-                               "team/_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n"},
-     "mysql_threads_running", "subtree_default_undeliverable"),
+                               "team/_defaults.yaml": "defaults:\n  my_own_threshold: 30\n"},
+     "my_own_threshold", "subtree_default_undeliverable"),
     ("subtree-retired", {"_defaults.yaml": _ROOT, "team/ta.yaml": _TENANT,
                          "team/_defaults.yaml": "defaults:\n  mysql_connections: 30\n"},
      "mysql_connections", "subtree_default_undeliverable"),

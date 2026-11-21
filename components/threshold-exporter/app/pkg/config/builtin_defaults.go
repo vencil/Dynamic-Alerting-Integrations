@@ -205,21 +205,21 @@ func BuiltinOffKeys() []string {
 }
 
 // seedBuiltinOff lays the off table under d in place: every off key d holds
-// no number and no root `disable` for, under ANY #1231 spelling, gets the off
-// value (builtinOffNaN). Unlike the table of values, a key of this table may
-// have a retired spelling (`mysql_cpu` → `mysql_threads_running`): a root
-// that values the retired spelling values the key, and an off value under
-// the canonical spelling beside it would take its place when the defaults
-// are canonicalised. A value the root decode refused falls to off, as one
-// falls to the platform's number above: the refusal is still reported, from
-// the file's bytes.
+// no value for, under ANY #1231 spelling, gets the off value (builtinOffNaN).
+// Unlike the table of values, a key of this table may have a retired
+// spelling (`mysql_cpu` → `mysql_threads_running`): a root that values the
+// retired spelling values the key, and an off value under the canonical
+// spelling beside it would take its place when the defaults are
+// canonicalised. A value the root decode refused (refusedDefault) is KEPT,
+// unlike above: it reads exactly as off (valued, no row of its own, no
+// family off) and stays a refusal, so served-values and backtest still name
+// root_default_refused for a root that mistyped a key the platform ships no
+// value for — replacing it with off would leave the mistake silent.
 func seedBuiltinOff(d map[string]float64) {
 	held := make(map[string]bool, len(d))
-	for k, v := range d {
-		if finiteThreshold(v) || RootDisabledDefault(v) {
-			canon, _ := CanonicalKeyFor(k)
-			held[canon] = true
-		}
+	for k := range d {
+		canon, _ := CanonicalKeyFor(k)
+		held[canon] = true
 	}
 	for k := range builtinOffKeys {
 		if held[k] {

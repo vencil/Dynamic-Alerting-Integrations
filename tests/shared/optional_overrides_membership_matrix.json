@@ -19,7 +19,12 @@
     "Rows carrying \"requires_alias\": true spell the live deprecated alias",
     "literally (mysql_cpu). They are only meaningful while that alias sits inside",
     "its #1231 transition window, so the reader skips them when the alias table",
-    "is empty. Delete them when the window closes."
+    "is empty. Delete them when the window closes.",
+    "",
+    "#4163: every registry key the platform ships no value for is in the readers'",
+    "built-in layer (valued off), so a row about what the LIST does uses a key",
+    "outside the registry (app_queue_depth, app_heap); a registry key is read",
+    "whatever the list holds."
   ],
   "defaults": [
     "mysql_connection_usage_percent",
@@ -65,9 +70,9 @@
     {
       "name": "_critical whose base is declared",
       "declared": [
-        "oracle_wait_time_rate"
+        "app_queue_depth"
       ],
-      "key": "oracle_wait_time_rate_critical",
+      "key": "app_queue_depth_critical",
       "verdict": "refuse",
       "why": "resolveCriticalRows keys off defaults[base]; the row would be dropped"
     },
@@ -81,19 +86,19 @@
     {
       "name": "_critical key named ON the list",
       "declared": [
-        "jvm_memory_critical"
+        "app_heap_critical"
       ],
-      "key": "jvm_memory_critical",
+      "key": "app_heap_critical",
       "verdict": "refuse",
       "why": "16 of the registry's 25 optional_overrides keys are this shape; Go's cascade never reaches membership for it"
     },
     {
       "name": "_critical key AND its base both on the list",
       "declared": [
-        "jvm_memory",
-        "jvm_memory_critical"
+        "app_heap",
+        "app_heap_critical"
       ],
-      "key": "jvm_memory_critical",
+      "key": "app_heap_critical",
       "verdict": "refuse",
       "why": "still no base VALUE to emit against"
     },
@@ -231,8 +236,8 @@
         "mysql_cpu_critical"
       ],
       "key": "mysql_threads_running_critical",
-      "verdict": "refuse",
-      "why": "canonicalizes to the _critical shape, which is refused regardless of spelling",
+      "verdict": "accept",
+      "why": "#4163: the alias target is a key of the built-in layer (valued off at the root), so its _critical is served whatever the list holds; the listing is redundant",
       "requires_alias": true
     },
     {
@@ -259,9 +264,9 @@
     {
       "name": "whitespace-padded list entry does NOT match",
       "declared": [
-        " oracle_wait_time_rate "
+        " app_queue_depth "
       ],
-      "key": "oracle_wait_time_rate",
+      "key": "app_queue_depth",
       "verdict": "refuse",
       "why": "neither side strips. Recorded as a KNOWN SHARED GAP, not an endorsement: silently trimming would normalise a malformed platform file the way the rejected lowercase-coercion would have. The fix belongs in list-content validation, and this row exists so that fix has to update one table instead of hunting two suites."
     },
@@ -270,7 +275,7 @@
       "declared": [
         ""
       ],
-      "key": "oracle_wait_time_rate",
+      "key": "app_queue_depth",
       "verdict": "refuse",
       "why": "same shared gap as the row above"
     }

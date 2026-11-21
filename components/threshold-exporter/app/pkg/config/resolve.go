@@ -447,12 +447,18 @@ func headLive(base string, defaults map[string]float64, sv ScheduledValue, now t
 // `expires:` (PREVENT #656) — the one rule the resolver (headLive), the
 // expiry event (ResolveThresholdExpiriesAt) and the write check
 // (ValidateTenantKeys) share: the root `defaults:` (canonical) values key,
-// and not with the built-in layer's off (BuiltinOffDefault, #4163). A value
-// lapsing to off would take the threshold away in silence, so such a key
+// and not with the built-in layer's off (BuiltinOffDefault, #4163) — nor,
+// for a key of the off table, with a value the root decode refused, which
+// seedBuiltinOff keeps in off's place and which reads as off does. A value
+// lapsing to either would take the threshold away in silence, so such a key
 // keeps its value past `expires:`, as a declared key does.
 func expiryHonoured(key string, defaults map[string]float64) bool {
 	v, valued := defaults[key]
-	return valued && !BuiltinOffDefault(v)
+	if !valued || BuiltinOffDefault(v) {
+		return false
+	}
+	_, refused := RefusedDefault(v)
+	return !(refused && BuiltinOff(key))
 }
 
 // familyHeadOff reports whether the tenant switches family base off at now
@@ -1846,7 +1852,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 						v.Errors = append(v.Errors, fmt.Sprintf(
 							"WARN: tenant=%s: invalid `expires:` %q on %q (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert", tenant, sv.Expiry.Expires, canonKey))
 					}
-				} else if BuiltinOffDefault(canonDefaults[canonKey]) {
+				} else if _, valued := canonDefaults[canonKey]; valued && BuiltinOff(canonKey) {
 					// #4163: the built-in layer values the key off — the
 					// declared key's case, reached through the layer instead of
 					// the list, refused for the reason given below.

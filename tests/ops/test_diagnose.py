@@ -16,7 +16,7 @@ from _kubectl_fake import install as install_kubectl  # noqa: E402  (#3349)
 from _lib_tenant_values import ServedValuesError  # noqa: E402
 import subprocess  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from _builtin_layer import BUILTIN_DEFAULTS  # noqa: E402  (#3832)
+from _builtin_layer import BUILTIN_DEFAULTS, BUILTIN_OFF  # noqa: E402  (#3832, #4163)
 
 
 def _own(inh):
@@ -341,7 +341,9 @@ class TestResolveInheritanceChain:
             encoding="utf-8")
         (tmp_path / "db-a.yaml").write_text("tenants:\n  db-a: {}\n", encoding="utf-8")
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
-        assert result["declared"] == ["oracle_x", "123"]
+        # #4163: the root's listing first, then every key the built-in layer
+        # values off that the tenant has no value for.
+        assert result["declared"] == ["oracle_x", "123", *sorted(BUILTIN_OFF)]
         assert "oracle_x" not in result["resolved"]
 
     def test_declared_ignores_a_nested_only_defaults_carrier(self, tmp_path):
@@ -353,7 +355,9 @@ class TestResolveInheritanceChain:
         (tmp_path / "team" / "db-a.yaml").write_text("tenants:\n  db-a: {}\n",
                                                      encoding="utf-8")
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
-        assert result["declared"] == []
+        # #4163: no listing is read, but the built-in layer's off keys are
+        # declared whatever the tree writes.
+        assert result["declared"] == sorted(BUILTIN_OFF)
 
 
 # ---------------------------------------------------------------------------
@@ -1122,7 +1126,7 @@ class TestRound1ReviewPins:
             "team/_defaults.yaml": "defaults:\n  cpu: 51\n",
             "team/ta.yaml": "tenants:\n  ta: {}\n"})
         chain = diagnose.resolve_inheritance_chain("ta", d)
-        assert chain["declared"] == ["extra_key"]
+        assert chain["declared"] == ["extra_key", *sorted(BUILTIN_OFF)]  # #4163
         err = capsys.readouterr().err
         assert "FLAT" not in err and "SKIPPED" not in err, err
 
