@@ -98,7 +98,8 @@ function ConfigErrorNotice({ name, code }) {
 function TenantMetadataRows({ data, modeColors }) {
   return (
     <>
-      <div style={styles.row}>
+      {/* The gap below the badges the (often empty) pill row used to give. */}
+      <div style={{ ...styles.row, marginTop: 'var(--da-space-3)' }}>
         <span style={styles.rowLabel}>
           {data.operational_mode_source === 'config'
             ? t('模式（依設定推算）', 'Mode (derived from config)')
