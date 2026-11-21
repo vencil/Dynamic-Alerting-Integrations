@@ -231,7 +231,7 @@ lint works on Prometheus rule files, not on tenant config (validate tenant confi
 
 Checks (the built-in policy's defaults; override them with `--policy`):
 - Denied functions: `holt_winters`, `predict_linear`, `quantile_over_time`
-- Denied patterns: the match-all `=~".*"` and `without(tenant)`; to deny other patterns, add them to `denied_patterns` in the policy file
+- Results keep tenant: every alert's result must carry `tenant` (`without(tenant)`, `sum by (a)`, an ungrouped `sum(…)` and the like are refused), judged on Prometheus' parse tree; `preserved_labels` in the policy file
 - Required label: `tenant`
 - Range vectors at most `1h`; rule-group `interval` at most `60s`
 - WARN (does not fail CI) when an `owner` or `expiry` label is missing

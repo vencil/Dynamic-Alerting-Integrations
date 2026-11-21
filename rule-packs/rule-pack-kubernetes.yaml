@@ -986,10 +986,13 @@ groups:
         labels:
           severity: warning
           maintenance: page
-          # Platform-scoped: the count() expr yields no tenant, so this renders
-          # empty (dropped) — same established pattern as *ExporterAbsent sentinels.
-          # Present to satisfy custom-rule-policy required_labels (tenant).
-          tenant: "{{ $labels.tenant }}"
+          # Platform-scoped: the count() expr yields no tenant, so the alert has
+          # none — same as the *ExporterAbsent sentinels. Written as "" (no
+          # tenant: Prometheus drops an empty label, the label set is what
+          # `{{ $labels.tenant }}` rendered) for custom-rule-policy
+          # required_labels; a copy of $labels.tenant would be judged by
+          # preserved_labels, which this result does not keep (#4098).
+          tenant: ""
         annotations:
           summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels — feature inert"
           summary_zh: "已宣告版本專屬閾值，但 kube-state-metrics 未暴露 pod 標籤 — 功能靜默失效"

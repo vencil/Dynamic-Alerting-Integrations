@@ -383,12 +383,11 @@ data:
     \n      (count(tenant:kube_pod_info:count) or vector(0)) > 0\n\n      and\n\n\
     \      (count(tenant:kube_pod_labels:count) or vector(0)) == 0\n\n      '\n  \
     \  for: 10m\n    labels:\n      maintenance: page\n      severity: warning\n \
-    \     tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
-    \ $value | printf \"%.0f\" }} version-specific container CPU threshold(s) declared\
-    \ and tenant pods are running, but kube-state-metrics emits no pod labels at all.\
-    \ Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'\n     \
-    \ description_zh: 已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod 正在運行，但\
-    \ kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n\
+    \     tenant: ''\n    annotations:\n      description: '{{ $value | printf \"\
+    %.0f\" }} version-specific container CPU threshold(s) declared and tenant pods\
+    \ are running, but kube-state-metrics emits no pod labels at all. Set KSM --metric-labels-allowlist=pods=[app.kubernetes.io/version].'\n\
+    \      description_zh: 已宣告 {{ $value | printf \"%.0f\" }} 個版本專屬容器 CPU 閾值且租戶 Pod\
+    \ 正在運行，但 kube-state-metrics 完全未暴露 pod 標籤。請為 KSM 設定 --metric-labels-allowlist=pods=[app.kubernetes.io/version]。\n\
     \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation\n\
