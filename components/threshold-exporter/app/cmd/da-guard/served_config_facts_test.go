@@ -31,6 +31,8 @@ var configFactsTree = map[string]string{
 	"tmeta.yaml": "tenants:\n  tmeta:\n    _metadata:\n      owner:\n        x: y\n",
 	"tr.yaml": "tenants:\n  tr:\n    _routing:\n      receiver:\n        type: webhook\n" +
 		"        url: \"https://hooks.example.com/tr\"\n      group_wait: 10s\n",
+	// A `_routing` the resolver refuses (WARN, no routing).
+	"trej.yaml": "tenants:\n  trej:\n    _routing:\n      receiver:\n        type: nosuchtype\n",
 }
 
 // factsFields are the fields --config-facts writes for a tenant, compared
@@ -137,8 +139,9 @@ func TestServedConfigFacts_RefusesFlagsItWouldNotRead(t *testing.T) {
 // TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant: --tenant
 // narrows --config-facts as it narrows the default mode (the same tenants,
 // tenants_requested and tenants_absent); the resolver's WARN on a
-// `_metadata` that does not decode is printed once, as the default mode
-// prints it; and the document carries no `at` — it reads no instant.
+// `_metadata` that does not decode, and the routing resolver's on a
+// `_routing` it refuses (#4109), are each printed once, as the default mode
+// prints them; and the document carries no `at` — it reads no instant.
 func TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant(t *testing.T) {
 	t.Parallel()
 	dir := writeConfD(t, configFactsTree)
@@ -177,6 +180,9 @@ func TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant(t *testing.T) {
 	}
 	if n := strings.Count(stderr.String(), "failed to parse _metadata"); n != 1 {
 		t.Errorf("the `_metadata` WARN printed %d times, want once:\n%s", n, stderr.String())
+	}
+	if n := strings.Count(stderr.String(), "_routing for tenant=trej"); n != 1 {
+		t.Errorf("the `_routing` WARN printed %d times, want once:\n%s", n, stderr.String())
 	}
 	var doc map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(stdout.String()), &doc); err != nil {
