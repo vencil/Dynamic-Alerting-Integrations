@@ -72,6 +72,12 @@
 // it in a rule (promql_reads.go): {"documents": [[{"selectors", "calls",
 // "problem"}, …]]}.
 //
+// `promql-shape` reads the same input and prints, per expression, its tree
+// as Prometheus' parser builds it — every aggregation with its `by` /
+// `without` labels, every binary operator with its vector matching, every
+// call and selector, each holding its operands (promql_shape.go):
+// {"documents": [[<node>, …]]}.
+//
 // `-` reads standard input — how a file held in a ConfigMap is handed over
 // once its outer layer is read the Kubernetes way (da-crdecode); for
 // `prometheus-rules` at most once.
@@ -162,6 +168,7 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
 	say(stderr, "       %s promql-label-flow <label> -\n", programName)
 	say(stderr, "       %s promql-reads -\n", programName)
+	say(stderr, "       %s promql-shape -\n", programName)
 	say(stderr, "       %s %s\n", programName, selfCheckCmd)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
 		"their consumer's own loader and prints the reading as JSON, keeping only the keys "+
@@ -172,7 +179,9 @@ func usage(stderr io.Writer) int {
 		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether the left side of "+
 		"each `and`/`unless on(<label>)` keeps <label>; promql-reads reads a JSON array of "+
 		"PromQL expressions and prints, per expression, the window each selector reads and "+
-		"the functions and aggregations it calls. Exit 2 when the input is refused, "+
+		"the functions and aggregations it calls; promql-shape reads the same input and prints, "+
+		"per expression, its tree: every aggregation, binary operator, call and selector with "+
+		"its grouping and matching labels. Exit 2 when the input is refused, "+
 		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+
 		"exit 2 without it when da-read could not answer (bad arguments, a file that cannot be "+
 		"opened, an I/O error). A refusal by Alertmanager's loader leaves the loader's reason "+
@@ -201,6 +210,7 @@ var subcommands = map[string]subcommand{
 	"promql-selectors":  runSelectors,
 	"promql-label-flow": runLabelFlow,
 	"promql-reads":      runReads,
+	"promql-shape":      runShape,
 }
 
 func isFileArg(a string) bool {
@@ -267,6 +277,30 @@ func runReads(operands []string, stdin io.Reader, stdout, stderr io.Writer) int 
 		return exitCallerErr
 	}
 	out, err := readPromQLReads(exprs)
+	if err != nil {
+		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
+		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runShape is `promql-shape -`.
+func runShape(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 1 || operands[0] != "-" {
+		return usage(stderr)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	exprs, err := jsonStrings(data)
+	if err != nil {
+		// the caller's framing: no answer about the input
+		say(stderr, "%s: standard input is not a JSON array of strings: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLShape(exprs)
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 		return refuse(stdout, stderr)

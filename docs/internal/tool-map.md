@@ -159,6 +159,7 @@ lang: zh
 | `check_cli_contract.py` | 文件裡教人抄的 da-tools 命令 ↔ 活的 argparse 契約（#1379 / TRK-370）。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_cli_default_drift.py` | cli-reference 的「預設值」欄 vs argparse 的實際 default。 |
+| `check_cluster_identity.py` | rules keep `da_cluster` wherever they keep an identity label (#4097). |
 | `check_codename_gate.py` | Layer 2 glossary-driven codename gate (#469). |
 | `check_codename_leak.py` | Block internal codenames from leaking to user-facing files. |
 | `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |

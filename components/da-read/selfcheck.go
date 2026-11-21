@@ -59,6 +59,7 @@ var selfCheckCases = []selfCheckCase{
 	{"promql-selectors", []string{"promql-selectors", `user_state_filter{filter="maintenance"}`, "-"}, exitOK},
 	{"promql-label-flow", []string{"promql-label-flow", "tenant", "-"}, exitOK},
 	{"promql-reads", []string{"promql-reads", "-"}, exitOK},
+	{"promql-shape", []string{"promql-shape", "-"}, exitOK},
 }
 
 // runSelfCheck is `da-read self-check`.

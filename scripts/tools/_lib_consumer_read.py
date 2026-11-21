@@ -884,6 +884,83 @@ def promql_reads(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
     return docs[0]
 
 
+#: The node kinds of a ``promql-shape`` tree and the keys each must carry.
+_SHAPE_KEYS = {
+    "aggregate": ("op", "without", "labels", "expr", "param"),
+    "binary": ("op", "bool", "matching", "lhs", "rhs"),
+    "call": ("name", "args"),
+    "selector": ("name", "matchers", "range"),
+    "subquery": ("expr",),
+    "paren": ("expr",),
+    "unary": ("op", "expr"),
+    "number": (),
+    "string": (),
+}
+
+
+def _is_shape(node) -> bool:
+    """*node* has the shape of one ``promql-shape`` tree, all the way down."""
+    if not isinstance(node, dict) or node.get("kind") not in _SHAPE_KEYS:
+        return False
+    if not all(isinstance(node.get(k), int) for k in ("start", "end")):
+        return False
+    if not all(k in node for k in _SHAPE_KEYS[node["kind"]]):
+        return False
+    kind = node["kind"]
+    if kind == "aggregate":
+        return (isinstance(node["without"], bool) and isinstance(node["labels"], list)
+                and _is_shape(node["expr"])
+                and (node["param"] is None or _is_shape(node["param"])))
+    if kind == "binary":
+        m = node["matching"]
+        return ((m is None or (isinstance(m, dict) and isinstance(m.get("on"), bool)
+                               and isinstance(m.get("labels"), list)
+                               and isinstance(m.get("include"), list)
+                               and isinstance(m.get("card"), str)))
+                and _is_shape(node["lhs"]) and _is_shape(node["rhs"]))
+    if kind == "call":
+        return isinstance(node["args"], list) and all(_is_shape(a) for a in node["args"])
+    if kind == "selector":
+        return (isinstance(node["name"], str) and isinstance(node["matchers"], list)
+                and isinstance(node["range"], bool))
+    if kind in ("subquery", "paren", "unary"):
+        return _is_shape(node["expr"])
+    return True
+
+
+def promql_shape(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
+    """⛔ THE one reading of how a PromQL expression is put together (#4097):
+    per expression of *exprs*, its tree as Prometheus' parser builds it
+    (``da-read promql-shape``). A node is
+
+    * ``{"kind": "aggregate", "op", "without": bool, "labels", "expr", "param"}``
+    * ``{"kind": "binary", "op", "bool", "matching": None | {"card", "on": bool,
+      "labels", "include"}, "lhs", "rhs"}`` — ``matching`` is None when one
+      side is a scalar; ``card`` is ``many-to-one`` for ``group_left``,
+      ``one-to-many`` for ``group_right``
+    * ``{"kind": "call", "name", "args"}``
+    * ``{"kind": "selector", "name", "matchers": [{"name", "type", "value"}],
+      "range": bool}`` — ``name`` is "" for ``{__name__=~"…"}``
+    * ``{"kind": "subquery" | "paren" | "unary", "expr"}``, ``{"kind": "number" | "string"}``
+
+    each with ``start`` / ``end`` (byte offsets into the expression's UTF-8
+    encoding). An expression Prometheus' parser refuses raises
+    ``InputRefused``. No tool reads ``by (…)`` / ``on (…)`` off the text of
+    an expression."""
+    resolved = da_read_binary(binary)
+    data = json.dumps(list(exprs)).encode("utf-8")
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-shape", "-"], data)
+    docs = out.get("documents")
+    if (not isinstance(docs, list) or len(docs) != 1 or not isinstance(docs[0], list)
+            or len(docs[0]) != len(exprs) or not all(_is_shape(e) for e in docs[0])):
+        _fault(DA_READ_BINARY_NAME, ["promql-shape"], "stale")
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one tree per expression "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""

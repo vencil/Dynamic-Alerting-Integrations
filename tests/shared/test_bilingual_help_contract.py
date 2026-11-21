@@ -256,6 +256,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_undefined_tokens.py": _R_LINT,
     "check_unpinned_deps.py": _R_LINT,
     "check_vmalert_coverage.py": _R_LINT,
+    "check_cluster_identity.py": _R_LINT,
     "check_jsx_linecount.py": _R_LINT,
     "check_window_x_no_fallback.py": _R_LINT,
     "check_workflow_git_push_permissions.py": _R_LINT,

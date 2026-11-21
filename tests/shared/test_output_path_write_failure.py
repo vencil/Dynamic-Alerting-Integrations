@@ -2821,8 +2821,14 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "not a path. A write that fails is held by "
         "tests/ops/test_threshold_recommend.py "
         "(test_generate_observed_map_that_cannot_be_written_is_exit_2).",
+    "lint/check_cluster_identity.py":
+        "`--generate` rewrites the committed "
+        "`tests/rulepacks/cluster_identity_baseline.yaml`; the flag is a switch, "
+        "not a path. A write that fails is held by "
+        "tests/lint/test_check_cluster_identity.py "
+        "(test_generate_that_cannot_write_the_baseline_is_exit_2).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 2
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 3
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
