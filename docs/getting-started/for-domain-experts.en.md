@@ -229,11 +229,11 @@ python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ \
 
 lint works on Prometheus rule files, not on tenant config (validate tenant config with `validate_config.py` above). Without `--ci` it exits 0 even when it reports an ERROR.
 
-Checks (the built-in policy's defaults; override them with `--policy`):
-- Denied functions: `holt_winters`, `predict_linear`, `quantile_over_time`
-- Results keep tenant: every alert's result must carry `tenant` (`without(tenant)`, `sum by (a)`, an ungrouped `sum(…)` and the like are refused), judged on Prometheus' parse tree; `preserved_labels` in the policy file
-- Required label: `tenant`
-- Range vectors at most `1h`; rule-group `interval` at most `60s`
+Checks (the built-in policy's values: [custom-rule-governance §4.1](../custom-rule-governance.en.md#41-deny-list-rules); override them with `--policy`):
+- Denied functions: `denied_functions`
+- Labels results keep: `preserved_labels` (`without(tenant)`, `sum by (a)`, an ungrouped `sum(…)` and other spellings that drop tenant are refused, judged on Prometheus' parse tree)
+- Required labels: `required_labels`
+- Range vector cap `max_range_duration`; rule-group `interval` cap `max_evaluation_interval`
 - WARN (does not fail CI) when an `owner` or `expiry` label is missing
 
 A naming-convention check is not implemented yet, and the policy file has no such setting. Cardinality is guarded by the platform's Cardinality Guard; for trend forecasting see Cardinality Forecasting below.

@@ -25,9 +25,9 @@ every other copy is GENERATED from it:
              `da-guard write` takes, #3866)
   - Policy : the compiled pack's forecast `max_range_duration` (the longest
              lookback a compiled forecast reads) in
-             .github/custom-rule-policy.yaml and its copy in
-             docs/custom-rule-governance{,.en}.md — the one line that carries
-             `# forecast lookback`
+             .github/custom-rule-policy.yaml — the one line that carries
+             `# forecast lookback` (#4099: that file is the lint's built-in
+             policy, and the docs include it, so it is the only copy)
   - Recipes: the `status:` line and each param's `required:` / `enum:` /
              `default:` in rule-packs/recipes/*.yaml, whose params must be
              exactly the recipe's (the rest is hand-written and kept)
@@ -77,7 +77,6 @@ PORTAL_STATUS_REL = "tools/portal/src/interactive/tools/_common/data/recipe-stat
 CONSTANTS_REL = "scripts/tools/_lib_constants.py"
 RECIPES_DIR_REL = "rule-packs/recipes"
 POLICY_REL = ".github/custom-rule-policy.yaml"
-GOVERNANCE_DOC_RELS = ("docs/custom-rule-governance.md", "docs/custom-rule-governance.en.md")
 #: The targets written whole: a missing one is generated, not an error.
 WHOLE_FILE_TARGETS = frozenset({PORTAL_ENUMS_REL, PORTAL_STATUS_REL})
 
@@ -405,7 +404,6 @@ def render_constants(c, g):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
         f"# block from {CONTRACT_REL}. DO NOT EDIT.",
-        f'FORECAST_MAX_LOOKBACK: Final[str] = "{forecast_max_lookback(c)}"',
         f'THRESHOLD_NUMBER_PATTERN: Final[str] = {_py_str(c["patterns"]["thresholdNumber"])}',
         "THRESHOLD_TRIM_CODE_POINTS: Final[frozenset[int]] = frozenset(("
         + ", ".join(f"0x{cp:X}" for cp in sorted(set(g["trim_code_points"]))) + "))",
@@ -523,8 +521,7 @@ def targets(root, c, g):
         (PORTAL_STATUS_REL, lambda _t: render_portal_status(c)),
         (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c, g), CONSTANTS_REL)),
     ]
-    for rel in (POLICY_REL, *GOVERNANCE_DOC_RELS):
-        out.append((rel, lambda t, rel=rel: render_max_lookback(t, c, rel)))
+    out.append((POLICY_REL, lambda t: render_max_lookback(t, c, POLICY_REL)))
     yamls = sorted((Path(root) / RECIPES_DIR_REL).glob("*.yaml"))
     names = {p.stem for p in yamls}
     missing = sorted({r["name"] for r in c["recipes"]} - names)

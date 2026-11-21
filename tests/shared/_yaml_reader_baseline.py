@@ -219,6 +219,8 @@ ALLOWED = {
         (1, "generate-routes --secret-mounts-out's list (--secret-mounts), read through _lib_input.document as JSON (#3797): no YAML is parsed"),
     ('scripts/tools/ops/policy_engine.py', '_main'):
         (1, "a standalone policy file (--policy), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-guard parse-tree reads it"),
+    ('scripts/tools/ops/lint_custom_rules.py', 'builtin_policy'):
+        (1, "#4099 the custom-rule lint's built-in policy (.github/custom-rule-policy.yaml, shipped in the image), decoded as a --policy is; only Python reads it"),
     ('scripts/tools/ops/validate_config.py', '_main'):
         (1, "a standalone policy file (--policy-dsl), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-guard parse-tree reads it"),
     ('scripts/tools/ops/silencer_drift_check.py', 'main'):

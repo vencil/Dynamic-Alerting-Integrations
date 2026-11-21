@@ -229,11 +229,11 @@ python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ \
 
 lint 的對象是 Prometheus 規則檔，不是租戶配置（租戶配置用上面的 `validate_config.py`）。沒帶 `--ci` 時，就算有 ERROR 也會以 0 結束。
 
-檢查項目（內建 policy 的預設值，可用 `--policy` 覆寫）：
-- 禁用函式：`holt_winters`、`predict_linear`、`quantile_over_time`
-- 結果保留 tenant：每條 alert 的結果都要帶 `tenant`（`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等都會被擋），依 Prometheus 語法樹判定；policy 檔的 `preserved_labels`
-- 必備 label：`tenant`
-- range vector 最長 `1h`、rule group 的 `interval` 最長 `60s`
+檢查項目（內建 policy 的值見 [custom-rule-governance §4.1](../custom-rule-governance.md#41-deny-list-規則)，可用 `--policy` 覆寫）：
+- 禁用函式：`denied_functions`
+- 結果保留的 label：`preserved_labels`（`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等丟掉 tenant 的寫法會被擋，依 Prometheus 語法樹判定）
+- 必備 label：`required_labels`
+- range vector 上限 `max_range_duration`、rule group 的 `interval` 上限 `max_evaluation_interval`
 - 缺 `owner` 或 `expiry` label 時出 WARN（不擋 CI）
 
 規則命名慣例的檢查尚未實作，policy 檔也沒有這一項。基數的防護由平台的 Cardinality Guard 負責，趨勢預測見下方的 Cardinality Forecasting。

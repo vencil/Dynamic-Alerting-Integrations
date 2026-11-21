@@ -1,11 +1,11 @@
 # Custom Rule Governance Policy
 # 參考: docs/custom-rule-governance.md §4
 #
-# 此檔案定義 CI deny-list linting 的檢查規則。
-# 由 scripts/tools/lint_custom_rules.py 讀取。
+# 此檔案定義 CI deny-list linting 的檢查規則，也**就是** lint 的內建政策
+# （scripts/tools/ops/lint_custom_rules.py 讀它；da-tools 映像內附；#4099）：
+# 改這份等於改所有不帶 --policy 的 lint。文件 §4.1 直接引入本檔。
 
 denied_functions:
-  - holt_winters           # CPU 密集型函式
   - predict_linear         # 大範圍回溯查詢
   - quantile_over_time     # 高記憶體消耗
 
@@ -41,7 +41,6 @@ file_overrides:
       # 下 per-PVC fan-out，但 PVC/租戶為個位數 → bounded。whitelist 對 forecast
       # 維持「pod 不可」（pod fan-out × predict_linear × 8h lookback 為另一數量級）。
       denied_functions:
-        - holt_winters
         - quantile_over_time
       # 下一行的值由 scripts/tools/dx/gen_recipe_contract.py 依 recipe 契約寫入，勿手改。
       max_range_duration: 96h   # forecast lookback 上限 = max(lookback_factor·最大 horizon, lookback_floor)

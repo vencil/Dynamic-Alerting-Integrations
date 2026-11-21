@@ -215,42 +215,15 @@ groups:
 
 ### 4.1 Deny-list 規則
 
+lint 工具的內建政策**就是**下面這份檔（`.github/custom-rule-policy.yaml`，da-tools 映像內附），這裡直接引入原檔，不另抄一份（[#4099](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4099)）。`--policy` 給的檔逐鍵蓋過它：
+
 ```yaml
-# .github/custom-rule-policy.yaml（可選；lint 工具有內建 default policy）
-denied_functions:
-  - holt_winters           # CPU 密集型函式
-  - predict_linear         # 大範圍回溯查詢
-  - quantile_over_time     # 高記憶體消耗
-
-preserved_labels:
-  - tenant                 # 每條 alert 的結果必須保留 tenant（依 Prometheus 語法樹判定）
-
-required_labels:
-  - tenant                 # 所有 Custom Rule 必須帶 tenant label
-
-max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
-max_evaluation_interval: 60s  # Custom Rule group interval 上限
-
-# 每個值在載入政策時判定（#4061），不符即結束碼 2、點名鍵與原因：
-# denied_functions／preserved_labels／required_labels 是清單（可為空），每項是
-# 非空字串（寫成單一字串會被拒，不再逐字元比對）；兩個時長是正的 Prometheus
-# 時長，語法同 Prometheus 的 ParseDuration（90m、1h30m、2w 可；1.5h、不加
-# 引號的 5 不可）。group 的 interval 也照這個語法讀。
-
-# 這份只給 lint（`lint --policy`、`validate-config --lint-policy`）；webhook 網域
-# 白名單 `allowed_domains` 在部署端 policy（另一份檔，給 generate-routes /
-# validate-config 的 --policy）。兩份各自拒收對方的鍵（#3797）。
-
-# 平台 COMPILED pack 的逐檔豁免（v2.10.0）——deny-list 治理對象是租戶手寫
-# raw PromQL；compiler 產出的 pack（如 Custom Alerts forecast recipe 的
-# predict_linear，成本緩解在編譯期內建）由 file_overrides 取得列管豁免
-file_overrides:
-  - path: rule-packs/rule-pack-custom-alerts.yaml
-    require_generated_marker: true   # 檔頭須帶 GENERATED 標記，否則照常全檢
-    policy:
-      denied_functions: [holt_winters, quantile_over_time]  # predict_linear 豁免
-      max_range_duration: 96h        # forecast lookback 上限 = max(lookback_factor·最大 horizon, lookback_floor)，由 recipe 契約產生
+--8<-- ".github/custom-rule-policy.yaml"
 ```
+
+- **每個值在載入政策時判定**（[#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)），不符即結束碼 `2`、點名鍵與原因：`denied_functions`／`preserved_labels`／`required_labels` 是清單（可為空），每項是非空字串（寫成單一字串會被拒，不再逐字元比對）；兩個時長是正的 Prometheus 時長，語法同 Prometheus 的 `ParseDuration`（`90m`、`1h30m`、`2w` 可；`1.5h`、不加引號的 `5` 不可）。group 的 `interval` 也照這個語法讀。
+- **`denied_functions` 的每個名字必須是規則叫得到的**（[#4099](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4099)）：Prometheus 載入 rule file 的 parser 認得、且已啟用的函式或聚合運算子（由 `da-read promql-names` 回答，部署的 Prometheus 不開 experimental 功能）。打錯字、Prometheus 3 已不存在的 `holt_winters`、未啟用的 experimental 函式（例如 `double_exponential_smoothing`；寫了的規則本來就會被 rule loader 拒收），都是開始 lint 前的結束碼 `2`——那樣的條目什麼也沒禁。
+- 這份只給 lint（`lint --policy`、`validate-config --lint-policy`）；webhook 網域白名單 `allowed_domains` 在部署端 policy（另一份檔，給 `generate-routes`／`validate-config` 的 `--policy`）。兩份各自拒收對方的鍵（[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。
 
 > **範圍與函式照 Prometheus 的讀法判定**（[#4080](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4080)）：運算式由 Prometheus 的 PromQL parser 讀，不比對文字。
 > `max_range_duration` 比的是每個 selector 讀取的時間窗寬度：自身 range 加上外層每個子查詢的
@@ -316,7 +289,7 @@ docker run --rm \
 
 # 輸出範例
 # PASS: custom_tenant_rules.yaml - 2 rules checked
-# FAIL: bad_rule.yaml:15 - denied function 'holt_winters' in expr
+# FAIL: bad_rule.yaml:15 - denied function 'predict_linear' in expr
 # FAIL: bad_rule.yaml:22 - missing required label 'tenant'
 ```
 
