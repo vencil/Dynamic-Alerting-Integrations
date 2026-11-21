@@ -108,13 +108,14 @@ def extract_sot_scopes(yaml_path: Path) -> set[str]:
         raise FileNotFoundError(f"SOT not found: {yaml_path}")
     try:
         import yaml as yaml_mod
+        from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     except ImportError as exc:
         raise RuntimeError(
             "PyYAML is required (pip install pyyaml). "
             "Repo CI installs this via setup."
         ) from exc
     with open(yaml_path, encoding="utf-8") as f:
-        cfg = yaml_mod.safe_load(f)
+        cfg = strict_safe_load(f)
     if not isinstance(cfg, dict):
         raise ValueError(f"{yaml_path} root is not a mapping")
     rules = cfg.get("rules") or {}

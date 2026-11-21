@@ -16,7 +16,12 @@ gate's docstring for what counts).
   reading (`Reading`). Value: (count, Reading). A point that reads files of
   several kinds is filed under the one with a Go consumer; between two with
   Go consumers, the earlier letter (A before D before E), whose migration
-  the later steps wait on.
+  the later steps wait on. (The F row came in with the gate's reach, #4111:
+  helm/ was not scanned before; it is no new reader.)
+
+A second, independent axis (#4111): `LAX` — the points that read YAML
+laxly on purpose, mirroring a consumer that does. Every other point reads
+through `_lib_yaml_strict`; the gate derives which is which.
 """
 from __future__ import annotations
 
@@ -31,6 +36,10 @@ class Reading(enum.Enum):
     C = "da-read alertmanager"       # Alertmanager config (config.Load)
     D = "da-crdecode"                # Kubernetes manifests, Helm values / charts
     E = "da-guard parse-tree"        # conf.d-shaped text
+    # #4111: tenant-api's account registry (internal/federation/account) —
+    # no reader binary serves it yet; the projection gate reads it strictly
+    # (the duplicate rule is yaml.v3's) until one does.
+    F = "tenant-api account registry"
 
 
 def debt_by_class() -> "dict[Reading, list[tuple[str, str]]]":
@@ -150,9 +159,6 @@ ALLOWED = {
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/generate_tenant_mapping_rules.py', 'load_metrics_from_dictionary'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
-    ('scripts/tools/ops/da_assembler.py', '_legacy_name_hint'):
-        (3, "the file name an earlier da-assembler wrote, which PyYAML's typing of the name decided; "
-            "only PyYAML can say what it was. Decides nothing: the CR is judged from da-crdecode"),
     ('scripts/tools/ops/init_project.py', '_classify_root_file'):
         (2, "the customer repo's CI files (GitHub workflow, GitLab CI, pre-commit), read by those CI systems; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_gitlab_root_includes'):
@@ -227,4 +233,21 @@ ALLOWED = {
         (1, "an amtool silence dump (--silences-file), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
 }
 
-DEBT: dict = {}
+DEBT: dict = {
+    ('helm/vector/projection-gate/verify_tenant_projections.py', 'load_yaml'):
+        (1, Reading.F),
+}
+
+#: ⛔ #4111: the points that read YAML LAXLY on purpose — a repeated key keeps
+#: its last value — because the file's consumer reads it so and the point
+#: mirrors that consumer. Value: (count, the consumer and why). Every other
+#: point reads through `_lib_yaml_strict`. A file the repo writes is never
+#: here (a repeated key in it is our mistake; the strict reading is its lint).
+LAX = {
+    ('scripts/tools/ops/init_project.py', '_classify_root_file'):
+        (2, "the customer's root .gitlab-ci.yml, as GitLab (Ruby Psych) reads it: the last of a "
+            "repeated key wins and every `<<` merges; init only tells the customer what to add"),
+    ('scripts/tools/ops/init_project.py', '_gitlab_root_includes'):
+        (1, "the customer's root .gitlab-ci.yml, as GitLab (Ruby Psych) reads it, to tell whether "
+            "it already includes our pipeline"),
+}

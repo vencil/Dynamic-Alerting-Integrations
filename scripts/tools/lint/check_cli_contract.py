@@ -1794,13 +1794,14 @@ _ENTRY_KEYS = {"file", "command", "verdict", "token", "count", "ticket"}
 def load_baseline(path: Path = BASELINE_PATH) -> tuple[list[BaselineEntry], list[str]]:
     """Ledger entries plus FATAL errors about the ledger's own shape."""
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     errors: list[str] = []
     if not path.is_file():
         return [], [f"baseline ledger {_rel(path, REPO_ROOT)} "
                     f"is missing — this check runs against an empty ledger only "
                     f"if you create the file with `entries: []`"]
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = strict_safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         return [], [f"baseline ledger is not valid YAML: {exc}"]
     rows = data.get("entries") if isinstance(data, dict) else None

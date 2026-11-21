@@ -36,6 +36,7 @@ import sys
 import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
 except Exception:  # pragma: no cover - compat shim optional
@@ -106,7 +107,7 @@ def main() -> int:
     # reason: an unreadable reference point is "cannot check" (2), never
     # "checked" (0) and never "violation" (1).
     try:
-        pin = yaml.safe_load(PIN.read_text(encoding="utf-8"))
+        pin = strict_safe_load(PIN.read_text(encoding="utf-8"))
         helpers = pin["workload_closure"]["helpers"]
         if (not isinstance(helpers, list) or not helpers
                 or not all(isinstance(h, str) and h.strip() for h in helpers)):

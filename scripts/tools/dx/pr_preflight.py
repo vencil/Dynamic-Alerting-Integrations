@@ -1420,11 +1420,12 @@ def _soft_fail_check_names() -> set[str]:
         return names
     try:
         import yaml  # PyYAML — already a repo dependency
+        from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     except ImportError:
         return names
     for wf in sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")]):
         try:
-            data = yaml.safe_load(wf.read_text(encoding="utf-8"))
+            data = strict_safe_load(wf.read_text(encoding="utf-8"))
         except (yaml.YAMLError, OSError, UnicodeDecodeError):
             continue
         jobs = data.get("jobs") if isinstance(data, dict) else None

@@ -53,6 +53,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -73,7 +74,7 @@ _DATA_AUDIENCE_RE = re.compile(r'data-audience="([^"]*)"')
 def _check_registry() -> list[str]:
     issues: list[str] = []
     with REGISTRY.open(encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+        data = strict_safe_load(f)
     for entry in data.get("tools", []):
         key = entry.get("key", "<no-key>")
         for aud in entry.get("audience", []) or []:

@@ -599,7 +599,7 @@ What a YAML file means is decided by the program that reads it and acts on it. W
 | tenant-api's state records (groups, views, federation whitelist and subsets, AccountID registry) | tenant-api's parse function for each kind of record: `parse-tree`'s judgement first, then a decode into typed structs, then that record's own checks (§2) | the JSON `tenant-api state show` prints (below) |
 | The RBAC config and `_tenant_orgs.yaml` tenant-api reads | as above | `tenant-api config check` judges whether they can be read; the Python schema lint keeps only the authoring checks stricter than the parse function (for example a permission value must be one of the known ones) |
 | conf.d examples in the docs | the exporter and the generator (through `parse-tree`) | `parse-tree`'s whole-tree mode |
-| Files with no Go consumer that only Python reads in the repo (GitHub workflows, pre-commit config, mkdocs config, repo-internal data) | — | not enforced; unchanged |
+| Files with no Go consumer that only Python reads in the repo (GitHub workflows, pre-commit config, mkdocs config, repo-internal data) | — | read with PyYAML, always through the strict reading (a repeated key refuses the file; see "The boundary and how it is held" below) |
 
 Example: `name: no` in a Kubernetes manifest is the boolean `false` to kubectl and the string `"no"` to `parse-tree`. Judging the manifest by yaml.v3's reading would disagree with kubectl, which actually applies it; so ask sigs.k8s.io/yaml.
 
@@ -638,6 +638,20 @@ $ da-crdecode --any-shape values.yaml
 **`tenant-api config check --kind rbac|tenant-orgs FILE|-`**: judges the file with the same parse function the server reads it with; RBAC is also checked against the declared identity claims, using the same flags and environment variables as the server. It prints JSON: `schema` is `tenant-api.config-check/v1`, plus `kind`, `config` (the decoded config, with the field names of the YAML) and `problem` (as above); exactly one of the two is not null. The authoring checks stricter than the parse function run on `config`; the file is not read again with PyYAML. Exit codes: 0 can be read, 1 refused, 2 usage error or the input cannot be opened. An empty file can be read and decodes to an empty config, as in the server. A check inside the repo has no running server, so the declared claims come from `oauth2Proxy.claimHeaders` in the Helm values (read with `da-crdecode`), written as the oauth2-proxy config file the chart renders and passed as `--oauth2-proxy-config` ([ADR-027](./027-tenant-api-caller-identity.en.md) §2). `check_admin_config_schema` passes the RBAC config and `_tenant_orgs.yaml` to it; the RBAC config embedded in the Helm values is two layers: `da-crdecode` gets the string out of the outer one (Helm reads values with sigs.k8s.io/yaml), and the inner one goes to it on standard input. The `_domain_policy.yaml` this lint reads is a conf.d file and, like every other conf.d reader, goes through `parse-tree`.
 
 **The boundary and how it is held**: if a file has a Go consumer, Python must not read it with PyYAML. CI runs an AST lint (parsing the Python source's syntax tree to find where a YAML parser is called) that lists every call site; the file holding a call site must be on an allow-list (or on the ratchet baseline below), each allow-list entry with its reason (for example "reads only GitHub workflows; no Go consumer"). The allow-list takes only readers with no Go consumer. A call site whose file has a Go consumer but which has not migrated yet is not on the allow-list but on a separate ratchet baseline: a new call site fails CI, and a migrated call site still in the baseline fails CI too, so the baseline only shrinks and is empty once the migration is done.
+
+The same lint holds a second boundary, independent of the first: **Python reads YAML through one strict reading** (`_lib_yaml_strict`: a key repeated in one mapping refuses the file, keys compared as yaml.v3 compares them). PyYAML by default keeps the last of a repeated key without a word, and the first one is gone. The lint derives from the syntax tree whether each call site goes through a shared reader or calls PyYAML itself; the modules holding the shared readers may touch PyYAML only at the strict reading's base, so everything read through them is read strictly. A call site that calls PyYAML itself must be on a separate list, each entry naming the consumer whose reading it mirrors. Only a file whose consumer itself keeps the last value gets there — the customer's `.gitlab-ci.yml`, for one: GitLab reads it with Ruby's Psych, which keeps the last of a repeated key and merges every `<<`, and init reads the customer's file that way to judge it. A file the repo writes is never on it: a repeated key there can only be a mistake, and the strict reading is its lint.
+
+Example:
+
+```yaml {.illustrative reason="a repeated key on purpose: init's .da-init.yaml, which the strict reading refuses"}
+# .da-init.yaml (init's record of the files it wrote)
+files:
+  ci/a.yml: h1
+files:
+  ci/b.yml: h2
+```
+
+Read the PyYAML default way, the first `files:` is gone and init takes `ci/a.yml`, which it wrote, for a file that is not its own; the strict reading refuses the file, init reads it as unreadable, and deletes nothing.
 
 Scope: the order of this section's work is in §7. The portal's js-yaml previews stay as §2's scope note says and are not covered here.
 

@@ -44,6 +44,7 @@ from _lib_validation import i18n_text  # noqa: E402
 
 try:
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
 except ImportError:  # pragma: no cover - environment guard
     print("check_percent_render_pinned: PyYAML required (pip install pyyaml)", file=sys.stderr)
     sys.exit(2)
@@ -77,7 +78,7 @@ class RulePacksRefused(Exception):
 
 
 def _load_yaml(p: Path) -> dict:
-    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    data = strict_safe_load(p.read_text(encoding="utf-8"))
     if data is None:
         return {}
     if not isinstance(data, dict):

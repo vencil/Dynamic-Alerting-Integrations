@@ -64,6 +64,7 @@ from _lib_validation import i18n_text  # noqa: E402
 
 try:
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
 except ImportError:  # pragma: no cover - environment guard
     print("check_exporter_queries: PyYAML required (pip install pyyaml)", file=sys.stderr)
     sys.exit(2)
@@ -98,7 +99,7 @@ def bindings() -> list[tuple[str, Path, Path]]:
 
 def load_queries(path: Path) -> dict:
     try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        doc = strict_safe_load(path.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError) as e:
         raise CannotRun(f"cannot read {path}: {e}") from e
     if not isinstance(doc, dict):

@@ -74,6 +74,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
@@ -187,7 +188,7 @@ def ci_packages(path: Path) -> set[str]:
     if not path.is_file():
         raise ParityError(f"ci.yml not found: {path}")
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = strict_safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise ParityError(f"cannot parse {path.name}: {exc}") from exc
 

@@ -57,6 +57,7 @@ import _lib_consumer_read  # noqa: E402  (ADR-036 §12: rendered manifests read 
 from typing import Iterable, Optional
 
 import yaml
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 # Charts whose rendered output carries egress-relevant config.
 DEFAULT_CHARTS = ("helm/vector", "helm/victorialogs", "helm/chargeback-aggregator")
@@ -210,7 +211,7 @@ def lint_chart(chart_dir: Path, manifests: list[dict], allow_globs: list[str]) -
         # ── (1) sink egress allowlist ──────────────────────────────────
         if m.get("kind") == "ConfigMap" and "vector.yaml" in (m.get("data") or {}):
             try:
-                vcfg = yaml.safe_load(m["data"]["vector.yaml"]) or {}
+                vcfg = strict_safe_load(m["data"]["vector.yaml"]) or {}
             except yaml.YAMLError as e:
                 vios.append(Violation("ERROR", chart, "vector.yaml", f"embedded vector config unparseable: {e}"))
                 continue

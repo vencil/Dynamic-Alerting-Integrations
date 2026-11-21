@@ -100,6 +100,7 @@ def load_registry(path: Path) -> list[FlakeEntry]:
         return []
     try:
         import yaml  # local import: keeps script importable for unit tests
+        from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     except ImportError:
         # PyYAML missing — degrade to pure pass-through with a stderr
         # advisory rather than crashing the wrapper. CI / pre-commit
@@ -111,7 +112,7 @@ def load_registry(path: Path) -> list[FlakeEntry]:
         )
         return []
     with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+        data = strict_safe_load(f) or {}
     raw = data.get("known_flakes") or []
     out: list[FlakeEntry] = []
     for item in raw:

@@ -20,6 +20,9 @@ _GATE = Path(__file__).parent.parent.parent / "helm" / "vector" / "projection-ga
 
 
 def _load_gate():
+    # The image puts the script and its _lib_yaml_strict.py side by side.
+    if str(_GATE.parent) not in sys.path:
+        sys.path.insert(0, str(_GATE.parent))
     spec = importlib.util.spec_from_file_location("verify_tenant_projections", _GATE)
     assert spec and spec.loader, f"cannot load gate module at {_GATE}"
     mod = importlib.util.module_from_spec(spec)
@@ -188,3 +191,35 @@ def test_main_registry_unreadable_degrades_even_in_enforce(tmp_path):
     assert (f["cdir"] / gate._BASE_NAME).is_file()
     assert not (f["cdir"] / gate._FRAGMENT_NAME).exists()
     assert 'category="registry_unreadable"' in f["metrics"].read_text(encoding="utf-8")
+
+
+# ── #4111: the gate reads YAML the repo's one strict way ─────────────────
+
+_STRICT = Path(__file__).parent.parent.parent / "scripts" / "tools" / "_lib_yaml_strict.py"
+
+
+def test_the_gates_strict_reader_is_the_repos_byte_for_byte():
+    """The image's build context is the gate directory, so it carries a copy
+    of scripts/tools/_lib_yaml_strict.py: the copy must BE it, or the gate
+    judges a repeated key differently from every other reader."""
+    assert (_GATE.parent / "_lib_yaml_strict.py").read_bytes() == _STRICT.read_bytes(), (
+        "cp scripts/tools/_lib_yaml_strict.py helm/vector/projection-gate/ "
+        "(and bump the projection-gate image tag)")
+
+
+def test_a_registry_naming_a_tenant_twice_degrades(tmp_path):
+    """#4111: the lax reading kept the second account id of a repeated tenant,
+    so a projection to it passed — the Go reader refuses that registry."""
+    f = _setup(tmp_path, "- {tenantId: tenant-alpha, accountId: 1001}\n")
+    f["reg"].write_text("schema_version: v1\nnext_account_id: 1002\nallocations:\n"
+                        "  tenant-alpha: 1000\n  tenant-alpha: 1001\n", encoding="utf-8")
+    assert gate.main(_argv(f, mode="degrade")) == 0
+    assert not (f["cdir"] / gate._FRAGMENT_NAME).exists()
+    assert 'category="registry_unreadable"' in f["metrics"].read_text(encoding="utf-8")
+
+
+def test_projections_naming_a_key_twice_are_a_mismatch(tmp_path):
+    f = _setup(tmp_path, "- {tenantId: tenant-beta, tenantId: tenant-alpha, accountId: 1000}\n")
+    assert gate.main(_argv(f, mode="degrade")) == 0
+    assert not (f["cdir"] / gate._FRAGMENT_NAME).exists()
+    assert 'category="mismatch"' in f["metrics"].read_text(encoding="utf-8")

@@ -54,6 +54,7 @@ from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 try:
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
 except ImportError:
     print("ERROR: pyyaml not installed. Run: pip install pyyaml", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
@@ -157,7 +158,7 @@ def run(check_only: bool) -> int:
     if not SOURCES.exists():
         print(f"ERROR: missing {SOURCES}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    decl = yaml.safe_load(SOURCES.read_text(encoding="utf-8"))
+    decl = strict_safe_load(SOURCES.read_text(encoding="utf-8"))
     sources = decl.get("sources") or []
 
     previous = {}

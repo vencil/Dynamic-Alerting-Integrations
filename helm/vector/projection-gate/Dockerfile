@@ -35,6 +35,8 @@ RUN apk add --no-cache python3 py3-yaml \
 # emptyDir mounted at /tmp in the DaemonSet, not loosening the read-only rootfs.
 ENV PYTHONDONTWRITEBYTECODE=1
 COPY verify_tenant_projections.py /usr/local/bin/verify_tenant_projections.py
+# The repo's one strict YAML reading (#4111), beside the script so it imports it.
+COPY _lib_yaml_strict.py /usr/local/bin/_lib_yaml_strict.py
 # serve_metrics.py runs as a long-lived SIDECAR (command override in the DaemonSet)
 # that re-serves the init-container's verdict textfile over HTTP for Prometheus
 # (#908 PR-3). It never re-evaluates the gate — see its module docstring. Both

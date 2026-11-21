@@ -499,24 +499,29 @@ class TestHttpGetJson:
 
 
 # ============================================================
-# write_onboard_hints / read_onboard_hints round-trip
+# write_onboard_hints round-trip (read back as `scaffold --from-onboard` reads it)
 # ============================================================
 
+def _read_hints(path):
+    import _lib_input
+    return _lib_input.decode_bytes(pathlib.Path(path).read_bytes(), fmt="json", name=str(path))
+
+
 class TestOnboardHintsRoundTrip:
-    """write_onboard_hints → read_onboard_hints 往返測試。"""
+    """write_onboard_hints → `_lib_input` 讀回（#4111：read_onboard_hints 已刪，無正式呼叫者）。"""
 
     def test_round_trip_basic(self, config_dir):
         """基本 dict 寫入後讀回應完全一致。"""
         hints = {"tenants": ["db-a", "db-b"], "db_types": {"db-a": "mysql"}}
         path = lib.write_onboard_hints(str(config_dir), hints)
-        result = lib.read_onboard_hints(path)
+        result = _read_hints(path)
         assert result == hints
 
     def test_round_trip_unicode(self, config_dir):
         """含 Unicode（繁體中文）的值正確往返。"""
         hints = {"note": "租戶設定完成", "tags": ["告警", "監控"]}
         path = lib.write_onboard_hints(str(config_dir), hints)
-        result = lib.read_onboard_hints(path)
+        result = _read_hints(path)
         assert result == hints
         # 確認 ensure_ascii=False 寫入原生 Unicode
         raw = pathlib.Path(path).read_text(encoding="utf-8")
@@ -532,18 +537,18 @@ class TestOnboardHintsRoundTrip:
             "metadata": {"version": "2.0.0", "generated": True},
         }
         path = lib.write_onboard_hints(str(config_dir), hints)
-        assert lib.read_onboard_hints(path) == hints
+        assert _read_hints(path) == hints
 
     def test_round_trip_empty_dict(self, config_dir):
         """空 dict 正確往返。"""
         path = lib.write_onboard_hints(str(config_dir), {})
-        assert lib.read_onboard_hints(path) == {}
+        assert _read_hints(path) == {}
 
     def test_round_trip_list_values(self, config_dir):
         """含 list / numeric / boolean 值正確往返。"""
         hints = {"counts": [1, 2, 3], "enabled": True, "ratio": 0.95}
         path = lib.write_onboard_hints(str(config_dir), hints)
-        assert lib.read_onboard_hints(path) == hints
+        assert _read_hints(path) == hints
 
     def test_write_creates_file(self, config_dir):
         """write_onboard_hints 建立 onboard-hints.json 檔案。"""
@@ -558,17 +563,10 @@ class TestOnboardHintsRoundTrip:
         mode = os.stat(path).st_mode & 0o777
         assert mode == 0o600
 
-    @pytest.mark.parametrize("path", [
-        "/nonexistent/path.json", None, "",
-    ], ids=["missing-file", "none", "empty-string"])
-    def test_read_invalid_path_returns_none(self, path):
-        """無效路徑（不存在 / None / 空字串）回傳 None。"""
-        assert lib.read_onboard_hints(path) is None
-
     def test_overwrite_existing(self, config_dir):
         """重複寫入同目錄會覆蓋舊檔。"""
         lib.write_onboard_hints(str(config_dir), {"v": 1})
         path = lib.write_onboard_hints(str(config_dir), {"v": 2})
-        assert lib.read_onboard_hints(path) == {"v": 2}
+        assert _read_hints(path) == {"v": 2}
 
 
