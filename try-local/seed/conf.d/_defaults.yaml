@@ -91,14 +91,12 @@ optional_overrides:
     # database with no limit set (0) has no share. Replaces the absolute-bytes key
     # oracle_pga_allocated_bytes (#1320: a unit change is a removal plus an addition, no alias)
   # ── db2：IBM DB2 (query-exporter) ──
-  - db2_log_usage_percent   # % — Transaction log usage warning
   - db2_deadlocks_per_5m
     # count/5m — Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the
     # threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5,
     # per database, for 5m). Replaces the per-second key db2_deadlock_rate (#1320: a unit change is
     # a removal plus an addition, no alias)
     # ⚠ 參考庫實測反例（#1176）：其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-  - db2_tablespace_used_percent   # % — Tablespace usage warning
   # ── clickhouse：ClickHouse (built-in /metrics) ──
   - clickhouse_max_part_count   # count — Max part count per partition
   - clickhouse_replication_queue   # count — Replication queue size

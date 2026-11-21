@@ -800,13 +800,24 @@ keys:
       observed_zh: 良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml）
   db2_log_usage_percent:
     pack: db2
-    tier: optional_overrides
-    value: 70
+    tier: defaults
+    value: 75
     unit: '%'
-    desc: Transaction log usage warning
+    desc: 'Transaction log usage warning: used over used plus available active log space,
+      fullest database per tenant; 75 = the warning value IBM''s GET ALERT CONFIGURATION
+      page shows as the default of the db.log_util health indicator, which has the same
+      formula (the health monitor itself is deprecated; the number is what is borrowed)'
     metric_class: capacity
-    arming: operator
+    arming: default
     portability: portable
+    validation:
+      basis: vendor
+      sources:
+      - org: "IBM"
+        url: https://www.ibm.com/docs/api/v1/content/SSEPGG_11.5.0/com.ibm.db2.luw.admin.cmd.doc/doc/r0008744.html
+        quote: "Indicator Name = db.log_util Default = Yes Type = Threshold-based Warning = 75 Alarm = 85 Unit = %"
+        value: 75
+        tier: warning
   db2_deadlocks_per_5m:
     pack: db2
     tier: optional_overrides
@@ -828,13 +839,27 @@ keys:
       observed_zh: 其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5
   db2_tablespace_used_percent:
     pack: db2
-    tier: optional_overrides
-    value: 85
+    tier: defaults
+    value: 80
     unit: '%'
-    desc: Tablespace usage warning
+    desc: 'Tablespace usage warning: share of the space a tablespace can grow to, fullest
+      tablespace per tenant; 80 = the default warning threshold IBM states for the
+      ts.ts_util health indicator (used over usable pages — the form served for a
+      tablespace that does not auto-resize; that indicator is not evaluated for an
+      auto-resizing one, and the pages cited state no default for the auto-resize form,
+      which reuses 80 here). The health monitor itself is deprecated; the number is
+      what is borrowed'
     metric_class: capacity
-    arming: operator
+    arming: default
     portability: portable
+    validation:
+      basis: vendor
+      sources:
+      - org: "IBM"
+        url: https://www.ibm.com/docs/api/v1/content/SSEPGG_11.5.0/com.ibm.db2.luw.admin.mon.doc/doc/r0009214.html
+        quote: "This example uses the default warning of 80% and alarm thresholds of 90%."
+        value: 80
+        tier: warning
   db2_connections_active_critical:
     pack: db2
     tier: optional_overrides
