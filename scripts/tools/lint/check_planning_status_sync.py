@@ -312,7 +312,7 @@ def _emit_gha_warnings(issues: List[ValidationIssue]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Validate PR trailers ↔ planning frontmatter sync (ADR-019 §第三層).",
+        description="Validate PR trailers ↔ planning frontmatter sync (ADR-019, CI status-sync layer).",
     )
     ap.add_argument(
         "--base",

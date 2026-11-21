@@ -228,7 +228,7 @@ func main() {
 	// Raising this toward 30m removes that margin; lowering it only adds volume.
 	federationHeartbeatInterval := flag.Duration("federation-heartbeat-interval",
 		parseDurationOrDefault(os.Getenv("TA_FEDERATION_HEARTBEAT_INTERVAL"), token.DefaultHeartbeatInterval),
-		"ADR-028 §證據通道: cadence of the federation revocation evidence-channel liveness canary (default 5m; must stay well below the reconciler's 30m heartbeat window; TA_FEDERATION_HEARTBEAT_INTERVAL)")
+		"ADR-028 evidence channel: cadence of the federation revocation evidence-channel liveness canary (default 5m; must stay well below the reconciler's 30m heartbeat window; TA_FEDERATION_HEARTBEAT_INTERVAL)")
 
 	// ADR-027 §2: the API's only listener. The same pod's oauth2-proxy
 	// routes /api/ to this socket; the TCP --addr listener serves only

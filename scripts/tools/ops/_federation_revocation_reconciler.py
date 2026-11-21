@@ -819,7 +819,7 @@ def _serve_forever(cfg: Config, metrics: Metrics, clock=time.time) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Federation revocation reconciler (ADR-028 §偵測主體, #924).")
+    p = argparse.ArgumentParser(description="Federation revocation reconciler (ADR-028 detection design, #924).")
     # #3528: judged at parse time, so an unusable URL is exit 2 at start —
     # not a reconcile loop that fails every interval.
     p.add_argument("--victorialogs-url", type=url_type(empty="refuse"),
