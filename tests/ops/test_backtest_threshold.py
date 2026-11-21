@@ -2889,7 +2889,10 @@ class TestBacktestWorkflow:
         found."; without a reachable Prometheus the skip comes first."""
         with open(_WORKFLOW, encoding="utf-8") as f:
             text = f.read()
-        assert "Not everything the result" in text
+        # #3756: the caveat that stood here ("Not everything the result depends
+        # on is in the list") is gone with what it described — see
+        # test_it_runs_when_the_tool_or_the_workflow_changes.
+        assert "Not everything the result" not in text
         assert bt._NOT_RUN_WHY[("skipped", "prometheus_unavailable")].startswith(
             "Prometheus is unavailable")
         assert '"Prometheus is unavailable"' in text
@@ -2903,7 +2906,13 @@ class TestBacktestWorkflow:
         for needed in ("components/threshold-exporter/config/conf.d/**",
                        "scripts/tools/ops/backtest_threshold.py",
                        "scripts/tools/ops/_observed_map_lib.py",
-                       ".github/workflows/backtest.yaml"):
+                       ".github/workflows/backtest.yaml",
+                       # #3756: what the old comment said was NOT in the list —
+                       # the da-guard Go sources and the other shared `_lib_*`
+                       # modules — now is, from the job's measured reads.
+                       "components/threshold-exporter/app/cmd/da-guard/*.go",
+                       "components/threshold-exporter/app/pkg/config/*.go",
+                       "scripts/tools/_lib_io.py"):
             assert needed in paths, (needed, paths)
 
     # A layout of the base's conf.d/: a file `name`, a directory `name/`, a
