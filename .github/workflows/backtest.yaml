@@ -103,8 +103,8 @@ jobs:
   backtest:
     runs-on: ubuntu-24.04
     # #3756: no job-level `continue-on-error` — it would make the assert
-    # step's failure not count. What stays advisory is said per step: the
-    # backtest itself and the PR comment.
+    # step's failure not count. The two steps whose failure does not fail the
+    # job say so themselves: the backtest and the PR comment.
     steps:
       - uses: actions/checkout@v6
         with:
