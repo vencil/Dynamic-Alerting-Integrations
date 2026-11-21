@@ -371,6 +371,29 @@ class TestMainCli:
         )
         assert "one of the arguments" in proc.stderr or "required" in proc.stderr
 
+    # #3980: the doc is read before it is rewritten. A --target that is not
+    # there, or is a directory, is the caller's mistake: rc 2 and one line
+    # naming the flag — not a traceback (which under pytest ends at the crash
+    # code DA_TEST_CRASH_EXIT_CODE, not 2).
+    @pytest.mark.parametrize("mode", ["--check", "--write"])
+    def test_absent_target_is_named_not_a_traceback(self, tiny_repo, mode):
+        adr_dir, target = tiny_repo
+        absent = target.parent / "no-such-dir" / "arch.md"
+        proc = self._run(mode, "--adr-dir", str(adr_dir), "--target", str(absent),
+                         expect_returncode=2)
+        assert "Traceback" not in proc.stderr
+        assert "does not exist" in proc.stderr and "--target" in proc.stderr
+        assert not absent.exists()
+
+    def test_target_that_is_a_directory_is_named_not_a_traceback(self, tiny_repo):
+        adr_dir, target = tiny_repo
+        as_dir = target.parent / "as-dir.md"
+        as_dir.mkdir()
+        proc = self._run("--check", "--adr-dir", str(adr_dir), "--target", str(as_dir),
+                         expect_returncode=2)
+        assert "Traceback" not in proc.stderr
+        assert "not a regular file" in proc.stderr and "--target" in proc.stderr
+
 
 # ---------------------------------------------------------------------------
 # Real-corpus integration — guards the live drift gate

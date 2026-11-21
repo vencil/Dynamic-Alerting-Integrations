@@ -500,6 +500,18 @@ class TestMainCli:
         proc = self._run(root, "--check", target, expect_returncode=2)
         assert "Sentinel block missing" in proc.stderr
 
+    # #3980: a --target that is not there is the caller's mistake: rc 2 and
+    # one line naming the flag — not a FileNotFoundError traceback (which
+    # under pytest ends at the crash code DA_TEST_CRASH_EXIT_CODE, not 2).
+    @pytest.mark.parametrize("mode", ["--check", "--write"])
+    def test_absent_target_is_named_not_a_traceback(self, tiny_repo, mode):
+        root, target = tiny_repo
+        absent = target.parent / "no-such-dir" / "planning-index.md"
+        proc = self._run(root, mode, absent, expect_returncode=2)
+        assert "Traceback" not in proc.stderr
+        assert "does not exist" in proc.stderr and "--target" in proc.stderr
+        assert not absent.exists()
+
 
 # ---------------------------------------------------------------------------
 # Real-corpus smoke — guards the live drift gate against parse regressions

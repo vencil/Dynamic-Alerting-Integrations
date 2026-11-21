@@ -157,10 +157,10 @@ CALLERS: dict[str, Caller] = {
         "generate_byo_rulepack_table", "scripts/tools/dx/generate_byo_rulepack_table.py:284",
         None, _setup_byo),
     "adr_index": Caller(
-        "generate_adr_index", "scripts/dx/generate_adr_index.py:260", "--target",
+        "generate_adr_index", "scripts/dx/generate_adr_index.py:284", "--target",
         _setup_adr_index),
     "planning_index": Caller(
-        "generate_planning_index", "scripts/dx/generate_planning_index.py:512", "--target",
+        "generate_planning_index", "scripts/dx/generate_planning_index.py:525", "--target",
         _setup_planning_index),
 }
 

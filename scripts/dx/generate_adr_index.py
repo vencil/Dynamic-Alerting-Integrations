@@ -38,7 +38,7 @@ _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
-from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
+from _lib_io import check_repo_artifact, write_repo_artifact  # noqa: E402  (#3107 v2)
 
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
 if hasattr(sys.stdout, "reconfigure"):
@@ -208,6 +208,24 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+def read_target_doc(target: Path, flag: "str | None") -> "str | None":
+    """The text of the doc whose sentinel block is rewritten, or ``None``
+    after one ERROR line when it cannot be read (#3980): the block lives in
+    an existing doc, so a doc that is not there is the caller's mistake,
+    named as such, not a traceback."""
+    whose = f"the value given to {flag}" if flag else "the default target doc"
+    try:
+        return target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"ERROR: {_display(target)} does not exist; the ADR index is written between "
+              f"the sentinel lines of an existing doc — check {whose}", file=sys.stderr)
+    except (OSError, UnicodeDecodeError) as exc:
+        detail = getattr(exc, "strerror", None) or str(exc)
+        print(f"ERROR: cannot read {_display(target)}: {detail} — check {whose}",
+              file=sys.stderr)
+    return None
+
+
 @exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(
@@ -243,8 +261,16 @@ def main() -> int:
 
     targets = [(args.target, "adr/", "zh")] if args.target else list(DEFAULT_TARGETS)
     stale, changed = [], []
+    # #2128: --target is named only when the operator gave it.
+    flag = "--target" if args.target else None
     for target, prefix, lang in targets:
-        current = target.read_text(encoding="utf-8")
+        # #3980: the doc is read before it is rewritten, so its preconditions
+        # are checked before the read too (a directory or FIFO would otherwise
+        # end as a traceback or block), and a doc that is not there is said so.
+        check_repo_artifact(target, flag=flag)
+        current = read_target_doc(target, flag)
+        if current is None:
+            return 2
         try:
             new = replace_sentinel_block(current, render_table(entries, prefix, lang), target)
         except ValueError as e:
@@ -253,9 +279,7 @@ def main() -> int:
         if new != current:
             stale.append(_display(target))
             if args.write:
-                # #2128: rc 2 + one line naming the doc; --target is named
-                # only when the operator gave it.
-                flag = "--target" if args.target else None
+                # #2128: rc 2 + one line naming the doc.
                 with output_write(target, flag=flag):
                     write_repo_artifact(target, new, flag=flag)
                 changed.append(_display(target))
