@@ -27,20 +27,23 @@ switch it off (decision 4; da-guard reports the listing as
     (for example a tenant value that overrides a subdirectory's, or a tenant
     value that keeps a key on under a root switched off) is kept and named.
 
-Deleting a copy is the one step that makes a tree depend on the built-in layer:
-a reader without the table then serves nothing for that key. So deletions need
-`--exporter-digest`, the built-in table digest of every deployed exporter
-(`da_config_builtin_defaults_info{digest}`, one per cluster the conf.d feeds),
-and are refused when any differs from this tool's table. The rewrites are not
-gated (decision 9 does them before the upgrade) and are written either way.
+Both writes need the exporters to carry the built-in table. A deleted copy
+leaves a reader without the table nothing to serve for that key; a root
+`"disable"` makes a released exporter without it drop the whole root
+`_defaults.yaml` (v2.9.0: `entire block dropped`), every tenant's root rows
+with it. So any write needs `--exporter-digest`, the built-in table digest of
+every exporter that reads the tree (`da_config_builtin_defaults_info{digest}`,
+one per cluster the conf.d feeds), and nothing is written when one is missing
+or any differs from this tool's table (decisions 5, 7 and 9: the tree changes
+in the same change that upgrades the exporters).
 
 A number equal to the platform's may be pinned on purpose, so nothing is written
 without `--apply`, and `--keep <key>` leaves a key alone.
 
 Exit codes: 0 previewed or written (a value equal to the built-in one that is
 not a copy — it overrides another layer — is named and kept, which is no
-failure); 1 deletions refused because an exporter digest differs (the rewrites
-are still written); 2 caller error.
+failure); 1 nothing written because an exporter digest differs; 2 caller
+error, including a write asked for without --exporter-digest.
 """
 from __future__ import annotations
 
@@ -84,10 +87,10 @@ _HELP = {
     "config_dir": {"en": "the conf.d tree", "zh": "conf.d 目錄"},
     "apply": {"en": "write the changes (default: preview)", "zh": "寫入（預設只預覽）"},
     "exporter_digest": {
-        "en": "built-in table digest of a deployed exporter (da_config_builtin_defaults_info); "
-              "once per cluster; required to delete",
-        "zh": "部署中 exporter 的內建表摘要（da_config_builtin_defaults_info）；每個叢集給一次；"
-              "刪除複製品時必填",
+        "en": "built-in table digest of an exporter that reads this tree "
+              "(da_config_builtin_defaults_info); once per cluster; required to write",
+        "zh": "讀這棵樹的 exporter 的內建表摘要（da_config_builtin_defaults_info）；每個叢集給一次；"
+              "寫入時必填",
     },
     "keep": {"en": "leave this key's values alone (pinned on purpose); repeatable",
              "zh": "這個鍵的值不動（刻意釘住的數字）；可重複"},
@@ -305,30 +308,33 @@ def run(config_dir: str, *, apply: bool, digests: list[str], keep: set[str]) -> 
         print(f"  kept {_show(d)} — equal to the built-in value, but {why}")
     if keep:
         print(f"kept by --keep: {', '.join(sorted(keep))}")
-    rc = EXIT_OK
     if not apply:
         print("preview only: nothing written (--apply writes)")
-        return rc
-    deletions = plan.deletions
-    if deletions:
-        wrong = sorted({d for d in digests if d != plan.digest})
-        if not digests:
-            print("not deleted: deleting a copy needs --exporter-digest for every deployed "
-                  "exporter (da_config_builtin_defaults_info), and none was given", file=sys.stderr)
-            deletions = []
-        elif wrong:
-            print(f"refused: exporter digest(s) {', '.join(wrong)} differ from this tool's built-in "
-                  f"table {plan.digest}; an exporter without this table serves nothing for a key "
-                  f"whose copy is deleted (upgrade it first)", file=sys.stderr)
-            deletions, rc = [], EXIT_VIOLATION
-    edits = _edits(deletions, plan.rewrites, plan.root)
-    if not edits:
+        return EXIT_OK
+    if not (plan.deletions or plan.rewrites):
         print("nothing written")
-        return rc
+        return EXIT_OK
+    # Why both writes are gated: an exporter without the built-in table serves
+    # nothing for a deleted copy, and drops the whole root _defaults.yaml over
+    # a root "disable" (released versions; decision 5).
+    consequence = ("an exporter without this table serves nothing for a key whose copy is "
+                   "deleted, and drops the whole root _defaults.yaml over a \"disable\"")
+    if not digests:
+        print("not written: deleting a copy or writing \"disable\" needs --exporter-digest for "
+              "every exporter that reads this tree (da_config_builtin_defaults_info), and none "
+              f"was given; {consequence}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    wrong = sorted({d for d in digests if d != plan.digest})
+    if wrong:
+        print(f"refused: exporter digest(s) {', '.join(wrong)} differ from this tool's built-in "
+              f"table {plan.digest}; nothing written: {consequence} (change the tree in the same "
+              "change that upgrades the exporters)", file=sys.stderr)
+        return EXIT_VIOLATION
+    edits = _edits(plan.deletions, plan.rewrites, plan.root)
     _lib_confedit.edit_all(config_dir, edits)
-    print(f"written: {len(deletions)} deletion(s), {len(plan.rewrites)} rewrite(s), "
+    print(f"written: {len(plan.deletions)} deletion(s), {len(plan.rewrites)} rewrite(s), "
           f"{len(edits)} file(s)")
-    return rc
+    return EXIT_OK
 
 
 @exit_on_yaml_file_error  # #1654: an unreadable YAML file → rc 2, named
