@@ -48,6 +48,7 @@ import (
 	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/batchpr"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // Version is overridden at build time via `-ldflags "-X main.Version=..."`.
@@ -178,13 +179,24 @@ func writeReport(path string, stdout io.Writer, body string) error {
 // load C-9 emit output, and by refresh-source to load patch files.
 //
 // `root` MUST exist and be a directory; missing/file → error.
-// Symlinks are NOT followed (filepath.Walk semantics — symlinks to
-// directories appear as regular files with ModeSymlink set and are
-// skipped by the IsDir() check; symlinks to files are read-through
-// because os.ReadFile follows them when the dirent is treated as
-// a regular file). If a customer's emit-dir / patches-dir contains
-// a symlinked subdirectory they expect walked into, they'll need to
-// resolve it before invoking this CLI.
+// Symlinks are not walked into (filepath.Walk does not follow them):
+// a symlink to a file is read through; a symlink to a directory is an
+// error naming it (wrapping config.ErrDirectory), not skipped. If a
+// customer's emit-dir / patches-dir contains a symlinked subdirectory
+// they expect walked into, they'll need to resolve it before invoking
+// this CLI.
+//
+// Special files (#2950): an entry that is neither a regular file nor
+// a directory — a FIFO, a socket, a device, or a symlink to one — is
+// refused with an error naming it (wrapping config.ErrSpecialFile)
+// without blocking: os.ReadFile on a FIFO with no writer blocks
+// forever, and on /dev/zero never reaches EOF. The read is
+// config.ReadConfFile, the one the exporter's conf.d re-reads and
+// tenant-api use (#2939): it opens with O_NONBLOCK and judges the
+// opened fd with config.IsSpecialFile, so an entry swapped for a FIFO
+// after the listing is refused too. Like da-guard's subcommands, a CLI
+// run fails on it rather than producing a PR with the file silently
+// missing.
 //
 // Path normalisation: returned keys use forward slashes regardless
 // of host OS (matches the rest of the batchpr / config packages).
@@ -220,9 +232,15 @@ func walkFilesDir(root, prefix string) (map[string][]byte, error) {
 		if prefix != "" {
 			rel = prefix + "/" + rel
 		}
-		body, err := os.ReadFile(path)
+		// ⛔ #2950: never block on a special file. ReadConfFile opens
+		// without waiting for a FIFO writer and judges the opened fd itself,
+		// so an entry swapped for a FIFO after the listing is refused too
+		// (a symlink is judged by its target). Refusals wrap
+		// config.ErrSpecialFile; a directory reached through a symlink wraps
+		// config.ErrDirectory.
+		body, err := config.ReadConfFile(path)
 		if err != nil {
-			return fmt.Errorf("read %q: %w", path, err)
+			return fmt.Errorf("refusing to read %q: %w", path, err)
 		}
 		out[rel] = body
 		return nil
