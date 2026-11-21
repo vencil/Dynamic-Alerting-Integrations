@@ -1059,24 +1059,24 @@ groups:
         annotations:
           summary: "tenant-api {{ $labels.component }} config is stale or unconfirmed — last reload failed or never reported"
           description: |
-            The tenant-api `{{ $labels.component }}` config manager's LAST
-            reload FAILED, so it is serving the LAST-GOOD snapshot and the
-            on-disk config is NOT in effect (memory diverged from disk). Check
-            the tenant-api WARN log ("config reload failed") for the root cause,
-            which decides the remedy: a `parse ...` error means the on-disk YAML
-            is broken — fix it; a `read ...` (transient I/O) error means the
-            YAML is fine but a re-read failed — re-apply the config (re-PUT) or
-            restart the pod. Every manager (rbac / policy / tenantorg /
-            federation-policy / groups / views) retries on every WatchLoop
-            tick (--reload-interval, 30s by default) and clears on the first
-            good one; groups, views and federation-policy are read from the
-            tenant-api-state ConfigMap, not conf.d. Unlike
-            TenantApiConfigReloadFailing (a failure-rate alert), this fires
-            however rarely the reload is retried. A 0 can also mean the
-            component was never wired to the reload observer (the gauge starts
-            at 0 and only a wired manager's replayed startup load moves it): if
-            the WARN log shows no reload failure for this component, it is a
-            tenant-api wiring bug, not a config problem — report it.
+            The tenant-api `{{ $labels.component }}` config manager reports 0, which
+            has one of two causes. (1) Its LAST reload FAILED: it is serving
+            the LAST-GOOD snapshot and the stored config is NOT in effect.
+            Check the tenant-api WARN log ("config reload failed") with
+            component={{ $labels.component }}; a `parse ...` error means the YAML is broken —
+            fix it; a `read ...` (transient I/O) error means the YAML is fine
+            but a re-read failed — re-apply the config (re-PUT) or restart the
+            pod. (2) The component was NEVER WIRED to the reload observer: the
+            gauge starts at 0 ("not yet confirmed") and only a wired manager's
+            replayed startup load moves it. If that WARN log shows no reload
+            failure for this component, it is a tenant-api wiring bug, not a
+            config problem — report it; restarting will not clear it. Every
+            wired manager (rbac / policy / tenantorg / federation-policy /
+            groups / views) retries on every WatchLoop tick (--reload-interval,
+            30s by default) and clears on the first good one; groups, views and
+            federation-policy are read from the tenant-api-state ConfigMap, not
+            conf.d. Unlike TenantApiConfigReloadFailing (a failure-rate alert),
+            this fires however rarely the reload is retried.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
       # --- tenant-api cannot have writes judged (ADR-036 §5, #2903) ---

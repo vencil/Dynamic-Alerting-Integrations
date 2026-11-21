@@ -313,23 +313,24 @@ data:
     \ tenant_api_config_last_reload_successful{job=\"tenant-api\"} == 0\n    for:\
     \ 2m\n    labels:\n      alert_source: platform\n      severity: warning\n   \
     \ annotations:\n      description: 'The tenant-api `{{ $labels.component }}` config\
-    \ manager''s LAST\n\n        reload FAILED, so it is serving the LAST-GOOD snapshot\
-    \ and the\n\n        on-disk config is NOT in effect (memory diverged from disk).\
-    \ Check\n\n        the tenant-api WARN log (\"config reload failed\") for the\
-    \ root cause,\n\n        which decides the remedy: a `parse ...` error means the\
-    \ on-disk YAML\n\n        is broken — fix it; a `read ...` (transient I/O) error\
-    \ means the\n\n        YAML is fine but a re-read failed — re-apply the config\
-    \ (re-PUT) or\n\n        restart the pod. Every manager (rbac / policy / tenantorg\
-    \ /\n\n        federation-policy / groups / views) retries on every WatchLoop\n\
-    \n        tick (--reload-interval, 30s by default) and clears on the first\n\n\
-    \        good one; groups, views and federation-policy are read from the\n\n \
-    \       tenant-api-state ConfigMap, not conf.d. Unlike\n\n        TenantApiConfigReloadFailing\
-    \ (a failure-rate alert), this fires\n\n        however rarely the reload is retried.\
-    \ A 0 can also mean the\n\n        component was never wired to the reload observer\
-    \ (the gauge starts\n\n        at 0 and only a wired manager''s replayed startup\
-    \ load moves it): if\n\n        the WARN log shows no reload failure for this\
-    \ component, it is a\n\n        tenant-api wiring bug, not a config problem —\
-    \ report it.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
+    \ manager reports 0, which\n\n        has one of two causes. (1) Its LAST reload\
+    \ FAILED: it is serving\n\n        the LAST-GOOD snapshot and the stored config\
+    \ is NOT in effect.\n\n        Check the tenant-api WARN log (\"config reload\
+    \ failed\") with\n\n        component={{ $labels.component }}; a `parse ...` error\
+    \ means the YAML is broken —\n\n        fix it; a `read ...` (transient I/O) error\
+    \ means the YAML is fine\n\n        but a re-read failed — re-apply the config\
+    \ (re-PUT) or restart the\n\n        pod. (2) The component was NEVER WIRED to\
+    \ the reload observer: the\n\n        gauge starts at 0 (\"not yet confirmed\"\
+    ) and only a wired manager''s\n\n        replayed startup load moves it. If that\
+    \ WARN log shows no reload\n\n        failure for this component, it is a tenant-api\
+    \ wiring bug, not a\n\n        config problem — report it; restarting will not\
+    \ clear it. Every\n\n        wired manager (rbac / policy / tenantorg / federation-policy\
+    \ /\n\n        groups / views) retries on every WatchLoop tick (--reload-interval,\n\
+    \n        30s by default) and clears on the first good one; groups, views and\n\
+    \n        federation-policy are read from the tenant-api-state ConfigMap, not\n\
+    \n        conf.d. Unlike TenantApiConfigReloadFailing (a failure-rate alert),\n\
+    \n        this fires however rarely the reload is retried.\n\n        '\n    \
+    \  runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md\n\
     \      summary: tenant-api {{ $labels.component }} config is stale or unconfirmed\
     \ — last reload failed or never reported\n  - alert: TenantApiPolicyUnavailable\n\
     \    expr: tenant_api_policy_available{job=\"tenant-api\"} == 0\n    for: 2m\n\
