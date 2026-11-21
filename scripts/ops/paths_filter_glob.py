@@ -16,6 +16,7 @@ GitHub's own matcher cannot be run locally.
 """
 from __future__ import annotations
 
+import functools
 import re
 
 # One `[...]` character class: literal characters and `a-z` ranges only. A
@@ -108,6 +109,9 @@ def covers(pattern: str, path: str) -> bool:
     return match_segments(pattern.split("/"), path.split("/"))
 
 
+# Cached: `generate --check` asks every pattern of every workflow about every
+# tracked file, and the same few hundred segments come back millions of times.
+@functools.lru_cache(maxsize=None)
 def _segment_regex(segment: str) -> re.Pattern[str]:
     out = []
     i = 0

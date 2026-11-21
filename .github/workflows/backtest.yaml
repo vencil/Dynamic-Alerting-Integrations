@@ -6,10 +6,11 @@ on:
       # #3111: the tool, the modules that decide what it compares, and this
       # workflow, so a change to how the backtest runs is run here too (as
       # config-diff-advisory.yml lists its own). A PR that changes none of
-      # conf.d/ still gets a comment: without a reachable Prometheus (no
-      # PROMETHEUS_URL secret) it says "Prometheus is unavailable" — that
-      # check comes before the "no threshold changes found." one — and with
-      # one, the latter.
+      # conf.d/ still gets a result: without a reachable Prometheus (no
+      # PROMETHEUS_URL secret) it is "Prometheus is unavailable" — that check
+      # comes before the "no threshold changes found." one — and goes to the
+      # job summary only (see `Check for report`); with one, the latter, as
+      # a PR comment.
       - 'scripts/tools/ops/backtest_threshold.py'
       - 'scripts/tools/ops/_observed_map_lib.py'
       - 'scripts/tools/ops/metric_observed_map.yaml'
@@ -193,9 +194,26 @@ jobs:
         id: report
         # hashFiles() 只能讀 GITHUB_WORKSPACE 內的檔案（/tmp 恆回空字串），
         # 改用 step output gate：本步寫 has_comment，下一步依它判斷。
+        #
+        # #3756 (owner ruling 2026-11-21): every result goes to the job
+        # summary; the PR comment is for a backtest that ran or was refused.
+        # One skipped because no Prometheus is reachable says nothing about
+        # the PR, and since the path filter became what the job reads, about
+        # half of all PRs start this workflow. Read from the JSON report's
+        # `status`/`reason`, not from the comment's wording; a report that is
+        # absent or unreadable (the base has no conf.d/) is not that case,
+        # so the comment is posted.
         run: |
           if [ -s /tmp/backtest-comment.md ]; then
-            echo "has_comment=true" >> "$GITHUB_OUTPUT"
+            cat /tmp/backtest-comment.md >> "$GITHUB_STEP_SUMMARY"
+            if python3 -c 'import json, sys
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          sys.exit(0 if (d.get("status"), d.get("reason")) == ("skipped", "prometheus_unavailable") else 1)
+          ' /tmp/backtest-report.json 2>/dev/null; then
+              echo "::notice::backtest not run: Prometheus is unavailable — result in the job summary, no PR comment"
+            else
+              echo "has_comment=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Comment PR

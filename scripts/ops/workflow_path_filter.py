@@ -878,8 +878,11 @@ class Traced:
         recording); both are exactly the generated steps; no `continue-on-error`
         and no `defaults.run.shell` stands between their exit code and the
         job's; and no other `run:` mentions the git setting `reset` holds.
-        NOT checked: a job-level `if:` that never holds (the job, and so the
-        assertion, does not run), and what a `uses:` step does to git config.
+        NOT checked: whether the job runs at all — a job-level `if:` that
+        never holds, or `on.pull_request.branches`/`types` that never match a
+        PR (no run, so no assertion); what a `uses:` step does to git config;
+        and whether the `--out` file is uploaded (an upload placed before the
+        assert step finds no file and only warns).
         """
         workflow = self.workflow if workflow is None else workflow
         errors = []
