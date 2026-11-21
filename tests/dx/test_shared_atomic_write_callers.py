@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_posix_modes, symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _d in (REPO_ROOT / "scripts" / "dx", REPO_ROOT / "scripts" / "ops"):
@@ -64,6 +64,7 @@ def _argv_runner(mod, mp, argv):
     def run():
         mp.setattr(sys, "argv", argv)
         return mod.main()
+    run.argv = argv
     return run
 
 
@@ -376,6 +377,7 @@ def test_enospc_mid_write_is_rc2_and_keeps_the_previous_file(name, root, monkeyp
 def test_the_execute_bit_is_kept_and_nothing_else_of_the_mode(name, mode, root, monkeypatch):
     """#3981: a generator passes no ``mode=`` — the entry keeps the execute
     bit of the file it replaces and does not read the umask."""
+    require_posix_modes()
     target = _target(root)
     os.chmod(target, mode)
     old = os.umask(0o077)
@@ -429,13 +431,18 @@ def test_the_safe_flag_is_a_usage_error(name, root, monkeypatch):
     target = _target(root)
     caller = CALLERS[name]
     mod = importlib.import_module(caller.module)
+    # setup() stubs the inputs; the runner it returns is what sets argv, and
+    # is not called — the argv here is that runner's own (so a generator that
+    # took the flag again would write the stubbed target, nothing real), plus
+    # the flag.
     run = caller.setup(mod, monkeypatch, root, target)
-    monkeypatch.setattr(sys, "argv", sys.argv + ["--safe"])
-    with pytest.raises(SystemExit) as exc, contextlib.redirect_stderr(io.StringIO()):
+    monkeypatch.setattr(sys, "argv", [*run.argv, "--safe"])
+    err = io.StringIO()
+    with pytest.raises(SystemExit) as exc, contextlib.redirect_stderr(err):
         mod.main()
     assert exc.value.code == 2
+    assert "--safe" in err.getvalue(), err.getvalue()
     assert target.read_text(encoding="utf-8") == OLD
-    del run
 
 
 def test_the_caller_table_is_the_surveyed_population():

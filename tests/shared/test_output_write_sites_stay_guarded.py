@@ -111,6 +111,9 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT / "tests") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "tests"))
+from _tree import repo_files  # noqa: E402
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 
 # Handler names that CAN catch what a raw sink raises — a plain ``OSError``.
@@ -1272,8 +1275,10 @@ _MAY_NAME_THE_ATOMIC_WRITER = frozenset({
 
 
 def atomic_writer_namers(root: Path = SCRIPTS_DIR) -> set[str]:
-    return {p.relative_to(REPO_ROOT).as_posix() for p in sorted(root.rglob("*.py"))
-            if "__pycache__" not in p.parts
+    # Tracked files only (tests/_tree.py): an ignored .py on disk is not the
+    # repository's.
+    return {p.relative_to(REPO_ROOT).as_posix() for p in sorted(repo_files(".py"))
+            if p.is_relative_to(root)
             and "_lib_atomic_write" in p.read_text(encoding="utf-8", errors="replace")}
 
 
