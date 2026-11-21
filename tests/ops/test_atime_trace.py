@@ -487,17 +487,35 @@ def test_a_canary_directory_holding_someone_elses_files_is_refused_untouched(tmp
     state = tmp_path / "s2.json"
     _reset(repo, state)
     _reset(repo, state)
-    # …unless somebody has put a file of theirs into it since: the mark says
-    # who made the directory, not who owns everything in it.
-    canary = Path(_state(state)["canary"]["dir"])
-    for extra in (canary / "znotes.txt", canary / at.CANARY_DIR / "zmore.txt"):
-        extra.write_text("theirs\n", encoding="utf-8")
-        state.unlink(missing_ok=True)
-        proc = _tool(repo, "reset", "--state", str(state))
-        assert proc.returncode == 2 and extra.name in proc.stderr, proc.stderr
-        assert extra.read_text(encoding="utf-8") == "theirs\n"
-        extra.unlink()
+
+
+@pytest.mark.parametrize("shape", ["top-level file", "file in listed-dir",
+                                   "inner replaced by a directory"])
+def test_a_marked_canary_directory_keeps_what_somebody_added_to_it(tmp_path, shape):
+    """The mark says who made the directory, not who owns everything in it.
+    Nothing is deleted recursively: the tool unlinks its own files by name and
+    `rmdir`s, so whatever else is there — under any name, a directory where a
+    canary file was included — survives and the reset is exit 2. (Review, three
+    rounds: each "check the names, then rmtree" let one more shape through.)"""
+    repo = _make_repo(tmp_path / "zrepo")
+    state = tmp_path / "s.json"
     _reset(repo, state)
+    canary = Path(_state(state)["canary"]["dir"])
+    if shape == "top-level file":
+        theirs = canary / "znotes.txt"
+    elif shape == "file in listed-dir":
+        theirs = canary / at.CANARY_DIR / "zmore.txt"
+    else:
+        (canary / at.CANARY_INNER).unlink()
+        (canary / at.CANARY_INNER).mkdir()
+        theirs = canary / at.CANARY_INNER / "zdeep.txt"
+    theirs.write_text("theirs\n", encoding="utf-8")
+    state.unlink()
+    proc = _tool(repo, "reset", "--state", str(state))
+    assert proc.returncode == 2 and "did not put there" in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr
+    assert theirs.read_text(encoding="utf-8") == "theirs\n"
+    assert _local_trustctime(repo) is None  # the failed reset left no setting behind
 
 
 def test_git_is_not_led_to_another_repository_by_inherited_variables(tmp_path, monkeypatch):

@@ -332,6 +332,29 @@ def _nearest_existing(path: Path) -> Path:
     return path
 
 
+def _remove_own_canaries(directory: Path) -> None:
+    """Take an earlier run's canaries away WITHOUT a recursive delete: unlink
+    the files this tool creates, by name and only when they are files, then
+    `rmdir` the two directories — which the kernel refuses while anything
+    else is in them. A file somebody added, or a directory put where a canary
+    file was, is therefore left exactly as it is, whatever it is called.
+    (Two rounds of "check the names, then rmtree" each missed a shape.)"""
+    try:
+        for name in (CANARY_INNER, CANARY_READ, CANARY_UNTOUCHED, CANARY_MARK):
+            path = directory / name
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+        inner = directory / CANARY_DIR
+        if inner.is_dir() and not inner.is_symlink():
+            inner.rmdir()
+        directory.rmdir()
+    except OSError as exc:
+        raise _caller_error(
+            f"the canary directory {directory} holds something this tool did not "
+            f"put there ({exc.filename or exc}: {exc.strerror}); only this tool's "
+            "own canaries were removed. Name an empty or absent directory.") from exc
+
+
 def make_canaries(directory: Path, root: Path) -> dict:
     """Three paths nobody but the caller touches, with their stamps.
 
@@ -345,23 +368,14 @@ def make_canaries(directory: Path, root: Path) -> dict:
             f"{root}: its canaries would say nothing about the tracked files.")
     if directory.exists() and not directory.is_dir():
         raise _caller_error(f"the canary directory {directory} is not a directory.")
-    if directory.is_dir():
-        # Emptied only when EVERYTHING in it is this tool's: its mark, and
-        # nothing beside the names it creates. A file somebody added to an
-        # earlier canary directory is theirs, mark or no mark.
-        ours = {CANARY_MARK, CANARY_READ, CANARY_UNTOUCHED, CANARY_DIR}
-        found = {entry.name for entry in directory.iterdir()}
-        inner = directory / CANARY_DIR
-        if inner.is_dir():
-            found |= {f"{CANARY_DIR}/{e.name}" for e in inner.iterdir()} - {CANARY_INNER}
-        if found and (CANARY_MARK not in found or found - ours):
+    if directory.is_dir() and any(directory.iterdir()):
+        if not (directory / CANARY_MARK).is_file():
             raise _caller_error(
                 f"the canary directory {directory} holds something this tool did "
-                f"not put there ({', '.join(sorted(found - ours)) or f'no {CANARY_MARK}'}); "
-                "it is not emptied. Name an empty or absent directory.")
+                f"not put there (no {CANARY_MARK}); it is not emptied. Name an "
+                "empty or absent directory.")
+        _remove_own_canaries(directory)
     try:
-        if directory.is_dir():
-            shutil.rmtree(directory)
         (directory / CANARY_DIR).mkdir(parents=True)
         with open(directory / CANARY_MARK, "w", encoding="utf-8", newline="\n") as handle:
             handle.write("written by scripts/ops/atime_trace.py reset (#3756)\n")
