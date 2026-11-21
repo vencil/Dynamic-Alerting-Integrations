@@ -69,7 +69,9 @@ report says so instead of guessing one.
 Which workflows are watched is written once: `on.workflow_run.workflows` of
 the detector workflow. This script reads it from there, and
 tests/ops/test_main_red_report.py holds it equal to the set of workflows that
-report an entry of `.github/required-checks.yaml`. A watched workflow without
+report an entry of `.github/required-checks.yaml`, plus the ones that test
+names with a reason (`_ALSO_WATCHED`: a faster verdict on something one of
+those checks holds). A watched workflow without
 a `push` trigger for main (commitlint lints a PR's title) never has a run to
 judge and is left out. A `push` trigger in a shape this script does not model
 (`branches-ignore`, `tags`, `paths`, a glob, a bare string) is exit 2: it is
