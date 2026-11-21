@@ -27,7 +27,7 @@ lang: zh
 
 ## ADR 索引
 
-> 自動產生：`scripts/dx/generate_adr_index.py` 從各 ADR 的 frontmatter 與 `## 狀態` 區塊渲染。新增或修改 ADR 後跑 `make adr-index`；pre-commit 的 `adr-index-check` 會擋過期的表，也會擋狀態不一致的 ADR：frontmatter `status:`、`## 狀態` 那一行、英文版 `## Status` 那一行必須是同一個狀態，改狀態時三處一起改。每份 ADR 的背景、選項與取捨，請直接讀該檔。
+> 自動產生：`scripts/dx/generate_adr_index.py` 從各 ADR 的 frontmatter 與 `## 狀態` 區塊渲染。新增或修改 ADR 後跑 `make adr-index`；pre-commit 的 `adr-index-check` 會擋過期的表，也會擋狀態不一致的 ADR：frontmatter `status:`、`## 狀態` 那一行、英文版 `## Status` 那一行必須是同一個狀態（frontmatter 用小寫的 `proposed`／`accepted` 等值），改狀態時三處一起改。每份 ADR 的背景、選項與取捨，請直接讀該檔。
 
 <!-- ADR_INDEX_START -->
 | ADR | 標題 | 狀態 | 版本 |

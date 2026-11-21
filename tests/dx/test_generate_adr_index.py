@@ -415,6 +415,23 @@ class TestStatusMismatches:
         [line] = gai.status_mismatches(self._entries(tmp_path))
         assert "ADR-001" in line and "status: proposed" in line and "'Accepted'" in line
 
+    @pytest.mark.parametrize("fm", ["Accepted", "in progress"])
+    def test_frontmatter_not_spelled_as_planning_status(self, tmp_path, fm):
+        # Normalised it would match, but the planning index compares verbatim
+        # and silently drops the entry, so the gate must not normalise it.
+        block = "✅ **Accepted**" if fm == "Accepted" else "🔵 **In Progress**"
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block=block, fm_status=fm)
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "is not one of" in line and "planning index drops" in line
+
+    def test_status_outside_planning_vocabulary(self, tmp_path):
+        # All three places agree, but `extended` is not a planning status.
+        _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
+                   status_block="🔵 **Extended**", fm_status="extended")
+        [line] = gai.status_mismatches(self._entries(tmp_path))
+        assert "status: extended" in line and "is not one of" in line
+
     def test_frontmatter_missing(self, tmp_path):
         _write_adr(tmp_path / "001-alpha.md", title="ADR-001: Alpha",
                    status_block="✅ **Accepted**", fm_status=None)

@@ -18,10 +18,17 @@ written (#2664), and exit 1 without writing when they disagree:
     - the `## 狀態` line   — read here, rendered into the index tables
     - the `.en.md` sibling's `## Status` line — read by no generator, so
       nothing else would notice it going stale
-Each is compared after normalising the name (`In Progress` → `in-progress`);
-the emoji is not compared. A missing frontmatter `status:` or an `.en.md`
-without a readable `## Status` line is a mismatch too: the planning index
-skips an entry whose status it cannot read, silently.
+The two status lines are compared after normalising the name (`In Progress`
+→ `in-progress`); the emoji is not compared. The frontmatter value is not
+normalised: it must be spelled exactly as one of `generate_planning_index`'s
+STATUSES, because the planning index silently skips an entry whose status is
+not — so a missing `status:`, `status: Accepted` or a status name outside that
+set (`Extended`) is a mismatch too, as is an `.en.md` without a readable
+`## Status` line.
+
+Only the first `<emoji> **Name**` in each status block is read — the same one
+the index table shows. A block that appends a later status after the first
+(`✅ **Accepted** → ⛔ **Superseded**`) is read as the first.
 
 Why discovery-based (not hand-curated): each new ADR previously required a hub-doc edit
 that was easy to forget. ADR-018 / ADR-019 / ADR-020 all reached merge before any hub
@@ -50,6 +57,9 @@ sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
+# The frontmatter status vocabulary: the planning index's own set (#2664).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from generate_planning_index import STATUSES as PLANNING_STATUSES  # noqa: E402
 
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
 if hasattr(sys.stdout, "reconfigure"):
@@ -192,7 +202,12 @@ def status_mismatches(entries: List[AdrEntry]) -> List[str]:
                 f"ADR-{e.number}: {zh_file} has no frontmatter `status:` "
                 f"(`## 狀態` says {e.status_name!r})"
             )
-        elif _norm_status(e.fm_status) != body:
+        elif e.fm_status not in PLANNING_STATUSES:
+            out.append(
+                f"ADR-{e.number}: {zh_file} frontmatter `status: {e.fm_status}` is not one of "
+                f"{sorted(PLANNING_STATUSES)} (the planning index drops the entry)"
+            )
+        elif e.fm_status != body:
             out.append(
                 f"ADR-{e.number}: {zh_file} frontmatter `status: {e.fm_status}` "
                 f"!= `## 狀態` {e.status_name!r}"

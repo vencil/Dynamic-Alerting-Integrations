@@ -27,7 +27,7 @@ New here? Pick based on your needs:
 
 ## ADR Index
 
-> Auto-generated: `scripts/dx/generate_adr_index.py` renders this from each ADR's frontmatter and `## 狀態` (status) block. Run `make adr-index` after adding or changing an ADR; the `adr-index-check` pre-commit hook blocks a stale table, and also an ADR whose status disagrees between its frontmatter `status:`, its `## 狀態` line and its English `## Status` line; change all three together. For each ADR's context, options and trade-offs, read the ADR itself. Some ADRs are Chinese-only by language policy; those rows link to the Chinese file.
+> Auto-generated: `scripts/dx/generate_adr_index.py` renders this from each ADR's frontmatter and `## 狀態` (status) block. Run `make adr-index` after adding or changing an ADR; the `adr-index-check` pre-commit hook blocks a stale table, and also an ADR whose status disagrees between its frontmatter `status:`, its `## 狀態` line and its English `## Status` line (the frontmatter takes a lowercase value such as `proposed` or `accepted`); change all three together. For each ADR's context, options and trade-offs, read the ADR itself. Some ADRs are Chinese-only by language policy; those rows link to the Chinese file.
 
 <!-- ADR_INDEX_START -->
 | ADR | Title | Status | Version |
