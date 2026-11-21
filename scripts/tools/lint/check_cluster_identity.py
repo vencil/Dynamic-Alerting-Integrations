@@ -112,6 +112,7 @@ import yaml
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 import _lib_consumer_read  # noqa: E402
@@ -481,7 +482,7 @@ _BASELINE_HEADER = """\
 def load_baseline() -> "dict[str, list[str]]":
     if not BASELINE.exists():
         return {}
-    data = yaml.safe_load(BASELINE.read_text(encoding="utf-8")) or {}
+    data = strict_safe_load(BASELINE.read_text(encoding="utf-8")) or {}
     return {f: sorted(v or []) for f, v in (data.get("findings") or {}).items()}
 
 

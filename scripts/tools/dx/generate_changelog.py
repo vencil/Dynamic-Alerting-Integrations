@@ -579,6 +579,7 @@ def parse_fragment(text: str) -> Tuple[Optional[Dict], str, List[str]]:
     front matter is missing or unparseable; ``problems`` lists every issue
     found, and ``meta["created"]`` is normalised to a datetime when valid."""
     import yaml  # pyyaml: the hooks install it; imported here so --check needs nothing
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
 
     text = text.replace("\r\n", "\n")
     fm = _FRONT_MATTER_RE.match(text)
@@ -586,7 +587,7 @@ def parse_fragment(text: str) -> Tuple[Optional[Dict], str, List[str]]:
         return None, text, ["no front matter: the file must start with a '---' block "
                             f"carrying {', '.join(FRAGMENT_KEYS)}"]
     try:
-        meta = yaml.safe_load(fm.group("meta"))
+        meta = strict_safe_load(fm.group("meta"))
     except yaml.YAMLError as exc:
         return None, fm.group("body"), [f"front matter is not valid YAML: {exc}"]
     if not isinstance(meta, dict):

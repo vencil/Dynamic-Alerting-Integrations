@@ -336,12 +336,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_OK
     try:
         import yaml
+        from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     except ImportError:
         print("ERROR: pyyaml not installed", file=sys.stderr)
         return EXIT_CALLER_ERROR
     try:
         with open(registry_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+            data = strict_safe_load(f) or {}
     except yaml.YAMLError as e:
         print(f"ERROR: cannot parse {registry_path}: {e}", file=sys.stderr)
         return EXIT_CALLER_ERROR

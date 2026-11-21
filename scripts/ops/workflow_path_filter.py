@@ -334,8 +334,9 @@ def tracked_files(root: Path) -> tuple[str, ...]:
 
 def parse_workflow(text: str, where: str) -> dict:
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     try:
-        doc = yaml.safe_load(text)
+        doc = strict_safe_load(text)
     except yaml.YAMLError as exc:
         raise _caller_error(
             f"{where} does not parse ({type(exc).__name__}), so it was NOT "

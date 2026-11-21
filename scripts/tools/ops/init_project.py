@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import read_shipped_da_tools_version, try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_python import (  # noqa: E402
     detect_cli_lang, ensure_dir_or_die, exit_on_output_write_error, output_dir_type,
 )
@@ -2382,7 +2383,7 @@ def _root_relative_ci_paths(path: Path, offset: str = '') -> list[str]:
     a job added later cannot quietly acquire a filter this warning omits.
     """
     try:
-        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+        doc = strict_safe_load(path.read_text(encoding='utf-8'))
     except (OSError, yaml.YAMLError):
         return []
     found: list[str] = []
@@ -2476,7 +2477,7 @@ def _precommit_root_relative_paths(path: Path) -> list[str]:
     against the generator's own output rather than left to this reader alone.
     """
     try:
-        doc = yaml.safe_load(path.read_text(encoding='utf-8'))
+        doc = strict_safe_load(path.read_text(encoding='utf-8'))
     except (OSError, yaml.YAMLError):
         return []
     found: list[str] = []
@@ -4321,7 +4322,7 @@ def _read_ownership(output_dir: str) -> _Ownership:
     if not marker.is_file():
         return _Ownership(_OWN_ABSENT, {})
     try:
-        doc = yaml.safe_load(marker.read_text(encoding='utf-8'))
+        doc = strict_safe_load(marker.read_text(encoding='utf-8'))
     except (OSError, UnicodeDecodeError, yaml.YAMLError):
         return _Ownership(_OWN_UNREADABLE, {})
     if not isinstance(doc, dict):

@@ -53,6 +53,7 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads 
 
 try:
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
 except ImportError:  # pragma: no cover - environment guard
     print("check_vmalert_coverage: PyYAML required (pip install pyyaml)", file=sys.stderr)
     sys.exit(2)
@@ -84,7 +85,7 @@ _BASELINE_HEADER = """\
 def _load_yaml(p: Path) -> dict:
     """A promtool test fixture or this lint's own baseline — never a rule
     pack, which is read the way Prometheus reads it (`declared_alerts`)."""
-    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    data = strict_safe_load(p.read_text(encoding="utf-8"))
     if data is None:
         return {}
     if not isinstance(data, dict):

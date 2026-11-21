@@ -100,6 +100,7 @@ if hasattr(sys.stdout, "reconfigure"):
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_yaml_strict import strict_safe_load, strict_safe_load_all  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 # ADR-036 §12 (#3206): values files and manifests, read Helm's / kubectl's way.
@@ -150,7 +151,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH):
         raise ConfigError(f"cannot read config data file {path}: {exc}") from exc
 
     try:
-        data = yaml.safe_load(text)
+        data = strict_safe_load(text)
     except yaml.YAMLError as exc:
         raise ConfigError(f"config data file {path} is not valid YAML: {exc}") from exc
 
@@ -402,7 +403,7 @@ def scan_compose(path: Path, rel: str) -> List[Finding]:
     # ⚠️ Still PyYAML: docker compose (compose-go) has no reading da-tools
     # ships; registered in the reader baseline's ALLOWED with that reason.
     text = path.read_text(encoding="utf-8")
-    return _scan_docs(text, list(yaml.safe_load_all(text)), rel, lambda _doc: None,
+    return _scan_docs(text, list(strict_safe_load_all(text)), rel, lambda _doc: None,
                       apply_bare=False)
 
 

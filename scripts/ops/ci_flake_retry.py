@@ -99,7 +99,7 @@ def load_registry(path: Path) -> list[FlakeEntry]:
     if not path.is_file():
         return []
     try:
-        import yaml  # local import: keeps script importable for unit tests
+        import yaml  # noqa: F401  local import: keeps script importable for unit tests
     except ImportError:
         # PyYAML missing — degrade to pure pass-through with a stderr
         # advisory rather than crashing the wrapper. CI / pre-commit
@@ -110,8 +110,12 @@ def load_registry(path: Path) -> list[FlakeEntry]:
             f"({path.name}). pip install pyyaml to enable retries.\n"
         )
         return []
+    # #4111: the strict reading (a repeated key refuses the registry). Not in
+    # the try above: a missing _lib_yaml_strict is a broken checkout, not
+    # "pyyaml not installed", and must not switch retries off unseen.
+    from _lib_yaml_strict import strict_safe_load  # noqa: PLC0415
     with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+        data = strict_safe_load(f) or {}
     raw = data.get("known_flakes") or []
     out: list[FlakeEntry] = []
     for item in raw:

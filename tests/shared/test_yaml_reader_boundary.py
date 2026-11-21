@@ -1,5 +1,6 @@
-"""Who under `scripts/` reads YAML with PyYAML — an AST ratchet on the
-boundary of ADR-036 §12 (step 12, #3206).
+"""Who under `scripts/` and `helm/` (SCAN_ROOTS; helm/ since #4111) reads
+YAML with PyYAML — an AST ratchet on the boundary of ADR-036 §12 (step 12,
+#3206).
 
 WHAT IT GUARDS. A YAML file means what the program that reads it and acts on
 it says it means. When a file has a Go consumer, Python does not read it with
@@ -43,14 +44,27 @@ entry of that module; a plain rebinding of a module (`Y = yaml`, `x = io`) is
 followed. ruamel.yaml counts too (`RUAMEL_ENTRIES`: its `YAML` class and load
 functions).
 
+THE SECOND AXIS — STRICT (#4111). A point either reaches PyYAML through a
+wrapper of a home, or names a PyYAML / ruamel entry itself (`bare`). Every
+wrapper is strict: the homes name PyYAML only at `STRICT_ROOT`, the base of
+`_lib_yaml_strict.StrictSafeLoader`, which refuses a repeated mapping key
+(#2123's identity). A bare point is the lax reading — the last of a repeated
+key wins, silently — and is red unless `LAX` (in the baseline) lists it with
+the consumer whose reading it mirrors. The two axes are independent: a strict
+point still has to be registered in ALLOWED or DEBT.
+
 ⚠️ WHAT IT CANNOT CATCH (it reads names, not values): a name built at run time
 (`getattr(yaml, "safe_" + "load")`, `importlib`, `__import__`); a module or an
 entry reached through a mapping (`yaml.__dict__["safe_load"]`,
 `sys.modules["yaml"]`); a module or parser handed in as an argument and used as
 an attribute of the parameter (`def f(m): m.safe_load(...)`), including from a
-module outside `scripts/`; and the callers of a helper inside `scripts/` other
+module outside SCAN_ROOTS; and the callers of a helper inside SCAN_ROOTS other
 than `WRAPPER_HOMES` — only the helper's own point counts, so an `ALLOWED`
-helper later called on a file with a Go consumer stays green.
+helper later called on a file with a Go consumer stays green. On the strict
+axis: a strict loader driven around its duplicate check
+(`StrictSafeLoader(t).get_single_node()` composes without constructing; a
+subclass overriding `construct_document` / `construct_mapping`) counts as
+strict.
 """
 from __future__ import annotations
 
@@ -68,7 +82,7 @@ for _p in (HERE, HERE.parent):
         sys.path.insert(0, str(_p))
 from _ast_refs import Ref, module_is, refs  # noqa: E402
 from _tree import repo_files  # noqa: E402
-from _yaml_reader_baseline import ALLOWED, DEBT, Reading, debt_by_class  # noqa: E402
+from _yaml_reader_baseline import ALLOWED, DEBT, LAX, Reading, debt_by_class  # noqa: E402
 
 REPO = HERE.parents[1]
 
@@ -113,6 +127,13 @@ class Scan:
     points: "collections.Counter[tuple[str, str]]"
     #: home module -> its top-level names that are entries
     wrappers: "dict[str, frozenset[str]]"
+    #: the points that reach PyYAML / ruamel.yaml THEMSELVES, not through a
+    #: wrapper of a home (#4111: the lax reading — a repeated key keeps the
+    #: last value without a word)
+    bare: "collections.Counter[tuple[str, str]]"
+    #: (home path, scope, entry) of every PyYAML / ruamel entry a home names
+    #: itself — where the homes' own reading is built
+    home_bare: "frozenset[tuple[str, str, str]]"
 
 
 def _entries_of(module: str, known: "dict[str, set[str]]") -> "frozenset[str] | set[str]":
@@ -135,6 +156,17 @@ def _reaches(ref: Ref, known: "dict[str, set[str]]", own: "set[str]") -> bool:
     if ref.module is not None:
         return ref.name in _entries_of(ref.module, known)
     return ref.name in own or any(ref.name in _entries_of(m, known) for m in ref.star)
+
+
+def _is_bare(ref: Ref) -> bool:
+    """*ref* names a PyYAML / ruamel.yaml entry itself (its module, or a star
+    import of it), not a wrapper of a home."""
+    if ref.module is not None:
+        return (module_is(ref.module, package="yaml") and ref.name in ENTRIES) or \
+            (module_is(ref.module, package="ruamel.yaml") and ref.name in RUAMEL_ENTRIES)
+    return any((module_is(m, package="yaml") and ref.name in ENTRIES)
+               or (module_is(m, package="ruamel.yaml") and ref.name in RUAMEL_ENTRIES)
+               for m in ref.star)
 
 
 def scan(sources: "dict[str, str]") -> Scan:
@@ -165,17 +197,45 @@ def scan(sources: "dict[str, str]") -> Scan:
                         known[stem] |= new
                         changed = True
     points: "collections.Counter[tuple[str, str]]" = collections.Counter()
+    bare: "collections.Counter[tuple[str, str]]" = collections.Counter()
+    home_bare: "set[tuple[str, str, str]]" = set()
     for path, rs in trees.items():
         own = defined.get(_stem(path), set())
         for r in rs:
-            if _reaches(r, known, own) and r.top not in own:
+            if r.via_import or not _reaches(r, known, own):
+                continue
+            if r.top not in own:
                 points[(path, r.scope)] += 1
-    return Scan(points, {h: frozenset(v) for h, v in defined.items()})
+                if _is_bare(r):
+                    bare[(path, r.scope)] += 1
+            elif _is_bare(r):
+                home_bare.add((path, r.scope, r.name))
+    return Scan(points, {h: frozenset(v) for h, v in defined.items()}, bare, frozenset(home_bare))
+
+
+#: Where the gate looks (#4111: helm/ too — the projection gate's init
+#: container reads YAML in Python).
+SCAN_ROOTS = ("scripts", "helm")
+
+#: Byte-identical copies of a home a build context cannot reach (a Docker
+#: context of one directory): not scanned — the copy IS the home, pinned
+#: equal below (`test_a_vendored_home_is_the_home`).
+VENDORED_HOMES = {
+    "helm/vector/projection-gate/_lib_yaml_strict.py": "scripts/tools/_lib_yaml_strict.py",
+}
+
+#: ⛔ Where the homes may name PyYAML themselves (#4111): only the strict
+#: loader's base. Every wrapper of a home reaches the parser through it, so
+#: every wrapper is strict; a home helper calling `yaml.safe_load` would be
+#: another reading, and lax.
+STRICT_ROOT = frozenset({("scripts/tools/_lib_yaml_strict.py", "StrictSafeLoader", "SafeLoader")})
 
 
 def _scripts() -> "dict[str, str]":
     return {p.relative_to(REPO).as_posix(): p.read_text(encoding="utf-8")
-            for p in repo_files(".py") if p.relative_to(REPO).parts[0] == "scripts"}
+            for p in repo_files(".py")
+            if p.relative_to(REPO).parts[0] in SCAN_ROOTS
+            and p.relative_to(REPO).as_posix() not in VENDORED_HOMES}
 
 
 @pytest.fixture(scope="module")
@@ -377,3 +437,47 @@ def test_wrappers_are_derived_and_their_definitions_are_not_points() -> None:
     # `load_yaml_file` reaches the parser only through `_parse`: transitive
     assert s.wrappers["_lib_io"] == {"SAFE", "load_yaml_file", "_parse", "Strict"}
     assert not s.points
+
+
+# ── #4111: the strict axis ───────────────────────────────────────────
+
+def test_the_homes_name_pyyaml_only_at_the_strict_root(found: Scan) -> None:
+    """Every wrapper of a home is strict: the only place a home names PyYAML
+    itself is the strict loader's base. A helper there calling
+    `yaml.safe_load` would make every caller of it lax unseen."""
+    assert found.home_bare == STRICT_ROOT, sorted(found.home_bare - STRICT_ROOT)
+
+
+def test_every_lax_point_is_a_listed_consumers_reading(found: Scan) -> None:
+    """A point naming PyYAML itself reads a repeated key as its last value,
+    silently. It is red unless LAX lists it (with the consumer whose reading
+    it mirrors) at its count; a LAX row no point needs is red too."""
+    got = dict(found.bare)
+    want = {k: v[0] for k, v in LAX.items()}
+    assert got == want, (
+        "lax YAML reading (a repeated key keeps its last value, silently): "
+        f"{sorted(set(got.items()) - set(want.items()))}; stale LAX rows: "
+        f"{sorted(set(want.items()) - set(got.items()))}. Read with "
+        "_lib_yaml_strict.strict_safe_load (or _lib_io / _lib_input) instead.")
+
+
+def test_every_lax_row_names_its_consumer() -> None:
+    bad = {k: v for k, v in LAX.items()
+           if not (isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], int) and v[0] > 0
+                   and isinstance(v[1], str) and len(v[1].split()) >= 6)}
+    assert not bad, bad
+
+
+def test_a_vendored_home_is_the_home() -> None:
+    for copy, home in VENDORED_HOMES.items():
+        assert (REPO / copy).read_bytes() == (REPO / home).read_bytes(), (copy, home)
+
+
+@pytest.mark.parametrize("src, bare", [
+    ("import yaml\nd = yaml.safe_load('a: 1')\n", True),
+    ("from yaml import *\nd = safe_load('a: 1')\n", True),
+    ("from _lib_io import load_yaml_file\nd = load_yaml_file('p')\n", False),
+])
+def test_the_strict_axis_tells_a_bare_entry_from_a_wrapper(src, bare) -> None:
+    s = scan({"scripts/tools/_lib_io.py": _LIB_IO, "scripts/t.py": src})
+    assert (("scripts/t.py", "<module>") in s.bare) is bare

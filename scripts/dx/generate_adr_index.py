@@ -55,6 +55,7 @@ import yaml
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_io import check_repo_artifact, write_repo_artifact  # noqa: E402  (#3107 v2)
 # The frontmatter status vocabulary: the planning index's own set (#2664).
@@ -126,7 +127,7 @@ def parse_adr(path: Path) -> AdrEntry:
     if not fm:
         raise AdrParseError(f"{path.name}: missing YAML frontmatter")
     try:
-        meta = yaml.safe_load(fm.group(1)) or {}
+        meta = strict_safe_load(fm.group(1)) or {}
     except yaml.YAMLError as e:
         raise AdrParseError(f"{path.name}: frontmatter YAML parse error: {e}") from e
 
@@ -165,7 +166,7 @@ def parse_adr(path: Path) -> AdrEntry:
     if en_path.is_file():
         en_text = en_path.read_text(encoding="utf-8")
         en_fm = FRONTMATTER_RE.match(en_text)
-        en_meta = (yaml.safe_load(en_fm.group(1)) or {}) if en_fm else {}
+        en_meta = (strict_safe_load(en_fm.group(1)) or {}) if en_fm else {}
         en_title = TITLE_PREFIX_RE.sub("", (en_meta.get("title") or "").strip()).strip()
         en_filename = en_path.name
         en_sb = EN_STATUS_BLOCK_RE.search(en_text)

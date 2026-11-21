@@ -1422,9 +1422,10 @@ def _soft_fail_check_names() -> set[str]:
         import yaml  # PyYAML — already a repo dependency
     except ImportError:
         return names
+    from _lib_yaml_strict import strict_safe_load  # noqa: PLC0415  (#4111: not "no pyyaml": a broken checkout)
     for wf in sorted([*wf_dir.glob("*.yml"), *wf_dir.glob("*.yaml")]):
         try:
-            data = yaml.safe_load(wf.read_text(encoding="utf-8"))
+            data = strict_safe_load(wf.read_text(encoding="utf-8"))
         except (yaml.YAMLError, OSError, UnicodeDecodeError):
             continue
         jobs = data.get("jobs") if isinstance(data, dict) else None
