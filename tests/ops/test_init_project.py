@@ -7195,6 +7195,18 @@ class TestStaleFiles:
         assert 'acme-c' not in (kbase / 'README.md').read_text(encoding='utf-8')
         assert 'acme-a.yaml' in (kbase / 'kustomization.yaml').read_text(encoding='utf-8')
 
+    def test_a_ledger_with_a_repeated_key_is_unreadable(self, tmp_path):
+        """#4111: `files:` written twice kept only the second ledger (PyYAML
+        keeps the last of a repeated key): init took files it wrote for files
+        it did not. Read strictly, the ledger is unreadable — no claim, and
+        nothing removed on its say-so."""
+        out = tmp_path / 'repo'
+        out.mkdir()
+        (out / '.da-init.yaml').write_text(
+            'files:\n  ci/a.yml: h1\nfiles:\n  ci/b.yml: h2\n', encoding='utf-8')
+        own = ip._read_ownership(str(out))
+        assert own.state == ip._OWN_UNREADABLE and own.files == {}
+
     @pytest.mark.parametrize('key', ['../outside/victim.txt', '/etc/passwd',
                                      'a/../../outside/victim.txt'])
     def test_a_ledger_key_outside_the_output_is_not_trusted(self, tmp_path, key):

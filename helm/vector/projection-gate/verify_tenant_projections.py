@@ -84,6 +84,15 @@ try:  # PyYAML is the only third-party dep; the init-container image bakes it in
     import yaml
 except ImportError:  # pragma: no cover - exercised only in a misbuilt image
     yaml = None
+try:
+    # #4111: the repo's one strict reading (a duplicate key refuses the file, as
+    # the Go reader, yaml.v3, does). A byte-identical copy of
+    # scripts/tools/_lib_yaml_strict.py, COPYed beside this script (the build
+    # context is this directory); tests/shared/test_tenant_projection_gate.py
+    # pins the two equal.
+    from _lib_yaml_strict import strict_safe_load
+except ImportError:  # pragma: no cover - exercised only in a misbuilt image
+    strict_safe_load = None
 
 # Mirror the Go SSOT (components/tenant-api/internal/federation/account/registry.go):
 # the on-disk registry is schema v1; tenant ids start at 1000 (0 = platform default
@@ -184,8 +193,15 @@ def load_yaml(path: Path) -> Any:
     """Load a YAML document, raising a clear error the caller maps to a verdict."""
     if yaml is None:
         raise RuntimeError("PyYAML is not installed in the init-container image")
+    if strict_safe_load is None:
+        raise RuntimeError("_lib_yaml_strict.py is missing beside the gate in the init-container image")
     text = path.read_text(encoding="utf-8")
-    return yaml.safe_load(text)
+    # ⛔ Strict (#4111): the lax reading kept the LAST of a repeated key, so a
+    # registry naming a tenant twice was read as its second account id — the
+    # Go reader refuses that file, and this gate passed a projection the
+    # platform never allocated. A refusal here is the registry_unreadable /
+    # mismatch path: degrade to the platform-only config.
+    return strict_safe_load(text)
 
 
 def load_registry(path: Path) -> dict[str, Any]:

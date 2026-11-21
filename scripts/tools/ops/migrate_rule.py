@@ -72,6 +72,7 @@ import _lib_write_check  # noqa: E402  (the draft conf.d's name and layout check
 # traceback at rc=1 (which reads as "your rules have a violation").
 _OUTPUT_FLAG = "-o/--output-dir"
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
@@ -749,8 +750,11 @@ def process_rule(rule, interactive=False, prefix="custom_", dictionary=None,
         print(f"   🤖 AI 猜測: {agg_mode} ({agg_reason})")
         if has_golden:
             print(f"   📖 字典建議: 改用黃金標準 {dict_match['golden_rule']}")
-        choice = input(
-            "   選擇聚合模式 [s=sum / m=max / Enter=採用猜測]: "
+        choice = prompt_line(
+            "   選擇聚合模式 [s=sum / m=max / Enter=採用猜測]: ",
+            remedy="不帶 --interactive 重跑：複雜表達式改採 AI 猜測的聚合模式，"
+                   "並在輸出中標註待確認。",
+            lang="zh",
         ).strip().lower()
         if choice == 's':
             agg_mode = "sum"

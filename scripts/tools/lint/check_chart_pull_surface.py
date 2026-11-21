@@ -64,6 +64,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
@@ -102,7 +103,7 @@ def registry_and_owner(repo_root: Path = REPO_ROOT) -> Tuple[str, str]:
     """
     wf = repo_root / ".github" / "workflows" / "release.yaml"
     try:
-        doc = yaml.safe_load(wf.read_text(encoding="utf-8"))
+        doc = strict_safe_load(wf.read_text(encoding="utf-8"))
     except OSError as exc:
         raise CallerError(f"cannot read {wf}: {exc}") from exc
     except yaml.YAMLError as exc:

@@ -405,13 +405,14 @@ def main(argv: Optional[list] = None) -> "int | Report":
 
     try:
         import yaml
+        from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     except ImportError:
         print("ERROR: pyyaml not installed", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     try:
         with open(manifest_path, encoding="utf-8") as f:
-            manifest = yaml.safe_load(f) or {}
+            manifest = strict_safe_load(f) or {}
     except yaml.YAMLError as e:
         print(f"ERROR: cannot parse {manifest_path}: {e}", file=sys.stderr)
         return EXIT_CALLER_ERROR

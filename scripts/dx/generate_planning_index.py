@@ -49,6 +49,7 @@ import yaml
 _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
 
@@ -180,7 +181,7 @@ class PlanningParseError(ValueError):
 def _safe_yaml_load(text: str, *, where: str) -> Optional[dict]:
     """Parse YAML; on failure return None and let caller skip the entry."""
     try:
-        loaded = yaml.safe_load(text)
+        loaded = strict_safe_load(text)
     except yaml.YAMLError as e:
         raise PlanningParseError(f"{where}: YAML parse error: {e}") from e
     return loaded if isinstance(loaded, dict) else None
@@ -301,7 +302,7 @@ def _discover_flaky_tests(flaky_path: Path, repo_root: Path) -> Iterable[Plannin
     except (OSError, UnicodeDecodeError):
         return
     try:
-        loaded = yaml.safe_load(text)
+        loaded = strict_safe_load(text)
     except yaml.YAMLError:
         return
     if not isinstance(loaded, list):
@@ -477,17 +478,30 @@ def main() -> int:
     body = render_index(entries)
     from _lib_io import check_repo_artifact  # noqa: E402  (#3107 v2: before the read)
     check_repo_artifact(args.target, flag="--target")
-    current = args.target.read_text(encoding="utf-8")
+    try:
+        rel_target = args.target.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        rel_target = str(args.target)
+    # #3980: the block lives in an existing doc, so a doc that is not there
+    # (or cannot be read) is the caller's mistake, named as such, not a
+    # traceback. --target is named only when it is not the built-in default.
+    whose = ("the default target doc" if args.target == TARGET_DOC
+             else "the value given to --target")
+    try:
+        current = args.target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"ERROR: {rel_target} does not exist; the planning index is written between "
+              f"the sentinel lines of an existing doc — check {whose}", file=sys.stderr)
+        return 2
+    except (OSError, UnicodeDecodeError) as exc:
+        detail = getattr(exc, "strerror", None) or str(exc)
+        print(f"ERROR: cannot read {rel_target}: {detail} — check {whose}", file=sys.stderr)
+        return 2
     try:
         new = replace_sentinel_block(current, body)
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-
-    try:
-        rel_target = args.target.relative_to(REPO_ROOT).as_posix()
-    except ValueError:
-        rel_target = str(args.target)
 
     if args.check:
         if new == current:

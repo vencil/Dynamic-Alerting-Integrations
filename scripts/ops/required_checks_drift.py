@@ -39,6 +39,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 import yaml  # noqa: E402
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 EXIT_DRIFT = 1
 # The verdict, as one whole line of stdout. The workflow greps for these exact
@@ -121,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(args[0], encoding="utf-8") as fh:
             branch = json.load(fh)
         with open(args[1] if len(args) == 2 else DEFAULT_SSOT, encoding="utf-8") as fh:
-            ssot = yaml.safe_load(fh)
+            ssot = strict_safe_load(fh)
         problems = compare(ssot, branch)
     except (Unreadable, ValueError, yaml.YAMLError) as err:
         sys.stderr.write(f"required_checks_drift: cannot compare — {err}\n")

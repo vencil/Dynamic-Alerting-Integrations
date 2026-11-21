@@ -449,14 +449,9 @@ class TestArgvErrorIsNotDownstreamOfTheConfigTree:
 #     correct split of `_lib_io.read_onboard_hints`, the assertion went red
 #     with a message forbidding the only correct response.
 #
-# ⚠️ `_lib_io.read_onboard_hints` still collapses the two cases. Its one call
-# site, `scaffold_tenant.run_from_onboard`, left it in #3445: --from-onboard
-# is declared with `_lib_input.add_input(decode=...)` and read by
-# `_lib_input.document`, which names a missing, unreadable, non-JSON or
-# non-object file (the rows are made from the declaration in
-# tests/shared/test_caller_paths.py). The helper has no caller in
-# scripts/tools today — a snapshot, not a guard: nothing here stops a new
-# caller from collapsing the two cases again.
+# `_lib_io.read_onboard_hints`, which collapsed the two cases, is gone (#4111):
+# it had no caller since #3445 moved `scaffold --from-onboard` to
+# `_lib_input.document`.
 #
 # (The compensation that was itself of the family — `{}` exiting 2 as
 # "Cannot read onboard hints" — went with it: `{}` is read, and holds no

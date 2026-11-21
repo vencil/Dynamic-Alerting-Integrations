@@ -10,6 +10,13 @@ Its own module because `_lib_input` is standard library only and imports
 `_lib_exitcodes` (the crash hook) only on a refusal, while `_lib_io`
 imports it at the top: this module imports PyYAML and nothing of the repo,
 and `_lib_input` imports it only when it parses YAML.
+
+⚠️ A byte-identical copy ships in the vector projection-gate image
+(helm/vector/projection-gate/_lib_yaml_strict.py, #4111: its build context
+is that directory). Any change here — a comment too — is a change to that
+image: copy the file there and bump `projectionGate.image.tag` and the
+chart version (tests/shared/test_tenant_projection_gate.py and
+test_vector_projection_gate_image_tag.py say so when you forget).
 """
 from __future__ import annotations
 

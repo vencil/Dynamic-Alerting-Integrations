@@ -8,6 +8,14 @@ data:
     global:
       scrape_interval: 15s
       evaluation_interval: 15s
+      # Which cluster this Prometheus is in (ADR-006). The rule packs group and
+      # match per (tenant, da_cluster); the label is not written at scrape
+      # time. Prometheus attaches external labels to what leaves it — alerts
+      # sent to Alertmanager, /federate, remote write — so a central
+      # Prometheus sees each cluster's series already labelled, and this one,
+      # which only sees its own cluster, needs no label on them.
+      external_labels:
+        da_cluster: lab
       # Federation chargeback (#539 Phase 2). Each PromQL query is
       # logged as one JSON line with params.query / params.start_time /
       # stats.samples.totalQueryableSamples / stats.timings.* — the

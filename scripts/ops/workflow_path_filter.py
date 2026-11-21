@@ -263,10 +263,6 @@ AWAITS_READ_ASSERTION = "awaits-read-assertion"
 ADVISORY_KINDS = (DIFF_DRIVEN, AWAITS_READ_ASSERTION)
 
 ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
-    "backtest.yaml": (
-        AWAITS_READ_ASSERTION,
-        "its Python step queries a Prometheus; without one it returns before "
-        "the comparison, so a run that can be reproduced reads a partial list"),
     "bench-gate-pr.yaml": (
         DIFF_DRIVEN,
         "the benchmark's inputs: non-test Go of the exporter and the scripts "
@@ -299,7 +295,6 @@ ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
 # traced). Kept beside the ledger and compared with it both ways, so the queue
 # cannot name a workflow the ledger has dropped or miss one it has gained.
 READ_ASSERTION_ORDER: tuple[str, ...] = (
-    "backtest.yaml",
     "forge-e2e-github.yaml",
 )
 
@@ -339,8 +334,9 @@ def tracked_files(root: Path) -> tuple[str, ...]:
 
 def parse_workflow(text: str, where: str) -> dict:
     import yaml
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     try:
-        doc = yaml.safe_load(text)
+        doc = strict_safe_load(text)
     except yaml.YAMLError as exc:
         raise _caller_error(
             f"{where} does not parse ({type(exc).__name__}), so it was NOT "
@@ -883,8 +879,11 @@ class Traced:
         recording); both are exactly the generated steps; no `continue-on-error`
         and no `defaults.run.shell` stands between their exit code and the
         job's; and no other `run:` mentions the git setting `reset` holds.
-        NOT checked: a job-level `if:` that never holds (the job, and so the
-        assertion, does not run), and what a `uses:` step does to git config.
+        NOT checked: whether the job runs at all — a job-level `if:` that
+        never holds, or `on.pull_request.branches`/`types` that never match a
+        PR (no run, so no assertion); what a `uses:` step does to git config;
+        and whether the `--out` file is uploaded (an upload placed before the
+        assert step finds no file and only warns).
         """
         workflow = self.workflow if workflow is None else workflow
         errors = []

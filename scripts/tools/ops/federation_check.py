@@ -26,6 +26,7 @@ Usage:
 
 import argparse
 import os
+import re
 import sys
 import urllib.parse
 
@@ -68,6 +69,37 @@ def _count(check, results):
         return None, _query_failed(check, str(exc))
 
 
+#: ADR-006: the external label that says which cluster a Prometheus is in.
+CLUSTER_IDENTITY_LABEL = "da_cluster"
+
+_EXTERNAL_LABELS = re.compile(r"(?m)^(?P<indent>[ ]*)external_labels:[ ]*$")
+_LABEL_LINE = re.compile(r"^(?P<indent>[ ]+)(?P<key>[A-Za-z_][A-Za-z0-9_]*):[ ]*(?P<value>.*?)[ ]*$")
+
+
+def external_labels(config_yaml: str) -> "dict[str, str] | None":
+    """`global.external_labels` of a configuration as `/api/v1/status/config`
+    prints it — the keys directly under that one mapping and nothing else in
+    the file (a scrape job's `labels:` or `target_label:` is not it). None
+    when the configuration has no such mapping.
+
+    The text is Prometheus' own rendering (block style, one key a line), which
+    is what makes reading it line by line safe; it is not a YAML reader for a
+    hand-written file.
+    """
+    m = _EXTERNAL_LABELS.search(config_yaml)
+    if m is None:
+        return None
+    base, out = len(m["indent"]), {}
+    for line in config_yaml[m.end():].split("\n")[1:]:
+        if not line.strip():
+            continue
+        k = _LABEL_LINE.match(line)
+        if k is None or len(k["indent"]) <= base:
+            break
+        out[k["key"]] = k["value"].strip("\"'")
+    return out
+
+
 def check_edge(prom_url):
     """Verify edge cluster configuration (§6.1)."""
     checks = []
@@ -102,25 +134,42 @@ def check_edge(prom_url):
             "detail": f"Config API failed: {str(exc)[:60]}",
         })
     else:
-        has_external = "external_labels" in config_yaml
-        has_cluster = "cluster" in config_yaml
-        if has_external and has_cluster:
+        labels = external_labels(config_yaml)
+        if labels is None:
+            checks.append({
+                "check": "edge_external_labels",
+                "status": "fail",
+                "detail": "No external_labels configured",
+            })
+        elif labels.get("cluster"):
             checks.append({
                 "check": "edge_external_labels",
                 "status": "pass",
                 "detail": "external_labels with cluster label found",
             })
-        elif has_external:
+        else:
             checks.append({
                 "check": "edge_external_labels",
                 "status": "warn",
                 "detail": "external_labels found but 'cluster' label may be missing",
             })
+        # ADR-006: the platform's own cluster identity. The rule packs group and
+        # match per (tenant, da_cluster); Prometheus attaches this label to what
+        # leaves it (alerts, /federate, remote write). Without it two edges'
+        # series arrive at the centre indistinguishable and merge.
+        if (labels or {}).get(CLUSTER_IDENTITY_LABEL):
+            checks.append({
+                "check": "edge_cluster_identity",
+                "status": "pass",
+                "detail": f"external_labels.{CLUSTER_IDENTITY_LABEL} = "
+                          f"{labels[CLUSTER_IDENTITY_LABEL]}",
+            })
         else:
             checks.append({
-                "check": "edge_external_labels",
+                "check": "edge_cluster_identity",
                 "status": "fail",
-                "detail": "No external_labels configured",
+                "detail": f"external_labels.{CLUSTER_IDENTITY_LABEL} is not set — add it under "
+                          "global.external_labels with this cluster's id (ADR-006)",
             })
 
     # 3. tenant label exists on metrics

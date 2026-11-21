@@ -275,6 +275,7 @@ lang: zh
 - `scripts/tools/_lib_parse_tree.py`：read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_paths.py`：The one judgement of a path the caller gave (#3276).
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
+- `scripts/tools/_lib_prompt.py`：`prompt_line`: the one read of an interactive answer from stdin (#3822).
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.
 - `scripts/tools/_lib_registry.py`：Does an image ref resolve? Asked of its registry through the distribution v2 API (#3611).

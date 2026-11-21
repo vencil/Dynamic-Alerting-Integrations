@@ -52,6 +52,7 @@ import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
 except Exception:  # pragma: no cover - compat shim optional
@@ -114,7 +115,7 @@ def scan_workflow(path: Path) -> List[str]:
     file is a caller error, not a lint finding; `main()` catches it and maps
     it to `EXIT_CALLER_ERROR`, distinct from a `--ci` violation (EXIT 1).
     """
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    doc = strict_safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(doc, dict):
         return []
 

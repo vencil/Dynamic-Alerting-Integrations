@@ -37,6 +37,7 @@ global:
   scrape_interval: 15s
   external_labels:
     cluster: "edge-asia-prod"    # unique identifier
+    da_cluster: "edge-asia-prod" # the platform's cluster identity (ADR-006), same value as cluster
 ```
 
 **1.2 Tenant Label Injection** (choose one mode)
