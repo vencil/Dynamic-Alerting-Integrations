@@ -1,0 +1,129 @@
+name: Atime Git Canary (temporary, #3756)
+
+# ⛔ TEMPORARY, MEASUREMENT ONLY — #3756 stage 3's precondition. Not meant to
+# be merged; the PR carrying it is closed once its result has been read.
+#
+# Stage 1 found that after the access times are reset, ANY git command in the
+# measured stretch reads the whole tree: setting an access time moves the
+# change time, and with `core.trustctime` at its default git re-reads every
+# file whose change time moved. Two ways out were named, to be measured the
+# same way and not assumed:
+#   (a) `core.trustctime=false` for the working tree while measuring;
+#   (b) refresh the index once more after the reset, then re-arm only what
+#       that refresh read.
+# Measured on ext4 relatime off the runner: (a) leaves 4 files read by
+# `git status` (the .gitignore files it really reads), (b) does not help —
+# re-arming moves the change time again. This job asks the same on a hosted
+# runner, and whether (a) changes what git reports.
+#
+# Every answer is printed under a line starting `=== ATIME-GIT-CANARY Q<n>`.
+# The job is red only when the measurement has no answer (reset or collect
+# failed, a canary does not hold).
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atime-git-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: atime git canary (measurement only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: "Q1: git and its settings on the runner"
+        run: |
+          echo "=== ATIME-GIT-CANARY Q1: git and its settings ==="
+          git version
+          echo "findmnt: $(findmnt -no SOURCE,FSTYPE,OPTIONS -T "$GITHUB_WORKSPACE" || echo 'NOT MEASURED')"
+          for key in core.trustctime core.checkstat core.fsmonitor core.untrackedcache core.preloadindex; do
+            echo "$key: $(git config --show-origin --get "$key" || echo '(unset)')"
+          done
+          echo "tracked files: $(git ls-files | wc -l)"
+
+      - name: "Q2-Q4: reads by git after a reset, per setting"
+        run: |
+          set -u
+          state="$RUNNER_TEMP/atime-git.json"
+          canary="$GITHUB_WORKSPACE/.git/atime-canary"
+          tool() { python3 -I scripts/ops/atime_trace.py "$@"; }
+          arm() {
+            tool reset --state "$state" --canary-dir "$canary" > "$RUNNER_TEMP/reset.out" 2>&1 \
+              || { cat "$RUNNER_TEMP/reset.out"; echo "NOT MEASURED: reset failed"; exit 2; }
+          }
+          count() {
+            tool collect --state "$state" --label "$1" > "$RUNNER_TEMP/collect.out" 2>&1 \
+              || { cat "$RUNNER_TEMP/collect.out"; echo "NOT MEASURED: collect failed"; exit 2; }
+            head -1 "$RUNNER_TEMP/collect.out"
+          }
+          # Two seconds between steps: git compares change times by the
+          # second, so back-to-back commands hide the re-read.
+          series() {
+            for cmd in "status" "status" "diff" "diff --quiet HEAD" "add -A" "status"; do
+              sleep 2
+              # shellcheck disable=SC2086
+              git $cmd > /dev/null 2>&1 || true
+              echo "  git $cmd -> $(count "$1")"
+            done
+          }
+
+          echo "=== ATIME-GIT-CANARY Q2: runner defaults ==="
+          arm; series defaults
+
+          echo "=== ATIME-GIT-CANARY Q3: candidate (a) core.trustctime=false in the repository config ==="
+          git config --local core.trustctime false
+          arm; series trustctime-false
+          echo "--- does git still see changes? (content edit of the same size, then a mode change)"
+          sleep 2
+          first=$(head -c 1 README.md | od -An -c | tr -d ' ')
+          printf 'Z' | dd of=README.md bs=1 count=1 conv=notrunc 2> /dev/null
+          echo "  after a 1-byte edit (was '$first'): git status --short -> '$(git status --short | tr '\n' ';')'"
+          git checkout -q -- README.md
+          chmod +x README.md
+          echo "  after chmod +x: git status --short -> '$(git status --short | tr '\n' ';')'"
+          chmod -x README.md
+          echo "  restored: git status --short -> '$(git status --short | tr '\n' ';')'"
+          git config --local --unset core.trustctime
+
+          echo "=== ATIME-GIT-CANARY Q4: candidate (b) refresh after the reset, re-arm, then runner defaults ==="
+          arm
+          sleep 2
+          git update-index -q --refresh || true
+          echo "  git update-index --refresh -> $(count refresh)"
+          series after-refresh
+
+          echo "=== ATIME-GIT-CANARY canaries ==="
+          arm
+          cat "$canary/must-read" > /dev/null
+          ls "$canary/listed-dir" > /dev/null
+          tool collect --state "$state" --label canaries > /dev/null
+          tool canary --state "$state"
+
+      - name: "Q5 setup: candidate (a) before a second checkout"
+        run: |
+          git config --local core.trustctime false
+          python3 -I scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime-git2.json" \
+            --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary" > /dev/null
+          sleep 2
+
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          clean: false
+
+      - name: "Q5: what a second actions/checkout read under candidate (a)"
+        run: |
+          echo "=== ATIME-GIT-CANARY Q5: second actions/checkout under core.trustctime=false ==="
+          echo "core.trustctime after the action: $(git config --show-origin --get core.trustctime || echo '(unset — the action removed it)')"
+          python3 -I scripts/ops/atime_trace.py collect --state "$RUNNER_TEMP/atime-git2.json" \
+            --label "uses: actions/checkout (second run)" | head -1
