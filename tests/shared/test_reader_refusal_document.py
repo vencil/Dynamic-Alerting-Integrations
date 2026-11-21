@@ -67,6 +67,9 @@ REFUSALS = [
     ("read-promql-reads", cr.DA_READ_ENV, cr.DA_READ_BINARY_NAME,
      ["promql-reads", "-"], json.dumps([f"{MARKER} +"]),
      lambda t: cr.promql_reads([f"{MARKER} +"])),
+    ("read-promql-shape", cr.DA_READ_ENV, cr.DA_READ_BINARY_NAME,
+     ["promql-shape", "-"], json.dumps([f"{MARKER} +"]),
+     lambda t: cr.promql_shape([f"{MARKER} +"])),
 ]
 
 
