@@ -800,6 +800,22 @@ describe('TenantManager — group write errors follow the code\'s remedy (#3202)
     await waitFor(() => expect(within(sidebar).queryByText('Taken')).toBeNull()); // optimistic add reverted
   });
 
+  it('a 503 STATE_RELOAD_FAILED (committed) keeps the new group and shows the server text (#1073)', async () => {
+    stubFetch(503, apiFixture('ErrorResponse', {
+      error: 'the change was saved, but this server could not load it yet',
+      code: 'STATE_RELOAD_FAILED',
+      committed: true,
+      retry_after_s: 5,
+    }));
+    await createGroup('saved-id');
+    const toast = await screen.findByText(/the change was saved/);
+    expect(toast.textContent).not.toMatch(/temporarily busy/);
+    expect(document.body.textContent).not.toMatch(/Group created successfully/);
+    const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
+    // the write is saved: the optimistic add must stay
+    expect(within(sidebar).getByText('Taken')).toBeInTheDocument();
+  });
+
   it('control: a 409 CONFLICT still says "refresh and try again"', async () => {
     stubFetch(409, apiFixture('ErrorResponse', { error: 'updated', code: 'CONFLICT' }));
     await createGroup('race-id');

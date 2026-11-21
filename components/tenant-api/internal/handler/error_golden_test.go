@@ -190,6 +190,7 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("GitManagedError", &gitops.GitManagedError{TenantID: goldenTenant, Reason: "tenant_count"})
 	add("GitDriverError", &gitops.GitDriverError{Found: []gitops.GitConfigEntry{{Scope: "global", Key: "filter.lfs.clean"}}})
 	add("PlaceholderError", &gitops.PlaceholderError{Violations: []gitops.BodyViolation{{Field: "tenants.tu-a._routing.receiver.token", Reason: "masked placeholder"}}})
+	add("stateReloadError{reload read: ErrUnavailable}", &stateReloadError{key: "_groups.yaml", err: fmt.Errorf("%w: read _groups.yaml: timeout", statestore.ErrUnavailable)})
 	add("configFileParseError", &configFileParseError{fmt.Errorf("read current _groups.yaml: %w", errors.New("yaml: line 1: did not find expected key"))})
 	add("freshBaseScopeError{Put, PreState}", &freshBaseScopeError{TenantID: goldenTenant, Put: true, PreState: true})
 	add("freshBaseScopeError{Put}", &freshBaseScopeError{TenantID: goldenTenant, Put: true})
@@ -421,6 +422,7 @@ var goldenTexts = []struct{ name, text string }{
 	{"msgBatchCommittedIncomplete", msgBatchCommittedIncomplete},
 	{"msgGeneratorTooLarge", msgGeneratorTooLarge},
 	{"msgGitDriverConfigured", msgGitDriverConfigured},
+	{"msgStateReloadFailed", msgStateReloadFailed},
 	// Texts the production code composes; the golden names the ones its
 	// corpus produces (goldenComposedTexts).
 }
@@ -752,6 +754,8 @@ func kindSample(k errkind.Kind) error {
 		return gitops.ErrValidation
 	case errkind.ConfigFileParse:
 		return &configFileParseError{errors.New("yaml")}
+	case errkind.StateReloadFailed:
+		return &stateReloadError{key: "_groups.yaml", err: errors.New("read")}
 	case errkind.FederationMintRateLimited:
 		return &token.MintRateLimitedError{Wait: time.Second}
 	case errkind.WriteOutcomeUnknown:

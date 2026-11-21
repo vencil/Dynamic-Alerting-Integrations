@@ -12,6 +12,24 @@ Modes:
     --check   exit 1 if rendered output differs from current target file (drift gate)
     --write   apply the rendered table to the target file
 
+Both modes first check that each ADR states one status in all the places it is
+written (#2664), and exit 1 without writing when they disagree:
+    - frontmatter `status:` — read by `generate_planning_index.py`
+    - the `## 狀態` line   — read here, rendered into the index tables
+    - the `.en.md` sibling's `## Status` line — read by no generator, so
+      nothing else would notice it going stale
+The two status lines are compared after normalising the name (`In Progress`
+→ `in-progress`); the emoji is not compared. The frontmatter value is not
+normalised: it must be spelled exactly as one of `generate_planning_index`'s
+STATUSES, because the planning index silently skips an entry whose status is
+not — so a missing `status:`, `status: Accepted` or a status name outside that
+set (`Extended`) is a mismatch too, as is an `.en.md` without a readable
+`## Status` line.
+
+Only the first `<emoji> **Name**` in each status block is read — the same one
+the index table shows. A block that appends a later status after the first
+(`✅ **Accepted** → ⛔ **Superseded**`) is read as the first.
+
 Why discovery-based (not hand-curated): each new ADR previously required a hub-doc edit
 that was easy to forget. ADR-018 / ADR-019 / ADR-020 all reached merge before any hub
 cross-reference was added. Pre-commit drift gate kills that class of bug.
@@ -38,7 +56,10 @@ _TOOLS_DX = Path(__file__).resolve().parent.parent / "tools" / "dx"
 sys.path.insert(0, str(_TOOLS_DX))
 sys.path.insert(0, str(_TOOLS_DX.parent))
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
-from _lib_io import write_repo_artifact  # noqa: E402  (#3107 v2)
+from _lib_io import check_repo_artifact, write_repo_artifact  # noqa: E402  (#3107 v2)
+# The frontmatter status vocabulary: the planning index's own set (#2664).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from generate_planning_index import STATUSES as PLANNING_STATUSES  # noqa: E402
 
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
 if hasattr(sys.stdout, "reconfigure"):
@@ -70,6 +91,11 @@ STATUS_BLOCK_RE = re.compile(
 STATUS_LINE_RE = re.compile(
     r"(?P<emoji>[✅🟢🟡🔵⛔❌🟠⚪])\s*\*\*(?P<name>[A-Za-z][A-Za-z\- ]*?)\*\*"
 )
+# The `.en.md` sibling's status block, read with the same STATUS_LINE_RE.
+EN_STATUS_BLOCK_RE = re.compile(
+    r"^##\s+Status\s*\n(.*?)(?=^##\s|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
 VERSION_RE = re.compile(r"v\d+\.\d+\.\d+")
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -84,6 +110,8 @@ class AdrEntry:
     rel_path: str     # relative to architecture-and-design.md, e.g. "adr/001-...-md"
     en_title: str = ""     # title from the `.en.md` sibling, "" when there is none
     en_filename: str = ""  # the `.en.md` sibling's name, "" when there is none
+    fm_status: str = ""    # frontmatter `status:` as written, "" when absent
+    en_status_name: str = ""  # the `.en.md` sibling's `## Status` name, "" when unreadable
 
 
 class AdrParseError(ValueError):
@@ -132,13 +160,17 @@ def parse_adr(path: Path) -> AdrEntry:
     v = VERSION_RE.search(status_block)
     version = v.group(0) if v else ""
 
-    en_title, en_filename = "", ""
+    en_title, en_filename, en_status_name = "", "", ""
     en_path = path.with_name(path.name[: -len(".md")] + ".en.md")
     if en_path.is_file():
-        en_fm = FRONTMATTER_RE.match(en_path.read_text(encoding="utf-8"))
+        en_text = en_path.read_text(encoding="utf-8")
+        en_fm = FRONTMATTER_RE.match(en_text)
         en_meta = (yaml.safe_load(en_fm.group(1)) or {}) if en_fm else {}
         en_title = TITLE_PREFIX_RE.sub("", (en_meta.get("title") or "").strip()).strip()
         en_filename = en_path.name
+        en_sb = EN_STATUS_BLOCK_RE.search(en_text)
+        en_sl = STATUS_LINE_RE.search(en_sb.group(1)) if en_sb else None
+        en_status_name = en_sl.group("name").strip() if en_sl else ""
 
     return AdrEntry(
         number=number,
@@ -149,7 +181,49 @@ def parse_adr(path: Path) -> AdrEntry:
         rel_path=f"adr/{path.name}",
         en_title=en_title,
         en_filename=en_filename,
+        fm_status=str(meta.get("status") or "").strip(),
+        en_status_name=en_status_name,
     )
+
+
+def _norm_status(name: str) -> str:
+    """`In Progress` / `in-progress` / `Accepted` → the frontmatter spelling."""
+    return re.sub(r"[\s_]+", "-", name.strip().lower())
+
+
+def status_mismatches(entries: List[AdrEntry]) -> List[str]:
+    """One line per ADR whose status places disagree (#2664). Empty = consistent."""
+    out = []
+    for e in entries:
+        body = _norm_status(e.status_name)
+        zh_file = e.rel_path.split("/", 1)[1]
+        if not e.fm_status:
+            out.append(
+                f"ADR-{e.number}: {zh_file} has no frontmatter `status:` "
+                f"(`## 狀態` says {e.status_name!r})"
+            )
+        elif e.fm_status not in PLANNING_STATUSES:
+            out.append(
+                f"ADR-{e.number}: {zh_file} frontmatter `status: {e.fm_status}` is not one of "
+                f"{sorted(PLANNING_STATUSES)} (the planning index drops the entry)"
+            )
+        elif e.fm_status != body:
+            out.append(
+                f"ADR-{e.number}: {zh_file} frontmatter `status: {e.fm_status}` "
+                f"!= `## 狀態` {e.status_name!r}"
+            )
+        if e.en_filename:
+            if not e.en_status_name:
+                out.append(
+                    f"ADR-{e.number}: {e.en_filename} has no `<emoji> **Status**` line "
+                    f"under `## Status` (`## 狀態` says {e.status_name!r})"
+                )
+            elif _norm_status(e.en_status_name) != body:
+                out.append(
+                    f"ADR-{e.number}: {e.en_filename} `## Status` {e.en_status_name!r} "
+                    f"!= {zh_file} `## 狀態` {e.status_name!r}"
+                )
+    return out
 
 
 def discover_adrs(adr_dir: Path = ADR_DIR) -> List[Path]:
@@ -208,6 +282,24 @@ def _display(path: Path) -> str:
         return str(path)
 
 
+def read_target_doc(target: Path, flag: "str | None") -> "str | None":
+    """The text of the doc whose sentinel block is rewritten, or ``None``
+    after one ERROR line when it cannot be read (#3980): the block lives in
+    an existing doc, so a doc that is not there is the caller's mistake,
+    named as such, not a traceback."""
+    whose = f"the value given to {flag}" if flag else "the default target doc"
+    try:
+        return target.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"ERROR: {_display(target)} does not exist; the ADR index is written between "
+              f"the sentinel lines of an existing doc — check {whose}", file=sys.stderr)
+    except (OSError, UnicodeDecodeError) as exc:
+        detail = getattr(exc, "strerror", None) or str(exc)
+        print(f"ERROR: cannot read {_display(target)}: {detail} — check {whose}",
+              file=sys.stderr)
+    return None
+
+
 @exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(
@@ -241,10 +333,30 @@ def main() -> int:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 
+    mismatches = status_mismatches(entries)
+    if mismatches:
+        for line in mismatches:
+            print(f"STATUS MISMATCH: {line}", file=sys.stderr)
+        print(
+            "  An ADR's status is written in up to three places: frontmatter `status:`, "
+            "the `## 狀態` line, and the `.en.md` `## Status` line. Change all of them "
+            "together; nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
     targets = [(args.target, "adr/", "zh")] if args.target else list(DEFAULT_TARGETS)
     stale, changed = [], []
+    # #2128: --target is named only when the operator gave it.
+    flag = "--target" if args.target else None
     for target, prefix, lang in targets:
-        current = target.read_text(encoding="utf-8")
+        # #3980: the doc is read before it is rewritten, so its preconditions
+        # are checked before the read too (a directory or FIFO would otherwise
+        # end as a traceback or block), and a doc that is not there is said so.
+        check_repo_artifact(target, flag=flag)
+        current = read_target_doc(target, flag)
+        if current is None:
+            return 2
         try:
             new = replace_sentinel_block(current, render_table(entries, prefix, lang), target)
         except ValueError as e:
@@ -253,9 +365,7 @@ def main() -> int:
         if new != current:
             stale.append(_display(target))
             if args.write:
-                # #2128: rc 2 + one line naming the doc; --target is named
-                # only when the operator gave it.
-                flag = "--target" if args.target else None
+                # #2128: rc 2 + one line naming the doc.
                 with output_write(target, flag=flag):
                     write_repo_artifact(target, new, flag=flag)
                 changed.append(_display(target))

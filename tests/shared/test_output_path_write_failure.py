@@ -1154,11 +1154,8 @@ ROWS: list[Row] = [
       reach="a tmp doc holding an empty sentinel block; the repo's own ADRs "
             "fill it, so the run rewrites the doc",
       out_name="architecture-and-design.md",
-      shapes=("target_is_dir",),
-      known_defect="generate_adr_index reads --target with no check in front of the "
-                   "read (generate_planning_index calls check_repo_artifact first): a "
-                   "target that is a directory ends as `unexpected internal error "
-                   "(IsADirectoryError)`, not the write-failure line naming --target"),
+      # #3980: like the planning row, the check runs in front of the read.
+      shapes=("target_is_dir",)),
     R("../ops/audit_rules_drift.py", "--out", "file", "operator",
       lambda c, out: ["--out", str(out)],
       reach="the repo's own rule corpus; the memory directory is absent off a "
@@ -2038,7 +2035,7 @@ _CASES = [pytest.param(row, shape, id=f"{row.id}-{shape}",
 
 #: How many rows may carry `known_defect`. Like `_NO_ROW_CEILING`: the field
 #: turns a red bad-path case into an expected one, so one more is an edit here.
-_KNOWN_DEFECT_CEILING = 1
+_KNOWN_DEFECT_CEILING = 0
 
 
 def test_a_known_defect_is_a_strict_xfail_and_nothing_else_is_marked():
