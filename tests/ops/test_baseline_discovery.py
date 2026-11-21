@@ -644,8 +644,9 @@ def _rule_ratio(record):
     text = (_REPO / "rule-packs" / "rule-pack-kubernetes.yaml").read_text(encoding="utf-8")
     body = text.split(f"- record: {record}", 1)[1]
     # 分子內有一層 rate(...)，分母沒有巢狀括號。
-    m = _re.search(r"(sum by\(namespace, pod, container\) \(\s*(?:[^()]|\([^()]*\))*?\)"
-                   r"\s*/\s*sum by\(namespace, pod, container\) \(\s*[^()]*?\))", body)
+    # da_cluster 在分子分母的分組裡（ADR-006）：同名的 Pod 在兩個叢集各算各的。
+    m = _re.search(r"(sum by\(namespace, pod, container, da_cluster\) \(\s*(?:[^()]|\([^()]*\))*?\)"
+                   r"\s*/\s*sum by\(namespace, pod, container, da_cluster\) \(\s*[^()]*?\))", body)
     assert m, record
     return " ".join(m.group(1).split()).replace('namespace=~"db-.+"', 'namespace="{tenant}"')
 
@@ -668,7 +669,7 @@ def test_connections_query_is_the_rule_packs_own_ratio():
     比值原文，只在兩個指標上加租戶篩選；外層同樣取最滿的 instance。"""
     text = (_REPO / "rule-packs" / "rule-pack-mariadb.yaml").read_text(encoding="utf-8")
     body = text.split("- record: tenant:mysql_connection_usage:percent", 1)[1]
-    m = _re.search(r"max by\(tenant\) \((.*?)\)\s*\n\s*(?:#|- )", body, _re.S)
+    m = _re.search(r"max by\(tenant, da_cluster\) \((.*?)\)\s*\n\s*(?:#|- )", body, _re.S)
     assert m, body[:300]
     rule = "".join(m.group(1).split())
     query = "".join(baseline_discovery.DEFAULT_METRICS["connections"]["query"].split())

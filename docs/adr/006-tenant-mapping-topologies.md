@@ -182,7 +182,7 @@ groups:
 2. **叢集 ID。** 在整個平台內唯一，每個叢集一個、不隨時間改變。已經照 [Federation 整合指南](../integration/federation-integration.md) 設了 `external_labels.cluster` 的部署，建議沿用同一個值；`external_labels` 本身不必更動。
 3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 這些由 threshold-exporter 送出的序列不帶 `da_cluster`。規則用 `on(tenant) group_left` 把它們套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條）。
 4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。
-5. **告警帶 `da_cluster`。** 帶這個 label 的告警，Alertmanager 的分組與 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）都把它納入，兩個叢集的同名告警互不壓制。不帶的告警（例如「租戶沒設定閾值」這類只跟設定有關的）維持現在的分組與去重。
+5. **告警帶 `da_cluster`。** 帶這個 label 的告警，Alertmanager 的分組與 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）都把它納入，兩個叢集的同名告警互不壓制。不帶的告警（例如「租戶沒設定閾值」這類只跟設定有關的）維持現在的分組與去重。帶不帶看的是告警讀了哪些序列，不是告警的主題：只讀 threshold-exporter 序列的不帶；讀到租戶 exporter 序列的就帶——「有 exporter 在跑、設定卻沒宣告」這種告警也是，它會指出是哪個叢集的 exporter。
 6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。
 7. **缺 `da_cluster` 的抓取設定在部署前被擋下。** 檢查抓取設定的 lint（今天檢查「租戶 exporter 的 job 必須寫出 `tenant`」的那一支）會加上這一條，不讓部署靜默退回「不分叢集」。
 

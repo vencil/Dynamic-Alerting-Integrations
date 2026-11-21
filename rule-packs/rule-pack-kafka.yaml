@@ -47,7 +47,7 @@ groups:
     rules:
       # Consumer lag: maximum lag across all consumer groups
       - record: tenant:kafka_consumer_lag:max
-        expr: max by(tenant) (kafka_consumergroup_lag_sum)
+        expr: max by(tenant, da_cluster) (kafka_consumergroup_lag_sum)
 
       # Under-replicated partitions: number of partitions without all in-sync replicas.
       # The source metric is a per-partition 0/1 flag ("1 if Topic/Partition is
@@ -66,13 +66,13 @@ groups:
       # partition fails it still emits 0 for that partition, so this undercounts.
       - record: tenant:kafka_under_replicated_partitions:sum
         expr: |
-          sum by(tenant) (
-            max by(tenant, topic, partition) (kafka_topic_partition_under_replicated_partition)
+          sum by(tenant, da_cluster) (
+            max by(tenant, topic, partition, da_cluster) (kafka_topic_partition_under_replicated_partition)
           )
 
       # Total broker count in cluster
       - record: tenant:kafka_broker_count:max
-        expr: max by(tenant) (kafka_brokers)
+        expr: max by(tenant, da_cluster) (kafka_brokers)
 
   # -------------------------------------------------------
   # Threshold normalization: Kafka

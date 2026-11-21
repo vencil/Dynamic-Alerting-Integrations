@@ -88,6 +88,8 @@ groups:
 
 **關鍵：** 使用 `max by(tenant)` 而非 `sum`，防止 HA 雙倍計算（詳見第 4.3 節）
 
+出貨的規則在這些 `by(tenant)` 裡另外保留叢集 label `da_cluster`（`by(tenant, da_cluster)`），同一個租戶跑在多個叢集時逐叢集計算；閾值這一層仍是 `by(tenant)`。上面的範例為了易讀省略了它，契約見 [ADR-006](../adr/006-tenant-mapping-topologies.md)。
+
 #### Part 3：警報規則 (Alert Rules)
 ```yaml
 groups:

@@ -14,11 +14,11 @@ metadata:
     rule-pack: nginx
 data:
   nginx-recording.yml: "groups:\n- name: nginx-normalization\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:nginx_connections_active:max\n    expr: \"max by(tenant) (\\\
-    n  nginx_connections_active\\n)\\n\"\n  - record: tenant:nginx_requests:rate5m\n\
-    \    expr: \"sum by(tenant) (\\n  rate(nginx_http_requests_total[5m])\\n)\\n\"\
-    \n  - record: tenant:nginx_connections_waiting:max\n    expr: \"max by(tenant)\
-    \ (\\n  nginx_connections_waiting\\n)\\n\"\n- name: nginx-threshold-normalization\n\
+    \  - record: tenant:nginx_connections_active:max\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  nginx_connections_active\\n)\\n\"\n  - record: tenant:nginx_requests:rate5m\n\
+    \    expr: \"sum by(tenant, da_cluster) (\\n  rate(nginx_http_requests_total[5m])\\\
+    n)\\n\"\n  - record: tenant:nginx_connections_waiting:max\n    expr: \"max by(tenant,\
+    \ da_cluster) (\\n  nginx_connections_waiting\\n)\\n\"\n- name: nginx-threshold-normalization\n\
     \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:nginx_connections\n\
     \    expr: max by(tenant) (user_threshold{component=\"nginx\", metric=\"connections\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:nginx_connections_critical\n\

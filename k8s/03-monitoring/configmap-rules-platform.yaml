@@ -48,24 +48,26 @@ data:
     \        endpoint and a rejected credential.\n\n        '\n      runbook_url:\
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md\n\
     \      summary: Alertmanager {{ $labels.integration }} notifications are failing\n\
-    \  - alert: CronJobLastRunFailed\n    expr: \"(\\n  max by (owner_name, namespace)\
-    \ (\\n    (\\n      max by (job_name, namespace) (\\n        kube_job_status_start_time{namespace=\\\
-    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace)\\n        max\
-    \ by (job_name, namespace) (\\n          kube_job_failed{namespace=\\\"monitoring\\\
-    \", condition=\\\"true\\\"}\\n        ) == 1\\n    )\\n    * on (job_name, namespace)\
-    \ group_left (owner_name)\\n      max by (job_name, namespace, owner_name) (\\\
-    n        kube_job_owner{namespace=\\\"monitoring\\\", owner_kind=\\\"CronJob\\\
-    \"}\\n      )\\n  )\\n  ==\\n  max by (owner_name, namespace) (\\n    (\\n   \
-    \   max by (job_name, namespace) (\\n        kube_job_status_start_time{namespace=\\\
-    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace)\\n        (\\\
-    n          max by (job_name, namespace) (\\n            kube_job_failed{namespace=\\\
-    \"monitoring\\\", condition=\\\"true\\\"}\\n          )\\n          or\\n    \
-    \      max by (job_name, namespace) (\\n            kube_job_complete{namespace=\\\
-    \"monitoring\\\", condition=\\\"true\\\"}\\n          )\\n        ) == 1\\n  \
-    \  )\\n    * on (job_name, namespace) group_left (owner_name)\\n      max by (job_name,\
-    \ namespace, owner_name) (\\n        kube_job_owner{namespace=\\\"monitoring\\\
-    \", owner_kind=\\\"CronJob\\\"}\\n      )\\n  )\\n)\\nunless on (owner_name, namespace)\\\
-    n  label_replace(\\n    max by (cronjob, namespace) (\\n      kube_cronjob_spec_suspend{namespace=\\\
+    \  - alert: CronJobLastRunFailed\n    expr: \"(\\n  max by (owner_name, namespace,\
+    \ da_cluster) (\\n    (\\n      max by (job_name, namespace, da_cluster) (\\n\
+    \        kube_job_status_start_time{namespace=\\\"monitoring\\\"}\\n      )\\\
+    n      and on (job_name, namespace, da_cluster)\\n        max by (job_name, namespace,\
+    \ da_cluster) (\\n          kube_job_failed{namespace=\\\"monitoring\\\", condition=\\\
+    \"true\\\"}\\n        ) == 1\\n    )\\n    * on (job_name, namespace, da_cluster)\
+    \ group_left (owner_name)\\n      max by (job_name, namespace, owner_name, da_cluster)\
+    \ (\\n        kube_job_owner{namespace=\\\"monitoring\\\", owner_kind=\\\"CronJob\\\
+    \"}\\n      )\\n  )\\n  ==\\n  max by (owner_name, namespace, da_cluster) (\\\
+    n    (\\n      max by (job_name, namespace, da_cluster) (\\n        kube_job_status_start_time{namespace=\\\
+    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace, da_cluster)\\\
+    n        (\\n          max by (job_name, namespace, da_cluster) (\\n         \
+    \   kube_job_failed{namespace=\\\"monitoring\\\", condition=\\\"true\\\"}\\n \
+    \         )\\n          or\\n          max by (job_name, namespace, da_cluster)\
+    \ (\\n            kube_job_complete{namespace=\\\"monitoring\\\", condition=\\\
+    \"true\\\"}\\n          )\\n        ) == 1\\n    )\\n    * on (job_name, namespace,\
+    \ da_cluster) group_left (owner_name)\\n      max by (job_name, namespace, owner_name,\
+    \ da_cluster) (\\n        kube_job_owner{namespace=\\\"monitoring\\\", owner_kind=\\\
+    \"CronJob\\\"}\\n      )\\n  )\\n)\\nunless on (owner_name, namespace, da_cluster)\\\
+    n  label_replace(\\n    max by (cronjob, namespace, da_cluster) (\\n      kube_cronjob_spec_suspend{namespace=\\\
     \"monitoring\\\"}\\n    ) == 1,\\n    \\\"owner_name\\\", \\\"$1\\\", \\\"cronjob\\\
     \", \\\"(.*)\\\"\\n  )\\n\"\n    for: 15m\n    labels:\n      alert_source: platform\n\
     \      severity: warning\n    annotations:\n      description: 'The most recent\
@@ -470,9 +472,9 @@ data:
     \    the Prometheus pod''s sidecar watches the Rule Packs, the\n\n        Alertmanager\
     \ pod''s watches the routing config.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md\n\
     \      summary: config-reloader sidecar in {{ $labels.pod }} is restarting frequently\n\
-    \  - alert: ConfigReloaderNotStarting\n    expr: \"max by (namespace, pod) (\\\
-    n  max_over_time(\\n    kube_pod_container_status_waiting_reason{container=\\\"\
-    config-reloader\\\", namespace=\\\"monitoring\\\", reason=~\\\"ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError|CrashLoopBackOff\\\
+    \  - alert: ConfigReloaderNotStarting\n    expr: \"max by (namespace, pod, da_cluster)\
+    \ (\\n  max_over_time(\\n    kube_pod_container_status_waiting_reason{container=\\\
+    \"config-reloader\\\", namespace=\\\"monitoring\\\", reason=~\\\"ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError|CrashLoopBackOff\\\
     \"}[5m]\\n  )\\n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n\
     \      severity: critical\n    annotations:\n      description: 'The config-reloader\
     \ container is stuck waiting (image pull failure,\n\n        bad image reference,\
@@ -504,27 +506,28 @@ data:
     \ §5.6. Dashboard: tenant_api_sse_clients.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
     \      summary: tenant-api read load sustained — revisit read/write CQRS split\
     \ (ADR-023 A4)\n  - alert: TenantApiSingleWriterBreach\n    expr: \"max by (namespace,\
-    \ deployment) (\\n  kube_deployment_spec_replicas{deployment=\\\"tenant-api\\\"\
-    }\\n) > 1\\nor\\nmax by (namespace, deployment) (\\n  kube_deployment_status_replicas{deployment=\\\
-    \"tenant-api\\\"}\\n) > 1\\n\"\n    for: 2m\n    labels:\n      alert_source:\
-    \ platform\n      severity: critical\n    annotations:\n      description: 'The\
-    \ tenant-api Deployment has more than one replica ({{ $value }}) by\n\n      \
-    \  declared spec OR actually-running status. The write plane is a SINGLE\n\n \
-    \       WRITER by design (ADR-023): a per-process write lock + in-memory PR\n\n\
-    \        tracker that do NOT coordinate across pods, so two replicas push to the\n\
-    \n        same git working tree → tree corruption + silent data loss. The static\n\
-    \n        guards (Helm `fail` + check_single_writer_invariant.py lint, `strategy:\n\
-    \n        Recreate`) bind only deploy-time config; THIS is a runtime breach —\
-    \ a\n\n        `kubectl scale`, an HPA, a GitOps controller reconciling a patched\n\
-    \n        `replicas`, or a node-eviction replacement racing a stuck-Terminating\n\
-    \n        pod. ACTION NOW: scale back to one\n\n        (`kubectl -n {{ $labels.namespace\
-    \ }} scale deploy/tenant-api --replicas=1`) and find\n\n        what set it —\
-    \ check `kubectl get events`, the GitOps app''s sync history\n\n        / an `ignoreDifferences`\
-    \ on replicas, and any HPA targeting tenant-api.\n\n        This alert is ALSO\
-    \ the codified re-eval trigger for the deferred K8s\n\n        Lease (ADR-023\
-    \ Deferred A3 / #787): if multi-writer is now a real\n\n        operational need,\
-    \ build leader-election — do NOT raise replicaCount.\n\n        Details: docs/api/tenant-api-hardening.md\
-    \ §5.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
+    \ deployment, da_cluster) (\\n  kube_deployment_spec_replicas{deployment=\\\"\
+    tenant-api\\\"}\\n) > 1\\nor\\nmax by (namespace, deployment, da_cluster) (\\\
+    n  kube_deployment_status_replicas{deployment=\\\"tenant-api\\\"}\\n) > 1\\n\"\
+    \n    for: 2m\n    labels:\n      alert_source: platform\n      severity: critical\n\
+    \    annotations:\n      description: 'The tenant-api Deployment has more than\
+    \ one replica ({{ $value }}) by\n\n        declared spec OR actually-running status.\
+    \ The write plane is a SINGLE\n\n        WRITER by design (ADR-023): a per-process\
+    \ write lock + in-memory PR\n\n        tracker that do NOT coordinate across pods,\
+    \ so two replicas push to the\n\n        same git working tree → tree corruption\
+    \ + silent data loss. The static\n\n        guards (Helm `fail` + check_single_writer_invariant.py\
+    \ lint, `strategy:\n\n        Recreate`) bind only deploy-time config; THIS is\
+    \ a runtime breach — a\n\n        `kubectl scale`, an HPA, a GitOps controller\
+    \ reconciling a patched\n\n        `replicas`, or a node-eviction replacement\
+    \ racing a stuck-Terminating\n\n        pod. ACTION NOW: scale back to one\n\n\
+    \        (`kubectl -n {{ $labels.namespace }} scale deploy/tenant-api --replicas=1`)\
+    \ and find\n\n        what set it — check `kubectl get events`, the GitOps app''s\
+    \ sync history\n\n        / an `ignoreDifferences` on replicas, and any HPA targeting\
+    \ tenant-api.\n\n        This alert is ALSO the codified re-eval trigger for the\
+    \ deferred K8s\n\n        Lease (ADR-023 Deferred A3 / #787): if multi-writer\
+    \ is now a real\n\n        operational need, build leader-election — do NOT raise\
+    \ replicaCount.\n\n        Details: docs/api/tenant-api-hardening.md §5.7.\n\n\
+    \        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
     \      summary: tenant-api running >1 replica — single-writer invariant (ADR-023)\
     \ breached at runtime\n  - alert: FederationRevocationTamperSuspected\n    expr:\
     \ max_over_time(federation_revocation_tamper_suspected[1h]) > 0\n    for: 5m\n\
@@ -892,9 +895,9 @@ data:
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector projection gate could not read the account registry at\
     \ boot (mode={{ $labels.mode }}) — tenant routing silently degraded\n  - alert:\
-    \ VectorProjectionGateStuck\n    expr: \"max by (namespace) (\\n  max_over_time(\\\
-    n    kube_pod_init_container_status_waiting_reason{container=\\\"projection-gate\\\
-    \", reason=~\\\"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError\\\
+    \ VectorProjectionGateStuck\n    expr: \"max by (namespace, da_cluster) (\\n \
+    \ max_over_time(\\n    kube_pod_init_container_status_waiting_reason{container=\\\
+    \"projection-gate\\\", reason=~\\\"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError\\\
     \"}[5m]\\n  )\\n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n\
     \      severity: critical\n    annotations:\n      description: 'The projection-gate\
     \ init-container is stuck waiting (crash loop,\n\n        image-pull failure,\

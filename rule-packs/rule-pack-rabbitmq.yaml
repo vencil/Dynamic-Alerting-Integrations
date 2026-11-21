@@ -65,15 +65,15 @@ groups:
     rules:
       # Queue depth: maximum messages ready for delivery across all queues
       - record: tenant:rabbitmq_queue_messages:max
-        expr: max by(tenant) (rabbitmq_queue_messages_ready)
+        expr: max by(tenant, da_cluster) (rabbitmq_queue_messages_ready)
 
       # Consumer count: active consumers across all queues
       - record: tenant:rabbitmq_consumers:max
-        expr: max by(tenant) (rabbitmq_queue_consumers)
+        expr: max by(tenant, da_cluster) (rabbitmq_queue_consumers)
 
       # Total connections to the broker
       - record: tenant:rabbitmq_connections:max
-        expr: max by(tenant) (rabbitmq_connections)
+        expr: max by(tenant, da_cluster) (rabbitmq_connections)
 
       # Memory used as a percentage of the memory high watermark, PER NODE,
       # fullest node per tenant (#3929). 100 % is RabbitMQ's memory alarm:
@@ -94,7 +94,7 @@ groups:
       #     from the plugin behind the kbudde one.
       - record: tenant:rabbitmq_node_mem_percent:ratio
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             label_replace(
               100 * rabbitmq_node_mem_used / (rabbitmq_node_mem_limit > 0),
               "mem_source", "exporter", "", "")
@@ -126,7 +126,7 @@ groups:
       #     cannot hide a 1 from the other.
       - record: tenant:rabbitmq_memory_alarm:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             label_replace(rabbitmq_node_mem_alarm, "alarm_source", "exporter", "", "")
             or
             label_replace(rabbitmq_alarms_memory_used_watermark, "alarm_source", "plugin", "", "")
@@ -134,7 +134,7 @@ groups:
 
       - record: tenant:rabbitmq_disk_alarm:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             label_replace(rabbitmq_node_disk_free_alarm, "alarm_source", "exporter", "", "")
             or
             label_replace(rabbitmq_alarms_free_disk_space_watermark, "alarm_source", "plugin", "", "")
@@ -142,7 +142,7 @@ groups:
 
       # Unacknowledged messages (typically indicates consumer slowness)
       - record: tenant:rabbitmq_unacked_messages:max
-        expr: max by(tenant) (rabbitmq_queue_messages_unacked)
+        expr: max by(tenant, da_cluster) (rabbitmq_queue_messages_unacked)
 
   # -------------------------------------------------------
   # Threshold normalization: RabbitMQ
