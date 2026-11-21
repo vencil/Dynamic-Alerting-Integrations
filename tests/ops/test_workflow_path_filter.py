@@ -1482,14 +1482,14 @@ def test_the_real_ledger_holds_both_kinds_and_the_ruled_members() -> None:
     assert wpf.ADVISORY_KINDS == (wpf.DIFF_DRIVEN, wpf.AWAITS_READ_ASSERTION)
     by_kind = {kind: sorted(n for n, (k, _w) in wpf.ADVISORY_PATH_GATES.items() if k == kind)
                for kind in wpf.ADVISORY_KINDS}
-    # component-docker-build.yaml left this list when it was wired (#3756
-    # stage 3, second of four).
-    assert by_kind[wpf.AWAITS_READ_ASSERTION] == ["backtest.yaml", "forge-e2e-github.yaml"]
+    # component-docker-build.yaml and backtest.yaml left this list when they
+    # were wired (#3756 stage 3, second and third of four).
+    assert by_kind[wpf.AWAITS_READ_ASSERTION] == ["forge-e2e-github.yaml"]
     assert by_kind[wpf.DIFF_DRIVEN] == [
         "bench-gate-pr.yaml", "bench-probe-write-latency.yaml",
         "bench-workload-effect.yaml", "bench-workload-record.yaml",
         "config-diff-advisory.yml", "guard-defaults-impact.yml"]
-    assert wpf.READ_ASSERTION_ORDER == ("backtest.yaml", "forge-e2e-github.yaml")
+    assert wpf.READ_ASSERTION_ORDER == ("forge-e2e-github.yaml",)
 
 
 def _all_real_patterns() -> list[str]:

@@ -2889,10 +2889,64 @@ class TestBacktestWorkflow:
         found."; without a reachable Prometheus the skip comes first."""
         with open(_WORKFLOW, encoding="utf-8") as f:
             text = f.read()
-        assert "Not everything the result" in text
+        # #3756: the caveat that stood here ("Not everything the result depends
+        # on is in the list") is gone with what it described — see
+        # test_it_runs_when_the_tool_or_the_workflow_changes.
+        assert "Not everything the result" not in text
         assert bt._NOT_RUN_WHY[("skipped", "prometheus_unavailable")].startswith(
             "Prometheus is unavailable")
         assert '"Prometheus is unavailable"' in text
+
+    @pytest.mark.parametrize("report, comment, posted", [
+        # skipped for want of a Prometheus: the summary only
+        ({"status": "skipped", "reason": "prometheus_unavailable"}, "not run", False),
+        # every other outcome is commented on — a run, a refusal, another skip
+        ({"status": "ok", "risk_summary": {"HIGH": 1}}, "ran", True),
+        ({"status": "caller_error", "reason": "prometheus_unavailable"}, "refused", True),
+        ({"status": "skipped", "reason": "something_else"}, "skipped", True),
+        ({"status": "no_changes", "reason": "no_threshold_changes_detected"}, "none", True),
+        # no JSON report at all (the base has no conf.d/), or one that is not JSON
+        (None, "no base", True),
+        ("{not json", "broken", True),
+        (["skipped", "prometheus_unavailable"], "a list", True),
+        # nothing to say
+        ({"status": "skipped", "reason": "prometheus_unavailable"}, "", False),
+    ])
+    def test_a_backtest_skipped_for_want_of_prometheus_is_not_a_pr_comment(
+            self, tmp_path, report, comment, posted):
+        """#3756: with the path filter being what the job reads, about half
+        of all PRs start this workflow; where no Prometheus is reachable each
+        got a comment that says nothing about the PR. The result still goes
+        to the job summary, whatever it is."""
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("needs bash")
+        steps = _workflow()["jobs"]["backtest"]["steps"]
+        check = next(st for st in steps if st.get("id") == "report")
+        post = next(st for st in steps if str(st.get("uses", "")).startswith("marocchino/"))
+        assert post["if"] == "steps.report.outputs.has_comment == 'true'"
+        out, summary = tmp_path / "gh-output", tmp_path / "gh-summary"
+        md, js = tmp_path / "comment.md", tmp_path / "report.json"
+        if comment:
+            md.write_text(comment + "\n", encoding="utf-8")
+        if report is not None:
+            js.write_text(report if isinstance(report, str) else json.dumps(report),
+                          encoding="utf-8")
+        # The two files, and only them, by the names the run step writes.
+        run = next(st for st in steps if st.get("id") == "backtest")["run"]
+        assert "--markdown-output /tmp/backtest-comment.md" in run
+        assert "--output /tmp/backtest-report.json" in run
+        script = check["run"]
+        assert script.count("/tmp/") == 3 and script.count("/tmp/backtest-report.json") == 1
+        script = script.replace("/tmp/backtest-comment.md", str(md)).replace(
+            "/tmp/backtest-report.json", str(js))
+        subprocess.run([bash, "-e", "-c", script], cwd=str(tmp_path), timeout=60, check=True,
+                       env={**os.environ, "GITHUB_OUTPUT": str(out),
+                            "GITHUB_STEP_SUMMARY": str(summary)})
+        got = out.read_text(encoding="utf-8") if out.exists() else ""
+        assert got == ("has_comment=true\n" if posted else "")
+        said = summary.read_text(encoding="utf-8") if summary.exists() else ""
+        assert said == (comment + "\n" if comment else "")
 
     def test_it_runs_when_the_tool_or_the_workflow_changes(self):
         """73c1e2da: `paths` listed only conf.d/**, so a PR changing how the
@@ -2903,7 +2957,13 @@ class TestBacktestWorkflow:
         for needed in ("components/threshold-exporter/config/conf.d/**",
                        "scripts/tools/ops/backtest_threshold.py",
                        "scripts/tools/ops/_observed_map_lib.py",
-                       ".github/workflows/backtest.yaml"):
+                       ".github/workflows/backtest.yaml",
+                       # #3756: what the old comment said was NOT in the list —
+                       # the da-guard Go sources and the other shared `_lib_*`
+                       # modules — now is, from the job's measured reads.
+                       "components/threshold-exporter/app/cmd/da-guard/*.go",
+                       "components/threshold-exporter/app/pkg/config/*.go",
+                       "scripts/tools/_lib_io.py"):
             assert needed in paths, (needed, paths)
 
     # A layout of the base's conf.d/: a file `name`, a directory `name/`, a

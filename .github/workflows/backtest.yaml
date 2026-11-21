@@ -5,19 +5,95 @@ on:
       - 'components/threshold-exporter/config/conf.d/**'
       # #3111: the tool, the modules that decide what it compares, and this
       # workflow, so a change to how the backtest runs is run here too (as
-      # config-diff-advisory.yml lists its own). ⚠️ Not everything the result
-      # depends on is in the list — the da-guard Go sources and the other
-      # shared `_lib_*` modules are not — so a change there alone does not run
-      # this; the next conf.d PR does. A PR that changes none of conf.d/ still
-      # gets a comment: without a reachable Prometheus (no PROMETHEUS_URL
-      # secret) it says "Prometheus is unavailable" — that check comes before
-      # the "no threshold changes found." one — and with one, the latter.
+      # config-diff-advisory.yml lists its own). A PR that changes none of
+      # conf.d/ still gets a result: without a reachable Prometheus (no
+      # PROMETHEUS_URL secret) it is "Prometheus is unavailable" — that check
+      # comes before the "no threshold changes found." one — and goes to the
+      # job summary only (see `Check for report`); with one, the latter, as
+      # a PR comment.
       - 'scripts/tools/ops/backtest_threshold.py'
       - 'scripts/tools/ops/_observed_map_lib.py'
       - 'scripts/tools/ops/metric_observed_map.yaml'
       - 'scripts/tools/_lib_tenant_values.py'
       - 'scripts/tools/_lib_validation.py'
       - '.github/workflows/backtest.yaml'
+      # #3756: the rest of what the job reads — the da-guard Go sources it
+      # builds, the shared `_lib_*` modules the tool imports, the Makefile —
+      # from what the job was measured to read by access time
+      # (.github/path-traces/backtest.yaml.json), less what a pattern above
+      # already covers. The job's assert step fails, naming the file, when it
+      # reads something this list does not cover. Do not edit between the
+      # markers.
+      # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/path-traces/backtest.yaml.json"
+      - ".python-version"
+      - "Makefile"
+      - "components/threshold-exporter/app/cmd/da-guard/*.go"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/compile-custom-alerts.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/conf.d/_defaults.yaml"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/conf.d/team/t1.yaml"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/default.stderr"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/default.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/effective.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/key-refs.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/key-spellings.input"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/key-spellings.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/key-verdict.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/parse-tree.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/served-values.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/severity-dedup.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/threshold-values.input"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/threshold-values.want"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/write.input"
+      - "components/threshold-exporter/app/cmd/da-guard/selfcheck/write.want"
+      - "components/threshold-exporter/app/go.mod"
+      - "components/threshold-exporter/app/go.sum"
+      - "components/threshold-exporter/app/internal/confdlayout/*.go"
+      - "components/threshold-exporter/app/internal/guard/*.go"
+      - "components/threshold-exporter/app/internal/guard/findingkind/*.go"
+      - "components/threshold-exporter/app/internal/scrape/*.go"
+      - "components/threshold-exporter/app/internal/thresholdmetric/*.go"
+      - "components/threshold-exporter/app/pkg/confdname/*.go"
+      - "components/threshold-exporter/app/pkg/confedit/*.go"
+      - "components/threshold-exporter/app/pkg/config/*.go"
+      - "components/threshold-exporter/app/pkg/config/recipe_contract.json"
+      - "components/threshold-exporter/app/pkg/keyverdict/*.go"
+      - "components/threshold-exporter/app/pkg/parsetree/*.go"
+      - "components/threshold-exporter/app/pkg/receiverspec/*.go"
+      - "components/threshold-exporter/app/pkg/tenantid/*.go"
+      - "components/threshold-exporter/app/pkg/tenantid/tenant_id.json"
+      - "components/threshold-exporter/app/third_party/yaml.v3/*.go"
+      - "components/threshold-exporter/app/third_party/yaml.v3/go.mod"
+      - "helm/threshold-exporter/Chart.yaml"
+      - "requirements/ci-constraints.txt"
+      - "scripts/ops/atime_trace.py"
+      - "scripts/ops/go_build.sh"
+      - "scripts/ops/paths_filter_glob.py"
+      - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_atomic_write.py"
+      - "scripts/tools/_lib_compat.py"
+      - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/_lib_confedit.py"
+      - "scripts/tools/_lib_constants.py"
+      - "scripts/tools/_lib_consumer_read.py"
+      - "scripts/tools/_lib_exitcodes.py"
+      - "scripts/tools/_lib_godispatch.py"
+      - "scripts/tools/_lib_input.py"
+      - "scripts/tools/_lib_io.py"
+      - "scripts/tools/_lib_label.py"
+      - "scripts/tools/_lib_parse_cache.py"
+      - "scripts/tools/_lib_parse_tree.py"
+      - "scripts/tools/_lib_paths.py"
+      - "scripts/tools/_lib_prometheus.py"
+      - "scripts/tools/_lib_python.py"
+      - "scripts/tools/_lib_tool_fault.py"
+      - "scripts/tools/_lib_write_check.py"
+      - "scripts/tools/_lib_yaml_strict.py"
+      - "scripts/tools/ops/_registry_lib.py"
+      - "scripts/tools/ops/_rule_packs_generated.py"
+      - "scripts/tools/ops/guard_dispatch.py"
+      - "scripts/tools/ops/scaffold_tenant.py"
+      # END GENERATED path-trace
 
 permissions:
   contents: read
@@ -26,11 +102,18 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-24.04
-    continue-on-error: true
+    # #3756: no job-level `continue-on-error` — it would make the assert
+    # step's failure not count. The two steps whose failure does not fail the
+    # job say so themselves: the backtest and the PR comment.
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      # BEGIN GENERATED path-trace-env job=backtest
+      - name: Set access times back, to measure what this job reads (#3756)
+        run: python3 -I scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime-trace.json" --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"
+      # END GENERATED path-trace-env
 
       # #3111: the tool no longer checks a base out itself; the PR base is
       # checked out here, into its own path, and compared as a second tree.
@@ -111,9 +194,26 @@ jobs:
         id: report
         # hashFiles() 只能讀 GITHUB_WORKSPACE 內的檔案（/tmp 恆回空字串），
         # 改用 step output gate：本步寫 has_comment，下一步依它判斷。
+        #
+        # #3756 (owner ruling 2026-11-21): every result goes to the job
+        # summary; the PR comment is for a backtest that ran or was refused.
+        # One skipped because no Prometheus is reachable says nothing about
+        # the PR, and since the path filter became what the job reads, about
+        # half of all PRs start this workflow. Read from the JSON report's
+        # `status`/`reason`, not from the comment's wording; a report that is
+        # absent or unreadable (the base has no conf.d/) is not that case,
+        # so the comment is posted.
         run: |
           if [ -s /tmp/backtest-comment.md ]; then
-            echo "has_comment=true" >> "$GITHUB_OUTPUT"
+            cat /tmp/backtest-comment.md >> "$GITHUB_STEP_SUMMARY"
+            if python3 -c 'import json, sys
+          d = json.load(open(sys.argv[1], encoding="utf-8"))
+          sys.exit(0 if (d.get("status"), d.get("reason")) == ("skipped", "prometheus_unavailable") else 1)
+          ' /tmp/backtest-report.json 2>/dev/null; then
+              echo "::notice::backtest not run: Prometheus is unavailable — result in the job summary, no PR comment"
+            else
+              echo "has_comment=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Comment PR
@@ -122,3 +222,26 @@ jobs:
         with:
           path: /tmp/backtest-comment.md
           header: threshold-backtest
+        # A PR from a fork has no token that may comment; the job was
+        # `continue-on-error` as a whole before #3756.
+        continue-on-error: true
+
+      # #3756: every tracked file this job read must be in
+      # `on.pull_request.paths` above. The base checkout (.backtest-base) is
+      # not this commit's tree and is not measured. Only artifact uploads
+      # may follow (`generate --check` refuses anything else). Generated.
+      # BEGIN GENERATED path-trace-assert job=backtest
+      - name: Path filter covers everything this job read (#3756)
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && python3 scripts/ops/workflow_path_filter.py assert --workflow backtest.yaml --job backtest --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json" --leg "${{ strategy.job-index }}/${{ strategy.job-total }}"
+      # END GENERATED path-trace-assert
+
+      # What `assert --out` wrote: on a red run, `workflow_path_filter.py
+      # merge` this file into .github/path-traces/backtest.yaml.json.
+      - name: Upload the trace
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-backtest-backtest
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn
