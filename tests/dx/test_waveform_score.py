@@ -342,7 +342,74 @@ def test_fanout_ratio_reported():
     assert out["verdict"] == "PASS"                     # 不 gate
 
 
-# ── CLI 契約 + poison（免 VM） ─────────────────────────────────────────
+# ── 按事件計（故障事件 × 告警類別）揭露比率（ADR-030 §7；只揭露不 gate） ──
+
+def _ep(s):
+    return (s["episode_class_caught"], s["episode_class_pairs"],
+            s["episode_class_catch_rate"])
+
+
+def test_episode_rate_collapses_variants_and_fanout_into_one_event():
+    """一個故障 5 個必叫 case（含 fan-out）同一類別接住 → 門檻 5/5、按事件計 1/1。"""
+    variants = [("base", None), ("noise", None), ("fanout", "f01"),
+                ("fanout", "f02"), ("fanout", "f03")]
+    recs = [_record(variant=v, series=s, alerts=[_alert(fire=1000)])
+            for v, s in variants]
+    metas = [_meta(variant=v, series=s) for v, s in variants]
+    out = ws.score([("r.json", _report(recs, metas))], _TOLS)
+    assert out["summary"]["scored_denominator"] == 5
+    assert _ep(out["summary"]) == (1, 1, 1.0)
+
+
+def test_episode_rate_is_looser_than_gate_one_variant_missed():
+    """漏一個 fan-out series：門檻按 case 計 → FAIL；按事件計仍 1/1（只揭露）。"""
+    recs = [_record(variant="base", alerts=[_alert(fire=1000)]),
+            _record(variant="fanout", series="f01", alerts=[])]
+    metas = [_meta(variant="base"), _meta(variant="fanout", series="f01")]
+    out = ws.score([("r.json", _report(recs, metas))], _TOLS)
+    assert out["verdict"] == "FAIL" and out["summary"]["false_negatives"] == 1
+    assert _ep(out["summary"]) == (1, 1, 1.0)
+
+
+def test_episode_rate_counts_each_alert_class_separately():
+    """同一事件兩個類別：A 窗內、B 只在天花板之後開火 → 2 個配對接住 1 個。"""
+    rec = _record(alerts=[_alert(name="A", fire=1000), _alert(name="B", fire=9871)])
+    out = _score_one(rec, _meta())
+    assert _ep(out["summary"]) == (1, 2, 0.5)
+
+
+def test_episode_rate_no_attributed_alert_is_one_uncaught_pair():
+    """事件 0 接住、事件 1 完全沒開火 → 2 個事件、各 1 配對，1/2。"""
+    recs = [_record(sig=0, alerts=[_alert(fire=1000)]), _record(sig=1, alerts=[])]
+    out = ws.score([("r.json", _report(recs, [_meta(sig=0), _meta(sig=1)]))], _TOLS)
+    assert _ep(out["summary"]) == (1, 2, 0.5)
+
+
+def test_episode_rate_excludes_indeterminate_and_carve_out():
+    tol = dict(_TOLS)
+    tol["carve_outs"] = {"cc": {"fault_class": "cc", "reason": "x"}}
+    rep = _report([_record(sig=0, alerts=[_alert(fire=1000)]),
+                   _record(sig=1, fault_class="cc", alerts=[])],
+                  [_meta(sig=0), _meta(sig=1)])
+    rep2 = _report([_record(sig=2, alerts=[])], [_meta(sig=2)],
+                   unattributed=[{"alertname": "Agg", "labels": {}}])
+    out = ws.score([("a.json", rep), ("b.json", rep2)], tol)
+    assert out["summary"]["indeterminate"] == 1 and out["summary"]["carved_out"] == 1
+    assert _ep(out["summary"]) == (1, 1, 1.0)
+
+
+def test_episode_rate_survives_redaction_and_prints(tmp_path):
+    full = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
+    assert _ep(ws.redact_report(full)["summary"]) == (1, 1, 1.0)
+    p = _write_report(tmp_path, _report([_record(alerts=[_alert(fire=1000)])],
+                                        [_meta()]))
+    for extra in ((), ("--redact",)):
+        r = _run_score(str(p), "--tolerances", str(_TOL), *extra)
+        assert r.returncode == 0, r.stderr
+        assert "按事件計（故障事件 × 告警類別）: 1/1 = 100.0%" in r.stdout
+
+
+# ── CLI 契約 + poison（免 VM）─────────────────────────────────────────
 
 def _write_report(tmp_path, report, name="rep.json"):
     p = tmp_path / name
