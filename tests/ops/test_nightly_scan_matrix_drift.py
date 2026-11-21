@@ -4073,8 +4073,8 @@ def _label_create_steps_with_continue_on_error() -> list[str]:
 
     Checks BOTH levels and treats any enabled value as fail-open, not just a
     literal step-level `True`:
-      * `continue-on-error` is valid on a JOB too (backtest.yaml and
-        self-review-pass2.yaml both use it that way), and a job-level one
+      * `continue-on-error` is valid on a JOB too (self-review-pass2.yaml and
+        bench-record.yaml both use it that way), and a job-level one
         swallows every step under it.
       * a templated `${{ ... }}` value yaml-loads as a STRING, so an `is True`
         comparison silently passes the very spelling used to make it conditional.

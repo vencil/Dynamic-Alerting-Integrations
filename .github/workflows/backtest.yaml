@@ -5,19 +5,32 @@ on:
       - 'components/threshold-exporter/config/conf.d/**'
       # #3111: the tool, the modules that decide what it compares, and this
       # workflow, so a change to how the backtest runs is run here too (as
-      # config-diff-advisory.yml lists its own). ⚠️ Not everything the result
-      # depends on is in the list — the da-guard Go sources and the other
-      # shared `_lib_*` modules are not — so a change there alone does not run
-      # this; the next conf.d PR does. A PR that changes none of conf.d/ still
-      # gets a comment: without a reachable Prometheus (no PROMETHEUS_URL
-      # secret) it says "Prometheus is unavailable" — that check comes before
-      # the "no threshold changes found." one — and with one, the latter.
+      # config-diff-advisory.yml lists its own). A PR that changes none of
+      # conf.d/ still gets a comment: without a reachable Prometheus (no
+      # PROMETHEUS_URL secret) it says "Prometheus is unavailable" — that
+      # check comes before the "no threshold changes found." one — and with
+      # one, the latter.
       - 'scripts/tools/ops/backtest_threshold.py'
       - 'scripts/tools/ops/_observed_map_lib.py'
       - 'scripts/tools/ops/metric_observed_map.yaml'
       - 'scripts/tools/_lib_tenant_values.py'
       - 'scripts/tools/_lib_validation.py'
       - '.github/workflows/backtest.yaml'
+      # #3756: the rest of what the job reads — the da-guard Go sources it
+      # builds, the shared `_lib_*` modules the tool imports, the Makefile —
+      # from what the job was measured to read by access time
+      # (.github/path-traces/backtest.yaml.json), less what a pattern above
+      # already covers. The job's assert step fails, naming the file, when it
+      # reads something this list does not cover. Do not edit between the
+      # markers.
+      # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/path-traces/backtest.yaml.json"
+      - "scripts/ops/atime_trace.py"
+      - "scripts/ops/paths_filter_glob.py"
+      - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_compat.py"
+      - "scripts/tools/_lib_exitcodes.py"
+      # END GENERATED path-trace
 
 permissions:
   contents: read
@@ -26,11 +39,18 @@ permissions:
 jobs:
   backtest:
     runs-on: ubuntu-24.04
-    continue-on-error: true
+    # #3756: no job-level `continue-on-error` — it would make the assert
+    # step's failure not count. What stays advisory is said per step: the
+    # backtest itself and the PR comment.
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      # BEGIN GENERATED path-trace-env job=backtest
+      - name: Set access times back, to measure what this job reads (#3756)
+        run: python3 -I scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime-trace.json" --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"
+      # END GENERATED path-trace-env
 
       # #3111: the tool no longer checks a base out itself; the PR base is
       # checked out here, into its own path, and compared as a second tree.
@@ -122,3 +142,26 @@ jobs:
         with:
           path: /tmp/backtest-comment.md
           header: threshold-backtest
+        # A PR from a fork has no token that may comment; the job was
+        # `continue-on-error` as a whole before #3756.
+        continue-on-error: true
+
+      # #3756: every tracked file this job read must be in
+      # `on.pull_request.paths` above. The base checkout (.backtest-base) is
+      # not this commit's tree and is not measured. Only artifact uploads
+      # may follow (`generate --check` refuses anything else). Generated.
+      # BEGIN GENERATED path-trace-assert job=backtest
+      - name: Path filter covers everything this job read (#3756)
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && python3 scripts/ops/workflow_path_filter.py assert --workflow backtest.yaml --job backtest --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json" --leg "${{ strategy.job-index }}/${{ strategy.job-total }}"
+      # END GENERATED path-trace-assert
+
+      # What `assert --out` wrote: on a red run, `workflow_path_filter.py
+      # merge` this file into .github/path-traces/backtest.yaml.json.
+      - name: Upload the trace
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-backtest-backtest
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn

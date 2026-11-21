@@ -263,10 +263,6 @@ AWAITS_READ_ASSERTION = "awaits-read-assertion"
 ADVISORY_KINDS = (DIFF_DRIVEN, AWAITS_READ_ASSERTION)
 
 ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
-    "backtest.yaml": (
-        AWAITS_READ_ASSERTION,
-        "its Python step queries a Prometheus; without one it returns before "
-        "the comparison, so a run that can be reproduced reads a partial list"),
     "bench-gate-pr.yaml": (
         DIFF_DRIVEN,
         "the benchmark's inputs: non-test Go of the exporter and the scripts "
@@ -299,7 +295,6 @@ ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
 # traced). Kept beside the ledger and compared with it both ways, so the queue
 # cannot name a workflow the ledger has dropped or miss one it has gained.
 READ_ASSERTION_ORDER: tuple[str, ...] = (
-    "backtest.yaml",
     "forge-e2e-github.yaml",
 )
 

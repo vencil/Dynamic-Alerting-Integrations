@@ -1,0 +1,9 @@
+{
+  "jobs": {
+    "backtest": {
+      "files": [],
+      "import_dirs": []
+    }
+  },
+  "workflow": "backtest.yaml"
+}
