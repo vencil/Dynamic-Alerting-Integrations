@@ -189,6 +189,49 @@ def test_a_per_cluster_side_must_be_the_many_side(expr, want):
     assert found(expr) == want
 
 
+def _good_tree() -> dict:
+    return _lib_consumer_read.promql_shape(
+        ["sum by (tenant) (rate(x_total[5m])) > on (tenant) group_left topk(1, y)"])[0]
+
+
+@pytest.mark.parametrize("break_it", [
+    lambda t: t.pop("matching"),                                  # a key its kind must carry
+    lambda t: t.__setitem__("kind", "something-new"),             # a kind this reader does not know
+    lambda t: t.__setitem__("start", "0"),                        # an offset that is no number
+    lambda t: t["matching"].__setitem__("labels", "tenant"),      # labels that are no list
+    lambda t: t["lhs"].__setitem__("without", "no"),              # `without` that is no bool
+    lambda t: t["lhs"]["expr"].__setitem__("args", None),         # a call without arguments list
+    lambda t: t["lhs"]["expr"]["args"][0].__setitem__("range", 1),  # a selector's range flag
+    lambda t: t["rhs"].__setitem__("param", "1"),                 # a parameter that is no node
+    lambda t: t["lhs"].__setitem__("expr", {"kind": "paren", "start": 0, "end": 1}),  # a child cut short
+], ids=["missing-key", "unknown-kind", "offset", "labels", "without", "args", "range",
+        "param", "truncated-child"])
+def test_a_tree_of_another_shape_is_not_taken(break_it, monkeypatch):
+    """A da-read older or newer than this reader prints another shape: that
+    is "could not read" by name, never a tree with a hole a check would read
+    as "no grouping here"."""
+    assert _lib_consumer_read._is_shape(_good_tree())
+    bad = _good_tree()
+    break_it(bad)
+    assert not _lib_consumer_read._is_shape(bad)
+    monkeypatch.setattr(_lib_consumer_read, "_run", lambda *a, **k: {"documents": [[bad]]})
+    with pytest.raises(_lib_consumer_read.ConsumerReadError, match="one tree per expression"):
+        _lib_consumer_read.promql_shape(["x"])
+
+
+@pytest.mark.parametrize("answer", [{}, {"documents": []}, {"documents": [[]]},
+                                    {"documents": [[], []]}, {"documents": "x"}])
+def test_an_answer_without_one_tree_per_expression_is_not_taken(answer, monkeypatch):
+    monkeypatch.setattr(_lib_consumer_read, "_run", lambda *a, **k: answer)
+    with pytest.raises(_lib_consumer_read.ConsumerReadError, match="one tree per expression"):
+        _lib_consumer_read.promql_shape(["x"])
+
+
+def test_an_unparsable_expression_is_refused_by_name():
+    with pytest.raises(_lib_consumer_read.InputRefused):
+        _lib_consumer_read.promql_shape(["sum by ("])
+
+
 def _tree(tmp_path: Path, rules: "list[tuple[str, str]]") -> Path:
     packs = tmp_path / "rule-packs"
     packs.mkdir()
