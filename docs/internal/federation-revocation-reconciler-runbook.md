@@ -41,7 +41,7 @@
 
 **IR**：
 1. 查 VictoriaLogs 拿 opaque token_id：用 `log_type:"federation_evidence" AND event:"federation_token_revoked"` 過濾近 24h（與 reconciler 同一支查詢；#1237 起加 `log_type` 限定，避免比對到非權威來源灌入的同名事件）（reconciler pod log 也會印 `TAMPER SUSPECTED: ...`）。
-2. **租戶去識別化**：log 只有 token_id（ADR-028 §事件不帶租戶識別碼）；IR 時從 store 的 records 以 token_id 反查租戶，**別**把租戶識別碼寫回工單。
+2. **租戶去識別化**：log 只有 token_id（ADR-028 §事件不帶租戶識別碼）；撤銷時 tenant-api 會把該 token 的簽發紀錄從 store 移除，所以撤銷之後無法再以 token_id 從 store 反查租戶；**別**把租戶識別碼寫回工單。
 3. diff live store vs git 歷史；若確為惡意刪除，從 git 還原該撤銷（break-glass 見 governance-security.md）。
 4. 併查 #926 audit（是否有非平台身份寫 ConfigMap）——但本告警的威脅是**帶合法 SA 身份**的寫入，#926 可能看不到。
 5. ⚠️ **若 diff 顯示那些 token 其實都在 store 裡、而且是剛剛才合法撤銷的 → 這是投影延遲造成的假陽性，不是攻擊。** 成因：撤銷事件已可對帳，但 reconciler 自己那份 kubelet ConfigMap 投影還沒更新，於是合法撤銷讀起來像 un-revoke。**判別**：該 token 在**下一輪**對帳就會消失（不需要任何人動手），且時間點緊跟著一次合法撤銷。**處置**：查目標叢集 kubelet 的 `syncFrequency` 與 `configMapAndSecretChangeDetectionStrategy`（後者若為非預設的 `Cache`，傳播上界要再加一個 TTL），把 `reconcile.projectionGraceSeconds` 調到**確定大於該叢集的最壞傳播時間**並留餘裕；預設 180s 是照 Kubernetes 預設行為（sync 週期 60s 一級）取的，**叢集若把 sync 週期調大到分鐘級就會被擊穿**。⛔ 這件事在 #1238 之前不會發生：當時 `for: 5m` 順帶吸收掉了這種單輪假陽性，鎖存把那層免費保護拿掉了，所以它現在會直接 page。上線前請跑 §chaos 場景 4c 確認本叢集不會誤報。

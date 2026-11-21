@@ -116,7 +116,7 @@ gateway 作廢整輪重讀之後，之後新增的撤銷也都不會生效，而
 三類日誌查詢都以平台寫入的分類欄位限定來源，不只比對內容：
 
 - 撤銷事件與心跳：`log_type:"federation_evidence"`。兩者必須同一個串流，否則可能出現「事件查詢讀不到、心跳仍正常」的假健康。
-- gateway 的三種重讀警告：`log_type:"gateway_operational"` 加 `app:"envoy"`。`app` 只用來排除同一個 pod 裡其他 sidecar 的雜訊。
+- gateway 的三種重讀警告：`log_type:"gateway_operational"` 加 `app` 限定。讀取失敗與內容被拒只認 `app:"envoy"`；檔案不存在另外也認 `app:"federation-store-preflight"`，那是 gateway pod 啟動時檢查掛載的 init-container，每次 pod 啟動寫一筆同樣的警告；它補的是沒收到流量、Lua 從不重讀的 gateway。`app` 只用來排除同一個 pod 裡其他 sidecar 的雜訊。沒有流量時只有啟動時那一筆，`FederationGatewayRevokedSetMissing` 會在最後一筆之後一小時解除，告警解除不代表掛載已經修好。
 
 `log_type` 由 Vector 依來源 pod 的 label 與 namespace 決定：撤銷證據只收 `tenant-api` namespace（`evidenceChannel.podNamespace`），gateway 警告只收 `monitoring` namespace（`evidenceChannel.gatewayNamespace`）。namespace 由控制面指派，pod 無法自選；pod label 與容器名則可以自己宣告。Vector 讀這些來源欄位時，用的是合併 producer 自己 JSON 之前的值，所以日誌內容蓋不掉它們。
 
@@ -144,7 +144,7 @@ reconciler 每輪從頭重算指標，非零只維持一輪。若告警寫成「
 
 ### 事件不帶租戶識別碼
 
-撤銷事件與心跳只帶不透明的 `token_id` 與到期時間，不帶租戶或任何客戶識別碼；指標也只回報計數。否則稽核日誌庫本身會變成客戶識別資料的外洩點。事件處理時要知道是哪個租戶，以 `token_id` 回 `store.json` 的紀錄查。
+撤銷事件與心跳只帶不透明的 `token_id` 與到期時間，不帶租戶或任何客戶識別碼；指標也只回報計數。否則稽核日誌庫本身會變成客戶識別資料的外洩點。代價是事件處理時查不回租戶：tenant-api 撤銷時會把該 token 的簽發紀錄從 `store.json` 移除，只留下 `token_id` 與到期時間，所以撤銷之後無法再以 `token_id` 從 store 查出它屬於哪個租戶。
 
 ### 範例
 

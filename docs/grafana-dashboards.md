@@ -307,7 +307,7 @@ Tukey fences 需要分布**有離散度**才準。有兩種常見情形會讓它
 
 ## Dashboard 4: Federation Revocation Reconciler
 
-> **檔案：** `k8s/03-monitoring/federation-revocation-dashboard.json` · **uid：** `federation-revocation` · **來源：** [#1002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1002)（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) D1 / [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)）
+> **檔案：** `k8s/03-monitoring/federation-revocation-dashboard.json` · **uid：** `federation-revocation` · **來源：** [#1002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1002)（[ADR-028](./adr/028-federation-revocation-tamper-evidence.md) §偵測主體 / [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924)）
 
 ### 動機
 

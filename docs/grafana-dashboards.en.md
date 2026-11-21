@@ -307,7 +307,7 @@ This dashboard is the **passive** governance view — use the distribution data 
 
 ## Dashboard 4: Federation Revocation Reconciler
 
-> **File:** `k8s/03-monitoring/federation-revocation-dashboard.json` · **uid:** `federation-revocation` · **Source:** [#1002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1002) ([ADR-028](./adr/028-federation-revocation-tamper-evidence.md) D1 / [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924))
+> **File:** `k8s/03-monitoring/federation-revocation-dashboard.json` · **uid:** `federation-revocation` · **Source:** [#1002](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1002) ([ADR-028](./adr/028-federation-revocation-tamper-evidence.md) §偵測主體 / [#924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/924))
 
 ### Motivation
 

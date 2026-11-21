@@ -118,7 +118,7 @@ frontmatter 可以寫在四種位置，產生器都會找到：
 1. **`docs/**/*.md` 的檔案開頭**：整份檔案是一個條目，例如每一份 ADR。
 2. **`docs/**/*.md` 裡 H2／H3 標題（`##`／`###`）正下方、語言標記為 `yaml`（或 `yml`）的程式碼區塊**（標題與區塊之間只能有空行，語言標記後面不能接其他內容；用 `---` 包起來的 YAML 不算，會被靜默略過）：一份檔案放多個條目，例如 `dx-tooling-backlog.md`。
 3. **`flaky-tests.yaml` 頂層清單裡帶 `tracking_kind:` 的項目**：沒有 `tracking_kind:` 的項目不收錄。
-4. **程式碼註解**：`// TECH-DEBT(id=TRK-042, status=in-progress, tracking_kind=tech-debt)` 或 `# TECH-DEBT(...)`，逗號分隔的 `key=value`，而且註解符號必須是該行第一個非空白字元（寫在說明文字或字串裡的不算）。掃描範圍是 `components/` 的 `.go`／`.py`、`tools/` 的 `.ts`／`.tsx`／`.js`／`.jsx`、`tests/` 的 `.go`／`.py`／`.ts`／`.tsx`、`scripts/` 的 `.py`／`.sh`，略過 `node_modules/` 與 `archive/` 底下的檔案。
+4. **程式碼註解**：`// TECH-DEBT(id=TRK-042, status=in-progress, tracking_kind=tech-debt)` 或 `# TECH-DEBT(...)`，逗號分隔的 `key=value`，而且註解符號必須是該行第一個非空白字元（同一行裡跟在程式碼或文字後面的不算）。掃描是逐行比對，不認得字串邊界：Python 多行字串裡若有一行以 `# TECH-DEBT(` 開頭，同樣會被收錄。掃描範圍是 `components/` 的 `.go`／`.py`、`tools/` 的 `.ts`／`.tsx`／`.js`／`.jsx`、`tests/` 的 `.go`／`.py`／`.ts`／`.tsx`、`scripts/` 的 `.py`／`.sh`，略過 `node_modules/` 與 `archive/` 底下的檔案。
 
 ### 編號政策：三種前綴並存
 
