@@ -53,11 +53,11 @@ from _lib_label import safe_label  # noqa: E402
 from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text  # noqa: E402
 
 try:
-    import yaml
-    from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
+    import yaml  # noqa: F401
 except ImportError:
     print("ERROR: pyyaml not installed. Run: pip install pyyaml", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 # ADR-036 §12 (#3206): an upstream CRD is a Kubernetes manifest, so it is read
 # the way kubectl reads it — `da-crdecode` (sigs.k8s.io/yaml), the text handed

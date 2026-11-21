@@ -36,9 +36,10 @@ class Reading(enum.Enum):
     C = "da-read alertmanager"       # Alertmanager config (config.Load)
     D = "da-crdecode"                # Kubernetes manifests, Helm values / charts
     E = "da-guard parse-tree"        # conf.d-shaped text
-    # #4111: tenant-api's account registry (internal/federation/account) —
-    # no reader binary serves it yet; the projection gate reads it strictly
-    # (the duplicate rule is yaml.v3's) until one does.
+    # #4111: tenant-api's account registry (internal/federation/account).
+    # `tenant-api state show` reads it, but the projection gate's
+    # init-container image has no tenant-api; the gate reads it strictly
+    # (the duplicate rule is yaml.v3's) until it asks that reading (#4164).
     F = "tenant-api account registry"
 
 
@@ -235,7 +236,7 @@ ALLOWED = {
 
 DEBT: dict = {
     ('helm/vector/projection-gate/verify_tenant_projections.py', 'load_yaml'):
-        (1, Reading.F),
+        (2, Reading.F),
 }
 
 #: ⛔ #4111: the points that read YAML LAXLY on purpose — a repeated key keeps

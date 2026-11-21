@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONTEXT = "helm/vector/projection-gate"
 _VALUES = "helm/vector/values.yaml"
 
-_RECIPE_DIGEST = "f3aa768250598d34b2a4adb8299881ae6f1e6894e6464d04d95e986fb0c83d04"
+_RECIPE_DIGEST = "490b5eae035c43597f25572fdf2b947fe3aeb14dd6208c55e050bc103ad4d006"
 _EXPECTED_TAG = "0.1.3"
 
 

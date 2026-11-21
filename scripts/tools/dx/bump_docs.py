@@ -1295,8 +1295,8 @@ def _count_precommit_hook_stages():
 
     auto = manual = push = 0
     try:
-        import yaml  # local import — yaml is a transitive dep, not in core
-        from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
+        # local import — yaml is a transitive dep, not in core (#4111: strict)
+        from _lib_yaml_strict import strict_safe_load  # noqa: PLC0415
         cfg = strict_safe_load(config.read_text(encoding="utf-8"))
     except Exception:
         return 0, 0, 0

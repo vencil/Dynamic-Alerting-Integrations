@@ -48,7 +48,6 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout

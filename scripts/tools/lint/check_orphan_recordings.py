@@ -61,8 +61,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
-import yaml  # noqa: E402  (only the observed-map, Python's own data)
-from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: the observed-map, read strictly)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files / manifests as their consumers read them)
 
 # The 12 recording rules already orphaned when this gate landed — series with

@@ -1094,7 +1094,9 @@ def _repo_with_the_tools(tmp_path: Path, monkeypatch) -> Path:
         (repo / rel).write_bytes(text.encode("utf-8"))
     for rel in ("scripts/ops/atime_trace.py", "scripts/ops/workflow_path_filter.py",
                 "scripts/ops/paths_filter_glob.py", "scripts/tools/_lib_exitcodes.py",
-                "scripts/tools/_lib_compat.py"):
+                "scripts/tools/_lib_compat.py",
+                # #4111: the workflow is read with the strict YAML reading
+                "scripts/tools/_lib_yaml_strict.py"):
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, repo / rel)
     _git(repo, "init", "-q")
@@ -1160,7 +1162,8 @@ def test_the_generated_steps_measure_and_assert_end_to_end(
     assert EXPECTED_BLOCK | {"scripts/ops/atime_trace.py", "scripts/ops/paths_filter_glob.py",
                              "scripts/ops/workflow_path_filter.py",
                              "scripts/tools/_lib_compat.py",
-                             "scripts/tools/_lib_exitcodes.py"} == block
+                             "scripts/tools/_lib_exitcodes.py",
+                             "scripts/tools/_lib_yaml_strict.py"} == block
 
     # Second run: green.
     for script in (reset, job, check):

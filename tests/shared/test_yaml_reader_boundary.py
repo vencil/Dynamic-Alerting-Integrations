@@ -1,5 +1,6 @@
-"""Who under `scripts/` reads YAML with PyYAML — an AST ratchet on the
-boundary of ADR-036 §12 (step 12, #3206).
+"""Who under `scripts/` and `helm/` (SCAN_ROOTS; helm/ since #4111) reads
+YAML with PyYAML — an AST ratchet on the boundary of ADR-036 §12 (step 12,
+#3206).
 
 WHAT IT GUARDS. A YAML file means what the program that reads it and acts on
 it says it means. When a file has a Go consumer, Python does not read it with
@@ -57,7 +58,7 @@ point still has to be registered in ALLOWED or DEBT.
 entry reached through a mapping (`yaml.__dict__["safe_load"]`,
 `sys.modules["yaml"]`); a module or parser handed in as an argument and used as
 an attribute of the parameter (`def f(m): m.safe_load(...)`), including from a
-module outside `scripts/`; and the callers of a helper inside `scripts/` other
+module outside SCAN_ROOTS; and the callers of a helper inside SCAN_ROOTS other
 than `WRAPPER_HOMES` — only the helper's own point counts, so an `ALLOWED`
 helper later called on a file with a Go consumer stays green. On the strict
 axis: a strict loader driven around its duplicate check

@@ -101,13 +101,12 @@ def extract_sot_scopes(yaml_path: Path) -> set[str]:
           - 2          # severity
           - always     # condition
           - [scope1, scope2, ...]
-    so we want the list at index 2. yaml.safe_load handles the dash-list
+    so we want the list at index 2. strict_safe_load handles the dash-list
     expansion for us.
     """
     if not yaml_path.exists():
         raise FileNotFoundError(f"SOT not found: {yaml_path}")
     try:
-        import yaml as yaml_mod
         from _lib_yaml_strict import strict_safe_load  # noqa: E402,PLC0415  (#4111: duplicate keys refused)
     except ImportError as exc:
         raise RuntimeError(
