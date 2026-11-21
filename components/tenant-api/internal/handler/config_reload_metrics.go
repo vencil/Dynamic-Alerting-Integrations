@@ -57,10 +57,10 @@ import (
 //     and views too since #2856, as the state ConfigMap can be edited out of
 //     band).
 //   - groups / views / federation-policy are also reloaded after a write that
-//     succeeded or may have (#1535): `_ = mgr.Reload()` in handler/state.go's
-//     reloadState, or ReloadAsync in the background when the outcome is
-//     unknown. Neither reports the error to anyone — the handler answers
-//     regardless. Equally silent.
+//     succeeded or may have (#1535): Reload in handler/state.go's reloadState,
+//     or ReloadAsync in the background when the outcome is unknown. The first
+//     answers its error to the writer only (503 STATE_RELOAD_FAILED, #1073);
+//     the second reports it to no one. Neither tells an operator.
 //
 // A new manager appends its label here in the same commit that adds it. This is
 // an ARRAY, not a slice, so the `counters` / `states` stores below are sized FROM

@@ -71,7 +71,7 @@ var extraFields = []ExtraField{
 	{Name: "commit", Type: ExtraString,
 		Doc: "The commit the batch was written as."},
 	{Name: "committed", Type: ExtraBoolean,
-		Doc: "Whether the batch was committed: true on BATCH_COMMITTED (do not resend it), false on a direct-mode batch's CONFLICT."},
+		Doc: "Whether the write was committed: true on BATCH_COMMITTED (do not resend it) and on STATE_RELOAD_FAILED (saved, not yet served; served after the next reload, no resend needed), false on a direct-mode batch's CONFLICT."},
 	{Name: "config_error", Type: ExtraString,
 		Doc: "Why the tenant's conf.d file cannot be loaded (the value GET /api/v1/tenants shows for it)."},
 	{Name: "current_source_hash", Type: ExtraString,
@@ -127,6 +127,7 @@ var codeExtra = map[Code][]string{
 	PreviewBusy:             {"reason"},
 	PreviewUnavailable:      {"reason"},
 	BatchCommitted:          {"committed", "commit"},
+	StateReloadFailed:       {"committed"},
 }
 
 // ExtraFields lists every envelope field beyond the fixed ones, sorted by
