@@ -192,6 +192,7 @@ def test_a_state_without_the_trustctime_record_cannot_be_finished(armed):
 def test_reset_keeps_the_modification_times_and_a_clean_tree(armed):
     repo, state, _ = armed
     before = {name: os.lstat(repo / name).st_mtime_ns for name in FILES}
+    state.unlink()  # abandon the fixture's measurement; reset refuses to run over it
     proc = _tool(repo, "reset", "--state", str(state))
     assert proc.returncode == 0, proc.stderr
     assert {name: os.lstat(repo / name).st_mtime_ns for name in FILES} == before
@@ -225,7 +226,7 @@ def test_canary_is_exit_2_naming_what_does_not_hold(tmp_path, read, listed, touc
     repo = _make_repo(tmp_path / "zrepo")
     state = tmp_path / "state.json"
     _measurable(repo, state)  # the all-three-hold case is rc 0 here, or the test fails
-    assert _tool(repo, "reset", "--state", str(state)).returncode == 0
+    _reset(repo, state)
     canary = Path(json.loads(state.read_text(encoding="utf-8"))["canary"]["dir"])
     if read:
         _cat(canary / at.CANARY_READ)
@@ -295,6 +296,10 @@ def _local_trustctime(repo: Path) -> str | None:
 
 
 def _reset(repo: Path, state: Path) -> None:
+    """A fresh measurement. An unfinished one in *state* is abandoned the
+    documented way — the file is deleted — because `reset` refuses to run
+    over it."""
+    state.unlink(missing_ok=True)
     proc = _tool(repo, "reset", "--state", str(state))
     assert proc.returncode == 0, proc.stderr
 
@@ -360,18 +365,76 @@ def test_reset_sets_trustctime_false_and_finish_puts_back_what_was_there(tmp_pat
     assert _local_trustctime(repo) == "false"
     assert _state(state)["trustctime"] == {
         "previous": before, "restored": False, "root": str(repo.resolve())}
-    # A second reset before any finish finds its OWN `false`: what is put back
-    # is still what the first one found.
+    # The state file is LOST before any finish (an interrupted local run).
+    # The next reset finds its own `false` in the config; what is put back is
+    # still what the first one found, because that is written in the config
+    # too. (Review: the tool used to "restore" the `false` it had written.)
+    state.unlink()
     _reset(repo, state)
     assert _state(state)["trustctime"]["previous"] == before
     proc = _tool(repo, "finish", "--state", str(state))
     assert proc.returncode == 0, proc.stderr
     assert _local_trustctime(repo) == before
     assert _state(state)["trustctime"]["restored"] is True
+    marker = subprocess.run(["git", "config", "--local", "--get", at.TRUSTCTIME_WAS],
+                            cwd=repo, capture_output=True, text=True, encoding="utf-8",
+                            timeout=60, env=_ENV)
+    assert (marker.returncode, marker.stdout) == (1, ""), "the marker outlived finish"
     # A second finish does not "restore" again over whatever is there now.
     _git(repo, "config", "--local", "core.trustctime", "true")
     assert _tool(repo, "finish", "--state", str(state)).returncode == 0
     assert _local_trustctime(repo) == "true"
+
+
+def test_a_reset_over_an_unfinished_measurement_is_exit_2_and_discards_nothing(armed):
+    """A second `reset` in the middle of a job — spelled any way, so the
+    wiring check cannot see it — would drop every read collected so far and
+    the job would be asserted on the rest."""
+    repo, state, _canary = armed
+    _cat(repo / "za.txt")
+    _collect(repo, state, "zfirst")
+    before = state.read_bytes()
+    proc = _tool(repo, "reset", "--state", str(state))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "was not finished" in proc.stderr and "Traceback" not in proc.stderr
+    assert state.read_bytes() == before
+    # Finished, the same state file may be reset over.
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 0
+    assert _tool(repo, "reset", "--state", str(state)).returncode == 0
+
+
+def test_finish_twice_leaves_no_stale_mark_when_the_second_one_fails(armed):
+    """`finish` clears the mark before it measures: a state that was finished
+    once and then fails its canaries must not still read as finished."""
+    repo, state, _canary = armed
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 0
+    assert _state(state)["finished"]["canary"] == "ok"
+    _cat(Path(_state(state)["canary"]["dir"]) / at.CANARY_UNTOUCHED)
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 2
+    assert _state(state)["finished"] is None
+
+
+def test_reset_right_after_the_tree_is_written_leaves_git_nothing_to_reread(tmp_path):
+    """git re-reads a file written in the same second as the index whatever
+    `core.trustctime` says. `reset` waits that second out and THEN refreshes
+    the index, which is what clears those entries: without the wait (or the
+    refresh) the job's first `git status` reads them all. Measured on a real
+    checkout followed at once by `reset`: 455 to 1350 files."""
+    count = 150
+    names = tuple(f"zr/z{i:03}.txt" for i in range(count))
+    repo = _make_repo(tmp_path / "zrepo", names)
+    state = tmp_path / "state.json"
+    _measurable(repo, state)
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 0
+    # Rewrite the tree and the index inside one second, then reset at once.
+    for name in names:
+        (repo / name).write_text(f"rewritten {name}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _reset(repo, state)
+    time.sleep(1.2)
+    subprocess.run(["git", "-c", "core.checkstat=default", "status"],
+                   cwd=repo, check=True, capture_output=True, timeout=120, env=_ENV)
+    assert _collect(repo, state, "zgit")[0]["files"] == []
 
 
 @pytest.mark.parametrize("meddle", [("true",), ("--unset",)])

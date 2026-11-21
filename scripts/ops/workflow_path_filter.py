@@ -83,9 +83,14 @@ time that did not move is not proof that a file was not used
   * a directory listing is not a read: a file ADDED to a directory a job scans
     starts the workflow only if a pattern covers the directory (the `.go`
     widening above is the one place this tool adds such a pattern itself);
-  * a tracked file the job REPLACED (a new inode at the path) is reported by
-    atime_trace.py as replaced and is not counted as read: whether the old
-    content was read first is unknown;
+  * a tracked file the job REPLACED (a new inode at the path) or deleted is
+    reported by atime_trace.py as replaced / gone. Whether the old content
+    was read first is unknown, so both are COUNTED as read here — a job that
+    rewrites a tracked file must have it in its list;
+  * a measurement that names nearly the whole tree is taken for what it
+    almost always is — a git command comparing change times
+    (`git -c core.trustctime=true`, `GIT_CONFIG_*` in a step's `env:`) — and
+    is exit 2, not a list of thousands of uncovered files to record;
   * atime_trace.py leaves its own source out of every segment (each run of it
     reads it), and `finish` ends the measurement before `assert` runs, so this
     tool's reads are not in a job's trace either. Both are listed through
@@ -489,6 +494,11 @@ def render(lines: list[str], regions: list[Region], workflow: str,
 
 # ── traces ──────────────────────────────────────────────────────────────────
 
+#: Below this many tracked files "nearly all of them" says nothing (a
+#: fixture repository of five files, all read).
+WHOLE_TREE_FLOOR = 200
+
+
 def read_state(root: Path, state_path: Path, tracked: frozenset[str]) -> set[str]:
     """The tracked files a FINISHED atime measurement of this checkout names
     as read: the union of every segment's `files`. Anything short of that —
@@ -511,7 +521,12 @@ def read_state(root: Path, state_path: Path, tracked: frozenset[str]) -> set[str
         measured_root = os.path.realpath(state["root"])
         segments = state["segments"]
         finished = state.get("finished")
-        read = {f for segment in segments for f in segment["files"]}
+        # REPLACED (the inode changed: an in-place rewrite, a `mv` over it)
+        # and GONE (deleted) count as read. Whether the old content was read
+        # first is not known, and "not known" must not come out as covered:
+        # `sed -i` reads the file it replaces, and so does a formatter.
+        read = {f for segment in segments
+                for key in ("files", "replaced", "gone") for f in segment[key]}
         if not all(isinstance(f, str) for f in read):
             raise TypeError("a segment names something that is not a path")
     except (KeyError, TypeError, AttributeError) as exc:
@@ -533,6 +548,14 @@ def read_state(root: Path, state_path: Path, tracked: frozenset[str]) -> set[str
             "whether access times record reads here is unknown, so the "
             "segments are not a measurement.")
     read &= tracked
+    if len(tracked) >= WHOLE_TREE_FLOOR and len(read) * 10 > len(tracked) * 9:
+        raise _caller_error(
+            f"{state_path} names {len(read)} of {len(tracked)} tracked files as "
+            "read. That is what one git command does when it compares change "
+            "times after the reset (`core.trustctime` in effect as true: `git "
+            "-c`, a `GIT_CONFIG_*` variable, a global config), not what a job "
+            "reads — the segments are not a measurement of the job. A job "
+            "that really reads the whole tree has no use for a path gate.")
     if not read:
         raise _caller_error(
             f"{state_path} names no tracked file as read over {len(segments)} "

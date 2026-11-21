@@ -49,8 +49,10 @@ show it, and a machine whose global config already says `core.trustctime=false`
 or `core.checkstat=minimal` never does. The setting also does not stop git
 from re-reading a file whose modification time is not older than the index
 file's (git's "racily clean" case): a tree written in the same second as its
-index — a test fixture, not a checkout that then installed anything — is
-read whole either way (measured: 200 of 200 files, against 0 a second later).
+index is read whole either way (measured: 200 of 200 files, against 0 a second
+later — and on a real checkout followed at once by `reset`, 455 to 1350 files
+at the job's first `git status`). So `reset` waits until the second the index
+was written in is over before it refreshes; the refresh then clears them.
 
 Why resetting is not optional: under `relatime` a read updates the access time
 only when it is not newer than the modification / change time (or is a day
@@ -78,7 +80,8 @@ a tool that only SNAPSHOTS access times misses every second read.
 And what a changed one does not prove: `mmap` without `read`, `execve` and a
 `cp` all count as reads, and they are — but so does anything else that ran in
 the same stretch, on a shared machine included. A path whose inode changed is
-reported as REPLACED: whether the old content was read first is unknown.
+reported as REPLACED and one that was deleted as GONE: whether the old content
+was read first is unknown — workflow_path_filter.py counts both as read.
 
 Exit codes (scripts/tools/_lib_exitcodes.py): 0 measured, nothing to report;
 1 is not used here (the finding — a file read and not covered — is
@@ -330,37 +333,81 @@ def _local_trustctime(root: Path) -> str | None:
     return value or None
 
 
+#: Where `reset` writes what `core.trustctime` was, in the repository's own
+#: config — beside the value it replaces, so the two cannot be separated. A
+#: state file can be lost between `reset` and `finish` (a local run that was
+#: interrupted); a second `reset` would then find the `false` the first one
+#: wrote and record THAT as the value to put back.
+TRUSTCTIME_WAS = "atimetrace.trustctimewas"
+_UNSET = "(unset)"
+
+
 def _restore_trustctime(root: Path, previous: str | None) -> None:
     if previous is None:
         # 5: there was nothing to unset.
         _git(root, "config", "--local", "--unset-all", TRUSTCTIME, accept=(0, 5))
     else:
         _git(root, "config", "--local", TRUSTCTIME, previous)
+    _git(root, "config", "--local", "--unset-all", TRUSTCTIME_WAS, accept=(0, 5))
 
 
-def _previous_trustctime(root: Path, state_path: Path) -> str | None:
-    """What `finish` must put back. A `reset` over a state whose measurement
-    was never finished (a second `reset` in one job) finds the `false` the
-    first one wrote: the value to restore is the one THAT reset recorded."""
+def _previous_trustctime(root: Path) -> str | None:
+    """What `finish` must put back: the value an unfinished `reset` recorded
+    in the config, else the value as it stands (which is then recorded)."""
+    was = _git(root, "config", "--local", "--get", TRUSTCTIME_WAS, accept=(0, 1)).strip()
+    if was:
+        return None if was == _UNSET else was
+    previous = _local_trustctime(root)
+    _git(root, "config", "--local", TRUSTCTIME_WAS, _UNSET if previous is None else previous)
+    return previous
+
+
+def _refuse_a_measurement_in_progress(root: Path, state_path: Path) -> None:
+    """A `reset` over a state that holds this checkout's unfinished
+    measurement would discard every read collected so far, and the job would
+    be asserted on what came after it. (An adversarial review walked through
+    it: a second `reset`, spelled differently from the generated step, in the
+    middle of a job.)"""
     try:
         with open(state_path, encoding="utf-8") as handle:
-            pending = json.load(handle)["trustctime"]
-        if (pending["restored"] is False and pending["root"] == str(root)
-                and (pending["previous"] is None or isinstance(pending["previous"], str))):
-            return pending["previous"]
+            pending = json.load(handle)
+        in_progress = (os.path.realpath(pending["root"]) == os.path.realpath(root)
+                       and not pending.get("finished"))
     except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return _local_trustctime(root)
+        return
+    if in_progress:
+        raise _caller_error(
+            f"{state_path} holds a measurement of {root} that was not finished: "
+            "a second `reset` would discard what it has read so far. Run "
+            "`finish` first, or delete the state file to abandon it.")
+
+
+def _wait_out_the_index_second(root: Path) -> None:
+    """git compares times by the SECOND: a file written in the same second as
+    the index ("racily clean") is re-read by every later git command, and the
+    refresh below cannot clear that while the clock is still in that second —
+    it would write the index in it again. Measured on a fresh checkout
+    followed at once by `reset`: a later `git status` read 455 to 1350 files.
+    So the refresh waits until the second the index was written in is over."""
+    git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
+    try:
+        written = os.stat(git_dir / "index").st_mtime
+    except OSError:
+        return
+    while time.time() < int(written) + 1.05:
+        time.sleep(0.05)
 
 
 def cmd_reset(args: argparse.Namespace) -> int:
     root: Path = args.root
     started = time.monotonic()
+    _refuse_a_measurement_in_progress(root, Path(args.state))
+    _wait_out_the_index_second(root)
     # 0: clean; 1: some entry still differs from the index (a modified tree).
     _git(root, "update-index", "-q", "--refresh", accept=(0, 1))
     refreshed = time.monotonic()
     # After the refresh, before the access times: see the module docstring.
-    previous = _previous_trustctime(root, Path(args.state))
+    previous = _previous_trustctime(root)
     _git(root, "config", "--local", TRUSTCTIME, "false")
     try:
         return _arm(args, root, previous, started, refreshed)

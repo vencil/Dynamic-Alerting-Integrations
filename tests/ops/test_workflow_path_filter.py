@@ -534,6 +534,9 @@ ASSERT_ONCE = "generated assert step exactly once, unchanged (found 0)"
      "step 3's `run:` mentions `core.trustctime`"),
     (TOOL_STEP, "      - run: git -c Core.TrustCtime=true status; python3 ztool/zmain.py\n",
      "step 3's `run:` mentions `core.trustctime`"),
+    # …whichever step it is in (review: every row above put it in step 3).
+    (TOOL_STEP, TOOL_STEP + "      - run: git config core.trustctime true\n",
+     "step 4's `run:` mentions `core.trustctime`"),
     # A string comparison, stated as one: a mention in a comment is refused too.
     (TOOL_STEP, "      - run: |\n          # leaves core.trustctime alone\n"
                 "          python3 ztool/zmain.py\n",
@@ -596,6 +599,76 @@ def test_assert_names_a_read_file_taken_out_of_the_region(
     assert "atime_trace.py reset" in err and "BOUNDARY" not in err and "tracer" not in err
     # `--check` reds on the same edit, before CI is ever reached.
     assert _main(repo, "generate", "--check") == 1
+
+
+def _extra_tracked(repo: Path, *names: str) -> None:
+    for name in names:
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{name}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+
+
+def test_a_file_the_job_replaced_or_deleted_counts_as_read(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """`sed -i` reads the file it replaces; a file deleted after it was read
+    has no access time left to show it. atime_trace.py reports the two as
+    REPLACED / GONE because it cannot know — and "cannot know" used to come
+    out here as "Every one is covered" (an adversarial review ran both)."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _extra_tracked(repo, "zextra/zreplaced.txt", "zextra/zgone.txt", "zextra/zidle.txt")
+    assert _atime(repo, "reset", "--state", str(state)).returncode == 0
+    fresh = repo / "zextra/znew"
+    fresh.write_text("rewritten\n", encoding="utf-8")
+    os.replace(fresh, repo / "zextra/zreplaced.txt")
+    (repo / "zextra/zgone.txt").unlink()
+    assert _atime(repo, "finish", "--state", str(state)).returncode == 0
+    capsys.readouterr()
+    assert _main(repo, "assert", *_job_args(state)) == 1
+    err = capsys.readouterr().err
+    assert "UNCOVERED  zextra/zreplaced.txt" in err and "UNCOVERED  zextra/zgone.txt" in err
+    assert "zidle" not in err and err.count("UNCOVERED") == 2, err
+
+
+def test_the_read_set_is_the_union_of_every_segment(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """A read collected in an earlier segment is the job's as much as one in
+    the last (review: every other state here holds a single segment)."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _extra_tracked(repo, "zextra/zearly.txt", "zextra/zlate.txt")
+    assert _atime(repo, "reset", "--state", str(state)).returncode == 0
+    (repo / "zextra/zearly.txt").read_bytes()
+    assert _atime(repo, "collect", "--state", str(state), "--label", "zfirst").returncode == 0
+    (repo / "zextra/zlate.txt").read_bytes()
+    assert _atime(repo, "finish", "--state", str(state)).returncode == 0
+    capsys.readouterr()
+    assert _main(repo, "assert", *_job_args(state)) == 1
+    err = capsys.readouterr().err
+    assert "UNCOVERED  zextra/zearly.txt" in err and "UNCOVERED  zextra/zlate.txt" in err
+
+
+def test_a_measurement_naming_nearly_the_whole_tree_is_no_answer(
+        repo: Path, tmp_path: Path, capsys, monkeypatch) -> None:
+    """What one `git status` with `core.trustctime` in effect as true leaves
+    behind (`git -c`, a `GIT_CONFIG_*` variable — spellings the wiring check
+    cannot see). Thousands of UNCOVERED lines and "record them" would be the
+    wrong reading: the measurement is polluted, which is exit 2."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    assert _atime(repo, "reset", "--state", str(state)).returncode == 0
+    tracked = wpf.tracked_files(repo)
+    for name in tracked:
+        (repo / name).read_bytes()
+    assert _atime(repo, "finish", "--state", str(state)).returncode == 0
+    monkeypatch.setattr(wpf, "WHOLE_TREE_FLOOR", len(tracked))
+    with pytest.raises(CallerError, match="tracked files as read"):
+        _main(repo, "assert", *_job_args(state))
+    # Below the floor the same state is an ordinary answer (a small tree,
+    # all of it read, is not that signature).
+    monkeypatch.setattr(wpf, "WHOLE_TREE_FLOOR", len(tracked) + 1)
+    assert _main(repo, "assert", *_job_args(state)) in (0, 1)
 
 
 def test_assert_sees_a_read_the_recorded_trace_never_had(
