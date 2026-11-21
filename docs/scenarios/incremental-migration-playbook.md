@@ -672,7 +672,7 @@ fi
 
 ### 檢查三：新舊兩版 exporter 送出的閾值列
 
-讀取端從 [#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832) 那一版起內建平台預設啟用的閾值：樹裡沒寫的鍵改送平台值，所以同一棵 conf.d 升級後每個租戶可能多出幾列。用兩版 exporter 映像各讀一次同一棵樹，比對 `/metrics` 的 `user_threshold` 列（只有租戶、元件、指標與 severity 這些 label，沒有 webhook URL，可以印在 CI 日誌）：
+讀取端從 [#3832](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3832) 那一版起內建平台預設啟用的閾值：樹裡沒寫的鍵改送平台值，所以同一棵 conf.d 升級後每個租戶可能多出幾列。用兩版 exporter 映像各讀一次同一棵樹，比對 `/metrics` 的 `user_threshold` 列（label 是租戶、元件、指標、severity，加上租戶維度鍵的 label 與 `_re` 正則 label，沒有 webhook URL；維度值會出現在 CI 日誌裡）：
 
 ```bash
 set -e
@@ -704,11 +704,11 @@ echo "新版少掉（或值不同）的列："; comm -23 "$out/current.txt" "$ou
 
 1. 做完上面三項檢查，確認多出的列；再以新版 da-tools 跑 `da-tools migrate-builtin-defaults --config-dir conf.d`（不加 `--apply`，只預覽），它列出哪些鍵今天靠根層 `null` 或 `optional_overrides:` 列名關掉、在新版會開始送平台值。
 2. 在**同一個變更**裡做三件事：升級 threshold-exporter、平台規則包與 tenant-api；CI 換成新版 da-tools；處理不想要的預設啟用鍵——整個平台不要就在根 `_defaults.yaml` 的 `defaults:` 寫 `<鍵>: disable`（Helm：`--set thresholdConfig.defaults.<鍵>=disable`），某個租戶不要就在它的檔裡寫 `disable`，第 1 步預覽列出的鍵一併照改（Helm 的 `null` 也改成 `disable`）。GitOps 是同一個 commit 換映像 tag 與 conf.d；Helm 是同一次 `helm upgrade`。同一份 conf.d 供給多個叢集時，這些叢集要在同一個變更裡一起升級。
-3. **全部升級完**、每個叢集 exporter 的 `da_config_builtin_defaults_info{digest}` 都與 da-tools 相同之後，才刪複製品：`da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <摘要>`，每個叢集各給一次（見 [`migrate-builtin-defaults`](../cli-reference.md#migrate-builtin-defaults)）。Helm 自建 ConfigMap 的部署沒有這一步：chart 照樣寫出這些數字，跟著 chart 升級。
+3. **全部升級完**、每個叢集 exporter 的 `da_config_builtin_defaults_info{digest}` 都與 da-tools 相同之後，才刪複製品：`da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <叢集 A 的摘要> --exporter-digest <叢集 B 的摘要>`，在同一條指令裡每個叢集各給一次（分開跑、每次只給一個摘要，閘門就看不到其他叢集；見 [`migrate-builtin-defaults`](../cli-reference.md#migrate-builtin-defaults)）。Helm 自建 ConfigMap 的部署沒有這一步：chart 照樣寫出這些數字，跟著 chart 升級。
 
 第 2 步不能拆開。已發布的舊版 exporter 讀到根層的 `disable` 會丟掉整份根 `_defaults.yaml`（v2.9.0 實測），每個租戶的閾值列一起消失，所以根層的 `disable` 不能早於 exporter 升級；新版 da-guard 對根層 `optional_overrides:` 只列名的預設啟用鍵報 `root_optional_builtin`（結束碼 1），所以有這種寫法的樹不改就過不了新版 CI；而先升級 exporter、晚改樹，不想要的告警會在改樹之前先響。剩下的窗口是滾動更新那一兩分鐘：還沒被替換的舊 pod 可能讀到新的 ConfigMap。平台規則包的 `BuiltinDefaultsDigestMismatch` 告警會在有 exporter 沒升上去時觸發（沒部署平台規則包的環境，自己比對各元件的摘要指標）。
 
-第 3 步不能提前：舊版讀取端沒有內建層，讀到刪掉複製品的樹，那些鍵就沒有值，告警不響也不報錯。要回退到舊版，先把複製品放回去、根層的 `disable` 拿掉。
+第 3 步不能提前：舊版讀取端沒有內建層，讀到刪掉複製品的樹，那些鍵就沒有值，告警不響也不報錯。要回退到舊版，先把複製品放回去；根層的 `disable` 與回退映像放在同一個變更裡拿掉（提早拿掉，還在跑的新版 exporter 會改送平台值），要在舊版關掉的鍵改回舊版的寫法（根層 `null` 或 `optional_overrides:` 列名）。
 
 ---
 
