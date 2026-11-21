@@ -88,7 +88,7 @@
   //    沒有它時 tests/shared/test_vector_projection_vrl.py 的
   //    TestVectorValidateAndTest（`vector validate` ×3 + `vector test` 跑
   //    helm/vector/tests/projection_tests.yaml）會整組 skip——那是出貨 VRL
-  //    唯一被「執行」而非字串比對的地方（租戶 fail-closed 路由、ADR-028 §D3
+  //    唯一被「執行」而非字串比對的地方（租戶 fail-closed 路由、ADR-028 §事件不帶租戶識別碼
   //    PII 丟棄、#1293 origin-spoof 真值表）。少了它，VRL 改動只能推上去等 CI，
   //    而 #1293 正是那個往返成本的實例。pin parity 由
   //    tests/shared/test_vector_pin_parity.py 顧。

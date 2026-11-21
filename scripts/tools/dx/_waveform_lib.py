@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""_waveform_lib.py — fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）
+"""_waveform_lib.py — fault-waveform pack 合成核心（ADR-030 決策層驗證，純函式庫）
 
 Pure library behind waveform_compile.py: load / validate / synthesize /
 variants / two materializations / readback rendering. No printing, no file
@@ -15,7 +15,7 @@ writes (the CLI owns I/O). Deterministic by construction:
   * gaussian noise is an OWNED Box-Muller over ``rng.random()`` so bitwise
     reproducibility does not depend on stdlib ``gauss`` internals.
 
-Compile semantics (ADR-030 D2 / R2-1, PR-1 design doc §2-§3):
+Compile semantics (ADR-030 §2):
 
   * ``metric_kind: gauge``   — levels used directly.
   * ``metric_kind: counter`` — SME levels are RATES (per-second); the
@@ -197,7 +197,7 @@ def validate_pack(pack: dict, schema: dict, validator_module: Any) -> list[dict]
         tier = classify_field(fld)
         if fld == "independent_of_rule_conversion":
             msg = (f"pack.independent_of_rule_conversion 必須為 true"
-                   f"（盲寫 attestation，ADR-030 D2 反循環守則）: {err.message}")
+                   f"（盲寫 attestation，ADR-030 §2 反循環守則）: {err.message}")
             issues.append({"tier": "platform", "field": fld,
                            "message": f"平台補填: {path}: {msg}"})
         elif tier == "sme":
@@ -497,7 +497,7 @@ def _apply_declared_dips(values: list[float], fw: tuple[int, int],
     Dips fall on interior fault-window samples only (never the first), so the
     fault onset is a clean fault_level — otherwise every onset/for-duration rule
     sees a systematically dip-contaminated first sample.
-    Returns (values, clamp_note); clamp_note is set (D8.4 no-silent-caps) when
+    Returns (values, clamp_note); clamp_note is set (ADR-030 §8 第 4 道 no-silent-caps) when
     the declared depth would overshoot normal_level and was clamped."""
     normal = float(sig["normal_level"])
     fault = float(sig["fault_level"])
@@ -579,7 +579,7 @@ def _apply_time_axis(samples: list, time_axis: dict) -> tuple[list, int, bool]:
     if tail:
         cut = max(1, math.ceil(parse_duration(tail) / STEP))
         if cut >= len(out):
-            # fail-loud (D8.4 no-silent-caps): a staleness_tail >= the whole
+            # fail-loud (ADR-030 §8 第 4 道 no-silent-caps): a staleness_tail >= the whole
             # series would silently no-op, so the SME-declared agent-death is
             # never actually injected. Force a fix rather than ship a
             # must_detect series that quietly lacks its staleness.
@@ -841,7 +841,7 @@ def materialize_vm(series_list: list[Series]) -> str:
 
 def build_metadata(pack: dict, series_list: list[Series], seed: int, fanout: int) -> dict:
     """Per-output provenance metadata: variant kind, expects inheritance (or
-    probe/companion), seed, step, auto-modulation trail (D8.4 no-silent-caps)."""
+    probe/companion), seed, step, auto-modulation trail (ADR-030 §8 第 4 道 no-silent-caps)."""
     any_jitter = any(s.jitter_s > 0 for s in series_list)
     return {
         "pack_id": pack["pack"]["id"],
@@ -948,6 +948,6 @@ def render_readback(pack: dict) -> str:
     lines.extend([
         "請 SME 確認以上形狀與描述皆與實際故障相符。",
         "確認無誤後，由平台工程師在 pack 標記 readback_signed_off: true（簽核紀錄）。",
-        "簽核前 SME 不得閱讀 VM 規則與閾值（盲寫治理，ADR-030 D2）。",
+        "簽核前 SME 不得閱讀 VM 規則與閾值（盲寫治理，ADR-030 §2）。",
     ])
     return "\n".join(lines) + "\n"

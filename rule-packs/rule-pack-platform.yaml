@@ -1633,7 +1633,7 @@ groups:
             Details: docs/api/tenant-api-hardening.md §5.7.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
 
-      # --- Federation revocation tamper-evidence (ADR-028 D1 / #924) ---
+      # --- Federation revocation tamper-evidence (ADR-028 §偵測主體 / #924) ---
       # Metrics from the federation-reconciler Deployment's /metrics
       # (helm/federation-reconciler). Behavioural contract:
       # tests/rulepacks/platform-federation-revocation_test.yaml (reads this
@@ -1651,7 +1651,7 @@ groups:
       # separates "was this ever detected" from "is it still true right now",
       # and only the first question is meaningful for tamper evidence.
       #
-      # ⚠️ What the latch does NOT buy (ADR-028 §D3, say it plainly):
+      # ⚠️ What the latch does NOT buy (ADR-028 §鎖存告警, say it plainly):
       # it makes a detection that HAPPENED reach a human. It does not make
       # the detection happen. The reconciler samples every 300s while the
       # smallest viable un-revoke is far shorter, so an attack reverted inside
@@ -1700,7 +1700,7 @@ groups:
             identity-based controls (#926 audit) cannot see. ACTION: query
             VictoriaLogs for `event:"federation_token_revoked"` for the opaque
             token_id(s) (resolve the tenant from the store's records at IR time,
-            ADR-028 D3), diff against the live store, and if malicious restore
+            ADR-028 §事件不帶租戶識別碼), diff against the live store, and if malicious restore
             the revocation from git. Details:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
@@ -1740,7 +1740,7 @@ groups:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
-      # The evidence channel itself is dead (ADR-028 D1 / #1234). Without
+      # The evidence channel itself is dead (ADR-028 §證據通道 / #1234). Without
       # this alert an empty channel is INDISTINGUISHABLE from "no revocations
       # happened": the reconciler queries a reachable store, gets zero rows,
       # and publishes a clean all-clear with a fresh last_reconcile_ts — so
@@ -1872,7 +1872,7 @@ groups:
             docs/internal/federation-revocation-reconciler-runbook.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
 
-      # --- Enforcement-plane staleness (ADR-028 D1 / #1235 / TRK-349) ---
+      # --- Enforcement-plane staleness (ADR-028 §逐位元組契約 / #1235 / TRK-349) ---
       # ⛔ These two are NOT the read-failure alert above, and must never be
       # read as it — the CAUSE differs, the posture does not.
       # FederationGatewayRevocationLoadFailure means "the list could not be

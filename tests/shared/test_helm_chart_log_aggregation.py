@@ -258,7 +258,7 @@ class TestVector:
     def test_evidence_transform_exists_and_is_wired_to_the_store(
         self, repo_root: Path
     ) -> None:
-        """ADR-028 D1 / #1234. Every other test in this class inspects
+        """ADR-028 §證據通道 / #1234. Every other test in this class inspects
         `transforms.demux.source` only, so the whole second ingest path is
         outside their field of view — a change that deleted it would leave this
         class green. Pin the two structural facts that make the federation

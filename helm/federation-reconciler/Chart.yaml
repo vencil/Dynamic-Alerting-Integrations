@@ -1,6 +1,6 @@
 apiVersion: v2
 name: federation-reconciler
-description: Federation revocation reconciler (ADR-028 D1, #924) — a long-running detective control that reconciles the off-store revocation event log (VictoriaLogs) against the live revoked set (the tenant-federation-store ConfigMap's revoked.txt, mounted read-only) and exposes tamper / staleness / gateway-fail-open metrics for alerting. Reuses the da-tools image; the script is baked in (scripts/tools/ops/_federation_revocation_reconciler.py). Not a CronJob: the platform has no Pushgateway, so an exporter with up-based liveness is the Prometheus-native shape.
+description: Federation revocation reconciler (ADR-028 §偵測主體, #924) — a long-running detective control that reconciles the off-store revocation event log (VictoriaLogs) against the live revoked set (the tenant-federation-store ConfigMap's revoked.txt, mounted read-only) and exposes tamper / staleness / gateway-fail-open metrics for alerting. Reuses the da-tools image; the script is baked in (scripts/tools/ops/_federation_revocation_reconciler.py). Not a CronJob: the platform has no Pushgateway, so an exporter with up-based liveness is the Prometheus-native shape.
 type: application
 # version: Helm Chart version (bump on chart/template change).
 # 0.1.0 — #924 / ADR-028: initial chart (Deployment + /metrics + revoked.txt mount + NetworkPolicy).
@@ -16,7 +16,8 @@ type: application
 #         keys default and Helm deep-merges the maps); default `warn` never blocks
 #         startup and `optional: true` on the volume is unchanged.
 # 0.4.0 — #1295: victorialogs.auth {username, existingSecret} -> VICTORIALOGS_USERNAME / VICTORIALOGS_PASSWORD env, sent as HTTP basic auth by the reconciler. ⚠️ Needs a da-tools image that carries #1295; an older one ignores the env and queries without credentials. No Secret = no change.
-version: 0.4.0
+# 0.4.1 — #2789: comments and descriptions only (they ship in the package): ADR-028 section references renamed after the ADR rewrite. No template or value change.
+version: 0.4.1
 # appVersion: the da-tools image the reconciler ships in.
 # ⛔ v2.9.0 does NOT contain the reconciler script — it was added to build.sh
 # TOOL_FILES after that tag was cut, so the chart is not runnable as pinned.

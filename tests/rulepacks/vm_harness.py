@@ -6,7 +6,7 @@ Consumers
 * ``test_vm_replay_staleness.py`` — staleness characterization bench (#947/#968).
 * ``test_vm_backend_parity.py``   — engine-equivalence anchor (ADR-025 Part 1).
 * ``test_vm_alert_parity.py``     — per-PR gate A (binary discovery only).
-* the fault-injection CLI (scripts/tools/dx/, ADR-030 PR-2) — loaded via
+* the fault-injection CLI (scripts/tools/dx/, ADR-030) — loaded via
   ``importlib`` file-path load in a NON-pytest environment.
 
 ⛔ Contract: this module must NOT import pytest (the CLI imports it outside any

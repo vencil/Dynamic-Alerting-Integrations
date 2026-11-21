@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Federation revocation reconciler — ADR-028 D1 detective control (#924).
+"""Federation revocation reconciler — ADR-028 §偵測主體 detective control (#924).
 
 Reconciles the off-store, append-only revocation event log (in VictoriaLogs)
 against the live revoked set (the ``tenant-federation-store`` ConfigMap's
@@ -17,7 +17,7 @@ temporal ordering: the anchor predates the attack).
 Detection: a ``token_id`` the log says was revoked, still comfortably before its
 ``expires_at``, but ABSENT from the live set → a suspected un-revoke.
 
-Design notes (ADR-028 §MVP):
+Design notes (ADR-028 §考慮過的替代方案):
   * Long-running Deployment + ``/metrics`` (not a CronJob): the platform has no
     Pushgateway / textfile-collector / vmalert, so a short-lived job can't be
     scraped; an exporter with ``up``-based liveness is the Prometheus-native
@@ -208,7 +208,7 @@ def parse_revoked_file(text: str) -> tuple[set[str], int]:
     i.e. it would re-create, in a new place, the failure ADR-028 is about.
 
     Rejected lines are counted only; their content is never returned or
-    logged (ADR-028 D3).
+    logged (ADR-028 §事件不帶租戶識別碼).
 
     Dialect note: ``fullmatch``, not ``match`` — Python's bare ``$`` also
     matches just before a trailing newline, while Lua's and Go's anchor at
@@ -276,7 +276,7 @@ def reconcile(
     now: float,
     skew_margin_s: float = DEFAULT_SKEW_MARGIN_S,
 ) -> ReconcileResult:
-    """Pure reconciliation (ADR-028 D1).
+    """Pure reconciliation (ADR-028 §偵測主體).
 
     For each logged revocation still comfortably before expiry
     (``now < expires_at - skew_margin``), assert its ``token_id`` is in the live
@@ -314,7 +314,7 @@ def event_settle_s(settle_s: int, projection_grace_s: int) -> int:
       ``revoked.txt`` still predates it, so a token that was revoked correctly
       reads as absent from the live set — i.e. a LEGITIMATE revocation is
       reported as tamper. tenant-api commits the ConfigMap BEFORE emitting the
-      event (ADR-028 §D3 dual-write ordering), so projection starts no later
+      event (ADR-028 §後果與已知限制 dual-write ordering), so projection starts no later
       than the event timestamp and measuring the grace from the event is the
       conservative direction.
 
@@ -364,7 +364,7 @@ def build_logsql_query(lookback_s: int, settle_s: int) -> str:
 
 
 def build_heartbeat_query(lookback_s: int, settle_s: int) -> str:
-    """LogsQL for the evidence-channel liveness canary (ADR-028 D1 / #1234).
+    """LogsQL for the evidence-channel liveness canary (ADR-028 §證據通道 / #1234).
 
     tenant-api emits ``federation_revocation_channel_heartbeat`` every ~5m down
     the SAME Vector transform and sink path as real revocation events, so its
@@ -538,7 +538,7 @@ class Metrics:
         self.events_dropped = 0              # gauge: event-filtered rows that failed to parse (schema-drift signal)
         self.reconcile_errors_total = 0      # counter: failed reconcile passes (fail-closed)
         self.gateway_load_errors = 0         # gauge: gateway fail-open warns in window
-        # ADR-028 D1 / #1234 evidence-channel canary. channel_up starts at 0:
+        # ADR-028 §證據通道 / #1234 evidence-channel canary. channel_up starts at 0:
         # before the first SUCCESSFUL pass the reconciler has no evidence the
         # channel works, and claiming 1 would be exactly the optimistic default
         # this control exists to remove. The alert's `for: 15m` (≈3 heartbeat
@@ -734,7 +734,7 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     # time) → tenant-api event-schema drift silently narrowing coverage. Exposed
     # as a gauge so the drift is visible, even though any single drop is benign:
     # a fully-drifted feed would otherwise reconcile to a clean, healthy zero
-    # while a real un-revoke went unseen (ADR-028 D3 honest-boundary).
+    # while a real un-revoke went unseen (ADR-028 §後果與已知限制 honest-boundary).
     metrics.events_dropped = len(ev_rows) - len(parsed)
     metrics.gateway_load_errors = len(fo_rows)
     # Evidence-channel liveness (#1234). Only reached on a SUCCESSFUL pass, so a
@@ -747,7 +747,7 @@ def reconcile_once(cfg: "Config", metrics: Metrics, now: float) -> None:
     metrics.gateway_revoked_set_missing = len(ms_rows)
     metrics.last_reconcile_ts = now
     if live_rejected:
-        # Count only — never the line itself (ADR-028 D3; the content is the
+        # Count only — never the line itself (ADR-028 §事件不帶租戶識別碼; the content is the
         # sensitive part).
         #
         # ⚠️ An earlier revision of this fix deliberately shipped NO metric
@@ -819,7 +819,7 @@ def _serve_forever(cfg: Config, metrics: Metrics, clock=time.time) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Federation revocation reconciler (ADR-028 D1, #924).")
+    p = argparse.ArgumentParser(description="Federation revocation reconciler (ADR-028 §偵測主體, #924).")
     # #3528: judged at parse time, so an unusable URL is exit 2 at start —
     # not a reconcile loop that fails every interval.
     p.add_argument("--victorialogs-url", type=url_type(empty="refuse"),

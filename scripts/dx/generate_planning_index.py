@@ -68,7 +68,7 @@ SENTINEL_END = "<!-- PLANNING_INDEX_END -->"
 # (`docs/` tree). Edit if forking.
 GITHUB_BLOB_BASE = "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main"
 
-# Per ADR-019 §Frontmatter Contract.
+# Per ADR-019 §第一層 (frontmatter contract).
 TRACKING_KINDS = {"tech-debt", "feature", "dx", "regression", "adr", "sprint"}
 STATUSES = {
     "proposed", "accepted", "in-progress", "done", "abandoned", "superseded",
@@ -409,7 +409,7 @@ def render_index(entries: List[PlanningEntry]) -> str:
     """Render the index body that lives between the sentinel markers."""
     if not entries:
         return (
-            "_目前 discovery 沒有任何 entry。各 source 加上 ADR-019 §Frontmatter Contract_\n"
+            "_目前 discovery 沒有任何 entry。各 source 加上 ADR-019 §第一層（frontmatter 契約）_\n"
             "_要求的 `tracking_kind:` / `id:` / `status:` 欄位後會自動出現於此。_\n"
         )
     # Group by status, preserving STATUS_ORDER.

@@ -23,7 +23,7 @@ What it does
    - Verify the entry's `pr_ref:` is set to the **current PR number** (when
      provided via ``--pr-number``).
 
-3. Per [ADR-019 Layer 3](docs/adr/019-planning-ssot.md#三層設計) the default
+3. Per [ADR-019 §第三層](docs/adr/019-planning-ssot.md#第三層ci-狀態同步檢查) the default
    behaviour is **soft-warn**: print findings to stderr, exit 0 so CI shows a
    yellow neutral check rather than a red block. `--strict` upgrades to hard-fail
    (exit 1) — wire that on once contributor adoption is high enough that false
@@ -80,7 +80,7 @@ if hasattr(sys.stdout, "reconfigure"):
     except (AttributeError, OSError):
         pass
 
-# Per ADR-019 §Implementation gotcha: `\b` word-boundary anchored + only the
+# Per ADR-019 §實作注意事項: `\b` word-boundary anchored + only the
 # three live namespaces. (Legacy `TD-NN` / `HA-NN` / `REG-NN` are intentionally
 # excluded — they have to be translated to `TRK-NNN` via planning-id-mapping.md
 # before a Resolves/Closes/Fixes trailer is meaningful.)

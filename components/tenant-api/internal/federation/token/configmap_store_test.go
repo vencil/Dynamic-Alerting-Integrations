@@ -204,7 +204,7 @@ func TestConfigMapStore_RefusesNewerSchema(t *testing.T) {
 	}
 }
 
-// TestConfigMapStore_RevokeEmitsEvent asserts the ADR-028 D1 tamper-evidence
+// TestConfigMapStore_RevokeEmitsEvent asserts the ADR-028 §偵測主體 tamper-evidence
 // anchor: a newly-added revocation emits exactly one federation_token_revoked
 // event carrying an opaque token_id + expires_at and NO tenant identifier
 // (D3 PII minimization); an idempotent re-revoke re-emits nothing. The logger

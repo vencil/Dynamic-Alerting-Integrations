@@ -60,7 +60,7 @@ func TestHeartbeater_EmitsCanaryEvent(t *testing.T) {
 	}
 }
 
-// TestHeartbeater_CarriesNoTenantIdentifier pins ADR-028 §D3 (PII
+// TestHeartbeater_CarriesNoTenantIdentifier pins ADR-028 §事件不帶租戶識別碼 (PII
 // minimisation): this event lands in a 30-day audit store, so it must not carry
 // any customer identifier. Asserted on the KEY SET rather than against a
 // specific field name, so a future `tenant`, `tenant_id` or `tenantID` all trip

@@ -597,7 +597,7 @@ def test_jitter_over_cap_rejected(tmp_path):
 
 
 def test_staleness_tail_exceeding_series_fails_loud(tmp_path):
-    """MED-2: staleness_tail >= 整條序列 → fail-loud（D8.4），不靜默 no-op。"""
+    """MED-2: staleness_tail >= 整條序列 → fail-loud（ADR-030 §8 第 4 道），不靜默 no-op。"""
     def mut(pack):
         pack["signatures"][0].setdefault("time_axis", {})["staleness_tail"] = "10h"
     p = _mutate_fixture(tmp_path, _DISK, mut)

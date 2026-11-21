@@ -101,7 +101,7 @@ Fixes: Trap #12
 
 The verb (`Resolves` / `Closes` / `Fixes` / `Fix`) is **case-insensitive**; the ID itself must be `\b`-bounded so that `TRK-1` does not eat `TRK-100`. CI's `check_planning_status_sync.py` (chunk 2b, pending) verifies that the matching `frontmatter status:` flips to `done` and the `pr_ref:` field is populated in the same PR.
 
-**Namespace rules (effective v2.8.1, per [ADR-019 §Namespace Policy](../adr/019-planning-ssot.md#namespace-policy三-namespace-共存)):**
+**Namespace rules (effective v2.8.1, per [ADR-019 §編號政策](../adr/019-planning-ssot.md#編號政策三種前綴並存)):**
 
 - **`TRK-NNN`** is the **only** namespace for new tracking items — unifies the legacy `TECH-DEBT-NNN` / `TD-NN` / `HA-NN` / `REG-NN` four-way split. Numeric ranges encode the source namespace (see [`planning-id-mapping.md`](planning-id-mapping.md) §編號分區). ⛔ New items are numbered by their newly-opened tracking issue — `TRK-<issue number>`, four digits or more; three-digit numbers belong to the table frozen at TRK-392 and must not be allocated (ADR-019, #2106).
 - Legacy IDs in old commit messages / external citations still work during the transition window — CI auto-translates via the mapping doc but emits a warning. New commits must use `TRK-NNN`.

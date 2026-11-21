@@ -370,7 +370,7 @@ spec:
 | ADR-016 | [conf.d/ 目錄分層 + 混合模式 + 遷移策略](adr/016-conf-d-directory-hierarchy-mixed-mode.md) | ✅ Accepted | v2.7.0 |
 | ADR-017 | [_defaults.yaml 多層繼承與雙雜湊熱重載](adr/017-defaults-yaml-inheritance-dual-hash.md) | ✅ Accepted | v2.7.0 |
 | ADR-018 | [Profile-as-Directory-Default](adr/018-profile-as-directory-default.md) | 🟢 Accepted | v2.8.0 |
-| ADR-019 | [Planning SSOT — Frontmatter Contract + Discovery-based Index](adr/019-planning-ssot.md) | ✅ Accepted | v2.8.0 |
+| ADR-019 | [計畫追蹤的單一來源 — 各條目自帶 frontmatter，索引自動產生](adr/019-planning-ssot.md) | ✅ Accepted | v2.8.0 |
 | ADR-020 | [Tenant Federation — Label-Injection Proxy over Self-Built Endpoint](adr/020-tenant-federation.md) | ✅ Accepted | v2.8.0 |
 | ADR-021 | [Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled](adr/021-tenant-log-query-federation.md) | ✅ Accepted | v2.9.0 |
 | ADR-022 | [tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment](adr/022-dev-auth-bypass-four-layer-containment.md) | ✅ Accepted | v2.9.0 |
@@ -379,9 +379,9 @@ spec:
 | ADR-025 | [告警平面自我存活性 — 讓告警系統能偵測自己的死亡](adr/025-alerting-plane-self-liveness.md) | ✅ Accepted | — |
 | ADR-026 | [Node/Cluster 維護告警抑制 — 不需要子系統](adr/026-node-maintenance-liveness-suppression.md) | 🟡 Proposed | — |
 | ADR-027 | [tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分](adr/027-tenant-api-caller-identity.md) | ✅ Accepted | — |
-| ADR-028 | [Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控](adr/028-federation-revocation-tamper-evidence.md) | ✅ Accepted | — |
+| ADR-028 | [偵測聯邦 token 撤銷被偷偷撤回 — 以叢集外的日誌對帳為主](adr/028-federation-revocation-tamper-evidence.md) | ✅ Accepted | — |
 | ADR-029 | [租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後](adr/029-custom-alert-cross-tenant-query-scoping.md) | ✅ Accepted | — |
-| ADR-030 | [決策層遷移驗證 — 製造 Oracle 而非觀測](adr/030-decision-layer-migration-validation.md) | 🟢 Accepted | — |
+| ADR-030 | [告警遷移驗證：注入人造故障，量新規則接住多少](adr/030-decision-layer-migration-validation.md) | 🟢 Accepted | — |
 | ADR-031 | [slo_burn_rate recipe — 宣告式 SLO 告警編譯](adr/031-slo-burn-rate-recipe.md) | ✅ Accepted | — |
 | ADR-032 | [夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點](adr/032-paired-interleaved-bench-measurement.md) | ✅ Accepted | — |
 | ADR-033 | [與運維執行平面的協同介面 — MariaDB 計畫性作業](adr/033-ops-execution-plane-interface.md) | ✅ Accepted | — |

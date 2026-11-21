@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""inject_waveform.py — fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2）
+"""inject_waveform.py — fault-waveform 注入執行器（ADR-030 決策層驗證）
 
 管線：waveform pack（SME 盲寫、PR-1 schema）→ 函式級呼叫 PR-1 編譯
 （validate → synthesize → materialize_vm）→ 注入隔離 vmsingle →
@@ -42,7 +42,7 @@ exact-match 歸因（對 records 単射、無雙重歸因），topology labels �
     - 殘餘風險：**同一台 vmsingle 勿並發多個 inject**（pre-check→import 間
       TOCTOU）；slot 掃描上限 512，掃完仍髒 → exit 2 換 VM。
 
-D8.4 fail-loud：schema 無效(1)；binary 缺 / VM 不可達 / 零注入行 / import・flush・
+ADR-030 §8 第 4 道 fail-loud：schema 無效(1)；binary 缺 / VM 不可達 / 零注入行 / import・flush・
 replay 失敗 / 殘留窗 / 注入後在場驗證失敗 / replay 正控（sentinel）沒 fire →
 一律 exit 2 + 明確 stderr。「候選規則沒 fire」是合法資料（fired:false、exit 0），
 與管線壞掉（exit 2）絕不混淆。兩道正控分工：
@@ -639,7 +639,7 @@ def _print_human(report: dict) -> None:
 def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="fault-waveform 注入執行器（ADR-030 PR-2）：pack → 編譯 → 注入隔離 "
+        description="fault-waveform 注入執行器（ADR-030）：pack → 編譯 → 注入隔離 "
                     "vmsingle → vmalert -replay 候選規則 → per-signature 開火紀錄"
                     "（PR-3 catch-rate 原料；不算 catch-rate、不做 temporal-match）")
     parser.add_argument("pack", help="waveform pack YAML 路徑（單一 pack）")
@@ -686,7 +686,7 @@ def main() -> "int | Report":
 
     if sys.flags.optimize:
         print("ERROR: 禁止在 python -O 下執行——vm_harness 以 assert 訊號管線失敗，"
-              "-O 會把失敗變靜默（D8.4 fail-loud 破功）", file=sys.stderr)
+              "-O 會把失敗變靜默（ADR-030 §8 第 4 道 fail-loud 破功）", file=sys.stderr)
         return EXIT_CALLER_ERROR
     if args.fanout < 1:
         parser.error("--fanout must be >= 1")

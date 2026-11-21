@@ -59,7 +59,7 @@ def test_vector_present_when_required() -> None:
     the mtail twin it mirrored retired with mtail in #1278 D1).
 
     ``TestVectorValidateAndTest`` is the ONLY place the shipped VRL is executed
-    rather than string-matched — tenant fail-closed routing, the ADR-028 §D3 PII
+    rather than string-matched — tenant fail-closed routing, the ADR-028 §事件不帶租戶識別碼 PII
     drop, and the #1293 origin-spoof truth table are all proven there and nowhere
     else. Those tests are ``skipif``-gated on the binary, so if the CI ``Install
     Vector`` step is deleted or breaks, they SKIP, the job stays green, and the
@@ -182,7 +182,7 @@ class TestProjectionDisabledByDefault:
         assert not any(k.startswith("vl_tenant_") for k in cfg["sinks"])
         # The primary 0:0 sink is still there and still reads demux.
         #
-        # ⛔ CONTRACT CHANGE (ADR-028 D1 / #1234), not a test dodge: the 0:0
+        # ⛔ CONTRACT CHANGE (ADR-028 §證據通道 / #1234), not a test dodge: the 0:0
         # store now has TWO ingest paths, and the exact-list form is kept
         # deliberately so that dropping either one goes red. `demux` alone was
         # the bug — tenant-api's revocation events never reached the store, so
@@ -392,11 +392,11 @@ class TestProjectionEnabledShape:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Federation revocation EVIDENCE channel (ADR-028 D1 / #1234)
+# Federation revocation EVIDENCE channel (ADR-028 §證據通道 / #1234)
 #
 # The reconciler's evidence query returned zero rows forever because the Vector
 # source only tailed federation-gateway — tenant-api's `federation_token_revoked`
-# events never reached VictoriaLogs at all. ADR-028 §D3 assumed they did. These
+# events never reached VictoriaLogs at all. ADR-028 §證據通道 assumed they did. These
 # tests pin the pipeline shape that closes that gap; the BEHAVIOUR (parse/merge,
 # PII drop, no tenant-partition reachability) is pinned by `vector test` in
 # helm/vector/tests/projection_tests.yaml.
@@ -476,7 +476,7 @@ class TestFederationEvidenceChannel:
         collected that was not exactly the evidence producer fell through into
         demux and on to the 30-day 0:0 store — for a mislabelled tenant-api pod
         that means `caller` (operator email) and `remote` (client IP), exactly
-        what ADR-028 §D3 exists to exclude. With two positive matches an
+        what ADR-028 §事件不帶租戶識別碼 exists to exclude. With two positive matches an
         unrecognised row lands in `origin_split._unmatched`, which nothing
         consumes, so the failure is a DROP. Reverting either branch to a
         negation must fail here."""
@@ -528,7 +528,7 @@ class TestFederationEvidenceChannel:
 
     @_needs_helm
     def test_evidence_vrl_drops_everything_but_the_two_events(self, repo_root: Path) -> None:
-        """ADR-028 §D3 PII minimisation. tenant-api's request middleware logs
+        """ADR-028 §事件不帶租戶識別碼 PII minimisation. tenant-api's request middleware logs
         `caller` (the operator's EMAIL) and `remote` (client IP) on EVERY
         request; the whole pod stderr must NOT enter a 30-day audit store.
 

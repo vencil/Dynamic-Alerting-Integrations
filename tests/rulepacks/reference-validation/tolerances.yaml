@@ -1,6 +1,6 @@
-# Detection-time ceiling matrix (D5). ⚠️ ILLUSTRATIVE values for the Vibe REFERENCE
+# Detection-time ceiling matrix (ADR-030 §5). ⚠️ ILLUSTRATIVE values for the Vibe REFERENCE
 # report — NOT customer-derived. Real engagement ceilings come from that customer's
-# MTTA/SLO (ADR-030 D5). Seconds; a hit later than the ceiling past fault-end = miss.
+# MTTA/SLO (ADR-030 §5). Seconds; a hit later than the ceiling past fault-end = miss.
 defaults:
   critical: 600
   warning: 1800

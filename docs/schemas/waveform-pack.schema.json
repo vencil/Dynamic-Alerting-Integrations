@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "waveform-pack.schema.json",
-  "title": "Fault-Waveform Pack (ADR-030 decision-layer validation, PR-1)",
+  "title": "Fault-Waveform Pack (ADR-030 decision-layer validation)",
   "description": "SME-elicited fault signature pack consumed by scripts/tools/dx/waveform_compile.py. Two hard tiers: SME semantic fields (validator says 退回 SME on gaps) vs platform fields (validator says 平台補填). Anti-tautology: source enum forbids deriving waveforms from rule thresholds; independent_of_rule_conversion is a const-true attestation.",
   "type": "object",
   "additionalProperties": false,
@@ -35,7 +35,7 @@
         },
         "independent_of_rule_conversion": {
           "const": true,
-          "description": "Attestation: waveform parameters were provided by an SME NOT involved in writing/converting the VM rules, and were NOT reverse-engineered from rule thresholds (ADR-030 D2 anti-tautology). Must be literally true."
+          "description": "Attestation: waveform parameters were provided by an SME NOT involved in writing/converting the VM rules, and were NOT reverse-engineered from rule thresholds (ADR-030 §2 anti-tautology). Must be literally true."
         },
         "readback_signed_off": {
           "type": "boolean",
@@ -179,7 +179,7 @@
         },
         "shape_class": {
           "enum": ["ramp", "spike", "plateau", "step"],
-          "description": "Platform field: waveform envelope class (maps back to ADR-030 R2-5 shape taxonomy)."
+          "description": "Platform field: waveform envelope class (maps back to ADR-030 §2 questionnaire)."
         },
         "noise_kind": {
           "enum": ["gaussian", "uniform"],
