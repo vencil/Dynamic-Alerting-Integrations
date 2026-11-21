@@ -760,9 +760,9 @@ keys:
     desc: Active connections warning
     metric_class: saturation
     arming: operator
-    portability: ratio_pending
-    portability_reason: "An absolute connection count does not carry across deployments (#1176 measured a benign peak of 360); the portable form is a share of MAXAPPLS, pending #1320"
-    portability_reason_zh: "絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320"
+    portability: site_specific
+    portability_reason: "A healthy connection count depends on the workload and the pool sizes in front of the database (#1176 measured a benign peak of 360), and Db2 offers no ceiling to take a share of: MAXAPPLS defaults to AUTOMATIC, which allows any number of connections. Where MAXAPPLS is set by hand, use about 85% of it"
+    portability_reason_zh: "正常的連線數取決於工作負載與資料庫前面的連線池大小（#1176 量到良性尖峰 360），而 Db2 沒有可以拿來算比例的上限：MAXAPPLS 預設 AUTOMATIC，允許任意數量的連線。手動固定 MAXAPPLS 的部署可取它的約 85%"
     value_counterexample:
       issue: 1176
       direction: over_fire

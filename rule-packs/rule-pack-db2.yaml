@@ -12,7 +12,8 @@
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   db2_connections_active: 200   # count — Active connections warning
 #       ⚠ 參考庫實測反例（#1176）：尖峰時段的工作負載會到 360 個連線 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-#       未啟用（待改比值）：絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320
+#       未啟用（依部署而定）：正常的連線數取決於工作負載與資料庫前面的連線池大小（#1176 量到良性尖峰 360），而 Db2 沒有可以拿來算比例的上限：MAXAPPLS 預設
+#       AUTOMATIC，允許任意數量的連線。手動固定 MAXAPPLS 的部署可取它的約 85%
 #   db2_bufferpool_hit_ratio: 0.95   # ratio — Bufferpool hit ratio warning
 #       未啟用（依部署而定）：交易型與分析型工作負載的合理命中率不同
 #   db2_lock_wait_time: 10
@@ -404,8 +405,8 @@ groups:
         annotations:
           summary: "DB2 active connections critical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 連線數嚴重過高"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 connections at critical level — check headroom to MAXAPPLS (new connections are refused past it); cap the offending pool"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 連線數達嚴重水位 — 請確認距 MAXAPPLS 的餘裕（超過後新連線會被拒）；限制造成問題的連線池"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 connections at critical level — if MAXAPPLS is set by hand, new connections are refused past it (the default AUTOMATIC does not cap them); cap the offending pool"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 連線數達嚴重水位 — 若 MAXAPPLS 是手動固定的，超過後新連線會被拒（預設的 AUTOMATIC 不設上限）；限制造成問題的連線池"
           description: "{{ $value | printf \"%.0f\" }} active connections (critical threshold exceeded)"
           description_zh: "{{ $value | printf \"%.0f\" }} 個活動連線（超過嚴重閾值）"
 
