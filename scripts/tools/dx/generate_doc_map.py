@@ -15,7 +15,6 @@
 import argparse
 import os
 import re
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +22,6 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR.parent))  # #3107: the atomic writer is in scripts/tools/
-from _lib_atomic_write import atomic_write_text  # noqa: E402
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -36,7 +34,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 # already use.
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
+from _lib_io import exit_on_output_write_error, write_repo_artifact  # noqa: E402  (#2128, #3981)
 from _lib_versions import (  # noqa: E402
     PlatformVersionUnreadable,
     require_platform_version,
@@ -484,9 +482,6 @@ def main():
                         help="Include ADR entries from docs/adr/ (default: True)")
     parser.add_argument("--no-adr", action="store_true",
                         help="Exclude ADR entries from docs/adr/")
-    parser.add_argument("--safe", action="store_true",
-                        help="Write via a private temp file + atomic os.replace "
-                             "(FUSE interruption safety; v2.8.0 Trap #60)")
 
     args = parser.parse_args()
     if args.no_adr:
@@ -503,20 +498,12 @@ def main():
             continue
 
         if args.generate:
-            # Force LF line endings on all platforms so Windows and Linux
-            # regens produce byte-identical output (prevents CRLF ping-pong
-            # drift in `--check`).
-            # #2128: an internal path (flag=None); either writer's failure is
-            # rc 2 + one line naming the map, not a traceback.
-            with output_write(map_path, flag=None):
-                if args.safe:
-                    atomic_write_text(map_path, content, newline="\n")
-                else:
-                    with open(map_path, "w", encoding="utf-8", newline="\n") as fh:
-                        fh.write(content)
-                os.chmod(map_path,
-                         stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
-                         | stat.S_IROTH)
+            # #3981: a tracked file this tool owns — the artifact entry, on
+            # every run (the atomic replace `--safe` used to opt into). LF on
+            # every host, so Windows and Linux regens are byte-identical. An
+            # internal path (flag=None): a failure is rc 2 + one line naming
+            # the map, not a traceback (#2128).
+            write_repo_artifact(map_path, content)
             entry_count = content.count("\n|") - 2
             print(f"✅ Generated {map_path.relative_to(REPO_ROOT)} "
                   f"({entry_count} entries, {lang})")
