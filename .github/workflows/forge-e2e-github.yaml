@@ -32,6 +32,7 @@ on:
       - "scripts/ops/workflow_path_filter.py"
       - "scripts/tools/_lib_compat.py"
       - "scripts/tools/_lib_exitcodes.py"
+      - "scripts/tools/_lib_yaml_strict.py"
       # END GENERATED path-trace
   push:
     branches: [main]
