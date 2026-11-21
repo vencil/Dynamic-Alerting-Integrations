@@ -154,6 +154,9 @@ _UNCOMPARABLE_DEFAULTS = {
         "subtree shown as repository:tag plus a digest note",
     ("federation-gateway", "`auditLog.metrics.resources`"):
         "requests/limits mapping summarised as prose",
+    ("threshold-exporter", "`thresholdConfig.defaults.*`"):
+        "a generated mapping of the registry's default-armed keys; the row is "
+        "about how to switch one off, its numbers live in values.yaml (#3832)",
 }
 
 
