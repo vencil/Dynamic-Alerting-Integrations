@@ -176,7 +176,8 @@ def test_every_identity_label_is_one(label):
     ("topk without (da_cluster) (3, db_up)", cid.CLUSTER),
     ("sum(db_up)", cid.FLAT),
     ("month(db_ts)", cid.CLUSTER), ("day_of_week(user_threshold)", cid.FLAT),
-    ("month()", None), ("time()", None), ("pi()", None),
+    ("month()", cid.FLAT), ("day_of_week()", cid.FLAT),   # vector(time()): no labels, a vector
+    ("time()", None), ("pi()", None),
     ("vector(1)", cid.FLAT),
     ('label_replace(vector(1), "tenant", "t", "__name__", ".*")', cid.FLAT),
 ])
@@ -207,6 +208,10 @@ def test_what_is_under_a_node_is_judged_too():
     ("count by (da_cluster) (db_x) > on () group_left count(user_threshold)", []),
     ('max by (tenant, da_cluster) (db_x) > on (tenant) label_replace(vector(1), "tenant", "t", "", "")',
      [(cid.ONE_SIDE, "tenant")]),
+    ('max by (tenant, da_cluster) (db_x) > on (tenant) label_replace(month(), "tenant", "t", "", "")',
+     [(cid.ONE_SIDE, "tenant")]),
+    ('label_replace(month(), "tenant", "t", "", "") * on (tenant) group_right max by (tenant, da_cluster) (db_x)',
+     []),
 ])
 def test_a_per_cluster_side_must_be_the_many_side(expr, want):
     assert found(expr) == want

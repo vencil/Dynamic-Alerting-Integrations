@@ -119,8 +119,10 @@ _ALERT_SERIES = frozenset({"ALERTS", "ALERTS_FOR_STATE"})
 _FLAT_CALLS = frozenset({"absent", "absent_over_time", "vector"})
 #: Calls that return a scalar.
 _SCALAR_CALLS = frozenset({"scalar", "time", "pi"})
-#: The date functions: a scalar with no argument (`month()` is of `time()`),
-#: and with a vector argument that vector, labels kept.
+#: The date functions take a vector: with an argument that vector, labels
+#: kept; with none it is `vector(time())` — one sample with no labels, a
+#: vector and not a scalar (`label_replace(month(), …)` parses, of `time()`
+#: it does not).
 _DATE_CALLS = frozenset({"month", "year", "hour", "minute", "day_of_week",
                          "day_of_month", "day_of_year", "days_in_month"})
 #: Aggregations that SELECT series rather than combine them: what comes out
@@ -186,9 +188,9 @@ def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]")
         return judge(node["expr"], records, found)
     if kind == "call":
         scopes = [judge(a, records, found) for a in node["args"]]
-        if node["name"] in _FLAT_CALLS:
+        if node["name"] in _FLAT_CALLS or (node["name"] in _DATE_CALLS and not node["args"]):
             return FLAT
-        if node["name"] in _SCALAR_CALLS or (node["name"] in _DATE_CALLS and not node["args"]):
+        if node["name"] in _SCALAR_CALLS:
             return None
         # PromQL's functions take one vector; the other arguments are scalars or strings
         return next((sc for sc in scopes if sc is not None), None)
