@@ -264,9 +264,13 @@ def read_file_content(filepath: str) -> str:
 
 
 def write_file_content(filepath: str, content: str) -> None:
-    """Write file content (UTF-8, LF); an existing file keeps its mode."""
-    with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(content)
+    """Write file content (UTF-8, LF), atomically, through the artifact
+    entry (#3981). The file ends up with the mode git would check it out
+    with — its owner-execute bit is kept, nothing else of the old mode."""
+    # Imported here, not at the top: `_lib_io` imports PyYAML, and the
+    # read-only modes run where there is none (docs-ci runs `--check`).
+    from _lib_io import write_repo_artifact  # noqa: E402, PLC0415
+    write_repo_artifact(filepath, content)
 
 
 def generate_frontmatter(title: str, tags: List[str], audience: List[str],
@@ -404,7 +408,15 @@ def main():
                        help='Base directory to scan (default: current directory)')
 
     args = parser.parse_args()
+    if not (args.check or args.dry_run):
+        # The one mode that writes; see `write_file_content` for why the
+        # import is here.
+        from _lib_io import exit_on_output_write_error  # noqa: E402, PLC0415
+        return exit_on_output_write_error(_run)(args)
+    return _run(args)
 
+
+def _run(args):
     # #3276: the shared judgement of a caller-given path — of the string the
     # caller gave (#3406): `Path('')` is `.`, so `''` (an unset shell
     # variable) judged after it was the current directory, scanned and

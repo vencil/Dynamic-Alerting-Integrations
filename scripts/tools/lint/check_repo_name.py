@@ -119,8 +119,13 @@ def scan_file_full(filepath, fix=False):
         fixed_lines.append(line)
 
     if fix and changed:
-        with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
-            f.writelines(fixed_lines)
+        # #3981: atomic, through the artifact entry — a write that fails
+        # half-way no longer leaves the file truncated, and the failure is
+        # rc 2, named (`main` wraps the `--fix` run). Imported here, not at
+        # the top: `_lib_io` imports PyYAML, and the `repo-name-check` hook
+        # runs `--ci` in its own environment, which has none.
+        from _lib_io import write_repo_artifact  # noqa: E402, PLC0415
+        write_repo_artifact(filepath, "".join(fixed_lines))
 
     return violations
 
@@ -218,6 +223,8 @@ def main():
     )
     args = parser.parse_args()
 
+    # Before the import below: a caller error is named as one wherever the
+    # tool runs, PyYAML or not.
     if args.fix and not args.full_scan:
         print(
             'ERROR: --fix requires --full-scan (partial-line rewrites in '
@@ -225,6 +232,15 @@ def main():
         )
         return EXIT_CALLER_ERROR
 
+    if args.fix:
+        # The one mode that writes. See `scan_file_full` for why the import
+        # is here.
+        from _lib_io import exit_on_output_write_error  # noqa: E402, PLC0415
+        return exit_on_output_write_error(_run)(args)
+    return _run(args)
+
+
+def _run(args):
     # Resolve scan mode
     if args.full_scan:
         scan_mode = 'full-repo'

@@ -693,3 +693,79 @@ class TestCIGate:
         assert rc == cdl.EXIT_CALLER_ERROR, (
             f"a root with neither docs/ nor README.md is a caller error, "
             f"got {rc}")
+
+
+# ── #3981: `--fix-anchors` rewrites a tracked doc through the artifact entry ──
+
+def _doc_with_a_broken_anchor(tmp_path: Path) -> tuple[Path, list]:
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    doc = docs / "zdoc.md"
+    doc.write_text("see [x](#zold-anchor)\n", encoding="utf-8")
+    broken = [{"file": "docs/zdoc.md", "anchor": "zold-anchor",
+               "best_match": "znew-anchor", "link": "#zold-anchor"}]
+    return doc, broken
+
+
+def test_fix_anchors_rewrites_the_doc(tmp_path: Path) -> None:
+    doc, broken = _doc_with_a_broken_anchor(tmp_path)
+    assert cdl._fix_broken_anchors(broken, tmp_path) == 1
+    assert doc.read_text(encoding="utf-8") == "see [x](#znew-anchor)\n"
+
+
+def test_fix_anchors_that_cannot_write_the_doc_is_exit_2(tmp_path: Path, capsys) -> None:
+    """A write that fails used to be a traceback at rc 1 with the doc already
+    truncated (`Path.write_text` opens with `w` first). Through the artifact
+    entry it is rc 2, one line naming the file, and the doc is as it was."""
+    doc, broken = _doc_with_a_broken_anchor(tmp_path)
+
+    class Checker:
+        def __init__(self, root, verbose=False):
+            self.broken_anchors = broken
+
+        def run(self):
+            return 0
+
+    def refuse(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    with patch.object(cdl, "DocLinkChecker", Checker), \
+            patch.object(sys, "argv", ["check_doc_links.py", "--fix-anchors",
+                                       "--repo-root", str(tmp_path)]), \
+            patch("os.replace", refuse), pytest.raises(SystemExit) as exc:
+        cdl.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert str(doc) in err and "Traceback" not in err, err
+    assert doc.read_text(encoding="utf-8") == "see [x](#zold-anchor)\n"
+    assert [p.name for p in doc.parent.iterdir()] == ["zdoc.md"]
+
+
+@pytest.mark.parametrize("before, after", [(0o755, 0o755), (0o600, 0o644), (0o664, 0o644)])
+def test_fix_anchors_leaves_the_mode_git_would_check_out(tmp_path: Path, before, after) -> None:
+    """Review: this tool is not in the scenario matrix of
+    tests/dx/test_shared_atomic_write_callers.py (its rewrite cannot be
+    stubbed to that matrix's OLD -> NEW), so a `mode=` passed at the call
+    went unnoticed."""
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits")
+    doc, broken = _doc_with_a_broken_anchor(tmp_path)
+    os.chmod(doc, before)
+    assert cdl._fix_broken_anchors(broken, tmp_path) == 1
+    assert os.stat(doc).st_mode & 0o777 == after
+
+
+def test_fix_anchors_updates_every_name_of_a_hard_linked_doc(tmp_path: Path, capsys) -> None:
+    """…and neither did `atomic_only=True`, which refuses the in-place
+    fallback a hard-linked file needs."""
+    doc, broken = _doc_with_a_broken_anchor(tmp_path)
+    twin = tmp_path / "ztwin.md"
+    try:
+        os.link(doc, twin)
+    except (OSError, NotImplementedError):
+        pytest.skip("no hard links here")
+    assert cdl._fix_broken_anchors(broken, tmp_path) == 1
+    want = "see [x](#znew-anchor)\n"
+    assert doc.read_text(encoding="utf-8") == want
+    assert twin.read_text(encoding="utf-8") == want
+    assert os.stat(doc).st_ino == os.stat(twin).st_ino

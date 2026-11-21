@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_io import (  # noqa: E402  (#3981: the committed README is a repo artifact)
+    exit_on_output_write_error, write_repo_artifact)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from validate_docs_versions import count_rule_packs  # noqa: E402
 # The metadata annotation templates' one spelling (#3483): the example below must
@@ -276,6 +278,12 @@ def count_preloaded_packs(rule_packs_dir: Path) -> int:
     return count_rule_packs(rule_packs_dir, k8s_rules_dir)["pack_count"]
 
 
+def _readme_path(rule_packs_dir: Path) -> Path:
+    """The README this tool owns, beside the rule packs it describes."""
+    return rule_packs_dir / "README.md"
+
+
+@exit_on_output_write_error
 def main():
     """CLI entry point: Generate rule-packs/README.md from actual YAML rule pack files."""
     parser = argparse.ArgumentParser(
@@ -319,7 +327,7 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     generated_content = generate_readme_content(rows, total_records, total_alerts, pack_count)
-    readme_path = args.rule_packs_dir / "README.md"
+    readme_path = _readme_path(args.rule_packs_dir)
 
     if args.check:
         # Read current README and compare
@@ -345,16 +353,13 @@ def main():
             sys.exit(EXIT_OK)
 
     elif args.update:
-        # Write to file. newline="\n" forces LF on all platforms so a regen on
-        # the Windows host matches the `*.md eol=lf` .gitattributes + Linux-CI
-        # generator output (otherwise a CRLF working tree shows phantom drift).
-        try:
-            with open(readme_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write(generated_content)
-            print(f"Updated {readme_path}", file=sys.stderr)
-        except IOError as e:
-            print(f"Error: Failed to write {readme_path}: {e}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+        # #3981: through the artifact entry — atomic, LF on every platform
+        # (a regen on the Windows host matches `*.md eol=lf`), and a target
+        # that is not a regular file is refused before it is opened (a FIFO
+        # there used to hang this run). A failure is rc 2, named, by
+        # `exit_on_output_write_error` on `main`.
+        write_repo_artifact(readme_path, generated_content)
+        print(f"Updated {readme_path}", file=sys.stderr)
 
     else:
         # Default: dry-run (print to stdout)
