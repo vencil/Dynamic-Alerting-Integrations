@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
+"""租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
+
+No `rule_packs` (#4141): once the readers serve the default-armed keys for
+every tenant (#3832), a pack inferred from the served keys was the same for
+all of them. What a tenant declares is `_metadata.db_type`.
 
 The tenants and every value read here come from `da-guard served-values`
 (#2115 0-B/B4), so the tool needs da-guard: `$DA_GUARD_BINARY`, else
@@ -76,62 +80,8 @@ DEFAULT_CONFIG_DIR = REPO_ROOT / "components" / "threshold-exporter" / "config" 
 
 
 # ---------------------------------------------------------------------------
-# Metric prefix to rule pack mapping (from _lib_constants.py)
-# ---------------------------------------------------------------------------
-METRIC_PREFIX_DB_MAP = {
-    "mysql_": "mariadb",
-    "mariadb_": "mariadb",
-    "pg_": "postgresql",
-    "postgres_": "postgresql",
-    "redis_": "redis",
-    "mongo_": "mongodb",
-    "mongodb_": "mongodb",
-    "kafka_": "kafka",
-    "rabbitmq_": "rabbitmq",
-    "rabbit_": "rabbitmq",
-    "elasticsearch_": "elasticsearch",
-    "es_": "elasticsearch",
-    "oracle_": "oracle",
-    "clickhouse_": "clickhouse",
-    "db2_": "db2",
-    "container_": "kubernetes",
-    "jvm_": "jvm",
-    "nginx_": "nginx",
-}
-
-# Always-included packs (inferred from reserved metric keys)
-RESERVED_PACKS = {"operational", "platform"}
-
-
-# ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-def infer_rule_packs(tenant_config: dict) -> list[str]:
-    """Infer rule packs from metric key prefixes.
-
-    `tenant_config` holds the threshold keys /metrics serves for the tenant
-    in some part of the day (#4109), so a key inherited from `defaults:`
-    counts as if the tenant had written it (#2115 0-B/B4); a key /metrics
-    serves at no minute (switched off, no default) is not there."""
-    packs = set(RESERVED_PACKS)
-
-    for key in tenant_config.keys():
-        # Skip reserved keys
-        if key.startswith("_"):
-            continue
-
-        # Extract metric prefix (everything before first underscore or [)
-        metric = key.split("[")[0] if "[" in key else key
-
-        # Match metric prefix to rule pack
-        for prefix, pack in METRIC_PREFIX_DB_MAP.items():
-            if metric.startswith(prefix):
-                packs.add(pack)
-                break
-
-    return sorted(list(packs))
-
-
 def extract_owner(tenant_config: dict) -> str:
     """Extract owner from _metadata.owner if present."""
     metadata = tenant_config.get("_metadata", {})
@@ -349,7 +299,6 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
             "tier": extract_tier(tenant_config),
             "domain": domain,
             "db_type": db_type,
-            "rule_packs": infer_rule_packs(tenant_config),
             "owner": extract_owner(tenant_config),
             "routing_channel": extract_routing_channel(tenant_config),
             "metric_count": count_metrics(tenant_config),

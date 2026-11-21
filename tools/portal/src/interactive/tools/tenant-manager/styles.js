@@ -328,20 +328,6 @@ const styles = {
     'tier-2': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
     'tier-3': { backgroundColor: 'var(--da-color-tag-bg)', color: 'var(--da-color-tag-fg)' },
   },
-  pills: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: 'var(--da-space-1)',
-    marginBottom: 'var(--da-space-3)',
-  },
-  pill: {
-    backgroundColor: 'var(--da-color-tag-bg)',
-    color: 'var(--da-color-tag-fg)',
-    padding: 'var(--da-space-1) var(--da-space-2)',
-    borderRadius: 'var(--da-radius-pill)',
-    fontSize: 'var(--da-font-size-xs)',
-    fontWeight: 'var(--da-font-weight-medium)',
-  },
   row: {
     display: 'flex',
     justifyContent: 'space-between',
