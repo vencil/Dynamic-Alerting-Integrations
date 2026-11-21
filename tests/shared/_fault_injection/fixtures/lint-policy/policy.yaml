@@ -2,7 +2,6 @@
 # (.github/custom-rule-policy.yaml): shorter range vectors, a tighter group
 # interval, `absent` denied as well, and `severity` required beside `tenant`.
 denied_functions:
-  - holt_winters
   - predict_linear
   - quantile_over_time
   - absent

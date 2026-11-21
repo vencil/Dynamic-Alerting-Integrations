@@ -105,6 +105,9 @@ REQUIRED_DATA_FILES: dict = {
     "_grar_validate.py": ("configmap-rules-platform.yaml",),
     "_lib_validation.py": ("tenant-config.schema.json",),
     "_lib_consumer_read.py": ("PrometheusRule_v1.json",),
+    # #4099: the built-in lint policy is the repo's policy file; without it
+    # lint refuses to run (builtin_policy_missing), never lints by nothing.
+    "lint_custom_rules.py": ("custom-rule-policy.yaml",),
     "_threshold_alerts.py": (
         "rule-pack-clickhouse.yaml",
         "rule-pack-db2.yaml",

@@ -5,7 +5,6 @@
 # 由 scripts/tools/lint_custom_rules.py 讀取。
 
 denied_functions:
-  - holt_winters           # CPU 密集型函式
   - predict_linear         # 大範圍回溯查詢
   - quantile_over_time     # 高記憶體消耗
 
@@ -41,7 +40,6 @@ file_overrides:
       # 下 per-PVC fan-out，但 PVC/租戶為個位數 → bounded。whitelist 對 forecast
       # 維持「pod 不可」（pod fan-out × predict_linear × 8h lookback 為另一數量級）。
       denied_functions:
-        - holt_winters
         - quantile_over_time
       # 下一行的值由 scripts/tools/dx/gen_recipe_contract.py 依 recipe 契約寫入，勿手改。
       max_range_duration: 96h   # forecast lookback 上限 = max(lookback_factor·最大 horizon, lookback_floor)

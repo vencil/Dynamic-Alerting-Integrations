@@ -349,7 +349,7 @@ RECIPES: list[Recipe] = [
 
     R("lint_custom_rules",
       lambda t, s: [_denied_function_rules_dir(t)],
-      note="denied function holt_winters => lint ERROR; 0 -> 1"),
+      note="holt_winters (gone in Prometheus 3) => the rule loader refuses the file, lint ERROR; 0 -> 1"),
 
     # Webhook receiver at a dead endpoint (port 1) => the live send fails.
     R("notification_tester",

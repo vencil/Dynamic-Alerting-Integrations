@@ -186,45 +186,15 @@ All rules submitted to `rule-packs/custom/` must pass automated checks.
 
 ### 4.1 Deny-list Rules
 
+The lint tool's built-in policy **is** the file below (`.github/custom-rule-policy.yaml`, shipped in the da-tools image); it is included here as it is, not copied ([#4099](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4099)). A file given to `--policy` overrides it key by key (its comments are in Chinese, the source language of this repo):
+
 ```yaml
-# .github/custom-rule-policy.yaml (optional; the lint tool has a built-in default policy)
-denied_functions:
-  - holt_winters           # CPU-intensive function
-  - predict_linear         # Large lookback queries
-  - quantile_over_time     # High memory consumption
-
-preserved_labels:
-  - tenant                 # Every alert's result must keep tenant (judged on Prometheus' parse tree)
-
-required_labels:
-  - tenant                 # All Custom Alert Rules must include tenant label
-
-max_range_duration: 1h     # Prohibit excessively long range vectors (e.g., [7d])
-max_evaluation_interval: 60s  # Custom Rule Group interval cap
-
-# Every value is judged when the policy is loaded (#4061); a wrong one exits 2,
-# naming the key and why: denied_functions / preserved_labels / required_labels
-# are lists (possibly empty) of non-empty strings (a single string is refused,
-# no longer matched character by character); the two durations are positive
-# Prometheus durations, Prometheus' ParseDuration grammar (90m, 1h30m, 2w; not
-# 1.5h, not an unquoted 5). A group's interval is read with the same grammar.
-
-# This file is lint's alone (`lint --policy`, `validate-config --lint-policy`);
-# the webhook domain allowlist `allowed_domains` lives in the deployment policy
-# (another file, for --policy of generate-routes / validate-config). Each
-# refuses the other's keys (#3797).
-
-# Per-file exemptions for platform-COMPILED packs (v2.10.0) — the deny-list
-# governs tenant hand-written raw PromQL; compiler-emitted packs (e.g. the
-# Custom Alerts forecast recipe's predict_linear, whose cost mitigations are
-# baked in at compile time) get an audited exemption via file_overrides
-file_overrides:
-  - path: rule-packs/rule-pack-custom-alerts.yaml
-    require_generated_marker: true   # header must carry the GENERATED marker, else fully linted
-    policy:
-      denied_functions: [holt_winters, quantile_over_time]  # predict_linear exempted
-      max_range_duration: 96h        # forecast lookback cap = max(lookback_factor·largest horizon, lookback_floor), generated from the recipe contract
+--8<-- ".github/custom-rule-policy.yaml"
 ```
+
+- **Every value is judged when the policy is loaded** ([#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)); a wrong one exits `2`, naming the key and why: `denied_functions` / `preserved_labels` / `required_labels` are lists (possibly empty) of non-empty strings (a single string is refused, no longer matched character by character); the two durations are positive Prometheus durations, Prometheus' `ParseDuration` grammar (`90m`, `1h30m`, `2w`; not `1.5h`, not an unquoted `5`). A group's `interval` is read with the same grammar.
+- **Every `denied_functions` name must be one a rule can call** ([#4099](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4099)): a function or aggregation operator that the parser Prometheus loads rule files with knows and has enabled (answered by `da-read promql-names`; the deployed Prometheus enables no experimental feature). A typo, `holt_winters` (gone in Prometheus 3), or an experimental function not enabled (such as `double_exponential_smoothing`, whose rules the rule loader refuses anyway) exits `2` before anything is linted — such an entry denied nothing.
+- This file is lint's alone (`lint --policy`, `validate-config --lint-policy`); the webhook domain allowlist `allowed_domains` lives in the deployment policy (another file, for `--policy` of `generate-routes` / `validate-config`). Each refuses the other's keys ([#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)).
 
 > **Ranges and functions are judged as Prometheus reads them** ([#4080](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4080)): the expression is read by Prometheus' PromQL parser, never matched as text.
 > `max_range_duration` is compared with the width of the window each selector reads: its own
@@ -304,7 +274,7 @@ docker run --rm \
 
 # Example output
 # PASS: custom_tenant_rules.yaml - 2 rules checked
-# FAIL: bad_rule.yaml:15 - denied function 'holt_winters' in expr
+# FAIL: bad_rule.yaml:15 - denied function 'predict_linear' in expr
 # FAIL: bad_rule.yaml:22 - missing required label 'tenant'
 ```
 

@@ -79,6 +79,11 @@
 // call and selector, each holding its operands (promql_shape.go):
 // {"documents": [[<node>, …]]}.
 //
+// `promql-names` reads a JSON array of names on standard input and prints,
+// per name, whether a rule's expression can call it — a function or an
+// aggregation operator the rule loader's parser accepts (promql_names.go):
+// {"documents": [[true|false, …]]}.
+//
 // `-` reads standard input — how a file held in a ConfigMap is handed over
 // once its outer layer is read the Kubernetes way (da-crdecode); for
 // `prometheus-rules` at most once.
@@ -169,6 +174,7 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
 	say(stderr, "       %s promql-label-flow <label> -\n", programName)
 	say(stderr, "       %s promql-reads -\n", programName)
+	say(stderr, "       %s promql-names -\n", programName)
 	say(stderr, "       %s promql-shape -\n", programName)
 	say(stderr, "       %s %s\n", programName, selfCheckCmd)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
@@ -211,6 +217,7 @@ var subcommands = map[string]subcommand{
 	"promql-selectors":  runSelectors,
 	"promql-label-flow": runLabelFlow,
 	"promql-reads":      runReads,
+	"promql-names":      runNames,
 	"promql-shape":      runShape,
 }
 
@@ -281,6 +288,30 @@ func runReads(operands []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	if err != nil {
 		say(stderr, "%s: %s: %v\n", programName, stdinName, err)
 		return refuse(stdout, stderr)
+	}
+	return write(stdout, stderr, append(out, '\n'), exitOK)
+}
+
+// runNames is `promql-names -`.
+func runNames(operands []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(operands) != 1 || operands[0] != "-" {
+		return usage(stderr)
+	}
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
+	}
+	names, err := jsonStrings(data)
+	if err != nil {
+		// the caller's framing: no answer about the input
+		say(stderr, "%s: standard input is not a JSON array of strings: %v\n", programName, err)
+		return exitCallerErr
+	}
+	out, err := readPromQLNames(names)
+	if err != nil {
+		say(stderr, "%s: %v\n", programName, err)
+		return exitCallerErr
 	}
 	return write(stdout, stderr, append(out, '\n'), exitOK)
 }

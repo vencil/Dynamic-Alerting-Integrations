@@ -364,6 +364,9 @@ REPO_DATA_FILES=(
     rule-packs/rule-pack-postgresql.yaml
     rule-packs/rule-pack-rabbitmq.yaml
     rule-packs/rule-pack-redis.yaml
+    # #4099 — the custom-rule lint's built-in policy is this file, not a copy
+    # in the tool (lint_custom_rules.builtin_policy).
+    .github/custom-rule-policy.yaml
 )
 
 for f in "${REPO_DATA_FILES[@]}"; do
