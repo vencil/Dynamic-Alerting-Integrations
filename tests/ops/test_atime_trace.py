@@ -487,6 +487,17 @@ def test_a_canary_directory_holding_someone_elses_files_is_refused_untouched(tmp
     state = tmp_path / "s2.json"
     _reset(repo, state)
     _reset(repo, state)
+    # …unless somebody has put a file of theirs into it since: the mark says
+    # who made the directory, not who owns everything in it.
+    canary = Path(_state(state)["canary"]["dir"])
+    for extra in (canary / "znotes.txt", canary / at.CANARY_DIR / "zmore.txt"):
+        extra.write_text("theirs\n", encoding="utf-8")
+        state.unlink(missing_ok=True)
+        proc = _tool(repo, "reset", "--state", str(state))
+        assert proc.returncode == 2 and extra.name in proc.stderr, proc.stderr
+        assert extra.read_text(encoding="utf-8") == "theirs\n"
+        extra.unlink()
+    _reset(repo, state)
 
 
 def test_git_is_not_led_to_another_repository_by_inherited_variables(tmp_path, monkeypatch):

@@ -345,11 +345,20 @@ def make_canaries(directory: Path, root: Path) -> dict:
             f"{root}: its canaries would say nothing about the tracked files.")
     if directory.exists() and not directory.is_dir():
         raise _caller_error(f"the canary directory {directory} is not a directory.")
-    if directory.is_dir() and any(directory.iterdir()) and not (directory / CANARY_MARK).is_file():
-        raise _caller_error(
-            f"the canary directory {directory} holds something this tool did not "
-            f"put there (no {CANARY_MARK}); it is not emptied. Name an empty or "
-            "absent directory.")
+    if directory.is_dir():
+        # Emptied only when EVERYTHING in it is this tool's: its mark, and
+        # nothing beside the names it creates. A file somebody added to an
+        # earlier canary directory is theirs, mark or no mark.
+        ours = {CANARY_MARK, CANARY_READ, CANARY_UNTOUCHED, CANARY_DIR}
+        found = {entry.name for entry in directory.iterdir()}
+        inner = directory / CANARY_DIR
+        if inner.is_dir():
+            found |= {f"{CANARY_DIR}/{e.name}" for e in inner.iterdir()} - {CANARY_INNER}
+        if found and (CANARY_MARK not in found or found - ours):
+            raise _caller_error(
+                f"the canary directory {directory} holds something this tool did "
+                f"not put there ({', '.join(sorted(found - ours)) or f'no {CANARY_MARK}'}); "
+                "it is not emptied. Name an empty or absent directory.")
     try:
         if directory.is_dir():
             shutil.rmtree(directory)
