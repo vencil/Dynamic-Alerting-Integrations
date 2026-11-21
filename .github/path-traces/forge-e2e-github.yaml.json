@@ -1,0 +1,39 @@
+{
+  "jobs": {
+    "github-e2e": {
+      "files": [
+        "components/tenant-api/internal/github/client.go",
+        "components/tenant-api/internal/github/client_test.go",
+        "components/tenant-api/internal/github/tracker.go",
+        "components/tenant-api/internal/github/tracker_test.go",
+        "components/tenant-api/internal/gitlab/client.go",
+        "components/tenant-api/internal/gitlab/client_test.go",
+        "components/tenant-api/internal/gitlab/tracker.go",
+        "components/tenant-api/internal/gitlab/tracker_test.go",
+        "components/tenant-api/internal/platform/branch_test.go",
+        "components/tenant-api/internal/platform/circuitbreaker.go",
+        "components/tenant-api/internal/platform/circuitbreaker_test.go",
+        "components/tenant-api/internal/platform/errors.go",
+        "components/tenant-api/internal/platform/errors_test.go",
+        "components/tenant-api/internal/platform/forge_ratelimit.go",
+        "components/tenant-api/internal/platform/forge_ratelimit_test.go",
+        "components/tenant-api/internal/platform/httpclient_test.go",
+        "components/tenant-api/internal/platform/platform.go",
+        "components/tenant-api/internal/platform/tracker.go",
+        "components/tenant-api/internal/platform/tracker_batch_test.go",
+        "components/tenant-api/internal/platform/tracker_test.go",
+        "components/tenant-api/internal/platform/transport.go",
+        "components/tenant-api/internal/platform/transport_test.go",
+        "components/tenant-api/test/forgee2e/forbidden_test.go",
+        "components/tenant-api/test/forgee2e/github_e2e_test.go",
+        "components/tenant-api/test/forgee2e/github_pagination_test.go",
+        "components/tenant-api/test/forgee2e/github_seed_test.go",
+        "components/tenant-api/test/forgee2e/gitlab_e2e_test.go",
+        "components/tenant-api/test/forgee2e/gitlab_seed_test.go",
+        "components/tenant-api/test/forgee2e/harness_test.go"
+      ],
+      "import_dirs": []
+    }
+  },
+  "workflow": "forge-e2e-github.yaml"
+}

@@ -280,23 +280,18 @@ ADVISORY_PATH_GATES: dict[str, tuple[str, str]] = {
         DIFF_DRIVEN,
         "the conf.d tree whose base/head pair it diffs; what it loads depends "
         "on that pair, so one run's reads say nothing about the next"),
-    "forge-e2e-github.yaml": (
-        AWAITS_READ_ASSERTION,
-        "`go test -tags forge_e2e` against a forge started for the run; not "
-        "wired yet"),
     "guard-defaults-impact.yml": (
         DIFF_DRIVEN,
         "the defaults files whose blast radius it reports; which scopes it "
         "runs depends on the files the PR changes"),
 }
 
-# The order the AWAITS_READ_ASSERTION workflows are wired in (ruling point 4;
-# image-ref-resolve.yaml and component-docker-build.yaml went first and are
-# traced). Kept beside the ledger and compared with it both ways, so the queue
-# cannot name a workflow the ledger has dropped or miss one it has gained.
-READ_ASSERTION_ORDER: tuple[str, ...] = (
-    "forge-e2e-github.yaml",
-)
+# The order the AWAITS_READ_ASSERTION workflows are wired in (ruling point 4).
+# Empty: the four it named — image-ref-resolve, component-docker-build,
+# backtest, forge-e2e-github — are traced. Kept beside the ledger and compared
+# with it both ways, so the queue cannot name a workflow the ledger has dropped
+# or miss one it gains.
+READ_ASSERTION_ORDER: tuple[str, ...] = ()
 
 # A pattern that matches no tracked file ON PURPOSE: (workflow, list label as
 # `generate --check` prints it, pattern) → why it stays. Checked both ways: a
