@@ -1063,6 +1063,14 @@ _DEFAULTS_CONFD_ROOTS_WITHOUT_ARTIFACTS: dict[str, str] = {
         "point is a conf.d holding a single `tenants:` file with no "
         "`_defaults.yaml` above it, so growing one would change the very "
         "shape the fixture characterises.",
+    "tests/fixtures/opa/configured-never-served/conf.d":
+        "a tree the documented rego examples are evaluated on (#4110): it "
+        "reads the key from the built-in defaults layer, so a `_defaults.yaml` "
+        "here would only restate a platform default.",
+    "tests/fixtures/opa/served-over-threshold/conf.d":
+        "a tree the documented rego examples are evaluated on (#4110): it "
+        "reads the key from the built-in defaults layer, so a `_defaults.yaml` "
+        "here would only restate a platform default.",
 }
 
 # Display prefix for artifact labels. ⛔ DISPLAY ONLY — it carries no meaning to

@@ -1,0 +1,3 @@
+tenants:
+  ta:
+    mysql_connection_usage_percent: disable
