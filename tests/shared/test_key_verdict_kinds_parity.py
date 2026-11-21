@@ -14,11 +14,14 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 
 import _lib_key_verdict  # noqa: E402
+import _lib_tenant_values  # noqa: E402
 from _grar_merge import FINDING_KINDS  # noqa: E402
 from generate_alertmanager_routes import _KEY_VERDICT_KINDS  # noqa: E402
 
@@ -99,3 +102,36 @@ def test_the_gate_kinds_are_the_ones_the_go_verdict_names():
                                  FINDINGKIND_GO.read_text(encoding="utf-8"), re.M))
     assert used <= set(registered), used - set(registered)
     assert set(_lib_key_verdict._GATE_KINDS) == {registered[c] for c in used}
+
+
+
+CONFIG_SCHEDULE_GO = (REPO / "components" / "threshold-exporter" / "app" / "pkg" / "config"
+                      / "schedule.go")
+
+
+def _go_json_fields(go: Path, struct: str) -> dict[str, bool]:
+    """`type <struct> struct { … }` 在 *go* 的 JSON 欄位名 → 有沒有 `omitempty`
+    （`json:"-"` 不算）。每個 `json:` tag 都要被讀到，否則算失敗。"""
+    src = go.read_text(encoding="utf-8")
+    m = re.search(rf"^type {struct} struct \{{\n(.*?)^\}}\n", src, re.S | re.M)
+    assert m, f"`type {struct} struct {{` is not in {go}"
+    tags = re.findall(r'json:"([^"]*)"', m.group(1))
+    fields = {t.split(",")[0]: "omitempty" in t.split(",")[1:] for t in tags if t.split(",")[0] != "-"}
+    assert fields, f"no json tag read from {struct} in {go}"
+    assert all(re.fullmatch(r"[a-z_]+", f) for f in fields), fields
+    return fields
+
+
+@pytest.mark.parametrize("record, go, struct, own", [
+    (_lib_key_verdict.KeyVerdict, KEYVERDICT_GO, "KeyVerdict", {"tenant"}),
+    (_lib_key_verdict.Finding, KEYVERDICT_GO, "Finding", set()),
+    (_lib_tenant_values.DeadEntry, CONFIG_SCHEDULE_GO, "DeadEntry", set()),
+], ids=["KeyVerdict", "Finding", "DeadEntry"])
+def test_the_python_records_carry_every_field_go_writes(record, go, struct, own):
+    """#4077：explain-keys 的每鍵輸出與 findings 就是這些記錄原樣序列化（去掉 tenant），
+    文件也只寫「同 da-guard key-verdict」。Go 多寫一個欄位而 Python 沒讀，那句話就悄悄
+    不成立——先前 `hint`、`gate_kind` 就是這樣漏掉的；Go 的 `omitempty`（空就不寫）在
+    Python 是 `OMIT_WHEN_NONE`，兩邊也要一樣。"""
+    fields = _go_json_fields(go, struct)
+    assert set(record._fields) - own == set(fields)
+    assert set(getattr(record, "OMIT_WHEN_NONE", ())) == {f for f, omit in fields.items() if omit}

@@ -253,3 +253,64 @@ def test_a_profile_key_no_tenant_binds_is_a_finding_with_no_tenant(tmp_path):
     assert "error: unread: _unknown_thing in _profiles.yaml (unregistered) — no tenant" in p.stdout
     p = _run("--config-dir", d, "--tenant", "db-b", "--json")
     assert _json(p)["findings"] == []
+
+
+
+def test_each_row_and_finding_is_da_guards_own(tmp_path, da_guard_binary):
+    """#4077：每鍵輸出與 findings 就是 `da-guard key-verdict` 的那一列與那一筆（每鍵去掉
+    tenant，本來就不在 da-guard 的 JSON 裡）——直接拿 da-guard 的輸出比，不再由手寫清單
+    或文件逐欄宣稱。樹裡放了 dead_entry 的兩種條目（被遮住的 window、被蓋滿的 default：
+    Go 不寫空的 `window`）、與非 dead_entry 的 finding（`dead_entries` 是 null）。"""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (d / "a.yaml").write_text(
+        "tenants:\n  t1:\n    mysql_conections: 70\n"
+        "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
+        "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
+        "        - window: \"01:00-03:00\"\n          value: \"5\"\n"
+        "    redis_memory:\n      default: \"60\"\n      overrides:\n"
+        "        - window: \"00:00-12:00\"\n          value: \"61\"\n"
+        "        - window: \"12:00-00:00\"\n          value: \"62\"\n", encoding="utf-8")
+    g = subprocess.run([da_guard_binary, "key-verdict", "--config-dir", str(d)],
+                       capture_output=True, encoding="utf-8", timeout=300)
+    assert g.returncode == 0, g.stderr
+    want = json.loads(g.stdout)
+    p = _run("--config-dir", d, "--json")
+    assert p.returncode == 0, p.stderr
+    doc = _json(p)
+    assert doc["tenants"] == want["tenants"]
+    assert doc["findings"] == want["findings"]
+    kinds = {f["kind"] for f in want["findings"]}
+    reasons = {e["reason"] for f in want["findings"] for e in f["dead_entries"] or ()}
+    assert {"dead_entry", "unread"} <= kinds and {"window_covered", "default_covered"} <= reasons, \
+        (kinds, reasons)  # 樹真的涵蓋了上面說的形狀
+
+
+def test_a_dead_entry_is_written_as_da_guard_writes_it(tmp_path):
+    """#4077：排程裡永遠不生效的條目在判決裡仍是 `read`、沒有等級，只看得到
+    `dead_entries`（物件，不是位置陣列）；`--assert` 釘得住它。"""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (d / "a.yaml").write_text(
+        "tenants:\n  t1:\n    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
+        "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
+        "        - window: \"01:00-03:00\"\n          value: \"5\"\n", encoding="utf-8")
+    p = _run("--config-dir", d, "--json")
+    assert p.returncode == 0, p.stderr
+    doc = _json(p)
+    dead = [{"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}]
+    row = {x["key"]: x for x in doc["tenants"]["t1"]}["mysql_connection_usage_percent"]
+    assert (row["verdict"], row["severity"], row["dead_entries"]) == ("read", None, dead)
+    [f] = [f for f in doc["findings"] if f["kind"] == "dead_entry"]
+    assert (f["dead_entries"], f["tenants"]) == (dead, ["t1"])
+    expected = tmp_path / "expected.json"
+    expected.write_text(json.dumps({"tenants": {"t1": [
+        {"key": k, **({"dead_entries": dead} if k == "mysql_connection_usage_percent" else {})}
+        for k in {x["key"] for x in doc["tenants"]["t1"]}]}}), encoding="utf-8")
+    assert _run("--config-dir", d, "--assert", expected).returncode == 0
+    expected.write_text(expected.read_text(encoding="utf-8").replace("01:00-03:00", "02:00-03:00"),
+                        encoding="utf-8")
+    p = _run("--config-dir", d, "--assert", expected)
+    assert p.returncode == 1 and "dead_entries: expected" in p.stderr, p.stderr

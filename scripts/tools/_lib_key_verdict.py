@@ -65,6 +65,11 @@ class KeyVerdictError(tv.DaGuardError):
 
 
 class KeyVerdict(NamedTuple):
+    """One row of `da-guard key-verdict`'s `tenants.<tenant>[]`: every field
+    Go's `keyverdict.KeyVerdict` writes, in its order, plus the tenant (which
+    Go keeps out of the JSON). explain-keys writes this row as it is, less
+    the tenant (#4077) — tests/shared/test_key_verdict_kinds_parity pins the
+    field set to Go's JSON tags."""
     tenant: str
     key: str                       # as the tenant's config spells it
     layer: str | None              # da-guard effective's layer, None when it has no source
@@ -74,12 +79,14 @@ class KeyVerdict(NamedTuple):
     severity: str | None           # ERROR / WARNING / NOTICE; None for READ
     reason: str | None             # the whole day's reason (never a value's, #3835), "disable_noop", or None
     disable: str | None            # "effective" / "noop" / None
+    hint: str | None               # #3829: a retired threshold key's replacement; None otherwise
     switched_off_with: str | None  # the base whose `disable` switches it off (#3046), or None
+    # #3502: the entries of its schedule /metrics serves at no minute of the day
+    dead_entries: "tuple[tv.DeadEntry, ...]"
     value: Any                     # the effective config's value (as written); None when absent
     # (v3, #3835: no `served` — what /metrics serves at one instant is
     # served-values'.)
-    # #3502: the entries of its schedule /metrics serves at no minute of the day
-    dead_entries: "tuple[tv.DeadEntry, ...]" = ()
+    gate_kind: str | None          # #3996: the main gate's finding kind for the same fact, or None
 
 
 class Finding(NamedTuple):
@@ -93,7 +100,9 @@ class Finding(NamedTuple):
     reason: str | None
     blocks: bool = False                # a whole-tree gate refuses it (Go's keyverdict.Blocking)
     base: str | None = None             # disable_cascade: the base whose `disable` switches it off
-    dead_entries: "tuple[tv.DeadEntry, ...]" = ()  # dead_entry (#3502): its entries, in the order written
+    # dead_entry (#3502): its entries, in the order written; None on any other
+    # kind, as da-guard writes it (#4077)
+    dead_entries: "tuple[tv.DeadEntry, ...] | None" = None
     # #3829: a retired threshold key's hint (reason `retired`), naming the key
     # that replaces it; None for any other finding.
     hint: str | None = None
@@ -247,12 +256,15 @@ def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
     # A read key has no severity; an unread one has one.
     if (verdict == UNREAD) != (severity is not None):
         raise ShapeError(f"{w}: verdict {shown_value(verdict)} with severity {shown_value(severity)}")
-    return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
-                      _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
-                      severity, _optional(r["reason"], f"{w}.reason"),
-                      _optional(r["disable"], f"{w}.disable", _DISABLES),
-                      _optional(r["switched_off_with"], f"{w}.switched_off_with"), r["value"],
-                      tv.dead_entries(r["dead_entries"], f"{w}.dead_entries"))
+    return KeyVerdict(
+        tenant=tenant, key=_str(r["key"], f"{w}.key"), layer=_optional(r["layer"], f"{w}.layer"),
+        file=_optional(r["file"], f"{w}.file"), read_by=_tuple(r["read_by"], f"{w}.read_by"),
+        verdict=verdict, severity=severity, reason=_optional(r["reason"], f"{w}.reason"),
+        disable=_optional(r["disable"], f"{w}.disable", _DISABLES),
+        hint=_optional(r["hint"], f"{w}.hint"),
+        switched_off_with=_optional(r["switched_off_with"], f"{w}.switched_off_with"),
+        dead_entries=tv.dead_entries(r["dead_entries"], f"{w}.dead_entries"), value=r["value"],
+        gate_kind=_optional(r["gate_kind"], f"{w}.gate_kind", _GATE_KINDS))
 
 
 def _finding(f: dict) -> Finding:
@@ -264,13 +276,13 @@ def _finding(f: dict) -> Finding:
                    _optional(f["hint"], "findings.hint"), _optional(f["gate_kind"], "findings.gate_kind", _GATE_KINDS))
 
 
-def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":
-    """A finding's `dead_entries`: a non-empty list on a dead_entry, null on
-    any other kind (#3502)."""
+def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...] | None":
+    """A finding's `dead_entries`: a non-empty list on a dead_entry, null
+    (None) on any other kind (#3502)."""
     v = f["dead_entries"]
     if (f["kind"] == "dead_entry") != (v is not None):
         raise ShapeError(f"findings: kind {shown_value(f['kind'])} with dead_entries {shown_value(v)}")
-    out = tv.dead_entries(v, "findings.dead_entries") if v is not None else ()
+    out = tv.dead_entries(v, "findings.dead_entries") if v is not None else None
     if f["kind"] == "dead_entry" and not out:
         raise ShapeError("findings: a dead_entry without entries")
     return out
