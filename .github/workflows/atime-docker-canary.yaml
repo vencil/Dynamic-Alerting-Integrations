@@ -1,0 +1,120 @@
+name: Atime Docker Canary (temporary, #3756)
+
+# ⛔ TEMPORARY, MEASUREMENT ONLY — #3756 stage 3, before component-docker-build
+# is wired. Not meant to be merged; the PR carrying it is closed once its
+# result has been read.
+#
+# The question: when `docker/build-push-action` builds an image, do the reads
+# of the build context move access times on the runner — and if so, of which
+# files? A build context is sent to the builder by the buildx client, a host
+# process, so the reads should be visible; whether it reads the whole context
+# or only what the Dockerfile COPYs is not known, and neither is assumed.
+#
+# Every answer is printed under a line starting `=== ATIME-DOCKER-CANARY Q<n>`:
+#   Q1  how many tracked files the build read, against how many are tracked
+#       and how many the context directory holds
+#   Q2  the reads `component-docker-build.yaml`'s `on.pull_request.paths` does
+#       NOT cover (what a wired job would name as UNCOVERED)
+#   Q3  the reads by directory, to see the shape
+# The job is red only when the measurement has no answer.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atime-docker-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: atime docker canary (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: threshold-exporter
+            context: .
+            dockerfile: components/threshold-exporter/app/Dockerfile
+          - name: da-portal
+            context: .
+            dockerfile: components/da-portal/Dockerfile
+          - name: federation-audit-sidecar
+            context: helm/federation-gateway/audit-sidecar
+            dockerfile: helm/federation-gateway/audit-sidecar/Dockerfile
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set access times back
+        run: python3 -I scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime-trace.json" --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: What setting up buildx read
+        run: python3 -I scripts/ops/atime_trace.py collect --state "$RUNNER_TEMP/atime-trace.json" --label setup-buildx --show 20
+
+      - name: Ensure da-portal vendor dir exists
+        if: matrix.name == 'da-portal'
+        run: mkdir -p docs/assets/vendor
+
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          load: true
+          tags: local-pr-test/${{ matrix.name }}:canary
+
+      - name: What the build read
+        env:
+          CONTEXT: ${{ matrix.context }}
+        run: |
+          python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" --show 0
+          python3 - "$RUNNER_TEMP/atime-trace.json" <<'PY'
+          import collections, json, os, subprocess, sys
+          sys.path.insert(0, "scripts/ops")
+          sys.path.insert(0, "scripts/tools")
+          import paths_filter_glob
+          import workflow_path_filter as wpf
+
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          by_label = {s["label"]: s for s in state["segments"]}
+          build = by_label["end"]
+          read = sorted(set(build["files"]) | set(build["replaced"]) | set(build["gone"]))
+          tracked = subprocess.run(["git", "ls-files", "-z"], capture_output=True, check=True,
+                                   text=True, encoding="utf-8").stdout.split("\0")
+          tracked = [t for t in tracked if t]
+          context = os.environ["CONTEXT"].rstrip("/")
+          in_context = [t for t in tracked if context == "." or t.startswith(context + "/")]
+          print("=== ATIME-DOCKER-CANARY Q1: how much of the context the build read ===")
+          print(f"tracked files: {len(tracked)}; in the context `{context}`: {len(in_context)}; "
+                f"read during the build: {len(read)} "
+                f"({len(build['replaced'])} replaced, {len(build['gone'])} gone)")
+          outside = [f for f in read if f not in set(in_context)]
+          print(f"read OUTSIDE the context: {len(outside)}")
+          for name in outside[:40]:
+              print(f"  OUTSIDE  {name}")
+
+          doc = wpf.load_workflow(wpf.REPO_ROOT / ".github/workflows/component-docker-build.yaml")
+          paths = wpf.pull_request_paths(doc, "component-docker-build.yaml")
+          uncovered = [f for f in read if not paths_filter_glob.on_paths_covers(paths, f)]
+          print("=== ATIME-DOCKER-CANARY Q2: reads component-docker-build.yaml's paths do not cover ===")
+          print(f"{len(uncovered)} of {len(read)} read file(s) are not covered")
+          for name in uncovered[:200]:
+              print(f"  UNCOVERED  {name}")
+          if len(uncovered) > 200:
+              print(f"  UNCOVERED  … and {len(uncovered) - 200} more")
+
+          print("=== ATIME-DOCKER-CANARY Q3: reads by directory ===")
+          dirs = collections.Counter(os.path.dirname(f) or "." for f in read)
+          for name, count in dirs.most_common(40):
+              print(f"  {count:5d}  {name}")
+          PY
