@@ -54,6 +54,7 @@ import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_THIS_DIR))
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
@@ -100,7 +101,7 @@ def _read(path: Path) -> str:
 
 def _yaml(path: Path):
     try:
-        return yaml.safe_load(_read(path))
+        return strict_safe_load(_read(path))
     except yaml.YAMLError as exc:
         raise FixupError(f"{path}: not YAML: {exc}") from exc
 

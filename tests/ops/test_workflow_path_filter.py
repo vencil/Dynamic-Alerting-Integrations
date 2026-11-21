@@ -1094,7 +1094,9 @@ def _repo_with_the_tools(tmp_path: Path, monkeypatch) -> Path:
         (repo / rel).write_bytes(text.encode("utf-8"))
     for rel in ("scripts/ops/atime_trace.py", "scripts/ops/workflow_path_filter.py",
                 "scripts/ops/paths_filter_glob.py", "scripts/tools/_lib_exitcodes.py",
-                "scripts/tools/_lib_compat.py"):
+                "scripts/tools/_lib_compat.py",
+                # #4111: the workflow is read with the strict YAML reading
+                "scripts/tools/_lib_yaml_strict.py"):
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(ROOT / rel, repo / rel)
     _git(repo, "init", "-q")
@@ -1160,7 +1162,8 @@ def test_the_generated_steps_measure_and_assert_end_to_end(
     assert EXPECTED_BLOCK | {"scripts/ops/atime_trace.py", "scripts/ops/paths_filter_glob.py",
                              "scripts/ops/workflow_path_filter.py",
                              "scripts/tools/_lib_compat.py",
-                             "scripts/tools/_lib_exitcodes.py"} == block
+                             "scripts/tools/_lib_exitcodes.py",
+                             "scripts/tools/_lib_yaml_strict.py"} == block
 
     # Second run: green.
     for script in (reset, job, check):
@@ -1482,14 +1485,14 @@ def test_the_real_ledger_holds_both_kinds_and_the_ruled_members() -> None:
     assert wpf.ADVISORY_KINDS == (wpf.DIFF_DRIVEN, wpf.AWAITS_READ_ASSERTION)
     by_kind = {kind: sorted(n for n, (k, _w) in wpf.ADVISORY_PATH_GATES.items() if k == kind)
                for kind in wpf.ADVISORY_KINDS}
-    # component-docker-build.yaml left this list when it was wired (#3756
-    # stage 3, second of four).
-    assert by_kind[wpf.AWAITS_READ_ASSERTION] == ["backtest.yaml", "forge-e2e-github.yaml"]
+    # component-docker-build.yaml and backtest.yaml left this list when they
+    # were wired (#3756 stage 3, second and third of four).
+    assert by_kind[wpf.AWAITS_READ_ASSERTION] == ["forge-e2e-github.yaml"]
     assert by_kind[wpf.DIFF_DRIVEN] == [
         "bench-gate-pr.yaml", "bench-probe-write-latency.yaml",
         "bench-workload-effect.yaml", "bench-workload-record.yaml",
         "config-diff-advisory.yml", "guard-defaults-impact.yml"]
-    assert wpf.READ_ASSERTION_ORDER == ("backtest.yaml", "forge-e2e-github.yaml")
+    assert wpf.READ_ASSERTION_ORDER == ("forge-e2e-github.yaml",)
 
 
 def _all_real_patterns() -> list[str]:

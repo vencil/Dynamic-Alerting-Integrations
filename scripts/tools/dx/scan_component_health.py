@@ -43,11 +43,11 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 from _lib_exitcodes import EXIT_OK, Report, encode_json  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789; #3982)
     ensure_dir, exit_on_output_write_error, write_operator_output)
@@ -326,7 +326,7 @@ def _is_archive_candidate(entry: dict, today: datetime) -> tuple[bool, str]:
 # --- 主流程 ---
 def scan(today: datetime | None = None) -> dict:
     today = today or datetime.now(timezone.utc)
-    registry = yaml.safe_load(REGISTRY.read_text(encoding="utf-8"))
+    registry = strict_safe_load(REGISTRY.read_text(encoding="utf-8"))
     tools = registry["tools"]
     spec_names = {p.stem.replace(".spec", "") for p in E2E_DIR.glob("*.spec.ts")}
 

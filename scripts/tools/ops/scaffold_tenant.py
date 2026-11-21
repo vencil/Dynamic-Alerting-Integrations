@@ -39,6 +39,7 @@ from _lib_python import (  # noqa: E402
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --from-onboard is read by the lib)
+from _lib_prompt import prompt_line  # noqa: E402  (#3822: an unreadable stdin is rc 2, named)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: the conf.d files go to da-guard write)
 import _lib_write_check  # noqa: E402  (the draft conf.d's name and layout check, #4014)
@@ -67,6 +68,21 @@ from _registry_lib import counterexample_for_key as _registry_counterexample_for
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
+
+
+# #3822: what an interactive run that cannot read stdin is told to do instead.
+_NO_PROMPT_REMEDY = {
+    'zh': '不經提示執行：--non-interactive --tenant <name> --db <type>[,<type>...]'
+          '，或 --from-onboard <file>。',
+    'en': 'To run without prompts: --non-interactive --tenant <name> '
+          '--db <type>[,<type>...], or --from-onboard <file>.',
+}
+
+
+def _ask(prompt: str) -> str:
+    """One interactive answer (#3822): `prompt_line`, naming --non-interactive."""
+    lang = 'zh' if _LANG == 'zh' else 'en'
+    return prompt_line(prompt, remedy=_NO_PROMPT_REMEDY[lang], lang=lang)
 
 #: `--silent-mode` choices: the silencing targets plus the documented off word.
 #: The exporter also takes the other off aliases (disabled / off / false);
@@ -284,7 +300,7 @@ def prompt_choice(question: str, options: list[tuple[str, str]], default: str | 
         marker = " (default)" if key == default else ""
         print(f"  {i}. {label}{marker}")
     while True:
-        raw = input(f"選擇 [1-{len(options)}]: ").strip()
+        raw = _ask(f"選擇 [1-{len(options)}]: ").strip()
         if not raw and default:
             return default
         try:
@@ -303,7 +319,7 @@ def prompt_multi(question: str, options: list[tuple[str, str]]) -> list[str]:
         print(f"  {i}. {label}")
     print(f"  輸入數字 (逗號分隔，例如 1,3)，或 'all' 全選:")
     while True:
-        raw = input("選擇: ").strip()
+        raw = _ask("選擇: ").strip()
         if raw.lower() == "all":
             return [k for k, _ in options]
         try:
@@ -391,7 +407,7 @@ def prompt_value(metric: str, info: dict[str, object], current: str | None = Non
     else:
         default_val = current if current else info["value"]
         prompt = f"  {metric} [{info['desc']}] ({default_val} {info['unit']}): "
-    raw = input(prompt).strip()
+    raw = _ask(prompt).strip()
     if not raw:
         return None if default_val is None else str(default_val)
     if raw.lower() in ("skip", "disable"):
@@ -474,7 +490,7 @@ def generate_defaults(selected_dbs: list[str]) -> dict:
 
 
 def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
-    """互動式收集 tenant 覆寫（原 generate_tenant 內的 input()/print() 邏輯）。
+    """互動式收集 tenant 覆寫（原 generate_tenant 內的 _ask()/print() 邏輯）。
 
     逐項詢問並收集：metric 閾值覆寫 → 維護模式 → 靜音模式 → 嚴重度去重 →
     告警路由。prompt 提示字串、預設值與詢問次序與抽出前逐字相同（互動 UX 為契約），
@@ -532,11 +548,11 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
 
     # Always add maintenance state control (disabled by default)
     # v1.7.0: supports structured format with expires for auto-deactivation
-    enable_maint = input("\n  啟用維護模式? (y/N): ").strip().lower()
+    enable_maint = _ask("\n  啟用維護模式? (y/N): ").strip().lower()
     if enable_maint == "y":
-        expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
+        expires_str = _ask("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
         if expires_str:
-            reason_str = input("  原因 (選填): ").strip()
+            reason_str = _ask("  原因 (選填): ").strip()
             maint_obj = {"target": "enable", "expires": expires_str}
             if reason_str:
                 maint_obj["reason"] = reason_str
@@ -551,12 +567,12 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
     print("    2. Warning — 只靜音 warning 通知")
     print("    3. Critical — 只靜音 critical 通知")
     print("    4. All — 靜音所有通知")
-    silent_choice = input("  選擇 [1-4] (預設 1): ").strip()
+    silent_choice = _ask("  選擇 [1-4] (預設 1): ").strip()
     silent_map = INTERACTIVE_SILENT_TARGETS
     if silent_choice in silent_map:
-        expires_str = input("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
+        expires_str = _ask("  設定到期時間 (ISO 8601, 如 2026-04-01T00:00:00Z, 空白=無期限): ").strip()
         if expires_str:
-            reason_str = input("  原因 (選填): ").strip()
+            reason_str = _ask("  原因 (選填): ").strip()
             silent_obj = {"target": silent_map[silent_choice], "expires": expires_str}
             if reason_str:
                 silent_obj["reason"] = reason_str
@@ -568,7 +584,7 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
     print("\n  嚴重度去重 (Severity Dedup):")
     print("    1. Enable — critical 觸發時壓制 warning 通知 (預設)")
     print("    2. Disable — warning 和 critical 通知都發送")
-    dedup_choice = input("  選擇 [1-2] (預設 1): ").strip()
+    dedup_choice = _ask("  選擇 [1-2] (預設 1): ").strip()
     if dedup_choice == "2":
         tenant_config["_severity_dedup"] = "disable"
 
@@ -576,35 +592,35 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
     print("\n  告警路由 (Alert Routing):")
     print("    設定通知目的地，空白跳過使用平台預設")
     print("    支援類型: webhook | email | slack | teams | rocketchat | pagerduty")
-    receiver_type = input("  Receiver type (預設 webhook): ").strip().lower() or "webhook"
+    receiver_type = _ask("  Receiver type (預設 webhook): ").strip().lower() or "webhook"
     receiver_obj = None
     if receiver_type == "webhook":
-        url = input("  Webhook URL: ").strip()
+        url = _ask("  Webhook URL: ").strip()
         if url:
             receiver_obj = {"type": "webhook", "url": url}
     elif receiver_type == "email":
-        to = input("  Email to (逗號分隔): ").strip()
-        smarthost = input("  SMTP smarthost (例如 smtp.example.com:587): ").strip()
+        to = _ask("  Email to (逗號分隔): ").strip()
+        smarthost = _ask("  SMTP smarthost (例如 smtp.example.com:587): ").strip()
         if to and smarthost:
             receiver_obj = {"type": "email", "to": [t.strip() for t in to.split(",")],
                             "smarthost": smarthost}
     elif receiver_type == "slack":
-        api_url = input("  Slack API URL: ").strip()
+        api_url = _ask("  Slack API URL: ").strip()
         if api_url:
             receiver_obj = {"type": "slack", "api_url": api_url}
-            channel = input("  Channel (例如 #alerts，選填): ").strip()
+            channel = _ask("  Channel (例如 #alerts，選填): ").strip()
             if channel:
                 receiver_obj["channel"] = channel
     elif receiver_type == "teams":
-        webhook_url = input("  Teams Webhook URL: ").strip()
+        webhook_url = _ask("  Teams Webhook URL: ").strip()
         if webhook_url:
             receiver_obj = {"type": "teams", "webhook_url": webhook_url}
     elif receiver_type == "rocketchat":
-        url = input("  Rocket.Chat Webhook URL: ").strip()
+        url = _ask("  Rocket.Chat Webhook URL: ").strip()
         if url:
             receiver_obj = {"type": "rocketchat", "url": url}
     elif receiver_type == "pagerduty":
-        service_key = input("  PagerDuty Service Key: ").strip()
+        service_key = _ask("  PagerDuty Service Key: ").strip()
         if service_key:
             receiver_obj = {"type": "pagerduty", "service_key": service_key}
     else:
@@ -613,12 +629,12 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
     if receiver_obj:
         routing = {"receiver": receiver_obj}
 
-        group_by = input("  Group by labels (逗號分隔，預設 alertname,tenant): ").strip()
+        group_by = _ask("  Group by labels (逗號分隔，預設 alertname,tenant): ").strip()
         routing["group_by"] = ([g.strip() for g in group_by.split(",")]
                                if group_by else ["alertname", "tenant"])
-        routing["group_wait"] = input("  Group wait (預設 30s，範圍 5s-5m): ").strip() or "30s"
-        routing["group_interval"] = input("  Group interval (預設 5m，範圍 5s-5m): ").strip() or "5m"
-        routing["repeat_interval"] = input("  Repeat interval (預設 4h，範圍 1m-72h): ").strip() or "4h"
+        routing["group_wait"] = _ask("  Group wait (預設 30s，範圍 5s-5m): ").strip() or "30s"
+        routing["group_interval"] = _ask("  Group interval (預設 5m，範圍 5s-5m): ").strip() or "5m"
+        routing["repeat_interval"] = _ask("  Repeat interval (預設 4h，範圍 1m-72h): ").strip() or "4h"
 
         tenant_config["_routing"] = routing
 
@@ -630,7 +646,7 @@ def generate_tenant(tenant_name: str, selected_dbs: list[str], interactive: bool
 
     純組裝：``interactive=True`` 時委派 ``prompt_tenant_overrides`` 逐項收集覆寫，
     否則為空覆寫（non-interactive 一律繼承 _defaults.yaml，不寫 metric 覆寫）。
-    本函式本身不再直接呼叫 input()/print()——互動 I/O 全在 prompt_tenant_overrides。
+    本函式本身不再直接呼叫 _ask()/print()——互動 I/O 全在 prompt_tenant_overrides。
     """
     tenant_config = prompt_tenant_overrides(selected_dbs) if interactive else {}
     return {"tenants": {tenant_name: tenant_config}} if tenant_config else {"tenants": {tenant_name: {}}}
@@ -1083,7 +1099,7 @@ def run_interactive(output_dir: str) -> None:
     print("=" * 60)
 
     # Step 1: Tenant name
-    tenant_name = input("\n📛 Tenant namespace (例如 db-c): ").strip()
+    tenant_name = _ask("\n📛 Tenant namespace (例如 db-c): ").strip()
     if not tenant_name:
         print("錯誤: Tenant name 不可為空")
         sys.exit(EXIT_CALLER_ERROR)
@@ -1101,18 +1117,18 @@ def run_interactive(output_dir: str) -> None:
     print(f"\n已選擇: {', '.join(selected_dbs)}")
 
     # Step 3: Configure thresholds
-    customize = input("\n🔧 自訂閾值? (y=逐項設定 / N=使用預設值): ").strip().lower()
+    customize = _ask("\n🔧 自訂閾值? (y=逐項設定 / N=使用預設值): ").strip().lower()
     interactive_thresholds = customize == "y"
 
     # Step 4: N:1 tenant mapping (optional)
     namespaces = None
-    ns_input = input("\n📍 K8s 命名空間 (逗號分隔，例如 ns1,ns2,ns3，空白跳過): ").strip()
+    ns_input = _ask("\n📍 K8s 命名空間 (逗號分隔，例如 ns1,ns2,ns3，空白跳過): ").strip()
     if ns_input:
         namespaces = ns_input
 
     # Step 5: Profile assignment (optional, v1.12.0)
     profile_name = None
-    profile_input = input("\n🏷️  使用 Tenant Profile? (輸入 profile 名稱，空白跳過): ").strip()
+    profile_input = _ask("\n🏷️  使用 Tenant Profile? (輸入 profile 名稱，空白跳過): ").strip()
     if profile_input:
         profile_name = profile_input
 

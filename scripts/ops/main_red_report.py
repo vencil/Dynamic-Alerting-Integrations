@@ -115,6 +115,7 @@ from pathlib import Path
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 import yaml  # noqa: E402
+from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 EXIT_RED = 1
 EXIT_NO_VERDICT = 2
@@ -305,11 +306,11 @@ def watched_workflows(detector: Path = DETECTOR_WORKFLOW,
                       workflow_dir: Path = WORKFLOW_DIR) -> list[Watched]:
     """The detector's `on.workflow_run.workflows`, resolved to workflow files."""
     try:
-        doc = yaml.safe_load(detector.read_text(encoding="utf-8"))
+        doc = strict_safe_load(detector.read_text(encoding="utf-8"))
         names = _on(doc)["workflow_run"]["workflows"]
         by_name: dict[str, list[tuple[str, dict]]] = {}
         for path in sorted(workflow_dir.glob("*.y*ml")):
-            other = yaml.safe_load(path.read_text(encoding="utf-8"))
+            other = strict_safe_load(path.read_text(encoding="utf-8"))
             if isinstance(other, dict) and isinstance(other.get("name"), str):
                 by_name.setdefault(other["name"], []).append((path.name, other))
     except (OSError, yaml.YAMLError, KeyError, TypeError, AttributeError) as err:

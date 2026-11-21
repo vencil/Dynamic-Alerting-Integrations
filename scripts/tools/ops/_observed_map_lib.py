@@ -178,7 +178,7 @@ def scope_of(series: str) -> str:
     """Aggregation scope = the recording-rule prefix (``tenant`` / ``tenant_version``).
 
     The prefix IS the topology: ``tenant:X:agg`` is aggregated per tenant
-    (``by(tenant, da_cluster)`` — per cluster where the scrape writes that
+    (``by(tenant, da_cluster)`` — per cluster where the series carry that
     label, ADR-006); ``tenant_version:X:agg`` adds ``version`` (ADR-024). Derived, never
     hand-set; the drift-guard cross-checks scope == observed_series prefix.
     """
@@ -361,6 +361,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
 from _lib_compat import find_project_root  # noqa: E402
 from _lib_exitcodes import die_caller_error  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
+if yaml is not None:
+    from _lib_yaml_strict import strict_safe_load  # noqa: E402  (#4111: duplicate keys refused)
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
 
@@ -724,7 +726,7 @@ def load_observed_map(path: Optional[str] = None) -> dict[str, dict[str, Any]]:
         raise ObservedMapError(f"{p}: observed-map not found ({regen})", "missing")
     try:
         with open(p, encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh)
+            doc = strict_safe_load(fh)
     except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
         # One line: a YAMLError's str() spans several (problem + context mark).
         why = " ".join(str(exc).split())

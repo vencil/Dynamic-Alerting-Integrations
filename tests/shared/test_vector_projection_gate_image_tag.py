@@ -34,8 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONTEXT = "helm/vector/projection-gate"
 _VALUES = "helm/vector/values.yaml"
 
-_RECIPE_DIGEST = "dcc1abf63e165784b24315771d180b5662e769a49249024609dad2ae73088efc"
-_EXPECTED_TAG = "0.1.2"
+_RECIPE_DIGEST = "490b5eae035c43597f25572fdf2b947fe3aeb14dd6208c55e050bc103ad4d006"
+_EXPECTED_TAG = "0.1.3"
 
 
 def _instruction_lines(dockerfile: Path) -> list[str]:
@@ -114,6 +114,7 @@ def test_copy_parser_sees_both_shipped_scripts() -> None:
     """The digest is only as good as the COPY parser; pin what it finds today."""
     body = _instruction_lines(REPO_ROOT / _CONTEXT / "Dockerfile")
     assert sorted(_context_copy_sources(body)) == [
+        "_lib_yaml_strict.py",
         "serve_metrics.py",
         "verify_tenant_projections.py",
     ]

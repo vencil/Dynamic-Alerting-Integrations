@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from _platform_fs import require_file_name, require_shebang_scripts  # noqa: E402
+from _platform_fs import require_shebang_scripts  # noqa: E402
 import yaml
 
 import da_assembler  # noqa: E402
@@ -476,39 +476,28 @@ class TestRenderCrFile:
     # strings). `.inf` is refused by the decoder itself (no JSON for it):
     # TestRenderCrNameFormat.test_decoder_refusal_names_the_file. A name
     # that stays a string (`1:30`) is refused by the name-format check
-    # instead: test_null_and_datetime_name_stale_hint.
-    # `stale`: the file an earlier version (before #2399/#2400) rendered
-    # this name to — measured against tools/v2.9.0, #2430. None where it
-    # is the name as written and quoting saves it: quoting then overwrites
-    # the same file. `fix`: "quote" when the quoted name is DNS-1123;
-    # "rename" when it is not (#2396), and then even a same-spelling file
-    # (`True` -> `True.yaml`, `-5` -> `-5.yaml`) is left behind.
-    @pytest.mark.parametrize("name, json_type, stale, fix", [
-        pytest.param("42", "number", None, "quote", id="name-int"),
-        pytest.param("8", "number", None, "quote", id="name-int-8"),
-        pytest.param("010", "number", "8.yaml", "quote", id="name-int-octal"),
-        pytest.param("0x1F", "number", "31.yaml", "rename", id="name-int-hex"),
-        pytest.param("-5", "number", "-5.yaml", "rename",
-                     id="name-int-negative"),
-        pytest.param("1.5", "number", None, "quote", id="name-float"),
-        pytest.param("1.50", "number", "1.5.yaml", "quote",
-                     id="name-float-trailing-0"),
-        pytest.param("true", "bool", "True.yaml", "quote",
-                     id="name-bool-true"),
-        pytest.param("TRUE", "bool", "True.yaml", "rename",
-                     id="name-bool-upper"),
-        pytest.param("True", "bool", "True.yaml", "rename",
-                     id="name-bool-title"),
-        pytest.param("yes", "bool", "True.yaml", "quote", id="name-bool-yes"),
-        pytest.param("off", "bool", "False.yaml", "quote", id="name-bool-off"),
-        pytest.param("0o17", "number", None, "quote", id="name-0o17"),
-        pytest.param("1e3", "number", None, "quote", id="name-1e3"),
-        pytest.param("08", "number", None, "quote", id="name-08"),
-        pytest.param("y", "bool", None, "quote", id="name-y"),
-        pytest.param("n", "bool", None, "quote", id="name-n"),
+    # instead: test_null_and_datetime_name_is_refused.
+    @pytest.mark.parametrize("name, json_type", [
+        pytest.param("42", "number", id="name-int"),
+        pytest.param("8", "number", id="name-int-8"),
+        pytest.param("010", "number", id="name-int-octal"),
+        pytest.param("0x1F", "number", id="name-int-hex"),
+        pytest.param("-5", "number", id="name-int-negative"),
+        pytest.param("1.5", "number", id="name-float"),
+        pytest.param("1.50", "number", id="name-float-trailing-0"),
+        pytest.param("true", "bool", id="name-bool-true"),
+        pytest.param("TRUE", "bool", id="name-bool-upper"),
+        pytest.param("True", "bool", id="name-bool-title"),
+        pytest.param("yes", "bool", id="name-bool-yes"),
+        pytest.param("off", "bool", id="name-bool-off"),
+        pytest.param("0o17", "number", id="name-0o17"),
+        pytest.param("1e3", "number", id="name-1e3"),
+        pytest.param("08", "number", id="name-08"),
+        pytest.param("y", "bool", id="name-y"),
+        pytest.param("n", "bool", id="name-n"),
     ])
     def test_non_string_name_is_refused_by_the_reading(
-            self, name, json_type, stale, fix, tmp_path, caplog):
+            self, name, json_type, tmp_path, caplog):
         """#2371／#2476／#3490：未加引號、Kubernetes 會解成數字／布林的 name 一律 rc 2。
 
         型別取自 da-crdecode（Kubernetes client 的 YAML→JSON），不是 YAML 1.1；
@@ -516,14 +505,6 @@ class TestRenderCrFile:
         加引號」一句。`0o17`、`1e3`、`08`、`y`、`n` 先前以 PyYAML 讀成字串而
         rc 0；會讓這幾列轉紅的改動：改回以 YAML 1.1 判型別。
 
-        #2430：舊版（#2399／#2400 之前）把這個 name 寫成型別化後的拼法
-        （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
-        若還在持久輸出目錄裡，同一租戶就有兩份。da-crdecode 拒收時，訊息
-        只在那個舊檔**確實存在**於 --config-dir 時指名它（空目錄不提）；
-        拼法相同（`42`）時加引號會覆寫同一個檔，不該提。本工具不刪檔。
-        加引號仍非 DNS-1123（`TRUE`、`-5`，#2396）就得改名，舊檔即使拼法
-        相同也會留下，要提。會讓本測試轉紅的改動：拒收時不問舊檔提示，
-        或拿掉 `_stale_render_hint` 的存在檢查（空目錄也提）。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -535,124 +516,45 @@ class TestRenderCrFile:
         assert (f"cannot unmarshal {json_type} "
                 + self._KUBECTL_FIELD.format("name")) in caplog.text, caplog.text
         assert self._QUOTE_HINT in caplog.text
-        # Empty --config-dir: nothing was ever rendered here, no hint.
-        assert "earlier version" not in caplog.text
         assert list(out_dir.iterdir()) == []
-        if stale is None:
-            return
-        # The earlier version's file is there: the hint must name it.
-        old = stale[:-len(".yaml")]
-        (out_dir / stale).write_text(self._rendered(old), encoding="utf-8")
-        caplog.clear()
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert (f"{stale} exists in this --config-dir" in caplog.text), \
-            caplog.text
-        assert "confirm it is not the output of another CR" in caplog.text
-        new_file = "quoted name's" if fix == "quote" else "renamed CR's"
-        assert f"it and the {new_file} file both" in caplog.text, \
-            caplog.text
-        assert "do not delete it" not in caplog.text
-        assert [p.name for p in out_dir.iterdir()] == [stale]
 
-    def test_no_stale_hint_when_decoding_cannot_be_asked(
-            self, tmp_path, caplog, monkeypatch):
-        """#2430：da-crdecode 沒跑成（找不到 binary）不是它對這份 CR 的回答，
-        舊檔在也不提示；提示只跟著拒收。"""
-        cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text(self._K + "metadata: {name: 010}\n" + self._T,
-                           encoding="utf-8")
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        (out_dir / "8.yaml").write_text(self._rendered("8"), encoding="utf-8")
-        monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-binary"))
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "exists in this --config-dir" not in caplog.text, caplog.text
-
-    def test_stale_hint_asks_to_rule_out_a_string_named_cr(
-            self, tmp_path, caplog):
-        """#2430：`90.yaml` 也可能是另一個 name 為 `"90"` 的合法 CR 的輸出。
-
-        舊版把 `1:30` 寫成 `90.yaml`；兩者檔頭同為 `ThresholdConfig ?/90`，
-        工具分不出來，所以提示必須要求先確認再刪，且不得動那個檔。會讓本
-        測試轉紅的改動：提示拿掉「確認」那句，或改成只看 name 推算、不看
-        目錄。
-        """
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        # What an earlier version rendered for a CR named "90" (#3671: before
-        # the CR's own directory) — the same file name as `1:30`'s.
-        rendered = self._rendered("90")
-        (out_dir / "90.yaml").write_text(rendered, encoding="utf-8")
-        cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text(self._K + "metadata: {name: 1:30}\n" + self._T,
-                           encoding="utf-8")
-        caplog.clear()
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "90.yaml exists in this --config-dir" in caplog.text
-        assert ("confirm it is not the output of another CR whose "
-                "metadata.name is the string '90'") in caplog.text
-        assert "cannot tell them apart" in caplog.text
-        assert [p.name for p in out_dir.iterdir()] == ["90.yaml"]
-        assert (out_dir / "90.yaml").read_text(encoding="utf-8") == rendered
-
-    # The file an earlier version (fb7acd71, measured for #2430) wrote for
-    # a name refused now for not being a string / not DNS-1123. A sexagesimal
-    # name is a string to Kubernetes and a number to PyYAML (tools/v2.9.0
-    # wrote `1:30` to `90.yaml`, #2430).
-    @pytest.mark.parametrize("name, stale", [
-        pytest.param("1:30", "90.yaml", id="sexagesimal-int"),
-        pytest.param("1:30.5", "90.5.yaml", id="sexagesimal-float"),
-        pytest.param("~", "None.yaml", id="tilde"),
-        pytest.param("null", "None.yaml", id="null"),
-        pytest.param("", "None.yaml", id="empty-scalar"),
-        pytest.param("2024-01-01T10:00:00Z", "2024-01-01 10:00:00+00:00.yaml",
+    # A name refused for not being a string (null) or not DNS-1123 (a
+    # sexagesimal or a timestamp spelling, which Kubernetes clients decode to
+    # a string).
+    @pytest.mark.parametrize("name, is_null", [
+        pytest.param("1:30", False, id="sexagesimal-int"),
+        pytest.param("1:30.5", False, id="sexagesimal-float"),
+        pytest.param("~", True, id="tilde"),
+        pytest.param("null", True, id="null"),
+        pytest.param("", True, id="empty-scalar"),
+        pytest.param("2024-01-01T10:00:00Z", False,
                      id="datetime-utc"),
-        pytest.param("2024-01-01 10:00:00", "2024-01-01 10:00:00.yaml",
+        pytest.param("2024-01-01 10:00:00", False,
                      id="datetime-space"),
         # Kubernetes clients decode every timestamp spelling to a string,
         # tagged or not, quoted or not: the DNS-1123 branch.
-        pytest.param("!!timestamp 2024-01-01T10:00:00Z",
-                     "2024-01-01 10:00:00+00:00.yaml",
+        pytest.param("!!timestamp 2024-01-01T10:00:00Z", False,
                      id="tagged-plain-datetime"),
-        pytest.param('!!timestamp "2024-01-01T10:00:00Z"',
-                     "2024-01-01 10:00:00+00:00.yaml",
+        pytest.param('!!timestamp "2024-01-01T10:00:00Z"', False,
                      id="tagged-quoted-datetime"),
     ])
-    def test_null_and_datetime_name_stale_hint(
-            self, name, stale, tmp_path, caplog):
-        """#2430：null、datetime 與六十進位 name 舊版也會寫檔，舊檔存在才提示。
+    def test_null_and_datetime_name_is_refused(
+            self, name, is_null, tmp_path, caplog):
+        """#2430：null、datetime 與六十進位 name 一律 rc 2。
 
-        舊版把 null（`~`、`null`、空值）寫成 `None.yaml`，datetime 寫成
-        Python 的拼法，`1:30` 寫成 `90.yaml`。空目錄不提；舊檔存在就指名並要求先確認。null 另外
-        提示：本意是字串 null 就加引號。
-        提示分兩條路徑：null 走「不是字串」分支；datetime 與六十進位
-        （Kubernetes client 一律解成字串，datetime 含帶 `!!timestamp`
-        標籤、加不加引號）走 DNS-1123 分支，舊檔名由 `_legacy_name_hint`
-        以 PyYAML 重建。會讓本
-        測試轉紅的改動：拿掉任一處的提示呼叫。
+        null（`~`、`null`、空值）走「不是字串」分支，另提示本意是字串 null
+        就加引號；datetime 與六十進位（Kubernetes client 一律解成字串，
+        datetime 含帶 `!!timestamp` 標籤、加不加引號）走 DNS-1123 分支。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
                            + self._T, encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        is_null = stale == "None.yaml"
-        old = stale[:-len(".yaml")]
-        non_string = is_null
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert (self._BAD_NAME in caplog.text) == non_string, caplog.text
-        assert "exists in this --config-dir" not in caplog.text
+        assert (self._BAD_NAME in caplog.text) == is_null, caplog.text
         assert ('quote it ("null")' in caplog.text) == is_null, caplog.text
-        require_file_name(stale)
-        (out_dir / stale).write_text(self._rendered(old, "ns"),
-                                     encoding="utf-8")
-        caplog.clear()
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert f"{stale} exists in this --config-dir" in caplog.text, \
-            caplog.text
-        assert "confirm it is not the output of another CR" in caplog.text
-        assert ('quote it ("null")' in caplog.text) == is_null
-        assert [p.name for p in out_dir.iterdir()] == [stale]
+        assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("name", [
         "2024-13-01T00:00:00Z", "2024-02-30 10:00:00",
@@ -660,13 +562,8 @@ class TestRenderCrFile:
     ])
     def test_unconstructable_datetime_name_is_caller_error(
             self, name, tmp_path, caplog):
-        """#2430：YAML 判成 timestamp 卻建不出值的 name 仍是 rc 2 單行訊息。
-
-        推算舊版檔名要以 PyYAML 建這個 name，月份／日期／小時超界時丟
-        ValueError；舊版對它同樣 crash、沒寫過檔，所以不附舊檔提醒，也不得
-        變成 traceback。會讓本測試轉紅的改動：拿掉 `_legacy_name_hint` 建值
-        時的 except。
-        """
+        """#2430：YAML 判成 timestamp 卻建不出值的 name 仍是 rc 2 單行訊息，
+        不是 traceback（Kubernetes client 把它解成字串，由名稱格式拒收）。"""
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
                            + self._T, encoding="utf-8")
@@ -676,154 +573,22 @@ class TestRenderCrFile:
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1, caplog.text
         assert "not a valid Kubernetes object name" in caplog.text
-        assert "earlier version" not in caplog.text
         assert "Traceback" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
-    # A null name was rendered by an earlier version to `None.yaml`, header
-    # `?/None`; a valid CR named "none" renders to `none.yaml`, header
-    # `?/none`. On a case-insensitive file system these are one file, and
-    # opening `None.yaml` reads whichever was written: `header` models what
-    # that open returns.
-    _NO_SLASH = ("# Auto-generated by da-assembler from ThresholdConfig "
-                 "None\ntenants: {}\n")
-
-    @pytest.mark.parametrize("content, expect", [
-        pytest.param(_rendered("None"), "stale", id="own-header"),
-        # The name is after the LAST `/`: a `/` in the namespace is kept.
-        pytest.param(_rendered("None", "ns/a"), "stale",
-                     id="slash-in-namespace"),
-        pytest.param(_rendered("none"), "other", id="case-folded-other-cr"),
-        pytest.param("tenants: {}\n", "none", id="hand-written"),
-        pytest.param(_NO_SLASH, "none", id="header-without-slash"),
-        pytest.param(None, "none", id="directory"),
-    ])
-    def test_stale_hint_judges_by_the_header(
-            self, content, expect, tmp_path, caplog):
-        """#2430：舊檔提醒看 `<old_name>.yaml` 的 da-assembler 檔頭決定。
-
-        不列目錄，只看那一個路徑。檔頭的 name 與舊拼法逐字相同 → 原提示
-        （要求先排除字串 name 的 CR）；不同（大小寫不分的檔案系統上
-        `None.yaml` 開到合法 CR `"none"` 的 `none.yaml`）→ 說明它是另一個
-        CR 的輸出、不要刪；沒有 da-assembler 檔頭（手寫檔）或是目錄 →
-        不提示。Linux 上以寫入不同檔頭的 `None.yaml` 模擬開檔結果。
-        會讓本測試轉紅的改動：不看檔頭、存在即提示（other／none 轉紅），
-        或不分辨檔頭 name（other 轉紅）；以第一個 `/` 切 name
-        （slash-in-namespace 轉紅）。
-        """
-        cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text(self._K + "metadata: {name: null}\n" + self._T,
-                           encoding="utf-8")
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        target = out_dir / "None.yaml"
-        if content is None:
-            target.mkdir()
-        else:
-            target.write_text(content, encoding="utf-8")
-        before = target.read_bytes() if target.is_file() else None
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        text = caplog.text
-        errors = [r for r in caplog.records if r.levelname == "ERROR"]
-        assert len(errors) == 1, text
-        stale_hint = "None.yaml exists in this --config-dir: an earlier"
-        other_hint = ("None.yaml in this --config-dir resolves to a file "
-                      "whose header comment shows it is the output of CR "
-                      "'none', not an earlier version's file for this CR: "
-                      "do not delete it")
-        assert (stale_hint in text) == (expect == "stale"), text
-        assert ("cannot tell them apart" in text) == (expect == "stale")
-        assert (other_hint in text) == (expect == "other"), text
-        if expect == "none":
-            assert "None.yaml" not in text, text
-        assert [p.name for p in out_dir.iterdir()] == ["None.yaml"]
-        if before is not None:
-            assert target.read_bytes() == before
-
-    @pytest.mark.parametrize("name, stale", [
-        pytest.param("1:30", "90.yaml", id="sexagesimal"),
-        pytest.param("null", "None.yaml", id="null"),
-    ])
-    def test_crlf_header_gets_the_stale_hint(
-            self, name, stale, tmp_path, caplog):
-        """#2430：CRLF 換行的舊檔（Windows 寫出或 core.autocrlf）照樣提示。
-
-        檔頭行尾的 `\r` 不屬於 name；讀成 `90\r` 會被當成「另一個 CR 的
-        檔、不要刪」，方向相反。會讓本測試轉紅的改動：拿掉
-        `_rendered_cr_name` 去掉行尾 `\r` 的處理。
-        """
-        cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
-                           + self._T, encoding="utf-8")
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        old = stale[:-len(".yaml")]
-        (out_dir / stale).write_bytes(
-            self._rendered(old).replace("\n", "\r\n").encode("utf-8"))
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert f"{stale} exists in this --config-dir" in caplog.text, \
-            caplog.text
-        assert "cannot tell them apart" in caplog.text
-        assert "do not delete it" not in caplog.text
-        assert [p.name for p in out_dir.iterdir()] == [stale]
-
-    def test_undecodable_header_has_no_stale_hint(self, tmp_path, caplog):
-        """#2430：檔頭解不出 UTF-8 時當作讀不到，不提示、不 traceback。"""
-        cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text(self._K + "metadata: {name: 1:30}\n" + self._T,
-                           encoding="utf-8")
-        out_dir = tmp_path / "out"
-        out_dir.mkdir()
-        (out_dir / "90.yaml").write_bytes(
-            b"# Auto-generated by da-assembler from ThresholdConfig ?/90\xff\n")
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        errors = [r for r in caplog.records if r.levelname == "ERROR"]
-        assert len(errors) == 1, caplog.text
-        assert "90.yaml" not in caplog.text
-        assert "Traceback" not in caplog.text
-
-    def test_unreadable_config_dir_has_no_stale_hint(
-            self, tmp_path, caplog):
-        """#2430：--config-dir 不存在、探測 `<old_name>.yaml` 失敗時當作沒有舊檔。
-
-        舊檔檢查探測 `<old_name>.yaml`，它的 OSError 必須當成不存在：rc 2、
-        只有一筆 ERROR、無提示、無 traceback。會讓本測試轉紅的改動：拿掉
-        `_rendered_cr_name` 的 OSError 處理。
-        """
-        cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text(self._K + "metadata: {name: 1:30}\n" + self._T,
-                           encoding="utf-8")
-        out_dir = tmp_path / "missing"
-        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        errors = [r for r in caplog.records if r.levelname == "ERROR"]
-        assert len(errors) == 1, caplog.text
-        assert "is not a valid Kubernetes object name" in caplog.text
-        assert "exists in this --config-dir" not in caplog.text
-        assert not out_dir.exists()
-
-    def test_missing_name_has_no_stale_hint(self, tmp_path, caplog):
-        """#2430：缺 name 時舊版 crash、沒寫檔，`None.yaml` 在也不提。"""
+    def test_missing_name_is_refused(self, tmp_path, caplog):
+        """缺 name 時 rc 2；不是 null，所以不提加引號。"""
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + "metadata: {namespace: ns}\n" + self._T,
                            encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        (out_dir / "None.yaml").write_text(self._rendered("None"),
-                                           encoding="utf-8")
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert self._BAD_NAME in caplog.text
-        assert "exists in this --config-dir" not in caplog.text
         assert "quote it" not in caplog.text
 
-    def test_overlong_int_name_has_no_stale_hint(self, tmp_path, caplog):
-        """#2430：name 太長、舊檔名超過檔名上限時不提示、不 traceback。
-
-        六十進位的 name 對 Kubernetes 是字串、對 PyYAML 是整數；這個 name
-        的 PyYAML 值有兩百多位，舊版寫 `<兩百多位>.yaml` 會因檔名過長失敗，
-        目錄裡不可能有它。探測那個過長的路徑會丟 ENAMETOOLONG，須當成不存在。
-        會讓本測試轉紅的改動：拿掉存在檢查（偽提示），或探測路徑卻不處理
-        OSError（ENAMETOOLONG → traceback）。
-        """
+    def test_overlong_sexagesimal_name_is_refused(self, tmp_path, caplog):
+        """六十進位、超過名稱長度上限的 name：rc 2 單行訊息，不 traceback。"""
         name = "1" + ":30" * 150
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
@@ -834,18 +599,14 @@ class TestRenderCrFile:
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1, caplog.text
         assert "is not a valid Kubernetes object name" in caplog.text
-        assert "exists in this --config-dir" not in caplog.text
         assert "Traceback" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
     def test_int_name_past_str_digit_limit_is_caller_error(
             self, tmp_path, caplog):
-        """#2430：超過 Python 4300 位 int↔str 上限的 int name 仍是 rc 2。
-
-        推算舊版檔名時 int(...)／str(...) 會丟 ValueError；舊版對它同樣
-        crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。Kubernetes
-        client 把這麼長的數字解成字串，於是由名稱格式（長度）拒收。
-        """
+        """#2430：超過 Python 4300 位 int↔str 上限的 int name 仍是 rc 2：
+        Kubernetes client 把這麼長的數字解成字串，由名稱格式（長度）拒收，
+        訊息不帶 Python 的 int 上限。"""
         name = "1" * 5000
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -857,19 +618,14 @@ class TestRenderCrFile:
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1, caplog.text
         assert "is not a valid Kubernetes object name" in caplog.text
-        assert "earlier version" not in caplog.text
         assert "4300" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("name", ["0b_", "0x_", "-0x_"])
     def test_unconstructable_int_name_is_caller_error(
             self, name, tmp_path, caplog):
-        """#2430：YAML 判成 int 卻建不出值的 name 仍是 rc 2 單行訊息。
-
-        推算舊版檔名要以 PyYAML 建這個 name，這些形狀會丟 ValueError；舊版
-        對它們同樣 crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。
-        Kubernetes client 把它們解成字串，由名稱格式拒收。
-        """
+        """#2430：YAML 判成 int 卻建不出值的 name 仍是 rc 2：Kubernetes
+        client 把它們解成字串，由名稱格式拒收。"""
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
             self._K + f"metadata: {{name: {name}}}\n" + self._T,
@@ -878,7 +634,6 @@ class TestRenderCrFile:
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "is not a valid Kubernetes object name" in caplog.text
-        assert "earlier version" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("spec", [

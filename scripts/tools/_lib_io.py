@@ -1254,18 +1254,6 @@ def write_onboard_hints(
     return path
 
 
-def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
-    """Read onboard hints JSON.
-
-    Returns:
-        Parsed dict, or ``None`` if file is missing / unreadable.
-    """
-    if not path or not Path(path).is_file():
-        return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
 # ── Common argparse helpers ─────────────────────────────────────────
 # Extracted in v2.4.0 Phase B to eliminate argparse boilerplate across 20+ tools.
 
