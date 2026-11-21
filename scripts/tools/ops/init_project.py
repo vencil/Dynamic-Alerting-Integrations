@@ -2817,7 +2817,7 @@ def _gen_gitlab_ci(
       # ⛔ NO `allow_failure:`. `da-tools lint --ci` exits non-zero on ERROR
       # only (lint_custom_rules.py: `if args.ci and errors`), and its ERRORs are
       # the governance deny-list on tenant-authored raw PromQL — denied
-      # functions, denied patterns, and missing required labels, the last of
+      # functions, results that drop tenant, and missing required labels, the last of
       # which is what four-layer routing keys on. WARN-level naming nits do not
       # affect the exit code at all, so the tool has already made the
       # severity call and `allow_failure` was overriding it.

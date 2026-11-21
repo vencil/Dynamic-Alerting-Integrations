@@ -606,12 +606,16 @@ _GROUP_LABELS = ("  - name: f2-group-labels\n    labels:\n      tenant: \"\"\n  
                  "        labels:\n          maintenance: mute\n")
 
 
-@pytest.mark.parametrize("rule_labels,want", [
-    ("", 1),                                                   # the group's "" removes tenant
-    ("        labels:\n          tenant: t1\n", 0),            # the rule's own label wins
+@pytest.mark.parametrize("rule_labels,said", [
+    ("", "drops `tenant`"),                                    # the group's "" removes tenant
+    # the rule's own label wins — and a literal is no series' value (#4098:
+    # a recording rule's labels are no template), so it is not proven
+    ("        labels:\n          tenant: t1\n", "cannot prove"),
 ])
-def test_group_labels_reach_the_record_under_the_rules_own(da_read_env, tmp_path, rule_labels, want):
+def test_group_labels_reach_the_record_under_the_rules_own(da_read_env, tmp_path, capsys,
+                                                           rule_labels, said):
     """CodeRabbit on #3690: Prometheus writes a group's `labels:` on every
     series its rules write, the rule's own labels taking precedence."""
     rp = _pack_with(tmp_path, _GROUP_LABELS.format(rule_labels=rule_labels))
-    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == want
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert said in capsys.readouterr().err

@@ -9,9 +9,8 @@ denied_functions:
   - predict_linear         # 大範圍回溯查詢
   - quantile_over_time     # 高記憶體消耗
 
-denied_patterns:
-  - '=~".*"'              # 全通配 regex（效能殺手）
-  - 'without(tenant)'     # 破壞 tenant 隔離
+preserved_labels:
+  - tenant                 # 每條 alert 的結果必須保留 tenant（依 Prometheus 語法樹判定，#4098）
 
 required_labels:
   - tenant                 # 所有 Custom Alert Rule 必須帶 tenant label
@@ -30,7 +29,7 @@ max_evaluation_interval: 60s  # Custom Rule Group interval 上限
 #   3. 只有 denied_functions / max_range_duration 可被放寬（lint 工具
 #      OVERRIDABLE_POLICY_KEYS 白名單）；列其他 key（如清空 required_labels）
 #      或 entry 寫錯，載入政策時即結束碼 2（#3977），結構性檢查不可被豁免關閉。
-#   4. 被覆寫以外的檢查（denied_patterns / required_labels …）照跑。
+#   4. 被覆寫以外的檢查（preserved_labels / required_labels …）照跑。
 file_overrides:
   - path: rule-packs/rule-pack-custom-alerts.yaml
     require_generated_marker: true

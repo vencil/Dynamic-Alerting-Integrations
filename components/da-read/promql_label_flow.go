@@ -4,16 +4,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
-// `da-read promql-label-flow <label>`: for every `and` / `unless` of each
-// PromQL expression that matches `on(… <label> …)`, whether the series its
-// LEFT side yields can carry <label> — judged on Prometheus' own parse tree
-// (#3678 F2). `x unless on(tenant) (m == 1)` removes a left series only when
+// `da-read promql-label-flow <label>`: whether the series each PromQL
+// expression yields carry <label> (#4098: the custom-rule lint's
+// preserved_labels), and for every `and` / `unless` of it that matches
+// `on(… <label> …)`, whether the series its LEFT side yields can carry
+// <label> — judged on Prometheus' own parse tree (#3678 F2). `x unless on(tenant) (m == 1)` removes a left series only when
 // some right series has the same tenant; a left side that has already lost
 // `tenant` (`sum without(tenant) (…)`, `sum(…)`, `vector(1)`) never matches,
 // and the clause is there only in its spelling.
@@ -32,16 +34,26 @@ import (
 // (tenant from namespace in the kubernetes pack); a copy from any other
 // label proves nothing — it would hold another label's values. stdout is
 //
-//	{"documents": [[[{"op": "and"|"unless", "start": <byte offset>,
-//	                  "end": <byte offset, exclusive>,
-//	                  "lhs": "kept"|"dropped"|"unknown"}, …], …]]}
+//	{"documents": [[{"result": "kept"|"dropped"|"unknown",
+//	                 "set_matches": [{"op": "and"|"unless", "start": <byte offset>,
+//	                                  "end": <byte offset, exclusive>,
+//	                                  "lhs": "kept"|"dropped"|"unknown"}, …]}, …]]}
 //
-// one list per expression, in input order. "kept": EVERY series the left
-// side yields carries the label, with the value of a series it was computed
-// from (the series a selector of a raw metric reads are taken to carry it).
-// "dropped": some series it yields lack it. "unknown": this reading cannot
-// tell (a function that writes the label, one it does not model, a record
-// cycle) — a caller that needs a proof refuses it.
+// one entry per expression, in input order: "result" is the whole
+// expression's verdict, "lhs" each clause's left side's. "kept": EVERY
+// series it yields carries the label, with the value of a series it was
+// computed from. "dropped": some series it yields lack it. "unknown": this
+// reading cannot tell (a function that writes the label, one it does not
+// model, a value copied from a series matched on other labels, a record
+// cycle, a record named but not given) — a caller that needs a proof
+// refuses it.
+//
+// ⛔ What it cannot see (#4098): the series a selector of a raw metric reads
+// are TAKEN to carry the label — whether a metric has it at all is the
+// scrape's business, not the expression's (`up{job="x"}` reads series
+// without tenant and is "kept"). A metric name with a colon is a recording
+// rule's (Prometheus' naming rule): one not among "records" is "unknown",
+// never taken for a raw metric.
 //
 // An expression or record the parser refuses refuses the input (rc 2, the
 // refusal document); an empty <label> or standard input that is not the
@@ -61,17 +73,17 @@ func readPromQLLabelFlow(label string, in *labelFlowRequest) ([]byte, error) {
 			f.records[name] = append(f.records[name], recordDef{expr: node, labels: d.Labels})
 		}
 	}
-	out := make([][]setMatch, 0, len(in.Expressions))
+	out := make([]exprFlow, 0, len(in.Expressions))
 	for i, e := range in.Expressions {
 		node, err := parseExpr(e)
 		if err != nil {
 			return nil, fmt.Errorf("expression %d: %w", i, err)
 		}
-		out = append(out, f.setMatchesOn(node))
+		out = append(out, exprFlow{Result: f.carries(node).String(), SetMatches: f.setMatchesOn(node)})
 	}
 	return json.Marshal(struct {
-		Documents [][][]setMatch `json:"documents"`
-	}{Documents: [][][]setMatch{out}})
+		Documents [][]exprFlow `json:"documents"`
+	}{Documents: [][]exprFlow{out}})
 }
 
 // labelFlowRequest is promql-label-flow's standard input.
@@ -155,6 +167,12 @@ type flowReader struct {
 type recordDef struct {
 	expr   parser.Expr
 	labels map[string]string
+}
+
+// exprFlow is one expression's entry.
+type exprFlow struct {
+	Result     string     `json:"result"`
+	SetMatches []setMatch `json:"set_matches"`
 }
 
 type setMatch struct {
@@ -314,10 +332,19 @@ func (f *flowReader) callCarries(n *parser.Call) flow {
 		if vs == nil {
 			return flowDropped
 		}
+		// createLabelsForAbsentFunction: an equality matcher sets the label,
+		// any other matcher of it — a second one, a negative one, before or
+		// after — removes it (the engine, promql_label_flow_test.go), and an
+		// empty value is no label (#4098 review). So: exactly one matcher of
+		// the label, an equality with a value.
+		var of []*labels.Matcher
 		for _, m := range vs.LabelMatchers {
-			if m.Name == label && m.Type == labels.MatchEqual {
-				return flowKept
+			if m.Name == label {
+				of = append(of, m)
 			}
+		}
+		if len(of) == 1 && of[0].Type == labels.MatchEqual && of[0].Value != "" {
+			return flowKept
 		}
 		return flowDropped
 	}
@@ -368,6 +395,13 @@ func (f *flowReader) binaryCarries(n *parser.BinaryExpr) flow {
 		many, one = n.RHS, n.LHS
 	}
 	if slices.Contains(m.Include, label) {
+		// The value is copied from the "one" side's series matched on the
+		// matching labels: unless they decide the label, a series of
+		// another tenant can be the match (#4098 review: `x * on()
+		// group_left(tenant) y` rewrote t1's series to t2).
+		if m.On != slices.Contains(m.MatchingLabels, label) {
+			return flowUnknown
+		}
 		return f.carries(one)
 	}
 	if m.Card == parser.CardOneToOne {
@@ -391,13 +425,14 @@ func both(a, b flow) flow {
 
 // selectorCarries: a selector of a recording rule yields what the rule's
 // expression yields (every definition of it); one whose metric name is not
-// an equality matcher could read a record unseen, so it proves nothing.
+// an equality matcher could read a record unseen — given or not (#4098
+// review) — so it proves nothing.
 func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
 	name := ""
 	for _, m := range vs.LabelMatchers {
 		if m.Name == model.MetricNameLabel {
 			if m.Type != labels.MatchEqual {
-				return f.anyRecordMatches(m)
+				return flowUnknown
 			}
 			name = m.Value
 		}
@@ -407,6 +442,11 @@ func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
 	}
 	defs, ok := f.records[name]
 	if !ok {
+		if strings.Contains(name, ":") {
+			// A recording rule's name (Prometheus reserves the colon for
+			// them) that the caller did not give: what it yields is unseen.
+			return flowUnknown
+		}
 		return flowKept
 	}
 	if f.visiting[name] {
@@ -417,24 +457,20 @@ func (f *flowReader) selectorCarries(vs *parser.VectorSelector) flow {
 	out := flowKept
 	for _, d := range defs {
 		if v, set := d.labels[f.label]; set {
-			// The rule's own labels overwrite (or with "", remove) it.
+			// The rule's own labels overwrite (or with "", remove) it. A
+			// recording rule's labels are no template (rules/recording.go):
+			// any other value is the literal text on every series, not the
+			// value of a series it read (#4098 review).
 			if v == "" {
 				out = both(out, flowDropped)
+			} else {
+				out = both(out, flowUnknown)
 			}
 			continue
 		}
 		out = both(out, f.carries(d.expr))
 	}
 	return out
-}
-
-func (f *flowReader) anyRecordMatches(m *labels.Matcher) flow {
-	for name := range f.records {
-		if m.Matches(name) {
-			return flowUnknown
-		}
-	}
-	return flowKept
 }
 
 // copiesWhole: `label_replace(v, dst, "$1", src, "(.*)")` (or `(.+)`, or

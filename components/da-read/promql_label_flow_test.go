@@ -30,6 +30,12 @@ var labelFlowCases = []struct {
 	{"vector", `vector(1)`, flowDropped},
 	{"rate", `rate(c[5m]) > 0`, flowKept},
 	{"absent with tenant matcher", `absent(nope{tenant="t1"})`, flowKept},
+	// createLabelsForAbsentFunction (#4098 review): a second or a negative
+	// matcher of the label removes it; an empty value is no label.
+	{"absent with a second tenant matcher", `absent(nope{tenant="t1", tenant!="t2"})`, flowDropped},
+	{"absent with tenant twice", `absent(nope{tenant="t1", tenant="t1"})`, flowDropped},
+	{"absent with an empty tenant", `absent(nope{tenant=""})`, flowDropped},
+	{"absent negative then equal", `absent(nope{tenant!="t2", tenant="t1"})`, flowDropped},
 	{"absent without", `absent(nope{job="x"})`, flowDropped},
 	{"label_replace other", `label_replace(up, "x", "1", "", "")`, flowKept},
 	{"label_replace tenant", `label_replace(up, "tenant", "", "", "")`, flowUnknown},
@@ -44,7 +50,11 @@ var labelFlowCases = []struct {
 	{"ignoring tenant", `up >= ignoring(tenant) up`, flowDropped},
 	{"ignoring other", `up >= ignoring(instance) up`, flowKept},
 	{"group_left keeps many side", `up * on(job) group_left max by(job) (up)`, flowKept},
-	{"group_left include tenant from one side", `sum by(job) (up) * on(job) group_left(tenant) up`, flowKept},
+	// The copied tenant is the matched "one" series': matched on other
+	// labels, it can be another tenant's (#4098 review).
+	{"group_left include tenant matched on another label", `sum by(job) (up) * on(job) group_left(tenant) up`, flowUnknown},
+	{"group_left include tenant matched on nothing", `up * on() group_left(tenant) max by(tenant) (up{tenant="t2"})`, flowUnknown},
+	{"group_left include tenant matched by ignoring others", `up * ignoring(instance, job, ns, namespace) group_left(tenant) up`, flowKept},
 	{"group_right many side lost it", `max by(job) (up) * on(job) group_right sum by(job) (up)`, flowDropped},
 	{"scalar arithmetic", `up * 2`, flowKept},
 	{"or with a dropped side (review)", `up or sum(up)`, flowDropped},
@@ -153,13 +163,14 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 		t.Fatalf("rc %d: %s", rc, stderr.String())
 	}
 	var got struct {
-		Documents [][][]setMatch `json:"documents"`
+		Documents [][]exprFlow `json:"documents"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Documents) != 1 || len(got.Documents[0]) != 1 || len(got.Documents[0][0]) != 1 ||
-		got.Documents[0][0][0].LHS != "dropped" || got.Documents[0][0][0].Op != "unless" {
+	if len(got.Documents) != 1 || len(got.Documents[0]) != 1 || len(got.Documents[0][0].SetMatches) != 1 ||
+		got.Documents[0][0].SetMatches[0].LHS != "dropped" || got.Documents[0][0].SetMatches[0].Op != "unless" ||
+		got.Documents[0][0].Result != "dropped" {
 		t.Fatalf("got %s", stdout.String())
 	}
 	// An empty expression list is an answer about no expressions.
@@ -173,7 +184,7 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 	stdout.Reset()
 	ok := `{"expressions": ["r"], "records": {"r": [{"expr": "up", "labels": {"tenant": null}}]}, "aliases": ["namespace"]}`
 	if rc := run([]string{"promql-label-flow", "tenant", "-"}, strings.NewReader(ok), &stdout, &stderr); rc != exitOK ||
-		stdout.String() != `{"documents":[[[]]]}`+"\n" {
+		stdout.String() != `{"documents":[[{"result":"dropped","set_matches":[]}]]}`+"\n" {
 		t.Fatalf("records and aliases: rc %d stdout %q stderr %s", rc, stdout.String(), stderr.String())
 	}
 	// An expression or record the parser refuses is the input refused: the
@@ -235,7 +246,9 @@ func TestRecordLabelsOverride(t *testing.T) {
 		want flow
 	}{
 		{map[string]string{"tenant": ""}, flowDropped},
-		{map[string]string{"tenant": "t1"}, flowKept},
+		// No template: the literal text on every series (#4098 review).
+		{map[string]string{"tenant": "t1"}, flowUnknown},
+		{map[string]string{"tenant": "{{ $labels.tenant }}"}, flowUnknown},
 		{map[string]string{"x": "y"}, flowKept},
 	} {
 		f := newFlow(nil)
@@ -279,11 +292,41 @@ func TestRecordsAreFollowed(t *testing.T) {
 		`up == 0`:                            flowKept,
 		`a:loop`:                             flowUnknown,
 		`{__name__=~"job:.*"} == 0`:          flowUnknown,
-		`{__name__=~"nothing_here.*"} == 0`:  flowKept,
+		// #4098 review: a record outside the given ones is unseen — a
+		// regex name can match one, a colon name is one.
+		`{__name__=~"nothing_here.*"} == 0`: flowUnknown,
+		`tenant:not_given:sum == 0`:         flowUnknown,
+		`not_a_record == 0`:                 flowKept,
 	} {
 		hits := newFlow(recs).setMatchesOn(mustParse(t, lhs+clause))
 		if len(hits) != 1 || hits[0].LHS != want.String() {
 			t.Errorf("%s: got %+v, want %s", lhs, hits, want)
+		}
+	}
+}
+
+// TestResultIsTheWholeExpressionsVerdict: "result" is carries() of the whole
+// expression (#4098: the lint's preserved_labels reads it), for every case
+// the engine pins above.
+func TestResultIsTheWholeExpressionsVerdict(t *testing.T) {
+	t.Parallel()
+	exprs := make([]string, 0, len(labelFlowCases))
+	for _, c := range labelFlowCases {
+		exprs = append(exprs, c.lhs)
+	}
+	out, err := readPromQLLabelFlow("tenant", &labelFlowRequest{Expressions: exprs, Aliases: []string{"namespace"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Documents [][]exprFlow `json:"documents"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range labelFlowCases {
+		if r := got.Documents[0][i].Result; r != c.want.String() {
+			t.Errorf("%s: result %s, want %s", c.name, r, c.want)
 		}
 	}
 }
