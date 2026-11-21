@@ -837,6 +837,9 @@ class DeadEntry(NamedTuple):
     window: str | None
     value: str
     reason: str
+    #: Fields da-guard leaves out of the JSON when empty (Go `omitempty`):
+    #: a writer of this record leaves them out when None (#4077).
+    OMIT_WHEN_NONE = ("window",)
 
 
 def dead_entries(v: Any, what: str) -> "tuple[DeadEntry, ...]":

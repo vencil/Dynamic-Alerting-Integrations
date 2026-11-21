@@ -13,6 +13,10 @@ tenant of a conf.d, every key of its config is listed with
 * what a `disable` does (effective / noop);
 * the value as written (`value`).
 
+Each key's entry is `da-guard key-verdict`'s row as it is, less the tenant
+(#4077: `kv.KeyVerdict`, so `hint`, `dead_entries` and `gate_kind` too), and
+each finding its finding, every record written as an object.
+
 All of it is the shared verdict (`da-guard key-verdict`, read through
 `_lib_key_verdict.judge_tree`), not a reading of this tool's own. It is
 judged over each tenant's whole UTC day: `--at` decides only what has
@@ -79,8 +83,10 @@ DEFAULT_TIMEOUT = tv.DEFAULT_TIMEOUT
 #: (it is often this tool's own output) but only `tenants` is compared.
 TOP_FIELDS = frozenset({"schema", "status", "at", "tenants", "findings",
                         "assert_differences"})
-FIELDS = ("layer", "file", "read_by", "verdict", "severity", "reason", "disable",
-          "switched_off_with", "value")
+#: The per-key fields an expected file may pin: da-guard key-verdict's own
+#: row (`kv.KeyVerdict`, #4077), less the tenant (the mapping it sits under)
+#: and the key (what an entry is matched by).
+FIELDS = tuple(f for f in kv.KeyVerdict._fields if f not in ("tenant", "key"))
 #: Fields an expected file of an earlier schema may carry that this one does
 #: not write: field → why it is gone. Refused by name, so an old pin is not
 #: read as a misspelling.
@@ -96,11 +102,26 @@ class ExplainError(Exception):
     """A caller error: exit 2 with this reason."""
 
 
+def _json_value(v: Any) -> Any:
+    """*v* as JSON writes it, the way da-guard does (#4077): a record
+    (NamedTuple — a `tv.DeadEntry`, a verdict row, a finding) as an object
+    of its fields (less those its `OMIT_WHEN_NONE` names, when None), a
+    tuple as a list. `json` alone would write a record as a positional array.
+    tests/ops/test_explain_keys pins the result to da-guard's own output."""
+    if isinstance(v, tuple) and hasattr(v, "_fields"):
+        omit = getattr(v, "OMIT_WHEN_NONE", ())  # Go's `omitempty`
+        return {f: _json_value(x) for f, x in zip(v._fields, v) if not (x is None and f in omit)}
+    if isinstance(v, (tuple, list)):
+        return [_json_value(x) for x in v]
+    return v
+
+
 def _entry(v: kv.KeyVerdict) -> dict[str, Any]:
-    return {"key": v.key, "layer": v.layer, "file": v.file, "read_by": list(v.read_by),
-            "verdict": v.verdict, "severity": v.severity, "reason": v.reason,
-            "disable": v.disable, "switched_off_with": v.switched_off_with,
-            "value": v.value}
+    """The row da-guard key-verdict writes for *v* (#4077): every field, the
+    tenant left out (it is the mapping the row sits under)."""
+    row = _json_value(v)
+    del row["tenant"]
+    return row
 
 
 def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
@@ -147,8 +168,7 @@ def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Option
         "status": "ok",
         "at": at,
         "tenants": {t: [_entry(v) for v in verdict.keys[t]] for t in shown},
-        "findings": [dict(f._asdict(), tenants=list(f.tenants))
-                     for f in verdict.findings
+        "findings": [_json_value(f) for f in verdict.findings
                      if not tenants or set(f.tenants) & set(tenants)],
     }
 
