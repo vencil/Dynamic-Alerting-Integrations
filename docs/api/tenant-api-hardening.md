@@ -186,8 +186,8 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 
 現在回 **503 `STATE_RELOAD_FAILED`**，帶 `committed: true`、`Retry-After: 5`／`retry_after_s: 5`，處理方式是 `retry_after`：
 
-- **寫入已經存了**，不是沒寫進去。`committed: true` 與 `BATCH_COMMITTED` 的同名欄位同義。
-- **重送同一個請求是安全的**：這幾個端點都是依 id 整筆取代或刪除，重送寫出同樣的內容並再觸發一次重讀（刪除時 store 裡已經沒有該項，重送是成功的 no-op）。不重送也會在下一次週期性重讀成功後生效；若那次重讀已先成功，重送 `DELETE` 會得到 404，意思是刪除已經生效。
+- **寫入已經存了**，不是沒寫進去。`committed: true` 在這裡與 `BATCH_COMMITTED` 一樣表示「已存」，但 `BATCH_COMMITTED` 要求不要重送，這裡則不必重送、重送也可以。
+- **重送同一個請求是安全的**：這幾個端點都是依 id 整筆取代或刪除，重送寫出同樣的內容並再觸發一次重讀（刪除時 store 裡已經沒有該項，重送是成功的 no-op）。不重送也會在下一次週期性重讀成功後生效；若那次重讀已先成功，重送 `DELETE` 會得到 404，意思是刪除已經生效。重送 `PUT` 是整筆取代：這段期間若有別人改過同一項，會被覆蓋。
 - 不是 207：207 在 HTTP client 眼裡仍是成功（`fetch` 的 `res.ok` 為 true），等於沒改。
 
 重讀失敗本身照舊記在 `tenant_api_config_reload_failures_total` 與 `tenant_api_config_last_reload_successful`。

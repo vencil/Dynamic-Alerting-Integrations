@@ -186,8 +186,8 @@ After `PUT` / `DELETE /api/v1/groups/{id}`, `PUT` / `DELETE /api/v1/views/{id}` 
 
 It is now **503 `STATE_RELOAD_FAILED`** with `committed: true` and `Retry-After: 5` / `retry_after_s: 5`; the remedy is `retry_after`:
 
-- **The write is saved** — it is not a write that failed. `committed: true` means what the same field means on `BATCH_COMMITTED`.
-- **Resending the same request is safe**: these endpoints replace or delete by id, so a resend writes the same content and triggers another re-read (for a delete, the item is already gone from the store and the resend is a successful no-op). Without a resend, the write takes effect when the next periodic reload succeeds; if that reload has already happened, a resent `DELETE` answers 404, meaning the delete took effect.
+- **The write is saved** — it is not a write that failed. `committed: true` means "saved" here as on `BATCH_COMMITTED`, but where `BATCH_COMMITTED` says not to resend, here a resend is not needed and is allowed.
+- **Resending the same request is safe**: these endpoints replace or delete by id, so a resend writes the same content and triggers another re-read (for a delete, the item is already gone from the store and the resend is a successful no-op). Without a resend, the write takes effect when the next periodic reload succeeds; if that reload has already happened, a resent `DELETE` answers 404, meaning the delete took effect. A resent `PUT` replaces the whole item: a change someone else made to it in between is overwritten.
 - Not 207: an HTTP client reads 207 as success (`fetch`'s `res.ok` is true), which would change nothing.
 
 The failed re-read itself is still recorded in `tenant_api_config_reload_failures_total` and `tenant_api_config_last_reload_successful`.

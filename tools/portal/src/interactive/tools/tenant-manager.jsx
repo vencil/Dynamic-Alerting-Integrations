@@ -432,6 +432,14 @@ export default function TenantManager() {
       });
       if (resp.ok) return { ok: true, data: await resp.json().catch(() => ({})) };
       const body = await resp.json().catch(() => ({ error: resp.statusText }));
+      // #1073: STATE_RELOAD_FAILED is a write that WAS saved (committed:
+      // true) and that reads show once this server reloads it. Not a failure
+      // to undo: the caller keeps its optimistic state, and the toast is the
+      // server's own text, not the generic "resend later" advice.
+      if (body && body.code === 'STATE_RELOAD_FAILED' && body.committed === true) {
+        showNotification('warning', body.error);
+        return { ok: true, committed: true, data: {} };
+      }
       // #3202: the message follows the code's remedy in the generated
       // contract, not the status — a 409 GROUP_ID_UNAVAILABLE means "pick
       // another id", not "someone else updated it, refresh"; a missing or
@@ -473,7 +481,7 @@ export default function TenantManager() {
         // Revert optimistic update on conflict/error
         setGroups(prev => { const next = { ...prev }; delete next[newGroup.id]; return next; });
         setActiveGroupId(null);
-      } else if (!result.localOnly) {
+      } else if (!result.localOnly && !result.committed) {
         showNotification('success', t('群組已建立。', 'Group created successfully.'));
       }
     }
@@ -494,7 +502,7 @@ export default function TenantManager() {
       if (!result.ok) {
         // Revert on error
         setGroups(backup);
-      } else if (!result.localOnly) {
+      } else if (!result.localOnly && !result.committed) {
         showNotification('success', t('群組已刪除。', 'Group deleted successfully.'));
       }
     }

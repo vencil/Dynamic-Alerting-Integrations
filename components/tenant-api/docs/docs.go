@@ -2187,7 +2187,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "committed": {
-                    "description": "Whether the write was committed: true on BATCH_COMMITTED (do not resend it) and on STATE_RELOAD_FAILED (saved, not yet served; resending the same request is safe), false on a direct-mode batch's CONFLICT. Codes that carry it: BATCH_COMMITTED, CONFLICT, STATE_RELOAD_FAILED.",
+                    "description": "Whether the write was committed: true on BATCH_COMMITTED (do not resend it) and on STATE_RELOAD_FAILED (saved, not yet served; served after the next reload, no resend needed), false on a direct-mode batch's CONFLICT. Codes that carry it: BATCH_COMMITTED, CONFLICT, STATE_RELOAD_FAILED.",
                     "type": "boolean"
                 },
                 "config_error": {

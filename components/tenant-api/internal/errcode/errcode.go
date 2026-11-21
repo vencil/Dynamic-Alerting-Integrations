@@ -94,8 +94,10 @@ const (
 	// the federation whitelist) that WAS saved, but that this server could
 	// not load into the snapshot it serves reads from (#1073): reads miss the
 	// write until the next periodic reload. The envelope carries committed:
-	// true. Resending the same request is safe — these writes replace or
-	// delete by id — and loads it at once; so does waiting for Retry-After.
+	// true. It needs no resend: the next periodic reload loads it. A resend
+	// loads it at once (these writes replace or delete by id), but a resent
+	// PUT also overwrites any change made in between, and a resent DELETE
+	// answers 404 once a reload has loaded the delete.
 	StateReloadFailed Code = "STATE_RELOAD_FAILED"
 	// GroupIDUnavailable marks the 409 of a PUT /groups/{id} whose id is
 	// held by a group the caller cannot see (#3123). It is NOT CONFLICT:
