@@ -35,6 +35,14 @@
 #       auto-resize; that indicator is not evaluated for an auto-resizing one, and the pages cited
 #       state no default for the auto-resize form, which reuses 80 here). The health monitor itself
 #       is deprecated; the number is what is borrowed
+#   db2_storage_path_used_percent: 80   [chart-default]
+#       % — Storage path file system usage warning: bytes used over the size of the file system an
+#       automatic-storage path is on, fullest path per tenant — what a tablespace with no MAXSIZE
+#       runs out of (#4093). 80 is the warning threshold of Zabbix's Linux template and equals
+#       db2_tablespace_used_percent; Db2's own indicator for the LOG file system (db.log_fs_util,
+#       the same used / total) warns at 75 — Db2 publishes none for storage paths. Zabbix leaves
+#       root-reserved blocks out of its total, so its figure reads a few points higher than this
+#       one. The file system may hold other data too
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
@@ -178,6 +186,20 @@ groups:
       - record: tenant:db2_tablespace_used_percent:max
         expr: max by(tenant) (db2_tablespace_used_percent)
 
+      # File system of the automatic-storage paths, % used, the fullest path
+      # (#4093). An automatic-storage tablespace with no MAXSIZE — every
+      # tablespace of a default database — has no row in the metric above: what
+      # stops it growing is this file system. Bytes come from the exporter and
+      # the share is taken here, so a rule that wants the bytes can read them.
+      # `da_cluster` (ADR-006) is kept: a tenant in two clusters has two file
+      # systems, and the full one must not be averaged or hidden by the other.
+      - record: tenant:db2_storage_path_used_percent:max
+        expr: |
+          max by(tenant, da_cluster) (
+            100 * db2_storage_path_fs_used_bytes
+            / (db2_storage_path_fs_total_bytes > 0)
+          )
+
       # Lock wait accrual RATE — seconds of lock wait accrued PER SECOND, averaged
       # over a 5m window. ⚠️ NOT "seconds per 5m window": rate() divides by the
       # window, so the unit is s/s (dimensionless — 1.0 means one second of waiting
@@ -238,6 +260,9 @@ groups:
 
       - record: tenant:alert_threshold:db2_tablespace_used_percent
         expr: max by(tenant) (user_threshold{component="db2", metric="tablespace_used_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:db2_storage_path_used_percent
+        expr: max by(tenant) (user_threshold{component="db2", metric="storage_path_used_percent", severity="warning"})
 
       - record: tenant:alert_threshold:db2_lock_wait_time
         expr: max by(tenant) (user_threshold{component="db2", metric="lock_wait_time", severity="warning"})
@@ -512,6 +537,35 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 tablespace 即將滿容 — 儲存審查"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
           description_zh: "Tablespace 使用率：{{ $value | printf \"%.1f\" }}%"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # The file system the automatic-storage paths are on (#4093): what an
+      # automatic-storage tablespace with no MAXSIZE runs out of. The same level
+      # and `for:` as DB2TablespaceAlmostFull — it is the same event seen from the
+      # other side. One file system can back several paths, and other data too.
+      - alert: DB2StoragePathAlmostFull
+        expr: |
+          (
+            tenant:db2_storage_path_used_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_storage_path_used_percent
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "DB2 storage path file system nearing capacity on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 DB2 storage path 的檔案系統即將滿容"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 storage path file system nearing capacity — automatic-storage tablespaces cannot grow once it is full — storage review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 storage path 的檔案系統即將滿容 — 滿了之後自動儲存的 tablespace 無法再擴充 — 儲存審查"
+          description: "Storage path file system usage (fullest path; the file system may be shared with other data): {{ $value | printf \"%.1f\" }}%"
+          description_zh: "Storage path 檔案系統使用率（最滿的那個路徑；該檔案系統可能與其他資料共用）：{{ $value | printf \"%.1f\" }}%"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

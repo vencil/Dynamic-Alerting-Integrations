@@ -25,11 +25,15 @@
 # pureScale / DPF: run one exporter per member (each DSN pinned to its member,
 # same tenant namespace); the pack takes each ratio per exporter before the
 # max / min, so a saturated member is not diluted by the others.
-# The monitor user needs EXECUTE on the three table functions below; SYSMON
+# The monitor user needs EXECUTE on the four table functions below; SYSMON
 # authority does NOT grant it (SQL0551N on DB2 11.5.9). Grant it explicitly:
 #   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_DATABASE TO USER MONITOR
 #   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_TRANSACTION_LOG TO USER MONITOR
 #   GRANT EXECUTE ON FUNCTION SYSPROC.MON_GET_TABLESPACE TO USER MONITOR
+#   GRANT EXECUTE ON FUNCTION SYSPROC.ADMIN_GET_STORAGE_PATHS TO USER MONITOR
+# Without a grant that query fails on every run, and DB2QueryStalled names it.
+# ADMIN_GET_STORAGE_PATHS is called with member -1 like the rest; that was run
+# against a single-member 11.5.9 only, NOT on pureScale / DPF.
 #
 # Every query has a `timeout` below its interval. Each database entry has ONE
 # connection by default, and a query that times out keeps it until the
@@ -99,8 +103,27 @@ metrics:
       large tablespaces: SMS and temporary tablespaces, and an auto-resizing one with
       no maximum (bounded only by its file system), are not served. A default
       database's automatic-storage tablespaces have no maximum (MAXSIZE NONE), so
-      it serves no rows until one is set; their file system is #4093.
+      it serves no rows until one is set; what bounds those is the file system of
+      their storage paths, db2_storage_path_fs_*_bytes below.
     labels: [tablespace]
+    expiration: 10m
+  db2_storage_path_fs_total_bytes:
+    type: gauge
+    description: >-
+      Size of the file system an automatic-storage path is on, in bytes
+      (ADMIN_GET_STORAGE_PATHS FS_TOTAL_SIZE), per storage group and path. The
+      ceiling of every automatic-storage tablespace with no MAXSIZE. Several paths
+      on one file system each report that file system. Every path of every storage
+      group is served, whatever its state (in use or not, drop pending). A path
+      whose file system reports no size is left out, so it goes quiet, not red.
+    labels: [storage_group, path]
+    expiration: 10m
+  db2_storage_path_fs_used_bytes:
+    type: gauge
+    description: >-
+      Bytes in use on that file system (FS_USED_SIZE): its size less what is still
+      available — by this database or by anything else that shares it.
+    labels: [storage_group, path]
     expiration: 10m
   db2_bufferpool_logical_reads:
     type: counter
@@ -191,3 +214,15 @@ queries:
         AND tbsp_content_type NOT IN ('SYSTEMP', 'USRTEMP')
         AND tbsp_usable_pages > 0
         AND (tbsp_auto_resize_enabled = 0 OR tbsp_max_size > 0)
+  db2_storage_path:
+    interval: 60
+    timeout: 8
+    databases: [db2]
+    metrics: [db2_storage_path_fs_total_bytes, db2_storage_path_fs_used_bytes]
+    sql: >-
+      SELECT storage_group_name AS "storage_group",
+             db_storage_path AS "path",
+             fs_total_size AS db2_storage_path_fs_total_bytes,
+             fs_used_size AS db2_storage_path_fs_used_bytes
+      FROM TABLE(ADMIN_GET_STORAGE_PATHS(NULL, -1))
+      WHERE fs_total_size > 0 AND fs_used_size >= 0

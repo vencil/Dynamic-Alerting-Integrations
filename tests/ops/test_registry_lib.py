@@ -612,7 +612,10 @@ def test_real_registry_chart_default_set():
     # #1320: the two DB2 % keys rest on the default warning thresholds of Db2's
     # own health indicators, db.log_util 75 and ts.ts_util 80 (12 -> 14).
     assert {"db2_log_usage_percent", "db2_tablespace_used_percent"} <= tagged
-    assert len(tagged) == 14
+    # #4093: the storage paths' file system, between Db2's own file-system
+    # indicator (75) and Zabbix's Linux template (80) (14 -> 15).
+    assert "db2_storage_path_used_percent" in tagged
+    assert len(tagged) == 15
 
 
 def test_every_real_key_states_its_arming():

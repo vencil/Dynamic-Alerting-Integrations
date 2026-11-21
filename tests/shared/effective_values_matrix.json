@@ -15,8 +15,8 @@
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
       },
       "expect": {
-        "tenant-a": {"value": 55, "source": {"layer": "defaults", "file": "_defaults.yaml", "level": 0}, "profile": null, "merged_hash": "0ce5c044275d34fd"},
-        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "5994fd675d5dd689"}
+        "tenant-a": {"value": 55, "source": {"layer": "defaults", "file": "_defaults.yaml", "level": 0}, "profile": null, "merged_hash": "e02284ce7c23dad3"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "d57b5cf1a4273023"}
       }
     },
     {
@@ -27,8 +27,8 @@
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
       },
       "expect": {
-        "tenant-a": {"value": 55, "source": {"layer": "platform", "file": "_defaults.yaml"}, "profile": null, "merged_hash": "0ce5c044275d34fd"},
-        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "5994fd675d5dd689"}
+        "tenant-a": {"value": 55, "source": {"layer": "platform", "file": "_defaults.yaml"}, "profile": null, "merged_hash": "e02284ce7c23dad3"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "d57b5cf1a4273023"}
       }
     },
     {
@@ -39,8 +39,8 @@
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
       },
       "expect": {
-        "tenant-a": {"value": 55, "source": {"layer": "tenant", "file": "sub/tenant-a.yaml"}, "profile": null, "merged_hash": "c6b836254daf3b44"},
-        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "5994fd675d5dd689"}
+        "tenant-a": {"value": 55, "source": {"layer": "tenant", "file": "sub/tenant-a.yaml"}, "profile": null, "merged_hash": "7500b538a6f069c5"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "d57b5cf1a4273023"}
       }
     },
     {
@@ -52,8 +52,8 @@
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
       },
       "expect": {
-        "tenant-a": {"value": 55, "source": {"layer": "defaults", "file": "sub/_defaults.yaml", "level": 1}, "profile": null, "merged_hash": "0ce5c044275d34fd"},
-        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "5994fd675d5dd689"}
+        "tenant-a": {"value": 55, "source": {"layer": "defaults", "file": "sub/_defaults.yaml", "level": 1}, "profile": null, "merged_hash": "e02284ce7c23dad3"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "d57b5cf1a4273023"}
       }
     },
     {
@@ -65,8 +65,8 @@
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
       },
       "expect": {
-        "tenant-a": {"value": 55, "source": {"layer": "profile", "file": "_profiles.yaml"}, "profile": "p55", "merged_hash": "75fcd8604c8ef7de"},
-        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "5994fd675d5dd689"}
+        "tenant-a": {"value": 55, "source": {"layer": "profile", "file": "_profiles.yaml"}, "profile": "p55", "merged_hash": "a3fe2a55db2cbd8d"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "d57b5cf1a4273023"}
       }
     },
     {
@@ -78,8 +78,8 @@
         "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
       },
       "expect": {
-        "tenant-a": {"value": 55, "source": {"layer": "profile", "file": "_profiles.yaml"}, "profile": "p55", "merged_hash": "75fcd8604c8ef7de"},
-        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "5994fd675d5dd689"}
+        "tenant-a": {"value": 55, "source": {"layer": "profile", "file": "_profiles.yaml"}, "profile": "p55", "merged_hash": "a3fe2a55db2cbd8d"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "d57b5cf1a4273023"}
       }
     }
   ]

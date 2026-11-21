@@ -474,7 +474,30 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                               'here). The health monitor itself is '
                                                               'deprecated; the number is what is '
                                                               'borrowed',
-                                                      'metric_class': 'capacity'}},
+                                                      'metric_class': 'capacity'},
+                      'db2_storage_path_used_percent': {'value': 80,
+                                                        'unit': '%',
+                                                        'desc': 'Storage path file system usage '
+                                                                'warning: bytes used over the size '
+                                                                'of the file system an '
+                                                                'automatic-storage path is on, '
+                                                                'fullest path per tenant — what a '
+                                                                'tablespace with no MAXSIZE runs '
+                                                                'out of (#4093). 80 is the warning '
+                                                                "threshold of Zabbix's Linux "
+                                                                'template and equals '
+                                                                'db2_tablespace_used_percent; '
+                                                                "Db2's own indicator for the LOG "
+                                                                'file system (db.log_fs_util, the '
+                                                                'same used / total) warns at 75 — '
+                                                                'Db2 publishes none for storage '
+                                                                'paths. Zabbix leaves '
+                                                                'root-reserved blocks out of its '
+                                                                'total, so its figure reads a few '
+                                                                'points higher than this one. The '
+                                                                'file system may hold other data '
+                                                                'too',
+                                                        'metric_class': 'capacity'}},
          'optional_overrides': {'db2_deadlocks_per_5m': {'value': 5,
                                                          'unit': 'count/5m',
                                                          'desc': 'Deadlocks in the last 5 minutes, '
@@ -693,4 +716,4 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                              'desc': 'Waiting connections critical',
                                                              'metric_class': 'saturation'}}}}
 
-BUILTIN_DEFAULT_KEYS = frozenset({'container_cpu', 'container_cpu_throttle', 'container_memory', 'db2_log_usage_percent', 'db2_tablespace_used_percent', 'es_disk_usage_percent', 'es_heap_usage_percent', 'mysql_connection_usage_percent', 'mysql_replication_lag', 'oracle_process_usage_percent', 'oracle_tablespace_used_percent', 'pg_connections', 'pg_replication_lag', 'rabbitmq_node_mem_percent'})
+BUILTIN_DEFAULT_KEYS = frozenset({'container_cpu', 'container_cpu_throttle', 'container_memory', 'db2_log_usage_percent', 'db2_storage_path_used_percent', 'db2_tablespace_used_percent', 'es_disk_usage_percent', 'es_heap_usage_percent', 'mysql_connection_usage_percent', 'mysql_replication_lag', 'oracle_process_usage_percent', 'oracle_tablespace_used_percent', 'pg_connections', 'pg_replication_lag', 'rabbitmq_node_mem_percent'})

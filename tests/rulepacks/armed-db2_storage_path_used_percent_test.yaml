@@ -1,0 +1,40 @@
+# promtool unit test — the shipped default of db2_storage_path_used_percent.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-db2.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # The storage path's file system 75 % used for 10m, then 85 %: used / total.
+      - series: 'db2_storage_path_fs_used_bytes{tenant="t-armed", instance="db-0", storage_group="IBMSTOGROUP", path="/database/data"}'
+        values: '750x40 850x40'
+      - series: 'db2_storage_path_fs_total_bytes{tenant="t-armed", instance="db-0", storage_group="IBMSTOGROUP", path="/database/data"}'
+        values: '1000x81'
+      - series: 'user_threshold{tenant="t-armed", component="db2", metric="storage_path_used_percent", severity="warning"}'
+        values: '80x81'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="DB2StoragePathAlmostFull"})
+        eval_time: 8m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="DB2StoragePathAlmostFull"})
+        eval_time: 12m
+        exp_samples:
+          - labels: '{alertname="DB2StoragePathAlmostFull", tenant="t-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="DB2StoragePathAlmostFull"})
+        eval_time: 12m
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="DB2StoragePathAlmostFull"})
+        eval_time: 17m
+        exp_samples:
+          - labels: '{alertname="DB2StoragePathAlmostFull", tenant="t-armed"}'
+            value: 1
