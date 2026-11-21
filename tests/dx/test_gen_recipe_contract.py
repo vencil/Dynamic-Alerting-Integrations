@@ -74,7 +74,9 @@ def test_a_contract_edit_reaches_every_copy(tmp_path):
     _edit_contract(root, add)
     r = _cli(root, "--check")
     assert r.returncode == 1, r.stdout + r.stderr
-    for rel in (gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL, gen.PORTAL_STATUS_REL, gen.CONSTANTS_REL,
+    # (#4099: _lib_constants no longer carries the forecast lookback, so a
+    # horizon edit does not reach it; the policy file is the one copy)
+    for rel in (gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL, gen.PORTAL_STATUS_REL,
                 f"{gen.RECIPES_DIR_REL}/forecast.yaml", f"{gen.RECIPES_DIR_REL}/rate.yaml",
                 gen.POLICY_REL):
         assert f"STALE: {rel}" in r.stdout
@@ -86,7 +88,6 @@ def test_a_contract_edit_reaches_every_copy(tmp_path):
     assert "72h" in props["horizon"]["enum"]
     assert "72h" in json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))["horizon"]
     assert json.loads((root / gen.PORTAL_STATUS_REL).read_text(encoding="utf-8"))["statuses"]["rate"] == "deprecated"
-    assert 'FORECAST_MAX_LOOKBACK: Final[str] = "144h"' in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8")
     forecast = yaml.safe_load((root / gen.RECIPES_DIR_REL / "forecast.yaml").read_text(encoding="utf-8"))
     assert "72h" in forecast["params"]["horizon"]["enum"]
     rate = yaml.safe_load((root / gen.RECIPES_DIR_REL / "rate.yaml").read_text(encoding="utf-8"))
@@ -106,7 +107,6 @@ def test_the_forecast_lookback_reaches_the_policy(tmp_path, edit, want):
     assert _cli(root, "--update").returncode == 0
     policy = yaml.safe_load((root / gen.POLICY_REL).read_text(encoding="utf-8"))
     assert policy["file_overrides"][0]["policy"]["max_range_duration"] == want
-    assert f'FORECAST_MAX_LOOKBACK: Final[str] = "{want}"' in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8")
 
 
 def test_a_hand_edited_copy_is_caught(tmp_path):

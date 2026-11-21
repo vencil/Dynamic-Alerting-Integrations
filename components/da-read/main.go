@@ -188,7 +188,9 @@ func usage(stderr io.Writer) int {
 		"PromQL expressions and prints, per expression, the window each selector reads and "+
 		"the functions and aggregations it calls; promql-shape reads the same input and prints, "+
 		"per expression, its tree: every aggregation, binary operator, call and selector with "+
-		"its grouping and matching labels. Exit 2 when the input is refused, "+
+		"its grouping and matching labels; promql-names reads a JSON array of names and prints, "+
+		"per name, whether a rule can call it (a function or aggregation the rule loader's "+
+		"parser accepts). Exit 2 when the input is refused, "+
 		"with {\"answer\": \"refused\"} on stdout (prometheus-rules: beside \"files\"); "+
 		"exit 2 without it when da-read could not answer (bad arguments, a file that cannot be "+
 		"opened, an I/O error). A refusal by Alertmanager's loader leaves the loader's reason "+

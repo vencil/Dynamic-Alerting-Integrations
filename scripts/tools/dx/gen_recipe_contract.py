@@ -404,7 +404,6 @@ def render_constants(c, g):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
         f"# block from {CONTRACT_REL}. DO NOT EDIT.",
-        f'FORECAST_MAX_LOOKBACK: Final[str] = "{forecast_max_lookback(c)}"',
         f'THRESHOLD_NUMBER_PATTERN: Final[str] = {_py_str(c["patterns"]["thresholdNumber"])}',
         "THRESHOLD_TRIM_CODE_POINTS: Final[frozenset[int]] = frozenset(("
         + ", ".join(f"0x{cp:X}" for cp in sorted(set(g["trim_code_points"]))) + "))",

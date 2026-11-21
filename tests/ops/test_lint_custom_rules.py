@@ -28,11 +28,14 @@ import yaml
 
 import lint_custom_rules  # noqa: E402
 import _lib_exitcodes  # noqa: E402
-from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_python import parse_duration_seconds  # noqa: E402
 
 
 # ── Shared Fixture ────────────────────────────────────────────────
+
+#: The compiled pack's lookback cap: the override in the built-in policy
+#: (#4099: written once, by gen_recipe_contract, into the policy file).
+FORECAST_MAX_LOOKBACK = lint_custom_rules.builtin_policy()["file_overrides"][0]["policy"]["max_range_duration"]
 
 @pytest.fixture
 def policy():
@@ -750,7 +753,7 @@ def test_collect_single_file():
 # Regression for the latent CI conflict found while reviewing #819: the policy
 # denies predict_linear + ranges >1h for tenant raw rules, but the forecast
 # recipe (ADR-024 能力 B) legitimately compiles to predict_linear with a
-# platform-derived lookback of up to FORECAST_MAX_LOOKBACK (96h today) inside the GENERATED
+# platform-derived lookback of up to FORECAST_MAX_LOOKBACK (the compiled-pack override's max_range_duration) inside the GENERATED
 # rule-packs/rule-pack-custom-alerts.yaml. The `file_overrides` exemption must
 # let the compiled forecast shape through while keeping every other check live.
 
@@ -904,6 +907,34 @@ def test_a_missing_built_in_policy_is_a_caller_error(monkeypatch):
     with pytest.raises(_lib_exitcodes.CallerError) as exc:
         lint_custom_rules.load_policy(None)
     assert exc.value.reason == "builtin_policy_missing"
+
+
+def test_a_complete_policy_needs_no_built_in_one(monkeypatch):
+    full = lint_custom_rules.builtin_policy()
+    monkeypatch.setattr(lint_custom_rules, "builtin_policy_path", lambda: None)
+    monkeypatch.setattr(lint_custom_rules, "_BUILTIN_POLICY", None)
+    assert lint_custom_rules.load_policy(full, "p.yaml") == full
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy({"denied_functions": []}, "p.yaml")
+    assert "give a --policy that sets every key" in str(exc.value)
+
+
+def test_the_image_reads_the_policy_beside_the_tool(tmp_path, monkeypatch):
+    """The da-tools image ships the policy file beside the tool (build.sh
+    REPO_DATA_FILES): the flat layout is read first."""
+    (tmp_path / lint_custom_rules.BUILTIN_POLICY_NAME).write_text(
+        open(_REAL_POLICY, encoding="utf-8").read(), encoding="utf-8")
+    monkeypatch.setattr(lint_custom_rules, "_THIS_DIR", str(tmp_path))
+    assert lint_custom_rules.builtin_policy_path() == tmp_path / lint_custom_rules.BUILTIN_POLICY_NAME
+
+
+def test_a_built_in_policy_lacking_a_key_is_refused(monkeypatch):
+    lacking = lint_custom_rules.builtin_policy()
+    del lacking["max_evaluation_interval"]
+    monkeypatch.setattr(lint_custom_rules, "_BUILTIN_POLICY", lacking)
+    with pytest.raises(_lib_exitcodes.CallerError) as exc:
+        lint_custom_rules.load_policy(None)
+    assert exc.value.reason == "policy_invalid" and "lacks max_evaluation_interval" in str(exc.value)
 
 
 def test_a_built_in_policy_with_a_key_lint_does_not_read_is_refused(monkeypatch):

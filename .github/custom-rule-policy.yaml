@@ -1,8 +1,9 @@
 # Custom Rule Governance Policy
 # 參考: docs/custom-rule-governance.md §4
 #
-# 此檔案定義 CI deny-list linting 的檢查規則。
-# 由 scripts/tools/lint_custom_rules.py 讀取。
+# 此檔案定義 CI deny-list linting 的檢查規則，也**就是** lint 的內建政策
+# （scripts/tools/ops/lint_custom_rules.py 讀它；da-tools 映像內附；#4099）：
+# 改這份等於改所有不帶 --policy 的 lint。文件 §4.1 直接引入本檔。
 
 denied_functions:
   - predict_linear         # 大範圍回溯查詢

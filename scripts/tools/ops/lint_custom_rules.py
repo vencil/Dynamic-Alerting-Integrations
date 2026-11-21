@@ -106,8 +106,9 @@ def builtin_policy() -> dict:
         if path is None:
             raise _lib_exitcodes.CallerError(
                 f"the built-in policy {BUILTIN_POLICY_NAME} is in neither {_THIS_DIR} nor "
-                f"{'/'.join(_BUILTIN_POLICY_IN_REPO)} of this tree: give --policy, or "
-                "reinstall da-tools", "builtin_policy_missing")
+                f"{'/'.join(_BUILTIN_POLICY_IN_REPO)} of this tree: give a --policy that "
+                f"sets every key ({', '.join(sorted(POLICY_KEYS))}), or reinstall da-tools",
+                "builtin_policy_missing")
         # the one decoding of a policy document, a --policy's (_lib_input)
         try:
             data = _lib_input.decode_bytes(path.read_bytes(), fmt="yaml", name=str(path))
@@ -735,7 +736,12 @@ def load_policy(custom, path=None):
     # A fresh copy of the built-in policy (builtin_policy deep-copies: a
     # caller appending to a nested list must not reach the cached one, #1616),
     # its keys judged like a --policy's: the file is the default, not code.
-    merged = builtin_policy()
+    # A --policy that sets every key needs no built-in one (#4099 review: it
+    # was read, and refused when missing, under a complete --policy too).
+    if custom is not None and POLICY_KEYS <= set(custom):
+        merged = copy.deepcopy(custom)
+    else:
+        merged = builtin_policy()
     unknown = sorted(safe_label(str(k)) for k in merged if k not in POLICY_KEYS)
     missing = sorted(POLICY_KEYS - set(merged))
     if unknown or missing:
