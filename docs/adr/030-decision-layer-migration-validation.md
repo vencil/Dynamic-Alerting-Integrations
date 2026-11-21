@@ -88,7 +88,7 @@ updated_at: 2026-11-21
 
 **波形要帶真實的雜訊。** SME 手寫的波形通常太乾淨，乾淨波形會系統性地高估 catch-rate，原因有二：貼近閾值來回震盪的訊號會不斷讓 `for:` 計時歸零，乾淨的爬升測得過不代表真故障接得住；單一 series 的波形驗不到多 series 的聚合行為（`by()` 收斂、多 series 同時出現、標籤變動）。所以每個故障一律產生三種變體：疊加日常雜訊、在故障期間掉回正常水位的震盪、多 series 同時出現。
 
-**SME 用問卷描述故障，不必懂取樣。** SME 不講「取樣間隔」「樣本序列」的語言。平台提供標準化的填空範本（[`waveform_pack_template.yaml`](../../scripts/tools/dx/waveform_pack_template.yaml)），問題包括正常水位、故障水位、惡化多快、持續多久、日常抖動多大、故障中會不會暫時掉回、故障當下監控數據還在不在、半夜發生要不要被叫醒；再由編譯器把回答轉成注入參數。沒填日常抖動的退回重填，從源頭擋住太乾淨的波形。
+**SME 用問卷描述故障，不必懂取樣。** SME 不講「取樣間隔」「樣本序列」的語言。平台提供標準化的填空範本（`scripts/tools/dx/waveform_pack_template.yaml`），問題包括正常水位、故障水位、惡化多快、持續多久、日常抖動多大、故障中會不會暫時掉回、故障當下監控數據還在不在、半夜發生要不要被叫醒；再由編譯器把回答轉成注入參數。沒填日常抖動的退回重填，從源頭擋住太乾淨的波形。
 
 代價：製造的對照答案只涵蓋注得出來的已知故障，碰不到沒預料到的長尾，所以注入結果**不能單獨當作切換的放行訊號**（見第 8 節）。
 
@@ -128,7 +128,7 @@ updated_at: 2026-11-21
 
 **先有預設天花板矩陣，例外才協商。** 幾百條規則逐條協商會變成營運瓶頸，拖久了必然妥協成一個寬鬆的常數，正好是上面要防的路。所以分兩段：先依嚴重度與 SLO 訂好預設的容差天花板矩陣，而且在看到任何差異**之前**就鎖定（先承諾本身就是防操弄的手段）；只有預設值不適用的告警類別才進入逐類協商。矩陣的數值由各案的 MTTA／SLO 推出，本篇不列範例值。
 
-計分器 [`waveform_score.py`](../../scripts/tools/dx/waveform_score.py) 讀的容差檔就是這個形狀：`defaults` 是嚴重度對天花板的矩陣，`overrides` 是逐類例外，每筆都必須帶 `justification` 與 `approved_by`，而且容差不得超過它宣告的嚴重度那一列的天花板，違反時結束碼 2。
+計分器 `scripts/tools/dx/waveform_score.py` 讀的容差檔就是這個形狀：`defaults` 是嚴重度對天花板的矩陣，`overrides` 是逐類例外，每筆都必須帶 `justification` 與 `approved_by`，而且容差不得超過它宣告的嚴重度那一列的天花板，違反時結束碼 2。
 
 ### 6. 用 saved-search 的排程設定預測誤報
 
@@ -159,7 +159,7 @@ updated_at: 2026-11-21
 
 ### 範例：注入一個磁碟爬滿的故障
 
-輸入一：波形庫節錄（[`tests/dx/fixtures/waveform/selftest_disk_used_percent.yaml`](../../tests/dx/fixtures/waveform/selftest_disk_used_percent.yaml)，工具自測用的假指標，所以下面的指令都要帶 `--allow-selftest`）：
+輸入一：波形庫節錄（`tests/dx/fixtures/waveform/selftest_disk_used_percent.yaml`，工具自測用的假指標，所以下面的指令都要帶 `--allow-selftest`）：
 
 ```yaml
   - description: "自測用：磁碟空間在半小時內從常態爬升到近滿，並持續兩小時"
@@ -176,7 +176,7 @@ updated_at: 2026-11-21
       dropout_pattern: "every:10"   # 每 10 個樣本漏抓一個
 ```
 
-輸入二：候選規則（[`tests/dx/fixtures/waveform/rules/selftest_disk.rules.yaml`](../../tests/dx/fixtures/waveform/rules/selftest_disk.rules.yaml)）`selftest_disk_used_percent > 80`，`for: 2m`，`severity: warning`；容差檔（[`tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml`](../../tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml)）的天花板是 critical 300 秒、warning 600 秒、其他 900 秒。
+輸入二：候選規則（`tests/dx/fixtures/waveform/rules/selftest_disk.rules.yaml`）`selftest_disk_used_percent > 80`，`for: 2m`，`severity: warning`；容差檔（`tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml`）的天花板是 critical 300 秒、warning 600 秒、其他 900 秒。
 
 在有隔離 vmsingle（`-retentionPeriod=100y`）與 vmalert 的環境執行：
 
@@ -218,7 +218,7 @@ verdict: PASS  (catch 5/5 = 100.0%, FN=0)
 
 - 繞過了「拿不到來源規則」與「拿不到來源歷史」兩個限制。
 - 不宣稱等價，降低了假綠燈推人退役舊系統的責任風險。
-- 注入沿用既有的 vmalert 重放設施（[`tests/rulepacks/vm_harness.py`](../../tests/rulepacks/vm_harness.py)），新寫的部分是串接：注入、收集開火、時間比對、分類、產出報告。
+- 注入沿用既有的 vmalert 重放設施（`tests/rulepacks/vm_harness.py`），新寫的部分是串接：注入、收集開火、時間比對、分類、產出報告。
 - 驗證結果以結構化格式保存（每個注入故障與它的開火紀錄，標明哪些必叫），等於新系統一份最乾淨的開火歷史，日後做歷史比對可以直接當基準。這只是報告格式的要求，不因此承諾任何 AIOps 或事件關聯的範圍（與第 3 節的停損一致）。
 
 ### 要承擔的
@@ -257,8 +257,8 @@ verdict: PASS  (catch 5/5 = 100.0%, FN=0)
 
 ## 相關
 
-- 工具：[`waveform_compile.py`](../../scripts/tools/dx/waveform_compile.py)（驗證、回讀、產生注入資料）、[`inject_waveform.py`](../../scripts/tools/dx/inject_waveform.py)（注入與重放）、[`waveform_score.py`](../../scripts/tools/dx/waveform_score.py)（時間比對與計分）；波形庫格式 [`waveform-pack.schema.json`](../schemas/waveform-pack.schema.json)、容差檔格式 [`waveform-tolerances.schema.json`](../schemas/waveform-tolerances.schema.json)
+- 工具：`scripts/tools/dx/waveform_compile.py`（驗證、回讀、產生注入資料）、`scripts/tools/dx/inject_waveform.py`（注入與重放）、`scripts/tools/dx/waveform_score.py`（時間比對與計分）；波形庫格式 [`waveform-pack.schema.json`](../schemas/waveform-pack.schema.json)、容差檔格式 [`waveform-tolerances.schema.json`](../schemas/waveform-tolerances.schema.json)
 - [故障波形擷取與轉譯 SOP](../internal/waveform-elicitation-sop.md)：怎麼向 SME 擷取故障、轉成波形庫
 - [Air-gap 自助驗證 runbook](../internal/airgap-self-service-runbook.md)：資料不出關的環境怎麼跑
-- [Rule Pack 參考驗證庫](../../tests/rulepacks/reference-validation/README.md)：用公開文件寫成的 Oracle、DB2、Linux-on-K8s 波形庫與結果
+- Rule Pack 參考驗證庫（`tests/rulepacks/reference-validation/README.md`）：用公開文件寫成的 Oracle、DB2、Linux-on-K8s 波形庫與結果
 - 設計討論：issue [#948](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/948)
