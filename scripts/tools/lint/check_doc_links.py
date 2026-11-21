@@ -26,6 +26,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import (  # noqa: E402  (#3981: a tracked file rewritten in place is a repo artifact)
+    exit_on_output_write_error, write_repo_artifact)
 
 
 # ---------------------------------------------------------------------------
@@ -915,11 +917,14 @@ def _fix_broken_anchors(broken_anchors: list, repo_root: Path) -> int:
                 fixed_count += 1
 
         if new_content != content:
-            fpath.write_text(new_content, encoding="utf-8", newline="\n")
+            # #3981: atomic, through the artifact entry; a failure is rc 2,
+            # named (`exit_on_output_write_error` on `main`).
+            write_repo_artifact(fpath, new_content)
 
     return fixed_count
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: 文件間交叉引用一致性檢查."""
     try_utf8_stdout()

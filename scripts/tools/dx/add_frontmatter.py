@@ -26,6 +26,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_io import (  # noqa: E402  (#3981: a tracked file rewritten in place is a repo artifact)
+    exit_on_output_write_error, write_repo_artifact)
 
 # Files/paths excluded from front matter scanning.
 #
@@ -264,9 +266,10 @@ def read_file_content(filepath: str) -> str:
 
 
 def write_file_content(filepath: str, content: str) -> None:
-    """Write file content (UTF-8, LF); an existing file keeps its mode."""
-    with open(filepath, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(content)
+    """Write file content (UTF-8, LF), atomically, through the artifact
+    entry (#3981). The file ends up with the mode git would check it out
+    with — its owner-execute bit is kept, nothing else of the old mode."""
+    write_repo_artifact(filepath, content)
 
 
 def generate_frontmatter(title: str, tags: List[str], audience: List[str],
@@ -391,6 +394,7 @@ def find_markdown_files(base_dir: str) -> List[str]:
     return sorted(set(str(Path(p).resolve()) for p in md_files))
 
 
+@exit_on_output_write_error
 def main():
     """CLI entry point: Add YAML front matter to documentation files for MkDocs/Docusaurus integration."""
     parser = argparse.ArgumentParser(

@@ -33,6 +33,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_io import (  # noqa: E402  (#3981: the two references are repo artifacts)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
 # The metadata annotation templates (#3483): shown as the bare label name, so a
@@ -527,6 +529,14 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
     return alerts_by_pack
 
 
+def _reference_paths(rule_packs_dir: str) -> Tuple[str, str]:
+    """The two references this tool owns (Chinese, English), beside the
+    rule packs they describe."""
+    return (str(Path(rule_packs_dir) / "ALERT-REFERENCE.md"),
+            str(Path(rule_packs_dir) / "ALERT-REFERENCE.en.md"))
+
+
+@exit_on_output_write_error
 def main():
     """CLI entry point: generate_alert_reference.py - Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files."""
     parser = argparse.ArgumentParser(
@@ -579,8 +589,7 @@ def main():
         return
 
     # Define output paths
-    file_zh = str(Path(rule_packs_dir) / "ALERT-REFERENCE.md")
-    file_en = str(Path(rule_packs_dir) / "ALERT-REFERENCE.en.md")
+    file_zh, file_en = _reference_paths(rule_packs_dir)
 
     if args.check:
         # Check mode: compare generated vs existing
@@ -637,19 +646,18 @@ def main():
             )
             sys.exit(EXIT_OK)
 
-    # Write mode: generate and write
-    try:
-        with open(file_zh, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content_zh)
-        print(f"Generated {file_zh}")
-
-        with open(file_en, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content_en)
-        print(f"Generated {file_en}")
-
-    except IOError as e:
-        print(f"Error writing output files: {e}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    # Write mode. #3981: through the artifact entry — atomic, and a target
+    # that is not a regular file is refused before it is opened (a FIFO there
+    # used to hang this run). BOTH targets are judged before either is
+    # written, so a refused English file does not leave the Chinese one
+    # regenerated alone. A failure is rc 2, named, by
+    # `exit_on_output_write_error` on `main`.
+    for target in (file_zh, file_en):
+        check_repo_artifact(target)
+    write_repo_artifact(file_zh, content_zh)
+    print(f"Generated {file_zh}")
+    write_repo_artifact(file_en, content_en)
+    print(f"Generated {file_en}")
 
 
 if __name__ == "__main__":

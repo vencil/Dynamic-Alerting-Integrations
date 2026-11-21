@@ -2847,8 +2847,36 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "path. A write that fails is held by "
         "tests/dx/test_shared_atomic_write_callers.py "
         "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    # #3981, second batch: five tools that rewrote a tracked file with a bare
+    # `open(w)` / `write_text`. The two generators take a DIRECTORY flag for
+    # the rule packs they read; the file they write is named by the tool.
+    "dx/generate_rule_pack_readme.py":
+        "`--update` rewrites `README.md` beside the rule packs; `--rule-packs-dir` "
+        "names the directory read, not a file to write. A write that fails is "
+        "held by tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/generate_alert_reference.py":
+        "the default mode rewrites the two `ALERT-REFERENCE*.md` beside the rule "
+        "packs; `--output-dir` names the directory, not a file. A write that "
+        "fails is held by tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/add_frontmatter.py":
+        "rewrites each Markdown file it has just scanned under `--base-dir`; no "
+        "flag names a file. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "lint/check_repo_name.py":
+        "`--full-scan --fix` rewrites the tracked files it has just scanned; the "
+        "flag is a switch, not a path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "lint/check_doc_links.py":
+        "`--fix-anchors` rewrites the docs it has just scanned; the flag is a "
+        "switch, not a path. A write that fails is held by "
+        "tests/lint/test_check_doc_links.py "
+        "(test_fix_anchors_that_cannot_write_the_doc_is_exit_2).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 7
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 12
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

@@ -141,7 +141,77 @@ def _setup_planning_index(mod, mp, root, target):
                                   "--repo-root", str(root), "--target", str(target)])
 
 
+# ── #3981, second batch: five tools that rewrote a tracked file with a bare
+# `open(w)` / `write_text`. Each is driven at one target; what the tool would
+# compute is stubbed so that the write is OLD -> NEW.
+
+def _setup_rule_pack_readme(mod, mp, root, target):
+    mp.setattr(mod, "generate_table_rows", lambda d: ([], 0, 0))
+    mp.setattr(mod, "count_preloaded_packs", lambda d: 0)
+    mp.setattr(mod, "generate_readme_content", lambda rows, records, alerts, packs: NEW)
+    mp.setattr(mod, "_readme_path", lambda d: target)
+    return _argv_runner(mod, mp, ["generate_rule_pack_readme.py", "--update",
+                                  "--rule-packs-dir", str(root)])
+
+
+def _alert_reference_common(mod, mp, root):
+    aux = root / "aux"
+    aux.mkdir(exist_ok=True)
+    other = aux / "other.md"
+    other.write_text("UNCHANGED\n", encoding="utf-8")
+    mp.setattr(mod, "load_rule_packs", lambda d: {"zpack": []})
+    mp.setattr(mod, "generate_markdown_zh", lambda alerts: NEW)
+    mp.setattr(mod, "generate_markdown_en", lambda alerts: NEW)
+    return other, _argv_runner(mod, mp, ["generate_alert_reference.py",
+                                         "--output-dir", str(root)])
+
+
+def _setup_alert_reference_zh(mod, mp, root, target):
+    other, run = _alert_reference_common(mod, mp, root)
+    mp.setattr(mod, "_reference_paths", lambda d: (str(target), str(other)))
+    return run
+
+
+def _setup_alert_reference_en(mod, mp, root, target):
+    other, run = _alert_reference_common(mod, mp, root)
+    mp.setattr(mod, "_reference_paths", lambda d: (str(other), str(target)))
+    return run
+
+
+def _setup_repo_name(mod, mp, root, target):
+    mp.setattr(mod, "iter_scan_targets", lambda full_scan, base: [(str(target), "target.md")])
+    mp.setattr(mod, "_line_violates", lambda line: True)
+    mp.setattr(mod, "WRONG_REPO_URL", OLD.strip())
+    mp.setattr(mod, "CORRECT_REPO_URL", NEW.strip())
+    mp.setattr(mod, "_read_pr_body", lambda path: "")
+    return _argv_runner(mod, mp, ["check_repo_name.py", "--full-scan", "--fix"])
+
+
+def _setup_add_frontmatter(mod, mp, root, target):
+    mp.setattr(mod, "find_markdown_files", lambda base: [str(target)])
+    mp.setattr(mod, "has_frontmatter", lambda path: False)
+    mp.setattr(mod, "extract_version", lambda path, base: "v0")
+    mp.setattr(mod, "generate_frontmatter", lambda *a, **k: "")
+    mp.setattr(mod, "read_file_content", lambda path: NEW)
+    return _argv_runner(mod, mp, ["add_frontmatter.py", "--base-dir", str(root)])
+
+
 CALLERS: dict[str, Caller] = {
+    "rule_pack_readme": Caller(
+        "generate_rule_pack_readme", "scripts/tools/dx/generate_rule_pack_readme.py:361",
+        None, _setup_rule_pack_readme),
+    "alert_reference_zh": Caller(
+        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:657",
+        None, _setup_alert_reference_zh),
+    "alert_reference_en": Caller(
+        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:659",
+        None, _setup_alert_reference_en),
+    "repo_name_fix": Caller(
+        "check_repo_name", "scripts/tools/lint/check_repo_name.py:127",
+        None, _setup_repo_name),
+    "add_frontmatter": Caller(
+        "add_frontmatter", "scripts/tools/dx/add_frontmatter.py:272",
+        None, _setup_add_frontmatter),
     "rule_pack_stats_fragment": Caller(
         "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:445",
         None, _setup_rule_pack_stats_fragment),
@@ -390,8 +460,11 @@ def test_the_execute_bit_is_kept_and_nothing_else_of_the_mode(name, mode, root, 
     assert stat.S_IMODE(os.stat(target).st_mode) == mode
 
 
+# …and, second batch, the generators whose bare `open(w)` blocked on the FIFO
+# itself: the artifact entry refuses the target before opening it.
 _READS_ITS_TARGET_FIRST = ["rule_pack_stats_fragment", "rule_pack_stats_inject",
-                           "byo_rulepack_table", "tool_map", "doc_map"]
+                           "byo_rulepack_table", "tool_map", "doc_map",
+                           "rule_pack_readme", "alert_reference_zh", "alert_reference_en"]
 
 
 @pytest.mark.parametrize("name", _READS_ITS_TARGET_FIRST)
@@ -417,6 +490,20 @@ def test_a_fifo_target_is_rc2_before_anything_reads_it(name, root, monkeypatch):
     assert rc == 2 and "Traceback" not in err, err
     assert str(target) in err and len(err.strip().splitlines()) == 1, err
     assert stat.S_ISFIFO(os.stat(target).st_mode)
+
+
+def test_a_refused_english_reference_leaves_the_chinese_one_alone(root, monkeypatch):
+    """#3981: the two references are one regeneration. Both targets are judged
+    before either is written — the Chinese file used to be rewritten and the
+    run then failed on the English one, leaving the pair out of step."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFO on this platform")
+    target = _target(root)
+    target.unlink()
+    os.mkfifo(target)
+    rc, err = run_caller("alert_reference_en", monkeypatch, root, target)
+    assert rc == 2 and str(target) in err, err
+    assert (root / "aux" / "other.md").read_text(encoding="utf-8") == "UNCHANGED\n"
 
 
 def test_the_stats_fragment_directory_is_created_when_absent(root, monkeypatch):
@@ -452,8 +539,9 @@ def test_the_caller_table_is_the_surveyed_population():
     than the table silently testing a neighbour. #3107: a committed artifact
     may reach the helper through its entry point, `_lib_io.write_repo_artifact`.
     #3982 (owner 2026-11-18): `audit_rules_drift --out` is an operator
-    output now and left the table (seven of the eight remain)."""
-    assert len(CALLERS) == 7
+    output now and left the table (seven of the eight remain). #3981, second
+    batch: five more sites that rewrote a tracked file with a bare write."""
+    assert len(CALLERS) == 12
     for caller in CALLERS.values():
         rel, line = caller.site.rsplit(":", 1)
         src = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()

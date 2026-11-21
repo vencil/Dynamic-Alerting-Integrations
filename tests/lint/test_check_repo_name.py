@@ -343,3 +343,46 @@ class TestDiffAware:
         assert rc == 0  # env bypass kicks in
         captured = capsys.readouterr()
         assert "BYPASSED" in captured.out
+
+
+# ── #3981: the hook's path stays free of PyYAML ─────────────────────────────
+
+_NO_YAML = """
+import builtins, runpy, sys
+real = builtins.__import__
+def refuse(name, *a, **k):
+    if name == "yaml" or name.startswith("yaml."):
+        raise ModuleNotFoundError("No module named 'yaml' (the hook's environment)")
+    return real(name, *a, **k)
+builtins.__import__ = refuse
+sys.argv = [sys.argv[1], *sys.argv[2:]]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+@pytest.mark.parametrize("argv, wants_yaml", [
+    (["--ci", "--full-scan"], False),
+    # --fix is the one mode that writes, through `_lib_io` (which imports
+    # PyYAML): the control, so that the row above is not green for a tool
+    # that never imports it at all.
+    (["--full-scan", "--fix"], True),
+])
+def test_the_ci_mode_runs_without_pyyaml(argv, wants_yaml):
+    """`repo-name-check` is a `language: python` hook with no
+    additional_dependencies: its environment has no PyYAML. The first cut of
+    #3981 imported `_lib_io` at the top of the tool and the hook died on
+    `import yaml`."""
+    import subprocess
+    script = os.path.join(_TOOLS_DIR, "check_repo_name.py")
+    done = subprocess.run(
+        [sys.executable, "-c", _NO_YAML, script, *argv], capture_output=True,
+        text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+        timeout=300, cwd=os.path.join(_TOOLS_DIR, "..", "..", ".."))
+    if not wants_yaml:
+        assert done.returncode == 0, done.stderr
+        assert "yaml" not in done.stderr
+    else:
+        # No violation in this repository, so --fix never reaches the write
+        # and never imports the writer — but entering the --fix run does
+        # import `_lib_io` for the wrapper, which is where PyYAML is needed.
+        assert done.returncode != 0 and "No module named 'yaml'" in done.stderr, done.stderr

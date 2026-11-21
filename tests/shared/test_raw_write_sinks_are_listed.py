@@ -239,9 +239,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/_lib_exporter_presence.py": {
         "main .write_text [artifact]": 1,
     },
-    "scripts/tools/dx/add_frontmatter.py": {
-        "write_file_content open(w) [artifact]": 1,
-    },
     "scripts/tools/dx/analyze_bench_history.py": {
         "download_artifact .mkdir [work_dir]": 1,
         "download_artifact .write_text [work_dir]": 1,
@@ -284,9 +281,6 @@ DEBT: dict[str, dict[str, int]] = {
         "main .mkdir [artifact]": 1,
         "main .write_text [artifact]": 1,
     },
-    "scripts/tools/dx/generate_alert_reference.py": {
-        "main open(w) [artifact]": 2,
-    },
     "scripts/tools/dx/generate_crd_schemas.py": {
         "run .mkdir [artifact]": 1,
         "run .write_text [artifact]": 2,
@@ -295,9 +289,6 @@ DEBT: dict[str, dict[str, int]] = {
         "main .mkdir [artifact]": 2,
         "main .write_text [artifact]": 2,
         "main os.chmod [artifact]": 2,
-    },
-    "scripts/tools/dx/generate_rule_pack_readme.py": {
-        "main open(w) [artifact]": 1,
     },
     "scripts/tools/dx/generate_rulepack_configmaps.py": {
         "main .write_text [artifact]": 1,
@@ -337,9 +328,6 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/lint/check_cli_contract.py": {
         "write_baseline .write_text [artifact]": 1,
     },
-    "scripts/tools/lint/check_doc_links.py": {
-        "_fix_broken_anchors .write_text [artifact]": 1,
-    },
     "scripts/tools/lint/check_head_blob_hygiene.py": {
         "_fix_working_copy .write_bytes [artifact]": 1,
     },
@@ -352,9 +340,6 @@ DEBT: dict[str, dict[str, int]] = {
     },
     "scripts/tools/lint/check_percent_render_pinned.py": {
         "generate .write_text [artifact]": 1,
-    },
-    "scripts/tools/lint/check_repo_name.py": {
-        "scan_file_full open(w) [artifact]": 1,
     },
     "scripts/tools/lint/check_vmalert_coverage.py": {
         "generate .write_text [artifact]": 1,
@@ -393,7 +378,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 109
+_DEBT_CEILING = 103
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
