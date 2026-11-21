@@ -14,8 +14,10 @@ Each test is one way the measurement could go quiet:
   * a read not named, or a read named twice / never again (re-arming);
   * a listing reported as a read, a replaced file reported as read or unread;
   * the canaries passing when one of the three does not hold;
+  * `finish` marking a measurement whose canaries do not hold, or leaving the
+    repository's `core.trustctime` other than it found it;
+  * git reading the whole tree after a reset, and that being read as the job's;
   * the tool's own imports reported as the job's — or hiding the job's;
-  * `compare` passing when the access times missed a file the tracer saw;
   * a missing state, an unsettable access time or a differing filesystem
     ending in anything but exit 2.
 """
@@ -26,6 +28,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -38,8 +41,7 @@ sys.path.append(str(OPS))
 import atime_trace as at  # noqa: E402
 
 _ENV = {k: v for k, v in os.environ.items()
-        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_PATH_TRACE_DIR",
-                     "DA_TEST_CRASH_EXIT_CODE")}
+        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_TEST_CRASH_EXIT_CODE")}
 FILES = ("za.txt", "zd/zb.txt", "zd/zsub/zc.txt", "ze/zf.txt")
 
 
@@ -177,6 +179,16 @@ def test_a_deleted_file_is_gone(armed):
     assert _collect(repo, state)[0]["gone"] == []
 
 
+def test_a_state_without_the_trustctime_record_cannot_be_finished(armed):
+    repo, state, _ = armed
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    del doc["trustctime"]
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    proc = _tool(repo, "finish", "--state", str(state))
+    assert proc.returncode == 2
+    assert "did not set core.trustctime" in proc.stderr
+
+
 def test_reset_keeps_the_modification_times_and_a_clean_tree(armed):
     repo, state, _ = armed
     before = {name: os.lstat(repo / name).st_mtime_ns for name in FILES}
@@ -267,11 +279,159 @@ def test_canaries_on_another_filesystem_are_refused(tmp_path, monkeypatch):
                  "--canary-dir", str(tmp_path / "zcanary")])
 
 
+# ── finish ──────────────────────────────────────────────────────────────────
+
+def _state(state: Path) -> dict:
+    return json.loads(state.read_text(encoding="utf-8"))
+
+
+def _local_trustctime(repo: Path) -> str | None:
+    """The repository's LOCAL value, None when unset (`git config` exits 1)."""
+    proc = subprocess.run(["git", "config", "--local", "--get", "core.trustctime"],
+                          cwd=repo, capture_output=True, text=True, encoding="utf-8",
+                          timeout=120, env=_ENV)
+    assert proc.returncode in (0, 1), proc.stderr
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _reset(repo: Path, state: Path) -> None:
+    proc = _tool(repo, "reset", "--state", str(state))
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_finish_exercises_the_canaries_collects_and_marks_the_state(tmp_path):
+    """The job has no canary step of its own: `finish` reads and lists them,
+    then judges them. `_measurable` is not used here — nothing but the tool
+    touches the canaries, so a `finish` that only CHECKED would exit 2."""
+    repo = _make_repo(tmp_path / "zrepo")
+    state = tmp_path / "state.json"
+    _reset(repo, state)
+    assert _state(state)["finished"] is None
+    _cat(repo / "zd/zb.txt")
+    proc = _tool(repo, "finish", "--state", str(state))
+    if proc.returncode != 0 and "CANARY-FAILED" in proc.stderr:
+        pytest.fail("COULD NOT MEASURE: this filesystem does not record reads; "
+                    f"not a pass and not a skip.\n{proc.stderr}")
+    assert proc.returncode == 0, proc.stderr
+    assert "CANARY-OK" in proc.stdout
+    doc = _state(state)
+    assert doc["finished"] == {"canary": "ok", "segments": 1}
+    assert [(s["label"], s["files"]) for s in doc["segments"]] == [("end", ["zd/zb.txt"])]
+
+
+@pytest.mark.parametrize("spoil, problem", [
+    ("touched", "`must-not-read` was recorded as read"),
+    ("inner", "`listed-dir/inner` was recorded as read"),
+    ("removed", "is missing"),
+])
+def test_finish_is_exit_2_and_leaves_the_state_unmarked_when_a_canary_fails(
+        tmp_path, spoil, problem):
+    repo = _make_repo(tmp_path / "zrepo")
+    state = tmp_path / "state.json"
+    _measurable(repo, state)
+    _reset(repo, state)
+    canary = Path(_state(state)["canary"]["dir"])
+    if spoil == "touched":
+        _cat(canary / at.CANARY_UNTOUCHED)
+    elif spoil == "inner":
+        _cat(canary / at.CANARY_INNER)
+    else:
+        shutil.rmtree(canary)
+    _cat(repo / "za.txt")
+    proc = _tool(repo, "finish", "--state", str(state))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert problem in proc.stderr
+    doc = _state(state)
+    # The segment is there and the mark is not: a reader of the state file
+    # cannot take the one for a measurement without the other.
+    assert doc["finished"] is None
+    assert doc["segments"][-1]["files"] == ["za.txt"]
+    # …and the repository still got its setting back.
+    assert _local_trustctime(repo) is None
+
+
+@pytest.mark.parametrize("before", [None, "true", "false"])
+def test_reset_sets_trustctime_false_and_finish_puts_back_what_was_there(tmp_path, before):
+    repo = _make_repo(tmp_path / "zrepo")
+    if before is not None:
+        _git(repo, "config", "--local", "core.trustctime", before)
+    state = tmp_path / "state.json"
+    _reset(repo, state)
+    assert _local_trustctime(repo) == "false"
+    assert _state(state)["trustctime"] == {
+        "previous": before, "restored": False, "root": str(repo.resolve())}
+    # A second reset before any finish finds its OWN `false`: what is put back
+    # is still what the first one found.
+    _reset(repo, state)
+    assert _state(state)["trustctime"]["previous"] == before
+    proc = _tool(repo, "finish", "--state", str(state))
+    assert proc.returncode == 0, proc.stderr
+    assert _local_trustctime(repo) == before
+    assert _state(state)["trustctime"]["restored"] is True
+    # A second finish does not "restore" again over whatever is there now.
+    _git(repo, "config", "--local", "core.trustctime", "true")
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 0
+    assert _local_trustctime(repo) == "true"
+
+
+@pytest.mark.parametrize("meddle", [("true",), ("--unset",)])
+def test_finish_is_exit_2_when_trustctime_was_changed_during_the_measurement(
+        tmp_path, meddle):
+    """With any value but `false` the job's git commands compared change
+    times: the segments may name the whole tree. Not a measurement — and the
+    value `reset` found is still put back."""
+    repo = _make_repo(tmp_path / "zrepo")
+    _git(repo, "config", "--local", "core.trustctime", "yes")
+    state = tmp_path / "state.json"
+    _reset(repo, state)
+    if meddle == ("--unset",):
+        _git(repo, "config", "--local", "--unset", "core.trustctime")
+    else:
+        _git(repo, "config", "--local", "core.trustctime", *meddle)
+    proc = _tool(repo, "finish", "--state", str(state))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "core.trustctime was" in proc.stderr and "not the `false`" in proc.stderr
+    assert _state(state)["finished"] is None
+    assert _local_trustctime(repo) == "yes"
+
+
+def test_git_rereads_the_whole_tree_after_a_reset_unless_trustctime_is_false(tmp_path):
+    """Why `reset` touches the git config at all. Setting an access time moves
+    the change time; with git's default the next `git status` reads the
+    content of every tracked file, and the measurement names the whole tree.
+
+    ⚠️ Two things this reproduction depends on, both measured (#3756):
+      * git compares change times to the SECOND, and re-reads a file that is
+        not older than the index whatever the setting — hence the sleeps;
+      * a developer machine may set `core.trustctime=false` or
+        `core.checkstat=minimal` globally, where the default never shows —
+        hence `-c` on the git command line, which wins over every file.
+    """
+    count = 120
+    names = tuple(f"zt/z{i:03}.txt" for i in range(count))
+    repo = _make_repo(tmp_path / "zrepo", names)
+    state = tmp_path / "state.json"
+    _measurable(repo, state)
+
+    def reads_after_status(*config: str) -> int:
+        time.sleep(1.2)
+        _reset(repo, state)
+        time.sleep(1.2)
+        subprocess.run(["git", "-c", "core.checkstat=default", *config, "status"],
+                       cwd=repo, check=True, capture_output=True, timeout=120, env=_ENV)
+        return len(_collect(repo, state, "zgit")[0]["files"])
+
+    default = reads_after_status("-c", "core.trustctime=true")
+    assert _local_trustctime(repo) == "false"  # the second run reads this one
+    held = reads_after_status()
+    assert default == count, (default, held)
+    assert held == 0, (default, held)
+
+
 # ── no answer is exit 2 ─────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("command", [
-    ("collect", "--label", "z"), ("canary",), ("cost",),
-    ("compare", "--tracer-json", "znone.json")])
+    ("collect", "--label", "z"), ("canary",), ("cost",), ("finish",)])
 def test_no_state_file_is_exit_2(tmp_path, command):
     repo = _make_repo(tmp_path / "zrepo")
     proc = _tool(repo, command[0], "--state", str(tmp_path / "znone.json"), *command[1:])
@@ -304,6 +464,8 @@ def test_an_access_time_that_cannot_be_set_is_exit_2_not_a_smaller_list(tmp_path
     with pytest.raises(at._lib_exitcodes.CallerError, match=r"zd/zb\.txt: Operation not permitted"):
         at.main(["--root", str(repo), "reset", "--state", str(state)])
     assert not state.exists()
+    # No state file names the value to put back, so `reset` put it back itself.
+    assert _local_trustctime(repo) is None
 
 
 def test_reset_outside_a_repository_is_exit_2(tmp_path):
@@ -380,69 +542,6 @@ def test_without_isolated_mode_the_script_directory_is_named_as_not_measured(tmp
     assert proc.returncode == 0, proc.stderr
     assert "0 tracked file(s) read, 0 directory(ies) listed" in proc.stdout, proc.stdout
     assert "(not measured: the directory scripts/ops" in proc.stdout
-
-
-# ── compare ─────────────────────────────────────────────────────────────────
-
-def _trace(path: Path, files: list[str], sources: list[str]) -> Path:
-    path.write_text(json.dumps({"workflow": "z.yaml", "jobs": {"zjob": {
-        "files": files, "import_dirs": [],
-        "go": [{"module_dir": "zd", "package": "./zsub", "sources": sources}]}}}),
-        encoding="utf-8")
-    return path
-
-
-def test_compare_is_exit_1_naming_what_the_access_times_missed(armed, tmp_path):
-    repo, state, _ = armed
-    _cat(repo / "za.txt")
-    _cat(repo / "ze/zf.txt")
-    _collect(repo, state, "one")
-    _cat(repo / "zd/zsub/zc.txt")
-    _collect(repo, state, "two")
-    trace = _trace(tmp_path / "t.json", ["za.txt", "zd/zb.txt"], ["zd/zsub/*.txt", "zd/*.txt"])
-    proc = _tool(repo, "compare", "--state", str(state), "--tracer-json", str(trace))
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "COMPARE: TRACER-ONLY (1)" in proc.stderr
-    assert "  TRACER-ONLY  zd/zb.txt" in proc.stderr
-    assert "TRACER-ONLY  za.txt" not in proc.stderr
-    assert "3 tracked file(s) read over 2 segment(s)" in proc.stdout
-    assert "tracer (Python): 2 first-party file(s); both saw 1" in proc.stdout
-    # `zd/*.txt` stays inside one segment: zd/zb.txt, not zd/zsub/zc.txt twice.
-    assert "tracer (go list): 2 tracked file(s) under 2 source pattern(s); both saw 1" in proc.stdout
-    assert "  GO-LIST-ONLY  zd/zb.txt" in proc.stdout
-    assert "  ATIME-ONLY  ze/zf.txt" in proc.stdout
-
-
-def test_compare_is_exit_0_when_every_traced_file_was_seen(armed, tmp_path):
-    repo, state, _ = armed
-    _cat(repo / "za.txt")
-    _collect(repo, state)
-    trace = _trace(tmp_path / "t.json", ["za.txt"], [])
-    proc = _tool(repo, "compare", "--state", str(state), "--tracer-json", str(trace))
-    assert proc.returncode == 0, proc.stderr
-    assert "COMPARE: TRACER-ONLY (0)" in proc.stdout
-
-
-@pytest.mark.parametrize("content, message", [
-    ("not json", "is not a trace written by"),
-    ('{"jobs": {"z": {"files": [], "go": []}}}', "names no file"),
-])
-def test_compare_with_nothing_to_compare_against_is_exit_2(armed, tmp_path, content, message):
-    repo, state, _ = armed
-    _collect(repo, state)
-    trace = tmp_path / "t.json"
-    trace.write_text(content, encoding="utf-8")
-    proc = _tool(repo, "compare", "--state", str(state), "--tracer-json", str(trace))
-    assert proc.returncode == 2, proc.stdout
-    assert message in proc.stderr
-
-
-def test_compare_before_any_collect_is_exit_2(armed, tmp_path):
-    repo, state, _ = armed
-    trace = _trace(tmp_path / "t.json", ["za.txt"], [])
-    proc = _tool(repo, "compare", "--state", str(state), "--tracer-json", str(trace))
-    assert proc.returncode == 2
-    assert "no segment was collected" in proc.stderr
 
 
 # ── semantics ───────────────────────────────────────────────────────────────

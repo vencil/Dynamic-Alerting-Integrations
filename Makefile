@@ -269,7 +269,7 @@ agent-adapters: ## 由 .agents/ 中性 SSOT 重生跨 AI 轉接檔（.claude/** 
 	@python3 scripts/tools/dx/gen_agent_adapters.py --generate
 
 .PHONY: workflow-path-filters
-workflow-path-filters: ## 重生各 workflow `on.pull_request.paths` 的 GENERATED path-trace 區塊（來源：.github/path-traces/ 的執行期追蹤＋Go 來源＋字面 import；#3756）
+workflow-path-filters: ## 重生各 workflow `on.pull_request.paths` 的 GENERATED path-trace 區塊（來源：.github/path-traces/ 的 atime 讀檔量測＋其中 .py 的字面 import；#3756）
 	@python3 scripts/ops/workflow_path_filter.py generate
 
 .PHONY: workflow-path-filters-check

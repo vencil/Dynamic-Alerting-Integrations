@@ -7,18 +7,25 @@ all of them. This tool sets the access time of every tracked file and directory
 to a fixed moment in the past, lets the job run, and names the ones whose
 access time moved.
 
-    reset      `git update-index -q --refresh`, then set the access time of
-               every tracked file and of every directory holding one to PAST,
-               create three canaries, and write the state file.
+    reset      `git update-index -q --refresh`, set `core.trustctime=false`
+               in the repository's local config (the value it had goes into
+               the state file), then set the access time of every tracked file
+               and of every directory holding one to PAST, create the canaries,
+               and write the state file.
     collect    name what was read (files) and listed (directories) since the
                last `reset` / `collect`, store it in the state file as one
                labelled segment, and re-arm exactly those paths.
-    canary     the self-check of the measurement: the canary that was read
-               moved, the one nobody touched did not, the directory that was
-               listed moved. Exit 2 when any of the three does not hold.
-    compare    the union of the collected segments against a trace written by
-               `workflow_path_filter.py assert --out` (transitional: it goes
-               when the Python tracer goes).
+    finish     the end of a measurement, in one command: read the `must-read`
+               canary and list `listed-dir` (the tool does it, so a job has no
+               step of its own to forget), collect the last segment (label
+               `end`), put `core.trustctime` back to what `reset` found, check
+               the canaries, and mark the state file as finished. Exit 2 when
+               the canaries do not hold or `core.trustctime` was changed in
+               between; the state is then NOT marked, and
+               `workflow_path_filter.py assert` / `record` refuse it.
+    canary     the self-check of the measurement on its own: the canary that
+               was read moved, the one nobody touched did not, the directory
+               that was listed moved. Exit 2 when any of them does not hold.
     semantics  what an access time means on the filesystem holding a directory:
                one cell per way of touching a file, each printed next to the
                reference (ext4 `relatime`, where the method was validated).
@@ -27,6 +34,23 @@ access time moved.
 Why the order inside `reset` is fixed: on a fresh checkout the first `git
 status` was measured to read most of the tree (#3756, the 2026-11-14 survey),
 so the index is refreshed before the access times are set, not after.
+
+Why `reset` sets `core.trustctime=false`: setting an access time moves the
+change time to now. With git's default (`core.trustctime=true`) an index entry
+whose change time differs is "possibly modified", so the next git command —
+`git status`, `git diff`, a second `actions/checkout` — re-reads the content of
+EVERY tracked file to compare it, and the measurement reports the whole tree as
+read by whichever step ran git first. With `false` git compares the
+modification time and size instead, which `reset` leaves alone; content and
+mode changes are still seen. `finish` puts the previous local value back (or
+unsets it). ⚠️ Reproducing the re-read needs care: git compares change times
+to the SECOND, so two git commands inside the same second as the reset do not
+show it, and a machine whose global config already says `core.trustctime=false`
+or `core.checkstat=minimal` never does. The setting also does not stop git
+from re-reading a file whose modification time is not older than the index
+file's (git's "racily clean" case): a tree written in the same second as its
+index — a test fixture, not a checkout that then installed anything — is
+read whole either way (measured: 200 of 200 files, against 0 a second later).
 
 Why resetting is not optional: under `relatime` a read updates the access time
 only when it is not newer than the modification / change time (or is a day
@@ -43,29 +67,32 @@ a tool that only SNAPSHOTS access times misses every second read.
   * this tool's own source is read by every run of it, so it is left out of
     every segment and named as such, never reported as "not read". (What it
     imports from scripts/tools/ is NOT left out: those access times are put
-    back after the imports.) Inside a job that also runs the Python tracer,
-    start it as `python3 -I`, or the interpreter reads the tracer's
-    sitecustomize.py on its behalf;
-  * whatever runs after the job's last step (an action's post step) is after
-    the last `collect`.
+    back after the imports.) Start it as `python3 -I`: without it the
+    interpreter lists this file's directory at start-up, and that listing is
+    then named as not measured;
+  * whatever runs BEFORE `reset` (the checkout itself, and anything an action
+    read by then) and whatever runs after `finish` (an action's post step) is
+    outside the measurement;
+  * a directory listing is not a read: `dirs` says which directories were
+    listed, and a file ADDED to one is seen only once something reads it.
 And what a changed one does not prove: `mmap` without `read`, `execve` and a
 `cp` all count as reads, and they are — but so does anything else that ran in
 the same stretch, on a shared machine included. A path whose inode changed is
 reported as REPLACED: whether the old content was read first is unknown.
 
 Exit codes (scripts/tools/_lib_exitcodes.py): 0 measured, nothing to report;
-1 a finding (`compare`: the access times missed a file the tracer recorded);
+1 is not used here (the finding — a file read and not covered — is
+workflow_path_filter.py's to report);
 2 no answer — the canaries do not hold, an access time could not be set, the
-state file or `git` is unusable, or (`semantics`) a cell the method rests on
-differs from the reference. Never read as a pass.
+state file or `git` is unusable, `core.trustctime` was changed between `reset`
+and `finish`, or (`semantics`) a cell the method rests on differs from the
+reference. Never read as a pass.
 
 Usage:
     python3 scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime.json" \\
         --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"
-    cat "$GITHUB_WORKSPACE/.git/atime-canary/must-read" > /dev/null
-    ls "$GITHUB_WORKSPACE/.git/atime-canary/listed-dir" > /dev/null
     python3 scripts/ops/atime_trace.py collect --state "$RUNNER_TEMP/atime.json" --label build
-    python3 scripts/ops/atime_trace.py canary --state "$RUNNER_TEMP/atime.json"
+    python3 scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime.json"
     python3 scripts/ops/atime_trace.py semantics --dir "$GITHUB_WORKSPACE/.git"
 """
 from __future__ import annotations
@@ -118,7 +145,6 @@ import glob  # noqa: E402
 import json  # noqa: E402
 import mmap  # noqa: E402
 import platform  # noqa: E402
-import re  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
@@ -163,6 +189,8 @@ CANARY_READ = "must-read"
 CANARY_UNTOUCHED = "must-not-read"
 CANARY_DIR = "listed-dir"
 CANARY_INNER = "listed-dir/inner"
+TRUSTCTIME = "core.trustctime"
+END_LABEL = "end"
 
 
 def _caller_error(message: str) -> _lib_exitcodes.CallerError:
@@ -294,12 +322,57 @@ def make_canaries(directory: Path) -> dict:
                        for name in (CANARY_READ, CANARY_UNTOUCHED, CANARY_DIR, CANARY_INNER)}}
 
 
+def _local_trustctime(root: Path) -> str | None:
+    """The repository's LOCAL `core.trustctime` as written, None when unset
+    (`git config --get` exits 1). The global and system values are not this
+    tool's to touch, and a local value wins over both."""
+    value = _git(root, "config", "--local", "--get", TRUSTCTIME, accept=(0, 1)).strip()
+    return value or None
+
+
+def _restore_trustctime(root: Path, previous: str | None) -> None:
+    if previous is None:
+        # 5: there was nothing to unset.
+        _git(root, "config", "--local", "--unset-all", TRUSTCTIME, accept=(0, 5))
+    else:
+        _git(root, "config", "--local", TRUSTCTIME, previous)
+
+
+def _previous_trustctime(root: Path, state_path: Path) -> str | None:
+    """What `finish` must put back. A `reset` over a state whose measurement
+    was never finished (a second `reset` in one job) finds the `false` the
+    first one wrote: the value to restore is the one THAT reset recorded."""
+    try:
+        with open(state_path, encoding="utf-8") as handle:
+            pending = json.load(handle)["trustctime"]
+        if (pending["restored"] is False and pending["root"] == str(root)
+                and (pending["previous"] is None or isinstance(pending["previous"], str))):
+            return pending["previous"]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return _local_trustctime(root)
+
+
 def cmd_reset(args: argparse.Namespace) -> int:
     root: Path = args.root
     started = time.monotonic()
     # 0: clean; 1: some entry still differs from the index (a modified tree).
     _git(root, "update-index", "-q", "--refresh", accept=(0, 1))
     refreshed = time.monotonic()
+    # After the refresh, before the access times: see the module docstring.
+    previous = _previous_trustctime(root, Path(args.state))
+    _git(root, "config", "--local", TRUSTCTIME, "false")
+    try:
+        return _arm(args, root, previous, started, refreshed)
+    except BaseException:
+        # No state file names the previous value on this path, so nothing
+        # later could put it back.
+        _restore_trustctime(root, previous)
+        raise
+
+
+def _arm(args: argparse.Namespace, root: Path, previous: str | None,
+         started: float, refreshed: float) -> int:
     files, dirs = tracked_paths(root)
     git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
     canary_dir = Path(args.canary_dir).resolve() if args.canary_dir else git_dir / "atime-canary"
@@ -334,6 +407,8 @@ def cmd_reset(args: argparse.Namespace) -> int:
         "version": STATE_VERSION, "root": str(root), "past_ns": PAST_NS,
         "self": _self_rel(root), "files": stamps["files"], "dirs": stamps["dirs"],
         "canary": canary, "segments": [],
+        "trustctime": {"previous": previous, "restored": False, "root": str(root)},
+        "finished": None,
         "cost": {"refresh_s": refreshed - started, "list_s": listed - refreshed,
                  "reset_s": armed - listed, "collect_s": []},
     }
@@ -343,8 +418,10 @@ def cmd_reset(args: argparse.Namespace) -> int:
     print(f"atime-trace reset: mount: {mount_of(str(root))}")
     print(f"atime-trace reset: cost: git update-index --refresh {refreshed - started:.2f}s, "
           f"git ls-files {listed - refreshed:.2f}s, setting access times {armed - listed:.2f}s")
-    print(f"atime-trace reset: canaries in {canary_dir} — read `{CANARY_READ}`, "
-          f"list `{CANARY_DIR}`, leave `{CANARY_UNTOUCHED}` alone, then run `canary`.")
+    print(f"atime-trace reset: {TRUSTCTIME}=false in the local git config (was: "
+          f"{'unset' if previous is None else previous}); `finish` puts it back.")
+    print(f"atime-trace reset: canaries in {canary_dir} — `finish` reads `{CANARY_READ}` "
+          f"and lists `{CANARY_DIR}`; leave `{CANARY_UNTOUCHED}` alone.")
     return EXIT_OK
 
 
@@ -389,7 +466,11 @@ def _show(tag: str, names: list[str], limit: int) -> None:
 
 def cmd_collect(args: argparse.Namespace) -> int:
     state_path = Path(args.state)
-    state = load_state(state_path)
+    return _collect(state_path, load_state(state_path), args.label, args.show, args.out)
+
+
+def _collect(state_path: Path, state: dict, label: str, show: int,
+             out: str | None) -> int:
     root = state["root"]
     started = time.monotonic()
     files = _diff(root, state["files"])
@@ -416,30 +497,30 @@ def cmd_collect(args: argparse.Namespace) -> int:
         state["dirs"][name] = None
     seconds = time.monotonic() - started
     state["segments"].append({
-        "label": args.label, "files": files["read"], "dirs": dirs["read"],
+        "label": label, "files": files["read"], "dirs": dirs["read"],
         "replaced": files["replaced"] + files["appeared"], "gone": files["gone"]})
     state["cost"]["collect_s"].append(seconds)
     save_state(state_path, state)
 
-    print(f"atime-trace collect [{args.label}]: {len(files['read'])} tracked file(s) read, "
+    print(f"atime-trace collect [{label}]: {len(files['read'])} tracked file(s) read, "
           f"{len(dirs['read'])} directory(ies) listed, "
           f"{len(files['replaced']) + len(files['appeared'])} replaced, "
           f"{len(files['gone'])} gone ({seconds:.2f}s)")
-    _show("READ    ", files["read"], args.show)
-    _show("LISTED  ", dirs["read"], args.show)
-    _show("REPLACED", files["replaced"] + files["appeared"], args.show)
-    _show("GONE    ", files["gone"], args.show)
+    _show("READ    ", files["read"], show)
+    _show("LISTED  ", dirs["read"], show)
+    _show("REPLACED", files["replaced"] + files["appeared"], show)
+    _show("GONE    ", files["gone"], show)
     if own:
         print(f"  (not measured: {own} — every run of this tool reads it)")
     if own_dir:
         print(f"  (not measured: the directory {own_dir} — without `python3 -I` the "
               "interpreter lists it at start-up)")
-    if args.out:
+    if out:
         try:
-            with open(args.out, "w", encoding="utf-8", newline="\n") as handle:
+            with open(out, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write("".join(f"{name}\n" for name in files["read"]))
         except OSError as exc:
-            raise _caller_error(f"{args.out} cannot be written: {exc}") from exc
+            raise _caller_error(f"{out} cannot be written: {exc}") from exc
     if refused:
         raise _caller_error(
             f"{len(refused)} path(s) could not be re-armed, so the next segment "
@@ -481,8 +562,7 @@ def canary_verdict(state: dict) -> list[str]:
     return problems
 
 
-def cmd_canary(args: argparse.Namespace) -> int:
-    state = load_state(Path(args.state))
+def _require_canaries(state: dict) -> None:
     problems = canary_verdict(state)
     where = state["canary"]["dir"]
     if problems:
@@ -494,70 +574,65 @@ def cmd_canary(args: argparse.Namespace) -> int:
     print(f"CANARY-OK: in {where} the file that was read moved, the file nobody "
           "touched did not, the directory that was listed moved and the file "
           "inside it did not.")
+
+
+def cmd_canary(args: argparse.Namespace) -> int:
+    _require_canaries(load_state(Path(args.state)))
     return EXIT_OK
 
 
-# ── compare (transitional) ──────────────────────────────────────────────────
+# ── finish ──────────────────────────────────────────────────────────────────
 
-def _glob_regex(pattern: str) -> re.Pattern[str]:
-    """`*` stays inside one path segment, `**` crosses them — the two forms a
-    trace's Go source entries use."""
-    out = []
-    for part in re.split(r"(\*\*|\*)", pattern):
-        out.append(".*" if part == "**" else "[^/]*" if part == "*" else re.escape(part))
-    return re.compile("".join(out) + r"\Z")
-
-
-def cmd_compare(args: argparse.Namespace) -> int:
-    state = load_state(Path(args.state))
-    try:
-        with open(args.tracer_json, encoding="utf-8") as handle:
-            jobs = json.load(handle)["jobs"]
-        python_files = sorted({f for job in jobs.values() for f in job["files"]})
-        go_patterns = sorted({s for job in jobs.values() for b in job["go"] for s in b["sources"]})
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+def cmd_finish(args: argparse.Namespace) -> int:
+    state_path = Path(args.state)
+    state = load_state(state_path)
+    root = Path(state["root"])
+    trust = state.get("trustctime")
+    if not isinstance(trust, dict):
         raise _caller_error(
-            f"{args.tracer_json} is not a trace written by `workflow_path_filter.py "
-            f"assert --out` ({exc!r}): there is nothing to compare against.") from exc
-    if not python_files:
-        raise _caller_error(f"{args.tracer_json} names no file: the tracer measured nothing.")
-    if not state["segments"]:
-        raise _caller_error("no segment was collected: the access times measured nothing.")
-
-    seen = {f for segment in state["segments"] for f in segment["files"]}
-    replaced = {f for segment in state["segments"] for f in segment["replaced"]}
-    tracked = sorted(state["files"])
-    regexes = [_glob_regex(p) for p in go_patterns]
-    go_files = sorted(f for f in tracked if any(r.match(f) for r in regexes))
-    own = state.get("self")
-
-    tracer_only = [f for f in python_files if f not in seen and f != own]
-    go_only = [f for f in go_files if f not in seen]
-    atime_only = sorted(seen - set(python_files) - set(go_files))
-    print(f"COMPARE: access times: {len(seen)} tracked file(s) read over "
-          f"{len(state['segments'])} segment(s) ({len(replaced)} replaced, not counted)")
-    print(f"COMPARE: tracer (Python): {len(python_files)} first-party file(s); "
-          f"both saw {len(set(python_files) & seen)}")
-    print(f"COMPARE: tracer (go list): {len(go_files)} tracked file(s) under "
-          f"{len(go_patterns)} source pattern(s); both saw {len(set(go_files) & seen)}")
-    print(f"COMPARE: GO-LIST-ONLY ({len(go_only)}) — matched by a source pattern, not "
-          "read (a pattern is wider than a build: `_test.go`, other platforms):")
-    _show("GO-LIST-ONLY", go_only, args.show)
-    print(f"COMPARE: ATIME-ONLY ({len(atime_only)}) — read, and not named by the tracer:")
-    _show("ATIME-ONLY", atime_only, args.show)
-    if own and own in python_files:
-        print(f"COMPARE: (not compared: {own} — every run of this tool reads it)")
-    if not tracer_only:
-        print("COMPARE: TRACER-ONLY (0) — the access times saw every file the "
-              "Python tracer recorded.")
-        return EXIT_OK
-    print(f"COMPARE: TRACER-ONLY ({len(tracer_only)}) — the tracer recorded these and "
-          "their access time did not move. Each is a file the access-time method "
-          "MISSED (or one that was opened and never read):", file=sys.stderr)
-    for name in tracer_only:
-        note = "  [replaced during the run]" if name in replaced else ""
-        print(f"  TRACER-ONLY  {name}{note}", file=sys.stderr)
-    return EXIT_VIOLATION
+            f"{state_path} was written by a `reset` that did not set {TRUSTCTIME}: "
+            "run `reset` again. Nothing was measured.")
+    # The canaries first, by this process: a job has no step of its own to
+    # forget, and a canary nobody read cannot be told from a filesystem that
+    # records nothing. A missing canary is `canary_verdict`'s to name.
+    canary_dir = state["canary"]["dir"]
+    try:
+        with open(os.path.join(canary_dir, CANARY_READ), "rb") as handle:
+            handle.read()
+        os.listdir(os.path.join(canary_dir, CANARY_DIR))
+    except OSError:
+        pass
+    state["finished"] = None
+    try:
+        rc = _collect(state_path, state, END_LABEL, args.show, None)
+    finally:
+        # Whatever `collect` did, the repository gets its setting back. Read
+        # BEFORE it is put back: anything but `false` means git commands of
+        # the job compared change times, and the first of them read every
+        # tracked file — the segments would name the whole tree.
+        changed, found = False, None
+        if not trust["restored"]:
+            found = _local_trustctime(root)
+            changed = (found or "").lower() != "false"
+            _restore_trustctime(root, trust["previous"])
+            trust["restored"] = True
+            save_state(state_path, state)
+            print(f"atime-trace finish: {TRUSTCTIME} put back to "
+                  f"{'unset' if trust['previous'] is None else trust['previous']} "
+                  "in the local git config.")
+    if changed:
+        raise _caller_error(
+            f"{TRUSTCTIME} was {'unset' if found is None else repr(found)} in the local "
+            f"git config of {root} at `finish`, not the `false` that `reset` wrote: "
+            "something changed it during the measurement, so a git command may "
+            "have read every tracked file. The segments are not a measurement "
+            "of the job.")
+    _require_canaries(state)
+    state["finished"] = {"canary": "ok", "segments": len(state["segments"])}
+    save_state(state_path, state)
+    print(f"atime-trace finish: {len(state['segments'])} segment(s); the state file "
+          "is marked finished.")
+    return rc
 
 
 # ── semantics ───────────────────────────────────────────────────────────────
@@ -806,8 +881,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="repository root (default: this checkout)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("reset", help="refresh the index, set every tracked path's "
-                                     "access time to the past, create the canaries")
+    p = sub.add_parser("reset", help="refresh the index, set core.trustctime=false, set every "
+                                     "tracked path's access time to the past, create the canaries")
     p.add_argument("--state", required=True, help="state file to write (JSON)")
     p.add_argument("--canary-dir", help="where the canaries go; must be on the "
                                         "filesystem of the root (default: <git dir>/atime-canary)")
@@ -820,16 +895,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", help="also write the files read, one per line")
     p.set_defaults(func=cmd_collect)
 
+    p = sub.add_parser("finish", help="exercise the canaries, collect the last segment, put "
+                                      "core.trustctime back, check the canaries, mark the state")
+    p.add_argument("--state", required=True)
+    p.add_argument("--show", type=int, default=200, help="paths printed per list (default 200)")
+    p.set_defaults(func=cmd_finish)
+
     p = sub.add_parser("canary", help="exit 2 unless the canaries show reads are measured")
     p.add_argument("--state", required=True)
     p.set_defaults(func=cmd_canary)
-
-    p = sub.add_parser("compare", help="collected segments against a Python tracer's trace")
-    p.add_argument("--state", required=True)
-    p.add_argument("--tracer-json", required=True,
-                   help="the file `workflow_path_filter.py assert --out` wrote")
-    p.add_argument("--show", type=int, default=60, help="paths printed per list (default 60)")
-    p.set_defaults(func=cmd_compare)
 
     p = sub.add_parser("semantics", help="what an access time means on a filesystem")
     p.add_argument("--dir", help="directory on the filesystem to probe (default: the "

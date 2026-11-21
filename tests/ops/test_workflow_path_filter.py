@@ -1,12 +1,11 @@
-"""scripts/ops/workflow_path_filter.py + scripts/ops/path_trace/sitecustomize.py (#3756).
+"""scripts/ops/workflow_path_filter.py, on measurements by scripts/ops/atime_trace.py (#3756).
 
 A workflow's `on.pull_request.paths` is generated from what its jobs were
-measured to load, and the job's last step fails when it loads something the
-list does not cover. Each test below is one way that chain could go quiet:
+measured to read — by access time, so whichever process did the reading — and
+the job's last step fails when it reads something the list does not cover.
+Each test below is one way that chain could go quiet:
 
-  * the tracer missing a load (a cached import, a module rolled back out of
-    `sys.modules`, a child process, the same relative name in two directories,
-    an event it could not record);
+  * a state file that measured nothing, or was never finished, read as a list;
   * the runtime check passing with an entry removed from the region;
   * `generate --check` passing with the region and the trace out of step, or
     with a job that only LOOKS wired;
@@ -14,8 +13,12 @@ list does not cover. Each test below is one way that chain could go quiet:
     and the second being reported as the first.
 
 Everything but the last section runs on a synthetic repository in `tmp_path`
-(file names start with `z` so no scanner mistakes one for a real repo path);
-the last section asks the same questions of the real tree.
+(file names start with `z` so no scanner mistakes one for a real repo path),
+and every trace there comes from a REAL measurement: `atime_trace.py reset`,
+the job's command, `atime_trace.py finish`. ⛔ A filesystem that does not
+record reads fails these tests (`_measure`) — it does not skip them: "could
+not measure" must never read as "measured, nothing wrong". The last section
+asks the same questions of the real tree.
 """
 from __future__ import annotations
 
@@ -31,14 +34,21 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 OPS = ROOT / "scripts" / "ops"
-TRACER_DIR = OPS / "path_trace"
 SCRIPT = OPS / "workflow_path_filter.py"
+ATIME = OPS / "atime_trace.py"
 
 sys.path.append(str(OPS))
 import paths_filter_glob  # noqa: E402
 import workflow_path_filter as wpf  # noqa: E402
 
 from _lib_exitcodes import CallerError  # noqa: E402  (scripts/tools, on sys.path via wpf)
+
+# The job's processes, and the tools': no bytecode (a `.pyc` written by one
+# measurement would hide the `.py` from the next — the boundary the tool's
+# docstring names), and none of the variables a pytest session may carry.
+_ENV = {k: v for k, v in os.environ.items()
+        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_TEST_CRASH_EXIT_CODE")}
+_ENV["PYTHONDONTWRITEBYTECODE"] = "1"
 
 WORKFLOW = "zflow.yaml"
 TEXT = """\
@@ -63,22 +73,19 @@ jobs:
       # END GENERATED path-trace-assert
 """
 MAIN = """\
-import os, sys, types
+import os, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, os.pardir)
-sys.path.insert(0, os.path.join(ROOT, 'zlib'))
-sys.path.insert(0, ROOT)
+for d in ('zlib', 'zdata', ''):
+    sys.path.insert(0, os.path.join(ROOT, d))
 import zdirect
-import zrolled
-del sys.modules['zrolled']
+import zplug
 import zpkg.zmod
 open(os.path.join(ROOT, 'zdata', 'zconfig.txt')).read()
 open(os.path.join(ROOT, 'zlib', 'zopened.txt')).read()
-os.close(os.open(os.path.join(ROOT, 'zlib', 'zosopen.txt'), os.O_RDONLY))
-os.close(os.open(os.path.join(ROOT, 'zlib', 'zwritten.txt'), os.O_WRONLY))
-fake = types.ModuleType('zfake')
-fake.__file__ = os.path.join(ROOT, 'zlib', 'zonlyinmodules.txt')
-sys.modules['zfake'] = fake
+os.close(os.open(os.path.join(ROOT, 'zlib', 'zunread.txt'), os.O_RDONLY))
+for name in ('zlib/zcat.txt', 'zapp/zpkg/zsrc.go'):
+    subprocess.run(['cat', os.path.join(ROOT, name)], stdout=subprocess.DEVNULL, check=True)
 if len(sys.argv) > 1:
     import zlazy
 """
@@ -86,44 +93,55 @@ FILES = {
     f".github/workflows/{WORKFLOW}": TEXT,
     "ztool/zmain.py": MAIN,
     "zlib/zdirect.py": "VALUE = 1\n",
-    "zlib/zrolled.py": "VALUE = 2\n",
     "zlib/zlazy.py": "def f():\n    import zdeep\n",
     "zlib/zdeep.py": "VALUE = 3\n",
+    "zlib/zhidden.py": "VALUE = 6\n",
     "zlib/zunrelated.py": "VALUE = 4\n",
     "zlib/zopened.txt": "x\n",
-    "zlib/zosopen.txt": "x\n",
-    "zlib/zwritten.txt": "x\n",
-    "zlib/zonlyinmodules.txt": "x\n",
-    "zpkg/__init__.py": "",
+    "zlib/zunread.txt": "x\n",
+    "zlib/zcat.txt": "x\n",
+    "zpkg/__init__.py": "VALUE = 0\n",
     "zpkg/zmod.py": "def f():\n    from . import zsibling\n",
     "zpkg/zsibling.py": "VALUE = 5\n",
     "zdata/zconfig.txt": "y\n",
+    "zdata/zplug.py": "def f():\n    import zhidden\n",
+    "zapp/zpkg/zsrc.go": "package zpkg\n",
+    "zapp/zpkg/zother_test.go": "package zpkg\n",
+    "zapp/zpkg/znotes.md": "x\n",
+    "zapp/zelse/zelse.go": "package zelse\n",
     ".gitignore": "__pycache__/\n",
 }
 # What `generate` must derive for the synthetic job, and why each is there.
 EXPECTED_BLOCK = {
     f".github/path-traces/{WORKFLOW}.json", f".github/workflows/{WORKFLOW}",
     "ztool/zmain.py", "zlib/zdirect.py",
-    "zlib/zrolled.py",            # removed from sys.modules before exit
-    "zlib/zopened.txt",           # open()
-    "zlib/zosopen.txt",           # os.open(O_RDONLY)
-    "zlib/zonlyinmodules.txt",    # only ever visible in sys.modules at exit
+    "zlib/zopened.txt",           # open().read()
+    "zlib/zcat.txt",              # read by a CHILD that is not Python
     "zpkg/__init__.py", "zpkg/zmod.py",
     "zpkg/zsibling.py",           # literal RELATIVE import inside a function
     "zlib/zlazy.py",              # literal import on a branch the job never took
     "zlib/zdeep.py",              # …and the import inside zlazy's function
+    "zlib/zhidden.py",            # literal import inside a hand-covered `.py`
+    "zapp/zpkg/*.go",             # a `.go` file read → its package directory
+}
+# What the measured job read. `zlib/zunread.txt` is not in it: opened and
+# closed, never read.
+EXPECTED_READ = {
+    "ztool/zmain.py", "zlib/zdirect.py", "zdata/zplug.py", "zpkg/__init__.py",
+    "zpkg/zmod.py", "zdata/zconfig.txt", "zlib/zopened.txt", "zlib/zcat.txt",
+    "zapp/zpkg/zsrc.go",
 }
 
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
-                   stdin=subprocess.DEVNULL, timeout=120)
+                   stdin=subprocess.DEVNULL, timeout=120, env=_ENV)
 
 
 @pytest.fixture()
 def repo(tmp_path: Path, monkeypatch) -> Path:
-    """A git repository with one traced workflow and a tool whose loads cover
-    every way a file can reach the trace (see EXPECTED_BLOCK)."""
+    """A git repository with one traced workflow and a tool whose reads cover
+    every way a file can reach the list (see EXPECTED_BLOCK)."""
     repo = tmp_path / "zrepo"
     for rel, text in FILES.items():
         path = repo / rel
@@ -134,42 +152,56 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     # The real ledgers name real workflows; this tree has its own.
     monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {})
     monkeypatch.setattr(wpf, "READ_ASSERTION_ORDER", ())
-    monkeypatch.setattr(wpf, "BOUNDARY", {})
     monkeypatch.setattr(wpf, "RESERVED_PATTERNS", {})
     monkeypatch.setattr(wpf, "MACHINERY", ())
-    monkeypatch.delenv("DA_PATH_TRACE_DIR", raising=False)
-    return repo
+    return repo.resolve()
 
 
-def _traced_env(trace_dir: Path) -> dict[str, str]:
-    env = dict(os.environ, PYTHONPATH=str(TRACER_DIR), DA_PATH_TRACE_DIR=str(trace_dir))
-    env.pop("PYTHONDONTWRITEBYTECODE", None)
-    return env
+def _atime(repo: Path, *argv: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-I", str(ATIME), "--root", str(repo), *argv], cwd=repo,
+        env=_ENV, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, timeout=120)
 
 
-def _run_traced(repo: Path, trace_dir: Path, *argv: str,
-                script: str = "ztool/zmain.py") -> None:
-    subprocess.run([sys.executable, script, *argv], cwd=repo, env=_traced_env(trace_dir),
-                   check=True, stdin=subprocess.DEVNULL, timeout=120)
+def _measure(repo: Path, state: Path, *argv: str, script: str = "ztool/zmain.py") -> None:
+    """reset → the job's command → finish, for real. FAILS when the filesystem
+    under pytest's tmp_path does not record reads."""
+    done = _atime(repo, "reset", "--state", str(state))
+    assert done.returncode == 0, done.stderr
+    subprocess.run([sys.executable, script, *argv], cwd=repo, env=_ENV, check=True,
+                   stdin=subprocess.DEVNULL, timeout=120)
+    done = _atime(repo, "finish", "--state", str(state))
+    if done.returncode != 0 and "CANARY-FAILED" in done.stderr:
+        pytest.fail(
+            "COULD NOT MEASURE: the filesystem holding pytest's tmp_path does "
+            "not record reads the way atime_trace.py needs, so none of these "
+            "tests can tell a working tool from a broken one. This is not a "
+            f"pass and not a skip.\n{done.stderr}")
+    assert done.returncode == 0, done.stderr
 
 
 def _main(repo: Path, *argv: str) -> int:
     return wpf.main(["--root", str(repo), *argv])
 
 
-def _job_args(trace_dir: Path) -> tuple[str, ...]:
-    return ("--workflow", WORKFLOW, "--job", "zjob", "--trace-dir", str(trace_dir))
+def _job_args(state: Path) -> tuple[str, ...]:
+    return ("--workflow", WORKFLOW, "--job", "zjob", "--state", str(state))
 
 
-def _record_and_generate(repo: Path, trace_dir: Path) -> None:
-    _run_traced(repo, trace_dir)
-    assert _main(repo, "record", *_job_args(trace_dir)) == 0
+def _record_and_generate(repo: Path, state: Path) -> None:
+    _measure(repo, state)
+    assert _main(repo, "record", *_job_args(state)) == 0
     _git(repo, "add", "-A")
     assert _main(repo, "generate") == 0
 
 
 def _workflow(repo: Path) -> Path:
     return repo / ".github/workflows" / WORKFLOW
+
+
+def _trace_file(repo: Path) -> Path:
+    return repo / ".github/path-traces" / f"{WORKFLOW}.json"
 
 
 def _block(repo: Path) -> list[str]:
@@ -182,130 +214,56 @@ def _edit(repo: Path, old: str, new: str) -> None:
     _workflow(repo).write_text(text.replace(old, new), encoding="utf-8")
 
 
-def _trace(repo: Path, trace_dir: Path) -> dict:
-    return wpf.read_trace_dir(repo, trace_dir, frozenset(wpf.tracked_files(repo)))
+def _read(repo: Path, state: Path) -> set[str]:
+    return wpf.read_state(repo, state, frozenset(wpf.tracked_files(repo)))
 
 
-# ── the tracer ──────────────────────────────────────────────────────────────
+# ── the measurement, as this tool reads it ──────────────────────────────────
 
-def test_tracer_records_every_kind_of_load_from_a_cached_run(
+def test_the_read_set_is_what_the_job_read_whichever_process_read_it(
         repo: Path, tmp_path: Path) -> None:
-    """⛔ Run TWICE: the second run imports from `__pycache__`, where the source
-    is never opened — a tracer listening to `open` alone records the first run
-    and misses every later one. `zrolled` is gone from `sys.modules` by exit,
-    so a tracer that only dumps `sys.modules` never sees it; `zfake` is ONLY
-    in `sys.modules`, so a tracer without the dump never sees that one."""
-    for trace_dir in (tmp_path / "t1", tmp_path / "t2"):
-        _run_traced(repo, trace_dir)
-        trace = _trace(repo, trace_dir)
-        assert {"ztool/zmain.py", "zlib/zdirect.py", "zlib/zrolled.py",
-                "zpkg/zmod.py", "zlib/zonlyinmodules.txt"} <= trace["code"]
-        assert {"zdata/zconfig.txt", "zlib/zopened.txt",
-                "zlib/zosopen.txt"} <= trace["opened"]
-        loaded = trace["code"] | trace["opened"]
-        assert "zlib/zlazy.py" not in loaded
-        # Opened write-only: not a read, so not a dependency.
-        assert "zlib/zwritten.txt" not in loaded
-        assert {"zlib", "ztool"} <= trace["import_dirs"]
+    """Measured TWICE over the same tree: `finish` puts nothing back that the
+    next `reset` does not set again, so a second measurement is the first.
+    `zlib/zcat.txt` and the `.go` file were read by `cat`, not by Python."""
+    for state in (tmp_path / "s1.json", tmp_path / "s2.json"):
+        _measure(repo, state)
+        assert _read(repo, state) == EXPECTED_READ
 
 
-def test_tracer_resolves_a_relative_path_where_the_event_happened(
+def test_the_record_keeps_python_files_and_drops_other_hand_covered_ones(
         repo: Path, tmp_path: Path) -> None:
-    """`open("zsame.txt")`, `os.chdir`, `open("zsame.txt")` are two files. A
-    tracer that de-duplicates the string it was handed records the first."""
-    for rel in ("zdata/zsame.txt", "zlib/zsame.txt", "zdata/zsame.py", "zlib/zsame.py"):
-        (repo / rel).write_text("x = 1\n", encoding="utf-8")
-    (repo / "ztool/zcwd.py").write_text(
-        "import os\n"
-        "for d in ('zdata', os.path.join(os.pardir, 'zlib')):\n"
-        "    os.chdir(d)\n"
-        "    open('zsame.txt').read()\n"
-        "    exec(compile(open('zsame.py').read(), 'zsame.py', 'exec'))\n",
-        encoding="utf-8")
-    _git(repo, "add", "-A")
-    _run_traced(repo, tmp_path / "t", script="ztool/zcwd.py")
-    trace = _trace(repo, tmp_path / "t")
-    assert {"zdata/zsame.txt", "zlib/zsame.txt"} <= trace["opened"]
-    assert {"zdata/zsame.py", "zlib/zsame.py"} <= trace["code"]
+    """`zdata/**` is hand-written. `zdata/zconfig.txt` is left out of the
+    trace (a job that reads a whole tree would make every file added there a
+    change to it); `zdata/zplug.py` is NOT — the import written in it
+    (`zhidden`, never executed) is found from the trace, and only from there."""
+    state = tmp_path / "s.json"
+    _record_and_generate(repo, state)
+    job = json.loads(_trace_file(repo).read_text(encoding="utf-8"))["jobs"]["zjob"]
+    assert sorted(job) == ["files", "import_dirs"]
+    assert job["files"] == sorted(EXPECTED_READ - {"zdata/zconfig.txt"})
+    assert job["import_dirs"] == ["zdata", "zlib", "zpkg", "ztool"]
+    block = _block(repo)
+    assert "zlib/zhidden.py" in block
+    # In the trace, and not in the block: the hand-written pattern has it.
+    assert "zdata/zplug.py" not in block and "zdata/zconfig.txt" not in block
 
 
-def test_an_event_the_tracer_cannot_record_never_reaches_the_program_but_fails_assert(
+def test_a_go_file_read_is_listed_as_its_package_directory(
         repo: Path, tmp_path: Path) -> None:
-    """A program may raise the audit events itself, with any arguments. The
-    hook must not turn that into an exception inside the traced program — and
-    must not drop it silently either: the trace is then incomplete, which
-    `assert` reports as no answer, never as a pass."""
-    (repo / "ztool/zaudit.py").write_text(
-        "import sys\n"
-        "sys.audit('open', 'zdata/zconfig.txt')\n"       # one argument, not three
-        "sys.audit('open', 'zlib/zopened.txt', 7, 0)\n"  # a mode that is not text
-        "print('survived')\n",
-        encoding="utf-8")
-    (repo / "ztool/zbroken.py").write_text(
-        "import sys\nsys.audit('open')\nsys.audit('exec')\nprint('survived')\n",
-        encoding="utf-8")
-    _git(repo, "add", "-A")
-    _record_and_generate(repo, tmp_path / "base")
-
-    tolerant = tmp_path / "t1"
-    _run_traced(repo, tolerant, script="ztool/zaudit.py")
-    trace = _trace(repo, tolerant)  # no error line: both were recorded
-    assert {"zdata/zconfig.txt", "zlib/zopened.txt"} <= trace["opened"]
-
-    broken = tmp_path / "t2"
-    _run_traced(repo, broken, script="ztool/zbroken.py")  # check=True: it exited 0
-    with pytest.raises(CallerError, match="incomplete.*open event.*IndexError"):
-        _main(repo, "assert", *_job_args(broken))
-
-
-def test_tracer_is_inert_without_the_trace_dir(repo: Path, tmp_path: Path) -> None:
-    env = dict(os.environ, PYTHONPATH=str(TRACER_DIR))
-    env.pop("DA_PATH_TRACE_DIR", None)
-    subprocess.run([sys.executable, "ztool/zmain.py"], cwd=repo, env=env, check=True,
-                   stdin=subprocess.DEVNULL, timeout=120)
-    assert not list(tmp_path.glob("**/py-*.log"))
-
-
-def test_tracer_still_runs_the_sitecustomize_it_shadows(tmp_path: Path) -> None:
-    """A Python build may ship its own `sitecustomize` (some distributions and
-    container images do). Putting the tracer first on `PYTHONPATH` must not
-    switch that one off for every interpreter of the job."""
-    other = tmp_path / "zsite"
-    other.mkdir()
-    (other / "sitecustomize.py").write_text(
-        "import os\nos.environ['ZSHADOWED_RAN'] = 'yes'\n", encoding="utf-8")
-    for trace_dir in (None, tmp_path / "t"):
-        env = dict(os.environ, PYTHONPATH=f"{TRACER_DIR}{os.pathsep}{other}")
-        env.pop("DA_PATH_TRACE_DIR", None)
-        if trace_dir:
-            env["DA_PATH_TRACE_DIR"] = str(trace_dir)
-        done = subprocess.run(
-            [sys.executable, "-c", "import os; print(os.environ.get('ZSHADOWED_RAN'))"],
-            env=env, capture_output=True, text=True, encoding="utf-8", check=True,
-            stdin=subprocess.DEVNULL, timeout=120)
-        assert done.stdout.strip() == "yes", done.stderr
-
-
-def test_tracer_follows_a_child_interpreter(repo: Path, tmp_path: Path) -> None:
-    """A job step is rarely the interpreter that does the loading: `make`, a
-    shell script or the tool itself starts another one."""
-    trace_dir = tmp_path / "t"
-    subprocess.run(
-        [sys.executable, "-c",
-         "import subprocess, sys; subprocess.run([sys.executable, 'ztool/zmain.py'], check=True)"],
-        cwd=repo, env=_traced_env(trace_dir), check=True, stdin=subprocess.DEVNULL,
-        timeout=120)
-    assert "zlib/zdirect.py" in _trace(repo, trace_dir)["code"]
-
-
-def test_env_prints_the_two_lines_a_job_exports(tmp_path: Path, capsys,
-                                                monkeypatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", "/zalready")
-    assert wpf.main(["env", "--trace-dir", str(tmp_path / "t")]) == 0
-    lines = capsys.readouterr().out.splitlines()
-    assert lines == [
-        f"PYTHONPATH={TRACER_DIR.as_posix()}{os.pathsep}/zalready",
-        f"DA_PATH_TRACE_DIR={(tmp_path / 't').resolve().as_posix()}"]
+    """One `.go` file was read. The entry is `<dir>/*.go`: the `_test.go`
+    beside it is covered (wider than the read — the safe direction), the
+    notes file there and the package next door are not."""
+    _record_and_generate(repo, tmp_path / "s.json")
+    block = _block(repo)
+    assert "zapp/zpkg/*.go" in block and "zapp/zpkg/zsrc.go" not in block
+    assert not any(e.startswith("zapp/zelse") or e.endswith("znotes.md") for e in block)
+    traced = wpf.Traced(repo, _workflow(repo), wpf.tracked_files(repo))
+    covered = {f: paths_filter_glob.on_paths_covers(traced.paths_now(), f)
+               for f in ("zapp/zpkg/zsrc.go", "zapp/zpkg/zother_test.go",
+                         "zapp/zpkg/znotes.md", "zapp/zelse/zelse.go")}
+    assert covered == {"zapp/zpkg/zsrc.go": True, "zapp/zpkg/zother_test.go": True,
+                       "zapp/zpkg/znotes.md": False, "zapp/zelse/zelse.go": False}
+    assert wpf.go_package_glob("zroot.go") == "*.go"
 
 
 # ── generate / --check ──────────────────────────────────────────────────────
@@ -328,7 +286,9 @@ def test_generate_writes_the_union_and_touches_nothing_else(
     steps = yaml.safe_load(after)["jobs"]["zjob"]["steps"]
     assert [s.get("name") for s in steps] == [
         None, wpf.ENV_STEP_NAME, None, wpf.ASSERT_STEP_NAME]
-    assert steps[1]["run"].endswith('>> "$GITHUB_ENV"')
+    assert steps[1]["run"] == wpf.ENV_STEP_RUN and " reset --state " in steps[1]["run"]
+    assert " finish --state " in steps[3]["run"]
+    assert " && python3 scripts/ops/workflow_path_filter.py assert " in steps[3]["run"]
     assert "--workflow zflow.yaml --job zjob " in steps[3]["run"]
     assert _main(repo, "generate", "--check") == 0
     assert _main(repo, "generate") == 0  # idempotent
@@ -345,7 +305,7 @@ def test_generate_keeps_crlf_line_endings(repo: Path, tmp_path: Path) -> None:
 def test_check_is_red_when_the_region_and_the_trace_disagree(
         repo: Path, tmp_path: Path, capsys) -> None:
     _record_and_generate(repo, tmp_path / "t")
-    trace_file = repo / ".github/path-traces" / f"{WORKFLOW}.json"
+    trace_file = _trace_file(repo)
     doc = json.loads(trace_file.read_text(encoding="utf-8"))
 
     # The trace gains a file the region does not have.
@@ -387,21 +347,37 @@ def test_generate_prunes_a_trace_entry_whose_file_is_gone(
     assert _main(repo, "generate", "--check") == 0
 
 
-def test_a_malformed_trace_file_is_no_answer_not_an_empty_trace(
-        repo: Path, tmp_path: Path) -> None:
+OLD_FORMAT = {"workflow": WORKFLOW, "jobs": {"zjob": {
+    "files": ["ztool/zmain.py"], "import_dirs": ["zlib"],
+    "go": [{"module_dir": "zapp", "package": "./zpkg", "sources": ["zapp/zpkg/*.go"]}]}}}
+
+
+@pytest.mark.parametrize("broken, why", [
+    ("{not json", "JSONDecodeError"),
+    ('{"jobs": {"zjob": {"files": "x", "import_dirs": []}}}', "`files` is not a list"),
+    ('{"jobs": {"zjob": {"files": [1], "import_dirs": []}}}', "`files` is not a list of strings"),
+    ('{"jobs": {"zjob": {"files": []}}}', "KeyError"),
+    ('{"workflow": 1}', "KeyError"),
+    # The format the retired Python tracer wrote: its `files` were what Python
+    # loaded, not what the job read. Refused, with what to do about it.
+    (json.dumps(OLD_FORMAT), "a job holds `go`"),
+])
+def test_a_malformed_or_old_format_trace_file_is_no_answer_not_an_empty_trace(
+        repo: Path, tmp_path: Path, broken: str, why: str) -> None:
     """Read as empty, a broken trace file would have `generate` rewrite the
     region down to the workflow's own two entries and exit 0."""
-    _record_and_generate(repo, tmp_path / "t")
-    trace_file = repo / ".github/path-traces" / f"{WORKFLOW}.json"
+    state = tmp_path / "s.json"
+    _record_and_generate(repo, state)
     before = _workflow(repo).read_bytes()
-    for broken in ("{not json", '{"jobs": {"zjob": {"files": "x"}}}', '{"workflow": 1}',
-                   '{"jobs": {"zjob": {"files": [], "import_dirs": [], "go": [{}]}}}'):
-        trace_file.write_text(broken, encoding="utf-8")
-        for argv in (("generate",), ("generate", "--check"),
-                     ("assert", *_job_args(tmp_path / "t"))):
-            with pytest.raises(CallerError, match="is not a trace file"):
-                _main(repo, *argv)
+    _trace_file(repo).write_text(broken, encoding="utf-8")
+    for argv in (("generate",), ("generate", "--check"),
+                 ("assert", *_job_args(state)), ("record", *_job_args(state))):
+        with pytest.raises(CallerError, match="is not a trace file") as caught:
+            _main(repo, *argv)
+        assert why in str(caught.value)
+        assert "Record it again from an atime measurement" in str(caught.value)
     assert _workflow(repo).read_bytes() == before
+    assert _trace_file(repo).read_text(encoding="utf-8") == broken
 
 
 def test_a_later_exclusion_of_a_generated_entry_is_a_finding(
@@ -417,28 +393,11 @@ def test_a_later_exclusion_of_a_generated_entry_is_a_finding(
     assert "EXCLUDED    zflow.yaml: zlib/zdirect.py" in err
 
 
-def test_boundary_entries_are_written_and_checked(repo: Path, tmp_path: Path, capsys,
-                                                  monkeypatch) -> None:
-    (repo / "Zmakefile").write_text("x\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    monkeypatch.setattr(wpf, "BOUNDARY", {WORKFLOW: {"Zmakefile": "zmake reads it"}})
-    _record_and_generate(repo, tmp_path / "t")
-    assert "Zmakefile" in _block(repo)
-
-    monkeypatch.setattr(wpf, "BOUNDARY", {
-        WORKFLOW: {"Zmakefile": "zmake reads it", "Zgone": "zwhy"},
-        "zother.yaml": {"Zmakefile": "zwhy"}})
-    capsys.readouterr()
-    assert _main(repo, "generate", "--check") == 1
-    err = capsys.readouterr().err
-    assert "DEAD        BOUNDARY zflow.yaml: 'Zgone'" in err
-    assert "STALE       BOUNDARY names zother.yaml" in err
-
-
 def test_this_tool_is_listed_through_machinery(repo: Path, tmp_path: Path,
                                                monkeypatch) -> None:
-    """`assert` and `record` drop their own trace, so the tool is listed by
-    name, with whatever it imports."""
+    """Neither tool is in a job's measurement (atime_trace.py leaves its own
+    source out; `assert` runs after `finish`), so both are listed by name,
+    with whatever they import."""
     for rel, text in (("zops/ztool.py", "import zhelper\n"), ("zops/zhelper.py", "")):
         (repo / rel).parent.mkdir(exist_ok=True)
         (repo / rel).write_text(text, encoding="utf-8")
@@ -449,6 +408,12 @@ def test_this_tool_is_listed_through_machinery(repo: Path, tmp_path: Path,
     assert {"zops/ztool.py", "zops/zhelper.py"} <= set(_block(repo))
 
 
+def test_the_real_machinery_is_this_tool_and_the_one_that_measures() -> None:
+    assert wpf.MACHINERY == ("scripts/ops/workflow_path_filter.py",
+                             "scripts/ops/atime_trace.py")
+    assert all((ROOT / f).is_file() for f in wpf.MACHINERY)
+
+
 # ── where the regions sit ───────────────────────────────────────────────────
 
 def test_an_empty_region_outside_the_pull_request_list_is_refused_unwritten(
@@ -457,7 +422,7 @@ def test_an_empty_region_outside_the_pull_request_list_is_refused_unwritten(
     between the markers yet. Under `push.paths` the entries would be written
     there, the pull_request list would stay as it was, and the run would
     exit 0."""
-    _run_traced(repo, tmp_path / "t")
+    _measure(repo, tmp_path / "t")
     _edit(repo,
           "      # BEGIN GENERATED path-trace (do not edit)\n"
           "      # END GENERATED path-trace\n  workflow_dispatch:\n",
@@ -504,48 +469,75 @@ def test_a_job_region_outside_its_job_is_refused(repo: Path) -> None:
         _main(repo, "generate")
 
 
-# ── is the job wired: seven ways it only looks so, and four more ────────────
+# ── is the job wired: the ways it only looks so ─────────────────────────────
 
-ENV_REGION = ("      # BEGIN GENERATED path-trace-env job=zjob\n"
-              f"      - name: {wpf.ENV_STEP_NAME}\n"
-              f"        run: {wpf.ENV_STEP_RUN}\n"
-              "      # END GENERATED path-trace-env\n")
+CHECKOUT = "      - uses: actions/checkout@v6\n"
+ENV_STEP = (f"      - name: {wpf.ENV_STEP_NAME}\n"
+            f"        run: {wpf.ENV_STEP_RUN}\n")
+ENV_REGION = ("      # BEGIN GENERATED path-trace-env job=zjob\n" + ENV_STEP
+              + "      # END GENERATED path-trace-env\n")
 TOOL_STEP = "      - run: python3 ztool/zmain.py\n"
 ASSERT_RUN = f"        run: {wpf.assert_step_run(WORKFLOW, 'zjob')}\n"
+FINISH = 'python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && '
+RESET_ONCE = "generated reset step exactly once, unchanged (found 0)"
+ASSERT_ONCE = "generated assert step exactly once, unchanged (found 0)"
 
 
 @pytest.mark.parametrize("old, new, message", [
-    # 1. the assert's failure is swallowed by the shell
-    (ASSERT_RUN, ASSERT_RUN.rstrip("\n") + " || true\n",
-     "generated assert step exactly once"),
-    # 2. …or by the job
-    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    continue-on-error: true\n",
-     "job `zjob` sets `continue-on-error`"),
-    # 3. the env step, byte-identical, moved after the step that does the loading
+    # ── the checkout is the first step ──
+    (CHECKOUT, "      - run: echo zearly\n" + CHECKOUT,
+     "its first step must be `uses: actions/checkout@…`"),
+    (CHECKOUT, "      - uses: actions/setup-python@v6\n" + CHECKOUT,
+     "its first step must be `uses: actions/checkout@…`"),
+    # ── the reset step is the second, byte-identical ──
+    # moved after the step that does the reading
     (ENV_REGION + TOOL_STEP, TOOL_STEP + ENV_REGION,
-     "runs a command before the env step"),
-    # 4. the env lines are printed, not exported
-    (' >> "$GITHUB_ENV"\n', "\n", "generated env step exactly once"),
-    # 5. the assert command survives only in a shell comment
+     "the generated reset step is step 3; it must be the second step"),
+    # a `uses:` step slipped in between: what the action reads is not measured
+    (CHECKOUT, CHECKOUT + "      - uses: actions/setup-python@v6\n",
+     "the generated reset step is step 3; it must be the second step"),
+    # its text edited: another state file, the `-I` dropped, another canary dir
+    ('reset --state "$RUNNER_TEMP/atime-trace.json"', 'reset --state "$RUNNER_TEMP/zother.json"',
+     RESET_ONCE),
+    ("run: python3 -I scripts/ops/atime_trace.py reset", "run: python3 scripts/ops/atime_trace.py reset",
+     RESET_ONCE),
+    (' --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"\n', "\n", RESET_ONCE),
+    # a key added to it: a failure of the reset would not stop the job
+    (ENV_STEP, ENV_STEP + "        continue-on-error: true\n", RESET_ONCE),
+    # a second copy, by hand, later in the job: the first measurement is void
+    (TOOL_STEP, TOOL_STEP + ENV_STEP,
+     "generated reset step exactly once, unchanged (found 2)"),
+    # ── the assert step is the last `run:`, byte-identical ──
+    # its failure is swallowed by the shell
+    (ASSERT_RUN, ASSERT_RUN.rstrip("\n") + " || true\n", ASSERT_ONCE),
+    # the command survives only in a shell comment
     (ASSERT_RUN, "        run: |\n          # " + ASSERT_RUN.strip()[5:] + "\n          true\n",
-     "generated assert step exactly once"),
-    # 6. a later step resets what the tracer lives on
-    (TOOL_STEP, "      - run: PYTHONPATH= python3 ztool/zmain.py\n",
-     "assigns, unsets or clears"),
-    # 7. the assert reads another directory
-    ('--trace-dir "$RUNNER_TEMP/path-trace" --out', '--trace-dir "$RUNNER_TEMP/zother" --out',
-     "generated assert step exactly once"),
-    # …and four more of the same family.
-    (TOOL_STEP, "      - run: python3 ztool/zmain.py\n        env:\n          PYTHONPATH: zx\n",
-     "step 3 sets PYTHONPATH / DA_PATH_TRACE_DIR in its `env:`"),
-    (TOOL_STEP, "      - run: unset FOO DA_PATH_TRACE_DIR; python3 ztool/zmain.py\n",
-     "assigns, unsets or clears"),
-    (TOOL_STEP, "      - run: env -i python3 ztool/zmain.py\n", "assigns, unsets or clears"),
+     ASSERT_ONCE),
+    # it reads another state file than the one `finish` marked
+    ('--state "$RUNNER_TEMP/atime-trace.json" --out', '--state "$RUNNER_TEMP/zother.json" --out',
+     ASSERT_ONCE),
+    # `finish` dropped: nothing ends the measurement or checks the canaries
+    (FINISH, "", ASSERT_ONCE),
+    # `&&` loosened: `assert` would run after a failed `finish`
+    (FINISH, FINISH[:-len(" && ")] + "; ", ASSERT_ONCE),
+    ("        if: ${{ !cancelled() }}\n", "        if: ${{ success() }}\n", ASSERT_ONCE),
     ("      # END GENERATED path-trace-assert\n",
      "      # END GENERATED path-trace-assert\n      - run: python3 ztool/zmain.py late\n",
-     "runs a command after the assert step"),
-    ("        if: ${{ !cancelled() }}\n", "        if: ${{ success() }}\n",
-     "generated assert step exactly once"),
+     "step 5 runs a command after the assert step"),
+    # ── nothing in the job makes a failure not count ──
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    continue-on-error: true\n",
+     "job `zjob` sets `continue-on-error`"),
+    ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    container: zimage\n",
+     "job `zjob` runs in a `container:`"),
+    # ── no other step touches the git setting the measurement holds ──
+    (TOOL_STEP, "      - run: git config core.trustctime true && python3 ztool/zmain.py\n",
+     "step 3's `run:` mentions `core.trustctime`"),
+    (TOOL_STEP, "      - run: git -c Core.TrustCtime=true status; python3 ztool/zmain.py\n",
+     "step 3's `run:` mentions `core.trustctime`"),
+    # A string comparison, stated as one: a mention in a comment is refused too.
+    (TOOL_STEP, "      - run: |\n          # leaves core.trustctime alone\n"
+                "          python3 ztool/zmain.py\n",
+     "step 3's `run:` mentions `core.trustctime`"),
 ])
 def test_a_job_that_only_looks_wired_is_a_finding(
         repo: Path, tmp_path: Path, capsys, old: str, new: str, message: str) -> None:
@@ -559,6 +551,27 @@ def test_a_job_that_only_looks_wired_is_a_finding(
     assert "WIRING" in err
 
 
+def test_a_wired_job_has_no_wiring_finding_and_each_rule_reports_once(
+        repo: Path, tmp_path: Path) -> None:
+    """The control for the table above (a rule that fired on a correct job
+    would make every row pass for the wrong reason), and one mis-wiring is
+    one finding, not a cascade."""
+    _record_and_generate(repo, tmp_path / "t")
+    traced = wpf.Traced(repo, _workflow(repo), wpf.tracked_files(repo))
+    assert traced.wiring_errors() == []
+    doc = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))
+    doc["jobs"]["zjob"]["steps"][2]["run"] += "  # core.trustctime"
+    assert len(traced.wiring_errors(doc)) == 1
+
+
+def test_the_generated_step_text_holds_no_mention_of_the_setting_it_guards() -> None:
+    """The `core.trustctime` rule skips the two generated steps by position;
+    were the setting named in their text, a hand-made copy of one could not
+    be told from a step that sets it."""
+    assert wpf.TRUSTCTIME not in wpf.ENV_STEP_RUN
+    assert wpf.TRUSTCTIME not in wpf.assert_step_run(WORKFLOW, "zjob")
+
+
 def test_a_job_without_a_recorded_trace_is_a_finding(repo: Path, capsys) -> None:
     assert _main(repo, "generate", "--check") == 1
     assert "job `zjob` has no recorded trace" in capsys.readouterr().err
@@ -566,70 +579,162 @@ def test_a_job_without_a_recorded_trace_is_a_finding(repo: Path, capsys) -> None
 
 # ── the runtime check ───────────────────────────────────────────────────────
 
-def test_assert_names_a_loaded_file_taken_out_of_the_region(
+def test_assert_names_a_read_file_taken_out_of_the_region(
         repo: Path, tmp_path: Path, capsys) -> None:
-    trace_dir = tmp_path / "t"
-    _record_and_generate(repo, trace_dir)
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
     capsys.readouterr()
-    assert _main(repo, "assert", *_job_args(trace_dir)) == 0
+    assert _main(repo, "assert", *_job_args(state)) == 0
+    assert f"{len(EXPECTED_READ)} tracked file(s) read" in capsys.readouterr().out
 
-    _edit(repo, '      - "zlib/zrolled.py"\n', "")
+    _edit(repo, '      - "zlib/zcat.txt"\n', "")
     out = tmp_path / "out.json"
-    assert _main(repo, "assert", *_job_args(trace_dir), "--out", str(out)) == 1
+    assert _main(repo, "assert", *_job_args(state), "--out", str(out)) == 1
     err = capsys.readouterr().err
-    assert "UNCOVERED  zlib/zrolled.py" in err
+    assert "UNCOVERED  zlib/zcat.txt" in err
     assert err.count("UNCOVERED") == 1, err
+    assert "atime_trace.py reset" in err and "BOUNDARY" not in err and "tracer" not in err
     # `--check` reds on the same edit, before CI is ever reached.
     assert _main(repo, "generate", "--check") == 1
 
 
-def test_assert_sees_a_load_the_recorded_trace_never_had(
+def test_assert_sees_a_read_the_recorded_trace_never_had(
         repo: Path, tmp_path: Path, capsys) -> None:
-    """The convergence argument: a new load starts from a listed file, the
-    workflow runs, and the check names what the list lacks. Here the hand-
-    written list is narrowed instead, so a file that WAS covered is not."""
-    trace_dir = tmp_path / "t"
-    _record_and_generate(repo, trace_dir)
-    _edit(repo, '      - "zdata/**"\n', '      - "zother/**"\n')
-    capsys.readouterr()
-    assert _main(repo, "assert", *_job_args(trace_dir)) == 1
-    assert "UNCOVERED  zdata/zconfig.txt" in capsys.readouterr().err
-
-
-def test_assert_refuses_a_trace_that_measured_nothing(repo: Path, tmp_path: Path) -> None:
+    """The convergence argument: a new read starts from a listed file, the
+    workflow runs, and the check names what the list lacks. Two ways here: the
+    job takes a branch the recorded run did not and reads through a path
+    nothing static names; and the hand-written list is narrowed, so a file
+    that WAS covered is not."""
     _record_and_generate(repo, tmp_path / "t")
-    with pytest.raises(CallerError, match="no Python trace"):
+    main = repo / "ztool/zmain.py"
+    main.write_text(main.read_text(encoding="utf-8")
+                    + "    open(os.path.join(ROOT, 'zlib', 'zunrelated.py')).read()\n",
+                    encoding="utf-8")
+    state = tmp_path / "t2"
+    _measure(repo, state, "zbranch")
+    capsys.readouterr()
+    assert _main(repo, "assert", *_job_args(state)) == 1
+    err = capsys.readouterr().err
+    # zlazy.py was read on that branch too — and is covered (literal import).
+    assert "UNCOVERED  zlib/zunrelated.py" in err and err.count("UNCOVERED") == 1, err
+
+    _edit(repo, '      - "zdata/**"\n', '      - "zother/**"\n')
+    assert _main(repo, "assert", *_job_args(tmp_path / "t")) == 1
+    err = capsys.readouterr().err
+    assert "UNCOVERED  zdata/zconfig.txt" in err and "UNCOVERED  zdata/zplug.py" in err
+
+
+def _doctored(state: Path, target: Path, change) -> Path:
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    change(doc)
+    target.write_text(json.dumps(doc), encoding="utf-8")
+    return target
+
+
+def _drop_segments(doc: dict) -> None:
+    doc["segments"] = []
+
+
+def _drop_finished(doc: dict) -> None:
+    doc["finished"] = None
+
+
+def _remove_finished(doc: dict) -> None:
+    del doc["finished"]
+
+
+def _failed_canary(doc: dict) -> None:
+    doc["finished"] = {"canary": "failed"}
+
+
+def _empty_reads(doc: dict) -> None:
+    for segment in doc["segments"]:
+        segment["files"] = []
+
+
+def _untracked_reads(doc: dict) -> None:
+    for segment in doc["segments"]:
+        segment["files"] = ["zelsewhere/zmain.py"]
+
+
+def _other_checkout(doc: dict) -> None:
+    doc["root"] = "/zelsewhere/zrepo"
+
+
+def _no_root(doc: dict) -> None:
+    del doc["root"]
+
+
+@pytest.mark.parametrize("change, message", [
+    (_drop_segments, "holds no segment"),
+    (_drop_finished, "is not marked finished"),
+    (_remove_finished, "is not marked finished"),
+    (_failed_canary, "is not marked finished"),
+    (_empty_reads, "names no tracked file as read over 1 segment"),
+    (_untracked_reads, "names no tracked file as read over 1 segment"),
+    (_other_checkout, "measured /zelsewhere/zrepo, not this checkout"),
+    (_no_root, "is not a state file `atime_trace.py` wrote"),
+])
+def test_a_state_that_is_not_a_finished_measurement_is_no_answer(
+        repo: Path, tmp_path: Path, change, message: str) -> None:
+    """Every one of these, read leniently, is a job that "read nothing
+    uncovered": exit 0 on a run that measured nothing."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    recorded = _trace_file(repo).read_bytes()
+    bad = _doctored(state, tmp_path / "zbad.json", change)
+    for command in ("assert", "record"):
+        with pytest.raises(CallerError, match=message):
+            _main(repo, command, *_job_args(bad))
+    assert _trace_file(repo).read_bytes() == recorded
+
+
+def test_a_missing_or_unreadable_state_and_an_unknown_job_are_no_answer(
+        repo: Path, tmp_path: Path) -> None:
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    with pytest.raises(CallerError, match="does not exist: nothing was measured"):
         _main(repo, "assert", *_job_args(tmp_path / "zmissing"))
-    # A trace taken in ANOTHER checkout holds no file of this one.
-    empty = tmp_path / "zempty"
-    empty.mkdir()
-    (empty / "py-1-00.log").write_text("exec\t/zelsewhere/zmain.py\n", encoding="utf-8")
-    with pytest.raises(CallerError, match="no first-party file"):
-        _main(repo, "assert", *_job_args(empty))
+    (tmp_path / "zjunk").write_text("{not json", encoding="utf-8")
+    with pytest.raises(CallerError, match="cannot be read"):
+        _main(repo, "assert", *_job_args(tmp_path / "zjunk"))
     with pytest.raises(CallerError, match="no job `znope`"):
         _main(repo, "assert", "--workflow", WORKFLOW, "--job", "znope",
-              "--trace-dir", str(tmp_path / "t"))
+              "--state", str(state))
+
+
+def test_a_measurement_nobody_finished_is_refused_for_real(
+        repo: Path, tmp_path: Path) -> None:
+    """Not a doctored file: `reset`, the job, `collect` — and no `finish`."""
+    _record_and_generate(repo, tmp_path / "t")
+    state = tmp_path / "zunfinished"
+    assert _atime(repo, "reset", "--state", str(state)).returncode == 0
+    subprocess.run([sys.executable, "ztool/zmain.py"], cwd=repo, env=_ENV, check=True,
+                   stdin=subprocess.DEVNULL, timeout=120)
+    assert _atime(repo, "collect", "--state", str(state), "--label", "z").returncode == 0
+    with pytest.raises(CallerError, match="is not marked finished"):
+        _main(repo, "assert", *_job_args(state))
+    _git(repo, "config", "--local", "--unset", "core.trustctime")
 
 
 def test_record_is_reproducible_and_equals_what_assert_writes(
         repo: Path, tmp_path: Path) -> None:
-    """In CI `assert` runs INSIDE the traced job, so the tracer logs the tool's
-    own reads (the workflow, the trace file) next to the job's. Left in, a
-    second `record` differs from the first by exactly those, and the artifact
-    the failure message points at is not what `record` writes."""
-    trace_dir = tmp_path / "t"
-    _record_and_generate(repo, trace_dir)
-    trace_file = repo / ".github/path-traces" / f"{WORKFLOW}.json"
+    """The artifact a red run points at (`assert --out`) is byte for byte what
+    `record` commits, and reading a state file does not change it."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    trace_file = _trace_file(repo)
     first = trace_file.read_bytes()
-    env = _traced_env(trace_dir)
     out = tmp_path / "out.json"
-    for argv in (["record", *_job_args(trace_dir)],
-                 ["assert", *_job_args(trace_dir), "--out", str(out)],
-                 ["record", *_job_args(trace_dir)]):
+    for argv in (["record", *_job_args(state)],
+                 ["assert", *_job_args(state), "--out", str(out)],
+                 ["record", *_job_args(state)]):
         done = subprocess.run(
-            [sys.executable, str(SCRIPT), "--root", str(repo), *argv], env=env,
+            [sys.executable, str(SCRIPT), "--root", str(repo), *argv], env=_ENV,
             capture_output=True, text=True, encoding="utf-8",
             stdin=subprocess.DEVNULL, timeout=120)
+        # The subprocess has the real MACHINERY and ledgers; `record` and
+        # `assert` read neither.
         assert done.returncode == 0, done.stderr
         assert trace_file.read_bytes() == first, argv
     assert out.read_bytes() == first
@@ -638,82 +743,116 @@ def test_record_is_reproducible_and_equals_what_assert_writes(
 def test_cli_exits_2_with_one_error_line_when_it_cannot_measure(tmp_path: Path) -> None:
     done = subprocess.run(
         [sys.executable, str(SCRIPT), "assert", "--workflow", "image-ref-resolve.yaml",
-         "--job", "resolve", "--trace-dir", str(tmp_path / "zmissing")],
+         "--job", "resolve", "--state", str(tmp_path / "zmissing")],
         capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL,
-        timeout=120,
-        env={k: v for k, v in os.environ.items() if k != "DA_PATH_TRACE_DIR"})
+        timeout=120, env=_ENV)
     assert done.returncode == 2, done.stderr
-    assert done.stderr.startswith("ERROR: no Python trace"), done.stderr
+    assert done.stderr.startswith("ERROR: the atime state file"), done.stderr
     assert done.stdout == ""
 
 
-# ── Go builds ───────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("gone", ["env", "--trace-dir"])
+def test_the_tracer_era_command_line_is_gone(tmp_path: Path, gone: str) -> None:
+    argv = (["env", "--trace-dir", str(tmp_path)] if gone == "env" else
+            ["assert", "--workflow", WORKFLOW, "--job", "zjob", "--trace-dir", str(tmp_path)])
+    done = subprocess.run([sys.executable, str(SCRIPT), *argv], capture_output=True,
+                          text=True, encoding="utf-8", stdin=subprocess.DEVNULL,
+                          timeout=120, env=_ENV)
+    assert done.returncode == 2 and "usage:" in done.stderr, done.stderr
 
-def _fake_go(tmp_path: Path, repo: Path) -> Path:
-    """A `go` that answers `go list -deps` with two in-repo packages (one
-    embedding a file), one in the module cache, and accepts `go build`."""
-    bindir = tmp_path / "zbin"
-    bindir.mkdir()
-    app = repo / "zapp"
-    lines = [f"{app}/cmd/ztool\t{app}/go.mod\t",
-             f"{app}/zpkg\t{app}/go.mod\tzembed.txt\x1f",
-             "/zmodcache/zdep@v1\t/zmodcache/zdep@v1/go.mod\t"]
-    listing = bindir / "zlisting"
-    listing.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    go = bindir / "go"
-    go.write_text(f'#!/bin/sh\nif [ "$1" = list ]; then cat "{listing}"; fi\nexit 0\n',
-                  encoding="utf-8")
-    go.chmod(0o755)
-    for rel in ("zapp/go.mod", "zapp/go.sum", "zapp/cmd/ztool/main.go",
-                "zapp/zpkg/zpkg.go", "zapp/zpkg/zembed.txt", "zapp/zpkg/znotes.md",
-                "scripts/ops/go_build.sh"):
+
+# ── the two generated steps, run as the shell lines they are ────────────────
+
+def _repo_with_the_tools(tmp_path: Path, monkeypatch) -> Path:
+    """The synthetic repository, TRACKING copies of the two tools and what
+    they import at the paths the generated steps name."""
+    repo = tmp_path / "zreal"
+    for rel, text in FILES.items():
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-        (repo / rel).write_text("x\n", encoding="utf-8")
+        (repo / rel).write_bytes(text.encode("utf-8"))
+    for rel in ("scripts/ops/atime_trace.py", "scripts/ops/workflow_path_filter.py",
+                "scripts/ops/paths_filter_glob.py", "scripts/tools/_lib_exitcodes.py",
+                "scripts/tools/_lib_compat.py"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, repo / rel)
+    _git(repo, "init", "-q")
     _git(repo, "add", "-A")
-    return bindir
+    monkeypatch.setattr(wpf, "ADVISORY_PATH_GATES", {})
+    monkeypatch.setattr(wpf, "READ_ASSERTION_ORDER", ())
+    monkeypatch.setattr(wpf, "RESERVED_PATTERNS", {})
+    return repo.resolve()
 
 
-def test_go_build_is_recorded_and_its_sources_required(
-        repo: Path, tmp_path: Path, monkeypatch, capsys) -> None:
-    bindir = _fake_go(tmp_path, repo)
-    trace_dir = tmp_path / "t"
-    env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}",
-               DA_PATH_TRACE_DIR=str(trace_dir))
-    subprocess.run(["sh", str(OPS / "go_build.sh"), "zapp", "./cmd/ztool",
-                    str(tmp_path / "zout")], cwd=repo, env=env, check=True,
-                   stdin=subprocess.DEVNULL, timeout=120)
-    assert (trace_dir / "go-build.log").read_text(encoding="utf-8") == (
-        f"{repo.resolve()}/zapp\t./cmd/ztool\n")
+def _step(repo: Path, runner_temp: Path, script: str) -> subprocess.CompletedProcess:
+    """A `run:` the way a runner starts it: `bash -eo pipefail`, in the
+    workspace."""
+    env = dict(_ENV, RUNNER_TEMP=str(runner_temp), GITHUB_WORKSPACE=str(repo))
+    return subprocess.run(
+        ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], cwd=repo,
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL, timeout=120)
 
-    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
-    _record_and_generate(repo, trace_dir)
+
+def test_the_generated_steps_measure_and_assert_end_to_end(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    """Nothing here calls a function of either tool: the reset step's text,
+    the job's command, the assert step's text, each through bash. The copies
+    in the repository are the ones that run, with the real MACHINERY."""
+    repo = _repo_with_the_tools(tmp_path, monkeypatch)
+    temp = tmp_path / "zrunner"
+    temp.mkdir()
+    reset, check = wpf.ENV_STEP_RUN, wpf.assert_step_run(WORKFLOW, "zjob")
+    job = "python3 ztool/zmain.py"
+
+    # First run of a workflow being wired: no trace yet, so the region holds
+    # nothing the job read — and the step says so, by name, with exit 1.
+    assert _main(repo, "generate") == 1          # WIRING: no recorded trace
+    assert "has no recorded trace" in capsys.readouterr().err
+    _git(repo, "add", "-A")
+    for script in (reset, job):
+        done = _step(repo, temp, script)
+        assert done.returncode == 0, done.stderr
+    done = _step(repo, temp, check)
+    if "CANARY-FAILED" in done.stderr:
+        pytest.fail(f"COULD NOT MEASURE — not a pass and not a skip.\n{done.stderr}")
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "CANARY-OK" in done.stdout
+    assert "UNCOVERED  zlib/zcat.txt" in done.stderr
+    # The tools' own files are not "read by the job": listed through MACHINERY.
+    assert "UNCOVERED  scripts/" not in done.stderr
+
+    # The `--out` artifact of that red run is the trace to commit.
+    _trace_file(repo).parent.mkdir(parents=True)
+    shutil.copy(temp / "path-trace.json", _trace_file(repo))
+    _git(repo, "add", "-A")
+    assert _main(repo, "generate") == 0
+    _git(repo, "add", "-A")
+    assert _main(repo, "generate", "--check") == 0
     block = set(_block(repo))
-    assert {"zapp/cmd/ztool/*.go", "zapp/zpkg/*.go", "zapp/zpkg/zembed.txt",
-            "zapp/go.mod", "zapp/go.sum", "scripts/ops/go_build.sh"} <= block
-    assert "zapp/zpkg/znotes.md" not in block
-    assert not any("zmodcache" in e for e in block)
+    assert EXPECTED_BLOCK | {"scripts/ops/atime_trace.py", "scripts/ops/paths_filter_glob.py",
+                             "scripts/ops/workflow_path_filter.py",
+                             "scripts/tools/_lib_compat.py",
+                             "scripts/tools/_lib_exitcodes.py"} == block
 
-    # The runtime check asks `go list` again, so a package the build has since
-    # grown is named even though the committed trace predates it.
-    capsys.readouterr()
-    assert _main(repo, "assert", *_job_args(trace_dir)) == 0
-    (repo / "zapp/znew").mkdir()
-    (repo / "zapp/znew/znew.go").write_text("x\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    with (bindir / "zlisting").open("a", encoding="utf-8") as fh:
-        fh.write(f"{repo}/zapp/znew\t{repo}/zapp/go.mod\t\n")
-    assert _main(repo, "assert", *_job_args(trace_dir)) == 1
-    assert "UNCOVERED  zapp/znew/znew.go  (go build zapp ./cmd/ztool)" in capsys.readouterr().err
+    # Second run: green.
+    for script in (reset, job, check):
+        done = _step(repo, temp, script)
+        assert done.returncode == 0, (script, done.stdout, done.stderr)
+    assert "Every one is covered" in done.stdout and "(by access time)" in done.stdout
 
-
-def test_go_build_without_the_trace_dir_writes_no_log(repo: Path, tmp_path: Path) -> None:
-    bindir = _fake_go(tmp_path, repo)
-    env = {k: v for k, v in os.environ.items() if k != "DA_PATH_TRACE_DIR"}
-    env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
-    subprocess.run(["sh", str(OPS / "go_build.sh"), "zapp", "./cmd/ztool",
-                    str(tmp_path / "zout")], cwd=repo, env=env, check=True,
-                   stdin=subprocess.DEVNULL, timeout=120)
-    assert not list(tmp_path.glob("**/go-build.log"))
+    # Third run: the canaries do not hold. `finish` exits 2, `assert` does not
+    # run (no verdict line, the artifact of the run before is not rewritten),
+    # and the step is the failure.
+    for script in (reset, job):
+        assert _step(repo, temp, script).returncode == 0
+    artifact = temp / "path-trace.json"
+    artifact.unlink()
+    shutil.rmtree(repo / ".git" / "atime-canary")
+    done = _step(repo, temp, check)
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "is missing" in done.stderr
+    assert "(by access time)" not in done.stdout and "UNCOVERED" not in done.stderr
+    assert not artifact.exists()
 
 
 # ── dead, reserved and unmodelled patterns ──────────────────────────────────
@@ -947,22 +1086,35 @@ def test_the_motivating_files_are_in_the_generated_region() -> None:
     traced = wpf.Traced(ROOT, path, wpf.tracked_files(ROOT))
     for expected in ("scripts/tools/_lib_input.py",                   # the #3756 file
                      "components/da-tools/app/VERSION",                # opened, not imported
-                     "requirements/ci-constraints.txt",                # pip's `-c`, traced
-                     "Makefile", ".python-version",                    # BOUNDARY
+                     "requirements/ci-constraints.txt",                # pip's `-c`
+                     "Makefile",                                       # read by make
+                     ".python-version",                                # read by setup-python
+                     # Read by every `make`: the Makefile's `CHART_VER :=
+                     # $(shell grep … Chart.yaml)` runs when it is parsed. The
+                     # Python tracer this replaced never saw it, and nobody
+                     # had listed it by hand.
+                     "helm/threshold-exporter/Chart.yaml",
+                     "scripts/ops/go_build.sh",                        # read by sh
                      "scripts/ops/workflow_path_filter.py",            # MACHINERY
+                     "scripts/ops/atime_trace.py",                     # MACHINERY
                      "scripts/ops/paths_filter_glob.py",               # …and its import
                      "components/threshold-exporter/app/third_party/yaml.v3/*.go",
                      "components/threshold-exporter/app/go.sum"):
         assert expected in traced.block, expected
+    # Every one of those but MACHINERY and the closure is there because the
+    # committed trace names it — measured, not listed by hand.
+    job = traced.trace["jobs"]["resolve"]
+    assert {"Makefile", ".python-version", "requirements/ci-constraints.txt",
+            "helm/threshold-exporter/Chart.yaml", "scripts/ops/go_build.sh",
+            "components/threshold-exporter/app/go.sum"} <= set(job["files"])
+    assert not any("path_trace" in e for e in traced.block)
     assert paths_filter_glob.on_paths_covers(traced.paths_now(), "scripts/tools/_lib_input.py")
     assert traced.wiring_errors() == []
 
 
 def test_every_real_ledger_entry_has_its_reason_written_down() -> None:
     reasons = ([(name, why) for name, (_kind, why) in wpf.ADVISORY_PATH_GATES.items()]
-               + [(k, why) for k, why in wpf.RESERVED_PATTERNS.items()]
-               + [((wf, e), why) for wf, entries in wpf.BOUNDARY.items()
-                  for e, why in entries.items()])
+               + [(k, why) for k, why in wpf.RESERVED_PATTERNS.items()])
     assert reasons
     for key, why in reasons:
         assert why.strip() and len(why) > 20, key
