@@ -545,6 +545,17 @@ ASSERT_ONCE = "generated assert step exactly once, unchanged (found 0)"
     ("      # END GENERATED path-trace-assert\n",
      "      # END GENERATED path-trace-assert\n      - run: python3 ztool/zmain.py late\n",
      "step 5 runs a command after the assert step"),
+    # a `uses:` step after it reads unmeasured (and the assert moved ABOVE
+    # one is the same job text: that step's reads leave the next recording)
+    ("      # END GENERATED path-trace-assert\n",
+     "      # END GENERATED path-trace-assert\n      - uses: zorg/zscan@v1\n",
+     "step 5 comes after the assert step"),
+    # the shell the assert step runs under is not the runner's
+    ("    runs-on: ubuntu-24.04\n",
+     "    runs-on: ubuntu-24.04\n    defaults:\n      run:\n        shell: bash -c \"bash {0} || true\"\n",
+     "the job sets `defaults.run.shell`"),
+    ("jobs:\n", "defaults:\n  run:\n    shell: bash -c \"bash {0} || true\"\njobs:\n",
+     "the workflow sets `defaults.run.shell`"),
     # ── nothing in the job makes a failure not count ──
     ("    runs-on: ubuntu-24.04\n", "    runs-on: ubuntu-24.04\n    continue-on-error: true\n",
      "job `zjob` sets `continue-on-error`"),
@@ -583,6 +594,12 @@ def test_a_wired_job_has_no_wiring_finding_and_each_rule_reports_once(
     _record_and_generate(repo, tmp_path / "t")
     traced = wpf.Traced(repo, _workflow(repo), wpf.tracked_files(repo))
     assert traced.wiring_errors() == []
+    # An artifact upload after the assert step is the one thing allowed there,
+    # and `defaults.run` without a `shell` changes nothing the rule is about.
+    allowed = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))
+    allowed["jobs"]["zjob"]["steps"].append({"uses": "actions/upload-artifact@v7"})
+    allowed["jobs"]["zjob"]["defaults"] = {"run": {"working-directory": "."}}
+    assert traced.wiring_errors(allowed) == []
     doc = yaml.safe_load(_workflow(repo).read_text(encoding="utf-8"))
     doc["jobs"]["zjob"]["steps"][2]["run"] += "  # core.trustctime"
     assert len(traced.wiring_errors(doc)) == 1
@@ -712,63 +729,148 @@ def test_a_go_file_is_recorded_even_when_a_hand_written_pattern_covers_it() -> N
 
 
 def _out_file(path: Path, files: list[str], dirs: list[str], *, workflow: str = WORKFLOW,
-              job: str = "zjob") -> Path:
-    path.write_text(json.dumps({"workflow": workflow, "jobs": {
-        job: {"files": files, "import_dirs": dirs}}}), encoding="utf-8")
+              job: str = "zjob", leg: str | None = "0/1") -> Path:
+    doc = {"workflow": workflow, "jobs": {job: {"files": files, "import_dirs": dirs}}}
+    if leg is not None:
+        doc["leg"] = leg
+    path.write_text(json.dumps(doc), encoding="utf-8")
     return path
+
+
+def _merge(repo: Path, *outs: Path, job: str = "zjob") -> int:
+    return _main(repo, "merge", "--workflow", WORKFLOW, "--job", job, *map(str, outs))
+
+
+def _recorded(repo: Path) -> dict:
+    return json.loads(_trace_file(repo).read_text(encoding="utf-8"))["jobs"]
 
 
 def test_merge_replaces_a_jobs_record_with_the_union_of_its_legs(
         repo: Path, tmp_path: Path) -> None:
     """A matrix job's legs each read their own part and each write an
-    `--out` file. `record` takes one measurement and would keep the last leg
-    only; `merge` takes them all. It REPLACES the entry, so a re-recording
-    still shrinks the list — a leg left out is left out."""
+    `--out` file; the job's entry is all of them together. It REPLACES the
+    entry, so a re-recording still shrinks the list, and it leaves every
+    other job's entry as it was."""
     _record_and_generate(repo, tmp_path / "t")
-    a = _out_file(tmp_path / "a.json", ["zlib/zcat.txt", "ztool/zmain.py"], ["ztool"])
-    b = _out_file(tmp_path / "b.json", ["zlib/zdirect.py"], ["zlib"])
-    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(a), str(b)) == 0
-    job = json.loads((repo / ".github/path-traces" / f"{WORKFLOW}.json").read_text(
-        encoding="utf-8"))["jobs"]["zjob"]
-    assert job == {"files": ["zlib/zcat.txt", "zlib/zdirect.py", "ztool/zmain.py"],
-                   "import_dirs": ["zlib", "ztool"]}
-    # The order of the legs is not part of the answer, and one leg alone is
-    # that leg alone.
-    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(b), str(a)) == 0
-    assert json.loads((repo / ".github/path-traces" / f"{WORKFLOW}.json").read_text(
-        encoding="utf-8"))["jobs"]["zjob"] == job
-    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(b)) == 0
-    assert json.loads((repo / ".github/path-traces" / f"{WORKFLOW}.json").read_text(
-        encoding="utf-8"))["jobs"]["zjob"] == {"files": ["zlib/zdirect.py"],
-                                               "import_dirs": ["zlib"]}
+    doc = json.loads(_trace_file(repo).read_text(encoding="utf-8"))
+    doc["jobs"]["zneighbour"] = {"files": ["zdata/zx.txt"], "import_dirs": []}
+    _trace_file(repo).write_text(json.dumps(doc), encoding="utf-8")
+    a = _out_file(tmp_path / "a.json", ["zlib/zcat.txt", "ztool/zmain.py"], ["ztool"],
+                  leg="0/2")
+    b = _out_file(tmp_path / "b.json", ["zlib/zdirect.py"], ["zlib"], leg="1/2")
+    assert _merge(repo, a, b) == 0
+    want = {"files": ["zlib/zcat.txt", "zlib/zdirect.py", "ztool/zmain.py"],
+            "import_dirs": ["zlib", "ztool"]}
+    assert _recorded(repo) == {"zjob": want, "zneighbour": doc["jobs"]["zneighbour"]}
+    # The order of the legs is not part of the answer.
+    assert _merge(repo, b, a) == 0
+    assert _recorded(repo)["zjob"] == want
+    # A later measurement that read less: the entry shrinks.
+    one = _out_file(tmp_path / "one.json", ["zlib/zdirect.py"], ["zlib"])
+    assert _merge(repo, one) == 0
+    assert _recorded(repo)["zjob"] == {"files": ["zlib/zdirect.py"], "import_dirs": ["zlib"]}
+
+
+def _raw(text: str):
+    return lambda p: (p.write_text(text, encoding="utf-8"), p)[1]
 
 
 @pytest.mark.parametrize("make, message", [
-    (lambda p: _out_file(p, ["a"], [], workflow="zother.yaml"), "it is a trace of `zother.yaml`"),
-    (lambda p: _out_file(p, ["a"], [], job="zelse"), "KeyError"),
-    (lambda p: (p.write_text('{"workflow": "zflow.yaml", "jobs": {"zjob": {"files": "a", '
-                             '"import_dirs": []}}}', encoding="utf-8"), p)[1],
-     "`files` is not a list of strings"),
-    (lambda p: (p.write_text('{"workflow": "zflow.yaml", "jobs": {"zjob": {"files": [], '
-                             '"import_dirs": [], "go": []}}}', encoding="utf-8"), p)[1],
-     "pre-atime"),
-    (lambda p: (p.write_text("{not json", encoding="utf-8"), p)[1], "JSONDecodeError"),
+    (lambda p: _out_file(p, [], [], workflow="zother.yaml", leg="1/2"),
+     "it is a trace of `zother.yaml`"),
+    (_raw('{"leg": "1/2", "jobs": {"zjob": {"files": [], "import_dirs": []}}}'),
+     "it is a trace of `None`"),
+    (lambda p: _out_file(p, [], [], job="zelse", leg="1/2"), "KeyError"),
+    (_raw('{"workflow": "zflow.yaml", "leg": "1/2", "jobs": {"zjob": {"files": "a", '
+          '"import_dirs": []}}}'), "`files` is not a list of strings"),
+    (_raw('{"workflow": "zflow.yaml", "leg": "1/2", "jobs": {"zjob": {"files": [], '
+          '"import_dirs": [], "go": []}}}'), "pre-atime"),
+    (_raw("{not json"), "JSONDecodeError"),
     (lambda p: p, "FileNotFoundError"),
+    # which leg it is: absent (a file from before legs were written), not a
+    # leg at all, or the leg another file already is
+    (lambda p: _out_file(p, [], [], leg=None), "leg None is not"),
+    (lambda p: _out_file(p, [], [], leg="2/2"), "leg '2/2' is not"),
+    (lambda p: _out_file(p, [], [], leg="/"), "leg '/' is not"),
+    (lambda p: _out_file(p, [], [], leg="0/2"), "it is leg 0, and so is"),
+    # names `assert --out` cannot have written: it writes tracked files only
+    (lambda p: _out_file(p, ["zlib/../zlib/zcat.txt"], [], leg="1/2"),
+     "not tracked in this checkout"),
+    (lambda p: _out_file(p, ["/etc/passwd"], [], leg="1/2"), "not tracked in this checkout"),
+    (lambda p: _out_file(p, ["zlib/zgone.txt"], [], leg="1/2"), "zlib/zgone.txt, not tracked"),
+    (lambda p: _out_file(p, [], [".."], leg="1/2"), "not tracked in this checkout"),
+    (lambda p: _out_file(p, [], ["zlib/"], leg="1/2"), "not tracked in this checkout"),
 ])
+@pytest.mark.parametrize("bad_first", [False, True])
 def test_merge_refuses_a_file_that_is_not_this_jobs_measurement_and_writes_nothing(
-        repo: Path, tmp_path: Path, make, message: str) -> None:
-    """One bad leg among good ones: nothing is written — a union with a hole
-    in it would look like a complete record."""
+        repo: Path, tmp_path: Path, make, message: str, bad_first: bool) -> None:
+    """One bad leg among good ones, wherever it stands on the command line:
+    nothing is written — a union with a hole in it would look like a complete
+    record."""
     _record_and_generate(repo, tmp_path / "t")
-    trace = repo / ".github/path-traces" / f"{WORKFLOW}.json"
-    before = trace.read_bytes()
-    good = _out_file(tmp_path / "good.json", ["zlib/zcat.txt"], [])
+    before = _trace_file(repo).read_bytes()
+    good = _out_file(tmp_path / "good.json", ["zlib/zcat.txt"], [], leg="0/2")
     bad = make(tmp_path / "bad.json")
+    if bad_first and "and so is" in message:
+        pytest.skip("the second file of a pair is the duplicate, whichever it is")
     with pytest.raises(CallerError, match=message):
-        _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(good), str(bad))
-    assert trace.read_bytes() == before
+        _merge(repo, *((bad, good) if bad_first else (good, bad)))
+    assert _trace_file(repo).read_bytes() == before
     with pytest.raises(CallerError, match="has no job `znone`"):
-        _main(repo, "merge", "--workflow", WORKFLOW, "--job", "znone", str(good))
+        _merge(repo, good, job="znone")
+
+
+@pytest.mark.parametrize("legs, message", [
+    (["0/3", "1/3"], r"got leg\(s\) 0, 1 of 3"),          # one left out
+    (["1/2"], r"got leg\(s\) 1 of 2"),                   # one leg's file alone
+    (["0/2", "1/3"], r"got leg\(s\) 0, 1 of 2 or 3"),     # two different runs
+])
+def test_merge_takes_nothing_less_than_every_leg(
+        repo: Path, tmp_path: Path, legs: list[str], message: str) -> None:
+    """A left-out leg whose reads hand-written patterns cover never fails its
+    own `assert`; what its `.py` files brought in by import would just go."""
+    _record_and_generate(repo, tmp_path / "t")
+    before = _trace_file(repo).read_bytes()
+    outs = [_out_file(tmp_path / f"{i}.json", ["zlib/zcat.txt"], [], leg=leg)
+            for i, leg in enumerate(legs)]
+    with pytest.raises(CallerError, match=message):
+        _merge(repo, *outs)
+    assert _trace_file(repo).read_bytes() == before
+
+
+def test_record_refuses_a_job_with_a_strategy(repo: Path, tmp_path: Path) -> None:
+    """One state file is one leg; as the job's entry it would drop the rest."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    before = _trace_file(repo).read_bytes()
+    _edit(repo, "    runs-on: ubuntu-24.04\n",
+          "    runs-on: ubuntu-24.04\n    strategy:\n      matrix:\n        zleg: [a, b]\n")
+    with pytest.raises(CallerError, match="has a `strategy:`"):
+        _main(repo, "record", *_job_args(state))
+    assert _trace_file(repo).read_bytes() == before
+
+
+def test_assert_on_a_matrix_leg_points_at_merge_not_at_its_own_file(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _edit(repo, '      - "zlib/zcat.txt"\n', "")
+    out = tmp_path / "out.json"
+    capsys.readouterr()
+    assert _main(repo, "assert", *_job_args(state), "--out", str(out), "--leg", "1/3") == 1
+    err = capsys.readouterr().err
+    assert "leg 1/3 of a matrix job" in err and "the union of all 3" in err
+    assert "merge --workflow zflow.yaml --job zjob <the 3 files>" in err
+    assert "`record`" not in err
+    assert json.loads(out.read_text(encoding="utf-8"))["leg"] == "1/3"
+    # …and a job with no matrix is told its one file is the whole answer.
+    assert _main(repo, "assert", *_job_args(state)) == 1
+    err = capsys.readouterr().err
+    assert "matrix" not in err and "<that file>" in err
+    for leg in ("3/3", "/", "", "a/2", "0/0"):
+        with pytest.raises(CallerError, match="--leg"):
+            _main(repo, "assert", *_job_args(state), "--out", str(out), "--leg", leg)
+        assert json.loads(out.read_text(encoding="utf-8"))["leg"] == "1/3", leg
 
 
 def test_the_read_set_is_the_union_of_every_segment(
@@ -950,7 +1052,14 @@ def test_record_is_reproducible_and_equals_what_assert_writes(
         # `assert` read neither.
         assert done.returncode == 0, done.stderr
         assert trace_file.read_bytes() == first, argv
-    assert out.read_bytes() == first
+    # …plus which leg wrote it; `merge` of that one file is `record`.
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc.pop("leg") == "0/1"
+    assert doc == json.loads(first)
+    trace_file.write_text("{}", encoding="utf-8")
+    trace_file.unlink()
+    assert _main(repo, "merge", "--workflow", WORKFLOW, "--job", "zjob", str(out)) == 0
+    assert trace_file.read_bytes() == first
 
 
 def test_cli_exits_2_with_one_error_line_when_it_cannot_measure(tmp_path: Path) -> None:
@@ -998,7 +1107,10 @@ def _repo_with_the_tools(tmp_path: Path, monkeypatch) -> Path:
 
 def _step(repo: Path, runner_temp: Path, script: str) -> subprocess.CompletedProcess:
     """A `run:` the way a runner starts it: `bash -eo pipefail`, in the
-    workspace."""
+    workspace, the `${{ strategy.* }}` expression already expanded (a job
+    with no matrix is run 0 of 1)."""
+    assert script.count(wpf.LEG_EXPR) <= 1
+    script = script.replace(wpf.LEG_EXPR, "0/1")
     env = dict(_ENV, RUNNER_TEMP=str(runner_temp), GITHUB_WORKSPACE=str(repo))
     bash = shutil.which("bash")
     if bash is None:

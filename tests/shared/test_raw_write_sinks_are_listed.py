@@ -229,8 +229,10 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/ops/workflow_path_filter.py": {
         "cmd_assert .write_text [operator]": 1,
         "cmd_generate .write_bytes [artifact]": 1,
-        # The trace file's one writer, for `record` and `merge` (#3756): the
-        # two sites that were `cmd_record`'s, moved, not added to.
+        # Where `record` and `merge` both write the trace file (#3756): the
+        # two sites that were `cmd_record`'s, moved. `merge` is a second
+        # CALLER of the same raw sinks — this ledger counts sinks, not
+        # callers, so that did not show here.
         "_write_job_record .mkdir [artifact]": 1,
         "_write_job_record .write_text [artifact]": 1,
     },

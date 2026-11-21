@@ -48,8 +48,10 @@ times (owner ruling on #3756). Three pieces:
 A MATRIX job is one job id with several legs, each reading its own part
 (component-docker-build.yaml: eight images). Every leg runs the same two
 generated steps and is asserted on its own reads; the committed record of the
-job is the UNION of the legs — `merge`, given every leg's `--out` file, since
-`record` takes one measurement and would keep the last leg only.
+job is the UNION of the legs — `merge`, given every leg's `--out` file. Each
+file says which leg of how many wrote it, so `merge` refuses a set that is not
+all of them, each once; `record` (one measurement) refuses a job with a
+`strategy:`.
 
 `generate --check` also holds, for EVERY workflow (traced or not):
 
@@ -201,7 +203,25 @@ def assert_step_run(workflow: str, job: str) -> str:
     return (f"python3 -I {ATIME_TOOL} finish {STATE_ARG} && "
             "python3 scripts/ops/workflow_path_filter.py assert "
             f"--workflow {workflow} --job {job} "
-            f'{STATE_ARG} --out "$RUNNER_TEMP/path-trace.json"')
+            f'{STATE_ARG} --out "$RUNNER_TEMP/path-trace.json" --leg "{LEG_EXPR}"')
+
+
+# Which run of the job this is, as GitHub numbers it: `<index>/<total>`, `0/1`
+# for a job with no matrix. In the generated assert step so that each `--out`
+# file says which leg wrote it and how many there are — `merge` takes nothing
+# less than all of them, and counts them from here, not from a reading of
+# `strategy.matrix` (whose `include`/`exclude`/expression forms this tool does
+# not model).
+LEG_EXPR = "${{ strategy.job-index }}/${{ strategy.job-total }}"
+UPLOAD_ACTION = "actions/upload-artifact@"
+
+
+def parse_leg(text: object) -> tuple[int, int]:
+    """`<index>/<total>` as two ints; anything else is no answer."""
+    m = re.fullmatch(r"(\d+)/(\d+)", text) if isinstance(text, str) else None
+    if not m or not int(m[1]) < int(m[2]):
+        raise ValueError(f"leg {text!r} is not `<index>/<total>` with index < total")
+    return int(m[1]), int(m[2])
 
 
 # The advisory workflows that gate on paths for a pull request and do not carry
@@ -857,9 +877,14 @@ class Traced:
         exist before it); the generated reset step is the SECOND, so every
         later step — a `uses:` one included: setup-python reading
         `.python-version` — is inside the measurement; the generated
-        finish-and-assert step is the last `run:` step; both are exactly the
-        generated steps; nothing in the job can make a failure of theirs not
-        count; and no other `run:` mentions the git setting `reset` holds.
+        finish-and-assert step is the last `run:` step, followed by nothing
+        but artifact uploads (a `uses:` step after it reads unmeasured, and
+        moving the assert above one drops that step's reads from the next
+        recording); both are exactly the generated steps; no `continue-on-error`
+        and no `defaults.run.shell` stands between their exit code and the
+        job's; and no other `run:` mentions the git setting `reset` holds.
+        NOT checked: a job-level `if:` that never holds (the job, and so the
+        assertion, does not run), and what a `uses:` step does to git config.
         """
         workflow = self.workflow if workflow is None else workflow
         errors = []
@@ -907,6 +932,21 @@ class Traced:
                     f"{where}: step {runs[-1] + 1} runs a command after the "
                     "assert step, so what it reads is not checked. The assert "
                     "step must be the job's last `run:` step")
+            else:
+                for i in range(assert_at[0] + 1, len(steps)):
+                    if not str(steps[i].get("uses", "")).lower().startswith(UPLOAD_ACTION):
+                        errors.append(
+                            f"{where}: step {i + 1} comes after the assert step "
+                            "and what it reads is not checked. Only "
+                            f"`uses: {UPLOAD_ACTION}…` steps may follow it")
+            for scope, holder in (("the workflow", workflow), ("the job", job)):
+                defaults = holder.get("defaults")
+                run_defaults = defaults.get("run") if isinstance(defaults, dict) else None
+                if isinstance(run_defaults, dict) and "shell" in run_defaults:
+                    errors.append(
+                        f"{where}: {scope} sets `defaults.run.shell`, which the "
+                        "assert step would run under — a shell that does not "
+                        "pass the exit code on would make its failure not count")
             for i, step in enumerate(steps):
                 if i in env_at or i in assert_at:
                     continue
@@ -1021,10 +1061,14 @@ def _job_trace(args: argparse.Namespace) -> tuple[Traced, set[str], dict]:
 
 
 def cmd_assert(args: argparse.Namespace) -> int:
+    try:
+        _, legs = parse_leg(args.leg)
+    except ValueError as exc:
+        raise _caller_error(f"--leg: {exc}.") from exc
     traced, read, record = _job_trace(args)
     if args.out:
         Path(args.out).write_text(dump_trace(
-            {"workflow": traced.name, "jobs": {args.job: record}}),
+            {"workflow": traced.name, "leg": args.leg, "jobs": {args.job: record}}),
             encoding="utf-8", newline="\n")
     uncovered = sorted(f for f in read if not on_paths_covers(traced.paths_now(), f))
     print(f"{traced.name} job `{args.job}`: {len(read)} tracked file(s) read "
@@ -1037,22 +1081,33 @@ def cmd_assert(args: argparse.Namespace) -> int:
           "them would not start this workflow:", file=sys.stderr)
     for f in uncovered:
         print(f"  UNCOVERED  {f}", file=sys.stderr)
+    if legs > 1:
+        how = (f"this is leg {args.leg} of a matrix job, and the job's entry is "
+               f"the union of all {legs}: download every leg's `--out` file "
+               "(each uploads one as an artifact, red or green) and `python3 "
+               "scripts/ops/workflow_path_filter.py merge --workflow "
+               f"{traced.name} --job {args.job} <the {legs} files>`. One leg's "
+               "file alone is refused — it would drop what the others read")
+    else:
+        how = ("the `--out` file (uploaded as an artifact) is this run's trace: "
+               f"`python3 scripts/ops/workflow_path_filter.py merge --workflow "
+               f"{traced.name} --job {args.job} <that file>`; or run the job's "
+               "steps locally between `atime_trace.py reset` and "
+               "`atime_trace.py finish` and `record` that state")
     print(
-        f"\nFix: make the `{args.job}` entry of {TRACES}/{traced.name}.json "
-        "this run's trace — the `--out` file (uploaded as an artifact) holds "
-        "exactly what `workflow_path_filter.py record` would write for the "
-        "job; or run the job's steps locally between `atime_trace.py reset` "
-        "and `atime_trace.py finish` and `record` that state — then `python3 "
-        "scripts/ops/workflow_path_filter.py generate` and commit both files. "
-        "The measurement is by access time: whichever process read the file, "
-        "it is in the list above.",
+        f"\nFix: re-record the `{args.job}` entry of {TRACES}/{traced.name}.json "
+        f"— {how} — then `python3 scripts/ops/workflow_path_filter.py generate` "
+        "and commit both files. The measurement is by access time: whichever "
+        "process read the file, it is in the list above.",
         file=sys.stderr)
     return EXIT_VIOLATION
 
 
 def _write_job_record(root: Path, traced: "Traced", job: str, record: dict) -> Path:
-    """Put *record* in as *job*'s entry of the workflow's trace file — the one
-    place the committed trace is written, for `record` and `merge` alike."""
+    """Put *record* in as *job*'s entry of the workflow's trace file, the other
+    jobs' entries as they were — what `record` and `merge` both end in.
+    (`generate` writes the file too: it prunes names that are no longer
+    tracked, through `write_if_changed`.)"""
     doc = traced.trace
     doc["workflow"] = traced.name
     doc["jobs"][job] = record
@@ -1064,6 +1119,12 @@ def _write_job_record(root: Path, traced: "Traced", job: str, record: dict) -> P
 
 def cmd_record(args: argparse.Namespace) -> int:
     traced, read, record = _job_trace(args)
+    job = traced.workflow["jobs"][args.job]
+    if isinstance(job, dict) and "strategy" in job:
+        raise _caller_error(
+            f"{traced.name} job `{args.job}` has a `strategy:` — its entry is "
+            "the union of its legs, and one state file is one leg. `merge` "
+            "every leg's `assert --out` file instead. Nothing was written.")
     path = _write_job_record(args.root, traced, args.job, record)
     print(f"recorded {len(record['files'])} file(s) of {len(read)} read for job "
           f"`{args.job}` in {path.relative_to(args.root).as_posix()}; "
@@ -1071,12 +1132,22 @@ def cmd_record(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _parents(path: str) -> list[str]:
+    parts = path.split("/")[:-1]
+    return ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
     """One job's record from several measurements of it — the legs of a
     matrix job, each of which read its own part. REPLACES the job's entry
     with the union of the given `--out` files, so a re-recording still
-    shrinks the list; a leg left out of the command line is left out of the
-    record, and its `assert` step names what that costs."""
+    shrinks the list. Every leg, each once: an `--out` file says which leg
+    of how many wrote it (`LEG_EXPR`), and a set that is not all of them is
+    refused — a left-out leg whose reads hand-written patterns cover would
+    never fail its own `assert`, while the entries its `.py` files brought in
+    by import went missing. Names that are not tracked files of this checkout
+    are refused as well: `assert --out` writes none, so such a file was edited
+    or belongs to another commit."""
     tracked = tracked_files(args.root)
     path = args.root / WORKFLOWS / args.workflow
     if not path.is_file():
@@ -1088,13 +1159,27 @@ def cmd_merge(args: argparse.Namespace) -> int:
             f"{', '.join(traced.job_ids()) or 'none'}).")
     files: set[str] = set()
     dirs: set[str] = set()
+    seen: dict[int, str] = {}
+    totals: set[int] = set()
+    known = frozenset(tracked)
+    known_dirs = {"."} | {d for f in tracked for d in _parents(f)}
     for name in args.out_files:
         try:
             doc = json.loads(Path(name).read_text(encoding="utf-8"))
             if doc.get("workflow") != traced.name:
                 raise ValueError(f"it is a trace of `{doc.get('workflow')}`")
+            index, total = parse_leg(doc.get("leg"))
+            if index in seen:
+                raise ValueError(f"it is leg {index}, and so is {seen[index]}")
+            seen[index] = name
+            totals.add(total)
             job = doc["jobs"][args.job]
             _check_job_record(job)
+            strange = sorted(set(job["files"]) - known)[:3] + sorted(
+                set(job["import_dirs"]) - known_dirs)[:3]
+            if strange:
+                raise ValueError(
+                    f"it names {', '.join(strange)}, not tracked in this checkout")
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             raise _caller_error(
                 f"{name} is not a trace `assert --out` wrote for {traced.name} "
@@ -1102,6 +1187,11 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 "written.") from exc
         files |= set(job["files"])
         dirs |= set(job["import_dirs"])
+    if len(totals) != 1 or len(seen) != next(iter(totals)):
+        raise _caller_error(
+            f"`merge` needs every leg of job `{args.job}`, each once: got "
+            f"leg(s) {', '.join(str(i) for i in sorted(seen))} of "
+            f"{' or '.join(str(t) for t in sorted(totals))}. Nothing was written.")
     out = _write_job_record(args.root, traced, args.job,
                             {"files": sorted(files), "import_dirs": sorted(dirs)})
     print(f"merged {len(args.out_files)} measurement(s) of job `{args.job}`: "
@@ -1265,6 +1355,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="the state file `atime_trace.py finish` marked")
         if name == "assert":
             p.add_argument("--out", help="write this job's trace here (JSON)")
+            p.add_argument("--leg", default="0/1", metavar="INDEX/TOTAL",
+                           help="which run of the job this is (default: 0/1, "
+                                "a job with no matrix)")
         p.set_defaults(func=func)
 
     p = sub.add_parser("merge", help="replace a job's record with the union of several "

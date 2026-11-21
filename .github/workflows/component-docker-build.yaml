@@ -95,7 +95,7 @@ on:
       # from what the eight builds were measured to read by access time
       # (.github/path-traces/component-docker-build.yaml.json — the union of
       # the matrix legs, `workflow_path_filter.py merge`), less what a pattern
-      # above already covers. Each leg's last step fails, naming the file,
+      # above already covers. Each leg's assert step fails, naming the file,
       # when its build reads something this list does not cover. Measured
       # before wiring: the da-portal image reads docs/CHANGELOG.md and the two
       # docs/README-root files, which nothing above covered. Do not edit
@@ -294,16 +294,18 @@ jobs:
 
       # #3756: every tracked file this leg read — the files its Dockerfile
       # COPYs, as the buildx client read them — must be in
-      # `on.pull_request.paths` above. Last step on purpose, after Trivy,
-      # which reads its ignore files from the checkout. Generated.
+      # `on.pull_request.paths` above. After Trivy, which reads its ignore
+      # files from the checkout; only artifact uploads may follow it
+      # (`generate --check` refuses anything else). Generated.
       # BEGIN GENERATED path-trace-assert job=build
       - name: Path filter covers everything this job read (#3756)
         if: ${{ !cancelled() }}
-        run: python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && python3 scripts/ops/workflow_path_filter.py assert --workflow component-docker-build.yaml --job build --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json"
+        run: python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && python3 scripts/ops/workflow_path_filter.py assert --workflow component-docker-build.yaml --job build --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json" --leg "${{ strategy.job-index }}/${{ strategy.job-total }}"
       # END GENERATED path-trace-assert
 
-      # What `assert --out` wrote for this leg. On a red run, download all
-      # eight and `workflow_path_filter.py merge` them into the trace file.
+      # What `assert --out` wrote for this leg. On a red run, download every
+      # leg's and `workflow_path_filter.py merge` them into the trace file
+      # (`merge` refuses a set that is not all of them).
       - name: Upload the trace
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
