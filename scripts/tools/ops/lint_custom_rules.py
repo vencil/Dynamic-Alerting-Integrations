@@ -62,6 +62,7 @@ import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_input  # noqa: E402  (#3462: the one wording of "selected nothing")
+import _threshold_alerts  # noqa: E402  (#4098: the rule packs this layout ships)
 from _lib_label import safe_label  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -382,11 +383,33 @@ def lint_preserved(targets, records, filepath, flow_of=None):
                 results.append(LintResult(
                     filepath, name, None, "ERROR",
                     f"cannot prove the result keeps label '{label}' (a label_replace or "
-                    f"group_left that writes it from another series, a recording rule not "
-                    f"in this run, a metric name that is not an equality): keep '{label}' "
-                    f"from the series it was read from, and lint the rule files it reads "
-                    f"together with it"))
+                    f"group_left that writes it from another series, a recording rule — "
+                    f"its name has a colon — neither in this run nor in a shipped rule pack, "
+                    f"a metric name that is not an equality): keep '{label}' from the series "
+                    f"it was read from, and lint the rule files it reads together with it"))
     return results
+
+
+def shipped_pack_paths(linted=()):
+    """The tenant rule packs this layout ships (``_threshold_alerts.
+    find_rule_pack_paths``: beside this module in the image, ``rule-packs/``
+    in the repo), less the declared platform packs and the files of the run
+    (*linted*). Their recording rules are what a custom rule may read without
+    them being linted with it (#4098: the generated CI lints
+    ``rule-packs/custom/`` alone, and its rules read ``tenant:…`` records)."""
+    seen = {os.path.realpath(f) for f in linted}
+    return [str(p) for p in _threshold_alerts.find_rule_pack_paths()
+            if not _lib_consumer_read.is_platform_pack(_lib_consumer_read.RULE_PACKS.member(p))
+            and os.path.realpath(p) not in seen]
+
+
+def context_records(linted_rule_files, linted=()):
+    """The recording rules the preserved-label check follows: those of the
+    run (*linted_rule_files*, ``RuleFile``s) and of the shipped tenant packs
+    not in it (``shipped_pack_paths``)."""
+    shipped = shipped_pack_paths(linted)
+    extra = [rf for rfs in read_rule_files(shipped).values() for rf in rfs] if shipped else []
+    return rule_records(list(linted_rule_files) + extra)
 
 
 def rule_records(rule_files):
@@ -487,8 +510,9 @@ def read_rule_files(files):
 def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, records=None):
     """Lint a single YAML rule file (or a ConfigMap holding rule files).
     *rule_files* is its reading from ``read_rule_files``; read here when not
-    given. *records* are the recording rules of the run (``rule_records``)
-    the preserved-label check follows; this file's own when not given.
+    given. *records* are the recording rules the preserved-label check
+    follows (``context_records``); this file's and the shipped packs' when
+    not given.
     Returns (list of LintResult, rule_count).
 
     *selected*: the file was selected from a declared input (`_lib_input`:
@@ -578,7 +602,10 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
                                      next(readings) if expr else None))
             results.extend(lint_labels(labels, policy, filepath, rule_name, is_recording))
             if not is_recording and expr:
-                alerts.append((rule_name, expr, labels))
+                # The labels Prometheus writes on the alert: the group's,
+                # then the rule's (rules/manager.go), each a template.
+                alerts.append((rule_name, expr,
+                               {**(group.get("labels") or {}), **(labels or {})}))
 
             # Governance checks (Tier 3 best practices)
             if not is_recording:
@@ -591,7 +618,8 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
     results.extend(found)
     if targets:
         results.extend(lint_preserved(
-            targets, rule_records(rule_files) if records is None else records, filepath))
+            targets, context_records(rule_files, [filepath]) if records is None else records,
+            filepath))
 
     return results, rule_count
 
@@ -834,8 +862,12 @@ def main():
         readings = read_rule_files(files)
     except _lib_consumer_read.ConsumerReadError as exc:
         die_caller_error(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}")
-    # #4098: an alert may read a record of another file of the run
-    records = rule_records([rf for f in files for rf in readings[f]])
+    # #4098: an alert may read a record of another file of the run, or of a
+    # rule pack this layout ships
+    try:
+        records = context_records([rf for f in files for rf in readings[f]], files)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(f"ERROR: shipped rule packs: {_lib_consumer_read.error_text(exc)}")
 
     for filepath in files:
         try:

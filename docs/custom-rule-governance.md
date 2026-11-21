@@ -267,17 +267,20 @@ file_overrides:
 > （`da-read promql-label-flow`）：`without(tenant)`、`without(tenant, b)`、`sum by (a)`、不帶分組的 `sum(x)`、
 > 不以 tenant 配對的一對一運算（`ignoring(tenant)`、`on(a)`）、`vector(…)` 都是丟掉；
 > `label_replace`／`label_join` 寫入 tenant、`group_left(tenant)` 從不以 tenant 配對的另一側抄值、
-> 名稱含冒號卻不在本次 lint 檔案裡的 recording rule、以正規式比對的指標名，都是「無法證明」，同樣是 ERROR。
-> 讀 recording rule 時會追進它的運算式與 `labels:`，所以 record 藏不住丟掉的 tenant。
+> 名稱含冒號卻既不在本次 lint 的檔案、也不在工具內附的 rule pack 裡的 recording rule、以正規式比對的指標名，
+> 都是「無法證明」，同樣是 ERROR。讀 recording rule 時會追進它的運算式與 `labels:`（含 group 的 `labels:`）；
+> 可追的 record 是本次 lint 的檔案加上工具內附的租戶 rule pack（da-tools 映像內附、repo 裡是 `rule-packs/`），
+> 所以只 lint `rule-packs/custom/` 時，讀 `tenant:…` 這類 pack record 的規則照樣判定。
 >
-> 依 alert 自己的 `tenant` 怎麼寫來分流：沒寫，或寫 `{{ $labels.tenant }}`（照抄 series 的值）時才判定；
+> 依 alert 自己的 `tenant`（rule 的 `labels:` 蓋過 group 的 `labels:`，同 Prometheus）怎麼寫來分流：沒寫，或寫 `{{ $labels.tenant }}`（照抄 series 的值）時才判定；
 > 寫字面值（單一租戶的規則寫 `tenant: db-a`，刻意不帶 tenant 的平台訊號寫 `tenant: ""`）時告警自己定了值，
 > 不判定；其他模板（例如 `{{ $labels.namespace }}`）是 ERROR。
 >
 > ⚠️ 判定不到的事：原始指標本身有沒有 `tenant` 是 scrape 決定的，判定時一律當作有（直接讀
 > `up{job="…"}` 這類平台指標的規則會通過，但告警沒有 tenant）；規則能不能讀到別的租戶的 series
 > （`x{tenant=~".*"}`）也不在此檢查。只依 Prometheus 的語意判定，vmalert 的行為沒有另外驗證。
-> 單獨 lint `rule-packs/custom/` 時，讀 pack 裡 recording rule 的規則會是「無法證明」：把它讀的 pack 一起列進路徑。
+> 名稱不含冒號、又不在可追範圍內的 recording rule，會被當成原始指標（Prometheus 不強制 record 名稱帶冒號）：
+> 規則讀自己寫的 record 時，把定義它的檔一起列進路徑。
 >
 > 舊鍵 `denied_patterns` 已移除（breaking）：它比對文字，`=~'.*'`、`without(tenant, b)` 就繞過了。
 > 其中 `=~".*"` 選到的 series 和拿掉這個 matcher 完全相同（比對空字串的 matcher 也會選到沒有該 label 的 series），

@@ -177,6 +177,63 @@ def test_a_record_of_another_file_of_the_run_is_followed(tmp_path, monkeypatch, 
     assert UNPROVEN in capsys.readouterr().out
 
 
+def test_a_record_of_a_shipped_rule_pack_is_followed(tmp_path, monkeypatch):
+    """#4098 review: the generated CI lints rule-packs/custom/ alone, and a
+    custom rule reads the packs' `tenant:…` records — the shipped packs are
+    the records it may read without linting them with it."""
+    assert _lint_alert(tmp_path, 'tenant:mysql_connection_usage:percent{tenant="db-a"} > 95') == []
+    pack = tmp_path / "pack" / "rule-pack-x.yaml"
+    pack.parent.mkdir()
+    pack.write_text(yaml.safe_dump({"groups": [{"name": "g", "rules": [
+        {"record": "pack:x:sum", "expr": "sum(x)"}]}]}), encoding="utf-8")
+    monkeypatch.setattr(lint_custom_rules, "shipped_pack_paths", lambda linted=(): [str(pack)])
+    assert any(DROPS in m for m in _lint_alert(tmp_path, "pack:x:sum > 0"))
+    monkeypatch.setattr(lint_custom_rules, "shipped_pack_paths", lambda linted=(): [])
+    assert any(UNPROVEN in m for m in _lint_alert(tmp_path, "pack:x:sum > 0"))
+
+
+def test_the_shipped_packs_are_the_tenant_packs_not_in_the_run():
+    shipped = lint_custom_rules.shipped_pack_paths()
+    names = {os.path.basename(p) for p in shipped}
+    assert "rule-pack-mariadb.yaml" in names and "rule-pack-platform.yaml" not in names, names
+    mariadb = [p for p in shipped if p.endswith("rule-pack-mariadb.yaml")]
+    assert "rule-pack-mariadb.yaml" not in {
+        os.path.basename(p) for p in lint_custom_rules.shipped_pack_paths(mariadb)}
+
+
+def test_group_labels_are_the_alerts_labels_too(tmp_path):
+    """#4098 review: Prometheus writes a group's `labels:` on its alerts
+    (rules/manager.go), each a template: a group-level tenant decides as a
+    rule-level one does, the rule's own winning."""
+    def lint(group_labels, rule_tenant=None):
+        rule = {"alert": "A", "expr": "sum(x) > 0", "labels": {"owner": "o", "expiry": "2099-01-01"}}
+        if rule_tenant is not None:
+            rule["labels"]["tenant"] = rule_tenant
+        f = tmp_path / "g.yaml"
+        f.write_text(yaml.safe_dump({"groups": [{"name": "g", "labels": group_labels,
+                                                 "rules": [rule]}]}), encoding="utf-8")
+        policy = dict(lint_custom_rules.DEFAULT_POLICY, required_labels=[])
+        results, _ = lint_custom_rules.lint_file(str(f), policy)
+        return [r.message for r in results if r.severity == "ERROR"]
+    assert any("is a template that does not copy" in m
+               for m in lint({"tenant": "{{ $labels.namespace }}"}))
+    assert lint({"tenant": "db-a"}) == []
+    assert any(DROPS in m for m in lint({"tenant": "db-a"}, "{{ $labels.tenant }}"))
+
+
+def test_a_records_group_labels_reach_it(tmp_path):
+    """#4098 review: a group's `labels: {tenant: ""}` removes tenant from the
+    records it writes; the rule's own labels win."""
+    f = tmp_path / "r.yaml"
+    f.write_text(yaml.safe_dump({"groups": [{"name": "g", "labels": {"tenant": ""}, "rules": [
+        {"record": "tenant:x:max", "expr": "max by (tenant) (x)"},
+        {"record": "tenant:y:max", "expr": "max by (tenant) (y)", "labels": {"tenant": "t1", "a": "b"}},
+    ]}]}), encoding="utf-8")
+    recs = lint_custom_rules.rule_records(lint_custom_rules.read_rule_files([str(f)])[str(f)])
+    assert recs["tenant:x:max"][0]["labels"] == {"tenant": ""}
+    assert recs["tenant:y:max"][0]["labels"] == {"tenant": "t1", "a": "b"}
+
+
 def test_preserved_labels_cannot_be_relaxed_by_an_override():
     with pytest.raises(_lib_exitcodes.CallerError) as exc:
         lint_custom_rules.load_policy({"file_overrides": [{
@@ -1184,7 +1241,9 @@ def test_yaml_that_is_no_rule_file_is_named_until_excluded(tmp_path, monkeypatch
     assert _run_main([str(tmp_path), "--ci", "--exclude", "Chart.yaml", "--exclude",
                       "recipes/*", "--exclude", "threshold-registry.yaml"], monkeypatch) == 0
     assert "ERROR" not in capsys.readouterr().out
-    assert seen == [str(tmp_path / "rules.yaml")]   # the excluded ones are not read
+    # the excluded ones are not read (#4098: the shipped rule packs are, for
+    # the records a rule may read — they are not the scan's)
+    assert [f for f in seen if str(f).startswith(str(tmp_path))] == [str(tmp_path / "rules.yaml")]
 
 
 @pytest.mark.parametrize("name,text,why", [

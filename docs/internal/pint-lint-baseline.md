@@ -65,9 +65,9 @@ updated_at: 2026-08-07
 
 ## Exemptions（`alerts/template`）— 中央 registry 在 `.pint.hcl`
 
-| Match（rule name `(.+ExporterAbsent\|VersionAwareThresholdInert)`） | Rationale |
+| Match（rule name `.+ExporterAbsent`） | Rationale |
 |---|---|
-| 名稱**結尾**為 `ExporterAbsent` 的 sentinel，或正好是 `VersionAwareThresholdInert` | platform-scoped sentinels：expr 刻意把 `tenant` 聚合掉（告警是平台級、render 空 → drop），但 repo 的 required-labels policy（`lint_custom_rules.py`）**強制**每條規則帶 `tenant` label → 此處「template 用了 query 不會有的 label」**是 by design 非 bug**。新規則若真的砍掉它需要的 label，name 不 match → **照樣被抓**。 |
+| 名稱**結尾**為 `ExporterAbsent` 的 sentinel | platform-scoped sentinels：expr 刻意把 `tenant` 聚合掉（告警是平台級、render 空 → drop），但 repo 的 required-labels policy（`lint_custom_rules.py`）**強制**每條規則帶 `tenant` label → 此處「template 用了 query 不會有的 label」**是 by design 非 bug**。新規則若真的砍掉它需要的 label，name 不 match → **照樣被抓**。`VersionAwareThresholdInert` 已改寫字面值 `tenant: ""`（[#4098](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4098)），沒有這個模板，不再豁免。 |
 
 > pint **auto-anchors** 每個 `match.name`（`X` 解析為 `^X$`，[pint docs](https://cloudflare.github.io/pint/configuration.html)），故 `.+ExporterAbsent` 已是「**結尾**為 ExporterAbsent」、僅**含**該子字串的名稱（如 `FooExporterAbsentButBuggy`）**不**豁免（對抗式 probe 實證會被抓）。不需顯式 `^...$`。
 >

@@ -246,11 +246,13 @@ file_overrides:
 > `without(tenant)`, `without(tenant, b)`, `sum by (a)`, an ungrouped `sum(x)`, a one-to-one match not on
 > tenant (`ignoring(tenant)`, `on(a)`) and `vector(…)` drop it; a `label_replace` / `label_join` writing
 > tenant, a `group_left(tenant)` copying it from the other side matched on other labels, a recording rule
-> whose name has a colon but is not among the files linted, and a metric name matched by a regex cannot be
-> proven — an ERROR as well. A recording rule read is followed into its expression and its `labels:`, so a
-> record cannot hide a dropped tenant.
+> whose name has a colon but is neither among the files linted nor in a rule pack the tool ships, and a
+> metric name matched by a regex cannot be proven — an ERROR as well. A recording rule read is followed into
+> its expression and its `labels:` (the group's `labels:` included); the records followed are those of the
+> files linted plus the tenant rule packs the tool ships (in the da-tools image; `rule-packs/` in the repo),
+> so linting `rule-packs/custom/` alone still judges a rule reading a pack record such as `tenant:…`.
 >
-> What the alert itself writes as `tenant` decides: nothing, or `{{ $labels.tenant }}` (the series' own
+> What the alert itself writes as `tenant` (the rule's `labels:` over the group's, as Prometheus does) decides: nothing, or `{{ $labels.tenant }}` (the series' own
 > value) is judged; a literal (`tenant: db-a` for a single-tenant rule, `tenant: ""` for a platform signal
 > with no tenant on purpose) sets the value whatever the result holds and is not judged; any other template
 > (such as `{{ $labels.namespace }}`) is an ERROR.
@@ -258,8 +260,9 @@ file_overrides:
 > ⚠️ What it cannot see: whether a raw metric has `tenant` at all is the scrape's business, and it is taken
 > to have it (a rule reading a platform metric such as `up{job="…"}` passes, with no tenant on the alert);
 > whether a rule reads other tenants' series (`x{tenant=~".*"}`) is not this check's either. It judges by
-> Prometheus' semantics; vmalert's behaviour is not verified separately. Linting `rule-packs/custom/` alone,
-> a rule reading a pack's recording rule cannot be proven: list the packs it reads among the paths.
+> Prometheus' semantics; vmalert's behaviour is not verified separately. A recording rule whose name has no
+> colon and that is outside the records followed is taken for a raw metric (Prometheus does not require a
+> colon in a record's name): a rule reading a record of its own needs the file defining it among the paths.
 >
 > The former key `denied_patterns` is removed (breaking): it matched text, which `=~'.*'` or
 > `without(tenant, b)` walked past. Its `=~".*"` selects exactly what the selector without that matcher
