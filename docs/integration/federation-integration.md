@@ -82,6 +82,7 @@ global:
   scrape_interval: 15s
   external_labels:
     cluster: "edge-asia-1"     # 唯一叢集識別
+    da_cluster: "edge-asia-1"  # 平台用的叢集身分（ADR-006），與 cluster 同值；規則逐（租戶，叢集）計算
     environment: "production"   # 選填：環境標籤
 ```
 
@@ -301,6 +302,7 @@ prometheus:
   prometheusSpec:
     externalLabels:
       cluster: "central-prod"
+      da_cluster: "central-prod"   # ADR-006：與 cluster 同值
       region: "us-east-1"
 ```
 

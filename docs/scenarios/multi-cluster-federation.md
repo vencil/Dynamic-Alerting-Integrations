@@ -37,6 +37,7 @@ global:
   scrape_interval: 15s
   external_labels:
     cluster: "edge-asia-prod"    # 唯一識別
+    da_cluster: "edge-asia-prod" # 平台用的叢集身分（ADR-006），與 cluster 同值
 ```
 
 **1.2 Tenant 標籤注入**（選擇一種模式）

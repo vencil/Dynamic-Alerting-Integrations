@@ -1215,3 +1215,46 @@ def test_a_crashed_da_crdecode_is_raised_not_a_skipped_file(tmp_path, monkeypatc
     with pytest.raises(gate._lib_consumer_read.ConsumerReadError) as exc:
         gate.parse_services([svc])
     assert not isinstance(exc.value, gate._lib_consumer_read.InputRefused)
+
+
+# ── ADR-006 / #4097: which cluster a Prometheus is in ────────────────────────
+@pytest.mark.parametrize("text, ok", [
+    ("global:\n  external_labels:\n    da_cluster: c1\n", True),
+    ("global:\n  external_labels:\n    cluster: c1\n    da_cluster: c1\n", True),
+    ("global:\n  external_labels:\n    cluster: c1\n", False),
+    ("global:\n  external_labels:\n    da_cluster: ''\n", False),
+    ("global:\n  scrape_interval: 15s\n", False),
+    ("scrape_configs:\n  - job_name: x\n    relabel_configs:\n"
+     "      - target_label: da_cluster\n        replacement: c1\n", False),
+], ids=["set", "next-to-cluster", "only-cluster", "empty", "no-external-labels", "a-scrape-step-is-not-it"])
+def test_a_prometheus_says_which_cluster_it_is_in(text, ok):
+    errors = gate.cluster_identity(text)
+    assert (errors == []) == ok
+    if not ok:
+        assert len(errors) == 1 and errors[0].startswith("CLUSTER-IDENTITY:")
+
+
+def test_the_cluster_label_is_spelled_as_the_rule_side_reads_it():
+    import check_cluster_identity
+    assert gate.CLUSTER_LABEL == check_cluster_identity.CLUSTER_LABEL
+
+
+def test_the_shipped_prometheus_config_says_its_cluster():
+    text = gate.load_repo_prometheus_text()
+    assert gate.cluster_identity(text) == []
+    # … and nothing writes it at scrape time: one place, not five
+    assert "target_label: da_cluster" not in text
+
+
+def test_the_gate_itself_reports_a_missing_cluster_identity(monkeypatch):
+    """On the gate's run path, for the repo's own config and for one passed in."""
+    result = gate.run_check(consumed={}, outputs=set(), jobs=[], services=[],
+                            prom_text="global:\n  scrape_interval: 15s\n")
+    assert [e for e in result["errors"] if e.startswith("CLUSTER-IDENTITY:")]
+    assert not [e for e in gate.run_check(consumed={}, outputs=set(), services=[])["errors"]
+                if e.startswith("CLUSTER-IDENTITY:")]
+    bare = gate.load_repo_prometheus_text().replace("da_cluster: lab", "zone: lab")
+    assert bare != gate.load_repo_prometheus_text()
+    monkeypatch.setattr(gate, "load_repo_prometheus_text", lambda: bare)
+    assert [e for e in gate.run_check(consumed={}, outputs=set(), services=[])["errors"]
+            if e.startswith("CLUSTER-IDENTITY:")]
