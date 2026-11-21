@@ -114,10 +114,10 @@ DEFAULT_METRICS = {
                          "兩者預設開啟）。"),
     },
     "cpu": {
-        "query": ('max((sum by(namespace, pod, container) ('
+        "query": ('max((sum by(namespace, pod, container, da_cluster) ('
                   'rate(container_cpu_usage_seconds_total{{namespace="{tenant}", '
                   'container!="", container!="POD"}}[5m])) / '
-                  'sum by(namespace, pod, container) ('
+                  'sum by(namespace, pod, container, da_cluster) ('
                   'kube_pod_container_resource_limits{{resource="cpu", '
                   'namespace="{tenant}"}})) * 100)'),
         "unit": "% of limit",
@@ -136,10 +136,10 @@ DEFAULT_METRICS = {
                           "not a tenant threshold"),
     },
     "memory": {
-        "query": ('max((sum by(namespace, pod, container) ('
+        "query": ('max((sum by(namespace, pod, container, da_cluster) ('
                   'container_memory_working_set_bytes{{namespace="{tenant}", '
                   'container!="", container!="POD"}}) / '
-                  'sum by(namespace, pod, container) ('
+                  'sum by(namespace, pod, container, da_cluster) ('
                   'kube_pod_container_resource_limits{{resource="memory", '
                   'namespace="{tenant}"}})) * 100)'),
         "unit": "% of limit",

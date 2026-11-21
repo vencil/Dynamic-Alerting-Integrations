@@ -105,10 +105,10 @@ func TestWatchLoop_ReloadFailure_RecordsOutcomeAndKeepsLastGood(t *testing.T) {
 }
 
 // A post-write Reload that fails to parse must ALSO record a failure outcome.
-// Its one production caller discards the returned error (`_ = mgr.Reload()` in
-// handler/state.go's reloadState) and the handler answers anyway, so the
-// observer is the only signal that the manager went stale until a WatchLoop
-// tick fails again.
+// Its one production caller (handler/state.go's reloadState) answers the error
+// to the writer only (503 STATE_RELOAD_FAILED, #1073), so the observer is the
+// only signal an operator gets that the manager went stale until a later load
+// succeeds.
 func TestReload_Failure_RecordsOutcomeAndKeepsLastGood(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

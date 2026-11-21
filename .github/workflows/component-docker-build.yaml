@@ -89,6 +89,36 @@ on:
       # portal-build stage. Pinned by tests/ops/test_portal_dist_consumers_build.py.
       - ".dockerignore"
       - ".github/workflows/component-docker-build.yaml"
+      # ⛔ Everything above is hand-written: the directories each image is
+      # built from. What a build READS is no longer only listed by hand
+      # (#3756): the region below is written by `make workflow-path-filters`
+      # from what the eight builds were measured to read by access time
+      # (.github/path-traces/component-docker-build.yaml.json — the union of
+      # the matrix legs, `workflow_path_filter.py merge`), less what a pattern
+      # above already covers. Each leg's assert step fails, naming the file,
+      # when its build reads something this list does not cover. Measured
+      # before wiring: the da-portal image reads docs/CHANGELOG.md and the two
+      # docs/README-root files, which nothing above covered. Do not edit
+      # between the markers.
+      # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/path-traces/component-docker-build.yaml.json"
+      - "components/da-tools/.trivyignore.yaml"
+      - "docs/CHANGELOG.md"
+      - "docs/README-root.en.md"
+      - "docs/README-root.md"
+      - "requirements/ci-constraints.txt"
+      - "scripts/ops/atime_trace.py"
+      - "scripts/ops/paths_filter_glob.py"
+      - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_atomic_write.py"
+      - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/ops/_grar_merge.py"
+      - "scripts/tools/ops/_grar_parse.py"
+      - "scripts/tools/ops/_grar_routes.py"
+      - "scripts/tools/ops/_grar_validate.py"
+      - "scripts/tools/ops/_threshold_alerts.py"
+      - "scripts/tools/ops/lint_custom_rules.py"
+      # END GENERATED path-trace
 
 concurrency:
   group: component-docker-build-${{ github.event.pull_request.number }}
@@ -161,6 +191,16 @@ jobs:
             dockerfile: try-local/generator/Dockerfile
     steps:
       - uses: actions/checkout@v6
+
+      # #3756: from here on, a read of a tracked file by ANY process of this
+      # leg — the buildx client sending the build context included — moves
+      # that file's access time, and the leg's last step reads that back.
+      # Second step on purpose: the actions below are measured too.
+      # Generated; `generate --check` holds its text and its position.
+      # BEGIN GENERATED path-trace-env job=build
+      - name: Set access times back, to measure what this job reads (#3756)
+        run: python3 -I scripts/ops/atime_trace.py reset --state "$RUNNER_TEMP/atime-trace.json" --canary-dir "$GITHUB_WORKSPACE/.git/atime-canary"
+      # END GENERATED path-trace-env
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -251,3 +291,25 @@ jobs:
           # (components/da-tools/.trivyignore.yaml). Empty → no-op for the rest.
           trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || matrix.name == 'da-tools' && 'components/da-tools/.trivyignore.yaml' || '' }}
         continue-on-error: true
+
+      # #3756: every tracked file this leg read — the files its Dockerfile
+      # COPYs, as the buildx client read them — must be in
+      # `on.pull_request.paths` above. After Trivy, which reads its ignore
+      # files from the checkout; only artifact uploads may follow it
+      # (`generate --check` refuses anything else). Generated.
+      # BEGIN GENERATED path-trace-assert job=build
+      - name: Path filter covers everything this job read (#3756)
+        if: ${{ !cancelled() }}
+        run: python3 -I scripts/ops/atime_trace.py finish --state "$RUNNER_TEMP/atime-trace.json" && python3 scripts/ops/workflow_path_filter.py assert --workflow component-docker-build.yaml --job build --state "$RUNNER_TEMP/atime-trace.json" --out "$RUNNER_TEMP/path-trace.json" --leg "${{ strategy.job-index }}/${{ strategy.job-total }}"
+      # END GENERATED path-trace-assert
+
+      # What `assert --out` wrote for this leg. On a red run, download every
+      # leg's and `workflow_path_filter.py merge` them into the trace file
+      # (`merge` refuses a set that is not all of them).
+      - name: Upload the trace
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-component-docker-build-${{ matrix.name }}
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn

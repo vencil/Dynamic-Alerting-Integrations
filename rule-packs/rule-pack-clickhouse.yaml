@@ -61,28 +61,28 @@ groups:
       # Query rate (5m)
       - record: tenant:clickhouse_queries:rate5m
         expr: |
-          sum by(tenant) (
+          sum by(tenant, da_cluster) (
             rate(ClickHouseProfileEvents_Query{tenant!=""}[5m])
           )
 
       # Active connections (current)
       - record: tenant:clickhouse_active_connections:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             ClickHouseMetrics_TCPConnection{tenant!=""}
           )
 
       # Max part count for partition (hotspot indicator)
       - record: tenant:clickhouse_max_part_count:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             ClickHouseAsyncMetrics_MaxPartCountForPartition{tenant!=""}
           )
 
       # Replication queue size
       - record: tenant:clickhouse_replication_queue:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             ClickHouseMetrics_ReplicatedSendQueueSize{tenant!=""}
             + ClickHouseMetrics_ReplicatedFetchQueueSize{tenant!=""}
           )
@@ -90,7 +90,7 @@ groups:
       # Failed queries rate (5m)
       - record: tenant:clickhouse_failed_queries:rate5m
         expr: |
-          sum by(tenant) (
+          sum by(tenant, da_cluster) (
             rate(ClickHouseProfileEvents_FailedQuery{tenant!=""}[5m])
           )
 

@@ -14,17 +14,18 @@ metadata:
     rule-pack: oracle
 data:
   oracle-recording.yml: "groups:\n- name: oracle-normalization\n  interval: 15s\n\
-    \  rules:\n  - record: tenant:oracle_sessions_active:max\n    expr: max by(tenant)\
-    \ (oracledb_sessions_active)\n  - record: tenant:oracle_tablespace_used_percent:max\n\
-    \    expr: max by(tenant) (oracledb_tablespace_used_percent)\n  - record: tenant:oracle_wait_time:rate5m\n\
-    \    expr: sum by(tenant) (rate(oracledb_wait_time_seconds_total[5m]))\n  - record:\
-    \ tenant:oracle_process_usage:percent\n    expr: \"max by(tenant) (\\n  100 *\
-    \ oracledb_process_count\\n  / (oracledb_processes_limit > 0)\\n)\\n\"\n  - record:\
-    \ tenant:oracle_pga_usage:percent\n    expr: \"max by(tenant) (\\n  100 * oracledb_pga_allocated_bytes\\\
+    \  rules:\n  - record: tenant:oracle_sessions_active:max\n    expr: max by(tenant,\
+    \ da_cluster) (oracledb_sessions_active)\n  - record: tenant:oracle_tablespace_used_percent:max\n\
+    \    expr: max by(tenant, da_cluster) (oracledb_tablespace_used_percent)\n  -\
+    \ record: tenant:oracle_wait_time:rate5m\n    expr: sum by(tenant, da_cluster)\
+    \ (rate(oracledb_wait_time_seconds_total[5m]))\n  - record: tenant:oracle_process_usage:percent\n\
+    \    expr: \"max by(tenant, da_cluster) (\\n  100 * oracledb_process_count\\n\
+    \  / (oracledb_processes_limit > 0)\\n)\\n\"\n  - record: tenant:oracle_pga_usage:percent\n\
+    \    expr: \"max by(tenant, da_cluster) (\\n  100 * oracledb_pga_allocated_bytes\\\
     n  / (oracledb_pga_aggregate_limit_bytes > 0)\\n)\\n\"\n  - record: tenant:oracle_hard_parse_time:percent\n\
-    \    expr: \"max by(tenant) (\\n  100 * rate(oracledb_hard_parse_elapsed_seconds_total[5m])\\\
+    \    expr: \"max by(tenant, da_cluster) (\\n  100 * rate(oracledb_hard_parse_elapsed_seconds_total[5m])\\\
     n  / (rate(oracledb_db_time_seconds_total[5m]) >= 1)\\n)\\n\"\n  - record: tenant:oracle_session_utilization:ratio\n\
-    \    expr: \"max by(tenant) (\\n  oracledb_sessions_current / (oracledb_sessions_limit\
+    \    expr: \"max by(tenant, da_cluster) (\\n  oracledb_sessions_current / (oracledb_sessions_limit\
     \ > 0)\\n)\\n\"\n- name: oracle-threshold-normalization\n  interval: 15s\n  rules:\n\
     \  - record: tenant:alert_threshold:oracle_sessions_active\n    expr: max by(tenant)\
     \ (user_threshold{component=\"oracle\", metric=\"sessions_active\", severity=\"\
@@ -44,16 +45,17 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"oracle\", metric=\"hard_parse_time_percent\"\
     , severity=\"warning\"})\n"
   oracle-alert.yml: "groups:\n- name: oracle-alerts\n  rules:\n  - alert: OracleDatabaseDown\n\
-    \    expr: \"max by(tenant, instance) (\\n  changes(query_timestamp{job=\\\"tenant-exporters\\\
-    \", query=\\\"oracle_liveness\\\"}[90s]) == 0\\n  and\\n  count_over_time(query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s]) > 1\\n  and\\n  query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"} offset 90s\\n)\\nor\\nmax\
-    \ by(tenant, instance) (\\n  (\\n    query_interval{job=\\\"tenant-exporters\\\
-    \", query=\\\"oracle_liveness\\\"}\\n    unless on(tenant, instance)\\n    count_over_time(query_timestamp{job=\\\
+    \    expr: \"max by(tenant, instance, da_cluster) (\\n  changes(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s]) == 0\\n  and\\n \
+    \ count_over_time(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\"oracle_liveness\\\
+    \"}[90s]) > 1\\n  and\\n  query_timestamp{job=\\\"tenant-exporters\\\", query=\\\
+    \"oracle_liveness\\\"} offset 90s\\n)\\nor\\nmax by(tenant, instance, da_cluster)\
+    \ (\\n  (\\n    query_interval{job=\\\"tenant-exporters\\\", query=\\\"oracle_liveness\\\
+    \"}\\n    unless on(tenant, instance, da_cluster)\\n    count_over_time(query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[90s])\\n  )\\n  and on(tenant,\
-    \ instance)\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\"oracle_liveness\\\
-    \"} offset 90s\\n)\\n\"\n    for: 15s\n    labels:\n      maintenance: page\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \ instance, da_cluster)\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\
+    \"oracle_liveness\\\"} offset 90s\\n)\\n\"\n    for: 15s\n    labels:\n      maintenance:\
+    \ page\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: The Oracle liveness query has not succeeded for 90s on {{\
     \ $labels.instance }}\n      description_zh: Oracle 存活查詢 90 秒內沒有成功，實例：{{ $labels.instance\
     \ }}\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
@@ -64,61 +66,63 @@ data:
     \ Oracle 實例 {{ $labels.instance }} 已關閉\n      tier: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
     \ }}{{ end }}{{ end }}'\n  - alert: OracleQueryStalled\n    expr: \"(\\n  max\
-    \ by(tenant, instance, query) (\\n    increase(queries_total{job=\\\"tenant-exporters\\\
-    \", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\", status=\\\"success\\\
-    \"}[5m]) == 0\\n    and\\n    count_over_time(queries_total{job=\\\"tenant-exporters\\\
-    \", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\", status=\\\"success\\\
-    \"}[5m]) > 1\\n  )\\n  or\\n  max by(tenant, instance, query) (\\n    query_interval{job=\\\
+    \ by(tenant, instance, query, da_cluster) (\\n    increase(queries_total{job=\\\
     \"tenant-exporters\\\", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\
-    \"}\\n    unless on(tenant, instance, query)\\n    queries_total{job=\\\"tenant-exporters\\\
-    \", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\", status=\\\"success\\\
-    \"}\\n  )\\n)\\nunless on(tenant, instance)\\nmax by(tenant, instance) (\\n  (\\\
-    n    changes(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\"oracle_liveness\\\
-    \"}[5m]) == 0\\n    and\\n    count_over_time(query_timestamp{job=\\\"tenant-exporters\\\
-    \", query=\\\"oracle_liveness\\\"}[5m]) > 1\\n  )\\n  or\\n  (query_interval{job=\\\
-    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}\\n   unless on(tenant,\
-    \ instance)\\n   count_over_time(query_timestamp{job=\\\"tenant-exporters\\\"\
-    , query=\\\"oracle_liveness\\\"}[5m]))\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: query-exporter stopped running {{ $labels.query }} (or it\
-    \ never succeeded). When a result does not fit the declared metrics it drops the\
-    \ query for good; the cause is in its log at the default level (\"query failed\"\
-    ) and in queries_total{status=\"error\"}. Fix the SQL in rule-packs/exporters/oracle.yaml,\
-    \ then restart the exporter.\n      description_zh: query-exporter 不再執行 {{ $labels.query\
-    \ }}（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"query failed\"）與 queries_total{status=\"\
-    error\"}。修正 rule-packs/exporters/oracle.yaml 的 SQL 後重啟 exporter。\n      owner:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: query-exporter query {{ $labels.query }} stopped while the database answers\
-    \ — the alerts on its metrics are silent'\n      platform_summary_zh: '[{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：資料庫有回應，但\
-    \ query-exporter 的查詢 {{ $labels.query }} 已停止 — 讀它指標的告警不會響'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Oracle query {{ $labels.query }} stopped on {{ $labels.instance }}\n      summary_zh:\
-    \ '{{ $labels.instance }} 上的 Oracle 查詢 {{ $labels.query }} 已停止'\n      tier: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: OracleHighActiveSessions\n\
-    \    expr: \"(\\n  tenant:oracle_sessions_active:max\\n  > on(tenant) group_left\\\
-    n  tenant:alert_threshold:oracle_sessions_active\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
-    \      metric_group: oracle_sessions_active\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: '{{ $value | printf\
-    \ \"%.0f\" }} active sessions'\n      description_zh: '{{ $value | printf \"%.0f\"\
-    \ }} 個活動 session'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \", status=\\\"success\\\"}[5m]) == 0\\n    and\\n    count_over_time(queries_total{job=\\\
+    \"tenant-exporters\\\", query=~\\\"oracle_.+\\\", query!=\\\"oracle_liveness\\\
+    \", status=\\\"success\\\"}[5m]) > 1\\n  )\\n  or\\n  max by(tenant, instance,\
+    \ query, da_cluster) (\\n    query_interval{job=\\\"tenant-exporters\\\", query=~\\\
+    \"oracle_.+\\\", query!=\\\"oracle_liveness\\\"}\\n    unless on(tenant, instance,\
+    \ query, da_cluster)\\n    queries_total{job=\\\"tenant-exporters\\\", query=~\\\
+    \"oracle_.+\\\", query!=\\\"oracle_liveness\\\", status=\\\"success\\\"}\\n  )\\\
+    n)\\nunless on(tenant, instance, da_cluster)\\nmax by(tenant, instance, da_cluster)\
+    \ (\\n  (\\n    changes(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\
+    \"oracle_liveness\\\"}[5m]) == 0\\n    and\\n    count_over_time(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[5m]) > 1\\n  )\\n  or\\\
+    n  (query_interval{job=\\\"tenant-exporters\\\", query=\\\"oracle_liveness\\\"\
+    }\\n   unless on(tenant, instance, da_cluster)\\n   count_over_time(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"oracle_liveness\\\"}[5m]))\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
+    \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: query-exporter stopped running {{\
+    \ $labels.query }} (or it never succeeded). When a result does not fit the declared\
+    \ metrics it drops the query for good; the cause is in its log at the default\
+    \ level (\"query failed\") and in queries_total{status=\"error\"}. Fix the SQL\
+    \ in rule-packs/exporters/oracle.yaml, then restart the exporter.\n      description_zh:\
+    \ query-exporter 不再執行 {{ $labels.query }}（或從未成功）。查詢結果與宣告的指標不符時，它會永久移除該查詢；原因記在預設等級的日誌（\"\
+    query failed\"）與 queries_total{status=\"error\"}。修正 rule-packs/exporters/oracle.yaml\
+    \ 的 SQL 後重啟 exporter。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: Oracle active sessions elevated — connection pool review'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：Oracle 活動 session 數升高 — connection pool 審查'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ {{ $labels.tenant }}: query-exporter query {{ $labels.query }} stopped while\
+    \ the database answers — the alerts on its metrics are silent'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：資料庫有回應，但 query-exporter 的查詢 {{ $labels.query }} 已停止 — 讀它指標的告警不會響'\n     \
+    \ runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Oracle query {{ $labels.query }} stopped on {{ $labels.instance\
+    \ }}\n      summary_zh: '{{ $labels.instance }} 上的 Oracle 查詢 {{ $labels.query\
+    \ }} 已停止'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: OracleHighActiveSessions\n    expr: \"(\\n  tenant:oracle_sessions_active:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:oracle_sessions_active\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: oracle_sessions_active\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value | printf \"%.0f\" }} active sessions'\n      description_zh:\
+    \ '{{ $value | printf \"%.0f\" }} 個活動 session'\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ Oracle active sessions elevated — connection pool review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：Oracle 活動 session 數升高 — connection pool 審查'\n      runbook_url: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
     \ Oracle high active sessions on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 上 Oracle 活動 session 數過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
@@ -268,8 +272,8 @@ data:
     \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 Oracle hard parse\
     \ 佔 DB time 比例過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: OraclePGALimitNotSet\n    expr: \"(\\n  max by(tenant, instance) (oracledb_pga_aggregate_limit_bytes\
-    \ == 0)\\n  and on(tenant)\\n  tenant:alert_threshold:oracle_pga_usage_percent\\\
+    \  - alert: OraclePGALimitNotSet\n    expr: \"(\\n  max by(tenant, instance, da_cluster)\
+    \ (oracledb_pga_aggregate_limit_bytes == 0)\\n  and on(tenant)\\n  tenant:alert_threshold:oracle_pga_usage_percent\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 30m\n    labels:\n      maintenance: mute\n      severity: info\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Database\

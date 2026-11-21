@@ -308,7 +308,7 @@ repos:
         files: ^docs/.*\.(md|jsx)$
 
       - id: adr-index-check
-        name: ADR index drift (architecture-and-design.md + docs/adr/README{,.en}.md)
+        name: ADR index drift (architecture-and-design.md + docs/adr/README{,.en}.md) + ADR status agrees across frontmatter / 狀態 / .en.md
         entry: python3 -X utf8 scripts/dx/generate_adr_index.py --check
         language: python
         pass_filenames: false

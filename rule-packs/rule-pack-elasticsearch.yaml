@@ -85,13 +85,13 @@ groups:
       # Cluster health (0=green, 1=yellow, 2=red)
       - record: tenant:es_cluster_health:status
         expr: |
-          max by(tenant) (elasticsearch_cluster_health_status{color="red"}) * 2
-          + max by(tenant) (elasticsearch_cluster_health_status{color="yellow"})
+          max by(tenant, da_cluster) (elasticsearch_cluster_health_status{color="red"}) * 2
+          + max by(tenant, da_cluster) (elasticsearch_cluster_health_status{color="yellow"})
 
       # JVM heap usage percent
       - record: tenant:es_heap_usage_percent:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             elasticsearch_jvm_memory_used_bytes{area="heap"}
             / elasticsearch_jvm_memory_max_bytes{area="heap"}
           ) * 100
@@ -99,7 +99,7 @@ groups:
       # Disk usage percent
       - record: tenant:es_disk_usage_percent:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             1 - (
               elasticsearch_filesystem_data_available_bytes
               / elasticsearch_filesystem_data_size_bytes
@@ -109,17 +109,17 @@ groups:
       # Search latency (ms)
       - record: tenant:es_search_latency_ms:avg
         expr: |
-          sum by(tenant) (rate(elasticsearch_indices_search_query_time_seconds[5m]))
-          / sum by(tenant) (rate(elasticsearch_indices_search_query_total[5m]))
+          sum by(tenant, da_cluster) (rate(elasticsearch_indices_search_query_time_seconds[5m]))
+          / sum by(tenant, da_cluster) (rate(elasticsearch_indices_search_query_total[5m]))
           * 1000
 
       # Pending cluster tasks
       - record: tenant:es_pending_tasks:max
-        expr: max by(tenant) (elasticsearch_cluster_health_number_of_pending_tasks)
+        expr: max by(tenant, da_cluster) (elasticsearch_cluster_health_number_of_pending_tasks)
 
       # Unassigned shards
       - record: tenant:es_unassigned_shards:count
-        expr: max by(tenant) (elasticsearch_cluster_health_unassigned_shards)
+        expr: max by(tenant, da_cluster) (elasticsearch_cluster_health_unassigned_shards)
 
   # -------------------------------------------------------
   # Threshold normalization: Elasticsearch

@@ -94,7 +94,7 @@ groups:
       # PodContainerHighCPU (rule-pack-kubernetes, cAdvisor ÷ limit/request) — complementary
       # signals, NOT equal (USE method; threads_running and CPU% decouple both ways).
       - record: tenant:mysql_threads_running:avg1m
-        expr: max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))
+        expr: max by(tenant, da_cluster) (avg_over_time(mysql_global_status_threads_running[1m]))
 
       # Connection usage, % of max_connections (#3778). The ratio is taken PER
       # INSTANCE first (both series come from the same exporter target, so they
@@ -108,17 +108,17 @@ groups:
       # drops out of the ratio the same way.
       - record: tenant:mysql_connection_usage:percent
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             100 * mysql_global_status_threads_connected
             / (mysql_global_variables_max_connections > 0)
           )
 
       # Additional Percona-inspired normalization
       - record: tenant:mysql_slow_queries:rate5m
-        expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
+        expr: sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))
 
       - record: tenant:mysql_aborted_connections:rate5m
-        expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))
+        expr: sum by(tenant, da_cluster) (rate(mysql_global_status_aborted_connects[5m]))
 
       # ── Async replication lag (#1200 WS5-P0-a) ──────────────────────────────
       # Seconds behind primary, SQL_Delay-ADJUSTED: an intentionally delayed
@@ -143,7 +143,7 @@ groups:
       # IO thread stopped + SQL caught up on relay log reads as lag 0).
       - record: tenant:mysql_replication_lag:max
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             mysql_slave_status_seconds_behind_master
             - (mysql_slave_status_sql_delay or 0 * mysql_slave_status_seconds_behind_master)
           )
@@ -227,7 +227,7 @@ groups:
       # (that is MariaDBNoPrimary's for:2m) — keeps time-to-critical near the
       # pre-#875 15s rather than regressing it to 1m.
       - alert: MariaDBClusterDown
-        expr: max by(tenant) (mysql_up{job="tenant-exporters"}) == 0
+        expr: max by(tenant, da_cluster) (mysql_up{job="tenant-exporters"}) == 0
         for: 30s
         labels:
           severity: critical
@@ -261,11 +261,40 @@ groups:
       # read_only stays 0 → NoPrimary is structurally blind. NOW COVERED by the two
       # semi-sync rules below (MariaDBSemiSyncDegraded / MariaDBSemiSyncReplicasGone, #892).
       # ⚠ At customer rollout, verify read_only is scraped (global_variables collector on).
+      # Per cluster (ADR-006): a tenant's two clusters are judged apart, so one
+      # cluster's primary does not hide the other's missing one.
+      # The second `unless` is for ONE replication set stretched over two
+      # clusters (primary in one, replicas in the other): the replica-only
+      # cluster has no writable node by design. It is left alone while BOTH
+      # hold: one of its replicas' IO thread is connected to its source
+      # (mysqld_exporter slave_io_running: Yes = 1; No and Connecting = 0), and
+      # the tenant has a writable node in some cluster. The second half is what
+      # keeps a stuck failover loud — old primary demoted to read-only but
+      # alive, replicas still attached to it: no writable node anywhere, so
+      # every cluster fires.
+      # ⚠ KNOWN LIMITATIONS:
+      #   * two INDEPENDENT sets in two clusters: the other cluster's primary
+      #     satisfies the second half, so a cluster that lost its primary stays
+      #     quiet as long as ANY of its replicas has a connected IO thread —
+      #     the stuck failover above, or a replica fed by another replica
+      #     (chained / multi-source replication).
+      #   * a replica-only cluster whose exporter does not serve
+      #     mysql_slave_status_* (collect.slave_status off; on by default):
+      #     nothing says it is a replica, and it fires for good.
+      # da_cluster: tenant-wide by-drops-cluster (tenant) — "the tenant has a writable node somewhere" is asked of all its clusters on purpose (stretched replication set, #4097)
       - alert: MariaDBNoPrimary
         expr: |
-          count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"})
+          (
+            count by(tenant, da_cluster) (mysql_global_variables_read_only{job="tenant-exporters"})
+            unless
+            count by(tenant, da_cluster) (mysql_global_variables_read_only{job="tenant-exporters"} == 0)
+          )
           unless
-          count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"} == 0)
+          (
+            count by(tenant, da_cluster) (mysql_slave_status_slave_io_running{job="tenant-exporters"} == 1)
+            and on(tenant)
+            count by(tenant) (mysql_global_variables_read_only{job="tenant-exporters"} == 0)
+          )
         for: 2m
         labels:
           severity: critical
@@ -299,9 +328,9 @@ groups:
       - alert: MariaDBSemiSyncDegraded
         expr: |
           (
-            max by(tenant) (
+            max by(tenant, da_cluster) (
               mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters"} == 1
-              and on(tenant, instance)
+              and on(tenant, instance, da_cluster)
               mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters"} == 0
             )
           )
@@ -330,9 +359,9 @@ groups:
       # opt-out (matches NoPrimary — a real durability outage must always page).
       - alert: MariaDBSemiSyncReplicasGone
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             mysql_global_variables_rpl_semi_sync_master_enabled{job="tenant-exporters"} == 1
-            and on(tenant, instance)
+            and on(tenant, instance, da_cluster)
             mysql_global_status_rpl_semi_sync_master_clients{job="tenant-exporters"} == 0
           )
         for: 1m
@@ -397,9 +426,9 @@ groups:
       # (which liveness grouping would).
       - alert: MariaDBReplicaIOThreadDown
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             mysql_slave_status_slave_io_running{job="tenant-exporters"} == 0
-            and on(tenant, instance)
+            and on(tenant, instance, da_cluster)
             mysql_slave_status_master_server_id{job="tenant-exporters"} > 0
           )
         for: 1m
@@ -419,9 +448,9 @@ groups:
 
       - alert: MariaDBReplicaSQLThreadDown
         expr: |
-          max by(tenant) (
+          max by(tenant, da_cluster) (
             mysql_slave_status_slave_sql_running{job="tenant-exporters"} == 0
-            and on(tenant, instance)
+            and on(tenant, instance, da_cluster)
             mysql_slave_status_master_server_id{job="tenant-exporters"} > 0
           )
         for: 1m
@@ -657,7 +686,7 @@ groups:
               > on(tenant) group_left
               tenant:alert_threshold:mysql_connection_usage_percent
             )
-            and on(tenant)
+            and on(tenant, da_cluster)
             (
               tenant:mysql_threads_running:avg1m
               > on(tenant) group_left

@@ -177,8 +177,9 @@ _NOT_APPLICABLE_MARKER = "by-design not-applicable"
 def scope_of(series: str) -> str:
     """Aggregation scope = the recording-rule prefix (``tenant`` / ``tenant_version``).
 
-    The prefix IS the topology: ``tenant:X:agg`` is aggregated ``by(tenant)``;
-    ``tenant_version:X:agg`` is ``by(tenant, version)`` (ADR-024). Derived, never
+    The prefix IS the topology: ``tenant:X:agg`` is aggregated per tenant
+    (``by(tenant, da_cluster)`` — per cluster where the scrape writes that
+    label, ADR-006); ``tenant_version:X:agg`` adds ``version`` (ADR-024). Derived, never
     hand-set; the drift-guard cross-checks scope == observed_series prefix.
     """
     return series.split(":", 1)[0] if ":" in series else "?"
