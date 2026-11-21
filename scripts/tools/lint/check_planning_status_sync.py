@@ -25,9 +25,9 @@ What it does
 
 3. Per [ADR-019 §第三層](docs/adr/019-planning-ssot.md#第三層ci-狀態同步檢查) the default
    behaviour is **soft-warn**: print findings to stderr, exit 0 so CI shows a
-   yellow neutral check rather than a red block. `--strict` upgrades to hard-fail
-   (exit 1) — wire that on once contributor adoption is high enough that false
-   positives are negligible.
+   yellow neutral check rather than a red block. Soft-warn is the settled
+   decision for CI, not a rollout phase. `--strict` upgrades to hard-fail
+   (exit 1) and is kept for manual local runs.
 
 CLI
 ---

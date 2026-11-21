@@ -7,8 +7,9 @@ name: Planning Status Sync
 #
 # Default behaviour is **soft-warn** (exit 0 with annotations) per ADR-019
 # Layer 3 — the check appears as a neutral indicator on the PR, not a red
-# block. Flip on `--strict` once contributor adoption is high enough that
-# false-positives have decayed.
+# block. Soft-warn is the settled decision, not a rollout phase: this workflow
+# is not meant to be flipped to `--strict`. `--strict` stays for manual local
+# runs.
 #
 # CRITICAL: `actions/checkout@v6` MUST set `fetch-depth: 0` so that
 # `<base>..HEAD` resolves. Without it, `git log` fatals with "unknown revision"
@@ -67,8 +68,8 @@ jobs:
           echo "ref=origin/${BASE_BRANCH}" >> "$GITHUB_OUTPUT"
 
       - name: Check planning status sync
-        # Soft-warn by default (exit 0 with annotations). Flip `--strict` on
-        # once adoption stabilises.
+        # Soft-warn by design (exit 0 with annotations); no `--strict` here —
+        # see the header note.
         # PR number is bound via env (same #1021 class: zero raw
         # ${{ github.event.* }} inside run:). steps.base.outputs.ref stays an
         # expression — steps context, a different class (derived value).
