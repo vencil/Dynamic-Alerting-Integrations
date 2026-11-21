@@ -2,13 +2,13 @@
 title: "Tenant Manager — TenantCard"
 purpose: |
   Single tenant card in the grid — checkbox, environment / tier badges,
-  pending-PR indicator (ADR-011), rule-pack pills, mode + domain +
+  pending-PR indicator (ADR-011), mode + domain +
   db_type + owner + routing + metric_count rows, and an optional
   config-commit short-SHA footer.
 
   #2068: a DEGRADED row (tenant-api #1680 — `data.config_error` set)
   renders a "config file unusable" box with the reason INSTEAD of the
-  badges / pills / metadata rows: those fields are placeholders the
+  badges / metadata rows: those fields are placeholders the
   hook filled in (the file could not be loaded), not the tenant's
   metadata, so showing them would read as an ordinary tenant.
 
@@ -92,16 +92,12 @@ function ConfigErrorNotice({ name, code }) {
   );
 }
 
-// Rule-pack pills + metadata rows of a healthy card.
+// Metadata rows of a healthy card. #4141: no rule-pack pills — every
+// tenant reported the same packs once the readers serve the built-in keys;
+// what a tenant declares is its db_type row.
 function TenantMetadataRows({ data, modeColors }) {
   return (
     <>
-      <div style={styles.pills}>
-        {data.rule_packs?.map(pack => (
-          <div key={pack} style={styles.pill}>{pack}</div>
-        ))}
-      </div>
-
       <div style={styles.row}>
         <span style={styles.rowLabel}>
           {data.operational_mode_source === 'config'

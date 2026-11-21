@@ -62,7 +62,7 @@ describe('TenantCard — config error state', () => {
   const base = {
     environment: 'unknown', tier: '', domain: '', db_type: '', owner: '',
     operational_mode: 'unknown', routing_channel: '', metric_count: 0,
-    rule_packs: [], last_config_commit: '',
+    last_config_commit: '',
   };
   const props = {
     isSelected: false, isHovered: false, pendingPR: null,

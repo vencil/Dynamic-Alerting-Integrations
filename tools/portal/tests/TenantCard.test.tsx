@@ -32,7 +32,6 @@ const tenantData = {
   operational_mode: 'normal',
   routing_channel: '#alerts-finance',
   metric_count: 42,
-  rule_packs: ['cpu', 'memory'],
   last_config_commit: 'abc1234567890def',
 };
 
@@ -125,11 +124,13 @@ describe('TenantCard', () => {
     expect(screen.queryByText(/PR #/)).not.toBeInTheDocument();
   });
 
-  it('renders rule pack pills', () => {
+  it('shows the declared db_type, no rule-pack pills (#4141)', () => {
+    // A stale offline copy may still carry rule_packs: the card shows what
+    // the tenant declares (db_type), never a pack list inferred for it.
     render(
       <TenantCard
         name="db-x"
-        data={{ ...tenantData, rule_packs: ['cpu', 'mem', 'io'] }}
+        data={{ ...tenantData, rule_packs: ['packzz-one', 'packzz-two'] }}
         isSelected={false}
         isHovered={false}
         pendingPR={null}
@@ -137,9 +138,8 @@ describe('TenantCard', () => {
         {...noopHandlers}
       />,
     );
-    expect(screen.getByText('cpu')).toBeInTheDocument();
-    expect(screen.getByText('mem')).toBeInTheDocument();
-    expect(screen.getByText('io')).toBeInTheDocument();
+    expect(screen.getByText('mariadb')).toBeInTheDocument();
+    expect(screen.queryByText(/packzz/)).not.toBeInTheDocument();
   });
 
   it('emits deep-link URLs with tenant_id query param', () => {
