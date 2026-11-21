@@ -2827,8 +2827,31 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "not a path. A write that fails is held by "
         "tests/lint/test_check_cluster_identity.py "
         "(test_generate_that_cannot_write_the_baseline_is_exit_2).",
+    # #3981: the four generators that called the atomic writer directly and
+    # go through the artifact entry now. None takes a path: each rewrites
+    # documents the repository names.
+    "dx/generate_byo_rulepack_table.py":
+        "`--generate` rewrites the BYO integration guide it has just read; "
+        "the tool takes no path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/generate_doc_map.py":
+        "`--generate` rewrites `docs/internal/doc-map*.md`; the tool takes no "
+        "path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/generate_rule_pack_stats.py":
+        "`--generate` rewrites the stats fragment and the two documents it is "
+        "injected into; the tool takes no path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/generate_tool_map.py":
+        "`--generate` rewrites `docs/internal/tool-map*.md`; the tool takes no "
+        "path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 3
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 7
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

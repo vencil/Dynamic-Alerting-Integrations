@@ -628,12 +628,15 @@ def test_ima_and_evm_are_not_compared(mod, target, monkeypatch):
 # ---------------------------------------------------------------------------
 # Integration: regen tools opt-in behavior
 # ---------------------------------------------------------------------------
-def test_regen_tools_expose_safe_flag():
-    """Regression guard: --safe flag is wired into generate_doc_map.py / generate_tool_map.py."""
+def test_regen_tools_write_atomically_on_every_run():
+    """#3981: the two map generators replace their output through the
+    artifact entry on EVERY run. The atomic write used to be an opt-in
+    (`--safe`, Trap #60) beside a bare in-place write; the flag is gone, and
+    so is the second way of writing."""
     for name in ("generate_doc_map.py", "generate_tool_map.py"):
         src = (_REPO_ROOT / "scripts" / "tools" / "dx" / name).read_text(encoding="utf-8")
-        assert "--safe" in src
-        assert "atomic_write_text" in src
+        assert "write_repo_artifact(" in src
+        assert '"--safe"' not in src and "args.safe" not in src
 
 
 def test_generate_tenant_metadata_uses_the_shared_helper():

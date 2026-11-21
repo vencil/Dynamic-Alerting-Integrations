@@ -283,17 +283,9 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/generate_alert_reference.py": {
         "main open(w) [artifact]": 2,
     },
-    "scripts/tools/dx/generate_byo_rulepack_table.py": {
-        "main atomic_write_text() [artifact]": 1,
-    },
     "scripts/tools/dx/generate_crd_schemas.py": {
         "run .mkdir [artifact]": 1,
         "run .write_text [artifact]": 2,
-    },
-    "scripts/tools/dx/generate_doc_map.py": {
-        "main atomic_write_text() [artifact]": 1,
-        "main open(w) [artifact]": 1,
-        "main os.chmod [artifact]": 1,
     },
     "scripts/tools/dx/generate_platform_data.py": {
         "main .mkdir [artifact]": 2,
@@ -303,20 +295,11 @@ DEBT: dict[str, dict[str, int]] = {
     "scripts/tools/dx/generate_rule_pack_readme.py": {
         "main open(w) [artifact]": 1,
     },
-    "scripts/tools/dx/generate_rule_pack_stats.py": {
-        "main .mkdir [artifact]": 1,
-        "main atomic_write_text() [artifact]": 2,
-    },
     "scripts/tools/dx/generate_rulepack_configmaps.py": {
         "main .write_text [artifact]": 1,
     },
     "scripts/tools/dx/generate_rulepack_derived.py": {
         "main .write_text [artifact]": 1,
-    },
-    "scripts/tools/dx/generate_tool_map.py": {
-        "main .write_text [artifact]": 1,
-        "main atomic_write_text() [artifact]": 1,
-        "main os.chmod [artifact]": 1,
     },
     "scripts/tools/dx/measure_judgement_budget.py": {
         "judge os.mkdir [work_dir]": 1,
@@ -406,7 +389,7 @@ DEBT: dict[str, dict[str, int]] = {
 #: How many sinks DEBT holds: one number to read. A site that moves to an
 #: entry lowers it. What stops it going UP is not this line (it is edited in
 #: the same diff as the list) but the comparison with the base commit below.
-_DEBT_CEILING = 119
+_DEBT_CEILING = 109
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
 REGISTERED: dict[str, dict[str, int]] = {
@@ -896,7 +879,7 @@ def test_the_two_lists_sum_per_site():
     assert listed(debt, registered) == {"scripts/x.py": Counter({"main .write_text": 3})}
 
 
-@pytest.mark.parametrize("rel", ["scripts/tools/dx/generate_tool_map.py",
+@pytest.mark.parametrize("rel", ["scripts/tools/dx/gen_adr_checks.py",
                                  "scripts/tools/lint/check_iac_helm.py",
                                  "scripts/session-guards/session-init.py"])
 def test_the_scan_reaches_each_kind_of_tree(rel):

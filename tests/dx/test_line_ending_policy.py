@@ -344,8 +344,8 @@ class TestSharedWriteHelpersPinLF:
         default = inspect.signature(atomic_write_text).parameters["newline"].default
         assert default == "\n", (
             "atomic_write_text's newline default is load-bearing: "
-            "generate_tool_map.py --safe relies on it rather than passing "
-            "newline= itself."
+            "generate_tool_map.py (through write_repo_artifact) relies on it "
+            "rather than passing newline= itself."
         )
 
     def test_atomic_write_text_emits_lf_without_being_asked(self, tmp_path):
