@@ -14,18 +14,19 @@ metadata:
     rule-pack: mongodb
 data:
   mongodb-recording.yml: "groups:\n- name: mongodb-normalization\n  interval: 15s\n\
-    \  rules:\n  - record: tenant:mongodb_connections_current:max\n    expr: max by(tenant)\
-    \ (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connection_usage:ratio\n\
-    \    expr: \"max by(tenant) (mongodb_connections{state=\\\"current\\\"})\\n/ (\\\
-    n  max by(tenant) (mongodb_connections{state=\\\"current\\\"})\\n  + min by(tenant)\
-    \ (mongodb_connections{state=\\\"available\\\"})\\n)\\n\"\n  - record: tenant:mongodb_replication_lag:max\n\
-    \    expr: max by(tenant) (mongodb_mongod_replset_member_replication_lag)\n  -\
-    \ record: tenant:mongodb_opcounters:rate5m\n    expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))\n\
-    \  - record: tenant:mongodb_page_faults:rate5m\n    expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))\n\
-    - name: mongodb-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
-    \ tenant:alert_threshold:mongodb_connections_current\n    expr: max by(tenant)\
-    \ (user_threshold{component=\"mongodb\", metric=\"connections_current\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:mongodb_connections_current_critical\n\
+    \  rules:\n  - record: tenant:mongodb_connections_current:max\n    expr: max by(tenant,\
+    \ da_cluster) (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connection_usage:ratio\n\
+    \    expr: \"max by(tenant, da_cluster) (mongodb_connections{state=\\\"current\\\
+    \"})\\n/ (\\n  max by(tenant, da_cluster) (mongodb_connections{state=\\\"current\\\
+    \"})\\n  + min by(tenant, da_cluster) (mongodb_connections{state=\\\"available\\\
+    \"})\\n)\\n\"\n  - record: tenant:mongodb_replication_lag:max\n    expr: max by(tenant,\
+    \ da_cluster) (mongodb_mongod_replset_member_replication_lag)\n  - record: tenant:mongodb_opcounters:rate5m\n\
+    \    expr: sum by(tenant, da_cluster) (rate(mongodb_opcounters_total[5m]))\n \
+    \ - record: tenant:mongodb_page_faults:rate5m\n    expr: sum by(tenant, da_cluster)\
+    \ (rate(mongodb_extra_info_page_faults_total[5m]))\n- name: mongodb-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:mongodb_connections_current\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"connections_current\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mongodb_connections_current_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"connections_current\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:mongodb_replication_lag\n\
     \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"replication_lag\"\
@@ -52,8 +53,8 @@ data:
     \ MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）\n      tier: '{{\
     \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBClusterDown\n\
-    \    expr: max by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for:\
-    \ 30s\n    labels:\n      maintenance: page\n      metric_group: mongodb_liveness\n\
+    \    expr: max by(tenant, da_cluster) (mongodb_up{job=\"tenant-exporters\"}) ==\
+    \ 0\n    for: 30s\n    labels:\n      maintenance: page\n      metric_group: mongodb_liveness\n\
     \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: No mongod reports up=1 for tenant {{ $labels.tenant }} — total\
     \ service outage, not a single-member failover. For a planned single-instance\
@@ -69,8 +70,8 @@ data:
     \ }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機\n      tier:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBNoPrimary\n\
-    \    expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job=\"tenant-exporters\"\
-    })\n\n      unless\n\n      count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
+    \    expr: 'count by(tenant, da_cluster) (mongodb_mongod_replset_member_state{job=\"\
+    tenant-exporters\"})\n\n      unless\n\n      count by(tenant, da_cluster) (mongodb_mongod_replset_member_state{job=\"\
     tenant-exporters\"} == 1)\n\n      '\n    for: 2m\n    labels:\n      maintenance:\
     \ page\n      metric_group: mongodb_liveness\n      severity: critical\n     \
     \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Replica-set\

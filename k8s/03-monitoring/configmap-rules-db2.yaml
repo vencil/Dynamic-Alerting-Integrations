@@ -14,22 +14,25 @@ metadata:
     rule-pack: db2
 data:
   db2-recording.yml: "groups:\n- name: db2-normalization\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:db2_connections_active:max\n    expr: max by(tenant) (db2_connections_current)\n\
-    \  - record: tenant:db2_bufferpool_hit_ratio:min\n    expr: \"min by(tenant) (\\\
-    n  rate(db2_bufferpool_pages_found_total[5m])\\n  / (rate(db2_bufferpool_logical_reads_total[5m])\
-    \ >= 200 / 300)\\n)\\n\"\n  - record: tenant:db2_log_usage_percent:max\n    expr:\
-    \ \"max by(tenant) (\\n  100 * db2_log_used_bytes\\n  / ((db2_log_used_bytes +\
-    \ db2_log_available_bytes) > 0)\\n)\\n\"\n  - record: tenant:db2_deadlocks:increase5m\n\
-    \    expr: sum by(tenant) (increase(db2_deadlocks_total[5m]))\n  - record: tenant:db2_tablespace_used_percent:max\n\
-    \    expr: max by(tenant) (db2_tablespace_used_percent)\n  - record: tenant:db2_storage_path_used_percent:max\n\
-    \    expr: \"max by(tenant, da_cluster) (\\n  100 * db2_storage_path_fs_used_bytes\\\
-    n  / (db2_storage_path_fs_total_bytes > 0)\\n)\\n\"\n  - record: tenant:db2_lock_wait_time:rate5m\n\
-    \    expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))\n  - record:\
-    \ tenant:db2_sort_overflow_ratio:avg\n    expr: 'sum by(tenant) (rate(db2_sort_overflows_total[5m]))\n\
-    \n      / (sum by(tenant) (rate(db2_sorts_total[5m])) >= 200 / 300)\n\n      '\n\
-    - name: db2-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:db2_connections_active\n\
-    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"connections_active\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_connections_active_critical\n\
+    \  - record: tenant:db2_connections_active:max\n    expr: max by(tenant, da_cluster)\
+    \ (db2_connections_current)\n  - record: tenant:db2_bufferpool_hit_ratio:min\n\
+    \    expr: \"min by(tenant, da_cluster) (\\n  rate(db2_bufferpool_pages_found_total[5m])\\\
+    n  / (rate(db2_bufferpool_logical_reads_total[5m]) >= 200 / 300)\\n)\\n\"\n  -\
+    \ record: tenant:db2_log_usage_percent:max\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  100 * db2_log_used_bytes\\n  / ((db2_log_used_bytes + db2_log_available_bytes)\
+    \ > 0)\\n)\\n\"\n  - record: tenant:db2_deadlocks:increase5m\n    expr: sum by(tenant,\
+    \ da_cluster) (increase(db2_deadlocks_total[5m]))\n  - record: tenant:db2_tablespace_used_percent:max\n\
+    \    expr: max by(tenant, da_cluster) (db2_tablespace_used_percent)\n  - record:\
+    \ tenant:db2_storage_path_used_percent:max\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  100 * db2_storage_path_fs_used_bytes\\n  / (db2_storage_path_fs_total_bytes\
+    \ > 0)\\n)\\n\"\n  - record: tenant:db2_lock_wait_time:rate5m\n    expr: sum by(tenant,\
+    \ da_cluster) (rate(db2_lock_wait_time_seconds_total[5m]))\n  - record: tenant:db2_sort_overflow_ratio:avg\n\
+    \    expr: 'sum by(tenant, da_cluster) (rate(db2_sort_overflows_total[5m]))\n\n\
+    \      / (sum by(tenant, da_cluster) (rate(db2_sorts_total[5m])) >= 200 / 300)\n\
+    \n      '\n- name: db2-threshold-normalization\n  interval: 15s\n  rules:\n  -\
+    \ record: tenant:alert_threshold:db2_connections_active\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"db2\", metric=\"connections_active\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:db2_connections_active_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"connections_active\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:db2_bufferpool_hit_ratio\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"bufferpool_hit_ratio\"\
@@ -47,39 +50,41 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"lock_wait_time\"\
     , severity=\"critical\"})\n"
   db2-alert.yml: "groups:\n- name: db2-alerts\n  rules:\n  - alert: DB2DatabaseDown\n\
-    \    expr: \"max by(tenant, instance) (\\n  changes(query_timestamp{job=\\\"tenant-exporters\\\
-    \", query=\\\"db2_liveness\\\"}[90s]) == 0\\n  and\\n  count_over_time(query_timestamp{job=\\\
+    \    expr: \"max by(tenant, instance, da_cluster) (\\n  changes(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[90s]) == 0\\n  and\\n  count_over_time(query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[90s]) > 1\\n  and\\n  query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"db2_liveness\\\"} offset 90s\\n)\\nor\\nmax\
-    \ by(tenant, instance) (\\n  (\\n    query_interval{job=\\\"tenant-exporters\\\
-    \", query=\\\"db2_liveness\\\"}\\n    unless on(tenant, instance)\\n    count_over_time(query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[90s])\\n  )\\n  and on(tenant,\
-    \ instance)\\n  query_interval{job=\\\"tenant-exporters\\\", query=\\\"db2_liveness\\\
-    \"} offset 90s\\n)\\n\"\n    for: 15s\n    labels:\n      maintenance: page\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: The DB2 liveness query has not succeeded for 90s on {{ $labels.instance\
-    \ }}\n      description_zh: DB2 存活查詢 90 秒內沒有成功，實例：{{ $labels.instance }}\n   \
-    \   owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ DB2 instance {{ $labels.instance }} is DOWN\n      summary_zh: DB2 實例 {{ $labels.instance\
+    \ by(tenant, instance, da_cluster) (\\n  (\\n    query_interval{job=\\\"tenant-exporters\\\
+    \", query=\\\"db2_liveness\\\"}\\n    unless on(tenant, instance, da_cluster)\\\
+    n    count_over_time(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\"\
+    db2_liveness\\\"}[90s])\\n  )\\n  and on(tenant, instance, da_cluster)\\n  query_interval{job=\\\
+    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"} offset 90s\\n)\\n\"\n    for:\
+    \ 15s\n    labels:\n      maintenance: page\n      severity: critical\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: The DB2 liveness\
+    \ query has not succeeded for 90s on {{ $labels.instance }}\n      description_zh:\
+    \ DB2 存活查詢 90 秒內沒有成功，實例：{{ $labels.instance }}\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: DB2\
+    \ instance {{ $labels.instance }} is DOWN\n      summary_zh: DB2 實例 {{ $labels.instance\
     \ }} 已關閉\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: DB2QueryStalled\n    expr: \"(\\n  max by(tenant, instance, query)\
-    \ (\\n    increase(queries_total{job=\\\"tenant-exporters\\\", query=~\\\"db2_.+\\\
-    \", query!=\\\"db2_liveness\\\", status=\\\"success\\\"}[5m]) == 0\\n    and\\\
-    n    count_over_time(queries_total{job=\\\"tenant-exporters\\\", query=~\\\"db2_.+\\\
-    \", query!=\\\"db2_liveness\\\", status=\\\"success\\\"}[5m]) > 1\\n  )\\n  or\\\
-    n  max by(tenant, instance, query) (\\n    query_interval{job=\\\"tenant-exporters\\\
-    \", query=~\\\"db2_.+\\\", query!=\\\"db2_liveness\\\"}\\n    unless on(tenant,\
-    \ instance, query)\\n    queries_total{job=\\\"tenant-exporters\\\", query=~\\\
-    \"db2_.+\\\", query!=\\\"db2_liveness\\\", status=\\\"success\\\"}\\n  )\\n)\\\
-    nunless on(tenant, instance)\\nmax by(tenant, instance) (\\n  (\\n    changes(query_timestamp{job=\\\
-    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[5m]) == 0\\n    and\\n   \
-    \ count_over_time(query_timestamp{job=\\\"tenant-exporters\\\", query=\\\"db2_liveness\\\
-    \"}[5m]) > 1\\n  )\\n  or\\n  (query_interval{job=\\\"tenant-exporters\\\", query=\\\
-    \"db2_liveness\\\"}\\n   unless on(tenant, instance)\\n   count_over_time(query_timestamp{job=\\\
+    \  - alert: DB2QueryStalled\n    expr: \"(\\n  max by(tenant, instance, query,\
+    \ da_cluster) (\\n    increase(queries_total{job=\\\"tenant-exporters\\\", query=~\\\
+    \"db2_.+\\\", query!=\\\"db2_liveness\\\", status=\\\"success\\\"}[5m]) == 0\\\
+    n    and\\n    count_over_time(queries_total{job=\\\"tenant-exporters\\\", query=~\\\
+    \"db2_.+\\\", query!=\\\"db2_liveness\\\", status=\\\"success\\\"}[5m]) > 1\\\
+    n  )\\n  or\\n  max by(tenant, instance, query, da_cluster) (\\n    query_interval{job=\\\
+    \"tenant-exporters\\\", query=~\\\"db2_.+\\\", query!=\\\"db2_liveness\\\"}\\\
+    n    unless on(tenant, instance, query, da_cluster)\\n    queries_total{job=\\\
+    \"tenant-exporters\\\", query=~\\\"db2_.+\\\", query!=\\\"db2_liveness\\\", status=\\\
+    \"success\\\"}\\n  )\\n)\\nunless on(tenant, instance, da_cluster)\\nmax by(tenant,\
+    \ instance, da_cluster) (\\n  (\\n    changes(query_timestamp{job=\\\"tenant-exporters\\\
+    \", query=\\\"db2_liveness\\\"}[5m]) == 0\\n    and\\n    count_over_time(query_timestamp{job=\\\
+    \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[5m]) > 1\\n  )\\n  or\\n \
+    \ (query_interval{job=\\\"tenant-exporters\\\", query=\\\"db2_liveness\\\"}\\\
+    n   unless on(tenant, instance, da_cluster)\\n   count_over_time(query_timestamp{job=\\\
     \"tenant-exporters\\\", query=\\\"db2_liveness\\\"}[5m]))\\n)\\nunless on(tenant)\\\
     n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
     \      maintenance: mute\n      severity: warning\n      tenant: '{{ $labels.tenant\

@@ -14,29 +14,31 @@ metadata:
     rule-pack: clickhouse
 data:
   clickhouse-recording.yml: "groups:\n- name: clickhouse-normalization\n  rules:\n\
-    \  - record: tenant:clickhouse_queries:rate5m\n    expr: \"sum by(tenant) (\\\
-    n  rate(ClickHouseProfileEvents_Query{tenant!=\\\"\\\"}[5m])\\n)\\n\"\n  - record:\
-    \ tenant:clickhouse_active_connections:max\n    expr: \"max by(tenant) (\\n  ClickHouseMetrics_TCPConnection{tenant!=\\\
-    \"\\\"}\\n)\\n\"\n  - record: tenant:clickhouse_max_part_count:max\n    expr:\
-    \ \"max by(tenant) (\\n  ClickHouseAsyncMetrics_MaxPartCountForPartition{tenant!=\\\
+    \  - record: tenant:clickhouse_queries:rate5m\n    expr: \"sum by(tenant, da_cluster)\
+    \ (\\n  rate(ClickHouseProfileEvents_Query{tenant!=\\\"\\\"}[5m])\\n)\\n\"\n \
+    \ - record: tenant:clickhouse_active_connections:max\n    expr: \"max by(tenant,\
+    \ da_cluster) (\\n  ClickHouseMetrics_TCPConnection{tenant!=\\\"\\\"}\\n)\\n\"\
+    \n  - record: tenant:clickhouse_max_part_count:max\n    expr: \"max by(tenant,\
+    \ da_cluster) (\\n  ClickHouseAsyncMetrics_MaxPartCountForPartition{tenant!=\\\
     \"\\\"}\\n)\\n\"\n  - record: tenant:clickhouse_replication_queue:max\n    expr:\
-    \ \"max by(tenant) (\\n  ClickHouseMetrics_ReplicatedSendQueueSize{tenant!=\\\"\
-    \\\"}\\n  + ClickHouseMetrics_ReplicatedFetchQueueSize{tenant!=\\\"\\\"}\\n)\\\
-    n\"\n  - record: tenant:clickhouse_failed_queries:rate5m\n    expr: \"sum by(tenant)\
-    \ (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\"\\\"}[5m])\\n)\\\
-    n\"\n- name: clickhouse-threshold-normalization\n  rules:\n  - record: tenant:alert_threshold:clickhouse_queries_rate\n\
+    \ \"max by(tenant, da_cluster) (\\n  ClickHouseMetrics_ReplicatedSendQueueSize{tenant!=\\\
+    \"\\\"}\\n  + ClickHouseMetrics_ReplicatedFetchQueueSize{tenant!=\\\"\\\"}\\n)\\\
+    n\"\n  - record: tenant:clickhouse_failed_queries:rate5m\n    expr: \"sum by(tenant,\
+    \ da_cluster) (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\"\\\"\
+    }[5m])\\n)\\n\"\n- name: clickhouse-threshold-normalization\n  rules:\n  - record:\
+    \ tenant:alert_threshold:clickhouse_queries_rate\n    expr: \"max by(tenant) (\\\
+    n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"queries_rate\\\", severity=\\\
+    \"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"queries_rate\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:alert_threshold:clickhouse_active_connections\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"active_connections\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections_critical\n\
+    , metric=\\\"active_connections\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
+    \ tenant:alert_threshold:clickhouse_active_connections_critical\n    expr: \"\
+    max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"\
+    active_connections\\\", severity=\\\"critical\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_max_part_count\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"active_connections\\\", severity=\\\"critical\\\"}\\n)\\n\"\n  -\
-    \ record: tenant:alert_threshold:clickhouse_max_part_count\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"max_part_count\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_replication_queue\n\
-    \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"replication_queue\\\", severity=\\\"warning\\\"}\\n)\\n\"\n"
+    , metric=\\\"max_part_count\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
+    \ tenant:alert_threshold:clickhouse_replication_queue\n    expr: \"max by(tenant)\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"replication_queue\\\
+    \", severity=\\\"warning\\\"}\\n)\\n\"\n"
   clickhouse-alert.yml: "groups:\n- name: clickhouse-alerts\n  rules:\n  - alert:\
     \ ClickHouseHighQueryRate\n    expr: \"(\\n  tenant:clickhouse_queries:rate5m\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_queries_rate\\\

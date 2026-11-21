@@ -1,0 +1,221 @@
+# promtool unit test — one tenant in two clusters, one of them healthy (#4097,
+# ADR-006). test_cluster_metamorphic.py replays every shipped test with a
+# cluster label; what it cannot make up is a HEALTHY second cluster, and that
+# is the case #4097 was opened for: the healthy cluster hiding the broken one.
+#
+# In every case below "east" is broken and "west" is fine, and exactly one
+# alert fires, for east. Each shape of hiding is here once:
+#   * `max by(tenant)` == 0   — MariaDBClusterDown: west's up=1 was the max.
+#   * `A unless B` per tenant — MariaDB / MongoDB NoPrimary: west's primary
+#     was the B that cancelled east's A.
+#   * MariaDBNoPrimary's one deliberate look across clusters: a replica-only
+#     cluster of a stretched set is quiet while the set has a primary (t-st),
+#     fires when the primary is lost (t-sl), and fires when the failover is
+#     stuck with replicas still attached (t-sf), or when its replicas are cut
+#     off from a primary that is alive (t-sd).
+#   * `unless on(tenant, instance)` — DB2DatabaseDown with the SAME instance
+#     address in both clusters (a DR pair): west's live query cancelled east's.
+#   * a ratio of sums         — ElasticsearchHighSearchLatency: west's fast,
+#     busy cluster diluted east's slow one below the threshold.
+#   * `max by(tenant)` > threshold — DB2HighLogUsage fires for east only, with
+#     east's value; west is not named.
+#   * a compound alert (MariaDBSystemBottleneck): the two conditions meet per
+#     cluster, while each is still compared with the tenant's one threshold.
+# Taking `da_cluster` out of any of those groupings or matchings turns its
+# case red (the lint's finding, seen as behaviour).
+rule_files:
+  - ../../rule-packs/rule-pack-mariadb.yaml
+  - ../../rule-packs/rule-pack-mongodb.yaml
+  - ../../rule-packs/rule-pack-db2.yaml
+  - ../../rule-packs/rule-pack-elasticsearch.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # MariaDB — tenant t-dr. east: both instances down. west: up, with a primary.
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-dr", da_cluster="east", instance="db-0:9104"}'
+        values: '0x80'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-dr", da_cluster="east", instance="db-1:9104"}'
+        values: '0x80'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-dr", da_cluster="west", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-dr", da_cluster="west", instance="db-1:9104"}'
+        values: '1x80'
+
+      # MariaDB — tenant t-np. east: two read-only nodes. west: a primary and a replica.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-np", da_cluster="east", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-np", da_cluster="east", instance="db-1:9104"}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-np", da_cluster="west", instance="db-0:9104"}'
+        values: '0x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-np", da_cluster="west", instance="db-1:9104"}'
+        values: '1x80'
+
+      # MariaDB, one replication set over two clusters — tenant t-st. east: the
+      # primary and a replica. west: replicas only, attached. Nobody fires.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-st", da_cluster="east", instance="db-0:9104"}'
+        values: '0x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-st", da_cluster="east", instance="db-1:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-st", da_cluster="east", instance="db-1:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-st", da_cluster="west", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-st", da_cluster="west", instance="db-1:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-st", da_cluster="west", instance="db-0:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-st", da_cluster="west", instance="db-1:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '1x80'
+
+      # The same set after the primary is lost — tenant t-sl: east's survivor is
+      # read-only, west's replicas are reconnecting (0). Both clusters fire.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sl", da_cluster="east", instance="db-1:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-sl", da_cluster="east", instance="db-1:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '0x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sl", da_cluster="west", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sl", da_cluster="west", instance="db-1:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-sl", da_cluster="west", instance="db-0:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '0x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-sl", da_cluster="west", instance="db-1:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '0x80'
+
+      # Stuck failover, stretched — tenant t-sf: the old primary was demoted to
+      # read-only and is alive, every replica is still attached to it. No
+      # writable node anywhere: attached replicas excuse nobody.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sf", da_cluster="east", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sf", da_cluster="east", instance="db-1:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-sf", da_cluster="east", instance="db-1:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '1x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sf", da_cluster="west", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-sf", da_cluster="west", instance="db-0:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '1x80'
+
+      # Stretched, primary alive, west cut off from it — tenant t-sd: west's
+      # replicas are not attached (0), so west is not excused.
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sd", da_cluster="east", instance="db-0:9104"}'
+        values: '0x80'
+      - series: 'mysql_global_variables_read_only{job="tenant-exporters", tenant="t-sd", da_cluster="west", instance="db-0:9104"}'
+        values: '1x80'
+      - series: 'mysql_slave_status_slave_io_running{job="tenant-exporters", tenant="t-sd", da_cluster="west", instance="db-0:9104", master_host="src", master_uuid="", channel_name="", connection_name=""}'
+        values: '0x80'
+
+      # MariaDB compound alert — tenant t-cb: connections AND running threads
+      # both over their thresholds. east: both. west: connections only — and
+      # east's threads must not be lent to it. The thresholds are the
+      # tenant's (no da_cluster) and still have to match.
+      - series: 'mysql_global_status_threads_connected{job="tenant-exporters", tenant="t-cb", da_cluster="east", instance="db-0:9104"}'
+        values: '95x80'
+      - series: 'mysql_global_variables_max_connections{job="tenant-exporters", tenant="t-cb", da_cluster="east", instance="db-0:9104"}'
+        values: '100x80'
+      - series: 'mysql_global_status_threads_running{job="tenant-exporters", tenant="t-cb", da_cluster="east", instance="db-0:9104"}'
+        values: '60x80'
+      - series: 'mysql_global_status_threads_connected{job="tenant-exporters", tenant="t-cb", da_cluster="west", instance="db-0:9104"}'
+        values: '95x80'
+      - series: 'mysql_global_variables_max_connections{job="tenant-exporters", tenant="t-cb", da_cluster="west", instance="db-0:9104"}'
+        values: '100x80'
+      - series: 'mysql_global_status_threads_running{job="tenant-exporters", tenant="t-cb", da_cluster="west", instance="db-0:9104"}'
+        values: '5x80'
+      - series: 'user_threshold{tenant="t-cb", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '80x80'
+      - series: 'user_threshold{tenant="t-cb", component="mysql", metric="threads_running", severity="warning"}'
+        values: '50x80'
+
+      # MongoDB — tenant t-mg. east: two SECONDARY (2). west: PRIMARY (1) and SECONDARY.
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="t-mg", da_cluster="east", member="m-0"}'
+        values: '2x80'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="t-mg", da_cluster="east", member="m-1"}'
+        values: '2x80'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="t-mg", da_cluster="west", member="m-0"}'
+        values: '1x80'
+      - series: 'mongodb_mongod_replset_member_state{job="tenant-exporters", tenant="t-mg", da_cluster="west", member="m-1"}'
+        values: '2x80'
+
+      # DB2 liveness — tenant t-db, the same instance address in both clusters.
+      # east: the liveness query stops succeeding after 1m. west: every 15s.
+      - series: 'query_interval{tenant="t-db", da_cluster="east", instance="10.0.0.5:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x80'
+      - series: 'query_timestamp{tenant="t-db", da_cluster="east", instance="10.0.0.5:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
+        values: '0+15x4 60x76'
+      - series: 'query_interval{tenant="t-db", da_cluster="west", instance="10.0.0.5:9560", job="tenant-exporters", query="db2_liveness"}'
+        values: '15x80'
+      - series: 'query_timestamp{tenant="t-db", da_cluster="west", instance="10.0.0.5:9560", job="tenant-exporters", query="db2_liveness", database="db2_liveness"}'
+        values: '0+15x80'
+
+      # DB2 log usage — tenant t-db. east 90 % used, west 10 %.
+      - series: 'db2_log_used_bytes{tenant="t-db", da_cluster="east", instance="10.0.0.5:9560"}'
+        values: '900x80'
+      - series: 'db2_log_available_bytes{tenant="t-db", da_cluster="east", instance="10.0.0.5:9560"}'
+        values: '100x80'
+      - series: 'db2_log_used_bytes{tenant="t-db", da_cluster="west", instance="10.0.0.5:9560"}'
+        values: '100x80'
+      - series: 'db2_log_available_bytes{tenant="t-db", da_cluster="west", instance="10.0.0.5:9560"}'
+        values: '900x80'
+      - series: 'user_threshold{tenant="t-db", component="db2", metric="log_usage_percent", severity="warning"}'
+        values: '75x80'
+
+      # Elasticsearch — tenant t-es, threshold 500 ms. east: 10 queries/s at
+      # 2 s each. west: 1000 queries/s at 10 ms. Together: about 30 ms.
+      - series: 'elasticsearch_indices_search_query_time_seconds{tenant="t-es", da_cluster="east", instance="es-0"}'
+        values: '0+300x80'
+      - series: 'elasticsearch_indices_search_query_total{tenant="t-es", da_cluster="east", instance="es-0"}'
+        values: '0+150x80'
+      - series: 'elasticsearch_indices_search_query_time_seconds{tenant="t-es", da_cluster="west", instance="es-0"}'
+        values: '0+150x80'
+      - series: 'elasticsearch_indices_search_query_total{tenant="t-es", da_cluster="west", instance="es-0"}'
+        values: '0+15000x80'
+      - series: 'user_threshold{tenant="t-es", component="es", metric="search_latency_ms", severity="warning"}'
+        values: '500x80'
+
+    promql_expr_test:
+      - expr: tenant:db2_log_usage_percent:max
+        eval_time: 15m
+        exp_samples:
+          - labels: 'tenant:db2_log_usage_percent:max{tenant="t-db", da_cluster="east"}'
+            value: 90
+          - labels: 'tenant:db2_log_usage_percent:max{tenant="t-db", da_cluster="west"}'
+            value: 10
+      - expr: tenant:es_search_latency_ms:avg
+        eval_time: 15m
+        exp_samples:
+          - labels: 'tenant:es_search_latency_ms:avg{tenant="t-es", da_cluster="east"}'
+            value: 2000
+          - labels: 'tenant:es_search_latency_ms:avg{tenant="t-es", da_cluster="west"}'
+            value: 10
+      # Everything that fires at 15m, and nothing for west.
+      - expr: count by(alertname, tenant, da_cluster) (ALERTS{alertstate="firing", alertname=~"MariaDBClusterDown|MariaDBNoPrimary|MariaDBSystemBottleneck|MongoDBNoPrimary|DB2DatabaseDown|DB2HighLogUsage|ElasticsearchHighSearchLatency"})
+        eval_time: 15m
+        exp_samples:
+          - labels: '{alertname="MariaDBClusterDown", tenant="t-dr", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="MariaDBSystemBottleneck", tenant="t-cb", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="MariaDBNoPrimary", tenant="t-np", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="MariaDBNoPrimary", tenant="t-sd", da_cluster="west"}'
+            value: 1
+          - labels: '{alertname="MariaDBNoPrimary", tenant="t-sl", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="MariaDBNoPrimary", tenant="t-sl", da_cluster="west"}'
+            value: 1
+          - labels: '{alertname="MariaDBNoPrimary", tenant="t-sf", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="MariaDBNoPrimary", tenant="t-sf", da_cluster="west"}'
+            value: 1
+          - labels: '{alertname="MongoDBNoPrimary", tenant="t-mg", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="DB2DatabaseDown", tenant="t-db", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="DB2HighLogUsage", tenant="t-db", da_cluster="east"}'
+            value: 1
+          - labels: '{alertname="ElasticsearchHighSearchLatency", tenant="t-es", da_cluster="east"}'
+            value: 1

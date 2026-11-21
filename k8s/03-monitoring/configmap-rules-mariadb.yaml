@@ -14,14 +14,15 @@ metadata:
     rule-pack: mariadb
 data:
   mariadb-recording.yml: "groups:\n- name: mariadb-normalization\n  interval: 15s\n\
-    \  rules:\n  - record: tenant:mysql_threads_running:avg1m\n    expr: max by(tenant)\
-    \ (avg_over_time(mysql_global_status_threads_running[1m]))\n  - record: tenant:mysql_connection_usage:percent\n\
-    \    expr: \"max by(tenant) (\\n  100 * mysql_global_status_threads_connected\\\
-    n  / (mysql_global_variables_max_connections > 0)\\n)\\n\"\n  - record: tenant:mysql_slow_queries:rate5m\n\
-    \    expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))\n  - record:\
-    \ tenant:mysql_aborted_connections:rate5m\n    expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))\n\
-    \  - record: tenant:mysql_replication_lag:max\n    expr: \"max by(tenant) (\\\
-    n  mysql_slave_status_seconds_behind_master\\n  - (mysql_slave_status_sql_delay\
+    \  rules:\n  - record: tenant:mysql_threads_running:avg1m\n    expr: max by(tenant,\
+    \ da_cluster) (avg_over_time(mysql_global_status_threads_running[1m]))\n  - record:\
+    \ tenant:mysql_connection_usage:percent\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  100 * mysql_global_status_threads_connected\\n  / (mysql_global_variables_max_connections\
+    \ > 0)\\n)\\n\"\n  - record: tenant:mysql_slow_queries:rate5m\n    expr: sum by(tenant,\
+    \ da_cluster) (rate(mysql_global_status_slow_queries[5m]))\n  - record: tenant:mysql_aborted_connections:rate5m\n\
+    \    expr: sum by(tenant, da_cluster) (rate(mysql_global_status_aborted_connects[5m]))\n\
+    \  - record: tenant:mysql_replication_lag:max\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  mysql_slave_status_seconds_behind_master\\n  - (mysql_slave_status_sql_delay\
     \ or 0 * mysql_slave_status_seconds_behind_master)\\n)\\n\"\n- name: mariadb-threshold-normalization\n\
     \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:mysql_connection_usage_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"connection_usage_percent\"\
@@ -54,17 +55,17 @@ data:
     \ {{ $labels.tenant }})\n      summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶\
     \ {{ $labels.tenant }}）\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: MariaDBClusterDown\n    expr: max by(tenant) (mysql_up{job=\"tenant-exporters\"\
-    }) == 0\n    for: 30s\n    labels:\n      maintenance: page\n      metric_group:\
-    \ mariadb_liveness\n      severity: critical\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      description: No mysqld reports up=1 for tenant\
-    \ {{ $labels.tenant }} — total service outage, not a single-replica failover.\
-    \ For a planned single-instance drain, silence via the Alertmanager Silence API\
-    \ (no maintenance-window opt-out by design; a tenant's silent-critical sentinel\
-    \ still suppresses it).\n      description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mysqld\
-    \ 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API\
-    \ 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n      owner: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \  - alert: MariaDBClusterDown\n    expr: max by(tenant, da_cluster) (mysql_up{job=\"\
+    tenant-exporters\"}) == 0\n    for: 30s\n    labels:\n      maintenance: page\n\
+    \      metric_group: mariadb_liveness\n      severity: critical\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: No mysqld reports\
+    \ up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-replica\
+    \ failover. For a planned single-instance drain, silence via the Alertmanager\
+    \ Silence API (no maintenance-window opt-out by design; a tenant's silent-critical\
+    \ sentinel still suppresses it).\n      description_zh: 租戶 {{ $labels.tenant }}\
+    \ 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager\
+    \ Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n   \
+    \   owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
@@ -72,9 +73,12 @@ data:
     \ MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機\n      tier: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBNoPrimary\n   \
-    \ expr: 'count by(tenant) (mysql_global_variables_read_only{job=\"tenant-exporters\"\
-    })\n\n      unless\n\n      count by(tenant) (mysql_global_variables_read_only{job=\"\
-    tenant-exporters\"} == 0)\n\n      '\n    for: 2m\n    labels:\n      maintenance:\
+    \ expr: \"(\\n  count by(tenant, da_cluster) (mysql_global_variables_read_only{job=\\\
+    \"tenant-exporters\\\"})\\n  unless\\n  count by(tenant, da_cluster) (mysql_global_variables_read_only{job=\\\
+    \"tenant-exporters\\\"} == 0)\\n)\\nunless\\n(\\n  count by(tenant, da_cluster)\
+    \ (mysql_slave_status_slave_io_running{job=\\\"tenant-exporters\\\"} == 1)\\n\
+    \  and on(tenant)\\n  count by(tenant) (mysql_global_variables_read_only{job=\\\
+    \"tenant-exporters\\\"} == 0)\\n)\\n\"\n    for: 2m\n    labels:\n      maintenance:\
     \ page\n      metric_group: mariadb_liveness\n      severity: critical\n     \
     \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: All instances\
     \ are read_only for tenant {{ $labels.tenant }} — no writable primary (failover\
@@ -89,16 +93,17 @@ data:
     \ }}'\n      summary_zh: MariaDB：租戶 {{ $labels.tenant }} 沒有可寫 primary\n      tier:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBSemiSyncDegraded\n\
-    \    expr: \"(\\n  max by(tenant) (\\n    mysql_global_variables_rpl_semi_sync_master_enabled{job=\\\
-    \"tenant-exporters\\\"} == 1\\n    and on(tenant, instance)\\n    mysql_global_status_rpl_semi_sync_master_status{job=\\\
-    \"tenant-exporters\\\"} == 0\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 2m\n    labels:\n      maintenance: mute\n\
-    \      metric_group: mariadb_liveness\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Tenant {{ $labels.tenant\
-    \ }} has semi-sync enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0)\
-    \ — writes continue but the semi-sync durability guarantee is lost (a primary\
-    \ failure now risks data loss). Usually a replica timed out / disconnected. read_only\
-    \ stays 0, so MariaDBNoPrimary cannot see this.\n      description_zh: 租戶 {{ $labels.tenant\
+    \    expr: \"(\\n  max by(tenant, da_cluster) (\\n    mysql_global_variables_rpl_semi_sync_master_enabled{job=\\\
+    \"tenant-exporters\\\"} == 1\\n    and on(tenant, instance, da_cluster)\\n   \
+    \ mysql_global_status_rpl_semi_sync_master_status{job=\\\"tenant-exporters\\\"\
+    } == 0\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n\"\n    for: 2m\n    labels:\n      maintenance: mute\n      metric_group:\
+    \ mariadb_liveness\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: Tenant {{ $labels.tenant }} has semi-sync\
+    \ enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0) — writes continue\
+    \ but the semi-sync durability guarantee is lost (a primary failure now risks\
+    \ data loss). Usually a replica timed out / disconnected. read_only stays 0, so\
+    \ MariaDBNoPrimary cannot see this.\n      description_zh: 租戶 {{ $labels.tenant\
     \ }} 啟用了 semi-sync 但已 fallback 到 ASYNC（status=0）— 寫入照常，但失去 semi-sync 持久性保證（此時\
     \ primary 故障有資料遺失風險）。通常是 replica timeout／斷線。read_only 仍為 0，故 MariaDBNoPrimary\
     \ 看不到。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
@@ -109,8 +114,9 @@ data:
     \ tenant {{ $labels.tenant }}\n      summary_zh: MariaDB semi-sync 降級 — 租戶 {{\
     \ $labels.tenant }} 失去持久性保證\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: MariaDBSemiSyncReplicasGone\n    expr: \"max by(tenant) (\\n  mysql_global_variables_rpl_semi_sync_master_enabled{job=\\\
-    \"tenant-exporters\\\"} == 1\\n  and on(tenant, instance)\\n  mysql_global_status_rpl_semi_sync_master_clients{job=\\\
+    \  - alert: MariaDBSemiSyncReplicasGone\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  mysql_global_variables_rpl_semi_sync_master_enabled{job=\\\"tenant-exporters\\\
+    \"} == 1\\n  and on(tenant, instance, da_cluster)\\n  mysql_global_status_rpl_semi_sync_master_clients{job=\\\
     \"tenant-exporters\\\"} == 0\\n)\\n\"\n    for: 1m\n    labels:\n      maintenance:\
     \ page\n      metric_group: mariadb_liveness\n      severity: critical\n     \
     \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Tenant\
@@ -131,8 +137,9 @@ data:
     \      summary_zh: MariaDB semi-sync 租戶 {{ $labels.tenant }} 連線的 replica 數為 0\n\
     \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: MariaDBReplicaIOThreadDown\n    expr: \"max by(tenant) (\\n  mysql_slave_status_slave_io_running{job=\\\
-    \"tenant-exporters\\\"} == 0\\n  and on(tenant, instance)\\n  mysql_slave_status_master_server_id{job=\\\
+    \  - alert: MariaDBReplicaIOThreadDown\n    expr: \"max by(tenant, da_cluster)\
+    \ (\\n  mysql_slave_status_slave_io_running{job=\\\"tenant-exporters\\\"} == 0\\\
+    n  and on(tenant, instance, da_cluster)\\n  mysql_slave_status_master_server_id{job=\\\
     \"tenant-exporters\\\"} > 0\\n)\\n\"\n    for: 1m\n    labels:\n      maintenance:\
     \ page\n      metric_group: mysql_replication_lag\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Replica\
@@ -152,8 +159,8 @@ data:
     \  summary_zh: MariaDB 租戶 {{ $labels.tenant }} 的 replica IO 執行緒未運行\n      tier:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBReplicaSQLThreadDown\n\
-    \    expr: \"max by(tenant) (\\n  mysql_slave_status_slave_sql_running{job=\\\"\
-    tenant-exporters\\\"} == 0\\n  and on(tenant, instance)\\n  mysql_slave_status_master_server_id{job=\\\
+    \    expr: \"max by(tenant, da_cluster) (\\n  mysql_slave_status_slave_sql_running{job=\\\
+    \"tenant-exporters\\\"} == 0\\n  and on(tenant, instance, da_cluster)\\n  mysql_slave_status_master_server_id{job=\\\
     \"tenant-exporters\\\"} > 0\\n)\\n\"\n    for: 1m\n    labels:\n      maintenance:\
     \ page\n      metric_group: mysql_replication_lag\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Replica\
@@ -302,39 +309,40 @@ data:
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
     \ }}{{ end }}{{ end }}'\n  - alert: MariaDBSystemBottleneck\n    expr: \"(\\n\
     \  (\\n    tenant:mysql_connection_usage:percent\\n    > on(tenant) group_left\\\
-    n    tenant:alert_threshold:mysql_connection_usage_percent\\n  )\\n  and on(tenant)\\\
-    n  (\\n    tenant:mysql_threads_running:avg1m\\n    > on(tenant) group_left\\\
-    n    tenant:alert_threshold:mysql_threads_running\\n  )\\n)\\nunless on(tenant)\\\
-    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 1m\n    labels:\n\
-    \      maintenance: mute\n      severity: critical\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      description: Both connections AND running-thread\
-    \ saturation thresholds exceeded simultaneously\n      description_zh: 連線數與執行緒飽和閾值同時超出\n\
-    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: running-thread saturation + connections both exceeded\
-    \ — multi-resource bottleneck, escalate'\n      platform_summary_zh: '[{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：執行緒飽和與連線皆超出\
-    \ — 多資源瓶頸，需升級處理'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: System bottleneck on {{ $labels.tenant }}\n      summary_zh:\
-    \ '{{ $labels.tenant }} 系統瓶頸'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: MariaDBRecentRestart\n    expr: 'mysql_global_status_uptime < 300\n\
-    \n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"}\
-    \ == 1)\n\n      '\n    for: 0s\n    labels:\n      maintenance: mute\n      severity:\
-    \ info\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
-    \ Uptime is only {{ $value }}s (< 5 min)\n      description_zh: 運行時間僅 {{ $value\
-    \ }}s（少於 5 分鐘）\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: '{{ $labels.instance }} restarted recently'\n      summary_zh:\
-    \ '{{ $labels.instance }} 最近已重新啟動'\n      tier: '{{ with query (printf `topk(1,\
+    n    tenant:alert_threshold:mysql_connection_usage_percent\\n  )\\n  and on(tenant,\
+    \ da_cluster)\\n  (\\n    tenant:mysql_threads_running:avg1m\\n    > on(tenant)\
+    \ group_left\\n    tenant:alert_threshold:mysql_threads_running\\n  )\\n)\\nunless\
+    \ on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n   \
+    \ for: 1m\n    labels:\n      maintenance: mute\n      severity: critical\n  \
+    \    tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Both\
+    \ connections AND running-thread saturation thresholds exceeded simultaneously\n\
+    \      description_zh: 連線數與執行緒飽和閾值同時超出\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}'\n  - alert: MariaDBHighSlowQueries\n    expr: 'tenant:mysql_slow_queries:rate5m\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: running-thread saturation + connections\
+    \ both exceeded — multi-resource bottleneck, escalate'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：執行緒飽和與連線皆超出 — 多資源瓶頸，需升級處理'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
+    \ }}{{ end }}{{ end }}'\n      summary: System bottleneck on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 系統瓶頸'\n      tier: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBRecentRestart\n\
+    \    expr: 'mysql_global_status_uptime < 300\n\n      unless on(tenant)\n\n  \
+    \    (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for: 0s\n\
+    \    labels:\n      maintenance: mute\n      severity: info\n      tenant: '{{\
+    \ $labels.tenant }}'\n    annotations:\n      description: Uptime is only {{ $value\
+    \ }}s (< 5 min)\n      description_zh: 運行時間僅 {{ $value }}s（少於 5 分鐘）\n      owner:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ '{{ $labels.instance }} restarted recently'\n      summary_zh: '{{ $labels.instance\
+    \ }} 最近已重新啟動'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: MariaDBHighSlowQueries\n    expr: 'tenant:mysql_slow_queries:rate5m\
     \ > 1\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\
     } == 1)\n\n      '\n    for: 5m\n    labels:\n      maintenance: mute\n      severity:\
     \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\

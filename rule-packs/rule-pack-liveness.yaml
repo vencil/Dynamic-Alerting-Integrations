@@ -215,7 +215,7 @@ groups:
       # tenant_expected_exporter 回來前的短暫缺席。expr 由 _lib_exporter_presence.py 生成，不要手改。
       - alert: TenantExporterUndeclared
         expr: |
-          group by(tenant, db_type) (
+          group by(tenant, da_cluster, db_type) (
             label_replace(max_over_time(mysql_up{job="tenant-exporters"}[1h]), "db_type", "mariadb", "", "")
             or label_replace(max_over_time(pg_up{job="tenant-exporters"}[1h]), "db_type", "postgresql", "", "")
             or label_replace(max_over_time(redis_up{job="tenant-exporters"}[1h]), "db_type", "redis", "", "")
