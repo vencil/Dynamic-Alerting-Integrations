@@ -351,8 +351,10 @@ jobs:
           pre-commit run jsx-syntax-check --all-files
           pre-commit run jsx-linecount-check --all-files
           # Container SAST Layer 1 (#448 / TRK-311): hadolint + Vibe wrapper
-          # over all Dockerfiles. BLOCK findings fail the Lint job; WARN/INFO
-          # are recorded in docs/internal/iac-lint-baseline.md. hadolint binary
+          # over all Dockerfiles. BLOCK findings fail the Lint job, and so does
+          # a WARN without a registered rationale, a stale registration or a
+          # drifted generated table in docs/internal/iac-lint-baseline.md
+          # (#3863); registered WARN/INFO do not. hadolint binary
           # installed in the "Set up hadolint" step above (wrapper uses PATH).
           pre-commit run iac-sast-check --all-files
           # Container SAST Layer 3 (#448 / TRK-313): Helm values secret-shape

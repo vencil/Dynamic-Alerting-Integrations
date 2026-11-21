@@ -305,6 +305,7 @@ lang: zh
 - `scripts/tools/ops/_threshold_alerts.py`：Which alerts read a threshold key — looked up in the rule packs, not guessed.
 - `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).
 - `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證，純函式庫）
+- `scripts/tools/lint/_iac_warn_baseline.py`：the Layer 1 WARN register and its generated table (#3863).
 - `scripts/tools/lint/_lint_helpers.py`：Shared utilities for lint tools.
 - `scripts/tools/lint/_rule_tree.py`：Rule-tree reader — what alerting rules this repo actually ships.
 - `scripts/tools/lint/_rule_tripwire.py`：Coverage tripwire: rule-shaped YAML outside the rule-source declaration (#3438).
