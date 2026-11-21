@@ -413,8 +413,6 @@ def make_canaries(directory: Path, root: Path) -> dict:
             f"{root}: its canaries would say nothing about the tracked files.")
     if directory.exists() and not directory.is_dir():
         raise _caller_error(f"the canary directory {directory} is not a directory.")
-    if directory.is_symlink():
-        raise _caller_error(f"the canary directory {directory} is a symbolic link.")
     if directory.is_dir() and any(directory.iterdir()):
         if not os.path.lexists(directory / CANARY_MARK):
             raise _caller_error(
@@ -535,6 +533,12 @@ def _arm(args: argparse.Namespace, root: Path, previous: str | None,
          started: float, refreshed: float) -> int:
     files, dirs = tracked_paths(root)
     git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
+    if args.canary_dir and os.path.islink(args.canary_dir):
+        # Before the path is resolved: afterwards it names the link's target
+        # and nothing can tell it was reached through a link.
+        raise _caller_error(
+            f"the canary directory {args.canary_dir} is a symbolic link; name the "
+            "directory itself.")
     canary_dir = Path(args.canary_dir).resolve() if args.canary_dir else git_dir / "atime-canary"
 
     absent: list[str] = []

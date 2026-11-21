@@ -535,6 +535,20 @@ def test_a_marked_canary_directory_keeps_what_somebody_added_to_it(tmp_path, sha
     assert _local_trustctime(repo) is None  # the failed reset left no setting behind
 
 
+def test_a_canary_directory_named_through_a_symlink_is_refused(tmp_path):
+    """Checked on the path as given: resolved, it is the link's target, and
+    an empty target would simply be filled with canaries."""
+    repo = _make_repo(tmp_path / "zrepo")
+    target = repo / ".git" / "ztarget"
+    target.mkdir()
+    link = repo / ".git" / "zlink"
+    symlink_or_skip(target, link, target_is_directory=True)
+    proc = _tool(repo, "reset", "--state", str(tmp_path / "s.json"), "--canary-dir", str(link))
+    assert proc.returncode == 2 and "symbolic link" in proc.stderr, proc.stderr
+    assert list(target.iterdir()) == [] and link.is_symlink()
+    assert _local_trustctime(repo) is None
+
+
 def test_git_is_not_led_to_another_repository_by_inherited_variables(tmp_path, monkeypatch):
     """A git hook exports GIT_DIR; the setting must land in --root's config."""
     repo = _make_repo(tmp_path / "zrepo")
