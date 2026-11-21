@@ -75,6 +75,12 @@ a tool that only SNAPSHOTS access times misses every second read.
   * whatever runs BEFORE `reset` (the checkout itself, and anything an action
     read by then) and whatever runs after `finish` (an action's post step) is
     outside the measurement;
+  * a tracked directory mounted separately with `noatime` (a bind mount
+    shares the device number, so the canaries — which sit on the root's
+    mount — cannot tell): reads under it leave no trace;
+  * `reset` refuses to run over an unfinished measurement in the SAME state
+    file; a second `reset` with another state file is not detected, and
+    discards what the first one would have seen;
   * a directory listing is not a read: `dirs` says which directories were
     listed, and a file ADDED to one is seen only once something reads it.
 And what a changed one does not prove: `mmap` without `read`, `execve` and a
@@ -241,10 +247,18 @@ def mount_of(path: str) -> str:
 
 # ── the repository ──────────────────────────────────────────────────────────
 
+#: Variables that tell git WHICH repository to act on. Inherited (a git hook
+#: exports them), `git -C root config --local core.trustctime false` would be
+#: written into another repository than the one whose files are measured.
+GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                    "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
 def _git(root: Path, *argv: str, accept: tuple[int, ...] = (0,)) -> str:
+    env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_ENV}
     try:
         proc = subprocess.run(
-            ["git", *argv], cwd=root, capture_output=True, stdin=subprocess.DEVNULL,
+            ["git", *argv], cwd=root, capture_output=True, stdin=subprocess.DEVNULL, env=env,
             text=True, encoding="utf-8", errors="surrogateescape", timeout=GIT_TIMEOUT)
     except (OSError, subprocess.SubprocessError) as exc:
         raise _caller_error(f"`git {' '.join(argv)}` could not run in {root}: {exc!r}") from exc
@@ -308,11 +322,40 @@ def save_state(path: Path, state: dict) -> None:
 
 # ── reset ───────────────────────────────────────────────────────────────────
 
-def make_canaries(directory: Path) -> dict:
-    """Three paths nobody but the caller touches, with their stamps."""
+#: What marks a directory as this tool's to delete and re-create.
+CANARY_MARK = ".atime-trace-canaries"
+
+
+def _nearest_existing(path: Path) -> Path:
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return path
+
+
+def make_canaries(directory: Path, root: Path) -> dict:
+    """Three paths nobody but the caller touches, with their stamps.
+
+    Checked BEFORE anything is deleted: the directory is on the filesystem of
+    *root* (canaries elsewhere say nothing about the tracked files), and what
+    is already there is this tool's own — `--canary-dir` may name any
+    directory, and an earlier version emptied it first and asked afterwards."""
+    if os.lstat(_nearest_existing(directory)).st_dev != os.lstat(root).st_dev:
+        raise _caller_error(
+            f"the canary directory {directory} is on another filesystem than "
+            f"{root}: its canaries would say nothing about the tracked files.")
+    if directory.exists() and not directory.is_dir():
+        raise _caller_error(f"the canary directory {directory} is not a directory.")
+    if directory.is_dir() and any(directory.iterdir()) and not (directory / CANARY_MARK).is_file():
+        raise _caller_error(
+            f"the canary directory {directory} holds something this tool did not "
+            f"put there (no {CANARY_MARK}); it is not emptied. Name an empty or "
+            "absent directory.")
     try:
-        shutil.rmtree(directory, ignore_errors=True)
+        if directory.is_dir():
+            shutil.rmtree(directory)
         (directory / CANARY_DIR).mkdir(parents=True)
+        with open(directory / CANARY_MARK, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("written by scripts/ops/atime_trace.py reset (#3756)\n")
         for name in (CANARY_READ, CANARY_UNTOUCHED, CANARY_INNER):
             with open(directory / name, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write("atime canary (#3756)\n")
@@ -445,11 +488,7 @@ def _arm(args: argparse.Namespace, root: Path, previous: str | None,
             "so a read of them would go unseen — nothing is measured: "
             + "; ".join(refused[:5]) + (" …" if len(refused) > 5 else ""))
 
-    canary = make_canaries(canary_dir)
-    if os.lstat(canary_dir).st_dev != os.lstat(root).st_dev:
-        raise _caller_error(
-            f"the canary directory {canary_dir} is on another filesystem than "
-            f"{root}: its canaries would say nothing about the tracked files.")
+    canary = make_canaries(canary_dir, root)
     state = {
         "version": STATE_VERSION, "root": str(root), "past_ns": PAST_NS,
         "self": _self_rel(root), "files": stamps["files"], "dirs": stamps["dirs"],
@@ -513,7 +552,13 @@ def _show(tag: str, names: list[str], limit: int) -> None:
 
 def cmd_collect(args: argparse.Namespace) -> int:
     state_path = Path(args.state)
-    return _collect(state_path, load_state(state_path), args.label, args.show, args.out)
+    state = load_state(state_path)
+    if state.get("finished"):
+        raise _caller_error(
+            f"{state_path} is marked finished: `finish` put the git setting back, "
+            "so a segment collected now would not measure the job. Run `reset` "
+            "for a new measurement.")
+    return _collect(state_path, state, args.label, args.show, args.out)
 
 
 def _collect(state_path: Path, state: dict, label: str, show: int,
@@ -547,6 +592,11 @@ def _collect(state_path: Path, state: dict, label: str, show: int,
         "label": label, "files": files["read"], "dirs": dirs["read"],
         "replaced": files["replaced"] + files["appeared"], "gone": files["gone"]})
     state["cost"]["collect_s"].append(seconds)
+    if refused:
+        # Kept in the state: the stamp of such a path is now its access time
+        # AFTER this read, so a later read may not move it (relatime), and a
+        # later `finish` must not call this a measurement.
+        state["rearm_failed"] = sorted(set(state.get("rearm_failed", [])) | set(refused))
     save_state(state_path, state)
 
     print(f"atime-trace collect [{label}]: {len(files['read'])} tracked file(s) read, "
@@ -650,6 +700,11 @@ def cmd_finish(args: argparse.Namespace) -> int:
     except OSError:
         pass
     state["finished"] = None
+    if trust.get("changed"):
+        raise _caller_error(
+            f"{state_path} recorded that {TRUSTCTIME} was changed during the "
+            "measurement: its segments are not a measurement of the job, and a "
+            "second `finish` does not make them one. Run `reset` again.")
     try:
         rc = _collect(state_path, state, END_LABEL, args.show, None)
     finally:
@@ -663,6 +718,7 @@ def cmd_finish(args: argparse.Namespace) -> int:
             changed = (found or "").lower() != "false"
             _restore_trustctime(root, trust["previous"])
             trust["restored"] = True
+            trust["changed"] = changed
             save_state(state_path, state)
             print(f"atime-trace finish: {TRUSTCTIME} put back to "
                   f"{'unset' if trust['previous'] is None else trust['previous']} "
@@ -674,6 +730,11 @@ def cmd_finish(args: argparse.Namespace) -> int:
             "something changed it during the measurement, so a git command may "
             "have read every tracked file. The segments are not a measurement "
             "of the job.")
+    if state.get("rearm_failed"):
+        raise _caller_error(
+            f"{len(state['rearm_failed'])} path(s) could not be re-armed during this "
+            "measurement, so a later read of them may have gone unseen: "
+            + "; ".join(state["rearm_failed"][:5]) + ". Run `reset` again.")
     _require_canaries(state)
     state["finished"] = {"canary": "ok", "segments": len(state["segments"])}
     save_state(state_path, state)
@@ -780,6 +841,11 @@ def measure_semantics(work: str) -> dict[str, bool]:
     time.sleep(0.05)
     read(e)
     out["reset-second-read"] = atime(e) != after_first
+
+    if not hasattr(os, "O_NOATIME"):
+        raise _caller_error(
+            "this platform has no O_NOATIME: the cells are defined for Linux, "
+            "where the method is used. Nothing was measured.")
 
     def noatime() -> None:
         fd = os.open(a, os.O_RDONLY | os.O_NOATIME)

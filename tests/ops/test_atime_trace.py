@@ -41,7 +41,21 @@ sys.path.append(str(OPS))
 import atime_trace as at  # noqa: E402
 
 _ENV = {k: v for k, v in os.environ.items()
-        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_TEST_CRASH_EXIT_CODE")}
+        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_TEST_CRASH_EXIT_CODE",
+                     # a git hook running pytest exports these; git in a
+                     # fixture repository must not follow them out of it
+                     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")}
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_location(monkeypatch):
+    """The in-process calls read os.environ, not _ENV."""
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                 "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX"):
+        monkeypatch.delenv(name, raising=False)
+
+
 FILES = ("za.txt", "zd/zb.txt", "zd/zsub/zc.txt", "ze/zf.txt")
 
 
@@ -77,6 +91,12 @@ def _cat(path: Path) -> None:
 
 def _ls(path: Path) -> None:
     subprocess.run(["ls", str(path)], stdout=subprocess.DEVNULL, check=True, timeout=60)
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="the access-time method is defined for the Linux CI runner; on "
+           "Windows there is no O_NOATIME and no relatime to measure against")
 
 
 def _measurable(repo: Path, state: Path) -> Path:
@@ -274,6 +294,8 @@ def test_canaries_on_another_filesystem_are_refused(tmp_path, monkeypatch):
             return os.stat_result(tuple(st[:2]) + (st.st_dev + 1,) + tuple(st[3:]))
         return st
 
+    (tmp_path / "zcanary").mkdir()
+    (tmp_path / "zcanary" / "zkeep").write_text("theirs\n", encoding="utf-8")
     monkeypatch.setattr(at.os, "lstat", lstat)
     with pytest.raises(at._lib_exitcodes.CallerError, match="another filesystem"):
         at.main(["--root", str(repo), "reset", "--state", str(tmp_path / "s.json"),
@@ -401,6 +423,83 @@ def test_a_reset_over_an_unfinished_measurement_is_exit_2_and_discards_nothing(a
     # Finished, the same state file may be reset over.
     assert _tool(repo, "finish", "--state", str(state)).returncode == 0
     assert _tool(repo, "reset", "--state", str(state)).returncode == 0
+
+
+def test_collect_after_finish_is_exit_2_and_adds_no_segment(armed):
+    """`finish` put the git setting back: a segment collected after it would
+    not measure the job, and the state would still read as finished."""
+    repo, state, _canary = armed
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 0
+    before = state.read_bytes()
+    proc = _tool(repo, "collect", "--state", str(state), "--label", "zlate")
+    assert proc.returncode == 2 and "is marked finished" in proc.stderr
+    assert state.read_bytes() == before
+
+
+def test_a_finish_that_found_the_setting_changed_cannot_be_retried_into_a_pass(armed):
+    """The first `finish` restores the setting and exits 2. A second one used
+    to skip the check (already restored) and mark the same segments finished."""
+    repo, state, _canary = armed
+    _git(repo, "config", "--local", "core.trustctime", "true")
+    assert _tool(repo, "finish", "--state", str(state)).returncode == 2
+    proc = _tool(repo, "finish", "--state", str(state))
+    assert proc.returncode == 2 and "was changed during the" in proc.stderr
+    assert _state(state)["finished"] is None
+
+
+def test_a_path_that_could_not_be_rearmed_keeps_the_state_from_finishing(
+        armed, monkeypatch, capsys):
+    """Its stamp is now the access time AFTER the read, so a later read may
+    not move it. The failed `collect` is exit 2 on its own; what this holds
+    is that a `finish` after it cannot mark the state finished."""
+    repo, state, _canary = armed
+    _cat(repo / "za.txt")
+    real = at._set_past
+
+    def refuse(path):
+        if path.endswith("za.txt"):
+            raise PermissionError(1, "Operation not permitted", path)
+        real(path)
+
+    monkeypatch.setattr(at, "_set_past", refuse)
+    with pytest.raises(at._lib_exitcodes.CallerError, match="could not be re-armed"):
+        at.main(["--root", str(repo), "collect", "--state", str(state), "--label", "z"])
+    monkeypatch.setattr(at, "_set_past", real)
+    assert _state(state)["rearm_failed"]
+    proc = _tool(repo, "finish", "--state", str(state))
+    assert proc.returncode == 2 and "could not be re-armed" in proc.stderr
+    assert _state(state)["finished"] is None
+
+
+def test_a_canary_directory_holding_someone_elses_files_is_refused_untouched(tmp_path):
+    """`--canary-dir` may name any directory; `reset` used to empty it first
+    and check afterwards."""
+    repo = _make_repo(tmp_path / "zrepo")
+    theirs = repo / ".git" / "zkeep"
+    theirs.mkdir()
+    (theirs / "zmine.txt").write_text("not a canary\n", encoding="utf-8")
+    proc = _tool(repo, "reset", "--state", str(tmp_path / "s.json"),
+                 "--canary-dir", str(theirs))
+    assert proc.returncode == 2 and "did not" in proc.stderr
+    assert (theirs / "zmine.txt").read_text(encoding="utf-8") == "not a canary\n"
+    assert _local_trustctime(repo) is None  # and the failed reset left no setting behind
+    # Its own directory from an earlier run is re-created, not refused.
+    state = tmp_path / "s2.json"
+    _reset(repo, state)
+    _reset(repo, state)
+
+
+def test_git_is_not_led_to_another_repository_by_inherited_variables(tmp_path, monkeypatch):
+    """A git hook exports GIT_DIR; the setting must land in --root's config."""
+    repo = _make_repo(tmp_path / "zrepo")
+    other = _make_repo(tmp_path / "zother")
+    env = dict(_ENV, GIT_DIR=str(other / ".git"), GIT_WORK_TREE=str(other))
+    proc = subprocess.run(
+        [sys.executable, "-I", str(SCRIPT), "--root", str(repo), "reset",
+         "--state", str(tmp_path / "s.json")], cwd=repo, env=env, capture_output=True,
+        text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert _local_trustctime(repo) == "false" and _local_trustctime(other) is None
 
 
 def test_finish_twice_leaves_no_stale_mark_when_the_second_one_fails(armed):

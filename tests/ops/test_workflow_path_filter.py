@@ -47,7 +47,21 @@ from _lib_exitcodes import CallerError  # noqa: E402  (scripts/tools, on sys.pat
 # measurement would hide the `.py` from the next — the boundary the tool's
 # docstring names), and none of the variables a pytest session may carry.
 _ENV = {k: v for k, v in os.environ.items()
-        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_TEST_CRASH_EXIT_CODE")}
+        if k not in ("PYTHONUNBUFFERED", "PYTHONPATH", "DA_TEST_CRASH_EXIT_CODE",
+                     # a git hook running pytest exports these; git in a
+                     # fixture repository must not follow them out of it
+                     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX")}
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_git_location(monkeypatch):
+    """The in-process calls read os.environ, not _ENV."""
+    for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                 "GIT_OBJECT_DIRECTORY", "GIT_NAMESPACE", "GIT_PREFIX"):
+        monkeypatch.delenv(name, raising=False)
+
+
 _ENV["PYTHONDONTWRITEBYTECODE"] = "1"
 
 WORKFLOW = "zflow.yaml"
@@ -155,6 +169,12 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(wpf, "RESERVED_PATTERNS", {})
     monkeypatch.setattr(wpf, "MACHINERY", ())
     return repo.resolve()
+
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason="the access-time measurement these tests run for real is defined "
+           "for the Linux CI runner")
 
 
 def _atime(repo: Path, *argv: str) -> subprocess.CompletedProcess:
@@ -375,7 +395,8 @@ def test_a_malformed_or_old_format_trace_file_is_no_answer_not_an_empty_trace(
         with pytest.raises(CallerError, match="is not a trace file") as caught:
             _main(repo, *argv)
         assert why in str(caught.value)
-        assert "Record it again from an atime measurement" in str(caught.value)
+        assert "again from an atime measurement" in str(caught.value)
+        assert "Delete it" in str(caught.value)
     assert _workflow(repo).read_bytes() == before
     assert _trace_file(repo).read_text(encoding="utf-8") == broken
 
@@ -629,6 +650,65 @@ def test_a_file_the_job_replaced_or_deleted_counts_as_read(
     err = capsys.readouterr().err
     assert "UNCOVERED  zextra/zreplaced.txt" in err and "UNCOVERED  zextra/zgone.txt" in err
     assert "zidle" not in err and err.count("UNCOVERED") == 2, err
+
+
+def test_a_file_read_and_then_removed_from_the_index_still_counts(
+        repo: Path, tmp_path: Path, capsys) -> None:
+    """`git rm` after the read: the file is tracked no more when `assert`
+    runs, and was filtered out with everything else untracked."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    _extra_tracked(repo, "zextra/zrm.txt")
+    assert _atime(repo, "reset", "--state", str(state)).returncode == 0
+    (repo / "zextra/zrm.txt").read_bytes()
+    _git(repo, "rm", "-q", "-f", "zextra/zrm.txt")
+    assert _atime(repo, "finish", "--state", str(state)).returncode == 0
+    capsys.readouterr()
+    assert _main(repo, "assert", *_job_args(state)) == 1
+    assert "UNCOVERED  zextra/zrm.txt" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", [{"zlib/zcat.txt": True}, "zlib/zcat.txt", [1]])
+def test_a_segment_field_that_is_not_a_list_of_paths_is_no_answer(
+        repo: Path, tmp_path: Path, bad) -> None:
+    """A mapping iterates as its keys: `{"covered.txt": true}` used to read
+    as one covered file."""
+    state = tmp_path / "t"
+    _record_and_generate(repo, state)
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    doc["segments"][-1]["files"] = bad
+    state.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(CallerError, match="is not a state file"):
+        _main(repo, "assert", *_job_args(state))
+
+
+def test_a_listed_python_file_missing_from_the_tree_does_not_stop_generate(
+        repo: Path, tmp_path: Path) -> None:
+    """A job that reads a `.py` file and deletes it leaves a trace naming a
+    file with no text to parse; the path is still a requirement."""
+    _record_and_generate(repo, tmp_path / "t")
+    (repo / "zlib/zdirect.py").unlink()
+    assert _main(repo, "generate", "--check") in (0, 1)
+
+
+def test_the_import_lookup_always_includes_the_checkout_root(
+        repo: Path, tmp_path: Path) -> None:
+    """`python -m pkg.main` resolves `import pkg.lazy` from the root, whatever
+    directories the job read files in."""
+    for name, text in (("zpkg/__init__.py", ""), ("zpkg/zmain.py", "import zpkg.zlazy\n"),
+                       ("zpkg/zlazy.py", "")):
+        (repo / name).parent.mkdir(exist_ok=True)
+        (repo / name).write_text(text, encoding="utf-8")
+    _git(repo, "add", "-A")
+    tracked = frozenset(wpf.tracked_files(repo))
+    trace = {"jobs": {"zjob": {"files": ["zpkg/zmain.py"], "import_dirs": ["zpkg"]}}}
+    assert "zpkg/zlazy.py" in wpf.required_entries(repo, WORKFLOW, trace, tracked)
+
+
+def test_a_go_file_is_recorded_even_when_a_hand_written_pattern_covers_it() -> None:
+    """Its package glob has to survive for the siblings the job did not read."""
+    record = wpf.job_record({"zgo/za.go", "zdata/zx.txt"}, ["zgo/za.go", "zdata/**"])
+    assert record["files"] == ["zgo/za.go"] and record["import_dirs"] == []
 
 
 def test_the_read_set_is_the_union_of_every_segment(

@@ -525,10 +525,16 @@ def read_state(root: Path, state_path: Path, tracked: frozenset[str]) -> set[str
         # and GONE (deleted) count as read. Whether the old content was read
         # first is not known, and "not known" must not come out as covered:
         # `sed -i` reads the file it replaces, and so does a formatter.
+        for segment in segments:
+            for key in ("files", "replaced", "gone"):
+                if not (isinstance(segment[key], list)
+                        and all(isinstance(f, str) for f in segment[key])):
+                    raise TypeError(f"a segment's `{key}` is not a list of paths")
         read = {f for segment in segments
                 for key in ("files", "replaced", "gone") for f in segment[key]}
-        if not all(isinstance(f, str) for f in read):
-            raise TypeError("a segment names something that is not a path")
+        measured = state["files"]
+        if not isinstance(measured, dict):
+            raise TypeError("`files` is not the table of measured paths")
     except (KeyError, TypeError, AttributeError) as exc:
         raise _caller_error(
             f"{state_path} is not a state file `atime_trace.py` wrote "
@@ -547,8 +553,11 @@ def read_state(root: Path, state_path: Path, tracked: frozenset[str]) -> set[str
             "not run after the last segment, or its canaries did not hold — "
             "whether access times record reads here is unknown, so the "
             "segments are not a measurement.")
+    # The files tracked when `reset` ran, not only those tracked now: a job
+    # that reads a file and then `git rm`s it has still read it.
+    tracked = tracked | frozenset(measured)
     read &= tracked
-    if len(tracked) >= WHOLE_TREE_FLOOR and len(read) * 10 > len(tracked) * 9:
+    if len(tracked) >= WHOLE_TREE_FLOOR and len(read) * 10 >= len(tracked) * 9:
         raise _caller_error(
             f"{state_path} names {len(read)} of {len(tracked)} tracked files as "
             "read. That is what one git command does when it compares change "
@@ -569,13 +578,17 @@ def job_record(read: set[str], manual: list[str]) -> dict:
 
     A file a hand-written pattern covers is left out — a job that reads a
     whole tree (`k8s/**`) would otherwise make every file added there a change
-    to the trace — EXCEPT a `.py` file: the literal imports written in it are
-    looked up from the trace, covered or not. `import_dirs` is where those
-    lookups go: the directories holding the `.py` files the job read."""
-    python = {f for f in read if f.endswith(".py")}
+    to the trace — EXCEPT a `.py` file (the literal imports written in it are
+    looked up from the trace, covered or not) and a `.go` file (its package
+    is listed as `<dir>/*.go`, which must stay when a sibling the job did not
+    read is not covered by hand). `import_dirs` is where the import lookups
+    go: the directories holding the `.py` files the job read; the checkout
+    root is always looked in as well (`required_entries`)."""
+    python = {f for f in read if f.endswith((".py", ".go"))}
     return {
         "files": sorted(python | {f for f in read if not on_paths_covers(manual, f)}),
-        "import_dirs": sorted({f.rpartition("/")[0] or "." for f in python}),
+        "import_dirs": sorted({f.rpartition("/")[0] or "." for f in python
+                               if f.endswith(".py")}),
     }
 
 
@@ -612,8 +625,9 @@ def load_trace(root: Path, workflow: str) -> dict:
         raise _caller_error(
             f"{path.relative_to(root).as_posix()} is not a trace file "
             f"`workflow_path_filter.py record` wrote ({type(exc).__name__}: "
-            f"{exc}). Record it again from an atime measurement; do not edit "
-            "it.") from exc
+            f"{exc}). Delete it, then `record` each of its jobs again from an "
+            "atime measurement (`record` reads this file first, so it cannot "
+            "replace one it refuses); do not edit it.") from exc
     return doc
 
 
@@ -654,6 +668,11 @@ def literal_import_closure(root: Path, seeds: set[str], import_dirs: list[str],
         done.add(current)
         try:
             tree = ast.parse((root / current).read_bytes(), filename=current)
+        except FileNotFoundError:
+            # Tracked and not in the working tree (a job deleted it after
+            # reading it): the path is still a requirement, and there is no
+            # text to read imports from.
+            continue
         except (OSError, SyntaxError, ValueError) as exc:
             raise _caller_error(
                 f"{current} cannot be parsed ({type(exc).__name__}), so the "
@@ -700,7 +719,10 @@ def required_entries(root: Path, workflow: str, trace: dict,
         list(MACHINERY_IMPORT_DIRS), tracked)
     for job in trace["jobs"].values():
         files = {f for f in job["files"] if f in tracked}
-        closure = literal_import_closure(root, files, job["import_dirs"], tracked)
+        # The root too: a job started as `python -m pkg.main` resolves
+        # `import pkg.lazy` from it, whichever directories it read files in.
+        closure = literal_import_closure(
+            root, files, sorted({".", *job["import_dirs"]}), tracked)
         entries |= {go_package_glob(f) if f.endswith(".go") else f for f in closure}
     return entries
 

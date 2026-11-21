@@ -414,7 +414,7 @@ REGISTERED: dict[str, dict[str, int]] = {
     "scripts/ops/atime_trace.py": {
         "_collect open(w) [state]": 1,
         "make_canaries .mkdir [state]": 1,
-        "make_canaries open(w) [state]": 1,
+        "make_canaries open(w) [state]": 2,
         "measure_semantics open(w) [scratch]": 1,
         "measure_semantics os.chmod [scratch]": 1,
         "measure_semantics os.replace [scratch]": 1,
