@@ -241,6 +241,10 @@ def unprivileged_sandbox(repo):
                         ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copytree(os.path.join(repo, "docs", "schemas"),
                         os.path.join(box, "docs", "schemas"))
+        # #4099: the custom-rule lint's built-in policy is this file
+        os.makedirs(os.path.join(box, ".github"))
+        shutil.copy2(os.path.join(repo, ".github", "custom-rule-policy.yaml"),
+                     os.path.join(box, ".github", "custom-rule-policy.yaml"))
         shutil.copy2(da_guard, os.path.join(box, "da-guard"))
         for dirpath, dirnames, filenames in os.walk(box):
             for n in dirnames:

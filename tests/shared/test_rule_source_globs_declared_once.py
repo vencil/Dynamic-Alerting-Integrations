@@ -442,8 +442,6 @@ ALLOWED: "tuple[tuple[str, str, str], ...]" = (
      "the one generated custom-alerts pack, by name"),
     ("scripts/tools/dx/compile_custom_alerts.py", r"rule-packs/rule-pack-custom-alerts\.yaml",
      "the file this compiler writes, by name"),
-    ("scripts/tools/ops/lint_custom_rules.py", r"rule-packs/rule-pack-custom-alerts\.yaml",
-     "the custom-alerts pack, by name"),
     ("scripts/tools/ops/_grar_validate.py", r"configmap-rules-platform\.yaml",
      "the platform rules ConfigMap (generated from the platform pack since #1595), by name"),
     ("scripts/tools/lint/check_image_pin_capability.py", r"configmap-rules-platform\.yaml",
