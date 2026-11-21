@@ -35,10 +35,10 @@ is gone.
   or that sits in the repo (``work_dir``). Meant to shrink to zero:
   ``_DEBT_CEILING`` is its size, and it moves down as sites move to an entry.
   A new write of these kinds goes through an entry, not onto this list.
-  ⚠️ What holds that is the ceiling being a second line a reviewer sees
-  move — a raise, or an entry moved to ``REGISTERED`` with the code
-  unchanged, passes this file. A check against the base commit is #3981's
-  open item.
+  SHRINK-ONLY, held against the commit this branch forked from
+  (``test_debt_does_not_grow_since_the_base_commit``): the list may not
+  hold more than it did there, and a site may not leave it for
+  ``REGISTERED``.
 * ``REGISTERED`` — a write the contract does not cover: an intermediate
   file under a temporary directory the code itself made (``scratch``), a
   marker / lock / cache / log / git-internal file (``state``), a call the
@@ -75,6 +75,8 @@ WHAT IT DOES NOT SEE
 from __future__ import annotations
 
 import ast
+import os
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -399,10 +401,9 @@ DEBT: dict[str, dict[str, int]] = {
     },
 }
 
-#: How many sinks DEBT holds. Meant to go DOWN only: a site that moves to
-#: an entry lowers it, and nothing is added (a new tracked-file or
-#: flag-named write goes through an entry from the start). It is a second
-#: line for a reviewer to see move, not a lock — see the module docstring.
+#: How many sinks DEBT holds: one number to read. A site that moves to an
+#: entry lowers it. What stops it going UP is not this line (it is edited in
+#: the same diff as the list) but the comparison with the base commit below.
 _DEBT_CEILING = 119
 
 #: Writes the two-class contract does not cover. Exact, not shrink-only.
@@ -583,13 +584,113 @@ def test_every_raw_write_sink_is_listed_and_every_entry_is_real():
 
 
 def test_the_debt_ceiling_is_the_size_of_the_debt_list():
-    """One number for a reviewer to watch. It does not stop a raise made in
-    the same diff as a new entry (nothing in this file can: that needs the
-    base commit) — it makes one visible as a second changed line."""
+    """One number to read. It does not stop a raise made in the same diff as
+    a new entry — `test_debt_does_not_grow_since_the_base_commit` does."""
     size = sum(count for sites in DEBT.values() for count in sites.values())
     assert size == _DEBT_CEILING, (
         f"DEBT holds {size} sink(s) and _DEBT_CEILING says {_DEBT_CEILING}: lower the "
         "ceiling with the entries you removed; a raise needs the owner (#3981)")
+
+
+# ── Shrink-only, against the commit the branch forked from ─────────────────
+_SELF = "tests/shared/test_raw_write_sinks_are_listed.py"
+
+
+def lists_in(source: str) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    """(DEBT, REGISTERED) as *source* — a revision of this file — writes
+    them. Read as literals, never executed: the base commit's code is not
+    this run's code."""
+    found = {node.target.id: ast.literal_eval(node.value)
+             for node in ast.parse(source).body
+             if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+             and node.target.id in ("DEBT", "REGISTERED")}
+    return found["DEBT"], found["REGISTERED"]
+
+
+def debt_regressions(base: tuple[dict, dict], head: tuple[dict, dict]) -> list[str]:
+    """What *head*'s lists do that a shrink-only DEBT forbids, against
+    *base*'s: hold more debt, or move a site from DEBT to REGISTERED. A
+    rename or a move of the code keeps the total and is neither."""
+    def size(debt: dict[str, dict[str, int]]) -> int:
+        return sum(count for sites in debt.values() for count in sites.values())
+
+    faults = []
+    was, now = size(base[0]), size(head[0])
+    if now > was:
+        faults.append(f"DEBT grew from {was} to {now} sink(s): a new tracked-file or "
+                      "flag-named write goes through an entry, not onto the list")
+    debt_was, debt_now = listed(base[0]), listed(head[0])
+    reg_was, reg_now = listed(base[1]), listed(head[1])
+    for rel in sorted(debt_was):
+        for site, count in sorted(debt_was[rel].items()):
+            left = count - debt_now.get(rel, Counter())[site]
+            joined = reg_now.get(rel, Counter())[site] - reg_was.get(rel, Counter())[site]
+            if left > 0 and joined > 0:
+                faults.append(f"{rel}: `{site}` left DEBT and joined REGISTERED "
+                              f"({min(left, joined)} time(s)) — debt is paid by moving the "
+                              "write to an entry, not by relabelling it")
+    return faults
+
+
+def _base_commit() -> str:
+    """The commit this branch forked from the default branch at. Fails —
+    never skips — when it cannot be found: a skipped comparison is a
+    comparison nobody made (the CI jobs that run this check out with
+    ``fetch-depth: 0``; locally, ``git fetch origin main`` or ``--unshallow``)."""
+    target = f"origin/{os.environ.get('GITHUB_BASE_REF') or 'main'}"
+    found = subprocess.run(["git", "merge-base", "HEAD", target], cwd=REPO_ROOT,
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    if found.returncode != 0 or not found.stdout.strip():
+        pytest.fail(f"no merge base of HEAD and {target} ({found.stderr.strip()!r}): the "
+                    "shrink-only comparison of DEBT was NOT made. Most likely a shallow "
+                    "clone or a missing remote branch — `git fetch --unshallow origin` / "
+                    f"`git fetch origin {target.partition('/')[2]}`.")
+    return found.stdout.strip()
+
+
+def test_debt_does_not_grow_since_the_base_commit():
+    """`_DEBT_CEILING` and the list are edited in one diff, so this file's
+    own text cannot hold "shrink-only" — measured: a new entry with the
+    ceiling raised, and an entry moved to REGISTERED with the code unchanged,
+    both passed. The lists of the base commit can."""
+    base = _base_commit()
+    shown = subprocess.run(["git", "show", f"{base}:{_SELF}"], cwd=REPO_ROOT,
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+    # No "the base has no such file ⇒ pass": every commit this file can be
+    # forked from holds it (it arrived with the lists, #4124), so a base
+    # without it is a comparison that could not be made — a failure.
+    assert shown.returncode == 0, (
+        f"cannot read {_SELF} at the base commit {base}: {shown.stderr.strip()} — the "
+        "shrink-only comparison of DEBT was NOT made")
+    faults = debt_regressions(lists_in(shown.stdout), (DEBT, REGISTERED))
+    assert not faults, f"against the base commit {base[:9]}:\n  " + "\n  ".join(faults)
+
+
+def test_the_base_comparison_says_no():
+    base = ({"scripts/x.py": {"main .write_text [artifact]": 2}},
+            {"scripts/x.py": {"main open(w) [scratch]": 1}})
+    same = debt_regressions(base, base)
+    assert same == []
+    # paid: one site moved to an entry
+    assert debt_regressions(base, ({"scripts/x.py": {"main .write_text [artifact]": 1}},
+                                   base[1])) == []
+    # renamed function: the total holds
+    assert debt_regressions(base, ({"scripts/x.py": {"run .write_text [artifact]": 2}},
+                                   base[1])) == []
+    # one more debt entry
+    grown = ({"scripts/x.py": {"main .write_text [artifact]": 2},
+              "scripts/y.py": {"f open(w) [operator]": 1}}, base[1])
+    assert len(debt_regressions(base, grown)) == 1
+    # relabelled: left DEBT, joined REGISTERED, same site
+    moved = ({"scripts/x.py": {"main .write_text [artifact]": 1}},
+             {"scripts/x.py": {"main open(w) [scratch]": 1, "main .write_text [scratch]": 1}})
+    assert len(debt_regressions(base, moved)) == 1
+
+
+def test_the_lists_are_read_back_from_this_files_own_source():
+    """`lists_in` is what reads the base commit: on this revision it must
+    read exactly the lists this module holds."""
+    assert lists_in(Path(__file__).read_text(encoding="utf-8")) == (DEBT, REGISTERED)
 
 
 def test_every_entry_names_a_class_of_its_list_and_a_tracked_file():
