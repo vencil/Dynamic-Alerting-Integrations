@@ -241,4 +241,113 @@ cmt18="$(run_exp "$d18" "$b18" 1 | comment_of)"
 echo "$cmt18" | grep -q "Total: 1 → 2" || fail "case18 old-format marker must still yield a delta; got: $cmt18"
 echo "ok: case18 (marker without total= → derived fallback still works)"
 
+# ── Existence verdict: the customer-delivered bucket (#1400) ──────────────────
+# A failed pull is ambiguous on its own: a removed tag and an anonymous Docker
+# Hub rate limit produce the same missing fragment. The report job now feeds the
+# authoritative existence check (check_image_refs_resolve.py --scope delivered)
+# in through EXISTENCE_REPORT / EXISTENCE_RC. Replayed as consecutive nights,
+# each night's baseline being the marker the previous night would have written.
+#
+# The checker's real per-ref line shapes (see its main()):
+#   "  ok       <ref>" / "  FAIL     <ref>  (reason)" / "  NO-ANSWER <ref>  (reason)"
+mkexist() { # <file> <line...>
+  local f="$1"; shift
+  { echo "Resolving 3 concrete image ref(s) [scope=delivered] via the registry v2 API..."
+    printf '%s\n' "$@"; } > "$f"
+}
+# The marker an existence-mode night writes (it carries yanked=).
+mkbody_y() { # <file> <missing> <total> <yanked> <tokens...>
+  local f="$1" m="$2" t="$3" y="$4"; shift 4
+  printf 'previous body\n\n<!-- cve-state: missing=%s total=%s yanked=%s tokens=[%s] -->\n' \
+    "$m" "$t" "$y" "$*" > "$f"
+}
+run_dl() { # <frags_dir> <prev_body> <existence_file> <existence_rc>
+  DRY_RUN_ISSUE_NUM=77 DRY_RUN_PREV_BODY="$2" EXISTENCE_REPORT="$3" EXISTENCE_RC="$4" \
+  GITHUB_STEP_SUMMARY=/dev/null DO_FILE=true DRY_RUN=1 REPO=o/r RUN_URL=http://run \
+    bash "$SCRIPT" "$1" nightly-cve-delivered "DL" 3 "customer-delivered image" 2>&1
+}
+# Two of three legs report (kubectl's pull failed), both clean.
+ddl="$WORK/ddl"; mkdir -p "$ddl"; mkfrag "$ddl" delivered-helm 0; mkfrag "$ddl" delivered-da-tools 0
+ex_yank="$WORK/ex_yank"; mkexist "$ex_yank" \
+  "  FAIL     alpine/kubectl:1.37.2  (manifest unknown)" \
+  "  ok       alpine/helm:3.22.1" \
+  "  ok       ghcr.io/vencil/da-tools:v2.9.0"
+
+# --- Night 1: kubectl removed upstream, first night → comment, removal named ---
+bn1="$WORK/bn1"; mkbody_t "$bn1" 0 0 ""
+outn1="$(run_dl "$ddl" "$bn1" "$ex_yank" 1)"
+cmtn1="$(echo "$outn1" | comment_of)"
+echo "$cmtn1" | grep -q "CONFIRMED REMOVED UPSTREAM" || fail "night1 must announce the removal; got: $cmtn1"
+echo "$cmtn1" | grep -q "alpine/kubectl:1.37.2" || fail "night1 must name the removed ref; got: $cmtn1"
+echo "$cmtn1" | grep -q "rate limit or a transient" && fail "night1 must not call a confirmed removal a rate limit; got: $cmtn1"
+echo "$outn1" | edit_title_of | grep -q "1 removed upstream" \
+  || fail "night1 title must carry the removal; got: $(echo "$outn1" | edit_title_of)"
+echo "$outn1" | grep -q "cve-state: missing=1 total=0 yanked=1 tokens=\[\]" \
+  || fail "night1 must record yanked=1 in the marker; got: $outn1"
+echo "ok: night1 (confirmed removal → comment naming the ref, title says so)"
+
+# --- Night 2: STILL removed, nothing else changed → must STILL be seen ---
+# Under the pure delta rule (missing 1 → 1, no new ids) this night was silent:
+# the removal notified once and then never again. That is the #1400 defect.
+bn2="$WORK/bn2"; mkbody_y "$bn2" 1 0 1 ""
+outn2="$(run_dl "$ddl" "$bn2" "$ex_yank" 1)"
+echo "$outn2" | grep -q "DRY_RUN gh issue comment" \
+  || fail "night2 a removal that persists must notify again; got: $outn2"
+cmtn2="$(echo "$outn2" | comment_of)"
+echo "$cmtn2" | grep -q "STILL REMOVED UPSTREAM" || fail "night2 expected the persisting wording; got: $cmtn2"
+echo "$cmtn2" | grep -q "SCAN COVERAGE REGRESSED" && fail "night2 coverage did not change, must not claim it did; got: $cmtn2"
+echo "$cmtn2" | grep -q "TOTAL UNCHANGED" && fail "night2 must not invent a CVE delta; got: $cmtn2"
+echo "ok: night2 (removal persists → notified again, no invented delta)"
+
+# --- Night 3: pull failed but the ref EXISTS (rate limit) → different wording ---
+ex_ok="$WORK/ex_ok"; mkexist "$ex_ok" \
+  "  ok       alpine/helm:3.22.1" \
+  "  ok       alpine/kubectl:1.37.2" \
+  "  ok       ghcr.io/vencil/da-tools:v2.9.0"
+bn3="$WORK/bn3"; mkbody_y "$bn3" 0 0 0 ""
+outn3="$(run_dl "$ddl" "$bn3" "$ex_ok" 0)"
+cmtn3="$(echo "$outn3" | comment_of)"
+echo "$cmtn3" | grep -q "SCAN COVERAGE REGRESSED" || fail "night3 still a coverage drop; got: $cmtn3"
+echo "$cmtn3" | grep -q "rate limit or a transient error" || fail "night3 expected the rate-limit wording; got: $cmtn3"
+echo "$cmtn3" | grep -q "REMOVED UPSTREAM" && fail "night3 must NOT be reported as a removal; got: $cmtn3"
+echo "$outn3" | edit_title_of | grep -q "removed upstream" && fail "night3 title must not claim a removal"
+# …and a rate limit that merely persists stays on the delta rule: silent.
+bn3b="$WORK/bn3b"; mkbody_y "$bn3b" 1 0 0 ""
+outn3b="$(run_dl "$ddl" "$bn3b" "$ex_ok" 0)"
+echo "$outn3b" | grep -q "DRY_RUN gh issue comment" && fail "night3b a persisting rate limit must stay silent; got: $outn3b"
+echo "$outn3b" | grep -q "rate limit or a transient error" || fail "night3b the BODY must still explain the gap; got: $outn3b"
+echo "ok: night3 (ref exists → rate-limit wording, not a removal; persisting → silent)"
+
+# --- Night 4: the existence check itself failed → say "cannot tell" ---
+# rc 1 with no per-ref line is the checker refusing (empty pin table, missing
+# module), NOT a removal. Reading its exit code alone would invent one.
+ex_broken="$WORK/ex_broken"
+printf 'Traceback (most recent call last):\nModuleNotFoundError: No module named %s\n' "'yaml'" > "$ex_broken"
+outn4="$(run_dl "$ddl" "$bn3" "$ex_broken" 1)"
+cmtn4="$(echo "$outn4" | comment_of)"
+echo "$cmtn4" | grep -q "Existence NOT determined" || fail "night4 must say existence is undetermined; got: $cmtn4"
+echo "$cmtn4" | grep -q "REMOVED UPSTREAM" && fail "night4 must not read a broken check as a removal; got: $cmtn4"
+echo "$cmtn4" | grep -q "rate limit or a transient" && fail "night4 must not read a broken check as present; got: $cmtn4"
+echo "$outn4" | edit_title_of | grep -q "existence unknown" \
+  || fail "night4 title must flag the unknown; got: $(echo "$outn4" | edit_title_of)"
+# The step did not run at all (EXISTENCE_RC empty) is the same verdict.
+outn4b="$(run_dl "$ddl" "$bn3" "$WORK/does-not-exist" "")"
+echo "$outn4b" | comment_of | grep -q "Existence NOT determined" \
+  || fail "night4b an existence step that never ran must read as undetermined; got: $outn4b"
+echo "ok: night4 (existence check failed / did not run → undetermined, never present or absent)"
+
+# --- Partial: one ref got NO answer → only that ref is undetermined ---
+ex_part="$WORK/ex_part"; mkexist "$ex_part" \
+  "  ok       alpine/helm:3.22.1" \
+  "  NO-ANSWER alpine/kubectl:1.37.2  (HTTP 429)" \
+  "  ok       ghcr.io/vencil/da-tools:v2.9.0"
+cmtp="$(run_dl "$ddl" "$bn3" "$ex_part" 2 | comment_of)"
+echo "$cmtp" | grep -q "Existence NOT determined for 1 ref(s)" || fail "partial expected per-ref undetermined; got: $cmtp"
+echo "$cmtp" | grep -q "REMOVED UPSTREAM" && fail "partial: no answer is not a removal; got: $cmtp"
+echo "ok: partial (NO-ANSWER ref → undetermined for that ref only)"
+
+# --- Opt-in: without EXISTENCE_REPORT the other buckets' marker is unchanged ---
+echo "$out17" | grep -q "yanked=" && fail "a bucket without EXISTENCE_REPORT must not grow a yanked= field"
+echo "ok: opt-in (no EXISTENCE_REPORT → marker and wording as before)"
+
 echo "PASS: all file_cve_report.sh cases"

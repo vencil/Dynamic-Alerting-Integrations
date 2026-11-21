@@ -16,6 +16,10 @@
 #   * a COMMENT (the only notifying action) fires ONLY when the posture gets
 #     WORSE — a CVE id not seen in the previous run, or more images failing to
 #     scan — plus the initial create and the final auto-close.
+#   * ONE exception, opt-in and delivered-bucket only (#1400): while the
+#     authoritative existence check CONFIRMS a ref removed upstream, the comment
+#     fires EVERY night, not only on the transition. See "Existence verdict"
+#     below for why a removal is not standing debt.
 # "Worse" is computed against a machine-readable snapshot embedded in the issue
 # body. Any failure to read that snapshot is treated as "no baseline" and
 # NOTIFIES: this path fails OPEN (over-alert), never silent.
@@ -44,6 +48,10 @@
 #   DO_FILE   (default false) — "true" to create/edit/close the issue; else summary-only
 #   DRY_RUN   (default 0)     — "1" to echo gh actions instead of running them (offline test)
 #   GITHUB_STEP_SUMMARY       — appended to when set (no-op locally / in tests)
+#   EXISTENCE_REPORT          — opt-in (#1400): path to the captured output of
+#                               `check_image_refs_resolve.py --scope delivered`.
+#                               Unset → no existence verdict, byte-identical behaviour.
+#   EXISTENCE_RC              — that checker's exit code (empty = it did not run)
 # Test seams (DRY_RUN=1 only; both unset in CI, where they are inert):
 #   DRY_RUN_ISSUE_NUM         — pretend this issue number already exists
 #   DRY_RUN_PREV_BODY         — file standing in for that issue's current body
@@ -118,6 +126,54 @@ tok_count="${tok_count:-0}"
 totals_comparable=1
 [ "$tok_count" -ne "$total" ] && totals_comparable=0
 
+# ── Existence verdict (opt-in; the customer-delivered bucket, #1400) ──────────
+# An unscanned leg says only "Trivy produced no report". For the delivered
+# bucket the two usual causes look byte-identical on that wire — the tag was
+# removed upstream, or an anonymous Docker Hub pull was rate limited — and they
+# need opposite reactions. The authoritative tie-breaker is the existence check
+# (check_image_refs_resolve.py --scope delivered), which asks each registry
+# through the distribution API and prints one verdict per ref:
+#   `  ok       <ref>` / `  FAIL     <ref>  (…)` / `  NO-ANSWER <ref>  (…)`
+# with exit 0 (all resolve) / 1 (some do not resolve) / 2 (some got no answer).
+#
+# ⛔ Per-ref LINES are the verdict, and the exit code is only a consistency
+# check on them, never a verdict by itself: the checker also exits 1 on a
+# refusal unrelated to any registry (an empty pin table is a `SystemExit(msg)`,
+# a missing module a traceback), and reading THAT 1 as "a ref is gone" would be
+# a false removal. Any disagreement between the lines and the exit code — or no
+# lines at all, or no exit code — makes the whole verdict UNDETERMINED, and an
+# undetermined verdict is never read as present or as absent.
+existence_on=0
+existence_state=""
+ex_ok=0; ex_gone=0; ex_unans=0
+gone_refs=""; unans_refs=""
+ex_rc="${EXISTENCE_RC:-}"
+if [ -n "${EXISTENCE_REPORT:-}" ]; then
+  existence_on=1
+  if [ -r "$EXISTENCE_REPORT" ]; then
+    while read -r verdict ref _rest; do
+      case "$verdict" in
+        ok)        ex_ok=$(( ex_ok + 1 )) ;;
+        FAIL)      ex_gone=$(( ex_gone + 1 ));   gone_refs="${gone_refs:+$gone_refs }$ref" ;;
+        NO-ANSWER) ex_unans=$(( ex_unans + 1 )); unans_refs="${unans_refs:+$unans_refs }$ref" ;;
+      esac
+    done < <(grep -E '^  (ok|FAIL|NO-ANSWER) +[^ ]' "$EXISTENCE_REPORT" || true)
+  fi
+  case "$ex_rc" in
+    0) [ "$ex_ok" -gt 0 ] && [ "$ex_gone" -eq 0 ] && [ "$ex_unans" -eq 0 ] && existence_state=checked ;;
+    1) [ "$ex_gone" -gt 0 ] && [ "$ex_unans" -eq 0 ] && existence_state=checked ;;
+    # rc 2 wins over rc 1 in the checker, so FAIL lines may sit beside the
+    # NO-ANSWER ones: each FAIL is still the registry's own "no such manifest".
+    2) [ "$ex_unans" -gt 0 ] && existence_state=partial ;;
+  esac
+  if [ -z "$existence_state" ]; then
+    existence_state=undetermined
+    ex_gone=0; gone_refs=""   # lines we cannot reconcile are not evidence
+  fi
+fi
+# Refs the registry itself says do not exist. Only ever non-zero in existence mode.
+yanked="$ex_gone"
+
 {
   echo "# Nightly Image CVE Scan — ${KIND} — $(date -u +%F)"
   echo ""
@@ -125,6 +181,10 @@ totals_comparable=1
   if [ "$missing" -gt 0 ]; then
     echo ""
     echo "⚠️ ${missing} image(s) failed to build/scan — see the matrix jobs above."
+  fi
+  if [ "$existence_on" -eq 1 ]; then
+    echo ""
+    echo "Existence check: ${existence_state} (exit ${ex_rc:-not run}; ok=${ex_ok} removed=${ex_gone} no-answer=${ex_unans})"
   fi
   echo ""
   printf '%s' "$table"
@@ -200,6 +260,7 @@ prev_tokens=""
 have_baseline=0
 prev_missing=0
 prev_total=0
+prev_yanked=0
 if [ -n "$num" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     # Test seam (see DRY_RUN_ISSUE_NUM): stand in for the issue body the offline
@@ -226,6 +287,8 @@ if [ -n "$num" ]; then
       prev_total="$(printf '%s' "$prev_tokens" | tr ' ' '\n' | sed '/^$/d' | grep -c '/' || true)"
     fi
     prev_total="${prev_total:-0}"
+    prev_yanked="$(printf '%s' "$marker" | sed -n 's/.*[ ]yanked=\([0-9]*\).*/\1/p')"
+    prev_yanked="${prev_yanked:-0}"
   fi
 fi
 
@@ -248,12 +311,27 @@ fi
 problem=0
 [ "$total" -gt 0 ] && problem=1
 [ "$missing" -gt 0 ] && problem=1
+[ "$yanked" -gt 0 ] && problem=1
 
 # Worse than last time? That — not the raw total — is what earns a notification.
 worse=0
 [ -n "$new_tokens" ] && worse=1
 [ "$missing" -gt "$prev_missing" ] && worse=1
 [ "$have_baseline" -eq 0 ] && worse=1   # no readable baseline → assume worse
+# The delta conditions above, kept apart so the comment can tell "worse" from
+# "still removed" — the CVE/coverage paragraph is written only when one of them
+# actually holds.
+delta_worse="$worse"
+# ⛔ LEVEL-based on purpose, the one exception to the delta model in the header
+# (#1400). The delta model exists because standing CVE debt waits on an
+# UPSTREAM rebuild: a nightly ping on it changes nothing and trains the reader
+# to mute the issue. A confirmed removal differs on every count — every
+# pipeline pulling the ref fails today, the fix is ours (bump the pin, tell the
+# customers), it ends the night the pin moves, and it is the registry's own
+# verdict rather than a failed pull, so it cannot be a rate limit repeating
+# itself. Under the delta rule it notified once and then sat silently behind a
+# title that read like any other degraded run.
+[ "$yanked" -gt 0 ] && worse=1
 
 degraded_note=""
 if [ "$missing" -gt 0 ]; then
@@ -266,6 +344,10 @@ fi
 # do not notify, so this is free visibility between the sparse comments.
 title_now="${TITLE} — ${total} fixable"
 [ "$missing" -gt 0 ] && title_now="${title_now}, ${missing} unscanned"
+[ "$yanked" -gt 0 ] && title_now="${title_now}, ${yanked} removed upstream"
+if [ "$existence_state" = "undetermined" ] && [ "$missing" -gt 0 ]; then
+  title_now="${title_now}, existence unknown"
+fi
 if [ "${#title_now}" -gt "$ISSUE_TITLE_MAX" ]; then
   title_now="${title_now:0:$ISSUE_TITLE_MAX}"
 fi
@@ -274,7 +356,39 @@ fi
 # count is only correct while every id is a CVE/GHSA shape — see the
 # totals_comparable note above. Old markers lack the field; the reader below
 # falls back to the derivation for those, which is why the fallback stays.
-state_marker="${STATE_OPEN} missing=${missing} total=${total} tokens=[${tokens}] ${STATE_CLOSE}"
+yanked_field=""
+[ "$existence_on" -eq 1 ] && yanked_field=" yanked=${yanked}"
+state_marker="${STATE_OPEN} missing=${missing} total=${total}${yanked_field} tokens=[${tokens}] ${STATE_CLOSE}"
+
+# The existence paragraphs, shared by the body (state) and the comment (alert).
+# Each is TRUE for its own case only, and the three never share wording: a
+# removal, a probable rate limit and "could not tell" must not read alike.
+yank_para=""
+explain_para=""
+if [ "$existence_on" -eq 1 ]; then
+  if [ "$yanked" -gt 0 ]; then
+    if [ "$prev_yanked" -gt 0 ]; then
+      yank_para="⛔ **STILL REMOVED UPSTREAM** — the existence check again got a no-such-manifest answer from the registry for: ${gone_refs}."
+    else
+      yank_para="⛔ **CONFIRMED REMOVED UPSTREAM** — the existence check got a no-such-manifest answer from the registry for: ${gone_refs}."
+    fi
+    yank_para="${yank_para} This is the registry's own verdict, not a failed pull, so it is not a rate limit. Every newly generated project, and every existing customer pipeline still on that ref, fails to pull it: bump the pin, then tell existing customers. Repeated as a comment EVERY night while the ref stays gone."
+  fi
+  unexplained=$(( missing - yanked ))
+  if [ "$existence_state" = "undetermined" ]; then
+    explain_para="❓ **Existence NOT determined** — the existence check itself gave no verdict this run can trust (exit ${ex_rc:-not run}; its per-ref lines and exit code do not agree, or it printed none). So the ${missing} unscanned leg(s) are NEITHER confirmed removed NOR confirmed present; read the existence step's log."
+  else
+    if [ "$ex_unans" -gt 0 ]; then
+      explain_para="❓ **Existence NOT determined for ${ex_unans} ref(s)** — the registry gave no answer during the existence check for: ${unans_refs}. Whether they exist was not checked; they are not counted as removed."
+    fi
+    if [ "$unexplained" -gt 0 ] && [ "$ex_unans" -eq 0 ]; then
+      explain_para="ℹ️ **${unexplained} unscanned leg(s) NOT explained by a removal** — the existence check resolved every ref it did not report removed, so the pull failure is most likely a registry rate limit or a transient error (the Docker Hub refs are pulled anonymously from shared runners), not a removal."
+    fi
+  fi
+fi
+existence_block=""
+[ -n "$yank_para" ] && existence_block="${yank_para}"$'\n\n'
+[ -n "$explain_para" ] && existence_block="${existence_block}${explain_para}"$'\n\n'
 
 if [ "$problem" -eq 1 ]; then
   # ⛔ The "what a failed leg means" sentence is per-bucket, not universal. It used
@@ -286,8 +400,12 @@ if [ "$problem" -eq 1 ]; then
   # inheritance, on the run where the bucket is doing its most valuable work.
   # Default preserves the previous wording for callers that do not set it.
   failure_cause_note="${FAILURE_CAUSE_NOTE:-A failed build/scan is a Dockerfile/COPY break or a bad/missing image ref to fix directly.}"
-  body="$(printf '%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s %s images scanned.\n\n%s\n%s\n**Remediate**: %s%s This issue is REFRESHED in place (body edited — no comment spam); it comments only when a NEW CVE appears or more images fail to scan, and auto-closes once clean.\n\n%s' \
-    "$degraded_note" "$RUN_URL" "$total" "$present" "$EXPECTED" "$KIND" "$table" "$details" "${EXTRA_NOTE:+$EXTRA_NOTE }" "$failure_cause_note" "$state_marker")"
+  comment_rule="it comments only when a NEW CVE appears or more images fail to scan"
+  if [ "$existence_on" -eq 1 ]; then
+    comment_rule="${comment_rule}, and EVERY night while the existence check confirms a ref removed upstream"
+  fi
+  body="$(printf '%s%sNightly image scan on `main` (%s): **%s** fixable HIGH/CRITICAL CVE(s) across %s/%s %s images scanned.\n\n%s\n%s\n**Remediate**: %s%s This issue is REFRESHED in place (body edited — no comment spam); %s, and auto-closes once clean.\n\n%s' \
+    "$degraded_note" "$existence_block" "$RUN_URL" "$total" "$present" "$EXPECTED" "$KIND" "$table" "$details" "${EXTRA_NOTE:+$EXTRA_NOTE }" "$failure_cause_note" "$comment_rule" "$state_marker")"
   if [ -n "$num" ]; then
     # EDIT in place rather than a daily comment: a comment emails the assignee
     # every morning while an upstream patch is pending (fatigue → muted scan).
@@ -314,7 +432,13 @@ if [ "$problem" -eq 1 ]; then
       # `configmap-reload` became `config-reloader` (16 findings -> 1) and the
       # bucket fell 120 -> 62, yet the alert announced a worsening.
       dated="as of $(date -u +%F) (${RUN_URL})"
-      if [ "$have_baseline" -eq 0 ]; then
+      note=""
+      if [ "$delta_worse" -eq 0 ]; then
+        # Only a standing removal set `worse`: there is no CVE/coverage delta to
+        # describe, and inventing one ("total unchanged") is the wrong-wording
+        # failure the branches below were rewritten for.
+        :
+      elif [ "$have_baseline" -eq 0 ]; then
         # Fail open, but do not pretend to know a direction we cannot compute.
         note="⚠️ Notifying without a comparable baseline ${dated}."$'\n\n'"No readable previous snapshot in this issue, so no direction can be established — treating that as worse on purpose."
       elif [ "$missing" -gt "$prev_missing" ]; then
@@ -338,6 +462,17 @@ if [ "$problem" -eq 1 ]; then
       # by a coverage regression alone, and the old wording announced "new
       # findings" with nothing to list.
       [ -n "$new_tokens" ] && note="${note}"$'\n\n'"New findings: ${new_tokens}"
+      # Existence paragraphs (#1400). The removal LEADS: it is the actionable
+      # part and, alone among these, repeats nightly. The explanation of the
+      # unscanned legs follows the coverage paragraph it explains, and only on a
+      # night that paragraph is written.
+      if [ -n "$yank_para" ]; then
+        nl2=$'\n\n'
+        note="${yank_para} (${dated})${note:+${nl2}${note}}"
+      fi
+      if [ "$delta_worse" -eq 1 ] && [ -n "$explain_para" ]; then
+        note="${note}"$'\n\n'"${explain_para}"
+      fi
       echo "notifying on #${num}"
       gh_do issue comment "$num" --repo "$REPO" --body "$note"
     else

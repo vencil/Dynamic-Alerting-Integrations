@@ -21,6 +21,10 @@ name: Nightly Image CVE Scan
 # third-party bucket sits at ~120 standing findings that upstream has not rebuilt
 # for — a nightly ping on that number trains the reader to ignore the issue, which
 # is the same outcome as no alert at all. See scripts/ops/file_cve_report.sh.
+# ONE level-based exception (#1400), customer-delivered bucket only: a ref the
+# nightly existence check CONFIRMS removed upstream is re-raised every night it
+# stays gone — a removal breaks every pipeline pulling it and the fix is ours,
+# so it is not the standing upstream debt the delta rule exists to quiet.
 #
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
@@ -528,7 +532,41 @@ jobs:
           path: frags-dl
           merge-multiple: true
 
+      # #1400: the delivered bucket's unscanned legs are ambiguous on their own —
+      # a tag removed upstream and an anonymous Docker Hub rate limit leave the
+      # same missing fragment. The authoritative existence check (the delivered
+      # scope of check_image_refs_resolve.py, which asks each registry through
+      # the distribution API and prints one verdict per ref) breaks the tie, and
+      # until this step it ran only on PRs that touch the pin table, never on a
+      # schedule. Same anonymous registry access the scan legs already use; no
+      # da-crdecode needed (that is the deploy scope's reader, not this one's).
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      # ⚠️ This step never fails the job, and that is a hand-off, not a swallow:
+      # its output and exit code are passed to the delivered report call below,
+      # which reads the per-ref lines as the verdict and turns any exit code the
+      # lines do not explain (a refused pin table, a missing module, a step that
+      # never ran) into an explicit "existence NOT determined" in the issue —
+      # never into "present" or "absent". Failing here instead would skip the
+      # aggregate step, i.e. lose all three buckets' alerts over one tie-breaker.
+      # `!cancelled()` on this step AND the aggregate step: a failed setup-python
+      # above must degrade the verdict to undetermined, not skip the alerting.
+      - name: Existence check (delivered refs, feeds the delivered issue)
+        id: existence
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          rc=0
+          { python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt \
+              && python3 scripts/ops/check_image_refs_resolve.py --scope delivered; } \
+            > existence-delivered.txt 2>&1 || rc=$?
+          cat existence-delivered.txt
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
       - name: Aggregate + maybe file the tracking issues
+        if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -544,9 +582,18 @@ jobs:
             A leg that did not report means the ref could not be pulled or
             scanned: either the tag is gone or was retagged away, or the registry
             refused us (the Docker Hub refs are pulled anonymously, so a
-            shared-runner rate limit looks identical here — check the leg log
-            before treating it as a yank). Nothing was built, so there is no
-            build break to look for.
+            shared-runner rate limit fails the pull the same way). The existence
+            paragraph at the top of this issue says which, from the nightly
+            existence check: CONFIRMED REMOVED is the registry's own verdict;
+            NOT explained by a removal means the ref resolved, so a rate limit or
+            transient error is the likely cause; NOT determined means the check
+            could not tell, and neither reading is confirmed. Nothing was built,
+            so there is no build break to look for.
+          # #1400: the existence step's exit code. Empty when that step did not
+          # run — the reporter reads empty as "existence NOT determined". Named
+          # DELIVERED_ for the same reason as the note above: only the delivered
+          # call may see it, so it is exported right before that call.
+          DELIVERED_EXISTENCE_RC: ${{ steps.existence.outputs.rc }}
         run: |
           set -euo pipefail
           rc=0
@@ -619,11 +666,16 @@ jobs:
           # sites recognised". The fix is to keep the call line in the shape the
           # parser reads, not to register an exemption for it.
           export FAILURE_CAUSE_NOTE="$DELIVERED_FAILURE_CAUSE_NOTE"
+          # #1400: the existence verdict, delivered call only (same own-line
+          # export shape as above, same reason). Its contract lives in the
+          # reporter's "Existence verdict" block.
+          export EXISTENCE_REPORT="existence-delivered.txt"
+          export EXISTENCE_RC="$DELIVERED_EXISTENCE_RC"
           bash scripts/ops/file_cve_report.sh frags-dl \
             nightly-cve-delivered \
             "🛡️ Nightly image scan — customer-delivered image CVEs on main" \
             3 "customer-delivered image" \
-            "the lever here is DIFFERENT from the other two buckets, and reaching for theirs wastes the triage: we do not deploy these. da-tools init writes them into the CUSTOMER's repo, where they are frozen at generation time — so bumping the constant changes what the NEXT generated project gets, and nothing else. Three separate actions, in this order. (1) BUMP THE PIN so new projects start clean. The pins are version TAGS, not digests, on purpose: the customer has no updater of ours to re-resolve a digest, and an unmaintained digest inhibits security updates — that is a decision, not an omission to fix here. (2) ASK WHETHER THE TAG IS MUTABLE BEFORE ASSUMING ANYONE MUST ACT. alpine/k8s and alpine/helm come from the same publisher whose alpine/git the third-party bucket documents as re-pushed weekly from a fresh apk add, so an upstream rebuild of the SAME tag reaches every existing customer on their next pipeline run with no release from us — verify that per image rather than assuming it. DA_TOOLS_IMAGE is OUR image but no longer our lever: since issue 2900 (ADR-036 section 6) its default is the release tag ghcr.io/vencil/da-tools:v<VERSION> of the da-tools that generated the project, so a fixed da-tools release reaches an existing installation only when the customer moves that tag; step 3 applies to it exactly as to the pinned apply images. (3) FOR EXISTING CUSTOMERS, A BUMP IS NOT DELIVERY. It is a communication task: they re-run the init tool or edit the ref themselves. ⛔ HONEST SCOPE, and it is narrower than the other two buckets: this measures the refs WE WOULD HAND OUT TODAY, not any customer's actual posture. The generated GitLab pipeline emits ONE of DA_KUBECTL_IMAGE / DA_HELM_IMAGE — whichever the chosen --deploy selects, never both — as an OVERRIDABLE CI variable, plus DA_TOOLS_IMAGE which is overridable in the same block AND settable at generation time via --da-tools-image; we have no telemetry on which version a customer generated from or overrode to. A clean run here means OUR DEFAULT is clean; it does not mean anyone's pipeline is. ⛔ IT IS A UNION, NOT A CUSTOMER, and the distribution is uneven: measured across the full option matrix (every --ci x --deploy) by generating each tree, a single generated project carries ONE or TWO of these refs. Only DA_TOOLS_IMAGE is in every one of them — the third-party apply images are one per deploy method and reach only projects that generate a GitLab pipeline (a GitHub --deploy helm project installs the same helm VERSION with azure/setup-helm from get.helm.sh; that binary is not an image and this bucket does not scan it). (The git-sync image left this bucket when GitOps Native Mode was withdrawn, issue 1349.) So a clean run means every ref we could hand out is clean; it is not a per-customer statement, and the count a given customer is exposed to is smaller than the full set. (Before the tool image was added, three combinations carried NONE of the watched refs at all.) ⚠️ Finally, do not read this bucket as replacing the offline pin guard in the init-project suite: that one checks floating-vs-concrete SHAPE and says so in its own docstring — it stays green on a perfectly concrete but two-year-stale tag. This bucket is the EXISTENCE-AND-CVE half — the half that needs a registry round-trip: it pulls each ref and scans it, so a ref that has been deleted or retagged away shows up as a degraded run, and a ref that grows a CRITICAL shows up as a finding. ⚠️ BUT DO NOT READ THE EXISTENCE HALF AS AN ALERT — measured, not assumed. The comment that notifies fires only when the missing count INCREASES, so a vanished ref notifies on the transition night and then never again while it stays gone; the issue title keeps saying \"1 unscanned\" and nothing re-raises it. And the same wire carries the most common transient failure on these runners: two of them are Docker Hub, pulled anonymously, so a shared-IP rate limit produces byte-identical wording to a yank. The authoritative existence check is check_image_refs_resolve.py --scope delivered, and it lives in a PR-triggered workflow with no schedule, so nothing re-asserts existence nightly. Treat a degraded delivered run as \"go look\", not as \"we will be told again\". ⛔ CURRENCY IS NOT MEASURED BY ANYTHING, HERE OR ANYWHERE. Nothing in this repo compares these pins against what the upstream has published since, so a two-year-old tag that still exists and whose findings are all unfixed (this scan passes ignore-unfixed) is green in this bucket AND green in the offline pin guard. Answering it needs a per-registry tag-enumeration call, which is not built and is not costed — quay.io and registry.k8s.io have not been checked for a usable list API. Until then, staleness is a human review item, not an alert." || rc=1
+            "the lever here is DIFFERENT from the other two buckets, and reaching for theirs wastes the triage: we do not deploy these. da-tools init writes them into the CUSTOMER's repo, where they are frozen at generation time — so bumping the constant changes what the NEXT generated project gets, and nothing else. Three separate actions, in this order. (1) BUMP THE PIN so new projects start clean. The pins are version TAGS, not digests, on purpose: the customer has no updater of ours to re-resolve a digest, and an unmaintained digest inhibits security updates — that is a decision, not an omission to fix here. (2) ASK WHETHER THE TAG IS MUTABLE BEFORE ASSUMING ANYONE MUST ACT. alpine/k8s and alpine/helm come from the same publisher whose alpine/git the third-party bucket documents as re-pushed weekly from a fresh apk add, so an upstream rebuild of the SAME tag reaches every existing customer on their next pipeline run with no release from us — verify that per image rather than assuming it. DA_TOOLS_IMAGE is OUR image but no longer our lever: since issue 2900 (ADR-036 section 6) its default is the release tag ghcr.io/vencil/da-tools:v<VERSION> of the da-tools that generated the project, so a fixed da-tools release reaches an existing installation only when the customer moves that tag; step 3 applies to it exactly as to the pinned apply images. (3) FOR EXISTING CUSTOMERS, A BUMP IS NOT DELIVERY. It is a communication task: they re-run the init tool or edit the ref themselves. ⛔ HONEST SCOPE, and it is narrower than the other two buckets: this measures the refs WE WOULD HAND OUT TODAY, not any customer's actual posture. The generated GitLab pipeline emits ONE of DA_KUBECTL_IMAGE / DA_HELM_IMAGE — whichever the chosen --deploy selects, never both — as an OVERRIDABLE CI variable, plus DA_TOOLS_IMAGE which is overridable in the same block AND settable at generation time via --da-tools-image; we have no telemetry on which version a customer generated from or overrode to. A clean run here means OUR DEFAULT is clean; it does not mean anyone's pipeline is. ⛔ IT IS A UNION, NOT A CUSTOMER, and the distribution is uneven: measured across the full option matrix (every --ci x --deploy) by generating each tree, a single generated project carries ONE or TWO of these refs. Only DA_TOOLS_IMAGE is in every one of them — the third-party apply images are one per deploy method and reach only projects that generate a GitLab pipeline (a GitHub --deploy helm project installs the same helm VERSION with azure/setup-helm from get.helm.sh; that binary is not an image and this bucket does not scan it). (The git-sync image left this bucket when GitOps Native Mode was withdrawn, issue 1349.) So a clean run means every ref we could hand out is clean; it is not a per-customer statement, and the count a given customer is exposed to is smaller than the full set. (Before the tool image was added, three combinations carried NONE of the watched refs at all.) ⚠️ Finally, do not read this bucket as replacing the offline pin guard in the init-project suite: that one checks floating-vs-concrete SHAPE and says so in its own docstring — it stays green on a perfectly concrete but two-year-stale tag. This bucket is the EXISTENCE-AND-CVE half — the half that needs a registry round-trip: it pulls each ref and scans it, so a ref that has been deleted or retagged away shows up as a degraded run, and a ref that grows a CRITICAL shows up as a finding. ⚠️ HOW THE EXISTENCE HALF ALERTS. A failed pull alone cannot tell a removed tag from a rate limit — two of these refs are Docker Hub, pulled anonymously from shared runners — so the report job also runs the authoritative existence check (check_image_refs_resolve.py --scope delivered) every night and the issue states its verdict at the top. A ref the registry answers as having no such manifest is CONFIRMED REMOVED: it is named in the issue title and re-raised as a comment EVERY night while it stays gone, unlike everything else in these issues, because a removal is not standing upstream debt — every pipeline pulling the ref fails, and the fix (bump the pin, then tell existing customers) is ours. A leg that failed to pull while its ref resolved is reported as a probable rate limit or transient error, NOT a removal, and like any coverage drop it notifies only on the night coverage falls. When the existence check cannot answer — the registry gave no answer for a ref, or the check itself failed or did not run — the issue says existence is NOT determined for those refs and reads them as neither present nor removed; a check that cannot run never silences the rest of the report. ⛔ CURRENCY IS NOT MEASURED BY ANYTHING, HERE OR ANYWHERE. Nothing in this repo compares these pins against what the upstream has published since, so a two-year-old tag that still exists and whose findings are all unfixed (this scan passes ignore-unfixed) is green in this bucket AND green in the offline pin guard. Answering it needs a per-registry tag-enumeration call, which is not built and is not costed — quay.io and registry.k8s.io have not been checked for a usable list API. Until then, staleness is a human review item, not an alert." || rc=1
           exit $rc
 
       # A cron nobody watches degrades into background noise once it is red for
