@@ -814,3 +814,71 @@ def test_dispatcher_passes_tool_system_exit_through(tmp_path, code):
     p = _run_dispatcher(entry)
     assert p.returncode == code, p.stderr
     assert "ERROR: unexpected internal error" not in p.stderr
+
+
+# ── The dispatcher's own stderr, reader gone (#3821) ──────────────
+
+
+_DISPATCH_ENV = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+
+
+def _dispatch_with_reader_gone(entry, argv, *, unbuffered, stdout_gone=False):
+    """Run *entry* with stderr (and, if *stdout_gone*, stdout) on a pipe
+    whose read end is already closed — deterministic, no race."""
+    import subprocess
+
+    env = dict(_DISPATCH_ENV, PYTHONIOENCODING="utf-8")
+    if unbuffered:
+        env["PYTHONUNBUFFERED"] = "1"
+    pipes = [os.pipe() for _ in range(2 if stdout_gone else 1)]
+    for r, _ in pipes:
+        os.close(r)
+    try:
+        return subprocess.run(
+            [sys.executable, str(entry), *argv], cwd=entry.parent,
+            stdin=subprocess.DEVNULL,
+            stdout=pipes[1][1] if stdout_gone else subprocess.DEVNULL,
+            stderr=pipes[0][1], timeout=60, env=env,
+        ).returncode
+    finally:
+        for _, w in pipes:
+            os.close(w)
+
+
+def _lone_dispatcher(tmp_path):
+    """entrypoint.py alone, outside any checkout: no tool can be found."""
+    import shutil
+
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    shutil.copy(os.path.join(DA_TOOLS_DIR, "entrypoint.py"), opt / "entrypoint.py")
+    return opt / "entrypoint.py"
+
+
+@pytest.mark.real_crash_exit_code
+@pytest.mark.parametrize("unbuffered", [False, True], ids=["buffered", "unbuffered"])
+@pytest.mark.parametrize("path", ["unknown-command", "tool-not-found", "tool-crash",
+                                  "stdout-failed"])
+def test_dispatcher_keeps_rc_2_when_stderr_reader_is_gone(tmp_path, path, unbuffered):
+    """#3821: a stderr the dispatcher cannot write loses its text, not rc 2.
+    Bare prints ended rc 120 (the interpreter's failing last flush) buffered,
+    rc 1 (the uncaught BrokenPipeError) under PYTHONUNBUFFERED=1.
+
+    ⚠️ `stdout-failed-unbuffered` is a control, not proof of the fix: the old
+    `_exit_stdout_failed` already caught its own write error, and unbuffered
+    there is no leftover buffer for the last flush to fail on, so that case
+    was rc 2 before #3821 as well. The other seven are red with the fix
+    reverted (measured: rc 120 buffered, rc 1 unbuffered)."""
+    stdout_gone = False
+    if path == "unknown-command":
+        entry, argv = _lone_dispatcher(tmp_path), ["nosuchcmd"]
+    elif path == "tool-not-found":
+        entry, argv = _lone_dispatcher(tmp_path), ["validate-config"]
+    elif path == "tool-crash":
+        entry = _image_layout(tmp_path, "raise RuntimeError('boom')\n")
+        argv = ["validate-config"]
+    else:
+        entry, argv, stdout_gone = _lone_dispatcher(tmp_path), ["--version"], True
+    rc = _dispatch_with_reader_gone(entry, argv, unbuffered=unbuffered,
+                                    stdout_gone=stdout_gone)
+    assert rc == entrypoint.EXIT_CALLER_ERROR, rc
