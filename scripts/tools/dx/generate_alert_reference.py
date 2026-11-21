@@ -649,9 +649,11 @@ def main():
     # Write mode. #3981: through the artifact entry — atomic, and a target
     # that is not a regular file is refused before it is opened (a FIFO there
     # used to hang this run). BOTH targets are judged before either is
-    # written, so a refused English file does not leave the Chinese one
-    # regenerated alone. A failure is rc 2, named, by
-    # `exit_on_output_write_error` on `main`.
+    # written, so an English target of that kind does not leave the Chinese
+    # file regenerated alone. That is all the pre-check covers: a write that
+    # fails later (a read-only file, a failing rename) still leaves the first
+    # file updated. A failure is rc 2, named, by `exit_on_output_write_error`
+    # on `main`.
     for target in (file_zh, file_en):
         check_repo_artifact(target)
     write_repo_artifact(file_zh, content_zh)

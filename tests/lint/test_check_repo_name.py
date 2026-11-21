@@ -343,3 +343,17 @@ class TestDiffAware:
         assert rc == 0  # env bypass kicks in
         captured = capsys.readouterr()
         assert "BYPASSED" in captured.out
+
+
+def test_fix_does_not_rewrite_a_file_with_nothing_to_fix(tmp_path):
+    """Review: `if fix and changed` could lose `and changed` with every test
+    green. Since #3981 a rewrite also resets the mode, so a needless one
+    would show."""
+    clean = tmp_path / "zclean.md"
+    clean.write_text("nothing to fix here\n", encoding="utf-8")
+    os.chmod(clean, 0o600)
+    before = (os.stat(clean).st_ino, os.stat(clean).st_mtime_ns)
+    assert crn.scan_file_full(str(clean), fix=True) == []
+    assert (os.stat(clean).st_ino, os.stat(clean).st_mtime_ns) == before
+    if os.name != "nt":
+        assert os.stat(clean).st_mode & 0o777 == 0o600

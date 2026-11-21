@@ -739,3 +739,33 @@ def test_fix_anchors_that_cannot_write_the_doc_is_exit_2(tmp_path: Path, capsys)
     assert str(doc) in err and "Traceback" not in err, err
     assert doc.read_text(encoding="utf-8") == "see [x](#zold-anchor)\n"
     assert [p.name for p in doc.parent.iterdir()] == ["zdoc.md"]
+
+
+@pytest.mark.parametrize("before, after", [(0o755, 0o755), (0o600, 0o644), (0o664, 0o644)])
+def test_fix_anchors_leaves_the_mode_git_would_check_out(tmp_path: Path, before, after) -> None:
+    """Review: this tool is not in the scenario matrix of
+    tests/dx/test_shared_atomic_write_callers.py (its rewrite cannot be
+    stubbed to that matrix's OLD -> NEW), so a `mode=` passed at the call
+    went unnoticed."""
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits")
+    doc, broken = _doc_with_a_broken_anchor(tmp_path)
+    os.chmod(doc, before)
+    assert cdl._fix_broken_anchors(broken, tmp_path) == 1
+    assert os.stat(doc).st_mode & 0o777 == after
+
+
+def test_fix_anchors_updates_every_name_of_a_hard_linked_doc(tmp_path: Path, capsys) -> None:
+    """…and neither did `atomic_only=True`, which refuses the in-place
+    fallback a hard-linked file needs."""
+    doc, broken = _doc_with_a_broken_anchor(tmp_path)
+    twin = tmp_path / "ztwin.md"
+    try:
+        os.link(doc, twin)
+    except (OSError, NotImplementedError):
+        pytest.skip("no hard links here")
+    assert cdl._fix_broken_anchors(broken, tmp_path) == 1
+    want = "see [x](#znew-anchor)\n"
+    assert doc.read_text(encoding="utf-8") == want
+    assert twin.read_text(encoding="utf-8") == want
+    assert os.stat(doc).st_ino == os.stat(twin).st_ino

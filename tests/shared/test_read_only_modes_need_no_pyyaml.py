@@ -9,9 +9,10 @@ The first cut imported it at the top of the tool; the `repo-name-check` hook
 died on `import yaml`, and `doc-links-check` would have on the next docs
 commit.
 
-Each tool has a control: its writing mode, which DOES need `_lib_io`. Without
-it a tool that never imported `_lib_io` at all would pass the read-only half
-for the wrong reason.
+The control is of the HARNESS, not of the tools: a script that imports PyYAML
+must fail under it, or "rc 0 without PyYAML" would be measuring nothing.
+(Review: the first control asserted that each tool's WRITING mode fails
+without PyYAML — which pinned a limitation as the expected behaviour.)
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ def _tree(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _run(script: str, argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def _run(script: str | Path, argv: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, "-c", _NO_YAML, str(TOOLS / script), *argv], cwd=cwd,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -55,27 +56,35 @@ def _run(script: str, argv: list[str], cwd: Path) -> subprocess.CompletedProcess
 
 
 ROWS = [
-    # script, read-only argv, writing argv ("{tree}" is the temp tree)
-    ("lint/check_repo_name.py", ["--ci", "--full-scan"], ["--full-scan", "--fix"]),
-    ("lint/check_doc_links.py", ["--ci", "--repo-root", "{tree}"],
-     ["--fix-anchors", "--repo-root", "{tree}"]),
-    ("dx/add_frontmatter.py", ["--check", "--base-dir", "{tree}/docs"],
-     ["--base-dir", "{tree}/docs"]),
+    # script, read-only argv ("{tree}" is the temp tree)
+    ("lint/check_repo_name.py", ["--ci", "--full-scan"]),
+    ("lint/check_repo_name.py", ["--ci"]),
+    # A caller error is named as one here too, not buried under an import.
+    ("lint/check_repo_name.py", ["--fix"]),
+    ("lint/check_doc_links.py", ["--ci", "--repo-root", "{tree}"]),
+    ("dx/add_frontmatter.py", ["--check", "--base-dir", "{tree}/docs"]),
+    ("dx/add_frontmatter.py", ["--dry-run", "--base-dir", "{tree}/docs"]),
 ]
 
 
-@pytest.mark.parametrize("script, read_only, writing", ROWS, ids=[r[0] for r in ROWS])
-def test_the_read_only_mode_runs_without_pyyaml(tmp_path, script, read_only, writing):
+@pytest.mark.parametrize("script, argv", ROWS, ids=[f"{r[0]} {' '.join(r[1])}" for r in ROWS])
+def test_the_read_only_mode_runs_without_pyyaml(tmp_path, script, argv):
     tree = _tree(tmp_path)
-
-    def fill(argv: list[str]) -> list[str]:
-        return [a.replace("{tree}", str(tree)) for a in argv]
-
     cwd = REPO_ROOT if script.endswith("check_repo_name.py") else tree
-    done = _run(script, fill(read_only), cwd)
-    assert done.returncode == 0, done.stderr
+    done = _run(script, [a.replace("{tree}", str(tree)) for a in argv], cwd)
     assert "No module named" not in done.stderr, done.stderr
-    # The control: the mode that writes enters `_lib_io`, which needs PyYAML.
-    control = _run(script, fill(writing), cwd)
-    assert control.returncode != 0 and "refused by the test" in control.stderr, (
-        control.returncode, control.stderr)
+    if argv == ["--fix"]:
+        assert done.returncode == 2 and "--fix requires --full-scan" in done.stderr, done.stderr
+    else:
+        assert done.returncode == 0, done.stderr
+
+
+def test_the_harness_does_refuse_pyyaml(tmp_path):
+    """The control. Without it every row above could pass because the
+    refusal did nothing."""
+    probe = tmp_path / "zprobe.py"
+    probe.write_text("import yaml\nprint('imported')\n", encoding="utf-8")
+    done = _run(probe, [], tmp_path)
+    assert done.returncode != 0 and "refused by the test" in done.stderr, (
+        done.returncode, done.stdout, done.stderr)
+    assert "imported" not in done.stdout

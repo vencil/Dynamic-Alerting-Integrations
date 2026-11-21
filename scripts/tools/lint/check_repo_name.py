@@ -222,6 +222,16 @@ def main():
         help='Path to file containing PR body for bypass tag check.'
     )
     args = parser.parse_args()
+
+    # Before the import below: a caller error is named as one wherever the
+    # tool runs, PyYAML or not.
+    if args.fix and not args.full_scan:
+        print(
+            'ERROR: --fix requires --full-scan (partial-line rewrites in '
+            'a diff context are unsafe).', file=sys.stderr,
+        )
+        return EXIT_CALLER_ERROR
+
     if args.fix:
         # The one mode that writes. See `scan_file_full` for why the import
         # is here.
@@ -231,13 +241,6 @@ def main():
 
 
 def _run(args):
-    if args.fix and not args.full_scan:
-        print(
-            'ERROR: --fix requires --full-scan (partial-line rewrites in '
-            'a diff context are unsafe).', file=sys.stderr,
-        )
-        return EXIT_CALLER_ERROR
-
     # Resolve scan mode
     if args.full_scan:
         scan_mode = 'full-repo'
