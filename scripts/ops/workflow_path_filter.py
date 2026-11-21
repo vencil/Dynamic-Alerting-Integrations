@@ -1050,14 +1050,21 @@ def cmd_assert(args: argparse.Namespace) -> int:
     return EXIT_VIOLATION
 
 
-def cmd_record(args: argparse.Namespace) -> int:
-    traced, read, record = _job_trace(args)
+def _write_job_record(root: Path, traced: "Traced", job: str, record: dict) -> Path:
+    """Put *record* in as *job*'s entry of the workflow's trace file — the one
+    place the committed trace is written, for `record` and `merge` alike."""
     doc = traced.trace
     doc["workflow"] = traced.name
-    doc["jobs"][args.job] = record
-    path = trace_path(args.root, traced.name)
+    doc["jobs"][job] = record
+    path = trace_path(root, traced.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dump_trace(doc), encoding="utf-8", newline="\n")
+    return path
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    traced, read, record = _job_trace(args)
+    path = _write_job_record(args.root, traced, args.job, record)
     print(f"recorded {len(record['files'])} file(s) of {len(read)} read for job "
           f"`{args.job}` in {path.relative_to(args.root).as_posix()}; "
           "now run `workflow_path_filter.py generate`.")
@@ -1095,12 +1102,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 "written.") from exc
         files |= set(job["files"])
         dirs |= set(job["import_dirs"])
-    doc = traced.trace
-    doc["workflow"] = traced.name
-    doc["jobs"][args.job] = {"files": sorted(files), "import_dirs": sorted(dirs)}
-    out = trace_path(args.root, traced.name)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(dump_trace(doc), encoding="utf-8", newline="\n")
+    out = _write_job_record(args.root, traced, args.job,
+                            {"files": sorted(files), "import_dirs": sorted(dirs)})
     print(f"merged {len(args.out_files)} measurement(s) of job `{args.job}`: "
           f"{len(files)} file(s) in {out.relative_to(args.root).as_posix()}; now "
           "run `workflow_path_filter.py generate`.")

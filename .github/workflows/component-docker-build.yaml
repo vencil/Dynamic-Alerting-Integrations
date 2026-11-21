@@ -102,9 +102,22 @@ on:
       # between the markers.
       # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
       - ".github/path-traces/component-docker-build.yaml.json"
+      - "components/da-tools/.trivyignore.yaml"
+      - "docs/CHANGELOG.md"
+      - "docs/README-root.en.md"
+      - "docs/README-root.md"
+      - "requirements/ci-constraints.txt"
       - "scripts/ops/atime_trace.py"
       - "scripts/ops/paths_filter_glob.py"
       - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_atomic_write.py"
+      - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/ops/_grar_merge.py"
+      - "scripts/tools/ops/_grar_parse.py"
+      - "scripts/tools/ops/_grar_routes.py"
+      - "scripts/tools/ops/_grar_validate.py"
+      - "scripts/tools/ops/_threshold_alerts.py"
+      - "scripts/tools/ops/lint_custom_rules.py"
       # END GENERATED path-trace
 
 concurrency:
