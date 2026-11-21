@@ -37,11 +37,11 @@ parent: architecture-and-design.md
 | RabbitMQ | `prometheus-rules-rabbitmq` | 16 | 12 |
 | JVM | `prometheus-rules-jvm` | 9 | 8 |
 | Nginx | `prometheus-rules-nginx` | 9 | 7 |
-| Kubernetes | `prometheus-rules-kubernetes` | 32 | 14 |
+| Kubernetes | `prometheus-rules-kubernetes` | 35 | 16 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 1 | 56 |
-| **總計** | | **172** | **202** (= **374** rules) |
+| **總計** | | **175** | **204** (= **379** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

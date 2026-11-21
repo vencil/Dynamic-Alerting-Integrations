@@ -1009,6 +1009,133 @@ groups:
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
   # ─────────────────────────────────────────────────────────────────────
+  # Metric-source sentinels (#1177). Every alert above reads a series that is
+  # THERE; when the source stops being scraped the series go stale and the
+  # alerts go quiet — a dead kubelet looks exactly like a healthy container.
+  # Two sources feed this pack and each is the witness for the other:
+  #   * cAdvisor (container_*)        → CPU / memory / throttling / OOM
+  #   * kube-state-metrics (kube_pod_*) → crash loop / image pull / node / HA
+  # ContainerMetricsMissing: KSM says a container is running, cAdvisor has had
+  # no sample of it for five minutes. PodStateMetricsMissing: cAdvisor has
+  # containers for a tenant KSM reports no pod of.
+  # Read from the series, not from `up{job=...}`: the job name is the
+  # deployment's choice, and a cAdvisor job that is up while a relabel drops
+  # the series is the same blind spot.
+  # NOT seen here:
+  #   * both sources gone at once (nothing is left to witness it) — that is
+  #     the scrape jobs' own `up`;
+  #   * a kube-state-metrics that answers but is wrong or partial: serving a
+  #     frozen cache after losing its API watch, or with kube_pod_info kept
+  #     and the status series filtered out.
+  # Both scrape jobs must write `da_cluster`, or neither (ADR-006): on one side
+  # only, nothing matches and every container reads as missing.
+  # Edge normalization (#1168) as everywhere in this pack: the joins on
+  # namespace / pod happen in the recordings, the alerts read only
+  # tenant-labelled recordings. `da_cluster` (ADR-006) is kept throughout: one
+  # cluster's scrape failing must not be hidden by the tenant's other cluster.
+  - name: kubernetes-metric-source-sentinels
+    rules:
+      # Containers KSM calls running that cAdvisor has not sampled. Matched per
+      # CONTAINER and per container over time, so the count is of containers
+      # that are each missing — not a relay of different ones:
+      #   * running now AND five minutes ago: a container that just started is
+      #     not counted while its first sample is on the way, and a rollout
+      #     does not add up one fresh pod after another;
+      #   * a container in CrashLoopBackOff is `waiting`, not `running`: its
+      #     cgroup is gone between attempts and that is ContainerCrashLoop's
+      #     to report, not a scrape problem;
+      #   * no sample in the last five minutes (last_over_time skips the
+      #     staleness marker a dead target leaves).
+      # Working-set memory is the witness: cAdvisor emits it for every
+      # container that has a cgroup, limit or not. The `container` label is in
+      # the match, so the pod-level series (container="" / "POD") never stand
+      # in for a container.
+      - record: tenant:containers_without_metrics:count
+        expr: |
+          count by(tenant, da_cluster) (
+            label_replace(
+              (
+                (kube_pod_container_status_running{namespace=~"db-.+"} == 1)
+                and on(namespace, pod, container, da_cluster)
+                  (kube_pod_container_status_running{namespace=~"db-.+"} offset 5m == 1)
+              )
+              unless on(namespace, pod, container, da_cluster)
+                last_over_time(container_memory_working_set_bytes{namespace=~"db-.+"}[5m]),
+              "tenant", "$1", "namespace", "(.+)"
+            )
+          )
+
+      # Containers cAdvisor sees, per tenant — the witness for KSM.
+      - record: tenant:container_metrics:count
+        expr: |
+          count by(tenant, da_cluster) (
+            label_replace(
+              container_memory_working_set_bytes{namespace=~"db-.+", container!="", container!="POD"},
+              "tenant", "$1", "namespace", "(.+)"
+            )
+          )
+
+      # Per tenant AND cluster (the sentinel group's tenant:kube_pod_info:count
+      # is per tenant only, and stays so for VersionAwareThresholdInert).
+      - record: tenant:pod_state_metrics:count
+        expr: |
+          count by(tenant, da_cluster) (
+            label_replace(kube_pod_info{namespace=~"db-.+"}, "tenant", "$1", "namespace", "(.+)")
+          )
+
+      # The five minutes are in the recording (per container); `for: 1m` only
+      # asks that it holds for a few evaluations. A NotReady node fires this
+      # next to NodeNotReady — its kubelet is the cAdvisor that stopped
+      # answering.
+      - alert: ContainerMetricsMissing
+        expr: |
+          (tenant:containers_without_metrics:count > 0)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 1m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "No container metrics for running container(s) of {{ $labels.tenant }} — container alerts are blind"
+          summary_zh: "{{ $labels.tenant }} 有運行中的容器沒有容器指標 — 容器告警看不到它們"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: {{ $value }} running container(s) with no cAdvisor sample for 5m — check the kubelet / cAdvisor scrape (target down, node kubelet dead, or a relabel dropping the series)"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：{{ $value }} 個運行中的容器已 5 分鐘沒有 cAdvisor 樣本 — 請查 kubelet／cAdvisor 的抓取（target 掛掉、節點 kubelet 死亡，或 relabel 把序列丟掉）"
+          description: "{{ $value }} container(s) are running according to kube-state-metrics but have had no container metrics for 5 minutes. CPU, memory, throttling and OOM alerts cannot fire for them until the metrics return."
+          description_zh: "kube-state-metrics 回報 {{ $value }} 個容器在運行，但它們已 5 分鐘沒有容器指標。指標回來之前，CPU、記憶體、節流與 OOM 告警對它們都不會響。"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+      - alert: PodStateMetricsMissing
+        expr: |
+          (
+            tenant:container_metrics:count
+            unless on(tenant, da_cluster)
+            tenant:pod_state_metrics:count
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: warning
+          maintenance: mute
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "No pod state metrics for {{ $labels.tenant }} while its containers run — pod-state alerts are blind"
+          summary_zh: "{{ $labels.tenant }} 的容器在跑，卻沒有 Pod 狀態指標 — Pod 狀態類告警看不到它"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: {{ $value }} container(s) reporting but kube-state-metrics shows no pod of this tenant — check kube-state-metrics and its scrape"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：{{ $value }} 個容器有回報，但 kube-state-metrics 沒有這個租戶的任何 Pod — 請查 kube-state-metrics 與它的抓取"
+          description: "cAdvisor reports {{ $value }} container(s) for this tenant, but kube-state-metrics reports no pod. Crash-loop, image-pull, node and replica alerts cannot fire until it returns."
+          description_zh: "cAdvisor 回報這個租戶有 {{ $value }} 個容器，但 kube-state-metrics 沒有回報任何 Pod。它回來之前，重啟迴圈、映像拉取、節點與副本類告警都不會響。"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+
+  # ─────────────────────────────────────────────────────────────────────
   # Custom disk-recipe inert sentinel (#692 P0③ W2 / ADR-024 §Addendum).
   # A tenant can declare a disk-fill custom alert (forecast/ratio over
   # kubelet_volume_stats_*), but those series exist only when a CSI driver
