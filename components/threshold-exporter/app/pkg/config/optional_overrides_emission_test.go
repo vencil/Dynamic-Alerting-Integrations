@@ -96,12 +96,12 @@ func TestDeclaredEmission_TimeWindowAndInlineSeverity(t *testing.T) {
 	// 23:59 minute — a 1-in-1440 flake if the test read the wall clock. That is
 	// exactly what the `now` parameter exists for.
 	at := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
-	cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate", "db2_deadlock_rate"},
+	cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate", "db2_deadlocks_per_5m"},
 		map[string]ScheduledValue{
 			// severity suffix on the plain value
 			"oracle_wait_time_rate": {Default: "50:critical"},
 			// a window that is open at `at`, so the window value must win
-			"db2_deadlock_rate": {
+			"db2_deadlocks_per_5m": {
 				Default:   "5",
 				Overrides: []TimeWindowOverride{{Window: "09:00-11:00", Value: "9"}},
 			},
@@ -113,7 +113,7 @@ func TestDeclaredEmission_TimeWindowAndInlineSeverity(t *testing.T) {
 	if len(sev) != 1 || sev[0].Severity != "critical" || sev[0].Value != 50 {
 		t.Errorf("inline severity suffix not honoured: %+v", sev)
 	}
-	win := rowsFor(rows, "db2_deadlock_rate")
+	win := rowsFor(rows, "db2_deadlocks_per_5m")
 	if len(win) != 1 || win[0].Value != 9 {
 		t.Errorf("time-window value not honoured: %+v", win)
 	}
@@ -286,11 +286,11 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 func TestDeclaredEmission_CountsTowardCardinalityCap(t *testing.T) {
 	t.Parallel()
 	cfg := declaredEmissionCfg(nil,
-		[]string{"oracle_wait_time_rate", "oracle_pga_usage_percent", "db2_deadlock_rate"},
+		[]string{"oracle_wait_time_rate", "oracle_pga_usage_percent", "db2_deadlocks_per_5m"},
 		map[string]ScheduledValue{
 			"oracle_wait_time_rate":    {Default: "1"},
 			"oracle_pga_usage_percent": {Default: "2"},
-			"db2_deadlock_rate":        {Default: "3"},
+			"db2_deadlocks_per_5m":     {Default: "3"},
 		})
 	cfg.MaxMetricsPerTenant = 2
 

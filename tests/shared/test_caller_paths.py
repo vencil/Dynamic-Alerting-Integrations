@@ -1496,6 +1496,13 @@ _DEEP = 100_000
 _NESTED = {list: b"[" * _DEEP + b"]" * _DEEP,
            dict: b'{"a":' * _DEEP + b"1" + b"}" * _DEEP}
 _BEYOND = {"json": (), "yaml": (("timestamp", b"a: 2020-99-99\n"),)}
+#: #4064: a key (YAML) or a name (JSON) given twice in one mapping or object,
+#: in a top level the document takes. Both parsers kept the last value in
+#: silence (`denied_functions: [x]` then `denied_functions: []` linted
+#: nothing); the reading refuses it, and the refusal says so (`_DUP_SAYS`).
+_DUPLICATE = {"yaml": {dict: b"a: 1\na: 2\n", list: b"- {a: 1, a: 2}\n"},
+              "json": {dict: b'{"a": 1, "a": 2}\n', list: b'[{"a": 1, "a": 2}]\n'}}
+_DUP_SAYS = "is given"
 
 
 def _deep_cases(tops) -> "list[tuple[str, bytes]]":
@@ -1531,6 +1538,8 @@ def _bad_contents(doc) -> "list[tuple[str, bytes]]":
         tops = doc.top if isinstance(doc.top, tuple) else (doc.top,)
         cases += _deep_cases(tops)
         cases += [(f"top_{kind.__name__}", raw) for raw, kind in _TOPS if kind not in tops]
+        cases += [("duplicate_key", _DUPLICATE[doc.fmt][kind])
+                  for kind in (dict, list) if kind in tops][:1]
     if doc.fmt == "csv":
         # #3662: derived from the declared header — a file that is not the
         # report (no header, another header, one column short), a header
@@ -1596,6 +1605,8 @@ def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_d
                 why.append("a crash")
             if f"{_named(flag, given)}:" not in proc.stderr:
                 why.append("the flag and the path not named on stderr")
+            elif case == "duplicate_key" and _DUP_SAYS not in proc.stderr:
+                why.append(f"refused, but not for the key given twice ({_DUP_SAYS!r})")
             elif (says := _CSV_SAYS.get(case if not case.startswith("form_") else "form_")) \
                     and says not in proc.stderr:
                 # a later check (a value the tool refuses) must not stand in

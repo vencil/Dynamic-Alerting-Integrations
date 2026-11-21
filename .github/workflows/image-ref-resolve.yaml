@@ -111,6 +111,7 @@ on:
       - "scripts/tools/_lib_tool_fault.py"
       - "scripts/tools/_lib_validation.py"
       - "scripts/tools/_lib_write_check.py"
+      - "scripts/tools/_lib_yaml_strict.py"
       - "scripts/tools/ops/_registry_lib.py"
       - "scripts/tools/ops/_rule_packs_generated.py"
       - "scripts/tools/ops/guard_dispatch.py"

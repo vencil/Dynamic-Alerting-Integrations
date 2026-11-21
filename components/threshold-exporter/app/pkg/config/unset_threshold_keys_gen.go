@@ -13,7 +13,7 @@ var unsetThresholdKeys = []unsetThresholdKey{
 	{"clickhouse_replication_queue", "clickhouse"},
 	{"db2_bufferpool_hit_ratio", "db2"},
 	{"db2_connections_active", "db2"},
-	{"db2_deadlock_rate", "db2"},
+	{"db2_deadlocks_per_5m", "db2"},
 	{"db2_lock_wait_time", "db2"},
 	{"db2_log_usage_percent", "db2"},
 	{"db2_tablespace_used_percent", "db2"},

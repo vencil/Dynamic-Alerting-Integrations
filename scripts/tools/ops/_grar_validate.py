@@ -1298,7 +1298,8 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
     if policy_path is None:
         return PolicyDocument([], None)
     # #3797: the one reading of a document file (`_lib_input`: the path, the
-    # bytes, strict UTF-8, PyYAML's SafeLoader, a mapping at the top) — the
+    # bytes, strict UTF-8, the strict YAML loader — a key given twice is
+    # refused, #4064 — a mapping at the top) — the
     # same a tool's declared --policy (POLICY_DOCUMENT) gets; this by-path
     # entry is generator-service's, which re-reads the policy per request.
     import _lib_input  # noqa: PLC0415

@@ -32,11 +32,14 @@
 # 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   db2_log_usage_percent: 70   # % — Transaction log usage warning
 #       未啟用（可攜，僅宣告）：這個值可跨部署沿用，但鍵在 optional_overrides 層、平台不給值；要出貨得先升到 defaults 層，再通過出貨驗證
-#   db2_deadlock_rate: 5   # count/s — Deadlock rate (5m)
-#       ⚠ 參考庫實測反例（#1176）：真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到 ——
-#       此值接不到該抓的故障；這個數字是起點，不是平台背書的值
-#       未啟用（值有爭議，#1320）：#1176 量到真實的 deadlock storm 低於 5/s；值要重新推導或移除
-#       未啟用（依部署而定）：可容忍的 deadlock 速率取決於工作負載
+#   db2_deadlocks_per_5m: 5
+#       count/5m — Deadlocks in the last 5 minutes, summed over the tenant's exporters; 5 is the
+#       threshold of the grafana ibm-db2 mixin's IBMDB2HighNumberOfDeadlocks (increase over 5m > 5,
+#       per database, for 5m). Replaces the per-second key db2_deadlock_rate (#1320: a unit change
+#       is a removal plus an addition, no alias)
+#       ⚠ 參考庫實測反例（#1176）：其中一個參考庫的正常水位約每 5 分鐘 6 次 deadlock（0.02/s），高於 5 ——
+#       此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+#       未啟用（依部署而定）：可容忍的 deadlock 次數取決於工作負載
 #   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
 #       未啟用（可攜，僅宣告）：這個值可跨部署沿用，但鍵在 optional_overrides 層、平台不給值；要出貨得先升到 defaults 層，再通過出貨驗證
 #
@@ -60,24 +63,23 @@
 # lock_wait_time**）。閾值是 per-tenant 的，沒有通用解。相關：#1176（precision 校準）
 #
 # 失效模式**依方向而不同**，別一概而論：
-#   • 4 個「越高越糟」的 key（connections_active / log_usage_percent /
-#     tablespace_used_percent / lock_wait_time）—— 忙碌 / 大型庫的正常水位常高於
-#     範例值，照抄會 over-fire。這是**方向性風險**，適用這四個；至於哪幾個已經被
-#     ADR-030 良性參考庫（tests/rulepacks/reference-validation/negative-db2.yaml）
+#   • 5 個「越高越糟」的 key（connections_active / log_usage_percent /
+#     tablespace_used_percent / lock_wait_time / deadlocks_per_5m）—— 忙碌 / 大型庫的正常水位常高於
+#     範例值，照抄會 over-fire。這是**方向性風險**，適用這五個；至於哪幾個已經被
+#     ADR-030 參考庫（tests/rulepacks/reference-validation/ 的 DB2 各檔）
 #     實際量到反例，**逐條標在上方生成區塊該 key 底下**——這裡刻意不再重述清單，
 #     手抄一份就是下一個漂移源（本行原本自己就違反了這句：它把其中一個 key 的
 #     實測數字又抄了一遍）。⚠️ 另外注意持續時間：那些良性高原動輒數小時，遠長於
-#     for: 5m，所以 `for:` 擋不掉它們——這一點與數值無關，故留在這裡。
+#     任何一條的 `for:`，所以 `for:` 擋不掉它們——這一點與數值無關，故留在這裡。
 #   • bufferpool_hit_ratio 方向相反（`<`，越低越糟）—— 正常水位高於 0.95 只會讓它
 #     更不發射；它的 over-fire 是良性維護（如 REORG）短暫跌破門檻。
-#   • deadlock_rate 實測是**偏高漏抓**（under-fire）不是 over-fire，見下方語意陷阱。
 #
 # ⛔ 兩個會靜默失效 / 漏抓的語意陷阱：
 #   1. bufferpool_hit_ratio 尺度是 0–1，由本 pack 從兩個讀取 counter 的 rate 算出；
 #      門檻若寫成百分數（95 而非 0.95），`< 95` 永遠成立 → 一直響。
-#   2. deadlock_rate 比的是 rate() ＝**每秒值**，不是每分鐘——單位換算錯一次就
-#      差 60 倍。這個 key 的實測反例（含具體量到什麼）標在上方生成區塊該 key
-#      底下，此處不重述數字；要抓住較小的 storm 須依 baseline 往下調。
+#   2. deadlocks_per_5m 比的是 increase() ＝**過去 5 分鐘的次數**，不是每秒值。
+#      舊 key db2_deadlock_rate 比每秒值，已退役（#1320）：換算是乘 300，但舊的
+#      建議值本來就到不了，請依 baseline 重新取值。
 #
 # ⛔ 舊的那句「optional_overrides 永久無法啟用」已不適用：PR-C（#1314）讓
 # resolveDeclaredRows 直接走宣告集，#1310 又把宣告清單本身出貨到 _defaults.yaml /
@@ -145,9 +147,17 @@ groups:
             / ((db2_log_used_bytes + db2_log_available_bytes) > 0)
           )
 
-      # Deadlock rate
-      - record: tenant:db2_deadlocks:rate5m
-        expr: sum by(tenant) (rate(db2_deadlocks_total[5m]))
+      # Deadlocks in the last 5 minutes — a COUNT, not a per-second rate (#1320).
+      # The old form compared rate() (per second) against 5: 5 deadlocks every
+      # second is 1500 per 5 minutes, which no deadlock storm reaches (the
+      # reference library's storm is ~90 per minute), so the alert could not fire.
+      # increase() over the window is the unit an operator reads deadlocks in and
+      # the one the grafana ibm-db2 mixin compares (increase over 5m > 5).
+      # sum by(tenant) ADDS across the tenant's exporters: one exporter per
+      # database member (rule-packs/exporters/db2.yaml), so for one pureScale / DPF
+      # database it is that database's total.
+      - record: tenant:db2_deadlocks:increase5m
+        expr: sum by(tenant) (increase(db2_deadlocks_total[5m]))
 
       # Tablespace usage percentage
       - record: tenant:db2_tablespace_used_percent:max
@@ -162,7 +172,7 @@ groups:
       # would never fire. This became load-bearing once the threshold key below made
       # it a knob operators actually fill in.
       # Aggregation note: sum by(tenant) ADDS across DB2 instances, so the threshold's
-      # meaning scales with instance count (same convention as db2_deadlocks:rate5m).
+      # meaning scales with instance count (same convention as db2_deadlocks:increase5m).
       - record: tenant:db2_lock_wait_time:rate5m
         expr: sum by(tenant) (rate(db2_lock_wait_time_seconds_total[5m]))
 
@@ -208,8 +218,8 @@ groups:
       - record: tenant:alert_threshold:db2_log_usage_percent
         expr: max by(tenant) (user_threshold{component="db2", metric="log_usage_percent", severity="warning"})
 
-      - record: tenant:alert_threshold:db2_deadlock_rate
-        expr: max by(tenant) (user_threshold{component="db2", metric="deadlock_rate", severity="warning"})
+      - record: tenant:alert_threshold:db2_deadlocks_per_5m
+        expr: max by(tenant) (user_threshold{component="db2", metric="deadlocks_per_5m", severity="warning"})
 
       - record: tenant:alert_threshold:db2_tablespace_used_percent
         expr: max by(tenant) (user_threshold{component="db2", metric="tablespace_used_percent", severity="warning"})
@@ -441,24 +451,27 @@ groups:
       - alert: DB2HighDeadlockRate
         expr: |
           (
-            tenant:db2_deadlocks:rate5m
+            tenant:db2_deadlocks:increase5m
             > on(tenant) group_left
-            tenant:alert_threshold:db2_deadlock_rate
+            tenant:alert_threshold:db2_deadlocks_per_5m
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
-        for: 5m
+        # The expr already looks back 5m; `for:` only has to outlast one missed
+        # scrape. With for: 5m a storm had to stay above the threshold for a
+        # second full window before anyone heard of it (#1320).
+        for: 1m
         labels:
           severity: warning
           maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
-          summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
-          summary_zh: "{{ $labels.tenant }} 上 DB2 死鎖率過高"
-          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 deadlock rate elevated — application contention review"
-          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 死鎖率升高 — 應用程式爭用審查"
-          description: "{{ $value | printf \"%.1f\" }} deadlocks/sec"
-          description_zh: "{{ $value | printf \"%.1f\" }} 個死鎖/秒"
+          summary: "DB2 deadlocks on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 DB2 死鎖次數過高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 deadlocks elevated — application contention review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 死鎖次數升高 — 應用程式爭用審查"
+          description: "{{ $value | printf \"%.0f\" }} deadlocks in the last 5 minutes"
+          description_zh: "過去 5 分鐘 {{ $value | printf \"%.0f\" }} 個死鎖"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -492,10 +505,11 @@ groups:
       # shipped WITHOUT any consumer — no threshold normalization, no alert — so a real
       # lock-contention incident produced a populated series that paged nobody. Two
       # independent blind-written reference waveforms both reproduced the miss.
-      # `for: 5m` matches DB2HighDeadlockRate: both are rate() over a cumulative
-      # contention counter (as opposed to the 10m efficiency-ratio gauges), and the
-      # rate5m window already absorbs short lock convoys, so 5m means ~10m of
-      # sustained contention before anyone is paged.
+      # `for: 5m`, not the 10m of the efficiency-ratio gauges: this is rate() over a
+      # cumulative contention counter, and the rate5m window already absorbs short
+      # lock convoys, so 5m means ~10m of sustained contention before anyone is paged.
+      # (DB2HighDeadlockRate differs on purpose: it counts events with increase() and
+      # waits only for: 1m — a deadlock is an event, a lock wait is a level.)
       - alert: DB2HighLockWaitTime
         expr: |
           (
