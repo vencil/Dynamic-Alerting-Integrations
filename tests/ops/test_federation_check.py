@@ -168,7 +168,11 @@ class TestCheckEdge:
         mock_resp = _mock_urlopen_ok()
 
         http_mapping = {
-            "config": ({"status": "success", "data": {"yaml": "global:\n  external_labels:\n    env: prod"}}, None),
+            # `da_cluster` in a scrape job is not the external `cluster` label
+            "config": ({"status": "success", "data": {"yaml": (
+                "global:\n  external_labels:\n    env: prod\n"
+                "scrape_configs:\n  - job_name: tenant-exporters\n    relabel_configs:\n"
+                "      - target_label: da_cluster\n        replacement: edge-1\n")}}, None),
         }
         prom_mapping = {
             "tenant": ({"status": "success", "data": {"result": []}}, None),
@@ -181,6 +185,36 @@ class TestCheckEdge:
 
         ext_check = next(c for c in checks if c["check"] == "edge_external_labels")
         assert ext_check["status"] == "warn"
+        # … and it is not the cluster identity either: that is an external label
+        identity = next(c for c in checks if c["check"] == "edge_cluster_identity")
+        assert identity["status"] == "fail"
+
+    @pytest.mark.parametrize("config, cluster, identity", [
+        ("global:\n  scrape_interval: 15s\n  external_labels:\n    cluster: edge-1\n"
+         "    da_cluster: edge-1\nscrape_configs: []\n", "pass", "pass"),
+        ("global:\n  external_labels:\n    cluster: edge-1\n", "pass", "fail"),
+        ("global:\n  external_labels:\n    da_cluster: edge-1\n", "warn", "pass"),
+        ("global:\n  external_labels:\n    da_cluster: \"\"\n", "warn", "fail"),
+        # a `cluster` / `da_cluster` key somewhere else in the file is not an external label
+        ("global:\n  external_labels:\n    env: prod\nscrape_configs:\n  - job_name: es\n"
+         "    static_configs:\n      - targets: [\"es:9114\"]\n        labels:\n"
+         "          cluster: es-prod\n          da_cluster: edge-1\n", "warn", "fail"),
+        ("global:\n  scrape_interval: 15s\n", "fail", "fail"),
+    ], ids=["both", "cluster-only", "identity-only", "empty-identity", "elsewhere-in-the-file", "none"])
+    def test_external_labels_are_read_from_their_own_mapping(self, config, cluster, identity):
+        http_mapping = {"config": ({"status": "success", "data": {"yaml": config}}, None)}
+        prom_mapping = {"tenant": ({"status": "success", "data": {"result": []}}, None)}
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_ok()):
+            with patch.object(_lib_prometheus, "http_get_json", side_effect=_mock_http_get_json(http_mapping)):
+                with patch.object(fc, "query_prometheus", side_effect=_mock_query_prometheus(prom_mapping)):
+                    checks = {c["check"]: c["status"] for c in fc.check_edge("http://edge:9090")}
+        assert (checks["edge_external_labels"], checks["edge_cluster_identity"]) == (cluster, identity)
+
+    def test_the_identity_label_is_the_one_the_rules_group_on(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "cci", os.path.join(os.path.dirname(fc.__file__), "..", "lint", "check_cluster_identity.py"))
+        assert f'CLUSTER_LABEL = "{fc.CLUSTER_IDENTITY_LABEL}"' in open(spec.origin, encoding="utf-8").read()
 
 
 # ---------------------------------------------------------------------------

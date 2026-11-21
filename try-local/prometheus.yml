@@ -10,6 +10,9 @@
 global:
   scrape_interval: 5s
   evaluation_interval: 5s
+  # Which cluster this Prometheus is in (ADR-006); a single cluster sets it too.
+  external_labels:
+    da_cluster: try-local
 
 rule_files:
   - /etc/prometheus/rules/rule-pack-mariadb.yaml

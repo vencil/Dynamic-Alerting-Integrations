@@ -16,7 +16,7 @@
 #     5m30s); two exporters reporting the same (storage_group, path) and one
 #     path listed under two storage groups both evaluate (no many-to-many), the
 #     fullest still wins; only filter="maintenance" with value 1 mutes.
-#   * one tenant in two clusters (ADR-006, da_cluster on the scrape): each
+#   * one tenant in two clusters (ADR-006: the series carry da_cluster): each
 #     cluster keeps its own figure, and only the full one fires — a quiet
 #     cluster does not hide it and is not blamed for it.
 rule_files:

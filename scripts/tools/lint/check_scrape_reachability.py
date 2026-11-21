@@ -442,10 +442,9 @@ def _captures_port(rc: dict) -> bool:
 PROM_CONFIGMAP_KEY = "prometheus.yml"
 
 
-def load_repo_jobs() -> list[dict]:
-    """The scrape jobs of the repo's Prometheus ConfigMap: the outer layer
-    read the way kubectl reads it (``da-crdecode``), the ``prometheus.yml``
-    string inside it the way Prometheus does (``parse_scrape_jobs``)."""
+def load_repo_prometheus_text() -> str:
+    """``prometheus.yml`` of the repo's Prometheus ConfigMap, the outer layer
+    read the way kubectl reads it (``da-crdecode``)."""
     holders = [doc["data"][PROM_CONFIGMAP_KEY]
                for doc in _lib_consumer_read.kubernetes_documents(str(PROM_CONFIGMAP))
                if doc["kind"] == "ConfigMap"   # every doc an object (#3426)
@@ -455,7 +454,45 @@ def load_repo_jobs() -> list[dict]:
         raise _lib_consumer_read.ConsumerReadError(
             f"{rel}: expected exactly one ConfigMap with a string `data.{PROM_CONFIGMAP_KEY}` "
             f"in kubectl's reading of the file, found {len(holders)}")
-    return parse_scrape_jobs(holders[0])
+    return holders[0]
+
+
+def load_repo_jobs() -> list[dict]:
+    """The scrape jobs of the repo's Prometheus ConfigMap, its ``prometheus.yml``
+    read the way Prometheus does (``parse_scrape_jobs``)."""
+    return parse_scrape_jobs(load_repo_prometheus_text())
+
+
+#: ADR-006: the label that says which cluster a Prometheus is in. The rule
+#: side's reading of it is check_cluster_identity.CLUSTER_LABEL — one
+#: spelling, pinned equal by tests/lint/test_check_scrape_reachability.py.
+CLUSTER_LABEL = "da_cluster"
+
+
+def cluster_identity(prom_yaml_text: str) -> list[str]:
+    """Errors for a Prometheus configuration that does not say which cluster
+    it is in (ADR-006 contract 1 and 7, #4097).
+
+    The rule packs group and match per (tenant, da_cluster). The label is one
+    line, in one place: ``global.external_labels.da_cluster``. Prometheus
+    attaches external labels to everything that leaves it — alerts sent to
+    Alertmanager, ``/federate``, remote write — so wherever two clusters'
+    series or alerts meet they are already told apart, and a Prometheus that
+    evaluates its own cluster's rules needs no label on its series (the
+    grouping then reads as per tenant). Nothing is written at scrape time,
+    so there is no relabelling to get half right.
+
+    Not judged: a Prometheus that itself scrapes MORE than one cluster has to
+    label those jobs' series; one value per Prometheus cannot say that.
+    """
+    prom = _lib_consumer_read.prometheus_config(prom_yaml_text)
+    value = ((prom.get("global") or {}).get("external_labels") or {}).get(CLUSTER_LABEL)
+    if isinstance(value, str) and value.strip():
+        return []
+    return [f"CLUSTER-IDENTITY: `global.external_labels.{CLUSTER_LABEL}` is not set — add it with "
+            "this cluster's id (a single cluster sets one fixed value too). The rule packs "
+            "evaluate per (tenant, cluster); without it, alerts from two clusters of one "
+            "tenant are indistinguishable downstream. (ADR-006, #4097)"]
 
 
 def name_passes(metric: str, name_rules: list[tuple[str, str]]) -> bool:
@@ -925,6 +962,7 @@ def run_check(
     jobs: list[dict] | None = None,
     services: list[dict] | None = None,
     known_unknown: dict[str, str] | None = None,
+    prom_text: str | None = None,
 ) -> dict:
     """Return {errors, infos, classes, counts}. errors fail --ci.
 
@@ -937,7 +975,9 @@ def run_check(
         consumed = real_consumed if consumed is None else consumed
         outputs = real_outputs if outputs is None else outputs
     if jobs is None:
-        jobs = load_repo_jobs()
+        # the repo's own config: its jobs, and the text they were read from
+        prom_text = load_repo_prometheus_text()
+        jobs = parse_scrape_jobs(prom_text)
     if services is None:
         services = load_repo_services()
     if known_unknown is None:
@@ -951,7 +991,8 @@ def run_check(
         counts[cls] += 1
 
     errors: list[str] = (_platform_double_scrape(jobs) + _platform_job_label(jobs)
-                         + _platform_per_pod(jobs) + tenant_scrape_contract(jobs))
+                         + _platform_per_pod(jobs) + tenant_scrape_contract(jobs)
+                         + (cluster_identity(prom_text) if prom_text is not None else []))
     infos: list[str] = []
 
     for m, (cls, reason) in classes.items():

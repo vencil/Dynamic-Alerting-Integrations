@@ -60,6 +60,51 @@ def test_every_documented_scrape_config_keeps_the_contract(doc):
     assert gate.tenant_scrape_contract(jobs, every_tenant_job=True) == [], doc
 
 
+_IDENTITY_DOCS = [(DOCS / f"{name}{lang}.md") for name in ("byo-prometheus-integration", "federation-integration")
+                  for lang in ("", ".en")] + [
+    REPO / "docs" / "scenarios" / f"multi-cluster-federation{lang}.md" for lang in ("", ".en")]
+_ANY_YAML_BLOCK = re.compile(r"```yaml\n(.*?)```", re.S)
+
+
+def _external_label_maps(path) -> list[dict]:
+    """Every `external_labels` / `externalLabels` mapping a doc's YAML shows
+    (a prometheus.yml `global:` or a Prometheus CR / chart values)."""
+    found: list[dict] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in ("external_labels", "externalLabels") and isinstance(v, dict):
+                    found.append(v)
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    text = path.read_text(encoding="utf-8")
+    for block in _ANY_YAML_BLOCK.findall(text):
+        # a snippet quoted inside a `> ` note keeps its quote marks
+        block = "\n".join(line[2:] if line.startswith("> ") else line.lstrip(">")
+                          for line in block.split("\n"))
+        if "external_labels" not in block and "externalLabels" not in block:
+            continue
+        # a block that shows external labels is read whole: one that does not
+        # parse fails here instead of dropping out of the count
+        for obj in yaml.safe_load_all(block):
+            walk(obj)
+    return found
+
+
+@pytest.mark.parametrize("path", _IDENTITY_DOCS, ids=[p.name for p in _IDENTITY_DOCS])
+def test_every_documented_external_labels_block_names_the_cluster(path):
+    """ADR-006: a reader who copies a documented `external_labels` block gets
+    the platform's cluster identity with it."""
+    maps = _external_label_maps(path)
+    assert maps, f"{path.name}: no external_labels block found — did the snippet move?"
+    for m in maps:
+        assert m.get(gate.CLUSTER_LABEL), (path.name, m)
+
+
 def _tenant_service_monitors(doc: str) -> list[dict]:
     out = []
     for text in _blocks(doc):

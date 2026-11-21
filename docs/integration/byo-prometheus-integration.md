@@ -126,6 +126,16 @@ relabel_configs:
 
 > **⚠️ 重要**：`tenant` 標籤的值必須與 `threshold-exporter` ConfigMap 中的 tenant 名稱完全一致（例如 `db-a`、`db-b`）。請用 `scaffold_tenant.py` 產生的名稱作為基準。
 
+> **叢集身分 `da_cluster`**：出貨的規則逐（租戶，叢集）計算（[ADR-006](../adr/006-tenant-mapping-topologies.md)）。在這台 Prometheus 的 `global.external_labels` 設一行即可，抓取 job 不必寫：
+>
+> ```yaml
+> global:
+>   external_labels:
+>     da_cluster: cluster-a   # 這個叢集的 ID；單一叢集也要設，值固定即可
+> ```
+>
+> prometheus-operator 寫在 Prometheus CR 的 `spec.externalLabels`。Prometheus 會把 external label 加在送往 Alertmanager 的告警、`/federate` 與 remote write 上，所以告警與中央 Prometheus 都分得出叢集。上線後用 `da-tools federation-check edge --prometheus <url>` 檢查這一行有沒有設。
+
 ### 驗證
 
 ```bash

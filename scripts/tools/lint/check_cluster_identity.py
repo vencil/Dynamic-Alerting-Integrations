@@ -130,8 +130,10 @@ IDENTITY_LABELS = frozenset({"tenant", "instance", "pod", "namespace", "node"})
 
 CLUSTER, FLAT = "cluster", "flat"
 
-#: The scrape jobs ADR-006 has write `da_cluster`: the tenant-exporter job and
-#: the Kubernetes state / container jobs the kubernetes rules read.
+#: The scrape jobs whose series are per cluster (ADR-006): the tenant-exporter
+#: job and the Kubernetes state / container jobs the kubernetes rules read.
+#: Their series carry `da_cluster` wherever two clusters' data meet — the
+#: label is the external label of the Prometheus they came through.
 CLUSTER_JOBS = frozenset({"tenant-exporters", "kube-state-metrics",
                           "kubelet-cadvisor", "kubelet-volume-stats"})
 #: Scrape jobs of the platform's own components: their `up` / `scrape_*` do
