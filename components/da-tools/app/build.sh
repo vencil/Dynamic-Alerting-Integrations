@@ -203,6 +203,11 @@ TOOL_FILES=(
     # EXIT_VIOLATION / EXIT_CALLER_ERROR). Imported by ops/dx/lint tools
     # + _lib_godispatch. Stdlib-only; safe to bundle.
     _lib_exitcodes.py
+    # #3822 — the one read of an interactive answer (an unreadable stdin is
+    # rc 2, named); imported by ops/scaffold_tenant, ops/init_project,
+    # ops/migrate_rule and ops/generate_alertmanager_routes. Imports
+    # _lib_exitcodes (above).
+    _lib_prompt.py
     # #1911 (conf.d family) — single answer to "what is in a conf.d/" (iter_config_files /
     # nested_yaml_warning). Imported by validate_config, _grar_parse and
     # every other tool that enumerates a tenant config dir; without it the
