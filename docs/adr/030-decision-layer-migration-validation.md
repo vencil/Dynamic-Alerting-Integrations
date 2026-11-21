@@ -19,9 +19,9 @@ updated_at: 2026-11-21
 
 ## 狀態
 
-🟢 **Accepted**（2026-07-19）。決策內容自此不再變動，之後只修表達、錯字與連結。待解問題（例如哪些告警屬合規類）是導入前要和遷移方一起補齊的項目，不是本決策生效的前提。
+🟢 **Accepted**（2026-07-19）。本 ADR 自此凍結、不再修改（僅修錯字／連結）。待解問題（例如哪些告警屬合規類）是導入前要和遷移方一起補齊的項目，不是本決策生效的前提。
 
-2026-11-21：改寫表達，拿掉內部代號與過程敘事、補上名詞解釋與範例；決策不變。
+2026-11-21：依 owner 對全部 ADR 的改寫指示（[#2789](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2789)）改寫表達，拿掉內部代號與過程敘事、補上名詞解釋與範例；決策不變。
 
 依語言政策（ADR-019 起預設只寫中文），本篇沒有英文版。
 
@@ -110,7 +110,7 @@ updated_at: 2026-11-21
 
 告警是離散的事件，適合用 precision／recall 衡量；指標是連續訊號，適合用 DTW 比對形狀。要遷移方接受「DTW 是訊號對齊工具，回答不了決策問題」，換來的是每個問題都用對的工具。
 
-內容平面不能省：recall 再完美，annotation 渲染錯了（例如比例值 100% 顯示成 1%、少了 runbook 連結），維運上一樣是災難。這一層不另外造，沿用 promtool 與 vmalert-tool 的規則單元測試，它們會比對開火告警的標籤與 annotation。
+內容平面不能省：recall 再完美，annotation 渲染錯了（例如比例值 100% 顯示成 1%、少了 runbook 連結），維運上一樣是災難。這一層不另外造，沿用 promtool 與 vmalert-tool（Prometheus 與 VictoriaMetrics 各自的規則單元測試工具）的規則單元測試，它們會比對開火告警的標籤與 annotation。
 
 ### 5. 時間容差逐告警類別訂，先鎖預設天花板
 
@@ -176,7 +176,7 @@ updated_at: 2026-11-21
       dropout_pattern: "every:10"   # 每 10 個樣本漏抓一個
 ```
 
-輸入二：候選規則（`tests/dx/fixtures/waveform/rules/selftest_disk.rules.yaml`）`selftest_disk_used_percent > 80`，`for: 2m`，`severity: warning`；容差檔（`tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml`）的天花板是 critical 300 秒、warning 600 秒、其他 900 秒。
+輸入二：候選規則（`tests/dx/fixtures/waveform/rules/selftest_disk.rules.yaml`）`selftest_disk_used_percent > 80`，`for: 2m`，`severity: warning`；容差檔（`tests/dx/fixtures/waveform/tolerances/selftest_tolerances.yaml`）給每個嚴重度一個天花板（工具自測用的示意值，依第 5 節不列在文件裡）。
 
 在有隔離 vmsingle（`-retentionPeriod=100y`）與 vmalert 的環境執行：
 
@@ -201,7 +201,9 @@ python3 scripts/tools/dx/waveform_score.py inject.json \
   未歸因 alerts: 0
 ```
 
-輸出（計分，結束碼 0）：
+輸出（計分，結束碼 0；節錄，省略 `reason:` 與 `scope:` 兩行）：
+
+其中 indeterminate 是「接住與否判不出來」的 case（例如開火的告警被聚合規則拿掉標籤、歸不回是哪個故障），carve-out 是容差檔 `carve_outs` 明列、排除在分母外的故障類別（例如第 1 節的合規類），early-onset 是規則在故障還在爬升時就開火（可能過度敏感，只揭露、不擋判定）。
 
 ```text
 verdict: PASS  (catch 5/5 = 100.0%, FN=0)

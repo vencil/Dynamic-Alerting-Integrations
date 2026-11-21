@@ -396,7 +396,7 @@ class TestProjectionEnabledShape:
 #
 # The reconciler's evidence query returned zero rows forever because the Vector
 # source only tailed federation-gateway — tenant-api's `federation_token_revoked`
-# events never reached VictoriaLogs at all. ADR-028 §證據通道 assumed they did. These
+# events never reached VictoriaLogs at all. The original design assumed they did. These
 # tests pin the pipeline shape that closes that gap; the BEHAVIOUR (parse/merge,
 # PII drop, no tenant-partition reachability) is pinned by `vector test` in
 # helm/vector/tests/projection_tests.yaml.

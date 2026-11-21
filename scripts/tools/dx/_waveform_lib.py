@@ -497,7 +497,7 @@ def _apply_declared_dips(values: list[float], fw: tuple[int, int],
     Dips fall on interior fault-window samples only (never the first), so the
     fault onset is a clean fault_level — otherwise every onset/for-duration rule
     sees a systematically dip-contaminated first sample.
-    Returns (values, clamp_note); clamp_note is set (ADR-030 §8 第 4 道 no-silent-caps) when
+    Returns (values, clamp_note); clamp_note is set (ADR-030 §8 第 2 道 no-silent-caps) when
     the declared depth would overshoot normal_level and was clamped."""
     normal = float(sig["normal_level"])
     fault = float(sig["fault_level"])
@@ -579,7 +579,7 @@ def _apply_time_axis(samples: list, time_axis: dict) -> tuple[list, int, bool]:
     if tail:
         cut = max(1, math.ceil(parse_duration(tail) / STEP))
         if cut >= len(out):
-            # fail-loud (ADR-030 §8 第 4 道 no-silent-caps): a staleness_tail >= the whole
+            # fail-loud (ADR-030 §8 第 2 道 no-silent-caps): a staleness_tail >= the whole
             # series would silently no-op, so the SME-declared agent-death is
             # never actually injected. Force a fix rather than ship a
             # must_detect series that quietly lacks its staleness.
@@ -841,7 +841,7 @@ def materialize_vm(series_list: list[Series]) -> str:
 
 def build_metadata(pack: dict, series_list: list[Series], seed: int, fanout: int) -> dict:
     """Per-output provenance metadata: variant kind, expects inheritance (or
-    probe/companion), seed, step, auto-modulation trail (ADR-030 §8 第 4 道 no-silent-caps)."""
+    probe/companion), seed, step, auto-modulation trail (ADR-030 §8 第 2 道 no-silent-caps)."""
     any_jitter = any(s.jitter_s > 0 for s in series_list)
     return {
         "pack_id": pack["pack"]["id"],

@@ -473,7 +473,7 @@ data:
           # implicit field policy. No-op today; ready when gateway-side
           # signing lands.
       # ── Federation revocation EVIDENCE channel (ADR-028 §證據通道 / #1234) ──────
-      # The second ingest path into the 0:0 platform store. ADR-028 §證據通道 assumed
+      # The second ingest path into the 0:0 platform store. The original design assumed
       # tenant-api's revocation events already reached VictoriaLogs "via the
       # existing Vector pipeline"; they did not — the source selector only
       # tailed federation-gateway, so the reconciler's evidence query returned

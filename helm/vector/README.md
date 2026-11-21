@@ -55,7 +55,7 @@ The stream-field set is locked at the values level (`streamFields`) — changing
 
 `source.extraLabelSelector` defaults to the set selector `app.kubernetes.io/name in (federation-gateway,tenant-api)`. Per #539 §7 non-goals this is **not** a general platform log roll-up — every new consumer opens its own ticket, and both members here have one.
 
-`tenant-api` was added by ADR-028 / [#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234): it is the producer of the federation revocation evidence events the reconciler queries. ADR-028 §證據通道 assumed those events already reached VictoriaLogs "via the existing Vector pipeline" — they did not, because this selector did not match tenant-api, so the reconciler's evidence query returned zero rows forever and the un-revoke tamper-evidence control was a silent no-op.
+`tenant-api` was added by ADR-028 / [#1234](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1234): it is the producer of the federation revocation evidence events the reconciler queries. The original design assumed those events already reached VictoriaLogs "via the existing Vector pipeline" — they did not, because this selector did not match tenant-api, so the reconciler's evidence query returned zero rows forever and the un-revoke tamper-evidence control was a silent no-op.
 
 A **set selector** rather than a second `additionalSources` entry is deliberate: two `kubernetes_logs` sources sharing one `data_dir` have undocumented checkpoint behaviour, and overlapping selectors double-ingest. One source, one checkpoint namespace, split downstream by `origin_split`.
 

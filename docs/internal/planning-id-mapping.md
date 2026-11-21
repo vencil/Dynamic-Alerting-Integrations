@@ -249,7 +249,7 @@ SOT 在 [`dx-tooling-backlog.md`](dx-tooling-backlog.md)。
 
 | 工具 | 狀態 |
 |---|---|
-| ~~`scripts/tools/lint/check_techdebt_drift.py`~~ | **已移除** — `known-regressions.md` 撤除後成 phantom no-op；繼任者 `check_planning_status_sync.py`（chunk 2b，ADR-019 Layer 3）已上線 |
+| ~~`scripts/tools/lint/check_techdebt_drift.py`~~ | **已移除** — `known-regressions.md` 撤除後成 phantom no-op；繼任者 `check_planning_status_sync.py`（ADR-019 §第三層）已上線 |
 | `scripts/dx/generate_planning_index.py` | chunk 2a 新增，掃 frontmatter 產 `planning-index.md` |
 | Pre-commit hooks | 暫不擋舊 ID（過渡期）；chunk 5 收編後正式 deprecate |
 

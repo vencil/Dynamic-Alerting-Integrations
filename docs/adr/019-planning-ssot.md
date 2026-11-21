@@ -116,7 +116,7 @@ tracking_kind: tech-debt | regression | dx
 frontmatter 可以寫在四種位置，產生器都會找到：
 
 1. **`docs/**/*.md` 的檔案開頭**：整份檔案是一個條目，例如每一份 ADR。
-2. **`docs/**/*.md` 裡 H2／H3 標題（`##`／`###`）正下方的 YAML 區塊**（標題與區塊之間只能有空行）：一份檔案放多個條目，例如 `dx-tooling-backlog.md`。
+2. **`docs/**/*.md` 裡 H2／H3 標題（`##`／`###`）正下方、語言標記為 `yaml`（或 `yml`）的程式碼區塊**（標題與區塊之間只能有空行，語言標記後面不能接其他內容；用 `---` 包起來的 YAML 不算，會被靜默略過）：一份檔案放多個條目，例如 `dx-tooling-backlog.md`。
 3. **`flaky-tests.yaml` 頂層清單裡帶 `tracking_kind:` 的項目**：沒有 `tracking_kind:` 的項目不收錄。
 4. **程式碼註解**：`// TECH-DEBT(id=TRK-042, status=in-progress, tracking_kind=tech-debt)` 或 `# TECH-DEBT(...)`，逗號分隔的 `key=value`，而且註解符號必須是該行第一個非空白字元（寫在說明文字或字串裡的不算）。掃描範圍是 `components/` 的 `.go`／`.py`、`tools/` 的 `.ts`／`.tsx`／`.js`／`.jsx`、`tests/` 的 `.go`／`.py`／`.ts`／`.tsx`、`scripts/` 的 `.py`／`.sh`，略過 `node_modules/` 與 `archive/` 底下的檔案。
 
@@ -196,7 +196,7 @@ status: wip
 
 `TRK-2160` 的 `status: wip` 不在列舉內，整個條目沒有被收錄，產生器也不報錯。
 
-範例刻意用「檔案開頭的 frontmatter」這種寫法：本 ADR 自己也在 `docs/` 底下，若在這裡貼一段「H2／H3 標題＋YAML 區塊」，即使包在程式碼區塊裡，產生器也會把它當成真的條目收進索引。
+範例刻意用「檔案開頭的 frontmatter」這種寫法：本 ADR 自己也在 `docs/` 底下，若在這裡貼一段「H2／H3 標題＋`yaml` 程式碼區塊」，即使外面再包一層程式碼區塊，產生器也會把它當成真的條目收進索引。
 
 ### 第三層：CI 狀態同步檢查
 
@@ -263,7 +263,14 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 
 **已知限制**：
 
-- CI 同步檢查目前只警告、不擋 merge（workflow 沒有帶 `--strict`）。「PR 解決了某項目、frontmatter 沒改成 `done`」仍然合得進去，只會留下 warning 註記。本決策原本還要求兩件事，目前都沒有實作：同一個項目連續三支 PR 仍未同步就改為擋 merge；以及在 CLAUDE.md 的起手式要求 AI agent 先讀 `planning-index.md`（現行 CLAUDE.md 只在路由表指向對照表與本 ADR）。
+- CI 同步檢查目前只警告、不擋 merge（workflow 沒有帶 `--strict`）。「PR 解決了某項目、frontmatter 沒改成 `done`」仍然合得進去，只會留下 warning 註記。本決策還要求以下幾件事，目前都沒有實作：
+  - 同一個項目連續三支 PR 仍未同步，就改為擋 merge。
+  - 同步檢查不通過時在 PR 留言提醒（現在只有 warning 註記）。
+  - 本機 pre-push 時先跑一次同步檢查。
+  - 每次 commit 時自動重產索引並加進 commit（現在 pre-commit 只做 `--check`，過期就失敗，要自己跑 `make planning-index`）。
+  - 每月一次的定期掃描，列出過期條目給 maintainer 季度回顧。
+  - 在 CLAUDE.md 的起手式要求 AI agent 先讀 `planning-index.md`（現行 CLAUDE.md 只在路由表指向對照表與本 ADR）。
+- `pr_ref` 只能填一個號碼。填成清單時會被串成 `"375, 380"` 這樣的字串，與 PR 號碼比對一定不符，同步檢查回報 `pr-ref-mismatch`。
 - 欄位值不在列舉內、或 YAML 解析失敗的條目會被靜默略過，不報錯。它不會出現在索引裡；有 commit 宣告解決它時，CI 回報的是 `missing-entry`，而不是指出欄位寫錯。
 - 只認 commit trailer。寫在 PR 標題或 PR 說明裡的「Resolves …」不會被檢查。
 
@@ -289,9 +296,9 @@ Default behaviour is **soft-warn** (exit 0). Run with `--strict` to fail CI on t
 
 好處是不必改寫任何既有引用，只要補 frontmatter。不採用的原因：TD、HA、REG 本質同類，長期並存是歷史包袱；AI agent 與新貢獻者要學好幾種看起來都像待辦的前綴；而且沒有解決核心問題——分散不只是「散在不同檔案」，也是「同一個概念有三個名字」。省下的改寫成本很小，換來的是編號分散永久存在。
 
-### 定期掃描找過期條目，不在 PR 時檢查（不採用）
+### 只靠定期掃描找過期條目（不當主要防線，保留為次要安全網）
 
-做法是排程定期掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目。不採用的原因：這是被動的，漂移已經發生才會發現。PR 宣告解決某項目的那一刻是最主動的檢查點，在 CI 階段驗證成本最低。
+做法是排程定期掃描，找出「標成完成卻沒有 PR 編號」「標成進行中卻很久沒動」的條目。不當主要防線的原因：這是被動的，漂移已經發生才會發現。PR 宣告解決某項目的那一刻是最主動的檢查點，在 CI 階段驗證成本最低。決策是以 PR 時的檢查為主，每月一次的定期掃描為輔，列出過期條目給 maintainer 季度回顧；這個每月掃描目前沒有實作（見已知限制）。
 
 ### 在產生器裡寫死來源檔清單（不採用）
 

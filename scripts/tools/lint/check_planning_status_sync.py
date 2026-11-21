@@ -205,7 +205,7 @@ def validate_sync(
     *,
     pr_number: Optional[str] = None,
 ) -> List[ValidationIssue]:
-    """Apply the three sync rules per ADR-019 Layer 3."""
+    """Apply the three sync rules per ADR-019 §第三層."""
     issues: List[ValidationIssue] = []
     for h in hits:
         entry = find_entry_by_id(h.id, entries)
@@ -312,7 +312,7 @@ def _emit_gha_warnings(issues: List[ValidationIssue]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Validate PR trailers ↔ planning frontmatter sync (ADR-019 Layer 3).",
+        description="Validate PR trailers ↔ planning frontmatter sync (ADR-019 §第三層).",
     )
     ap.add_argument(
         "--base",

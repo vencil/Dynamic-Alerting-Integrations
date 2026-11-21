@@ -454,7 +454,7 @@ def replace_sentinel_block(content: str, body: str) -> str:
 @exit_on_output_write_error
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Generate the unified planning index (ADR-019 Layer 2).",
+        description="Generate the unified planning index (ADR-019 §第二層).",
     )
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="exit 1 if rendered output drifts")

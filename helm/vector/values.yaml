@@ -55,7 +55,7 @@ victorialogs:
 # ⛔ ADR-028 / #1234 widened this to a SET selector so tenant-api is tailed too.
 # tenant-api is the producer of the federation revocation evidence events
 # (`federation_token_revoked` / `federation_revocation_channel_heartbeat`) that
-# the federation-reconciler queries. ADR-028 §證據通道 assumed those already reached
+# the federation-reconciler queries. Before #1234 the design assumed those reached
 # VictoriaLogs "via the existing Vector pipeline"; they did not — this selector
 # did not match tenant-api, so the reconciler's evidence query returned zero
 # rows forever and the un-revoke tamper-evidence control was a silent no-op.

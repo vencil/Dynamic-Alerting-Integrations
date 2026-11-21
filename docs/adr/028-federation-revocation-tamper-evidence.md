@@ -75,9 +75,11 @@ reconciler 的 pod 不掛 ServiceAccount token、沒有任何 Role，網路只�
 
 ### 證據通道與它的存活訊號
 
-撤銷事件要經 Vector 採集才進得了 VictoriaLogs，所以 Vector 的採集範圍必須包含 tenant-api（`source.extraLabelSelector` 涵蓋 `tenant-api` 與 `federation-gateway`）。Vector 把 tenant-api 的這類事件分到專用的 `federation_evidence` 處理段：只放行列名的事件、只保留列名的欄位，標上 `log_type:"federation_evidence"`，且只寫入平台自己的分區，租戶查不到。
+撤銷事件要經 Vector（平台的日誌採集器，讀節點上各容器的日誌檔、分類後送進日誌庫）採集才進得了 VictoriaLogs，所以 Vector 的採集範圍必須包含 tenant-api（`source.extraLabelSelector` 涵蓋 `tenant-api` 與 `federation-gateway`）。Vector 把 tenant-api 的這類事件分到專用的 `federation_evidence` 處理段：只放行列名的事件、只保留列名的欄位，標上 `log_type:"federation_evidence"`，且只寫入平台自己的分區，租戶查不到。
 
 只看撤銷事件無法判斷通道是否通：「查到零筆」可能是這段時間沒人撤銷，也可能是通道斷了。所以 tenant-api 每 5 分鐘再送一筆不含任何內容的心跳 `federation_revocation_channel_heartbeat`，走與撤銷事件完全相同的處理段與目的地。reconciler 查最近 30 分鐘的心跳，查到就把 `federation_revocation_channel_up` 設為 1，否則為 0；持續 15 分鐘為 0 就觸發 `FederationRevocationEvidenceChannelDown`。心跳必須走同一條路，走別條路就證明不了撤銷事件到得了。
+
+兩件事刻意不做：`FederationRevocationEvidenceChannelDown` 不加 `or absent(...)`，因為指標整個不見的情況已由 `ReconcileStale` 的 `absent()` 分支涵蓋；也不用 Vector 的丟棄計數（`vector_component_discarded_events_total`）做速率告警，因為這個處理段設計上就丟掉絕大多數列，量到的是 tenant-api 的請求量而不是設定失配（理由見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §8.7）。
 
 心跳查詢與其他查詢在同一個失敗即放棄的區塊裡：VictoriaLogs 暫時連不上時，`channel_up` 保留前一輪的值，不會誤報通道斷線（那種情況已由 `ReconcileStale` 回報）。
 
@@ -118,7 +120,7 @@ gateway 作廢整輪重讀之後，之後新增的撤銷也都不會生效，而
 
 `log_type` 由 Vector 依來源 pod 的 label 與 namespace 決定：撤銷證據只收 `tenant-api` namespace（`evidenceChannel.podNamespace`），gateway 警告只收 `monitoring` namespace（`evidenceChannel.gatewayNamespace`）。namespace 由控制面指派，pod 無法自選；pod label 與容器名則可以自己宣告。Vector 讀這些來源欄位時，用的是合併 producer 自己 JSON 之前的值，所以日誌內容蓋不掉它們。
 
-這是提高偽造門檻，不是驗證來源身分：能在上述 namespace 建 pod 的人，仍可以讓自己的輸出被歸進這兩個串流。`monitoring` namespace 還跑著 Prometheus、Grafana、Alertmanager 等元件，對能在那裡建 pod 的人，這道綁定不增加成本。真正的來源身分驗證需要 producer 端簽章或 admission control。
+這是提高偽造門檻，不是驗證來源身分：能在上述 namespace 建 pod 的人，仍可以讓自己的輸出被歸進這兩個串流。`monitoring` namespace 還跑著 Prometheus、Grafana、Alertmanager 等元件，對能在那裡建 pod 的人，這道綁定不增加成本。真正的來源身分驗證需要 producer 端簽章，或 admission control（Kubernetes 在建立 pod 時依政策放行或拒絕的機制）。
 
 ### 鎖存告警與取樣盲區
 
@@ -191,7 +193,7 @@ gateway 讀 `revoked.txt` 失敗時不回 500，依失敗方式有三種結果�
 - **新增的運維面**：多一支要顧存活的 reconciler；VictoriaLogs 的保留期要大於 token 效期加事件處理所需的時間（4 小時 + 約 72 小時，預設保留 30 天足夠）。
 - **tenant-api 的日誌等級必須是 Info 或更詳細。** 撤銷事件是 Info 等級，`TA_LOG_LEVEL` 設成 warn 或 error 會把它濾掉，偵測就失效。
 - **偵測錨點的強度，取決於攻擊者的 ConfigMap 寫入權不延伸到日誌庫。** 對 tenant-api 範圍的入侵成立；整個叢集或 VictoriaLogs 本身被入侵時就打穿。
-- **日誌庫的寫入權只給 Vector。** VictoriaLogs 前方的 vmauth 依「消費端 × 路徑」授權：只有 Vector 能寫入（`/insert`），reconciler、gateway、Grafana、chargeback 只能查詢（`/select`），沒帶帳密的請求只能存取健康檢查與指標（victorialogs chart 預設 `auth.mode: enforce`，見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §1.2）。剩下的偽造路徑都經過 Vector：在受採集的 namespace 建 pod，或寫入節點上 Vector 讀的容器日誌檔。
+- **日誌庫的寫入權只給 Vector。** VictoriaLogs 前方的 vmauth（VictoriaMetrics 家族的認證代理）依「消費端 × 路徑」授權：只有 Vector 能寫入（`/insert`），reconciler、gateway、Grafana、chargeback 只能查詢（`/select`），沒帶帳密的請求只能存取健康檢查與指標（victorialogs chart 預設 `auth.mode: enforce`，見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §1.2）。剩下的偽造路徑都經過 Vector：在受採集的 namespace 建 pod，或寫入節點上 Vector 讀的容器日誌檔。
 - **寫入與日誌之間的縫隙。** 撤銷寫進 ConfigMap 之後才寫日誌；若 pod 剛好在兩者之間被強制終止，這筆撤銷生效但沒有日誌，之後針對它的 un-revoke 抓不到。要封住得用 outbox 模式（先寫一份待送清單，另一個程序負責送出），對 4 小時效期的撤銷是過度設計。接受此風險：需要「剛好在縫隙崩潰」且「攻擊者剛好針對那個 token」兩件事同時發生。
 - **大量撤銷事件可能讓 reconciler 記憶體不足。** 每輪把 24 小時窗的事件整包讀進記憶體。大量撤銷會讓 pod 因記憶體不足被終止，結果是 `ReconcileStale` 觸發，被打瞎會立即告警，不會靜默。
 - **事件格式漂移會靜默縮小覆蓋。** 帶撤銷事件標記但缺欄位或時間無法解析的列會被丟掉，數量記在 `federation_revocation_events_dropped`。全部列都解析不了時，對帳結果是零事件、看似健康；目前沒有對應的告警，只有這個指標。
@@ -222,7 +224,7 @@ gateway 讀 `revoked.txt` 失敗時不回 500，依失敗方式有三種結果�
 | 事件驅動的偵測（[#1322](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1322)） | 出現一次真實的 un-revoke；token 效期大幅下修；平台開始收集 API server 稽核日誌；或相關 namespace 引入 admission control |
 | reconciler 逐行解析或調高記憶體 | reconciler 實務上反覆因記憶體不足重啟，或正常撤銷量逼近 24 小時窗的記憶體上限 |
 | 事件格式漂移的專屬告警 | `federation_revocation_events_dropped` 在實務上持續大於 0 |
-| ConfigMap 內的撤銷集校驗碼 | 出現意外損毀或手改未同步的實際案例 |
+| ConfigMap 內的撤銷集校驗碼（只當輔助，抓意外損毀或忘了同步的手改） | 延後，未設觸發條件 |
 
 ## 與其他決策的關係
 

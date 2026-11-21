@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """waveform_score.py — temporal-match + episode 對帳 + catch-rate 報告器（ADR-030）
 
-吃 PR-2 ``inject_waveform.py`` 的 JSON 報告（1..N 份）+ 容差矩陣檔（ADR-030 §5 兩段式）→
+吃 ``inject_waveform.py`` 的 JSON 報告（1..N 份）+ 容差矩陣檔（ADR-030 §5 兩段式）→
 逐 injected case 做 temporal-match → episode×alert-class 對帳 → catch-rate +
 FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1 道）+ 結構化報告保存
 （R2-4 baseline；``schema_version`` 欄）。**不做**：通知送達／post-inhibition 層
@@ -30,12 +30,12 @@ FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1
     歸因被聚合規則剝 label 遮蔽時不得偽裝 PASS；診斷逃生門＝驗證期把
     waveform_signature 加入該規則的 by() 子句〔修改後規則 ≠ 生產規則〕）；
     **PASS** = FN==0 且 indeterminate==0（exit 0）。
-  * carve-out（D1/OQ1）：容差檔 ``carve_outs``（鍵 = case 的 ``fault_class``——
+  * carve-out（ADR-030 §1）：容差檔 ``carve_outs``（鍵 = case 的 ``fault_class``——
     分母排除必須在開火前可決定的 case 側身分）→ 從分母排除 + 獨立列出（dual-
     control 人工審軌）。
   * fan-out ratio（D7/R3-1）= 每 episode 的 series-level 命中筆數；報告分位數
     （p50/p90/max）、只揭露不 gate、無魔術閾值。
-  * no-silent-caps 守恆（ADR-030 §8 第 4 道）：``scored 分母 + indeterminate + carve-out 排除
+  * no-silent-caps 守恆（ADR-030 §8 第 2 道）：``scored 分母 + indeterminate + carve-out 排除
     == 總 must_detect case 數`` 且 ``hits + FN == scored 分母``——違反 = 工具自身
     bug → exit 2；分母的每一次縮小都顯性計數。零分母分流：**carve-out 致零分母
     → exit 2**（設定面問題）；**indeterminate 致零分母 → verdict INDETERMINATE
@@ -453,7 +453,7 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
           tolerances_path: str | None = None, schema_path: str | None = None) -> dict:
     """全量計分 → score 報告 dict（verdict 由 caller 讀 summary 判 exit）。
 
-    守恆（no-silent-caps，ADR-030 §8 第 4 道）：任何 case 不得靜默蒸發——違反丟 ScoreToolBug。"""
+    守恆（no-silent-caps，ADR-030 §8 第 2 道）：任何 case 不得靜默蒸發——違反丟 ScoreToolBug。"""
     cases: list[dict] = []
     carved: list[dict] = []
     seen_case_keys: set[tuple] = set()
