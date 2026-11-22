@@ -18,7 +18,7 @@
 # `make pr-preflight` fails when the guards are not on the push path.
 #
 # These hooks run the lightweight CI checks locally before each commit,
-# catching drift issues early (tool-map, rule-pack stats, glossary, etc.).
+# catching drift issues early (tool-map, rule-pack stats, etc.).
 #
 # ⛔ A NEW auto-stage hook must declare its CI execution point (#2694): call it
 # by id (`pre-commit run <id> --all-files`) in a workflow, or register it in
@@ -263,7 +263,8 @@ repos:
         name: Tool map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_tool_map.py --check --lang all
         language: python
-        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        # #2128: the tool imports its write entry from _lib_io, which needs PyYAML
+        # (#4223: _lib_output does not; moving the import there is #3981's).
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^scripts/tools/.*\.py$
@@ -304,7 +305,8 @@ repos:
         name: Doc map coverage
         entry: python3 -X utf8 scripts/tools/dx/generate_doc_map.py --check --lang all
         language: python
-        # #2128: the shared _atomic_write helper imports _lib_io, which needs PyYAML.
+        # #2128: the tool imports its write entry from _lib_io, which needs PyYAML
+        # (#4223: _lib_output does not; moving the import there is #3981's).
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^docs/.*\.(md|jsx)$
@@ -416,14 +418,6 @@ repos:
         # 改變 --check 的判定而本 hook 不跑，由 CI 全量 pytest 裡的
         # test_repo_check_is_green 攔。
         files: ^(scripts/|components/da-tools/app/|tests/)
-        additional_dependencies: ['pyyaml']
-
-      - id: glossary-check
-        name: Glossary abbreviation sync
-        entry: python3 -X utf8 scripts/tools/dx/sync_glossary_abbr.py --check
-        language: python
-        pass_filenames: false
-        files: ^docs/.*\.md$
         additional_dependencies: ['pyyaml']
 
       # ⛔ The name used to be "Changelog format", which is what a reader
@@ -802,14 +796,15 @@ repos:
         additional_dependencies: ['pyyaml']
 
       # #880 Day-3 hardening: validate every tenant-shaped conf.d file against
-      # tenant-config.schema.json (metadata additionalProperties:false + db_type
-      # enum). Shifts the #869 db_type-typo silent-failure (dbType/db_typ key or a
-      # maraidb value → DBType="" → tenant silently dropped from liveness) left to
+      # tenant-config.schema.json (the closed `_` namespace, _expected_exporters as
+      # a list of the exporter-kind enum, metadata additionalProperties:false).
+      # Shifts the #869 liveness-typo silent-failure (a mistyped key or a maraidb
+      # kind → nothing declared → tenant silently dropped from liveness) left to
       # author/CI time. jsonschema is REQUIRED here (unlike md-yaml-drift it does not
       # degrade) so it is in additional_dependencies. Also wired into ci.yml's Lint
       # job (pre-commit run confd-schema-check) like routing-profiles-check.
       - id: confd-schema-check
-        name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 db_type-typo + #658 _defaults key guard + #2245)
+        name: conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml ↔ schemas (#880 liveness-typo + #658 _defaults key guard + #2245)
         # ADR-036 step 4 (#2906): the lint reads conf.d through `da-guard
         # parse-tree` (with_da_guard.sh, as for routing-profiles-check).
         entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_confd_schema.py --config-dir components/threshold-exporter/config/conf.d
@@ -1186,6 +1181,24 @@ repos:
         files: ^(docs/.*\.md|mkdocs\.yml|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
         additional_dependencies: ['pyyaml', 'jsonschema', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
 
+      # #1558: a fence declared ```<lang> {.quote src="…" [anchor="…"]} must
+      # match its source file line for line (only common indentation and
+      # trailing whitespace normalised; mid-block elisions marked with a
+      # whole `...` line). Opt-in: undeclared blocks are not looked at. It
+      # reads files only (no git, no subprocess); the blocks are the site
+      # renderer's (the docs' YAML inventory's Renderer), so the renderer's
+      # packages are pinned as for md-yaml-fence-check and a missing one is
+      # rc 2, never a skip. `files:` cannot list the quoted sources (they are
+      # declared in the docs), so editing a source does not run this locally:
+      # ci.yml's always-on Lint job names it.
+      - id: doc-quote-check
+        name: Declared quotes in docs/ match their source (.quote)
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_quotes.py
+        language: python
+        pass_filenames: false
+        files: ^(docs/.*\.md|mkdocs\.yml|scripts/tools/lint/check_doc_quotes\.py|scripts/tools/_lib_doc_yaml_inventory\.py)$
+        additional_dependencies: ['pyyaml', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
+
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
         # docs/assets/dist/ is build output and not in git (#3738): build it
@@ -1433,7 +1446,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_(io|output)\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: runtime-canary-compile-check
         name: "#3679: runtime canary's compiled rules must match its recipe through the real compiler"
@@ -1447,12 +1460,12 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_(io|output)\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: retire-drift-check
-        name: "#869: forbid removing a K8s exporter target while conf.d _metadata.db_type remains (false-positive guard)"
-        # #2858: db_type is read through `da-guard served-values` (the exporter's
-        # own reading: profile, platform file, per-key layering); the wrapper
+        name: "#869: forbid removing a K8s exporter target while its conf.d _expected_exporters declaration remains (false-positive guard)"
+        # #2858: the declared kinds are read through `da-guard served-values` (the
+        # exporter's own reading: profile, platform file, the tenant file over them); the wrapper
         # builds .build/da-guard as for platform-data-check, and a run without
         # one fails by name. The Go module and the reader are in `files:` for
         # the same reason as there: they change the answer. #3206: the
@@ -1463,11 +1476,11 @@ repos:
         additional_dependencies: ['pyyaml']
         pass_filenames: false
         files: ^(components/threshold-exporter/config/conf\.d/|helm/values-.*\.yaml$|k8s/00-namespaces/namespaces\.yaml$|scripts/tools/lint/check_retire_drift\.py$|scripts/tools/_lib_(tenant_values|parse_cache|parse_tree|consumer_read)\.py$|scripts/ops/with_da_(guard|crdecode)\.sh$|components/threshold-exporter/app/)
-        # A tenant that declares _metadata.db_type emits tenant_expected_exporter=1
+        # A tenant that declares _expected_exporters emits tenant_expected_exporter=1
         # (collector.go). If a PR deletes its K8s target (helm/values-<t>.yaml or its
-        # db-* namespace) but leaves the conf.d _metadata, TenantExporterAbsent
+        # db-* namespace) but leaves the conf.d declaration, TenantExporterAbsent
         # (#869) fires a permanent FALSE-POSITIVE critical against the dead tenant.
-        # This blocks that order. Fix: remove the conf.d _metadata entry first (or
+        # This blocks that order. Fix: remove the conf.d declaration first (or
         # in the same PR). NOTE the files: path filter can miss some PRs (e.g. a
         # delete-only diff) — the CI mirror in ci.yml runs unfiltered over HEAD.
         # The deployed custom-alert pack is COMPILED from the live conf.d
@@ -1717,7 +1730,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|environments/[^/]+/threshold-exporter\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|prompt|python|validation|write_check|yaml_strict)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|environments/[^/]+/threshold-exporter\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|output|parse_cache|parse_tree|paths|prometheus|prompt|python|validation|write_check|yaml_strict)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + fixed point + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"

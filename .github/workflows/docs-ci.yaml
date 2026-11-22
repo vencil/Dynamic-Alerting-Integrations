@@ -237,10 +237,6 @@ jobs:
           # `unrecognized arguments: docs/ rule-packs/`.
           python scripts/tools/dx/doc_coverage.py --ci
 
-      - name: Sync glossary abbreviations
-        run: |
-          python scripts/tools/dx/sync_glossary_abbr.py --check
-
   mkdocs-build:
     name: MkDocs Build Verification
     runs-on: ubuntu-24.04
@@ -390,7 +386,7 @@ jobs:
         # a missing node is a hard error (rc 2) everywhere since #3611.
         run: |
           python scripts/tools/validate_all.py \
-            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,repo_name,alerts,cli_default_drift,cli_contract,frontmatter_versions \
+            --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,includes,repo_name,alerts,cli_default_drift,cli_contract,frontmatter_versions \
             --ci
 
   i4-runbook-smoke-test:

@@ -73,7 +73,7 @@ CONTROL = "acme"
 HIDDEN_MARKS = ("ghost", ".snap")
 
 # A body most readers understand: a threshold (gitops_check counts it,
-# deprecate_rule scans for it), `_metadata.db_type` (check_retire_drift,
+# deprecate_rule scans for it), `_expected_exporters` (check_retire_drift,
 # migrate_conf_d) and a `_custom_alerts` instance (a reader of that list
 # sees only a tenant that carries one — without it such a cell would see
 # nothing in EITHER arm and pass vacuously; the custom-alert loader's cell
@@ -82,8 +82,7 @@ _BODY = (
     "tenants:\n"
     "  {tid}:\n"
     "    cpu_usage: \"80\"\n"
-    "    _metadata:\n"
-    "      db_type: postgres\n"
+    "    _expected_exporters: [postgresql]\n"
     "    _custom_alerts:\n"
     "      - recipe: pg_connections_high\n"
     "        params:\n"
@@ -159,7 +158,7 @@ def _generate_tenant_metadata(root):
 
 
 # Cells whose reader takes the tenants (or, for check_retire_drift, #2858, the
-# db_type) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
+# declared exporter kinds) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
 # `tree_tenants` takes its tenant set from parse-tree (#2906). (#3572: the
 # operator-plane readers that used it read no conf.d any more.)
 _SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff",
@@ -235,7 +234,7 @@ def _check_confd_schema(root):
 
 def _check_retire_drift(root):
     import check_retire_drift
-    return sorted(check_retire_drift.conf_d_declared_db_type_tenants(root))
+    return sorted(check_retire_drift.conf_d_declared_exporter_tenants(root))
 
 
 def _config_diff(root):

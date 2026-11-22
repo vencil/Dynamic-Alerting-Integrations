@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-19
+updated_at: 2026-11-22
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -79,6 +79,8 @@ updated_at: 2026-11-19
 2026-11-18 修訂：判決不再有 `undecidable`：判決文件拿掉 `undecidable` 與 `undecidable_blocks` 兩個欄位，各閘門也不再有「判不了的閾值鍵」這種結果；決定 7 改寫成「沒讀到根平台檔的樹」（決定 5、6、7）。
 
 2026-11-19 修訂：根 `defaults:` 裡沒有讀取端讀的 `_` 鍵（登錄表沒有的鍵，以及 defaults 合併每一層都丟掉的 `_metadata`），判在那份檔上，沒有租戶繼承它時也判；`_metadata` 的原因是 `merge_dropped`（決定 4）。
+
+2026-11-22 修訂：值讀不懂的保留鍵在平台檔 `tenants:` 與 profile 原本一律是 notice；兩種情形改為三層都是 error——exporter 不讀的 `_expected_exporters`，以及還寫著已移除的 `_metadata.db_type`（決定 10）。
 
 ## 摘要
 
@@ -244,7 +246,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 | 子鍵 | 以誰為準 |
 |---|---|
 | `_routing` 的子鍵、receiver 型別、`_routing_enforced` 的欄位 | 產生器的程式碼 |
-| `_metadata` 的 9 個欄位 | Go 的 `TenantMetadata` 結構 |
+| `_metadata` 的 8 個欄位 | Go 的 `TenantMetadata` 結構 |
 | `_custom_alerts` 條目的欄位 | recipe 契約檔（[ADR-024](./024-version-aware-threshold-via-dimensional-label.md) §9） |
 
 這條分界讓讀者知道某個清單該去哪裡改：頂層保留鍵改登錄表，子鍵改讀取它的那支程式。
@@ -430,6 +432,7 @@ tenants:
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
+| 值讀不懂、後果是整批租戶無聲地失去缺席告警的兩種情形：`_expected_exporters` 的值 exporter 不讀（不是列表、不認得的種類、重複、`@` 後面不是叢集 ID、同一個種類既單獨寫又寫成 `種類@叢集`）；`_metadata` 還寫著已移除的 `db_type` | 同上，由 exporter 的讀取函式判，判決報 `value_unread`；讀取函式另外標明這種問題在每一層都算 error。`db_type` 的原因文字就是遷移指示（要改寫成哪一行） | **租戶檔、平台檔 `tenants:`、profile 三層都是 error**。在平台檔或 profile 只報 notice，等於讓該層餵到的每個租戶都不再被 `TenantExporterAbsent` 納管，卻沒有任何東西會響 |
 | 保留鍵寫成排程（`overrides:` 時窗，或 `{default: …, expires: …}` 形式的 `expires:`／`reason:`） | exporter 與 annotation 這些讀取端只讀 `default`，時窗與到期時間都不生效。判決報 `schedule_unread`，判在寫它的檔與層，規則與 `value_unread` 相同；涵蓋那一層有任何讀取端讀的鍵，不只 exporter 讀的（annotation 讀的 `_namespaces` 也只讀 `default`；產生器讀的 `_routing_profile` 寫成 mapping 時，產生器整棵樹拒收，`routing_profile_invalid`）；那一層沒有讀取端讀的鍵（例如 profile 裡的 `_severity_dedup`）只報那個鍵本身沒人讀。寫入閘門以寫下的原樣比對新舊，挪動時窗算新的；tenant-api 不因它另外拒收，沿用決定 12 的寫入檢查 | 租戶檔：error；平台檔與 profile：notice |
 | 子目錄 `_defaults.yaml` 的 defaults 寫了保留鍵，或寫了做不成閾值列的 `_` 鍵（例如 `_silent_mode: all`，也包括排程寫法） | 子目錄 defaults 不帶這些鍵，exporter 不論值為何都不套用。判決報 `unread`、原因 `subtree_default_reserved_key`，掛在子目錄檔，每個檔與鍵一筆，列出繼承它的租戶。這份集合與 da-guard 主檢查的同名 finding 共用一個函式，所以一邊報、另一邊一定也報。`da-guard write` 只列主檢查那一筆。路由鍵（`_routing`、`_routing_<…>`）由產生器自己判，不在此列 | error |
 

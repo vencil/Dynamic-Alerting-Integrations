@@ -4,9 +4,8 @@ package main
 // the exporter module's production code, the only function that references a
 // stdlib DIRECT directory-listing entry point is walkDirTree in
 // pkg/config/tree_scan.go (behind config.ScanDirTree, the conf.d walker), and
-// it does so exactly once. walkFilesDir in cmd/da-batchpr/main.go is the one
-// explicit exclusion — it walks a PR payload directory, not conf.d (#1911
-// owner ruling ①(a)).
+// it does so exactly once. The explicit exclusions (confdWalkerExclusions)
+// each list a directory that is not conf.d, with the reason beside them.
 //
 // The population is derived, not listed: every non-_test.go Go file the
 // module holds (the directories `./...` would load — see
@@ -40,10 +39,7 @@ package main
 //     go/build.ImportDir, os.RemoveAll, os.CopyFS (with a non-DirFS source),
 //     syscall.ReadDirent. Only the DIRECT entry points below are matched;
 //     chasing the transitive closure is deliberately not attempted.
-//   - subprocess-based listing (exec.Command "ls", "find", "git …"). The
-//     module has one today, internal/batchpr/git_shell.go
-//     (`git status --porcelain` in collectRebaseConflicts), which walks a PR
-//     work tree, not the exporter's conf.d.
+//   - subprocess-based listing (exec.Command "ls", "find", "git …").
 //   - reflection that looks a method up by string (reflect.Value.MethodByName
 //     ("Readdirnames")…): no selector names the entry point in the source.
 //   - cgo and raw syscalls.
@@ -84,8 +80,7 @@ var confdWalkerExclusions = map[string]struct {
 	sites  int
 	reason string
 }{
-	"cmd/da-batchpr/main.go · walkFilesDir": {1, "walks the PR payload directory, not conf.d — #1911 ruling ①(a)"},
-	"cmd/da-guard/selfcheck.go · copyTree":  {1, "walks the self-check fixture embedded in the binary (embed.FS) to write a copy of it; the copy is read by the subcommands themselves, through the walker — #3943"},
+	"cmd/da-guard/selfcheck.go · copyTree": {1, "walks the self-check fixture embedded in the binary (embed.FS) to write a copy of it; the copy is read by the subcommands themselves, through the walker — #3943"},
 }
 
 // dirEnumeratingFuncs are the stdlib package-level entry points that DIRECTLY

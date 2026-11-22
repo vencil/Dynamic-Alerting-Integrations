@@ -76,10 +76,10 @@ Every row says which kind of path its flag names. One rule (#3982, owner
   under the audit hook logging reads), or its default is a file the repo
   tracks, or another program loads it whole (``EXTERNAL_READERS``, the one
   part no test can measure: only the owner adds to it, with the reason).
-  Written by atomic replace (``_lib_io.write_repo_artifact``): a failed run
+  Written by atomic replace (``_lib_output.write_repo_artifact``): a failed run
   leaves the old file whole.
 * ``operator`` — everything else: the output only a person or a pipe reads.
-  Opened in place by the kernel (``_lib_io.write_operator_output`` /
+  Opened in place by the kernel (``_lib_output.write_operator_output`` /
   ``open_operator_output``). An append is always operator.
 
 ``test_the_class_follows_the_read_back`` holds both directions: an operator
@@ -103,7 +103,7 @@ The control run is also the measurement of who wrote. It runs under
 ``_write_audit/sitecustomize.py``, an audit hook that logs every filesystem
 change the tool and its Python children make, with the stack that made it.
 After the run, every change UNDER THE OUTPUT PATH must have come through the
-entry of the row's class (``_lib_io.OUTPUT_ENTRY_POINTS`` says which
+entry of the row's class (``_lib_output.OUTPUT_ENTRY_POINTS`` says which
 functions those are; ``ensure_dir`` is the entry for a ``mkdir``).
 
 "Under the output path" is the directory the control run hands the tool —
@@ -225,7 +225,7 @@ POPULATION — WHAT THIS TABLE CAN AND CANNOT SEE
 ``test_every_flag_named_at_a_writer_has_a_row`` derives, from the tree, the
 (tool, flag) pairs that pass ``flag=`` to one of the WRITER NAMES, in every
 Python file of the repository that is not a test (``tests/_tree.repo_files``:
-what git tracks) — every function ``_lib_io.OUTPUT_ENTRY_POINTS`` lists: the two classes' entries, the
+what git tracks) — every function ``_lib_output.OUTPUT_ENTRY_POINTS`` lists: the two classes' entries, the
 old names, ``ensure_dir``, and (#1789) the ``output_write`` context manager
 that wraps a raw sink. A tool that grows an output flag and names it in one
 of those without adding a row goes red. So does a second flag on a tool that
@@ -333,16 +333,6 @@ def _legacy_rules(tmp: Path) -> str:
         "          severity: warning\n"
         "        annotations:\n"
         "          summary: connection count high\n",
-        encoding="utf-8")
-    return str(p)
-
-
-def _glossary(tmp: Path) -> str:
-    p = tmp / "glossary.md"
-    p.write_text(
-        "# Glossary\n\n"
-        "**ADR (Architecture Decision Record)** — a design decision.\n\n"
-        "**BYO (Bring Your Own)** — customer-supplied component.\n",
         encoding="utf-8")
     return str(p)
 
@@ -618,12 +608,12 @@ class Row:
     # batch_diagnose reads its ConfigMap through a fake `kubectl` on PATH).
     env: Callable[[Ctx], dict[str, str]] | None = None
     # Bad-path shapes to drive. A FILE tool whose own mkdir -p creates the
-    # parent (sync_glossary_abbr) legitimately succeeds on missing_parent, so
-    # it lists parent_is_file only.
+    # parent legitimately succeeds on missing_parent, so it lists
+    # parent_is_file only.
     shapes: tuple[str, ...] = ("missing_parent", "parent_is_file")
     # The head the tool prints in front of the shared ``cannot <action> …``
     # message, on the same line. The default is the one the shared emitter
-    # (``_lib_io._die_on_write_error``) writes; a tool may replace it with a
+    # (``_lib_output._die_on_write_error``) writes; a tool may replace it with a
     # head of its own when that head is a contract that predates this ticket:
     #   * ``waveform_score`` — ``ERROR [ERR_OUTPUT]: ``, the de-identified
     #     error code its ``--redact`` mode is documented to print in both
@@ -795,11 +785,6 @@ ROWS: list[Row] = [
         shapes=("artifact_is_dir",),
         artifact=_artefact, variant=_artefact)
       for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
-    R("dx/sync_glossary_abbr.py", "--output", "file", "artifact",
-      lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
-      reach="tmp glossary.md with two **ABBR (Expansion)** entries",
-      out_name="abbreviations.md",
-      shapes=("parent_is_file", "target_is_dir")),
     # A non-default `prefix`. This tool funnels every error through
     # `_emit_error`, which stamps a de-identified error CODE — a documented
     # `--redact` contract (the SME triages by code without a re-run, and under
@@ -1297,7 +1282,7 @@ def _bad_path(tmp: Path, shape: str, row: Row) -> Path:
     raise AssertionError(shape)
 
 
-# The verbs ``_lib_io.OutputWriteError`` can put in ``cannot <action> …``.
+# The verbs ``_lib_output.OutputWriteError`` can put in ``cannot <action> …``.
 # Longest-first so ``create directory`` is not eaten by a prefix.
 _ACTIONS = ("create directory", "copy into", "append to", "inspect",
             "write", "append")
@@ -1461,11 +1446,11 @@ def _read_audit_log(log: Path) -> list[dict] | None:
 
 def _entry_frames() -> dict[str, str]:
     """``<file relative to the repo>:<function>`` → what kind of entry it is,
-    for every function `_lib_io.OUTPUT_ENTRY_POINTS` names as one that
+    for every function `_lib_output.OUTPUT_ENTRY_POINTS` names as one that
     writes. Read from the library, not listed here a second time."""
-    import _lib_io
+    import _lib_output
     frames = {}
-    for kind, names in _lib_io.OUTPUT_ENTRY_POINTS.items():
+    for kind, names in _lib_output.OUTPUT_ENTRY_POINTS.items():
         if kind in ("names_flag_only", "wrapper"):
             continue  # neither opens anything: the write under them is another frame's
         for name in names:
@@ -1491,7 +1476,7 @@ def _via(event: dict, frames: dict[str, str]) -> str:
 #: entry's frame on the stack and is neither a kernel open nor the atomic
 #: writer. Private names, so `test_the_entry_point_list_is_complete` checks
 #: they exist.
-_OPERATOR_OPENER = "scripts/tools/_lib_io.py:_kernel_open_operator_output"
+_OPERATOR_OPENER = "scripts/tools/_lib_output.py:_kernel_open_operator_output"
 _ATOMIC_WRITER = "scripts/tools/_lib_atomic_write.py:"
 
 
@@ -1922,8 +1907,8 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
 #: Otherwise operator. Both directions are faults: an operator flag the tool
 #: reads back, and an artifact flag (a) and (c) do not explain.
 #: ⚠️ (b) has no list here: every row whose default is tracked
-#: (generate_adr_index / generate_planning_index --target, sync_glossary_abbr
-#: --output) also reads it back, so an entry would explain nothing (a)
+#: (generate_adr_index / generate_planning_index --target) also reads it
+#: back, so an entry would explain nothing (a)
 #: does not — measured: removing one changed no outcome. A row that needs
 #: (b) adds the list then, held to `git ls-files`. It stays the static
 #: trigger for constant-path writers this gate does not run.
@@ -2553,15 +2538,15 @@ _UNRESOLVED = "<cannot tell which flag: {}>"
 
 
 def _writer_names() -> frozenset[str]:
-    """Every function `_lib_io.OUTPUT_ENTRY_POINTS` names — the entries, the
+    """Every function `_lib_output.OUTPUT_ENTRY_POINTS` names — the entries, the
     two that only name the flag, and the wrappers. Read from the library:
     the hand-kept copy of this list that used to live here did not know
     `write_operator_output` / `write_repo_artifact` / `atomic_write_text`, so
     each tool migrated to them left this population without a word
     (`ops/federation_keygen` had; `ops/migrate_credentials` never entered)."""
-    import _lib_io
+    import _lib_output
     return frozenset(name.split(".")[1]
-                     for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names)
+                     for names in _lib_output.OUTPUT_ENTRY_POINTS.values() for name in names)
 
 
 def _cli_modules() -> list[tuple[str, Path, ast.Module]]:
@@ -2581,9 +2566,9 @@ def _cli_modules() -> list[tuple[str, Path, ast.Module]]:
     same string its ``Row.tool`` carries. A file that does not parse fails
     the scan: it could not be read, which is not "it calls no writer".
     """
-    import _lib_io
+    import _lib_output
     own = {TOOLS_DIR / f"{name.split('.')[0]}.py"
-           for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names}
+           for names in _lib_output.OUTPUT_ENTRY_POINTS.values() for name in names}
     out = []
     for py in sorted(repo_files(".py")):
         if py in own or py.relative_to(REPO_ROOT).parts[0] == "tests":
@@ -2738,6 +2723,16 @@ def test_a_flag_expression_that_resolves_to_nothing_is_unresolved_not_absent():
 # test_output_write_sites_stay_guarded for a raw sink) — which sees the shape
 # of the code, never the rc an operator gets.
 NO_ROW: dict[Key, str] = {
+    ("dx/generate_rulepack_derived.py", "--rule-packs-dir"):
+        "#3981, fifth batch. The flag names the INPUT directory, whose packs "
+        "the tool rewrites in place: a row's bad-path shapes (a missing "
+        "parent, a parent that is a file) fail when the packs are listed and "
+        "read, before any write — the pair would measure the reader. What "
+        "speaks for the write: tests/dx/test_generate_rulepack_derived.py "
+        "`test_a_refused_pack_leaves_the_earlier_stale_one_alone`, through "
+        "da-read, in process: a stale pack that is the process's stdin is "
+        "refused before it is replaced, rc 2, one line naming the file and "
+        "the flag, and the earlier stale pack keeps its bytes.",
     ("dx/inject_waveform.py", "--out"):
         "Its `--out` write is the LAST step of an injection run: the tool "
         "pushes a waveform into an isolated vmsingle over HTTP and then "
@@ -2765,7 +2760,7 @@ NO_ROW: dict[Key, str] = {
         "still_unreachable` holds that premise: the day a migration is "
         "registered it goes red, and this entry gives way to a row.",
 }
-_NO_ROW_CEILING = 2
+_NO_ROW_CEILING = 3
 
 
 def test_every_flag_named_at_a_writer_has_a_row():
@@ -2881,8 +2876,39 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "switch, not a path. A write that fails is held by "
         "tests/lint/test_check_doc_links.py "
         "(test_fix_anchors_that_cannot_write_the_doc_is_exit_2).",
+    # #3981, third batch: two generators of committed copies of a schema
+    # definition. Each names its own targets.
+    "dx/gen_tenant_id_json.py":
+        "the default mode rewrites the two `tenant-id.json` copies the tool "
+        "names; it takes no path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    "dx/gen_am_duration_json.py":
+        "the default mode rewrites the `am-duration.json` copy the tool names; "
+        "it takes no path. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    # #3981, fourth batch: its `write_targets` is gen_recipe_contract's too.
+    "dx/sync_schema.py":
+        "`--update` rewrites the generated targets the tool names (and, "
+        "through its `write_targets`, gen_recipe_contract's); it takes no "
+        "path but `--root`. A write that fails is held by "
+        "tests/dx/test_shared_atomic_write_callers.py "
+        "(test_a_failing_replace_is_rc2_one_line_naming_the_target).",
+    # #3981, fifth batch: two generators of committed files they name.
+    "dx/gen_adr_checks.py":
+        "`--write` rewrites the generated block of the ADRs under docs/adr/; "
+        "it takes no path. A target refused before the first write is held by "
+        "tests/lint/test_gen_adr_checks.py "
+        "(test_a_stdin_target_leaves_the_other_language_alone; a FIFO, refused "
+        "at the read: test_a_refused_adr_leaves_the_other_language_alone).",
+    "dx/generate_rulepack_configmaps.py":
+        "the default mode rewrites the rule-pack ConfigMaps under "
+        "k8s/03-monitoring/; it takes no path. A refused target is held by "
+        "tests/dx/test_generate_rulepack_configmaps.py "
+        "(test_a_refused_configmap_leaves_the_others_unwritten).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 13
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 18
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:
@@ -2919,16 +2945,16 @@ def test_a_no_row_flag_excuses_only_calls_that_name_it():
 
 def test_every_caller_of_a_two_class_entry_has_a_row():
     """File level, and regardless of ``flag=``: a module under the CLI roots
-    — a library too — that CALLS one of `_lib_io`'s operator or artifact
+    — a library too — that CALLS one of `_lib_output`'s operator or artifact
     entries has a row that runs it. The pair-level test above reads ``flag=``
     and skips libraries; a call that names no flag, or sits in a library, is
     still a write through an entry that some control run has to exercise
     (carried over from the file-level audit this table replaced). The callers
     no row can be written for are `ENTRY_CALLERS_WITH_NO_FLAG` (no flag at
     the writer) and the tools of `NO_ROW` (a flag, and a measured reason)."""
-    import _lib_io
+    import _lib_output
     entries = {name.split(".")[1] for kind in CLASSES
-               for name in _lib_io.OUTPUT_ENTRY_POINTS[kind] if name.startswith("_lib_io.")}
+               for name in _lib_output.OUTPUT_ENTRY_POINTS[kind] if name.startswith("_lib_output.")}
     modules = {tool: tree for tool, _py, tree in _cli_modules()}
     callers = {tool for tool, tree in modules.items()
                if any(isinstance(node, ast.Call) and _called_name(node) in entries
@@ -2985,19 +3011,19 @@ def test_the_unreachable_state_migration_is_still_unreachable():
 
 
 def test_the_entry_point_list_is_complete():
-    """`_lib_io.OUTPUT_ENTRY_POINTS` is what the population and the audit are
+    """`_lib_output.OUTPUT_ENTRY_POINTS` is what the population and the audit are
     derived from, so a writer missing from it is a hole in both. Held from
     the code: every name resolves to a function that takes ``flag``; every
-    top-level function of `_lib_io` / `_lib_atomic_write` that takes ``flag``
+    top-level function of `_lib_io` / `_lib_output` / `_lib_atomic_write` that takes ``flag``
     is named; and so is every function of a library module that hands its
     own ``flag`` on to a named one (a wrapper)."""
-    import _lib_io
+    import _lib_output
     # The two private functions the audit holds each class's write to.
-    assert callable(getattr(_lib_io, _OPERATOR_OPENER.rpartition(":")[2], None)), (
+    assert callable(getattr(_lib_output, _OPERATOR_OPENER.rpartition(":")[2], None)), (
         f"{_OPERATOR_OPENER} is gone: name the function that opens an operator path now")
     assert (REPO_ROOT / _ATOMIC_WRITER.rstrip(":")).is_file(), _ATOMIC_WRITER
-    named = {name for names in _lib_io.OUTPUT_ENTRY_POINTS.values() for name in names}
-    assert len(named) == sum(len(v) for v in _lib_io.OUTPUT_ENTRY_POINTS.values()), (
+    named = {name for names in _lib_output.OUTPUT_ENTRY_POINTS.values() for name in names}
+    assert len(named) == sum(len(v) for v in _lib_output.OUTPUT_ENTRY_POINTS.values()), (
         "a function is listed under two kinds")
     takes_flag: dict[str, ast.FunctionDef] = {}
     for py in sorted(f for f in repo_files(".py")
@@ -3011,7 +3037,7 @@ def test_the_entry_point_list_is_complete():
     short = {name.split(".")[1] for name in named}
     should = set()
     for name, fn in takes_flag.items():
-        if name.split(".")[0] in ("_lib_io", "_lib_atomic_write"):
+        if name.split(".")[0] in ("_lib_io", "_lib_output", "_lib_atomic_write"):
             should.add(name)
         elif any(isinstance(n, ast.Call) and _called_name(n) in short
                  and any(kw.arg == "flag" and isinstance(kw.value, ast.Name)
@@ -3020,7 +3046,7 @@ def test_the_entry_point_list_is_complete():
             should.add(name)
     assert not sorted(should - named), (
         "function(s) that write an output path for a caller's flag and are not "
-        f"in _lib_io.OUTPUT_ENTRY_POINTS: {sorted(should - named)}")
+        f"in _lib_output.OUTPUT_ENTRY_POINTS: {sorted(should - named)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3138,13 +3164,13 @@ def test_no_flag_with_a_row_is_declared_as_something_the_tool_does_not_write():
 # rule both ways: on a log written by hand, and on the real hook run over a
 # few lines of Python.
 # ═══════════════════════════════════════════════════════════════════════════
-_OP = ["scripts/tools/_lib_io.py:_kernel_open_operator_output",
-       "scripts/tools/_lib_io.py:open_operator_output",
-       "scripts/tools/_lib_io.py:write_operator_output", "scripts/tools/ops/t.py:main"]
+_OP = ["scripts/tools/_lib_output.py:_kernel_open_operator_output",
+       "scripts/tools/_lib_output.py:open_operator_output",
+       "scripts/tools/_lib_output.py:write_operator_output", "scripts/tools/ops/t.py:main"]
 _ART = ["scripts/tools/_lib_atomic_write.py:_try_atomic",
         "scripts/tools/_lib_atomic_write.py:atomic_write_text",
-        "scripts/tools/_lib_io.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
-_MKDIR = ["scripts/tools/_lib_io.py:ensure_dir", "scripts/tools/ops/t.py:main"]
+        "scripts/tools/_lib_output.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
+_MKDIR = ["scripts/tools/_lib_output.py:ensure_dir", "scripts/tools/ops/t.py:main"]
 _RAW = ["scripts/tools/ops/t.py:main"]
 
 
@@ -3244,7 +3270,7 @@ class TestWriteAuditVerdict:
 
     def test_the_artifact_entry_must_have_used_the_atomic_writer(self, tmp_path):
         """`write_repo_artifact` with a temp file and `os.replace` of its own."""
-        own = ["scripts/tools/_lib_io.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
+        own = ["scripts/tools/_lib_output.py:write_repo_artifact", "scripts/tools/ops/t.py:main"]
         log = _Log(tmp_path).add("open", ".o.tmp", own).add("os.rename", "o.json", own)
         faults = log.seen(_audit_row("artifact")).faults
         assert sum("not through `_lib_atomic_write`" in f for f in faults) == 2, faults
@@ -3296,7 +3322,7 @@ class TestWriteAuditVerdict:
         assert seen == Seen([], (), False, None)
         # Two classes on one stack: the inner one is the write's. Read from
         # the outside in, this would be the artifact entry's.
-        inside_artifact = [*_OP[:3], "scripts/tools/_lib_io.py:write_repo_artifact",
+        inside_artifact = [*_OP[:3], "scripts/tools/_lib_output.py:write_repo_artifact",
                            "scripts/tools/ops/t.py:main"]
         seen = _Log(tmp_path).add("open", "o.json", inside_artifact).seen(_audit_row())
         assert seen == Seen([], (), False, None)
@@ -3901,8 +3927,8 @@ UNREACHED_WRITER_CALLS: dict[tuple[str, str, str], int] = {
 def _writer_calls(tool: str) -> list[tuple[str, str, int, int]]:
     """(enclosing function, writer name, first line, last line) of every call
     of a writing name in *tool*'s own module."""
-    import _lib_io
-    silent = {name.split(".")[1] for name in _lib_io.OUTPUT_ENTRY_POINTS["names_flag_only"]}
+    import _lib_output
+    silent = {name.split(".")[1] for name in _lib_output.OUTPUT_ENTRY_POINTS["names_flag_only"]}
     names = _writer_names() - silent
     module = ast.parse((TOOLS_DIR / tool).read_text(encoding="utf-8"))
     parents = {child: node for node in ast.walk(module)
@@ -3963,7 +3989,7 @@ def test_unreached_writer_calls_are_counted_by_line():
     assert (tool, function, name) not in unreached_writer_calls({tool: {(own, last)}})
     assert (tool, function, name) in unreached_writer_calls({tool: {(own, last + 1)}})
     assert (tool, function, name) in unreached_writer_calls(
-        {tool: {("scripts/tools/_lib_io.py", first)}})
+        {tool: {("scripts/tools/_lib_output.py", first)}})
 
 
 #: A writer name used as a VALUE rather than called: aliased on import,
@@ -3977,7 +4003,7 @@ WRITER_NAMES_USED_AS_VALUES: dict[tuple[str, str], tuple[int, str]] = {
         1, "a string in LF_PINNING_WRAPPERS: the lint's own list of writers that "
            "pin LF, a name it looks for in other files and never calls."),
     ("ops/_registry_lib.py", "write_repo_artifact"): (
-        6, "handed to `_write_or_stop` as its `write` argument for the generated "
+        7, "handed to `_write_or_stop` as its `write` argument for the generated "
         "surfaces of the threshold registry (fixed repo paths, no flag). The "
         "write is `write_repo_artifact`'s own frame on a stack, so the audit "
         "attributes it when a row runs it; none does today."),

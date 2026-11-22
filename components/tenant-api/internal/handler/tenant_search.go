@@ -13,6 +13,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // SearchTenants is the v2.8.0 Phase .c C-1 server-side search /
@@ -44,14 +45,14 @@ import (
 //
 // Honest scope (this PR / PR-1 of the C-1+C-2+C-2a bundle):
 //   - free-text search is a simple case-insensitive substring match
-//     across id / owner / domain / db_type / tags[]. Inverted index
+//     across id / owner / domain / expected_exporters[] / tags[]. Inverted index
 //     / fuzzy matching is out of scope; revisit if a customer needs
 //     it (rare in practice — operators search by exact id prefix).
 //   - DEGRADED rows (#1680 — a tenant whose conf.d file is not usable,
 //     carrying only id + config_error) are part of the snapshot on
 //     purpose, and go through the same filterTenantsByRBAC (so only
 //     metadata-unrestricted callers see them). The exact-match metadata
-//     filters (environment / tier / domain / db_type / tag) never match
+//     filters (environment / tier / domain / expected_exporters / tag) never match
 //     one: its metadata is UNKNOWN, and matching "unknown" against a
 //     requested value would be a guess. Free-text q still matches its id
 //     — the only field it has — so an operator searching for a tenant by
@@ -141,13 +142,18 @@ type SearchResponse struct {
 // Query params (all optional):
 //
 //	q            — free-text substring (case-insensitive) matching
-//	               id / owner / domain / db_type / tags[]. Empty
+//	               id / owner / domain / expected_exporters[] / tags[]. Empty
 //	               or absent → no text constraint.
 //	environment  — exact match (e.g. "prod", "staging").
 //	tier         — exact match (e.g. "tier1").
 //	domain       — exact match.
-//	db_type      — exact match against any one of the tenant's
-//	               declared kinds (#3771: db_type is a list).
+//	expected_exporters — an exporter kind (`mariadb`): the tenant
+//	               declares that kind in `_expected_exporters`, alone
+//	               or per cluster (`mariadb@east` matches); or a whole
+//	               entry (`mariadb@east`): the tenant declares exactly
+//	               that entry. Exact, never a substring (#4097;
+//	               replaces the removed `db_type`, which is refused
+//	               with 400 rather than ignored).
 //	tag          — single tag the tenant must have in its
 //	               _metadata.tags list (case-sensitive — tags are
 //	               canonical labels, not free text).
@@ -162,15 +168,15 @@ type SearchResponse struct {
 //
 // @Summary     Search tenants
 // @Description Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.
-// @Description When the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / db_type / tag) matches it, and q matches its id only.
+// @Description When the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / expected_exporters / tag) matches it, and q matches its id only.
 // @Description An item whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
 // @Tags        tenants
 // @Produce     json
-// @Param       q           query    string false "Case-insensitive substring over id / owner / domain / db_type / tags"
+// @Param       q           query    string false "Case-insensitive substring over id / owner / domain / expected_exporters / tags"
 // @Param       environment query    string false "Exact environment"
 // @Param       tier        query    string false "Exact tier"
 // @Param       domain      query    string false "Exact domain"
-// @Param       db_type     query    string false "A db_type the tenant declares (exact match against any one of its kinds)"
+// @Param       expected_exporters query string false "An exporter kind the tenant declares in _expected_exporters, alone or per cluster (mariadb matches a tenant declaring mariadb or mariadb@east); or a whole kind@cluster entry, matched exactly. Replaces db_type, which is refused with 400."
 // @Param       tag         query    string false "A tag the tenant must carry (case-sensitive)"
 // @Param       page_size   query    int    false "Page size (default 50, max 500)"
 // @Param       offset      query    int    false "Offset (default 0)"
@@ -225,7 +231,7 @@ type searchParams struct {
 	environment string
 	tier        string
 	domain      string
-	dbType      string
+	kind        string
 	tag         string
 	pageSize    int
 	offset      int
@@ -239,11 +245,17 @@ func parseSearchParams(r *http.Request) (*searchParams, error) {
 		environment: strings.TrimSpace(q.Get("environment")),
 		tier:        strings.TrimSpace(q.Get("tier")),
 		domain:      strings.TrimSpace(q.Get("domain")),
-		dbType:      strings.TrimSpace(q.Get("db_type")),
+		kind:        strings.TrimSpace(q.Get("expected_exporters")),
 		tag:         strings.TrimSpace(q.Get("tag")),
 		pageSize:    defaultPageSize,
 		offset:      0,
 		sort:        "id",
+	}
+
+	// #4097: `db_type` was renamed, not aliased. Ignoring it would answer a
+	// v2.9 client's filtered query with every tenant, so it is refused.
+	if q.Has("db_type") {
+		return nil, fmt.Errorf("the db_type filter was removed with _metadata.db_type: use expected_exporters=<kind> (the kinds a tenant declares in _expected_exporters)")
 	}
 
 	if v := q.Get("page_size"); v != "" {
@@ -285,7 +297,7 @@ func parseSearchParams(r *http.Request) (*searchParams, error) {
 func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 	out := make([]TenantSummary, 0, len(in))
 	qLower := strings.ToLower(p.q)
-	metadataFiltered := p.environment != "" || p.tier != "" || p.domain != "" || p.dbType != "" || p.tag != ""
+	metadataFiltered := p.environment != "" || p.tier != "" || p.domain != "" || p.kind != "" || p.tag != ""
 	for _, t := range in {
 		if t.MetadataIncomplete {
 			// Metadata unknown (#2370, #2830): handled as a degraded row's (#1680) —
@@ -305,7 +317,7 @@ func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 		if p.domain != "" && t.Domain != p.domain {
 			continue
 		}
-		if p.dbType != "" && !containsString(t.DBType, p.dbType) {
+		if p.kind != "" && !declaresExporter(t.ExpectedExporters, p.kind) {
 			continue
 		}
 		if p.tag != "" && !containsString(t.Tags, p.tag) {
@@ -317,6 +329,23 @@ func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 		out = append(out, t)
 	}
 	return out
+}
+
+// declaresExporter reports whether entries — a tenant's `_expected_exporters`
+// as written, `kind` or `kind@cluster` — answer the expected_exporters
+// filter. A filter that is a kind matches BY KIND, the part of an entry
+// before `@`, so `mariadb` finds a tenant that declares `mariadb@east`: the
+// question "who runs mariadb" does not depend on how it was declared. A
+// filter with `@` is a whole entry and matches only that entry — it does not
+// match the bare kind, which makes no claim about that cluster.
+func declaresExporter(entries []string, filter string) bool {
+	whole := strings.Contains(filter, "@")
+	for _, entry := range entries {
+		if entry == filter || !whole && cfg.ExpectedExporterKind(entry) == filter {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesFreeText returns true when any indexed text field on the
@@ -335,8 +364,8 @@ func matchesFreeText(t TenantSummary, qLower string) bool {
 	if strings.Contains(strings.ToLower(t.Domain), qLower) {
 		return true
 	}
-	for _, dbType := range t.DBType {
-		if strings.Contains(strings.ToLower(dbType), qLower) {
+	for _, kind := range t.ExpectedExporters {
+		if strings.Contains(strings.ToLower(kind), qLower) {
 			return true
 		}
 	}

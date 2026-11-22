@@ -87,7 +87,7 @@ def _run(*config_dirs: str):
 class TestValidateDir:
     def test_clean_tenant_file(self, confd, schema):
         _write(confd, "db-a.yaml",
-               'tenants:\n  db-a:\n    mysql_connections: "70"\n    _metadata:\n      db_type: mariadb\n')
+               'tenants:\n  db-a:\n    mysql_connections: "70"\n    _expected_exporters: [mariadb]\n')
         checked, viol, skipped = validate_dir(confd, schema, jsonschema)
         assert (checked, viol, skipped) == (1, [], [])
 
@@ -171,25 +171,46 @@ class TestValidateDir:
         assert any("dbType" in v for v in viol)
 
     def test_value_typo_rejected(self, confd, schema):
-        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      db_type: maraidb\n')
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _expected_exporters: [maraidb]\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert any("maraidb" in v for v in viol)
 
-    def test_db_type_list_accepted(self, confd, schema):
-        # #3771: a tenant running several kinds lists them.
-        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      db_type: [mariadb, redis]\n')
+    @pytest.mark.parametrize("value", ["[mariadb]", "[mariadb, redis]", "[nginx, jvm]", "[]", "null",
+                                       "[mariadb@edge-1]", "[mariadb@east, mariadb@west, redis]",
+                                       "[redis@a]", "[redis@eu-west.1_b]", "[redis@East, redis@east]"])
+    def test_expected_exporters_list_accepted(self, confd, schema, value):
+        # #4097: a tenant lists the exporter kinds it runs — nginx and jvm are
+        # kinds too; an empty list (or null) declares nothing. An entry may
+        # be `kind@cluster`.
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _expected_exporters: {value}\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert viol == []
 
-    @pytest.mark.parametrize("value", ["[]", "[mariadb, mariadb]", "[mariadb, maraidb]"])
-    def test_db_type_list_empty_repeated_or_typo_rejected(self, confd, schema, value):
-        # #3771: the list is non-empty, unique, and each item is in the enum.
-        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _metadata:\n      db_type: {value}\n')
+    @pytest.mark.parametrize("value", ["mariadb", "[mariadb, mariadb]", "[mariadb, maraidb]",
+                                       "[kubernetes]", "[5]", "{mariadb: true}",
+                                       "[maraidb@east]", "[kubernetes@east]", '["@east"]', '["mariadb@"]',
+                                       '["mariadb@east@west"]', '["mariadb@-east"]', '["mariadb@east."]',
+                                       '["mariadb@edge 1"]', '["mariadb@.*"]', '["mariadb@東"]',
+                                       "[mariadb@east, mariadb@east]", '["mariadb@east\n"]',
+                                       '["mariadb@' + "a" * 64 + '"]'])
+    def test_expected_exporters_scalar_repeated_or_unknown_rejected(self, confd, schema, value):
+        # A list, unique, each item one of the kinds (the registry's packs with
+        # a presence metric) or `kind@cluster` with a cluster id — as the
+        # exporter itself judges the value. (One kind written both alone and
+        # per cluster is the exporter's to refuse: a schema cannot say it.)
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _expected_exporters: {value}\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert viol, value
 
-    def test_no_db_type_is_opt_out_not_error(self, confd, schema):
-        # Opt-in design: a tenant with _metadata but no db_type is NOT monitored
+    @pytest.mark.parametrize("value", ["mariadb", "[mariadb, redis]"])
+    def test_removed_metadata_db_type_rejected(self, confd, schema, value):
+        # #4097: `_metadata.db_type` is removed, no alias — an unknown field now.
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _metadata:\n      db_type: {value}\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert any("db_type" in v for v in viol), viol
+
+    def test_no_declaration_is_opt_out_not_error(self, confd, schema):
+        # Opt-in design: a tenant that declares no exporter is NOT monitored
         # for liveness and that must stay valid (not forced-required).
         _write(confd, "svc.yaml", 'tenants:\n  svc:\n    _metadata:\n      owner: dba-team\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
@@ -203,7 +224,7 @@ class TestValidateDir:
 
     def test_meta_file_skipped(self, confd, schema):
         _write(confd, "_defaults.yaml", "defaults:\n  mysql_threads_running: 80\n")
-        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      db_type: redis\n')
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _expected_exporters: [redis]\n')
         checked, viol, skipped = validate_dir(confd, schema, jsonschema)
         assert checked == 1 and viol == [] and skipped == ["_defaults.yaml"]
 

@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""db_type → exporter presence metric: the one table, and the rules made from it (#3771).
+"""Exporter kind → presence metric, read from the threshold registry, and the rules made from it (#3771, #4097).
 
-A tenant declares the database kinds it runs in ``_metadata.db_type``; the
-threshold-exporter turns each into a ``tenant_expected_exporter{tenant,
-db_type}`` series. ``TenantExporterAbsent`` (rule-packs/rule-pack-liveness.yaml)
-asks, per (tenant, db_type), whether an exporter OF THAT KIND is reporting:
+A tenant declares the exporters it runs in ``_expected_exporters`` (a list of
+kinds); the threshold-exporter turns each into a ``tenant_expected_exporter{
+tenant, pack}`` series. ``TenantExporterAbsent`` (rule-packs/rule-pack-liveness.yaml)
+asks, per (tenant, pack), whether an exporter OF THAT KIND is reporting:
 
-    tenant_expected_exporter unless on(tenant, db_type) (<presence>)
+    tenant_expected_exporter unless on(tenant, pack) (<presence>)
+
+An entry may also be ``kind@cluster`` (ADR-006 contract 6): the series then
+carries ``expected_cluster`` and the question is asked per cluster — see
+"Per cluster" below.
 
 ``up`` cannot answer that — no label on it says which kind of exporter a
 target is — so the answer is read from a metric only that kind of exporter
-emits, on every scrape it answers, whether or not the database behind it is
+emits, on every scrape it answers, whether or not what it watches is
 reachable (``mysql_up`` is 0 when MariaDB is down and still present; a target
-that does not answer leaves no series at all). The table below names that
-metric for every kind; :func:`presence_expr` turns it into ``<presence>``:
-one ``label_replace(<metric>{job="tenant-exporters"}, "db_type", "<kind>", "",
-"")`` per kind, joined by ``or``. No aggregation: ``unless on(tenant,
-db_type)`` matches many right-hand series as well as one, and an aggregation
-``by (tenant)`` in MassExporterOutage would read to the platform-alert guard
-(_grar_validate) as an alert that carries a tenant label, which it does not.
+that does not answer leaves no series at all). A KIND is a rule pack of
+rule-packs/threshold-registry.yaml that names such a metric in ``presence:``
+— the one table (:func:`presence_table`); :func:`presence_expr` turns it into
+``<presence>``: one ``label_replace(<metric>{job="tenant-exporters"}, "pack",
+"<kind>", "", "")`` per kind, joined by ``or``. No aggregation: ``unless
+on(tenant, pack)`` matches many right-hand series as well as one, and an
+aggregation ``by (tenant)`` in MassExporterOutage would read to the
+platform-alert guard (_grar_validate) as an alert that carries a tenant
+label, which it does not.
 
 The expression is written INTO each alert that needs it — TenantExporterAbsent
 and TenantExporterUndeclared (liveness pack) and MassExporterOutage (platform
@@ -29,7 +35,7 @@ federation split (records on the edge, alerts on the central Prometheus,
 which pulls only ``{tenant!=""}`` series) each left the alert reading an
 empty vector — silent, or paging for every declared pair. Inline, each alert
 reads only the raw tenant-labelled series it always read. The presence
-metrics are not in the DB packs either: most are ``default_on: false``.
+metrics are not in the packs either: most are ``default_on: false``.
 
 Why each metric (read from the exporter's own source):
 
@@ -67,17 +73,61 @@ Why each metric (read from the exporter's own source):
                 ``rabbitmq_identity_info`` — the built-in rabbitmq_prometheus
                 plugin (prometheus_rabbitmq_core_metrics_collector.erl,
                 emit_identity_info on every endpoint). Either one counts.
+* jvm           ``jvm_memory_used_bytes`` — the heap used series of
+                client_java / jmx_exporter / Micrometer — and
+                ``jvm_memory_bytes_used`` — jmx_exporter before 1.0; the two
+                names rule-pack-jvm.yaml reads. Many applications expose
+                ``jvm_*`` without anyone meaning to run "a JVM exporter", so
+                the registry marks the pack ``undeclared_notice: false``:
+                TenantExporterUndeclared does not name it, a tenant may still
+                declare it.
+* nginx         ``nginx_up`` — nginxinc/nginx-prometheus-exporter, written on
+                every scrape.
 
 Every series is read under ``job="tenant-exporters"`` — the scrape contract
 liveness is written for — so a same-named series from elsewhere does not count.
 
-The key set must equal the ``_metadata.db_type`` enum
-(docs/schemas/tenant-config.schema.json ``definitions.dbTypeValue``) in both
-directions; ``tests/rulepacks/test_exporter_presence.py`` holds that, and holds
-the three alerts' ``expr`` equal to :func:`alert_exprs` (``--write`` and the
-check mode compare the parsed ``expr``, not a text block).
+The kinds are the registry's and nobody else's: the exporter's allowed-kind
+table (generated), the ``_expected_exporters`` enum of
+docs/schemas/tenant-config.schema.json and ``_lib_constants.JOB_DB_MAP`` are
+held to them by ``tests/rulepacks/test_exporter_presence.py``, which also
+holds the three alerts' ``expr`` equal to :func:`alert_exprs` (``--write`` and
+the check mode compare the parsed ``expr``, not a text block).
 
-Regenerate the three expressions after editing the table or a template::
+Per cluster (``kind@cluster``, #4097)
+-------------------------------------
+``tenant_expected_exporter{tenant, pack, expected_cluster}`` says the kind must
+report FROM that cluster; a row without ``expected_cluster`` keeps the meaning
+above (one cluster reporting is enough). The cluster a presence series is from
+is its ``da_cluster`` — the external label of the Prometheus it came through,
+so it is on the series where two clusters' data meet (a central Prometheus)
+and on nothing a Prometheus scraped itself.
+
+* TenantExporterAbsent is two branches joined by ``or``
+  (:func:`absent_expr`). Rows with ``expected_cluster`` are reduced to one per
+  (tenant, pack, expected_cluster), the cluster is copied into ``da_cluster``
+  and ``expected_cluster`` dropped — the alert's identity is (tenant, pack,
+  da_cluster) — then ``unless on(tenant, pack, da_cluster) (<presence>)``.
+  A second ``unless on(tenant, pack)`` reads the presence series that carry
+  NO ``da_cluster`` (:func:`presence_expr` with ``unlabelled=True`` — the
+  same table, each selector with ``da_cluster=""``): such a series counts
+  for every declared cluster. That is what a Prometheus that scrapes the
+  exporters itself sees, so ``kind@cluster`` there reads as the bare kind
+  instead of paging for every declared cluster of every tenant. It is a
+  term of the expression, not a gate on "do I see labelled series": a gate
+  would flip whenever a federation link flaps, and reset ``for:``.
+  Rows without ``expected_cluster`` take the rule as it was.
+* TenantExporterUndeclared is per (tenant, pack, da_cluster) on its left
+  already. What is declared for such a row: the kind alone; or the kind for
+  that cluster; or — a row with no ``da_cluster`` — the kind for any cluster.
+* MassExporterOutage counts (tenant, pack) PAIRS, and a pair with entries for
+  three clusters is three rows: both sides are reduced to pairs first, and a
+  pair is absent when TenantExporterAbsent's expression has any row for it.
+  A pair carries no ``da_cluster`` either: floor and ratio are the fleet's.
+  That expression is written there with ``without`` instead of ``by`` (see
+  :func:`absent_expr`).
+
+Regenerate the three expressions after editing the registry or a template::
 
     python3 scripts/tools/_lib_exporter_presence.py --write
 
@@ -98,33 +148,42 @@ import _lib_exitcodes  # noqa: E402  (the one exit path: tests/shared/test_singl
 from _lib_consumer_read import RULE_PACKS  # noqa: E402  (#3471: the rule-pack file names)
 from _lib_python import detect_cli_lang  # noqa: E402  (dev-rules §9: CLI help 語言)
 
-#: db_type → the metric(s) whose presence under job="tenant-exporters" means an
-#: exporter of that kind is answering. Several metrics: any one counts.
-EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
-    "mariadb": ("mysql_up",),
-    "postgresql": ("pg_up",),
-    "redis": ("redis_up",),
-    "mongodb": ("mongodb_up",),
-    "elasticsearch": ("elasticsearch_exporter_build_info",),
-    "oracle": ('query_interval{query="oracle_liveness"}',),
-    "db2": ('query_interval{query="db2_liveness"}',),
-    "clickhouse": ("ClickHouseMetrics_TCPConnection",),
-    "kafka": ("kafka_brokers",),
-    "rabbitmq": ("rabbitmq_up", "rabbitmq_identity_info"),
-}
+#: The label of ``tenant_expected_exporter`` that carries the kind — the label
+#: ``user_threshold_unset{tenant, pack, key}`` already uses.
+KIND_LABEL = "pack"
+#: The label of ``tenant_expected_exporter`` that carries the cluster of a
+#: ``kind@cluster`` entry (collector.go collectTenantExpectedExporter). Not
+#: CLUSTER_LABEL: a row for a kind alone, federated from an edge, arrives with
+#: that edge's ``da_cluster`` stamped on it and would read as declared.
+EXPECTED_CLUSTER_LABEL = "expected_cluster"
+#: ADR-006: the label that says which cluster a series came from
+#: (check_cluster_identity.CLUSTER_LABEL; pinned equal by
+#: tests/rulepacks/test_exporter_presence.py).
+CLUSTER_LABEL = "da_cluster"
 
-#: pack → the presence metric(s) of an exporter whose kind is no db_type: the
-#: application packs whose threshold keys the platform does not ship a value
-#: for (#1200 D-A A3). Kept apart from EXPORTER_PRESENCE, whose keys must be
-#: exactly the db_type enum (liveness opt-in). jvm: the heap used series of
-#: client_java / jmx_exporter / Micrometer (jvm_memory_used_bytes) and of
-#: jmx_exporter before 1.0 (jvm_memory_bytes_used), the two names
-#: rule-pack-jvm.yaml reads; nginx: nginxinc/nginx-prometheus-exporter's
-#: nginx_up, written on every scrape.
-APP_PRESENCE: dict[str, tuple[str, ...]] = {
-    "jvm": ("jvm_memory_used_bytes", "jvm_memory_bytes_used"),
-    "nginx": ("nginx_up",),
-}
+
+def _registry():
+    ops_dir = os.path.join(_HERE, "ops")
+    if ops_dir not in sys.path:
+        sys.path.insert(0, ops_dir)
+    import _registry_lib  # noqa: PLC0415  (scripts/tools/ops)
+    return _registry_lib
+
+
+def presence_table() -> dict[str, tuple[str, ...]]:
+    """kind → the selector(s) whose presence under job="tenant-exporters"
+    means an exporter of that kind is answering (several: any one counts).
+    Every registry pack with ``presence:``, in the registry's order."""
+    lib = _registry()
+    return lib.pack_presence(lib.load_registry())
+
+
+def undeclared_kinds() -> list[str]:
+    """The kinds TenantExporterUndeclared names: every kind whose pack does
+    not say ``undeclared_notice: false``."""
+    lib = _registry()
+    return lib.undeclared_notice_kinds(lib.load_registry())
+
 
 #: pack → the prefix every alert of that pack carries. Alertnames are unique
 #: across rule packs (check_vmalert_coverage), so the unconfigured-threshold
@@ -161,58 +220,62 @@ PLATFORM_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("platform")
 _PAD = "  "
 
 
-def selector(metric: str) -> str:
+#: The matcher of a presence series that carries no cluster.
+UNLABELLED_SELECTOR = f'{CLUSTER_LABEL}=""'
+
+
+def selector(metric: str, unlabelled: bool = False) -> str:
     """*metric* under the tenant-exporters job. A table entry is a bare name or
     a selector with its own matchers (query-exporter's built-ins are told apart
-    by their `query` label); the job matcher joins those."""
+    by their `query` label); the job matcher joins those. *unlabelled*: only
+    the series that carry no ``da_cluster``."""
+    matchers = JOB_SELECTOR + (f", {UNLABELLED_SELECTOR}" if unlabelled else "")
     if metric.endswith("}"):
-        return f"{metric[:-1]}, {JOB_SELECTOR}}}"
-    return f"{metric}{{{JOB_SELECTOR}}}"
+        return f"{metric[:-1]}, {matchers}}}"
+    return f"{metric}{{{matchers}}}"
 
 
 def _indent(text: str, depth: int) -> str:
     return "\n".join(_PAD * depth + line for line in text.split("\n"))
 
 
-def presence_expr() -> str:
-    """Every series of a table metric under the tenant-exporters job, with
-    its kind as ``db_type`` — one ``label_replace`` term per table row,
-    ``or``-ed (the terms differ in metric name and db_type, so ``or`` keeps
-    them all)."""
+def _terms(kinds, wrap, unlabelled: bool = False) -> str:
+    table = presence_table()
     terms = []
-    for db_type, metrics in EXPORTER_PRESENCE.items():
-        inner = " or ".join(selector(m) for m in metrics)
-        terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
+    for kind in kinds:
+        inner = " or ".join(wrap(selector(m, unlabelled)) for m in table[kind])
+        terms.append(f'label_replace({inner}, "{KIND_LABEL}", "{kind}", "", "")')
     return "\nor ".join(terms)
+
+
+def presence_expr(unlabelled: bool = False) -> str:
+    """Every series of a presence metric under the tenant-exporters job, with
+    its kind as ``pack`` — one ``label_replace`` term per kind, ``or``-ed
+    (the terms differ in metric name and pack, so ``or`` keeps them all).
+    *unlabelled*: the same table, only the series with no ``da_cluster``."""
+    return _terms(presence_table(), lambda sel: sel, unlabelled)
 
 
 def presence_over_time_expr() -> str:
-    """:func:`presence_expr` remembered for UNDECLARED_LOOKBACK: every series a
-    table metric had under the tenant-exporters job within that window, with
-    its kind as ``db_type``."""
-    terms = []
-    for db_type, metrics in EXPORTER_PRESENCE.items():
-        inner = " or ".join(f"max_over_time({selector(m)}[{UNDECLARED_LOOKBACK}])"
-                            for m in metrics)
-        terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
-    return "\nor ".join(terms)
+    """:func:`presence_expr` remembered for UNDECLARED_LOOKBACK, over the
+    kinds TenantExporterUndeclared names (:func:`undeclared_kinds`): every
+    series such a kind's metric had under the tenant-exporters job within
+    that window, with its kind as ``pack``."""
+    return _terms(undeclared_kinds(),
+                  lambda sel: f"max_over_time({sel}[{UNDECLARED_LOOKBACK}])")
 
 
 def pack_presence(pack: str) -> tuple[str, ...]:
-    """The presence metric(s) of *pack*'s exporter: EXPORTER_PRESENCE for a
-    database pack (its name is the db_type), APP_PRESENCE otherwise."""
-    return EXPORTER_PRESENCE.get(pack) or APP_PRESENCE.get(pack) or ()
+    """The presence selector(s) of *pack*'s exporter; () when it has none."""
+    return presence_table().get(pack, ())
 
 
 def unset_notice_packs() -> list[str]:
     """The packs that read a threshold key the platform ships no value for —
     each carries <prefix>ThresholdNotConfigured (#1200 D-A A3). Derived from the
     threshold registry, never listed here."""
-    ops_dir = os.path.join(_HERE, "ops")
-    if ops_dir not in sys.path:
-        sys.path.insert(0, ops_dir)
-    import _registry_lib  # noqa: PLC0415  (scripts/tools/ops)
-    return sorted(set(_registry_lib.unset_notice_keys(_registry_lib.load_registry()).values()))
+    lib = _registry()
+    return sorted(set(lib.unset_notice_keys(lib.load_registry()).values()))
 
 
 def unset_notice_expr(pack: str) -> str:
@@ -225,7 +288,7 @@ def unset_notice_expr(pack: str) -> str:
     metrics = pack_presence(pack)
     if not metrics:
         raise ValueError(f"pack {pack!r} reads unset-notice keys but has no presence metric "
-                         "(EXPORTER_PRESENCE / APP_PRESENCE)")
+                         "(threshold-registry.yaml packs.<pack>.presence)")
     inner = " or ".join(selector(m) for m in metrics)
     return "\n".join([
         "(",
@@ -238,57 +301,170 @@ def unset_notice_expr(pack: str) -> str:
     ])
 
 
-def _absent_pairs() -> str:
-    return ("max without(instance, pod) (tenant_expected_exporter)\n"
-            "unless on(tenant, db_type) (\n" + _indent(presence_expr(), 1) + "\n)")
+def _unless(on: str, body: str) -> str:
+    return f"unless on({on}) (\n" + _indent(body, 1) + "\n)"
 
 
-def alert_exprs() -> dict[tuple[Path, str], str]:
-    """(pack, alertname) → the alert's whole ``expr`` (no trailing newline)."""
-    absent = _absent_pairs()
-    # The floor counts TENANTS (#3771 review): one tenant declaring seven kinds,
-    # all down, is seven pairs but no shared failure. `count without` both
-    # times — a `by (tenant)` would read to the platform-alert guard
-    # (_grar_validate) as an alert carrying a tenant label.
-    mass = "\n".join([
-        "(",
-        "  count without (tenant) (count without (db_type) (",
-        _indent(absent, 2),
-        "  )) > 5",
-        "  and",
-        "  (",
-        "    count without (tenant, db_type) (",
-        _indent(absent, 3),
-        "    )",
-        "    /",
-        "    count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))",
-        "  ) > 0.1",
-        ")",
-        'unless on() absent(up{job="tenant-exporters"})',
+def absent_expr(aggregate_by: bool = True) -> str:
+    """TenantExporterAbsent: every declared expectation nothing answers for.
+
+    Two branches, ``or``-ed (their label sets differ, so ``or`` keeps both):
+
+    * per cluster — the rows with ``expected_cluster``, the cluster copied
+      into ``da_cluster``; gone when a presence series of the kind carries
+      that ``da_cluster``, or when one carries no ``da_cluster`` at all.
+    * any cluster — the rows without ``expected_cluster``: the rule as it
+      was, labels included (``max without(instance, pod)`` keeps whatever
+      else the scrape put on the row).
+
+    *aggregate_by* is how the per-cluster rows are reduced before the cluster
+    is copied. The reduction is not optional: the same entry federated from
+    two edges arrives as two rows that differ only in the ``da_cluster`` each
+    edge stamped, and writing the declared cluster over it would leave two
+    series with one label set — an evaluation error, the rule silent.
+
+    * True (the alert): ``max by(tenant, pack, expected_cluster)``, then
+      ``expected_cluster`` is dropped. One alert per (tenant, pack, cluster)
+      whatever else the rows carry.
+    * False (MassExporterOutage, which only asks which PAIRS have a row):
+      ``max without(instance, pod, da_cluster)``. The platform-alert guard
+      (_grar_validate) reads any ``by (… tenant …)`` in a platform alert's
+      expr as "this alert carries a tenant label", which it does not.
+    """
+    declared = f'tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}!=""}}'
+    if aggregate_by:
+        rows = "\n".join([
+            "label_replace(",
+            "  label_replace(",
+            f"    max by(tenant, {KIND_LABEL}, {EXPECTED_CLUSTER_LABEL}) ({declared}),",
+            f'    "{CLUSTER_LABEL}", "$1", "{EXPECTED_CLUSTER_LABEL}", "(.+)"),',
+            f'  "{EXPECTED_CLUSTER_LABEL}", "", "", "")',
+        ])
+    else:
+        rows = "\n".join([
+            "label_replace(",
+            f"  max without(instance, pod, {CLUSTER_LABEL}) ({declared}),",
+            f'  "{CLUSTER_LABEL}", "$1", "{EXPECTED_CLUSTER_LABEL}", "(.+)")',
+        ])
+    per_cluster = "\n".join([
+        rows,
+        _unless(f"tenant, {KIND_LABEL}, {CLUSTER_LABEL}", presence_expr()),
+        _unless(f"tenant, {KIND_LABEL}", presence_expr(unlabelled=True)),
     ])
-    # Per (tenant, db_type) (#3771 review): a tenant declaring [mariadb] while
-    # it also runs a redis exporter is named for redis. And per cluster
-    # (ADR-006, #4097): the declaration is the tenant's, the exporter is in a
-    # cluster, and the alert says which. The guard joins on
-    # tenant: threshold-exporter down (no tenant_metadata_info at all) and a
-    # de-provisioned tenant (its config gone, the lookback's memory of its
-    # exporter not yet) both stay silent.
-    undeclared = "\n".join([
-        "group by(tenant, da_cluster, db_type) (",
+    any_cluster = "\n".join([
+        f'max without(instance, pod) (tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}=""}})',
+        _unless(f"tenant, {KIND_LABEL}", presence_expr()),
+    ])
+    return "\n".join(["(", _indent(per_cluster, 1), ")", "or", "(", _indent(any_cluster, 1), ")"])
+
+
+#: Every declared (tenant, pack) once, however many clusters it is declared
+#: for, however many exporter replicas serve the row, and whichever Prometheus
+#: the row came through: federated from the edges, the same declarations arrive
+#: with each edge's ``da_cluster``, and a pair that kept it would be counted —
+#: floor and ratio both — once per source instead of once in the fleet.
+DECLARED_PAIRS = (f"max without (instance, pod, {EXPECTED_CLUSTER_LABEL}, {CLUSTER_LABEL}) "
+                  "(tenant_expected_exporter)")
+
+
+def absent_pairs_expr() -> str:
+    """The declared (tenant, pack) pairs TenantExporterAbsent has ANY row for
+    — one row per pair, with the labels of :data:`DECLARED_PAIRS`, so the
+    count of them divides by the count of those."""
+    return "\n".join([
+        DECLARED_PAIRS,
+        f"and on(tenant, {KIND_LABEL}) (",
+        _indent(absent_expr(aggregate_by=False), 1),
+        ")",
+    ])
+
+
+def undeclared_expr() -> str:
+    """TenantExporterUndeclared: per (tenant, pack, cluster), an exporter that
+    answered and that no entry covers.
+
+    Per (tenant, pack) (#3771 review): a tenant declaring [mariadb] while it
+    also runs a redis exporter is named for redis. And per cluster (ADR-006,
+    #4097): the left side is a row for each ``da_cluster`` the exporter
+    answers in. Such a row is covered by
+
+    * the kind written alone — ``unless on(tenant, pack)``;
+    * the kind for that cluster — ``unless on(tenant, pack, da_cluster)``
+      against the declared rows with their cluster copied into
+      ``da_cluster``;
+    * for a row with NO ``da_cluster`` (a Prometheus that scraped the
+      exporter itself cannot say which cluster it is), the kind for any
+      cluster: the same ``unless``, whose right side also carries each
+      declared (tenant, pack) with no ``da_cluster`` — the label a left row
+      without one matches on.
+
+    So `mariadb@east` with a mariadb exporter answering in west names west:
+    nothing pages if it stops. The guard joins on tenant: threshold-exporter
+    down (no tenant_metadata_info at all) and a de-provisioned tenant (its
+    config gone, the lookback's memory of its exporter not yet) both stay
+    silent.
+    """
+    declared = f'tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}!=""}}'
+    return "\n".join([
+        f"group by(tenant, {CLUSTER_LABEL}, {KIND_LABEL}) (",
         _indent(presence_over_time_expr(), 1),
         ")",
-        "unless on(tenant, db_type) tenant_expected_exporter",
+        f'unless on(tenant, {KIND_LABEL}) tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}=""}}',
+        f"unless on(tenant, {KIND_LABEL}, {CLUSTER_LABEL}) (",
+        f"  label_replace(group by(tenant, {KIND_LABEL}, {EXPECTED_CLUSTER_LABEL}) ({declared}),",
+        f'    "{CLUSTER_LABEL}", "$1", "{EXPECTED_CLUSTER_LABEL}", "(.+)")',
+        f"  or group by(tenant, {KIND_LABEL}) ({declared})",
+        ")",
         "and on(tenant) tenant_metadata_info",
         "unless on(tenant)",
         '(user_state_filter{filter="maintenance"} == 1)',
     ])
+
+
+def mass_outage_expr() -> str:
+    """MassExporterOutage: more than 5 tenants and over 10% of the declared
+    (tenant, pack) pairs absent, while the job itself is there.
+
+    The floor counts TENANTS (#3771 review): one tenant declaring seven kinds,
+    all down, is seven pairs but no shared failure. The ratio counts PAIRS on
+    both sides (#4097): a pair declared for three clusters is three rows of
+    tenant_expected_exporter and up to three of TenantExporterAbsent — counted
+    as rows, one such tenant would weigh three times in the numerator, the
+    denominator, or both. Both are FLEET-WIDE: the pairs drop the `da_cluster`
+    of the Prometheus the declaration came through (:data:`DECLARED_PAIRS`),
+    so the same absent set gives one alert, with no `da_cluster`, however the
+    declarations are split across sources. `count without` throughout — a `by (tenant)` would
+    read to the platform-alert guard (_grar_validate) as an alert carrying a
+    tenant label.
+    """
+    absent = absent_pairs_expr()
+    return "\n".join([
+        "(",
+        f"  count without (tenant) (count without ({KIND_LABEL}) (",
+        _indent(absent, 2),
+        "  )) > 5",
+        "  and",
+        "  (",
+        f"    count without (tenant, {KIND_LABEL}) (",
+        _indent(absent, 3),
+        "    )",
+        "    /",
+        f"    count without (tenant, {KIND_LABEL}) ({DECLARED_PAIRS})",
+        "  ) > 0.1",
+        ")",
+        'unless on() absent(up{job="tenant-exporters"})',
+    ])
+
+
+def alert_exprs() -> dict[tuple[Path, str], str]:
+    """(pack, alertname) → the alert's whole ``expr`` (no trailing newline)."""
     notices = {(Path(RULE_PACKS.directory) / RULE_PACKS.file_name(p), unset_notice_alert(p)):
                unset_notice_expr(p) for p in unset_notice_packs()}
     return {
         **notices,
-        (LIVENESS_PACK, "TenantExporterAbsent"): absent,
-        (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared,
-        (PLATFORM_PACK, "MassExporterOutage"): mass,
+        (LIVENESS_PACK, "TenantExporterAbsent"): absent_expr(),
+        (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared_expr(),
+        (PLATFORM_PACK, "MassExporterOutage"): mass_outage_expr(),
     }
 
 
@@ -325,8 +501,8 @@ def main(argv: list[str] | None = None) -> int:
     zh = detect_cli_lang() == "zh"
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--write", action="store_true",
-                        help=("依對照表改寫三條告警的 expr" if zh
-                              else "rewrite the three alerts' expr from the table"))
+                        help=("依 registry 的 presence 改寫各告警的 expr" if zh
+                              else "rewrite the alerts' expr from the registry's presence table"))
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[2]),
                         help=("repo 根目錄（預設：本工作樹）" if zh
                               else "repository root (default: this tree's)"))

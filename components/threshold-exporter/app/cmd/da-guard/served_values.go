@@ -49,8 +49,10 @@ const servedValuesCmd = "served-values"
 // as sentences that quoted the key; v2 writes records (#3703); v3 adds
 // `ungathered` beside the schedules (#3991); v4 adds each --schedules-only
 // tenant's `unserved_thresholds` (#4073); v5 adds each --config-facts
-// tenant's `routing` (#4109).
-const servedValuesSchema = "da-guard.served-values/v5"
+// tenant's `routing` (#4109); v6 serves `_expected_exporters` (`values`, and
+// `expected_exporters` of a --config-facts tenant) and drops `db_type` from
+// `_metadata` (#4097).
+const servedValuesSchema = "da-guard.served-values/v6"
 
 // customAlertsKey is the reserved key whose rows are the tenant's custom
 // alerts; its value is the list of those rows rather than one number.
@@ -354,7 +356,6 @@ func metadataReading(m config.ResolvedMetadata) map[string]any {
 		"environment": m.Environment,
 		"region":      m.Region,
 		"domain":      m.Domain,
-		"db_type":     nonNilStrings(m.DBType),
 		"tags":        nonNilStrings(m.Tags),
 		"groups":      nonNilStrings(m.Groups),
 	}
@@ -651,7 +652,8 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 	fs.BoolVar(&f.configFacts, "config-facts", false,
 		"Print each tenant's fields the exporter reads at no instant and nothing else (#3918):\n"+
 			"custom_alerts, custom_alerts_error, custom_alerts_finding (as the default mode writes them)\n"+
-			"and metadata (the default mode's values._metadata). Nothing is resolved or gathered: a part\n"+
+			"metadata (the default mode's values._metadata) and expected_exporters (its\n"+
+			"values._expected_exporters). Nothing is resolved or gathered: a part\n"+
 			"of the day /metrics cannot be gathered in, or the time the run starts at, changes nothing.\n"+
 			"Not with --at, --schedules, --schedules-only or --disable-effects.")
 	fs.BoolVar(&f.disableEffects, "disable-effects", false,
@@ -1072,6 +1074,10 @@ type servedTenantFacts struct {
 	// Metadata: the tenant's `_metadata` as the exporter's resolver reads it
 	// (metadataReading) — the default mode's `values._metadata`.
 	Metadata map[string]any `json:"metadata"`
+	// ExpectedExporters (#4097): the default mode's
+	// `values._expected_exporters` — the kinds the tenant declares, as the
+	// exporter reads them ([] for none).
+	ExpectedExporters []string `json:"expected_exporters"`
 	// Routing (#4109): the default mode's `routing` (routingReading) — the
 	// resolver takes no instant. Absent when it accepts no `_routing`.
 	Routing map[string]any `json:"routing,omitempty"`
@@ -1087,7 +1093,8 @@ func servedConfigFacts(cfg *config.ThresholdConfig) map[string]servedTenantFacts
 		routing[r.Tenant] = r
 	}
 	for _, m := range cfg.ResolveMetadataLogf(log.Printf) {
-		f := servedTenantFacts{Metadata: metadataReading(m)}
+		f := servedTenantFacts{Metadata: metadataReading(m),
+			ExpectedExporters: nonNilStrings(config.ExpectedExportersOf(cfg.Tenants[m.Tenant]))}
 		f.CustomAlerts, f.CustomAlertsError, f.CustomAlertsFinding = customAlertsOf(m.Tenant, cfg.Tenants[m.Tenant])
 		if rc, ok := routing[m.Tenant]; ok {
 			f.Routing = routingReading(rc)
@@ -1320,6 +1327,10 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		reserved := map[string]any{}
 		m := metadata[tenant]
 		reserved["_metadata"] = metadataReading(m)
+		// #4097: the declared exporter kinds, as tenant_expected_exporter is
+		// served from them ([] for a tenant that declares none, or a value
+		// the exporter does not read).
+		reserved["_expected_exporters"] = nonNilStrings(config.ExpectedExportersOf(cfg.Tenants[tenant]))
 		if mode, ok := dedup[tenant]; ok {
 			reserved["_severity_dedup"] = mode
 		} else {

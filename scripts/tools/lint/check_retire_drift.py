@@ -2,16 +2,17 @@
 """RETIRE-ordering hard gate (#869 design item 7; matrix Gap #2).
 
 The #869 per-tenant liveness rule TenantExporterAbsent fires whenever a tenant
-that DECLARES a db_type (and so emits tenant_expected_exporter=1) has no healthy
-up{job="tenant-exporters"}==1 target:
+that DECLARES an exporter kind in `_expected_exporters` (and so emits
+tenant_expected_exporter=1) has no exporter of that kind answering under
+job="tenant-exporters":
 
-    tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+    tenant_expected_exporter unless on(tenant, pack) (<presence of that kind>)
 
 That makes a de-provisioning ORDER bug newly dangerous: if a PR removes a tenant's
-K8s scrape target (Helm release / namespace) but LEAVES its conf.d `_metadata`
+K8s scrape target (Helm release / namespace) but LEAVES its conf.d declaration
 behind, the exporter keeps emitting tenant_expected_exporter{tenant}=1 while `up`
 is gone forever → TenantExporterAbsent fires 100% FALSE-POSITIVE critical against a
-tenant that no longer exists. The safe order is: remove conf.d (cut the metadata
+tenant that no longer exists. The safe order is: remove conf.d (cut the declaration's
 source) FIRST, or remove both together — NEVER K8s-target-only.
 
 This gate enforces that statically at PR time. It is a NET-NEW conf.d↔K8s set
@@ -24,20 +25,22 @@ enforcing.
 
 What "a tenant" means here
 --------------------------
-We enumerate ONLY tenants whose served `_metadata.db_type` is non-empty, because
+We enumerate ONLY tenants whose served `_expected_exporters` is non-empty, because
 that is EXACTLY the set the collector emits tenant_expected_exporter for (collector.go
-collectTenantExpectedExporter skips db_type==""). Same ruler as the metric → the
-gate cannot pass while the metric over-emits, or vice versa. (Tenants without a
-db_type are not monitored by TenantExporterAbsent, so a stale conf.d entry for them
-carries no false-positive risk and is not this gate's concern.)
+collectTenantExpectedExporter: a tenant that declares nothing gets no series). Same
+ruler as the metric → the gate cannot pass while the metric over-emits, or vice
+versa. (Tenants that declare nothing are not monitored by TenantExporterAbsent, so a
+stale conf.d entry for them carries no false-positive risk and is not this gate's
+concern.)
 
-The db_type is the exporter's own reading, from `da-guard served-values`
+The declared kinds are the exporter's own reading, from `da-guard served-values`
 (`_lib_tenant_values.load_served_facts`, `--config-facts`, which reads no
 instant, so a part of the day /metrics cannot be gathered in is no failure
-here — #2858, #3918): a db_type a tenant gets from
-a profile or a root platform file's `tenants:` entry, the per-key layering of
-`_metadata`, `optional_overrides` switching a profile's `_metadata` off and a
-non-string db_type are all the exporter's answer, not re-derived here. Which
+here — #2858, #3918): a declaration a tenant gets from
+a profile or a root platform file's `tenants:` entry, the tenant file replacing
+it whole, and a value the exporter does not read (an unknown kind, a repeat, not
+a list: it then serves none, #4097) are all the exporter's answer, not re-derived
+here. Which
 tenants are judged is still this lint's own walk (below): the examples/
 subtree is excluded even though the exporter would load it.
 
@@ -61,17 +64,17 @@ error naming the file (exit 2), never taken as its text and never skipped.
 
 Directions
 ----------
-  VIOLATION (exit 1): conf.d declares db_type for <tenant> but NO K8s-target
+  VIOLATION (exit 1): conf.d declares _expected_exporters for <tenant> but NO K8s-target
       declaration found → de-provisioning would strand tenant_expected_exporter →
       false-positive TenantExporterAbsent. This is the dangerous order.
-  WARN (exit 0):       K8s target declared but conf.d has no db_type for it →
+  WARN (exit 0):       K8s target declared but conf.d declares no exporter for it →
       orphan deploy (no tenant_expected_exporter → TenantExporterAbsent can't fire
       on it). Harmless to liveness; surfaced but not blocking, so the legitimate
       "provision infra first, add conf.d later" onboarding order is not blocked.
 
 Exit codes (per scripts/tools/_lib_exitcodes.py):
     0  No retire-ordering violations (warnings allowed)
-    1  Violation(s) detected (--ci) — conf.d db_type without a K8s target
+    1  Violation(s) detected (--ci) — conf.d _expected_exporters without a K8s target
     2  Caller error (missing path, da-guard or da-crdecode missing or
        failing, a namespaces file kubectl would refuse — including a
        label that is not a string —, or a conf.d file the
@@ -113,7 +116,7 @@ from _lib_io import YamlFileError, safe_label  # noqa: E402
 # The namespaces manifest is Kubernetes YAML, not conf.d: PyYAML.
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests as kubectl reads them)
 # ADR-036 step 4 (#2906): conf.d's tenant files and their `tenants:` keys are
-# `da-guard parse-tree`'s, as the db_type is `da-guard served-values`'.
+# `da-guard parse-tree`'s, as the declared kinds are `da-guard served-values`'.
 import _lib_parse_cache  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     exit_on_served_values_error,
@@ -127,13 +130,12 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def conf_d_declared_db_type_tenants(config_dir: Path,
+def conf_d_declared_exporter_tenants(config_dir: Path,
                                      binary: str | None = None) -> Dict[str, str]:
-    """tenant → db_type for every judged tenant whose served db_type is non-empty.
+    """tenant → its declared kinds, for every judged tenant that declares one.
 
-    The value is the declared kinds joined by "," (#3771: `db_type` is a
-    list, served as one; a tenant declaring [mariadb, redis] reads
-    "mariadb,redis").
+    The value is the declared kinds joined by "," (a tenant declaring
+    [mariadb, redis] reads "mariadb,redis").
 
     WHICH TENANTS: the keys of the `tenants:` mapping of every tenant file
     `da-guard parse-tree` selects (ADR-036 step 4, #2906: the exporter's own
@@ -145,12 +147,13 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
     raises YamlFileError naming it (exit 2): which tenants the tree
     declares is unknown.
 
-    WHICH db_type: `_metadata.db_type` as /metrics serves it (`da-guard
-    served-values`, #2858) — the value collectTenantExpectedExporter reads,
-    with every layer the exporter applies (root platform files' `tenants:`
-    entries, the tenant file, the profile filling what neither writes unless
-    `optional_overrides` declares `_metadata`). A tenant the exporter serves
-    no metadata for counts as none. Raises what `load_served_facts` raises,
+    WHICH KINDS: `_expected_exporters` as /metrics serves it (`da-guard
+    served-values`, #2858, #4097) — the value collectTenantExpectedExporter
+    reads, with every layer the exporter applies (root platform files'
+    `tenants:` entries, the tenant file, the profile filling what neither
+    writes). The entries are kept as written — a kind, or `kind@cluster`
+    (#4097); either way the tenant emits tenant_expected_exporter and is in
+    the set. A tenant the exporter serves no kind for counts as none. Raises what `load_served_facts` raises,
     and ParseTreeError for no usable parse-tree (exit 2).
     """
     reader = _lib_parse_cache.reader_for(config_dir)
@@ -172,11 +175,7 @@ def conf_d_declared_db_type_tenants(config_dir: Path,
     out: Dict[str, str] = {}
     for tenant in sorted(judged):
         facts = tree.tenants.get(tenant)
-        db_type = facts.metadata.get("db_type") if facts is not None else None
-        # #3771: served as a list (every declared kind); a string is one kind.
-        if isinstance(db_type, str):
-            db_type = [db_type]
-        kinds = [k for k in db_type if isinstance(k, str) and k] if isinstance(db_type, list) else []
+        kinds = list(facts.expected_exporters) if facts is not None else []
         if kinds:
             out[tenant] = ",".join(kinds)
     return out
@@ -235,20 +234,20 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
 def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path,
              binary: str | None = None) -> dict:
     """Return {violations: [...], warnings: [...], declared: {...}, targets: [...]}."""
-    declared = conf_d_declared_db_type_tenants(config_dir, binary=binary)
+    declared = conf_d_declared_exporter_tenants(config_dir, binary=binary)
     helm_targets = helm_declared_targets(helm_dir)
     ns_targets = namespace_declared_targets(namespaces_file)
     k8s_targets = helm_targets | ns_targets
 
     violations: List[str] = []
-    for tenant, db_type in sorted(declared.items()):
+    for tenant, kinds in sorted(declared.items()):
         if tenant not in k8s_targets:
             violations.append(
-                f"tenant '{tenant}' declares db_type='{db_type}' in conf.d "
+                f"tenant '{tenant}' declares _expected_exporters='{kinds}' in conf.d "
                 f"(emits tenant_expected_exporter=1) but has NO K8s target "
                 f"declaration (helm/values-{tenant}.yaml or a db-* namespace with "
-                f"instance={tenant}). De-provisioning order bug: remove conf.d "
-                f"_metadata BEFORE/with the K8s target, else TenantExporterAbsent "
+                f"instance={tenant}). De-provisioning order bug: remove the conf.d "
+                f"declaration BEFORE/with the K8s target, else TenantExporterAbsent "
                 f"fires a false-positive critical against a dead tenant."
             )
 
@@ -257,7 +256,7 @@ def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path,
         if tenant not in declared:
             warnings.append(
                 f"tenant '{tenant}' has a K8s target declaration but no conf.d "
-                f"db_type (orphan deploy / pre-conf.d onboarding) — not monitored "
+                f"_expected_exporters (orphan deploy / pre-conf.d onboarding) — not monitored "
                 f"by TenantExporterAbsent. Harmless to liveness; informational."
             )
 
@@ -277,7 +276,7 @@ def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Forbid de-provisioning a K8s exporter target while its conf.d "
-        "_metadata.db_type remains (#869 false-positive guard)."
+        "_expected_exporters declaration remains (#869 false-positive guard)."
     )
     repo = _repo_root()
     parser.add_argument(
@@ -314,7 +313,7 @@ def main() -> "int | Report":
 
     if not args.json:
         n_decl = len(result["declared"])
-        print(f"RETIRE gate (#869): {n_decl} tenant(s) declare db_type; "
+        print(f"RETIRE gate (#869): {n_decl} tenant(s) declare _expected_exporters; "
               f"{len(result['k8s_targets'])} K8s target(s).")
         # #1538: a tenant id is the tree's, so a line carrying one is escaped
         # here, where it meets the terminal (--json keeps the raw text).
@@ -326,7 +325,7 @@ def main() -> "int | Report":
             print("  ✅ No retire-ordering violations.")
 
     if result["violations"] and args.ci:
-        print("\n❌ RETIRE-ordering violation: conf.d _metadata.db_type without a "
+        print("\n❌ RETIRE-ordering violation: conf.d _expected_exporters without a "
               "K8s target. Remove the conf.d entry first (or together).",
               file=sys.stderr)
     status = EXIT_VIOLATION if result["violations"] and args.ci else EXIT_OK

@@ -27,7 +27,7 @@ const tenantData = {
   environment: 'production',
   tier: 'tier-1',
   domain: 'finance',
-  db_type: 'mariadb',
+  expected_exporters: ['mariadb'],
   owner: 'team-a',
   operational_mode: 'normal',
   routing_channel: '#alerts-finance',
@@ -61,13 +61,13 @@ describe('TenantCard', () => {
     expect(screen.getByText('TIER-1')).toBeInTheDocument();
   });
 
-  // #3771: tenant-api sends db_type as a list; a string (platform-data.json,
-  // demo fixtures) is one kind.
-  it('renders every declared db_type, list or string', () => {
+  // #3771, #4097: tenant-api and platform-data.json send expected_exporters
+  // as a list; a lone string is read as one kind.
+  it('renders every declared exporter kind, list or string', () => {
     const { unmount } = render(
       <TenantCard
         name="multi"
-        data={{ ...tenantData, db_type: ['mariadb', 'redis'] }}
+        data={{ ...tenantData, expected_exporters: ['mariadb', 'redis'] }}
         isSelected={false}
         isHovered={false}
         pendingPR={null}
@@ -89,6 +89,26 @@ describe('TenantCard', () => {
       />,
     );
     expect(screen.getByText('mariadb')).toBeInTheDocument();
+    expect(screen.getByText('Expected exporters')).toBeInTheDocument();
+  });
+
+  // #4097: the row reads `expected_exporters`; the removed `db_type` field
+  // (a stale offline copy, an older tenant-api) is not read as a declaration.
+  it('does not read the removed db_type field', () => {
+    const { expected_exporters: _dropped, ...withoutKinds } = tenantData;
+    render(
+      <TenantCard
+        name="old"
+        data={{ ...withoutKinds, db_type: 'zzz-old-kind' }}
+        isSelected={false}
+        isHovered={false}
+        pendingPR={null}
+        modeColors={modeColors}
+        {...noopHandlers}
+      />,
+    );
+    expect(screen.getByText('Expected exporters')).toBeInTheDocument();
+    expect(screen.queryByText(/zzz-old-kind/)).not.toBeInTheDocument();
   });
 
   it('renders pending-PR badge when pendingPR provided', () => {
@@ -124,9 +144,9 @@ describe('TenantCard', () => {
     expect(screen.queryByText(/PR #/)).not.toBeInTheDocument();
   });
 
-  it('shows the declared db_type, no rule-pack pills (#4141)', () => {
+  it('shows the declared exporter kinds, no rule-pack pills (#4141)', () => {
     // A stale offline copy may still carry rule_packs: the card shows what
-    // the tenant declares (db_type), never a pack list inferred for it.
+    // the tenant declares (expected_exporters), never a pack list inferred for it.
     render(
       <TenantCard
         name="db-x"

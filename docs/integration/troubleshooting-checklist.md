@@ -1179,7 +1179,7 @@ kubectl get jobs -n monitoring -w
 
 **Symptom**：`MassExporterOutage`（critical）fire，summary 寫「Mass exporter outage (N tenants)」，同時有一批 `TenantExporterAbsent`。
 
-條件是**同時**：超過 5 個租戶有某種宣告的 exporter 沒在回應（該種的存在指標缺席，例如 `mysql_up`），且超過 10% 的「租戶 × db_type」組缺席（[#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)）。門檻數租戶，所以單一租戶宣告多種、全部掛掉不會觸發；比例數組，宣告 `[mariadb, redis]` 的租戶在分母算 2 組，只有 mariadb 掛時分子算 1 組。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
+條件是**同時**：超過 5 個租戶有某種宣告的 exporter 沒在回應（該種的存在指標缺席，例如 `mysql_up`），且超過 10% 的「租戶 × 宣告的 exporter 種類（`pack`）」組缺席（[#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)）。門檻數租戶，所以單一租戶宣告多種、全部掛掉不會觸發；比例數組，宣告 `[mariadb, redis]` 的租戶在分母算 2 組，只有 mariadb 掛時分子算 1 組。逐叢集宣告的種類（`mariadb@east`、`mariadb@west`）不管宣告幾個叢集都是 1 組，任何一個宣告的叢集缺席就算缺席；本告警不分叢集，看不出是哪個叢集大量缺席，要從個別的 `TenantExporterAbsent` 的 `da_cluster` 看。逐叢集的診斷有個前提：中央 Prometheus 評估的存在序列（例如 `mysql_up`）帶著 `da_cluster`。沒有 `da_cluster` 的存在序列對該租戶這一種所宣告的每個叢集都算存在，於是沒有任何一則 `TenantExporterAbsent` 會指名缺的那個叢集，`MassExporterOutage` 也不把這一組算進缺席。門檻與比例是全艦隊的：宣告（`tenant_expected_exporter`）不管經哪個叢集的 Prometheus 送到中央都合起來算一次，告警上沒有 `da_cluster`。這有個前提：各來源送來的宣告序列只差 `da_cluster`；若還帶著其他隨來源不同的 label（例如各台 Prometheus 另外設的 external label），門檻與比例仍會依那個 label 分開算。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
 
 ```mermaid
 flowchart TD
@@ -1187,7 +1187,7 @@ flowchart TD
     B -- 是 --> J[TenantExporterJobAbsent<br/>本告警不 fire]
     B -- 否 --> C{超過 5 個且超過 10%？}
     C -- 是 --> M[MassExporterOutage：<br/>當成一個事件查共因]
-    C -- 否 --> T[個別 TenantExporterAbsent：<br/>逐租戶、逐 db_type 處理]
+    C -- 否 --> T[個別 TenantExporterAbsent：<br/>逐租戶、逐 exporter 種類處理]
 ```
 
 ⛔ **不要逐租戶修**。一個一個重啟 exporter 不會處理共因，還會拖延。
@@ -1216,7 +1216,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -30
 
 **If not this**：
 - (a) Prometheus 自己出問題（Pod 重啟中、資源不足）→ 此時其他 scrape job 也會一起異常；先看 Prometheus Pod 狀態
-- (b) 一次退租了很多租戶但 conf.d 的 `_metadata` 沒移除 → 這是殘留組態，不是故障；移除後告警解除
+- (b) 一次退租了很多租戶但 conf.d 的 `_expected_exporters` 宣告沒移除 → 這是殘留組態，不是故障；移除後告警解除
 
 **Cross-ref**：門檻（5 與 10%）的由來與 `unless on() absent(...)` 的用意寫在平台 pack 來源 `rule-packs/rule-pack-platform.yaml` 本告警上方的註解（部署用的 `k8s/03-monitoring/configmap-rules-platform.yaml` 由它生成，不帶註解）。
 

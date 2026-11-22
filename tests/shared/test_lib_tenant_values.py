@@ -643,12 +643,32 @@ def test_served_facts_refuse_another_modes_document(tmp_path):
     assert ei.value.binary_fault and "not a --config-facts tenant" in str(ei.value)
 
 
+@pytest.mark.parametrize("kinds, ok", [
+    (["mariadb", "redis"], True), ([], True),
+    ("mariadb", False), (None, False), (["mariadb", 1], False), ({"mariadb": True}, False),
+], ids=["list", "empty-list", "string", "null", "non-string-item", "mapping"])
+def test_served_facts_refuse_expected_exporters_not_of_their_shape(tmp_path, kinds, ok):
+    """#4097：`expected_exporters` 必須是字串列表。少了這道檢查，`tuple("mariadb")` 會把一個
+    字串讀成七個單字元的種類、`tuple({...})` 讀成鍵名，下游拿它判「宣告了哪些 exporter」。"""
+    doc = {"schema": tv.SERVED_VALUES_SCHEMA, "config_hash": None, "parse_failed": [], "skipped": [],
+           "unreadable": [], "unread_keys": [], "root_defaults_refused": [],
+           "tenants": {"t": {"custom_alerts": [], "custom_alerts_finding": None, "metadata": {},
+                             "expected_exporters": kinds}}}
+    fake = _old_da_guard(tmp_path, json.dumps(doc))
+    if ok:
+        assert tv.load_served_facts(tmp_path, binary=fake).tenants["t"].expected_exporters == tuple(kinds)
+        return
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_facts(tmp_path, binary=fake)
+    assert ei.value.broken and "expected_exporters is not a list of strings" in str(ei.value), ei.value
+
+
 def test_served_facts_read_what_the_default_mode_reads(tmp_path, da_guard):
     """#3918：`load_served_facts` 的每個欄位，等於 `load_served_tree` 在 Gather 得起來時讀到的
-    （custom alerts、`values["_metadata"]` 與 `routing`，#4109），含解碼失敗的 `_custom_alerts`。"""
+    （custom alerts、`values["_metadata"]`、`values["_expected_exporters"]`（#4097）與 `routing`，#4109），含解碼失敗的 `_custom_alerts`。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  redis_memory: 90\n",
-        "tc.yaml": ("tenants:\n  tc:\n    _metadata:\n      db_type: [mariadb, redis]\n    _custom_alerts:\n"
+        "tc.yaml": ("tenants:\n  tc:\n    _metadata:\n      owner: team-c\n    _expected_exporters: [mariadb, redis]\n    _custom_alerts:\n"
                     "      - recipe: threshold\n        name: q_high\n        metric: q_high_depth\n"
                     "        op: \">\"\n        window: 5m\n        threshold: \"1000:warning\"\n"),
         "tbad.yaml": "tenants:\n  tbad:\n    _custom_alerts: \"oops\"\n",
@@ -660,8 +680,11 @@ def test_served_facts_read_what_the_default_mode_reads(tmp_path, da_guard):
     assert sorted(facts) == sorted(full) == ["tbad", "tc", "tr"]
     for t, v in full.items():
         assert facts[t] == tv.TenantFacts(v.custom_alerts, v.custom_alerts_error,
-                                          v.custom_alerts_finding, v.values["_metadata"], v.routing), t
-    assert facts["tbad"].custom_alerts_error and facts["tc"].metadata["db_type"] == ["mariadb", "redis"]
+                                          v.custom_alerts_finding, v.values["_metadata"], v.routing,
+                                          tuple(v.values["_expected_exporters"])), t
+    assert facts["tbad"].custom_alerts_error and facts["tc"].metadata["owner"] == "team-c"
+    assert facts["tc"].expected_exporters == ("mariadb", "redis") and facts["tbad"].expected_exporters == ()
+    assert "db_type" not in facts["tc"].metadata
     assert facts["tr"].routing["receiver"]["url"] == "https://hooks.example.com/tr" and facts["tc"].routing is None
 
 
@@ -910,7 +933,7 @@ def test_real_da_guard_names_the_schema_this_reader_reads(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: disable\n"})
     proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
                           capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
-    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v5"
+    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v6"
     assert tv.load_served_values(conf_d, binary=da_guard)["t"].state_filters == {}
 
 
@@ -925,12 +948,12 @@ def test_output_without_schema_is_refused_as_older(tmp_path):
 
 
 def test_output_with_an_unknown_schema_is_refused(tmp_path):
-    """認不得的 schema（例如未來的 v6）：raise 並寫出兩個值，不當成舊版、也不照 v5 讀。"""
-    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v6"))
+    """認不得的 schema（例如未來的 v7）：raise 並寫出兩個值，不當成舊版、也不照 v6 讀。"""
+    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v7"))
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     msg = str(ei.value)
-    assert "da-guard.served-values/v6" in msg and tv.SERVED_VALUES_SCHEMA in msg
+    assert "da-guard.served-values/v7" in msg and tv.SERVED_VALUES_SCHEMA in msg
     assert "older than this tool" not in msg
     assert ei.value.binary_fault and not ei.value.stale
 
@@ -938,11 +961,12 @@ def test_output_with_an_unknown_schema_is_refused(tmp_path):
 # A literal, not SERVED_VALUES_OLDER_SCHEMAS: emptying that tuple must turn
 # these cells red, not leave nothing to parametrize over.
 @pytest.mark.parametrize("schema", ["da-guard.served-values/v1", "da-guard.served-values/v2",
-                                    "da-guard.served-values/v3", "da-guard.served-values/v4"])
+                                    "da-guard.served-values/v3", "da-guard.served-values/v4",
+                                    "da-guard.served-values/v5"])
 @pytest.mark.parametrize("load", [tv.load_served_tree, tv.load_served_schedules])
 def test_output_with_an_older_schema_is_refused_as_older(tmp_path, schema, load):
     """#3703：較舊的 schema（v1：key_checks 是引用鍵的整句；v2：schedules 旁沒有
-    `ungathered`，#3991；v3：`--schedules-only` 的租戶沒有 `unserved_thresholds`，#4073；v4：`--config-facts` 的租戶沒有 `routing`，#4109）一律由 schema 本身指出要升級
+    `ungathered`，#3991；v3：`--schedules-only` 的租戶沒有 `unserved_thresholds`，#4073；v4：`--config-facts` 的租戶沒有 `routing`，#4109；v5：宣告的 exporter kind 還在 `_metadata.db_type`、沒有 `_expected_exporters`，#4097）一律由 schema 本身指出要升級
     da-guard——stale、不是 broken，訊息寫出兩個值；不逐一辨認舊形狀。文件其餘部分照
     這支工具讀的形狀寫，證明判定只來自 schema。"""
     assert tv.SERVED_VALUES_SCHEMA not in tv.SERVED_VALUES_OLDER_SCHEMAS
@@ -989,7 +1013,7 @@ def test_state_filters_not_of_their_shape_are_refused(tmp_path, extra):
 
 def test_schema_refusal_exits_2_through_the_cli_decorator(tmp_path, capsys):
     """讀取端的 CLI 一律經 exit_on_served_values_error：schema 缺少或認不得都是 rc 2、一行 ERROR。"""
-    for schema in (None, "da-guard.served-values/v6", *tv.SERVED_VALUES_OLDER_SCHEMAS):
+    for schema in (None, "da-guard.served-values/v7", *tv.SERVED_VALUES_OLDER_SCHEMAS):
         fake = _old_da_guard(tmp_path, _sv_doc(schema))
 
         @tv.exit_on_served_values_error
@@ -1503,3 +1527,29 @@ def test_ungathered_refusal_names_every_part():
     text = tv.ungathered_refusal((tv.UngatheredPart("01:00", "01:29", "HTTP 500"),
                                   tv.UngatheredPart("22:00", "24:00", "dup")))
     assert "01:00-01:29 UTC (HTTP 500)" in text and "22:00-24:00 UTC (dup)" in text
+
+
+@pytest.mark.parametrize("entry, kind", [
+    ("mariadb@east", "mariadb"), ("redis", "redis"), ("", ""), ("@east", ""), ("a@b@c", "a")])
+def test_expected_exporter_kind_is_the_part_before_at(entry, kind):
+    """#4097: an `_expected_exporters` entry is `kind` or `kind@cluster`; a
+    consumer that asks by kind takes the part before `@` (the exporter's own
+    ExpectedExporterKind, pinned to the same cases in expected_exporters_test.go)."""
+    assert tv.expected_exporter_kind(entry) == kind
+
+
+def test_expected_exporter_kinds_names_each_kind_once_in_order():
+    assert tv.expected_exporter_kinds(["mariadb@east", "redis", "mariadb@west"]) == ["mariadb", "redis"]
+    assert tv.expected_exporter_kinds(()) == []
+
+
+def test_served_facts_carry_per_cluster_entries_as_written(tmp_path, da_guard):
+    """What da-guard serves for `_expected_exporters` is the entries as
+    written — a list of strings, the shape it always had."""
+    root = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t1.yaml": "tenants:\n  t1:\n    _expected_exporters: [mariadb@east, mariadb@west, redis]\n",
+        "t2.yaml": "tenants:\n  t2:\n    _expected_exporters: [redis, redis@east]\n"})
+    facts = tv.load_served_facts(root, binary=da_guard)
+    assert facts.tenants["t1"].expected_exporters == ("mariadb@east", "mariadb@west", "redis")
+    assert facts.tenants["t2"].expected_exporters == ()

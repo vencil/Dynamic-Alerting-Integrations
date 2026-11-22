@@ -40,6 +40,8 @@ import check_rulepack_sync as sync  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+from _lib_output import (  # noqa: E402  (#3981: the artifact entry)
+    check_repo_artifact, exit_on_output_write_error, write_repo_artifact)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -104,6 +106,7 @@ def target_name(pack: str) -> str:
     return _lib_consumer_read.CONFIGMAP_RULES.file_name(pack)
 
 
+@exit_on_output_write_error
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Generate rule-pack ConfigMaps from source")
@@ -159,6 +162,7 @@ def main() -> int:
 
     drift = []
     wrote = 0
+    pending: list = []
     for name, cm in cms.items():
         target = out_dir / target_name(name)
 
@@ -183,7 +187,7 @@ def main() -> int:
                 f"# Run `make rulepack-configmaps` after editing the rule pack.\n"
                 f"# ============================================================\n"
             )
-            target.write_text(header + rendered, encoding="utf-8", newline="\n")
+            pending.append((target, header + rendered))
             wrote += 1
 
     if args.check:
@@ -198,6 +202,12 @@ def main() -> int:
         print(f"✅ All {len(packs)} rule-pack configmaps match source.")
         return EXIT_OK
 
+    # #3981: every ConfigMap judged before the first is written — one that
+    # is no regular file leaves the others as they were.
+    for target, _text in pending:
+        check_repo_artifact(target)
+    for target, text in pending:
+        write_repo_artifact(target, text)
     print(f"✅ Generated {wrote} configmaps into {out_dir.relative_to(repo)}/.")
     return EXIT_OK
 

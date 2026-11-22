@@ -3,7 +3,7 @@ title: "Tenant Manager — TenantCard"
 purpose: |
   Single tenant card in the grid — checkbox, environment / tier badges,
   pending-PR indicator (ADR-011), mode + domain +
-  db_type + owner + routing + metric_count rows, and an optional
+  expected exporters + owner + routing + metric_count rows, and an optional
   config-commit short-SHA footer.
 
   #2068: a DEGRADED row (tenant-api #1680 — `data.config_error` set)
@@ -41,7 +41,7 @@ purpose: |
 // `styles` may be undefined when this module evaluates.
 // Import the canonical export instead. See tenant-manager/styles.js.
 import { styles } from '../styles.js';
-import { dbTypesOf } from '../utils/db-types.js';
+import { expectedExportersOf } from '../utils/expected-exporters.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -94,7 +94,7 @@ function ConfigErrorNotice({ name, code }) {
 
 // Metadata rows of a healthy card. #4141: no rule-pack pills — every
 // tenant reported the same packs once the readers serve the built-in keys;
-// what a tenant declares is its db_type row.
+// what a tenant declares is its Expected exporters row (`_expected_exporters`).
 function TenantMetadataRows({ data, modeColors }) {
   return (
     <>
@@ -117,8 +117,8 @@ function TenantMetadataRows({ data, modeColors }) {
       </div>
 
       <div style={styles.row}>
-        <span style={styles.rowLabel}>{t('數據庫類型', 'DB Type')}</span>
-        <span style={styles.rowValue}>{dbTypesOf(data.db_type).join(', ')}</span>
+        <span style={styles.rowLabel}>{t('預期的 exporter', 'Expected exporters')}</span>
+        <span style={styles.rowValue}>{expectedExportersOf(data.expected_exporters).join(', ')}</span>
       </div>
 
       <div style={styles.row}>

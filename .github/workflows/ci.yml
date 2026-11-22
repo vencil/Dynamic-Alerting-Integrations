@@ -199,7 +199,6 @@ jobs:
           # versions. Enforcement resting on an undocumented chain of three
           # unrelated filters silently disappears the day any of them moves.
           pre-commit run version-consistency --all-files
-          pre-commit run glossary-check --all-files
           pre-commit run changelog-lint --all-files
           # ⛔ `changelog-lint` walks git log; it never opens the file. This
           # second line is the one that checks the file's structure (#1765),
@@ -221,6 +220,10 @@ jobs:
           # decodes non-strictly, so `state_flters` or a flat `receiver_type`
           # is invisible to it by construction.
           pre-commit run md-yaml-drift-check --all-files
+          # #1558: declared quotes (```<lang> {.quote src=…}) match their
+          # source. Named here because editing a quoted SOURCE file does not
+          # run the hook locally (its files: covers docs/ only).
+          pre-commit run doc-quote-check --all-files
           pre-commit run repo-name-check --all-files
           # Codename-leak guard runs in diff-only mode by default (lint-policy
           # §3 (b) class). resolve_diff_base() auto-picks origin/$GITHUB_BASE_REF
@@ -324,10 +327,10 @@ jobs:
           pre-commit run metric-dictionary-check --all-files
           pre-commit run structure-check --all-files
           pre-commit run routing-profiles-check --all-files
-          # #880: conf.d tenant YAML vs tenant-config schema (db_type-typo guard).
+          # #880: conf.d tenant YAML vs tenant-config schema (liveness-typo guard).
           # Backstops the local pre-commit hook so a direct push / bypass cannot
-          # land a dbType/db_typ key or maraidb value that silently drops a tenant
-          # from liveness. Hook venv carries jsonschema via additional_dependencies.
+          # land a mistyped _expected_exporters key or a maraidb kind that silently
+          # drops a tenant from liveness. Hook venv carries jsonschema via additional_dependencies.
           pre-commit run confd-schema-check --all-files
           # Same gate over every OTHER shipped conf.d tree (try-local demo stack +
           # recipe/da-tools examples), which had NO validation of any kind: the hook
@@ -503,7 +506,7 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml -c requirements/ci-constraints.txt
 
-      # #2858: the RETIRE gate reads db_type through `da-guard served-values`;
+      # #2858: the RETIRE gate reads the declared exporter kinds through `da-guard served-values`;
       # its wrapper (scripts/ops/with_da_guard.sh) builds .build/da-guard with
       # `make da-guard-build`, which needs go. Without this step the gate fails
       # by name (go is not on PATH), never passes.

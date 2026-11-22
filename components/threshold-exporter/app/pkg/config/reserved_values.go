@@ -40,6 +40,12 @@ type valueCheck struct {
 	// effect is what happens while the reader ignores the value, for the
 	// write gate's message ("nothing is silenced while it is set").
 	effect string
+	// everyLayer (#4097) reports whether a problem of this value is an error
+	// in whichever layer writes it — a root platform file's `tenants:` entry
+	// and a profile too, where a problem is otherwise a notice (ADR-038
+	// decision 10). nil = never. For a value whose unread form silently
+	// switches off alerts for every tenant the layer feeds.
+	everyLayer func(k string, sv ScheduledValue) bool
 }
 
 // valueChecks binds each `value.check` name the registry may carry (on a
@@ -69,6 +75,17 @@ var valueChecks = map[string]valueCheck{
 		problem: metadataProblem,
 		reading: metadataReading,
 		effect:  "what the exporter cannot read of it is not served",
+		// #4097: only the removed `db_type` — any other unread field stays
+		// a notice outside the tenant's own file.
+		everyLayer: func(_ string, sv ScheduledValue) bool { return metadataWritesRetiredField(sv) },
+	},
+	// #4097: `_expected_exporters`, by the one reading the collector serves
+	// tenant_expected_exporter from (expectedExportersOf).
+	"expected_exporters": {
+		problem:    expectedExportersProblem,
+		reading:    expectedExportersReading,
+		effect:     "no exporter is expected (TenantExporterAbsent stays off for every kind) while it is set",
+		everyLayer: func(string, ScheduledValue) bool { return true },
 	},
 	// #3591: `_severity_dedup`, by the resolver's own words
 	// (severityDedupModeOf).
@@ -195,6 +212,14 @@ func readAlike(k string, a, b ScheduledValue) bool {
 		return false
 	}
 	return c.reading(k, a) == c.reading(k, b)
+}
+
+// valueErrorInEveryLayer reports whether a problem of sv, the value of
+// reserved key k, is an error in whichever layer writes it (the check's
+// everyLayer).
+func valueErrorInEveryLayer(k string, sv ScheduledValue) bool {
+	c, ok := reservedCheck(k)
+	return ok && c.everyLayer != nil && c.everyLayer(k, sv)
 }
 
 // valueEffect is what happens while the reader ignores a value of k ("" when

@@ -118,9 +118,9 @@ Alertmanager silence 必須帶 `tenant` matcher（決策當時的 builder 在 `s
 
 DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 tenant-agnostic）。運維執行平面的座標是 `kubectl context + namespace + 實例名`。**兩邊沒有橋，所以任何「從告警走到可執行動作」的想法都卡在第一步**——包含被 reject 的決策 1。
 
-放在 `TenantMetadata` 既有的**非 label 欄位**類別（`types.go` 記著 v2.5.0 的決定：`environment` / `region` / `db_type` 等「NOT emitted as Prometheus labels (cardinality concern) — consumed by tenant-api and generate_tenant_metadata.py only」）。
+放在 `TenantMetadata` 既有的**非 label 欄位**類別（`types.go` 記著 v2.5.0 的決定：`environment` / `region` / `domain` 等「NOT emitted as Prometheus labels (cardinality concern) — consumed by tenant-api and generate_tenant_metadata.py only」）。
 
-⛔ **不得加進 `tenant_metadata_info` 的 label 集**。這不是我的推論，是 `collector.go` 自己寫的：`tenant_metadata_info` 是每個租戶恰好一筆、每條 rule-pack 告警的 metadata annotation 都會查詢的資訊指標，「widening its label set is forbidden」。同一段也記了唯一一次 scoped reversal 是**開一個新 metric**（`tenant_expected_exporter{tenant, db_type}`），不是加寬既有的——要走那條路就得比照辦理。
+⛔ **不得加進 `tenant_metadata_info` 的 label 集**。這不是我的推論，是 `collector.go` 自己寫的：`tenant_metadata_info` 是每個租戶恰好一筆、每條 rule-pack 告警的 metadata annotation 都會查詢的資訊指標，「widening its label set is forbidden」。同一段也記了唯一一次 scoped reversal 是**開一個新 metric**（`tenant_expected_exporter{tenant, pack}`，租戶以頂層的 `_expected_exporters` 宣告），不是加寬既有的——要走那條路就得比照辦理。
 
 **這份對照必須是 advisory-only。** 外審在這點上是對的而草稿是錯的：草稿說「對不上時應該降級成找不到可執行動作」，但**沒指定誰、用什麼、在哪一側做這個判定**，而在宣告式表 + 不建 controller 的前提下，這個判定做不出來——最惡劣的情形是座標被**重用**（實例改名後舊的 `(ns, name)` 仍然存在、仍然解析得到、只是指向別的東西），任何「查得到就算對」的檢查都會回綠，要區分只能靠 DAI 沒有的身分憑證（如 CR uid）。
 

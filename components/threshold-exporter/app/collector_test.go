@@ -784,49 +784,71 @@ func TestCollector_TenantMetadataInfo_NoMetadata(t *testing.T) {
 
 func TestCollector_TenantExpectedExporter(t *testing.T) {
 	t.Parallel()
-	// #869: emit tenant_expected_exporter{tenant,db_type}=1 ONLY for tenants that
-	// declare a db_type in _metadata. db-a declares mariadb (emits); db-b declares
-	// postgresql (emits); db-c has _metadata but NO db_type (must NOT emit — the
-	// db_type="" guard); db-d has no _metadata at all (must NOT emit).
-	// #3771: db-e writes the list form (one series per kind, a repeat and an
-	// empty entry dropped).
+	// #869, #4097: emit tenant_expected_exporter=1 ONLY for the entries a
+	// tenant declares in `_expected_exporters`. t-a declares mariadb
+	// (emits); t-b declares two kinds, one of them nginx — a kind that is no
+	// database (one series each); t-c has `_metadata` but declares nothing
+	// (must NOT emit — the opt-in guard); t-d writes no key at all (must NOT
+	// emit); t-e writes an empty list (declares nothing).
+	//
+	// A value the exporter does not read serves NOTHING, not the entries it
+	// could have read: t-f names an unknown kind beside a known one, t-g
+	// repeats a kind (two identical series would fail the scrape), t-h is a
+	// scalar, t-j writes one kind both with and without a cluster, t-k names
+	// a cluster that is no cluster id.
+	//
+	// Per cluster (`kind@cluster`): t-i's row carries the cluster in
+	// `expected_cluster`, one row per entry, beside a kind written alone
+	// whose row has NO such label (not an empty one).
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {
-				"_metadata": SVYAML("db_type: mariadb\nowner: dba-team"),
-			},
-			"db-b": {
-				"_metadata": SVYAML("db_type: postgresql\nowner: pg-team"),
-			},
-			"db-c": {
-				// _metadata present but db_type omitted → DBType=="" → skipped.
-				"_metadata": SVYAML("owner: misc-team\ntier: bronze"),
-			},
-			"db-d": {
-				// No _metadata at all → DBType=="" → skipped.
-			},
-			"db-e": {
-				"_metadata": SVYAML("db_type: [mariadb, redis, mariadb, \"\"]\nowner: multi-team"),
-			},
+			"t-a": {"_expected_exporters": SVYAML("[mariadb]"), "_metadata": SVYAML("owner: dba-team")},
+			"t-b": {"_expected_exporters": SVYAML("[postgresql, nginx]")},
+			"t-c": {"_metadata": SVYAML("owner: misc-team\ntier: bronze")},
+			"t-d": {},
+			"t-e": {"_expected_exporters": SVYAML("[]")},
+			"t-f": {"_expected_exporters": SVYAML("[redis, MySQL]")},
+			"t-g": {"_expected_exporters": SVYAML("[redis, redis]")},
+			"t-h": {"_expected_exporters": SV("redis")},
+			"t-i": {"_expected_exporters": SVYAML("[redis@edge-1, redis@edge-2, kafka]")},
+			"t-j": {"_expected_exporters": SVYAML("[redis@edge-1, redis]")},
+			"t-k": {"_expected_exporters": SVYAML("[redis@edge 1]")},
 		},
 	}
 
 	manager := newTestManager(cfg)
 	collector := NewThresholdCollector(manager)
 
-	// db-a and db-b one series each; db-e one per declared kind; db-c and db-d
-	// are absent (opt-in via db_type).
 	expected := `
-		# HELP tenant_expected_exporter Liveness expectation (always 1) for each db_type a tenant declares in _metadata. LHS of the TenantExporterAbsent anti-join (#869, #3771). One series per declared (tenant, db_type).
+		# HELP tenant_expected_exporter Liveness expectation (always 1) for each entry a tenant declares in _expected_exporters: {tenant, pack} for an exporter kind written alone (an exporter of that kind answering in any cluster is enough), {tenant, pack, expected_cluster} for kind@cluster (one must answer in that cluster). LHS of the TenantExporterAbsent anti-join (#869, #3771, #4097). One series per entry.
 		# TYPE tenant_expected_exporter gauge
-		tenant_expected_exporter{db_type="mariadb",tenant="db-a"} 1
-		tenant_expected_exporter{db_type="postgresql",tenant="db-b"} 1
-		tenant_expected_exporter{db_type="mariadb",tenant="db-e"} 1
-		tenant_expected_exporter{db_type="redis",tenant="db-e"} 1
+		tenant_expected_exporter{expected_cluster="edge-1",pack="redis",tenant="t-i"} 1
+		tenant_expected_exporter{expected_cluster="edge-2",pack="redis",tenant="t-i"} 1
+		tenant_expected_exporter{pack="kafka",tenant="t-i"} 1
+		tenant_expected_exporter{pack="mariadb",tenant="t-a"} 1
+		tenant_expected_exporter{pack="nginx",tenant="t-b"} 1
+		tenant_expected_exporter{pack="postgresql",tenant="t-b"} 1
 	`
 	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "tenant_expected_exporter"); err != nil {
 		t.Errorf("tenant_expected_exporter output mismatch: %v", err)
+	}
+}
+
+// #4097: `_metadata.db_type` is removed with no alias — a tree that still
+// writes it gets no tenant_expected_exporter series from it.
+func TestCollector_RemovedMetadataDBTypeDeclaresNothing(t *testing.T) {
+	t.Parallel()
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{},
+		Tenants: map[string]map[string]ScheduledValue{
+			"t-a": {"_metadata": SVYAML("db_type: mariadb\nowner: dba-team")},
+			"t-b": {"_metadata": SVYAML("db_type: [mariadb, redis]")},
+		},
+	}
+	collector := NewThresholdCollector(newTestManager(cfg))
+	if n := testutil.CollectAndCount(collector, "tenant_expected_exporter"); n != 0 {
+		t.Errorf("tenant_expected_exporter: %d series from the removed _metadata.db_type, want 0", n)
 	}
 }
 

@@ -40,6 +40,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_python.py",
     "_lib_constants.py",
     "_lib_io.py",
+    "_lib_output.py",      # #4223: the output entries, no PyYAML / _lib_constants (_lib_io re-exports them)
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_atomic_write.py",  # #3107: the one atomic writer (was dx/_atomic_write.py)
@@ -52,7 +53,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_yaml_strict.py",  # #4064: the one strict YAML loader, PyYAML only (_lib_io re-exports it)
     "_lib_prompt.py",      # #3822: the one read of an interactive answer (unreadable stdin is rc 2)
     "_lib_shadow_report.py",  # #3662: the one definition of validation-report.csv, stdlib only
-    "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / batchpr / parser
+    "_lib_godispatch.py",  # v2.8.0 PR-2: shared dispatcher for guard / parser
     "_lib_compat.py",      # v2.8.0 PR #432: cross-platform compat helpers (try_utf8_stdout)
     "_lib_exitcodes.py",   # #452 Track A: canonical 0/1/2 exit-code contract (SSOT)
     "_lib_versions.py",    # platform / da-tools version SSOT readers for doc generators
@@ -71,7 +72,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_consumer_read.py",  # #3206: a manifest / Alertmanager config read the consumer's way (da-crdecode / da-read, ADR-036 §12)
     "_lib_tool_fault.py",  # #3862: the record of da-guard / da-read / da-crdecode not running (the service's 503 tool_fault)
     "_lib_metric_sources.py",  # #1595 D1b: metric family → source table; operator-generate's portability derivation
-    "_lib_exporter_presence.py",  # #3771: db_type → exporter presence metric table; the inline presence exprs of 3 alerts
+    "_lib_exporter_presence.py",  # #3771, #4097: exporter kind → presence metric (read from the registry); the inline presence exprs of 3 alerts
     "_lib_doc_yaml_inventory.py",  # #3416: the one inventory of the docs' ```yaml examples (drift / unit-sanity lints, Go loader test)
     "metric-dictionary.yaml",
     "validate_all.py",

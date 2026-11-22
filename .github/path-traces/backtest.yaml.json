@@ -234,7 +234,6 @@
         "components/threshold-exporter/app/pkg/config/custom_alert_compile.go",
         "components/threshold-exporter/app/pkg/config/custom_alert_compile_test.go",
         "components/threshold-exporter/app/pkg/config/custom_alert_test.go",
-        "components/threshold-exporter/app/pkg/config/db_types.go",
         "components/threshold-exporter/app/pkg/config/default_text_guard_test.go",
         "components/threshold-exporter/app/pkg/config/defaults_carriers_test.go",
         "components/threshold-exporter/app/pkg/config/defaults_parse.go",

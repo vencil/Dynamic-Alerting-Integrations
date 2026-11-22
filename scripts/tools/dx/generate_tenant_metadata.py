@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
+"""租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 owner、tier、routing_channel；expected_exporters 只取 `_expected_exporters` 宣告值。
 
 No `rule_packs` (#4141): once the readers serve the default-armed keys for
 every tenant (#3832), a pack inferred from the served keys was the same for
-all of them. What a tenant declares is `_metadata.db_type`.
+all of them. What a tenant declares is `_expected_exporters` (#4097).
 
 The tenants and every value read here come from `da-guard served-values`
 (#2115 0-B/B4), so the tool needs da-guard: `$DA_GUARD_BINARY`, else
@@ -56,6 +56,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #327
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
     exit_on_served_values_error,
+    expected_exporter_kind,
     load_whole_day,
     now_at,
     recorded_at,
@@ -101,8 +102,8 @@ def extract_tier(tenant_config: dict) -> str:
 def extract_environment(tenant_name: str, metadata: dict) -> str:
     """Return the environment the tenant's `_metadata` resolves to, or "".
 
-    Not inferred from the tenant name (#2830), for the reason db_type is not
-    inferred (extract_db_type): the exporter's tenant_metadata_info and
+    Not inferred from the tenant name (#2830), for the reason the exporter
+    kinds are not inferred (extract_expected_exporters): the exporter's tenant_metadata_info and
     tenant-api's list/search read only `_metadata`, and the portal falls back
     to this file when tenant-api is down, so a `prod-x` tenant with no
     environment would show as production here and as unset there. tenant_name
@@ -114,22 +115,19 @@ def extract_environment(tenant_name: str, metadata: dict) -> str:
     return ""
 
 
-def extract_db_type(metadata: dict) -> list[str]:
-    """Return the db_types the tenant declares in `_metadata`, in order; [] if none.
+def extract_expected_exporters(declared: Any) -> list[str]:
+    """Return the entries the tenant declares in `_expected_exporters`, as
+    the exporter reads them and as written (an exporter kind, or
+    `kind@cluster`, #4097), in order; [] if none.
 
-    Not inferred from metric keys (#2115 B4): Go reads only the declared
-    db_type. The exporter's tenant_expected_exporter liveness series and
-    tenant-api's list/search read only that, and the portal falls back to
-    this file when tenant-api is down, so an inferred value here would show
-    the same tenant with two different db_types. #3771: `db_type` is a list
-    (served as one; a string is one kind), so this returns every declared
-    kind. [] means "not declared", which is also "not liveness-monitored"."""
-    if isinstance(metadata, dict):
-        db_type = metadata.get("db_type", [])
-        if isinstance(db_type, str):
-            db_type = [db_type]
-        if isinstance(db_type, list):
-            return [str(d) for d in db_type if isinstance(d, str) and d]
+    Not inferred from metric keys (#2115 B4): Go reads only the declaration.
+    The exporter's tenant_expected_exporter liveness series and tenant-api's
+    list/search read only that, and the portal falls back to this file when
+    tenant-api is down, so an inferred value here would show the same tenant
+    with two different sets of kinds. [] means "not declared", which is also
+    "not liveness-monitored"."""
+    if isinstance(declared, (list, tuple)):
+        return [str(d) for d in declared if isinstance(d, str) and d]
     return []
 
 
@@ -264,7 +262,7 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
         at = now_at()
     whole = load_whole_day(config_dir, at=at)
     # The threshold keys served in some part of the day, `_metadata` as the
-    # exporter's resolver reads it, and `_routing` as the exporter module's
+    # exporter's resolver reads it, `_expected_exporters` as it serves them, and `_routing` as the exporter module's
     # routing resolver reads it (`--config-facts`: read at no instant).
     tenant_configs = {}
     for tid, day in whole.days.tenants.items():
@@ -272,6 +270,7 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
         config: dict[str, Any] = {k: sch for k, sch in day.items()
                                   if any(seg.value is not None for seg in sch.segments)}
         config["_metadata"] = facts.metadata
+        config["_expected_exporters"] = list(facts.expected_exporters)
         if facts.routing is not None:
             config["_routing"] = facts.routing
         tenant_configs[tid] = config
@@ -288,7 +287,7 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
         domain = metadata.get("domain", "") if isinstance(metadata, dict) else ""
 
         # v2.5.0: extract extended metadata fields
-        db_type = extract_db_type(metadata)
+        expected_exporters = extract_expected_exporters(tenant_config.get("_expected_exporters"))
         tags = extract_tags(metadata)
         group_memberships = extract_groups(metadata)
 
@@ -298,7 +297,7 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
             "region": region,
             "tier": extract_tier(tenant_config),
             "domain": domain,
-            "db_type": db_type,
+            "expected_exporters": expected_exporters,
             "owner": extract_owner(tenant_config),
             "routing_channel": extract_routing_channel(tenant_config),
             "metric_count": count_metrics(tenant_config),
@@ -307,7 +306,7 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
             "groups": group_memberships,
         }
 
-        # Clean up empty fields (db_type is a list, [] when none — #3771)
+        # Clean up empty fields (expected_exporters is a list, [] when none)
         for key in ["environment", "region", "domain"]:
             if not tenant_entry[key]:
                 tenant_entry[key] = ""
@@ -373,13 +372,16 @@ def _load_custom_groups(state: Any, config_dir: Path) -> dict:
 def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
     """Build multi-dimension group views from tenant metadata.
 
-    Produces three dimension views: by-domain, by-db_type, by-region.
+    Produces three dimension views: by-domain, by-expected_exporter, by-region.
     Each view maps dimension value → list of tenant IDs. A list-valued field
-    (db_type, #3771) puts the tenant under each of its values.
+    (expected_exporters) puts the tenant under each of its values — by KIND
+    (#4097): an entry may be `kind@cluster`, and a tenant declaring
+    `mariadb@east` and `mariadb@west` is under `mariadb`, once.
     """
+    by_kind = {"expected_exporters"}
     dimensions = {
         "by_domain": "domain",
-        "by_db_type": "db_type",
+        "by_expected_exporter": "expected_exporters",
         "by_region": "region",
     }
     result: dict[str, dict[str, list[str]]] = {}
@@ -388,7 +390,10 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
         groups: dict[str, list[str]] = {}
         for tenant_id, meta in tenant_metadata.items():
             value = meta.get(field, "")
-            for v in (value if isinstance(value, list) else [value]):
+            values = value if isinstance(value, list) else [value]
+            if field in by_kind:
+                values = dict.fromkeys(expected_exporter_kind(v) for v in values if isinstance(v, str))
+            for v in values:
                 if v:
                     groups.setdefault(v, []).append(tenant_id)
         # Sort member lists for deterministic output

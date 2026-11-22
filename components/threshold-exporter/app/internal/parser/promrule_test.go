@@ -188,7 +188,7 @@ func TestParsePromRules_WrongCRDShapeYieldsWarningNotFatal(t *testing.T) {
 	t.Parallel()
 	// A valid YAML document with no `groups:` (operator pasted the
 	// wrong CRD shape) should surface as a warning, not a fatal
-	// error — partial-batch tolerance is a hard contract for C-10.
+	// error — partial-batch tolerance is a hard contract.
 	src := []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: not-a-rule\n")
 	res, err := ParsePromRules(src, "wrong.yaml", testGeneratedBy)
 	if err != nil {

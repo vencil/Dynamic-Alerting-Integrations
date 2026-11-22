@@ -284,6 +284,12 @@
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -398,6 +404,12 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1014,7 +1026,7 @@
         },
         "/api/v1/tenants/search": {
             "get": {
-                "description": "Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.\nWhen the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / db_type / tag) matches it, and q matches its id only.\nAn item whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.",
+                "description": "Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.\nWhen the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / expected_exporters / tag) matches it, and q matches its id only.\nAn item whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.",
                 "produces": [
                     "application/json"
                 ],
@@ -1025,7 +1037,7 @@
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Case-insensitive substring over id / owner / domain / db_type / tags",
+                        "description": "Case-insensitive substring over id / owner / domain / expected_exporters / tags",
                         "name": "q",
                         "in": "query"
                     },
@@ -1049,8 +1061,8 @@
                     },
                     {
                         "type": "string",
-                        "description": "A db_type the tenant declares (exact match against any one of its kinds)",
-                        "name": "db_type",
+                        "description": "An exporter kind the tenant declares in _expected_exporters, alone or per cluster (mariadb matches a tenant declaring mariadb or mariadb@east); or a whole kind@cluster entry, matched exactly. Replaces db_type, which is refused with 400.",
+                        "name": "expected_exporters",
                         "in": "query"
                     },
                     {
@@ -1615,6 +1627,12 @@
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
@@ -1732,6 +1750,12 @@
                     },
                     "409": {
                         "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -3929,18 +3953,18 @@
                         "invalid_config"
                     ]
                 },
-                "db_type": {
-                    "description": "Every database kind the tenant declares in `_metadata.db_type`, in the\norder written (#3771: the config takes a string or a list; a string is\none kind). Omitted when none is declared.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
                 "domain": {
                     "type": "string"
                 },
                 "environment": {
                     "type": "string"
+                },
+                "expected_exporters": {
+                    "description": "The entries the tenant declares in `_expected_exporters`, as written and in the order written — an exporter kind (`mariadb`) or `kind@cluster` (`mariadb@east`) — as threshold-exporter reads them through the tenant's layers (root platform files' entry, the tenant file over it, else its profile's): the entries tenant_expected_exporter is served for, so what TenantExporterAbsent watches. Omitted when none is declared, or when the value is one the exporter does not read (an unknown kind, a repeat, a kind written both with and without a cluster, not a list).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "git_managed_reason": {
                     "description": "GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:\nnot_tenant_document (not YAML, its root or tenants: is not a mapping, or its root has a key other than\ntenants), several_documents, yaml_indirection,\ntenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's\nother fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:\nit names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id\n(always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.",

@@ -19,7 +19,7 @@ from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() 
 # ── 1. DB Type Inference ────────────────────────────────────────────
 
 class TestInferDbType:
-    """Test _infer_db_type_from_job。"""
+    """Test _infer_kind_from_job。"""
 
     @pytest.mark.parametrize("job_name,expected", [
         ("mysql", "mariadb"),
@@ -43,17 +43,21 @@ class TestInferDbType:
             "unknown-process", "unknown-thanos"])
     def test_infer_db_from_job(self, job_name, expected):
         """job 名稱正確推斷 DB 類型。"""
-        assert bsd._infer_db_type_from_job(job_name) == expected
+        assert bsd._infer_kind_from_job(job_name) == expected
 
-    def test_job_vocabulary_is_the_declared_db_type_vocabulary(self):
-        """#4026：live 端 job 推得的 DB 類型，與租戶 `_metadata.db_type`
-        能宣告的值（schema `definitions.dbTypeValue.enum`）是同一組名字。
-        兩邊差一個字，那類 DB 不是永遠 covered 就是永遠 blind_spot。"""
+    def test_job_vocabulary_is_within_the_declarable_kinds(self):
+        """#4026、#4097：live 端 job 推得的 kind，必須是租戶 `_expected_exporters` 能宣告的
+        kind（registry 帶 `presence:` 的 pack，生成進 `EXPECTED_EXPORTER_KINDS`，與 schema
+        `definitions.exporterKind.enum` 同一組）。差一個字，那一類不是永遠 covered 就是
+        永遠 blind_spot。不是每一種 kind 都能從 job 名稱看出來（jvm），所以是子集。"""
         import pathlib
         repo = pathlib.Path(bsd.__file__).resolve().parents[3]
         schema = json.loads((repo / "docs/schemas/tenant-config.schema.json")
                             .read_text(encoding="utf-8"))
-        assert set(bsd.JOB_DB_MAP.values()) == set(schema["definitions"]["dbTypeValue"]["enum"])
+        kinds = set(bsd.EXPECTED_EXPORTER_KINDS)
+        assert kinds == set(schema["definitions"]["exporterKind"]["enum"])
+        assert set(bsd.JOB_DB_MAP.values()) and set(bsd.JOB_DB_MAP.values()) <= kinds
+        assert {"nginx", "jvm"} <= kinds
 
 
 # ── 2. Extract DB Instances ─────────────────────────────────────────
@@ -96,15 +100,15 @@ class TestExtractDbInstances:
         assert "redis:6379" in result["redis"]
 
 
-# ── 3. Load Monitored DB Types ──────────────────────────────────────
+# ── 3. Load Declared Kinds ──────────────────────────────────────
 
 @pytest.mark.usefixtures("da_guard_env")
-class TestLoadMonitoredDbTypes:
-    """Test load_monitored_db_types()。
+class TestLoadDeclaredKinds:
+    """Test load_declared_kinds()。
 
-    #4026：已監控＝租戶 `_metadata.db_type` 宣告的 DB 類型，照 exporter 的讀法
+    #4026、#4097：已監控＝租戶 `_expected_exporters` 宣告的 exporter kind，照 exporter 的讀法
     （da-guard served-values --config-facts）——也就是 exporter 送出
-    `tenant_expected_exporter{tenant,db_type}` 的那份宣告（#869、#2737）。
+    `tenant_expected_exporter{tenant,pack}` 的那份宣告（#869、#2737）。
     /metrics 送了哪些閾值鍵不算：內建層的鍵每個租戶都有列（#3832）。
     """
 
@@ -122,30 +126,48 @@ class TestLoadMonitoredDbTypes:
         """平面格式（無 `tenants:` 包裝）：exporter 不當租戶，不算已監控，並具名 WARN（R3）。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
-                            "db-a.yaml": "mysql_connections: 50\n_metadata: {db_type: mariadb}\n"})
-            result = bsd.load_monitored_db_types(d)
+                            "db-a.yaml": "mysql_connections: 50\n_expected_exporters: [mariadb]\n"})
+            result = bsd.load_declared_kinds(d)
             assert result == {}
             err = capsys.readouterr().err
             assert "WARN: db-a.yaml: declares no tenant" in err
 
-    def test_declared_db_type_is_monitored(self):
-        """宣告一個或一串 db_type：每一類都算這個租戶已監控。"""
+    def test_declared_kinds_are_monitored(self):
+        """宣告一個或一串 kind：每一類都算這個租戶已監控。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
-                            "db-a.yaml": "tenants:\n  db-a:\n    _metadata: {db_type: mariadb}\n",
-                            "db-b.yaml": "tenants:\n  db-b:\n    _metadata: {db_type: [postgresql, redis]}\n"})
-            assert bsd.load_monitored_db_types(d) == {
+                            "db-a.yaml": "tenants:\n  db-a:\n    _expected_exporters: [mariadb]\n",
+                            "db-b.yaml": "tenants:\n  db-b:\n    _expected_exporters: [postgresql, redis]\n"})
+            assert bsd.load_declared_kinds(d) == {
                 "mariadb": {"db-a"}, "postgresql": {"db-b"}, "redis": {"db-b"}}
+
+    def test_a_kind_declared_per_cluster_is_monitored_by_kind(self):
+        """#4097：條目可以是 `kind@cluster`。這支工具比的是 kind：`@` 前面那一段，
+        同一個 kind 宣告兩個叢集仍是一個 kind、一個租戶。混寫（同一個 kind 既單獨寫又寫
+        `@cluster`）exporter 不讀，等於什麼都沒宣告。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n"
+                                         "    _expected_exporters: [mariadb@east, mariadb@west, redis]\n",
+                            "db-b.yaml": "tenants:\n  db-b:\n    _expected_exporters: [kafka@east]\n",
+                            "db-c.yaml": "tenants:\n  db-c:\n"
+                                         "    _expected_exporters: [nginx, nginx@east]\n"})
+            declared = bsd.load_declared_kinds(d)
+            assert declared == {"mariadb": {"db-a"}, "redis": {"db-a"}, "kafka": {"db-b"}}
+            # … and a kind declared only per cluster is covered, not an unknown declaration.
+            spots = bsd.find_blind_spots({"mariadb": {"10.0.0.1:9104"}}, declared)
+            assert {s["kind"]: s["status"] for s in spots} == {
+                "mariadb": "covered", "redis": "covered", "kafka": "covered"}
 
     def test_served_keys_without_a_declaration_are_not_monitored(self):
         """#4026 行為變更：租戶送出 mysql_／redis_ 的閾值鍵（自己寫的、繼承的、內建層的），
-        沒宣告 db_type 就不算已監控。改寫前 db-a 算 mariadb＋redis，以及內建層推得出的
+        沒宣告 `_expected_exporters` 就不算已監控。改寫前 db-a 算 mariadb＋redis，以及內建層推得出的
         每一類（樹裡只要有一個租戶，那幾類永遠不會是盲點）。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
                             "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"
                                          "    redis_memory: 512\n"})
-            assert bsd.load_monitored_db_types(d) == {}
+            assert bsd.load_declared_kinds(d) == {}
 
     def test_a_disabled_key_does_not_withdraw_the_declaration(self):
         """宣告不看閾值鍵：db-a 把 redis 的鍵全關了，仍宣告 redis，仍算已監控
@@ -153,19 +175,19 @@ class TestLoadMonitoredDbTypes:
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
                             "db-a.yaml": "tenants:\n  db-a:\n    redis_memory: disable\n"
-                                         "    _metadata: {db_type: redis}\n"})
-            assert bsd.load_monitored_db_types(d) == {"redis": {"db-a"}}
+                                         "    _expected_exporters: [redis]\n"})
+            assert bsd.load_declared_kinds(d) == {"redis": {"db-a"}}
 
     def test_the_declaration_is_read_through_the_platform_layer(self):
-        """根平台檔 `tenants.<id>._metadata` 是一層（#2370）：db-a 只在那裡宣告也算；
+        """根平台檔的 `tenants.<id>` 是一層（#2370）：db-a 只在那裡宣告也算；
         db-b 的租戶檔整值換掉平台層的宣告。"""
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS
-                            + "tenants:\n  db-a:\n    _metadata: {db_type: oracle}\n"
-                            + "  db-b:\n    _metadata: {db_type: [oracle, db2]}\n",
+                            + "tenants:\n  db-a:\n    _expected_exporters: [oracle]\n"
+                            + "  db-b:\n    _expected_exporters: [oracle, db2]\n",
                             "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n",
-                            "db-b.yaml": "tenants:\n  db-b:\n    _metadata: {db_type: kafka}\n"})
-            assert bsd.load_monitored_db_types(d) == {"oracle": {"db-a"}, "kafka": {"db-b"}}
+                            "db-b.yaml": "tenants:\n  db-b:\n    _expected_exporters: [kafka]\n"})
+            assert bsd.load_declared_kinds(d) == {"oracle": {"db-a"}, "kafka": {"db-b"}}
 
     @pytest.mark.parametrize("at", ["2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"])
     def test_no_instant_enters_the_answer(self, tmp_path, monkeypatch, at):
@@ -179,7 +201,7 @@ class TestLoadMonitoredDbTypes:
         d.mkdir()
         self._write(str(d), {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": "tenants:\n  ta:\n    _metadata: {db_type: mariadb}\n"
+            "ta.yaml": "tenants:\n  ta:\n    _expected_exporters: [mariadb]\n"
                        + "".join(f"    {k}: {window}\n" for k in (
                            "mysql_connections", "mysql_connection_usage_percent",
                            "mysql_replication_lag"))
@@ -187,10 +209,25 @@ class TestLoadMonitoredDbTypes:
                          '[{window: "02:00-03:00", value: "95:critical"}]}\n'
                        + '    redis_memory_critical: "95"\n'})
         monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
-        assert bsd.load_monitored_db_types(str(d)) == {"mariadb": {"ta"}}
+        assert bsd.load_declared_kinds(str(d)) == {"mariadb": {"ta"}}
 
-    def test_a_db_type_that_is_not_a_list_of_strings_is_exit_2_named(self, monkeypatch):
-        """da-guard 送的 db_type 一律是字串清單；不是時不猜（字串會被逐字拆開），
+    def test_the_removed_metadata_db_type_declares_nothing(self):
+        """#4097：`_metadata.db_type` 已移除、沒有別名——還這樣寫的租戶不算宣告了任何 kind
+        （exporter 不送 tenant_expected_exporter，TenantExporterAbsent 也不管它）。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n    _metadata: {db_type: mariadb}\n"})
+            assert bsd.load_declared_kinds(d) == {}
+
+    def test_nginx_and_jvm_can_be_declared(self):
+        """#4097：nginx、jvm 是可宣告的 kind（v2.9 的 db_type 沒有這兩個值）。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n    _expected_exporters: [nginx, jvm]\n"})
+            assert bsd.load_declared_kinds(d) == {"nginx": {"db-a"}, "jvm": {"db-a"}}
+
+    def test_kinds_that_are_not_a_list_of_strings_are_exit_2_named(self, monkeypatch):
+        """da-guard 送的 expected_exporters 一律是字串清單；不是時不猜（字串會被逐字拆開），
         rc 2 並點名租戶。"""
         import _lib_tenant_values as tv
         real = tv.load_served_facts
@@ -198,15 +235,15 @@ class TestLoadMonitoredDbTypes:
         def fake(conf_d, *a, **kw):
             facts = real(conf_d, *a, **kw)
             t = facts.tenants["db-a"]
-            facts.tenants["db-a"] = t._replace(metadata={**t.metadata, "db_type": "mariadb"})
+            facts.tenants["db-a"] = t._replace(expected_exporters="mariadb")
             return facts
         monkeypatch.setattr(bsd, "load_served_facts", fake)
         with tempfile.TemporaryDirectory() as d:
             self._write(d, {"_defaults.yaml": self._DEFAULTS,
-                            "db-a.yaml": "tenants:\n  db-a:\n    _metadata: {db_type: mariadb}\n"})
-            with pytest.raises(tv.ServedValuesError, match="tenant 'db-a' carries a _metadata.db_type "
-                                                           "that is not a list of strings"):
-                bsd.load_monitored_db_types(d)
+                            "db-a.yaml": "tenants:\n  db-a:\n    _expected_exporters: [mariadb]\n"})
+            with pytest.raises(tv.ServedValuesError, match="tenant 'db-a' carries expected_exporters "
+                                                           "that are not a list of strings"):
+                bsd.load_declared_kinds(d)
 
     @pytest.mark.parametrize("name, reason", [("nope", "dir_not_found"), ("f", "dir_not_found")])
     def test_a_config_dir_that_is_not_a_directory_is_a_caller_error(self, tmp_path, name,
@@ -214,7 +251,7 @@ class TestLoadMonitoredDbTypes:
         """#3392：不存在或不是目錄的 --config-dir 是呼叫端錯誤（rc 2，具名），
         不再是 WARN 加空字典（每個活著的 DB 都被報成 blind spot、rc 0）。
         #3751：由 `main` 的宣告輸入判定一次（`declared_trees`），不再由
-        `load_monitored_db_types` 自己判，所以經 CLI 量。"""
+        `load_declared_kinds` 自己判，所以經 CLI 量。"""
         from _lib_exitcodes import CallerError
         (tmp_path / "f").write_text("x", encoding="utf-8")
         cli_argv("blind_spot_discovery", "--config-dir", str(tmp_path / name))
@@ -242,7 +279,7 @@ class TestFindBlindSpots:
         live = {"mariadb": {"db-a/10.0.0.1:9104"}, "postgresql": {"db-b/10.0.0.2:5432"}}
         monitored = {"mariadb": {"db-a"}}
         results = bsd.find_blind_spots(live, monitored)
-        statuses = {r["db_type"]: r["status"] for r in results}
+        statuses = {r["kind"]: r["status"] for r in results}
         assert statuses["mariadb"] == "covered"
         assert statuses["postgresql"] == "blind_spot"
 
@@ -251,22 +288,30 @@ class TestFindBlindSpots:
         live = {}
         monitored = {"redis": {"db-a"}}
         results = bsd.find_blind_spots(live, monitored)
-        assert results[0]["db_type"] == "redis"
+        assert results[0]["kind"] == "redis"
         assert results[0]["live_count"] == 0
         assert results[0]["status"] == "covered"
 
     @pytest.mark.parametrize("declared", ["MySQL", "mysql", "unknown", "123"])
-    def test_a_declaration_no_job_maps_to_is_never_covered(self, declared):
-        """#4026 審查 F2：宣告不在詞彙表（`JOB_DB_MAP` 的值＝schema enum）裡時，沒有任何
-        live target 會是這一類，TenantExporterAbsent 永遠解不掉——不算 covered，
-        另列 unknown_declaration。`unknown` 也不能被 live 端的 unknown 吃掉。"""
+    def test_a_declaration_outside_the_kinds_is_never_covered(self, declared):
+        """#4026 審查 F2：宣告不在 kind 詞彙表（`EXPECTED_EXPORTER_KINDS`）裡時，它沒有存在指標，
+        TenantExporterAbsent 永遠解不掉——不算 covered，另列 unknown_declaration。
+        `unknown` 也不能被 live 端的 unknown 吃掉。（#4097 起 exporter 自己拒收這種值，
+        所以真實的 da-guard 不會送出來；這裡釘的是工具與 da-guard 版本不同時的行為。）"""
         live = {"mariadb": {"db/m:9104"}, "unknown": {"ns/x:80"}}
         results = bsd.find_blind_spots(live, {declared: {"t1"}})
-        by = {(r["db_type"], r["status"]): r for r in results}
+        by = {(r["kind"], r["status"]): r for r in results}
         assert by[(declared, "unknown_declaration")]["monitored_tenants"] == ["t1"]
         assert (declared, "covered") not in by
         assert by[("mariadb", "blind_spot")]["live_count"] == 1
         assert by[("unknown", "unrecognized")]["live_count"] == 1
+
+    @pytest.mark.parametrize("declared", ["nginx", "jvm"])
+    def test_a_kind_no_job_name_maps_to_is_still_covered(self, declared):
+        """#4097：nginx、jvm 是 kind，但 `JOB_DB_MAP` 沒有對應的 job 名稱——宣告了就是
+        covered（Absent 靠存在指標判斷，不靠 job 名稱），不是 unknown_declaration。"""
+        results = bsd.find_blind_spots({}, {declared: {"t1"}})
+        assert [(r["kind"], r["status"]) for r in results] == [(declared, "covered")]
 
     def test_the_report_lists_unknown_declarations_escaped(self):
         report = bsd.render_report(bsd.find_blind_spots(
@@ -296,7 +341,7 @@ class TestRenderReport:
 
     def test_report_contains_blind_spot(self):
         """報告包含盲點標記。"""
-        results = [{"db_type": "postgresql", "live_count": 3,
+        results = [{"kind": "postgresql", "live_count": 3,
                      "live_instances": ["a", "b", "c"],
                      "monitored_tenants": [], "monitored_count": 0,
                      "status": "blind_spot"}]
@@ -307,7 +352,7 @@ class TestRenderReport:
 
     def test_report_contains_covered(self):
         """報告包含已涵蓋標記。"""
-        results = [{"db_type": "mariadb", "live_count": 2,
+        results = [{"kind": "mariadb", "live_count": 2,
                      "live_instances": ["x", "y"],
                      "monitored_tenants": ["db-a"], "monitored_count": 1,
                      "status": "covered"}]
@@ -318,13 +363,13 @@ class TestRenderReport:
     def test_report_summary(self):
         """報告摘要統計正確。"""
         results = [
-            {"db_type": "mariadb", "live_count": 2, "live_instances": [],
+            {"kind": "mariadb", "live_count": 2, "live_instances": [],
              "monitored_tenants": ["t1"], "monitored_count": 1, "status": "covered"},
-            {"db_type": "redis", "live_count": 1, "live_instances": [],
+            {"kind": "redis", "live_count": 1, "live_instances": [],
              "monitored_tenants": [], "monitored_count": 0, "status": "blind_spot"},
         ]
         report = bsd.render_report(results)
-        assert "1 DB type(s) covered" in report
+        assert "1 kind(s) covered" in report
         assert "1 blind spot(s)" in report
 
 
@@ -409,7 +454,7 @@ class TestRenderReportAdvanced:
     def test_blind_spot_more_than_5(self):
         """Blind spot 超過 5 個 instance 顯示 '... and N more'。"""
         instances = [f"inst-{i}" for i in range(8)]
-        results = [{"db_type": "redis", "live_count": 8,
+        results = [{"kind": "redis", "live_count": 8,
                      "live_instances": instances,
                      "monitored_tenants": [], "monitored_count": 0,
                      "status": "blind_spot"}]
@@ -418,7 +463,7 @@ class TestRenderReportAdvanced:
 
     def test_unknown_status(self):
         """Unrecognized 狀態正確渲染。"""
-        results = [{"db_type": "unknown", "live_count": 2,
+        results = [{"kind": "unknown", "live_count": 2,
                      "live_instances": ["u1", "u2"],
                      "monitored_tenants": [], "monitored_count": 0,
                      "status": "unrecognized"}]
@@ -428,7 +473,7 @@ class TestRenderReportAdvanced:
     def test_unknown_more_than_5(self):
         """Unrecognized 超過 5 個 instance 顯示 '... and N more'。"""
         instances = [f"unknown-{i}" for i in range(7)]
-        results = [{"db_type": "unknown", "live_count": 7,
+        results = [{"kind": "unknown", "live_count": 7,
                      "live_instances": instances,
                      "monitored_tenants": [], "monitored_count": 0,
                      "status": "unrecognized"}]

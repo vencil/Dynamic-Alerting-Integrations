@@ -256,6 +256,15 @@ def run_check(
     if msg:
         errors.append(f"stale-surface: {msg}")
 
+    # 3h. the generated Go table of the exporter kinds (#4097): the packs with
+    #     `presence:`, the values the exporter admits in `_expected_exporters`.
+    kinds_path = (surface_paths or {}).get(registry_lib.EXPECTED_KINDS_GO_ID)
+    msg = registry_lib.check_expected_kinds_go(doc, kinds_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+    for problem in registry_lib.presence_problems(doc):
+        errors.append(f"inconsistent: {problem}")
+
     # 3g. the pack digest the promtool test of BuiltinDefaultsDigestMismatch
     #     expects (#3831): the platform pack's recording rule carries the
     #     table's digest (a surface above), and the test feeds it back.

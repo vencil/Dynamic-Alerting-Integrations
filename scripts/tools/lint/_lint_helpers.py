@@ -44,6 +44,7 @@ BUILD_EXEMPT = frozenset({
     "_lib_kubectl.py",  # #3207/#3210, #3539: kubectl launcher and cluster reader, library not CLI
     "_lib_engine.py",  # #3611 / #3539: engine locate/run, imported by _lib_kubectl; library not CLI
     "_lib_io.py",
+    "_lib_output.py",  # #4223: the output entries, split out of _lib_io; library not CLI
     # #3276 — caller-path judgement (stdlib only) and safe_label, split out
     # of _lib_io so tools without PyYAML can import them. Library, not CLI.
     "_lib_paths.py",
@@ -59,11 +60,14 @@ BUILD_EXEMPT = frozenset({
     # operator_generate + migrate_to_operator. Library, not CLI.
     "_lib_yaml.py",
     # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
-    # batchpr / parser dispatcher boilerplate. Library, not CLI.
+    # parser dispatcher boilerplate. Library, not CLI.
     "_lib_godispatch.py",
     # #2744 — validate-config's json_schema row imports its verdict. Shipped
     # as a library; `check_confd_schema` is not a da-tools command.
     "check_confd_schema.py",
+    # #4225 — compile-custom-alerts' --check compares through its semantic
+    # diff. Shipped as a library; `check_rulepack_sync` is not a da-tools command.
+    "check_rulepack_sync.py",
     # #3862 — the record of a reader binary that did not run. Library, not CLI.
     "_lib_tool_fault.py",
     # v2.8.0 PR #432 — cross-platform compat helpers (try_utf8_stdout

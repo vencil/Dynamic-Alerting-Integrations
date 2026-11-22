@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """test_lib_godispatch.py — _lib_godispatch.GoBinaryDispatcher tests.
 
-The shared dispatcher absorbs ~95% of the boilerplate from the three
-v2.8.0 dispatchers (guard / batchpr / parser). Per-shim tests in
+The shared dispatcher absorbs ~95% of the boilerplate from the
+v2.8.0 dispatchers (guard / parser). Per-shim tests in
 tests/ops/test_*_dispatch.py exercise this code path indirectly with
 each shim's specific config; these tests pin the LIBRARY contract
 itself so future shims can rely on it without re-deriving the matrix.
@@ -276,7 +276,7 @@ class TestSubcommandForwarding:
 
     def test_pass_subcommand_true_forwards_subcommand(
             self, make_dispatcher, fake_binary):
-        """batchpr/parser pattern: the Go binary itself is a multi-
+        """parser pattern: the Go binary itself is a multi-
         subcommand dispatcher; forward the subcommand as first arg."""
         d = make_dispatcher(pass_subcommand=True)
         with mock.patch("subprocess.run") as run:

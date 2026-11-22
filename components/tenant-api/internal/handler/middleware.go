@@ -98,11 +98,14 @@ func SlogRequestLogger(next http.Handler) http.Handler {
 // ─────────────────────────────────────────────────────────────────
 
 // DefaultMaxBodyBytes is the request-body cap (d.MaxBody()) for the
-// non-batch write handlers. Those that read through readLimitedBody
-// answer a body over it with 413 PAYLOAD_TOO_LARGE and never act on a
-// truncated prefix (#2778); the federation handlers still read it via
-// io.LimitReader, where an over-cap JSON body fails to decode as a 400.
-// The batch endpoints have their own, tighter cap (below). 1 MiB
+// non-batch write handlers. Every handler, federation included, reads
+// its body through the request_body helpers, which answer a body over
+// its cap with 413 PAYLOAD_TOO_LARGE and never act on a truncated
+// prefix (#2778): readLimitedBody / ReadLimitedBody under this cap,
+// the batch endpoints readBodyWithin under their own, tighter cap
+// (below), recipe preview readBodyCapped under
+// recipepreview.MaxRequestBytes. forbidigo keeps any other read of
+// r.Body out of internal/handler (.golangci.yml, #2778). 1 MiB
 // fits even the largest realistic tenant YAML (deeply-nested rule
 // pack with hundreds of thresholds) with order-of-magnitude
 // headroom, while keeping a single oversize POST from holding

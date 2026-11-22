@@ -907,7 +907,7 @@ docker-build-all: ## 建 8 個 self-built image（local --load，無 push；#474
 	@# Dockerfile 只 COPY+chmod 不執行 binary，故 stub 可驗 COPY 路徑 / 語法）。
 	@# #463 multi-arch：Dockerfile 改 COPY 帶 arch 後綴（da-guard.<arch>），stub 須對應。
 	@mkdir -p components/da-tools/app/tools
-	@for b in da-guard da-batchpr da-parser da-crdecode da-read; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
+	@for b in da-guard da-parser da-crdecode da-read; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
 	@docker buildx build --load -t local-test:da-tools components/da-tools/app
 	@# 兩顆隨 chart 出貨、從不發布的自建 image（#1337）——build context 就是各自目錄。
 	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar
@@ -1096,7 +1096,7 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 .PHONY: lint-docs
 lint-docs: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；platform_data／byo_rulepack_table 經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/validate_all.py \
-		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
+		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
 		$(ARGS)
 
 .PHONY: lint-image-caveats

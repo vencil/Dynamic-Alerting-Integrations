@@ -39,11 +39,11 @@ vi.mock('../src/interactive/tools/tenant-manager/fixtures/demo-tenants.js', asyn
   };
 });
 
-// Demo fixture distinct domains / db_types, sorted — what the wired
+// Demo fixture distinct domains / exporter kinds, sorted — what the wired
 // dropdowns should render (the old hardcoded lists happened to match
 // in demo mode, but these are now derived from the data).
 const EXPECTED_DOMAINS = [...new Set(Object.values(DEMO_TENANTS).map((t: any) => t.domain).filter(Boolean))].sort();
-const EXPECTED_DBTYPES = [...new Set(Object.values(DEMO_TENANTS).map((t: any) => t.db_type).filter(Boolean))].sort();
+const EXPECTED_KINDS = [...new Set(Object.values(DEMO_TENANTS).flatMap((t: any) => t.expected_exporters || []))].sort();
 
 beforeEach(() => {
   // Every fetch fails → API path returns null → platform-data.json
@@ -121,14 +121,15 @@ describe('TenantManager — last-mile activation', () => {
     expect(optionValues).toEqual(EXPECTED_DOMAINS);
   });
 
-  it('db-type dropdown options are derived from filterOptions (live data), not hardcoded', async () => {
+  it('expected-exporter dropdown options are derived from filterOptions (live data), not hardcoded', async () => {
     await renderAndSettle();
-    const dbSelect = document.getElementById('filter-dbtype') as HTMLSelectElement;
+    const dbSelect = document.getElementById('filter-expected-exporter') as HTMLSelectElement;
     expect(dbSelect).not.toBeNull();
     const optionValues = Array.from(dbSelect.options)
       .map((o) => o.value)
-      .filter((v) => v !== ''); // drop the leading "All DB Types"
-    expect(optionValues).toEqual(EXPECTED_DBTYPES);
+      .filter((v) => v !== ''); // drop the leading "All kinds"
+    expect(optionValues).toEqual(EXPECTED_KINDS);
+    expect(EXPECTED_KINDS.length).toBeGreaterThan(0);
   });
 
   it('dropdowns are truly DATA-DRIVEN — a sentinel value absent from the old hardcoded lists appears', async () => {
@@ -136,12 +137,12 @@ describe('TenantManager — last-mile activation', () => {
     // mobile,streaming] / [mariadb,redis,postgresql,mongodb,kafka] — which
     // happen to equal the demo distinct set, so the EXPECTED_* assertions
     // above cannot tell a regression-to-hardcoded apart. Override the data
-    // with a SENTINEL domain/db_type the legacy lists never contained: only
+    // with a SENTINEL domain/exporter kind the legacy lists never contained: only
     // a filterOptions-driven dropdown can surface it.
     demoOverride.tenants = {
       'sentinel-01': {
         environment: 'production', region: 'x', tier: 'tier-1',
-        domain: 'zzz-sentinel-domain', db_type: 'zzz-sentinel-db',
+        domain: 'zzz-sentinel-domain', expected_exporters: ['zzz-sentinel-db'],
         owner: 'x', routing_channel: 'x',
         operational_mode: 'normal', metric_count: 0,
         last_config_commit: 'x', tags: [], groups: [],
@@ -149,11 +150,34 @@ describe('TenantManager — last-mile activation', () => {
     };
     await renderAndSettle();
     const domainOpts = Array.from((document.getElementById('filter-domain') as HTMLSelectElement).options).map((o) => o.value);
-    const dbOpts = Array.from((document.getElementById('filter-dbtype') as HTMLSelectElement).options).map((o) => o.value);
+    const dbOpts = Array.from((document.getElementById('filter-expected-exporter') as HTMLSelectElement).options).map((o) => o.value);
     expect(domainOpts).toContain('zzz-sentinel-domain');
     expect(dbOpts).toContain('zzz-sentinel-db');
     // A legacy hardcoded value cannot appear (that tenant no longer exists).
     expect(domainOpts).not.toContain('finance');
+  });
+
+  it('per-cluster entries: one option per KIND, the filter matches by kind, the card shows the entry as written (#4097)', async () => {
+    const base = {
+      environment: 'production', region: 'x', tier: 'tier-1', domain: 'd', owner: 'x', routing_channel: 'x',
+      operational_mode: 'normal', metric_count: 0, last_config_commit: 'x', tags: [], groups: [],
+    };
+    demoOverride.tenants = {
+      't-both': { ...base, expected_exporters: ['mariadb@east', 'mariadb@west', 'redis'] },
+      't-bare': { ...base, expected_exporters: ['mariadb'] },
+      't-other': { ...base, expected_exporters: ['kafka@east'] },
+    };
+    await renderAndSettle();
+    const select = document.getElementById('filter-expected-exporter') as HTMLSelectElement;
+    const opts = Array.from(select.options).map((o) => o.value).filter((v) => v !== '');
+    // kinds, each once — not `mariadb@east` / `mariadb@west` as two options
+    expect(opts).toEqual(['kafka', 'mariadb', 'redis']);
+    expect(screen.getAllByText('mariadb@east, mariadb@west, redis').length).toBeGreaterThan(0);
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.change(select, { target: { value: 'mariadb' } });
+    await waitFor(() => expect(screen.queryAllByText('t-other').length).toBe(0));
+    expect(screen.getAllByText('t-both').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('t-bare').length).toBeGreaterThan(0);
   });
 
   it('still renders the fixed-enum filters (env/tier/mode) untouched', async () => {

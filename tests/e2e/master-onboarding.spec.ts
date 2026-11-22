@@ -5,8 +5,8 @@
  *   - jsx-loader loads master-onboarding without 404 / JS error
  *   - Page title matches expected pattern
  *   - Step 0 dual-entry choice: both Import + Wizard journey cards visible
- *   - Click Import card → 5-step Import path renders (parser / profile /
- *     batch-pr / guard CTAs)
+ *   - Click Import card → 5-step Import path renders (parser / migrate /
+ *     conf.d placement / guard CTAs)
  *   - Click Wizard card → 5-step Wizard path renders (cicd / deploy CTAs;
  *     alert-builder + routing-trace marked "Planned")
  *   - Back button returns to choice screen
@@ -51,8 +51,8 @@ test.describe('Master Onboarding @critical', () => {
     // Key CTAs — match by the actual rendered LINK text (not desc prose
     // that may mention the same token). Step 1 link: "View installation
     // guide" (en) / "查看安裝指南" (zh). Step 2: "CLI Reference" (both
-    // langs). Step 3: "ADR-018" (both langs). getByRole('link', name)
-    // avoids strict-mode collision with description prose (e.g. step 3
+    // langs). Step 4: "ADR-018" (both langs). getByRole('link', name)
+    // avoids strict-mode collision with description prose (e.g. step 4
     // desc text references ADR-018 AND the CTA link is "ADR-018 →").
     await expect(
       page.getByRole('link', { name: /installation guide|安裝指南/i })

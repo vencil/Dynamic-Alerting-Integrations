@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -228,6 +229,46 @@ func TestPreviewRecipe_TooLargeIs413BeforeAsking(t *testing.T) {
 		ServeHTTP(w, previewRequest("db-a", big, true))
 	if w.Code != http.StatusRequestEntityTooLarge || fp.called != 0 {
 		t.Fatalf("status = %d (called %d), want 413 unasked; body: %s", w.Code, fp.called, w.Body.String())
+	}
+}
+
+// TestPreviewRecipe_BodyCapBoundary pins both sides of previewMaxBody through
+// the shared overflow-detecting reader (#2778): a body of exactly the cap is
+// forwarded, one byte more is a 413 PAYLOAD_TOO_LARGE that never asks the
+// container. The over-cap body is the at-cap body plus one trailing space —
+// valid JSON either way — so only the size can decide; a bare
+// io.LimitReader(previewMaxBody) would forward its truncated prefix instead.
+func TestPreviewRecipe_BodyCapBoundary(t *testing.T) {
+	t.Parallel()
+	atCap := previewBody + strings.Repeat(" ", previewMaxBody-len(previewBody))
+	const tenant = "tenant-alpha"
+
+	fp := &fakePreviewer{verdict: json.RawMessage(previewVerdict)}
+	w := httptest.NewRecorder()
+	previewRouter(newRBACManager(t, previewAdmins), &Deps{RecipePreview: fp}).
+		ServeHTTP(w, previewRequest(tenant, atCap+" ", true))
+	if w.Code != http.StatusRequestEntityTooLarge || fp.called != 0 {
+		t.Fatalf("one byte over the cap: status = %d (called %d), want 413 unasked; body: %s",
+			w.Code, fp.called, w.Body.String())
+	}
+	var env ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("413 body is not an error envelope: %v", err)
+	}
+	if env.Code != errcode.PayloadTooLarge {
+		t.Errorf("code = %q, want %q", env.Code, errcode.PayloadTooLarge)
+	}
+	if want := fmt.Sprintf("a recipe preview request is at most %d bytes", previewMaxBody); env.Error != want {
+		t.Errorf("message = %q, want %q (the endpoint's existing contract)", env.Error, want)
+	}
+
+	fp2 := &fakePreviewer{verdict: json.RawMessage(previewVerdict)}
+	w2 := httptest.NewRecorder()
+	previewRouter(newRBACManager(t, previewAdmins), &Deps{RecipePreview: fp2}).
+		ServeHTTP(w2, previewRequest(tenant, atCap, true))
+	if w2.Code != http.StatusOK || fp2.called != 1 {
+		t.Fatalf("exactly at the cap: status = %d (called %d), want 200 forwarded; body: %s",
+			w2.Code, fp2.called, w2.Body.String())
 	}
 }
 

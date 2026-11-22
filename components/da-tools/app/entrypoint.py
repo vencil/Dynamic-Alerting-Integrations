@@ -88,14 +88,13 @@ def _build_help_text(lang):
     guard             驗證 conf.d/ 樹是否安全 (schema + cardinality；路由交給 generate-routes)
                       子命令: defaults-impact
 
+命令 (Custom Alerts — 租戶自訂告警, ADR-024):
+    compile-custom-alerts  把 conf.d 的 _custom_alerts 編譯成規則包（--config-dir、--out；--check 比對既有規則包）
+
 命令 (Tenant Verify — rollback verification, v2.8.0):
     tenant-verify     列印 tenant 的 effective config + merged_hash；
                       `--expect-merged-hash` 與快照比對 (rollback checklist)
                       `--all --json` 拍 pre-base snapshot 給 rollback 後 diff
-
-命令 (Batch PR — Migration Batch PR Pipeline, v2.8.0):
-    batch-pr          開出/更新 tenant chunk PRs，或於 Base merge 後 rebase（experimental）。
-                      子命令: apply / refresh / refresh-source
 
 命令 (Parser — PromRule parser, v2.8.0):
     parser            解析 PrometheusRule YAML，輸出 JSON ParseResult；
@@ -179,16 +178,15 @@ Commands (Guard — Dangling Defaults Guard, v2.8.0):
     guard             Validate a conf.d/ tree (schema + cardinality; routing: generate-routes)
                       Subcommands: defaults-impact
 
+Commands (Custom Alerts — tenant-authored alerts, ADR-024):
+    compile-custom-alerts  Compile a conf.d's _custom_alerts into a rule pack (--config-dir, --out; --check compares an existing pack)
+
 Commands (Tenant Verify — rollback verification, v2.8.0):
     tenant-verify     Print tenant effective config + merged_hash;
                       `--expect-merged-hash` compares against a snapshot
                       (rollback checklist item 6).
                       `--all --json` snapshots pre-base state for diffing
                       after rollback.
-
-Commands (Batch PR — Migration Batch PR Pipeline, v2.8.0):
-    batch-pr          Open/update tenant chunk PRs, or rebase after Base merges (experimental).
-                      Subcommands: apply / refresh / refresh-source
 
 Commands (Parser — PromRule parser, v2.8.0):
     parser            Parse PrometheusRule YAML to JSON ParseResult;
@@ -414,9 +412,10 @@ COMMAND_MAP = {
     # See docs/scenarios/incremental-migration-playbook.md §Emergency
     # Rollback Procedures, checklist item 6.
     "tenant-verify": "tenant_verify.py",
-    # Group I: Batch PR pipeline (v2.8.0 Phase .c C-10 PR-5)
-    # Wraps the da-batchpr Go binary; see scripts/tools/ops/batchpr_dispatch.py.
-    "batch-pr": "batchpr_dispatch.py",
+    # #4225 — ADR-024 Capability B: a conf.d's `_custom_alerts` compiled into
+    # a rule pack through `da-guard compile-custom-alerts`. Outside this
+    # repository --config-dir and --out are both required.
+    "compile-custom-alerts": "compile_custom_alerts.py",
     # Group J: PromRule parser (v2.8.0 Phase .c C-8 PR-2)
     # Wraps the da-parser Go binary; see scripts/tools/ops/parser_dispatch.py.
     "parser": "parser_dispatch.py",

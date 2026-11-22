@@ -9,13 +9,13 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-06
-updated_at: 2026-11-13
+updated_at: 2026-11-22
 ---
 # ADR-010: Multi-Tenant Grouping Architecture
 
 > **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)
 
-**決策摘要**：自訂群組定義在 `_groups.yaml`（現存於 tenant-api 的 state store，不在 conf.d/，見下方狀態），成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，群組定義的寫入不走 PR（見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
+**決策摘要**：自訂群組定義在 `_groups.yaml`（現存於 tenant-api 的 state store，不在 conf.d/，見下方狀態），成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，群組定義的寫入不走 PR（見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。租戶跑哪些 exporter 不屬於 metadata，由頂層的 `_expected_exporters` 宣告。
 
 ## 狀態
 
@@ -38,7 +38,7 @@ updated_at: 2026-11-13
 
 tenant-api 已提供單一租戶的 CRUD 與批量操作，但租戶數量增加（50 個以上）後，領域專家遇到以下困難：
 
-1. **沒有分組的視角**：列出租戶的 API 回傳扁平清單，無法依業務維度（region、domain、db_type）快速篩選。
+1. **沒有分組的視角**：列出租戶的 API 回傳扁平清單，無法依業務維度（region、domain、跑的是哪一種資料庫）快速篩選。
 2. **批量操作要手動指定**：每次批量操作都得逐一列出租戶 ID，無法「對某個群組整批操作」。
 3. **metadata 不夠用**：當時的 `_metadata` 只有 runbook_url、owner、tier，撐不起多維度篩選。
 4. **沒有可保存的群組**：UI 的篩選條件重新整理後就消失，無法建立可命名、可重用的群組定義。
@@ -62,7 +62,6 @@ _metadata:
   environment: "production"       # production | staging | development
   region: "ap-northeast-1"       # 雲端區域
   domain: "finance"              # 業務領域
-  db_type: "mariadb"             # 資料庫類型；多種時寫列表，如 [mariadb, redis]
   tags: ["critical-path", "pci"] # 自由標籤
   groups: ["production-dba"]     # 所屬群組
 ```
@@ -71,7 +70,7 @@ _metadata:
 
 - **全部選填**：省略等同空值，向下相容。
 - **不加進 `tenant_metadata_info`**：不成為這個指標的標籤，避免 cardinality 暴增。
-- **`db_type` 另有一個指標**：宣告了 `db_type` 的租戶，exporter 另外輸出 `tenant_expected_exporter{tenant, db_type}`（值為 1），供存活檢查判斷這個租戶的資料庫 exporter 是否缺席。`db_type` 可以是字串或列表（字串等同一元素列表），每個宣告的種類各一條，存活檢查逐種類判斷。
+- **租戶跑哪些 exporter 不是 metadata 欄位**：由租戶頂層的 `_expected_exporters` 宣告，值是一個 exporter 種類的列表（例如 `[mariadb, redis, nginx]`；種類就是有存在指標的 Rule Pack）。exporter 對每個宣告的種類輸出一條 `tenant_expected_exporter{tenant, pack}`（值為 1），存活檢查據此逐種類判斷那一種 exporter 是否缺席，所以宣告就等於打開該種類的缺席告警。同一個租戶跑在好幾個叢集時，條目可以寫成 `種類@叢集`（例如 `[mariadb@east, mariadb@west, redis]`）：exporter 對這種條目輸出的序列多一個 `expected_cluster` label，缺席改為逐叢集判斷——任何一個宣告的叢集沒有這一種 exporter 在回報就告警；只寫種類時，任一個叢集有就算存在。同一個種類只能擇一寫法。叢集怎麼辨識、這個判斷在哪裡成立，見 [ADR-006](./006-tenant-mapping-topologies.md) 的「多叢集同租戶」。這件事原本由 `_metadata.db_type` 兼任：一個欄位同時是 UI 的分組字串與存活宣告，值沒有人檢查，也宣告不了 nginx、JVM 這類不是資料庫的 exporter。該欄位已移除，還寫著它的設定會被拒收，訊息指出要改寫成哪一行。tenant-api 與 UI 仍可依宣告的種類篩選（`mariadb` 會找到宣告 `mariadb@east` 的租戶），條目則照寫的樣子顯示。
 - **environment、domain 也可限定權限範圍**：`_rbac.yaml` 的規則可用 `environments`、`domains` 限定適用範圍。
 - **兩端都能解析**：Go 的 `TenantMetadata` struct 與 Python 的 `generate_tenant_metadata.py` 都讀得懂這些欄位。
 
@@ -112,25 +111,25 @@ groups:
 
 - 群組側欄：顯示群組清單、成員數，以及建立與刪除操作。
 - 群組篩選：點選群組就過濾租戶清單。
-- 多維度篩選：可依 environment、domain、db_type 等欄位過濾，其中 domain、db_type 的下拉選單由租戶的 metadata 動態產生。
+- 多維度篩選：可依 environment、domain、宣告的 exporter 種類等過濾，其中 domain 與 exporter 種類的下拉選單由租戶的資料動態產生。
 - 依權限顯示：呼叫 `/api/v1/me` 取得權限，沒有寫入權限時，群組的建立、刪除等寫入操作直接隱藏（不是灰掉）。
 - 寫入回 409 時，提示設定已被別人更新、請重新整理後再試。
 
 ### 範例：群組不影響 `/metrics`，新欄位不進 `tenant_metadata_info`
 
-輸入：conf.d/ 裡有 `_defaults.yaml`（`defaults: {mysql_connections: 80}`）、租戶檔 `db-a.yaml`（`mysql_connections: "70"`，`_metadata` 為第 1 節的內容），以及第 2 節的 `_groups.yaml`。
+輸入：conf.d/ 裡有 `_defaults.yaml`（`defaults: {mysql_connections: 80}`）、租戶檔 `db-a.yaml`（`mysql_connections: "70"`、`_expected_exporters: [mariadb]`，`_metadata` 為第 1 節的內容），以及第 2 節的 `_groups.yaml`。
 
 threshold-exporter 的 `/metrics` 中帶 `tenant="db-a"` 的全部輸出（不含註解行）：
 
 ```
 da_tenant_metrics_over_limit{tenant="db-a"} 0
-tenant_expected_exporter{db_type="mariadb",tenant="db-a"} 1
+tenant_expected_exporter{pack="mariadb",tenant="db-a"} 1
 tenant_metadata_info{owner="team-dba",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="tier-1"} 1
 user_severity_dedup{mode="enable",tenant="db-a"} 1
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
 ```
 
-結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；`db_type` 只出現在 `tenant_expected_exporter`。拿掉 `_groups.yaml` 重跑，除了計時與 Go runtime 指標（`go_memstats_*`、`go_threads`），輸出完全相同。
+結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；宣告的 exporter 種類只出現在 `tenant_expected_exporter` 的 `pack` 標籤。拿掉 `_groups.yaml` 重跑，除了計時與 Go runtime 指標（`go_memstats_*`、`go_threads`），輸出完全相同。
 
 ## 理由
 
@@ -146,7 +145,7 @@ user_threshold{component="mysql",metric="connections",severity="warning",tenant=
 
 ### 為何新增 metadata 欄位，而不是只用 tags？
 
-結構化欄位（environment、domain、db_type）比自由標籤更適合 UI 篩選：
+結構化欄位（environment、domain）比自由標籤更適合 UI 篩選：
 
 - 下拉選單需要有限的選項集合。
 - Schema 驗證可以檢查結構化欄位的值域。

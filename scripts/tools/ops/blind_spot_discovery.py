@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
 blind_spot_discovery.py — Scan Prometheus targets and cross-reference tenant configs
-to find cluster instances of a DB type no tenant declares (`_metadata.db_type`,
-the declaration per-tenant exporter liveness pages from).
+to find cluster instances of an exporter kind no tenant declares
+(`_expected_exporters`, the declaration per-tenant exporter liveness pages from).
 
 Complements analyze_rule_pack_gaps.py (custom rule vs Rule Pack coverage).
 Blind Spot Discovery analyzes infrastructure coverage vs tenant config coverage.
+
+Limitation: the kind of a live target is inferred from its job name
+(`JOB_DB_MAP`), which covers the database-like kinds only. A live nginx or jvm
+exporter is reported as `unrecognized` and is never a blind spot; a DECLARED
+nginx / jvm still counts as covered. No `nginx` job keyword is added on
+purpose: it would match the platform's ingress-nginx jobs.
 
 Usage:
   python3 scripts/tools/ops/blind_spot_discovery.py --prometheus http://localhost:9090 --config-dir conf.d/
@@ -27,14 +33,15 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     JOB_DB_MAP,
 )
-# #4026: the DB types a tenant is monitored for are the ones its
-# `_metadata.db_type` declares, as the exporter's resolver reads it
+# #4026, #4097: the exporter kinds a tenant is monitored for are the ones its
+# `_expected_exporters` declares, as the exporter reads it
 # (`da-guard served-values --config-facts`) — the declaration the exporter
-# turns into `tenant_expected_exporter{tenant,db_type}` (#869, #2737). No
+# turns into `tenant_expected_exporter{tenant,pack}` (#869, #2737). No
 # instant, schedule or gather enters it.
 from _lib_tenant_values import (  # noqa: E402
     ServedValuesError,
     exit_on_served_values_error,
+    expected_exporter_kinds,
     load_served_facts,
     print_load_warnings,
 )
@@ -43,6 +50,9 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lib_prometheus import prometheus_targets  # noqa: E402
 import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+# The kinds a tenant may declare: the registry's packs with a presence metric,
+# as the generated module carries them (no repo tree needed, #4097).
+from _rule_packs_generated import EXPECTED_EXPORTER_KINDS  # noqa: E402
 
 
 def query_prometheus_targets(prom_url):
@@ -67,9 +77,9 @@ def query_prometheus_targets(prom_url):
 
 
 def extract_db_instances(targets, exclude_jobs=None):
-    """Map targets to DB types by job name.
+    """Map targets to exporter kinds by job name.
 
-    Returns {db_type: set(instance_ids)} where instance_id is "namespace/instance".
+    Returns {kind: set(instance_ids)} where instance_id is "namespace/instance".
     Unrecognized jobs are grouped under "unknown".
     """
     exclude = set(exclude_jobs or [])
@@ -80,15 +90,15 @@ def extract_db_instances(targets, exclude_jobs=None):
             continue
 
         # Try exact match, then prefix match
-        db_type = _infer_db_type_from_job(job)
+        kind = _infer_kind_from_job(job)
         instance_id = f"{t['namespace']}/{t['instance']}" if t["namespace"] else t["instance"]
-        result.setdefault(db_type, set()).add(instance_id)
+        result.setdefault(kind, set()).add(instance_id)
 
     return result
 
 
-def _infer_db_type_from_job(job):
-    """Infer DB type from job name using JOB_DB_MAP.
+def _infer_kind_from_job(job):
+    """Infer the exporter kind from a job name using JOB_DB_MAP.
 
     Matching strategy (in order):
     1. Exact match against full job name
@@ -101,24 +111,24 @@ def _infer_db_type_from_job(job):
         return JOB_DB_MAP[job_lower]
     # Segment match (split by common separators: -, _, ., /)
     segments = set(re.split(r'[-_.\s/]+', job_lower))
-    for keyword, db_type in JOB_DB_MAP.items():
+    for keyword, kind in JOB_DB_MAP.items():
         if keyword in segments:
-            return db_type
+            return kind
     return "unknown"
 
 
-def load_monitored_db_types(config_dir):
-    """Which tenants declare each DB type.
+def load_declared_kinds(config_dir):
+    """Which tenants declare each exporter kind.
 
-    Returns {db_type: set(tenant_ids)}.
+    Returns {kind: set(tenant_ids)}.
 
-    A tenant is monitored for the DB types its `_metadata.db_type` declares
-    (#4026), wherever the exporter's resolver reads it from — the tenant
-    file (at any depth), a root platform file's `tenants.<id>._metadata`, a
-    profile the tenant binds; a subdirectory `_defaults.yaml` is not one —
+    A tenant is monitored for the kinds its `_expected_exporters` declares
+    (#4026, #4097), wherever the exporter reads it from — the tenant file (at
+    any depth), a root platform file's `tenants.<id>` entry, a profile the
+    tenant binds; a subdirectory `_defaults.yaml` is not one —
     (`load_served_facts`, `da-guard served-values --config-facts`). That is
     the declaration the exporter emits `tenant_expected_exporter{tenant,
-    db_type}` from, so a tenant counted here is one `TenantExporterAbsent`
+    pack}` from, so a tenant counted here is one `TenantExporterAbsent`
     pages for when no exporter of that kind is up (#869, #2737). The
     threshold keys a tenant is served do not enter: every tenant is served
     the built-in layer's keys (#3832), so a key's prefix says what the
@@ -127,8 +137,11 @@ def load_monitored_db_types(config_dir):
 
     Files the load serves no tenant from are named on stderr, after whatever
     da-guard prints on stderr (line by line, each behind `DA_GUARD_PREFIX`).
-    da-guard missing or failing, a file the load cannot decode, or a
-    `db_type` that is not a list of strings raises (the CLI exits 2). So does
+    da-guard missing or failing, a file the load cannot decode, or declared
+    kinds that are not a list of strings raises (the CLI exits 2). An entry
+    may be `kind@cluster` (#4097): the kind it declares is the part before
+    `@` — this tool compares kinds, and a kind declared for one cluster is
+    a kind the tenant is monitored for. So does
     a *config_dir* that is not there or not a directory (#3392) — judged by
     `main` (`_lib_parse_cache.declared_trees`, #3751), never again here.
     """
@@ -136,39 +149,41 @@ def load_monitored_db_types(config_dir):
     facts = load_served_facts(config_dir)
     print_load_warnings(facts)
     for t_name, tenant in facts.tenants.items():
-        declared = tenant.metadata.get("db_type")
-        if not (isinstance(declared, list) and all(isinstance(d, str) for d in declared)):
+        declared = tenant.expected_exporters
+        if not (isinstance(declared, (list, tuple)) and all(isinstance(d, str) for d in declared)):
             raise ServedValuesError(
-                f"da-guard served-values: tenant '{shown_key(t_name)}' carries a "
-                f"_metadata.db_type that is not a list of strings "
+                f"da-guard served-values: tenant '{shown_key(t_name)}' carries "
+                f"expected_exporters that are not a list of strings "
                 f"({type(declared).__name__})", None, "")
-        for db_type in declared:
-            result.setdefault(db_type, set()).add(t_name)
+        for kind in expected_exporter_kinds(declared):
+            result.setdefault(kind, set()).add(t_name)
 
     return result
 
 
-def find_blind_spots(live_instances, monitored_db_types):
-    """Compare live cluster instances vs monitored tenant configs.
+def find_blind_spots(live_instances, declared_kinds):
+    """Compare live cluster instances vs what tenants declare.
 
-    Returns list of dicts: [{db_type, live_count, monitored_tenants, status}].
+    Returns list of dicts: [{kind, live_count, monitored_tenants, status}].
 
-    A declared `db_type` no exporter job maps to (not one of `JOB_DB_MAP`'s
-    values, which are the schema's `dbTypeValue` enum) is
-    `unknown_declaration`, never `covered`: no live target can ever be of
-    that type, so `TenantExporterAbsent` never clears for it (#4026).
+    A declared kind the registry does not have (not one of
+    `EXPECTED_EXPORTER_KINDS`) is `unknown_declaration`, never `covered`: it
+    has no presence metric, so `TenantExporterAbsent` could never clear for
+    it (#4026). The exporter refuses such a value itself (#4097: it serves no
+    kind it does not know), so this only shows a da-guard and a tool of
+    different versions.
     """
-    known = frozenset(JOB_DB_MAP.values())
-    all_db_types = ((set(live_instances) - {"unknown"})
-                    | (set(monitored_db_types) & known))
+    known = frozenset(EXPECTED_EXPORTER_KINDS)
+    all_kinds = ((set(live_instances) - {"unknown"})
+                 | (set(declared_kinds) & known))
 
     results = []
-    for db_type in sorted(all_db_types):
-        live = live_instances.get(db_type, set())
-        tenants = monitored_db_types.get(db_type, set())
+    for kind in sorted(all_kinds):
+        live = live_instances.get(kind, set())
+        tenants = declared_kinds.get(kind, set())
         status = "covered" if tenants else "blind_spot"
         results.append({
-            "db_type": db_type,
+            "kind": kind,
             "live_count": len(live),
             "live_instances": sorted(live),
             "monitored_tenants": sorted(tenants),
@@ -176,10 +191,10 @@ def find_blind_spots(live_instances, monitored_db_types):
             "status": status,
         })
 
-    for db_type in sorted(set(monitored_db_types) - known):
-        tenants = monitored_db_types[db_type]
+    for kind in sorted(set(declared_kinds) - known):
+        tenants = declared_kinds[kind]
         results.append({
-            "db_type": db_type,
+            "kind": kind,
             "live_count": 0,
             "live_instances": [],
             "monitored_tenants": sorted(tenants),
@@ -191,7 +206,7 @@ def find_blind_spots(live_instances, monitored_db_types):
     unknown = live_instances.get("unknown", set())
     if unknown:
         results.append({
-            "db_type": "unknown",
+            "kind": "unknown",
             "live_count": len(unknown),
             "live_instances": sorted(unknown),
             "monitored_tenants": [],
@@ -216,10 +231,10 @@ def render_report(results):
     undeclarable = [r for r in results if r["status"] == "unknown_declaration"]
 
     if blind_spots:
-        lines.append("BLIND SPOTS (cluster instances of a DB type no tenant declares in _metadata.db_type):")
+        lines.append("BLIND SPOTS (cluster instances of an exporter kind no tenant declares in _expected_exporters):")
         lines.append("")
         for r in blind_spots:
-            lines.append(f"  ⚠ {safe_label(r['db_type'])}: {r['live_count']} instance(s) in cluster, "
+            lines.append(f"  ⚠ {safe_label(r['kind'])}: {r['live_count']} instance(s) in cluster, "
                          "0 tenants declare it")
             for inst in r["live_instances"][:5]:
                 lines.append(f"      - {safe_label(inst)}")
@@ -228,25 +243,25 @@ def render_report(results):
         lines.append("")
 
     if covered:
-        lines.append("COVERED (instances of a DB type a tenant declares in _metadata.db_type):")
+        lines.append("COVERED (instances of an exporter kind a tenant declares in _expected_exporters):")
         lines.append("")
         for r in covered:
-            lines.append(f"  ✓ {safe_label(r['db_type'])}: {r['live_count']} instance(s), "
+            lines.append(f"  ✓ {safe_label(r['kind'])}: {r['live_count']} instance(s), "
                          f"{r['monitored_count']} tenant(s) declaring it "
                          f"({safe_label(', '.join(r['monitored_tenants']))})")
         lines.append("")
 
     if undeclarable:
-        lines.append("UNKNOWN DECLARATIONS (a _metadata.db_type no exporter job maps to; "
+        lines.append("UNKNOWN DECLARATIONS (a declared kind this tool's registry does not have; "
                      "TenantExporterAbsent never clears for it):")
         lines.append("")
         for r in undeclarable:
-            lines.append(f"  ✗ {safe_label(r['db_type'])}: declared by {r['monitored_count']} tenant(s) "
+            lines.append(f"  ✗ {safe_label(r['kind'])}: declared by {r['monitored_count']} tenant(s) "
                          f"({safe_label(', '.join(r['monitored_tenants']))})")
         lines.append("")
 
     if unknown:
-        lines.append("UNRECOGNIZED (job names not mapped to any DB type):")
+        lines.append("UNRECOGNIZED (job names not mapped to any exporter kind):")
         lines.append("")
         for r in unknown:
             for inst in r["live_instances"][:5]:
@@ -259,7 +274,7 @@ def render_report(results):
     total_blind = sum(r["live_count"] for r in blind_spots)
     total_covered = sum(r["live_count"] for r in covered)
     lines.append("-" * 60)
-    lines.append(f"Summary: {len(covered)} DB type(s) covered, "
+    lines.append(f"Summary: {len(covered)} kind(s) covered, "
                  f"{len(blind_spots)} blind spot(s), "
                  f"{len(undeclarable)} unknown declaration(s), "
                  f"{total_covered} monitored instance(s), "
@@ -278,6 +293,12 @@ def build_parser():
               %(prog)s --prometheus http://localhost:9090 --config-dir conf.d/
               %(prog)s --config-dir conf.d/ --json-output
               %(prog)s --config-dir conf.d/ --exclude-jobs prometheus,node-exporter
+
+            Limitation:
+              A live target's kind is inferred from its job name, for the
+              database-like kinds only. A live nginx or jvm exporter is reported
+              as "unrecognized" and is never a blind spot; a declared nginx / jvm
+              (_expected_exporters) still counts as covered.
         """),
     )
     add_prometheus_arg(parser,
@@ -313,10 +334,10 @@ def _main(args):
     [config_dir] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
     exclude_jobs = [j.strip() for j in args.exclude_jobs.split(",")] if args.exclude_jobs else []
 
-    # 1. Load monitored DB types from tenant configs — FIRST (#3206): a
+    # 1. Load the declared exporter kinds from tenant configs — FIRST (#3206): a
     # conf.d da-guard validation names paths on ends the run through the
     # shared refusal before anything else is asked (Prometheus included).
-    monitored = load_monitored_db_types(config_dir)
+    monitored = load_declared_kinds(config_dir)
     if monitored is None:
         sys.exit(EXIT_VIOLATION)
 

@@ -366,7 +366,7 @@ class TestEnvironmentIsNotInferredFromTheName:
     (tenant_metadata_info, tenant-api's list/search), never one guessed from
     the tenant name — the portal falls back to this file when tenant-api is
     down, so a guess would show the tenant in two environments. Same rule as
-    db_type (#2115 B4)."""
+    the declared exporter kinds (#2115 B4)."""
 
     def test_a_name_pattern_sets_no_environment(self, tmp_path):
         root = tmp_path / "conf.d"
@@ -382,3 +382,37 @@ class TestEnvironmentIsNotInferredFromTheName:
         assert envs == {"prod-x": "", "staging-y": "", "dev-z": "", "t4": "production"}
         grouped = {t for g in meta["tenant_groups"].values() for t in g["tenants"]}
         assert grouped == {"t4"}, meta["tenant_groups"]
+
+
+class TestExpectedExportersPerCluster:
+    """#4097: an `_expected_exporters` entry may be `kind@cluster`. The
+    tenant's row carries the entries as written (the portal's card shows
+    them, and tenant-api's row is the same list); the `by_expected_exporter`
+    view groups BY KIND — the part before `@` — and lists a tenant once per
+    kind however many clusters it declares the kind for."""
+
+    def test_entries_as_written_and_grouped_by_kind(self, tmp_path):
+        root = tmp_path / "conf.d"
+        root.mkdir()
+        (root / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+        (root / "t1.yaml").write_text(
+            "tenants:\n  t1:\n    _expected_exporters: [mariadb@east, mariadb@west, redis]\n",
+            encoding="utf-8")
+        (root / "t2.yaml").write_text(
+            "tenants:\n  t2:\n    _expected_exporters: [mariadb]\n", encoding="utf-8")
+        # one kind both alone and per cluster: the exporter reads none of it
+        (root / "t3.yaml").write_text(
+            "tenants:\n  t3:\n    _expected_exporters: [kafka, kafka@east]\n", encoding="utf-8")
+        meta = gtm.build_tenant_metadata(root)
+        declared = {t: m["expected_exporters"] for t, m in meta["tenant_metadata"].items()}
+        assert declared == {"t1": ["mariadb@east", "mariadb@west", "redis"],
+                            "t2": ["mariadb"], "t3": []}
+        assert meta["dimension_groups"]["by_expected_exporter"] == {
+            "mariadb": ["t1", "t2"], "redis": ["t1"]}
+
+    def test_the_view_names_no_entry_with_a_cluster(self):
+        groups = gtm._build_dimension_groups({
+            "t1": {"expected_exporters": ["nginx@a", "nginx@b"], "domain": "d"},
+            "t2": {"expected_exporters": ["nginx@a", "jvm"], "domain": "d"}})
+        assert groups["by_expected_exporter"] == {"jvm": ["t2"], "nginx": ["t1", "t2"]}
+        assert groups["by_domain"] == {"d": ["t1", "t2"]}

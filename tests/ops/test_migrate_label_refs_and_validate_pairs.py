@@ -266,14 +266,19 @@ def test_golden_entries_get_no_pair(tmp_path, capsys):
     assert "黃金標準" in err and "old_query" not in err
 
 
-def test_non_mapping_entries_are_skipped(tmp_path):
-    """手改壞的項（值不是 mapping）跳過，不讓整個檔載入失敗。"""
+def test_a_non_mapping_entry_is_named_not_skipped(tmp_path):
+    """手改壞的項（值不是 mapping）點名並以 rc 2 拒收（#4210）。先前是跳過、
+    只比對其餘的組，使用者以為那個 key 也比對過了。"""
+    from _lib_exitcodes import CallerError
     p = tmp_path / "prefix-mapping.yaml"
     p.write_text(yaml.safe_dump({
         "custom_bad": "not-a-mapping",
         "custom_x": {"original_metric": "x", "old_query": "max by(tenant) (x)",
                      "new_query": "tenant:custom_x:max"}}), encoding="utf-8")
-    assert [q["label"] for q in vm.load_mapping_pairs(_mapping_args(p))] == ["custom_x"]
+    with pytest.raises(CallerError) as exc:
+        vm.load_mapping_pairs(_mapping_args(p))
+    assert "custom_bad（值不是映射（實為字串））" in str(exc.value)
+    assert "custom_x（" not in str(exc.value)
 
 
 def test_every_label_value_is_a_double_quoted_scalar():

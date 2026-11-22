@@ -353,8 +353,8 @@ class _StubHandler(BaseHTTPRequestHandler):
                         "data": {"resultType": "vector", "result": result}})
         elif url.path == "/api/v1/targets":
             # redis, mongodb and mysql exporter targets (blind_spot_discovery).
-            # Job names differ from the db_type they map to, so excluding by
-            # job name and by db_type give different answers. #3832: not
+            # Job names differ from the kind they map to, so excluding by
+            # job name and by kind give different answers. #3832: not
             # postgres — `pg_*` is in the built-in layer, which every tenant
             # is served, so postgresql is never a blind spot.
             self._send({"status": "success", "data": {"activeTargets": [
@@ -478,18 +478,18 @@ def _avg_correlations(proc: subprocess.CompletedProcess) -> object:
 
 
 def _mysql_only_confd(tmp: Path) -> str:
-    """One tenant declaring mariadb only (`_metadata.db_type`, #4026) — the
+    """One tenant declaring mariadb only (`_expected_exporters`, #4026) — the
     stub's redis and mongodb targets are the blind spots."""
     d = tmp / "confd-mysql-only"
     _write(d / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
     _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 90\n"
-                                  "    _metadata: {db_type: mariadb}\n")
+                                  "    _expected_exporters: [mariadb]\n")
     return str(d)
 
 
 def _blind_spots(proc: subprocess.CompletedProcess) -> object:
     try:
-        return sorted(r["db_type"] for r in json.loads(proc.stdout)
+        return sorted(r["kind"] for r in json.loads(proc.stdout)
                       if r["status"] == "blind_spot")
     except (ValueError, KeyError, TypeError):
         return UNPARSABLE
@@ -756,7 +756,7 @@ RECIPES: list[Recipe] = [
            "it; the flag does not change the --ci verdict"),
 
     # Two job names in one comma list, and a boundary that names the same
-    # services by db_type instead of job: excluding is by job name.
+    # services by kind instead of job: excluding is by job name.
     R("blind_spot_discovery", "--exclude-jobs",
       lambda t, s: ["--prometheus", s, "--config-dir", _mysql_only_confd(t),
                     "--json-output"],
@@ -764,7 +764,7 @@ RECIPES: list[Recipe] = [
       boundary=("--exclude-jobs", "redis,mongodb"),
       without=["mongodb", "redis"], with_=[], observe=_blind_spots,
       note="unmonitored redis + mongodb: excluding both jobs clears them; "
-           "their db_type names exclude nothing"),
+           "their kind names exclude nothing"),
 
     # The flag's DEFAULT does the work: both of its prefixes are needed, one
     # on the modified path and one on the added/removed path. Configmap mode

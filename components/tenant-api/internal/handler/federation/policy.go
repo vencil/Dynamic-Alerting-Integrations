@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -92,6 +91,7 @@ type PutFederationPolicyRequest struct {
 // @Failure     400  {object} handler.ErrorResponse
 // @Failure     403  {object} handler.ErrorResponse
 // @Failure     409  {object} handler.ErrorResponse
+// @Failure     413  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
 // @Failure     507  {object} handler.ErrorResponse
@@ -109,9 +109,10 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 		}
 		email := rbac.RequestEmail(r)
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		// #2778: through the shared helper, so a body over d.MaxBody() is a
+		// 413 instead of a truncated prefix that fails to decode as a 400.
+		body, ok := handler.ReadLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 		var req PutFederationPolicyRequest
@@ -409,6 +410,7 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 // @Failure     400  {object} handler.ErrorResponse
 // @Failure     403  {object} handler.ErrorResponse
 // @Failure     409  {object} handler.ErrorResponse
+// @Failure     413  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
 // @Failure     507  {object} handler.ErrorResponse
@@ -429,9 +431,10 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 		}
 		email := rbac.RequestEmail(r)
 
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		// #2778: through the shared helper, so a body over d.MaxBody() is a
+		// 413 instead of a truncated prefix that fails to decode as a 400.
+		body, ok := handler.ReadLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 		var subset fedpolicy.Subset

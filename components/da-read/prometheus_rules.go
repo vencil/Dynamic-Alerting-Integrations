@@ -31,12 +31,12 @@ import (
 //     UTF-8: a deployment whose prometheus.yml asks for `legacy` judges label
 //     names more strictly than this;
 //   - the PromQL parser is cmd/prometheus/main.go's
-//     parser.NewParser(cfg.parserOpts): the zero parser.Options with no
-//     feature flag (the deployed Prometheus,
-//     k8s/03-monitoring/deployment-prometheus.yaml, passes no
-//     --enable-feature), so experimental PromQL functions are refused.
-//     Duration expressions need no option: v3.16 made them permanent and
-//     removed parser.Options.ExperimentalDurationExpr.
+//     parser.NewParser(cfg.parserOpts), built from the --enable-feature
+//     options the deployed Prometheus passes: deployedFeatures
+//     (prometheus_features.go), which a test holds to every Prometheus the
+//     repo runs. None sets a parser option today, so experimental PromQL
+//     functions, binary operator fill modifiers and unquoted UTF-8 names are
+//     refused.
 //
 // rulefmt decodes with go.yaml.in/yaml/v3, so the walk (yamlwalk.go) spells
 // values with it and composes `<<` merges by v3's rules (written.go).
@@ -53,7 +53,7 @@ var formatV3 = yamlFormat{marshal: yaml.Marshal, unmarshal: yaml.Unmarshal}
 // files with when nothing overrides them (see above).
 var (
 	ruleNameValidation = model.UTF8Validation
-	ruleParser         = parser.NewParser(parser.Options{})
+	ruleParser         = parser.NewParser(mustParserOptions(deployedFeatures))
 )
 
 // readRuleFile returns the rule file *data* as Prometheus loads it: one JSON

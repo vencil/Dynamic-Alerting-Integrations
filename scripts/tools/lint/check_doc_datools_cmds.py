@@ -12,8 +12,8 @@ against the full CLI command tree) was prototyped and rejected: scenario docs
 use illustrative / aspirational pseudo-commands even inside code blocks
 (``da-tools describe-tenant``, ``list-tenants``, ``upgrade-check`` per issue
 #405), giving ~88 false positives — the same noise that sank a broad
-path-existence lint. So this is scoped to the three **binary-wrapper**
-commands (``guard`` / ``parser`` / ``batch-pr``), whose subcommand sets are a
+path-existence lint. So this is scoped to the **binary-wrapper**
+commands (``guard`` / ``parser``), whose subcommand sets are a
 small, stable, real contract — and which is exactly where F3 lived.
 
 Only fenced code blocks are scanned (prose mentions and inline-code
@@ -46,7 +46,6 @@ DOCS_DIR = REPO_ROOT / "docs"
 WRAPPER_SUBCOMMANDS: Dict[str, Set[str]] = {
     "guard": {"defaults-impact", "served-values", "effective"},
     "parser": {"import", "allowlist"},
-    "batch-pr": {"apply", "refresh", "refresh-source"},
 }
 
 # `da-tools` (binary) or `da-tools:vX.Y.Z` (image), then the wrapper command +
@@ -57,7 +56,7 @@ WRAPPER_SUBCOMMANDS: Dict[str, Set[str]] = {
 # of those `:latest` lines carried the stale `guard --conf-d` invocation, so
 # the narrow tag pattern was a second, independent way to miss the same defect.
 _DATOOLS_RE = re.compile(
-    r"da-tools(?:[:@][^\s\\]+)?\s+(guard|parser|batch-pr)(?:\s+([^\s\\]+))?")
+    r"da-tools(?:[:@][^\s\\]+)?\s+(guard|parser)(?:\s+([^\s\\]+))?")
 
 _PLACEHOLDER_CHARS = "<>${}"
 INLINE_IGNORE = "datools-cmd-ignore"

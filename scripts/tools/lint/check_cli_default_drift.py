@@ -74,7 +74,6 @@ _HEADER_DEFAULT_COL: dict[tuple[str, ...], int] = {
     ("Argument", "Description", "Default"): 2,
     ("Parameter", "Purpose", "Default"): 2,
     ("Flag", "Default", "Description"): 1,
-    ("Flag", "Default", "Purpose"): 1,
 }
 # Header shapes that legitimately carry NO default column.
 _HEADER_NO_DEFAULT: set[tuple[str, ...]] = {
@@ -252,8 +251,8 @@ def introspect_defaults() -> tuple[dict[str, dict[str, Any]], list[str],
             except _Captured as hit:
                 captured[command] = _parser_defaults(hit.parser)
             except SystemExit:
-                # A repo fact, not an apparatus failure: three tools
-                # (batch-pr / guard / parser) exit before argparse is reached.
+                # A repo fact, not an apparatus failure: two tools
+                # (guard / parser) exit before argparse is reached.
                 # Measured; they stay a soft disclosure.
                 unscoreable.append(f"{command} (SystemExit before argparse)")
             except BaseException as exc:  # noqa: BLE001 - report, never swallow

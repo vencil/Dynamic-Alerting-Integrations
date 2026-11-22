@@ -142,33 +142,14 @@ modules:
       - load_yaml_file
     excluded:
       write_onboard_hints: "json.dump through open_operator_output (#3107); the entry, the bytes and the mode pinned by tests/shared/test_write_failure_class.py::TestLibraryPassthrough"
-      ensure_dir: "Side-effecting I/O (mkdir -p) raising OutputWriteError (#1641); contract pinned by tests/shared/test_write_failure_class.py"
-      ensure_dir_or_die: "Side-effecting I/O + sys.exit wrapper over ensure_dir (#1641); same gate"
-      _die_on_write_error: "print-to-stderr + sys.exit; no value computation (#1641)"
       root_profiles_schema: "#3647 a dict lookup of definitions.rootPlatformProfiles; no value computation — its shape pinned by tests/lint/test_check_confd_schema.py::TestRootPlatformProfilesBlock::test_the_definition_is_a_reference_not_a_copy"
       confd_quoting_schemas: "#3647 a branch table over a da-guard parse-tree Entry's flags (defaults_document / reserved / root_platform_file); pinned by example over real parse-tree listings in tests/lint/test_check_confd_schema.py::TestRootPlatformProfilesBlock and ::TestRootPlatformTenantsBlock, and through validate-config in tests/ops/test_validate_config.py"
-      claim_stdout: "run-scoped stdout owner (#3107 v2) over _lib_exitcodes.claim_stdout_owner; conflict and per-run reset pinned in tests/shared/test_lib_io_operator_output.py"
-      _is_our_stdout: "fstat comparison against fd 1 (#3107 v2 R3); side-effect free but environment-bound, exercised via open_operator_output in tests/shared/test_lib_io_operator_output.py"
-      targets_stdout: "path → _is_our_stdout predicate (#3107 v2); environment-bound, same file"
-      _StdoutSink.writable: "io.TextIOBase protocol stub over sys.stdout (#3107 v2); no value computation"
-      _StdoutSink.write: "delegates to sys.stdout.write (#3107 v2); pinned by the `-` case in tests/shared/test_lib_io_operator_output.py"
-      _StdoutSink.flush: "delegates to sys.stdout.flush (#3107 v2); no value computation"
-      _kernel_open_operator_output: "open(2) + R2/V15 fchmod (#3107 v2); side-effecting I/O, modes pinned by example in tests/shared/test_lib_io_operator_output.py"
-      open_operator_output: "context manager over the kernel open (#3107 v2 R0–R5); side-effecting I/O, pinned in tests/shared/test_lib_io_operator_output.py and the write audit of tests/shared/test_output_path_write_failure.py"
-      write_operator_output: "thin wrapper over open_operator_output (#3107 v2)"
-      write_operator_output_or_die: "write_operator_output + sys.exit wrapper (#3107 v2); rc 2 + one line, pinned by tests/shared/test_write_failure_class.py::TestOrDieSisters"
-      check_repo_artifact: "stat-based preconditions of write_repo_artifact (#3107 v2); refusals pinned in tests/shared/test_lib_io_operator_output.py"
-      _repo_artifact_mode: "stat of the file being replaced → 0755 if S_IXUSR else 0644 (#3107); environment-bound (a file's mode), every case pinned by example in tests/shared/test_lib_io_operator_output.py"
-      write_repo_artifact: "check_repo_artifact + _lib_atomic_write.atomic_write_text (#3107 v2); the atomic contract is pinned in tests/dx/test_atomic_write.py, the default mode in tests/shared/test_lib_io_operator_output.py"
       add_config_dir_arg: "argparse boilerplate; not a value computation"
       add_json_arg: "argparse boilerplate"
       add_ci_arg: "argparse boilerplate"
       add_prometheus_arg: "argparse boilerplate"
       prometheus_url: "#3528 flag → env → default precedence with the env judged by url_problem; example-pinned by tests/shared/test_lib_python.py::TestAddPrometheusArg and the per-tool env-fallback tests"
       exit_on_yaml_file_error: "CLI-entry decorator (stderr + sys.exit on YamlFileError, #1654); example-pinned in tests/shared/test_yaml_file_error.py, no value computation to fuzz"
-      output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
-      _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
-      exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
       find_metric_dictionary: "Filesystem probe over two fixed candidate paths (issue 1513); the answer is which file exists on disk, not a value law — example-pinned for both layouts and the none-found case in tests/ops/test_metric_dictionary_inputs.py"
       load_confd_file: "A conf.d file through da-guard parse-tree (ADR-036 step 4, #2906); I/O and subprocess-bound, contract pinned in tests/ops/test_lib_parse_cache.py and across tools in tests/shared/test_yaml_v3_reading_across_tools.py"
       # #2164 → #2906 quoting of string fields. The verdict is yaml.v3's tag (da-guard
@@ -190,10 +171,35 @@ modules:
       _is_tree_scalar: "parse-tree scalar predicate (the shape _lib_parse_tree.is_scalar checks); exercised through every finder pin"
       _written: "Suggestion-line shape (key / sequence item); pinned through both finders' message pins"
       # #2509 → #2906: YAML 1.1 boolean words (strings to yaml.v3) in boolean fields.
-      is_special_file: "#3615 → #1560 ⑤-a stat predicate (I/O); pinned through generate-routes' output clashes (/dev/null collides with nothing) in tests/ops"
-      same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
       find_yaml11_bool_words: "parse-tree nodes × schema walk (#2509 → #2906); word set (_lib_validation.yaml_bool_literals minus yaml.v3's six), quoted and unquoted alike, quiet controls (true/false, string field) and the Go reading (da-guard effective) in tests/shared/test_yaml11_bool_word_warning.py"
       YamlBoolWord.message: "Operator-facing text (#2509); suggestion shapes pinned in tests/shared/test_yaml11_bool_word_warning.py"
+
+  scripts/tools/_lib_output.py:
+    # #4223: moved from _lib_io (re-exported there) so a tool reaches the
+    # output entries without PyYAML or _lib_constants.
+    excluded:
+      ensure_dir: "Side-effecting I/O (mkdir -p) raising OutputWriteError (#1641); contract pinned by tests/shared/test_write_failure_class.py"
+      ensure_dir_or_die: "Side-effecting I/O + sys.exit wrapper over ensure_dir (#1641); same gate"
+      _die_on_write_error: "print-to-stderr + sys.exit; no value computation (#1641)"
+      claim_stdout: "run-scoped stdout owner (#3107 v2) over _lib_exitcodes.claim_stdout_owner; conflict and per-run reset pinned in tests/shared/test_lib_io_operator_output.py"
+      _is_our_stdout: "fstat comparison against fd 1 (#3107 v2 R3); side-effect free but environment-bound, exercised via open_operator_output in tests/shared/test_lib_io_operator_output.py"
+      targets_stdout: "path → _is_our_stdout predicate (#3107 v2); environment-bound, same file"
+      _StdoutSink.writable: "io.TextIOBase protocol stub over sys.stdout (#3107 v2); no value computation"
+      _StdoutSink.write: "delegates to sys.stdout.write (#3107 v2); pinned by the `-` case in tests/shared/test_lib_io_operator_output.py"
+      _StdoutSink.flush: "delegates to sys.stdout.flush (#3107 v2); no value computation"
+      _StdoutSink.close: "marks the sink closed without flushing sys.stdout (#4055); no value computation, pinned by tests/shared/test_lib_io_operator_output.py::test_closing_the_stdout_sink_never_flushes_stdout"
+      _kernel_open_operator_output: "open(2) + R2/V15 fchmod (#3107 v2); side-effecting I/O, modes pinned by example in tests/shared/test_lib_io_operator_output.py"
+      open_operator_output: "context manager over the kernel open (#3107 v2 R0–R5); side-effecting I/O, pinned in tests/shared/test_lib_io_operator_output.py and the write audit of tests/shared/test_output_path_write_failure.py"
+      write_operator_output: "thin wrapper over open_operator_output (#3107 v2)"
+      write_operator_output_or_die: "write_operator_output + sys.exit wrapper (#3107 v2); rc 2 + one line, pinned by tests/shared/test_write_failure_class.py::TestOrDieSisters"
+      check_repo_artifact: "stat-based preconditions of write_repo_artifact (#3107 v2); refusals pinned in tests/shared/test_lib_io_operator_output.py"
+      _repo_artifact_mode: "stat of the file being replaced → 0755 if S_IXUSR else 0644 (#3107); environment-bound (a file's mode), every case pinned by example in tests/shared/test_lib_io_operator_output.py"
+      write_repo_artifact: "check_repo_artifact + _lib_atomic_write.atomic_write_text (#3107 v2); the atomic contract is pinned in tests/dx/test_atomic_write.py, the default mode in tests/shared/test_lib_io_operator_output.py"
+      output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
+      _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
+      exit_on_output_write_error: "CLI-entry decorator (stderr + sys.exit on OutputWriteError, #1789); same rationale as exit_on_yaml_file_error, no value computation to fuzz"
+      is_special_file: "#3615 → #1560 ⑤-a stat predicate (I/O); pinned through generate-routes' output clashes (/dev/null collides with nothing) in tests/ops"
+      same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
 
   scripts/tools/_lib_yaml_strict.py:
     # #4064: moved from _lib_io (re-exported there) so _lib_input reads every
@@ -271,7 +277,7 @@ modules:
       GoBinaryDispatcher._print_binary_missing: "Side-effecting (prints to stderr); error-message templating"
       GoBinaryDispatcher.binary_missing_message: "Error-message templating; asserted by the missing-binary tests of the shims and _lib_tenant_values"
       GoBinaryDispatcher.resolve_binary: "The resolution step of _resolve_binary (covered), split out so _lib_tenant_values resolves da-guard the same way"
-      GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/batchpr/parser shims"
+      GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/parser shims"
       _may_be_file: "Filesystem probe (Path.is_file under OSError); its EACCES case is pinned in tests/shared/test_lib_godispatch.py (#3214)"
 
   # ── DX tools (doc/changelog/scaffold) ─────────────────────────────

@@ -19,7 +19,7 @@ updated_at: 2026-11-22
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
 📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
-🧭 **修訂** (2026-11-21) — 多叢集同租戶的叢集身分 `da_cluster`（由每台 Prometheus 的 external label 提供）與逐叢集的告警粒度，見下方「多叢集同租戶」；實作進行中。2026-11-22：通知的分組預設不按叢集拆
+🧭 **修訂** (2026-11-21) — 多叢集同租戶的叢集身分 `da_cluster`（由每台 Prometheus 的 external label 提供）與逐叢集的告警粒度，見下方「多叢集同租戶」；實作進行中。2026-11-22：通知的分組預設不按叢集拆；租戶可以逐叢集宣告預期的 exporter（`種類@叢集`）
 
 ## 背景
 
@@ -167,7 +167,7 @@ groups:
 
 **決策：同一個租戶可以出現在多個叢集。每台 Prometheus 用一個 external label `da_cluster` 說明自己在哪個叢集；凡是以租戶 exporter 序列為輸入的規則，聚合與比對都以 (tenant, da_cluster) 為單位，告警也逐叢集各發一次。**
 
-這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算，Alertmanager 的 warning／critical 去重也已經逐叢集（第 5 點）；通知的分組依決策維持原樣、不按叢集拆（第 5 點）；逐叢集的存在判定（第 6 點）還沒做。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
+這一節是上表 N:1「多叢集同租戶、DR 對（主站與備援站各一套）」的契約。**它描述的是完成後的行為，目前只完成一部分**：rule pack 已經逐叢集計算，Alertmanager 的 warning／critical 去重也已經逐叢集（第 5 點）；通知的分組依決策維持原樣、不按叢集拆（第 5 點）；逐叢集的存在判定（第 6 點）已經用在租戶 exporter 的缺席告警上，還沒涵蓋的檢查列在「後果與已知限制」。實作分階段進行，進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
 
 ### 為什麼需要
 
@@ -183,7 +183,7 @@ groups:
 3. **閾值仍是租戶一份。** 閾值、維護狀態、租戶 metadata 由 threshold-exporter 送出，一個租戶一組，不分叢集。這些序列若是從別的叢集 federate 上來，身上也會帶 `da_cluster`；規則一律先以 `by(tenant)` 收成一份，再用 `on(tenant) group_left` 套到該租戶的每個叢集（`group_left` 表示右邊一條序列可以配左邊多條），所以帶不帶結果相同。前提是各叢集送上來的閾值內容一致。
 4. **規則的寫法。** 輸入是租戶 exporter 序列的聚合，`by(...)` 只要含 `tenant`、`instance`、`pod`、`namespace`、`node` 任一個，就必須同時含 `da_cluster`。兩邊都是這類序列的配對（`on(...)`）也一樣。
 5. **告警帶 `da_cluster`。** 送到 Alertmanager 的告警都有這個 label：規則算出來的告警若已經帶著（它讀的序列來自哪個叢集），就是那個值；沒有的，Prometheus 送出時補上自己的 external label，也就是「評估這條規則的那台 Prometheus 所在的叢集」。Alertmanager 的 warning／critical 去重（[ADR-001](./001-severity-dedup-via-inhibit.md)）把它納入，兩個叢集的同名告警互不壓制。通知的分組（`group_by`，決定哪些告警合成同一則通知）預設不變：同一條告警在幾個叢集同時觸發時是一則通知，裡面裝著各叢集的告警；會不會逐條列出告警與它的 `da_cluster`，取決於接收端用的模板（Alertmanager 內建的 email、PagerDuty、webhook 會，內建的 Slack 不會，見下面的已知限制）。要每個叢集各收一則的部署或租戶，把 `da_cluster` 加進自己的 `group_by`。租戶自助告警（`Custom_*`）例外：它們走另一條分組固定的路由，租戶的 `group_by` 對它們不適用。只讀 threshold-exporter 序列的告警（例如「租戶沒設定閾值」）屬於後一種：它講的是整個租戶，label 上的叢集只代表是哪一台算出來的。
-6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。
+6. **「該有卻沒有」逐叢集判定。** 租戶可以在設定裡宣告自己預期出現在哪些叢集；有宣告時，任一個宣告的叢集沒有回報就告警。沒宣告時，只要在至少一個叢集出現就算存在。宣告的位置是租戶頂層的 `_expected_exporters`（見 [ADR-010](./010-multi-tenant-grouping.md)），它列出租戶跑哪些種類的 exporter：條目只寫種類（`mariadb`）就是沒宣告叢集；寫成 `種類@叢集`（`mariadb@edge-a`）就是宣告「這個叢集要有這一種 exporter 在回報」，其中叢集是該叢集 Prometheus 的 `da_cluster` 值。同一個種類只能擇一寫法，兩種並寫會被拒收。叢集 ID 只能用英數字與 `.`、`_`、`-`（英數字開頭與結尾，最長 63 個字元，大小寫有別）；`da_cluster` 的值含其他字元（例如 `/`、`:`）的叢集目前無法逐叢集宣告。逐叢集的缺席告警（`TenantExporterAbsent`）帶的 `da_cluster` 就是宣告的那個叢集。平台沒有叢集清單，不檢查宣告的叢集是否存在：叢集 ID 打錯時，結果是對那個不存在的叢集發缺席告警。
 7. **沒設 `da_cluster` 的 Prometheus 在上線時被指出來。** `da-tools federation-check edge` 讀實際那台 Prometheus 的設定，`external_labels.da_cluster` 沒有值就失敗；本 repo 自己的設定由抓取設定的 lint 檢查同一件事。兩者都只看一個地方，不需要推算 relabel 的結果。
 
 ### 範例
@@ -223,6 +223,26 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 
 `db_expected` 與 `db_up` 是為了說明而取的名字，不是平台的指標。
 
+逐叢集宣告的實際樣子（第 6 點）。租戶 `t1` 的設定：
+
+```yaml
+tenants:
+  t1:
+    _expected_exporters: [mariadb@edge-a, mariadb@edge-b, redis]
+```
+
+`edge-a` 的 MariaDB exporter 消失、`edge-b` 的還在，Redis exporter 只在 `edge-b`。中央 Prometheus 上的序列：
+
+```text
+tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-a"}  1
+tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-b"}  1
+tenant_expected_exporter{tenant="t1", pack="redis"}                               1
+mysql_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
+redis_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
+```
+
+三分鐘後有一則告警：`TenantExporterAbsent{tenant="t1", pack="mariadb", da_cluster="edge-a"}`。`edge-b` 的 MariaDB 與只寫種類的 Redis 都不告警。同樣的序列，若租戶只寫 `_expected_exporters: [mariadb, redis]`，沒有任何告警：`edge-b` 有一台在回報就算存在。
+
 ### 後果與已知限制
 
 - **升級順序不拘。** 規則在沒有 `da_cluster` 的序列上照樣運作，結果與不分叢集時相同；external label 設上去之後，離開那台 Prometheus 的資料才開始帶它。
@@ -233,6 +253,9 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 - **各叢集的閾值要一致。** 每個叢集各有一份 threshold-exporter 並 federate 到中央時，中央以 `by(tenant)` 把它們收成一份，取其中較大的值；內容不一致時，中央用的不是任何一個叢集自己的那組。
 - **有些抓取代理在抓取時就加上 external label**（不是 Prometheus 本身的行為）。那樣的話序列在本地就帶著 `da_cluster`，規則的結果相同。
 - **加總是逐叢集的。** 「該租戶所有實例加總」的規則（例如鎖等待、deadlock 次數）在每個叢集各自加總、各自比對閾值。
+- **逐叢集的存在判定要在序列帶 `da_cluster` 的地方評估。** 也就是收了各叢集資料的中央 Prometheus；規則分層部署時告警規則本來就放在那裡。各叢集拿同一份租戶設定、各自評估告警規則的部署，本地序列沒有 `da_cluster`，`種類@叢集` 在那裡等同只寫種類：本地有這一種 exporter 就全部算存在，本地沒有時則對該種類每一個宣告的叢集各發一則，告警上的叢集是本地 Prometheus 看不到的那些。這種部署請只寫種類，各叢集用各自的租戶設定。邊緣 Prometheus 若在抓取 job 上自己寫了 `da_cluster`、又拿共用的租戶設定自行評估，情況更糟：本地序列只帶本地那個叢集，其他宣告的叢集即使全部健康也會一直告警。
+- **沒有 `da_cluster` 的存在序列，對每個宣告的叢集都算存在。** 上一項的另一面：中央 Prometheus 若自己也直接抓租戶 exporter，那份本地序列會讓所有宣告的叢集都不告警。要逐叢集判定，就在那個抓取 job 上寫 `da_cluster`。
+- **逐叢集判定目前只涵蓋 exporter 缺席與未宣告。** 兩項檢查仍以整個租戶為單位，一個有回報的叢集會遮住另一個：「設了自訂 recipe 的磁碟告警卻沒有對應資料」（`CustomRecipeDiskInert`）與「設了依版本區分的閾值卻沒有版本資料」（`VersionAwareThresholdInert`）。「多個租戶的 exporter 同時缺席」的彙總告警（`MassExporterOutage`）以（租戶、種類）為單位計數，一個種類宣告了幾個叢集都算一組，不會指出是哪個叢集大量缺席。「同租戶還有健康的抓取目標、但其中一個掛了」的告警（`TenantExporterReplicaDown`）刻意維持跨叢集比對：只寫種類的租戶某個叢集整個掛掉時，只要那個叢集的抓取目標仍被發現、讀到 `up=0`，那是唯一的訊號。目標本身已經不在（例如 Service 被移除）時這條告警也不會響，而只寫種類的租戶因為另一個叢集有回應，exporter 缺席告警（`TenantExporterAbsent`）同樣不響——這種情形沒有任何訊號，要逐叢集宣告才有。進度見 [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)。
 - **維護模式是整個租戶。** 無法只對一個叢集進維護。
 - **各叢集不能有不同的閾值。** 同一個租戶在所有叢集用同一組閾值。
 - **通知預設不按叢集拆。** 平台不附通知模板，看到的是 Alertmanager 內建模板的輸出。兩個叢集同時觸發時，email 內文、PagerDuty 的 details、webhook payload 逐條列出告警與它的 `da_cluster`；單行標題是 `[FIRING:2] <告警名> <租戶> (<其他共同 label>)`，沒有叢集（只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label）。內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個，要用逐條列出告警的自訂模板。PagerDuty 一組是一個 incident，所有叢集都恢復後才 resolve。預設不改的原因：租戶的 route 帶不帶 `group_by`，看部署的 `_routing_defaults`、routing profile 與租戶自己的 `_routing` 合起來最後有沒有值（工具產生的 `_defaults.yaml` 有給）；最後沒有值的租戶——哪一層都沒給，或租戶把它寫成 `null` 或空列表蓋掉——才沿用根 route 的分組，所以改平台預設值只會影響到這一部分租戶，不是全部；另一個原因是下面的第一項代價。

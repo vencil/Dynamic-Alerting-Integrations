@@ -71,6 +71,15 @@ rustdoc's `invalid_codeblock_attributes`:
 * `.illustrative reason="…"`: the fence is judged by no gate. The reason is
   mandatory and non-empty, and every exemption is printed by every report.
   It takes no other attribute.
+* `.quote src="<repo path>" [anchor="<literal>"]` (#1558): the fence is an
+  excerpt of a file in the repo, and its text is held to that file by
+  scripts/tools/lint/check_doc_quotes.py, not by a consumer here. Like
+  `.illustrative` it excludes every other attribute (a consumer, an
+  expectation, a reason) and is listed by every report as an exemption: an
+  excerpt with its elisions marked is not a whole file, so no consumer has
+  anything to read. `src` is mandatory and non-empty; `anchor`, when given,
+  is non-empty. The same three words are the quote guard's vocabulary on a
+  fence of any language (`parse_declaration` is the one reading of them).
 * `.expect-refused=<kind>` (with `.confd`): every unit of the fence must be
   refused by parse-tree with that problem kind; read, or refused with another
   kind, is an error. Only parse-tree names a kind; the other consumers'
@@ -149,6 +158,9 @@ CONSUMERS = {
     "prometheus": "da-read prometheus",
 }
 ILLUSTRATIVE = "illustrative"
+#: `.quote src="…" [anchor="…"]` (#1558): judged by check_doc_quotes.py.
+QUOTE = "quote"
+QUOTE_KEYS = ("src", "anchor")
 EXPECT_REFUSED = "expect-refused"
 EXPECT_INVALID = "expect-invalid"
 
@@ -365,6 +377,9 @@ class Renderer:
             raise RendererError(f"{config_path}: markdown_extensions has no pymdownx.superfences — "
                              "the inventory reads code blocks through its fences")
         self.blocks: "list[CodeBlock]" = []
+        #: The HTML of the last `code_blocks` call (the quote guard counts
+        #: the inline code spans it does not check from it).
+        self.html = ""
 
         def recording(fmt):
             def format_(source, language, class_name, options, md, **kwargs):
@@ -394,7 +409,7 @@ class Renderer:
         language, in the order the renderer formats them."""
         self.blocks = []
         self.md.reset()
-        self.md.convert(content)
+        self.html = self.md.convert(content)
         return self.blocks
 
 
@@ -409,7 +424,17 @@ class Declaration:
     illustrative: "str | None" = None
     expect_refused: "str | None" = None
     expect_invalid: bool = False
+    #: `.quote`'s (src, anchor) — anchor None when not given; None for no `.quote`.
+    quote: "tuple[str, str | None] | None" = None
     errors: "list[str]" = field(default_factory=list)
+
+
+def is_quote_fence(block: "CodeBlock") -> bool:
+    """Does *block* carry any word of the `.quote` vocabulary (`.quote`,
+    `.quote=…`, `src=`, `anchor=`)? Such a fence is the quote guard's, in
+    any language: a stray `src=` without `.quote` is its error to report."""
+    return (QUOTE in block.classes or f".{QUOTE}" in block.attrs
+            or any(k in block.attrs for k in QUOTE_KEYS))
 
 
 @dataclass
@@ -468,6 +493,8 @@ def parse_declaration(block: CodeBlock, raw: str = "") -> "Declaration | None":
     for k, v in block.attrs.items():
         tokens.append((k[1:], v, True) if k.startswith(".") else (k, v, False))
     reason_given = None
+    quote_given: "dict[str, str]" = {}
+    is_quote = False
     consumers: "list[str]" = []
     if block.id_value:
         decl.errors.append(f"unknown attribute '#{block.id_value}' (an id names no consumer)")
@@ -477,6 +504,8 @@ def parse_declaration(block: CodeBlock, raw: str = "") -> "Declaration | None":
                 consumers.append(name)
             elif name == ILLUSTRATIVE and value is None:
                 decl.illustrative = decl.illustrative or ""
+            elif name == QUOTE and value is None:
+                is_quote = True
             elif name == EXPECT_REFUSED:
                 if not value:
                     decl.errors.append(".expect-refused needs a kind: .expect-refused=<kind>")
@@ -489,12 +518,29 @@ def parse_declaration(block: CodeBlock, raw: str = "") -> "Declaration | None":
                 decl.errors.append(f"unknown attribute {shown!r} (known: "
                                    + ", ".join(f".{c}" for c in CONSUMERS)
                                    + f", .{ILLUSTRATIVE} reason=\"…\", .{EXPECT_REFUSED}=<kind>, "
-                                   f".{EXPECT_INVALID})")
+                                   f".{EXPECT_INVALID}, .{QUOTE} src=\"…\" anchor=\"…\")")
         elif name == "reason":
             reason_given = value
+        elif name in QUOTE_KEYS:
+            quote_given[name] = value
         else:
             decl.errors.append(f"unknown attribute {name}={value!r} (only .{ILLUSTRATIVE} "
-                               "takes a key=value: reason=\"…\")")
+                               f"takes reason=\"…\", only .{QUOTE} takes src=\"…\" and "
+                               "anchor=\"…\")")
+    if is_quote:
+        src = (quote_given.get("src") or "").strip()
+        anchor = quote_given.get("anchor")
+        if not src:
+            decl.errors.append(f".{QUOTE} needs a non-empty src=\"<repo path>\"")
+        if anchor is not None and not anchor:
+            decl.errors.append(f".{QUOTE}: anchor=\"\" is empty; give a literal or leave it out")
+        if consumers or decl.illustrative is not None or reason_given is not None:
+            decl.errors.append(f".{QUOTE} takes no other attribute: an excerpt is held to its "
+                               "source by the quote guard, so no consumer reads it")
+        if src:
+            decl.quote = (src, anchor)
+    elif quote_given:
+        decl.errors.append(f"{' and '.join(sorted(quote_given))}=… is only for .{QUOTE}")
     if len(consumers) > 1:
         decl.errors.append(f"more than one consumer: {', '.join('.' + c for c in consumers)}")
     decl.consumer = consumers[0] if consumers else None
@@ -506,8 +552,10 @@ def parse_declaration(block: CodeBlock, raw: str = "") -> "Declaration | None":
         if decl.consumer or decl.expect_refused or decl.expect_invalid:
             decl.errors.append(f".{ILLUSTRATIVE} takes no other attribute: no gate judges "
                                "the fence, so a consumer or an expectation means nothing")
-    elif reason_given is not None:
+    elif reason_given is not None and not is_quote:
         decl.errors.append(f"reason=… is only for .{ILLUSTRATIVE}")
+    if is_quote and (decl.expect_refused or decl.expect_invalid):
+        decl.errors.append(f".{QUOTE} takes no expectation: no consumer reads an excerpt")
     if decl.expect_refused and decl.consumer != "confd":
         decl.errors.append(
             f".{EXPECT_REFUSED} needs .confd: only parse-tree names the kind of a refusal "
@@ -542,11 +590,14 @@ def _info_text(opening: str) -> str:
 
 def locate_blocks(path: str, lines: "list[str]", blocks: "list[CodeBlock]", *,
                   tab_length: int = 4,
-                  errors: "list[tuple[str, int, str]] | None" = None
+                  errors: "list[tuple[str, int, str]] | None" = None,
+                  select: "Any" = None, kind: str = "yaml"
                   ) -> "list[tuple[CodeBlock, int]]":
     """Where each YAML block of *blocks* (`Renderer.code_blocks` of the file
     whose lines are *lines*) sits: ``(block, i)``, *i* the 0-based index of
-    its first line, in file order.
+    its first line, in file order. *select* (default: `CodeBlock.is_yaml`)
+    picks other blocks instead — the quote guard's `.quote` fences of any
+    language (`is_quote_fence`) — and *kind* names them in the messages.
 
     A block is matched against the file by its lines, each without its
     container prefix (`_bare`): a candidate is a run of lines equal to the
@@ -560,6 +611,7 @@ def locate_blocks(path: str, lines: "list[str]", blocks: "list[CodeBlock]", *,
     no line of code (an empty fence) is no unit, as before.
     """
     errors = [] if errors is None else errors
+    select = select or (lambda b: b.is_yaml)
     bare = [_bare(line, tab_length) for line in lines]
     starts: "dict[str, list[int]]" = {}
     for i, b in enumerate(bare):
@@ -571,7 +623,7 @@ def locate_blocks(path: str, lines: "list[str]", blocks: "list[CodeBlock]", *,
             groups.setdefault(key, []).append(block)
     found: "list[tuple[CodeBlock, int]]" = []
     for key, group in groups.items():
-        if not any(b.is_yaml for b in group):
+        if not any(select(b) for b in group):
             continue
         n = len(key)
         candidates = [i for i in starts.get(key[0], [])
@@ -581,7 +633,7 @@ def locate_blocks(path: str, lines: "list[str]", blocks: "list[CodeBlock]", *,
         first = key[0] if key[0] else (key[1] if n > 1 else "")
         if not candidates:
             errors.append((path, 1, (
-                f"a yaml code block the site renders (its first line {first!r}) is found "
+                f"a {kind} code block the site renders (its first line {first!r}) is found "
                 "nowhere in the file's lines: the inventory cannot say where it is, so no "
                 "gate would judge it. Report this (#3814): the inventory's reading of the "
                 "file is wrong")))
@@ -589,7 +641,7 @@ def locate_blocks(path: str, lines: "list[str]", blocks: "list[CodeBlock]", *,
         where = ", ".join(str(i + 1) for i in candidates)
         if len(candidates) != len(group):
             errors.append((path, candidates[0] + 1, (
-                f"the text of a yaml code block is at {len(candidates)} places (lines "
+                f"the text of a {kind} code block is at {len(candidates)} places (lines "
                 f"{where}) and the site renders {len(group)} code block(s) of it: the "
                 "inventory cannot tell which line is the rendered one — make the copies "
                 "differ, or drop the one that is not a code block")))
@@ -600,7 +652,7 @@ def locate_blocks(path: str, lines: "list[str]", blocks: "list[CodeBlock]", *,
                 "fence info: the inventory cannot tell which line holds which — make "
                 "their text differ")))
             continue
-        found.extend((b, i) for b, i in zip(group, candidates) if b.is_yaml)
+        found.extend((b, i) for b, i in zip(group, candidates) if select(b))
     return sorted(found, key=lambda bi: bi[1])
 
 
@@ -839,7 +891,9 @@ def build(repo_root: "Path | str", *,
                 if decl is not None:
                     u.errors.extend(decl.errors)
                     if not decl.errors:
-                        u.exemption = decl.illustrative
+                        u.exemption = decl.illustrative if decl.quote is None else (
+                            f"quote of {decl.quote[0]} (held to its source by "
+                            "check_doc_quotes.py)")
                         u.consumer = decl.consumer
                         u.how = "declared" if decl.consumer else None
                         u.expect_refused = decl.expect_refused
@@ -917,7 +971,7 @@ def print_exemptions(inv: "Inventory | list[tuple[str, str]]", file=None) -> Non
           if isinstance(inv, Inventory) else list(inv))
     if not ex:
         return
-    print(f"Units exempted (.{ILLUSTRATIVE}): {len(ex)}", file=file)
+    print(f"Units exempted (.{ILLUSTRATIVE} / .{QUOTE}): {len(ex)}", file=file)
     for where, reason in ex:
         print(f"    {where} — {reason}", file=file)
 

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: k8s
 created_at: 2026-03-13
-updated_at: 2026-10-10
+updated_at: 2026-11-22
 ---
 # ADR-005: 投影卷掛載 Rule Pack
 
@@ -54,8 +54,9 @@ updated_at: 2026-10-10
 
 `k8s/03-monitoring/deployment-prometheus.yaml` 的 `rules` volume（節錄）：
 
-```yaml
+```yaml {.quote src="k8s/03-monitoring/deployment-prometheus.yaml"}
 volumes:
+  # ...
   - name: rules
     projected:
       sources:
@@ -67,6 +68,7 @@ volumes:
                 path: mariadb-recording.yml
               - key: mariadb-alert.yml
                 path: mariadb-alert.yml
+        # ...
         - configMap:
             name: prometheus-rules-jvm
             optional: true
@@ -75,10 +77,10 @@ volumes:
                 path: jvm-recording.yml
               - key: jvm-alert.yml
                 path: jvm-alert.yml
-        # ... 其餘 Rule Pack 比照
+        # ...
 ```
 
-這個 volume 掛在 `/etc/prometheus/rules`，Prometheus 設定以 `rule_files: ["/etc/prometheus/rules/*.yml"]` 讀取。
+其餘 Rule Pack 依同樣寫法各接一個 `configMap` 來源。這個 volume 掛在 `/etc/prometheus/rules`，Prometheus 設定以 `rule_files: ["/etc/prometheus/rules/*.yml"]` 讀取。
 
 卸載 JVM 的 Rule Pack：
 

@@ -64,7 +64,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_operator_output_or_die, output_dir_type, add_prometheus_arg, prometheus_url, non_negative_seconds  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, json_file_text  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, json_file_text  # noqa: E402
+from _lib_label import safe_label  # noqa: E402  (#4210: a key is file content)
 from _lib_validation import operator_file_type  # noqa: E402  (#3107 ③b)
 import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
 from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT  # noqa: E402  (#3662)
@@ -155,6 +156,58 @@ def run_single_comparison(prom_url, old_query, new_query, label, tolerance=0.001
 MAPPING_DOCUMENT = _lib_input.Document("yaml", dict)
 
 
+_KIND = {type(None): "空值", str: "字串", int: "數字", float: "數字",
+         bool: "布林值", list: "清單", dict: "映射"}
+
+
+_KEY_SHOWN = 120  # a key longer than this is cut in the refusal line
+
+
+def _kind(value):
+    return _KIND.get(type(value), "其他型別")
+
+
+def _shown_key(key):
+    """*key* as the refusal line names it: control characters neutralised,
+    a non-string as its repr, a very long one cut."""
+    label = safe_label(key if isinstance(key, str) else repr(key))
+    return label if len(label) <= _KEY_SHOWN else label[:_KEY_SHOWN] + "…"
+
+
+def _unusable_reason(key, info):
+    """Why the `--mapping` entry *key* → *info* cannot become a pair, or None.
+
+    A field counts as given when it is there and not null; a given field
+    the entry is read by must be a non-empty string. Usable: `old_query` and
+    `new_query` both given; or neither, and a truthy `golden_rule` (skipped,
+    said) or a given `original_metric` (the legacy pair). `original_metric`
+    is judged only on the legacy path, the one that reads it: migrate can
+    write it empty (a key equal to the prefix) beside a usable pair.
+    """
+    if not isinstance(key, str):
+        return f"key 不是字串（實為{_kind(key)}）"
+    if not isinstance(info, dict):
+        return f"值不是映射（實為{_kind(info)}）"
+    for field in ("old_query", "new_query"):
+        reason = _not_a_string(info, field)
+        if reason:
+            return reason
+    if (info.get("old_query") is None) != (info.get("new_query") is None):
+        return "old_query 與 new_query 只有一個"
+    if info.get("old_query") is not None or info.get("golden_rule"):
+        return None
+    if info.get("original_metric") is None:
+        return "沒有 old_query／new_query，也沒有 original_metric 或 golden_rule"
+    return _not_a_string(info, "original_metric")
+
+
+def _not_a_string(info, field):
+    value = info.get(field)
+    if value is not None and not (isinstance(value, str) and value.strip()):
+        return f"{field} 不是非空字串（實為{_kind(value)}）"
+    return None
+
+
 def load_mapping_pairs(args):
     """從 `--mapping`（prefix-mapping.yaml，`MAPPING_DOCUMENT`）載入比對組。
 
@@ -166,6 +219,11 @@ def load_mapping_pairs(args):
 
     改用黃金標準（有 `golden_rule`）的項沒有 migrate 產出的 recording rule，
     舊檔對它們組出的 `tenant:<key>:max` 不存在、只會報新側缺值，所以跳過並說明。
+
+    ⛔ 不能用的項目是 caller error（#4210，dev-rules §13 的 supplied-but-unusable，
+    比照 #1649）：先前它們被靜默略過，使用者以為那個 key 比對過了。migrate 正常
+    產出的檔不會碰到，碰到的是手改或損毀的檔；全部點名
+    （key 與原因）後以 rc 2 結束，而不是只比對剩下的。形狀見 `_unusable_reason`。
     """
     # #3415 / #3445: the path and the content judged by the lib — missing,
     # not a file, not openable, not UTF-8, not YAML, not a mapping: named.
@@ -175,16 +233,17 @@ def load_mapping_pairs(args):
     pairs = []
     legacy = []
     golden = []
+    unusable = []
     for prefixed_key, info in mapping.items():
-        if not isinstance(info, dict):
+        reason = _unusable_reason(prefixed_key, info)
+        if reason:
+            unusable.append(f"{_shown_key(prefixed_key)}（{reason}）")
             continue
         original = info.get("original_metric")
         old_query, new_query = info.get("old_query"), info.get("new_query")
-        if not (old_query and new_query):
+        if old_query is None:
             if info.get("golden_rule"):
                 golden.append(prefixed_key)
-                continue
-            if not original:
                 continue
             # `_critical` 項讀的是同一條 recording rule。
             base_key = prefixed_key[:-len("_critical")] if prefixed_key.endswith(
@@ -198,13 +257,18 @@ def load_mapping_pairs(args):
             "alert_name": info.get("alert_name", ""),
             "golden_match": info.get("golden_match"),
         })
+    if unusable:
+        raise CallerError(
+            f"--mapping {safe_label(str(mapping_path))}: {len(unusable)} 個項目不能用，整份未比對"
+            f"（請用 migrate 重產這個檔，或修正這幾項）: {'；'.join(unusable)}",
+            reason="mapping_entry_unusable")
     if golden:
         print(f"ℹ️  {len(golden)} 項改用黃金標準，migrate 沒有為它們產生 recording rule，"
-              f"不在這裡比對: {', '.join(golden)}", file=sys.stderr)
+              f"不在這裡比對: {', '.join(map(safe_label, golden))}", file=sys.stderr)
     if legacy:
         print(f"⚠️  {mapping_path} 沒有 old_query／new_query（舊版 migrate 產出），"
               f"{len(legacy)} 組改用「原始指標 vs tenant:<key>:max」比對；rate 類或 :sum "
-              f"的組會比不出來。請用新版 migrate 重產這個檔: {', '.join(legacy)}",
+              f"的組會比不出來。請用新版 migrate 重產這個檔: {', '.join(map(safe_label, legacy))}",
               file=sys.stderr)
     return pairs
 

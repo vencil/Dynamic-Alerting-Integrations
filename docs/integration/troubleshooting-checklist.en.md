@@ -1181,15 +1181,15 @@ The alert resolves on its own: once the next run (or the manual one) succeeds, t
 
 **Symptom**: `MassExporterOutage` (critical) fires with summary "Mass exporter outage (N tenants)", alongside a batch of `TenantExporterAbsent`.
 
-It fires when **both** more than 5 tenants have a declared kind with no exporter answering (that kind's presence metric, such as `mysql_up`, absent) and more than 10% of the declared (tenant, db_type) pairs are absent ([#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)). The floor counts tenants, so one tenant declaring many kinds that all go down does not trip it; the ratio counts pairs: a tenant declaring `[mariadb, redis]` counts 2 in the denominator, and 1 in the numerator when only its mariadb exporter is gone. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
+It fires when **both** more than 5 tenants have a declared kind with no exporter answering (that kind's presence metric, such as `mysql_up`, absent) and more than 10% of the declared (tenant, exporter kind) pairs — the `pack` label — are absent ([#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)). The floor counts tenants, so one tenant declaring many kinds that all go down does not trip it; the ratio counts pairs: a tenant declaring `[mariadb, redis]` counts 2 in the denominator, and 1 in the numerator when only its mariadb exporter is gone. A kind declared per cluster (`mariadb@east`, `mariadb@west`) is one pair however many clusters it names, absent when any declared cluster is; this alert is not per cluster and does not say which cluster lost many — read the `da_cluster` of the individual `TenantExporterAbsent` alerts for that. Diagnosing per cluster has a precondition: the presence series the central Prometheus evaluates (for example `mysql_up`) carry `da_cluster`. A presence series without `da_cluster` counts as present for every cluster declared for that tenant and kind, so no `TenantExporterAbsent` names the missing cluster, and `MassExporterOutage` does not count the pair as absent. The floor and the ratio are fleet-wide: declarations (`tenant_expected_exporter`) are counted once together whichever cluster's Prometheus they reached the central one through, and the alert carries no `da_cluster`. This holds when the declaration series of the sources differ in `da_cluster` only; if they also carry another label that differs by source (an extra external label each Prometheus sets, for instance), the floor and the ratio are still evaluated per value of that label. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
 
 ```mermaid
 flowchart TD
-    A[One db_type of a tenant has no exporter answering] --> B{Whole tenant-exporters job absent?}
+    A[One exporter kind of a tenant has no exporter answering] --> B{Whole tenant-exporters job absent?}
     B -- yes --> J[TenantExporterJobAbsent<br/>this alert stays silent]
     B -- no --> C{More than 5 AND more than 10%?}
     C -- yes --> M[MassExporterOutage:<br/>treat as ONE incident, find the common cause]
-    C -- no --> T[Individual TenantExporterAbsent:<br/>handle per tenant and db_type]
+    C -- no --> T[Individual TenantExporterAbsent:<br/>handle per tenant and exporter kind]
 ```
 
 ⛔ **Do not fix tenants one by one.** Restarting exporters individually does not address the common cause and only delays finding it.
@@ -1218,7 +1218,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -30
 
 **If not this**:
 - (a) Prometheus itself is unhealthy (Pod restarting, starved of resources) → other scrape jobs degrade at the same time; check the Prometheus Pod first
-- (b) many tenants were offboarded at once but their conf.d `_metadata` was not removed → stale config, not an outage; removing it clears the alert
+- (b) many tenants were offboarded at once but their conf.d `_expected_exporters` declaration was not removed → stale config, not an outage; removing it clears the alert
 
 **Cross-ref**: why the thresholds are 5 and 10%, and what `unless on() absent(...)` is for, are explained in the comment above this alert in the platform pack source `rule-packs/rule-pack-platform.yaml` (the deployed `k8s/03-monitoring/configmap-rules-platform.yaml` is generated from it and carries no comments).
 

@@ -8,5 +8,3 @@ findings:
   rule-pack-custom-alerts.yaml:
   - 'custom-alerts-normalization / custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m: by-drops-cluster (tenant,version)'
   - 'custom-alerts-normalization / custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m: by-drops-cluster (tenant,version)'
-  rule-pack-liveness.yaml:
-  - 'tenant-liveness / TenantExporterReplicaDown: on-drops-cluster (tenant)'

@@ -718,7 +718,7 @@
       "files": {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    _metadata:\n      owner: platform-team\n      environment: production\n      domain: finance\n    mysql_connections: \"60\"\n",
         "_ops.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: ops-team\n      tier: silver\n",
-        "tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n      tier: gold\n"
+        "tx.yaml": "tenants:\n  tx:\n    _metadata:\n      region: r-1\n      tier: gold\n"
       },
       "expect": {
         "tx": {
@@ -747,7 +747,7 @@
             "environment": "production",
             "domain": "finance",
             "tier": "gold",
-            "db_type": "mariadb"
+            "region": "r-1"
           }
         }
       }

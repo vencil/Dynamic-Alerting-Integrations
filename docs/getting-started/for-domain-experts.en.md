@@ -35,28 +35,26 @@ The snippets below are verbatim excerpts from `rule-packs/rule-pack-mariadb.yaml
 
 ### Part 1: Normalization recording rules
 
-```yaml
-# rule-packs/rule-pack-mariadb.yaml — group: mariadb-normalization (excerpt)
+```yaml {.quote src="rule-packs/rule-pack-mariadb.yaml"}
 - record: tenant:mysql_connection_usage:percent
   expr: |
-    max by(tenant) (
+    max by(tenant, da_cluster) (
       100 * mysql_global_status_threads_connected
       / (mysql_global_variables_max_connections > 0)
     )
-
+# ...
 - record: tenant:mysql_slow_queries:rate5m
-  expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
+  expr: sum by(tenant, da_cluster) (rate(mysql_global_status_slow_queries[5m]))
 ```
 
 Names are always `tenant:<metric>:<function>`. Pick the aggregation by meaning: connection usage (% of max_connections) takes `max` (the fullest instance of the tenant), rates take `sum` (the whole cluster's total).
 
 ### Part 2: Threshold-normalization recording rules
 
-```yaml
-# rule-packs/rule-pack-mariadb.yaml — group: mariadb-threshold-normalization (excerpt)
+```yaml {.quote src="rule-packs/rule-pack-mariadb.yaml"}
 - record: tenant:alert_threshold:mysql_connection_usage_percent
   expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
-
+# ...
 - record: tenant:alert_threshold:mysql_connection_usage_percent_critical
   expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
 ```
@@ -65,8 +63,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
 
 ### Part 3: Alert rules
 
-```yaml
-# rule-packs/rule-pack-mariadb.yaml — group: mariadb-alerts (excerpt)
+```yaml {.quote src="rule-packs/rule-pack-mariadb.yaml"}
 - alert: MariaDBHighConnections
   expr: |
     (
@@ -87,6 +84,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
     summary_zh: "{{ $labels.tenant }} 連線數過高"
     platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
     platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定"
+# ...
     runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
 ```
 
@@ -162,10 +160,9 @@ Submit a pull request to the Platform Team for review and integration.
 
 ### Use the metric dictionary
 
-`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while converting existing rules: when a raw metric already has a golden-standard alert, the tool suggests setting the threshold instead of emitting a duplicate `custom_` rule.
+`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while converting existing rules: when a raw metric already has a golden-standard alert, the tool suggests setting the threshold instead of emitting a duplicate `custom_` rule. One entry, as an example:
 
-```yaml
-# scripts/tools/metric-dictionary.yaml (excerpt)
+```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
 mysql_global_status_threads_connected:
   maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections

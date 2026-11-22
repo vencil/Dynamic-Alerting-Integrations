@@ -113,6 +113,7 @@ on:
       - "scripts/tools/_lib_atomic_write.py"
       - "scripts/tools/_lib_confd.py"
       - "scripts/tools/_lib_metric_sources.py"
+      - "scripts/tools/_lib_output.py"
       - "scripts/tools/ops/_grar_merge.py"
       - "scripts/tools/ops/_grar_parse.py"
       - "scripts/tools/ops/_grar_routes.py"
@@ -217,7 +218,7 @@ jobs:
         run: mkdir -p docs/assets/vendor
 
       # da-tools Dockerfile COPYs a build.sh-assembled tools/ dir + 3 pre-built Go
-      # binaries (da-guard / da-batchpr / da-parser). For a COPY-PATH smoke test we
+      # binaries (da-guard / da-parser / da-crdecode / da-read). For a COPY-PATH smoke test we
       # stub them (empty dir + zero-byte files) instead of running the Go cross-
       # compile — the Dockerfile only COPY+chmod's the binaries (never RUNs them at
       # build time), so a stub validates COPY-path correctness + Dockerfile syntax
@@ -228,7 +229,7 @@ jobs:
         run: |
           mkdir -p components/da-tools/app/tools
           # #463 multi-arch: Dockerfile now COPYs da-<tool>.${TARGETARCH}.
-          for b in da-guard da-batchpr da-parser da-crdecode da-read; do
+          for b in da-guard da-parser da-crdecode da-read; do
             for a in amd64 arm64; do
               touch "components/da-tools/app/$b.$a"
             done

@@ -22,7 +22,6 @@ lang: zh
 | `backtest_threshold.py` | Backtest threshold changes against historical Prometheus data. |
 | `baseline_discovery.py` | Baseline Discovery 工具。 |
 | `batch_diagnose.py` | Post-cutover multi-tenant health report. |
-| `batchpr_dispatch.py` | `da-tools batch-pr` Python entrypoint. |
 | `blind_spot_discovery.py` | Scan Prometheus targets and cross-reference tenant configs |
 | `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |
@@ -112,7 +111,7 @@ lang: zh
 | `generate_rulepack_configmaps.py` | Generate k8s/03-monitoring/configmap-rules-<pack>.yaml from rule-packs/. |
 | `generate_rulepack_derived.py` | Write the parts of a tenant rule-pack alert that are derived from its labels (#3309). |
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
-| `generate_tenant_metadata.py` | 租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。 |
+| `generate_tenant_metadata.py` | 租戶元資料產生器 — 讀 exporter 整天實際發出的值（da-guard served-values），推斷 owner、tier、routing_channel；expected_exporters 只取 `_expected_exporters` 宣告值。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證） |
 | `list_subprocess_only_modules.py` | 每個模組被哪一種進入點執行到（以 coverage 實測為準）。 |
@@ -130,7 +129,6 @@ lang: zh
 | `scaffold_lint.py` | generate a new pre-commit lint script from template. |
 | `scan_component_health.py` | JSX 元件健康快照（v2.7.0 Phase .a A-1 首發） |
 | `suggest_related.py` | 基於 audience 重疊 + tags 相似度推薦 related tools |
-| `sync_glossary_abbr.py` | Sync abbreviations from glossary.md to MkDocs snippet. |
 | `sync_schema.py` | Generate the reserved `_` key lists from the one registry. |
 | `sync_tool_registry.py` | 從 tool-registry.yaml 同步 Hub 卡片 + CUSTOM_FLOW_MAP |
 | `tenant_verify.py` | Verify a tenant's effective config — print merged_hash and source_hash. |
@@ -175,6 +173,7 @@ lang: zh
 | `check_doc_datools_cmds.py` | documented `da-tools` binary-wrapper subcommands |
 | `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |
+| `check_doc_quotes.py` | a declared quote in docs/ must match its source line for line (#1558). |
 | `check_engagement_disclosure.py` | Engagement-disclosure gate — block "active engagement" assertions in the PUBLIC repo. |
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_exporter_queries.py` | check_exporter_queries — a rule pack reads only what its query-exporter config serves. |
@@ -263,7 +262,7 @@ lang: zh
 - `scripts/tools/_lib_doc_yaml_inventory.py`：The one inventory of the YAML code blocks in docs/**/*.md (ADR-036 §12, #3416).
 - `scripts/tools/_lib_engine.py`：Engine detection layer: did the external engine actually give a verdict? (#3611)
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
-- `scripts/tools/_lib_exporter_presence.py`：db_type → exporter presence metric: the one table, and the rules made from it (#3771).
+- `scripts/tools/_lib_exporter_presence.py`：Exporter kind → presence metric, read from the threshold registry, and the rules made from it (#3771, #4097).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_input.py`：Which files a value the caller gave selects, and the bytes read from them (#3446).
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
@@ -271,6 +270,7 @@ lang: zh
 - `scripts/tools/_lib_kubectl.py`：Run kubectl: the one place that starts it, for reads and writes (#3207, #3210, #3539).
 - `scripts/tools/_lib_label.py`：`safe_label`: neutralise control characters in a value before it is printed.
 - `scripts/tools/_lib_metric_sources.py`：Where each metric a rule reads comes from — and whether a Prometheus Operator install has that source.
+- `scripts/tools/_lib_output.py`：The output entry points: every write to an output path goes through here.
 - `scripts/tools/_lib_parse_cache.py`：the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`：read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_paths.py`：The one judgement of a path the caller gave (#3276).

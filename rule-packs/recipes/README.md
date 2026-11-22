@@ -71,8 +71,10 @@ v1 的 `slo_burn_rate` 只接 availability／error-ratio 型（兩個 counter �
 ## 編譯
 
 ```bash
-make custom-alerts-compile   # _custom_alerts 宣告 → 向量化規則（編譯器）
+make custom-alerts-compile   # _custom_alerts 宣告 → 向量化規則（編譯器；只編本 repo 的 conf.d）
 ```
+
+客戶編自己的 conf.d：`da-tools compile-custom-alerts --config-dir <conf.d> --out <規則包>`，見 [cli-reference](../../docs/cli-reference.md#compile-custom-alerts)（[#4225](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4225)）。
 
 行為驗證（promtool fire/no-fire/隔離 golden）由 pytest 驅動：
 `tests/dx/test_custom_alerts_promtool.py` 編譯 [`examples/conf.d/`](examples/conf.d/) → temp pack → 跑 `promtool test rules`（promtool 不在時自動 skip）。

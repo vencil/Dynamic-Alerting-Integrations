@@ -16,17 +16,16 @@ const docUrl = (relative) => `${REPO_BASE}/${relative}`;
  *
  * Two onboarding entry points per planning §C-3:
  *   - Import Journey (existing assets): Migration Toolkit → C-8 parser →
- *     C-9 profile builder → C-10 batch PR → C-12 dangling-defaults guard
- *     (C-9 and C-10 are not wired today: batch-pr is experimental, issue 4211)
+ *     da-tools migrate (migrate-rule) → place into conf.d via the
+ *     customer's own PR → C-12 dangling-defaults guard. (C-9 Profile
+ *     Builder and C-10 Batch PR were retired in issue 4228, decision
+ *     in issue 4211; bulk recipe import is issue 4226.)
  *   - Wizard Journey (greenfield): CI/CD Setup Wizard → Deployment Wizard
  *     → [alert-builder, routing-trace TBD v2.8.x]
  *
  * Honest scope (PR-1 MVP):
  *   - Dispatcher UI + step-by-step pointers to existing tools/docs.
  *   - Does NOT build alert-builder / routing-trace wizards (deferred).
- *   - Does NOT implement architecture-aligned shared profile-extract
- *     UI (R7 constraint applies to backend code path, already covered
- *     by C-9 PR-3).
  * ─────────────────────────────────────────────────────────────────── */
 
 const IMPORT_STEPS = [
@@ -53,26 +52,26 @@ const IMPORT_STEPS = [
     cmd: 'da-tools parser import \\\n  --input prom-rules.yaml \\\n  --output parsed.json \\\n  --validate-strict-prom',
   },
   {
-    id: 'profile',
-    title: () => t('3. 聚類建議 Profile', '3. Cluster proposals into Profile'),
+    id: 'migrate',
+    title: () => t('3. 轉換成 conf.d 租戶檔', '3. Convert into conf.d tenant files'),
     desc: () => t(
-      'C-9 Profile Builder 把 parser 輸出聚類成 _defaults.yaml 候選、輸出 conf.d/ 目錄結構（Profile-as-Directory-Default, ADR-018）。目前只是 library（BuildProposals / EmitProposals），沒有接到任何 CLI，也沒有其他程式使用；它的輸出也還不能被 conf.d 載入（issue 4211 重新選型）。要導入客戶規則請改用逐租戶的 da-tools migrate。',
-      'C-9 Profile Builder clusters parser output into _defaults.yaml proposals and emits the conf.d/ directory shape (Profile-as-Directory-Default, ADR-018). It is only a library (BuildProposals / EmitProposals), wired to no CLI and used by nothing else; its output cannot yet be loaded as conf.d either (re-selection in issue 4211). To import customer rules, use the per-tenant da-tools migrate instead.'
-    ),
-    cta: () => t('ADR-018', 'ADR-018'),
-    href: docUrl('docs/adr/018-profile-as-directory-default.md'),
-    cmd: '# Profile Builder is a LIBRARY only (BuildProposals / EmitProposals),\n# wired to no CLI. Import customer rules per tenant instead:\nda-tools migrate legacy-rules.yml --tenant tenant-a',
-  },
-  {
-    id: 'batchpr',
-    title: () => t('4. 開 Batch PR 進客戶 repo', '4. Open Batch PRs into customer repo'),
-    desc: () => t(
-      'C-10 Batch PR Pipeline：先 [Base Infrastructure PR] 帶所有 _defaults.yaml；個別 tenant PR 標 Blocked by: #base。experimental：apply 必填的 --plan（Plan JSON）與 --emit-dir 目前沒有工具產生，需自備（見 CLI Reference 的 batch-pr 節）。',
-      'C-10 Batch PR Pipeline: [Base Infrastructure PR] first carries all _defaults.yaml; tenant PRs tagged Blocked by: #base. Experimental: the --plan (Plan JSON) and --emit-dir that apply requires are produced by no tool today and must be prepared by hand (see the batch-pr section of the CLI Reference).'
+      'da-tools migrate（migrate-rule）逐租戶把既有規則轉成 conf.d 租戶檔（threshold 寫在 tenants.<id> 底下）與平台規則，並列出需人工審閱的規則。輸出寫在 .migration/ 底下，不會被服務中的讀取端讀到。產出 _custom_alerts recipe 的批次導入見 issue 4226。',
+      'da-tools migrate (migrate-rule) converts existing rules per tenant into a conf.d tenant file (thresholds under tenants.<id>) plus platform rules, and lists the rules that need human review. Output lands under .migration/, which no serving reader reads. Bulk import producing _custom_alerts recipes is tracked in issue 4226.'
     ),
     cta: () => t('Migration Playbook', 'Migration Playbook'),
     href: docUrl('docs/scenarios/incremental-migration-playbook.md'),
-    cmd: 'da-tools batch-pr apply \\\n  --plan plan.json --emit-dir ./emit/ \\\n  --repo vencil/customer --workdir ./customer-repo \\\n  --dry-run',
+    cmd: 'da-tools migrate legacy-rules.yml \\\n  --tenant tenant-a \\\n  -o ./migration_output/',
+  },
+  {
+    id: 'place',
+    title: () => t('4. 放進客戶 repo 的 conf.d 樹', '4. Place into the customer repo conf.d tree'),
+    desc: () => t(
+      '把 .migration/conf.d/ 底下的租戶檔放進客戶 repo 的 conf.d 目錄，並把同目錄 _defaults.yaml 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml（合併，不要整份覆蓋；沒宣告的 key，exporter 不會發射閾值），再走客戶自己的 Git PR 流程。目錄即 default 的規則見 ADR-018。',
+      'Move the tenant files under .migration/conf.d/ into the customer repo conf.d directory, merge the defaults: block of the _defaults.yaml beside them into the _defaults.yaml at the conf.d root (merge, do not overwrite; the exporter emits no threshold for a key that is not declared there), then open a PR through the customer Git flow. The directory-as-default rule is ADR-018.'
+    ),
+    cta: () => t('ADR-018', 'ADR-018'),
+    href: docUrl('docs/adr/018-profile-as-directory-default.md'),
+    cmd: 'cp migration_output/.migration/conf.d/tenant-a.yaml \\\n  customer-repo/conf.d/db/tenant-a.yaml\n# merge the defaults: block of .migration/conf.d/_defaults.yaml\n# into customer-repo/conf.d/_defaults.yaml (merge, do not overwrite)\n# then open a PR in the customer repo',
   },
   {
     id: 'guard',
@@ -243,7 +242,7 @@ export default function MasterOnboarding() {
             )}
             bullets={[
               t('安裝 Migration Toolkit (binary / Docker / air-gapped tar)', 'Install Migration Toolkit (binary / Docker / air-gapped tar)'),
-              t('Parser → Profile → Batch PR → Guard 五步管線（Profile、Batch PR 兩步尚未接通，目前逐租戶用 migrate）', 'Parser → Profile → Batch PR → Guard 5-step pipeline (the Profile and Batch PR steps are not wired yet; use migrate per tenant for now)'),
+              t('Parser → Migrate → conf.d PR → Guard 管線（migrate 逐租戶轉換）', 'Parser → Migrate → conf.d PR → Guard pipeline (migrate converts per tenant)'),
               t('適合：巨型客戶、有既有資產、conf.d/ 大批次', 'For: large customers with existing assets, big-batch conf.d/'),
             ]}
             ctaLabel={t('開始 Import 路徑', 'Start Import Path')}

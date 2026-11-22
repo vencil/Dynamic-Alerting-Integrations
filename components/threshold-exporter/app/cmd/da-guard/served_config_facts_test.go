@@ -8,6 +8,7 @@ package main
 // mode exits 2 at an instant /metrics cannot be gathered at.
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -19,12 +20,12 @@ import (
 
 // configFactsTree is windowCollisionTree (a 01:00–03:00 part of the day
 // /metrics cannot be gathered in) plus a tenant with a custom alert and
-// `_metadata`, one whose `_custom_alerts` does not decode, and one whose
-// `_metadata` does not decode.
+// `_metadata` and `_expected_exporters`, one whose `_custom_alerts` does not
+// decode, and one whose `_metadata` does not decode.
 var configFactsTree = map[string]string{
 	"_defaults.yaml": windowCollisionTree["_defaults.yaml"],
 	"tx.yaml":        windowCollisionTree["tx.yaml"],
-	"tc.yaml": "tenants:\n  tc:\n    _metadata:\n      db_type: mariadb\n      owner: team-c\n    _custom_alerts:\n" +
+	"tc.yaml": "tenants:\n  tc:\n    _metadata:\n      owner: team-c\n    _expected_exporters: [mariadb, nginx]\n    _custom_alerts:\n" +
 		"      - recipe: threshold\n        name: q_high\n        metric: q_high_depth\n        op: \">\"\n" +
 		"        window: 5m\n        threshold: \"1000:warning\"\n",
 	"tbad.yaml":  "tenants:\n  tbad:\n    _custom_alerts: \"oops\"\n",
@@ -38,7 +39,7 @@ var configFactsTree = map[string]string{
 // factsFields are the fields --config-facts writes for a tenant, compared
 // with the default mode's: custom_alerts_error appears only beside a block
 // that does not decode, so it is compared as present-or-absent too.
-var factsFields = []string{"custom_alerts", "custom_alerts_error", "custom_alerts_finding", "routing", "metadata"}
+var factsFields = []string{"custom_alerts", "custom_alerts_error", "custom_alerts_finding", "routing", "metadata", "expected_exporters"}
 
 func factsTenants(t *testing.T, stdout string) map[string]map[string]json.RawMessage {
 	t.Helper()
@@ -55,7 +56,8 @@ func factsTenants(t *testing.T, stdout string) map[string]map[string]json.RawMes
 // exits 0 on a tree whose /metrics cannot be gathered in part of the day
 // (the default mode exits 2 at an instant there), writes nothing but its
 // fields, and each field is what the default mode writes at an instant
-// /metrics can be gathered at — `_metadata` as `values._metadata` — also for
+// /metrics can be gathered at — `_metadata` as `values._metadata`,
+// `_expected_exporters` as `values._expected_exporters` (#4097) — also for
 // a `_custom_alerts` and a `_metadata` that do not decode.
 func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 	t.Parallel()
@@ -81,12 +83,13 @@ func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 			}
 		}
 		var vals struct {
-			Metadata json.RawMessage `json:"_metadata"`
+			Metadata          json.RawMessage `json:"_metadata"`
+			ExpectedExporters json.RawMessage `json:"_expected_exporters"`
 		}
 		if err := json.Unmarshal(values[tenant]["values"], &vals); err != nil {
 			t.Fatal(err)
 		}
-		theirs := map[string]json.RawMessage{"metadata": vals.Metadata}
+		theirs := map[string]json.RawMessage{"metadata": vals.Metadata, "expected_exporters": vals.ExpectedExporters}
 		for _, field := range factsFields[:4] {
 			theirs[field] = values[tenant][field]
 		}
@@ -115,7 +118,10 @@ func TestServedConfigFacts_NoInstantAndTheDefaultModesFields(t *testing.T) {
 	// not decode, and a `_metadata` read as written.
 	if !strings.Contains(string(facts["tc"]["custom_alerts"]), `"served"`) ||
 		facts["tbad"]["custom_alerts_error"] == nil ||
-		!strings.Contains(string(facts["tc"]["metadata"]), `"mariadb"`) ||
+		!strings.Contains(string(facts["tc"]["metadata"]), `"team-c"`) ||
+		compactJSON(t, facts["tc"]["expected_exporters"]) != `["mariadb","nginx"]` ||
+		compactJSON(t, facts["tx"]["expected_exporters"]) != `[]` ||
+		strings.Contains(string(facts["tc"]["metadata"]), "db_type") ||
 		!strings.Contains(string(facts["tr"]["routing"]), `"https://hooks.example.com/tr"`) {
 		t.Fatalf("fixture did not exercise what it is for: %s", stdout)
 	}
@@ -191,4 +197,14 @@ func TestServedConfigFacts_TenantSubsetAndOneWarnAndNoInstant(t *testing.T) {
 	if _, ok := doc["at"]; ok {
 		t.Errorf("--config-facts document carries at = %s; it reads no instant", doc["at"])
 	}
+}
+
+// compactJSON is raw without its whitespace.
+func compactJSON(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := json.Compact(&b, raw); err != nil {
+		t.Fatal(err)
+	}
+	return b.String()
 }
