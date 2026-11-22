@@ -472,9 +472,9 @@ keys:
     desc: Current connections warning
     metric_class: saturation
     arming: operator
-    portability: ratio_pending
-    portability_reason: "An absolute connection count does not carry across deployments; the portable form is a share of current plus available connections, pending #1320"
-    portability_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320"
+    portability: site_specific
+    portability_reason: "A healthy connection count depends on the workload and the pool sizes in front of the database. The share of current plus available connections is a separate alert that needs no value, MongoDBConnectionSaturation (80%)"
+    portability_reason_zh: "正常的連線數取決於工作負載與資料庫前面的連線池大小。佔「已用＋可用」連線的比例另有一條不必填值的告警 MongoDBConnectionSaturation（80%）"
   mongodb_replication_lag:
     pack: mongodb
     tier: defaults
@@ -637,9 +637,9 @@ keys:
     desc: Active sessions warning
     metric_class: saturation
     arming: operator
-    portability: ratio_pending
-    portability_reason: "An absolute session count does not carry across deployments (#1176 measured a benign peak of 240); the portable form is a share of the SESSIONS limit, pending #1320"
-    portability_reason_zh: "絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待 #1320"
+    portability: site_specific
+    portability_reason: "A healthy active-session count depends on the workload and the pool sizes in front of the database (#1176 measured a benign peak of 240). The share of the SESSIONS limit is a separate alert that needs no value, OracleHighSessionUtilization (85%)"
+    portability_reason_zh: "正常的 active session 數取決於工作負載與資料庫前面的連線池大小（#1176 量到良性尖峰 240）。佔 SESSIONS 上限的比例另有一條不必填值的告警 OracleHighSessionUtilization（85%）"
     value_counterexample:
       issue: 1176
       direction: over_fire
@@ -924,9 +924,9 @@ keys:
     desc: Active TCP connections warning
     metric_class: saturation
     arming: operator
-    portability: ratio_pending
-    portability_reason: "An absolute connection count does not carry across deployments; the limit (max_connections) is not exported today, so #1320 decides the denominator"
-    portability_reason_zh: "絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定"
+    portability: site_specific
+    portability_reason: "A healthy connection count depends on the workload and the pool sizes in front of the server, and there is no ceiling to take a share of: ClickHouse's /metrics endpoint does not export max_connections (read in v25.8.1.5101-lts: it writes system.metrics, events, asynchronous metrics and errors only)"
+    portability_reason_zh: "正常的連線數取決於工作負載與 server 前面的連線池大小，而且沒有可以拿來算比例的上限：ClickHouse 的 /metrics 不匯出 max_connections（讀 v25.8.1.5101-lts 原始碼：只寫出 system.metrics、events、asynchronous metrics 與 errors）"
   clickhouse_max_part_count:
     pack: clickhouse
     tier: optional_overrides

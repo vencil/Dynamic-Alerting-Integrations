@@ -94,6 +94,7 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_compat import require_git_project_root  # noqa: E402  (#2852)
 
 _COMMENT_LINE = re.compile(r"^\s*#")
 _SET_WORD = re.compile(r"(?<![\w$.-])set(?![\w-])")
@@ -242,11 +243,14 @@ def scan_repo(root: Path) -> List[FileResult]:
 
 
 def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+    """The default scan root: the tree this file sits in, as git agrees.
+
+    ⛔ Not "the nearest `.git` above this file", and no `parents[3]` fallback:
+    a copy vendored into another repository found the OUTER `.git` and then
+    measured the outer repo's tracked scripts as its own (#2852). An explicit
+    `--root` is taken as given and never comes through here.
+    """
+    return require_git_project_root(_THIS_DIR)
 
 
 def main(argv: Optional[List[str]] = None) -> "int | Report":

@@ -225,8 +225,8 @@ curl -s "http://localhost:9090/api/v1/label/__name__/values" | \
 # 確認 Prometheus 可達
 curl -s http://localhost:9090/-/healthy
 
-# 確認 prefix-mapping.yaml 格式正確
-python3 -c "import yaml; print(yaml.safe_load(open('migration_output/.migration/prefix-mapping.yaml')))"
+# prefix-mapping.yaml 不必另外檢查：da-tools validate 以 --mapping 讀它時就照 YAML 規格嚴格讀，
+# 打不開、不是 YAML、同一層有重複的鍵、頂層不是 mapping，都會點名旗標與原因、以 rc 2 結束
 
 # K8s Job 重啟
 kubectl delete job shadow-monitor -n monitoring

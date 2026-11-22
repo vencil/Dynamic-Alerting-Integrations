@@ -609,8 +609,9 @@ import sys, json
 try:
     status = json.load(sys.stdin)
     cfg = status.get('config', {}).get('original', '')
-    import yaml
-    parsed = yaml.safe_load(cfg)
+    sys.path.insert(0, '${SCRIPT_DIR}/tools')
+    from _lib_yaml_strict import strict_safe_load
+    parsed = strict_safe_load(cfg)
     rules = parsed.get('inhibit_rules', [])
     print(len(rules))
 except: print(0)

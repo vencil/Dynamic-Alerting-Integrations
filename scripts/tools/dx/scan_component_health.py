@@ -53,14 +53,12 @@ from _lib_io import (  # noqa: E402  (#1789; #3982)
     ensure_dir, exit_on_output_write_error, write_operator_output)
 from _lib_validation import operator_file_type  # noqa: E402  (#3982)
 
-# --- 自動偵測 repo 根目錄（從 script 位置往上找 .git） ---
-def _find_repo_root(start: Path) -> Path:
-    for p in [start, *start.parents]:
-        if (p / ".git").exists():
-            return p
-    raise RuntimeError(f"Cannot locate repo root from {start}")
+from _lib_compat import require_git_project_root  # noqa: E402  (#2852)
 
-REPO = _find_repo_root(Path(__file__).resolve())
+# --- repo 根目錄：本檔所在的 scripts/tools 樹，且須是 git 自己的工作樹根 ---
+# ⛔ 不再「往上找最近的 .git」：被 vendor 進別的 repo 時會找到外層的 .git，
+# 接著用外層的 git log 算活躍度（#2852）。非標準佈局一律 exit 2。
+REPO = require_git_project_root(_THIS_DIR)
 REGISTRY = REPO / "docs/assets/tool-registry.yaml"
 E2E_DIR = REPO / "tests/e2e"
 # TRK-242 monorepo restructure: portal source moved from docs/ to

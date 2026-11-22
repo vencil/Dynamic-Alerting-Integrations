@@ -94,7 +94,7 @@ spelled=$(grep -cE '^#[[:space:]]*GRANT[[:space:]]' "$QUERIES" || true)
 [[ "$spelled" -eq ${#GRANTS[@]} ]] \
   || cannot_run "$QUERIES has $spelled GRANT comment lines, ${#GRANTS[@]} spelled '#   GRANT … ' with no ';'"
 # Query names, read the way query-exporter reads them (a YAML mapping).
-want=$("$PY" -c 'import sys, yaml; print(len(yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["queries"]))' "$QUERIES") \
+want=$("$PY" -c 'import sys; sys.path.insert(0, sys.argv[2]); from _lib_yaml_strict import strict_safe_load as L; print(len(L(open(sys.argv[1], encoding="utf-8"))["queries"]))' "$QUERIES" "$ROOT/scripts/tools") \
   || cannot_run "cannot read the queries of $QUERIES"
 
 WORK=$(mktemp -d)
