@@ -606,8 +606,6 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // here and is refused unless declared: `ResolveRouting` reads only the exact
 // key `_routing`, and `_routing` being a valid reserved prefix means
 // `ValidateTenantKeys` does not warn about `_routing_bogus: 5` either.
-// criticalKeySuffix mirrors pkg/config's unexported `criticalSuffix`.
-const criticalKeySuffix = "_critical"
 
 // criticalBaseValued is resolveCriticalRows' entry condition for a critical
 // key with base base (criticalRowBase), asked of the config the resolver will
