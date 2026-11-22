@@ -34,8 +34,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONTEXT = "helm/vector/projection-gate"
 _VALUES = "helm/vector/values.yaml"
 
-_RECIPE_DIGEST = "490b5eae035c43597f25572fdf2b947fe3aeb14dd6208c55e050bc103ad4d006"
-_EXPECTED_TAG = "0.1.3"
+_RECIPE_DIGEST = "86d9bb647e6ef80907454e050b492f7c644a2925d5d4dcb1f1e905799e26464d"
+_EXPECTED_TAG = "0.1.4"
 
 
 def _instruction_lines(dockerfile: Path) -> list[str]:
@@ -114,7 +114,25 @@ def test_copy_parser_sees_both_shipped_scripts() -> None:
     """The digest is only as good as the COPY parser; pin what it finds today."""
     body = _instruction_lines(REPO_ROOT / _CONTEXT / "Dockerfile")
     assert sorted(_context_copy_sources(body)) == [
-        "_lib_yaml_strict.py",
         "serve_metrics.py",
         "verify_tenant_projections.py",
     ]
+
+
+def test_the_registry_reader_is_tenant_apis_release() -> None:
+    """#4164: the registry-reader init-container runs tenant-api's own binary,
+    so the registry has one reader. Its image is tenant-api's published one —
+    the chart's repository, tagged v<appVersion> as release.yaml publishes it
+    (helm/tenant-api/Chart.yaml #3228) — and moves with each tenant-api
+    release, or the gate reads the registry with a stale parse."""
+    import sys
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
+    from _lib_yaml_strict import strict_safe_load
+    vector = strict_safe_load((REPO_ROOT / _VALUES).read_text(encoding="utf-8"))
+    reader = vector["projectionGate"]["registryReader"]["image"]
+    chart = strict_safe_load((REPO_ROOT / "helm/tenant-api/Chart.yaml").read_text(encoding="utf-8"))
+    api = strict_safe_load((REPO_ROOT / "helm/tenant-api/values.yaml").read_text(encoding="utf-8"))
+    assert reader["repository"] == api["image"]["repository"], reader
+    assert reader["tag"] == f"v{chart['appVersion']}", (
+        f"{_VALUES} projectionGate.registryReader.image.tag is {reader['tag']!r}; tenant-api's "
+        f"release is v{chart['appVersion']} — bump it with tenant-api")

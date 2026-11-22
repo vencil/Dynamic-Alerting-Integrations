@@ -829,10 +829,12 @@ kubectl rollout restart ds/<vector> -n <ns>
 
 #### 8.9.2 `VectorRegistryUnreadableAtBoot`（critical，ghost race / registry 讀不到）
 
-gate boot 時無法**信任** registry（degrade 到 0:0，`category="registry_unreadable"`）。最陰險的觸發＝**fresh-deploy 順序競態**：Vector 早於 registry ConfigMap 同步就啟動（`optional:true` 讓 pod 起得來）→ gate 讀到缺檔→降級，而 **one-shot-at-boot** 使它在 registry 之後到達仍**維持降級**（症狀：全綠、但租戶路由永久靜默關）。也可能是 registry 格式壞/schema 較新（fail-closed 拒驗）。復原：
+gate boot 時無法**信任** registry（degrade 到 0:0，`category="registry_unreadable"`）。最陰險的觸發＝**fresh-deploy 順序競態**：Vector 早於 registry ConfigMap 同步就啟動（`optional:true` 讓 pod 起得來）→ gate 讀到缺檔→降級，而 **one-shot-at-boot** 使它在 registry 之後到達仍**維持降級**（症狀：全綠、但租戶路由永久靜默關）。也可能是 tenant-api 拒收這份 registry：registry 由 gate 之前的 init-container `projection-gate-registry` 以 tenant-api 自己的讀法（`tenant-api state show`）判定（[#4164](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4164)），schema 較新、兩個租戶共用同一個 id、id 不小於 `next_account_id` 都是拒收；`projectionGate.registryReader.image` 是早於 #4164 的 tenant-api 版本時，讀不到 ConfigMap 掛載（key 是 symlink），一律降級。復原：
 
 ```bash
-# 1) 確認 registry ConfigMap 存在且 well-formed（projectionGate.registry.configMapName 指的那個）
+# 1) 看 tenant-api 怎麼判（拒收原因在 gate 的 log 裡，原文照錄）
+kubectl logs <vector-pod> -n <ns> -c projection-gate
+#    確認 registry ConfigMap 存在（projectionGate.registry.configMapName 指的那個）
 kubectl get configmap <registry-cm> -n <ns> -o jsonpath='{.data._account_registry\.yaml}' | head
 # 2) 確認無誤後，滾動 DaemonSet 讓 one-shot gate 對「現在存在」的 registry 重跑：
 kubectl rollout restart ds/<vector> -n <ns>
@@ -841,7 +843,7 @@ kubectl rollout restart ds/<vector> -n <ns>
 
 #### 8.9.3 `VectorProjectionGateStuck`（critical，gate init 卡死 → rollout 全卡）
 
-**任何**讓 gate init **無法跑完**的狀態：pod 卡在 Init → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container="projection-gate", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。三類成因：
+**任何**讓 gate init **無法跑完**的狀態：pod 卡在 Init → Vector 與 exposer sidecar **皆不啟動**（故 verdict metric 無人 serve，degrade alert 看不到 → 本條改靠 KSM `kube_pod_init_container_status_waiting_reason{container=~"projection-gate|projection-gate-registry", reason=~"CrashLoopBackOff|ImagePullBackOff|ErrImagePull|InvalidImageName|CreateContainerConfigError"}`）。DaemonSet 上 `maxUnavailable` 會**卡死整個 rollout**（rolling 中的 node 失去日誌、未滾到的 node 維持舊 config＝split-brain）。三類成因：
 - **`enforce` + config-bug mismatch**（原始場景）：gate 依設計非零退出 → `CrashLoopBackOff`
 - **image 打錯/清壞**（任何模式；Gemini #970 空殼 review 揪出——原本只 match CrashLoopBackOff 對這類**零告警**）→ `ImagePullBackOff`/`ErrImagePull`/`InvalidImageName`
 - **args/entrypoint 壞掉、staging ConfigMap 缺失**（任何模式）→ `CrashLoopBackOff`/`CreateContainerConfigError`
@@ -853,7 +855,8 @@ kubectl rollout restart ds/<vector> -n <ns>
 kubectl describe pod <stuck-vector-pod> -n <ns> | grep -A3 "State:\|Reason:"
 # 2a) CrashLoopBackOff（enforce config-bug）→ 看 gate 退出原因、REVERT 錯的 tenantProjections
 kubectl logs <vector-pod> -c projection-gate --previous
-# 2b) ImagePullBackOff 類 → 修 projectionGate.image（tag/repo 打錯、或 overlay 清壞了 image）
+# 2b) ImagePullBackOff 類 → 修 projectionGate.image（tag/repo 打錯、或 overlay 清壞了 image）；
+#     卡在 projection-gate-registry 則是 tenant-api 映像拉不到 → 修 projectionGate.registryReader.image
 # 2c) CreateContainerConfigError → staging/registry ConfigMap 名字或存在性
 kubectl delete pod <stuck-vector-pod> -n <ns>   # 修好後，讓它以正確 spec 重排
 ```

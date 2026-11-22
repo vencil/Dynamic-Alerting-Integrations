@@ -3057,7 +3057,8 @@ _NAMESPACE_MATCHER_RE = re.compile(r'(?<!\w)namespace\s*=\s*"([^"]+)"')
 _EDGE_LOCAL_BY_SELECTOR: dict[str, str] = {
     "VectorProjectionGateStuck":
         'reads kube_pod_init_container_status_waiting_reason with NO namespace '
-        'selector; container="projection-gate" exists only in the Vector '
+        'selector; the gate init-containers (container=~"projection-gate|'
+        'projection-gate-registry") exist only in the Vector '
         f'DaemonSet ({VECTOR_CHART}), so the KSM that sees it is the '
         "EDGE cluster's, not central's (helm/vector/templates/daemonset.yaml)",
 }

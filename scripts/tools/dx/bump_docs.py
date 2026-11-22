@@ -474,6 +474,20 @@ def _build_tenant_api_rules():
         "require_match": True,
     })
 
+    # helm/vector's projection-gate registry reader (#4164) runs tenant-api's
+    # published image, so the registry has one reader: it moves with the
+    # tenant-api release (tests/shared/test_vector_projection_gate_image_tag.py
+    # pins it to `v<appVersion>`).
+    rules.append({
+        "file": "helm/vector/values.yaml",
+        "desc": "vector projection-gate registry reader (tenant-api image tag)",
+        # A fixed-width lookbehind keeps the match the tag alone: --check
+        # compares the match with the replacement text, no backreferences.
+        "pattern": r'(?<=\n      repository: ghcr\.io/vencil/tenant-api\n      tag: )"v' + _SEMVER + '"',
+        "replacement": lambda v: f'"v{v}"',
+        "require_match": True,
+    })
+
     # da-tools README versioning table — the tenant-api row.
     #
     # Every OTHER row of that five-row table already had a dedicated rule
