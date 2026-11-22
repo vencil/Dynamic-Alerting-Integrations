@@ -225,8 +225,9 @@ Possible causes: new Recording Rule not yet evaluated (wait 1–2 evaluation int
 # Confirm Prometheus is reachable
 curl -s http://localhost:9090/-/healthy
 
-# Confirm prefix-mapping.yaml format is valid
-python3 -c "import yaml; print(yaml.safe_load(open('migration_output/.migration/prefix-mapping.yaml')))"
+# prefix-mapping.yaml needs no separate check: da-tools validate reads it strictly (by the YAML
+# spec) when given --mapping, and names the flag and the reason with rc 2 if it cannot be opened,
+# is not YAML, repeats a key in one mapping, or is not a mapping at the top
 
 # Restart K8s Job
 kubectl delete job shadow-monitor -n monitoring

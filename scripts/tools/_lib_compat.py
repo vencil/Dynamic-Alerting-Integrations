@@ -186,9 +186,10 @@ harden_stdout_errors()
 # root is found by structure instead; see `find_project_root`.
 #
 # These markers remain only as a test-isolation guard (a staging dir must not
-# sit inside any project tree). Tools that still take the nearest `.git` as
-# their root are listed and classified in #2852; a dev tool moving off it
-# uses `require_project_root`.
+# sit inside any project tree). A dev tool reads its own tree through
+# `require_project_root`, or `require_git_project_root` when it also runs git
+# there (#2852); taking "the nearest `.git` above me" as the root is held off
+# by tests/shared/test_no_nearest_git_root.py.
 PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
 
 
@@ -278,4 +279,123 @@ def require_project_root(start) -> "Path":
         print(f"ERROR: {start} is not inside a scripts/tools tree, so there "
               f"is no repo to read", file=sys.stderr)
         raise SystemExit(2)
+    return root
+
+
+def require_git_project_root(start) -> "Path":
+    """``require_project_root`` for a dev tool that also runs git on its tree.
+
+    The structural root (``require_project_root``) says which tree the tool
+    sits in; it says nothing about which repository a ``git ls-files`` /
+    ``git log`` run there reads. Two things can make git answer for another
+    repository, and both are refused here (#2852):
+
+    1. The tree is not the root of a work tree of its own — a copy vendored
+       into another repository has no ``.git``, so git walks up and answers
+       for the ENCLOSING one. So git is asked where the work tree containing
+       the root begins (``rev-parse --show-toplevel``), and that must BE the
+       root. git's repo-local environment variables (the names come from
+       ``git rev-parse --local-env-vars``, as in ``ops/_gsvc_child.py``) are
+       dropped for that question: with ``GIT_DIR`` set, ``--show-toplevel``
+       reports the ``-C`` directory itself, whatever it is.
+    2. The caller's environment points git elsewhere. The tool's own git
+       runs inherit that environment — deliberately: inside this repo's own
+       ``git commit -a`` hook, ``GIT_INDEX_FILE`` names ``index.lock``, and
+       only it holds what is being committed. So an inherited ``GIT_DIR``
+       must be this tree's git dir (``rev-parse --absolute-git-dir``), an
+       inherited ``GIT_INDEX_FILE`` must sit in that git dir, and an
+       inherited ``GIT_WORK_TREE`` must be the root. A hook of an OUTER
+       repository exports its own, and would have every later git read it.
+
+    Kept from the dropped list: the ``GIT_CONFIG*`` carriers (``GIT_CONFIG``,
+    ``GIT_CONFIG_PARAMETERS``, ``GIT_CONFIG_COUNT`` / ``_KEY_n`` /
+    ``_VALUE_n``). They carry configuration, not where the repository is, and
+    they are how ``safe.directory`` reaches git for a clone owned by another
+    user; without them that clone is "dubious ownership".
+
+    Paths are compared with ``os.path.samefile`` (the same file on disk), not
+    as realpath strings, which differ on case-folding filesystems and 8.3
+    names while naming one directory. A relative inherited path is read
+    against the root, where the tools' own git resolves it (``-C <root>`` /
+    ``cwd=<root>``); a path is never normalized first, so ``..`` after a
+    symlink resolves on disk as git opens it; a gitfile ``GIT_DIR`` (a
+    linked worktree's ``.git``) is compared by the directory it points at.
+
+    Any refusal — another root, a foreign inherited variable, git missing or
+    failing or not listing its variables — prints one line naming the
+    structural root and what git or the variable said, and exits 2
+    (``_lib_exitcodes``' EXIT_CALLER_ERROR, a literal for the same reason as
+    above).
+    """
+    import os
+    import subprocess
+
+    root = require_project_root(start)
+
+    def _refuse(why: str):  # never returns: SystemExit(2)
+        print(f"ERROR: {root} cannot be read as a git work tree of its own "
+              f"({why}); this tool reads git ls-files / git log and would "
+              f"otherwise read another repository (#2852)", file=sys.stderr)
+        raise SystemExit(2)
+
+    def _git(*args: str, env=None):
+        try:
+            return subprocess.run(["git", *args], cwd=str(root), env=env,
+                                  capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            _refuse(f"`git {' '.join(args)}` timed out")
+        except OSError as exc:  # FileNotFoundError: no git; and the rest
+            _refuse(f"cannot run git: {exc}")
+
+    def _answer(proc, what: str) -> str:
+        if proc.returncode != 0:
+            detail = os.fsdecode(proc.stderr).strip().splitlines()
+            _refuse(f"`git {what}`: "
+                    f"{detail[0] if detail else f'exit {proc.returncode}'}")
+        return os.fsdecode(proc.stdout).rstrip("\n")
+
+    def _same(a: str, b, what: str) -> bool:
+        try:
+            return os.path.samefile(a, b)
+        except OSError as exc:
+            _refuse(f"{what} {a!r} cannot be compared: {exc}")
+
+    names = _answer(_git("rev-parse", "--local-env-vars"),
+                    "rev-parse --local-env-vars").split()
+    if "GIT_DIR" not in names:
+        # An empty or garbled list would keep every variable it failed to
+        # name; fail closed rather than check with GIT_DIR still set.
+        _refuse("`git rev-parse --local-env-vars` did not list GIT_DIR")
+    env = {k: v for k, v in os.environ.items()
+           if k not in names or k.startswith("GIT_CONFIG")}
+
+    top = _answer(_git("-C", str(root), "rev-parse", "--show-toplevel", env=env),
+                  "rev-parse --show-toplevel")
+    if not _same(top, root, "git's work tree root"):
+        _refuse(f"git reports the work tree root {top}")
+
+    git_dir = _answer(_git("-C", str(root), "rev-parse", "--absolute-git-dir",
+                           env=env), "rev-parse --absolute-git-dir")
+    inherited = (
+        ("GIT_DIR", lambda p: p, git_dir, "is not this tree's git dir"),
+        ("GIT_INDEX_FILE", os.path.dirname, git_dir,
+         "is not inside this tree's git dir"),
+        ("GIT_WORK_TREE", lambda p: p, str(root), "is not this tree's root"),
+    )
+    for var, where, expected, label in inherited:
+        value = os.environ.get(var)
+        if not value:
+            continue
+        # A relative value is taken against the root: the tools run their
+        # git with `-C <root>` / `cwd=<root>`, where git resolves it. Never
+        # normalized: `..` after a symlink must resolve on disk, as git
+        # opens it, so samefile sees what git will see.
+        path = value if os.path.isabs(value) else os.path.join(str(root), value)
+        if var == "GIT_DIR" and os.path.isfile(path):
+            # A gitfile (a linked worktree's `.git`) is a GIT_DIR git
+            # accepts: compare the directory it points at.
+            path = _answer(_git("rev-parse", "--resolve-git-dir", path, env=env),
+                           f"rev-parse --resolve-git-dir {path}")
+        if not _same(where(path) or ".", expected, f"inherited {var}"):
+            _refuse(f"inherited {var}={value} {label} {expected}")
     return root
