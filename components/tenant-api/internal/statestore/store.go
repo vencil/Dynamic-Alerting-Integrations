@@ -1,6 +1,6 @@
 // Package statestore holds the state tenant-api itself maintains — groups,
-// saved views, the federation whitelist, per-tenant federation subsets and
-// the AccountID registry — outside the conf.d git tree (#2856).
+// saved views, the federation whitelist, per-tenant federation subsets,
+// per-tenant log visibility selections and the AccountID registry — outside the conf.d git tree (#2856).
 //
 // These used to be files in conf.d committed to the pod's local base branch.
 // Nothing ever pushed those commits (PR mode pushes tenant PR branches only),
@@ -57,6 +57,36 @@ func SubsetTenant(key string) (string, bool) {
 // SubsetPrefix is the Keys prefix that lists every federation subset.
 const SubsetPrefix = subsetPrefix
 
+// LogVisibilityPrefix + tenant id + ".yaml" is a tenant's log visibility
+// selection (ADR-021 §租戶自選的可見度子集): the fields of its tenant log
+// copy it chose to keep. Same key shape as a federation subset, a different
+// prefix, so neither key family can be mistaken for the other.
+const LogVisibilityPrefix = "_log_visibility."
+
+// LogVisibilityKey is the record key of tenantID's log visibility selection.
+func LogVisibilityKey(tenantID string) string { return LogVisibilityPrefix + tenantID + subsetSuffix }
+
+// LogVisibilityTenant is LogVisibilityKey's inverse: the tenant id of a log
+// visibility key, and false for any other key.
+func LogVisibilityTenant(key string) (string, bool) {
+	if !strings.HasPrefix(key, LogVisibilityPrefix) || !strings.HasSuffix(key, subsetSuffix) {
+		return "", false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(key, LogVisibilityPrefix), subsetSuffix)
+	if id == "" {
+		return "", false
+	}
+	return id, true
+}
+
+// logVisibilityEntityPrefix + tenant id is the Meta.Entity of a log
+// visibility write.
+const logVisibilityEntityPrefix = "log-visibility/"
+
+// LogVisibilityEntity is the Meta.Entity of a write to tenantID's log
+// visibility selection.
+func LogVisibilityEntity(tenantID string) string { return logVisibilityEntityPrefix + tenantID }
+
 // subsetEntityPrefix + tenant id is the Meta.Entity of a federation subset
 // write.
 const subsetEntityPrefix = "federation/"
@@ -69,17 +99,19 @@ func SubsetEntity(tenantID string) string { return subsetEntityPrefix + tenantID
 // AccountID registry, an import). The change-event stream (#3123) uses it to
 // send a state write only to callers who may read that tenant.
 func EntityTenant(entity string) (string, bool) {
-	id, ok := strings.CutPrefix(entity, subsetEntityPrefix)
-	if !ok || id == "" {
-		return "", false
+	for _, prefix := range []string{subsetEntityPrefix, logVisibilityEntityPrefix} {
+		if id, ok := strings.CutPrefix(entity, prefix); ok && id != "" {
+			return id, true
+		}
 	}
-	return id, true
+	return "", false
 }
 
 // Meta describes one write for the audit event and the change notification.
 type Meta struct {
 	// Entity names what changed in the change notification ("groups",
-	// "views", "federation-policy", "federation/<id>", "account-registry").
+	// "views", "federation-policy", "federation/<id>", "log-visibility/<id>",
+	// "account-registry").
 	Entity string
 	// Author is the caller's identity (email); empty for system writes.
 	Author string

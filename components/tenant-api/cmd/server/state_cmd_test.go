@@ -12,6 +12,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
+	"github.com/vencil/tenant-api/internal/federation/logvis"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/staterestore"
@@ -186,7 +187,10 @@ var goodState = map[string]string{
 	"_views.yaml":             "views:\n  v1:\n    label: V1\n    filters:\n      tenant: t-a\n",
 	"_federation_policy.yaml": "whitelist:\n  - metric: up\n",
 	"_federation.t-a.yaml":    "metrics: [up]\n",
-	"_account_registry.yaml":  "schema_version: v1\nnext_account_id: 1002\nallocations:\n  t-a: 1000\n  t-b: 1001\n",
+	// A log visibility record parses as a selection, not as a metric subset
+	// (both are per-tenant keys of the same shape).
+	"_log_visibility.t-a.yaml": "fields: [status]\n",
+	"_account_registry.yaml":   "schema_version: v1\nnext_account_id: 1002\nallocations:\n  t-a: 1000\n  t-b: 1001\n",
 }
 
 // parsedJSON is what the parse function the server uses makes of a record,
@@ -206,6 +210,8 @@ func parsedJSON(t *testing.T, key, data string) []byte {
 		v, err = fedpolicy.ParsePolicyConfig([]byte(data))
 	case "_account_registry.yaml":
 		v, err = account.Parse([]byte(data))
+	case "_log_visibility.t-a.yaml":
+		v, err = logvis.Parse([]byte(data))
 	default:
 		v, err = fedpolicy.ParseSubset([]byte(data))
 	}

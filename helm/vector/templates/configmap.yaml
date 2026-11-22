@@ -639,6 +639,11 @@ data:
       {{-   if hasKey $seenTid $tid }}{{- fail (printf "tenantProjections: duplicate tenantId %q — it would mis-route to a foreign AccountID. Each tenantId must be unique." $tid) }}{{- end }}
       {{-   $_ := set $seenAcct $acct true }}
       {{-   $_ := set $seenTid $tid true }}
+      {{-   if kindIs "slice" $p.visibleFields }}
+      {{-     range $f := $p.visibleFields }}
+      {{-       if not (has $f $.Values.tenantProjectionKeepFields) }}{{- fail (printf "tenantProjections: tenantId %q lists visibleFields entry %q, which is not in tenantProjectionKeepFields. A tenant's selection can only narrow the platform allowlist, never add to it (ADR-021); copy the selection from tenant-api again, or drop the entry." $tid (toString $f)) }}{{- end }}
+      {{-     end }}
+      {{-   end }}
       {{- end }}
       # ── (b) Tenant-sanitized projection — ADR-021 §平台副本與租戶副本 / #609 ────────
       # FAN-OUT, not a move: the platform full copy keeps flowing to the
@@ -775,10 +780,50 @@ data:
           # fields) is structurally ABSENT. Adding a field to
           # `tenantProjectionKeepFields` is the security-reviewed action — this
           # inverts the old "remember to drop" burden into "opt a field in".
+          {{- /* Tenant-selected visibility (ADR-021 §租戶自選的可見度子集). Rendered
+                 only when some projection carries `visibleFields`, so a chart
+                 with no selection renders the exact allowlist loop it always had. */}}
+          {{- $narrowing := false }}
+          {{- range $p := .Values.tenantProjections }}
+          {{-   if kindIs "slice" $p.visibleFields }}{{ $narrowing = true }}{{ end }}
+          {{- end }}
+          {{- $always := .Values.tenantProjectionAlwaysVisibleFields | default list }}
+          {{- if $narrowing }}
+          # ── Tenant-selected visibility (ADR-021 §租戶自選的可見度子集) ──────────
+          # A tenant may keep a SUBSET of the allowlist below in its own copy;
+          # the selection lives in tenant-api's state store and is copied into
+          # `tenantProjections[].visibleFields`. It can only NARROW: the loop
+          # below still iterates tenantProjectionKeepFields and nothing else, so
+          # a field outside the allowlist cannot be added by any selection (the
+          # render guard above also refuses one). Always-visible fields
+          # (tenantProjectionAlwaysVisibleFields: the partition identity, the
+          # event time and the log_event_id join key) are kept regardless.
+          # A tenant with no entry here keeps every allowlisted field.
+          visible_map = {
+          {{- range $p := .Values.tenantProjections }}
+          {{-   if kindIs "slice" $p.visibleFields }}
+            {{ $p.tenantId | quote }}: {{ $p.visibleFields | toJson }},
+          {{-   end }}
+          {{- end }}
+          }
+          narrow = false
+          visible = []
+          v = get(visible_map, [tid]) ?? null
+          if v != null {
+            narrow = true
+            # A value that is somehow not an array narrows to nothing but the
+            # always-visible fields (fail-closed), never back to everything.
+            visible = array(v) ?? []
+          }
+          {{- end }}
           kept = {}
           kept.account_id = aid   # the TRUSTED GitOps map value, never the payload's
           {{- range $f := .Values.tenantProjectionKeepFields }}
+          {{-   if and $narrowing (not (has $f $always)) }}
+          if exists(.{{ $f }}) && (!narrow || includes(visible, {{ $f | quote }})) {
+          {{-   else }}
           if exists(.{{ $f }}) {
+          {{-   end }}
             kept.{{ $f }} = .{{ $f }}
           }
           {{- end }}

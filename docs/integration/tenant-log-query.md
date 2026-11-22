@@ -101,6 +101,19 @@ tenantProjections:
 >   GitOps 版控**投影**，靠 PR review 對照 registry 把關（Phase 1 為 static-N 手抄；Phase 2 (a)
 >   會 from-registry 自動產生）。
 
+租戶若設定了自己的可見度選擇（§5.1），同一筆再加 `visibleFields`，內容從 tenant-api 抄：
+
+```yaml
+tenantProjections:
+  - tenantId: "<租戶 id>"
+    accountId: 1000
+    visibleFields: [status, path]   # = GET /api/v1/tenants/<租戶 id>/federation/log-visibility 回的 fields
+```
+
+- `fields` 是 `null`（租戶沒選）就**不要**寫 `visibleFields`：沒寫＝平台策展的全部欄位，含平台日後新增的。
+- `visibleFields` 只能縮小：列了不在 `tenantProjectionKeepFields` 的欄位，`helm template` 直接失敗。
+- 抄寫沒有機制比對 tenant-api 與 values；租戶改了選擇要再抄一次，DaemonSet 滾動後才套用到新寫入的列。
+
 詳細運作（fan-out 雙寫、淨化、Layer-1 護欄、`vector test` 自證）見
 [平台日誌彙整 runbook §8](../internal/platform-log-aggregation-runbook.md)。
 
@@ -180,6 +193,34 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 
 完整 tier-1 / tier-2 策展對照（含 enforced SSOT）見
 [2-Tier 日誌可見度 Catalogue](../internal/log-visibility-2tier-catalogue.md)。
+
+### 5.1 選擇你的副本要保留哪些欄位
+
+上面列的欄位是平台策展的上限。你可以從中挑自己要保留的子集，例如不想讓自己的查詢文字（`query`）
+或 token id 留在分區裡、被你所有的 logs token 持有者讀到。選擇經 tenant-api 自助管理，需該租戶的
+**admin**（與簽發 token 同一個門檻）：
+
+```text
+GET /api/v1/tenants/<你的租戶>/federation/log-visibility
+→ {"tenant_id":"<你的租戶>","fields":null,
+   "visible_fields":["tenant_id","log_type","log_event_id","timestamp","status","method","path","query","token_id","duration_ms","response_flags"],
+   "always_visible_fields":["tenant_id","log_type","log_event_id","timestamp"],
+   "selectable_fields":["status","method","path","query","token_id","duration_ms","response_flags"]}
+
+PUT /api/v1/tenants/<你的租戶>/federation/log-visibility
+{"fields": ["status", "path"]}
+```
+
+- **`fields: null`**（從沒設定過也是）＝平台預設：保留全部策展欄位，包括平台日後新增的。要回到預設就
+  `PUT {"fields": null}`。
+- **`fields: []`** 只留四個永遠保留的欄位：`tenant_id`、`log_type`、`timestamp`，以及報修時給值班用的
+  `log_event_id`。這四個不能被選掉，也不必列。
+- 只能從 `selectable_fields` 挑：列了清單外的欄位（例如 `upstream`）、重複的欄位、永遠保留的欄位，或
+  body 帶了 `fields` 以外的鍵，都回 `400`、不寫入。**選擇只會縮小你看到的欄位，不會擴大。**
+- ⚠️ **生效時機**：選擇存在 tenant-api，由 Vector 在**寫入**你的分區時套用——平台要把它抄進投影設定
+  （§2.2），之後新寫入的列才照新選擇；**已經寫進分區的列不會改變**。`GET` 回的是你的選擇，不是
+  Vector 目前實際套用的設定；不確定是否已套用，查一筆最新的列看欄位即可。
+- portal 目前沒有這個設定的畫面，與指標子集相同。
 
 > **值班報修 tip**：你的淨化截圖裡有個 `log_event_id`（time-sortable UUIDv7）。報修時附上它，平台
 > 值班可用它跨分區 join 回平台完整副本拿到 node / 後端等你看不到的資訊——淨化不會拖長排查。

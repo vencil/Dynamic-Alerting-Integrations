@@ -58,6 +58,8 @@ kubectl -n tenant-api patch configmap tenant-api-state --type=json \
 
 並非每個租戶都有 subset（只有曾經設定過 federation 指標子集的租戶才有）。第一行印不出內容就跳過——對不存在的 key 做 `remove`，patch 會失敗。單機（try-local，`TA_STATE_STORE=dir`）則是刪掉 state 目錄裡的 `_federation.<tenant>.yaml` 檔。
 
+日誌可見度選擇（ADR-021 [§租戶自選的可見度子集](../adr/021-tenant-log-query-federation.md)）同理存在 `_log_visibility.<tenant>.yaml`，用同樣兩行把 key 換成 `_log_visibility\.<tenant>\.yaml`（`get`）與 `/data/_log_visibility.<tenant>.yaml`（`remove`）；沒設定過選擇的租戶沒有這個 key。孤兒偵測（`tenant_api_federation_orphaned_*`）目前不涵蓋它。
+
 ⚠️ conf.d 若還留著搬遷前的 `conf.d/_federation/<tenant>.yaml`（或 `.yml`），也在步驟 3 的同一個 PR 裡 `git rm`：tenant-api 啟動時會把 conf.d 裡的舊 subset 檔匯入 state store 中**沒有**該紀錄的位置，所以只刪 key、不刪舊檔，下次重啟它會回來。
 
 > **平台 whitelist（`_federation_policy.yaml` 紀錄）不要動** —— 那是平台層級的、不隨單一租戶 offboarding 改變。只刪 per-tenant 的 `_federation.<tenant>.yaml`。

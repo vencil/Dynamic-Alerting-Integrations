@@ -113,6 +113,21 @@ enforced（runbook §8.1 / §8.3）。
 `query` / `token_id` / `path` / `log_event_id` 等高基數欄位設為 stream field（每個 distinct
 值建一條 stream → RAM 爆，Gemini #894；runbook §8.7）；它們是 queryable data field，非 stream field。
 
+## 租戶自選子集（在 Tier-2 之內再縮小）
+
+ADR-021 [§租戶自選的可見度子集](../adr/021-tenant-log-query-federation.md)：租戶可以從上面的 Tier-2 欄位中選自己的副本保留哪些。它**只會縮小、不會擴大** Tier-2：
+
+| | 在哪 | 誰改 |
+|---|---|---|
+| 租戶的選擇 | tenant-api state store 的 `_log_visibility.<tenant>.yaml`（`GET`／`PUT /api/v1/tenants/{id}/federation/log-visibility`）| 該租戶的 admin |
+| Vector 套用的副本 | `helm/vector/values.yaml` `tenantProjections[].visibleFields` | 平台，從 tenant-api 抄（與抄 `accountId` 同一個 PR 流程）|
+| 永遠保留、不能被選掉的欄位 | `tenantProjectionAlwaysVisibleFields`（`tenant_id` / `log_type` / `log_event_id` / `timestamp`）| 平台 |
+
+- 沒有選擇（無紀錄、`fields: null`、或 `tenantProjections` 項目沒有 `visibleFields`）＝ Tier-2 全部欄位。
+- `tenant_project` 的迴圈仍只走 `tenantProjectionKeepFields`，選擇只能讓某個可選欄位**不被複製**；`visibleFields` 裡出現不在 keepFields 的欄位時 chart 渲染失敗。
+- tenant-api 的可選清單（`components/tenant-api/internal/federation/logvis`）＝ keepFields − always-visible，由 `logvis_test.go` 的 `TestVocabularyMatchesVectorChart` 比對本 chart 的 `values.yaml`。
+- ⚠️ 抄寫沒有機制比對：沒抄或抄舊了，租戶副本保留平台預設或舊選擇（仍在 Tier-2 之內）。
+
 ## 租戶看不到（即使在自己分區）的東西 — 明確邊界
 
 - **他租戶的任何列**：VictoriaLogs `AccountID` 分區硬隔離（gateway 注入已驗證 `AccountID`、
@@ -132,6 +147,8 @@ enforced（runbook §8.1 / §8.3）。
 | 讓某欄位對租戶可見 / 不可見 | `helm/vector/values.yaml` `tenantProjectionKeepFields`（security-reviewed）| 本文件 §Tier-2 表 | `test_log_visibility_catalogue.py`（drift-guard）+ `test_vector_projection_vrl.py`（VRL allowlist）|
 | 讓某 `log_type` 對租戶可見 / 不可見 | Vector `tenant_route` 邏輯 + ADR review | 本文件 §Tier-1 表 | `vector test`（runbook §8.6 negative assertion）|
 | 改 stream field 維度 | `tenantProjectionStreamFields` | 本文件 §Stream fields | `test_vector_projection_vrl.py` |
+| 套用某租戶的可見度選擇 | `tenantProjections[].visibleFields`（從 tenant-api 的 `GET .../federation/log-visibility` 抄 `fields`）| — | render-time `{{ fail }}`（不在 keepFields 的欄位）+ `vector test`（projection_tests.yaml 的 visibleFields 案例）|
+| 改永遠保留的欄位 | `tenantProjectionAlwaysVisibleFields` + tenant-api `logvis.AlwaysVisibleFields`（同一個 PR）| 本文件 §租戶自選子集 | `TestVocabularyMatchesVectorChart` |
 
 > 所有變更走 GitOps commit 歷史（控制平面 audit；ADR-021 §稽核）。
 
