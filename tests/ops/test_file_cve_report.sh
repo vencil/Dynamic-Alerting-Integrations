@@ -241,4 +241,165 @@ cmt18="$(run_exp "$d18" "$b18" 1 | comment_of)"
 echo "$cmt18" | grep -q "Total: 1 → 2" || fail "case18 old-format marker must still yield a delta; got: $cmt18"
 echo "ok: case18 (marker without total= → derived fallback still works)"
 
+# ── Existence verdict: the customer-delivered bucket (#1400) ──────────────────
+# A failed pull is ambiguous on its own: an unresolvable tag and an anonymous
+# Docker Hub rate limit produce the same missing fragment. The report job now
+# feeds the authoritative existence check (check_image_refs_resolve.py --scope
+# delivered) in through EXISTENCE_REPORT / EXISTENCE_RC. Replayed as consecutive
+# nights, each night's baseline being the marker the previous night would write.
+#
+# The checker's real per-ref line shapes (see its main()):
+#   "  ok       <ref>" / "  FAIL     <ref>  (reason)" / "  NO-ANSWER <ref>  (reason)"
+# Its exit codes under _lib_exitcodes.run: 0 all resolve / 1 some FAIL (also a
+# failed top-level import) / 2 some NO-ANSWER (also a refusal or a crash).
+mkexist() { # <file> <line...>
+  local f="$1"; shift
+  { echo "Resolving 3 concrete image ref(s) [scope=delivered] via the registry v2 API..."
+    printf '%s\n' "$@"; } > "$f"
+}
+# The marker an existence-mode night writes (it carries unresolved=).
+mkbody_y() { # <file> <missing> <total> <unresolved> <tokens...>
+  local f="$1" m="$2" t="$3" y="$4"; shift 4
+  printf 'previous body\n\n<!-- cve-state: missing=%s total=%s unresolved=%s tokens=[%s] -->\n' \
+    "$m" "$t" "$y" "$*" > "$f"
+}
+run_dl() { # <frags_dir> <prev_body> <existence_file> <existence_rc>
+  DRY_RUN_ISSUE_NUM=77 DRY_RUN_PREV_BODY="$2" EXISTENCE_REPORT="$3" EXISTENCE_RC="$4" \
+  GITHUB_STEP_SUMMARY=/dev/null DO_FILE=true DRY_RUN=1 REPO=o/r RUN_URL=http://run \
+    bash "$SCRIPT" "$1" nightly-cve-delivered "DL" 3 "customer-delivered image" 2>&1
+}
+# Two of three legs report (kubectl's pull failed), both clean.
+ddl="$WORK/ddl"; mkdir -p "$ddl"; mkfrag "$ddl" delivered-helm 0; mkfrag "$ddl" delivered-da-tools 0
+ex_yank="$WORK/ex_yank"; mkexist "$ex_yank" \
+  "  FAIL     alpine/kubectl:1.37.2  (manifest unknown)" \
+  "  ok       alpine/helm:3.22.1" \
+  "  ok       ghcr.io/vencil/da-tools:v2.9.0"
+
+# --- Night 1: kubectl does not resolve, first night → comment, ref + reason ---
+bn1="$WORK/bn1"; mkbody_t "$bn1" 0 0 ""
+outn1="$(run_dl "$ddl" "$bn1" "$ex_yank" 1)"
+cmtn1="$(echo "$outn1" | comment_of)"
+echo "$cmtn1" | grep -q "1 REF(S) DO NOT RESOLVE" || fail "night1 must announce the unresolvable ref; got: $cmtn1"
+echo "$cmtn1" | grep -q "alpine/kubectl:1.37.2 (manifest unknown)" \
+  || fail "night1 must name the ref WITH the checker's reason; got: $cmtn1"
+echo "$cmtn1" | grep -q "removed upstream, not yet published, renamed, or private" \
+  || fail "night1 wording must stay neutral about the cause; got: $cmtn1"
+echo "$cmtn1" | grep -q "bump the pin" || fail "night1 third-party lever is bump the pin; got: $cmtn1"
+echo "$cmtn1" | grep -q "publish or re-publish" && fail "night1 a third-party ref must not get our publish lever; got: $cmtn1"
+echo "$cmtn1" | grep -q "rate limit or a transient" && fail "night1 must not call it a rate limit; got: $cmtn1"
+echo "$outn1" | edit_title_of | grep -q "1 unresolvable" \
+  || fail "night1 title must carry the count; got: $(echo "$outn1" | edit_title_of)"
+echo "$outn1" | edit_title_of | grep -q "removed" && fail "night1 title must not claim a removal"
+echo "$outn1" | grep -q "cve-state: missing=1 total=0 unresolved=1 tokens=\[\]" \
+  || fail "night1 must record unresolved=1 in the marker; got: $outn1"
+echo "ok: night1 (unresolvable ref → comment with ref + reason, neutral wording, title count)"
+
+# --- Night 2: STILL unresolvable, nothing else changed → must STILL be seen ---
+# Under the pure delta rule (missing 1 → 1, no new ids) this night was silent:
+# it notified once and then never again. That is the #1400 defect.
+bn2="$WORK/bn2"; mkbody_y "$bn2" 1 0 1 ""
+outn2="$(run_dl "$ddl" "$bn2" "$ex_yank" 1)"
+echo "$outn2" | grep -q "DRY_RUN gh issue comment" \
+  || fail "night2 an unresolvable ref that persists must notify again; got: $outn2"
+cmtn2="$(echo "$outn2" | comment_of)"
+echo "$cmtn2" | grep -q "STILL UNRESOLVABLE" || fail "night2 expected the persisting wording; got: $cmtn2"
+echo "$cmtn2" | grep -q "SCAN COVERAGE REGRESSED" && fail "night2 coverage did not change, must not claim it did; got: $cmtn2"
+echo "$cmtn2" | grep -q "TOTAL UNCHANGED" && fail "night2 must not invent a CVE delta; got: $cmtn2"
+echo "ok: night2 (still unresolvable → notified again, no invented delta)"
+
+# --- Release gap: OUR da-tools tag not yet published → publish lever, every night ---
+ex_gap="$WORK/ex_gap"; mkexist "$ex_gap" \
+  "  ok       alpine/helm:3.22.1" \
+  "  ok       alpine/kubectl:1.37.2" \
+  "  FAIL     ghcr.io/vencil/da-tools:v3.0.0  (manifest unknown)"
+bgap="$WORK/bgap"; mkbody_y "$bgap" 1 0 1 ""
+cmtg="$(run_dl "$ddl" "$bgap" "$ex_gap" 1 | comment_of)"
+echo "$cmtg" | grep -q "publish or re-publish tools/v3.0.0" \
+  || fail "gap our own ref needs the publish-the-tag lever; got: $cmtg"
+echo "$cmtg" | grep -q "bump the pin" && fail "gap no third-party ref failed, bump-the-pin is wrong advice; got: $cmtg"
+echo "ok: release-gap (ghcr.io/vencil ref → publish tools/<tag>, not suppressed)"
+
+# --- Night 3: pull failed but the ref RESOLVES (rate limit) → different wording ---
+ex_ok="$WORK/ex_ok"; mkexist "$ex_ok" \
+  "  ok       alpine/helm:3.22.1" \
+  "  ok       alpine/kubectl:1.37.2" \
+  "  ok       ghcr.io/vencil/da-tools:v2.9.0"
+bn3="$WORK/bn3"; mkbody_y "$bn3" 0 0 0 ""
+outn3="$(run_dl "$ddl" "$bn3" "$ex_ok" 0)"
+cmtn3="$(echo "$outn3" | comment_of)"
+echo "$cmtn3" | grep -q "SCAN COVERAGE REGRESSED" || fail "night3 still a coverage drop; got: $cmtn3"
+echo "$cmtn3" | grep -q "rate limit or a transient error" || fail "night3 expected the rate-limit wording; got: $cmtn3"
+echo "$cmtn3" | grep -q "DO NOT RESOLVE\|UNRESOLVABLE" && fail "night3 must NOT be reported as unresolvable; got: $cmtn3"
+echo "$outn3" | edit_title_of | grep -q "unresolvable" && fail "night3 title must not claim an unresolvable ref"
+# …and a rate limit that merely persists stays on the delta rule: silent.
+bn3b="$WORK/bn3b"; mkbody_y "$bn3b" 1 0 0 ""
+outn3b="$(run_dl "$ddl" "$bn3b" "$ex_ok" 0)"
+echo "$outn3b" | grep -q "DRY_RUN gh issue comment" && fail "night3b a persisting rate limit must stay silent; got: $outn3b"
+echo "$outn3b" | grep -q "rate limit or a transient error" || fail "night3b the BODY must still explain the gap; got: $outn3b"
+echo "ok: night3 (ref resolves → rate-limit wording, not unresolvable; persisting → silent)"
+
+# --- Night 4: the existence check itself failed → say "cannot tell" ---
+# Both exit codes the checker gives without a per-ref verdict: rc 1 (a failed
+# top-level import / pip install) and rc 2 (a refusal or a crash under
+# _lib_exitcodes.run). Reading either code alone would invent a verdict.
+ex_broken="$WORK/ex_broken"
+printf 'Traceback (most recent call last):\nModuleNotFoundError: No module named %s\n' "'yaml'" > "$ex_broken"
+for rc4 in 1 2; do
+  outn4="$(run_dl "$ddl" "$bn3" "$ex_broken" "$rc4")"
+  cmtn4="$(echo "$outn4" | comment_of)"
+  echo "$cmtn4" | grep -q "Existence NOT determined" || fail "night4 rc=$rc4 must say existence is undetermined; got: $cmtn4"
+  echo "$cmtn4" | grep -q "Existence NOT determined for" && fail "night4 rc=$rc4 is not a per-ref partial; got: $cmtn4"
+  echo "$cmtn4" | grep -q "DO NOT RESOLVE\|UNRESOLVABLE" && fail "night4 rc=$rc4 must not read a broken check as unresolvable; got: $cmtn4"
+  echo "$cmtn4" | grep -q "rate limit or a transient" && fail "night4 rc=$rc4 must not read a broken check as present; got: $cmtn4"
+  echo "$outn4" | edit_title_of | grep -q "existence unknown" \
+    || fail "night4 rc=$rc4 title must flag the unknown; got: $(echo "$outn4" | edit_title_of)"
+done
+# The step did not run at all (EXISTENCE_RC empty) is the same verdict.
+outn4b="$(run_dl "$ddl" "$bn3" "$WORK/does-not-exist" "")"
+echo "$outn4b" | comment_of | grep -q "Existence NOT determined" \
+  || fail "night4b an existence step that never ran must read as undetermined; got: $outn4b"
+echo "ok: night4 (check failed rc 1 / rc 2 / did not run → undetermined, never present or absent)"
+
+# --- Refusal: rc 2 with NO per-ref line at all (empty pin table) → undetermined ---
+ex_refused="$WORK/ex_refused"
+printf 'check_image_refs_resolve: the customer-delivered pin table in x is missing or EMPTY\n' > "$ex_refused"
+cmtr="$(run_dl "$ddl" "$bn3" "$ex_refused" 2 | comment_of)"
+echo "$cmtr" | grep -q "Existence NOT determined" || fail "refusal rc 2 must read as undetermined; got: $cmtr"
+echo "$cmtr" | grep -q "Existence NOT determined for" && fail "refusal rc 2 is not a partial verdict; got: $cmtr"
+echo "ok: refusal (rc 2, no per-ref line → undetermined, not partial)"
+
+# --- Inconsistent: a FAIL line but an exit code that does not explain it ---
+# rc 0 cannot coexist with a FAIL; rc 2 without NO-ANSWER is a crash mid-run.
+# Lines we cannot reconcile are not evidence: no unresolvable claim anywhere.
+for rcx in 0 2; do
+  outx="$(run_dl "$ddl" "$bn3" "$ex_yank" "$rcx")"
+  echo "$outx" | edit_title_of | grep -q "unresolvable\|removed" \
+    && fail "inconsistent rc=$rcx title must not claim an unresolvable ref; got: $(echo "$outx" | edit_title_of)"
+  echo "$outx" | comment_of | grep -q "Existence NOT determined" \
+    || fail "inconsistent rc=$rcx must read as undetermined; got: $outx"
+done
+echo "ok: inconsistent (FAIL line + rc 0 / rc 2 → undetermined, no unresolvable claim)"
+
+# --- Undetermined with every leg scanned: no "0 unscanned leg(s)" sentence ---
+dfull="$WORK/dfull"; mkdir -p "$dfull"
+mkfrag_cve "$dfull" delivered-helm CVE-2026-7777; mkfrag "$dfull" delivered-kubectl 0; mkfrag "$dfull" delivered-da-tools 0
+outf="$(run_dl "$dfull" "$bn3" "$ex_broken" 2)"
+echo "$outf" | grep -q "Existence NOT determined" || fail "full-scan undetermined must still say so; got: $outf"
+echo "$outf" | grep -q "0 unscanned leg" && fail "full-scan undetermined must not talk about 0 unscanned legs; got: $outf"
+echo "ok: undetermined-full (missing=0 → only says the check reached no verdict)"
+
+# --- Partial: one ref got NO answer → only that ref is undetermined ---
+ex_part="$WORK/ex_part"; mkexist "$ex_part" \
+  "  ok       alpine/helm:3.22.1" \
+  "  NO-ANSWER alpine/kubectl:1.37.2  (HTTP 429)" \
+  "  ok       ghcr.io/vencil/da-tools:v2.9.0"
+cmtp="$(run_dl "$ddl" "$bn3" "$ex_part" 2 | comment_of)"
+echo "$cmtp" | grep -q "Existence NOT determined for 1 ref(s)" || fail "partial expected per-ref undetermined; got: $cmtp"
+echo "$cmtp" | grep -q "DO NOT RESOLVE\|UNRESOLVABLE" && fail "partial: no answer is not unresolvable; got: $cmtp"
+echo "ok: partial (NO-ANSWER ref → undetermined for that ref only)"
+
+# --- Opt-in: without EXISTENCE_REPORT the other buckets' marker is unchanged ---
+echo "$out17" | grep -q "unresolved=" && fail "a bucket without EXISTENCE_REPORT must not grow an unresolved= field"
+echo "ok: opt-in (no EXISTENCE_REPORT → marker and wording as before)"
+
 echo "PASS: all file_cve_report.sh cases"

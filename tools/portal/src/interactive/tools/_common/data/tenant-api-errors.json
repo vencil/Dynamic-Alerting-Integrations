@@ -506,12 +506,12 @@
     },
     {
       "code": "STATE_RELOAD_FAILED",
-      "remedy": "retry_after",
-      "retryable": "always",
+      "remedy": "refresh",
+      "retryable": "never",
       "statuses": [
         503
       ],
-      "retry_after_s": 5,
+      "retry_after_s": null,
       "kinds": [
         "state_reload_failed"
       ],
