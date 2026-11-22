@@ -1964,11 +1964,22 @@ def _old_socket_at(path: str) -> bool:
     start and is left as it was. ``lstat``: a symlink is not a socket,
     whatever it points at. No side effect — `main` asks before it prepares
     --work-dir (#3983 review: a --socket refused after that had already
-    cost the work directory its `jobs`)."""
+    cost the work directory its `jobs`).
+
+    What is refused here, before anything is touched: something at the path
+    that is no socket; a path whose directory is not there, or is no
+    directory. ⚠️ Not everything a bind can fail on: a path too long for
+    AF_UNIX is found by the bind itself, after --work-dir is prepared."""
     try:
         st = os.lstat(path)
     except FileNotFoundError:
+        parent = os.path.dirname(path)
+        if not os.path.isdir(parent):
+            raise RuntimeError(f"--socket {path!r}: its directory {parent!r} is not there "
+                               f"(or is no directory)") from None
         return False
+    except OSError as exc:  # a file on the way (ENOTDIR), a link loop, …
+        raise RuntimeError(f"--socket {path!r}: {exc.strerror}") from exc
     if not stat.S_ISSOCK(st.st_mode):
         raise RuntimeError(f"--socket {path!r} exists and is not a socket; "
                            f"refusing to replace it")
@@ -2038,17 +2049,32 @@ def _prepare_work_dir(path: str) -> None:
     #3983: a path that cannot be one — a file there, a file on the way, a
     ``jobs`` entry that is not a directory to empty — is refused naming the
     flag; the bare ``[Errno 17] File exists: '…/jobs'`` named neither it nor
-    what was wrong with it. Nothing already there is removed: only a
-    ``jobs`` DIRECTORY is emptied (``rmtree`` does not follow or unlink a
-    file or a symlink in its place)."""
+    what was wrong with it. A file or a symlink in the place of ``jobs`` is
+    left as it is (``rmtree`` neither follows nor unlinks it).
+
+    ⚠️ A ``jobs`` DIRECTORY is emptied, and one that cannot be emptied
+    whole (an entry this user may not remove) has lost what could be removed
+    by the time the refusal is printed. The refusal carries ``rmtree``'s own
+    reason: with ``ignore_errors`` it was swallowed, and the ``mkdir`` after
+    it answered ``File exists`` — the message this change set out to end
+    (blind review of #4192)."""
     try:
         os.makedirs(path, mode=0o700, exist_ok=True)
-        shutil.rmtree(_jobs_dir(path), ignore_errors=True)
+        if os.path.islink(_jobs_dir(path)):
+            # `rmtree` refuses a link too, with no reason one can read
+            # (`[Errno None] None`).
+            raise NotADirectoryError(errno.ENOTDIR, "a symbolic link, not a directory",
+                                     _jobs_dir(path))
+        try:
+            shutil.rmtree(_jobs_dir(path))
+        except FileNotFoundError:
+            pass  # no jobs directory yet: the first start
         os.mkdir(_jobs_dir(path), 0o700)
     except OSError as exc:
-        # `safe_label`, as --repo's line: a path with a newline in it must
-        # not forge a second `ERROR:` line (the exception's own text shows
-        # the path through `repr`).
+        # `safe_label` on the PATH is what keeps a newline in it from
+        # forging a second `ERROR:` line (pinned). On the exception's text
+        # it is belt and braces: OSError already shows its path through
+        # `repr`, so no test can tell it from its absence.
         raise RuntimeError(f"--work-dir {safe_label(path)}: cannot be used as the work "
                            f"directory: {safe_label(str(exc))}") from exc
 
@@ -2123,9 +2149,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         fmt = state.object_format
         _check_config_subdir(settings.git, settings.repo, settings.config_subdir,
                              safe_label(repr(args.config_subdir)), state.head)
-        _old_socket_at(settings.socket)  # refuses before anything is touched
-        _prepare_work_dir(settings.work_dir)
+        # Every check without a side effect first: a start refused by one
+        # of them leaves --work-dir's `jobs` as it was (blind review of
+        # #4192: contradictory limits were found after it was emptied).
+        _old_socket_at(settings.socket)
         _check_limits(settings)
+        _prepare_work_dir(settings.work_dir)
         _prepare_socket_path(settings.socket)
         _ensure_fd_limit(settings.max_connections)
         _become_subreaper()
