@@ -162,10 +162,9 @@ python3 scripts/tools/lint/check_threshold_registry.py --ci
 
 ### 使用指標字典
 
-`scripts/tools/metric-dictionary.yaml` 把傳統規則常用的原始指標對到平台的閾值 key。`migrate_rule.py` 轉換既有規則時會查這份字典：原始指標已經有黃金標準告警的，工具會建議直接設閾值，而不是轉出一條重複的 `custom_` 規則。
+`scripts/tools/metric-dictionary.yaml` 把傳統規則常用的原始指標對到平台的閾值 key。`migrate_rule.py` 轉換既有規則時會查這份字典：原始指標已經有黃金標準告警的，工具會建議直接設閾值，而不是轉出一條重複的 `custom_` 規則。以其中一筆為例：
 
-```yaml
-# scripts/tools/metric-dictionary.yaml（節錄）
+```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
 mysql_global_status_threads_connected:
   maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections

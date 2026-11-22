@@ -219,10 +219,30 @@ rate(requests_total[5m]) > 100
   - 故意拒收的反例：`{.confd .expect-refused=<kind>}`（kind 是 parse-tree 回報的那個，例如 `multiple_documents`）。
   - 讀得了但故意寫錯的反例：`{.confd .expect-invalid}`（schema 檢查必須判 fence 裡**每一個**單元都不合法；要並列一份正確的檔，就拆成兩個 fence）。`.expect-invalid` 只能吸收 schema 錯誤，憑證判定一律照報；反例裡的憑證一律寫 Secret 參照（[#3748](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3748)）。它的值照樣會被 `threshold-unit-sanity-check` 判：讀者會照抄。
   - 不給任何閘門判的區塊：`{.illustrative reason="…"}`（reason 必填，每份報告都會列出）。
+  - repo 內某個檔案的節錄：`{.quote src="<repo 相對路徑>"}`，見下方「引用來源檔的區塊」。它和 `.illustrative` 一樣不能與其他屬性並用、每份報告都會列出，因為帶省略的節錄不是完整的檔，沒有讀者可以讀它。
   - 憑證判定只看用 YAML 寫成的 conf.d（[#3748](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3748)）：`{.confd}` 與依結構判為 conf.d 的區塊、沒有消費者的 yaml 區塊（routing 區塊在任何深度），以及 `{.helm-values}` 裡依 chart 渲染規則當成 conf.d 的 `thresholdConfig`（`_defaults.yaml` 與每個租戶一份檔）。用 printf、curl、bash heredoc 或另一份檔裡的字串寫出的內容不在判定範圍內；讀者照抄時由產生器的 `credential_plaintext` 拒收，真的密鑰由 CI 的 TruffleHog 抓。所以要示範一份 conf.d 檔，就寫成 ```` ```yaml {.confd} ````，第一行是檔頭註解（`# conf.d/<路徑>.yaml`），並用一句話說存到哪裡。
   - 一個 fence 示範好幾個檔時，在每個檔的第一行寫 column-0 的檔頭註解，**註解以檔名開頭**：`# conf.d/db-a.yaml`、`# conf.d/db-a.yaml (edge tenant)`、`# _defaults.yaml — 模式 A`（檔名之後要嘛換行，要嘛先空一格再寫註）。`# 見 conf.d/_defaults.yaml`、`# 層級 2：conf.d/finance/_defaults.yaml` 這種檔名不在開頭的是散文，不切檔；要當檔頭就改寫成檔名開頭。
   - 重複鍵由宣告的消費者決定：`.confd` 拒收；`.k8s`／`.helm-values` 依 kubectl／Helm 的讀法是後者勝。所以 `.k8s` 區塊的每份文件都必須是帶字串 `apiVersion` 與 `kind` 的物件，否則報錯。
   - 哪些是 yaml 區塊由站台渲染器決定（[#3814](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3814)）：清冊用 mkdocs.yml 的 `markdown_extensions` 渲染每一頁，網站上渲染成程式碼區塊、而且語言名經 pygments 對到 YAML lexer 的，就是要判的區塊——```` ```yaml ````、`~~~yml`、大寫、```` ``` {.yaml} ```` 都算，寫在 blockquote、清單項目或 admonition 裡也算；```` ```yaml+jinja ```` 這類別的 lexer 不算，也不擋。網站上不渲染成程式碼區塊的（例如沒有大括號的 ```` ```yaml confd ````、沒關上的 fence）就不是區塊，沒有閘門會看它。屬性同樣以渲染器的解讀為準：詞彙是封閉的，寫錯就報錯；`title="…"`、`hl_lines`、`linenums` 是 highlight 自己的選項，不算屬性。唯一刻意的差異是 `pymdownx.snippets` 不展開：`docs/includes/` 裡的檔案自己盤點一次。清冊要把渲染出的區塊對回原始檔的行號；同一段內容出現的位置比渲染出來的區塊多（例如 ````` ````markdown ````` 範例裡有一份一模一樣的），或內容相同但 fence 寫法不同，它分不出是哪一行，就直接報錯，請讓兩段內容不同。舊的 `md-yaml-drift` HTML 註解標記已退役，留著也會報錯。
+
+#### 引用來源檔的區塊（`.quote`）
+
+文件裡貼出 repo 內某個檔案的片段時，在 fence 上宣告它是節錄，`check_doc_quotes`（pre-commit 的 `doc-quote-check`，CI 的 Lint job 每個 PR 都跑）會逐行比對它與來源檔（[#1558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1558)）。任何語言的 fence 都可以：
+
+````markdown
+```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
+mysql_global_status_threads_connected:
+  maps_to: mysql_connection_usage_percent
+```
+````
+
+- **能整段轉嵌就轉嵌**：要原樣貼出整個檔或一整段，用 `pymdownx.snippets`（`--8<--`），根本沒有副本會漂。`.quote` 處理轉嵌做不到的節錄（要省略中間幾行、要在 GitHub 原始檔檢視裡也看得到內容）。
+- **屬性**：`src` 必填，是 repo 根目錄起算、用 `/` 分隔的路徑，必須是 repo 內存在的一般檔、不在 `.gitignore` 忽略的目錄裡；`anchor` 可選，是一段字面字串，必須在來源檔裡**恰好出現一次**，比對從它所在的行開始往後找。不接受行號與 regex：行號在上游一改就默默指到別處。其他屬性一律報錯。
+- **比對單位是整行**：區塊的每一段都要**等於**來源檔裡連續的幾行。只做兩種正規化：各自去掉共同縮排（可以把巢狀的 YAML 拉到最左邊），以及去掉行尾空白。不做全形半形、標點、Unicode 的正規化——`→` 寫成 `->`、`；` 寫成 `;`、行尾少了半句，都會紅。
+- **中間省略要在區塊裡標出位置**：整行寫 `...` 或 `…`（前面可以有縮排與註解前綴 `#`、`//`、`--`、`;`，後面可以接說明，例如 `# ... 其餘 Rule Pack 比照`）。區塊在這些行切成段，各段在來源檔裡依序出現、不重疊，兩段之間至少跳過來源的一行。散文寫「節錄」不算標了省略：讀者會把相鄰的兩行當成原文相鄰。開頭與結尾的省略不必標（節錄本來就是來源的一部分），標了就一定要真的省了東西。同一行裡的省略（`foo … bar`）不支援，要省就拆成整行。
+- **區塊裡不加原文沒有的東西**：補充說明寫在散文裡；`src` 已經寫明出處，區塊第一行不用再放檔名註解。
+- **中英兩份一起標**：`foo.md` 與 `foo.en.md` 的 `.quote` 區塊數與 `src` 必須相同，只改了一邊會紅。
+- **守衛的範圍**：只看宣告了 `.quote` 的 fenced block。沒宣告的引用、行內反引號、程式註解、CHANGELOG 都不看；工具的輸出也不行（守衛不執行任何工具，引用的必須是已提交的檔）。改了來源檔，本機的 pre-commit 不會跑這支（它只在動到 `docs/` 時跑），CI 的 Lint job 會紅在引用它的文件上，訊息會點名文件、行號、`src`、第一個對不上的段與來源檔裡最接近的位置；照來源檔更新引用即可。
 
 ### 3.3 表格
 

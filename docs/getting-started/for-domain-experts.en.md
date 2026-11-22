@@ -162,10 +162,9 @@ Submit a pull request to the Platform Team for review and integration.
 
 ### Use the metric dictionary
 
-`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while converting existing rules: when a raw metric already has a golden-standard alert, the tool suggests setting the threshold instead of emitting a duplicate `custom_` rule.
+`scripts/tools/metric-dictionary.yaml` maps raw metrics that legacy rules commonly use to the platform's threshold keys. `migrate_rule.py` consults it while converting existing rules: when a raw metric already has a golden-standard alert, the tool suggests setting the threshold instead of emitting a duplicate `custom_` rule. One entry, as an example:
 
-```yaml
-# scripts/tools/metric-dictionary.yaml (excerpt)
+```yaml {.quote src="scripts/tools/metric-dictionary.yaml"}
 mysql_global_status_threads_connected:
   maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections

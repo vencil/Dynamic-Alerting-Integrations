@@ -1186,6 +1186,24 @@ repos:
         files: ^(docs/.*\.md|mkdocs\.yml|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
         additional_dependencies: ['pyyaml', 'jsonschema', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
 
+      # #1558: a fence declared ```<lang> {.quote src="…" [anchor="…"]} must
+      # match its source file line for line (only common indentation and
+      # trailing whitespace normalised; mid-block elisions marked with a
+      # whole `...` line). Opt-in: undeclared blocks are not looked at. It
+      # reads files only (no git, no subprocess); the blocks are the site
+      # renderer's (the docs' YAML inventory's Renderer), so the renderer's
+      # packages are pinned as for md-yaml-fence-check and a missing one is
+      # rc 2, never a skip. `files:` cannot list the quoted sources (they are
+      # declared in the docs), so editing a source does not run this locally:
+      # ci.yml's always-on Lint job names it.
+      - id: doc-quote-check
+        name: Declared quotes in docs/ match their source (.quote)
+        entry: python3 -X utf8 scripts/tools/lint/check_doc_quotes.py
+        language: python
+        pass_filenames: false
+        files: ^(docs/.*\.md|mkdocs\.yml|scripts/tools/lint/check_doc_quotes\.py|scripts/tools/_lib_doc_yaml_inventory\.py)$
+        additional_dependencies: ['pyyaml', 'markdown==3.10.3', 'pymdown-extensions==11.0.1', 'mkdocs==1.6.1', 'pygments==2.21.0']
+
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
         # docs/assets/dist/ is build output and not in git (#3738): build it
