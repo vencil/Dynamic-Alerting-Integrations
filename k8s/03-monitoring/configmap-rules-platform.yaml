@@ -696,57 +696,64 @@ data:
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md\n\
     \      summary: Entire tenant-exporters scrape job is absent — per-tenant liveness\
     \ is BLIND\n  - alert: MassExporterOutage\n    expr: \"(\\n  count without (tenant)\
-    \ (count without (db_type) (\\n    max without(instance, pod) (tenant_expected_exporter)\\\
-    n    unless on(tenant, db_type) (\\n      label_replace(mysql_up{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(pg_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\
-    \")\\n      or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
-    \", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(mongodb_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\"\
-    )\\n      or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(query_interval{query=\\\
-    \"oracle_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"oracle\\\
+    \ (count without (pack) (\\n    max without(instance, pod) (tenant_expected_exporter)\\\
+    n    unless on(tenant, pack) (\\n      label_replace(pg_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(mysql_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\\
+    n      or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\",\
+    \ \\\"redis\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(mongodb_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\\
+    n      or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(query_interval{query=\\\
+    \"oracle_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\
     \", \\\"\\\", \\\"\\\")\\n      or label_replace(query_interval{query=\\\"db2_liveness\\\
-    \", job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\
-    \\\")\\n      or label_replace(ClickHouseMetrics_TCPConnection{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(kafka_brokers{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\\
-    n      or label_replace(rabbitmq_up{job=\\\"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\"\
-    )\\n    )\\n  )) > 5\\n  and\\n  (\\n    count without (tenant, db_type) (\\n\
-    \      max without(instance, pod) (tenant_expected_exporter)\\n      unless on(tenant,\
-    \ db_type) (\\n        label_replace(mysql_up{job=\\\"tenant-exporters\\\"}, \\\
-    \"db_type\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(pg_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\
-    \")\\n        or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
-    \", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(mongodb_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\"\
-    )\\n        or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n        or\
-    \ label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\"tenant-exporters\\\
-    \"}, \\\"db_type\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(query_interval{query=\\\
-    \"db2_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\"db2\\\"\
-    , \\\"\\\", \\\"\\\")\\n        or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
-    \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\
-    \")\\n        or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\
-    \"db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(rabbitmq_up{job=\\\
-    \"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\"\
-    }, \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n      )\\n    )\\\
-    n    /\\n    count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))\\\
+    \", job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\"\\\
+    \")\\n      or label_replace(ClickHouseMetrics_TCPConnection{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(kafka_brokers{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n \
+    \     or label_replace(rabbitmq_up{job=\\\"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\\
+    n      or label_replace(jvm_memory_used_bytes{job=\\\"tenant-exporters\\\"} or\
+    \ jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"jvm\\\
+    \", \\\"\\\", \\\"\\\")\\n      or label_replace(nginx_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n    )\\n  )) > 5\\n  and\\\
+    n  (\\n    count without (tenant, pack) (\\n      max without(instance, pod) (tenant_expected_exporter)\\\
+    n      unless on(tenant, pack) (\\n        label_replace(pg_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(mysql_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\\
+    n        or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\"\
+    , \\\"redis\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(mongodb_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\\
+    n        or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(query_interval{query=\\\
+    \"oracle_liveness\\\", job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\
+    \", \\\"\\\", \\\"\\\")\\n        or label_replace(query_interval{query=\\\"db2_liveness\\\
+    \", job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\"\\\
+    \")\\n        or label_replace(ClickHouseMetrics_TCPConnection{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\")\\n        or label_replace(kafka_brokers{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n \
+    \       or label_replace(rabbitmq_up{job=\\\"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\\
+    n        or label_replace(jvm_memory_used_bytes{job=\\\"tenant-exporters\\\"}\
+    \ or jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"jvm\\\
+    \", \\\"\\\", \\\"\\\")\\n        or label_replace(nginx_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n      )\\n    )\\n   \
+    \ /\\n    count without (tenant, pack) (max without (instance, pod) (tenant_expected_exporter))\\\
     n  ) > 0.1\\n)\\nunless on() absent(up{job=\\\"tenant-exporters\\\"})\\n\"\n \
     \   for: 3m\n    labels:\n      alert_source: platform\n      severity: critical\n\
     \    annotations:\n      description: 'More than 5 tenants AND over 10% of the\
-    \ declared (tenant, db_type)\n\n        pairs simultaneously have no exporter\
-    \ of that\n\n        db_type answering under job=\"tenant-exporters\"\n\n    \
-    \    (that kind''s presence metric absent).\n\n        Both conditions together\
-    \ mean this is almost certainly a SHARED\n\n        failure (node pool drained,\
-    \ network partition, image-pull outage on a\n\n        rolling restart) rather\
-    \ than N independent exporter deaths or a\n\n        routine single-node blip.\
-    \ Treat as ONE incident: inspect node health\n\n        / network / recent cluster-wide\
-    \ changes FIRST — remediating tenants\n\n        one by one will not address the\
-    \ common cause. Per-tenant detail is in\n\n        the fanned-out TenantExporterAbsent\
-    \ alerts. If instead the WHOLE\n\n        tenant-exporters job is gone, TenantExporterJobAbsent\
-    \ fires instead.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage\n\
+    \ declared (tenant, pack)\n\n        pairs (the kinds tenants list in _expected_exporters)\n\
+    \n        simultaneously have no exporter of that kind answering under\n\n   \
+    \     job=\"tenant-exporters\" (that kind''s presence metric absent).\n\n    \
+    \    Both conditions together mean this is almost certainly a SHARED\n\n     \
+    \   failure (node pool drained, network partition, image-pull outage on a\n\n\
+    \        rolling restart) rather than N independent exporter deaths or a\n\n \
+    \       routine single-node blip. Treat as ONE incident: inspect node health\n\
+    \n        / network / recent cluster-wide changes FIRST — remediating tenants\n\
+    \n        one by one will not address the common cause. Per-tenant detail is in\n\
+    \n        the fanned-out TenantExporterAbsent alerts. If instead the WHOLE\n\n\
+    \        tenant-exporters job is gone, TenantExporterJobAbsent fires instead.\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage\n\
     \      summary: Mass exporter outage ({{ $value }} tenants) — shared-dependency\
     \ failure suspected\n- name: federation-audit\n  rules:\n  - alert: FederationRejectionRateAnomaly\n\
     \    expr: \"(\\n  sum by (tenant) (\\n    rate(tenant_federation_requests_total{status=~\\\
@@ -876,31 +883,32 @@ data:
     \ §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Unprojected tenant audit rows surged above 3x their 1-day baseline\
     \ for 15m\n  - alert: TenantProjectionStampMissing\n    expr: \"sum without (instance,\
-    \ pod, host) (\\n  max_over_time(vector_tenant_projection_stamp_missed_events_total[1h])\\\
-    n) > 0\\n\"\n    for: 0s\n    labels:\n      alert_source: platform\n      severity:\
-    \ warning\n    annotations:\n      description: 'Within the last hour Vector counted\
-    \ gateway audit rows\n\n        carrying a valid `account_id` (the verified claim\
-    \ of a\n\n        tenant''s logs token) for a request that reached the log store,\n\
-    \n        which ended up in the platform 0:0 store but in no tenant\n\n      \
-    \  partition (reason={{ $labels.reason }}). The counter reads\n\n        {{ $value\
-    \ | humanize }}: rows counted since each Vector pod''s\n\n        series was last\
-    \ created, which under a steady stream reaches\n\n        back more than an hour\
-    \ — not a last-hour count. A tenant whose\n\n        token is forwarded holds\
-    \ an AccountID, so it should see these rows.\n\n        not_projected: federation_audit\
-    \ rows whose tenant_id is blank or\n\n        missing from helm/vector `tenantProjections`\
-    \ — usually a tenant\n\n        issued a logs token before its projection was\
-    \ added; add it\n\n        (copy the AccountID from `_account_registry.yaml`)\
-    \ and upgrade\n\n        the chart. If the tenant was just offboarded, its token\
-    \ was not\n\n        revoked (or the revocation has not reached the gateway yet):\n\
-    \n        revoke it first.\n\n        origin_rejected: suspicious_audit rows —\
-    \ demux reclassified them\n\n        because their pod_owner fails `audit.gatewayPodOwnerPrefix`:\n\
-    \n        either forged rows from a gateway-labelled pod, or a prefix\n\n    \
-    \    that no longer matches the real gateway (which empties every\n\n        tenant\
-    \ partition). Find the rows in 0:0 with\n\n        `log_type:federation_audit\
-    \ OR log_type:suspicious_audit`, a\n\n        non-empty account_id and upstream,\
-    \ grouped by tenant_id /\n\n        pod_name. Nothing is cut off automatically\
-    \ (ADR-021\n\n        §日誌進入端的契約). See platform-log-aggregation-runbook §8.7.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \ pod, host) (\\n  (\\n    vector_tenant_projection_stamp_missed_events_total\\\
+    n    unless\\n    vector_tenant_projection_stamp_missed_events_total offset 1h\\\
+    n  ) * 1 > 0\\n  and on () count(vector_uptime_seconds offset 1h) > 0\\n  or\\\
+    n  increase(vector_tenant_projection_stamp_missed_events_total[1h])\\n) > 0\\\
+    n\"\n    for: 0s\n    labels:\n      alert_source: platform\n      severity: warning\n\
+    \    annotations:\n      description: 'Within the last hour Vector counted about\
+    \ {{ $value | humanize }}\n\n        gateway audit rows carrying a valid `account_id`\
+    \ (the verified\n\n        claim of a tenant''s logs token) for a request that\
+    \ reached the\n\n        log store, which ended up in the platform 0:0 store but\
+    \ in no\n\n        tenant partition (reason={{ $labels.reason }}). A tenant whose\n\
+    \n        token is forwarded holds an AccountID, so it should see these rows.\n\
+    \n        not_projected: federation_audit rows whose tenant_id is blank or\n\n\
+    \        missing from helm/vector `tenantProjections` — usually a tenant\n\n \
+    \       issued a logs token before its projection was added; add it\n\n      \
+    \  (copy the AccountID from `_account_registry.yaml`) and upgrade\n\n        the\
+    \ chart. If the tenant was just offboarded, its token was not\n\n        revoked\
+    \ (or the revocation has not reached the gateway yet):\n\n        revoke it first.\n\
+    \n        origin_rejected: suspicious_audit rows — demux reclassified them\n\n\
+    \        because their pod_owner fails `audit.gatewayPodOwnerPrefix`:\n\n    \
+    \    either forged rows from a gateway-labelled pod, or a prefix\n\n        that\
+    \ no longer matches the real gateway (which empties every\n\n        tenant partition).\
+    \ Find the rows in 0:0 with\n\n        `log_type:federation_audit OR log_type:suspicious_audit`,\
+    \ a\n\n        non-empty account_id and upstream, grouped by tenant_id /\n\n \
+    \       pod_name. Nothing is cut off automatically (ADR-021\n\n        §日誌進入端的契約).\
+    \ See platform-log-aggregation-runbook §8.7.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Tenant audit rows with a verified account_id reached only the\
     \ platform 0:0 store ({{ $labels.reason }})\n  - alert: VectorProjectionGateMismatch\n\
     \    expr: \"max by (mode, namespace) (\\n  vector_tenant_projection_gate_info{category=\\\

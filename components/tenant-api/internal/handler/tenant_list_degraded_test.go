@@ -101,7 +101,7 @@ func TestLoadAllTenants_HealthyRowUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAllTenants: %v", err)
 	}
-	want := []TenantSummary{{ID: "acme", Environment: "production", Tier: "tier1", Domain: "db", DBType: []string{"mariadb"}, Owner: "alice", ManagedBy: managedByAPI}}
+	want := []TenantSummary{{ID: "acme", Environment: "production", Tier: "tier1", Domain: "db", ExpectedExporters: []string{"mariadb"}, Owner: "alice", ManagedBy: managedByAPI}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -219,7 +219,7 @@ func TestListTenants_DegradedRowVisibleOnlyToMetadataUnrestricted(t *testing.T) 
 // ── search: deliberate semantics for degraded rows ──────────────────────────
 //
 // A degraded row is part of the snapshot and goes through the same RBAC
-// filter. Metadata filters (environment/tier/domain/db_type/tag) never match
+// filter. Metadata filters (environment/tier/domain/expected_exporters/tag) never match
 // it — its metadata is unknown, and matching "unknown" against a requested
 // value would be a guess. Free-text q matches its id (the only field it has),
 // so an operator searching for a tenant by name still finds it broken rather
@@ -260,7 +260,7 @@ func TestSearchTenants_DegradedRows(t *testing.T) {
 		}
 	})
 	t.Run("metadata filters never match it", func(t *testing.T) {
-		for _, q := range []string{"environment=production", "domain=db", "tier=tier1", "db_type=mariadb"} {
+		for _, q := range []string{"environment=production", "domain=db", "tier=tier1", "expected_exporters=mariadb"} {
 			resp, _, _ := runSearch(t, dir, mgr, []string{"all-tenants"}, q)
 			if got := idsOf(resp.Items); !reflect.DeepEqual(got, []string{"healthy"}) {
 				t.Errorf("%s: ids = %v, want [healthy]", q, got)

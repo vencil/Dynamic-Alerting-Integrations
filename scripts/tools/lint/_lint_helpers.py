@@ -59,7 +59,7 @@ BUILD_EXEMPT = frozenset({
     # operator_generate + migrate_to_operator. Library, not CLI.
     "_lib_yaml.py",
     # v2.8.0 PR-2 — shared dispatcher absorbs ~95% of guard /
-    # batchpr / parser dispatcher boilerplate. Library, not CLI.
+    # parser dispatcher boilerplate. Library, not CLI.
     "_lib_godispatch.py",
     # #2744 — validate-config's json_schema row imports its verdict. Shipped
     # as a library; `check_confd_schema` is not a da-tools command.

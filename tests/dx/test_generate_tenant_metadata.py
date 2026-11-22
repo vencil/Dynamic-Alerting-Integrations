@@ -366,7 +366,7 @@ class TestEnvironmentIsNotInferredFromTheName:
     (tenant_metadata_info, tenant-api's list/search), never one guessed from
     the tenant name — the portal falls back to this file when tenant-api is
     down, so a guess would show the tenant in two environments. Same rule as
-    db_type (#2115 B4)."""
+    the declared exporter kinds (#2115 B4)."""
 
     def test_a_name_pattern_sets_no_environment(self, tmp_path):
         root = tmp_path / "conf.d"

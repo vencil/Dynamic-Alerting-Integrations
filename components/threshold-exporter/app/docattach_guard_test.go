@@ -53,9 +53,9 @@ package main
 //     declaration happens to carry some doc of its own, or shares its bare
 //     name with a documented sibling.
 //  3. It has no name-history oracle, so a doc naming an identifier that no
-//     longer exists (a rename leftover — cmd/da-batchpr/main.go's
-//     `exitCodeForSummary` naming `exitCodeForApply`, fixed by hand in #1738)
-//     is indistinguishable from ordinary prose.
+//     longer exists (a rename leftover — a doc for `exitCodeForSummary` still
+//     naming `exitCodeForApply`, fixed by hand in #1738) is indistinguishable
+//     from ordinary prose.
 //
 // Widening any of the three means another walk or another predicate layer, and
 // the point of this file is one cheap derivable check, not full coverage.

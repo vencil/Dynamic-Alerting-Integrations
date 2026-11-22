@@ -96,10 +96,6 @@ def _build_help_text(lang):
                       `--expect-merged-hash` 與快照比對 (rollback checklist)
                       `--all --json` 拍 pre-base snapshot 給 rollback 後 diff
 
-命令 (Batch PR — Migration Batch PR Pipeline, v2.8.0):
-    batch-pr          開出/更新 tenant chunk PRs，或於 Base merge 後 rebase（experimental）。
-                      子命令: apply / refresh / refresh-source
-
 命令 (Parser — PromRule parser, v2.8.0):
     parser            解析 PrometheusRule YAML，輸出 JSON ParseResult；
                       可選 strict-PromQL 相容性檢查 (anti-vendor-lock-in)。
@@ -191,10 +187,6 @@ Commands (Tenant Verify — rollback verification, v2.8.0):
                       (rollback checklist item 6).
                       `--all --json` snapshots pre-base state for diffing
                       after rollback.
-
-Commands (Batch PR — Migration Batch PR Pipeline, v2.8.0):
-    batch-pr          Open/update tenant chunk PRs, or rebase after Base merges (experimental).
-                      Subcommands: apply / refresh / refresh-source
 
 Commands (Parser — PromRule parser, v2.8.0):
     parser            Parse PrometheusRule YAML to JSON ParseResult;
@@ -424,9 +416,6 @@ COMMAND_MAP = {
     # a rule pack through `da-guard compile-custom-alerts`. Outside this
     # repository --config-dir and --out are both required.
     "compile-custom-alerts": "compile_custom_alerts.py",
-    # Group I: Batch PR pipeline (v2.8.0 Phase .c C-10 PR-5)
-    # Wraps the da-batchpr Go binary; see scripts/tools/ops/batchpr_dispatch.py.
-    "batch-pr": "batchpr_dispatch.py",
     # Group J: PromRule parser (v2.8.0 Phase .c C-8 PR-2)
     # Wraps the da-parser Go binary; see scripts/tools/ops/parser_dispatch.py.
     "parser": "parser_dispatch.py",

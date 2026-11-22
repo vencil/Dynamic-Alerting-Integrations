@@ -153,6 +153,7 @@ modules:
       _StdoutSink.writable: "io.TextIOBase protocol stub over sys.stdout (#3107 v2); no value computation"
       _StdoutSink.write: "delegates to sys.stdout.write (#3107 v2); pinned by the `-` case in tests/shared/test_lib_io_operator_output.py"
       _StdoutSink.flush: "delegates to sys.stdout.flush (#3107 v2); no value computation"
+      _StdoutSink.close: "marks the sink closed without flushing sys.stdout (#4055); no value computation, pinned by tests/shared/test_lib_io_operator_output.py::test_closing_the_stdout_sink_never_flushes_stdout"
       _kernel_open_operator_output: "open(2) + R2/V15 fchmod (#3107 v2); side-effecting I/O, modes pinned by example in tests/shared/test_lib_io_operator_output.py"
       open_operator_output: "context manager over the kernel open (#3107 v2 R0–R5); side-effecting I/O, pinned in tests/shared/test_lib_io_operator_output.py and the write audit of tests/shared/test_output_path_write_failure.py"
       write_operator_output: "thin wrapper over open_operator_output (#3107 v2)"
@@ -271,7 +272,7 @@ modules:
       GoBinaryDispatcher._print_binary_missing: "Side-effecting (prints to stderr); error-message templating"
       GoBinaryDispatcher.binary_missing_message: "Error-message templating; asserted by the missing-binary tests of the shims and _lib_tenant_values"
       GoBinaryDispatcher.resolve_binary: "The resolution step of _resolve_binary (covered), split out so _lib_tenant_values resolves da-guard the same way"
-      GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/batchpr/parser shims"
+      GoBinaryDispatcher.dispatch: "Side-effecting (subprocess.run); covered by integration tests of guard/parser shims"
       _may_be_file: "Filesystem probe (Path.is_file under OSError); its EACCES case is pinned in tests/shared/test_lib_godispatch.py (#3214)"
 
   # ── DX tools (doc/changelog/scaffold) ─────────────────────────────

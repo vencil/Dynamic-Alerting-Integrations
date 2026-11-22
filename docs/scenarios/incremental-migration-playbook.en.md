@@ -89,7 +89,7 @@ da-tools blind-spot \
   > blind-spot-report.json
 ```
 
-**Expected output**: `blind-spot-report.json` is an array with one element per DB type inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants that declare this DB type in `_metadata.db_type`), and `status`. No tenant config exists yet (the conf.d holds only an empty `_defaults.yaml`: a `--config-dir` that does not exist, or an empty directory, is refused with exit 2), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). When Prometheus is unreachable (or answers in the wrong shape) there is no blind-spot list: `blind-spot-report.json` is empty (since [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); read the exit code first), stderr one `ERROR: Prometheus query failed: …` line, and the exit code is 2 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133); it used to output `[]` at exit code 0).
+**Expected output**: `blind-spot-report.json` is an array with one element per exporter kind (`kind`) inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants that declare this kind in `_expected_exporters`), and `status`. No tenant config exists yet (the conf.d holds only an empty `_defaults.yaml`: a `--config-dir` that does not exist, or an empty directory, is refused with exit 2), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). When Prometheus is unreachable (or answers in the wrong shape) there is no blind-spot list: `blind-spot-report.json` is empty (since [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); read the exit code first), stderr one `ERROR: Prometheus query failed: …` line, and the exit code is 2 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133); it used to output `[]` at exit code 0).
 
 ### Step 0.4: Decision Matrix — Select Pilot Domain
 
@@ -716,9 +716,9 @@ Step 3 cannot come earlier: an older reader without the built-in layer that read
 ## Emergency Rollback Procedures
 
 > **Applies to**: structural bug discovered after customer cutover (e.g. parser eats labels / Dangling Guard false positives / mass false alerts) requiring batch reversal of a Base Infrastructure PR plus multiple tenant PRs.
-> Distinct from per-phase 0/1/2/3 rollback above (single-domain pilot retreat); this section covers post-cutover batch-PR pipeline reversal with cascading defaults and hierarchical dependencies.
+> Distinct from per-phase 0/1/2/3 rollback above (single-domain pilot retreat); this section covers post-cutover reversal of a whole batch of PRs (one Base PR plus tenant PRs) with cascading defaults and hierarchical dependencies.
 >
-> **Added in v2.8.0** to complement the Migration Batch PR Pipeline hierarchy-aware chunking design.
+> **Added in v2.8.0**.
 
 ### Rollback order: strict reverse of merge order
 
@@ -757,7 +757,7 @@ sum(rate(da_config_debounce_batch_size_count[5m]))
 **No formal cutover without a passed rehearsal first** — written into the cutover checklist as a hard gate (Customer Delivery milestone calendar).
 
 Rehearsal contents:
-1. Apply one full batch-PR pipeline output in customer's staging environment (any size, minimum 1 Base PR + 5 tenant PRs)
+1. Apply one full batch of PRs in customer's staging environment (any size, minimum 1 Base PR + 5 tenant PRs)
 2. **Immediately** trigger reverse-order rollback (no cooldown wait)
 3. Measure each segment: per-PR review/merge/git-sync apply/WatchLoop settle in seconds; end-to-end time for entire rollback to converge `merged_hash` back to the pre-Base-PR state
 4. Fill data into the "rollback time budget" table below; if production cutover measures > 1.5× of rehearsed budget, treat as anomaly and abort
@@ -796,10 +796,8 @@ Rehearsal contents:
 ### Tools not yet implemented (not scheduled)
 
 - `make rollback-dryrun` Makefile target — one-command staging rehearsal in customer environment that auto-fills the time-budget table above
-- `da-tools batch-pr rollback --plan` — given a Base PR #, derive the full reverse-order plan and output a markdown plan for ops review
-- `da-tools batch-pr rollback --execute` — automated reverse-order revert; waits for git-sync apply + reload settle between steps
 
-Until they exist, run the procedures in this section by hand; this section is also their specification.
+Until it exists, run the procedures in this section by hand; this section is also its specification.
 
 ---
 

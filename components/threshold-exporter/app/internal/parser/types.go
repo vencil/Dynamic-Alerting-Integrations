@@ -1,7 +1,7 @@
 // Package parser converts Prometheus / VictoriaMetrics rule artifacts
 // (PrometheusRule CRDs and similar YAML shapes) into a canonical
-// ParsedRule record consumed by the v2.8.0 Phase .c migration toolkit
-// (C-9 Profile Builder, C-10 Batch PR Pipeline).
+// ParsedRule record, emitted as JSON by `da-tools parser import`
+// (cmd/da-parser) for corpus triage and portability checks.
 //
 // PR-1 shipped the parser core + dialect detection. PR-2 adds:
 //   - external `vm_only_functions.yaml` + freshness CI gate,
@@ -20,8 +20,8 @@
 package parser
 
 // Dialect labels which rule language a parsed expression most closely
-// matches. The classification governs whether C-9 / C-10 will treat
-// the rule as portable to vanilla Prometheus.
+// matches. The classification tells a consumer whether the rule is
+// portable to vanilla Prometheus.
 type Dialect string
 
 const (
@@ -35,7 +35,7 @@ const (
 
 	// DialectAmbiguous — metricsql parser failed (syntax error,
 	// unrecognised function name, etc.). Caller must surface for
-	// human review; never auto-converted by C-9.
+	// human review; never auto-converted.
 	DialectAmbiguous Dialect = "ambiguous"
 )
 
@@ -56,10 +56,8 @@ type ParsedRule struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 
 	// SourceRuleID is a stable pointer back to the source location,
-	// shaped as `<file-or-doc>#groups[i].rules[j]`. C-10's
-	// `batch-pr refresh --source-rule-ids` indexes against this so
-	// data-layer hot-fixes can target the affected subset without
-	// rerunning the full pipeline.
+	// shaped as `<file-or-doc>#groups[i].rules[j]`, so a downstream
+	// consumer can map each parsed rule back to where it came from.
 	SourceRuleID string `json:"source_rule_id"`
 
 	// Dialect classification (see consts).
@@ -74,7 +72,7 @@ type ParsedRule struct {
 
 	// PromPortable is true when the rule can be evaluated by a
 	// vanilla Prometheus server unchanged: parses with metricsql AND
-	// uses no VM-only functions. Convenience flag for C-9 / C-10
+	// uses no VM-only functions. Convenience flag for
 	// consumers that don't want to switch on Dialect themselves.
 	//
 	// PromPortable is the structural / "no VM-only function names"
@@ -114,8 +112,7 @@ type ParsedRule struct {
 }
 
 // Provenance stamps where a ParsedRule came from + when + with
-// which parser version. C-10's `refresh --source-rule-ids` reads
-// SourceRuleID; the rest is for human auditing during incidents.
+// which parser version, for human auditing during incidents.
 //
 // Stamped at ParseResult level (not per-rule) since every rule in a
 // single Parse call shares the same provenance.
@@ -135,8 +132,8 @@ type Provenance struct {
 	ParsedAt string `json:"parsed_at"`
 
 	// SourceChecksum is the SHA-256 (full 64 hex) of the raw input
-	// bytes the parser saw. Lets C-10 detect "the source moved
-	// underneath us between the dry-run and the real apply".
+	// bytes the parser saw. Lets a consumer detect that the source
+	// moved underneath it between two runs.
 	SourceChecksum string `json:"source_checksum"`
 }
 

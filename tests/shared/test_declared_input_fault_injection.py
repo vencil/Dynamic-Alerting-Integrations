@@ -267,13 +267,13 @@ def _week_of_samples(path: str, params: dict) -> dict:
 
 
 LIVE.update({
-    # Tenants declaring mariadb and redis (`_metadata.db_type`, #4026): with
+    # Tenants declaring mariadb and redis (`_expected_exporters`, #4026): with
     # it those DB types are covered, with an empty conf.d blind spots.
     "blind-spot --config-dir": {
         "live": _files({
             "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-            "a.yaml": "tenants:\n  ta:\n    _metadata: {db_type: mariadb}\n",
-            "sub/b.yaml": "tenants:\n  tb:\n    _metadata: {db_type: [redis]}\n"}),
+            "a.yaml": "tenants:\n  ta:\n    _expected_exporters: [mariadb]\n",
+            "sub/b.yaml": "tenants:\n  tb:\n    _expected_exporters: [redis]\n"}),
         "argv": ["--config-dir", "{D}", "--json-output", "--prometheus", "{PROM}"],
         "prometheus": _targets(("mysql-exporter", "mysql-0:9104"),
                                ("redis-exporter", "redis-0:9121")),

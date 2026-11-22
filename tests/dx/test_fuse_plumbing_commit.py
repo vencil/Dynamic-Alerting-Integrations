@@ -405,3 +405,141 @@ def test_a_git_fatal_error_on_commit_is_a_caller_error(tmp_path: Path) -> None:
         capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo, env=env,
     )
     assert proc.returncode == 2, proc.stderr
+
+
+# ── #3836: `git commit` runs every hook; its limit is its own ──────────
+
+def _in_process(repo: Path, monkeypatch, *, step: float, commit: float):
+    mod = _load_module()
+    monkeypatch.setattr(mod, "STEP_TIMEOUT_S", step)
+    monkeypatch.setattr(mod, "COMMIT_TIMEOUT_S", commit)
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    return mod.main(["--auto", "-m", "test: x", "f.txt"])
+
+
+def test_a_commit_slower_than_a_plumbing_step_still_lands(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The hooks may outlast STEP_TIMEOUT_S: `git commit` is held to
+    COMMIT_TIMEOUT_S, not to it. Before #3836 every hook run past 60s
+    crashed with a traceback."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\nsleep 3\nexit 0\n")
+    assert _in_process(repo, monkeypatch, step=1.5, commit=60) == 0, capsys.readouterr().err
+    assert _head(repo) != before
+
+
+def test_a_commit_past_its_limit_is_a_named_2_not_a_traceback(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _init_tmp_repo(tmp_path)
+    _hook(repo, "#!/bin/sh\nsleep 10\nexit 0\n")
+    assert _in_process(repo, monkeypatch, step=60, commit=1) == 2
+    err = capsys.readouterr().err
+    assert "`git commit -m test: x` did not finish within 1s and was stopped" in err
+    assert "whether the commit landed is unknown" in err and "git log -1" in err
+
+
+def test_a_plumbing_step_past_its_limit_is_a_named_2(tmp_path: Path, monkeypatch, capsys) -> None:
+    mod = _load_module()
+    repo = _init_tmp_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    real = subprocess.run
+
+    def slow_write_tree(cmd, *a, **kw):
+        if cmd[:2] == ["git", "write-tree"]:
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(mod.subprocess, "run", slow_write_tree)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--force-plumbing", "-m", "test: x", "f.txt"]) == 2
+    assert "`git write-tree` did not finish within 60s" in capsys.readouterr().err
+
+
+def test_the_commit_limit_is_the_hooks_not_a_steps() -> None:
+    mod = _load_module()
+    assert mod.STEP_TIMEOUT_S == 60 and mod.COMMIT_TIMEOUT_S >= 600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX")
+def test_a_commit_past_its_limit_stops_its_hooks_too(tmp_path: Path, monkeypatch, capsys) -> None:
+    """#3836 review: killing git alone left the hook running, so a retry
+    ran a second pre-commit beside it. SIGINT goes first (pre-commit
+    restores its stash on it), then SIGKILL — here to the background
+    `sleep`, which a non-interactive shell starts with SIGINT ignored."""
+    repo = _init_tmp_repo(tmp_path)
+    marker, pidfile = tmp_path / "got-int", tmp_path / "sleep.pid"
+    _hook(repo, f"#!/bin/sh\ntrap 'echo int > {marker}; exit 1' INT\n"
+                f"sleep 30 & echo $! > {pidfile}\nwait\n")
+    mod = _load_module()
+    monkeypatch.setattr(mod, "_GRACE_S", 1)
+    monkeypatch.setattr(mod, "COMMIT_TIMEOUT_S", 1.5)
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--auto", "-m", "test: x", "f.txt"]) == 2
+    assert marker.exists(), "the hook never got SIGINT"
+    assert not _alive(int(pidfile.read_text(encoding="ascii")))
+
+
+def _alive(pid: int) -> bool:
+    """Running, not a zombie (a container's PID 1 may never reap one)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path(f"/proc/{pid}/stat")
+    return not (stat.exists() and stat.read_text(encoding="ascii").rsplit(")", 1)[1].split()[0] == "Z")
+
+
+def _timeout_on(mod, monkeypatch, prefix: list[str]):
+    real = subprocess.run
+
+    def fake(cmd, *a, **kw):
+        if cmd[:len(prefix)] == prefix:
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake)
+
+
+def test_a_landed_commit_whose_sha_cannot_be_read_still_exits_0(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\nexit 0\n")
+    mod = _load_module()
+    _timeout_on(mod, monkeypatch, ["git", "rev-parse", "HEAD"])
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--auto", "-m", "test: x", "f.txt"]) == 0
+    out, err = capsys.readouterr()
+    assert "committed: (unknown)" in out and "git log -1" in err
+    monkeypatch.undo()  # the fake replaced subprocess.run for this test too
+    assert _head(repo) != before
+
+
+def test_a_landed_commit_whose_branch_cannot_be_read_still_exits_0(tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _init_tmp_repo(tmp_path)
+    _hook(repo, "#!/bin/sh\nexit 0\n")
+    mod = _load_module()
+    _timeout_on(mod, monkeypatch, ["git", "symbolic-ref"])
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--auto", "-m", "test: x", "f.txt"]) == 0
+    assert "branch=(unknown)" in capsys.readouterr().out
+
+
+def test_plumbing_reads_the_branch_before_it_makes_the_commit(tmp_path: Path, monkeypatch) -> None:
+    """Past commit-tree a failure would strand the new commit with no SHA."""
+    repo = _init_tmp_repo(tmp_path)
+    mod = _load_module()
+    seen: list[str] = []
+    real = subprocess.run
+
+    def spy(cmd, *a, **kw):
+        seen.append(cmd[1])
+        return real(cmd, *a, **kw)
+
+    monkeypatch.setattr(mod.subprocess, "run", spy)
+    monkeypatch.chdir(repo)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    assert mod.main(["--force-plumbing", "-m", "test: x", "f.txt"]) == 0
+    assert seen.index("symbolic-ref") < seen.index("commit-tree")

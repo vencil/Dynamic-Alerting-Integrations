@@ -107,18 +107,16 @@ Migrating a customer's **existing PromRule corpus** into our `conf.d/` structure
 ```
 customer PromRule YAML
     ↓ da-parser import
-ParsedRule JSON (with dialect / vm_only / prom_portable annotations)
-    ↓ Profile Builder (library)
-Cluster + Profile-as-Directory-Default
-    ↓ da-batchpr apply
-Hierarchy-aware Batch PRs
+ParsedRule JSON (with dialect / vm_only / prom_portable annotations, for triage)
+    ↓ da-tools migrate (per tenant)
+conf.d tenant files → the customer's own PR
     ↓ da-guard
 Dangling Defaults Guard check (routing: generate-routes)
     ↓
 conf.d/ tree (GitOps merge)
 ```
 
-> ⚠️ The diagram is the design. The Profile Builder → `da-batchpr apply` steps are not wired today (experimental, see [`batch-pr`](../cli-reference.en.md#batch-pr)); to import customer rules, use the per-tenant [`migrate`](../cli-reference.en.md#migrate).
+The conversion step is [`migrate`](../cli-reference.en.md#migrate); bulk import producing `_custom_alerts` recipes is tracked in [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226).
 
 ### 5.2 MetricsQL handling and anti-vendor-lock-in
 
@@ -192,7 +190,7 @@ After finding your path via the §1 decision tree:
 
 - [ ] Run `da-parser import` against the customer PromRule corpus
 - [ ] Check dialect distribution + non-portable ratio
-- [ ] Run [`da-tools migrate`](../cli-reference.en.md#migrate) per tenant to produce conf.d tenant files (the Profile Builder and `da-batchpr apply` are not wired, see [`batch-pr`](../cli-reference.en.md#batch-pr))
+- [ ] Run [`da-tools migrate`](../cli-reference.en.md#migrate) per tenant to produce conf.d tenant files
 - [ ] Run `da-guard` through the schema / cardinality / redundant-override checks; on exit 4 (the tree holds routing or domain policy, which da-guard no longer judges since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)) also run `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] Details → [Migration Toolkit Installation](../migration-toolkit-installation.en.md)
 

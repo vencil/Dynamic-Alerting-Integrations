@@ -22,12 +22,12 @@ import (
 
 // listedMetadata is the metadata part of one LIST row.
 type listedMetadata struct {
-	Environment, Domain, DBType, Owner, Tier string
+	Environment, Domain, Region, Owner, Tier string
 	Tags                                     []string
 }
 
 func metadataOf(s TenantSummary) listedMetadata {
-	return listedMetadata{Environment: s.Environment, Domain: s.Domain, DBType: strings.Join(s.DBType, ","),
+	return listedMetadata{Environment: s.Environment, Domain: s.Domain, Region: s.Region,
 		Owner: s.Owner, Tier: s.Tier, Tags: s.Tags}
 }
 
@@ -55,9 +55,9 @@ func listTenantRows(t *testing.T, configDir string) (int, map[string]TenantSumma
 // listControlTenantFile is a second tenant whose metadata is written only in
 // its own file; no tree gives it a platform entry, so its row must stay
 // exactly listControlMetadata whatever the tree does to tx.
-const listControlTenantFile = "tenants:\n  ty:\n    _metadata:\n      owner: ty-team\n      db_type: postgresql\n"
+const listControlTenantFile = "tenants:\n  ty:\n    _metadata:\n      owner: ty-team\n      region: r-control\n"
 
-var listControlMetadata = listedMetadata{Owner: "ty-team", DBType: "postgresql"}
+var listControlMetadata = listedMetadata{Owner: "ty-team", Region: "r-control"}
 
 func platformMetadataTrees() []struct {
 	name  string
@@ -101,21 +101,21 @@ func platformMetadataTrees() []struct {
 			want: listedMetadata{Owner: "tx-team", Tier: "silver"},
 		},
 		{
-			name: "tenant file writes only db_type, platform writes environment domain owner",
+			name: "tenant file writes only region, platform writes environment domain owner",
 			files: map[string]string{
 				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      environment: production\n      domain: finance\n      owner: plat-team\n",
-				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 			},
-			want: listedMetadata{Owner: "plat-team", DBType: "mariadb", Environment: "production", Domain: "finance"},
+			want: listedMetadata{Owner: "plat-team", Region: "r-1", Environment: "production", Domain: "finance"},
 		},
 		{
 			name: "two platform files: the later file wins a key both write",
 			files: map[string]string{
 				"_a.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: a-team\n      tier: silver\n",
 				"_b.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: b-team\n      domain: finance\n",
-				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 			},
-			want: listedMetadata{Owner: "b-team", Tier: "silver", Domain: "finance", DBType: "mariadb"},
+			want: listedMetadata{Owner: "b-team", Tier: "silver", Domain: "finance", Region: "r-1"},
 		},
 		{
 			name: "a list value is replaced whole, not merged",
@@ -138,9 +138,9 @@ func platformMetadataTrees() []struct {
 			files: map[string]string{
 				"_broken.yaml":   "tenants: [\n",
 				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n",
-				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 			},
-			want: listedMetadata{Owner: "plat-team", DBType: "mariadb"},
+			want: listedMetadata{Owner: "plat-team", Region: "r-1"},
 		},
 	}
 }
@@ -200,7 +200,7 @@ func TestListTenants_UnreadablePlatformFileFallsBackToTenantFileMetadata(t *test
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n",
-		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 		"ty.yaml":        listControlTenantFile,
 	})
 	writeDanglingPlatformFile(t, dir)
@@ -208,7 +208,7 @@ func TestListTenants_UnreadablePlatformFileFallsBackToTenantFileMetadata(t *test
 	if code != http.StatusOK {
 		t.Fatalf("LIST status = %d, want 200", code)
 	}
-	if got, want := metadataOf(rows["tx"]), (listedMetadata{DBType: "mariadb"}); !reflect.DeepEqual(got, want) {
+	if got, want := metadataOf(rows["tx"]), (listedMetadata{Region: "r-1"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("tx metadata on LIST = %+v, want %+v (tenant file only)", got, want)
 	}
 	if got := metadataOf(rows["ty"]); !reflect.DeepEqual(got, listControlMetadata) {
@@ -223,7 +223,7 @@ func TestMetadataReadersMergePlatformLayerPerKey(t *testing.T) {
 	const platform = "tenants:\n  tx:\n    _metadata:\n      environment: production\n      domain: finance\n      owner: plat-team\n"
 	dir := setupConfigDir(t, map[string]string{
 		"_platform.yaml": platform,
-		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      region: r-1\n",
 		"ty.yaml":        listControlTenantFile,
 	})
 	if env, domain := WriteScopeMeta(dir)("tx"); env != "production" || domain != "finance" {
@@ -324,7 +324,7 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 	dir := setupConfigDir(t, map[string]string{
 		"_platform.yaml": "tenants:\n  t1:\n    _metadata:\n      environment: production\n",
 		"t1.yaml": "tenants:\n  t1:\n    _metadata:\n      owner: t1-team\n      tier: gold\n" +
-			"      domain: finance\n      db_type: mariadb\n      tags: [blue]\n",
+			"      domain: finance\n      tags: [blue]\n    _expected_exporters: [mariadb]\n",
 		"t2.yaml": "tenants:\n  t2:\n    _metadata:\n      environment: production\n",
 	})
 	both := []string{"t1", "t2"}
@@ -414,17 +414,17 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 	// because its metadata is incomplete) and with a value it does not.
 	mgr := newRBACManager(t, platformUnknownRBACYAML)
 	for query, want := range map[string][]string{
-		"environment=production": {},
-		"tier=gold":              {},
-		"tier=silver":            {},
-		"domain=finance":         {},
-		"domain=payments":        {},
-		"db_type=mariadb":        {},
-		"db_type=postgresql":     {},
-		"tag=blue":               {},
-		"tag=red":                {},
-		"q=t1-team":              {},
-		"q=T1":                   {"t1"},
+		"environment=production":        {},
+		"tier=gold":                     {},
+		"tier=silver":                   {},
+		"domain=finance":                {},
+		"domain=payments":               {},
+		"expected_exporters=mariadb":    {},
+		"expected_exporters=postgresql": {},
+		"tag=blue":                      {},
+		"tag=red":                       {},
+		"q=t1-team":                     {},
+		"q=T1":                          {"t1"},
 	} {
 		if got := viewAs(t, mgr, "all-tenants", query).search; !reflect.DeepEqual(got, want) {
 			t.Errorf("search %s while unreadable = %v, want %v", query, got, want)
@@ -440,9 +440,40 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 		t.Errorf("search environment=production after recovery = %v, want %v", got, both)
 	}
 	// With the platform layer readable again, t1's own values match.
-	for _, query := range []string{"tier=gold", "domain=finance", "db_type=mariadb", "tag=blue"} {
+	for _, query := range []string{"tier=gold", "domain=finance", "expected_exporters=mariadb", "tag=blue"} {
 		if got := viewAs(t, mgr, "all-tenants", query).search; !reflect.DeepEqual(got, []string{"t1"}) {
 			t.Errorf("search %s after recovery = %v, want [t1]", query, got)
+		}
+	}
+}
+
+// #4097: a row's `expected_exporters` is the exporter's reading of
+// `_expected_exporters` through the tenant's layers — a root platform file's
+// entry, the tenant file replacing it whole, a profile filling it in — and a
+// value the exporter does not read lists nothing.
+func TestListTenants_ExpectedExportersThroughTheLayers(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		"_profiles.yaml": "profiles:\n  web:\n    _expected_exporters: [nginx, jvm]\n",
+		"_platform.yaml": "tenants:\n  tplat:\n    _expected_exporters: [kafka]\n  tover:\n    _expected_exporters: [kafka, redis]\n",
+		"tplat.yaml":     "tenants:\n  tplat: {}\n",
+		"tover.yaml":     "tenants:\n  tover:\n    _expected_exporters: [mariadb]\n",
+		"tprof.yaml":     "tenants:\n  tprof:\n    _profile: web\n",
+		"tnone.yaml":     "tenants:\n  tnone:\n    _metadata:\n      owner: o\n",
+		"tbad.yaml":      "tenants:\n  tbad:\n    _expected_exporters: [mariadb, nope]\n",
+		"told.yaml":      "tenants:\n  told:\n    _metadata:\n      db_type: mariadb\n",
+	})
+	code, rows := listTenantRows(t, dir)
+	if code != http.StatusOK {
+		t.Fatalf("list: %d", code)
+	}
+	want := map[string][]string{
+		"tplat": {"kafka"}, "tover": {"mariadb"}, "tprof": {"nginx", "jvm"},
+		"tnone": nil, "tbad": nil, "told": nil,
+	}
+	for id, kinds := range want {
+		if got := rows[id].ExpectedExporters; !reflect.DeepEqual(got, kinds) {
+			t.Errorf("%s expected_exporters = %v, want %v", id, got, kinds)
 		}
 	}
 }

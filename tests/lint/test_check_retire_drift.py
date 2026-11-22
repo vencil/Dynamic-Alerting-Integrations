@@ -4,7 +4,7 @@
 #1603 (extension-SPELLING axis): the gate enumerated `rglob("*.yaml")`, so
 a tenant whose carrier is `alpha.yml` or `Alpha.YAML` was not in `declared`
 at all. Measured before the fix with byte-identical bodies: `alpha.yaml` →
-{alpha: postgres}; `alpha.yml` / `Alpha.YAML` → {} — the same answer as a
+{alpha: postgresql}; `alpha.yml` / `Alpha.YAML` → {} — the same answer as a
 tree with no tenant. The consequence is the gate's own failure mode: the
 exporter (which reads both spellings) keeps emitting
 `tenant_expected_exporter{tenant="alpha"}=1` after the K8s target is
@@ -17,13 +17,14 @@ directory are skipped, as the exporter's walker skips them. Before the fix
 cell is `tests/shared/test_confd_hidden_axis_across_tools.py`; the tests
 below add the operator-facing consequence and the dot-named-root boundary.
 
-#2858 (db_type source): the db_type is the exporter's own reading, from
-`da-guard served-values`. Before, the lint read each tenant file's own
-`_metadata` and skipped every `_` file, so a db_type the exporter takes from
-a profile or a root platform file was not declared (the exporter emits
-tenant_expected_exporter for it all the same) and a non-string db_type read
-as none. `test_declared_db_type_matches_served_values` compares the two on
-each way of writing it. da-guard is built by the conftest session fixture;
+#2858, #4097 (the declaration's source): the declared exporter kinds are the
+exporter's own reading of `_expected_exporters`, from `da-guard
+served-values`. Before #2858 the lint read each tenant file's own `_metadata`
+and skipped every `_` file, so a declaration the exporter takes from a profile
+or a root platform file was not declared (the exporter emits
+tenant_expected_exporter for it all the same).
+`test_declared_kinds_match_served_values` compares the two on each way of
+writing it. da-guard is built by the conftest session fixture;
 no go → fail, not skip.
 """
 from __future__ import annotations
@@ -47,7 +48,7 @@ def _da_guard(da_guard_env):
     return da_guard_env
 
 _BODY = ("tenants:\n  alpha:\n    pg_connections: 90\n"
-         "    _metadata:\n      db_type: postgres\n")
+         "    _expected_exporters: [postgresql]\n")
 
 
 def _tree(root: Path, carrier: str | None) -> Path:
@@ -76,11 +77,11 @@ def test_declared_tenants_see_yml_and_upper_case_the_same_as_yaml(
     The `notenants` arm is the sensitivity control: it must differ from the
     `yaml` arm, otherwise "same answer" is vacuous.
     """
-    control = crd.conf_d_declared_db_type_tenants(_tree(tmp_path / "none", None))
-    ref = crd.conf_d_declared_db_type_tenants(_tree(tmp_path / "yaml", "alpha.yaml"))
-    assert ref == {"alpha": "postgres"}, ref
+    control = crd.conf_d_declared_exporter_tenants(_tree(tmp_path / "none", None))
+    ref = crd.conf_d_declared_exporter_tenants(_tree(tmp_path / "yaml", "alpha.yaml"))
+    assert ref == {"alpha": "postgresql"}, ref
     assert control != ref, "fixture is vacuous — removing the tenant changed nothing"
-    assert crd.conf_d_declared_db_type_tenants(
+    assert crd.conf_d_declared_exporter_tenants(
         _tree(tmp_path / "other", carrier)) == ref
 
 
@@ -96,7 +97,7 @@ def test_reserved_and_examples_skips_survive_the_wider_spelling(
         _BODY.replace("alpha", "ghost_reserved_yml"), encoding="utf-8")
     (root / "examples" / "ex.yml").write_text(
         _BODY.replace("alpha", "ghost_example_yml"), encoding="utf-8")
-    assert crd.conf_d_declared_db_type_tenants(root) == {"alpha": "postgres"}
+    assert crd.conf_d_declared_exporter_tenants(root) == {"alpha": "postgresql"}
 
 
 def test_yml_tenant_without_a_k8s_target_is_a_violation(tmp_path: Path) -> None:
@@ -107,7 +108,7 @@ def test_yml_tenant_without_a_k8s_target_is_a_violation(tmp_path: Path) -> None:
     helm = tmp_path / "helm"
     helm.mkdir()
     result = crd.evaluate(root, helm, tmp_path / "no-namespaces.yaml")
-    assert result["declared"] == {"alpha": "postgres"}
+    assert result["declared"] == {"alpha": "postgresql"}
     assert len(result["violations"]) == 1, result["violations"]
     assert "'alpha'" in result["violations"][0]
 
@@ -122,7 +123,7 @@ def test_hidden_carriers_declare_no_tenant(tmp_path: Path) -> None:
     (root / ".snap").mkdir()
     (root / ".snap" / "s.yaml").write_text(
         _BODY.replace("alpha", "ghost_hidden_dir"), encoding="utf-8")
-    assert crd.conf_d_declared_db_type_tenants(root) == {"alpha": "postgres"}
+    assert crd.conf_d_declared_exporter_tenants(root) == {"alpha": "postgresql"}
     helm = tmp_path / "helm"
     helm.mkdir()
     result = crd.evaluate(root, helm, tmp_path / "no-namespaces.yaml")
@@ -133,46 +134,67 @@ def test_a_dot_named_conf_d_root_is_still_read(tmp_path: Path) -> None:
     """Only names BELOW the conf.d root are judged: the exporter reads the
     directory it is handed whatever it is called."""
     root = _tree(tmp_path / ".confd", "alpha.yaml")
-    assert crd.conf_d_declared_db_type_tenants(root) == {"alpha": "postgres"}
+    assert crd.conf_d_declared_exporter_tenants(root) == {"alpha": "postgresql"}
 
 
-# ── #2858: db_type is what /metrics serves, on every way of writing it ──
+# ── #2858, #4097: the declaration is what /metrics serves, on every way of writing it ──
 
 _DEFAULTS = "defaults:\n  pg_connections: 80\n"
-_PG_PROFILE = "profiles:\n  pg:\n    _metadata:\n      db_type: postgres\n"
+_PG_PROFILE = "profiles:\n  pg:\n    _expected_exporters: [postgresql]\n"
 _ON_PROFILE = "tenants:\n  alpha:\n    _profile: pg\n"
 
-# shape -> (files, the db_type alpha must be declared with; None = not declared)
+# shape -> (files, the kinds alpha must be declared with; None = not declared)
 SHAPES = {
-    "tenant-file": ({"_defaults.yaml": _DEFAULTS, "alpha.yaml": _BODY}, "postgres"),
+    "tenant-file": ({"_defaults.yaml": _DEFAULTS, "alpha.yaml": _BODY}, "postgresql"),
     "profile": ({"_defaults.yaml": _DEFAULTS, "_profiles.yaml": _PG_PROFILE,
-                 "alpha.yaml": _ON_PROFILE}, "postgres"),
+                 "alpha.yaml": _ON_PROFILE}, "postgresql"),
     "profile-yml": ({"_defaults.yaml": _DEFAULTS, "_profiles.yml": _PG_PROFILE,
-                     "alpha.yaml": _ON_PROFILE}, "postgres"),
+                     "alpha.yaml": _ON_PROFILE}, "postgresql"),
     "platform-file": ({"_defaults.yaml": _DEFAULTS,
-                       "_platform.yaml": "tenants:\n  alpha:\n    _metadata:\n"
-                                         "      db_type: postgres\n",
+                       "_platform.yaml": "tenants:\n  alpha:\n"
+                                         "    _expected_exporters: [postgresql]\n",
                        "alpha.yaml": "tenants:\n  alpha:\n    pg_connections: 90\n"},
-                      "postgres"),
-    # #3771: a list declares every kind it names, in the order written.
+                      "postgresql"),
+    # A list declares every kind it names, in the order written.
     "list": ({"_defaults.yaml": _DEFAULTS,
-              "alpha.yaml": "tenants:\n  alpha:\n    _metadata:\n"
-                            "      db_type: [postgres, redis]\n"}, "postgres,redis"),
+              "alpha.yaml": "tenants:\n  alpha:\n"
+                            "    _expected_exporters: [postgresql, redis]\n"}, "postgresql,redis"),
+    # #4097: kinds that are no database can be declared.
+    "application-kinds": ({"_defaults.yaml": _DEFAULTS,
+                           "alpha.yaml": "tenants:\n  alpha:\n"
+                                         "    _expected_exporters: [nginx, jvm]\n"}, "nginx,jvm"),
+    # #4097: the exporter judges the value. One it does not read — a
+    # non-string entry, a kind it does not know (the v2.9 free text) — serves
+    # no kind at all, so nothing is declared.
     "non-string": ({"_defaults.yaml": _DEFAULTS,
-                    "alpha.yaml": "tenants:\n  alpha:\n    _metadata:\n      db_type: 5\n"},
-                   "5"),
-    "tenant-metadata-over-profile": (
+                    "alpha.yaml": "tenants:\n  alpha:\n    _expected_exporters: [5]\n"},
+                   None),
+    "unknown-kind-beside-a-known-one": (
+        {"_defaults.yaml": _DEFAULTS,
+         "alpha.yaml": "tenants:\n  alpha:\n    _expected_exporters: [postgresql, postgres]\n"},
+        None),
+    # #4097: `_metadata.db_type` is removed, no alias.
+    "removed-metadata-db-type": (
+        {"_defaults.yaml": _DEFAULTS,
+         "alpha.yaml": "tenants:\n  alpha:\n    _metadata:\n      db_type: postgresql\n"}, None),
+    "tenant-over-profile": (
         {"_defaults.yaml": _DEFAULTS, "_profiles.yaml": _PG_PROFILE,
          "alpha.yaml": "tenants:\n  alpha:\n    _profile: pg\n"
-                       "    _metadata:\n      db_type: mysql\n"}, "mysql"),
-    # The profile fills `_metadata` only when the tenant's layer writes none:
-    # a tenant `_metadata` without db_type leaves it empty.
-    "tenant-metadata-without-db-type": (
+                       "    _expected_exporters: [mariadb]\n"}, "mariadb"),
+    # The key is its own, no longer a field of `_metadata`: a tenant writing
+    # `_metadata` still gets the profile's declaration (while it was
+    # `_metadata.db_type`, the tenant's `_metadata` kept the profile's out whole).
+    "tenant-metadata-beside-the-profiles-declaration": (
         {"_defaults.yaml": _DEFAULTS, "_profiles.yaml": _PG_PROFILE,
          "alpha.yaml": "tenants:\n  alpha:\n    _profile: pg\n"
-                       "    _metadata:\n      owner: team-a\n"}, None),
+                       "    _metadata:\n      owner: team-a\n"}, "postgresql"),
+    "tenant-empty-list-over-profile": (
+        {"_defaults.yaml": _DEFAULTS, "_profiles.yaml": _PG_PROFILE,
+         "alpha.yaml": "tenants:\n  alpha:\n    _profile: pg\n"
+                       "    _expected_exporters: []\n"}, None),
+    # A key the root lists under optional_overrides is one no profile may fill.
     "optional-overrides": (
-        {"_defaults.yaml": _DEFAULTS + "optional_overrides:\n  - _metadata\n",
+        {"_defaults.yaml": _DEFAULTS + "optional_overrides:\n  - _expected_exporters\n",
          "_profiles.yaml": _PG_PROFILE, "alpha.yaml": _ON_PROFILE}, None),
     "subdir-profiles": ({"_defaults.yaml": _DEFAULTS, "team/_profiles.yaml": _PG_PROFILE,
                          "team/alpha.yaml": _ON_PROFILE}, None),
@@ -190,25 +212,25 @@ def _write(root: Path, files: dict[str, str]) -> Path:
     return root
 
 
-def _served_db_type(root: Path, tenant: str) -> str:
-    """The served db_type as the lint reports it: #3771 serves it as a list
-    (every declared kind), joined by ","."""
-    meta = tv.load_served_tree(root).tenants[tenant].values.get("_metadata")
-    kinds = meta.get("db_type") if isinstance(meta, dict) else None
-    return ",".join(kinds) if isinstance(kinds, list) else (kinds or "")
+def _served_kinds(root: Path, tenant: str) -> str:
+    """The served kinds as the lint reports them: the default mode's
+    `values._expected_exporters`, joined by ","."""
+    kinds = tv.load_served_tree(root).tenants[tenant].values.get("_expected_exporters")
+    assert isinstance(kinds, list), kinds
+    return ",".join(kinds)
 
 
 @pytest.mark.parametrize("shape", sorted(SHAPES))
-def test_declared_db_type_matches_served_values(tmp_path: Path, shape: str) -> None:
+def test_declared_kinds_match_served_values(tmp_path: Path, shape: str) -> None:
     files, want = SHAPES[shape]
     root = _write(tmp_path / "conf.d", files)
-    assert _served_db_type(root, "alpha") == (want or ""), "fixture premise"
-    declared = crd.conf_d_declared_db_type_tenants(root)
+    assert _served_kinds(root, "alpha") == (want or ""), "fixture premise"
+    declared = crd.conf_d_declared_exporter_tenants(root)
     assert declared == ({"alpha": want} if want else {}), declared
 
 
 def test_profile_tenant_without_a_k8s_target_is_a_violation(tmp_path: Path) -> None:
-    """The operator-facing consequence: a tenant whose db_type comes from a
+    """The operator-facing consequence: a tenant whose declaration comes from a
     profile emits tenant_expected_exporter, so removing its K8s target must
     be reported (before #2858 it passed with rc=0)."""
     files, _ = SHAPES["profile"]
@@ -296,7 +318,7 @@ def test_no_da_crdecode_is_an_error_not_an_empty_set(tmp_path: Path, monkeypatch
         crd.namespace_declared_targets(f)
 
 
-# #3918: the db_type is read from `served-values --config-facts`, which reads
+# #3918: the declaration is read from `served-values --config-facts`, which reads
 # no instant. In 01:00–01:29 the tenant's two keys give one series, so the
 # whole tree's /metrics cannot be gathered there; the default mode then
 # exits 2, and this gate used to fail (rc 2) inside that window only.
@@ -305,16 +327,16 @@ _WINDOW_COLLISION = {
     "alpha.yaml": ("tenants:\n  alpha:\n    mysql_connection_usage_percent: \"70:critical\"\n"
                    "    mysql_connection_usage_percent_critical:\n      default: disable\n"
                    "      overrides:\n        - window: \"01:00-01:29\"\n          value: \"95\"\n"
-                   "    _metadata:\n      db_type: mariadb\n"),
+                   "    _expected_exporters: [mariadb]\n"),
 }
 
 
-def test_the_db_types_do_not_depend_on_the_time_of_day(tmp_path: Path, monkeypatch) -> None:
+def test_the_declared_kinds_do_not_depend_on_the_time_of_day(tmp_path: Path, monkeypatch) -> None:
     got = {}
     for at in ("2026-11-13T01:15:00Z", "2026-11-13T12:00:00Z"):
         root = _write(tmp_path / f"conf-{at.replace(':', '')}", _WINDOW_COLLISION)
         monkeypatch.setenv("DA_GUARD_BINARY", da_guard_at(tmp_path, at))
-        got[at] = crd.conf_d_declared_db_type_tenants(root)
+        got[at] = crd.conf_d_declared_exporter_tenants(root)
     assert list(got.values()) == [{"alpha": "mariadb"}] * 2, got
 
 

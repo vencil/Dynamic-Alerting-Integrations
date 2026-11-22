@@ -1142,8 +1142,7 @@ class TestParseVersionProperties:
 # ---------------------------------------------------------------------------
 # _resolve_binary — arg parsing for da-tools Go-binary dispatchers
 # ---------------------------------------------------------------------------
-# Pilot batch 5: drives binary resolution for da-guard / da-batchpr /
-# da-parser. Two flag forms are accepted (`--flag value` AND `--flag=value`);
+# Pilot batch 5: drives binary resolution for da-guard / da-parser. Two flag forms are accepted (`--flag value` AND `--flag=value`);
 # both must strip the flag pair from forwarded args, and both must record
 # the explicit override for later use. The space-form / equals-form parity
 # is exactly the kind of duplicated branch where mutation testing pays off.

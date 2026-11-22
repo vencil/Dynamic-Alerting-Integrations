@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.served-values/v5",
+  "schema": "da-guard.served-values/v6",
   "config_hash": "52288814bb386bd985ea1713ac5b51d1e5c4ff7ada90fa3bf2d45f08e309bcb8",
   "at": "2026-01-01T00:00:00Z",
   "parse_failed": [],
@@ -20,8 +20,8 @@
             "value": 100
           }
         ],
+        "_expected_exporters": [],
         "_metadata": {
-          "db_type": [],
           "domain": "",
           "environment": "",
           "groups": [],

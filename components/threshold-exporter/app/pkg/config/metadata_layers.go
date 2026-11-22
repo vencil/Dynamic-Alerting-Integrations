@@ -10,7 +10,7 @@ package config
 //
 //   - PER KEY. A later layer writes its keys over the earlier layers'; a
 //     key it does not write keeps the earlier value. A tenant file writing
-//     only `db_type` keeps the platform's `owner` / `environment` / `domain`.
+//     only `tier` keeps the platform's `owner` / `environment` / `domain`.
 //   - ORDER. Root platform files in merge order (a later file over an
 //     earlier one), the tenant file over all of them.
 //   - A VALUE IS REPLACED WHOLE. `tags: [a]` over `tags: [b, c]` is `[a]`;
@@ -19,7 +19,7 @@ package config
 //     replaces everything below it: no key survives from the earlier layers.
 //     A tenant writing `_metadata: null` therefore has no metadata.
 //
-// The planes: /metrics (tenant_metadata_info, tenant_expected_exporter —
+// The planes: /metrics (tenant_metadata_info —
 // the flat merge stacks layers through overlayTenantLayer, then
 // ApplyProfiles fills in, then ResolveMetadata decodes) and the tenant-api
 // metadata readers (MetadataResolver, which runs those same three steps
@@ -199,12 +199,13 @@ func LoadRootPlatformChecked(configDir string) (RootPlatform, error) {
 // `_metadata` alone. Read-only after construction; safe for concurrent use.
 type MetadataResolver struct {
 	root rootPlatform
-	// profiles is, per profile name, the merged profile's `_metadata` entry
-	// (mergeProfilesInto's rule: a later file over an earlier one), or an
-	// empty map when it writes none — the name is still a known profile.
+	// profiles is, per profile name, the merged profile's `_metadata` and
+	// `_expected_exporters` entries (mergeProfilesInto's rule: a later file
+	// over an earlier one), or an empty map when it writes neither — the
+	// name is still a known profile.
 	profiles map[string]map[string]ScheduledValue
-	// declared is the root carrier's optional_overrides when they declare
-	// `_metadata` (then no profile may fill it in), else nil.
+	// declared is those of the resolver's keys the root carrier's
+	// optional_overrides declare (then no profile may fill them in).
 	declared []string
 }
 
@@ -212,8 +213,8 @@ type MetadataResolver struct {
 func (root RootPlatform) MetadataResolver() MetadataResolver {
 	m := MetadataResolver{root: root.r}
 	// mergeProfilesInto's rule (a later file over an earlier one, per
-	// profile name, per key) for the `_metadata` key alone: the profiles'
-	// other keys are never copied.
+	// profile name, per key) for the resolver's keys alone (`_metadata`,
+	// `_expected_exporters`): the profiles' other keys are never copied.
 	for i := range root.r.files {
 		pf := root.r.files[i].parsed
 		if pf.err != nil {
@@ -228,18 +229,28 @@ func (root RootPlatform) MetadataResolver() MetadataResolver {
 				only = make(map[string]ScheduledValue, 1)
 				m.profiles[name] = only
 			}
-			if sv, ok := values[metadataKey]; ok {
-				only[metadataKey] = sv
+			for _, k := range metadataResolverKeys {
+				if sv, ok := values[k]; ok {
+					only[k] = sv
+				}
 			}
 		}
 	}
 	if c := root.r.carrier(); c != nil && c.parsed.err == nil {
-		if _, declared := canonicalizeOptionalOverrides(c.parsed.cfg.OptionalOverrides)[metadataKey]; declared {
-			m.declared = []string{metadataKey}
+		canon := canonicalizeOptionalOverrides(c.parsed.cfg.OptionalOverrides)
+		for _, k := range metadataResolverKeys {
+			if _, declared := canon[k]; declared {
+				m.declared = append(m.declared, k)
+			}
 		}
 	}
 	return m
 }
+
+// metadataResolverKeys are the keys a MetadataResolver reads through the
+// layers: `_metadata`, and `_expected_exporters` (#4097) — what the tenant
+// list shows of a tenant beside its metadata.
+var metadataResolverKeys = [...]string{metadataKey, expectedExportersKey}
 
 // Resolve reads tenantID's metadata, own being the tenant's entry in its
 // tenant file as ParseConfigFile decodes it (nil = the file writes no key).
@@ -247,9 +258,24 @@ func (root RootPlatform) MetadataResolver() MetadataResolver {
 // decode into TenantMetadata — the case in which every field reads empty
 // although the tenant wrote metadata.
 func (m MetadataResolver) Resolve(tenantID string, own map[string]ScheduledValue) (meta ResolvedMetadata, decoded bool) {
-	layers := make(map[string]ScheduledValue, 2)
+	return tenantMetadataOf(tenantID, m.layers(tenantID, own), nil)
+}
+
+// ExpectedExporters reads the kinds tenantID declares in
+// `_expected_exporters` (#4097) as /metrics reads them — the layers and the
+// profile fill-in of Resolve, the value replaced whole, then the exporter's
+// own reading (ExpectedExportersOf): nil when it declares none or the value
+// is one the exporter does not read. own is Resolve's.
+func (m MetadataResolver) ExpectedExporters(tenantID string, own map[string]ScheduledValue) []string {
+	return ExpectedExportersOf(m.layers(tenantID, own))
+}
+
+// layers is tenantID's merged entry for the resolver's keys: the LAYERS and
+// PROFILE steps above.
+func (m MetadataResolver) layers(tenantID string, own map[string]ScheduledValue) map[string]ScheduledValue {
+	layers := make(map[string]ScheduledValue, 3)
 	stack := func(layer map[string]ScheduledValue) {
-		for _, k := range [...]string{metadataKey, "_profile"} {
+		for _, k := range [...]string{metadataKey, expectedExportersKey, "_profile"} {
 			if sv, writes := layer[k]; writes {
 				overlayTenantLayer(layers, map[string]ScheduledValue{k: sv})
 			}
@@ -267,7 +293,7 @@ func (m MetadataResolver) Resolve(tenantID string, own map[string]ScheduledValue
 		OptionalOverrides: m.declared,
 	}
 	c.applyProfiles(nil)
-	return tenantMetadataOf(tenantID, layers, nil)
+	return layers
 }
 
 // ResolveFile is Resolve over a tenant file's bytes. ok is false when they

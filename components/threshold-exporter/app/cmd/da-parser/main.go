@@ -6,13 +6,13 @@
 // pipeline step or a one-shot triage:
 //
 //   - Convert kube-prometheus PrometheusRule YAML to ParseResult
-//     JSON for downstream C-9 Profile Builder consumption.
+//     JSON for triage or a downstream script of the caller's own.
 //   - Verify a corpus is "Prometheus-portable" before committing
 //     to MetricsQL (--validate-strict-prom).
 //   - Block migrations on any rule using VM-only functions
 //     (--fail-on-non-portable).
 //
-// Subcommands (dispatcher pattern, mirrors da-batchpr):
+// Subcommands (dispatcher pattern):
 //
 //	import       Parse PrometheusRule YAML(s) → JSON ParseResult.
 //	allowlist    Print the embedded VM-only allowlist (introspection

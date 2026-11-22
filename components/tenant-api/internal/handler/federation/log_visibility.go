@@ -122,6 +122,7 @@ func GetTenantLogVisibility(d *handler.Deps) http.HandlerFunc {
 // @Failure     400  {object} handler.ErrorResponse
 // @Failure     403  {object} handler.ErrorResponse
 // @Failure     409  {object} handler.ErrorResponse
+// @Failure     413  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
 // @Failure     507  {object} handler.ErrorResponse

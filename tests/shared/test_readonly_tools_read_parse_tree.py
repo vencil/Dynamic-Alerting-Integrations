@@ -352,14 +352,14 @@ def test_a_policy_file_whose_name_is_not_utf8_is_read(tmp_path):
 # ── check_retire_drift ───────────────────────────────────────────────────
 
 _RD = {"_defaults.yaml": "defaults:\n  cpu: 80\n",
-       "team/t.yaml": "tenants:\n  db-x:\n    _metadata: {db_type: mariadb}\n"}
+       "team/t.yaml": "tenants:\n  db-x:\n    _expected_exporters: [mariadb]\n"}
 
 
 def test_retire_drift_reads_the_yaml_v3_way(tmp_path):
     """A nested tenant file is judged (parse-tree's selection)."""
     rd = _tool("check_retire_drift")
     d = _write(tmp_path / "conf.d", _RD)
-    assert rd.conf_d_declared_db_type_tenants(d) == {"db-x": "mariadb"}
+    assert rd.conf_d_declared_exporter_tenants(d) == {"db-x": "mariadb"}
 
 
 def test_retire_drift_parses_no_yaml(tmp_path, no_yaml_parse):
@@ -373,7 +373,7 @@ def test_retire_drift_names_an_unreadable_tenant_file(tmp_path):
     rd = _tool("check_retire_drift")
     d = _write(tmp_path / "conf.d", {**_RD, "u.yaml": "tenants:\n  a: [\n"})
     with refuses("u.yaml") as err:  # the shared refusal (#3206)
-        rd.conf_d_declared_db_type_tenants(d)
+        rd.conf_d_declared_exporter_tenants(d)
     assert "(syntax_error:" in err.getvalue()
 
 

@@ -3,12 +3,15 @@
 
 WHY (the silent-failure this shifts left):
   The threshold-exporter opts a tenant INTO per-tenant exporter liveness only when
-  its _metadata declares a db_type (collector.go collectTenantExpectedExporter,
-  #869). A mistyped KEY (dbType / db_typ) or VALUE (maraidb) makes the resolver see
-  DBType=="" and silently drop the tenant from liveness — the exact silent-removal
-  class #869 set out to kill. docs/schemas/tenant-config.schema.json now models the
-  _metadata block as additionalProperties:false + a db_type enum, so this lint catches
-  both typo shapes at author/CI time instead of in production (#880 Day-3 hardening).
+  it declares exporter kinds in `_expected_exporters` (collector.go
+  collectTenantExpectedExporter, #869, #4097). A mistyped KEY or VALUE (maraidb)
+  declares nothing and silently drops the tenant from liveness — the exact
+  silent-removal class #869 set out to kill. The exporter judges the value itself
+  now (the key verdict's error, in every layer); docs/schemas/tenant-config.schema.json
+  models the same thing — the closed `_` namespace, `_expected_exporters` as a list
+  of the kind enum, `_metadata` as additionalProperties:false (so the removed
+  `db_type` is refused too) — so this lint catches the typo at author/CI time,
+  before anything is loaded (#880 Day-3 hardening).
 
 SCOPE:
   Validates every TENANT-shaped conf.d file (filename NOT starting with "_") against

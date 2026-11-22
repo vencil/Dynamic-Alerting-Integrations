@@ -23,6 +23,7 @@ measured that way).
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import errno
 import importlib
@@ -30,6 +31,7 @@ import io
 import os
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -41,6 +43,7 @@ import pytest
 from _platform_fs import require_posix_modes, symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+TOOLS = REPO_ROOT / "scripts" / "tools"
 for _d in (REPO_ROOT / "scripts" / "dx", REPO_ROOT / "scripts" / "ops"):
     if str(_d) not in sys.path:
         sys.path.insert(0, str(_d))
@@ -196,15 +199,31 @@ def _setup_add_frontmatter(mod, mp, root, target):
     return _argv_runner(mod, mp, ["add_frontmatter.py", "--base-dir", str(root)])
 
 
+def _setup_schema_json(mod, mp, root, target):
+    """gen_tenant_id_json / gen_am_duration_json: one copy, at *target*."""
+    (root / "schema.json").write_text("{}", encoding="utf-8")
+    mp.setattr(mod, "_repo_root", lambda: root)
+    mp.setattr(mod, "SCHEMA_REL", "schema.json")
+    mp.setattr(mod, "OUT_RELS", (target.relative_to(root).as_posix(),))
+    mp.setattr(mod, "render", lambda schema: NEW)
+    return _argv_runner(mod, mp, [f"{mod.__name__}.py"])
+
+
 CALLERS: dict[str, Caller] = {
+    "tenant_id_json": Caller(
+        "gen_tenant_id_json", "scripts/tools/dx/gen_tenant_id_json.py:121",
+        None, _setup_schema_json),
+    "am_duration_json": Caller(
+        "gen_am_duration_json", "scripts/tools/dx/gen_am_duration_json.py:120",
+        None, _setup_schema_json),
     "rule_pack_readme": Caller(
         "generate_rule_pack_readme", "scripts/tools/dx/generate_rule_pack_readme.py:361",
         None, _setup_rule_pack_readme),
     "alert_reference_zh": Caller(
-        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:657",
+        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:560",
         None, _setup_alert_reference_zh),
     "alert_reference_en": Caller(
-        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:659",
+        "generate_alert_reference", "scripts/tools/dx/generate_alert_reference.py:562",
         None, _setup_alert_reference_en),
     "repo_name_fix": Caller(
         "check_repo_name", "scripts/tools/lint/check_repo_name.py:127",
@@ -464,7 +483,9 @@ def test_the_execute_bit_is_kept_and_nothing_else_of_the_mode(name, mode, root, 
 # itself: the artifact entry refuses the target before opening it.
 _READS_ITS_TARGET_FIRST = ["rule_pack_stats_fragment", "rule_pack_stats_inject",
                            "byo_rulepack_table", "tool_map", "doc_map",
-                           "rule_pack_readme", "alert_reference_zh", "alert_reference_en"]
+                           "rule_pack_readme", "alert_reference_zh", "alert_reference_en",
+                           # third batch: their bare write blocked on the FIFO
+                           "tenant_id_json", "am_duration_json"]
 
 
 @pytest.mark.parametrize("name", _READS_ITS_TARGET_FIRST)
@@ -506,10 +527,33 @@ def test_a_refused_english_reference_leaves_the_chinese_one_alone(root, monkeypa
     assert (root / "aux" / "other.md").read_text(encoding="utf-8") == "UNCHANGED\n"
 
 
-def test_the_stats_fragment_directory_is_created_when_absent(root, monkeypatch):
-    target = root / "fresh" / "target.md"
-    rc, err = run_caller("rule_pack_stats_fragment", monkeypatch, root, target)
+@pytest.mark.parametrize("name", ["rule_pack_stats_fragment", "tenant_id_json",
+                                  "am_duration_json"])
+def test_the_target_directory_is_created_when_absent(name, root, monkeypatch):
+    """The generators that made the directory of a copy they add (a new
+    portal data file) still do."""
+    target = root / "fresh" / "deeper" / "target.md"
+    rc, err = run_caller(name, monkeypatch, root, target)
     assert (rc, target.read_text(encoding="utf-8")) == (0, NEW), err
+
+
+def test_a_refused_copy_leaves_the_other_copies_alone(root, monkeypatch):
+    """#3981, third batch: `gen_tenant_id_json` writes two copies. With the
+    second one no regular file, the first was already rewritten when the
+    write of the second failed (or blocked); every copy is judged first."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFO on this platform")
+    first = _target(root)
+    second = root / "out" / "second.json"
+    os.mkfifo(second)
+    mod = importlib.import_module("gen_tenant_id_json")
+    run = _setup_schema_json(mod, monkeypatch, root, first)
+    monkeypatch.setattr(mod, "OUT_RELS", ("out/target.md", "out/second.json"))
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+        rc = run()
+    assert rc == 2 and str(second) in err.getvalue(), err.getvalue()
+    assert first.read_text(encoding="utf-8") == OLD
 
 
 @pytest.mark.parametrize("name", ["tool_map", "doc_map"])
@@ -533,6 +577,43 @@ def test_the_safe_flag_is_a_usage_error(name, root, monkeypatch):
     assert target.read_text(encoding="utf-8") == OLD
 
 
+def _modules_loaded_with(module: str) -> set[str]:
+    """The names in ``sys.modules`` after importing *module* in a fresh
+    interpreter — what it cannot be imported without."""
+    code = (f"import sys; sys.path[:0] = {[str(TOOLS), str(TOOLS / 'dx')]!r}; "
+            f"import {module}; print('\\n'.join(sorted(sys.modules)))")
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          encoding="utf-8", stdin=subprocess.DEVNULL, timeout=120)
+    assert done.returncode == 0, done.stderr
+    return set(done.stdout.split())
+
+
+@pytest.mark.parametrize("module, constant", [("sync_schema", "PY_REL"),
+                                              ("gen_recipe_contract", "CONSTANTS_REL")])
+def test_a_generator_never_loads_what_loads_the_file_it_repairs(module, constant):
+    """#3981, third batch (blind review): `sync_schema --update` and
+    `gen_recipe_contract --update` rewrite a generated block of
+    `_lib_constants.py`. `_lib_io` imports that file — so with the artifact
+    entry on their write path, a block left broken (a merge conflict in it)
+    made `--update` die on the import, and it is `--update` that repairs
+    it. They stay off the entry until it lives in a module that loads
+    neither; this is what says so."""
+    mod = importlib.import_module(module)
+    target = getattr(mod, constant)
+    assert target == "scripts/tools/_lib_constants.py", target
+    assert "_lib_constants" in _modules_loaded_with("_lib_io"), (
+        "_lib_io no longer loads _lib_constants: this rule has no ground left")
+    source = ast.parse((TOOLS / "dx" / f"{module}.py").read_text(encoding="utf-8"))
+    imported = {a.name for n in ast.walk(source) if isinstance(n, ast.Import) for a in n.names}
+    imported |= {n.module for n in ast.walk(source) if isinstance(n, ast.ImportFrom)}
+    loaders = {name for name in imported
+               if name and name.startswith("_lib_") and name != "_lib_constants"
+               and "_lib_constants" in _modules_loaded_with(name)}
+    assert not loaders, (
+        f"{module} imports {sorted(loaders)}, which load(s) _lib_constants.py — "
+        f"the file its --update repairs")
+
+
 def test_the_caller_table_is_the_surveyed_population():
     """Anti-vacuity for the parametrization: the #2128 sites, each at a
     line that still calls the helper — so a moved call is noticed here rather
@@ -540,8 +621,9 @@ def test_the_caller_table_is_the_surveyed_population():
     may reach the helper through its entry point, `_lib_io.write_repo_artifact`.
     #3982 (owner 2026-11-18): `audit_rules_drift --out` is an operator
     output now and left the table (seven of the eight remain). #3981, second
-    batch: five more sites that rewrote a tracked file with a bare write."""
-    assert len(CALLERS) == 12
+    batch: five more sites that rewrote a tracked file with a bare write;
+    third batch: two generators of committed copies of a schema definition."""
+    assert len(CALLERS) == 14
     for caller in CALLERS.values():
         rel, line = caller.site.rsplit(":", 1)
         src = (REPO_ROOT / rel).read_text(encoding="utf-8").splitlines()

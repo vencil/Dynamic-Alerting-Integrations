@@ -64,6 +64,35 @@ func TestValueFindings_SeverityByLayer(t *testing.T) {
 	}
 }
 
+// #4097: a problem the reader marks EveryLayer — an `_expected_exporters`
+// the exporter does not read, a `_metadata` that still writes the removed
+// `db_type` — is an error, and blocks, in a root platform file's `tenants:`
+// entry and in a profile as well; a profile no judged tenant binds included.
+func TestValueFindings_EveryLayerIsAnErrorInEachLayer(t *testing.T) {
+	t.Parallel()
+	p := func(file, layer, owner, key string) config.LayerValueProblem {
+		return config.LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: key, Problem: "p", EveryLayer: true}
+	}
+	tr := Judge(valueInput(
+		p("t1.yaml", config.ValueLayerTenant, "t1", "_expected_exporters"),
+		p("_platform.yaml", config.ValueLayerPlatform, "t3", "_expected_exporters"),
+		p("_defaults.yaml", config.ValueLayerProfile, "gold", "_metadata"),
+		p("_defaults.yaml", config.ValueLayerProfile, "unbound", "_expected_exporters"),
+	))
+	want := []valueRow{
+		{SeverityError, "_defaults.yaml", "_expected_exporters", []string{}, true},
+		{SeverityError, "_defaults.yaml", "_metadata", []string{"t1", "t2"}, true},
+		{SeverityError, "_platform.yaml", "_expected_exporters", []string{"t3"}, true},
+		{SeverityError, "t1.yaml", "_expected_exporters", []string{"t1"}, true},
+	}
+	if got := valueRows(tr); !reflect.DeepEqual(got, want) {
+		t.Errorf("findings\n%+v\nwant\n%+v", got, want)
+	}
+	if n := len(Blocks(tr)); n != 5 {
+		t.Errorf("%d blocks, want 5 (one per tenant named, one for the unbound profile): %+v", n, Blocks(tr))
+	}
+}
+
 // A profile's or a platform entry's unread value never blocks: the tenants
 // cannot fix it in their own files.
 func TestValueFindings_InheritedNeverBlocks(t *testing.T) {

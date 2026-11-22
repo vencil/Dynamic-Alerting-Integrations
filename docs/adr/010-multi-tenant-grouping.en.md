@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./010-multi-tenant-grouping.md)
 
-**Decision in brief**: custom groups are defined in `_groups.yaml` (now kept in tenant-api's state store, not in conf.d/; see Status), with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions do not go through a PR (see [ADR-011](011-pr-based-write-back.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
+**Decision in brief**: custom groups are defined in `_groups.yaml` (now kept in tenant-api's state store, not in conf.d/; see Status), with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions do not go through a PR (see [ADR-011](011-pr-based-write-back.md)). In addition, tenant `_metadata` gains fields such as environment, region, and domain for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`. Which exporters a tenant runs is not metadata: it is declared in the top-level `_expected_exporters`.
 
 ## Status
 
@@ -32,7 +32,7 @@ lang: en
 
 tenant-api already offered single-tenant CRUD and batch operations, but once the number of tenants grew (50 or more), domain experts ran into the following difficulties:
 
-1. **No grouped view**: the API that lists tenants returns a flat list, with no way to filter quickly by business dimension (region, domain, db_type).
+1. **No grouped view**: the API that lists tenants returns a flat list, with no way to filter quickly by business dimension (region, domain, which kind of database it runs).
 2. **Batches had to be spelled out**: every batch operation required listing tenant IDs one by one, with no way to "operate on a whole group".
 3. **Metadata was too thin**: `_metadata` at the time only had runbook_url, owner, and tier, which could not support multi-dimensional filtering.
 4. **No saved groups**: UI filter conditions disappeared on refresh, with no way to create named, reusable group definitions.
@@ -56,7 +56,6 @@ _metadata:
   environment: "production"       # production | staging | development
   region: "ap-northeast-1"       # cloud region
   domain: "finance"              # business domain
-  db_type: "mariadb"             # database type; a list such as [mariadb, redis] for several
   tags: ["critical-path", "pci"] # free-form tags
   groups: ["production-dba"]     # group memberships
 ```
@@ -65,7 +64,7 @@ Properties of the new fields:
 
 - **All optional**: omitting a field equals an empty value, so existing configs keep working.
 - **Not added to `tenant_metadata_info`**: they do not become labels of that metric, which avoids a cardinality blow-up.
-- **`db_type` has a metric of its own**: for a tenant that declares `db_type`, the exporter also emits `tenant_expected_exporter{tenant, db_type}` (value 1), which liveness checks use to tell whether the tenant's database exporter is missing. `db_type` is a string or a list (a string is a one-element list); there is one series per declared kind, and liveness is judged per kind.
+- **Which exporters a tenant runs is not a metadata field**: it is declared in the tenant's top-level `_expected_exporters`, a list of exporter kinds (for example `[mariadb, redis, nginx]`; a kind is a Rule Pack that has a presence metric). For each declared kind the exporter emits one `tenant_expected_exporter{tenant, pack}` series (value 1), which liveness checks use to tell, per kind, whether that exporter is missing — so declaring a kind turns its absence alert on. `_metadata.db_type` used to do this as a second job: one field was both a UI grouping string and the liveness declaration, nothing judged its value, and it could not declare an exporter that is no database (nginx, a JVM). That field is removed; a config that still writes it is refused with a message naming the line to write instead. tenant-api and the UI can still filter by the declared kinds.
 - **environment and domain can also scope permissions**: rules in `_rbac.yaml` can use `environments` and `domains` to narrow what they apply to.
 - **Readable on both sides**: both the Go `TenantMetadata` struct and the Python `generate_tenant_metadata.py` understand these fields.
 
@@ -106,25 +105,25 @@ groups:
 
 - Group sidebar: shows the list of groups, member counts, and create and delete actions.
 - Group filter: clicking a group filters the tenant list.
-- Multi-dimensional filters: the list can be filtered by environment, domain, db_type, and other fields; the domain and db_type dropdowns are generated from tenant metadata.
+- Multi-dimensional filters: the list can be filtered by environment, domain, the declared exporter kinds, and other fields; the domain and exporter-kind dropdowns are generated from the tenants' data.
 - Permission-aware display: the UI calls `/api/v1/me` for the caller's permissions, and without write permission the group create and delete actions are hidden (not greyed out).
 - When a write returns 409, the UI says the configuration was updated by someone else and asks the user to refresh and retry.
 
 ### Example: groups leave `/metrics` unchanged, and the new fields stay out of `tenant_metadata_info`
 
-Input: conf.d/ holds `_defaults.yaml` (`defaults: {mysql_connections: 80}`), a tenant file `db-a.yaml` (`mysql_connections: "70"`, with the `_metadata` from section 1), and the `_groups.yaml` from section 2.
+Input: conf.d/ holds `_defaults.yaml` (`defaults: {mysql_connections: 80}`), a tenant file `db-a.yaml` (`mysql_connections: "70"`, `_expected_exporters: [mariadb]`, with the `_metadata` from section 1), and the `_groups.yaml` from section 2.
 
 Every line of threshold-exporter's `/metrics` carrying `tenant="db-a"` (comment lines excluded):
 
 ```
 da_tenant_metrics_over_limit{tenant="db-a"} 0
-tenant_expected_exporter{db_type="mariadb",tenant="db-a"} 1
+tenant_expected_exporter{pack="mariadb",tenant="db-a"} 1
 tenant_metadata_info{owner="team-dba",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="tier-1"} 1
 user_severity_dedup{mode="enable",tenant="db-a"} 1
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
 ```
 
-Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and `db_type` appears only on `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing and Go runtime metrics (`go_memstats_*`, `go_threads`).
+Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and the declared exporter kinds appear only as the `pack` label of `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing and Go runtime metrics (`go_memstats_*`, `go_threads`).
 
 ## Rationale
 
@@ -140,7 +139,7 @@ The conditions for metadata-based auto-matching are kept in the `filters` field,
 
 ### Why add metadata fields instead of using tags only?
 
-Structured fields (environment, domain, db_type) suit UI filtering better than free-form tags:
+Structured fields (environment, domain) suit UI filtering better than free-form tags:
 
 - Dropdowns need a finite set of options.
 - Schema validation can check the allowed values of structured fields.

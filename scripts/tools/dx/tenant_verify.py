@@ -3,7 +3,7 @@
 
 Use case: B-4 Emergency Rollback Procedures verification checklist (item 6
 in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback
-Procedures). After a batch-PR rollback wave, the operator needs to confirm
+Procedures). After a rollback wave, the operator needs to confirm
 each tenant's `merged_hash` returned to the pre-Base-PR snapshot. This
 tool prints `source_hash` + `merged_hash` for one tenant (or all tenants),
 optionally comparing against a reference value and returning exit 1 if

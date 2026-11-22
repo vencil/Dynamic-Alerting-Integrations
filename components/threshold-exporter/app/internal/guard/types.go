@@ -3,9 +3,8 @@
 // any tenant under it become invalid or carry redundant overrides?"
 // before the change reaches the WatchLoop.
 //
-// The guard exists to defend the contract C-9 / C-10 set up: the
-// migration toolkit moves shared structure into directory-level
-// `_defaults.yaml` files. That move only stays safe if subsequent
+// The guard exists to defend the conf.d contract (ADR-018): shared
+// structure lives in directory-level `_defaults.yaml` files. That move only stays safe if subsequent
 // edits to those defaults can't (a) silently break tenants by
 // removing fields they rely on, (b) leave tenants with overrides
 // that are exact duplicates of the new defaults — a smell that
@@ -14,9 +13,7 @@
 //
 // Triggers (planning §C-12):
 //   - GitHub Actions `on: pull_request` against any
-//     `**/_defaults.yaml` change. C-10 PR-2 wires the `apply` mode
-//     to require this guard pass before it allows the Base
-//     Infrastructure PR to merge.
+//     `**/_defaults.yaml` change.
 //   - Customer-side pre-commit hook (the same Go code packaged in
 //     a CLI subcommand by C-11 Migration Toolkit).
 //
@@ -121,10 +118,8 @@
 //   - PR-5: GitHub Actions wrapper that posts the rendered Markdown
 //     report as a PR comment.
 //
-// PR-1 contract is sufficient for C-10's apply mode (PR-2) to
-// invoke the guard programmatically: it merges defaults + tenant
-// overrides itself (it already needs that path for the YAML
-// emitter), then hands the merged maps to CheckDefaultsImpact.
+// A programmatic caller merges defaults + tenant overrides itself,
+// then hands the merged maps to CheckDefaultsImpact.
 package guard
 
 import (

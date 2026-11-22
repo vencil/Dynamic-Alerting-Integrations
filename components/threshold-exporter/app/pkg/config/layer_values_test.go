@@ -261,6 +261,11 @@ func TestLayerValueProblems_CarryNoAuthorText(t *testing.T) {
 		"{target: " + q + ", enabled: true}",
 		"{target: enable, reason: [" + q + "]}",
 		"{recurring: " + q + "}",
+		// #4097: the removed `_metadata.db_type`, whose problem prints a
+		// line to write — from the kind table, never from the value.
+		"{db_type: " + q + "}",
+		"{db_type: [mariadb, " + q + "]}",
+		"[mariadb, " + q + "]",
 		"{recurring: [" + q + "]}",
 		"{recurring: [{" + q + ": 1}]}",
 		"{recurring: [{weekdays: [" + q + "], window: \"02:00-06:00\"}]}",

@@ -20,7 +20,7 @@
 2. [核心能力](#2-核心能力) — 六項能力速覽
 3. [營運參考](#3-營運參考) — endpoints / 旗標 / metrics / exit codes
 4. [配置參考](#4-配置參考) — 檔案規則 / 繼承 / 閾值語法 / 自訂告警
-5. [配套 CLI](#5-配套-cli) — da-guard / da-parser / da-batchpr
+5. [配套 CLI](#5-配套-cli) — da-guard / da-parser
 6. [部署](#6-部署) — Helm + 熱重載模型
 7. [開發](#7-開發) — build / test / 驗證
 
@@ -97,7 +97,7 @@
 | `user_severity_dedup` | Gauge | 租戶開著 severity dedup（critical 觸發時抑制同租戶、同 `metric_group`、同叢集的 warning 通知）；只送 `mode="enable"`，設 `disable` 的租戶沒有序列（label: tenant / mode）。抑制本身是 route generator 產生的兩條 inhibit rule（告警帶 `da_cluster` 與不帶各一條），不讀這個指標 |
 | `user_slo_objective` | Gauge | 租戶在 `slo_burn_rate` 自訂告警宣告的 SLO 目標百分比；`objective: "disable"` 不發（labels: tenant / recipe_id；ADR-031） |
 | `tenant_metadata_info` | Gauge | 租戶 `_metadata` 的資訊指標，值恆 1（labels: tenant / runbook_url / owner / tier）；Rule Pack 不 join 它，告警的 annotation 以固定的查詢樣板讀出（#3483） |
-| `tenant_expected_exporter` | Gauge | per-tenant exporter liveness 期望，值恆 1（labels: tenant / db_type；**僅對宣告 `_metadata.db_type` 的租戶 emit**）。`TenantExporterAbsent` anti-join 的左手邊（#869） |
+| `tenant_expected_exporter` | Gauge | per-tenant exporter liveness 期望，值恆 1（labels: tenant / pack；**僅對在 `_expected_exporters` 宣告 exporter kind 的租戶 emit**，每個宣告的 kind 一條）。`TenantExporterAbsent` anti-join 的左手邊（#869、#4097） |
 | `user_threshold_unset` | Gauge | 平台不出貨值、對該租戶沒有送出任何門檻值、租戶也沒寫 `disable` 的閾值 key，值恆 1（labels: tenant / pack / key；這些鍵由內建層以 off 值宣告，租戶寫值即生效，不必平台先宣告，#4163）。**只對 state filter `unset_thresholds` 開著的租戶輸出**（出貨預設關閉；平台設 `default_state: enable` 全開，租戶寫 `_state_unset_thresholds: enable\|disable` 自選）。各 rule pack 的 `<Pack>ThresholdNotConfigured`（info，例如 `RedisThresholdNotConfigured`）讀它（#1200 D-A A3、#1175） |
 | `da_config_event` | Gauge | timed config 失效事件（silent / maintenance 自動解除；labels: tenant / event / reason / target_severity / metric_key；`metric_key` 只在 `event="threshold_expired"` 填該閾值的 key，其他事件為空字串；同租戶兩個過期 key 由它區分，不再靠 reason 文字，#2031） |
 | `da_custom_alert_parse_errors` | Gauge | 每租戶被丟棄的 `_custom_alerts` 數（fail-loud；0 = 全數有效；送出的 series 與清單中較前面一項相同的項目也丟棄並計入，[#2031](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2031)；label: tenant） |
@@ -137,13 +137,13 @@
 
 ### 3.4 Exit Codes（CLI binaries）
 
-| Code | `da-guard` | `da-parser` | `da-batchpr` |
-|------|-----------|-------------|--------------|
-| 0 | clean | parse OK | 全部目標成功 |
-| 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） | 一個以上目標失敗 |
-| 2 | caller error（旗標 / 路徑） | caller error | caller error |
-| 3 | exporter 無法 decode 或讀不到的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — | — |
-| 4 | 未判定：樹上有只能由 route generator 判的路由／domain policy 內容（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；優先序 3 > 1 > 4 > 0，見 [cli-reference §guard](../../docs/cli-reference.md#guard)） | — | — |
+| Code | `da-guard` | `da-parser` |
+|------|-----------|-------------|
+| 0 | clean | parse OK |
+| 1 | 發現錯誤（擋 merge） | gate 失敗（non-portable / ambiguous） |
+| 2 | caller error（旗標 / 路徑） | caller error |
+| 3 | exporter 無法 decode 或讀不到的設定檔（見 [cli-reference §guard](../../docs/cli-reference.md#guard)；#2123） | — |
+| 4 | 未判定：樹上有只能由 route generator 判的路由／domain policy 內容（[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)；優先序 3 > 1 > 4 > 0，見 [cli-reference §guard](../../docs/cli-reference.md#guard)） | — |
 
 ---
 
@@ -315,17 +315,7 @@ da-parser import --input rules.yaml --fail-on-non-portable
 da-parser allowlist                 # 印出 VM-only allowlist（introspection）
 ```
 
-### `da-batchpr` — 階層感知的 Batch PR 管線
-
-JSON-in / JSON-out + Markdown report；上游由 Python `da-tools` 包裝呼叫。
-
-| Subcommand | 作用 |
-|-----------|------|
-| `apply` | 依 plan 開 / 更新各租戶的 chunk PR |
-| `refresh` | Base PR merge 後，把租戶分支 rebase 到新的 main HEAD |
-| `refresh-source` | 把 data-layer hot-fix 重新 apply 到既有租戶分支 |
-
-> **Python 包裝**：`da-tools guard defaults-impact` / `da-tools batch-pr *` 會 shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` 旗標 → `$DA_<BIN>_BINARY` 環境變數 → `$PATH`。
+> **Python 包裝**：`da-tools guard *` / `da-tools parser *` 會 shell-out 到對應 Go binary。Binary 解析序：`--<bin>-binary` 旗標 → `$DA_<BIN>_BINARY` 環境變數 → `$PATH`。
 
 ---
 

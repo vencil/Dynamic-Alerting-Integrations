@@ -907,7 +907,7 @@ docker-build-all: ## 建 8 個 self-built image（local --load，無 push；#474
 	@# Dockerfile 只 COPY+chmod 不執行 binary，故 stub 可驗 COPY 路徑 / 語法）。
 	@# #463 multi-arch：Dockerfile 改 COPY 帶 arch 後綴（da-guard.<arch>），stub 須對應。
 	@mkdir -p components/da-tools/app/tools
-	@for b in da-guard da-batchpr da-parser da-crdecode da-read; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
+	@for b in da-guard da-parser da-crdecode da-read; do for a in amd64 arm64; do touch "components/da-tools/app/$$b.$$a"; done; done
 	@docker buildx build --load -t local-test:da-tools components/da-tools/app
 	@# 兩顆隨 chart 出貨、從不發布的自建 image（#1337）——build context 就是各自目錄。
 	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar

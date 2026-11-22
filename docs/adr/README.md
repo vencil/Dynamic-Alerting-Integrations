@@ -23,7 +23,7 @@ lang: zh
 - **千租戶 Scale / Config 管理**：[010 Multi-Tenant Grouping](./010-multi-tenant-grouping.md) + [016 conf.d/ 目錄分層](./016-conf-d-directory-hierarchy-mixed-mode.md) + [017 繼承引擎 + dual-hash](./017-defaults-yaml-inheritance-dual-hash.md) — 千租戶 config 組織與 hot-reload
 - **Frontend 品質治理**：[013 元件健康度 + Token Density](./013-component-health-token-density-metric.md) + [014 Wizard token 遷移](./014-wizard-arbitrary-value-token-migration.md) + [015 data-theme 單軌 dark mode](./015-data-theme-single-track-dark-mode.md)
 - **Accessibility 修補**：[012 threshold-heatmap 色盲補丁](./012-colorblind-hotfix-structured-severity-return.md)
-- **客戶導入管線**：[018 Profile-as-Directory-Default](./018-profile-as-directory-default.md) — Profile Builder 寫回 conf.d/ 的 default vs override 邊界
+- **客戶導入管線**：[018 Profile-as-Directory-Default](./018-profile-as-directory-default.md) — conf.d/ 的 default vs override 邊界（原為 Profile Builder 而寫，該 library 已退役）
 
 ## ADR 索引
 
