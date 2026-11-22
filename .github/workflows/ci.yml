@@ -2553,10 +2553,10 @@ jobs:
     # manifest; subsequent PRs (TRK-230b..f) add tools to the manifest as
     # they migrate to ESM.
     #
-    # Runs on every PR (#3756). The REQUIRED check is
-    # the "Portal Tests" AGGREGATE GATE below (job key `portal-tests`), NOT this
-    # job.
-    name: Portal Tests Run
+    # Runs on every PR (#3756) and reports the required "Portal Tests" check
+    # itself (`kind: job`): no needs / if / matrix, so it cannot be skipped
+    # and needs no aggregate gate in front of it (#4224).
+    name: Portal Tests
     runs-on: ubuntu-24.04
     # Least-privilege token (CodeQL: workflow-missing-permissions). Checkout +
     # local npm build/test only — no writes, no PR/API access.
@@ -2596,46 +2596,13 @@ jobs:
         working-directory: tools/portal
         run: npm run test
 
-  portal-tests:
-    # Aggregation gate for the portal-tests-run job above. The job
-    # name is kept EXACTLY "Portal Tests" — the check-run name that branch
-    # protection matches on.
-    # Mirrors the go-tests / python-tests aggregation gates. If this name ever
-    # changes, update the branch-protection required-checks entry together
-    # (owner action). New portal test jobs should join HERE (add to needs +
-    # the loop) rather than each getting their own required check.
-    name: Portal Tests
-    runs-on: ubuntu-24.04
-    # Pure result-aggregation gate — touches no repo content, needs no token.
-    permissions: {}
-    needs: [portal-tests-run]
-    # always(): without it a skipped/failed dependency would SKIP this job, and
-    # a skipped check would satisfy branch protection — the gate must run and
-    # FAIL, not skip, when the run job did not succeed.
-    if: always()
-    steps:
-      - name: Verify the portal test job succeeded
-        # Mirrors the go-tests gate semantics exactly:
-        #   success → PASS; anything else → FAIL.
-        env:
-          R_PORTAL: ${{ needs.portal-tests-run.result }}
-        run: |
-          echo "portal-tests-run: $R_PORTAL"
-          if [ "$R_PORTAL" = "success" ]; then
-            echo "Portal test gate satisfied."
-            exit 0
-          fi
-          echo "::error::the portal test job did not succeed (result=$R_PORTAL)"
-          exit 1
-
   smoke-tests-run:
     # Playwright smoke suite against the portal (moved from playwright.yml,
-    # #1428). Runs on every PR like portal-tests-run; the REQUIRED check is the
-    # "Smoke Tests (Chromium)" AGGREGATE GATE below (job key `smoke-tests`),
-    # NOT this job. In playwright.yml the whole workflow was suppressed by a
+    # #1428). Runs on every PR like portal-tests-run and reports the required
+    # "Smoke Tests (Chromium)" check itself (`kind: job`, #4224). In playwright.yml the whole workflow was suppressed by a
     # top-level `paths:` filter, so a PR touching no portal file never
     # reported the required check at all and sat permanently pending.
-    name: Smoke Tests Run
+    name: Smoke Tests (Chromium)
     runs-on: ubuntu-24.04
     # contents: read for checkout. Nothing here writes to the PR: the result
     # line goes to the step summary (#3756), not to a PR comment.
@@ -2751,31 +2718,6 @@ jobs:
           else
             echo "Playwright smoke run produced no HTML report (it stopped before the tests ran)." >> "$GITHUB_STEP_SUMMARY"
           fi
-
-  smoke-tests:
-    # Aggregation gate for smoke-tests-run (#1428). The job name is kept
-    # EXACTLY "Smoke Tests (Chromium)" — the check-run name branch protection
-    # requires — so it reports on every PR. Same verdict
-    # table as portal-tests: success → PASS; anything else → FAIL.
-    name: Smoke Tests (Chromium)
-    runs-on: ubuntu-24.04
-    # Pure result-aggregation gate — touches no repo content, needs no token.
-    permissions: {}
-    needs: [smoke-tests-run]
-    # always(): a skipped gate would satisfy branch protection.
-    if: always()
-    steps:
-      - name: Verify the smoke test job succeeded
-        env:
-          R_SMOKE: ${{ needs.smoke-tests-run.result }}
-        run: |
-          echo "smoke-tests-run: $R_SMOKE"
-          if [ "$R_SMOKE" = "success" ]; then
-            echo "Smoke test gate satisfied."
-            exit 0
-          fi
-          echo "::error::the smoke test job did not succeed (result=$R_SMOKE)"
-          exit 1
 
   lint-docs:
     name: Lint Documentation
