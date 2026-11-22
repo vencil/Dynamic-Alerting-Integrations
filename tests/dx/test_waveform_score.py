@@ -398,6 +398,15 @@ def test_episode_rate_excludes_indeterminate_and_carve_out():
     assert _ep(out["summary"]) == (1, 1, 1.0)
 
 
+def test_episode_rate_same_pack_and_sig_in_two_reports_are_two_events():
+    """兩份報告同 pack_id、同 signature_index → 仍是 2 個事件（report 是事件鍵的一部分）。"""
+    reps = [(name, _report([_record(sig=0, alerts=[_alert(fire=1000)])], [_meta(sig=0)]))
+            for name in ("a.json", "b.json")]
+    out = ws.score(reps, _TOLS)
+    assert out["summary"]["episode_class_pairs"] == 2
+    assert _ep(out["summary"]) == (2, 2, 1.0)
+
+
 def test_episode_rate_survives_redaction_and_prints(tmp_path):
     full = _score_one(_record(alerts=[_alert(fire=1000)]), _meta())
     assert _ep(ws.redact_report(full)["summary"]) == (1, 1, 1.0)

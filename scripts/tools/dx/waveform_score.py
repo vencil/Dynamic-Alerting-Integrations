@@ -16,7 +16,9 @@ FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1
     注入故障 ``(report, pack_id, signature_index)``，含它全部變體與 fan-out series；
     分母 = 每個事件 × 歸因到它 scored case 的 alertname（窗內或窗外開火都算），
     事件沒有任何歸因告警時記一個未接住的配對；分子 = 該 alertname 在該事件任一
-    scored case 上有窗內命中。indeterminate / carve-out 不入。
+    scored case 上有窗內命中。只計 must_detect 且 scored（hit / fn）的 case：
+    probe / informational、indeterminate、carve-out 不入。多份報告時 report 是
+    事件鍵的一部分：不同報告即使同 pack_id、同 signature_index 也是不同事件。
   * temporal hit = 該 case 至少一筆歸因 alert 的 ``fire_offset_s`` ∈
     ``[fault_start, fault_end + tolerance]``；晚於天花板 = miss（ADR-030 §5：FN 不可被
     放寬窗洗成「晚但接住」）。fault window 血緣 = inject 報告 metadata 的
