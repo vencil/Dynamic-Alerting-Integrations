@@ -19,7 +19,7 @@ lang: zh
 | Wrapper action | 來源 | 行為 |
 |---|---|---|
 | **BLOCK** | hadolint `error` level、Vibe 規則 V0/V1/V2/V3/V4 違反 | 擋 commit / PR（須 0；epic AC 7 Critical=0 必須）|
-| **WARN** | hadolint `warning` level | 記入本表（High），不擋 merge |
+| **WARN** | hadolint `warning` level | 須在登記表寫 rationale（High）；已登記不擋 merge，未登記擋（#3863） |
 | **INFO** | hadolint `info` / `style` level | 僅 log，不列管 |
 
 > 全 4 層共用的 Critical/High/Medium/Low → BLOCK/WARN/INFO 統一表已於 [TRK-314](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/595) 收斂 —— 見下節「統一 Severity → Action（全 4 層 SSOT）」；Layer 1 的 hadolint level → BLOCK/WARN reduction 是上表的特化。
@@ -32,7 +32,7 @@ lang: zh
 |---|---|---|---|
 | **Critical** | **BLOCK PR**（required check 擋 merge；epic AC 7 要求 Critical=0）| L1 Vibe V0–V4 / hadolint `error`；**L2 / L4** `privileged-container`·`privilege-escalation-container`·`host-network`·`host-pid`·`host-ipc`·`docker-sock`；L2 Mode A `ALLOW_EMPTY_*`/`INSECURE_*=true` | **無 escape**（必修） |
 | **Secret 字面（L3）** | **BLOCK**（lint ship 在 0）| L3 key 名像 secret 但值為非空硬編字面 | PR body `bypass-lint: helm-values-secrets` + `reason: <≥30 words>` |
-| **High** | **WARN**（不擋 merge，但**須列管**於本文件 + rationale）| **L2 / L4** `run-as-non-root`·`no-read-only-root-fs`·`unset-cpu·memory-requirements`·`capabilities-add`（wrapper rule）；L1 hadolint `warning` | **L2 / L4**：中央 `EXEMPTIONS` registry（`check_iac_helm.py` / `check_k8s_manifests.py`）+ 本表 rationale，否則未登記 High → BLOCK；L1 hadolint warning 自動入本表 |
+| **High** | **WARN**（不擋 merge，但**須列管**於本文件 + rationale）| **L2 / L4** `run-as-non-root`·`no-read-only-root-fs`·`unset-cpu·memory-requirements`·`capabilities-add`（wrapper rule）；L1 hadolint `warning` | **L2 / L4**：中央 `EXEMPTIONS` registry（`check_iac_helm.py` / `check_k8s_manifests.py`）+ 本表 rationale，否則未登記 High → BLOCK；L1 hadolint warning：`_iac_warn_baseline.py` 的 `REGISTER` 登記 rationale，未登記或過期登記 → `--ci` 紅（#3863） |
 | **Medium / Low** | **INFO**（僅 log，不列管）| 其餘所有 kube-linter check；hadolint `info`/`style` | n/a |
 
 > **CVE image scan 不由本表管**（AC 5）：#448 的 IaC 四層**不動** release.yaml 既有的 trivy image-CVE scan（與本表的「IaC misconfig」是不同關注點）。⛔ **勘誤（#1337）**：這裡原本寫「維持 informational／不升為 BLOCK」，但那個掃描**本來就是阻擋的**——五個 release job 全設 `exit-code: 1` 且無 `continue-on-error`，可修的 HIGH/CRITICAL 會讓 release job 紅。#1337 當時的但書是它跑在 **post-push**（image 已進 registry、擋的只是 release job 變綠）；⛔ 自 [#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278) 起不再成立：各 job 先推候選 tag、掃該 digest，通過後才把正式 tag 指到同一個 digest，並在那之後才簽章／SBOM／`helm push`／GitHub Release——掃描紅燈現在真的攔下發布。
@@ -55,38 +55,46 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 | Layer | 工具 | engine | scope | Critical | baseline-High | INFO |
 |---|---|---|---|---:|---:|---:|
-| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 9 Dockerfile | **0** | 7 | 2 |
-| L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 5 | 3 |
+| L1 Dockerfile（TRK-311）| `check_iac_vibe_rules.py` | hadolint | 全部 Dockerfile（`--list`）| **0** | 見 Layer 1 產生表 | 不列管 |
+| L2 Helm template（TRK-312）| `check_iac_helm.py` | kube-linter | 9 chart | **0** | 4 | 3 |
 | L3 values/manifest secret-shape（TRK-313）| `check_helm_values_secrets.py` | —（純 Vibe，無對應 engine）| 111 檔 | **0** | 0 | 0 |
 | L4 raw k8s manifest（TRK-314）| `check_k8s_manifests.py` | kube-linter | 42 manifest | **0** | 0 | 0 |
-| **總計** | | | | **0** ✅ | **12** | 5 |
+| **總計** | | | | **0** ✅ | L2 4（見 Layer 2 分節）＋ L1 產生表 | — |
 
-12 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api` 為架構事實（git workdir 需可寫；原本 L4 也有同一筆，#1594 刪除 raw manifest 後退場）；L1 7 筆為政策性 `--no-cache`/pip-self DL3018/DL3013（含 #908 vector projection-gate、issue 1444 da-tools 的 git）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
+baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api` 為架構事實（git workdir 需可寫；原本 L4 也有同一筆，#1594 刪除 raw manifest 後退場）；L2 mariadb×1（`no-read-only-root-fs`；`run-as-non-root` 已於 #1018 解除）+ vector×2（root log-collector）為架構必需。L1 的筆數與內容不在這裡手抄：見 Layer 1 的產生表，每筆都必須有登記的 rationale（#3863）。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
 
 > **Critical → BLOCK 已真正上鎖**（非裝飾）：`Lint` 與 `Container SAST (Helm L2 + raw k8s L4)` 是必要檢查，以 [`.github/required-checks.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/required-checks.yaml) 為準；與 GitHub 實際設定是否一致由 `required-checks-drift.yml` 每日比對。
 
 ## Layer 1 — Dockerfile（TRK-311，hadolint + Vibe wrapper）
 
-跑法：`python3 scripts/tools/lint/check_iac_vibe_rules.py`（CI hook `iac-sast-check`）。
+跑法：`python3 scripts/tools/lint/check_iac_vibe_rules.py`（CI hook `iac-sast-check`）；重寫下方產生表：加 `--write-baseline`。
 
-**Baseline 截至 2026-09-29**（#1278 D1 以工具輸出重新核對整張表，hadolint v2.12.0，與 ci.yml 同版）：**9** 個 Dockerfile，**0 BLOCK** ✅ / **4** WARN（High，列管如下）/ **2** INFO（`components/da-tools/app/Dockerfile:10`、`components/recipe-preview/Dockerfile:17` 的 DL3059）。
+hadolint `warning` 不擋 merge，但每一筆都要有登記的 rationale（[#3863](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3863)）：
 
-> ⚠️ 這張表在 #1337 之前已經對不上工具輸出：宣稱 8 個 Dockerfile（實際 9）、漏列 `components/recipe-preview` 的 DL3013 與 DL3059 兩筆、`tenant-api` 行號停在 `:44`（實際 `:53`）。表格與工具之間**沒有機械閘門**（`check_iac_vibe_rules.py` 只 print，不比對本檔），所以列管表只能靠人工對帳——動這張表時請重跑 `python3 scripts/tools/lint/check_iac_vibe_rules.py --ci` 並以輸出為準，不要只改自己那幾列。
+- **登記在哪**：`scripts/tools/lint/_iac_warn_baseline.py` 的 `REGISTER`，以（Dockerfile 路徑, 規則碼）為鍵，**不含行號**——行號移動不影響登記。每筆寫說明、rationale、退場條件。
+- **表格怎麼來**：下方產生區塊由 `check_iac_vibe_rules.py --write-baseline` 依本次 hadolint 輸出 join `REGISTER` 寫入，不要手改。行號以工具輸出為準（`python3 scripts/tools/lint/check_iac_vibe_rules.py`），表上只記每個（檔案, 規則碼）的筆數。
+- **什麼會紅**：`--ci`（hook `iac-sast-check`，CI `Lint` job）在三種情況回 1——有 WARN 沒有登記（未登記）、登記的（檔案, 規則碼）已不再出現（過期登記）、產生區塊與工具輸出不一致（漂移）。這三種不吃 PR body 的 `bypass-lint: iac-vibe-rules`：修法就是寫理由、刪登記或重新產生。已登記的 WARN 照舊不擋。
+- **INFO**（hadolint `info`／`style`）不列管，跑工具即可看到。
 
-| # | File:line | Code | 說明 | Rationale | 退場 / 修補 |
-|---|---|---|---|---|---|
-| 1 | `components/tenant-api/Dockerfile:56` | DL3018 | `apk add --no-cache git ca-certificates tzdata` 未 pin 版本 | 平台刻意採 `--no-cache` + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。同 `components/da-portal/Dockerfile` L30-31 註解的策略。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
-| 2 | `helm/federation-gateway/audit-sidecar/Dockerfile:33` | DL3018 | runtime `apk add --no-cache logrotate` 未 pin | 同 #1 | 同 #1 |
-| 3 | `helm/vector/projection-gate/Dockerfile:25` | DL3018 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | 同 #1（`--no-cache` + 月度 rebuild + Trivy gate 策略；py3-yaml 是 distro 套件，image 無 pip 與 build toolchain） | 同 #1 |
-| 4 | `components/da-tools/app/Dockerfile:38` | DL3018 | runtime `apk add --no-cache git` 未 pin | 同 #1。issue 1444：`da-tools init` 產出的 GitLab pipeline 在這個映像**裡面**跑 blast-radius job，要用 git 讀 MR 的 base commit；映像以 nonroot 執行，所以沒辦法在 job 裡 `apk add`，只能裝進映像。 | 同 #1 |
+**DL3018 政策（apk 不 pin 版本）**：平台刻意採 `apk add --no-cache` + 月度 rebuild + Trivy CRITICAL/HIGH gate，而非脆弱的 Alpine 版本 pin（Alpine repo 很快丟棄舊版本，pin 會把 build 變硬中斷）。下表 DL3018 各列的 rationale 只補該映像為什麼需要那些套件。
+
+<!-- BEGIN GENERATED: iac-l1-warn-baseline -->
+| # | Dockerfile | Code | 筆數 | 說明 | Rationale | 退場 / 修補 |
+|---:|---|---|---:|---|---|---|
+| 1 | `components/da-tools/app/Dockerfile` | DL3018 | 1 | runtime `apk add --no-cache git` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。issue 1444：`da-tools init` 產出的 GitLab pipeline 在這個映像**裡面**跑 blast-radius job，要用 git 讀 MR 的 base commit；映像以 nonroot 執行，job 裡沒辦法 `apk add`，只能裝進映像。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 2 | `components/tenant-api/Dockerfile` | DL3018 | 1 | `apk add --no-cache git ca-certificates tzdata` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。git：tenant-api 的 gitops writer 要 shell out 到 git（同 Layer 2 `EXEMPTIONS` 的 tenant-api 列）。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 3 | `helm/federation-gateway/audit-sidecar/Dockerfile` | DL3018 | 1 | runtime `apk add --no-cache logrotate` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 4 | `helm/vector/projection-gate/Dockerfile` | DL3018 | 1 | #908 tenantProjections gate 的 init-container image `apk add --no-cache python3 py3-yaml` 未 pin | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。py3-yaml 是 distro 套件，映像沒有 pip 與 build toolchain。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+| 5 | `try-local/generator/Dockerfile` | DL3018 | 1 | runtime `apk add --no-cache git` 未 pin（try-local demo stack 專用映像，#2903） | apk 不 pin 版本是平台政策（見本節上方「DL3018 政策」）。該行上方的註解即援引此政策。generator-service 用 git 讀 `--repo` 與請求的 base commit（`scripts/tools/ops/generator_service.py` 的 `--git` 旗標，#4035）；映像以 nonroot（uid 10001）執行，不能在執行期 `apk add`。nightly image scan 有掃這個映像。 | 政策性 deferred；除非改採 pinned-base 策略，否則保留 |
+<!-- END GENERATED: iac-l1-warn-baseline -->
 
 **已退場（#1278 D1）**：`audit-sidecar/Dockerfile` build stage 的 **DL3018**（`apk add --no-cache git`，只為 clone mtail 的 pinned commit）——metrics sidecar 改用上游 Vector 後這個映像不再編譯任何東西，build stage 整段拿掉，所以是**消失**而非豁免。
 
 **已退場（#2338）**：`components/da-tools/app/Dockerfile` 與 `components/recipe-preview/Dockerfile` 的 **DL3013**（`pip install --upgrade pip` 未 pin）——兩個映像改為裝完相依後移除 pip，不再有 `--upgrade pip` 那一段。本表直到 #1278 D1 重新對帳前仍列著這兩筆，行號也已漂移（tenant-api `:53`→`:56`、da-tools `:32`→`:38`、projection-gate `:24`→`:25`）。
 
-**已退場（#1337）**：`audit-sidecar/Dockerfile:22` 的 **DL4006**（`echo "<sha>  file" | sha256sum -c -` 的 pipe 未設 `-o pipefail`）。原列管寫的退場條件是「留待 sidecar Dockerfile 下次動到時順手」——本次改建置方式（預編 binary → 自 pinned commit 編譯）把整個 pipe 拿掉了，供應鏈把關由 tarball SHA-256 換成更強的 commit pin，所以這一筆是**消失**而非豁免。WARN 因此 7 → 6。
+**已退場（#1337）**：`audit-sidecar/Dockerfile:22` 的 **DL4006**（`echo "<sha>  file" | sha256sum -c -` 的 pipe 未設 `-o pipefail`）。原列管寫的退場條件是「留待 sidecar Dockerfile 下次動到時順手」——本次改建置方式（預編 binary → 自 pinned commit 編譯）把整個 pipe 拿掉了，供應鏈把關由 tarball SHA-256 換成更強的 commit pin，所以這一筆是**消失**而非豁免。
 
-INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12`、`components/recipe-preview/Dockerfile:13`，皆為 DL3059（multiple consecutive RUN）。
+**已改由工具產生（#3863）**：本表原為手寫，#3863 時與 hadolint v2.12.0 輸出對帳已漂移——工具報 5 筆 DL3018，手寫表只有 4 筆、其中 3 筆行號過期，且漏了 `try-local/generator/Dockerfile`。改成產生區塊＋登記表後，這類漂移由 `--ci` 擋下。
 
 ## 引擎缺席或沒跑成：一律 rc 2（#3611）
 

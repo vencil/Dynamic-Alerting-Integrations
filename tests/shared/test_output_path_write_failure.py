@@ -2807,6 +2807,12 @@ def test_every_row_is_about_a_flag_its_tool_names_at_a_writer():
 #: it does not hold rather than pass over them. Exact both ways; an entry
 #: that names a flag at a writer is not one of these.
 ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
+    "lint/check_iac_vibe_rules.py":
+        "`--write-baseline` rewrites the generated WARN table in "
+        "`docs/internal/iac-lint-baseline.md` (#3863); the flag is a switch, "
+        "not a path. A write that fails is held by "
+        "tests/lint/test_iac_warn_baseline.py "
+        "(test_write_baseline_that_cannot_write_is_rc_2_and_keeps_the_doc).",
     "lint/check_frontmatter_versions.py":
         "`--fix` rewrites the docs it has just scanned under the repository's "
         "own `docs/`; the tool takes no path. A write that fails is held by "
@@ -2876,7 +2882,7 @@ ENTRY_CALLERS_WITH_NO_FLAG: dict[str, str] = {
         "tests/lint/test_check_doc_links.py "
         "(test_fix_anchors_that_cannot_write_the_doc_is_exit_2).",
 }
-_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 12
+_ENTRY_CALLERS_WITH_NO_FLAG_CEILING = 13
 
 
 def _entry_calls_name_only(module: ast.Module, entries: set[str], flags: set[str]) -> bool:

@@ -258,6 +258,16 @@ def test_per_dockerfile_ignore_files_are_not_discovered_as_dockerfiles():
     assert not [d for d in found if d.endswith(".dockerignore")], found
 
 
+def _no_warn_baseline(monkeypatch, tmp_path):
+    """A run with no WARN: no register entry and an empty generated table
+    (#3863; the register itself is exercised in test_iac_warn_baseline.py)."""
+    wb = iac._iac_warn_baseline
+    doc = tmp_path / "warn-baseline.md"
+    doc.write_text(wb.render([], {}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(wb, "REGISTER", {})
+    monkeypatch.setattr(wb, "DOC", str(doc))   # absolute: REPO_ROOT / DOC is DOC
+
+
 # ---------------------------------------------------------------------------
 # main() exit codes (run_hadolint stubbed; real repo files are clean)
 # ---------------------------------------------------------------------------
@@ -266,8 +276,9 @@ class TestMainExitCodes:
         monkeypatch.setattr(sys, "argv", ["prog", "--list"])
         assert iac.main() == 0
 
-    def test_clean_returns_zero(self, monkeypatch):
+    def test_clean_returns_zero(self, monkeypatch, tmp_path):
         monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([]))
+        _no_warn_baseline(monkeypatch, tmp_path)
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert iac.main() == 0
 
@@ -405,11 +416,17 @@ def test_an_engine_run_that_does_not_show_it_ran_is_a_caller_error(tmp_path, rc,
 
 def test_a_clean_engine_run_passes(tmp_path):
     """The control: the stand-in route itself reaches OK (rc 0) when hadolint
-    exits 0 with nothing but the canary's findings: the rows above are not
-    red for some other reason. The canary's findings are not the repo's."""
-    proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(0, _report())))
+    exits 0 with the canary's findings plus one WARN per registered (file,
+    code) — what the committed generated table describes (#3863): the rows
+    above are not red for some other reason. The canary's findings are not
+    the repo's."""
+    register = iac._iac_warn_baseline.REGISTER
+    warns = [{"file": f, "line": 1, "code": c, "level": "warning", "message": "w"}
+             for f, c in register]
+    proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(0, _report(*warns))))
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "OK Container SAST Layer 1 — 0 BLOCK / 0 WARN / 0 INFO" in proc.stdout, proc.stdout
+    assert (f"OK Container SAST Layer 1 — 0 BLOCK / {len(register)} WARN / 0 INFO"
+            in proc.stdout), proc.stdout
 
 
 def test_a_finding_is_a_finding_not_an_engine_failure(tmp_path):
@@ -710,6 +727,7 @@ def test_v4_is_a_block_finding_and_rc_1(monkeypatch, tmp_path):
     monkeypatch.setattr(iac, "DOCKERFILE_CONTEXTS", {df: "."})
     monkeypatch.setattr(iac, "find_dockerfiles", lambda: [df])
     monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([]))
+    _no_warn_baseline(monkeypatch, tmp_path)
     blocks = iac.collect_findings([df])["BLOCK"]
     assert len(blocks) == 1 and "app/Dockerfile:1 [V4 lint-directive]" in blocks[0], blocks
     monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
