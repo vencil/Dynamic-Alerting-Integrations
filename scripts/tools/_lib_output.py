@@ -7,7 +7,8 @@ PyYAML, and a generator that rewrites ``_lib_constants.py`` must not load it
 could repair the block). At import it loads the standard library,
 ``_lib_exitcodes`` and ``_lib_label`` only; :func:`write_repo_artifact`
 also loads ``_lib_atomic_write`` (stdlib + ``_lib_label`` + this module) on
-first use, so a layout that ships this module ships that one too.
+first use: a layout that writes an artifact ships both (the da-tools image
+does; the recipe-preview core ships this module only, and never writes one).
 ``tests/shared/test_read_only_modes_need_no_pyyaml.py`` calls every entry
 and every failure exit with PyYAML, ``_lib_constants`` and ``_lib_io``
 refused.
