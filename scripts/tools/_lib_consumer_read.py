@@ -895,10 +895,6 @@ def _is_reads(entry) -> bool:
                     and all(isinstance(s.get(k), str) for k in ("selector", "range", "window"))
                     and isinstance(s.get("subqueries_ms"), list)
                     and isinstance(s.get("subqueries"), list)
-                    and isinstance(s.get("matchers"), list)
-                    and all(isinstance(m, dict) and m.get("op") in ("=", "!=", "=~", "!~")
-                            and all(isinstance(m.get(k), str) for k in ("name", "value"))
-                            for m in s["matchers"])
                     for s in entry["selectors"])
             and all(isinstance(c, dict) and isinstance(c.get("name"), str)
                     for c in entry["calls"]))
@@ -917,9 +913,7 @@ def promql_reads(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
       such as ``[(30d)]`` at its value, ``offset`` and the lookback delta
       not counted), ``"range_ms"`` and ``"subqueries_ms"`` (its parts);
       ``"window"``, ``"range"`` and ``"subqueries"`` are the same as
-      Prometheus spells a duration; ``"matchers"`` (``[{"name", "op":
-      "="|"!="|"=~"|"!~", "value"}]``, the metric name as ``__name__``) the
-      label matchers as the parser holds them (#4137);
+      Prometheus spells a duration;
     * ``calls``: every function and aggregation, ``{"name", "kind":
       "function"|"aggregation", "start", "end"}`` — read off the parse, so a
       name in a label value is none and ``topk by (a) (…)`` is ``topk``;
@@ -952,7 +946,7 @@ _SHAPE_KEYS = {
     "paren": ("expr",),
     "unary": ("op", "expr"),
     "number": (),
-    "string": (),
+    "string": ("value",),
 }
 
 
@@ -989,6 +983,8 @@ def _is_shape(node) -> bool:
                         for m in node["matchers"]))
     if kind in ("subquery", "paren", "unary"):
         return (kind != "unary" or isinstance(node["op"], str)) and _is_shape(node["expr"])
+    if kind == "string":
+        return isinstance(node["value"], str)
     return True
 
 
@@ -1005,7 +1001,9 @@ def promql_shape(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
     * ``{"kind": "call", "name", "args"}``
     * ``{"kind": "selector", "name", "matchers": [{"name", "type", "value"}],
       "range": bool}`` — ``name`` is "" for ``{__name__=~"…"}``
-    * ``{"kind": "subquery" | "paren" | "unary", "expr"}``, ``{"kind": "number" | "string"}``
+    * ``{"kind": "subquery" | "paren" | "unary", "expr"}``, ``{"kind": "number"}``
+    * ``{"kind": "string", "value"}`` — the literal as the parser reads it
+      (the label ``label_replace`` writes, #4136)
 
     each with ``start`` / ``end`` (byte offsets into the expression's UTF-8
     encoding). An expression Prometheus' parser refuses raises
@@ -1023,6 +1021,17 @@ def promql_shape(exprs: "list[str]", binary: str | None = None) -> "list[dict]":
             f"{DA_READ_BINARY_NAME} printed JSON without one tree per expression "
             "(an older da-read? rebuild it)")
     return docs[0]
+
+
+def shape_nodes(node: dict):
+    """Every node of a ``promql_shape`` tree, *node* first, then its operands
+    depth first, in the order they appear."""
+    yield node
+    for key in ("expr", "param", "lhs", "rhs"):
+        if isinstance(node.get(key), dict):
+            yield from shape_nodes(node[key])
+    for arg in node.get("args") or []:
+        yield from shape_nodes(arg)
 
 
 class RuleFileRefused(InputRefused):

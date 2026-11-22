@@ -6,6 +6,7 @@
   2. 每條 alert 的結果保留 tenant（preserved_labels，依 Prometheus 語法樹判定；#4098）
   3. 強制要求 tenant label
   4. 限制 range vector duration
+  5. 租戶隔離：路徑給的規則檔放在 <目錄>/<租戶>/，只讀、只寫該租戶（isolated_label；#4136）
 
 平台 COMPILED pack（如 rule-pack-custom-alerts.yaml，帶 GENERATED 檔頭）可由
 policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 predict_linear），
@@ -15,8 +16,8 @@ policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 pred
   # 掃描 custom rule 目錄
   python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/
 
-  # 掃描指定檔案
-  python3 scripts/tools/ops/lint_custom_rules.py path/to/rules.yaml
+  # 掃描指定檔案（所在目錄名即所屬租戶）
+  python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/db-a/rules.yaml
 
   # 使用自訂 policy 檔
   python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --policy .github/custom-rule-policy.yaml
@@ -57,6 +58,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import am_duration_seconds  # noqa: E402  (#4061: Prometheus' ParseDuration)
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (#4136: a tenant directory's name)
 from _lib_compat import find_project_root  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
@@ -157,6 +159,13 @@ def duration_seconds(value) -> "float | None":
     return am_duration_seconds(value) if isinstance(value, str) else None
 
 
+def _label_problem(value) -> "str | None":
+    """Why *value* is not a label name (an ``isolated_label``), or None."""
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", value):
+        return "must be a label name such as tenant"
+    return None
+
+
 def _duration_problem(value) -> "str | None":
     """Why *value* is not a positive Prometheus duration (``90m``, ``1h30m``),
     or None. ⛔ One the checks cannot read (``banana``, ``0s``, ``1.5h``, an
@@ -175,6 +184,7 @@ POLICY_VALUE_PROBLEMS = {
     "denied_functions": _string_list_problem,
     "preserved_labels": _string_list_problem,
     "required_labels": _string_list_problem,
+    "isolated_label": _label_problem,
     "max_range_duration": _duration_problem,
     "max_evaluation_interval": _duration_problem,
 }
@@ -405,6 +415,151 @@ def lint_preserved(targets, records, filepath, flow_of=None):
     return results
 
 
+# ---------------------------------------------------------------------------
+# Tenant isolation of tenant-authored rules (#4136)
+# ---------------------------------------------------------------------------
+#: Where a scan path's file says whose it is: ``<scan dir>/<tenant>/…`` (the
+#: init-generated CI lints ``rule-packs/custom/``), or a file given by path,
+#: its directory's name.
+TENANT_LAYOUT = "<scan dir>/<tenant>/<file>.yaml"
+
+
+def author_tenant(filepath, targets):
+    """→ (tenant, None) or (None, why): the tenant whose rule file *filepath*
+    is, by where it sits under the scan *targets* (``TENANT_LAYOUT``). ⛔ The
+    directory is the only identity: the lint does not know who wrote a file,
+    so the directory says whose series it may read and whom it may alert."""
+    real = os.path.realpath(filepath)
+    # The deepest target holding the file decides (#4136 review): with
+    # overlapping targets the verdict must not hang on their order.
+    holding = []
+    for target in targets:
+        root = os.path.realpath(target)
+        if real == root:
+            holding.append((len(root), target, None))
+        elif os.path.isdir(root):
+            rel = os.path.relpath(real, root)
+            if rel != os.curdir and rel.split(os.sep)[0] != os.pardir:
+                holding.append((len(root), target, Path(rel).parts))
+    if not holding:
+        return None, f"is under none of the scan paths ({TENANT_LAYOUT})"
+    _, target, parts = max(holding, key=lambda h: h[0])
+    if parts is None:
+        tenant = Path(real).parent.name
+    elif len(parts) < 2:
+        return None, (f"sits directly in {safe_label(target)}: a tenant's rule file goes in "
+                      f"{TENANT_LAYOUT}, the directory naming the tenant whose series it reads")
+    else:
+        tenant = parts[0]
+    if not is_valid_tenant_id(tenant):
+        return None, (f"its tenant directory {safe_label(tenant)} is no tenant id: a tenant's rule "
+                      f"file goes in {TENANT_LAYOUT}")
+    return tenant, None
+
+
+def _pin(matchers, label, aliases, tenant):
+    """→ (pinned, other): whether a selector's *matchers* select only
+    *tenant*'s series — an equality on *label*, or on an alias with *label*
+    matched to "" (a series with both labels, not equal, would pass the
+    alias alone) — and the other tenant an equality names, if any."""
+    eq = {(m["name"], m["value"]) for m in matchers if m["type"] == "="}
+    others = sorted(v for n, v in eq if n == label and v not in (tenant, ""))
+    if others:
+        return False, others[0]
+    if (label, tenant) in eq:
+        return True, None
+    return any((a, tenant) in eq for a in aliases) and (label, "") in eq, None
+
+
+def _string_of(node):
+    """The value of a string operand, through the parentheses Prometheus
+    strips from a call's arguments and an aggregation's parameter
+    (`label_replace(x, ("tenant"), …)`, #4136 review); None for anything else."""
+    while isinstance(node, dict) and node.get("kind") == "paren":
+        node = node.get("expr")
+    return node.get("value") if isinstance(node, dict) and node.get("kind") == "string" else None
+
+
+def isolation_problems(rules, tenant, label, filepath, shapes_of=None, flow_of=None):
+    """ERRORs (and WARNs) for the rules of *tenant*'s rule file (#4136):
+    *rules* are ``(rule_name, is_record, expr, labels)`` — labels as
+    Prometheus writes them, the group's then the rule's. A rule may read only
+    *tenant*'s series and write only *tenant* as *label*:
+
+    * every selector matches *label* (or a ``LABEL_ALIASES`` alias with
+      *label* ``=""``) to *tenant* by equality — a regex, a negation or no
+      matcher read every tenant's series;
+    * *label* (and each alias the pin accepts) written in ``labels:`` is
+      *tenant*, or, on an alert, the template copying the series' own — a
+      recording rule's labels are no template (Prometheus writes the text);
+    * nothing writes *label* or an alias from anything else
+      (``label_replace`` / ``label_join`` into it, ``count_values`` into it,
+      ``group_left`` / ``group_right`` copying it) — an alias written so would
+      reach the tenant who pins it;
+    * a WARN for a record whose series carry no *label* (its own ``labels:``
+      do not set it): a pinned reference to it selects nothing, so the rule
+      reading it never fires.
+
+    Read on Prometheus' parse tree (``promql_shape``, *shapes_of*), records
+    by ``_lib_metric_sources.label_flow`` (*flow_of*)."""
+    shapes_of = shapes_of or _lib_consumer_read.promql_shape
+    flow_of = flow_of or _lib_metric_sources.label_flow
+    aliases = _lib_consumer_read.LABEL_ALIASES.get(label, ())
+    guarded = (label, *aliases)
+    whose = f"{safe_label(tenant)}'s rule file (the tenant its directory names)"
+    results = []
+    judged = [r for r in rules if r[2]]
+    trees = shapes_of([e for _, _, e, _ in judged]) if judged else []
+    for (name, _, expr, labels), tree in zip(judged, trees):
+        for node in _lib_consumer_read.shape_nodes(tree):
+            kind = node["kind"]
+            if kind == "selector":
+                pinned, other = _pin(node["matchers"], label, aliases, tenant)
+                spelled = expr.encode("utf-8")[node["start"]:node["end"]].decode("utf-8", "replace")
+                if other is not None:
+                    results.append(LintResult(filepath, name, None, "ERROR",
+                        f"selector {spelled} reads {label} {safe_label(other)}'s series in {whose}"))
+                elif not pinned:
+                    results.append(LintResult(filepath, name, None, "ERROR",
+                        f"selector {spelled} can read every {label}'s series: match "
+                        f"{label}=\"{tenant}\" by equality (or "
+                        f"{'/'.join(aliases) or 'an alias'}=\"{tenant}\" with {label}=\"\")"))
+                continue
+            written = []
+            if kind == "call" and node["name"] in ("label_replace", "label_join") and len(node["args"]) > 1:
+                written = [_string_of(node["args"][1])]
+            elif kind == "aggregate" and node["op"] == "count_values":
+                written = [_string_of(node["param"])]
+            elif kind == "binary" and node["matching"] is not None:
+                written = node["matching"]["include"]
+            for w in sorted(set(written) & set(guarded)):
+                what = node.get("name") or node.get("op") or "the join"
+                results.append(LintResult(filepath, name, None, "ERROR",
+                    f"{what} writes {w} from something other than the series read: "
+                    f"{whose} keeps the {w} of the series it selects"))
+    for name, is_record, _, labels in judged:
+        for key in guarded:
+            value = (labels or {}).get(key)
+            if value is None or value == tenant or (
+                    not is_record and isinstance(value, str) and _copies_own_value(value, key)):
+                continue
+            remedy = (f"write {tenant}" if is_record else
+                      f"write {tenant} or {{{{ $labels.{key} }}}}")
+            results.append(LintResult(filepath, name, None, "ERROR",
+                f"label {key} is {safe_label(str(value))} in {whose}: {remedy}"
+                + (" (a recording rule's labels are written as text, not a template)"
+                   if is_record and isinstance(value, str) and "{{" in value else "")))
+    records = [(n, e) for n, is_record, e, lbls in judged
+               if is_record and label not in (lbls or {})]
+    if records:
+        for (name, _), v in zip(records, flow_of(label, [e for _, e in records], None)):
+            if v["result"] == "dropped":
+                results.append(LintResult(filepath, name, None, "WARN",
+                    f"its series carry no {label}: a reference pinned to {label}=\"{tenant}\" "
+                    f"selects nothing, so a rule reading it never fires"))
+    return results
+
+
 def shipped_pack_paths(linted=()):
     """The tenant rule packs this layout ships (``_threshold_alerts.
     find_rule_pack_paths``: beside this module in the image, ``rule-packs/``
@@ -522,12 +677,14 @@ def read_rule_files(files):
     return _lib_consumer_read.rule_files_in(files, keep_refusals=True)
 
 
-def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, records=None):
+def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, records=None,
+              tenant=None):
     """Lint a single YAML rule file (or a ConfigMap holding rule files).
     *rule_files* is its reading from ``read_rule_files``; read here when not
     given. *records* are the recording rules the preserved-label check
     follows (``context_records``); this file's and the shipped packs' when
-    not given.
+    not given. *tenant*: the file is that tenant's rule file (``author_tenant``),
+    judged by ``isolation_problems``; None for a declared rule pack.
     Returns (list of LintResult, rule_count).
 
     *selected*: the file was selected from a declared input (`_lib_input`:
@@ -590,6 +747,7 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
              for rule in group.get("rules", []) if isinstance(rule, dict)]
     readings = iter(_lib_consumer_read.promql_reads([e for e in exprs if e]))
     alerts = []
+    isolated = []
 
     for group in groups:
         if not isinstance(group, dict):
@@ -616,6 +774,8 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
             results.extend(lint_expr(expr, policy, filepath, rule_name,
                                      next(readings) if expr else None))
             results.extend(lint_labels(labels, policy, filepath, rule_name, is_recording))
+            isolated.append((rule_name, is_recording, expr,
+                             {**(group.get("labels") or {}), **(labels or {})}))
             if not is_recording and expr:
                 # The labels Prometheus writes on the alert: the group's,
                 # then the rule's (rules/manager.go), each a template.
@@ -626,6 +786,10 @@ def lint_file(filepath, policy, rule_files=None, *, flag=None, selected=False, r
             if not is_recording:
                 results.extend(check_expiry_label(labels, filepath, rule_name))
                 results.extend(check_owner_label(labels, filepath, rule_name))
+
+    # #4136: a tenant's rule file reads and writes only that tenant
+    if tenant is not None:
+        results.extend(isolation_problems(isolated, tenant, policy["isolated_label"], filepath))
 
     # #4098: every alert's result keeps the preserved labels (records are
     # followed, not judged themselves: one is read by the alerts that read it)
@@ -926,11 +1090,18 @@ def main():
         die_caller_error(f"ERROR: shipped rule packs: {_lib_consumer_read.error_text(exc)}")
 
     for filepath in files:
+        # #4136: a scan path's file is a tenant's (TENANT_LAYOUT); a declared
+        # rule pack (--rule-pack-dir) is the platform's, read by every tenant
+        tenant = None
+        if args.rule_pack_dir is None:
+            tenant, why = author_tenant(filepath, args.paths)
+            if why is not None:
+                all_results.append(LintResult(filepath, None, None, "ERROR", why))
         try:
             results, count = lint_file(
                 filepath, policy, readings[filepath],
                 flag="--rule-pack-dir" if args.rule_pack_dir is not None else None,
-                selected=True, records=records)
+                selected=True, records=records, tenant=tenant)
         except _lib_consumer_read.ConsumerReadError as exc:
             # #4080: da-read cannot read the file's expressions (missing,
             # older than lint, a fault): the reader's problem, named — no

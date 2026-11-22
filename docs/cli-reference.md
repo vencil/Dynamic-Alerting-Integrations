@@ -2612,13 +2612,13 @@ da-tools lint --rule-pack-dir <DIR> [options]
 
 | 參數 | 說明 |
 |------|------|
-| `<path...>` | 一個或多個檔案或目錄路徑 |
+| `<path...>` | 一個或多個檔案或目錄路徑。底下的規則檔是租戶的：放在 `<目錄>/<租戶>/`，目錄名即所屬租戶（直接給的檔取它所在的目錄名），見下方「檢查項目」 |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`）。只收內建政策的鍵（`denied_functions`、`preserved_labels`、`required_labels`、`max_range_duration`、`max_evaluation_interval`、`file_overrides`），其他鍵結束碼 `2`；部署端 policy 的鍵（`allowed_domains` 等）會指向 `generate-routes`／`validate-config --policy`（⚠️ Breaking，[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。`file_overrides` 的 entry 寫錯，不論有沒有檔案匹配，結束碼 `2`（⚠️ Breaking，[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)）；頂層的值型別不符（清單寫成字串、時長不是 Prometheus 時長）同樣結束碼 `2`（⚠️ Breaking，[#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)；格式見 custom-rule-governance §4.1） | 內建政策 |
+| `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`）。只收內建政策的鍵（`denied_functions`、`preserved_labels`、`required_labels`、`isolated_label`、`max_range_duration`、`max_evaluation_interval`、`file_overrides`），其他鍵結束碼 `2`；部署端 policy 的鍵（`allowed_domains` 等）會指向 `generate-routes`／`validate-config --policy`（⚠️ Breaking，[#3797](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3797)）。`file_overrides` 的 entry 寫錯，不論有沒有檔案匹配，結束碼 `2`（⚠️ Breaking，[#3977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3977)）；頂層的值型別不符（清單寫成字串、時長不是 Prometheus 時長）同樣結束碼 `2`（⚠️ Breaking，[#4061](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4061)；格式見 custom-rule-governance §4.1） | 內建政策 |
 | `--ci` | 有 ERROR 級違規時以結束碼 1 結束；一個檔都沒選到時結束碼 2（見下方） | false |
 | `--rule-pack-dir <DIR>` | 依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不 lint：這份 policy 管的是租戶 pack，平台告警本來就沒有租戶（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。選到的 pack 讀不到（判定後被刪、權限）⇒ 結束碼 2、一行點名旗標與檔（⚠️ **行為變更**，先前記成一條 ERROR、不帶 `--ci` 時 rc 0；位置參數給的檔仍是一條 ERROR，[#3724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3724)）。取代 `<path...>`，不能與 `--exclude` 併用 | — |
 | `--exclude <GLOB>` | 排除符合的檔（可重複；被排除的檔不讀）。不含 `/` 的樣式比對檔名、任何深度都算（`Chart.yaml`、`*-values.yaml`）；含 `/` 的樣式比對相對於所給目錄的路徑（`recipes/*`；直接給的檔則比對給的路徑）。以 Python `fnmatch.fnmatchcase` 比對：分大小寫，`*` 也跨 `/`。`lint`、`silencer-drift-check`、`onboard` 三者語意相同（共用 `_lib_consumer_read.files_to_read`） | — |
@@ -2632,13 +2632,14 @@ WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用
 - 禁用函式（`denied_functions`；每個名字須是 Prometheus 認得且已啟用的函式或聚合，#4099）
 - 結果保留 `tenant`（`preserved_labels`）：依 Prometheus 語法樹判定每條 alert 的結果是否保留 tenant，`without(tenant)`、`sum by (a)`、不分組的 `sum(…)` 等丟掉 tenant 的寫法都是 `ERROR`（[#4098](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4098)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
 - 必備 label（`required_labels`）
+- 租戶隔離（`isolated_label`）：位置參數給的規則檔是 `<目錄>/<租戶>/` 那個租戶的，每個 selector 都要以等號寫 `tenant="<租戶>"`，`labels:` 的 tenant 只能是該租戶，不得從別處寫入 tenant；`--rule-pack-dir` 的平台 pack 不判定（⚠️ Breaking，[#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)；判定規則見 [custom-rule-governance §4.1](custom-rule-governance.md#41-deny-list-規則)）
 - range vector 上限（`max_range_duration`）、rule group 的 `interval` 上限（`max_evaluation_interval`）
 - 缺 `owner` 或 `expiry` label 時出 WARN
 
 **範例**
 
 ```bash
-da-tools lint ./my-custom-rules.yaml
+da-tools lint rule-packs/custom/          # rule-packs/custom/db-a/*.yaml 是 db-a 的規則
 # 接進 CI 一定要帶 --ci：沒帶時即使有 ERROR 級違規也是結束碼 0
 da-tools lint --rule-pack-dir ./rule-packs --ci
 ```
