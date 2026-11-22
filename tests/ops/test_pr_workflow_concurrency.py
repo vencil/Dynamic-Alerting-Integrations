@@ -18,8 +18,8 @@ string match) against synthetic contexts:
     group would let one workflow cancel the other.
 
 What this deliberately does not decide: how a workflow behaves on push,
-schedule or any other event. Main's CI keeping its runs (test_main_ci_
-concurrency.py) and the sticky-comment workflows' non-PR rules
+schedule or any other event. Main's CI keeping its runs
+(test_main_ci_concurrency.py) and the sticky-comment workflows' non-PR rules
 (test_pr_report_workflow_concurrency.py) are held where they are argued.
 
 Not shown here: that GitHub honours the group as modelled. The evaluator
