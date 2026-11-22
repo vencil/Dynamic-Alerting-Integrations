@@ -230,7 +230,7 @@ def _write_tree(root: pathlib.Path, *, upper: bool, tenants: bool) -> None:
             "tenants:\n  alpha:\n    pg_connections: 90\n"
             "    _routing_profile: standard\n"
             # blind-spot counts a DB type a tenant declares (#4026).
-            "    _metadata: {db_type: postgresql}\n", encoding="utf-8")
+            "    _expected_exporters: [postgresql]\n", encoding="utf-8")
         (root / names["beta"]).write_text(
             "tenants:\n  beta:\n    pg_connections: 91\n", encoding="utf-8")
 
@@ -727,7 +727,7 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # thresholds, so removing the tenant files changes what it governs.
 #
 # ⛔ `check_retire_drift.py` LEFT this set in #4026. It reads only the
-# tenants that declare `_metadata.db_type`, and the fixture declared none;
+# tenants that declare `_expected_exporters`, and the fixture declared none;
 # `alpha` now declares postgresql (what blind-spot counts), so removing the
 # tenant files changes its report.
 #
@@ -1469,9 +1469,8 @@ def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
     """
     import yaml as _yaml  # noqa: PLC0415
     gate = _import_tool("lint", "check_threshold_unit_sanity")
-    registry = {"version": 1,
-                "packs": {"t": {"k": {"value": 50, "unit": "%",
-                                      "tier": "defaults"}}}}
+    registry = {"version": 1, "packs": {"t": {}},
+                "keys": {"k": {"pack": "t", "value": 50, "unit": "%"}}}
     body = _yaml.safe_dump({"defaults": {"k": 300}}, allow_unicode=True)
     counts = {}
     for arm, fname in _CASE_ARMS:

@@ -17,7 +17,7 @@
       "type": ["array", "null"],
       "items": { "type": "string" },
       "title": "Platform-recognised keys carrying no platform value",
-      "description": "Metric keys the platform RECOGNISES but asserts no value for — the runtime half of the registry's `tier: optional_overrides` (threshold-registry.schema.json calls that tier 'documented-but-dormant until wired'). A key listed here passes tenant-key validation, so a tenant can set it, while the platform emits nothing for it. That is the state the two-slot model cannot express: in `defaults` ⇒ armed for every tenant, absent ⇒ dead AND unwritable (ValidateTenantKeys rejects it, which the tenant-api write gate turns into ErrValidation). Membership is the whole payload, hence a list — a null inside `defaults` would decode into map[string]float64 as 0 and emit a zero threshold for everyone. ⛔ PLATFORM-SCOPED: applyBoundaryRules strips it from tenant-owned files, because a tenant able to name keys here would self-authorise past the write gate via a direct GitOps push."
+      "description": "Metric keys the platform RECOGNISES but asserts no value for. Every threshold-registry key is built into the readers (#4163), so only a key outside the registry (an operator's own rule) needs listing here. A key listed here passes tenant-key validation, so a tenant can set it, while the platform emits nothing for it. That is the state the two-slot model cannot express: in `defaults` ⇒ armed for every tenant, absent ⇒ dead AND unwritable (ValidateTenantKeys rejects it, which the tenant-api write gate turns into ErrValidation). Membership is the whole payload, hence a list — a null inside `defaults` would decode into map[string]float64 as 0 and emit a zero threshold for everyone. ⛔ PLATFORM-SCOPED: applyBoundaryRules strips it from tenant-owned files, because a tenant able to name keys here would self-authorise past the write gate via a direct GitOps push."
     },
     "dimensions": {
       "type": ["object", "null"],
@@ -52,6 +52,9 @@
     },
     "max_metrics_per_tenant": {
       "title": "ThresholdConfig.max_metrics_per_tenant — platform-wide cardinality cap; in directory mode the exporter honours it ONLY in the conf.d ROOT _defaults.yaml (#2028) and ignores it with a WARN anywhere else"
+    },
+    "_expected_exporters": {
+      "description": "The exporter kinds the tenant runs (a list of rule packs that have a presence metric), served as tenant_expected_exporter{tenant, pack}; declaring a kind turns TenantExporterAbsent on for it."
     },
     "_routing_defaults": {
       "$ref": "tenant-config.schema.json#/definitions/routingDefaults",

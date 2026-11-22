@@ -884,7 +884,9 @@ class TestTenantSettingChanges:
         "_silent_mode": "warning",
         "_state_container_crashloop": "disable",
         "_severity_dedup": "disable",
-        "_metadata": {"db_type": "mariadb", "owner": "team-a"},
+        "_metadata": {"tier": "gold", "owner": "team-a"},
+        # #4097: the declared exporter kinds are a setting of their own.
+        "_expected_exporters": ["mariadb"],
         "_namespaces": ["ns1"],
         # A route of its own: with `_severity_dedup: disable` and no route the
         # generator renders nothing and refuses the tree (exit 1).
@@ -908,7 +910,7 @@ class TestTenantSettingChanges:
 
     def test_json_carries_setting_changes(self, tmp_path):
         _write_tenant(tmp_path / "old", self.BASE)
-        _write_tenant(tmp_path / "new", {**self.BASE, "_metadata": {"db_type": "mariadb", "owner": "team-b"}})
+        _write_tenant(tmp_path / "new", {**self.BASE, "_metadata": {"tier": "gold", "owner": "team-b"}})
         doc = _json(_run_cli(tmp_path / "old", tmp_path / "new", "--format", "json"))
         assert doc["setting_changes"] == [{"key": "_metadata.owner", "old": "team-a", "new": "team-b",
                                            "change": "modified", "tenants": ["db-a"]}]
@@ -916,7 +918,7 @@ class TestTenantSettingChanges:
     def test_a_backtick_in_a_value_cannot_break_the_code_span(self, tmp_path):
         """值來自 PR 的檔案，屬不可信輸入（F5）。"""
         _write_tenant(tmp_path / "old", self.BASE)
-        _write_tenant(tmp_path / "new", {**self.BASE, "_metadata": {"db_type": "mariadb",
+        _write_tenant(tmp_path / "new", {**self.BASE, "_metadata": {"tier": "gold",
                                                                     "owner": "x` **bold** `y"}})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         line = next(ln for ln in p.stdout.splitlines() if ln.startswith("- `_metadata.owner`"))

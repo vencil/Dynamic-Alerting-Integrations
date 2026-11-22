@@ -817,45 +817,45 @@ tests:
   - interval: 1m
     name: mass-exporter-outage-two-replicas-fires-once
     input_series:
-    - series: tenant_expected_exporter{tenant="t0", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t0", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t0", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t0", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t1", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t1", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t2", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t2", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t2", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t2", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t3", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t3", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t3", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t3", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t4", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t4", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t4", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t4", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t5", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t5", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t5", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t5", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t6", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t6", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t6", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t6", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t7", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t7", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t7", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t7", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t8", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t8", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t8", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t8", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t9", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+    - series: tenant_expected_exporter{tenant="t9", pack="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
       values: 1+0x10
-    - series: tenant_expected_exporter{tenant="t9", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+    - series: tenant_expected_exporter{tenant="t9", pack="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
       values: 1+0x10
     - series: up{job="tenant-exporters", tenant="t0", instance="t0:9104"}
       values: 0+0x10
@@ -898,10 +898,10 @@ tests:
         exp_annotations:
           summary: Mass exporter outage (6 tenants) — shared-dependency failure suspected
           description: |
-            More than 5 tenants AND over 10% of the declared (tenant, db_type)
-            pairs simultaneously have no exporter of that
-            db_type answering under job="tenant-exporters"
-            (that kind's presence metric absent).
+            More than 5 tenants AND over 10% of the declared (tenant, pack)
+            pairs (the kinds tenants list in _expected_exporters)
+            simultaneously have no exporter of that kind answering under
+            job="tenant-exporters" (that kind's presence metric absent).
             Both conditions together mean this is almost certainly a SHARED
             failure (node pool drained, network partition, image-pull outage on a
             rolling restart) rather than N independent exporter deaths or a

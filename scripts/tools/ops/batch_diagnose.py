@@ -267,7 +267,7 @@ def generate_report(results, prom_url):
     """Generate unified health report from individual diagnose results."""
     healthy = [r for r in results if r.get("status") == "healthy"]
     # issue 1513: diagnose reports `unchecked` for a tenant whose Pod and
-    # exporter checks were skipped (not MariaDB, or db_type not declared).
+    # exporter checks were skipped (not MariaDB, or no exporter declared).
     # Counting it as healthy inflated the score with tenants nobody looked at.
     unchecked = [r for r in results if r.get("status") == "unchecked"]
     with_issues = [r for r in results

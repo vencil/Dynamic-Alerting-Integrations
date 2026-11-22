@@ -20,9 +20,13 @@ import (
 // fixtureTenantYAML returns a minimal valid tenant.yaml the
 // loadAllTenants() parser accepts. We expose only the metadata
 // surface SearchTenants exercises (id / environment / tier / domain
-// / db_type / owner / tags) — production tenant.yaml has more
-// fields but they're irrelevant to search.
-func fixtureTenantYAML(id, env, tier, domain, dbType, owner string, tags ...string) string {
+// / expected exporters / owner / tags) — production tenant.yaml has more
+// fields but they're irrelevant to search. kinds is the tenant's
+// `_expected_exporters`: one kind, or a flow list ("[mariadb, redis]").
+func fixtureTenantYAML(id, env, tier, domain, kinds, owner string, tags ...string) string {
+	if !strings.HasPrefix(kinds, "[") {
+		kinds = "[" + kinds + "]"
+	}
 	tagBlock := ""
 	if len(tags) > 0 {
 		// 6-space indent = sibling of environment / tier / etc. under
@@ -41,11 +45,11 @@ func fixtureTenantYAML(id, env, tier, domain, dbType, owner string, tags ...stri
       environment: %s
       tier: %s
       domain: %s
-      db_type: %s
       owner: %s
-%s    cpu:
+%s    _expected_exporters: %s
+    cpu:
       default: "70"
-`, id, env, tier, domain, dbType, owner, tagBlock)
+`, id, env, tier, domain, owner, tagBlock, kinds)
 }
 
 // makeFixtureDir creates a temp configDir populated with N tenants
@@ -316,30 +320,42 @@ func TestSearchTenants_MultipleFiltersAreANDed(t *testing.T) {
 	}
 }
 
-// #3771: db_type is a list; the filter matches any one declared kind
-// (exact), and a scalar spelling is a one-element list.
-func TestSearchTenants_DBTypeFilterMatchesAnyDeclaredKind(t *testing.T) {
+// #3771, #4097: `_expected_exporters` is a list; the filter matches any one
+// declared kind (exact). A value the exporter does not read — `near` names
+// a kind that does not exist — lists and matches nothing.
+func TestSearchTenants_ExpectedExportersFilterMatchesAnyDeclaredKind(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"multi.yaml":  fixtureTenantYAML("multi", "prod", "tier1", "db", "[mariadb, redis]", "alice"),
 		"single.yaml": fixtureTenantYAML("single", "prod", "tier1", "db", "redis", "alice"),
 		"other.yaml":  fixtureTenantYAML("other", "prod", "tier1", "db", "postgresql", "alice"),
 		"near.yaml":   fixtureTenantYAML("near", "prod", "tier1", "db", "[redis-cluster]", "alice"),
+		"web.yaml":    fixtureTenantYAML("web", "prod", "tier1", "db", "[nginx, jvm]", "alice"),
 	})
-	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "db_type=redis")
-	var got []string
-	for _, it := range resp.Items {
-		got = append(got, it.ID)
-	}
-	if want := []string{"multi", "single"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("db_type=redis matched %v, want %v (exact per kind, not substring)", got, want)
-	}
-	for _, it := range resp.Items {
-		if it.ID == "multi" && !reflect.DeepEqual(it.DBType, []string{"mariadb", "redis"}) {
-			t.Errorf("multi db_type = %v, want [mariadb redis]", it.DBType)
+	ids := func(query string) []string {
+		resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, query)
+		got := []string{}
+		for _, it := range resp.Items {
+			got = append(got, it.ID)
 		}
-		if it.ID == "single" && !reflect.DeepEqual(it.DBType, []string{"redis"}) {
-			t.Errorf("single db_type = %v, want [redis]", it.DBType)
+		return got
+	}
+	if got, want := ids("expected_exporters=redis"), []string{"multi", "single"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("expected_exporters=redis matched %v, want %v (exact per kind; an unread value matches nothing)", got, want)
+	}
+	if got := ids("expected_exporters=red"); len(got) != 0 {
+		t.Errorf("expected_exporters=red matched %v, want none (exact, not substring)", got)
+	}
+	// nginx and jvm are kinds a tenant can declare (they were no db_type).
+	if got, want := ids("expected_exporters=nginx"), []string{"web"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("expected_exporters=nginx matched %v, want %v", got, want)
+	}
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=50")
+	want := map[string][]string{"multi": {"mariadb", "redis"}, "single": {"redis"}, "other": {"postgresql"},
+		"near": nil, "web": {"nginx", "jvm"}}
+	for _, it := range resp.Items {
+		if !reflect.DeepEqual(it.ExpectedExporters, want[it.ID]) {
+			t.Errorf("%s expected_exporters = %v, want %v", it.ID, it.ExpectedExporters, want[it.ID])
 		}
 	}
 	resp, _, _ = runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "q=MARIA")
@@ -522,5 +538,29 @@ func TestSnapshotCache_InvalidateForcesRebuild(t *testing.T) {
 	}
 	if len(second.summaries) != 2 {
 		t.Errorf("post-invalidate len = %d, want 2", len(second.summaries))
+	}
+}
+
+// #4097: the `db_type` filter was renamed to `expected_exporters`, not
+// aliased. A query that still sends it is refused — ignoring the parameter
+// would answer a filtered query with every tenant.
+func TestSearchTenants_RemovedDBTypeFilterIsRefused(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice"),
+	})
+	for _, query := range []string{"db_type=mariadb", "db_type=", "expected_exporters=mariadb&db_type=redis"} {
+		_, code, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, query)
+		if code != http.StatusBadRequest || !strings.Contains(string(body), "expected_exporters") {
+			t.Errorf("%s: status %d body %s, want 400 naming expected_exporters", query, code, body)
+		}
+	}
+	// The removed `_metadata.db_type` lists nothing, and the JSON has no such field.
+	dir = setupConfigDir(t, map[string]string{
+		"old.yaml": "tenants:\n  old:\n    _metadata:\n      db_type: mariadb\n      owner: o\n",
+	})
+	resp, _, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=50")
+	if len(resp.Items) != 1 || resp.Items[0].ExpectedExporters != nil || strings.Contains(string(body), "db_type") {
+		t.Errorf("a tenant writing the removed _metadata.db_type: %s", body)
 	}
 }

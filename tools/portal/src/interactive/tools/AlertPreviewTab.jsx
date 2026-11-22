@@ -9,7 +9,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // destructure of `window.__portalShared` crashed the whole bundle at
 // load time: no module in the graph imported portal-shared.jsx, so
 // the producer never ran.
-import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
+import { RULE_PACK_DATA, getPackThresholds } from './_common/data/rule-packs.js';
 import { parseTenantYaml } from './_common/validation/yaml-parser.js';
 import { fetchPageData } from './_common/api/api-fetch.js';
 import { generateSampleYaml, simulateAlerts, unreadableThresholdMessage } from './_common/sim/alert-engine.js';
@@ -30,8 +30,10 @@ function AlertPreviewTab() {
     const result = {};
     for (const packId of selectedPacks) {
       const pack = RULE_PACK_DATA[packId];
-      if (!pack || !pack.defaults) continue;
-      for (const [key, meta] of Object.entries(pack.defaults)) {
+      if (!pack) continue;
+      // Platform values and declared keys alike (#4195): a declared key's
+      // reference value is a demo number here, like every slider.
+      for (const [key, meta] of Object.entries(getPackThresholds(packId))) {
         result[key] = {
           current: meta.value * 0.9,
           threshold: meta.value,
@@ -146,8 +148,8 @@ function AlertPreviewTab() {
           <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
             {selectedPacks.map(packId => {
               const pack = RULE_PACK_DATA[packId];
-              if (!pack || !pack.defaults) return null;
-              const packKeys = Object.keys(pack.defaults).filter(k => metrics[k]);
+              if (!pack) return null;
+              const packKeys = Object.keys(getPackThresholds(packId)).filter(k => metrics[k]);
               if (packKeys.length === 0) return null;
               return (
                 <div key={packId}>

@@ -104,7 +104,7 @@ def test_value_edit_without_regen_leaves_the_module_stale(tmp_path):
 def test_added_key_without_regen_leaves_the_module_stale(tmp_path):
     def add_key(doc):
         doc["keys"]["ghost_metric"] = {
-            "pack": "mariadb", "tier": "defaults", "value": 1,
+            "pack": "mariadb", "value": 1,
             "unit": "count", "desc": "ghost", "metric_class": "state"}
     path = _write_registry_variant(tmp_path, add_key)
     assert _module_stale(gate.run_check(registry_path=path))
@@ -380,7 +380,7 @@ def test_build_rejects_bad_alias_entries():
         "p1": {
             "display": "P1", "exporter": "e", "default_on": True,
             "rule_pack_file": "rule-packs/rule-pack-p1.yaml",
-            "defaults": {
+            "thresholds": {
                 "aaa_bbb": {"value": 1, "unit": "u", "desc": "d",
                              "metric_class": "state"},
                 "aaa_ccc": {"value": 2, "unit": "u", "desc": "d",
@@ -620,15 +620,14 @@ def test_the_promtool_test_digest_is_checked_and_rewritten(tmp_path):
 
 def test_the_committed_unset_keys_table_is_what_the_registry_generates():
     """Head: the generated Go table is fresh and holds exactly the operator
-    keys of both tiers (#1200 D-A A3), with their packs."""
+    keys (#1200 D-A A3), with their packs."""
     doc = lib.load_registry()
     assert lib.check_unset_keys_go(doc) is None
     table = lib.unset_notice_keys(doc)
     assert table == {k: e["pack"] for k, e in doc["keys"].items()
                      if e.get("arming") == "operator"}
     assert not any(k.endswith("_critical") for k in table)
-    assert {e["tier"] for k, e in doc["keys"].items() if k in table} == {
-        "defaults", "optional_overrides"}
+    assert "tier" not in next(iter(doc["keys"].values()))  # #4195
 
 
 def test_an_operator_key_armed_without_regen_leaves_the_unset_table_stale(tmp_path):

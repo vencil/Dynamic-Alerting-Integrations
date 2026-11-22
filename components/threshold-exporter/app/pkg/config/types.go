@@ -109,7 +109,10 @@ type RecurringSchedule struct {
 // Unconditionally emitted for ALL tenants — unset fields default to empty string.
 // This guarantees PromQL group_left joins always succeed (no False Negatives).
 //
-// v2.5.0: Added environment, region, domain, db_type, tags, groups for API/UI grouping.
+// v2.5.0: Added environment, region, domain, tags, groups for API/UI grouping.
+// (v2.5.0 also added `db_type`; #4097 removed it — what a tenant runs is the
+// top-level `_expected_exporters`, expected_exporters.go — and a `_metadata`
+// that still writes it is refused, retiredMetadataFields.)
 // These new fields are NOT emitted as Prometheus labels (cardinality concern) —
 // they are consumed by tenant-api and generate_tenant_metadata.py only.
 type TenantMetadata struct {
@@ -119,7 +122,6 @@ type TenantMetadata struct {
 	Environment string   `yaml:"environment"` // v2.5.0: production | staging | development
 	Region      string   `yaml:"region"`      // v2.5.0: cloud region (e.g., ap-northeast-1)
 	Domain      string   `yaml:"domain"`      // v2.5.0: business domain (e.g., finance, cache)
-	DBType      DBTypes  `yaml:"db_type"`     // v2.5.0: database type(s); #3771: a string or a list (db_types.go)
 	Tags        []string `yaml:"tags"`        // v2.5.0: free-form tags for ad-hoc filtering
 	Groups      []string `yaml:"groups"`      // v2.5.0: group memberships (references _groups.yaml)
 }
@@ -134,7 +136,6 @@ type ResolvedMetadata struct {
 	Environment string
 	Region      string
 	Domain      string
-	DBType      DBTypes // #3771: every declared kind; nil = not declared
 	Tags        []string
 	Groups      []string
 }
@@ -239,10 +240,9 @@ const DefaultMaxMetricsPerTenant = 500
 type ThresholdConfig struct {
 	Defaults map[string]float64 `yaml:"defaults"`
 	// OptionalOverrides names keys the platform RECOGNISES but asserts no value
-	// for — the runtime half of the registry's `tier: optional_overrides`
-	// (docs/schemas/threshold-registry.schema.json calls tier "a load-bearing
-	// field, not decoration" and the tier itself "documented-but-dormant until
-	// wired"; this is that wiring).
+	// for. Every threshold-registry key is built into the readers since #4163
+	// (and the registry has no `tier` since #4195), so this list now only
+	// matters for keys outside the registry — an operator's own rules.
 	//
 	// The config model used to have exactly two expressible states: a key is in
 	// Defaults (⇒ resolveBaseRows emits a platform value for EVERY tenant), or

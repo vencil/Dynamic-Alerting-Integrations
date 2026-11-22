@@ -9,8 +9,7 @@ nothing. The repo's only reading is the specification's:
 not for a customer file "read the way its consumer reads it", not as debt
 that only shrinks. A file that repeats a key is reported, never read.
 
-THE RULE. Outside `_lib_yaml_strict.py` (and its byte-identical copy in the
-projection-gate image, pinned equal below), no tracked `*.py` file names
+THE RULE. Outside `_lib_yaml_strict.py`, no tracked `*.py` file names
 * a PyYAML reading entry (`ENTRIES`: `yaml.safe_load*`, `yaml.load*`,
   `yaml.full_load*`, `yaml.unsafe_load*`, `yaml.compose*`, `yaml.parse`,
   `yaml.scan`, the Loader classes and the components they are built from);
@@ -68,10 +67,6 @@ REPO = HERE.parents[1]
 
 #: The one home of the YAML reading.
 HOME = "scripts/tools/_lib_yaml_strict.py"
-#: Byte-identical copies of HOME a build context cannot reach (a Docker
-#: context of one directory). Not scanned: the copy IS the home.
-HOME_COPIES = ("helm/vector/projection-gate/_lib_yaml_strict.py",)
-
 #: PyYAML's reading entries: load / compose / parse / scan, the Loader classes
 #: and the reading components a loader is built from (also by their submodule
 #: path, `yaml.constructor.SafeConstructor`).
@@ -114,7 +109,7 @@ def _sources() -> "dict[str, str]":
     out = {}
     for p in repo_files(".py"):
         rel = p.relative_to(REPO).as_posix()
-        if rel.split("/", 1)[0] == "tests" or rel in HOME_COPIES:
+        if rel.split("/", 1)[0] == "tests":
             continue
         out[rel] = p.read_text(encoding="utf-8")
     return out
@@ -153,11 +148,6 @@ def test_no_file_reads_yaml_laxly(sources) -> None:
         + "Read with _lib_yaml_strict.strict_safe_load / strict_safe_load_all "
           "(or _lib_io.load_yaml_file / _lib_input). There is no exception list: "
           "a file that repeats a key is reported to its owner, not read.")
-
-
-@pytest.mark.parametrize("copy", HOME_COPIES)
-def test_a_copy_of_the_home_is_the_home(copy) -> None:
-    assert (REPO / copy).read_bytes() == (REPO / HOME).read_bytes(), copy
 
 
 # ── the detector (synthetic sources) ─────────────────────────────────

@@ -158,6 +158,9 @@ curl -H "Authorization: Bearer <logs-jwt>" \
 回 `200` + 你自己 `AccountID` 分區裡、已淨化的 `federation_audit` 列 = 成功。**剛 onboard
 查到空結果是正常的**——見 §6。
 
+> ⛔ **`/select/logsql/query` 一定要帶 `limit`**，而且不能超過平台設定的上限（預設 `1000`）——
+> 規則見 §4.2。上例的 `--data-urlencode` 會讓 curl 改用 POST、把參數放在 form body，這是支援的寫法。
+
 ### 4.1 可用的 endpoint（default-deny 白名單）
 
 gateway 採 **default-deny 白名單**——只放行 VictoriaLogs 的 LogsQL **query / metadata** endpoint，
@@ -169,6 +172,47 @@ gateway 採 **default-deny 白名單**——只放行 VictoriaLogs 的 LogsQL **
 
 > metadata endpoint（`field_values` / `stream_field_values` 等）**同樣只回你自己 AccountID**
 > 的值——查不到別人的 field/stream，metadata leak 由原生租戶模型自動擋掉。
+
+### 4.2 `limit` 規則：`/select/logsql/query` 必須帶，`field_values` 會補上
+
+`/select/logsql/query` 是串流回應：不帶 `limit` 時，時間範圍內每一筆符合的 log 都會回傳
+（VictoriaLogs 把沒帶、空值或 `0` 都當成「不限筆數」）。gateway 因此要求：
+
+- **剛好一個** `limit` 參數，值是 `1` 到上限之間的整數。上限由平台設定（chart 值
+  `victorialogs.maxQueryLimit`，預設 `1000`），實際值請問平台團隊。
+- `limit` 可以放在 URL query string，也可以放在 `application/x-www-form-urlencoded` 的 POST
+  body；兩處合計只能出現一次。
+- 違反時 gateway 直接回 `400`（內文以 `federation gateway: /select/logsql/query` 開頭、寫明上限），
+  **不會**替你補上或改小 `limit`——你不會拿到一份被默默截斷、看起來卻像完整的結果。
+- POST 的 body 只接受 form-urlencoded（或不帶 body、參數全放 URL）；multipart、壓縮過
+  （帶 `Content-Encoding`）或其他格式的 body 回 `415`。
+- LogsQL 裡的 `| limit N` pipe 可以照用，但只能讓結果更少：VictoriaLogs 會把請求的 `limit`
+  接在你所有 pipe 的最後面，回傳筆數不會超過它。
+
+| 請求 | 結果 |
+|---|---|
+| `?query=...&limit=100` | `200` |
+| `?query=...`（沒帶）、`limit=`、`limit=0`、`limit=-5`、`limit=abc`、`limit=1.5` | `400` |
+| `limit` 超過上限（預設上限下的 `limit=5000`） | `400` |
+| `limit=10&limit=20`，或 URL 帶一個、body 再帶一個 | `400` |
+| POST，`Content-Type: multipart/form-data` | `415` |
+
+要的筆數超過上限時，縮小時間範圍或加過濾條件分批查。
+
+`/select/logsql/field_values` 與 `/select/logsql/stream_field_values` 用**同一個上限**，計數、
+重複、非整數、超過上限、`415` 的規則都與上面相同，差別只有沒帶 `limit` 時：
+
+- 沒帶 `limit`，或在 URL 帶 `limit=0`：gateway 改成 `limit=<上限>` 再轉送，回 `200`，但最多只有
+  上限筆不同值（Grafana 變數把筆數設成 `0` 時就是這種情況）。
+- POST body 裡帶 `limit=0`：`400`（body 的值會壓過 gateway 補在 URL 的值）。不想自己指定就不要帶。
+
+用 Grafana 的 VictoriaLogs data source 時，下面兩個設定若大於上限，對應的請求會收到 `400`：
+
+- 範本變數（template variable）設定的筆數上限（limit）。設成 `0` 則不帶 `limit`，由 gateway 補上上限值。
+- data source 設定裡 Query Builder 的 field values 筆數上限（`queryBuilderLimits.fieldValue`）。沒設定時
+  plugin 用 `1000`，有設定就以它為準。
+
+其他白名單 endpoint（`hits`、`facets`、`stats_query` 等）沒有這條規定。
 
 ## 5. 你能看到什麼：2-tier 可見度
 
@@ -252,8 +296,9 @@ PUT /api/v1/tenants/<你的租戶>/federation/log-visibility
   token（[§7.1](tenant-federation.md)）。
 - **查詢資源上限**：log 查詢受 VictoriaLogs Layer-1 護欄保護——主要是**時間範圍上限**
   （`-search.maxQueryTimeRange`，例如 7d）+ 單查詢執行時限。⚠️ **log 沒有 metrics 的
-  sample cap**，請務必**帶時間過濾 + `limit`**；無時間過濾 / 過寬範圍的查詢會被擋。並發查詢
-  也有上限（RAM 保護）。
+  sample cap**，請務必**帶時間過濾**；無時間過濾 / 過寬範圍的查詢會被擋。`/select/logsql/query`
+  沒帶 `limit` 或超過上限會被 gateway 以 `400` 擋下；`field_values` / `stream_field_values`
+  沒帶時會被補上上限（§4.2）。並發查詢也有上限（RAM 保護）。
 
 ## 7. 回應碼速查
 
@@ -262,6 +307,9 @@ PUT /api/v1/tenants/<你的租戶>/federation/log-visibility
 | `401` | 簽章 / `iss` 驗證失敗、token 缺失或壞了/不是本平台簽的（**注意：audience 不符不是 401，見下 403**）| 確認 token 完整且為本平台簽發；重新簽（§3）|
 | `403` | **最常見：拿 metrics token（`aud=tenant-federation`）打 log endpoint**——audience 不符，Envoy `jwt_authn` 原生回 `403 "Audiences in Jwt are not allowed"`；或 token 已撤銷/過期；或缺/壞 `account_id` claim（Lua fail-closed）；或打到**非白名單** endpoint（`/tail`、`/insert/*`、未知 path）| 用 `capability=logs`（`aud=tenant-federation-logs`）重新簽（§3）；改用白名單內的 query/metadata endpoint（§4.1）|
 | `200` + 空 result | 你還沒有 log 活動（cold-start）、或時間範圍內無資料 | 正常——產生活動後再查（§6.1），勿無腦重試 |
+| `400`（內文以 `federation gateway: /select/logsql/` 開頭）| `/select/logsql/query` 沒帶 `limit`；或 `query`、`field_values`、`stream_field_values` 的 `limit` 不是 `1` 到上限的整數、出現不只一次，或在 POST body 帶 `limit=0` | 帶剛好一個合法的 `limit`（§4.2）|
+| `400`（內文含 `parse error` / `cannot parse`）| LogsQL 語法錯誤（§6.1）| 修正 query |
+| `415` | 對 `/select/logsql/query`、`field_values`、`stream_field_values` 的 POST body 不是 form-urlencoded，或帶了 `Content-Encoding` | 改用 form-urlencoded，或把參數放 URL（§4.2）|
 | `429` | 撞 per-token / per-tenant 速率上限 | 退避重試；可多簽 token 分流（同 metrics）|
 | `413` | 請求 body 超過 1 MiB | LogsQL query 太長，拆小 |
 
@@ -271,6 +319,7 @@ PUT /api/v1/tenants/<你的租戶>/federation/log-visibility
 |---|---|
 | 全部請求 `403`（body 含 `Audiences in Jwt are not allowed`）| 多半是**用錯 token**——log query 要 `capability=logs`（`aud=tenant-federation-logs`）的 token，不是 metrics token；重新簽（§3）|
 | 查詢回 `200` 但 result 一直空 | cold-start（你還沒 federation 活動，§6.1）；或時間範圍內無資料；或平台側**還沒**把你配進 `tenantProjections`（§2.2）——聯絡平台團隊確認你的投影已上線 |
+| `/select/logsql/query`、`field_values` 一律 `400`，內文提到 `limit` | `/query` 沒帶 `limit`，或筆數超過上限；透過 Grafana 查詢時，檢查範本變數的筆數上限與 data source 的 Query Builder field values 上限（`queryBuilderLimits.fieldValue`）是否大於平台上限（§4.2）|
 | 打某 endpoint 一律 `403` | 該 endpoint 不在白名單（`/tail`、`/insert/*`、未知 path）——改用 §4.1 列出的 query/metadata endpoint |
 | 看不到某些欄位（node / 後端 IP）| **設計如此**——tier-2 淨化把基礎設施拓樸結構性移除（§5）；報修請附 `log_event_id` 讓平台值班 join 回完整副本 |
 

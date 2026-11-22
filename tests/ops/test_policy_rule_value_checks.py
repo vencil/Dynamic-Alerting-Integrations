@@ -30,7 +30,8 @@ def _as_run(result):
 
 _DEFAULTS = "defaults:\n  container_cpu: 80\n"
 _TENANT = ("tenants:\n  tenant-a:\n    container_cpu: \"70\"\n"
-           "    _metadata:\n      db_type: mariadb\n")
+           "    _expected_exporters: [mariadb]\n"
+           "    _metadata:\n      region: r-1\n")
 # A rule that holds for no tenant here (no tenant has an owner), so a rule
 # guarded by a `when` that is actually evaluated fails the run.
 _OWNER = "    target: _metadata.owner\n    operator: required\n"
@@ -46,15 +47,15 @@ _REFUSED = [
     ("when-no-value", _rule(_OWNER + "    when: {target: container_cpu, operator: gte}\n"),
      "`when.operator: gte` compares against `when.value`, and none is given"),
     ("when-bad-regex",
-     _rule(_OWNER + "    when: {target: _metadata.db_type, operator: matches, value: \"([a-z\"}\n"),
+     _rule(_OWNER + "    when: {target: _expected_exporters, operator: matches, value: \"([a-z\"}\n"),
      "`when.value` '([a-z' is not a valid regular expression"),
     ("when-one_of-scalar",
-     _rule(_OWNER + "    when: {target: _metadata.db_type, operator: one_of, value: mariadb}\n"),
+     _rule(_OWNER + "    when: {target: _expected_exporters, operator: one_of, value: mariadb}\n"),
      "`when.operator: one_of` needs `when.value` to be a non-empty list, got 'mariadb'"),
     ("when-wildcard-gte",
      _rule(_OWNER + "    when: {target: \"container_*\", operator: gte, value: 1}\n"),
      "a wildcard `when` supports only `required` / `forbidden`"),
-    ("main-not_equals-no-value", _rule("    target: _metadata.db_type\n    operator: not_equals\n"),
+    ("main-not_equals-no-value", _rule("    target: _expected_exporters\n    operator: not_equals\n"),
      "`operator: not_equals` compares against `value`, and none is given"),
     ("main-dotted-wildcard",
      _rule("    target: \"_metadata.*\"\n    operator: equals\n    value: x\n"),
@@ -62,15 +63,15 @@ _REFUSED = [
     # Ticket rows reported as a violation of every tenant (misleading).
     ("main-gte-no-value", _rule("    target: container_cpu\n    operator: gte\n"),
      "`operator: gte` compares against `value`, and none is given"),
-    ("main-matches-no-value", _rule("    target: _metadata.db_type\n    operator: matches\n"),
+    ("main-matches-no-value", _rule("    target: _expected_exporters\n    operator: matches\n"),
      "`operator: matches` compares against `value`, and none is given"),
-    ("main-contains-no-value", _rule("    target: _metadata.db_type\n    operator: contains\n"),
+    ("main-contains-no-value", _rule("    target: _expected_exporters\n    operator: contains\n"),
      "`operator: contains` compares against `value`, and none is given"),
     ("main-bad-regex",
-     _rule("    target: _metadata.db_type\n    operator: matches\n    value: \"([a-z\"\n"),
+     _rule("    target: _expected_exporters\n    operator: matches\n    value: \"([a-z\"\n"),
      "`value` '([a-z' is not a valid regular expression"),
     ("main-one_of-scalar",
-     _rule("    target: _metadata.db_type\n    operator: one_of\n    value: mariadb\n"),
+     _rule("    target: _expected_exporters\n    operator: one_of\n    value: mariadb\n"),
      "`operator: one_of` needs `value` to be a non-empty list"),
     # Same family, not on the ticket.
     ("when-dotted-wildcard", _rule(_OWNER + "    when: {target: \"_metadata.*\"}\n"),
@@ -83,13 +84,13 @@ _REFUSED = [
     ("gte-not-a-number", _rule("    target: container_cpu\n    operator: gte\n    value: high\n"),
      "`operator: gte` needs `value` to be a number or a duration"),
     ("matches-redos",
-     _rule("    target: _metadata.db_type\n    operator: matches\n    value: \"(a+)+\"\n"),
+     _rule("    target: _expected_exporters\n    operator: matches\n    value: \"(a+)+\"\n"),
      "has a nested quantifier"),
     ("matches-nested-in-group",
-     _rule("    target: _metadata.db_type\n    operator: matches\n    value: \"^((a+))+$\"\n"),
+     _rule("    target: _expected_exporters\n    operator: matches\n    value: \"^((a+))+$\"\n"),
      "has a nested quantifier"),
     ("matches-brace-repeat",
-     _rule("    target: _metadata.db_type\n    operator: matches\n    value: \"^(a+){2,}$\"\n"),
+     _rule("    target: _expected_exporters\n    operator: matches\n    value: \"^(a+){2,}$\"\n"),
      "has a nested quantifier"),
     ("lte-infinite", _rule("    target: container_cpu\n    operator: lte\n    value: inf\n"),
      "`operator: lte` needs `value` to be a number or a duration"),
@@ -97,18 +98,30 @@ _REFUSED = [
      _rule("    target: container_cpu\n    operator: gte\n    value: " + "9" * 400 + "\n"),
      "`operator: gte` needs `value` to be a number or a duration"),
     ("matches-optional-group",
-     _rule("    target: _metadata.db_type\n    operator: matches\n    value: \"^(\\\\d+)?$\"\n"),
+     _rule("    target: _expected_exporters\n    operator: matches\n    value: \"^(\\\\d+)?$\"\n"),
      "an optional `(\\d+)?`"),
-    ("one_of-empty", _rule("    target: _metadata.db_type\n    operator: one_of\n    value: []\n"),
+    ("one_of-empty", _rule("    target: _expected_exporters\n    operator: one_of\n    value: []\n"),
      "needs `value` to be a non-empty list, got []"),
-    ("equals-list", _rule("    target: _metadata.db_type\n    operator: equals\n    value: [a]\n"),
+    ("equals-list", _rule("    target: _expected_exporters\n    operator: equals\n    value: [a]\n"),
      "`operator: equals` needs `value` to be a scalar, got list"),
     ("matches-empty",
-     _rule("    target: _metadata.db_type\n    operator: matches\n    value: \"\"\n"),
+     _rule("    target: _expected_exporters\n    operator: matches\n    value: \"\"\n"),
      "`value` is empty, which matches every value"),
     ("contains-empty",
-     _rule("    target: _metadata.db_type\n    operator: contains\n    value: \"\"\n"),
+     _rule("    target: _expected_exporters\n    operator: contains\n    value: \"\"\n"),
      "`value` is empty, which every value contains"),
+    # #4097: the field is gone, so the path is never found. A `when` on it
+    # skipped the rule in silence; the refusal names what to write instead.
+    ("removed-target-main",
+     _rule("    target: _metadata.db_type\n    operator: one_of\n    value: [mariadb]\n"),
+     "`target` '_metadata.db_type': this field was removed, so it is never found "
+     "(a `when` on it would skip the rule) — use `_expected_exporters`"),
+    ("removed-target-forbidden", _rule("    target: _metadata.db_type\n    operator: forbidden\n"),
+     "`target` '_metadata.db_type': this field was removed"),
+    ("removed-target-when",
+     _rule(_OWNER + "    when: {target: _metadata.db_type, operator: equals, value: mariadb}\n"),
+     "`when.target` '_metadata.db_type': this field was removed, so it is never found "
+     "(a `when` on it would skip the rule) — use `_expected_exporters`"),
 ]
 
 # The four paths: (id, where the rules go, expected rc).
@@ -167,17 +180,17 @@ def test_rule_is_refused_on_every_path(rule, needle, path, tmp_path, capsys, cli
 # and, on this tree, violated — the refusal above is not a rule that never runs.
 _FIXED = [
     ("when-value", _rule(_OWNER + "    when: {target: container_cpu, operator: gte, value: 1}\n")),
-    ("when-regex", _rule(_OWNER + "    when: {target: _metadata.db_type, operator: matches, value: \"^maria\"}\n")),
+    ("when-regex", _rule(_OWNER + "    when: {target: _expected_exporters, operator: matches, value: \"^maria\"}\n")),
     ("when-one_of-list",
-     _rule(_OWNER + "    when: {target: _metadata.db_type, operator: one_of, value: [mariadb]}\n")),
+     _rule(_OWNER + "    when: {target: _expected_exporters, operator: one_of, value: [mariadb]}\n")),
     ("when-wildcard-required", _rule(_OWNER + "    when: {target: \"container_*\", operator: required}\n")),
     ("not_equals-value",
-     _rule("    target: _metadata.db_type\n    operator: not_equals\n    value: mariadb\n")),
-    ("nested-field", _rule("    target: _metadata.db_type\n    operator: equals\n    value: x\n")),
+     _rule("    target: _expected_exporters\n    operator: not_equals\n    value: mariadb\n")),
+    ("nested-field", _rule("    target: _metadata.region\n    operator: equals\n    value: x\n")),
     ("gte-value", _rule("    target: container_cpu\n    operator: gte\n    value: 100\n")),
     ("gte-duration-text", _rule("    target: container_cpu\n    operator: gte\n    value: \"5m\"\n")),
-    ("one_of-list", _rule("    target: _metadata.db_type\n    operator: one_of\n    value: [mysql]\n")),
-    ("contains-value", _rule("    target: _metadata.db_type\n    operator: contains\n    value: pg\n")),
+    ("one_of-list", _rule("    target: _expected_exporters\n    operator: one_of\n    value: [mysql]\n")),
+    ("contains-value", _rule("    target: _expected_exporters\n    operator: contains\n    value: pg\n")),
 ]
 
 

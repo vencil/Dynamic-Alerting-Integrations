@@ -35,11 +35,9 @@ SYNTH_PACKS = {
         "exporter": "alpha_exporter",
         "default_on": True,
         "rule_pack_file": "rule-packs/rule-pack-alpha.yaml",
-        "defaults": {
+        "thresholds": {
             "alpha_conn": {"value": 80, "unit": "count", "desc": "conn warning",
                            "metric_class": "saturation"},
-        },
-        "optional_overrides": {
             "alpha_conn_critical": {"value": 120, "unit": "count",
                                     "desc": "conn critical"},
             # no base key in this pack -> no critical_of, no inheritance, so
@@ -54,7 +52,7 @@ SYNTH_PACKS = {
         "exporter": "beta_exporter",
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-beta.yaml",
-        "defaults": {
+        "thresholds": {
             "beta_lag": {"value": 0.5, "unit": "seconds", "desc": "lag warning",
                          "metric_class": "replication"},
         },
@@ -76,8 +74,7 @@ def _armed(*default_keys: str, packs: dict | None = None) -> dict:
     packs = SYNTH_PACKS if packs is None else packs
     out: dict = {}
     for pack in packs.values():
-        tiers = {**(pack.get("defaults") or {}),
-                 **(pack.get("optional_overrides") or {})}
+        tiers = pack.get("thresholds") or {}
         for key in tiers:
             base = key[: -len("_critical")] if key.endswith("_critical") else None
             if base and base in tiers:
@@ -104,7 +101,7 @@ def test_build_registry_doc_structure():
         "rule_pack_file": "rule-packs/rule-pack-alpha.yaml",
     }
     assert doc["keys"]["alpha_conn"] == {
-        "pack": "alpha", "tier": "defaults", "value": 80, "unit": "count",
+        "pack": "alpha", "value": 80, "unit": "count",
         "desc": "conn warning", "metric_class": "saturation",
     }
     # float values survive as-is
@@ -127,7 +124,7 @@ def test_critical_inherits_base_metric_class():
 
 def test_strict_unclassified_key_fails_loud():
     packs = copy.deepcopy(SYNTH_PACKS)
-    del packs["beta"]["defaults"]["beta_lag"]["metric_class"]
+    del packs["beta"]["thresholds"]["beta_lag"]["metric_class"]
     with pytest.raises(ValueError, match="unclassified threshold keys"):
         lib.build_registry_doc(packs, strict_metric_class=True)
 
@@ -146,17 +143,9 @@ def test_real_registry_every_key_classified():
     assert len(saturation_bases) == 22
 
 
-def test_same_key_in_both_tiers_of_one_pack_fails_loud():
-    packs = copy.deepcopy(SYNTH_PACKS)
-    packs["alpha"]["optional_overrides"]["alpha_conn"] = {
-        "value": 1, "unit": "count", "desc": "shadow"}
-    with pytest.raises(ValueError, match="BOTH tiers"):
-        lib.build_registry_doc(packs)
-
-
 def test_same_key_in_two_packs_fails_loud():
     packs = copy.deepcopy(SYNTH_PACKS)
-    packs["beta"]["defaults"]["alpha_conn"] = {
+    packs["beta"]["thresholds"]["alpha_conn"] = {
         "value": 1, "unit": "count", "desc": "shadow"}
     with pytest.raises(ValueError, match="ambiguous"):
         lib.build_registry_doc(packs)
@@ -188,15 +177,6 @@ _BLOCKER = {"kind": "unwired", "tracking": 3770, "reason": "no source",
             "reason_zh": "沒有資料源"}
 
 
-def _make_default(entry: dict) -> None:
-    """Turn *entry* into a portable, unblocked `arming: default`."""
-    entry["arming"] = "default"
-    entry["portability"] = "portable"
-    for f in (*lib.PORTABILITY_REASON_FIELDS, "blocker", "default_exception"):
-        entry.pop(f, None)
-    entry["validation"] = _vendor(entry["value"])
-
-
 def _fixed_point_doc():
     return lib.build_registry_doc(
         SYNTH_PACKS, arming=_armed("alpha_conn"),
@@ -216,9 +196,6 @@ def _fixed_point_doc():
     ("critical_of pointing at the wrong base",
      lambda d: d["keys"]["alpha_conn_critical"].__setitem__("critical_of", "beta_lag"),
      "alpha_conn_critical"),
-    ("arming: default on an optional_overrides key",
-     lambda d: _make_default(d["keys"]["alpha_orphan_critical"]),
-     "chart-shippable"),
     ("arming authored on a critical tier",
      lambda d: d["keys"]["alpha_conn_critical"].__setitem__("arming", "default"),
      "follows its base"),
@@ -392,9 +369,10 @@ def _valid_doc():
     return lib.build_registry_doc(SYNTH_PACKS)
 
 
-def test_schema_rejects_bad_tier():
+def test_schema_rejects_a_tier_field():
+    """#4195: the registry has no tier — a leftover `tier:` is an unknown field."""
     doc = _valid_doc()
-    doc["keys"]["alpha_conn"]["tier"] = "defalts"  # typo
+    doc["keys"]["alpha_conn"]["tier"] = "defaults"
     assert any("tier" in e for e in lib.validate_registry(doc))
 
 
@@ -429,7 +407,7 @@ def test_diff_missing_and_extra_key_are_reported():
     committed = _valid_doc()
     del committed["keys"]["beta_lag"]
     committed["keys"]["ghost_key"] = {
-        "pack": "beta", "tier": "defaults", "value": 1, "unit": "x", "desc": "y"}
+        "pack": "beta", "value": 1, "unit": "x", "desc": "y"}
     diffs = lib.diff_docs(committed, lib.build_registry_doc(SYNTH_PACKS))
     assert any("beta_lag" in d and "missing from registry" in d for d in diffs)
     assert any("ghost_key" in d and "not derived" in d for d in diffs)
@@ -470,13 +448,6 @@ def test_arming_injected_table():
     assert "arming" not in doc["keys"]["alpha_conn_critical"]
 
 
-def test_arming_default_on_non_defaults_tier_fails_loud():
-    with pytest.raises(ValueError, match="chart-shippable"):
-        lib.build_registry_doc(
-            SYNTH_PACKS, arming={"alpha_orphan_critical": {
-                "arming": "default", "portability": "portable"}})
-
-
 def test_arming_unknown_key_fails_loud():
     with pytest.raises(ValueError, match="not found in the packs"):
         lib.build_registry_doc(SYNTH_PACKS, arming={"ghost": {"arming": "default"}})
@@ -498,12 +469,10 @@ def test_strict_arming_names_every_unarmed_key():
 
 
 def test_a_blocked_key_is_not_a_validation_candidate():
-    """Portable + operator in the defaults tier is the A2 input only while
-    nothing blocks it; an optional_overrides key is not one (D-A A2a: the
-    shipping gate refuses `default` there)."""
-    entry = {"arming": "operator", "portability": "portable", "tier": "defaults"}
+    """Portable + operator is the A2 input only while nothing blocks it
+    (#4195: no tier gates it any more)."""
+    entry = {"arming": "operator", "portability": "portable"}
     assert lib.is_validation_candidate(entry)
-    assert not lib.is_validation_candidate({**entry, "tier": "optional_overrides"})
     assert not lib.is_validation_candidate({**entry, "blocker": dict(_BLOCKER)})
     assert not lib.is_validation_candidate({**entry, "arming": "default"})
     assert not lib.is_validation_candidate({**entry, "portability": "site_specific"})
@@ -514,26 +483,13 @@ def test_notes_say_why_and_render_nothing_for_a_clean_default():
     blocked = {"arming": "operator", "portability": "portable",
                "blocker": dict(_BLOCKER)}
     assert lib.arming_notes_zh(blocked) == ["未啟用（沒有資料源，#3770）：沒有資料源"]
-    cand = {"arming": "operator", "portability": "portable", "tier": "defaults"}
+    cand = {"arming": "operator", "portability": "portable"}
     assert lib.arming_notes_zh(cand) == [
         f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
     exc = {"arming": "default", "portability": "ratio_pending",
            "portability_reason_zh": "絕對值", "default_exception": {"tracking": 1320}}
     assert lib.arming_notes_zh(exc) == ["出貨例外（待改比值，#1320）：絕對值"]
     assert lib.arming_notes_zh({"arming": "default", "portability": "portable"}) == []
-
-
-def test_a_portable_optional_tier_key_says_it_must_change_tier_first():
-    """`default` is defaults-tier only, so a portable optional-tier key is not
-    a candidate and its note does not say "ships once validated" (#3773
-    review F3; D-A A2a made the derived set agree with the note)."""
-    entry = {"arming": "operator", "portability": "portable",
-             "tier": "optional_overrides"}
-    assert lib.arming_notes_zh(entry) == [
-        f"未啟用（{lib.DECLARED_ONLY_LABEL_ZH}）：{lib.DECLARED_ONLY_NOTE_ZH}"]
-    assert "shadow" not in lib.CANDIDATE_NOTE_ZH + lib.DECLARED_ONLY_NOTE_ZH
-    assert lib.arming_notes_zh({**entry, "tier": "defaults"}) == [
-        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
 
 
 def test_notes_are_total_over_malformed_fields():
@@ -613,12 +569,9 @@ def test_real_shipped_non_portable_keys_are_the_recorded_exceptions():
 
 
 def test_real_validation_candidates_are_derived():
-    """The A2 input set is derived: portable, operator-supplied, unblocked,
-    in the defaults tier. Pinned so a reclassification shows up as a
-    deliberate test edit. The two DB2 keys in optional_overrides are not in
-    it (D-A A2a): the shipping gate refuses `default` outside the defaults
-    tier, so they are not promotable as they stand (#1320 decides their tier).
-    D-A A2b promoted four `%` keys. The last four candidates are blocked
+    """The A2 input set is derived: portable, operator-supplied, unblocked.
+    Pinned so a reclassification shows up as a deliberate test edit (#4195
+    dropped the tier condition; it admitted no new key). D-A A2b promoted four `%` keys. The last four candidates are blocked
     (#1200, 2026-11-15): jvm_memory is aggregation_bug (#3976 — Micrometer's
     per-pool limits do not add up to the heap limit), and the three non-`%`
     keys, which D-A does not promote, are unmeasured (#3979 — no source to
@@ -721,17 +674,15 @@ def test_render_pack_header_thresholds_then_critical_section():
 
 def _synth_optional_packs():
     packs = copy.deepcopy(SYNTH_PACKS)
-    # pure-flat optional tier (the oracle / db2 / clickhouse shape)
+    # flat keys without a platform value (the oracle / db2 / clickhouse shape)
     packs["gamma"] = {
         "display": "Gamma Store",
         "exporter": "gamma_exporter",
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-gamma.yaml",
-        "defaults": {
+        "thresholds": {
             "gamma_base": {"value": 1, "unit": "count", "desc": "base",
                            "metric_class": "saturation"},
-        },
-        "optional_overrides": {
             "gamma_queue": {"value": 50, "unit": "count", "desc": "queue size",
                             "metric_class": "saturation"},
             # base is itself optional-tier (#3778's mysql_threads_running
@@ -747,11 +698,9 @@ def _synth_optional_packs():
         "exporter": "delta_exporter",
         "default_on": False,
         "rule_pack_file": "rule-packs/rule-pack-delta.yaml",
-        "defaults": {
+        "thresholds": {
             "delta_conn": {"value": 10, "unit": "count", "desc": "conn",
                            "metric_class": "saturation"},
-        },
-        "optional_overrides": {
             "delta_lag": {"value": 7, "unit": "seconds", "desc": "lag",
                           "metric_class": "replication"},
             # base IS a chart default below -> settable by a tenant TODAY
@@ -762,7 +711,7 @@ def _synth_optional_packs():
                                      "desc": "qsize critical"},
         },
     }
-    packs["delta"]["defaults"]["delta_qsize"] = {
+    packs["delta"]["thresholds"]["delta_qsize"] = {
         "value": 40, "unit": "count", "desc": "qsize", "metric_class": "saturation"}
     return packs
 
@@ -793,9 +742,9 @@ def test_shipped_optional_predicate_excludes_critical_and_dimensional():
     resolveDeclaredRows skips the suffix and resolveCriticalRows needs
     defaults[base]. Dimensional tokens are excluded for the same reason
     scaffold_tenant excludes them."""
-    assert lib.is_shipped_optional_key("oracle_pga_usage_percent")
-    assert not lib.is_shipped_optional_key("pg_connections_critical")
-    assert not lib.is_shipped_optional_key('oracle_tablespace{name="X"}')
+    assert lib.is_flat_key("oracle_pga_usage_percent")
+    assert not lib.is_flat_key("pg_connections_critical")
+    assert not lib.is_flat_key('oracle_tablespace{name="X"}')
 
 
 # ── the header CLAIM vs the resolver's real entry condition (#1310 FIX-2) ──
@@ -1188,19 +1137,10 @@ def test_wrap_comment_never_splits_a_token() -> None:
         "call sites had.")
 
 
-# ── defaults_counterexample_head (#3206 10c-3) ──────────────────────────
-
-def _a_counterexample_key(tier: str) -> str:
-    import scaffold_tenant
-    return next(k for pack in scaffold_tenant.RULE_PACKS.values()
-                for k, info in (pack.get(tier) or {}).items()
-                if isinstance(info, dict) and "value_counterexample" in info)
-
-
 # ── D-A A2a: validation (what a shipped value rests on) ─────────────────────
 
 def _entry(value=80, unit="%", **validation):
-    return {"arming": "default", "portability": "portable", "tier": "defaults",
+    return {"arming": "default", "portability": "portable",
             "value": value, "unit": unit, "validation": validation or _vendor(value)}
 
 
@@ -1226,7 +1166,7 @@ def test_an_operator_key_may_carry_validation_and_is_held_to_it():
     assert _problems(op) == []
     op["validation"]["sources"][0].update(value=81, quote="expr: metric > 81")
     assert any("vendor source uses 81" in p for p in _problems(op))
-    plain = {"arming": "operator", "portability": "portable", "tier": "defaults", "value": 80}
+    plain = {"arming": "operator", "portability": "portable", "value": 80}
     assert _problems(plain) == []
 
 
@@ -1294,7 +1234,7 @@ def test_a_measured_counterexample_keeps_a_value_from_shipping():
     """語料量到這個值會錯判（`value_counterexample`）的鍵不得預設出貨：語料是否決，不是依據。"""
     ce = {"issue": 1176, "direction": "over_fire", "observed": "x"}
     assert any("measured wrong cannot ship" in p for p in _problems({**_entry(), "value_counterexample": ce}))
-    op = {"arming": "operator", "portability": "portable", "tier": "defaults", "value": 80,
+    op = {"arming": "operator", "portability": "portable", "value": 80,
           "value_counterexample": ce}
     assert _problems(op) == []
 

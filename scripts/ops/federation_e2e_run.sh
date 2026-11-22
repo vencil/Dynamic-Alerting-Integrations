@@ -173,11 +173,12 @@ from _lib_yaml_strict import strict_safe_load  # noqa: E402
 
 rendered = sys.argv[1]
 cm = strict_safe_load(open("/tmp/fed-e2e-cm-envoy-vl.yaml"))
-for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "inflight_limit.lua"):
+for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua", "query_limit.lua",
+            "inflight_limit.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
 print("[fed-e2e] rendered victorialogs envoy.yaml + revoked_check.lua + "
-      "audit_extract.lua + inflight_limit.lua")
+      "audit_extract.lua + query_limit.lua + inflight_limit.lua")
 PYEOF
 : > "$RENDERED/victorialogs/revoked.txt"
 

@@ -8,7 +8,7 @@ package main
 // v2.8.0 PR-4 collapsed the parallel `app/config_*.go` ↔ `pkg/config/*.go`
 // trees that diverged during the half-completed v2.x extract. `pkg/config`
 // is the canonical home — it has the v2.5.0 metadata fields
-// (Environment / Region / Domain / DBType / Tags / Groups on
+// (Environment / Region / Domain / Tags / Groups on
 // TenantMetadata) and is already imported by `cmd/da-guard`.
 //
 // Behavior pin: type aliases (`type X = config.X`) propagate methods,

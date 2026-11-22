@@ -157,11 +157,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectConfigInfo(ch)
 
 	// ResolveMetadata is a pure per-scrape snapshot (walks + yaml.Unmarshals
-	// every tenant's _metadata once). Resolve it a single time and share the
-	// slice between the two metadata consumers instead of resolving twice.
+	// every tenant's _metadata once).
 	metadata := cfg.ResolveMetadataLogf(c.logf)
 	c.collectMetadata(ch, metadata)
-	c.collectTenantExpectedExporter(ch, metadata)
+	c.collectTenantExpectedExporter(ch, cfg.ResolveExpectedExporters())
 	unset := cfg.UnsetThresholdsAt(now, config.UnsetThresholdsSubscribed(ops.StateFilters))
 	c.collectUnsetThresholds(ch, unset)
 
@@ -515,53 +514,52 @@ func (c *Collector) collectUnsetThresholds(ch chan<- prometheus.Metric, unset []
 	}
 }
 
-// collectTenantExpectedExporter emits tenant_expected_exporter{tenant, db_type}=1
-// for every db_type a tenant DECLARES in its _metadata block (#869) — one
-// series per declared kind (#3771: `db_type` may be a list).
+// collectTenantExpectedExporter emits tenant_expected_exporter{tenant, pack}=1
+// for every exporter kind a tenant DECLARES in `_expected_exporters` (#869,
+// #3771, #4097) — one series per declared kind.
 //
 // This is the LEFT-hand input to the per-tenant liveness anti-join
 // (TenantExporterAbsent in rule-pack-liveness.yaml):
 //
-//	tenant_expected_exporter unless on(tenant, db_type) (<presence of each kind>)
+//	tenant_expected_exporter unless on(tenant, pack) (<presence of each kind>)
 //
-// so each declared (tenant, db_type) for which no live exporter of that kind
+// so each declared (tenant, pack) for which no live exporter of that kind
 // reports is flagged — a tenant with a dead mariadb exporter and a healthy
 // redis exporter fires for mariadb (#3771), where the pre-#3771 `on(tenant)`
-// join let the redis target mask it.
+// join let the redis target mask it. The label is `pack`, the one
+// user_threshold_unset{tenant, pack, key} carries: a kind IS a rule pack
+// (the ones with a presence metric, config.ExpectedExporterKinds).
 //
-// Opt-in contract — the empty-list guard is LOAD-BEARING, not cosmetic:
-// the metadata slice (from ResolveMetadata, shared with collectMetadata) holds
-// EVERY tenant unconditionally, and a tenant with no _metadata resolves to an
-// empty DBType (see ResolveMetadata in pkg/config/resolve.go). Emitting
-// db_type="" for such tenants would put a left-hand series into the anti-join
-// for a tenant that has no matching exporter at all → a permanent
-// false-positive critical. So liveness coverage is OPT-IN via declaring
-// db_type; a tenant that scrapes exporters without declaring is surfaced by
-// TenantExporterUndeclared instead. DBType is already deduplicated
-// (config.NormalizeDBTypes), so no series is emitted twice.
+// Opt-in contract — LOAD-BEARING, not cosmetic: expected
+// (config.ResolveExpectedExporters) holds only the tenants that declare at
+// least one kind the exporter reads. A series for a tenant that declared
+// nothing would put a left-hand series into the anti-join for a tenant that
+// has no matching exporter at all → a permanent false-positive critical. So
+// liveness coverage is OPT-IN via declaring; a tenant that scrapes exporters
+// without declaring is surfaced by TenantExporterUndeclared instead. A value
+// the exporter does not read (an unknown kind, a repeat, not a list) declares
+// NOTHING — it is the key verdict's error, never a half-served expectation —
+// and a read value names each kind once, so no series is emitted twice.
 //
-// Deliberately a NEW, SEPARATE metric — db_type is intentionally NOT added to
-// tenant_metadata_info. types.go records the v2.5.0 decision that db_type
-// is NOT a Prometheus label (cardinality concern); tenant_metadata_info is also a
-// load-bearing 1-series-per-tenant info metric that every rule-pack alert's
-// metadata annotations query (#3483; it was joined into alerts before), so
-// widening its label set is forbidden. This is a SCOPED reversal limited to
-// the narrow, low-cardinality (1 series per declared kind) liveness need.
-func (c *Collector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, metadata []config.ResolvedMetadata) {
+// Deliberately a SEPARATE metric — the kind is NOT a label of
+// tenant_metadata_info: that is a load-bearing 1-series-per-tenant info
+// metric every rule-pack alert's metadata annotations query (#3483; it was
+// joined into alerts before), so widening its label set is forbidden.
+func (c *Collector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, expected []config.ExpectedExporters) {
 	expectedDesc := prometheus.NewDesc(
 		"tenant_expected_exporter",
-		"Liveness expectation (always 1) for each db_type a tenant declares in _metadata. "+
-			"LHS of the TenantExporterAbsent anti-join (#869, #3771). One series per declared (tenant, db_type).",
-		[]string{"tenant", "db_type"},
+		"Liveness expectation (always 1) for each exporter kind a tenant declares in _expected_exporters. "+
+			"LHS of the TenantExporterAbsent anti-join (#869, #3771, #4097). One series per declared (tenant, pack).",
+		[]string{"tenant", "pack"},
 		nil,
 	)
-	for _, md := range metadata {
+	for _, e := range expected {
 		// Opt-in: only declared kinds are expected to have a live exporter.
-		for _, dbType := range md.DBType {
+		for _, kind := range e.Kinds {
 			m, err := prometheus.NewConstMetric(expectedDesc, prometheus.GaugeValue, 1.0,
-				md.Tenant, dbType)
+				e.Tenant, kind)
 			if err != nil {
-				c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s db_type=%s: %v", md.Tenant, dbType, err)
+				c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s pack=%s: %v", e.Tenant, kind, err)
 				continue
 			}
 			ch <- m

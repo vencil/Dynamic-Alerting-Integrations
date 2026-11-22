@@ -32,13 +32,11 @@ type TenantSummary struct {
 	Region      string `json:"region,omitempty"`
 	Tier        string `json:"tier,omitempty"`
 	Domain      string `json:"domain,omitempty"`
-	// Every database kind the tenant declares in `_metadata.db_type`, in the
-	// order written (#3771: the config takes a string or a list; a string is
-	// one kind). Omitted when none is declared.
-	DBType []string `json:"db_type,omitempty"`
-	Owner  string   `json:"owner,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
-	Groups []string `json:"groups,omitempty"`
+	// The exporter kinds the tenant declares in `_expected_exporters`, in the order written, as threshold-exporter reads them through the tenant's layers (root platform files' entry, the tenant file over it, else its profile's) — the kinds tenant_expected_exporter is served for, so the ones TenantExporterAbsent watches. Omitted when none is declared, or when the value is one the exporter does not read (an unknown kind, a repeat, not a list).
+	ExpectedExporters []string `json:"expected_exporters,omitempty"`
+	Owner             string   `json:"owner,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
+	Groups            []string `json:"groups,omitempty"`
 
 	// ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file
 	// exists but is not usable, so every other field except ID is empty —
@@ -419,6 +417,9 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 			var meta cfg.ResolvedMetadata
 			meta, decoded = metadata.Resolve(tenantID, overrides)
 			setMetadata(&summary, meta)
+			// #4097: the declared exporter kinds, through the same layers
+			// (the exporter's own reading; an unread value lists none).
+			summary.ExpectedExporters = metadata.ExpectedExporters(tenantID, overrides)
 		}
 		// #3157: a git-managed file that does not declare the row's id
 		// (id_mismatch; tenant_count, several_documents or yaml_indirection
@@ -447,9 +448,6 @@ func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
 	summary.Region = meta.Region
 	summary.Tier = meta.Tier
 	summary.Domain = meta.Domain
-	if len(meta.DBType) > 0 {
-		summary.DBType = meta.DBType
-	}
 	summary.Owner = meta.Owner
 	if len(meta.Tags) > 0 {
 		summary.Tags = meta.Tags

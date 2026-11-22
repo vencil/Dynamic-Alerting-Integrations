@@ -20,9 +20,10 @@
 # 3.5.8-r0 — the one finding #1278 lists for this image); .6 ships 3.5.8-r0.
 # (Earlier: .4 shipped libcrypto3 3.5.6-r0 + libexpat 2.8.1-r0.)
 FROM alpine:3.24.4
-# python3 + PyYAML (the gate parses the registry + projections YAML). py3-yaml is
-# the distro package, so the image carries no pip and no build toolchain.
-RUN apk add --no-cache python3 py3-yaml \
+# python3 only: the gate reads JSON — tenant-api's own reading of the registry
+# (`tenant-api state show`, run by the init-container before it, #4164) and the
+# chart's toJson projections. No pip, no build toolchain, no YAML reader.
+RUN apk add --no-cache python3 \
  && rm -rf /var/cache/apk/*
 # The chart runs these containers with readOnlyRootFilesystem:true (#908 PR-3 m3),
 # so the rootfs contract is: NOTHING here may write outside the mounted volumes.
@@ -35,12 +36,10 @@ RUN apk add --no-cache python3 py3-yaml \
 # emptyDir mounted at /tmp in the DaemonSet, not loosening the read-only rootfs.
 ENV PYTHONDONTWRITEBYTECODE=1
 COPY verify_tenant_projections.py /usr/local/bin/verify_tenant_projections.py
-# The repo's one strict YAML reading (#4111), beside the script so it imports it.
-COPY _lib_yaml_strict.py /usr/local/bin/_lib_yaml_strict.py
 # serve_metrics.py runs as a long-lived SIDECAR (command override in the DaemonSet)
 # that re-serves the init-container's verdict textfile over HTTP for Prometheus
 # (#908 PR-3). It never re-evaluates the gate — see its module docstring. Both
-# scripts use only the stdlib + PyYAML already installed above.
+# scripts use only the stdlib.
 COPY serve_metrics.py /usr/local/bin/serve_metrics.py
 # Non-root. The Vector pod's securityContext (fsGroup) makes the shared config-dir
 # emptyDir group-writable so the gate can populate it; see the deployment wiring.

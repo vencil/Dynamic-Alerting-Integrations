@@ -1669,7 +1669,6 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 	meta.Environment = tm.Environment
 	meta.Region = tm.Region
 	meta.Domain = tm.Domain
-	meta.DBType = tm.DBType
 	meta.Tags = tm.Tags
 	meta.Groups = tm.Groups
 	return meta, true

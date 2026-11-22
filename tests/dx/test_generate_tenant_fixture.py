@@ -234,13 +234,13 @@ def test_gen_defaults_yaml_emits_only_numeric_values(fixture_module):
         )
 
 
-def test_gen_defaults_yaml_with_db_types_subset_still_numeric(fixture_module):
-    """Same numeric contract holds when caller passes a db_types subset
+def test_gen_defaults_yaml_with_kinds_subset_still_numeric(fixture_module):
+    """Same numeric contract holds when caller passes a kinds subset
     (the cascading-defaults path used by hierarchical / synthetic-v2)."""
     import random
 
     rng = random.Random(0xDEFA18)
-    out = fixture_module._gen_defaults_yaml(rng, db_types=["mysql", "redis"])
+    out = fixture_module._gen_defaults_yaml(rng, kinds=["mysql", "redis"])
 
     defaults_block = out["defaults"]
     assert len(defaults_block) > 0, "defaults block must be non-empty for subset"
@@ -378,12 +378,12 @@ def test_the_refusal_uses_the_registry_predicate_not_its_own_copy(fixture_module
     """⛔ Imported, not respelled.
 
     `not key.endswith("_critical") and "{" not in key` already exists in
-    `_registry_lib.is_shipped_optional_key`, and the exporter's `resolve.go` is
+    `_registry_lib.is_flat_key`, and the exporter's `resolve.go` is
     what both describe. A fourth hand-copy is how the contract drifts: this
     asserts the module actually binds that function, so a future edit that
     inlines the predicate here fails instead of silently forking it.
     """
-    assert fixture_module.is_shipped_optional_key.__module__ == "_registry_lib"
+    assert fixture_module.is_flat_key.__module__ == "_registry_lib"
 
 
 def test_generated_silent_mode_values_are_schema_words(fixture_module):

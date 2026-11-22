@@ -175,7 +175,8 @@ tests:
                 only one. Causes: `tenantProjectionGate: enforce` + a config-bug
                 mismatch (fail-closed working as designed — REVERT the bad
                 `tenantProjections` change); a wrong/garbled gate image or args
-                (any mode — fix `projectionGate.image` / the init spec); a
+                (any mode — fix `projectionGate.image`, the registry reader's
+                `projectionGate.registryReader.image` / the init spec); a
                 missing staging ConfigMap. Inspect `kubectl describe pod` for
                 the waiting reason and `kubectl logs <vector-pod> -c
                 projection-gate --previous` for crash output. Consider `degrade`
@@ -246,7 +247,8 @@ tests:
                 only one. Causes: `tenantProjectionGate: enforce` + a config-bug
                 mismatch (fail-closed working as designed — REVERT the bad
                 `tenantProjections` change); a wrong/garbled gate image or args
-                (any mode — fix `projectionGate.image` / the init spec); a
+                (any mode — fix `projectionGate.image`, the registry reader's
+                `projectionGate.registryReader.image` / the init spec); a
                 missing staging ConfigMap. Inspect `kubectl describe pod` for
                 the waiting reason and `kubectl logs <vector-pod> -c
                 projection-gate --previous` for crash output. Consider `degrade`
@@ -289,7 +291,49 @@ tests:
                 only one. Causes: `tenantProjectionGate: enforce` + a config-bug
                 mismatch (fail-closed working as designed — REVERT the bad
                 `tenantProjections` change); a wrong/garbled gate image or args
-                (any mode — fix `projectionGate.image` / the init spec); a
+                (any mode — fix `projectionGate.image`, the registry reader's
+                `projectionGate.registryReader.image` / the init spec); a
+                missing staging ConfigMap. Inspect `kubectl describe pod` for
+                the waiting reason and `kubectl logs <vector-pod> -c
+                projection-gate --previous` for crash output. Consider `degrade`
+                mode if a hard rollout stop is worse than fail-available 0:0 for
+                your environment. See platform-log-aggregation-runbook §8.9.3.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+              summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
+
+  # 11) REGISTRY-READER wedge (#4164): tenant-api's image (the registry reader,
+  #     the FIRST init-container) never pulls → the pod wedges before the gate runs.
+  #     RED on the old container="projection-gate" matcher.
+  - interval: 1m
+    name: registry-reader-image-pull-wedge-fires
+    input_series:
+      - series: 'kube_pod_init_container_status_waiting_reason{container="projection-gate-registry", reason="ImagePullBackOff", namespace="vector", pod="vector-jkl78", instance="10.0.0.9:8080", job="kube-state-metrics"}'
+        values: '1+0x9'
+    alert_rule_test:
+      - eval_time: 4m   # wedged since t0 but < for:5m → PENDING (same debounce contract)
+        alertname: VectorProjectionGateStuck
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: VectorProjectionGateStuck
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              namespace: vector
+            exp_annotations:
+              description: |
+                The projection-gate init-container is stuck waiting (crash loop,
+                image-pull failure, or container-config error) — the pod never
+                starts Vector, and on a DaemonSet maxUnavailable then HALTS the
+                rollout cluster-wide (mid-roll nodes lose logging; un-rolled
+                nodes keep the old config — a split brain). The verdict metric
+                is NOT served in this state (Vector + the sidecar never start),
+                so the degrade alerts cannot see it — this KSM signal is the
+                only one. Causes: `tenantProjectionGate: enforce` + a config-bug
+                mismatch (fail-closed working as designed — REVERT the bad
+                `tenantProjections` change); a wrong/garbled gate image or args
+                (any mode — fix `projectionGate.image`, the registry reader's
+                `projectionGate.registryReader.image` / the init spec); a
                 missing staging ConfigMap. Inspect `kubectl describe pod` for
                 the waiting reason and `kubectl logs <vector-pod> -c
                 projection-gate --previous` for crash output. Consider `degrade`

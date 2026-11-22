@@ -15,6 +15,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // decodeTenantMetadata is the exporter's one decode of a `_metadata` value:
@@ -94,6 +96,11 @@ func metadataProblem(_ string, sv ScheduledValue) string {
 	if sv.deleted || sv.Default == "" {
 		return ""
 	}
+	// Before the decode: a mapping that does not decode for another reason
+	// still gets the migration instruction for the field it must drop.
+	if p := retiredMetadataFieldProblem(sv); p != "" {
+		return p
+	}
 	if _, err := decodeTenantMetadata(sv); err != nil {
 		if errors.Is(err, errMetadataString) {
 			return metadataUndecodedProblem + ": " + errMetadataString.Error()
@@ -119,10 +126,99 @@ func metadataReading(k string, sv ScheduledValue) any {
 		return "none"
 	}
 	tm, _ := decodeTenantMetadata(sv)
-	read := fmt.Sprintf("%q|%q|%q|%q|%q|%q|%q|%q|%q", tm.RunbookURL, tm.Owner, tm.Tier, tm.Environment,
-		tm.Region, tm.Domain, tm.DBType, tm.Tags, tm.Groups)
+	read := fmt.Sprintf("%q|%q|%q|%q|%q|%q|%q|%q", tm.RunbookURL, tm.Owner, tm.Tier, tm.Environment,
+		tm.Region, tm.Domain, tm.Tags, tm.Groups)
 	if metadataProblem(k, sv) != "" {
 		return read + "|raw=" + sv.Default
 	}
 	return read
+}
+
+// retiredDBTypeField is the one `_metadata` field that was removed rather
+// than never known (#4097): until v2.9 `db_type` was a grouping string, then
+// (unreleased) the list tenant_expected_exporter was served from. Its job is
+// the top-level `_expected_exporters` key's now (expected_exporters.go).
+const retiredDBTypeField = "db_type"
+
+// metadataWritesRetiredField reports whether sv is a `_metadata` mapping
+// that still writes `db_type`. Such a value is an ERROR in every layer that
+// writes it (valueCheck.everyLayer), not the notice an unknown field is
+// outside a tenant file: a tree migrated half-way would otherwise load
+// clean while the declaration it used to make — and the absence alerts it
+// switched on — is gone.
+func metadataWritesRetiredField(sv ScheduledValue) bool {
+	_, writes := retiredDBTypeValue(sv)
+	return writes
+}
+
+// retiredDBTypeValue is what a `_metadata` mapping writes under `db_type`,
+// read off the YAML node rather than off the decoded map: a mapping that
+// also holds a non-string key, or a field of the wrong shape, does not
+// decode into the map the other checks read, and the retired field would
+// then pass unreported.
+func retiredDBTypeValue(sv ScheduledValue) (raw any, writes bool) {
+	node, structured, err := structureOf(sv)
+	if !structured || err != nil || node == nil || node.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != retiredDBTypeField {
+			continue
+		}
+		if node.Content[i+1].Decode(&raw) != nil {
+			return "", true // undecodable: not a kind, counted as such
+		}
+		return raw, true
+	}
+	return nil, false
+}
+
+// retiredMetadataFieldProblem is the migration instruction for a `_metadata`
+// that still writes `db_type`; "" when it does not. The line to write is
+// printed only when every value it held is an exporter kind — then it is
+// built from the kind table, not from the value (#3703); otherwise the
+// sentence carries a count and the allowed kinds.
+func retiredMetadataFieldProblem(sv ScheduledValue) string {
+	raw, writes := retiredDBTypeValue(sv)
+	if !writes {
+		return ""
+	}
+	var values []any
+	switch v := raw.(type) {
+	case nil:
+	case []any:
+		values = v
+	default:
+		values = []any{v}
+	}
+	var kinds []string
+	seen := map[string]bool{}
+	notKind := 0
+	for _, v := range values {
+		s, isString := v.(string)
+		switch {
+		case isString && s == "":
+		case isString && IsExpectedExporterKind(s):
+			if !seen[s] {
+				seen[s] = true
+				kinds = append(kinds, s)
+			}
+		default:
+			notKind++
+		}
+	}
+	const head = "`_metadata.db_type` is removed (#4097): what a tenant runs is declared in the top-level key `_expected_exporters`"
+	const where = " beside `_metadata` (the top level of this tenant or profile entry)"
+	const effect = "; a declared kind gets the absence alert TenantExporterAbsent, so declare only the exporters that are really scraped"
+	switch {
+	case notKind > 0:
+		return fmt.Sprintf("%s. %d of its value(s) is not an exporter kind, so there is no line to copy: delete `db_type` and write "+
+			"`_expected_exporters: [<kind>, …]`%s with the kinds of the exporters this tenant runs (%s)%s",
+			head, notKind, where, allowedKindsText(), effect)
+	case len(kinds) == 0:
+		return head + ". It declares nothing here: delete `db_type`" + effect
+	default:
+		return fmt.Sprintf("%s. Delete `db_type` and write `_expected_exporters: [%s]`%s%s",
+			head, strings.Join(kinds, ", "), where, effect)
+	}
 }

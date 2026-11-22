@@ -77,8 +77,8 @@ async function mountTenantManagerWithBackend(page: Page) {
       contentType: 'application/json',
       body: JSON.stringify({
         items: [
-          { id: 'prod-mariadb-01', environment: 'production', tier: 'tier-1', domain: 'finance', db_type: 'mariadb', owner: 'team-a', tags: [], groups: [] },
-          { id: 'staging-pg-01', environment: 'staging', tier: 'tier-2', domain: 'analytics', db_type: 'postgresql', owner: 'team-b', tags: [], groups: [] },
+          { id: 'prod-mariadb-01', environment: 'production', tier: 'tier-1', domain: 'finance', expected_exporters: ['mariadb'], owner: 'team-a', tags: [], groups: [] },
+          { id: 'staging-pg-01', environment: 'staging', tier: 'tier-2', domain: 'analytics', expected_exporters: ['postgresql'], owner: 'team-b', tags: [], groups: [] },
         ],
         total_matched: 2,
         page_size: 500,
@@ -298,7 +298,7 @@ test.describe('Saved Views (Smart Views) @critical', () => {
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          items: [{ id: 'prod-mariadb-01', environment: 'production', tier: 'tier-1', domain: 'finance', db_type: 'mariadb', owner: 'team-a', tags: [], groups: [] }],
+          items: [{ id: 'prod-mariadb-01', environment: 'production', tier: 'tier-1', domain: 'finance', expected_exporters: ['mariadb'], owner: 'team-a', tags: [], groups: [] }],
           total_matched: 1, page_size: 500, next_offset: null,
         }),
       });

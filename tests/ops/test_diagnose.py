@@ -395,10 +395,10 @@ class TestFormatChainSummary:
 # check()
 # ---------------------------------------------------------------------------
 
-# issue 1513（本輪決策 N2）：Pod／exporter 兩項只對 db_type=mariadb 的租戶執行，
+# issue 1513（本輪決策 N2）：Pod／exporter 兩項只對宣告了 mariadb 的租戶執行，
 # check() 先查 tenant_expected_exporter。這組測試描述 MariaDB 租戶，所以第一個
-# 回應固定是它；非 MariaDB 與沒宣告的情境在 test_diagnose_db_type_and_exit.py。
-_MARIADB = ([{"metric": {"tenant": "db-a", "db_type": "mariadb"}, "value": [0, "1"]}], None)
+# 回應固定是它；非 MariaDB 與沒宣告的情境在 test_diagnose_expected_exporters_and_exit.py。
+_MARIADB = ([{"metric": {"tenant": "db-a", "pack": "mariadb"}, "value": [0, "1"]}], None)
 
 
 def _mariadb_then(results, err):
@@ -754,7 +754,7 @@ class TestProfileLookupSharesTheChainRead:
 
     @staticmethod
     def _check(d):
-        with mock.patch.object(diagnose, "tenant_db_type",
+        with mock.patch.object(diagnose, "tenant_expected_kind",
                                return_value=(None, None)), \
                 mock.patch.object(diagnose, "query_prometheus",
                                   return_value=([], None)):
@@ -1047,7 +1047,7 @@ class TestSetTagReadAsTheExporterReadsIt:
         # (`!!set` was a row here; refused since ADR-036 step 6, #3206)
         assert chain["resolved"]["mysql_connections"] == 70
         assert 1 not in chain["resolved"]
-        with mock.patch.object(diagnose, "tenant_db_type",
+        with mock.patch.object(diagnose, "tenant_expected_kind",
                                return_value=(None, None)), \
                 mock.patch.object(diagnose, "query_prometheus",
                                   return_value=([], None)):
@@ -1188,7 +1188,7 @@ class TestGivenConfigDirIsNeverSilent:
         anything (the chain would raise too, but only after up to four
         Prometheus queries and a kubectl call)."""
         asked = []
-        monkeypatch.setattr(diagnose, "tenant_db_type",
+        monkeypatch.setattr(diagnose, "tenant_expected_kind",
                             lambda *a: asked.append(a) or (None, None))
         monkeypatch.setattr(diagnose, "query_prometheus",
                             lambda *a: asked.append(a) or ([], None))
@@ -1205,7 +1205,7 @@ class TestGivenConfigDirIsNeverSilent:
         '' and answer without it for the other two. An unusable path is
         refused before any query, as on the CLI."""
         asked = []
-        monkeypatch.setattr(diagnose, "tenant_db_type",
+        monkeypatch.setattr(diagnose, "tenant_expected_kind",
                             lambda *a: asked.append(a) or (None, None))
         monkeypatch.setattr(diagnose, "query_prometheus",
                             lambda *a: asked.append(a) or ([], None))
