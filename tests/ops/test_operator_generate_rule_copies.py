@@ -242,6 +242,10 @@ def test_migrating_the_shipped_configmaps_gives_operator_generates_objects(gener
         assert mine["metadata"]["name"] == gen["metadata"]["name"], name
         less = _excluded(theirs[name])
         assert less == _EXPECTED_EXCLUDED.get(cr.OPERATOR_RULES.member(name), []), name
+        # what only the generator leaves out is still in the migrated object —
+        # filtered from both sides below, a rule the migration LOST would pass
+        kept = {r.get("alert") for _g, r in _rules(mine, [])}
+        assert set(less) <= kept, (name, set(less) - kept)
         assert _rules(mine, less) == _rules(gen, []), name
         if not less:
             assert mine["spec"] == gen["spec"], name

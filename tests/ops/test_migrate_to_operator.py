@@ -1433,10 +1433,19 @@ def test_cli_two_keys_end_as_one_file_and_the_summary_says_one(tmp_path):
     # not describe (`my-rule-pack-foo`) is found too
     zh = _cli("--source-dir", str(src), "--checklist-only", lang="zh").stdout
     assert "**ConfigMap 檔案數**: 1" in zh and "**Rule 群組數**: 3" in zh, zh
-    for text in (checklist, zh):
-        assert text.count("kubectl get prometheusrule -A -l migrated-from=configmap`") == 1
-        assert text.count("kubectl delete prometheusrule -n <namespace> <name>") == 1
-        assert "`da-rule-pack-prometheus-rules-<pack>`" in text
+    # — one by one: the old name of THIS plan's object, never "whatever
+    # carries the label and is not in this output" (another migration's
+    # objects carry it too; CodeRabbit on #4190)
+    for text, old in ((checklist, "<old-name>"), (zh, "<舊名>")):
+        assert text.count("  - `da-rule-pack-prometheus-rules-zdb` → `da-rule-pack-zdb`\n") == 1
+        assert text.count("kubectl get prometheusrule -A -l migrated-from=configmap "
+                          f"--field-selector metadata.name={old}`") == 1, text
+        assert text.count(f"kubectl delete prometheusrule -n <namespace> {old}`") == 1
+        assert text.count(f"kubectl get prometheusrule -n <namespace> {old} -o yaml > "
+                          f"{old}.backup.yaml`") == 1, text
+    assert "belong to other migrations: leave them" in checklist
+    assert "屬於別次遷移，不要動" in zh
+
     # …and every other route to the counts gives the same ones
     summary = json.loads(_cli("--source-dir", str(src), "--output-dir", str(tmp_path / "o2"),
                               "--json").stdout)
@@ -1447,6 +1456,65 @@ def test_cli_two_keys_end_as_one_file_and_the_summary_says_one(tmp_path):
     only_json = json.loads(_cli("--source-dir", str(src), "--checklist-only", "--json").stdout)
     assert (only_json["configmap_files"], only_json["rule_groups"]) == (1, 3), only_json
     assert "**ConfigMap Files**: 1" in only.stdout and "**Rule Groups**: 3" in only.stdout
+
+
+@pytest.mark.parametrize("name, kind, file, legacy", [
+    ("prometheus-rules-zdb", "ConfigMap", "cm.yaml", "da-rule-pack-prometheus-rules-zdb"),
+    # the substring cut: the middle of a name went
+    ("my-rule-pack-zdb", "ConfigMap", "cm.yaml", "da-rule-pack-my-zdb"),
+    # names the earlier versions gave as they are given now: nothing to say
+    ("zplain", "ConfigMap", "cm.yaml", None),
+    ("rule-pack-zdb", None, "rule-pack-zdb.yaml", None),
+    ("rule-pack-zdb", "ConfigMap", "cm.yaml", None),
+])
+def test_what_an_earlier_version_named_the_object(name, kind, file, legacy):
+    found = [_rule_file(name, file, [_group("g")], kind=kind)]
+    planned = mto.planned_rules(found, "zns")
+    assert planned[0]["renamed_from"] == legacy
+    assert mto.renamed_objects(planned) == ([(legacy, planned[0]["name"])] if legacy else [])
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_cli_the_apply_step_names_each_file_of_the_plan(tmp_path):
+    """CodeRabbit on #4190: the step was one `-f` and a wildcard over the
+    directory — once the shell has expanded it, several paths, and kubectl
+    refuses every plan of more than one object. One `-f` per file of THIS
+    plan, quoted, in the written checklist and in --checklist-only alike."""
+    import shlex
+    src, out = tmp_path / "src", tmp_path / "o ut"   # a path that needs its quotes
+    src.mkdir()
+    _write_cm(src / "a.yaml", "prometheus-rules-zdb", [("a.yml", "zg")])
+    _write_cm(src / "b.yaml", "zplain", [("a.yml", "zh")])
+    done = _cli("--source-dir", str(src), "--output-dir", str(out))
+    assert done.returncode == 0, done.stderr
+    for lang in ("en", "zh"):
+        texts = [_cli("--source-dir", str(src), "--checklist-only", "--output-dir", str(out),
+                      lang=lang).stdout]
+        if lang == "en":
+            texts.append((out / "MIGRATION-CHECKLIST.md").read_text(encoding="utf-8"))
+        for text in texts:
+            line = next(ln for ln in text.splitlines() if "`kubectl apply -f " in ln
+                        and "--dry-run" not in ln)
+            argv = shlex.split(line.split("`")[1])
+            assert argv == ["kubectl", "apply", "-f", f"{out}/da-rule-pack-zdb.yaml",
+                            "-f", f"{out}/da-rule-pack-zplain.yaml"], line
+            assert "*" not in line  # no wildcard left for the shell
+            # every file the step names is one the run wrote
+            assert all(Path(a).is_file() for a in argv[3::2])
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_cli_a_plan_that_renames_nothing_has_no_rename_step(tmp_path):
+    """…so a checklist never tells a reader to look for objects to delete
+    when this plan left none behind."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _write_cm(src / "cm.yaml", "zplain", [("a.yml", "zg")])
+    for lang in ("en", "zh"):
+        only = _cli("--source-dir", str(src), "--checklist-only", lang=lang)
+        assert only.returncode == 0, only.stderr
+        assert "migrated-from=configmap --field-selector" not in only.stdout
+        assert "kubectl delete prometheusrule" not in only.stdout
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -1475,12 +1543,19 @@ def test_cli_a_rule_file_this_run_does_not_write_is_refused_in_the_output_dir(tm
     assert "notes.yaml" not in done.stderr and "Traceback" not in done.stderr
     assert "kind: PrometheusRule" not in done.stdout
     assert {p.name: p.read_bytes() for p in out.iterdir()} == before
-    # an entry of the naming that is no file is named too, not passed over
+    # by NAME, whatever the entry is — and one in the place of a file this
+    # run writes does not hide the other (CodeRabbit on #4190: the listing
+    # stopped at the first entry that was no file, and `zold` was passed)
     stale.unlink()
+    (out / "da-rule-pack-zdb.yaml").unlink()
+    (out / "da-rule-pack-zdb.yaml").mkdir()
+    (out / "da-rule-pack-zold.yaml").write_text("old\n", encoding="utf-8")
     (out / "da-rule-pack-zgone.yaml").mkdir()
     done = _cli("--source-dir", str(src), "--output-dir", str(out), *mode)
     assert done.returncode == 2 and "Traceback" not in done.stderr, done.stderr
-    assert "da-rule-pack-zgone.yaml: not a regular file" in done.stderr, done.stderr
+    assert "this run does not write: da-rule-pack-zgone.yaml, da-rule-pack-zold.yaml." \
+        in done.stderr, done.stderr
+    assert sorted(p.name for p in (out / "da-rule-pack-zdb.yaml").iterdir()) == []
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -1502,10 +1577,6 @@ def test_cli_a_collision_is_exit_2_in_every_mode_and_writes_and_prints_nothing(t
     assert ("one.yaml (ConfigMap zrules, document 1), "
             "two.yaml (ConfigMap zrules, document 1)") in done.stderr, done.stderr
     assert "Traceback" not in done.stderr
-    if "--json" in mode:
-        # the one JSON document a refusal leaves is the error envelope
-        assert "da-rule-pack-zrules" not in done.stdout or '"error"' in done.stdout
-        assert "kind: PrometheusRule" not in done.stdout
-    else:
-        assert done.stdout == ""
+    # a refusal prints no document, in --json as in text: stderr carries it
+    assert done.stdout == ""
     assert not out.exists() or not any(out.iterdir())

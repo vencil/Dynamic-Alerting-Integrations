@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -373,6 +374,21 @@ def rule_pack_name_of(obj: dict) -> str:
     return name
 
 
+def legacy_object_name(obj: dict) -> "str | None":
+    """The name the versions before #4041 gave the PrometheusRule made from
+    *obj*, else None where they made none of it (`a/b`).
+
+    ⛔ Frozen: this is what those versions DID — the source's name with every
+    `rule-pack-` cut out of it, wherever it stood, lower-cased — kept so the
+    checklist can name the object a cluster may still hold. It is not a
+    naming rule to share or to fix."""
+    old_pack = obj["name"].replace(_lib_consumer_read.RULE_PACKS.prefix, "").lower()
+    try:
+        return _lib_consumer_read.OPERATOR_RULES.file_stem(old_pack)
+    except ValueError:
+        return None
+
+
 def planned_rules(found: List[dict], namespace: str) -> List[dict]:
     """The PrometheusRules *found* migrates to: `[{name, file, keys, crd}]`,
     one per source object that is not already a PrometheusRule.
@@ -427,8 +443,11 @@ def planned_rules(found: List[dict], namespace: str) -> List[dict]:
                 f"{where}: 產出的物件名稱 `{name}` {problem}",
                 f"{where}: the object name it gives, `{name}`, {problem}"))
         by_name.setdefault(name, []).append(obj)
+        legacy = legacy_object_name(obj)
         planned.append({"name": name, "file": obj["file"], "keys": obj["keys"], "crd": crd,
-                        "where": where})
+                        "where": where,
+                        # the earlier versions' name for it, when it was another
+                        "renamed_from": legacy if legacy != name else None})
     for name, objs in by_name.items():
         if len(objs) > 1:
             sources = ", ".join(source_label(o) for o in objs)
@@ -450,28 +469,31 @@ def planned_rules(found: List[dict], namespace: str) -> List[dict]:
     return planned
 
 
-def other_rule_files(output_dir: Path, written: "list[str]") -> "list[str]":
-    """The PrometheusRule files of this tool's naming already in *output_dir*
-    that this run does not write, sorted (#4041 review).
+def renamed_objects(planned: List[dict]) -> "list[tuple[str, str]]":
+    """`(earlier name, name now)` for each planned object the versions
+    before #4041 named otherwise, in plan order."""
+    return [(p["renamed_from"], p["name"]) for p in planned if p["renamed_from"]]
 
-    The checklist applies `{output_dir}/*-rule-pack-*.yaml`: a file a run of
-    an earlier version left there under the old name (`da-rule-pack-
+
+def other_rule_files(output_dir: Path, written: "list[str]") -> "list[str]":
+    """The entries of this tool's PrometheusRule naming already in
+    *output_dir* that this run does not write, sorted (#4041 review).
+
+    The checklist works on the directory as a whole (`kubectl apply -f
+    {output_dir}/ --dry-run=client`, the file count to verify, the
+    rollback's `kubectl delete -f {output_dir}/`): a file a run of an
+    earlier version left there under the old name (`da-rule-pack-
     prometheus-rules-<pack>.yaml`), or one from sources since removed, is
-    applied with this run's — the same rules loaded twice. The listing is
-    the declaration's (`OPERATOR_RULES.named_in`): no directory there, or a
-    file in its place, holds none — the write says what is wrong with it —
-    and one that cannot be listed raises `SourcesUnlisted`. So does an
-    entry of that naming that is no regular file — unless it is one this
-    run writes: the write names that (`cannot write …`), as it always has."""
+    taken with this run's — the same rules loaded twice. The listing is
+    the declaration's (`OPERATOR_RULES.names_in`): by NAME, whatever the
+    entry is — a directory of such a name is as much in the glob's way, and
+    one in the place of a file this run writes does not hide the others
+    (CodeRabbit on #4190). No directory there, or a file in its place, holds
+    none — the write says what is wrong with it; one that cannot be listed
+    raises `SourcesUnlisted`."""
     mine = set(written)
-    try:
-        named = _lib_consumer_read.OPERATOR_RULES.named_in(output_dir)
-    except _lib_consumer_read.SourcesUnlisted as exc:
-        if any(Path(path).name not in mine or Path(path) == output_dir
-               for path, _why in exc.files):
-            raise
-        return []
-    return sorted(p.name for p in named if p.name not in mine)
+    return [n for n in _lib_consumer_read.OPERATOR_RULES.names_in(output_dir)
+            if n not in mine]
 
 
 def refuse_other_rule_files(output_dir: Path, result: dict) -> None:
@@ -488,11 +510,12 @@ def refuse_other_rule_files(output_dir: Path, result: dict) -> None:
         shown = ", ".join(safe_label(n) for n in others)
         die_caller_error("ERROR: " + i18n_text(
             f"--output-dir {safe_label(output_dir)} 裡有這次不會寫的 PrometheusRule 檔: {shown}。"
-            "checklist 的套用步驟會連它們一起套用（舊版留下的舊名檔會讓同一批規則載入兩次）；"
+            "checklist 以整個目錄為對象的步驟會連它們一起算進去（舊版留下的舊名檔會讓同一批規則載入兩次）；"
             "先移除它們，或換一個 --output-dir。未寫任何檔。",
             f"--output-dir {safe_label(output_dir)} holds PrometheusRule files this run does "
-            f"not write: {shown}. The checklist's apply step would apply them too (a file an "
-            "earlier version left under its old name loads the same rules twice); remove "
+            f"not write: {shown}. The checklist's steps on the whole directory would take "
+            "them too (a file an earlier version left under its old name loads the same "
+            "rules twice); remove "
             "them, or give another --output-dir. Nothing was written."),
             reason="output_dir_holds_other_rules")
 
@@ -580,7 +603,9 @@ def analyze_migration(source_dir: Path,
         analysis["rule_groups"] += len(item.get("rule_groups", []))
     # The checklist is a plan of the same migration: what `generate_migration`
     # refuses is refused here, not described.
-    planned_rules(found, "default")
+    planned = planned_rules(found, "default")
+    analysis["renamed"] = renamed_objects(planned)
+    analysis["planned_names"] = [plan["name"] for plan in planned]
     # #3426: a rule file the rule loader refuses, an unreadable source file
     # and a missing da-read / da-crdecode are no `issues` entry beside a
     # partial count: they reach `main` (`_sources_or_exit`), rc 2. #3721: a
@@ -642,16 +667,44 @@ def build_migration_checklist(
         output_dir = "<--output-dir>"
     timestamp = datetime.now(timezone.utc).isoformat()
     total = len(result.get("prometheus_rules", []))
-    # #4041: before it, this tool named a rule pack's PrometheusRule after the
-    # ConfigMap (`<operator prefix><configmap prefix><pack>`); now it is the
-    # name operator-generate gives. A cluster that applied the old ones has
-    # both after applying these, each loading the same rules. Both prefixes
-    # come from the declarations, as the names themselves do.
-    # ⛔ Not a grep for one old prefix: the anchored naming also renamed
-    # `my-rule-pack-foo` (`…my-foo` → `…my-rule-pack-foo`). The step lists
-    # every object this tool made — the label says so — against this set.
-    new_prefix = _lib_consumer_read.OPERATOR_RULES.prefix
-    old_prefix = new_prefix + _lib_consumer_read.CONFIGMAP_RULES_OBJECT_PREFIX
+    # #4041: the objects of this plan that the versions before it named
+    # otherwise (`renamed_objects`). A cluster that applied the old output
+    # has both after applying this one, each loading the same rules.
+    # ⛔ Named one by one, never "every object carrying the label that is
+    # not in this output": the label is on every migration's objects —
+    # another source directory's, another team's namespace — and that step
+    # read as an instruction to delete them (CodeRabbit on #4190).
+    # The apply step names each file of THIS plan, one `-f` apiece. It was
+    # `-f {output_dir}/*-rule-pack-*.yaml`: the shell expands that to several
+    # paths, `-f` takes one, and kubectl refuses the rest as unexpected
+    # arguments — every plan of more than one object (CodeRabbit on #4190).
+    apply_files = "".join(
+        " -f " + shlex.quote(f"{output_dir}/{output_file_name(name)}")
+        for name in result.get("planned_names", []))
+    apply_step = f"`kubectl apply{apply_files}`" if apply_files else i18n_text(
+        "本次計畫沒有要套用的 PrometheusRule", "no PrometheusRule in this plan to apply")
+    renamed = result.get("renamed", [])
+    zh_renamed = en_renamed = ""
+    if renamed:
+        rows = "".join(f"  - `{old}` → `{new}`\n" for old, new in renamed)
+        find = ("kubectl get prometheusrule -A -l migrated-from=configmap "
+                "--field-selector metadata.name=")
+        zh_renamed = (
+            "- [ ] 若曾套用過本工具舊版的輸出：下列物件舊版用的是另一個名稱，"
+            "新舊並存時同一批規則會載入兩次。逐一找出舊名物件"
+            f"（`{find}<舊名>`），先備份"
+            "（`kubectl get prometheusrule -n <namespace> <舊名> -o yaml > <舊名>.backup.yaml`；"
+            "回滾時 `kubectl apply -f` 它），確認新名物件已載入（Phase 3）後再刪除："
+            "`kubectl delete prometheusrule -n <namespace> <舊名>`。"
+            "帶同一個標籤的其他物件屬於別次遷移，不要動。\n" + rows)
+        en_renamed = (
+            "- [ ] If output of an earlier version of this tool was applied: it gave the "
+            "objects below another name, and with both in the cluster the same rules load "
+            f"twice. Find each old one (`{find}<old-name>`), back it up (`kubectl get "
+            "prometheusrule -n <namespace> <old-name> -o yaml > <old-name>.backup.yaml`; to "
+            "roll back, `kubectl apply -f` it) and, once the new one is loaded (Phase 3), "
+            "delete it: `kubectl delete prometheusrule -n <namespace> <old-name>`. "
+            "Other objects carrying that label belong to other migrations: leave them.\n" + rows)
     # #3426: PrometheusRules found in --source-dir are named here — they are
     # already the CRD, so nothing was converted from them.
     already = result.get("already_crd", [])
@@ -687,7 +740,7 @@ def build_migration_checklist(
 
 ### Phase 2: 套用新 CRD
 
-- [ ] 套用 PrometheusRule CRD (`kubectl apply -f {output_dir}/*-rule-pack-*.yaml`)
+- [ ] 套用 PrometheusRule CRD（{apply_step}）
 - [ ] 等待 Prometheus reconcile（約 30-60 秒）
 - [ ] 驗證 Prometheus 載入新 Rule（`kubectl logs -n monitoring -l app=prometheus -c prometheus | grep "loaded groups"`)
 
@@ -728,8 +781,7 @@ Alertmanager 路由不以 AlertmanagerConfig CRD 產生（#3572）：Prometheus 
 
 - [ ] 確認所有規則都已成功遷移
 - [ ] 刪除舊 ConfigMap: `kubectl delete configmap -n monitoring <configmap-names>`
-- [ ] 若曾套用過本工具舊版的輸出：舊版把規則包的 PrometheusRule 命名為 `{old_prefix}<pack>`，現在是 `{new_prefix}<pack>`（與 operator-generate 相同）。兩者並存時同一批規則會載入兩次。列出本工具產生過的全部物件: `kubectl get prometheusrule -A -l migrated-from=configmap`；名稱不在本次輸出檔名裡的就是舊名物件，逐一 `kubectl delete prometheusrule -n <namespace> <name>`
-- [ ] 刪除舊 Projected Volume 設定（如適用）
+{zh_renamed}- [ ] 刪除舊 Projected Volume 設定（如適用）
 - [ ] 驗證 Prometheus 仍正常運作
 
 ### Phase 6: 後置驗證
@@ -791,7 +843,7 @@ Generated: {timestamp}
 
 ### Phase 2: Apply New CRDs
 
-- [ ] Apply PrometheusRule CRDs (`kubectl apply -f {output_dir}/*-rule-pack-*.yaml`)
+- [ ] Apply PrometheusRule CRDs ({apply_step})
 - [ ] Wait for Prometheus reconciliation (approximately 30-60 seconds)
 - [ ] Verify Prometheus loaded new Rules (`kubectl logs -n monitoring -l app=prometheus -c prometheus | grep "loaded groups"`)
 
@@ -832,8 +884,7 @@ synthetic probe, sentinel) could not come first. See {_ROUTING_DOC_URL}
 
 - [ ] Confirm all rules successfully migrated
 - [ ] Delete old ConfigMaps: `kubectl delete configmap -n monitoring <configmap-names>`
-- [ ] If output of an earlier version of this tool was applied: it named a rule pack's PrometheusRule `{old_prefix}<pack>`; the name is now `{new_prefix}<pack>` (operator-generate's). With both in the cluster the same rules load twice. List every object this tool has made: `kubectl get prometheusrule -A -l migrated-from=configmap`; one whose name is not a file name of this output is an old one — `kubectl delete prometheusrule -n <namespace> <name>` each
-- [ ] Delete old Projected Volume settings (if applicable)
+{en_renamed}- [ ] Delete old Projected Volume settings (if applicable)
 - [ ] Verify Prometheus still works normally
 
 ### Phase 6: Post-Migration Verification
@@ -911,6 +962,8 @@ def generate_migration(
     # in it; `planned_rules` refuses a set whose members would not stay
     # distinct (`MigrationRefused` reaches `main`: rc 2, nothing written).
     planned = planned_rules(found, namespace)
+    result["renamed"] = renamed_objects(planned)
+    result["planned_names"] = [plan["name"] for plan in planned]
     result["configmap_files"] = len(planned)
     for plan in planned:
         result["rule_group_count"] += len(plan["crd"]["spec"]["groups"])

@@ -2123,6 +2123,23 @@ class RuleSource(NamedTuple):
         """``files_in`` of this source's ``directory`` under *repo_root*."""
         return _declared_in(pathlib.Path(repo_root, self.directory), self)
 
+    def names_in(self, directory: "str | os.PathLike[str]") -> "list[str]":
+        """The names of the top-level entries of *directory* that are a rule
+        file name of this source, sorted — the NAME only: what the entry is
+        (a file, a directory, a dangling link) is not judged. For a caller
+        that asks what a glob of this naming would match (an output
+        directory about to be written to); ``named_in`` is the one for
+        files to read. A directory that is not there holds none (``[]``);
+        one that cannot be listed raises :class:`SourcesUnlisted`."""
+        root = pathlib.Path(directory)
+        try:
+            names = _list(root)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as e:
+            raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
+        return sorted(n for n in names if self.member(n) is not None)
+
     def named_in(self, directory: "str | os.PathLike[str]") -> "list[pathlib.Path]":
         """The top-level entries of *directory* whose name is a rule file
         name of this source, sorted — nothing else there is judged. For a
@@ -2134,13 +2151,7 @@ class RuleSource(NamedTuple):
         and a matching entry that is no regular file (a dangling symlink),
         raise :class:`SourcesUnlisted`."""
         root = pathlib.Path(directory)
-        try:
-            entries = [root / n for n in _list(root)]
-        except (FileNotFoundError, NotADirectoryError):
-            return []
-        except OSError as e:
-            raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
-        named = [f for f in entries if self.member(f.name) is not None]
+        named = [root / n for n in self.names_in(root)]
         problems = [(str(f), _not_regular(str(f))) for f in named if not f.is_file()]
         problems += _same_member(named, self)
         if problems:
