@@ -136,7 +136,8 @@ func (e *stateReloadError) ErrorKind() errkind.Kind { return errkind.StateReload
 
 // msgStateReloadFailed is the fixed client text of STATE_RELOAD_FAILED.
 const msgStateReloadFailed = "the change was saved, but this server could not load it yet, so reads may not show it until the next reload; " +
-	"it needs no resend (a resend loads it at once, but a resent DELETE answers 404 once a reload has loaded it)"
+	"do not resend it, reload to check (a resent PUT overwrites changes made in between; " +
+	"a resent DELETE answers 404 once a reload has loaded it)"
 
 // reloadStateAsync is reloadState in the background, coalesced per record
 // (configwatcher.ReloadAsync: a call while a background reload of the same
@@ -163,8 +164,8 @@ func (d *Deps) MutateState(ctx context.Context, key, entity, author string, tran
 //   - statestore.ErrUnavailable → 503 + Retry-After / retry_after_s
 //     (Kubernetes API or the state directory unreachable)
 //   - statestore.ErrTooLarge    → 507 (the ConfigMap's size budget)
-//   - *stateReloadError         → 503 STATE_RELOAD_FAILED + Retry-After,
-//     committed: true (saved, not yet served — #1073)
+//   - *stateReloadError         → 503 STATE_RELOAD_FAILED, committed: true,
+//     no Retry-After (saved, not yet served; remedy refresh — #1073)
 //
 // The bodies are fixed strings: err names the ConfigMap (namespace/name)
 // and its byte counts, which are for the operator's log, not the caller.
