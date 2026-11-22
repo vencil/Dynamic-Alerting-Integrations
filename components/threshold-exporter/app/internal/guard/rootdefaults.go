@@ -376,8 +376,8 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 				} else if refusedKeys[other] {
 					msg = fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The root also writes "+
 						"`%s`, another spelling of the same threshold (`%s` is the current one), and refuses it "+
-						"too. Write a finite number under one spelling and delete the other.",
-						f.Name, r.Key, r.Text, why, other, canon)
+						"too. Write a finite number under one spelling and delete the other.%s",
+						f.Name, r.Key, r.Text, why, other, canon, off)
 				} else {
 					msg = fmt.Sprintf("%s: `%s: %s` under the conf.d root `defaults:` %s. The root also writes "+
 						"`%s`, another spelling of the same threshold (`%s` is the current one): the exporter reads "+

@@ -505,3 +505,21 @@ func TestCheckRootDefaultsRefused_WhatItSaysTheLineDoesIsServed(t *testing.T) {
 		}
 	}
 }
+
+// #4236: two refused spellings of one threshold still get the disable
+// advice when the line is an alias of it.
+func TestCheckRootDefaultsRefused_TwoRefusedSpellingsKeepTheDisableAdvice(t *testing.T) {
+	t.Parallel()
+	const retired = "mysql_cpu"
+	canon, _ := config.CanonicalKeyFor(retired)
+	got := checkRootDefaultsRefused(CheckInput{DefaultsFiles: []config.DefaultsFile{{Name: "_defaults.yaml",
+		Data: []byte("defaults:\n  " + canon + ": \"off\"\n  " + retired + ": disable\n")}}})
+	for _, f := range got {
+		if f.Field == "_defaults.yaml:defaults."+canon &&
+			strings.Contains(f.Message, "and refuses it too") &&
+			strings.Contains(f.Message, "write `"+canon+": disable`") {
+			return
+		}
+	}
+	t.Errorf("findings %+v: want the two-refused message on %s with its disable advice", got, canon)
+}
