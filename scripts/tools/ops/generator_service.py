@@ -2023,10 +2023,21 @@ def _become_subreaper() -> None:
 
 def _prepare_work_dir(path: str) -> None:
     """Create --work-dir, and empty what a previous run left in its jobs
-    directory (a crash between fork and cleanup)."""
-    os.makedirs(path, mode=0o700, exist_ok=True)
-    shutil.rmtree(_jobs_dir(path), ignore_errors=True)
-    os.mkdir(_jobs_dir(path), 0o700)
+    directory (a crash between fork and cleanup).
+
+    #3983: a path that cannot be one — a file there, a file on the way, a
+    ``jobs`` entry that is not a directory to empty — is refused naming the
+    flag; the bare ``[Errno 17] File exists: '…/jobs'`` named neither it nor
+    what was wrong with it. Nothing already there is removed: only a
+    ``jobs`` DIRECTORY is emptied (``rmtree`` does not follow or unlink a
+    file or a symlink in its place)."""
+    try:
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        shutil.rmtree(_jobs_dir(path), ignore_errors=True)
+        os.mkdir(_jobs_dir(path), 0o700)
+    except OSError as exc:
+        raise RuntimeError(
+            f"--work-dir {path}: cannot be used as the work directory: {exc}") from exc
 
 
 async def serve(settings: Settings, object_format: str) -> None:

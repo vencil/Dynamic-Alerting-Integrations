@@ -22,6 +22,13 @@ that takes a value to be declared in ``caller_path_manifest.yaml`` as one of:
   policy file's ``policy_unusable``, conf.d through da-guard). ``pinned_by``
   names the test.
 * ``output`` — a path the tool writes (the write entry's business, #3107).
+  Every one has a row in ``test_output_path_write_failure.py`` (the bad-path
+  pair and the write audit); there is no exception list.
+* ``runtime`` (#3983) — a path the tool creates for its own running and does
+  not leave as a result: the socket a service binds, the scratch directory
+  it builds in and empties. No write entry is on it and no control run ends
+  with a file to read, so it is not an ``output``; like a ``reader`` it is
+  held by ``pinned_by``, the test that runs the tool on a path it cannot use.
 * ``url`` / ``url_list`` (#3528) — a URL the tool sends a request to (a
   ``url_list``: comma-separated URLs). Judged at parse time by
   ``_lib_validation.url_problem`` through ``type=url_type(empty=...)`` /
@@ -99,7 +106,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 MANIFEST = pathlib.Path(__file__).with_name("caller_path_manifest.yaml")
 
-KINDS = {"reader", "output", "url", "url_list", "not_path", "pending"}
+KINDS = {"reader", "output", "runtime", "url", "url_list", "not_path", "pending"}
+#: Kinds held by a named test rather than by a table this gate can walk.
+PINNED_KINDS = {"reader", "runtime"}
 URL_KINDS = {"url", "url_list"}
 #: The `--json` reason prefix a declared input of each kind answers with
 #: (`_lib_paths`): `any` is a gatherer's (#3901: a file or a directory).
@@ -341,9 +350,9 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         if kind not in KINDS:
             faults.append(f"{where}: kind {kind!r} is not one of {sorted(KINDS)}")
             continue
-        if kind == "reader":
+        if kind in PINNED_KINDS:
             if not _test_exists(decl.get("pinned_by", "")):
-                faults.append(f"{where}: reader without a pinned_by test that exists")
+                faults.append(f"{where}: {kind} without a pinned_by test that exists")
         elif kind == "pending":
             if not isinstance(decl.get("ticket"), int):
                 faults.append(f"{where}: pending without a ticket number")
@@ -732,6 +741,22 @@ def test_a_reader_needs_its_pinning_test():
           "pinned_by": "tests/shared/test_caller_path_manifest.py::test_a_reader_needs_its_pinning_test"}
     assert _faults({"t": {"--d": "not_path", "--n": ok}}) == []
     assert len(_faults({"t": {"--d": "not_path", "--n": {"kind": "reader"}}})) == 1
+
+
+def test_a_runtime_path_needs_its_pinning_test():
+    """#3983: a socket or a scratch directory is not an ``output`` with an
+    exception — it is its own kind, held the way a ``reader`` is."""
+    here = "tests/shared/test_caller_path_manifest.py"
+    ok = {"kind": "runtime", "pinned_by": f"{here}::test_a_runtime_path_needs_its_pinning_test"}
+    assert _faults({"t": {"--d": "not_path", "--n": ok}}) == []
+    assert _faults({"t": {"--d": "not_path", "--n": {"kind": "runtime"}}}) == [
+        "t --n: runtime without a pinned_by test that exists"]
+    gone = {"kind": "runtime", "pinned_by": f"{here}::test_no_such_test"}
+    assert len(_faults({"t": {"--d": "not_path", "--n": gone}})) == 1
+    declared = {k: d for k, d in _entries(load_manifest()).items()
+                if d.get("kind") == "runtime"}
+    assert declared, "no runtime path is declared — the rule above holds nothing"
+    assert all(_test_exists(d.get("pinned_by", "")) for d in declared.values()), declared
 
 
 def test_a_manifest_file_line_is_a_fault():

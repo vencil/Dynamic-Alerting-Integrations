@@ -1202,6 +1202,43 @@ def test_an_old_socket_is_replaced_and_a_file_is_refused(tmp_path, world):
         shutil.rmtree(sdir, ignore_errors=True)
 
 
+@pytest.mark.parametrize("shape", ["a_file", "under_a_file", "jobs_is_a_file",
+                                   "jobs_is_a_link"])
+def test_a_work_dir_that_cannot_be_one_is_named_and_nothing_there_is_removed(
+        tmp_path, world, shape):
+    """#3983: the manifest's ``runtime`` kind pins --work-dir here. Each
+    shape is a path the service cannot build in; it must refuse to start
+    (rc 2) naming the flag, and leave what was there."""
+    work = tmp_path / "s" / "work"  # where `h.Service` puts --work-dir
+    work.parent.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("keep me", encoding="utf-8")
+    if shape == "a_file":
+        work.write_text("keep me", encoding="utf-8")
+        kept = work
+    elif shape == "under_a_file":
+        kept = tmp_path / "plain"
+        kept.write_text("keep me", encoding="utf-8")
+        symlink_or_skip(kept / "sub", work)
+    elif shape == "jobs_is_a_file":
+        work.mkdir()
+        kept = work / "jobs"
+        kept.write_text("keep me", encoding="utf-8")
+    else:
+        work.mkdir()
+        symlink_or_skip(outside, work / "jobs")
+        kept = outside / "keep"
+    svc = h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"], wait=False)
+    assert svc.proc.wait(60) == 2
+    log = svc.log.read_text(encoding="utf-8")
+    assert f"ERROR: --work-dir {work}: cannot be used as the work directory" in log, log
+    assert "Traceback" not in log, log
+    assert kept.read_text(encoding="utf-8") == "keep me"
+    assert not svc.socket.exists()
+    svc.stop()
+
+
 def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200

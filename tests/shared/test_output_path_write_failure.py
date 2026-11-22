@@ -3026,23 +3026,6 @@ def test_the_entry_point_list_is_complete():
 # audit, with no second registry to keep in step.
 # ═══════════════════════════════════════════════════════════════════════════
 
-#: `kind: output` flags with no row, and why. Exact both ways, like the lists
-#: above: a new output flag without a row is red, and so is an entry whose
-#: flag got a row or left the manifest.
-MANIFEST_OUTPUT_WITHOUT_ROW: dict[Key, str] = {
-    ("generator-service", "--socket"):
-        "Not a file the tool writes: the Unix socket the service binds and "
-        "listens on (an old socket there is replaced, anything else refuses). "
-        "No write entry is, or should be, on that path; `output` is the "
-        "nearest kind the manifest has for a path the tool creates.",
-    ("generator-service", "--work-dir"):
-        "Not an output the operator reads: the scratch directory the service "
-        "builds each judged tree in (`jobs/…`) and removes afterwards. A "
-        "long-running service has no control run that ends rc 0 with a file "
-        "left to look at.",
-}
-
-
 def _manifest_output_flags() -> dict[Key, str]:
     """(command, flag) → the script behind the command, for every flag the
     manifest declares ``kind: output``. The command → script map is the walk
@@ -3057,35 +3040,26 @@ def _manifest_output_flags() -> dict[Key, str]:
     return outputs
 
 
-def manifest_join_faults(outputs: dict[Key, str], rows: list[Row],
-                         without_row: dict[Key, str]) -> list[str]:
+def manifest_join_faults(outputs: dict[Key, str], rows: list[Row]) -> list[str]:
     """Hold the manifest's output flags to the rows. A row answers for a
     manifest flag when it is the same script and the flag is one of the
-    spellings in ``Row.flag`` (``-o/--output-dir`` answers ``--output-dir``)."""
+    spellings in ``Row.flag`` (``-o/--output-dir`` answers ``--output-dir``).
+
+    #3983: there is no exception list. The two flags that had one (a
+    service's socket and its scratch directory) were never outputs; they are
+    the manifest's ``runtime`` kind now, held by a named test."""
     rowed = {(row.tool, spelling) for row in rows for spelling in row.flag.split("/")}
-    faults = []
-    for (command, flag), script in sorted(outputs.items()):
-        key = (command, flag)
-        if (script, flag) in rowed:
-            if key in without_row:
-                faults.append(f"{command} {flag}: has a row now — drop it from "
-                              "MANIFEST_OUTPUT_WITHOUT_ROW")
-        elif key not in without_row:
-            faults.append(f"{command} {flag}: declared `kind: output` and {script} has "
-                          "no row for it — add the control pair")
-    for command, flag in sorted(set(without_row) - set(outputs)):
-        faults.append(f"{command} {flag}: not an output flag of the manifest any more — "
-                      "drop it from MANIFEST_OUTPUT_WITHOUT_ROW")
-    for key, reason in sorted(without_row.items()):
-        if not reason.strip():
-            faults.append(f"{key[0]} {key[1]}: needs a reason")
-    return faults
+    return [f"{command} {flag}: declared `kind: output` and {script} has no row for "
+            "it — add the control pair (a path the tool creates for its own "
+            "running, not a result, is `kind: runtime`)"
+            for (command, flag), script in sorted(outputs.items())
+            if (script, flag) not in rowed]
 
 
 def test_every_output_flag_of_the_manifest_has_a_row():
     outputs = _manifest_output_flags()
     assert outputs, "the manifest declares no output flag — the join measured nothing"
-    faults = manifest_join_faults(outputs, ROWS, MANIFEST_OUTPUT_WITHOUT_ROW)
+    faults = manifest_join_faults(outputs, ROWS)
     assert not faults, "\n".join(faults)
 
 
@@ -3095,24 +3069,19 @@ class TestManifestJoin:
                 reach="synthetic")]
 
     def test_a_row_answers_for_either_spelling(self):
-        assert manifest_join_faults(self._OUT, self._ROW, {}) == []
+        assert manifest_join_faults(self._OUT, self._ROW) == []
 
     def test_an_output_flag_without_a_row_is_a_fault(self):
-        assert len(manifest_join_faults(self._OUT, [], {})) == 1
+        assert len(manifest_join_faults(self._OUT, [])) == 1
         other_script = [Row("ops/u.py", "-o/--output-dir", "dir", "operator",
                             lambda c, out: [], reach="synthetic")]
-        assert len(manifest_join_faults(self._OUT, other_script, {})) == 1
+        assert len(manifest_join_faults(self._OUT, other_script)) == 1
 
-    def test_a_listed_exception_stands_only_while_it_is_true(self):
-        listed = {("cmd", "--output-dir"): "because"}
-        assert manifest_join_faults(self._OUT, [], listed) == []
-        assert manifest_join_faults(self._OUT, self._ROW, listed) == [
-            "cmd --output-dir: has a row now — drop it from MANIFEST_OUTPUT_WITHOUT_ROW"]
-        assert manifest_join_faults({}, [], listed) == [
-            "cmd --output-dir: not an output flag of the manifest any more — "
-            "drop it from MANIFEST_OUTPUT_WITHOUT_ROW"]
-        assert manifest_join_faults(self._OUT, [], {("cmd", "--output-dir"): " "}) == [
-            "cmd --output-dir: needs a reason"]
+    def test_a_runtime_path_is_not_an_output_of_the_join(self):
+        """#3983: the socket and the scratch directory left the join by
+        being declared what they are, not by a listed exception."""
+        outputs = _manifest_output_flags()
+        assert not [k for k in outputs if k[0] == "generator-service"], outputs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
