@@ -126,7 +126,7 @@ relabel_configs:
 
 > **⚠️ 重要**：`tenant` 標籤的值必須與 `threshold-exporter` ConfigMap 中的 tenant 名稱完全一致（例如 `db-a`、`db-b`）。請用 `scaffold_tenant.py` 產生的名稱作為基準。
 
-> **叢集身分 `da_cluster`**：出貨的規則逐（租戶，叢集）計算（[ADR-006](../adr/006-tenant-mapping-topologies.md)）。在這台 Prometheus 的 `global.external_labels` 設一行即可，抓取 job 不必寫：
+> **叢集身分 `da_cluster`**：出貨的規則逐（租戶，叢集）計算（[ADR-006](../adr/006-tenant-mapping-topologies.md)）。在這台 Prometheus 的 `global.external_labels` 設一行即可，抓取 job 不必寫（唯一的例外在這段最後：中央 Prometheus 自己也直接抓租戶 exporter 時）：
 >
 > ```yaml
 > global:

@@ -185,21 +185,21 @@ data:
     \ {{ $labels.pack }} entry at all, add {{ $labels.pack }} (for example _expected_exporters:\
     \ [mariadb, redis]){{ with $labels.da_cluster }}; written alone, {{ $labels.pack\
     \ }} covers every cluster but is satisfied by an exporter in any one of them.\
-    \ If the list already declares {{ $labels.pack }} per cluster, add {{ $labels.pack\
-    \ }}@{{ . }} instead. A cluster ID can be written after @ only if it is 1 to 63\
-    \ characters of letters, digits, ''.'', ''_'' and ''-'', the first and the last\
-    \ a letter or a digit; a cluster whose ID holds anything else cannot be declared\
-    \ per cluster, and {{ $labels.pack }} can then only be written alone{{ end }}.'\n\
-    \      description_zh: '租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter\
-    \ 最近一小時內在 job=\"tenant-exporters\" 下{{ with $labels.da_cluster }}（叢集 {{ . }}）{{\
-    \ end }}回應過，但 _expected_exporters 裡沒有任何條目涵蓋{{ with $labels.da_cluster }}叢集 {{\
-    \ . }} 的{{ end }}這個 exporter，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。要在租戶頂層的\
+    \ If the list already declares {{ $labels.pack }} per cluster, what to do depends\
+    \ on the cluster ID: when it is 1 to 63 characters of letters, digits, ''.'',\
+    \ ''_'' and ''-'', the first and the last a letter or a digit, add {{ $labels.pack\
+    \ }}@{{ . }}; a cluster whose ID holds anything else cannot be declared per cluster,\
+    \ so replace every {{ $labels.pack }}@… entry of the list with {{ $labels.pack\
+    \ }} written alone{{ end }}.'\n      description_zh: '租戶 {{ $labels.tenant }}\
+    \ 的 {{ $labels.pack }} exporter 最近一小時內在 job=\"tenant-exporters\" 下{{ with $labels.da_cluster\
+    \ }}（叢集 {{ . }}）{{ end }}回應過，但 _expected_exporters 裡沒有任何條目涵蓋{{ with $labels.da_cluster\
+    \ }}叢集 {{ . }} 的{{ end }}這個 exporter，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。要在租戶頂層的\
     \ _expected_exporters 列表補什麼，看列表裡 {{ $labels.pack }} 現在怎麼寫；同一個 kind 絕不能兩種寫法並存（整個列表會不被讀取）。列表裡完全沒有\
     \ {{ $labels.pack }} 的條目：補 {{ $labels.pack }}（例如 _expected_exporters: [mariadb,\
     \ redis]）{{ with $labels.da_cluster }}；單獨寫的 {{ $labels.pack }} 涵蓋所有叢集，但任何一個叢集有\
-    \ exporter 回應就算存在。列表已經逐叢集宣告 {{ $labels.pack }}：改補 {{ $labels.pack }}@{{ . }}。@\
-    \ 後面的叢集 ID 只能是 1 到 63 個英文字母、數字、''.''、''_''、''-''，且頭尾是字母或數字；ID 含其他字元的叢集無法逐叢集宣告，{{\
-    \ $labels.pack }} 只能單獨寫{{ end }}。'\n      owner: '{{ with query (printf `topk(1,\
+    \ exporter 回應就算存在。列表已經逐叢集宣告 {{ $labels.pack }}：看叢集 ID——是 1 到 63 個英文字母、數字、''.''、''_''、''-''，且頭尾是字母或數字時，改補\
+    \ {{ $labels.pack }}@{{ . }}；ID 含其他字元的叢集無法逐叢集宣告，要把列表裡所有 {{ $labels.pack }}@… 的條目換成單獨寫的\
+    \ {{ $labels.pack }}{{ end }}。'\n      owner: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
     \ }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
