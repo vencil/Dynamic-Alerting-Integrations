@@ -10,7 +10,15 @@ FN 清單 + indeterminate 清單 + fan-out ratio → verdict（ADR-030 §8 第 1
 計分模型（設計稿 §2 逐條映射 ADR 條文，無新裁量）：
   * injected case（分母單位）= ``(signature, variant)`` × ``expects==must_detect``；
     probe / informational / companion 不入分母（只回報）。
-  * episode = 一 case 一 episode（合成場景，ADR-030 §7）。
+  * 門檻（FN=0）以上面的 case 計——比按事件計更嚴：任一必叫變體、含 fan-out
+    每條 series 沒接住就 FAIL（ADR-030 §7）。
+  * 按事件計的揭露比率（只揭露不 gate；ADR-030 §7）：事件 = 同一份報告裡同一個
+    注入故障 ``(report, pack_id, signature_index)``，含它全部變體與 fan-out series；
+    分母 = 每個事件 × 歸因到它 scored case 的 alertname（窗內或窗外開火都算），
+    事件沒有任何歸因告警時記一個未接住的配對；分子 = 該 alertname 在該事件任一
+    scored case 上有窗內命中。只計 must_detect 且 scored（hit / fn）的 case：
+    probe / informational、indeterminate、carve-out 不入。多份報告時 report 是
+    事件鍵的一部分：不同報告即使同 pack_id、同 signature_index 也是不同事件。
   * temporal hit = 該 case 至少一筆歸因 alert 的 ``fire_offset_s`` ∈
     ``[fault_start, fault_end + tolerance]``；晚於天花板 = miss（ADR-030 §5：FN 不可被
     放寬窗洗成「晚但接住」）。fault window 血緣 = inject 報告 metadata 的
@@ -449,6 +457,23 @@ def _percentiles(values: list[int]) -> dict:
     return {"p50": rank(0.5), "p90": rank(0.9), "max": v[-1]}
 
 
+def _episode_class_tally(cases: list[dict]) -> tuple[int, int]:
+    """按「故障事件 × 告警類別」計的 (配對數, 接住的配對數)——只揭露不 gate。
+
+    定義見 module docstring「按事件計的揭露比率」。只看 scored case（hit / fn）。"""
+    classes: dict[tuple, set] = {}
+    caught: dict[tuple, set] = {}
+    for c in cases:
+        if c["status"] not in ("hit", "fn"):
+            continue
+        ek = (c["report"], c["pack_id"], c["signature_index"])
+        classes.setdefault(ek, set()).update(
+            h["alertname"] for h in c["hits"] + c["misses"])
+        caught.setdefault(ek, set()).update(h["alertname"] for h in c["hits"])
+    pairs = sum(max(1, len(v)) for v in classes.values())
+    return pairs, sum(len(v) for v in caught.values())
+
+
 def score(reports: list[tuple[str, dict]], tol: dict, *,
           tolerances_path: str | None = None, schema_path: str | None = None) -> dict:
     """全量計分 → score 報告 dict（verdict 由 caller 讀 summary 判 exit）。
@@ -587,6 +612,7 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
             f"[fire, last_fire] 連續應有樣本數，fire→resolve→fire 斷續震盪）——resolve "
             f"不計分故不改 verdict，但震盪告警品質存疑；詳 --json 的 flapping_suspected 旗標")
     fanout_values = [len(c["hits"]) for c in hits]
+    ep_pairs, ep_caught = _episode_class_tally(cases)
     effective = sorted(
         {(h["alertname"], h["tolerance_s"], h["tolerance_source"])
          for c in cases for h in c["hits"] + c["misses"]})
@@ -626,6 +652,10 @@ def score(reports: list[tuple[str, dict]], tol: dict, *,
             "false_negatives": len(fns),
             "catch_rate": (len(hits) / scored) if scored else None,
             "fanout_ratio": _percentiles(fanout_values),
+            # 按事件計（故障事件 × 告警類別）的揭露比率，只揭露不 gate（ADR-030 §7）
+            "episode_class_pairs": ep_pairs,
+            "episode_class_caught": ep_caught,
+            "episode_class_catch_rate": (ep_caught / ep_pairs) if ep_pairs else None,
             "early_onset_fires": early_onset_fires,   # G-2 揭露（不 gate）
             "flapping_suspected": flapping_suspected,  # G-3 揭露（不 gate）
         },
@@ -648,6 +678,7 @@ _REDACT_SUMMARY_KEYS = (
     "must_detect_total", "carved_out", "indeterminate", "scored_denominator",
     "not_scored_probe_informational", "hits", "false_negatives",
     "catch_rate", "fanout_ratio", "early_onset_fires", "flapping_suspected",
+    "episode_class_pairs", "episode_class_caught", "episode_class_catch_rate",
 )
 
 
@@ -676,6 +707,14 @@ def redact_report(report: dict) -> dict:
 
 # ── CLI ──────────────────────────────────────────────────────────────
 
+def _episode_line(s: dict) -> str:
+    """按事件計揭露比率的人類可讀一行（完整版與 redacted 共用；只含計數）。"""
+    rate = s.get("episode_class_catch_rate")
+    pct = "" if rate is None else " = {:.1%}".format(rate)
+    return (f"按事件計（故障事件 × 告警類別）: {s.get('episode_class_caught')}/"
+            f"{s.get('episode_class_pairs')}{pct}（只揭露不 gate）")
+
+
 def _print_redacted_human(report: dict) -> None:
     """redacted 報告的人類可讀摘要——只印 verdict + 計數 + scope，無 per-case 明細
     /識別項（對應 redact_report 的白名單；本地看完整版不加 --redact）。"""
@@ -694,6 +733,7 @@ def _print_redacted_human(report: dict) -> None:
         print(f"  疑似 flapping {s['flapping_suspected']} 筆（揭露不 gate）")
     fr = s.get("fanout_ratio") or {}
     print(f"  fan-out ratio: p50={fr.get('p50')} p90={fr.get('p90')} max={fr.get('max')}")
+    print(f"  {_episode_line(s)}")
     print(f"  scope: {report['scope']['disclaimer']}")
     print("  [識別項與 per-case 明細已剝除；本地完整版請不加 --redact 重跑]")
 
@@ -732,6 +772,7 @@ def _print_human(report: dict) -> None:
     fr = s["fanout_ratio"]
     print(f"  fan-out ratio: p50={fr['p50']} p90={fr['p90']} max={fr['max']}"
           f"（只揭露不 gate）")
+    print(f"  {_episode_line(s)}")
     print(f"  scope: {report['scope']['disclaimer']}")
 
 

@@ -805,7 +805,6 @@ describe('TenantManager — group write errors follow the code\'s remedy (#3202)
       error: 'the change was saved, but this server could not load it yet',
       code: 'STATE_RELOAD_FAILED',
       committed: true,
-      retry_after_s: 5,
     }));
     await createGroup('saved-id');
     const toast = await screen.findByText(/the change was saved/);
