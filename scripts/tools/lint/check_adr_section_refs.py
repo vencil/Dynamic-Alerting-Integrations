@@ -25,11 +25,15 @@ What is checked, in every git-tracked text file:
 
    Two more shapes are the same reference and are checked the same way:
      - a link: ``[ADR-020](../adr/020-tenant-federation.md) §Gateway`` —
-       the link target between ``ADR-NNN`` and ``§`` is skipped;
+       the link target between ``ADR-NNN`` and ``§`` is skipped — or the
+       section as the link text: ``ADR-NNN [§section](../adr/NNN-….md)``;
      - a line break: ``ADR-NNN`` (or its link) ends a line and the next line,
        its comment prefix (``#``, ``//``, ``--``, ``*``, ``;``, ``>``)
        removed, opens with ``§<section>`` — a code comment or a paragraph
-       wrapped there. The finding is reported on the line with ``ADR-NNN``.
+       wrapped there; sections chained after it on that next line are
+       checked too. The finding is reported on the line with ``ADR-NNN``.
+       (A markdown heading right after such a line, ``## §X``, reads as a
+       continuation too; the repository has none.)
 2. ``ADR-027`` followed by a section code of the withdrawn 2026-07 draft
    (``D2-B``, ``LD-6 P4b``, ``MED-8``, …) is a finding whatever follows: those
    codes name sections the rewritten ADR does not have.
@@ -37,8 +41,12 @@ What is checked, in every git-tracked text file:
 Not checked: a section cited without its ADR (``§7`` alone, ``see §3
 below``) — inside an ADR that is its own; elsewhere it cannot be resolved.
 Nor a break inside a reference (``ADR-024 §`` with the section on the next
-line, or a chain ``§3、`` continued there), nor a link whose text is more than
-``ADR-NNN``; none of these is written in the repository today.
+line, or a chain ``§3、`` continued there), a link whose text does not end
+with ``ADR-NNN`` (``[ADR-024 X](…) §3``), or a link target holding a space,
+a title or a ``)``; none of these is written in the repository today. A YAML
+double-quoted string continued by a backslash at the end of the line is not
+joined either: it occurs only in the generated ConfigMap copies of
+the rule packs, whose source files are checked.
 
 Scope: ``git ls-files`` text files, minus ``SKIP_PATHS`` (each with its
 reason). Heading text is read outside fenced code blocks.
@@ -82,9 +90,9 @@ SKIP_SUFFIXES = (".golden", ".png", ".jpg", ".svg", ".ico", ".gz", ".woff", ".wo
 _TOKEN = r"(?:\d+(?:\.\d+)*|[A-Za-z]{1,4}\d[\w-]*|[^\s,;:()（）、。，；：/\\\[\]{}\"'`*|<>]+)"
 # ADR-NNN, then an optional 's, or the target of a markdown link whose text
 # it is (``[ADR-020](../adr/020-….md)``), an optional space, then the first
-# §section.
+# §section, which may open a link's text (``[§section](…)``).
 _LINK_TARGET = r"(?:'s|\]\([^)\s]*\))?"
-_REF = re.compile(r"ADR-(\d{3})" + _LINK_TARGET + r"\s?§\s?(" + _TOKEN + r")")
+_REF = re.compile(r"ADR-(\d{3})" + _LINK_TARGET + r"\s?\[?§\s?(" + _TOKEN + r")")
 # A line that ends with ADR-NNN (or its link), and the comment prefix of the
 # line after it: the reference may continue there (see the module docstring).
 _REF_AT_EOL = re.compile(r"ADR-(\d{3})" + _LINK_TARGET + r"\s*$")
@@ -216,11 +224,10 @@ def _references(line: str, next_line: str | None) -> list[tuple[str, list[str]]]
     eol = _REF_AT_EOL.search(line)
     if eol and next_line is not None:
         rest = next_line[_COMMENT_PREFIX.match(next_line).end():]
-        if rest.startswith("§"):
-            joined = f"ADR-{eol.group(1)} {rest}"
-            m = _REF.match(joined)
-            if m:
-                refs.append((eol.group(1), _sections_after(m, joined)))
+        joined = f"ADR-{eol.group(1)} {rest}"
+        m = _REF.match(joined)  # matches only when § (or [§) opens rest
+        if m:
+            refs.append((eol.group(1), _sections_after(m, joined)))
     return refs
 
 

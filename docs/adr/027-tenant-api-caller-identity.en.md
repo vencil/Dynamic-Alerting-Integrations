@@ -189,7 +189,7 @@ This document is explanation; the checks below are the single source of truth fo
    - **7b** It agrees with the server's tenant-list decision, rule by rule.
    - **7c** CI runs it against the sample configuration in the repo.
 8. Reference check (this ADR and [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)):
-   - **8a** Every reference written as `ADR-NNN §section` in the repo (and sections chained after it on the same line) must resolve to an existing section of that ADR (matched by the section heading's number or name). A reference written as a link (`[ADR-020](../adr/020-tenant-federation.md) §Gateway`), or with `ADR-NNN` ending a line and the next line, its comment prefix removed, opening with `§section`, is the same reference.
+   - **8a** Every reference written as `ADR-NNN §section` in the repo (and sections chained after it on the same line) must resolve to an existing section of that ADR (matched by the section heading's number or name). A reference written as a link (`[ADR-020](../adr/020-tenant-federation.md) §Gateway`, or with the section as the link text), or with `ADR-NNN` ending a line and the next line, its comment prefix removed, opening with `§section`, is the same reference, and the sections chained after it on that next line must resolve too.
    - **8b** `ADR-027` followed by a section ID of the 2026-07 draft (`D2-B`, `LD-6 P4b`, `MED-8` and the like; the full list is in the check itself) always fails.
 9. oauth2-proxy configuration check (§10):
    - **9a** CI runs oauth2-proxy's configuration check (`--config-test`) with the image pinned by the chart (the same digest) against the configuration file the chart generates.

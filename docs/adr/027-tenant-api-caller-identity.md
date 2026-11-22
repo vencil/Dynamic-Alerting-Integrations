@@ -195,7 +195,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
    - **7b** 它與 server 租戶清單的判定逐條規則一致。
    - **7c** CI 對 repo 內的範例設定執行它。
 8. 引用檢查（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）：
-   - **8a** repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）。寫成連結（`[ADR-020](../adr/020-tenant-federation.md) §Gateway`），或 `ADR-NNN` 在行尾、下一行去掉註解符號後以 `§小節` 開頭的，也是同一種引用。
+   - **8a** repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）。寫成連結（`[ADR-020](../adr/020-tenant-federation.md) §Gateway`，或把小節寫成連結文字），或 `ADR-NNN` 在行尾、下一行去掉註解符號後以 `§小節` 開頭的，也是同一種引用，下一行接著列出的小節同樣要對應得到。
    - **8b** `ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。
 9. oauth2-proxy 設定檢查（§10）：
    - **9a** CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`）。

@@ -124,6 +124,9 @@ def test_withdrawn_draft_codes_fail(adrs, line, code):
         ("> quoting [ADR-024](x.md)\n> §4 here", ["4"]),
         ("a paragraph wrapped after ADR-024\n§4 as its section", ["4"]),
         ("ADR-099\n# §1", ["1"]),
+        ("ADR-024 [§驗證雙層](../adr/024-example.md)", []),
+        ("ADR-024 [§Nonexistent](../adr/024-example.md)", ["Nonexistent"]),
+        ("see ADR-024\n[§Nonexistent](x.md)", ["Nonexistent"]),
     ],
 )
 # adr-check: ADR-027/9.8a
