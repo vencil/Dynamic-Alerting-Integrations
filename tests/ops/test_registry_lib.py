@@ -453,8 +453,6 @@ def test_query_helpers():
     assert lib.default_value(doc, "alpha_conn") == 80
     assert lib.default_value(doc, "nope") is None
     assert set(lib.keys_by_pack(doc)) == {"alpha", "beta"}
-    assert set(lib.keys_in_tier(doc, "defaults")) == {"alpha_conn", "beta_lag"}
-    assert "alpha_conn_critical" in lib.keys_in_tier(doc, "optional_overrides")
 
 
 # ── arming / portability / blocker (D-A A1, #3773) ─────────────────────────
@@ -536,34 +534,6 @@ def test_a_portable_optional_tier_key_says_it_must_change_tier_first():
     assert "shadow" not in lib.CANDIDATE_NOTE_ZH + lib.DECLARED_ONLY_NOTE_ZH
     assert lib.arming_notes_zh({**entry, "tier": "defaults"}) == [
         f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
-
-
-def test_unarmed_block_names_the_key_on_every_reason():
-    """A key with a blocker AND a non-portable reason renders both, each led
-    by the key (#3773 review F6)."""
-    packs = {"beta": {**SYNTH_PACKS["beta"]}}
-    arming = {"beta_lag": {
-        "arming": "operator", "portability": "site_specific",
-        "portability_reason": "r", "portability_reason_zh": "依部署",
-        "blocker": dict(_BLOCKER)}}
-    doc = lib.build_registry_doc(packs, arming=arming)
-    text = "\n".join(lib.render_unarmed_lines(doc, 4))
-    assert "#   beta_lag 未啟用（沒有資料源，#3770）：沒有資料源" in text
-    assert "#   beta_lag 未啟用（依部署而定）：依部署" in text
-
-
-def test_a_shipped_exception_is_marked_in_the_chart_defaults():
-    """A non-portable shipped value says so beside its value in helm values,
-    not only in the rule-pack header (#3773 review F5)."""
-    arming = _armed()
-    arming["alpha_conn"] = {
-        "arming": "default", "portability": "ratio_pending",
-        "portability_reason": "r", "portability_reason_zh": "絕對值",
-        "default_exception": {"tracking": 3778}, "validation": _vendor(80)}
-    doc = lib.build_registry_doc(SYNTH_PACKS, arming=arming)
-    text = "\n".join(lib.render_chart_defaults_lines(doc, 4))
-    assert "出貨例外（待改比值，#3778）：絕對值" in text
-    assert text.index("出貨例外") < text.index("alpha_conn: 80")
 
 
 def test_notes_are_total_over_malformed_fields():
@@ -712,73 +682,27 @@ def test_real_kafka_pack_reads_no_unexported_metric():
         assert f"tenant:alert_threshold:{key}" not in names, key
 
 
-def test_not_chart_armed_is_the_registry_derivation():
-    """A defaults-tier key that is not `default`, and the `_critical` of one.
-
-    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals),
-    less the three kafka keys #3783 removed — pinned so the derivation can
-    only change with the registry, never with a rule edit here. #3778's
-    mysql_threads_running is NOT here: it sits in the optional_overrides tier
-    (declared, no value), so a tenant writing it alone is served — the
-    defaults tier with `arming: operator` rendered it on no runtime face and
-    served nothing."""
-    doc = lib.build_registry_doc()
-    derived = lib.not_chart_armed_keys(doc)
-    keys = doc["keys"]
-    for key in derived:
-        owner = keys[keys[key].get("critical_of") or key]
-        assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
-    assert not {"mysql_threads_running", "mysql_threads_running_critical"} & derived
-    # D-A A2b: three promoted keys and their three criticals left (58 -> 52).
-    # #3929: rabbitmq_node_mem_percent and its critical (52 -> 50).
-    assert len(derived) == 50
-    # optional_overrides flat keys belong to the unreachable face, not here
-    assert not any(keys[k]["tier"] == "optional_overrides"
-                   and not keys[k].get("critical_of") for k in derived)
-
-
-def test_not_chart_armed_follows_a_promotion():
-    """Promote one key to `default`: it and its critical leave the set."""
-    doc = lib.build_registry_doc()
-    before = lib.not_chart_armed_keys(doc)
-    assert {"redis_replication_lag", "redis_replication_lag_critical"} <= before
-    _make_default(doc["keys"]["redis_replication_lag"])
-    assert before - lib.not_chart_armed_keys(doc) == {
-        "redis_replication_lag", "redis_replication_lag_critical"}
-
-
 # ── generated surfaces: render / splice / freshness ───────────────────────
 
 def _synth_doc_with_chart():
     return lib.build_registry_doc(SYNTH_PACKS, arming=_armed("alpha_conn"))
 
 
-def test_render_chart_defaults_only_chart_keys():
-    doc = _synth_doc_with_chart()
-    body = lib.render_chart_defaults_lines(doc, 4)
-    text = "\n".join(body)
-    assert "    alpha_conn: 80" in text
-    # non-chart keys never render into the chart surfaces
-    assert "beta_lag" not in text
-    # the registry's critical sibling renders as an opt-in hint
-    assert "alpha_conn_critical" in text and "120" in text
-
-
-def test_render_pack_header_defaults_and_optional_sections():
+def test_render_pack_header_thresholds_then_critical_section():
+    """#3924: two sections keyed off `arming` / `critical_of`, not `tier` — the
+    pack's thresholds (`[chart-default]` where the platform ships the value),
+    then its `<base>_critical` keys under one sentence true for all of them; no
+    topology warning (chart / dev template) is left."""
     doc = _synth_doc_with_chart()
     text = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
-    assert "#   alpha_conn: 80" in text
-    assert "[chart-default]" in text
-    # alpha's optional tier is _critical-only, and it splits: alpha_conn_critical
-    # has a chart-default base (settable today) while alpha_orphan_critical has
-    # no base at all, so only the latter keeps the ⛔ precondition framing.
-    assert "optional_overrides" in text
-    assert _BASE_SHIPPED_MARK in text and _DORMANT_MARK in text
-    assert "⛔ 啟用前提" in text
-    assert "alpha_orphan_critical: 9" in text
-    # a pack with no optional tier renders no warning
+    assert "#   alpha_conn: 80" in text and "[chart-default]" in text
+    head, crit = text.split("<base>_critical（critical 層", 1)
+    assert "alpha_conn_critical" in crit and "alpha_conn_critical" not in head
+    for gone in ("optional_overrides", "dev conf.d", "Helm chart 不出貨", "⛔ 啟用前提"):
+        assert gone not in text, gone
     beta = "\n".join(lib.render_pack_header_lines(doc, "beta"))
-    assert "⛔" not in beta
+    if not any(e.get("critical_of") for e in lib.keys_by_pack(doc)["beta"].values()):
+        assert "<base>_critical" not in beta
 
 
 # ── optional_overrides: warning is chosen PER KEY (#1310) ─────────────────
@@ -793,23 +717,6 @@ def test_render_pack_header_defaults_and_optional_sections():
 # headings share the phrase "不在出貨清單裡", and a substring probe would have
 # reported the wrong section as "found" — the exact shape that lets a drift
 # hide (the same reason `- alert:` name matching had to become exact).
-
-_SHIPPED_MARK = "已出貨在清單裡——平台認得這個 key"
-_BASE_SHIPPED_MARK = "但 base 已出貨——租戶今天就設得動"
-_DEV_ONLY_MARK = "base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨"
-_DORMANT_MARK = "base 也未出貨——documented-but-dormant"
-_BASE_OPTIONAL_MARK = "base 本身也是 optional_overrides 層"
-_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK,
-              _BASE_OPTIONAL_MARK)
-
-
-def test_the_three_warning_marks_cannot_alias_each_other():
-    """Guard for the probes below: if one mark were a substring of another,
-    every 'section X was chosen' assertion in this file would be unable to
-    distinguish the two."""
-    for a in _ALL_MARKS:
-        for b in _ALL_MARKS:
-            assert a == b or a not in b, (a, b)
 
 
 def _synth_optional_packs():
@@ -873,33 +780,6 @@ def test_pack_header_says_why_a_key_is_not_armed():
     assert "未啟用" not in crit_block
 
 
-def test_unarmed_block_lists_exactly_the_unshipped_defaults():
-    doc = _synth_doc_with_chart()
-    text = "\n".join(lib.render_unarmed_lines(doc, 4))
-    assert "#   beta_lag 未啟用（依部署而定）：beta_lag 依部署而定" in text
-    # a chart default and an optional_overrides key are not in it
-    assert "alpha_conn" not in text and "alpha_orphan" not in text
-    assert all(line.startswith("    #") for line in text.split("\n"))
-
-
-def test_unarmed_block_is_empty_when_everything_ships():
-    doc = lib.build_registry_doc(
-        SYNTH_PACKS, arming=_armed("alpha_conn", "beta_lag"))
-    assert lib.render_unarmed_lines(doc, 4) == []
-
-
-def test_real_helm_unarmed_block_matches_the_derivation():
-    """The shipped values.yaml comment names every defaults-tier key the
-    derivation calls not-chart-armed, and nothing else."""
-    import re
-    doc = lib.build_registry_doc()
-    text = "\n".join(lib.render_unarmed_lines(doc, 4))
-    named = set(re.findall(r"#   ([a-z0-9_]+) 未啟用", text))
-    expected = {k for k in lib.not_chart_armed_keys(doc)
-                if not doc["keys"][k].get("critical_of")}
-    assert named == expected and len(named) == 28
-
-
 def _synth_optional_doc():
     """All three optional populations in one doc — `delta_conn` is the only
     chart default, so delta carries flat + base-shipped + dormant at once."""
@@ -918,230 +798,10 @@ def test_shipped_optional_predicate_excludes_critical_and_dimensional():
     assert not lib.is_shipped_optional_key('oracle_tablespace{name="X"}')
 
 
-def test_has_shipped_chart_base_asks_the_resolver_question():
-    """Off the list is not the same as dormant: `resolveCriticalRows` gates on
-    `defaults[base]`, so a `_critical` whose base is a chart default resolves
-    today. A key with no base at all (no `critical_of`) never does."""
-    doc = _synth_optional_doc()
-    assert lib.has_shipped_chart_base(doc, "delta_conn_critical")
-    assert not lib.has_shipped_chart_base(doc, "delta_qsize_critical")
-    assert not lib.has_shipped_chart_base(doc, "alpha_orphan_critical")
-    # a flat key has no base either — it is on the list instead
-    assert not lib.has_shipped_chart_base(doc, "delta_lag")
-
-
-def test_pack_header_warning_is_per_key_not_per_tier():
-    doc = _synth_optional_doc()
-
-    # 1. pure FLAT -> shipped warning only
-    gamma = "\n".join(lib.render_pack_header_lines(doc, "gamma"))
-    assert _SHIPPED_MARK in gamma
-    assert _BASE_SHIPPED_MARK not in gamma and _DORMANT_MARK not in gamma
-    # the sentence PR-C falsified must be gone everywhere
-    assert "永久無法啟用" not in gamma
-    assert "不是背書" in gamma, "the copy-me-not calibration warning is the point"
-
-    # 2. `_critical` with no chart-default base -> dormant warning only
-    alpha = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
-    assert _DORMANT_MARK in alpha
-    assert _SHIPPED_MARK not in alpha and _BASE_SHIPPED_MARK not in alpha
-
-    # 3. MIXED -> three sub-sections (no dev-only base here), each key under
-    #    the right one
-    delta = lib.render_pack_header_lines(doc, "delta")
-    text = "\n".join(delta)
-    for mark in (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DORMANT_MARK):
-        assert mark in text, (mark, delta)
-    assert _DEV_ONLY_MARK not in text
-
-    def _line(pred):
-        return next(i for i, ln in enumerate(delta) if pred(ln))
-
-    ship_ln = _line(lambda ln: _SHIPPED_MARK in ln)
-    base_ln = _line(lambda ln: _BASE_SHIPPED_MARK in ln)
-    dorm_ln = _line(lambda ln: _DORMANT_MARK in ln)
-    flat_i = _line(lambda ln: "delta_lag:" in ln)
-    live_crit_i = _line(lambda ln: "delta_conn_critical:" in ln)
-    dead_crit_i = _line(lambda ln: "delta_qsize_critical:" in ln)
-    assert ship_ln < flat_i < base_ln < live_crit_i < dorm_ln < dead_crit_i, (
-        "each key must sit under ITS OWN warning", delta)
-
-    # 4. no optional tier at all -> no warning of any kind
-    beta = "\n".join(lib.render_pack_header_lines(doc, "beta"))
-    assert not any(m in beta for m in _ALL_MARKS)
-
-
-def test_dev_only_base_gets_its_own_section(monkeypatch):
-    """#3730: a base the repo's dev conf.d template values (the example
-    tenants' packs) and the chart does not is neither "settable today" nor
-    "dormant" — it is each in one topology, and the header must say which.
-    Before, the split asked the chart alone and called these dormant, while
-    the dev tree serves them."""
-    monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
-    doc = _synth_optional_doc()
-    assert lib.base_topologies(doc, "delta_qsize_critical") == {"dev"}
-    assert lib.base_topologies(doc, "delta_conn_critical") == {"helm", "dev"}
-    assert lib.base_topologies(doc, "alpha_orphan_critical") == frozenset()
-    delta = lib.render_pack_header_lines(doc, "delta")
-
-    def _line(pred):
-        return next(i for i, ln in enumerate(delta) if pred(ln))
-
-    base_ln = _line(lambda ln: _BASE_SHIPPED_MARK in ln)
-    dev_ln = _line(lambda ln: _DEV_ONLY_MARK in ln)
-    live_i = _line(lambda ln: "delta_conn_critical:" in ln)
-    dev_i = _line(lambda ln: "delta_qsize_critical:" in ln)
-    assert base_ln < live_i < dev_ln < dev_i, delta
-    assert not any(_DORMANT_MARK in ln for ln in delta), (
-        "delta has no key whose base neither topology values", delta)
-    # the dormant pack stays dormant
-    alpha = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
-    assert _DORMANT_MARK in alpha and _DEV_ONLY_MARK not in alpha
-
-
-def test_topology_keeps_are_what_the_surfaces_carry():
-    """TOPOLOGY_DEFAULTS_KEEPS is the header's claim about what each topology
-    values; the generated files are what it does value. Held equal, over the
-    registry's keys, so a block added to (or dropped from) either surface
-    without the table — or the reverse — is red here."""
-    import yaml
-
-    doc = lib.build_registry_doc()
-    registry = set(doc["keys"])
-    chart = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
-    dev = yaml.safe_load(
-        (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
-         / "_defaults.yaml").read_text(encoding="utf-8")) or {}
-    dev_written = set(dev.get("defaults") or {})
-    builtin = lib.builtin_default_keys()
-    # #3832: the dev template copies no built-in key — the readers value
-    # those from their built-in layer, as they do any conf.d's.
-    assert not dev_written & builtin, sorted(dev_written & builtin)
-    carried = {
-        "helm": set((chart.get("thresholdConfig") or {}).get("defaults") or {}),
-        "dev": dev_written | builtin,
-    }
-    assert set(carried) == set(lib.TOPOLOGY_DEFAULTS_KEEPS)
-    for topo, keeps in lib.TOPOLOGY_DEFAULTS_KEEPS.items():
-        assert carried[topo], f"{topo}: the surface parsed as empty"
-        by_table = {k for k, e in doc["keys"].items()
-                    if any(keep(e.get("pack", "?"), e) for keep in keeps)}
-        on_surface = carried[topo] & registry
-        assert by_table == on_surface, (
-            f"{topo}: table-only={sorted(by_table - on_surface)}, "
-            f"surface-only={sorted(on_surface - by_table)}")
-
-
-def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
-    """Content, not section choice. The previous version of this test only
-    checked WHICH heading was selected — the same shape that let a false body
-    ship under a correct-looking heading. Assert what each body actually says
-    about emission, in both directions."""
-    doc = _synth_optional_doc()
-    bodies = {
-        _SHIPPED_MARK: "\n".join(lib._OPTIONAL_SHIPPED_WARNING_LINES),
-        _BASE_SHIPPED_MARK:
-            "\n".join(lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES),
-        _DEV_ONLY_MARK:
-            "\n".join(lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES),
-        _DORMANT_MARK: "\n".join(lib._OPTIONAL_UNSHIPPED_WARNING_LINES),
-        _BASE_OPTIONAL_MARK:
-            "\n".join(lib._OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES),
-    }
-    # only the DORMANT body may claim a tenant-set key produces nothing
-    for mark, body in bodies.items():
-        claims_dead = "並不會發射任何 user_threshold" in body
-        assert claims_dead == (mark == _DORMANT_MARK), (mark, body)
-    # the two live bodies must say the tenant's value takes effect
-    assert "填值並生效" in bodies[_SHIPPED_MARK]
-    assert "產出一條真的" in bodies[_BASE_SHIPPED_MARK]
-    # and the live-critical body must name the mechanism that makes it live
-    assert "defaults[base]" in bodies[_BASE_SHIPPED_MARK]
-    assert "resolveCriticalRows" in bodies[_BASE_SHIPPED_MARK]
-    # the dev-only body states both topologies: a row in the dev tree, none
-    # under the chart
-    dev_only = bodies[_DEV_ONLY_MARK]
-    assert "產出一條真的 critical row" in dev_only
-    assert "用 chart 部署時，租戶填一個並不會產出任何 row" in dev_only
-    # #3778: an optional-tier base. The dormant body's remedy ("scaffold_tenant's
-    # _defaults.yaml carries the base") is false for it; this body must name
-    # the only remedy and must not repeat that one.
-    base_optional = bodies[_BASE_OPTIONAL_MARK]
-    assert "部署面必須自己在根層 `defaults:`" in base_optional
-    # review: a subtree _defaults.yaml is not defaults[base] — say so
-    assert "子樹 _defaults.yaml" in base_optional
-    assert "_defaults.yaml 就含 base" not in base_optional
-    # every group the renderer can emit is covered above — no fifth body can
-    # be added without this test noticing (delta's qsize base is dev-only here)
-    monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
-    groups = lib.optional_warning_groups(
-        doc, {k: e for k, e in doc["keys"].items()
-              if e.get("tier") == "optional_overrides"})
-    assert {w for w, _ in groups} == {
-        lib._OPTIONAL_SHIPPED_WARNING_LINES,
-        lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES,
-        lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES,
-        lib._OPTIONAL_UNSHIPPED_WARNING_LINES,
-        lib._OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES,
-    }
-
-
-def test_critical_of_an_optional_tier_base_gets_its_own_warning():
-    """#3778: `gamma_queue_critical`'s base is optional-tier, so the dormant
-    warning's remedy does not apply; it renders under the base-optional
-    warning, and nothing else does."""
-    doc = _synth_optional_doc()
-    gamma = lib.render_pack_header_lines(doc, "gamma")
-    text = "\n".join(gamma)
-    assert _BASE_OPTIONAL_MARK in text and _DORMANT_MARK not in text
-    head = next(i for i, l in enumerate(gamma) if _BASE_OPTIONAL_MARK in l)
-    assert any("gamma_queue_critical" in l for l in gamma[head:])
-    for pack in ("alpha", "delta"):
-        assert _BASE_OPTIONAL_MARK not in "\n".join(
-            lib.render_pack_header_lines(doc, pack)), pack
-
-
-def test_optional_override_list_is_a_yaml_string_array():
-    """The surface is `array of string` (platform-defaults.schema.json), not a
-    mapping: a value here would arm the key for every tenant."""
-    import yaml
-
-    doc = _synth_optional_doc()
-    body = lib.render_optional_overrides_lines(doc, 2)
-    parsed = yaml.safe_load("\n".join(["optional_overrides:"] + body))
-    assert parsed["optional_overrides"] == lib.optional_override_list_keys(doc)
-    assert parsed["optional_overrides"] == ["gamma_queue", "delta_lag"]
-    # ...and the _critical sibling of the mixed pack is NOT in it
-    assert "delta_conn_critical" not in parsed["optional_overrides"]
-
-
-def test_real_registry_optional_list_is_the_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 7 FLAT keys, never the 41 the
-    tier holds (both asserted below; #3778 added mysql_threads_running, #1320
-    replaced the two absolute Oracle keys with one share and armed the other, then
-    armed the two DB2 % keys). Most
-    of the tier is `_critical` keys;
-    listing them would make the shipped list mostly decoration."""
-    doc = lib.build_registry_doc()
-    tier = {k for k, e in doc["keys"].items()
-            if e.get("tier") == "optional_overrides"}
-    shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 41
-    assert shipped == [
-        "mysql_threads_running",
-        "oracle_wait_time_rate", "oracle_hard_parse_time_percent",
-        "oracle_pga_usage_percent",
-        "db2_deadlocks_per_5m",
-        "clickhouse_max_part_count", "clickhouse_replication_queue",
-    ]
-    assert not [k for k in shipped if k.endswith("_critical")]
-
-
 # ── the header CLAIM vs the resolver's real entry condition (#1310 FIX-2) ──
 
 _RESOLVE_GO = (REPO_ROOT / "components" / "threshold-exporter" / "app" / "pkg" /
                "config" / "resolve.go")
-_CHART_VALUES = REPO_ROOT / "helm" / "threshold-exporter" / "values.yaml"
 
 
 def _resolve_critical_rows_body() -> str:
@@ -1202,80 +862,13 @@ def test_critical_tier_entry_condition_is_still_defaults_of_the_base():
     assert 'return strings.TrimSuffix(key, "_critical"), true' in base
 
 
-def test_every_real_pack_header_critical_claim_is_true_per_key():
-    """Per-pack, per-key truth check against the SHIPPED artifact.
-
-    The claim under test is not "the right heading was picked" but "the heading
-    that was picked says something true about THIS key": a `_critical` renders
-    under the settable-today warning IFF the chart actually ships its base,
-    under the dev-only warning IFF only the repo's dev conf.d template values
-    it (#3730), and under the dormant warning otherwise. Reads values.yaml
-    (what an operator gets) and the dev `_defaults.yaml`, while the renderer
-    reads the registry — so a divergence between declaration and artifact
-    surfaces here.
-    """
-    import yaml
-
-    doc = lib.build_registry_doc()
-    chart_doc = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
-    chart_defaults = set(
-        ((chart_doc.get("thresholdConfig") or {}).get("defaults") or {}))
-    shipped_list = set(
-        (chart_doc.get("thresholdConfig") or {}).get("optional_overrides") or [])
-    assert chart_defaults and shipped_list, "values.yaml faces parsed as empty"
-    dev_doc = yaml.safe_load(
-        (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
-         / "_defaults.yaml").read_text(encoding="utf-8")) or {}
-    dev_defaults = set(dev_doc.get("defaults") or {})
-    assert dev_defaults, "the dev _defaults.yaml parsed as empty"
-
-    checked = 0
-    for pack in doc["packs"]:
-        lines = lib.render_pack_header_lines(doc, pack)
-        # section index each key falls under
-        section = None
-        current = {}
-        for ln in lines:
-            for mark in _ALL_MARKS:
-                if mark in ln:
-                    section = mark
-            if ln.startswith("#   ") and ":" in ln:
-                key = ln[4:].split(":", 1)[0].strip()
-                if key in doc["keys"] and \
-                        doc["keys"][key].get("tier") == "optional_overrides":
-                    current[key] = section
-        for key, sect in current.items():
-            checked += 1
-            base = doc["keys"][key].get("critical_of")
-            if key in shipped_list:
-                expected = _SHIPPED_MARK
-            elif base and base in chart_defaults:
-                expected = _BASE_SHIPPED_MARK
-            elif base and base in dev_defaults:
-                expected = _DEV_ONLY_MARK
-            elif base and base in shipped_list:
-                # #3778: the base ships only as an optional_overrides list
-                # entry, never under defaults:
-                expected = _BASE_OPTIONAL_MARK
-            else:
-                expected = _DORMANT_MARK
-            assert sect == expected, (
-                f"{pack}/{key}: header claims {sect!r} but the shipped chart "
-                f"says {expected!r} (base={base!r}, "
-                f"base_in_chart={bool(base) and base in chart_defaults}, "
-                f"base_in_dev={bool(base) and base in dev_defaults}, "
-                f"on_declared_list={key in shipped_list})")
-    assert checked == 41, (
-        f"expected all 41 optional_overrides keys to be covered, saw {checked}")
-
-
 def test_splice_check_roundtrip_and_staleness():
     doc = _synth_doc_with_chart()
     spec = {
         "id": "unit-test",
         "path": "unit-test.yaml",
         "indent": "  ",
-        "body": lib.render_chart_defaults_lines(doc, 2),
+        "body": lib.render_dimensions_lines(doc, 2) or ["  some_key: [label]"],
     }
     spec["block"] = lib.render_block(spec["id"], spec["body"], spec["indent"])
     text = "\n".join([
@@ -1306,34 +899,17 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     doc = lib.build_registry_doc()
     specs = lib.surface_specs(doc)
     ids = [s["id"] for s in specs]
-    # the file-level surfaces are order-pinned: two `defaults` mappings, then
-    # the `optional_overrides` lists — two of which share the SAME two files as
-    # the mappings above (#1310), plus the try-local seed, which stopped being
-    # a hand-maintained third copy in #1176/#1344 (its only gate compared the
-    # PARSED list, so it never saw the per-key counter-example comments).
-    # `dev-example-defaults` (#3014) is the dev template's only `defaults`
-    # block — the example tenants' packs; the chart-default keys it used to
-    # copy are the readers' built-in layer (#3832).
-    # The `dimensions:` blocks (#3475) follow, one per runtime carrier.
-    assert ids[:9] == [
-        "helm-defaults", "helm-unarmed", "dev-example-defaults",
-        "helm-optional", "dev-optional", "try-local-optional",
-        "helm-dimensions", "dev-dimensions", "try-local-dimensions"]
+    # #3924: no surface carries a threshold key's value or name — only the
+    # `dimensions:` blocks (#3475), one per runtime carrier, then the platform
+    # pack's digest (#3831), then one header per threshold pack.
+    assert ids[:3] == ["helm-dimensions", "dev-dimensions", "try-local-dimensions"]
+    assert ids[3] == "platform-builtin-digest"
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
-    # #3831: the platform pack's digest recording rule, between the file-level
-    # surfaces and the pack headers.
-    assert ids[9] == "platform-builtin-digest"
-    assert len(ids) == 9 + 1 + 13  # 13 threshold packs, non-threshold packs none
-    # the two surfaces per file must target the same path but distinct blocks
-    by_id = {s["id"]: s for s in specs}
-    assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]
-    assert by_id["helm-unarmed"]["path"] == by_id["helm-defaults"]["path"]
-    assert by_id["dev-example-defaults"]["path"] == by_id["dev-optional"]["path"]
-    assert by_id["try-local-optional"]["path"] not in {
-        by_id["helm-optional"]["path"], by_id["dev-optional"]["path"]}
-    for carrier in ("helm", "dev", "try-local"):
-        assert by_id[f"{carrier}-dimensions"]["path"] == by_id[f"{carrier}-optional"]["path"]
-    assert len({s["id"] for s in specs}) == len(specs)
+    assert len(ids) == 3 + 1 + 13  # 13 threshold packs, non-threshold packs none
+    for gone in ("helm-defaults", "helm-unarmed", "helm-optional", "dev-example-defaults",
+                 "dev-optional", "try-local-optional"):
+        assert gone not in ids, gone
+    assert len({s["path"] for s in specs[:3]}) == 3
 
 
 # ── header-prose key membership (F6) ──────────────────────────────────────
@@ -1619,42 +1195,6 @@ def _a_counterexample_key(tier: str) -> str:
     return next(k for pack in scaffold_tenant.RULE_PACKS.values()
                 for k, info in (pack.get(tier) or {}).items()
                 if isinstance(info, dict) and "value_counterexample" in info)
-
-
-def test_counterexample_head_names_a_key_and_a_sequence_item() -> None:
-    """Both shapes `_defaults.yaml` carries a measured key in: a `defaults:`
-    entry (by its key) and an `optional_overrides:` item (by its value)."""
-    key = _a_counterexample_key("defaults")
-    item = _a_counterexample_key("optional_overrides")
-    on_key = lib.defaults_counterexample_head(("defaults", key), 1)
-    on_item = lib.defaults_counterexample_head(("optional_overrides", "[0]"), item)
-    for text in (on_key, on_item):
-        assert text and text.startswith("⚠ ") and lib.COUNTEREXAMPLE_MARK in text
-    # A section (a non-empty mapping) is not annotated, nor a key with
-    # nothing measured, nor a non-string item.
-    assert lib.defaults_counterexample_head((key,), {"a": 1}) is None
-    assert lib.defaults_counterexample_head(("defaults", "no_such_key"), 1) is None
-    assert lib.defaults_counterexample_head(("x", "[0]"), 5) is None
-
-
-def test_counterexample_head_wraps_at_the_width_left_at_its_indent() -> None:
-    """da-guard writes each line `# <line>` at the node's indent (two columns
-    a level): every written line stays within `_COMMENT_WIDTH`."""
-    key = _a_counterexample_key("optional_overrides")
-    for at in (("optional_overrides", "[0]"), ("a", "b", "c", "[0]")):
-        indent = 2 * (len(at) - 1)
-        text = lib.defaults_counterexample_head(at, key)
-        assert all(indent + 2 + len(line) <= lib._COMMENT_WIDTH
-                   for line in text.split("\n")), (at, text)
-
-
-def test_tenant_declared_foot_is_the_stub_block_as_comment_text() -> None:
-    keys = lib.shipped_optional_keys_for_packs(["oracle"])
-    assert keys, "fixture assumption: oracle declares keys"
-    lines = lib.render_tenant_declared_stub_lines(keys, lang="en")
-    foot = lib.tenant_declared_foot(keys, lang="en")
-    assert ["# " + t if t else "#" for t in foot.split("\n")] == lines
-    assert lib.tenant_declared_foot([], lang="en") is None
 
 
 # ── D-A A2a: validation (what a shipped value rests on) ─────────────────────

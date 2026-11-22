@@ -322,6 +322,34 @@ func TestDirRejectsPathKeys(t *testing.T) {
 	}
 }
 
+func TestLogVisibilityKeyRoundTrip(t *testing.T) {
+	t.Parallel()
+	id, ok := LogVisibilityTenant(LogVisibilityKey("tenant-alpha"))
+	if !ok || id != "tenant-alpha" {
+		t.Fatalf("LogVisibilityTenant(LogVisibilityKey(tenant-alpha)) = %q, %v", id, ok)
+	}
+	// The two per-tenant key families never answer for each other.
+	if _, ok := LogVisibilityTenant(SubsetKey("tenant-alpha")); ok {
+		t.Error("a federation subset key read as a log visibility key")
+	}
+	if _, ok := SubsetTenant(LogVisibilityKey("tenant-alpha")); ok {
+		t.Error("a log visibility key read as a federation subset key")
+	}
+	for _, k := range []string{KeyGroups, "_log_visibility..yaml", "_log_visibility.x.yml"} {
+		if _, ok := LogVisibilityTenant(k); ok {
+			t.Errorf("LogVisibilityTenant(%q) matched", k)
+		}
+	}
+	// The change-event stream sends a log visibility write only to callers
+	// who may read that tenant.
+	if id, ok := EntityTenant(LogVisibilityEntity("tenant-alpha")); !ok || id != "tenant-alpha" {
+		t.Errorf("EntityTenant(LogVisibilityEntity) = %q, %v", id, ok)
+	}
+	if _, ok := EntityTenant("log-visibility/"); ok {
+		t.Error("an entity with no tenant id matched")
+	}
+}
+
 func TestSubsetKeyRoundTrip(t *testing.T) {
 	id, ok := SubsetTenant(SubsetKey("db-a"))
 	if !ok || id != "db-a" {

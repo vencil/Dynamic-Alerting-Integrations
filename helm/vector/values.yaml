@@ -389,6 +389,16 @@ evidenceChannel:
 #   - Default empty: single-tenant store, projection disabled, pipeline is
 #     byte-for-byte the #539 behavior (no extra transforms/sinks rendered).
 #
+#   - `visibleFields` (optional): the tenant's own visibility selection
+#     (ADR-021 §租戶自選的可見度子集) — the fields of
+#     tenantProjectionKeepFields it chose to keep, copied from tenant-api
+#     (`GET /api/v1/tenants/<id>/federation/log-visibility`, its `fields`). Omit it
+#     (or copy a `fields: null`) for the default: every allowlisted field. It can
+#     only narrow: an entry outside tenantProjectionKeepFields fails the render,
+#     and tenantProjectionAlwaysVisibleFields are kept whatever it says. A
+#     change applies to rows written after the DaemonSet rolls, never to rows
+#     already in the partition.
+#
 # Each entry renders: a `t_<accountId>` route on the `tenant_route` transform
 # + a `vl_tenant_<accountId>` elasticsearch sink with a FIXED `AccountID`
 # header (static-N, because a per-event header template pollutes mixed-tenant
@@ -398,6 +408,7 @@ tenantProjections: []
   #   accountId: 1000
   # - tenantId: "tenant-beta"
   #   accountId: 1001
+  #   visibleFields: [status, path]   # tenant-beta keeps only these (+ always-visible)
 
 # ── Fail-closed projection GATE (#908) — active ONLY when tenantProjections is set.
 # A Vector init-container validates the rendered tenantProjections against the
@@ -540,6 +551,24 @@ tenantProjectionKeepFields:
   - token_id       # the tenant's own federation token id
   - duration_ms    # the tenant's own request latency (if emitted)
   - response_flags # Envoy response flags (not infra-identifying)
+
+# Fields of tenantProjectionKeepFields a tenant's `visibleFields` selection
+# cannot drop (ADR-021 §租戶自選的可見度子集): the partition's identity
+# (tenant_id, log_type — also stream fields), the event time, and the
+# log_event_id join key the platform needs to find the full row in 0:0.
+# Mirrored by tenant-api's selectable vocabulary (internal/federation/logvis,
+# pinned by its TestVocabularyMatchesVectorChart).
+# ⛔ NOT configurable: any other set fails the render (templates/configmap.yaml),
+# because tenant-api offers tenants exactly the rest of the allowlist as
+# selectable and an override would silently undo their selections.
+# `status` is selectable although it is a tenant stream field: a tenant that
+# drops it gets rows without that stream label (one stream instead of one per
+# status), and filtering by status finds nothing in those rows.
+tenantProjectionAlwaysVisibleFields:
+  - tenant_id
+  - log_type
+  - log_event_id
+  - timestamp
 
 # Stream fields for the TENANT projection sink — a tenant-safe subset (must be
 # a subset of tenantProjectionKeepFields, else the field won't exist on the

@@ -132,7 +132,7 @@ Tier 3 rules are placed in a dedicated Prometheus Rule Group with a longer `eval
 - Platform team can independently monitor Custom Rule Group evaluation duration
 
 ```yaml
-# rule-packs/custom/tenant-specific.yaml (this directory is created when the first Tier 3 Rule is submitted)
+# rule-packs/custom/db-a/special-tablespace.yaml (the directory db-a is the tenant this rule belongs to; created when the first Tier 3 Rule is submitted)
 groups:
   - name: custom_tenant_rules
     interval: 30s   # Dedicated evaluation interval
@@ -141,6 +141,7 @@ groups:
         expr: |
           custom_tablespace_usage{tenant="db-a", tablespace="SPECIAL_APP"} > 95
         labels:
+          tenant: "db-a"
           tier: "custom"
           owner: "team-db-a"
           expiry: "2026-06-30"
@@ -239,8 +240,7 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 >
 > ⚠️ What it cannot see: any other raw metric is taken to carry tenant (a tenant exporter scraped by the
 > tenant-exporters job always does); whether a platform component's own metrics (threshold-exporter,
-> tenant-api, Vector …) carry it depends on the metric, and they are taken to carry it too. Whether a rule
-> reads other tenants' series (`x{tenant=~".*"}`) is not this check's either. It judges by
+> tenant-api, Vector …) carry it depends on the metric, and they are taken to carry it too. It judges by
 > Prometheus' semantics; vmalert's behaviour is not verified separately. A recording rule whose name has no
 > colon and that is outside the records followed is taken for a raw metric (Prometheus does not require a
 > colon in a record's name): a rule reading a record of its own needs the file defining it among the paths.
@@ -249,6 +249,33 @@ The lint tool's built-in policy **is** the file below (`.github/custom-rule-poli
 > `without(tenant, b)` walked past. Its `=~".*"` selects exactly what the selector without that matcher
 > selects (a matcher matching the empty string also selects the series without the label), so it guarded
 > nothing. A policy still carrying it exits `2`, pointing to `preserved_labels`.
+
+> **A tenant's rule file reads and writes only that tenant** ([#4136](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4136)): a rule file under a scan path
+> sits in `<scan dir>/<tenant>/`, and the directory's name is the tenant the rules belong to (a file given as a
+> path: the name of its directory); a file directly in the scan directory, or a directory whose name is no valid
+> tenant id, is an ERROR. The policy key `isolated_label` names the label isolated (`tenant` built in), and each
+> of these is an ERROR:
+>
+> - a selector (of an alert or a recording rule) that does not match `tenant="<tenant>"` by equality. A regex
+>   (even `=~"db-a"`), a negation or no matcher reads every tenant's series; another tenant's value reads
+>   theirs. A metric with only a namespace, such as kube-state-metrics', is written
+>   `namespace="<tenant>", tenant=""` (namespace alone also selects a series carrying both labels with
+>   different values). A pack's record needs it too, such as `tenant:mysql_up:max{tenant="db-a"}`.
+> - `tenant` (or `namespace`) in the `labels:` of an alert, a recording rule or the group written as anything
+>   but that tenant. An alert may also write the series' own `{{ $labels.tenant }}`; a recording rule's labels are
+>   no template (Prometheus writes the text), so only the tenant.
+> - writing `tenant` or `namespace` from anything else: `label_replace` / `label_join` into it,
+>   `count_values("tenant", …)`, `group_left(tenant)` / `group_right(tenant)`. `namespace` counts because another
+>   tenant reads it with `namespace="<tenant>", tenant=""`.
+>
+> A recording rule whose result carries no tenant is a WARN: a reference pinned to the tenant selects nothing,
+> so an alert reading it never fires. Rules across tenants are not taken: by §2.3, Tier 3 is a single tenant's
+> exception, and a need across tenants is a Tier 2 candidate. `--rule-pack-dir` reads the rule packs the
+> platform ships (every tenant reads them) and does not judge this.
+>
+> ⚠️ This lint prevents mistakes; it is no security boundary: the tenant repository's CI is the customer's and
+> can drop the step. Enforcing it in Prometheus would take injecting a tenant matcher into every selector as
+> rules load (what prom-label-proxy does), which the platform does not do today.
 
 > **An exemption is not a skip (four guard rails)**: (1) `path` is anchored at
 > the top of the scanned tree (exact path, not a suffix), so a nested

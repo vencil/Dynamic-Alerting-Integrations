@@ -5,9 +5,9 @@ WHY: epic #1200 D2 (LOCKED) makes ``rule-packs/threshold-registry.yaml`` the
 standalone SoT for the threshold contract (language-neutral,
 schema-validatable). The PR-2 rewire promoted it from a gated parallel copy to
 a REAL SoT: previously hand-copied surfaces (rule-pack header threshold
-sections, helm values ``thresholdConfig.defaults``, the dev template
-``conf.d/_defaults.yaml`` defaults section, and — since #1310 — the
-``optional_overrides:`` declared-key LIST on both runtime surfaces) are now
+sections and, since #3475, the shipped ``dimensions:`` blocks; until #3924
+also the chart / dev ``defaults`` and ``optional_overrides`` blocks, which
+now ship empty because every registry key is built into the readers) are
 GENERATED from it inside delimited blocks. Since D-A PR-3 the registry is
 authored by hand and ``scaffold_tenant.RULE_PACKS`` is generated from it too
 (``scripts/tools/ops/_rule_packs_generated.py``, merged with scaffold's own
@@ -32,9 +32,8 @@ diagnosed (18 dead keys from four hand-copied surfaces drifting):
      every surface in one shot.
   4. HEADER-PROSE MEMBERSHIP (design F6): hand-written pack-header prose may
      only name conf.d threshold keys that exist in the contract — registry
-     keys, their derived ``_critical`` opt-ins, the #1196 KNOWN_UNWIRED
-     pending line (imported from check_threshold_reachability so the two
-     gates shrink together), or scaffold state-filter names. Dimensional
+     keys, their derived ``_critical`` opt-ins, or scaffold state-filter
+     names. Dimensional
      tokens (``key{...}``) are exempt. This kills the "header-only claim"
      class where prose advertises keys that exist nowhere.
 
@@ -86,19 +85,6 @@ _REGEN_HINT = (
     "then run `python3 scripts/tools/lint/check_threshold_registry.py "
     "--regen` to refresh every generated surface and the RULE_PACKS module."
 )
-
-
-def _known_unwired_keys() -> set[str]:
-    """The #1196 pending line — reused verbatim so the gates agree.
-
-    A KNOWN_UNWIRED key may legitimately appear in header prose (e.g. the
-    db2_lock_wait_time calibration walkthrough) while its identity repair is
-    pending; check_threshold_reachability's exit-lock forces that list to
-    shrink as fixes land, so this exemption cannot rot.
-    """
-    import check_threshold_reachability  # noqa: E402 — sibling lint module
-
-    return set(check_threshold_reachability.KNOWN_UNWIRED)
 
 
 def _state_filter_names() -> set[str]:
@@ -186,8 +172,8 @@ def run_check(
       (a missing id keeps the real path).
     - ``prose_files``: rule-pack files for the membership scan (defaults to
       every rule-packs/rule-pack-*.yaml).
-    - ``extra_allowed``: membership-universe extras (defaults to KNOWN_UNWIRED
-      + scaffold state-filter names).
+    - ``extra_allowed``: membership-universe extras (defaults to the
+      scaffold state-filter names).
     - ``changelog_paths``: (fragments dir, CHANGELOG path) the built-in
       table's digest must be announced in (defaults to changelog.d/ and
       CHANGELOG.md).
@@ -288,7 +274,7 @@ def run_check(
         prose_files = [str(p) for p in _lib_consumer_read.tenant_rule_pack_files(
             os.path.join(PROJECT_ROOT, _lib_consumer_read.RULE_PACKS.directory))]
     if extra_allowed is None:
-        extra_allowed = _known_unwired_keys() | _state_filter_names()
+        extra_allowed = _state_filter_names()
     universe = registry_lib.membership_universe(doc, extra_allowed)
     for pf in prose_files:
         with open(pf, encoding="utf-8") as fh:
@@ -299,7 +285,7 @@ def run_check(
                     f"membership: {os.path.relpath(pf, PROJECT_ROOT)}:{lineno}: "
                     f"header prose claims conf.d key {token!r} which exists "
                     "nowhere in the threshold contract (not a registry key / "
-                    "derived _critical / KNOWN_UNWIRED pending key / state "
+                    "derived _critical / state "
                     "filter) — fix the prose or wire the key"
                 )
 

@@ -935,8 +935,9 @@ def _render_critical_suggestion(critical, defaults=None):
     write of that file.
 
     Dropped rather than rendered was the other candidate and is wrong HERE, even
-    though it is what the sibling `init_project._catalog_critical` does. That
-    one is seeding a fresh stub, where a key nobody asked for is pure liability;
+    though it is what `init_project` did for its fresh stubs until #3924 (it
+    no longer pre-fills any `_critical`). That one was seeding a fresh stub,
+    where a key nobody asked for is pure liability;
     this one is REPORTING what the customer's own Alertmanager already had, and
     silently discarding a threshold they are relying on today is the one thing a
     migration tool must not do. So the numbers stay, under an instruction that
@@ -950,13 +951,12 @@ def _render_critical_suggestion(critical, defaults=None):
     defaults = defaults or {}
     ready, blocked = [], []
     for key in sorted(critical):
-        # Same suffix-guard as `init_project._catalog_critical`, for the same
-        # reason and as the same CLASS rather than the cited instance: slicing a
+        # A suffix guard, as the CLASS rather than the cited instance: slicing a
         # key that does not end in `_critical` removes nine arbitrary characters
         # and the membership test below then answers about a string that is not
         # a base key. The CLI path filters on `endswith` upstream (`:644`), but
         # both callers in the test suite build the mapping by hand, which is
-        # exactly the surface the sibling guard was added to protect.
+        # exactly the surface the guard protects.
         if not key.endswith(CRITICAL_SUFFIX):
             continue
         base = key[: -len(CRITICAL_SUFFIX)]
@@ -966,10 +966,8 @@ def _render_critical_suggestion(critical, defaults=None):
     # critical-severity-only estate produces no base tier, so `_write_phase2_outputs`
     # omits the `defaults:` mapping entirely (emitting `defaults: {}` would empty
     # the customer's platform tier on merge) — and the BLOCKED paragraph would
-    # then point at an absent section, the exact defect the sibling generator's
-    # `_critical_prefill_note` states it must never commit ("an empty tier
-    # renders nothing at all, so the file never points at an absent section").
-    # Blind review found the two generators disagreeing on their own shared rule.
+    # then point at an absent section. Rule: an empty tier renders nothing at
+    # all, so the file never points at an absent section.
     blocked_opener = ([
         "# ⛔ BLOCKED — no `<base>` in the `defaults:` block above (and possibly",
         "# none in your deployed conf.d/_defaults.yaml either — unchecked). Copying",

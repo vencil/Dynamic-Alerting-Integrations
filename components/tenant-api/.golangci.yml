@@ -135,6 +135,7 @@ linters:
             - "**/internal/errkind/**"
             - "**/internal/federation/account/**"
             - "**/internal/federation/fedpolicy/**"
+            - "**/internal/federation/logvis/**"
             - "**/internal/federation/token/**"
             - "**/internal/generator/**"
             - "**/internal/github/**"

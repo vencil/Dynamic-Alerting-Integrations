@@ -11,21 +11,17 @@ GENERATED SURFACES: previously hand-copied surfaces are generated from the
 registry inside delimited blocks (everything outside the delimiters stays
 hand-written):
 
-  1. rule-pack header threshold sections (the "對應的 threshold-exporter
-     defaults" block of every threshold pack, defaults tier + up to three
-     optional_overrides sub-sections, each under its own warning — see
-     ``optional_warning_groups`` / ``render_pack_header_lines``);
-  2. ``helm/threshold-exporter/values.yaml`` ``thresholdConfig.defaults``
-     (the ``arming: default`` key set);
-  3. ``components/threshold-exporter/config/conf.d/_defaults.yaml``
-     ``defaults`` section (same ``arming: default`` set);
-  4. the ``optional_overrides:`` LIST on both of those runtime surfaces
-     (#1310) — the declared-without-value key names the exporter recognises
-     but asserts no value for. A LIST, not a mapping: see
-     ``render_optional_overrides_lines``;
-  5. the comment block under that ``thresholdConfig.defaults`` listing the
-     defaults-tier keys the chart does NOT ship, each with its arming state
-     and reason (``render_unarmed_lines``, D-A A1).
+  1. rule-pack header threshold sections, two sections keyed by ``arming``
+     (keys with a platform value, keys the tenant must value; #3924 — see
+     ``render_pack_header_lines``);
+  2. the ``dimensions:`` block of the chart values, the dev conf.d root and
+     the try-local seed (#3475);
+  3. the built-in layer digest in ``rule-pack-platform.yaml``.
+
+Since #3924 no shipped artifact and no generator WRITES a registry key: every
+one is built into the readers (``builtin_defaults_gen.go``), so the chart's
+``thresholdConfig.defaults`` and ``optional_overrides`` ship empty and the
+reachability gate's producer policy keeps them that way.
 
 Since D-A PR-3 the registry FILE is authored by hand and is the only place a
 threshold is written. ``scaffold_tenant.RULE_PACKS``'s threshold half is a
@@ -127,9 +123,8 @@ CRITICAL_SUFFIX = "_critical"
 #                source, a broken aggregation, never measured, a disputed
 #                value), with the issue that tracks it.
 #
-# ⛔ Nothing here is a hand-kept list. "Read by a rule pack, not shipped by
-# the chart" (`not_chart_armed_keys`) and "portable, unshipped, unblocked —
-# what A2 validates next" (`validation_candidates`) are both DERIVED.
+# ⛔ Nothing here is a hand-kept list. "Portable, unshipped, unblocked —
+# what A2 validates next" (`validation_candidates`) is DERIVED.
 # The one-dimensional enum A1 shipped had grown a state per blocker and
 # could not say "shipped, but not portable"; that is why it was split.
 # ---------------------------------------------------------------------------
@@ -794,27 +789,6 @@ def arming_notes_zh(entry: dict) -> list[str]:
     return notes
 
 
-def not_chart_armed_keys(doc: dict) -> frozenset[str]:
-    """The keys the scaffold path supplies but the chart does not ship.
-
-    A ``defaults``-tier key whose arming is not ``default``, plus every
-    ``<base>_critical`` whose base is such a key (the critical row needs
-    ``defaults[base]``, which the chart then does not carry). This is what the
-    reachability gate's chart face must measure in the shipped values.yaml —
-    derived here so there is no hand-kept list to drift from the registry.
-    ``optional_overrides`` keys are not in it: the scaffold path supplies no
-    value for them either, so the gate's unreachable face owns them.
-    """
-    keys = registry_keys(doc)
-    out: set[str] = set()
-    for key, entry in keys.items():
-        base = entry.get("critical_of")
-        owner = keys.get(base) if base else entry
-        if owner and owner.get("tier") == "defaults" and not is_chart_armed(owner):
-            out.add(key)
-    return frozenset(out)
-
-
 # ---------------------------------------------------------------------------
 # The registry as source (D-A PR-3): project -> RULE_PACKS shape, fixed point,
 # and the generated Python module scaffold_tenant reads
@@ -1319,13 +1293,6 @@ def keys_by_pack(doc: dict) -> dict[str, dict[str, dict]]:
     return out
 
 
-def keys_in_tier(doc: dict, tier: str) -> dict[str, dict]:
-    """All keys of one tier ('defaults' / 'optional_overrides')."""
-    return {
-        k: e for k, e in registry_keys(doc).items() if e.get("tier") == tier
-    }
-
-
 def default_value(doc: dict, key: str):
     """The registry default value for ``key`` (None if absent)."""
     entry = registry_keys(doc).get(key)
@@ -1614,63 +1581,6 @@ def counterexample_sentence(ce: dict, lang: str = "zh") -> str:
     return f"#{ce['issue']} {mark}: {counterexample_observed(ce, 'en')} ({verdict})"
 
 
-def defaults_counterexample_head(at: tuple, value: Any,
-                                 rule_packs: Optional[dict] = None,
-                                 lang: str = "zh") -> Optional[str]:
-    """The ⚠ comment above an emitted `_defaults.yaml` key that has one: a
-    `_lib_confedit.data_value` *head* (key path, value) → comment text, or
-    None.
-
-    ⛔ Why this exists at all: the interactive prompt only reaches a human who
-    is ANSWERING PROMPTS. `generate_defaults` → `write_outputs` is the path
-    taken by `--non-interactive`, by `--from-onboard` batch onboarding, by the
-    interactive run whose operator declines to customise, and by
-    `da-tools init` — and it writes the platform-asserted numbers straight into
-    `_defaults.yaml` with nobody prompted.
-
-    ⛔ It lives HERE, not in `scaffold_tenant`, because there are TWO producers
-    of that file: `scaffold_tenant.write_outputs` and
-    `init_project._defaults_file`. It was in `scaffold_tenant`, so the
-    second producer wrote the same declared keys bare — same directory, same
-    filename, one annotated and one not (blind review, #1344).
-
-    A comment da-guard writes (ADR-036 §2, #3206 10c-3): Go writes the file,
-    this says which comment goes above which node. It is asked about every
-    node `da-guard write` will emit, so it can only annotate a key this run
-    actually writes.
-
-    ⛔ BOTH shapes, not just `key: value`. `optional_overrides:` is a plain
-    string LIST (`- oracle_process_count`), so a mapping-only rule skipped the
-    entire declared tier — the tier #1320 D1 says a tenant can fill in today.
-    A sequence item (its path ends `[i]`) is annotated by its string value; a
-    key whose value is a non-empty mapping or sequence (a section) is not.
-
-    ⛔ WRAPPED, like every other composer, at the width left at the node's
-    indent (yaml.v3's: two columns a level, a sequence item indented under
-    its key). This one used to interpolate the sentence raw, so an `observed`
-    containing a newline emitted its tail at column 0 and the written
-    `_defaults.yaml` stopped being valid YAML. The schema forbids the newline
-    at the source; da-guard writes every comment line as `# <line>` besides.
-    """
-    if not at:
-        return None
-    last = at[-1]
-    if last.startswith("[") and last.endswith("]"):
-        if not isinstance(value, str):
-            return None
-        key = value
-    elif isinstance(value, (dict, list, tuple)) and value:
-        return None
-    else:
-        key = last
-    ce = counterexample_for_key(key, rule_packs)
-    if not ce:
-        return None
-    indent = 2 * (len(at) - 1)
-    body = "⚠ " + " ".join(counterexample_sentence(ce, lang).split())
-    return "\n".join(_wrap_comment(body, _COMMENT_WIDTH - indent - len("# ")))
-
-
 def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
     """The ⚠ line under a key whose value has a measured counter-example.
 
@@ -1694,34 +1604,14 @@ def _counterexample_lines(entry: dict, cont: str = "#       ") -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# optional_overrides — ONE tier, TWO populations, two different truths (#1310)
+# optional_overrides — the flat/structured split (#1310, #1311)
 # ---------------------------------------------------------------------------
-# Until PR-C (#1314) the whole tier got a SINGLE warning stating that a
-# tenant-set key "永遠不會生效 ... 永久無法啟用". That sentence is now FALSE for
-# half the tier and still TRUE for the other half:
-#
-#   * FLAT keys (today oracle_* / db2_* / clickhouse_*) — ``resolveDeclaredRows``
-#     walks the DECLARED set and emits a row as soon as the TENANT supplies a
-#     value, and #1310 ships that declared list itself in ``_defaults.yaml`` /
-#     Helm values. Tenant fills one in → it fires. No platform fallback, by
-#     design: the platform asserts no value.
-#   * ``<base>_critical`` keys — never on the list. ``resolveDeclaredRows``
-#     skips the critical suffix outright and ``resolveCriticalRows`` keys off
-#     ``defaults[base]``, so they are deliberately EXCLUDED (#1311): listing all
-#     25 tier keys would make 16 of them decoration.
-#
-# ⛔ But "off the list" is NOT "dormant", and conflating the two is the second
-# mistake this block has now made in both directions. ``resolveCriticalRows``
-# needs ``defaults[base]``, and for 5 of the 16 (the postgresql / mariadb ones)
-# that base IS a shipped chart default — so a tenant filling one in today gets a
-# real critical row. Only the other 11, whose base is not shipped either, are
-# actually dormant.
-#
-# So the warning is chosen PER KEY by TWO derived predicates —
-# ``is_shipped_optional_key`` (the SAME one that decides list membership, so
-# header claim and shipped list cannot drift apart) and ``has_shipped_chart_base``
-# (which asks the resolver's real entry condition). See
-# ``optional_warning_groups``.
+# Since #3924 no shipped artifact lists a registry key under
+# `optional_overrides:` (every one is built into the readers). What survives is
+# the predicate that tells a flat key from the two shapes the exporter's
+# declared path never serves: still read by the portal's `declaredKeys`
+# (generate_platform_data) and the tenant-fixture tools until #4195 retires the
+# tier field.
 
 
 def is_shipped_optional_key(key: str) -> bool:
@@ -1743,71 +1633,12 @@ def is_shipped_optional_key(key: str) -> bool:
     return not key.endswith(CRITICAL_SUFFIX) and "{" not in key
 
 
-def builtin_default_keys() -> "frozenset[str]":
-    """The keys the readers of conf.d build in (`arming: default`, #3832), as
-    the generated RULE_PACKS module carries them: the same derivation as
-    builtin_defaults_gen.go (`builtin_defaults`), so a reader of the module
-    and the exporter's table cannot name different keys."""
-    from _rule_packs_generated import BUILTIN_DEFAULT_KEYS  # noqa: PLC0415
-    return BUILTIN_DEFAULT_KEYS
-
-
-def root_written_defaults(defaults: dict) -> dict:
-    """The root `defaults:` an onboarding generator writes for *defaults* (the
-    selected packs' platform values): every key but the built-in ones
-    (#3832 decision 7). A copy of a built-in value would pin the number the
-    platform shipped on that day; left out, the readers serve the platform's
-    value and follow its later recalibrations."""
-    builtin = builtin_default_keys()
-    return {k: v for k, v in defaults.items() if k not in builtin}
-
-
-def shipped_optional_keys_for_packs(
-    pack_names, rule_packs: Optional[dict] = None
-) -> list[str]:
-    """The shipped ``optional_overrides:`` key names for a SELECTION of packs.
-
-    The onboarding generators (``scaffold_tenant.generate_defaults`` and
-    ``init_project._gen_defaults_yaml``) write a customer-side ``_defaults.yaml``
-    for the packs that customer selected, and that file is the ONLY declared-key
-    source the tenant-api write path ever reads
-    (``config.mergeTenantConfig`` reads the root carrier the exporter's chain
-    selects — ``_defaults.yaml`` for these generators; #1674). They must
-    ship the same names the chart does, or a tenant on the GitOps topology gets
-    a 400 for a key the platform believes it declared.
-
-    ⛔ Both call this instead of re-spelling ``not endswith("_critical")``.
-    Since #1196 ``init_project`` also takes its ``defaults:`` VALUES from
-    ``scaffold_tenant.RULE_PACKS`` (its former own copy spelled keys the
-    exporter never read); this function stays the declared-key half of that
-    sharing — it unifies only the declared-key
-    derivation, so the two generators cannot disagree about which keys a tenant
-    may set. Splitting that derivation in two would just have created a fourth
-    hand-copy of the predicate (#1189).
-
-    Order is RULE_PACKS order (== registry pack order), not the caller's
-    selection order, so a full selection renders byte-identical to
-    ``optional_override_list_keys``.
-    """
-    if rule_packs is None:
-        rule_packs = _load_scaffold().RULE_PACKS
-    selected = set(pack_names)
-    return [
-        key
-        for pack, meta in rule_packs.items()
-        if pack in selected
-        for key in (meta or {}).get("optional_overrides", {})
-        if is_shipped_optional_key(key)
-    ]
-
-
 def shipped_dimensions_for_packs(
     pack_names, rule_packs: Optional[dict] = None
 ) -> "dict[str, list[str]]":
     """The ``dimensions:`` declaration for a SELECTION of packs (#3475).
 
-    The same reason as ``shipped_optional_keys_for_packs``: the onboarding
-    generators write the customer-side root ``_defaults.yaml``, and on the
+    The onboarding generators write the customer-side root ``_defaults.yaml``, and on the
     GitOps topology (tenant-api reading the customer repo; an
     ``existingConfigMap`` / kustomize deployment) that file is the only
     ``dimensions:`` the exporter and the write gate see. Without it a
@@ -1833,227 +1664,46 @@ def shipped_dimensions_for_packs(
     return out
 
 
-def has_shipped_chart_base(doc: dict, key: str) -> bool:
-    """Whether an UNSHIPPED optional key's base is itself a shipped chart default.
-
-    Only ``<base>_critical`` keys have a base at all (``critical_of`` is derived,
-    never authored — see ``build_registry_doc``). ``resolveCriticalRows`` emits a
-    row the moment ``defaults[base]`` carries a value, so a ``_critical`` whose
-    base is a shipped chart default is settable by a TENANT TODAY even though the
-    key itself is (correctly) off the declared list — it never needed to be on
-    it. (Shipped = the base's ``arming`` is ``default``.) A ``_critical`` whose base is NOT shipped is the genuinely dormant case:
-    the deployment must supply the base first.
-
-    ⛔ This distinction is why the pack-header warning is three-way and not two.
-    The pre-#1310 single warning, and the two-way split that first replaced it,
-    both told postgresql/mariadb readers their ``_critical`` keys "並不會發射任何
-    user_threshold" — false for all five of them, and false in the direction that
-    talks a tenant out of protection they already have.
-    """
-    return "helm" in base_topologies(doc, key)
-
-
-def base_topologies(doc: dict, key: str) -> frozenset[str]:
-    """The topologies (``TOPOLOGY_DEFAULTS_KEEPS``) whose generated defaults
-    value the base of ``key`` — where ``resolveCriticalRows`` has the
-    ``defaults[base]`` it admits a ``<base>_critical`` on. Empty for a key
-    with no base (no ``critical_of``)."""
-    keys = doc.get("keys", {})
-    base = (keys.get(key) or {}).get("critical_of")
-    if not base:
-        return frozenset()
-    entry = keys.get(base) or {}
-    pack = entry.get("pack", "?")
-    return frozenset(
-        topo for topo, keeps in TOPOLOGY_DEFAULTS_KEEPS.items()
-        if any(keep(pack, entry) for keep in keeps))
-
-
-# Warning A — the keys the platform SHIPS in the optional_overrides: list.
-_OPTIONAL_SHIPPED_WARNING_LINES = (
+# The `<base>_critical` keys' one sentence (#3924). Since #4163 every base is
+# valued — by the platform's number or by the built-in off — so the critical
+# row is served for any of them the moment a tenant, subdirectory or profile
+# writes it; nothing depends on the topology any more (the header used to
+# split them five ways by where the base was valued: chart, dev template,
+# neither…).
+_CRITICAL_SECTION_LINES = (
     "#",
-    "# optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：",
-    "# 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`",
-    "# 清單中，租戶可直接在自己的 conf.d 填值並生效（resolveDeclaredRows 走宣告集，",
-    "# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。",
-    "# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。",
-    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
-    "# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。",
-)
-# ⛔ The three counter-examples used to be spelled out HERE, as prose, inside a
-# GENERATED block — and the Oracle header enumerated DB2's case, so a pack
-# header asserted a fact about a pack it does not own. That is the hand-copied
-# contract this whole registry exists to delete: re-tuning db2_deadlock_rate
-# would have left two other packs quietly claiming the old number. They are now
-# rendered per key from `value_counterexample`, which also means a pack with no
-# measured counter-example silently gets no such claim (#1176).
-
-# Warning B — off the shipped list, but the BASE is a shipped chart default, so
-# `resolveCriticalRows` already has everything it needs. These keys are settable
-# by a tenant TODAY. Saying otherwise (as the single pre-#1310 warning and its
-# first two-way replacement both did) is the expensive direction of wrong: it
-# talks a reader out of protection that is already available.
-_OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES = (
-    "#",
-    "# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：",
-    "# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。",
-    "# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值",
-    "# （components/threshold-exporter/app/pkg/config/resolve.go），",
-    "# 而下列每個 key 的 base 都標了",
-    "# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的",
-    "# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的",
-    "# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。",
+    "# <base>_critical（critical 層；沒有平台值）：租戶、子目錄或 profile 寫了就送一條",
+    "# severity=critical 的列，根目錄寫的是每個租戶的 critical 預設值（#4173）；",
+    "# base 整族關掉（`<base>: \"disable\"`）時不送。",
     "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
 )
-
-# Warning B2 — off the shipped list; the base is valued by the repo's dev
-# conf.d template (its `dev-example-defaults` block) but not by the chart. True
-# in one topology and false in the other, so the header says both (#3730).
-_OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES = (
-    "#",
-    "# optional_overrides（不在出貨清單裡；base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨）：",
-    "# 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值",
-    "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
-    "# - repo 的 dev conf.d（components/threshold-exporter/config/conf.d/_defaults.yaml 的",
-    "#   dev-example-defaults 段）供給下列每個 key 的 base：在這棵樹裡租戶填一個，",
-    "#   resolveCriticalRows 就產出一條真的 critical row。",
-    "# - 出貨的 Helm values 不供給這些 base：用 chart 部署時，租戶填一個並不會產出任何 row，",
-    "#   要先由部署面供給 base（scaffold_tenant 針對選到的 pack 產生的 _defaults.yaml",
-    "#   就含 base，operator 也可自行填 Helm values）。",
-    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
-)
-
-# Warning C — off the shipped list AND the base is valued in neither topology.
-# This is the only population the original "documented-but-dormant" wording is
-# still true for. Worded by the property that actually gates them
-# (`defaults[base]`), not by the `_critical` spelling, so it stays true if the
-# populations shift.
-_OPTIONAL_UNSHIPPED_WARNING_LINES = (
-    "#",
-    "# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：",
-    "# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，",
-    "# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，",
-    "# 它讀的是 defaults[base]，base 沒有值就整列丟棄",
-    "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
-    "# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：",
-    "# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。",
-    "# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到",
-    "# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），",
-    "# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是",
-    "# 一格裝飾（#1311）。",
-)
-
-
-# Warning D — off the shipped list AND the base itself sits in the
-# optional_overrides tier (#3778: mysql_threads_running went operator-armed).
-# Warning C's remedy — "scaffold_tenant's _defaults.yaml carries the base" —
-# is false here: generators list an optional-tier base under
-# `optional_overrides:`, never under `defaults:`, and a tenant-level value of
-# the base is not `defaults[base]` — nor is a subtree `_defaults.yaml` or a
-# profile, which merge into the tenant's overrides (resolve.go
-# criticalRowRead reads the ROOT defaults). The only remedy is the deployer
-# writing the base under the ROOT `defaults:` by hand.
-_OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES = (
-    "#",
-    "# optional_overrides（不在出貨清單裡；base 本身也是 optional_overrides 層）：",
-    "# 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值",
-    "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
-    "# 而 base 屬 optional_overrides 層：沒有任何產生器把它寫進 `defaults:`",
-    "# （出貨的 Helm values、repo 的 dev conf.d 範本、scaffold_tenant 都只把它列進",
-    "# `optional_overrides:` 清單），租戶在自己的 conf.d 填 base 也不算 `defaults[base]`。",
-    "# ⇒ 要讓 critical 覆寫產出 row，部署面必須自己在根層 `defaults:`（根目錄的",
-    "# _defaults.yaml 或 Helm values）寫 base 的值；子樹 _defaults.yaml、profile、",
-    "# CRD 的 spec.defaults（渲染成 <ns>/_defaults.yaml，屬子樹層）都不算 `defaults[base]`。",
-    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
-)
-
-
-def optional_warning_groups(doc: dict, optional: dict) -> list[tuple[tuple, dict]]:
-    """[(warning_lines, {key: entry}), …] — the optional tier split by TRUTH.
-
-    Five populations, five different truths, and the split is DERIVED
-    (``is_shipped_optional_key`` for membership, ``base_topologies`` for the
-    rest: base valued by the chart — and so by the dev template too —, by the
-    dev template only, by neither because the base is itself optional-tier
-    (#3778), or by neither) rather than spelled out per pack — the
-    whole point is that a header can never claim something the resolver
-    contradicts in either topology it speaks for (#3730).
-
-    Empty groups are dropped, so a pack with no optional tier gets no warning
-    line at all and a single-population pack gets exactly one.
-    """
-    keys = doc.get("keys", {})
-    shipped, base_shipped, dev_only, base_optional, dormant = {}, {}, {}, {}, {}
-    for key, entry in optional.items():
-        topologies = base_topologies(doc, key)
-        base = (keys.get(key) or {}).get("critical_of")
-        if is_shipped_optional_key(key):
-            shipped[key] = entry
-        elif "helm" in topologies:
-            base_shipped[key] = entry
-        elif "dev" in topologies:
-            dev_only[key] = entry
-        elif base and (keys.get(base) or {}).get("tier") == "optional_overrides":
-            base_optional[key] = entry
-        else:
-            dormant[key] = entry
-    groups = [
-        (_OPTIONAL_SHIPPED_WARNING_LINES, shipped),
-        (_OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES, base_shipped),
-        (_OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES, dev_only),
-        (_OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES, base_optional),
-        (_OPTIONAL_UNSHIPPED_WARNING_LINES, dormant),
-    ]
-    return [(w, keys) for w, keys in groups if keys]
 
 
 def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     """The generated threshold section of one rule-pack header (body only).
 
-    The optional tier renders as up to FOUR sub-sections, each under its own
-    warning (see ``optional_warning_groups``): the keys the platform ships on
-    the ``optional_overrides:`` list, the ``_critical`` keys whose base is a
-    shipped chart default (settable today), the ones whose base only the
-    repo's dev conf.d template values, and the ones whose base neither does
-    (genuinely dormant). A pack gets exactly the sub-sections its keys populate,
-    in that order; a pack with no optional-tier key gets no warning whatsoever.
+    Two sections, keyed off ``arming`` and ``critical_of`` (#3924): the pack's
+    thresholds — every one built into the readers (#3832, #4163), tagged
+    ``[chart-default]`` when the platform ships its value, otherwise with the
+    reason it has none — then its ``<base>_critical`` keys under one sentence
+    that holds for all of them. A pack with no critical key gets no second
+    section.
     """
     by_pack = keys_by_pack(doc).get(pack_name, {})
-    defaults = {k: e for k, e in by_pack.items() if e.get("tier") == "defaults"}
-    optional = {
-        k: e for k, e in by_pack.items() if e.get("tier") == "optional_overrides"
-    }
+    base_keys = {k: e for k, e in by_pack.items() if not e.get("critical_of")}
+    critical = {k: e for k, e in by_pack.items() if e.get("critical_of")}
     lines = [
-        "# 對應的 threshold-exporter defaults"
-        "（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；"
-        "未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:",
+        "# 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；"
+        "[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，"
+        "「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:",
     ]
-    for key, entry in defaults.items():
+    for key, entry in base_keys.items():
         lines += _entry_lines(key, entry)
-    for warning, keys in optional_warning_groups(doc, optional):
-        lines += list(warning)
-        for key, entry in keys.items():
+    if critical:
+        lines += list(_CRITICAL_SECTION_LINES)
+        for key, entry in critical.items():
             lines += _entry_lines(key, entry)
     return lines
-
-
-def _critical_sibling(doc: dict, key: str) -> Optional[tuple[str, dict]]:
-    crit = registry_keys(doc).get(key + CRITICAL_SUFFIX)
-    if crit is not None and crit.get("critical_of") == key:
-        return key + CRITICAL_SUFFIX, crit
-    return None
-
-
-def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
-    """The chart-shipped ``defaults`` mapping body (helm values / dev template).
-
-    Only ``arming: default`` keys, grouped by pack in registry order.
-    unit+desc render as comment lines above each key; when the registry
-    carries a ``<key>_critical`` sibling, an opt-in hint (with the registry's
-    suggested value) is appended so the hand-written hints the old copies
-    carried are reproduced mechanically.
-    """
-    return _render_defaults_lines(doc, indent, _chart_default_keep)
 
 
 #: The platform pack's recording rule that carries the digest of the built-in
@@ -2078,141 +1728,6 @@ def render_platform_digest_lines(doc: dict, indent: int) -> list[str]:
         f"{pad}  labels:",
         f'{pad}    rulepack_digest: "{digest}"',
     ]
-
-
-def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
-    """The comment block under the chart's ``defaults``: every defaults-tier
-    key a rule pack reads but the chart does not ship, with why (D-A A1).
-
-    Comments only, so the mapping it sits in is unchanged. An operator who
-    only ran ``helm install`` reads here which alerts stay silent until they
-    supply a value, without opening the registry. Empty when every
-    defaults-tier key is chart-armed."""
-    ind = " " * indent
-    width = _COMMENT_WIDTH - indent - 2
-    groups = _defaults_by_pack(
-        doc, lambda _p, e: (e.get("tier") == "defaults"
-                            and e.get("arming") == ARMING_OFF
-                            and bool(arming_notes_zh(e))))
-    if not groups:
-        return []
-    lines = [f"{ind}# {seg}" for seg in _wrap_comment(
-        "下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。"
-        "用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了 "
-        "thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值"
-        "（其 <key>_critical 也要先有 base 值）。"
-        "原因取自 threshold-registry 的 arming、portability 與 blocker 欄位。", width)]
-    for pack_name, _meta, pairs in groups:
-        lines.append(f"{ind}# ── {pack_name} ──")
-        for key, entry in pairs:
-            # Every note names its key: a second reason indented like a
-            # wrapped continuation read as part of the first.
-            for note in arming_notes_zh(entry):
-                segs = _wrap_comment(f"{key} {note}", width - 2)
-                lines.append(f"{ind}#   {segs[0]}")
-                lines.extend(f"{ind}#     {seg}" for seg in segs[1:])
-            # Same discipline as every other face that hands a value over
-            # (test_counterexample_coverage): a key with a measured
-            # counter-example carries it here too.
-            lines.extend(_counterexample_lines(entry, f"{ind}#     "))
-    return lines
-
-
-# The packs whose `defaults`-tier keys the dev template's SECOND defaults block
-# arms (#3014). They are exactly the packs the shipped `conf.d/examples/`
-# tenants are written against. ⛔ Not "every non-chart pack": the dev tree is
-# what every doc points at, and arming kafka/oracle/... for db-a would add
-# series nothing in the tree asks for. ⛔ Not a subtree `_defaults.yaml` either
-# — that is where these keys used to sit (as `_defaults-multidb.yaml`, a name
-# the loader skips), and moving them to `examples/_defaults.yaml` does not work
-# today: a key that only a SUBTREE carrier declares never reaches /metrics
-# (#1976). The guard that this tuple is wide enough is
-# `test_shipped_example_tree_serves_every_tenant_key`, which fails the day an
-# example tenant uses a pack listed nowhere here.
-DEV_EXAMPLE_PACKS: tuple[str, ...] = ("redis", "elasticsearch", "mongodb")
-
-
-def render_dev_example_defaults_lines(doc: dict, indent: int) -> list[str]:
-    """The dev template's ``defaults`` keys for the example tenants' packs.
-
-    Every ``defaults``-tier key of ``DEV_EXAMPLE_PACKS`` that is not already a
-    chart default (those render in the block above). Same layout as
-    ``render_chart_defaults_lines``, so the counter-example and ``_critical``
-    hints come out of one code path.
-    """
-    return _render_defaults_lines(doc, indent, _dev_example_keep)
-
-
-def _chart_default_keep(pack: str, entry: dict) -> bool:
-    return is_chart_armed(entry)
-
-
-def _dev_example_keep(pack: str, entry: dict) -> bool:
-    return (pack in DEV_EXAMPLE_PACKS and entry.get("tier") == "defaults"
-            and not is_chart_armed(entry))
-
-
-# The two topologies a pack header speaks for, and the defaults blocks each
-# one's generated `defaults:` mapping carries — by the very keep predicates
-# `regen_surfaces` renders those blocks with (helm values: the chart-default
-# block; the repo's dev conf.d `_defaults.yaml`: the example tenants'
-# `dev-example-defaults` block, its chart-default keys valued by the readers'
-# built-in layer instead of a copy, #3832). A header never asks one
-# topology and speaks for the other (#3730);
-# `test_topology_keeps_are_what_the_surfaces_carry` holds this table to the
-# generated files.
-TOPOLOGY_DEFAULTS_KEEPS: dict[str, tuple] = {
-    "helm": (_chart_default_keep,),
-    "dev": (_chart_default_keep, _dev_example_keep),
-}
-
-
-def _defaults_by_pack(doc: dict, keep) -> list[tuple[str, dict, list]]:
-    """[(pack_name, pack_meta, [(key, entry), …]), …] — the keys
-    ``keep(pack, entry)`` admits, grouped by pack in registry order; packs
-    with none are omitted. The one traversal behind both the rendered block
-    and the entries ``regen_surfaces`` expects it to hold."""
-    grouped = keys_by_pack(doc)
-    out: list[tuple[str, dict, list]] = []
-    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
-        pairs = [(k, e) for k, e in grouped.get(pack_name, {}).items()
-                 if keep(pack_name, e)]
-        if pairs:
-            out.append((pack_name, pack_meta, pairs))
-    return out
-
-
-def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
-    """A ``defaults`` mapping body: the keys ``keep(pack, entry)`` admits,
-    grouped by pack in registry order."""
-    ind = " " * indent
-    lines: list[str] = []
-    for pack_name, pack_meta, chart_keys in _defaults_by_pack(doc, keep):
-        lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
-        for key, entry in chart_keys:
-            meta = f"{entry['unit']} — {entry['desc']}"
-            sibling = _critical_sibling(doc, key)
-            if sibling is not None:
-                crit_key, crit = sibling
-                meta += (
-                    f"（critical 加嚴 opt-in：{crit_key}，"
-                    f"registry 建議 {_fmt_value(crit['value'])}）"
-                )
-            for seg in _wrap_comment(meta, _COMMENT_WIDTH - indent - 2):
-                lines.append(f"{ind}# {seg}")
-            # Wired now, not "when a chart-default key gets one": no shipped
-            # chart default carries a counter-example today, so this emits
-            # nothing — but the alternative is a face that silently ships a
-            # bare number the day the registry learns something about it.
-            lines.extend(_counterexample_lines(entry, f"{ind}# "))
-            # A shipped value the registry records as non-portable says so
-            # here too, where the operator reads it (#3773 review F5). Only
-            # for chart defaults: the dev template's example block ships keys
-            # the chart does not, and "not shipped" would contradict it.
-            if is_chart_armed(entry):
-                lines.extend(_arming_note_lines(entry, f"{ind}# "))
-            lines.append(f"{ind}{key}: {_fmt_value(entry['value'])}")
-    return lines
 
 
 _COMMENT_WIDTH = 100
@@ -2247,287 +1762,6 @@ def _wrap_comment(body: str, width: int) -> list[str]:
                          break_long_words=False)
 
 
-def _append_wrapped_comment(lines: list[str], item: str, meta: str, cont: str,
-                            width: int = _COMMENT_WIDTH) -> list[str]:
-    """Append ``item`` carrying ``meta`` as a trailing comment; wrap past ``width``.
-
-    Both list-shaped renderers below (the shipped ``optional_overrides:`` list
-    and the tenant stub's declared block) need the identical rule: keep the
-    comment INLINE while the whole line fits in ``width`` columns, otherwise
-    emit the item alone and continue ``meta`` on comment-only lines indented to
-    ``cont``. Having written that rule twice is how the two blocks would
-    eventually stop looking alike — they render the SAME declared set to two
-    audiences, so a divergence in wrapping is a divergence nobody chose.
-
-    ⚠️ THAT RULE IS NO LONGER "whatever each renderer did inline", and this
-    paragraph used to say it was. The layout is unchanged — three spaces before
-    the ``#``, continuation indented to ``cont`` — but the wrapping goes through
-    ``_wrap_comment``, whose entire purpose is that ``textwrap``'s two splitting
-    defaults are OFF (#1453). For any ``meta`` carrying a hyphenated or
-    over-width token the output therefore DIFFERS from the old inline call, on
-    purpose. ⚠️ No ``meta`` reaching THIS renderer carries such a token today, so
-    reverting just this call site regenerates the surfaces byte-for-byte —
-    measured. The regen diff #1453 landed came from a different renderer.
-
-    Mutates and returns ``lines`` (the callers accumulate into one list).
-    """
-    inline = f"{item}   # {meta}"
-    if len(inline) <= width:
-        lines.append(inline)
-        return lines
-    lines.append(item)
-    lines += [f"{cont}{seg}" for seg in _wrap_comment(meta, width - len(cont))]
-    return lines
-
-
-def _shipped_optional_by_pack(doc: dict) -> list[tuple[str, dict, list]]:
-    """[(pack_name, pack_meta, [(key, entry), …]), …] — shipped optional keys.
-
-    Deterministic order, and the ONLY traversal used by both the renderer and
-    ``optional_override_list_keys``: registry pack order (``doc["packs"]``),
-    then registry key order within each pack. Packs with no shipped optional
-    key are omitted entirely.
-    """
-    grouped = keys_by_pack(doc)
-    out: list[tuple[str, dict, list]] = []
-    for pack_name, pack_meta in (doc.get("packs", {}) or {}).items():
-        pack_keys = [
-            (k, e)
-            for k, e in grouped.get(pack_name, {}).items()
-            if e.get("tier") == "optional_overrides" and is_shipped_optional_key(k)
-        ]
-        if pack_keys:
-            out.append((pack_name, pack_meta, pack_keys))
-    return out
-
-
-def optional_override_list_keys(doc: dict) -> list[str]:
-    """The key names shipped in the runtime ``optional_overrides:`` list.
-
-    Same traversal + predicate as ``render_optional_overrides_lines``, exposed
-    so callers can assert membership without re-parsing rendered comments.
-    """
-    return [k for _n, _m, pairs in _shipped_optional_by_pack(doc) for k, _e in pairs]
-
-
-def render_optional_overrides_lines(doc: dict, indent: int) -> list[str]:
-    """The shipped ``optional_overrides:`` LIST body (helm values / dev template).
-
-    A YAML **array of strings**, not a ``key: value`` mapping — the platform
-    RECOGNISES these keys and asserts NO value for them
-    (``docs/schemas/platform-defaults.schema.json`` types ``optional_overrides``
-    as ``array of string``; a value here would arm the key for every tenant,
-    the exact opposite of the tier's meaning).
-
-    ORDER: registry pack order, then registry key order within the pack (see
-    ``_shipped_optional_by_pack``) — the same traversal
-    ``render_chart_defaults_lines`` uses, so the two blocks read alike.
-
-    Each item carries the registry's ``unit — desc`` as an INLINE comment,
-    wrapped onto comment-only continuation lines when it would pass 100
-    columns (``_entry_lines`` house style — the wrapping itself is
-    ``_append_wrapped_comment``, shared with the tenant stub renderer).
-    Everything added is a comment, so the block still parses as a plain list of
-    key names — ``regen_surfaces`` reads each spliced conf.d file back through
-    ``da-guard parse-tree`` before writing and refuses one that does not read
-    as exactly these names, which would catch a regression here.
-    """
-    ind = " " * indent
-    cont = f"{ind}  # "
-    lines: list[str] = []
-    for pack_name, pack_meta, pack_keys in _shipped_optional_by_pack(doc):
-        lines.append(f"{ind}# ── {pack_name}：{pack_meta['display']} ──")
-        for key, entry in pack_keys:
-            _append_wrapped_comment(
-                lines, f"{ind}- {key}", f"{entry['unit']} — {entry['desc']}", cont)
-            # The tenant-facing copy of this same declared set already carries
-            # the caveat per key; an operator reading the chart got less than a
-            # tenant reading their own file. "Names a key" is the trigger, not
-            # "hands over a number" — a reader who goes and looks the key up is
-            # exactly the reader about to copy the reference figure (#1344).
-            #
-            # ⚠️ BELOW the item and indented, whereas
-            # `defaults_counterexample_head` puts it ABOVE the key. Not an
-            # oversight: this block is a YAML LIST whose items already carry a
-            # trailing `# unit — desc` comment that continues on indented
-            # comment lines (`_append_wrapped_comment`), so the caveat is the
-            # next continuation of the item it belongs to. A mapping key has no
-            # such continuation, and a comment above it is the only position
-            # that reads as a preamble rather than as a note on the PREVIOUS
-            # key. Same composer, two host grammars.
-            lines.extend(_counterexample_lines(entry, cont))
-    return lines
-
-
-# ---------------------------------------------------------------------------
-# The SAME declared set, told to the OTHER audience (#1321)
-# ---------------------------------------------------------------------------
-# Everything above renders the declared tier for a reader who owns the PLATFORM
-# side: rule-pack headers, helm values, the dev conf.d template. None of those
-# files is one a tenant ever opens. The single file a tenant does open is its
-# own ``<tenant>.yaml``, and until #1321 that file's generated header said the
-# opposite of the truth ("Omitted keys inherit from _defaults.yaml" /
-# "省略=Default") — true for every key with a platform default, FALSE for the
-# declared tier, which has no value to inherit at all.
-#
-# So the tenant stub gets its own rendering of the declared set. Deliberately
-# NOT a second derivation: both generators hand this renderer a key list that
-# came out of ``shipped_optional_keys_for_packs`` (``init_project`` calls it
-# directly; ``scaffold_tenant`` passes the very list ``generate_defaults``
-# already wrote into the sibling ``_defaults.yaml``, so the stub cannot
-# advertise a key that file does not declare — that mismatch is exactly what
-# earns a tenant an HTTP 400 from the only supported writer).
-#
-# ⛔ The values render as REFERENCE-ONLY comment text and every emitted key line
-# is itself a comment carrying a ``<your value>`` placeholder. Filling a real
-# number in for the tenant would re-arm, on the generated-artifact surface, the
-# exact keystroke #1310/PR-C removed from the interactive prompt (see
-# ``scaffold_tenant.prompt_value``): ADR-030's blind-write reference library has
-# measured counter-examples for these very numbers.
-
-TENANT_STUB_DECLARED_HEADING = {
-    "zh": "# ── 平台已宣告、但不主張值的 key（_defaults.yaml 的 optional_overrides 清單）──",
-    "en": "# -- Declared keys: the platform recognises these but asserts no value --",
-}
-
-_TENANT_STUB_PLACEHOLDER = {"zh": '"<你的值>"', "en": '"<your value>"'}
-
-_TENANT_STUB_PROSE = {
-    "zh": (
-        "#",
-        "# 平台「認得」下列 key：你在上面 tenants: 底下自己填值就會生效，不必再找",
-        "# operator 開通。但平台刻意不給它們預設值 ⇒ 不填＝沒有值＝不產生 series，",
-        "# 不會有告警，預設也不會有錯誤訊息（要提醒：寫 _state_unset_thresholds: enable）。",
-        "# 那是設計，不是漏掉的預設——所以本檔開頭",
-        "# 的三態在這一格只有兩態：填值，或靜默（沒有「省略＝用預設」可用）。",
-        "# ⚠️ 下列數字是「參考起點」不是背書：這種閾值只有你自己的 baseline 校準得",
-        "#    出來。平台自家的盲寫參考庫（ADR-030）已經對其中一些值量到反例，逐條",
-        "#    標在該 key 自己底下——沒有標的就是沒測過，永遠不讀作「已驗證」。",
-        "# 用法：整行複製到上面自己那個租戶底下、去掉開頭的「# 」、把佔位字串換成你",
-        "#    校準出來的數字（縮排已對齊）。若上面該租戶目前是 `<tenant>: {}`（空設",
-        "#    定），先把 ` {}` 刪掉再貼——flow mapping 底下接縮排行不是合法 YAML。",
-    ),
-    "en": (
-        "#",
-        "# The platform RECOGNISES these keys: set one under `tenants:` above and",
-        "# it takes effect — no operator action needed. But the platform ships no",
-        "# default for them, so leaving one out means NO value at all: no series,",
-        "# no alert, and by default no error message either (for a notice, write",
-        "# _state_unset_thresholds: enable). That silence is the design, not",
-        "# a missing default — the three-state rule at the top of this file has",
-        "# only two states here: set a value, or stay silent.",
-        "# WARNING: the numbers below are a STARTING REFERENCE, not an endorsement",
-        "#    — only your own baseline can calibrate this tier. Where the",
-        "#    platform's own blind-write reference library (ADR-030) measured a",
-        "#    counter-example it is noted under that key; no note means nothing",
-        "#    was measured, and never means 'validated'.",
-        "# To use: copy a whole line under your tenant above, drop the leading",
-        "#    '# ', and replace the placeholder with a number you calibrated",
-        "#    yourself (the indent already lines up). If your tenant currently",
-        "#    reads `<tenant>: {}`, delete the ` {}` first — indented lines under",
-        "#    a flow mapping are not valid YAML.",
-    ),
-}
-
-_TENANT_STUB_META = {
-    "zh": "{desc} — 參考起點 {value} {unit}（非背書，須依自身 baseline 校準）",
-    "en": "{desc} — reference start {value} {unit} (not an endorsement; calibrate)",
-}
-
-
-def stub_counterexample_lines(ce: dict, cont: str, lang: str = "zh") -> list[str]:
-    """The ⚠ continuation lines under ONE stub key that has a measured
-    counter-example.
-
-    ⛔ Per KEY, deliberately. This block used to carry a single hand-written
-    paragraph naming two Oracle cases, printed unconditionally — so a db2-only
-    tenant was handed a caveat about two keys its file does not contain, while
-    the one key in it that DOES have a measurement (``db2_deadlock_rate``) said
-    nothing, and the blanket "both would over-fire" was the exact reversal the
-    registry's ``direction`` enum exists to prevent (it is ``under_fire``).
-    Two independent blind reviews found this as their top finding (#1344).
-    """
-    verdict = counterexample_verdict(ce, lang)
-    mark = COUNTEREXAMPLE_MARKS[lang]
-    if lang == "zh":
-        body = (f"⚠ #{ce['issue']} {mark}："
-                f"{counterexample_observed(ce, 'zh')}（{verdict}）")
-    else:
-        body = (f"⚠ #{ce['issue']} {mark}: "
-                f"{counterexample_observed(ce, 'en')} ({verdict})")
-    # No-split rule lives in `_wrap_comment`, for the same reason as the header
-    # renderer: the defaults cut `negative-db2.yaml` in half across two lines.
-    return [f"{cont}{seg}" for seg in
-            _wrap_comment(body, _COMMENT_WIDTH - len(cont))]
-
-
-def _optional_entry_index(rule_packs: Optional[dict] = None) -> dict[str, dict]:
-    """key -> optional_overrides entry, across every pack (meta lookup only)."""
-    if rule_packs is None:
-        rule_packs = _load_scaffold().RULE_PACKS
-    return {
-        key: entry
-        for meta in (rule_packs or {}).values()
-        for key, entry in ((meta or {}).get("optional_overrides") or {}).items()
-    }
-
-
-def render_tenant_declared_stub_lines(
-    keys, rule_packs: Optional[dict] = None, lang: str = "zh", indent: int = 4
-) -> list[str]:
-    """The tenant-stub comment block for ``keys`` (all lines are comments).
-
-    ``keys`` is the caller's already-derived declared list (see the section
-    note above — this function never re-derives it, so it cannot disagree with
-    the ``_defaults.yaml`` written alongside). Empty list → empty block.
-
-    Every key renders as ``# <indent>key: "<placeholder>"``, i.e. commented out
-    AND valueless: dropping the leading ``"# "`` yields a line already at the
-    right indent for ``tenants: <tenant>:``.
-
-    ⚠️ Be precise about what the placeholder buys, because the natural claim —
-    "an unsubstituted placeholder gets caught by validation" — is FALSE and was
-    written here before it was measured. ``thresholdScalar`` in
-    ``docs/schemas/tenant-config.schema.json`` is ``{"type": "string"}`` whose
-    only pattern checks the ``:severity`` suffix (#3071), so
-    ``key: "<your value>"`` (no ``:``) is a schema-valid threshold: measured,
-    ``validate_config.py`` reports 5 checks / 5 pass / 0 warn on exactly that
-    file. What the placeholder DOES buy is that no platform-chosen number is
-    silently armed — the failure mode it removes is a wrong threshold quietly
-    alerting, not a wrong threshold being rejected. The only signal a
-    substituted-nothing key produces today is exporter-side and
-    tenant-invisible: ``resolveDeclaredRows`` cannot parse the value, logs
-    ``WARN: invalid declared threshold`` and emits no row (``resolve.go``), so
-    the tenant sees silence — the same thing it would see had it never set the
-    key at all. Tightening the schema is deliberately NOT done here: that
-    validator is on the path of every tenant threshold, so it is its own change.
-    """
-    if not keys:
-        return []
-    entries = _optional_entry_index(rule_packs)
-    prefix = f"# {' ' * indent}"
-    cont = f"{prefix}  # "
-    lines = [TENANT_STUB_DECLARED_HEADING[lang], *_TENANT_STUB_PROSE[lang]]
-    for key in keys:
-        entry = entries.get(key) or {}
-        keyline = f"{prefix}{key}: {_TENANT_STUB_PLACEHOLDER[lang]}"
-        if not entry:
-            lines.append(keyline)
-            continue
-        meta = _TENANT_STUB_META[lang].format(
-            desc=entry.get("desc", ""),
-            value=_fmt_value(entry.get("value")),
-            unit=entry.get("unit", ""),
-        )
-        # Same wrapping rule as the shipped `optional_overrides:` list — one
-        # implementation, because the two blocks render the same declared set.
-        _append_wrapped_comment(lines, keyline, meta, cont)
-        ce = entry.get("value_counterexample")
-        if ce:
-            lines.extend(stub_counterexample_lines(ce, cont, lang))
-    return lines
-
-
 # ---------------------------------------------------------------------------
 # The THIRD population — and its truth is per-GENERATOR, not per-repo (#1321)
 # ---------------------------------------------------------------------------
@@ -2558,183 +1792,6 @@ def render_tenant_declared_stub_lines(
 # the header lying about it: the claim is DERIVED from the ``defaults:`` mapping
 # the generator is about to write, so whichever regime a generator is in, the
 # file says the true one.
-
-def defaults_critical_keys(defaults) -> list[str]:
-    """The ``<base>_critical`` names a ``defaults:`` mapping assigns a value to.
-
-    ``defaults`` is the mapping the caller is ABOUT TO WRITE into its
-    ``_defaults.yaml`` — not a pack roster, not a registry query. Both
-    generators already hold it (``scaffold_tenant`` as
-    ``defaults_data["defaults"]``, ``init_project`` as ``_catalog_defaults()``),
-    so nothing new is derived and the header cannot drift from its sibling file.
-    """
-    return [k for k in (defaults or {}) if k.endswith(CRITICAL_SUFFIX)]
-
-
-# Two regimes, two truths. Keyed (lang, defaults-ships-critical) so a generator
-# in either regime gets prose that is true for the file it just wrote.
-#
-# ⛔ The True regime is a MISPLACEMENT REPORT, not the good case, and saying so
-# is the whole point of #1218 / TRK-344. It first shipped as reassurance — "the
-# critical row fires without you doing anything" — written from reading
-# `resolveCriticalRows` rather than running it. Measured (pkg/config/
-# critical_tier_placement_test.go): a `<base>_critical` under `defaults:` is
-# walked by `resolveBaseRows`, `parseMetricKey` splits on the FIRST underscore,
-# and the row that comes out is
-# `{component="<prefix>", metric="<rest>_critical", severity="warning"}`
-# — a series no recording rule joins — with no critical row anywhere. So the one
-# branch that existed to describe a defective file was telling its reader the
-# file was fine.
-#
-# No producer reaches this branch today (`check_threshold_reachability`'s
-# defaults-tier face fails CI first), and it is kept rather than deleted for
-# that reason: the alternative to a truthful branch is a KeyError inside a CLI
-# a customer is running.
-_TENANT_STUB_CRITICAL_NOTE = {
-    ("zh", False): (
-        "# 第三類 <base>_critical：本次一起產出的 _defaults.yaml 的 defaults: 一個都沒有列，",
-        "# 平台不供給 critical 值 ⇒ 你在這裡填一個，只要 <base> 在 defaults: 有值，就會",
-        "# 產生一條真的 critical 閾值（不填則無此列，base 的 warning 列不受影響）；",
-        "# 平台內建的 base 不在 defaults: 裡也算有值。",
-    ),
-    ("zh", True): (
-        "# ⚠️ 第三類 <base>_critical：本次一起產出的 _defaults.yaml 把其中 {n} 個放進了",
-        "# defaults:，那是平台給每個租戶的 critical 預設值 —— 只要 <base> 在 defaults: 有值，",
-        "# 每個租戶都會送出 critical 列。要不同的值，在本檔填 <base>_critical 蓋過它；",
-        "# 不要 critical 列，在本檔寫 <base>_critical: disable。",
-    ),
-    ("en", False): (
-        "# A third group is `<base>_critical`. The _defaults.yaml generated next to",
-        "# this file lists none of them under `defaults:`, so the platform supplies",
-        "# no critical value: set one here and it produces a real critical-severity",
-        "# threshold as long as `<base>` has a value under `defaults:` (a base the",
-        "# platform builds in counts); leave it out and there is no critical row.",
-    ),
-    ("en", True): (
-        "# ⚠️ A third group is `<base>_critical`. The _defaults.yaml generated next",
-        "# to this file puts {n} of them under `defaults:` — the platform's critical",
-        "# default for every tenant: each tenant gets a critical row while `<base>`",
-        "# has a value under `defaults:`. Set `<base>_critical` HERE to override",
-        "# it with another value, or write `<base>_critical: disable` here to have",
-        "# no critical row.",
-    ),
-}
-
-
-def render_tenant_critical_note_lines(defaults, lang: str = "zh") -> list[str]:
-    """The tenant header's ``<base>_critical`` paragraph, true for ``defaults``.
-
-    ⛔ Derived from the artifact, never asserted statically. Both generators
-    ship the False regime today, and that is precisely why the derivation has
-    to stay: they did NOT always agree (``init_project`` shipped 16 ``_critical``
-    keys under ``defaults:`` until #1218), and a sentence fixed to either regime
-    is a sentence that goes quietly false the next time one of them moves. The
-    count is rendered too — it is what makes the claim checkable against the
-    sibling ``_defaults.yaml`` rather than merely plausible.
-    """
-    shipped = defaults_critical_keys(defaults)
-    template = _TENANT_STUB_CRITICAL_NOTE[(lang, bool(shipped))]
-    return [line.format(n=len(shipped)) for line in template]
-
-
-# The header sentence that POINTS AT the block above — and the pointer is the
-# half that was still asserted rather than derived (#1321 review). The block is
-# emitted only when the declared list is non-empty (``tenant_declared_foot``
-# returns None for an empty list), while both generators' headers
-# said "the list is at the end of this file" unconditionally. Measured: the
-# optional tier of mariadb / redis / postgresql / kafka / rabbitmq / jvm / nginx
-# is `_critical`-only, so `shipped_optional_keys_for_packs` returns [] for every
-# one of them — a tenant onboarded onto any of those packs got a header
-# pointing at a section that is not in its file.
-#
-# ⛔ Not fixed by making the sentence conditional prose ("if there are declared
-# keys, see the end of the file") — that hands the tenant the judgement call the
-# generator already has the data to make. Same discipline as the `_critical`
-# paragraph next door: render the claim FROM the artifact this run produces.
-_TENANT_STUB_DECLARED_NOTE = {
-    ("zh", True): (
-        "# 宣告層（_defaults.yaml 的 optional_overrides: 清單）沒有值可繼承 ⇒"
-        " 省略＝沒有值＝靜默，",
-        "# 不是「用預設」；那一格只有「填值」與「不填」兩態。本次選的 pack 有 {n} 個"
-        "這種 key，",
-        "# 清單見檔尾。",
-    ),
-    ("zh", False): (
-        "# 宣告層（_defaults.yaml 的 optional_overrides: 清單）沒有值可繼承 ⇒"
-        " 省略＝沒有值＝靜默，",
-        "# 不是「用預設」；那一格只有「填值」與「不填」兩態。本次選的 pack 一個這種"
-        " key 都沒有，",
-        "# 所以本檔沒有那一段可看（換 pack 時會有）。",
-    ),
-    ("en", True): (
-        "# Omitting a key _defaults.yaml only DECLARES (its `optional_overrides:`",
-        "# list) inherits NOTHING — the platform asserts no value there, so an unset",
-        "# declared key stays silent. The {n} such keys for the packs selected here",
-        "# are listed at the end of this file.",
-    ),
-    ("en", False): (
-        "# Omitting a key _defaults.yaml only DECLARES (its `optional_overrides:`",
-        "# list) inherits NOTHING — the platform asserts no value there, so an unset",
-        "# declared key stays silent. The packs selected here declare no such key,",
-        "# so this file carries no such list.",
-    ),
-}
-
-
-def render_tenant_declared_note_lines(keys, lang: str = "zh") -> list[str]:
-    """The tenant header's declared-tier paragraph, true for ``keys``.
-
-    ``keys`` must be the SAME list the caller hands
-    ``tenant_declared_foot`` — that is what makes "the list is at the end
-    of this file" a fact about the file being written rather than a hope. Both
-    generators hold exactly one such list per run (``scaffold_tenant`` from the
-    sibling ``_defaults.yaml`` it just built, ``init_project`` from
-    ``shipped_optional_keys_for_packs``), so nothing new is derived here.
-
-    The count is rendered for the same reason ``render_tenant_critical_note_lines``
-    renders one: it makes the claim checkable against the emitted block instead
-    of merely plausible.
-    """
-    keys = list(keys or [])
-    return [line.format(n=len(keys))
-            for line in _TENANT_STUB_DECLARED_NOTE[(lang, bool(keys))]]
-
-
-def tenant_declared_foot(
-    keys,
-    rule_packs: Optional[dict] = None,
-    lang: str = "zh",
-    indent: int = 4,
-) -> Optional[str]:
-    """The declared-key block of a tenant stub as the file's foot comment
-    (`_lib_confedit.create_entry`'s *foot_comment*), or None for an empty
-    list.
-
-    A file-level reference section AFTER the tenant's YAML (da-guard writes
-    it after the last node, set off by a blank line), not inside the
-    tenant's own mapping: a stub with no overrides is ``<tenant>: {}`` (flow
-    style), so there is no block-mapping context to put it in at all. The
-    prose says so — copying a line into a tenant that still reads ``{}``
-    needs the ``{}`` removed first, and a hint that quietly produces a YAML
-    syntax error would be worse than no hint.
-    """
-    lines = render_tenant_declared_stub_lines(keys, rule_packs, lang, indent)
-    if not lines:
-        return None
-    import _lib_confedit  # noqa: PLC0415  (scripts/tools, on the path above)
-    return _lib_confedit.comment_block("\n".join(lines))
-
-
-def _confd_mapping(doc: dict, keep) -> dict:
-    """``confd`` of a ``defaults`` block: the keys it renders, in order."""
-    return {"carrier": "defaults", "shape": "mapping",
-            "keys": [k for _n, _m, pairs in _defaults_by_pack(doc, keep) for k, _e in pairs]}
-
-
-def _confd_sequence(doc: dict) -> dict:
-    """``confd`` of an ``optional_overrides`` block: the key names it lists."""
-    return {"carrier": "optional_overrides", "shape": "sequence",
-            "keys": list(optional_override_list_keys(doc))}
 
 
 def dimension_entries(doc: dict) -> "list[tuple[str, list[str]]]":
@@ -2769,9 +1826,8 @@ def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> st
 def surface_specs(doc: dict) -> list[dict]:
     """Every generated surface: id, absolute path, indent, rendered block.
 
-    Order: the two ``defaults`` mappings (helm values, dev template), the dev
-    template's example-pack ``defaults`` block (#3014), the two
-    ``optional_overrides`` lists on the SAME two files (#1310), then one per
+    Order: the three ``dimensions`` blocks (helm values, dev template,
+    try-local seed), the platform pack's built-in digest, then one per
     threshold pack (packs without threshold keys —
     liveness/operational/custom-alerts — carry no generated block).
 
@@ -2787,60 +1843,14 @@ def surface_specs(doc: dict) -> list[dict]:
     sitting under its carrier (`_check_carriers`).
     """
     root = _repo_path_or_raise(_REPO_ROOT, "the generated surfaces")
+    # #3924: no surface carries a threshold key's value or name. Every key
+    # of the registry is in the readers' built-in layer (#3832, #4163), so the
+    # chart, the dev template and the try-local seed list none (they carried
+    # the chart's `defaults` mapping, the unarmed keys' roster, the example
+    # packs' values and the `optional_overrides` list).
     specs = [
-        {
-            "id": "helm-defaults",
-            "path": HELM_VALUES_PATH,
-            "indent": " " * 4,
-            "body": render_chart_defaults_lines(doc, 4),
-        },
-        {
-            # D-A A1: the defaults-tier keys the chart does NOT ship, and
-            # why — comments right under the generated defaults mapping.
-            "id": "helm-unarmed",
-            "path": HELM_VALUES_PATH,
-            "indent": " " * 4,
-            "body": render_unarmed_lines(doc, 4),
-        },
-        # The dev template carries no block of the chart-default keys: they
-        # are the readers' built-in layer (#3832 decision 7, as `da-tools
-        # init` writes no copy of them either), so the template serves them
-        # without a copy that would pin today's numbers.
-        {
-            # The example tenants' packs (#3014): the keys the chart does not
-            # arm, so the readers build none of them in.
-            "id": "dev-example-defaults",
-            "path": DEV_DEFAULTS_PATH,
-            "indent": " " * 2,
-            "body": render_dev_example_defaults_lines(doc, 2),
-            "confd": _confd_mapping(doc, _dev_example_keep),
-        },
-        {
-            # thresholdConfig.optional_overrides — key at indent 2, list items
-            # (and therefore the markers) at 4.
-            "id": "helm-optional",
-            "path": HELM_VALUES_PATH,
-            "indent": " " * 4,
-            "body": render_optional_overrides_lines(doc, 4),
-        },
-        {
-            # top-level optional_overrides — key at indent 0, items at 2.
-            "id": "dev-optional",
-            "path": DEV_DEFAULTS_PATH,
-            "indent": " " * 2,
-            "body": render_optional_overrides_lines(doc, 2),
-            "confd": _confd_sequence(doc),
-        },
-        {
-            # try-local ships its own conf.d; same list, same shape.
-            "id": "try-local-optional",
-            "path": TRY_LOCAL_DEFAULTS_PATH,
-            "indent": " " * 2,
-            "body": render_optional_overrides_lines(doc, 2),
-            "confd": _confd_sequence(doc),
-        },
-        # #3475: the labels a dimensional key may carry, per base — the same
-        # three runtime surfaces as the optional_overrides list.
+        # #3475: the labels a dimensional key may carry, per base, on the
+        # three runtime surfaces.
         {
             "id": "helm-dimensions",
             "path": HELM_VALUES_PATH,

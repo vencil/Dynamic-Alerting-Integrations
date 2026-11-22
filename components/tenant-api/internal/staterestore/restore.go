@@ -142,6 +142,9 @@ func ValidKey(key string) bool {
 		return true
 	}
 	_, ok := statestore.SubsetTenant(key)
+	if !ok {
+		_, ok = statestore.LogVisibilityTenant(key)
+	}
 	return ok && !strings.ContainsAny(key, `/\`) && !strings.Contains(key, "..")
 }
 
@@ -293,6 +296,9 @@ func entityOf(key string) string {
 	}
 	if t, ok := statestore.SubsetTenant(key); ok {
 		return statestore.SubsetEntity(t)
+	}
+	if t, ok := statestore.LogVisibilityTenant(key); ok {
+		return statestore.LogVisibilityEntity(t)
 	}
 	return key
 }
