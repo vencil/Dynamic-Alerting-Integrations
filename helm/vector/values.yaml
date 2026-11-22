@@ -655,7 +655,8 @@ affinity: {}
 #
 # ⛔ ON by default (#1595; was off in Phase 1). The platform pack's Vector
 # alerts — VectorBufferEventsDropped, TenantProjectionMappingErrors,
-# TenantProjectionFanoutDiscardSpike — read ONLY these internal_metrics. With
+# TenantProjectionFanoutDiscardSpike, and TenantProjectionStampMissing (whose
+# counter, tenant_stamp_missed, is exported here too) — read ONLY this port. With
 # this off their `vector_*` series do not exist at all, so they can never
 # fire and look exactly like "nothing is being dropped". Turning it off is a
 # deliberate opt-out of that alerting, not a neutral default; Prometheus also

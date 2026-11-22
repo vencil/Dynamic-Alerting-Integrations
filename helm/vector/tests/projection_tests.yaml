@@ -1006,3 +1006,251 @@ tests:
           - type: vrl
             source: |
               assert_eq!(.token_id, "tok-ok")
+
+  # ══ ADR-021 §日誌進入端的契約 — the should-have-been-stamped counter ══════════
+  # tenant_stamp_check / tenant_stamp_missed feed
+  # vector_tenant_projection_stamp_missed_events_total, which
+  # TenantProjectionStampMissing alerts on. A row counts only when it carries a
+  # VERIFIED tenant identity (a valid account_id, written by Envoy from the
+  # logs-token claim) and still reaches no tenant partition. Each case below
+  # pins one side of that line; the fixture projects tenant-alpha→1000 and
+  # tenant-beta→1001 only.
+
+  # ── (S1) valid account_id, tenant not in tenantProjections → counted ──────
+  - name: "stamp-miss: a logs-token audit row of a tenant with no projection is counted as not_projected"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1002","token_id":"tok-g","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tenant_id, "tenant-gamma", "the 0:0 copy is untouched")
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+              assert!(!exists(.tenant_id), "the counter input carries the reason only")
+      - extract_from: tenant_stamp_missed
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "tenant_projection_stamp_missed_events_total")
+              assert_eq!(.namespace, "vector")
+              assert_eq!(.tags.reason, "not_projected")
+              assert_eq!(.kind, "incremental")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (S2) the gateway may log account_id as a JSON number (int or float) ───
+  - name: "stamp-miss: a numeric account_id (integer) is accepted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":1002,"status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+
+  - name: "stamp-miss: a numeric account_id (whole float) is accepted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":1002.0,"status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+
+  # ── (S3) valid account_id but blank tenant_id → still a miss ──────────────
+  - name: "stamp-miss: a valid account_id with a blank tenant_id is counted (tenant_project aborts it)"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"","account_id":"1000","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_stamp_check
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "not_projected")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (S4) the stamped case is NOT counted ──────────────────────────────────
+  - name: "stamp-miss: a projected tenant's logs-token row reaches its partition and is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","account_id":"1000","token_id":"tok-a","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.token_id, "tok-a")
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  # ── (S5) no verified identity → not counted, whatever the tenant_id ───────
+  # A metrics-token row (account_id empty) of a tenant with no partition is
+  # TenantProjectionFanoutDiscardSpike's population, not this one: such a
+  # tenant may legitimately have no AccountID.
+  - name: "stamp-miss: a metrics-token row (empty account_id) of an unprojected tenant is not counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (S6) account_id the gateway Lua would refuse → not counted ────────────
+  # Same acceptance rule as revoked_check.lua: whole number in [1000, 2^32-1].
+  - name: "stamp-miss: a reserved-band account_id (< 1000) is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"999","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+
+  - name: "stamp-miss: a non-integer account_id is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"1002.5","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+
+  - name: "stamp-miss: an account_id above 2^32-1 is not a verified identity"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-gamma","account_id":"4294967296","status":403}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    no_outputs_from:
+      - tenant_stamp_check
+
+  # ── (S7) platform-only classes are never counted ──────────────────────────
+  - name: "stamp-miss: gateway_operational and prometheus_query_log rows are never counted"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '[2026-11-22 envoy] upstream connect error account_id=1002'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"params":{"query":"up{tenant=\"tenant-gamma\"}"},"account_id":"1002"}'
+          kubernetes.container_name: prometheus
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: prometheus-0
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: StatefulSet/prometheus
+    no_outputs_from:
+      - tenant_stamp_check
+      - tenant_stamp_missed
+
+  # ── (S8) origin rejected: the wrong-prefix shape and the forgery shape ────
+  # A gateway-labelled row whose owner fails audit.gatewayPodOwnerPrefix is
+  # reclassified to suspicious_audit and never projected. With a valid
+  # account_id it counts as origin_rejected — a wrong prefix that rejects the
+  # real gateway would otherwise empty every partition in silence.
+  - name: "stamp-miss: a suspicious_audit row with a valid account_id is counted as origin_rejected"
+    inputs:
+      - insert_at: origin_split
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","account_id":"1000","token_id":"tok-x","status":200}'
+          'kubernetes.pod_labels."app.kubernetes.io/name"': federation-gateway
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: not-the-gateway-1234-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/not-the-gateway-1234
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "suspicious_audit")
+      - extract_from: tenant_stamp_missed
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tags.reason, "origin_rejected")
+    no_outputs_from:
+      - tenant_route.t_1000
+      - tenant_route.t_1001

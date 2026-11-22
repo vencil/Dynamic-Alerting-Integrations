@@ -205,7 +205,9 @@ class TestProjectionDisabledByDefault:
         assert cfg["sources"].get("internal_metrics", {}).get("type") == "internal_metrics"
         prom = cfg["sinks"].get("prometheus") or {}
         assert prom.get("type") == "prometheus_exporter", sorted(cfg["sinks"])
-        assert prom.get("inputs") == ["internal_metrics"]
+        # internal_metrics + the ADR-021 stamp-miss counter
+        # (TenantProjectionStampMissing reads it; see TestStampMissCounter).
+        assert prom.get("inputs") == ["internal_metrics", "tenant_stamp_missed"]
         assert prom.get("address") == "0.0.0.0:9598"
         ds = next(d for d in docs if d.get("kind") == "DaemonSet")
         vec = next(c for c in ds["spec"]["template"]["spec"]["containers"] if c["name"] == "vector")
@@ -389,6 +391,77 @@ class TestProjectionEnabledShape:
         # Eligibility + fail-closed aborts present.
         assert 'if .log_type != "federation_audit"' in vrl
         assert "abort" in vrl
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Should-have-been-stamped counter (ADR-021 §日誌進入端的契約)
+#
+# tenant_stamp_check → tenant_stamp_missed (log_to_metric) → the prometheus
+# exporter, read by TenantProjectionStampMissing. The behaviour (which rows
+# count, under which reason) is pinned by the `stamp-miss:` cases in
+# projection_tests.yaml; these pin the wiring the behaviour depends on.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _account_map_block(vrl: str) -> str:
+    m = re.search(r"account_map = \{(.*?)\n\s*\}", vrl, re.S)
+    assert m, "no account_map literal in the VRL"
+    return "\n".join(line.strip() for line in m.group(1).strip().splitlines())
+
+
+class TestStampMissCounter:
+    @_needs_helm
+    def test_counter_uses_the_same_map_tenant_project_stamps_from(self, repo_root: Path) -> None:
+        """"Not stamped" must mean exactly "tenant_project did not find the
+        tenant_id". The two transforms each render the map from
+        tenantProjections; if they ever diverge, the counter either misses real
+        misses or counts rows that were projected."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        project = _account_map_block(cfg["transforms"]["tenant_project"]["source"])
+        check = _account_map_block(cfg["transforms"]["tenant_stamp_check"]["source"])
+        assert project == check
+        assert '"tenant-alpha": 1000,' in check
+
+    @_needs_helm
+    def test_counter_is_rendered_without_any_projection(self, repo_root: Path) -> None:
+        """No tenantProjections is the case where EVERY logs-token row misses
+        its partition, so the counter must exist then too (empty map)."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        assert "tenant_project" not in cfg["transforms"]
+        check = cfg["transforms"]["tenant_stamp_check"]
+        assert re.search(r"account_map = \{\s*\}", check["source"]), "empty map expected"
+
+    @_needs_helm
+    def test_counter_reads_demux_and_feeds_only_the_exporter(self, repo_root: Path) -> None:
+        """The check is a side branch: it reads demux and its output may reach
+        the metrics exporter only, never a store sink (it would write a
+        `{reason}` row into the log store)."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        check = cfg["transforms"]["tenant_stamp_check"]
+        assert check["type"] == "remap"
+        assert check["inputs"] == ["demux"]
+        assert check["drop_on_abort"] is True and check["reroute_dropped"] is False
+        missed = cfg["transforms"]["tenant_stamp_missed"]
+        assert missed["type"] == "log_to_metric"
+        assert missed["inputs"] == ["tenant_stamp_check"]
+        (metric,) = missed["metrics"]
+        assert metric["type"] == "counter"
+        assert (metric["namespace"], metric["name"]) == (
+            "vector", "tenant_projection_stamp_missed_events_total"), (
+            "TenantProjectionStampMissing selects this exact name")
+        assert metric["tags"] == {"reason": "{{ reason }}"}
+        consumers = {name for section in ("transforms", "sinks")
+                     for name, comp in cfg[section].items()
+                     if {"tenant_stamp_check", "tenant_stamp_missed"} & set(comp.get("inputs") or [])}
+        assert consumers == {"tenant_stamp_missed", "prometheus"}, consumers
+
+    @_needs_helm
+    def test_counter_is_absent_when_metrics_are_off(self, repo_root: Path) -> None:
+        """metrics.enabled=false renders no exporter; a log_to_metric with no
+        consumer would only cost CPU, so the branch goes with it."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets={"metrics.enabled": "false"}))
+        assert "tenant_stamp_check" not in cfg["transforms"]
+        assert "tenant_stamp_missed" not in cfg["transforms"]
+        assert "prometheus" not in cfg["sinks"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -864,16 +864,38 @@ data:
     \n        or `tenantProjections` behind `_account_registry.yaml`);\n\n       \
     \ (b) a forged or malformed payload flood. This is a coarse\n\n        surge signal:\
     \ it cannot name the account and it is NOT a\n\n        registry-desync detector\
+    \ (rows from a tenant''s logs token are\n\n        covered by TenantProjectionStampMissing)\
     \ — a small or long-standing gap is\n\n        part of the baseline and does not\
     \ fire, and a permanent step\n\n        stops firing after about a day. Query\
     \ the 0:0 store for\n\n        recent `log_type:federation_audit` rows by `tenant_id`\
     \ and\n\n        compare against `tenantProjections`. See\n\n        platform-log-aggregation-runbook\
     \ §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Unprojected tenant audit rows surged above 3x their 1-day baseline\
-    \ for 15m\n  - alert: VectorProjectionGateMismatch\n    expr: \"max by (mode,\
-    \ namespace) (\\n  vector_tenant_projection_gate_info{category=\\\"mismatch\\\"\
-    }\\n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n     \
-    \ severity: critical\n    annotations:\n      description: 'A `tenantProjections`\
+    \ for 15m\n  - alert: TenantProjectionStampMissing\n    expr: \"sum by (reason)\
+    \ (\\n  max_over_time(vector_tenant_projection_stamp_missed_events_total[1h])\\\
+    n) > 0\\n\"\n    for: 0s\n    labels:\n      alert_source: platform\n      severity:\
+    \ warning\n    annotations:\n      description: 'In the last hour at least {{\
+    \ $value | humanize }} federation\n\n        audit row(s) carrying a valid `account_id`\
+    \ (the verified claim of\n\n        a tenant''s logs token) reached the platform\
+    \ 0:0 store but no\n\n        tenant partition (reason={{ $labels.reason }}).\
+    \ The tenant holds\n\n        an AccountID, so it should see these rows and does\
+    \ not.\n\n        not_projected: the tenant_id is blank or missing from helm/vector\n\
+    \n        `tenantProjections` — usually a tenant issued a logs token\n\n     \
+    \   before its projection was added; add it (copy the AccountID\n\n        from\
+    \ `_account_registry.yaml`) and upgrade the chart.\n\n        origin_rejected:\
+    \ demux reclassified the row to suspicious_audit\n\n        because its pod_owner\
+    \ fails `audit.gatewayPodOwnerPrefix` —\n\n        either a forged row from a\
+    \ gateway-labelled pod, or a prefix\n\n        that no longer matches the real\
+    \ gateway (which empties every\n\n        tenant partition). Find the rows in\
+    \ 0:0 with\n\n        `log_type:federation_audit OR log_type:suspicious_audit`\
+    \ and a\n\n        non-empty account_id, grouped by tenant_id / pod_name. Nothing\n\
+    \n        is cut off automatically (ADR-021 §日誌進入端的契約). See\n\n        platform-log-aggregation-runbook\
+    \ §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \      summary: Tenant audit rows with a verified account_id reached only the\
+    \ platform 0:0 store ({{ $labels.reason }})\n  - alert: VectorProjectionGateMismatch\n\
+    \    expr: \"max by (mode, namespace) (\\n  vector_tenant_projection_gate_info{category=\\\
+    \"mismatch\\\"}\\n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n\
+    \      severity: critical\n    annotations:\n      description: 'A `tenantProjections`\
     \ entry''s accountId does not match the\n\n        AccountID registry''s (`_account_registry.yaml`)\
     \ allocation — a unique-but-wrong\n\n        value (the cross-tenant-leak case\
     \ the render-time uniqueness\n\n        guard and the integer schema both pass).\

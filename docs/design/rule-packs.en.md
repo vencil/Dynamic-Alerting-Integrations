@@ -36,8 +36,8 @@ parent: architecture-and-design.en.md
 | Kubernetes | `prometheus-rules-kubernetes` | 35 | 16 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
-| Platform | `prometheus-rules-platform` | 1 | 56 |
-| **Total** | | **175** | **204** (= **379** rules) |
+| Platform | `prometheus-rules-platform` | 1 | 57 |
+| **Total** | | **175** | **205** (= **380** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)
