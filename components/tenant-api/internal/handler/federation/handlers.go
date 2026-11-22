@@ -2,7 +2,6 @@ package federation
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
@@ -99,6 +98,7 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Failure     400  {object} handler.ErrorResponse
 // @Failure     403  {object} handler.ErrorResponse
 // @Failure     409  {object} handler.ErrorResponse
+// @Failure     413  {object} handler.ErrorResponse
 // @Failure     429  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
@@ -106,9 +106,10 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Router      /api/v1/federation/tokens [post]
 func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
-		if err != nil {
-			handler.WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		// #2778: through the shared helper, so a body over d.MaxBody() is a
+		// 413 instead of a truncated prefix that fails to decode as a 400.
+		body, ok := handler.ReadLimitedBody(w, r, d)
+		if !ok {
 			return
 		}
 
@@ -160,6 +161,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 		var (
 			jwt string
 			rec token.Record
+			err error
 		)
 		switch capability {
 		case token.CapLogs:

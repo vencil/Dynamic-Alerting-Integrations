@@ -2043,6 +2043,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -2125,6 +2129,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -3247,6 +3255,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":

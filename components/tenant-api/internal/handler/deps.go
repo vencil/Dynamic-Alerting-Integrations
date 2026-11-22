@@ -211,10 +211,11 @@ type Deps struct {
 	readyLog *slog.Logger
 
 	// MaxBodyBytes caps the request body of the non-batch write
-	// handlers; readLimitedBody answers a body over it with 413
-	// rather than reading a truncated prefix (#2778; the federation
-	// handlers still use a bare io.LimitReader, see
-	// DefaultMaxBodyBytes). Wired from `TA_MAX_BODY_BYTES`
+	// handlers; readLimitedBody / ReadLimitedBody answer a body over
+	// it with 413 rather than reading a truncated prefix (#2778).
+	// Every handler, federation included, reads its body through
+	// that helper; forbidigo keeps a bare io.LimitReader out of
+	// internal/handler (.golangci.yml). Wired from `TA_MAX_BODY_BYTES`
 	// (default 1 MiB; see DefaultMaxBodyBytes / MaxBodyBytesFromEnv
 	// in middleware.go). Read via d.MaxBody() so a zero value (e.g.
 	// in tests that construct Deps literally) falls back to the

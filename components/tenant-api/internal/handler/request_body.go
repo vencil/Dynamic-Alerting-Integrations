@@ -34,6 +34,11 @@ func readLimitedBody(w http.ResponseWriter, r *http.Request, d *Deps) ([]byte, b
 
 // ReadLimitedBody is readLimitedBody for handler sub-packages (federation):
 // the same 413-on-over-cap read, so a body is never silently truncated.
+//
+// ⛔ The federation handlers read through a bare io.LimitReader until #2778's
+// follow-up, so an over-cap body there was a 400 "invalid JSON" naming neither
+// the size nor the cap. forbidigo now rejects io.LimitReader / io.ReadAll in
+// internal/handler outside this file (.golangci.yml, rules tagged #2778).
 func ReadLimitedBody(w http.ResponseWriter, r *http.Request, d *Deps) ([]byte, bool) {
 	return readLimitedBody(w, r, d)
 }
@@ -57,7 +62,11 @@ func readBodyWithin(w http.ResponseWriter, r *http.Request, limit int64, knob st
 }
 
 // readBodyCapped reads r.Body up to limit and answers 413 with tooLarge's
-// message when the body is longer.
+// message when the body is longer. readLimitedBody and readBodyWithin are its
+// two named callers; an endpoint with a cap of its own (recipe preview's
+// previewMaxBody) calls it directly. This file is the one place in
+// internal/handler allowed to name io.LimitReader / io.ReadAll (forbidigo,
+// .golangci.yml).
 //
 // ⛔ THE POINT IS DETECTING THE OVERFLOW. A bare io.LimitReader returns a short
 // read at the cap with no error — the caller then either fails somewhere
