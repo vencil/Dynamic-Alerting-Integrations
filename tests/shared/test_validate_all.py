@@ -2258,6 +2258,17 @@ class TestTheGateIsStillSelected:
             f"control: removing `{self._GATE}` from {rel} left this green, so "
             f"the assertion above cannot be detecting it")
 
+    @pytest.mark.parametrize("rel", _CALLERS)
+    def test_every_name_in_the_only_list_is_registered(self, rel):
+        """validate_all exits 2 before running anything when `--only` names a
+        check TOOLS does not register, so a check removed from TOOLS but left
+        in a caller's list turns that whole required job red (#4152: the
+        glossary check). Judged by validate_all's own predicate, not a copy."""
+        lists = self._only_lists(self._read(rel))
+        assert lists, f"no `--only` list could be read out of {rel}"
+        problems = [p for names in lists for p in va._unknown_check_names(set(names), set())]
+        assert not problems, f"{rel}: {va._unknown_check_names_message(problems)}"
+
 
 # ============================================================
 

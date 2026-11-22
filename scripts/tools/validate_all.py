@@ -93,7 +93,6 @@ FIX_COMMANDS: Dict[str, List[str]] = {
 TOOLS = [
     ("links", "lint/check_doc_links.py", ["--ci"], "Link validation"),
     ("mermaid", "lint/validate_mermaid.py", ["docs/", "rule-packs/", "--ci"], "Mermaid diagram syntax"),
-    ("glossary", "dx/sync_glossary_abbr.py", ["--check"], "Glossary abbreviation sync"),
     ("schema", "dx/sync_schema.py", ["--check"], "Go→JSON Schema drift"),
     ("alerts", "dx/generate_alert_reference.py", ["--check"], "Alert reference drift"),
     ("rule_packs", "dx/generate_rule_pack_readme.py", ["--check"], "Rule Pack README drift"),

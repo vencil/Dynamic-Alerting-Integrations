@@ -213,9 +213,10 @@ markdown_extensions:
       anchor_linenums: true
       line_anchors: ''
   - pymdownx.inlinehilite
+  # check_paths: a snippet whose file is gone fails the build instead of
+  # rendering as an empty block (#4152)
   - pymdownx.snippets:
-      auto_append:
-        - includes/abbreviations.md
+      check_paths: true
   # Lists & Tabs
   - pymdownx.tasklist:
       custom_checkbox: true
@@ -232,7 +233,6 @@ markdown_extensions:
   - attr_list
   - md_in_html
   - footnotes
-  - abbr
 
 extra:
   # Alternate language links

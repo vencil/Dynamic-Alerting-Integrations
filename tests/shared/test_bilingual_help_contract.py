@@ -183,7 +183,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "run_chaos_soak.py": _R_DX,
     "scaffold_lint.py": _R_DX,
     "suggest_related.py": _R_DX,
-    "sync_glossary_abbr.py": _R_DX,
     "sync_schema.py": _R_DX,
     "sync_tool_registry.py": _R_DX,
     "tenant_verify.py": _R_DX,

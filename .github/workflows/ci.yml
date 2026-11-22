@@ -199,7 +199,6 @@ jobs:
           # versions. Enforcement resting on an undocumented chain of three
           # unrelated filters silently disappears the day any of them moves.
           pre-commit run version-consistency --all-files
-          pre-commit run glossary-check --all-files
           pre-commit run changelog-lint --all-files
           # ⛔ `changelog-lint` walks git log; it never opens the file. This
           # second line is the one that checks the file's structure (#1765),
