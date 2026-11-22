@@ -1169,12 +1169,12 @@ def _stale(rel, old, new):
     return text.replace(old, new)
 
 
-# A key of the dev template's generated `defaults:` block (#3832: the
-# built-in keys are no longer copied there, so not container_cpu).
-_DEV_STALE = ("  redis_memory_used_bytes: 4294967296\n",
-              "  redis_memory_used_bytes: 4294967297\n  gone_key: 1\n")
-_SEED_STALE = ("  - oracle_wait_time_rate   # s/s — Wait time rate (5m)\n",
-               "  - oracle_wait_time_rate   # s/s — Wait time rate (5m)\n  - gone_key\n")
+# The two conf.d surfaces left are the generated `dimensions:` blocks (#3924:
+# no surface carries a threshold key's value or name any more).
+_DEV_STALE = ("  container_memory: [version]\n",
+              "  container_memory: [version, gone_label]\n  gone_key: [x]\n")
+_SEED_STALE = ("  container_memory: [version]\n",
+               "  container_memory: [version]\n  gone_key: [x]\n")
 
 
 def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
@@ -1186,25 +1186,6 @@ def test_threshold_registry_regen_writes_what_reads_back(tmp_path, monkeypatch):
     assert sorted(touched) == sorted([str(dev), str(seed)])
     assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
     assert seed.read_bytes() == (REPO / _SEED_REL).read_bytes()
-
-
-def test_threshold_registry_regen_refuses_a_text_that_reads_back_differently(
-        tmp_path, monkeypatch):
-    # A registry value of +inf renders `inf`. The exporter reads that text as
-    # +Inf, a value the root `defaults:` refuses for its key (#3250: no
-    # longer a string yaml.v3 refuses the file for): the tree gains a
-    # root_default_refused finding, and da-guard write refuses it. Neither
-    # file is written (the seed's change alone would pass: all or none).
-    lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
-                                  _stale(_SEED_REL, *_SEED_STALE))
-    before = _bytes(tmp_path / "repo")
-    doc = lib.build_registry_doc()
-    doc["keys"]["redis_memory_used_bytes"]["value"] = float("inf")
-    with pytest.raises(lib.ConfdWriteRefused) as exc:
-        lib.regen_surfaces(doc)
-    assert f"{dev.parent}/(the tree): worsens_tree: finding: _defaults.yaml: `redis_memory_used_bytes: inf`" in str(exc.value)
-    assert str(seed) not in str(exc.value)
-    assert _bytes(tmp_path / "repo") == before
 
 
 def test_threshold_registry_regen_does_not_write_an_unreadable_original(tmp_path, monkeypatch):
@@ -1303,21 +1284,21 @@ def test_threshold_registry_regen_refuses_a_symlinked_conf_d_file(
 
 
 def test_threshold_registry_regen_refuses_a_block_under_another_key(tmp_path, monkeypatch):
-    """The seed's `optional_overrides:` renamed by hand (`other_carrier:`),
-    the generated markers still inside it: the spliced block is no
-    `optional_overrides` item at all, so it is refused, named, and nothing
-    is written (da-guard alone would write it: the file still reads)."""
+    """The seed's `dimensions:` renamed by hand (`other_carrier:`), the
+    generated markers still inside it: the spliced block is no `dimensions`
+    entry at all, so it is refused, named, and nothing is written (da-guard
+    alone would write it: the file still reads)."""
     seed_text = _stale(_SEED_REL, *_SEED_STALE)
-    assert seed_text.count("\noptional_overrides:\n") == 1
+    assert seed_text.count("\ndimensions:\n") == 1
     lib, _dev, seed = _regen_setup(
         tmp_path, monkeypatch, None,
-        seed_text.replace("\noptional_overrides:\n", "\nother_carrier:\n"))
+        seed_text.replace("\ndimensions:\n", "\nother_carrier:\n"))
     before = _bytes(tmp_path / "repo")
     with pytest.raises(lib.ConfdWriteRefused) as exc:
         lib.regen_surfaces(lib.build_registry_doc())
     msg = str(exc.value)
-    assert f"{seed}: the generated block 'try-local-optional' does not read as under " \
-           "'optional_overrides'" in msg, msg
+    assert f"{seed}: the generated block 'try-local-dimensions' does not read as under " \
+           "'dimensions'" in msg, msg
     assert "nothing was written" in msg
     assert _bytes(tmp_path / "repo") == before
 
@@ -1336,14 +1317,14 @@ def test_threshold_registry_regen_names_what_was_written_when_a_later_write_fail
                                   _stale(_SEED_REL, *_SEED_STALE))
     helm =tmp_path / "repo" / "helm" / "values.yaml"
     helm.parent.mkdir()
-    marker = lib.begin_marker("helm-defaults", " " * 4) + "\n"
+    marker = lib.begin_marker("helm-dimensions", " " * 4) + "\n"
     text = (REPO / "helm" / "threshold-exporter" / "values.yaml").read_text(encoding="utf-8")
     assert text.count(marker) == 1
-    helm.write_text(text.replace(marker, marker + "    gone_key: 1\n"), encoding="utf-8")
+    helm.write_text(text.replace(marker, marker + "    gone_key: [x]\n"), encoding="utf-8")
     monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
-    # The conf.d surfaces and the helm `defaults` block (on the copy above).
+    # The conf.d surfaces and the helm `dimensions` block (on the copy above).
     monkeypatch.setattr(lib, "surface_specs", lambda doc: [
-        s for s in all_specs(doc) if s.get("confd") or s["id"] == "helm-defaults"])
+        s for s in all_specs(doc) if s.get("confd") or s["id"] == "helm-dimensions"])
     registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
     registry_before = registry.read_bytes()
     real_write = _lib_io.write_repo_artifact
@@ -1375,13 +1356,13 @@ def test_threshold_registry_regen_leaves_each_surface_with_the_mode_it_was_check
     root = tmp_path / "repo"
     helm = root / "helm" / "values.yaml"
     helm.parent.mkdir()
-    marker = lib.begin_marker("helm-defaults", " " * 4) + "\n"
+    marker = lib.begin_marker("helm-dimensions", " " * 4) + "\n"
     text = (REPO / "helm" / "threshold-exporter" / "values.yaml").read_text(encoding="utf-8")
     assert text.count(marker) == 1
-    helm.write_text(text.replace(marker, marker + "    gone_key: 1\n"), encoding="utf-8")
+    helm.write_text(text.replace(marker, marker + "    gone_key: [x]\n"), encoding="utf-8")
     monkeypatch.setattr(lib, "HELM_VALUES_PATH", str(helm))
     monkeypatch.setattr(lib, "surface_specs", lambda doc: [
-        s for s in all_specs(doc) if s["id"] == "helm-defaults"])
+        s for s in all_specs(doc) if s["id"] == "helm-dimensions"])
     module = root / "ops" / "_rule_packs_generated.py"
     want = {helm: 0o644, module: 0o755,
             root / "go" / "retired_threshold_keys_gen.go": 0o644,
@@ -1407,16 +1388,6 @@ def test_threshold_registry_regen_without_da_guard_is_exit_2(tmp_path, monkeypat
     err = capsys.readouterr().err
     assert "through `da-guard write`" in err and "nothing was written" in err
     assert _bytes(tmp_path / "repo") == before
-
-
-def test_threshold_registry_regen_judges_the_value_by_yaml_v3(tmp_path, monkeypatch):
-    # 1e20 renders `1e+20`: a float to yaml.v3 (the exporter reads it as a
-    # number), a string to PyYAML's YAML 1.1 — written.
-    lib, dev, _seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE))
-    doc = lib.build_registry_doc()
-    doc["keys"]["redis_memory_used_bytes"]["value"] = 1e20
-    lib.regen_surfaces(doc)
-    assert "  redis_memory_used_bytes: 1e+20\n" in dev.read_text(encoding="utf-8")
 
 
 def test_threshold_registry_regen_refused_writes_not_even_the_registry(

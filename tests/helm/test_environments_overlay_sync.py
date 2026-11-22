@@ -24,6 +24,14 @@ pre-commit, CI, or tests compared these files — verified by grepping
 checks image tag / pullPolicy only). So the guard is the fix: a 4th
 divergence fails here instead of shipping.
 
+#3924: the chart and both overlays now ship no threshold of the registry at
+all (`defaults: {}`; every registry key is built into the exporter), and
+check_threshold_reachability fails on a registry key written into any of
+them — so the equality below is no longer at risk of passing vacuously on a
+shape change (it used to be guarded by "the chart's defaults are
+non-empty"). It still catches an overlay that adds a value the chart does
+not have.
+
 Deliberately an EQUALITY assertion, not a subset one. A subset check
 ("every overlay key matches the chart") would pass for an overlay that
 silently drops a key the chart later adds — and a dropped key is exactly
@@ -47,13 +55,6 @@ _OVERLAYS = [
 def _defaults(path: Path) -> dict:
     doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return (doc.get("thresholdConfig") or {}).get("defaults") or {}
-
-
-def test_chart_defaults_are_non_empty() -> None:
-    """Fail loud if the chart shape moves — otherwise the comparisons below
-    would degenerate into ``{} == {}`` and pass vacuously."""
-    chart = _defaults(_CHART_VALUES)
-    assert chart, f"no thresholdConfig.defaults in {_CHART_VALUES} — chart shape changed?"
 
 
 @pytest.mark.parametrize("overlay", _OVERLAYS, ids=lambda p: p.parent.name)

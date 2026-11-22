@@ -9,25 +9,12 @@
 #     when this pack reads a name it does not serve (#3833).
 #
 # >>> GENERATED:threshold-registry:pack-oracle — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter 閾值（全部內建在讀取端，conf.d 不必列；[chart-default]=平台出貨即啟用，省略就用平台值；未標者沒有平台值，「未啟用」一行寫原因，租戶、子目錄或 profile 給值才發射）:
 #   oracle_sessions_active: 200   # count — Active sessions warning
 #       ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #       未啟用（依部署而定）：正常的 active session 數取決於工作負載與資料庫前面的連線池大小（#1176 量到良性尖峰 240）。佔 SESSIONS
 #       上限的比例另有一條不必填值的告警 OracleHighSessionUtilization（85%）
 #   oracle_tablespace_used_percent: 85   [chart-default]   # % — Tablespace usage warning
-#   oracle_process_usage_percent: 85   [chart-default]
-#       % of PROCESSES — Process usage warning: v$process rows as a share of the PROCESSES
-#       parameter, per exporter, busiest per tenant; 85 = awesome-prometheus-alerts "Oracle DB
-#       processes reaching limit". Replaces the absolute-count key oracle_process_count (#1320: a
-#       unit change is a removal plus an addition, no alias)
-#
-# optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
-# 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
-# 清單中，租戶可直接在自己的 conf.d 填值並生效（resolveDeclaredRows 走宣告集，
-# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
-# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
-# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   oracle_wait_time_rate: 50   # s/s — Wait time rate (5m)
 #       未啟用（尚未量測，#1320）：尚無實測；#1320 在有訊號前維持宣告
 #       未啟用（依部署而定）：正常的等待輪廓因工作負載而異
@@ -37,6 +24,11 @@
 #       per tenant; only while the database averages at least one active session (AAS >= 1)
 #       未啟用（尚未量測，#1174）：沒有 vendor 預設值（Oracle EM 的 parse 指標閾值為 Not Defined）。20 落在 #1174 於 Oracle Free
 #       23 實測的區間：健康負載 0.2–1.5%、字典統計收集 12%、被遞迴批次稀釋的 hard parse 風暴 38%、未稀釋 73%
+#   oracle_process_usage_percent: 85   [chart-default]
+#       % of PROCESSES — Process usage warning: v$process rows as a share of the PROCESSES
+#       parameter, per exporter, busiest per tenant; 85 = awesome-prometheus-alerts "Oracle DB
+#       processes reaching limit". Replaces the absolute-count key oracle_process_count (#1320: a
+#       unit change is a removal plus an addition, no alias)
 #   oracle_pga_usage_percent: 85
 #       % of PGA_AGGREGATE_LIMIT — PGA usage warning: v$pgastat total PGA allocated as a share of
 #       PGA_AGGREGATE_LIMIT (past it Oracle terminates sessions), per exporter, busiest per tenant;
@@ -45,29 +37,12 @@
 #       未啟用（尚未量測，#1320）：沒有公開的告警規則或 vendor 預設值給出佔 PGA_AGGREGATE_LIMIT 多少比例該警告；85 與 process、session
 #       比例一致，只是起點
 #
-# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
-# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
-# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
-# （components/threshold-exporter/app/pkg/config/resolve.go），
-# 而下列每個 key 的 base 都標了
-# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的
-# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
-# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。
+# <base>_critical（critical 層；沒有平台值）：租戶、子目錄或 profile 寫了就送一條
+# severity=critical 的列，根目錄寫的是每個租戶的 critical 預設值（#4173）；
+# base 整族關掉（`<base>: "disable"`）時不送。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-#   oracle_tablespace_used_percent_critical: 95   # % — Tablespace usage critical
-#
-# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
-# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
-# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
-# 它讀的是 defaults[base]，base 沒有值就整列丟棄
-# （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
-# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
-# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
-# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
-# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
-# 一格裝飾（#1311）。
 #   oracle_sessions_active_critical: 280   # count — Active sessions critical
+#   oracle_tablespace_used_percent_critical: 95   # % — Tablespace usage critical
 # <<< GENERATED:threshold-registry:pack-oracle
 #
 # ⚠️ 上列是「Day 0 起始 floor 範例」，不是通用安全值 —— 忙碌 / 大型庫的正常

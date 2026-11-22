@@ -31,29 +31,9 @@ exporter:
 # ⚠️ 這裡的 defaults 會 deep-merge 覆蓋 helm/threshold-exporter/values.yaml 的同名 key，
 #    所以必須與 chart 預設同步 — 否則 `-f environments/local/...` 會把已校準的預設靜默蓋回舊值。
 thresholdConfig:
-  defaults:
-    mysql_connection_usage_percent: 80   # % of max_connections warning（#3778：取代絕對連線數 mysql_connections）
-    # mysql_threads_running 不給預設：健康值隨主機 CPU 核數而定（#3778）。它在 chart 的 optional_overrides
-    # 宣告，租戶單獨寫即生效；要讓所有租戶有底值（含 _critical），在這裡依主機給值。
-    mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted) (#1200 WS5-P0-a)
-    pg_connections: 80   # % of max_connections warning；pg 兩鍵升 arming: default（#1200 Q3=C / D4 folding）
-    pg_replication_lag: 30   # replication lag warning (seconds)（#1200 Q3=C / D4 folding）
-    container_cpu: 80
-    container_cpu_throttle: 25
-    container_memory: 85
-    # D-A A2b（#1200）：三個容量類百分比升 arming: default，依據登記在 threshold registry 的 validation。
-    es_disk_usage_percent: 85   # % of the data path used
-    es_heap_usage_percent: 85   # % of the max JVM heap
-    oracle_tablespace_used_percent: 85   # % of the tablespace used
-    # #3929：節點記憶體佔 memory high watermark 的百分比，逐節點量、取最滿的一台。
-    rabbitmq_node_mem_percent: 90   # % of the memory high watermark
-    # #1320：process 數佔 PROCESSES 參數的百分比，逐 exporter 量、取最滿的一台。
-    oracle_process_usage_percent: 85   # % of the PROCESSES parameter
-    # #1320：兩個 DB2 容量類百分比升 arming: default，值取自 IBM health indicator 的預設 warning 門檻。
-    db2_log_usage_percent: 75   # % of the active log space used
-    db2_tablespace_used_percent: 80   # % of the space the tablespace can grow to
-    # #4093：自動儲存路徑所在檔案系統的使用率，逐路徑量、取最滿的一個。
-    db2_storage_path_used_percent: 80   # % of the storage path's file system used
+  # 規則包的閾值都內建在 exporter 裡（#3832、#4163），這裡一個都不寫（#3924）：
+  # 平台值跟著 exporter 映像，沒有平台值的鍵由租戶給。
+  defaults: {}
   state_filters:
     container_crashloop:
       reasons: ["CrashLoopBackOff"]

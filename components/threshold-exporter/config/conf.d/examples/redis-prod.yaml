@@ -5,8 +5,8 @@
 #    維度 label 在那一步就丟掉了——維度鍵改到的是整個租戶的門檻（各維度值與 base 合成一個值），
 #    對維度鍵寫 "disable" 只是不送出這一列，不會只停掉那個維度的告警。要依維度判斷得改 rule pack（#3475）；語法見 docs/design/config-driven.md。
 #
-# 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
-# ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
+# 三態: 數值=Custom, 省略=平台值, "disable"=停用。沒有平台值的鍵（只有部署本身校準得出來）
+# 省略就是不送，由租戶在這裡給值（#3924：根目錄 _defaults.yaml 不寫它們）。
 tenants:
   redis-prod:
     # 路由：引用本目錄 _routing_profiles.yaml 的 profile（#2326：子目錄的 profile
@@ -17,6 +17,8 @@ tenants:
     redis_memory_used_bytes: "8589934592"                  # 8GB warning
     redis_memory_used_bytes_critical: "10737418240"        # 10GB critical
     redis_connected_clients: "500"
+    redis_evicted_keys_rate: "100"
+    redis_replication_lag: "30"
 
     # --- 狀態控制 ---
     _state_maintenance: "enable"                            # 維護模式關閉

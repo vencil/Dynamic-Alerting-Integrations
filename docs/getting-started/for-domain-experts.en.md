@@ -113,10 +113,10 @@ tenants:
           value: "50"
 ```
 
-- A key you leave out takes its value from `defaults:` in `_defaults.yaml`. ⚠️ Keys listed under `optional_overrides:` have no platform default: leaving them out means no value and no series.
+- A key you leave out takes its value from `defaults:` in an upper `_defaults.yaml`, or else the platform's value built into the readers. ⚠️ Keys with no platform value (listed in the `platform_defaults` row of `da-tools validate-config`): leaving them out means no value and no series.
 - Scheduled-threshold windows are always UTC `HH:MM-HH:MM`, may cross midnight, and with several windows the first match wins.
 - Dimensional thresholds (for example `"redis_connected_clients{instance='redis-orders:6379'}": "500:critical"`) and the full syntax are in the [threshold-exporter config reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考) §4.4.
-- Each Rule Pack's file header lists the threshold keys it reads and suggested starting values. The content of `defaults:` is generated from the threshold registry; to change a platform default, edit `rule-packs/threshold-registry.yaml` and run `check_threshold_registry.py --regen`.
+- Each Rule Pack's file header lists the threshold keys it reads and suggested starting values. The platform defaults are built into the readers from the threshold registry; to change a platform default, edit `rule-packs/threshold-registry.yaml` and run `check_threshold_registry.py --regen`.
 
 > 💡 **Interactive Tools** — Want each Rule Pack's size and a link to its alert reference? Use [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx). Compare metrics across all Rule Packs? Try [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx). Calculate recommended thresholds from p50/p90/p99? Use [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx).
 
@@ -324,8 +324,8 @@ A: Override specific keys in tenant YAML:
 tenants:
   my-tenant:
     mysql_connection_usage_percent: "70"      # Custom this one
-    # Other keys omitted, will use the _defaults.yaml `defaults:` value
-    # WARNING: a key _defaults.yaml only DECLARES (its optional_overrides: list)
+    # Other keys omitted, will use the platform value (or a _defaults.yaml `defaults:` override)
+    # WARNING: a key with no platform value
     #    has no default to inherit — omitting it means no value and no series
 ```
 

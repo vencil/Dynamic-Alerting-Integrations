@@ -143,7 +143,7 @@ da-tools scaffold \
 cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 ```
 
-**預期輸出**：`scaffold_output/.scaffold/conf.d/redis-prod.yaml`（複製進 `conf.d/` 後的 `conf.d/redis-prod.yaml`）包含 recording rules 設定、threshold 初始值（conservative）、路由配置（初始禁用）；同一個草稿目錄下另有 `_defaults.yaml`（平台預設值），`scaffold_output/` 下另有 `scaffold-report.txt`。草稿放在點開頭的目錄，不會被服務（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
+**預期輸出**：`scaffold_output/.scaffold/conf.d/redis-prod.yaml`（複製進 `conf.d/` 後的 `conf.d/redis-prod.yaml`）包含 recording rules 設定、路由配置（初始禁用），不寫任何閾值（省略＝平台值；沒有平台值的鍵在步驟 1.2 給值）；同一個草稿目錄下另有 `_defaults.yaml`（根層範本：`dimensions`、`state_filters`，不寫任何閾值），`scaffold_output/` 下另有 `scaffold-report.txt`。草稿放在點開頭的目錄，不會被服務（[#4014](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4014)）。`-o/--output-dir` 吃的是**目錄**——寫 `--output conf.d/redis-prod.yaml` 會得到一個叫 `redis-prod.yaml` 的目錄、租戶檔在它裡面多一層。
 
 ### 步驟 1.2：編輯閾值配置
 
@@ -153,19 +153,17 @@ cp scaffold_output/.scaffold/conf.d/redis-prod.yaml conf.d/
 
 chart 以 OCI 發布（[ADR-002](../adr/002-oci-registry-over-chartmuseum.md)）。租戶設定放在 values 的 `thresholdConfig.tenants`，chart 會把它渲染成 `threshold-config` ConfigMap，一個 exporter 服務所有租戶。
 
-⚠️ chart 出貨的 `thresholdConfig.defaults` 只含登錄表標為預設啟用的 key（Kubernetes、MariaDB、PostgreSQL，以及 Elasticsearch、Oracle 的容量類與 RabbitMQ 的節點記憶體），redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `scaffold_output/.scaffold/conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會在「config keys no row of this exporter reads」那一行列出 `key="redis_memory_used_bytes" reason=unconsumed`。
+⚠️ 規則包的閾值都內建在 exporter 裡，chart 的 `thresholdConfig.defaults` 預設是空的、不必替 redis 補任何鍵（[#3924](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3924)）。redis 的鍵都沒有平台值：租戶給了值才送，沒給的鍵不送、對應的告警不響。哪些鍵沒有平台值，看 `da-tools validate-config --config-dir conf.d` 的 `platform_defaults` 列。
 
 ```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
-  defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 _defaults.yaml
-    redis_memory_used_bytes: 4294967296
-    redis_connected_clients: 200
-    redis_evicted_keys_rate: 100
-    redis_replication_lag: 30
   tenants:
     redis-prod:             # 內容＝conf.d/redis-prod.yaml 裡 tenants.redis-prod 底下那一層
       redis_memory_used_bytes: "8589934592"
+      redis_connected_clients: "200"
+      redis_evicted_keys_rate: "100"
+      redis_replication_lag: "30"
 ```
 
 ```bash
@@ -187,7 +185,7 @@ kubectl port-forward -n monitoring svc/threshold-exporter 8080:8080 &
 curl -s http://localhost:8080/metrics | grep 'user_threshold{component="redis"'
 ```
 
-**預期**（每個 redis key 一列；`component` 是 key 第一個 `_` 之前的部分，`metric` 是之後的部分）：
+**預期**（租戶給了值的每個 redis key 一列；`component` 是 key 第一個 `_` 之前的部分，`metric` 是之後的部分）：
 
 ```
 user_threshold{component="redis",metric="connected_clients",severity="warning",tenant="redis-prod"} 200
@@ -498,7 +496,7 @@ da-tools scaffold \
 cp scaffold_output/.scaffold/conf.d/mariadb-prod.yaml conf.d/
 
 # 編輯閾值
-# 把新租戶（與 chart 出貨沒有的 defaults）加進同一份 values，
+# 把新租戶加進同一份 values，
 #   helm upgrade 同一個 release（不需要第二個 exporter）
 # relabel、掛載 Rule Pack
 # 生成路由、雙軌驗證 1-2 週
@@ -704,7 +702,7 @@ echo "新版少掉（或值不同）的列："; comm -23 "$out/current.txt" "$ou
 
 1. 做完上面三項檢查，確認多出的列；再以新版 da-tools 跑 `da-tools migrate-builtin-defaults --config-dir conf.d`（不加 `--apply`，只預覽），它列出哪些鍵今天靠根層 `null` 或 `optional_overrides:` 列名關掉、在新版會開始送平台值。
 2. 在**同一個變更**裡做三件事：升級 threshold-exporter、平台規則包與 tenant-api；CI 換成新版 da-tools；處理不想要的預設啟用鍵——整個平台不要就在根 `_defaults.yaml` 的 `defaults:` 寫 `<鍵>: disable`（Helm：`--set thresholdConfig.defaults.<鍵>=disable`），某個租戶不要就在它的檔裡寫 `disable`，第 1 步預覽列出的鍵一併照改（Helm 的 `null` 也改成 `disable`）。GitOps 是同一個 commit 換映像 tag 與 conf.d；Helm 是同一次 `helm upgrade`。同一份 conf.d 供給多個叢集時，這些叢集要在同一個變更裡一起升級。
-3. **全部升級完**、每個叢集 exporter 的 `da_config_builtin_defaults_info{digest}` 都與 da-tools 相同之後，才刪複製品：`da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <叢集 A 的摘要> --exporter-digest <叢集 B 的摘要>`，在同一條指令裡每個叢集各給一次（分開跑、每次只給一個摘要，閘門就看不到其他叢集；見 [`migrate-builtin-defaults`](../cli-reference.md#migrate-builtin-defaults)）。Helm 自建 ConfigMap 的部署沒有這一步：chart 照樣寫出這些數字，跟著 chart 升級。
+3. **全部升級完**、每個叢集 exporter 的 `da_config_builtin_defaults_info{digest}` 都與 da-tools 相同之後，才刪複製品：`da-tools migrate-builtin-defaults --config-dir conf.d --apply --exporter-digest <叢集 A 的摘要> --exporter-digest <叢集 B 的摘要>`，在同一條指令裡每個叢集各給一次（分開跑、每次只給一個摘要，閘門就看不到其他叢集；見 [`migrate-builtin-defaults`](../cli-reference.md#migrate-builtin-defaults)）。Helm 自建 ConfigMap 的部署沒有這一步：chart 的 `thresholdConfig.defaults` 預設是空的，平台值由 exporter 內建，所以 chart 與映像要在第 2 步同一次 `helm upgrade` 裡升級；自己 values 檔裡 `thresholdConfig.defaults` 寫的數字會對每個租戶釘住，不想釘就刪掉。
 
 第 2 步不能拆開。已發布的舊版 exporter 讀到根層的 `disable` 會丟掉整份根 `_defaults.yaml`（v2.9.0 實測），每個租戶的閾值列一起消失，所以根層的 `disable` 不能早於 exporter 升級；新版 da-guard 對根層 `optional_overrides:` 只列名的預設啟用鍵報 `root_optional_builtin`（結束碼 1），所以有這種寫法的樹不改就過不了新版 CI；而先升級 exporter、晚改樹，不想要的告警會在改樹之前先響。剩下的窗口是滾動更新那一兩分鐘：還沒被替換的舊 pod 可能讀到新的 ConfigMap。平台規則包的 `BuiltinDefaultsDigestMismatch` 告警會在有 exporter 沒升上去時觸發（沒部署平台規則包的環境，自己比對各元件的摘要指標）。
 

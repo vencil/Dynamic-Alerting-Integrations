@@ -72,20 +72,14 @@ def test_tenant_file_names_the_tenant(scaffolded):
     assert tenant in _read(scaffolded, "mariadb", f"{tenant}.yaml")
 
 
-# #3832 決策 7：內建鍵（mariadb、kubernetes 的全部、es_heap_usage_percent、
-# oracle_tablespace_used_percent 等）不再寫進根檔，見 test_defaults_omit_the_built_in_keys。
-@pytest.mark.parametrize("case,keys", [
-    ("mariadb_redis", ["redis_memory", "redis_connected_clients"]),
-    ("all_four", ["mongodb_connections", "es_search_latency_ms"]),
-    ("oracle", ["oracle_sessions_active"]),
-    ("db2", ["db2_connections_active", "db2_bufferpool_hit_ratio"]),
-    ("oracle_db2", ["oracle_sessions_active", "db2_connections_active"]),
-    ("clickhouse", ["clickhouse_queries_rate", "clickhouse_active_connections"]),
-])
-def test_defaults_declare_the_db_keys(scaffolded, case, keys):
-    defaults = _read(scaffolded, case, "_defaults.yaml")
-    for key in keys:
-        assert key in defaults, key
+# #3924：登錄表的鍵都內建在讀取端，產生的根檔一個閾值鍵都不寫——
+# 沒有 `defaults:`、沒有 `optional_overrides:`，不論選哪些 DB。
+@pytest.mark.parametrize("case", ["mariadb_redis", "all_four", "oracle", "db2",
+                                  "oracle_db2", "clickhouse"])
+def test_defaults_write_no_threshold_key(scaffolded, case):
+    import yaml
+    doc = yaml.safe_load(_read(scaffolded, case, "_defaults.yaml")) or {}
+    assert "defaults" not in doc and "optional_overrides" not in doc, doc
 
 
 @pytest.mark.parametrize("case,keys", [
@@ -149,4 +143,5 @@ def test_the_root_header_explains_the_built_in_layer_without_copying_it(scaffold
 def test_the_tenant_header_counts_a_built_in_base_as_valued(scaffolded):
     tenant, _ = scaffolded["mariadb"]
     head = _read(scaffolded, "mariadb", f"{tenant}.yaml").split("\ntenants:")[0]
-    assert "或平台內建" in head, head
+    # #3924: one rule for every threshold key — the platform value or nothing.
+    assert "省略=平台值" in head, head
