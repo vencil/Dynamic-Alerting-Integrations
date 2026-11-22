@@ -784,8 +784,8 @@ func TestCollector_TenantMetadataInfo_NoMetadata(t *testing.T) {
 
 func TestCollector_TenantExpectedExporter(t *testing.T) {
 	t.Parallel()
-	// #869, #4097: emit tenant_expected_exporter{tenant,pack}=1 ONLY for the
-	// kinds a tenant declares in `_expected_exporters`. t-a declares mariadb
+	// #869, #4097: emit tenant_expected_exporter=1 ONLY for the entries a
+	// tenant declares in `_expected_exporters`. t-a declares mariadb
 	// (emits); t-b declares two kinds, one of them nginx — a kind that is no
 	// database (one series each); t-c has `_metadata` but declares nothing
 	// (must NOT emit — the opt-in guard); t-d writes no key at all (must NOT
@@ -794,7 +794,12 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 	// A value the exporter does not read serves NOTHING, not the entries it
 	// could have read: t-f names an unknown kind beside a known one, t-g
 	// repeats a kind (two identical series would fail the scrape), t-h is a
-	// scalar, t-i asks per cluster (`kind@cluster`, not read yet).
+	// scalar, t-j writes one kind both with and without a cluster, t-k names
+	// a cluster that is no cluster id.
+	//
+	// Per cluster (`kind@cluster`): t-i's row carries the cluster in
+	// `expected_cluster`, one row per entry, beside a kind written alone
+	// whose row has NO such label (not an empty one).
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -806,7 +811,9 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 			"t-f": {"_expected_exporters": SVYAML("[redis, MySQL]")},
 			"t-g": {"_expected_exporters": SVYAML("[redis, redis]")},
 			"t-h": {"_expected_exporters": SV("redis")},
-			"t-i": {"_expected_exporters": SVYAML("[redis@edge-1]")},
+			"t-i": {"_expected_exporters": SVYAML("[redis@edge-1, redis@edge-2, kafka]")},
+			"t-j": {"_expected_exporters": SVYAML("[redis@edge-1, redis]")},
+			"t-k": {"_expected_exporters": SVYAML("[redis@edge 1]")},
 		},
 	}
 
@@ -814,8 +821,11 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 	collector := NewThresholdCollector(manager)
 
 	expected := `
-		# HELP tenant_expected_exporter Liveness expectation (always 1) for each exporter kind a tenant declares in _expected_exporters. LHS of the TenantExporterAbsent anti-join (#869, #3771, #4097). One series per declared (tenant, pack).
+		# HELP tenant_expected_exporter Liveness expectation (always 1) for each entry a tenant declares in _expected_exporters: {tenant, pack} for an exporter kind written alone (an exporter of that kind answering in any cluster is enough), {tenant, pack, expected_cluster} for kind@cluster (one must answer in that cluster). LHS of the TenantExporterAbsent anti-join (#869, #3771, #4097). One series per entry.
 		# TYPE tenant_expected_exporter gauge
+		tenant_expected_exporter{expected_cluster="edge-1",pack="redis",tenant="t-i"} 1
+		tenant_expected_exporter{expected_cluster="edge-2",pack="redis",tenant="t-i"} 1
+		tenant_expected_exporter{pack="kafka",tenant="t-i"} 1
 		tenant_expected_exporter{pack="mariadb",tenant="t-a"} 1
 		tenant_expected_exporter{pack="nginx",tenant="t-b"} 1
 		tenant_expected_exporter{pack="postgresql",tenant="t-b"} 1

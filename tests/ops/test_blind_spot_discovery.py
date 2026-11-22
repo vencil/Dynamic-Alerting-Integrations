@@ -141,6 +141,24 @@ class TestLoadDeclaredKinds:
             assert bsd.load_declared_kinds(d) == {
                 "mariadb": {"db-a"}, "postgresql": {"db-b"}, "redis": {"db-b"}}
 
+    def test_a_kind_declared_per_cluster_is_monitored_by_kind(self):
+        """#4097：條目可以是 `kind@cluster`。這支工具比的是 kind：`@` 前面那一段，
+        同一個 kind 宣告兩個叢集仍是一個 kind、一個租戶。混寫（同一個 kind 既單獨寫又寫
+        `@cluster`）exporter 不讀，等於什麼都沒宣告。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n"
+                                         "    _expected_exporters: [mariadb@east, mariadb@west, redis]\n",
+                            "db-b.yaml": "tenants:\n  db-b:\n    _expected_exporters: [kafka@east]\n",
+                            "db-c.yaml": "tenants:\n  db-c:\n"
+                                         "    _expected_exporters: [nginx, nginx@east]\n"})
+            declared = bsd.load_declared_kinds(d)
+            assert declared == {"mariadb": {"db-a"}, "redis": {"db-a"}, "kafka": {"db-b"}}
+            # … and a kind declared only per cluster is covered, not an unknown declaration.
+            spots = bsd.find_blind_spots({"mariadb": {"10.0.0.1:9104"}}, declared)
+            assert {s["kind"]: s["status"] for s in spots} == {
+                "mariadb": "covered", "redis": "covered", "kafka": "covered"}
+
     def test_served_keys_without_a_declaration_are_not_monitored(self):
         """#4026 行為變更：租戶送出 mysql_／redis_ 的閾值鍵（自己寫的、繼承的、內建層的），
         沒宣告 `_expected_exporters` 就不算已監控。改寫前 db-a 算 mariadb＋redis，以及內建層推得出的

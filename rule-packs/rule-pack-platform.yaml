@@ -2055,6 +2055,20 @@ groups:
       # (#3771 review; promtool R5). The RATIO (> 0.1) is of (tenant, pack)
       # PAIRS: a tenant declaring [mariadb, redis] adds 2 to the denominator,
       # and 1 to the numerator when only its mariadb exporter is gone.
+      # PAIRS, NOT ROWS (#4097): an entry may be `kind@cluster`, and a pair
+      # declared for three clusters is three rows of tenant_expected_exporter
+      # and up to three of TenantExporterAbsent. Both sides are reduced to
+      # pairs first — the denominator `max without (instance, pod,
+      # expected_cluster)`, the numerator those pairs `and on(tenant, pack)`
+      # TenantExporterAbsent's expression — so such a pair weighs 1 in the
+      # denominator and 1 in the numerator when ANY of its clusters is absent
+      # (promtool tests/rulepacks/platform-mass-outage-per-cluster_test.yaml).
+      # That expression is written here with `max without (instance, pod,
+      # da_cluster)` where the liveness pack has `max by (tenant, pack,
+      # expected_cluster)`: a `by (… tenant …)` anywhere in this expr reads to
+      # the platform-alert guard as an alert that carries a tenant label.
+      # NOT DONE: a mass outage of ONE cluster is not told apart — this
+      # sentinel is fleet-wide, there is no per-cluster one.
       # INLINE, NOT A RECORDING RULE (#3771 review): reading a record the
       # liveness pack writes made this rule depend on that pack being loaded in
       # the same Prometheus — loaded alone it read every declared pair as
@@ -2103,43 +2117,121 @@ groups:
         expr: |
           (
             count without (tenant) (count without (pack) (
-              max without(instance, pod) (tenant_expected_exporter)
-              unless on(tenant, pack) (
-                label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
-                or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
-                or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
-                or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
-                or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
-                or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
-                or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
-                or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
-                or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
-                or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
-                or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
-                or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+              max without (instance, pod, expected_cluster) (tenant_expected_exporter)
+              and on(tenant, pack) (
+                (
+                  label_replace(
+                    max without(instance, pod, da_cluster) (tenant_expected_exporter{expected_cluster!=""}),
+                    "da_cluster", "$1", "expected_cluster", "(.+)")
+                  unless on(tenant, pack, da_cluster) (
+                    label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
+                    or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
+                    or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
+                    or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
+                    or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
+                    or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
+                    or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
+                    or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
+                    or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
+                    or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
+                    or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
+                    or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+                  )
+                  unless on(tenant, pack) (
+                    label_replace(pg_up{job="tenant-exporters", da_cluster=""}, "pack", "postgresql", "", "")
+                    or label_replace(mysql_up{job="tenant-exporters", da_cluster=""}, "pack", "mariadb", "", "")
+                    or label_replace(redis_up{job="tenant-exporters", da_cluster=""}, "pack", "redis", "", "")
+                    or label_replace(mongodb_up{job="tenant-exporters", da_cluster=""}, "pack", "mongodb", "", "")
+                    or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters", da_cluster=""}, "pack", "elasticsearch", "", "")
+                    or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters", da_cluster=""}, "pack", "oracle", "", "")
+                    or label_replace(query_interval{query="db2_liveness", job="tenant-exporters", da_cluster=""}, "pack", "db2", "", "")
+                    or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters", da_cluster=""}, "pack", "clickhouse", "", "")
+                    or label_replace(kafka_brokers{job="tenant-exporters", da_cluster=""}, "pack", "kafka", "", "")
+                    or label_replace(rabbitmq_up{job="tenant-exporters", da_cluster=""} or rabbitmq_identity_info{job="tenant-exporters", da_cluster=""}, "pack", "rabbitmq", "", "")
+                    or label_replace(jvm_memory_used_bytes{job="tenant-exporters", da_cluster=""} or jvm_memory_bytes_used{job="tenant-exporters", da_cluster=""}, "pack", "jvm", "", "")
+                    or label_replace(nginx_up{job="tenant-exporters", da_cluster=""}, "pack", "nginx", "", "")
+                  )
+                )
+                or
+                (
+                  max without(instance, pod) (tenant_expected_exporter{expected_cluster=""})
+                  unless on(tenant, pack) (
+                    label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
+                    or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
+                    or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
+                    or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
+                    or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
+                    or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
+                    or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
+                    or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
+                    or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
+                    or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
+                    or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
+                    or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+                  )
+                )
               )
             )) > 5
             and
             (
               count without (tenant, pack) (
-                max without(instance, pod) (tenant_expected_exporter)
-                unless on(tenant, pack) (
-                  label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
-                  or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
-                  or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
-                  or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
-                  or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
-                  or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
-                  or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
-                  or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
-                  or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
-                  or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
-                  or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
-                  or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+                max without (instance, pod, expected_cluster) (tenant_expected_exporter)
+                and on(tenant, pack) (
+                  (
+                    label_replace(
+                      max without(instance, pod, da_cluster) (tenant_expected_exporter{expected_cluster!=""}),
+                      "da_cluster", "$1", "expected_cluster", "(.+)")
+                    unless on(tenant, pack, da_cluster) (
+                      label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
+                      or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
+                      or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
+                      or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
+                      or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
+                      or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
+                      or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
+                      or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
+                      or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
+                      or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
+                      or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
+                      or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+                    )
+                    unless on(tenant, pack) (
+                      label_replace(pg_up{job="tenant-exporters", da_cluster=""}, "pack", "postgresql", "", "")
+                      or label_replace(mysql_up{job="tenant-exporters", da_cluster=""}, "pack", "mariadb", "", "")
+                      or label_replace(redis_up{job="tenant-exporters", da_cluster=""}, "pack", "redis", "", "")
+                      or label_replace(mongodb_up{job="tenant-exporters", da_cluster=""}, "pack", "mongodb", "", "")
+                      or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters", da_cluster=""}, "pack", "elasticsearch", "", "")
+                      or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters", da_cluster=""}, "pack", "oracle", "", "")
+                      or label_replace(query_interval{query="db2_liveness", job="tenant-exporters", da_cluster=""}, "pack", "db2", "", "")
+                      or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters", da_cluster=""}, "pack", "clickhouse", "", "")
+                      or label_replace(kafka_brokers{job="tenant-exporters", da_cluster=""}, "pack", "kafka", "", "")
+                      or label_replace(rabbitmq_up{job="tenant-exporters", da_cluster=""} or rabbitmq_identity_info{job="tenant-exporters", da_cluster=""}, "pack", "rabbitmq", "", "")
+                      or label_replace(jvm_memory_used_bytes{job="tenant-exporters", da_cluster=""} or jvm_memory_bytes_used{job="tenant-exporters", da_cluster=""}, "pack", "jvm", "", "")
+                      or label_replace(nginx_up{job="tenant-exporters", da_cluster=""}, "pack", "nginx", "", "")
+                    )
+                  )
+                  or
+                  (
+                    max without(instance, pod) (tenant_expected_exporter{expected_cluster=""})
+                    unless on(tenant, pack) (
+                      label_replace(pg_up{job="tenant-exporters"}, "pack", "postgresql", "", "")
+                      or label_replace(mysql_up{job="tenant-exporters"}, "pack", "mariadb", "", "")
+                      or label_replace(redis_up{job="tenant-exporters"}, "pack", "redis", "", "")
+                      or label_replace(mongodb_up{job="tenant-exporters"}, "pack", "mongodb", "", "")
+                      or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "pack", "elasticsearch", "", "")
+                      or label_replace(query_interval{query="oracle_liveness", job="tenant-exporters"}, "pack", "oracle", "", "")
+                      or label_replace(query_interval{query="db2_liveness", job="tenant-exporters"}, "pack", "db2", "", "")
+                      or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "pack", "clickhouse", "", "")
+                      or label_replace(kafka_brokers{job="tenant-exporters"}, "pack", "kafka", "", "")
+                      or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "pack", "rabbitmq", "", "")
+                      or label_replace(jvm_memory_used_bytes{job="tenant-exporters"} or jvm_memory_bytes_used{job="tenant-exporters"}, "pack", "jvm", "", "")
+                      or label_replace(nginx_up{job="tenant-exporters"}, "pack", "nginx", "", "")
+                    )
+                  )
                 )
               )
               /
-              count without (tenant, pack) (max without (instance, pod) (tenant_expected_exporter))
+              count without (tenant, pack) (max without (instance, pod, expected_cluster) (tenant_expected_exporter))
             ) > 0.1
           )
           unless on() absent(up{job="tenant-exporters"})
@@ -2153,7 +2245,9 @@ groups:
             More than 5 tenants AND over 10% of the declared (tenant, pack)
             pairs (the kinds tenants list in _expected_exporters)
             simultaneously have no exporter of that kind answering under
-            job="tenant-exporters" (that kind's presence metric absent).
+            job="tenant-exporters" (that kind's presence metric absent). A
+            kind declared per cluster (kind@cluster) is one pair however many
+            clusters it names, absent when any of them has none answering.
             Both conditions together mean this is almost certainly a SHARED
             failure (node pool drained, network partition, image-pull outage on a
             rolling restart) rather than N independent exporter deaths or a

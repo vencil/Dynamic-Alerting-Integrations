@@ -751,7 +751,9 @@ tests:
                 More than 5 tenants AND over 10% of the declared (tenant, pack)
                 pairs (the kinds tenants list in _expected_exporters)
                 simultaneously have no exporter of that kind answering under
-                job="tenant-exporters" (that kind's presence metric absent).
+                job="tenant-exporters" (that kind's presence metric absent). A
+                kind declared per cluster (kind@cluster) is one pair however many
+                clusters it names, absent when any of them has none answering.
                 Both conditions together mean this is almost certainly a SHARED
                 failure (node pool drained, network partition, image-pull outage on a
                 rolling restart) rather than N independent exporter deaths or a

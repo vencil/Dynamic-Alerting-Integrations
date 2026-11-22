@@ -514,9 +514,12 @@ func (c *Collector) collectUnsetThresholds(ch chan<- prometheus.Metric, unset []
 	}
 }
 
-// collectTenantExpectedExporter emits tenant_expected_exporter{tenant, pack}=1
-// for every exporter kind a tenant DECLARES in `_expected_exporters` (#869,
-// #3771, #4097) — one series per declared kind.
+// collectTenantExpectedExporter emits tenant_expected_exporter=1 for every
+// entry a tenant DECLARES in `_expected_exporters` (#869, #3771, #4097) — one
+// series per entry:
+//
+//	tenant_expected_exporter{tenant, pack}                    a kind alone
+//	tenant_expected_exporter{tenant, pack, expected_cluster}  `kind@cluster`
 //
 // This is the LEFT-hand input to the per-tenant liveness anti-join
 // (TenantExporterAbsent in rule-pack-liveness.yaml):
@@ -530,36 +533,57 @@ func (c *Collector) collectUnsetThresholds(ch chan<- prometheus.Metric, unset []
 // user_threshold_unset{tenant, pack, key} carries: a kind IS a rule pack
 // (the ones with a presence metric, config.ExpectedExporterKinds).
 //
+// `kind@cluster` (ADR-006 contract 6): the row names the cluster the kind
+// must report from, and the rule matches it against the presence series'
+// `da_cluster`, so one cluster reporting no longer hides another that went
+// quiet. The label is `expected_cluster`, NOT `da_cluster`, and a row for a
+// kind alone carries no such label at all: a Prometheus stamps its external
+// label `da_cluster` on every series that leaves it, so a bare row federated
+// from an edge arrives carrying one — were the declared cluster written in
+// that label, such a row would read as a per-cluster declaration nobody
+// made.
+//
 // Opt-in contract — LOAD-BEARING, not cosmetic: expected
 // (config.ResolveExpectedExporters) holds only the tenants that declare at
-// least one kind the exporter reads. A series for a tenant that declared
+// least one entry the exporter reads. A series for a tenant that declared
 // nothing would put a left-hand series into the anti-join for a tenant that
 // has no matching exporter at all → a permanent false-positive critical. So
 // liveness coverage is OPT-IN via declaring; a tenant that scrapes exporters
 // without declaring is surfaced by TenantExporterUndeclared instead. A value
-// the exporter does not read (an unknown kind, a repeat, not a list) declares
-// NOTHING — it is the key verdict's error, never a half-served expectation —
-// and a read value names each kind once, so no series is emitted twice.
+// the exporter does not read (an unknown kind, a repeat, a kind written both
+// with and without a cluster, not a list) declares NOTHING — it is the key
+// verdict's error, never a half-served expectation — and a read value names
+// each entry once, so no series is emitted twice.
 //
 // Deliberately a SEPARATE metric — the kind is NOT a label of
 // tenant_metadata_info: that is a load-bearing 1-series-per-tenant info
 // metric every rule-pack alert's metadata annotations query (#3483; it was
 // joined into alerts before), so widening its label set is forbidden.
 func (c *Collector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, expected []config.ExpectedExporters) {
-	expectedDesc := prometheus.NewDesc(
-		"tenant_expected_exporter",
-		"Liveness expectation (always 1) for each exporter kind a tenant declares in _expected_exporters. "+
-			"LHS of the TenantExporterAbsent anti-join (#869, #3771, #4097). One series per declared (tenant, pack).",
-		[]string{"tenant", "pack"},
-		nil,
-	)
+	// One family, two label sets (the collector is unchecked, Describe sends
+	// nothing): the HELP is the same text in both, as a family's must be.
+	const help = "Liveness expectation (always 1) for each entry a tenant declares in _expected_exporters: " +
+		"{tenant, pack} for an exporter kind written alone (an exporter of that kind answering in any cluster is enough), " +
+		"{tenant, pack, expected_cluster} for kind@cluster (one must answer in that cluster). " +
+		"LHS of the TenantExporterAbsent anti-join (#869, #3771, #4097). One series per entry."
+	// The label set is the entry's: built here, so the README parity test
+	// (metrics_readme_parity_test.go) reads the family as one whose labels
+	// are decided at scrape time and checks its name.
+	desc := func(labels []string) *prometheus.Desc {
+		return prometheus.NewDesc("tenant_expected_exporter", help, labels, nil)
+	}
+	anyClusterDesc := desc([]string{"tenant", "pack"})
+	perClusterDesc := desc([]string{"tenant", "pack", "expected_cluster"})
 	for _, e := range expected {
 		// Opt-in: only declared kinds are expected to have a live exporter.
-		for _, kind := range e.Kinds {
-			m, err := prometheus.NewConstMetric(expectedDesc, prometheus.GaugeValue, 1.0,
-				e.Tenant, kind)
+		for _, entry := range e.Entries {
+			desc, values := anyClusterDesc, []string{e.Tenant, entry.Kind}
+			if entry.Cluster != "" {
+				desc, values = perClusterDesc, append(values, entry.Cluster)
+			}
+			m, err := prometheus.NewConstMetric(desc, prometheus.GaugeValue, 1.0, values...)
 			if err != nil {
-				c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s pack=%s: %v", e.Tenant, kind, err)
+				c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s pack=%s: %v", e.Tenant, entry.Kind, err)
 				continue
 			}
 			ch <- m

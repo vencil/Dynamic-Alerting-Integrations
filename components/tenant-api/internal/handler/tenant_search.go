@@ -13,6 +13,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // SearchTenants is the v2.8.0 Phase .c C-1 server-side search /
@@ -146,10 +147,13 @@ type SearchResponse struct {
 //	environment  — exact match (e.g. "prod", "staging").
 //	tier         — exact match (e.g. "tier1").
 //	domain       — exact match.
-//	expected_exporters — exact match against any one of the exporter
-//	               kinds the tenant declares in `_expected_exporters`
-//	               (#4097; replaces the removed `db_type`, which is
-//	               refused with 400 rather than ignored).
+//	expected_exporters — an exporter kind (`mariadb`): the tenant
+//	               declares that kind in `_expected_exporters`, alone
+//	               or per cluster (`mariadb@east` matches); or a whole
+//	               entry (`mariadb@east`): the tenant declares exactly
+//	               that entry. Exact, never a substring (#4097;
+//	               replaces the removed `db_type`, which is refused
+//	               with 400 rather than ignored).
 //	tag          — single tag the tenant must have in its
 //	               _metadata.tags list (case-sensitive — tags are
 //	               canonical labels, not free text).
@@ -172,7 +176,7 @@ type SearchResponse struct {
 // @Param       environment query    string false "Exact environment"
 // @Param       tier        query    string false "Exact tier"
 // @Param       domain      query    string false "Exact domain"
-// @Param       expected_exporters query string false "An exporter kind the tenant declares in _expected_exporters (exact match against any one of its kinds). Replaces db_type, which is refused with 400."
+// @Param       expected_exporters query string false "An exporter kind the tenant declares in _expected_exporters, alone or per cluster (mariadb matches a tenant declaring mariadb or mariadb@east); or a whole kind@cluster entry, matched exactly. Replaces db_type, which is refused with 400."
 // @Param       tag         query    string false "A tag the tenant must carry (case-sensitive)"
 // @Param       page_size   query    int    false "Page size (default 50, max 500)"
 // @Param       offset      query    int    false "Offset (default 0)"
@@ -313,7 +317,7 @@ func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 		if p.domain != "" && t.Domain != p.domain {
 			continue
 		}
-		if p.kind != "" && !containsString(t.ExpectedExporters, p.kind) {
+		if p.kind != "" && !declaresExporter(t.ExpectedExporters, p.kind) {
 			continue
 		}
 		if p.tag != "" && !containsString(t.Tags, p.tag) {
@@ -325,6 +329,23 @@ func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 		out = append(out, t)
 	}
 	return out
+}
+
+// declaresExporter reports whether entries — a tenant's `_expected_exporters`
+// as written, `kind` or `kind@cluster` — answer the expected_exporters
+// filter. A filter that is a kind matches BY KIND, the part of an entry
+// before `@`, so `mariadb` finds a tenant that declares `mariadb@east`: the
+// question "who runs mariadb" does not depend on how it was declared. A
+// filter with `@` is a whole entry and matches only that entry — it does not
+// match the bare kind, which makes no claim about that cluster.
+func declaresExporter(entries []string, filter string) bool {
+	whole := strings.Contains(filter, "@")
+	for _, entry := range entries {
+		if entry == filter || !whole && cfg.ExpectedExporterKind(entry) == filter {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesFreeText returns true when any indexed text field on the

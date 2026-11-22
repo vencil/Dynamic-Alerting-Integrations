@@ -70,7 +70,7 @@ _metadata:
 
 - **全部選填**：省略等同空值，向下相容。
 - **不加進 `tenant_metadata_info`**：不成為這個指標的標籤，避免 cardinality 暴增。
-- **租戶跑哪些 exporter 不是 metadata 欄位**：由租戶頂層的 `_expected_exporters` 宣告，值是一個 exporter 種類的列表（例如 `[mariadb, redis, nginx]`；種類就是有存在指標的 Rule Pack）。exporter 對每個宣告的種類輸出一條 `tenant_expected_exporter{tenant, pack}`（值為 1），存活檢查據此逐種類判斷那一種 exporter 是否缺席，所以宣告就等於打開該種類的缺席告警。這件事原本由 `_metadata.db_type` 兼任：一個欄位同時是 UI 的分組字串與存活宣告，值沒有人檢查，也宣告不了 nginx、JVM 這類不是資料庫的 exporter。該欄位已移除，還寫著它的設定會被拒收，訊息指出要改寫成哪一行。tenant-api 與 UI 仍可依宣告的種類篩選。
+- **租戶跑哪些 exporter 不是 metadata 欄位**：由租戶頂層的 `_expected_exporters` 宣告，值是一個 exporter 種類的列表（例如 `[mariadb, redis, nginx]`；種類就是有存在指標的 Rule Pack）。exporter 對每個宣告的種類輸出一條 `tenant_expected_exporter{tenant, pack}`（值為 1），存活檢查據此逐種類判斷那一種 exporter 是否缺席，所以宣告就等於打開該種類的缺席告警。同一個租戶跑在好幾個叢集時，條目可以寫成 `種類@叢集`（例如 `[mariadb@east, mariadb@west, redis]`）：exporter 對這種條目輸出的序列多一個 `expected_cluster` label，缺席改為逐叢集判斷——任何一個宣告的叢集沒有這一種 exporter 在回報就告警；只寫種類時，任一個叢集有就算存在。同一個種類只能擇一寫法。叢集怎麼辨識、這個判斷在哪裡成立，見 [ADR-006](./006-tenant-mapping-topologies.md) 的「多叢集同租戶」。這件事原本由 `_metadata.db_type` 兼任：一個欄位同時是 UI 的分組字串與存活宣告，值沒有人檢查，也宣告不了 nginx、JVM 這類不是資料庫的 exporter。該欄位已移除，還寫著它的設定會被拒收，訊息指出要改寫成哪一行。tenant-api 與 UI 仍可依宣告的種類篩選（`mariadb` 會找到宣告 `mariadb@east` 的租戶），條目則照寫的樣子顯示。
 - **environment、domain 也可限定權限範圍**：`_rbac.yaml` 的規則可用 `environments`、`domains` 限定適用範圍。
 - **兩端都能解析**：Go 的 `TenantMetadata` struct 與 Python 的 `generate_tenant_metadata.py` 都讀得懂這些欄位。
 

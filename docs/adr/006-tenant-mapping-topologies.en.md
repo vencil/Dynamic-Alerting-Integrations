@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.1.0) — Toolchain completed, 1:N end-to-end integration pending production validation
 📎 **Addendum** (v2.10.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
-🧭 **Revision** (2026-11-21) — cluster identity `da_cluster` (one external label per Prometheus) and per-cluster alert granularity for a tenant in several clusters, see "One tenant in several clusters" below; implementation in progress. 2026-11-22: notification grouping is not split per cluster by default
+🧭 **Revision** (2026-11-21) — cluster identity `da_cluster` (one external label per Prometheus) and per-cluster alert granularity for a tenant in several clusters, see "One tenant in several clusters" below; implementation in progress. 2026-11-22: notification grouping is not split per cluster by default; a tenant can declare the exporters it expects per cluster (`kind@cluster`)
 
 ## Background
 
@@ -162,7 +162,7 @@ groups:
 
 **Decision: one tenant may appear in several clusters. Each Prometheus says which cluster it is in with one external label, `da_cluster`; every rule whose input is tenant-exporter series aggregates and matches per (tenant, da_cluster), and alerts fire once per cluster.**
 
-This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete, and only part of it is in place**: the rule packs already evaluate per cluster, and Alertmanager's warning/critical dedup is per cluster too (point 5); notification grouping stays as it is by decision and is not split per cluster (point 5); per-cluster presence (point 6) is not done yet. It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
+This section is the contract for the N:1 row above ("multi-cluster same tenant, DR pairs" — a primary site and a standby site, one set each). **It describes the behaviour once the work is complete, and only part of it is in place**: the rule packs already evaluate per cluster, and Alertmanager's warning/critical dedup is per cluster too (point 5); notification grouping stays as it is by decision and is not split per cluster (point 5); per-cluster presence (point 6) is in use for the tenant-exporter absence alert, and the checks it does not cover yet are listed under "Consequences and known limits". It is being implemented in stages, tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
 
 ### Why it is needed
 
@@ -178,7 +178,7 @@ Two shapes of rule go wrong when a tenant spans clusters:
 3. **Thresholds stay one per tenant.** Thresholds, maintenance state and tenant metadata come from threshold-exporter: one set per tenant, not per cluster. When these series arrive federated from another cluster they carry `da_cluster` too; the rules always collapse them `by(tenant)` first and then apply them to each of the tenant's clusters with `on(tenant) group_left` (`group_left` lets one series on the right match several on the left), so the result is the same either way — provided every cluster sends the same thresholds.
 4. **How rules are written.** In an aggregation over tenant-exporter series, a `by(...)` that contains any of `tenant`, `instance`, `pod`, `namespace`, `node` must also contain `da_cluster`. The same holds for a pairing (`on(...)`) whose two sides are both such series.
 5. **Alerts carry `da_cluster`.** Every alert that reaches Alertmanager has the label: an alert the rules computed with it (the cluster its series came from) keeps that value; one without gets the external label of the Prometheus that sends it — "the cluster of the Prometheus that evaluated this rule". Alertmanager's warning/critical dedup ([ADR-001](./001-severity-dedup-via-inhibit.en.md)) includes it, so the same alert in two clusters does not inhibit its counterpart. Notification grouping (`group_by`, which decides which alerts are combined into one notification) is unchanged by default: the same alert firing in several clusters at once is one notification that holds the alerts of all those clusters; whether each alert is listed with its `da_cluster` depends on the template the receiver uses (Alertmanager's built-in email, PagerDuty and webhook do, its built-in Slack does not — see the known limitations below). A deployment or tenant that wants one notification per cluster adds `da_cluster` to its own `group_by`. Tenant self-service alerts (`Custom_*`) are the exception: they go through a separate route whose grouping is fixed, and a tenant's `group_by` does not apply to them. An alert that reads only threshold-exporter series (for example "tenant has not configured a threshold") is of the second kind: it is about the whole tenant, and the cluster on its label only says which Prometheus computed it.
-6. **"Expected but absent" is judged per cluster.** A tenant may declare in its configuration which clusters it is expected in; when it does, any declared cluster that reports nothing raises an alert. Without a declaration, appearing in at least one cluster counts as present. The declaration lives in the tenant's top-level `_expected_exporters` (see [ADR-010](./010-multi-tenant-grouping.en.md)): today it declares only which kinds of exporter the tenant runs; the per-cluster form (`kind@cluster`) has no reader yet and is refused when written, so every tenant currently behaves as one that declared no cluster.
+6. **"Expected but absent" is judged per cluster.** A tenant may declare in its configuration which clusters it is expected in; when it does, any declared cluster that reports nothing raises an alert. Without a declaration, appearing in at least one cluster counts as present. The declaration lives in the tenant's top-level `_expected_exporters` (see [ADR-010](./010-multi-tenant-grouping.en.md)), which lists the kinds of exporter the tenant runs: an entry that is only a kind (`mariadb`) declares no cluster; written as `kind@cluster` (`mariadb@edge-a`) it declares "this cluster must have an exporter of this kind reporting", the cluster being the `da_cluster` value of that cluster's Prometheus. One kind is written one way or the other; both in the same list are refused. The per-cluster absence alert (`TenantExporterAbsent`) carries the declared cluster as its `da_cluster`. The platform keeps no list of clusters and does not check that a declared cluster exists: a misspelt cluster id shows up as an absence alert for that non-existent cluster.
 7. **A Prometheus without `da_cluster` is pointed out when it goes live.** `da-tools federation-check edge` reads the running Prometheus' configuration and fails when `external_labels.da_cluster` has no value; the repo's own configuration is held to the same by the scrape-configuration lint. Both look in one place, with no relabelling to work out.
 
 ### Example
@@ -218,6 +218,26 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 
 `db_expected` and `db_up` are names made up for the illustration, not platform metrics.
 
+What a per-cluster declaration looks like in practice (point 6). Tenant `t1`'s configuration:
+
+```yaml
+tenants:
+  t1:
+    _expected_exporters: [mariadb@edge-a, mariadb@edge-b, redis]
+```
+
+The MariaDB exporter in `edge-a` disappears, the one in `edge-b` is still there, and the Redis exporter runs only in `edge-b`. The series on the central Prometheus:
+
+```text
+tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-a"}  1
+tenant_expected_exporter{tenant="t1", pack="mariadb", expected_cluster="edge-b"}  1
+tenant_expected_exporter{tenant="t1", pack="redis"}                               1
+mysql_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
+redis_up{job="tenant-exporters", tenant="t1", da_cluster="edge-b"}                1
+```
+
+After three minutes there is one alert: `TenantExporterAbsent{tenant="t1", pack="mariadb", da_cluster="edge-a"}`. MariaDB in `edge-b` and Redis, written as a kind only, raise nothing. With the same series and a tenant that writes only `_expected_exporters: [mariadb, redis]`, there is no alert at all: one reporting in `edge-b` counts as present.
+
 ### Consequences and known limits
 
 - **Upgrade order does not matter.** The rules work on series without `da_cluster` exactly as they did before clusters were told apart; once the external label is set, data leaving that Prometheus starts to carry it.
@@ -228,6 +248,9 @@ max by(tenant, da_cluster, instance) (db_up == 1)
 - **Thresholds must agree across clusters.** When each cluster runs its own threshold-exporter and federates it to the centre, the centre collapses the copies `by(tenant)` and takes the larger value; if they differ, the centre uses a set that is no single cluster's own.
 - **Some scrape agents add external labels at scrape time** (Prometheus itself does not). Series then carry `da_cluster` locally as well, and the rules give the same result.
 - **Sums are per cluster.** Rules that sum "all of the tenant's instances" (for example lock wait and deadlock counts) sum within each cluster and compare each against the threshold.
+- **Per-cluster presence has to be evaluated where series carry `da_cluster`.** That is the central Prometheus that receives every cluster's data; when the rules are deployed in layers, the alert rules are placed there anyway. In a deployment where each cluster takes the same tenant configuration and evaluates the alert rules itself, local series carry no `da_cluster`, and `kind@cluster` reads there as the kind alone: with an exporter of the kind present locally every declared cluster counts as present, and with none locally one alert fires for each declared cluster of that kind, naming clusters the local Prometheus cannot see. Such a deployment should write kinds only and give each cluster its own tenant configuration.
+- **A presence series without `da_cluster` counts as present for every declared cluster.** The other side of the previous point: if the central Prometheus also scrapes tenant exporters directly, those local series keep every declared cluster from alerting. To judge per cluster, write `da_cluster` on that scrape job.
+- **Per-cluster judgement covers exporter absence and undeclared exporters only, so far.** Two checks are still made per tenant, so one reporting cluster hides another: "a custom-recipe disk alert is configured but has no matching data" (`CustomRecipeDiskInert`) and "a version-specific threshold is configured but there is no version data" (`VersionAwareThresholdInert`). The roll-up alert for "many tenants' exporters absent at once" (`MassExporterOutage`) counts (tenant, kind) pairs — a kind declared for several clusters is one pair — and does not say which cluster lost many. The alert for "one scrape target of the tenant is down while another is healthy" (`TenantExporterReplicaDown`) deliberately keeps matching across clusters: for a tenant that writes kinds only, it is the one signal when a whole cluster goes down. Progress is tracked in [#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097).
 - **Maintenance mode is the whole tenant.** One cluster cannot be put into maintenance alone.
 - **Clusters cannot have different thresholds.** A tenant uses one set of thresholds in all its clusters.
 - **Notifications are not split per cluster by default.** The platform ships no notification template, so what people see is the output of Alertmanager's built-in templates. When two clusters fire at once, the email body, the PagerDuty details and the webhook payload list each alert with its `da_cluster`; the one-line title is `[FIRING:2] <alert name> <tenant> (<other common labels>)`, without the cluster (when a single cluster fires, the title does show the cluster, because it is then a label common to the whole group). The built-in Slack template has a title and no body, so with two clusters firing it does not show which two; that needs a custom template that lists the alerts. In PagerDuty one group is one incident, resolved once every cluster has recovered. The default is left alone because whether a tenant's route carries a `group_by` depends on what the deployment's `_routing_defaults`, a routing profile and the tenant's own `_routing` add up to (the scaffolded `_defaults.yaml` gives one); a tenant left with none — no layer gives one, or the tenant overrides it with `null` or an empty list — inherits the root route's grouping, so changing the platform default would reach only those tenants, not all of them; the other reason is the first cost below.

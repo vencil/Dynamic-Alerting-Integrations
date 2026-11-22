@@ -56,6 +56,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #327
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
     exit_on_served_values_error,
+    expected_exporter_kind,
     load_whole_day,
     now_at,
     recorded_at,
@@ -115,8 +116,9 @@ def extract_environment(tenant_name: str, metadata: dict) -> str:
 
 
 def extract_expected_exporters(declared: Any) -> list[str]:
-    """Return the exporter kinds the tenant declares in `_expected_exporters`,
-    as the exporter reads them, in order; [] if none.
+    """Return the entries the tenant declares in `_expected_exporters`, as
+    the exporter reads them and as written (an exporter kind, or
+    `kind@cluster`, #4097), in order; [] if none.
 
     Not inferred from metric keys (#2115 B4): Go reads only the declaration.
     The exporter's tenant_expected_exporter liveness series and tenant-api's
@@ -372,8 +374,11 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
 
     Produces three dimension views: by-domain, by-expected_exporter, by-region.
     Each view maps dimension value → list of tenant IDs. A list-valued field
-    (expected_exporters) puts the tenant under each of its values.
+    (expected_exporters) puts the tenant under each of its values — by KIND
+    (#4097): an entry may be `kind@cluster`, and a tenant declaring
+    `mariadb@east` and `mariadb@west` is under `mariadb`, once.
     """
+    by_kind = {"expected_exporters"}
     dimensions = {
         "by_domain": "domain",
         "by_expected_exporter": "expected_exporters",
@@ -385,7 +390,10 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
         groups: dict[str, list[str]] = {}
         for tenant_id, meta in tenant_metadata.items():
             value = meta.get(field, "")
-            for v in (value if isinstance(value, list) else [value]):
+            values = value if isinstance(value, list) else [value]
+            if field in by_kind:
+                values = dict.fromkeys(expected_exporter_kind(v) for v in values if isinstance(v, str))
+            for v in values:
                 if v:
                     groups.setdefault(v, []).append(tenant_id)
         # Sort member lists for deterministic output

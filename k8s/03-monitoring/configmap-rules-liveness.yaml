@@ -14,89 +14,148 @@ metadata:
     rule-pack: liveness
 data:
   liveness-alert.yml: "groups:\n- name: tenant-liveness\n  rules:\n  - alert: TenantExporterAbsent\n\
-    \    expr: \"max without(instance, pod) (tenant_expected_exporter)\\nunless on(tenant,\
-    \ pack) (\\n  label_replace(pg_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\"\
-    , \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(mysql_up{job=\\\
+    \    expr: \"(\\n  label_replace(\\n    label_replace(\\n      max by(tenant,\
+    \ pack, expected_cluster) (tenant_expected_exporter{expected_cluster!=\\\"\\\"\
+    }),\\n      \\\"da_cluster\\\", \\\"$1\\\", \\\"expected_cluster\\\", \\\"(.+)\\\
+    \"),\\n    \\\"expected_cluster\\\", \\\"\\\", \\\"\\\", \\\"\\\")\\n  unless\
+    \ on(tenant, pack, da_cluster) (\\n    label_replace(pg_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(mysql_up{job=\\\
     \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\\
-    n  or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\"\
-    redis\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(mongodb_up{job=\\\"tenant-exporters\\\
-    \"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(elasticsearch_exporter_build_info{job=\\\
+    n    or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\
+    \"redis\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(mongodb_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(elasticsearch_exporter_build_info{job=\\\
     \"tenant-exporters\\\"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\
-    \")\\n  or label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\"\
-    tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n  or\
-    \ label_replace(query_interval{query=\\\"db2_liveness\\\", job=\\\"tenant-exporters\\\
-    \"}, \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
+    \")\\n    or label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n\
+    \    or label_replace(query_interval{query=\\\"db2_liveness\\\", job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
     \"tenant-exporters\\\"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\"\
-    )\\n  or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\"pack\\\
-    \", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(rabbitmq_up{job=\\\
+    )\\n    or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\"pack\\\
+    \", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(rabbitmq_up{job=\\\
     \"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\"\
-    }, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(jvm_memory_used_bytes{job=\\\
+    }, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(jvm_memory_used_bytes{job=\\\
     \"tenant-exporters\\\"} or jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"\
-    }, \\\"pack\\\", \\\"jvm\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(nginx_up{job=\\\
-    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n)\\\
-    n\"\n    for: 3m\n    labels:\n      maintenance: page\n      severity: critical\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: No\
-    \ {{ $labels.pack }} exporter of tenant {{ $labels.tenant }} has answered a scrape\
-    \ under job=\"tenant-exporters\" for 3m (its presence metric is absent; other\
-    \ exporter kinds of the tenant may still be up). Either the exporter pod is down\
-    \ (up=0, Service alive) or the tenant's scrape target was removed (series absent).\
-    \ If the tenant no longer runs {{ $labels.pack }}, remove it from _expected_exporters;\
+    }, \\\"pack\\\", \\\"jvm\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(nginx_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n \
+    \ )\\n  unless on(tenant, pack) (\\n    label_replace(pg_up{job=\\\"tenant-exporters\\\
+    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\"\
+    )\\n    or label_replace(mysql_up{job=\\\"tenant-exporters\\\", da_cluster=\\\"\
+    \\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(redis_up{job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"redis\\\", \\\"\
+    \\\", \\\"\\\")\\n    or label_replace(mongodb_up{job=\\\"tenant-exporters\\\"\
+    , da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n\
+    \    or label_replace(elasticsearch_exporter_build_info{job=\\\"tenant-exporters\\\
+    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\
+    \")\\n    or label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"oracle\\\", \\\
+    \"\\\", \\\"\\\")\\n    or label_replace(query_interval{query=\\\"db2_liveness\\\
+    \", job=\\\"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"db2\\\
+    \", \\\"\\\", \\\"\\\")\\n    or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"clickhouse\\\"\
+    , \\\"\\\", \\\"\\\")\\n    or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\
+    \", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n\
+    \    or label_replace(rabbitmq_up{job=\\\"tenant-exporters\\\", da_cluster=\\\"\
+    \\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\", da_cluster=\\\"\\\
+    \"}, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(jvm_memory_used_bytes{job=\\\
+    \"tenant-exporters\\\", da_cluster=\\\"\\\"} or jvm_memory_bytes_used{job=\\\"\
+    tenant-exporters\\\", da_cluster=\\\"\\\"}, \\\"pack\\\", \\\"jvm\\\", \\\"\\\"\
+    , \\\"\\\")\\n    or label_replace(nginx_up{job=\\\"tenant-exporters\\\", da_cluster=\\\
+    \"\\\"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n  )\\n)\\nor\\n(\\\
+    n  max without(instance, pod) (tenant_expected_exporter{expected_cluster=\\\"\\\
+    \"})\\n  unless on(tenant, pack) (\\n    label_replace(pg_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(mysql_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\\
+    n    or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"pack\\\", \\\
+    \"redis\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(mongodb_up{job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(elasticsearch_exporter_build_info{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\\\
+    \")\\n    or label_replace(query_interval{query=\\\"oracle_liveness\\\", job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n\
+    \    or label_replace(query_interval{query=\\\"db2_liveness\\\", job=\\\"tenant-exporters\\\
+    \"}, \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(ClickHouseMetrics_TCPConnection{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\\\"\
+    )\\n    or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\"pack\\\
+    \", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(rabbitmq_up{job=\\\
+    \"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\"\
+    }, \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(jvm_memory_used_bytes{job=\\\
+    \"tenant-exporters\\\"} or jvm_memory_bytes_used{job=\\\"tenant-exporters\\\"\
+    }, \\\"pack\\\", \\\"jvm\\\", \\\"\\\", \\\"\\\")\\n    or label_replace(nginx_up{job=\\\
+    \"tenant-exporters\\\"}, \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n \
+    \ )\\n)\\n\"\n    for: 3m\n    labels:\n      maintenance: page\n      severity:\
+    \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
+    \ 'No {{ $labels.pack }} exporter of tenant {{ $labels.tenant }} has answered\
+    \ a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent;\
+    \ other exporter kinds of the tenant may still be up). Either the exporter pod\
+    \ is down (up=0, Service alive) or the tenant''s scrape target was removed (series\
+    \ absent). If the tenant no longer runs {{ $labels.pack }}, remove it from _expected_exporters;\
     \ if the tenant was de-provisioned, remove its conf.d entry too (otherwise this\
-    \ is a stale-config false positive).\n      description_zh: 租戶 {{ $labels.tenant\
-    \ }} 的 {{ $labels.pack }} exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的\
-    \ exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除\
-    \ (series 缺席)。若租戶已不再使用 {{ $labels.pack }}，請從 _expected_exporters 移除；若租戶已退租，請確認\
-    \ conf.d 裡它的設定也一併移除 (否則這是殘留組態造成的假陽性)。\n      owner: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
-    \ }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ is a stale-config false positive).{{ with $labels.da_cluster }} This alert carries\
+    \ da_cluster={{ . }}. For a kind declared per cluster ({{ $labels.pack }}@{{ .\
+    \ }} in _expected_exporters) that is the declared cluster no exporter answers\
+    \ from; the kind may be healthy in the tenant''s other clusters. If {{ . }} is\
+    \ not a cluster the tenant runs in (a misspelt cluster id, or a cluster it left),\
+    \ correct or remove that entry. For a kind declared alone the label only names\
+    \ the Prometheus the declaration came through: no cluster has one answering.{{\
+    \ end }}'\n      description_zh: 租戶 {{ $labels.tenant }} 的 {{ $labels.pack }}\
+    \ exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter\
+    \ 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series\
+    \ 缺席)。若租戶已不再使用 {{ $labels.pack }}，請從 _expected_exporters 移除；若租戶已退租，請確認 conf.d\
+    \ 裡它的設定也一併移除 (否則這是殘留組態造成的假陽性)。{{ with $labels.da_cluster }}本告警帶 da_cluster={{\
+    \ . }}。逐叢集宣告的 kind（_expected_exporters 裡的 {{ $labels.pack }}@{{ . }}）：這就是沒有 exporter\
+    \ 回應的那個宣告叢集，同租戶其他叢集的這一種 exporter 可能仍正常；若 {{ . }} 不是租戶所在的叢集（叢集 ID 打錯，或已撤出），請更正或移除該條目。只寫\
+    \ kind 的宣告：這個 label 只代表宣告經過的是哪一台 Prometheus，意思是沒有任何叢集有這一種 exporter 在回應。{{ end\
+    \ }}\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
     \ }}'\n      summary: Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.pack\
-    \ }})\n      summary_zh: 租戶 {{ $labels.tenant }} ({{ $labels.pack }}) 的 exporter\
-    \ 缺席\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: TenantExporterReplicaDown\n    expr: '(up{job=\"tenant-exporters\"\
-    } == 0) and on(tenant) (up{job=\"tenant-exporters\"} == 1)\n\n      and on(tenant)\
-    \ group by(tenant) (tenant_expected_exporter)\n\n      unless on(tenant)\n\n \
-    \     (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for: 10m\n\
-    \    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Target {{ $labels.instance\
-    \ }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tenant\
-    \ }} has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"\
-    } target of the same tenant reads up=1. That target may belong to a different\
-    \ Service: if {{ with $labels.service }}Service {{ . }}{{ else }}its Service{{\
-    \ end }} has no other replica, its metrics are no longer scraped at all. When\
-    \ it was the only exporter of one of the kinds the tenant declares in _expected_exporters,\
-    \ TenantExporterAbsent (critical) fires for that kind as well; when another Service\
-    \ of the same kind is still up, this warning is the only signal. If every target\
-    \ of the tenant goes down, this alert resolves and TenantExporterAbsent takes\
-    \ over. Only tenants that declare _expected_exporters get this alert; an undeclared\
-    \ tenant gets TenantExporterUndeclared instead.'\n      description_zh: 租戶 {{\
-    \ $labels.tenant }} 的 target {{ $labels.instance }}{{ with $labels.pod }}（pod\
-    \ {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target\
-    \ 為 up=1。那個 target 可能屬於別的 Service：若{{ with $labels.service }} Service {{ . }}\
-    \ {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取。它若是租戶在 _expected_exporters 宣告的某個\
-    \ kind 唯一的 exporter，TenantExporterAbsent（critical）也會對那個 kind 響；同一個 kind 若還有別的\
-    \ Service 是 up，本告警就是唯一的訊號。若租戶所有 target 都掛，本告警會解除，改由 TenantExporterAbsent 接手。只有宣告了\
-    \ _expected_exporters 的租戶才會收到本告警；沒宣告的租戶改收 TenantExporterUndeclared。\n      owner:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Exporter target {{ $labels.instance }} down for tenant {{ $labels.tenant }}\
-    \ (another tenant-exporters target of the tenant is up)\n      summary_zh: 租戶\
-    \ {{ $labels.tenant }} 的 exporter target {{ $labels.instance }} 停機（同租戶仍有其他 tenant-exporters\
-    \ target 為 up）\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: TenantExporterUndeclared\n    expr: \"group by(tenant, da_cluster,\
-    \ pack) (\\n  label_replace(max_over_time(pg_up{job=\\\"tenant-exporters\\\"}[1h]),\
-    \ \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(mysql_up{job=\\\
-    \"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\"\
-    )\\n  or label_replace(max_over_time(redis_up{job=\\\"tenant-exporters\\\"}[1h]),\
-    \ \\\"pack\\\", \\\"redis\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(mongodb_up{job=\\\
-    \"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\"\
-    )\\n  or label_replace(max_over_time(elasticsearch_exporter_build_info{job=\\\"\
-    tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\"\
-    \\\")\\n  or label_replace(max_over_time(query_interval{query=\\\"oracle_liveness\\\
+    \ }}{{ with $labels.da_cluster }}, da_cluster {{ . }}{{ end }})\n      summary_zh:\
+    \ 租戶 {{ $labels.tenant }} ({{ $labels.pack }}{{ with $labels.da_cluster }}，da_cluster\
+    \ {{ . }}{{ end }}) 的 exporter 缺席\n      tier: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}'\n  - alert: TenantExporterReplicaDown\n    expr: '(up{job=\"\
+    tenant-exporters\"} == 0) and on(tenant) (up{job=\"tenant-exporters\"} == 1)\n\
+    \n      and on(tenant) group by(tenant) (tenant_expected_exporter)\n\n      unless\
+    \ on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n   \
+    \   '\n    for: 10m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Target\
+    \ {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant\
+    \ {{ $labels.tenant }} has read up=0 for 10m while at least one other up{job=\"\
+    tenant-exporters\"} target of the same tenant reads up=1. That target may belong\
+    \ to a different Service: if {{ with $labels.service }}Service {{ . }}{{ else\
+    \ }}its Service{{ end }} has no other replica, its metrics are no longer scraped\
+    \ at all. When it was the only exporter of one of the kinds the tenant declares\
+    \ in _expected_exporters, TenantExporterAbsent (critical) fires for that kind\
+    \ as well; when another Service of the same kind is still up, this warning is\
+    \ the only signal. If every target of the tenant goes down, this alert resolves\
+    \ and TenantExporterAbsent takes over. Only tenants that declare _expected_exporters\
+    \ get this alert; an undeclared tenant gets TenantExporterUndeclared instead.'\n\
+    \      description_zh: 租戶 {{ $labels.tenant }} 的 target {{ $labels.instance }}{{\
+    \ with $labels.pod }}（pod {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"\
+    tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若{{ with $labels.service\
+    \ }} Service {{ . }} {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取。它若是租戶在 _expected_exporters\
+    \ 宣告的某個 kind 唯一的 exporter，TenantExporterAbsent（critical）也會對那個 kind 響；同一個 kind\
+    \ 若還有別的 Service 是 up，本告警就是唯一的訊號。若租戶所有 target 都掛，本告警會解除，改由 TenantExporterAbsent\
+    \ 接手。只有宣告了 _expected_exporters 的租戶才會收到本告警；沒宣告的租戶改收 TenantExporterUndeclared。\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Exporter target {{ $labels.instance }} down for tenant {{\
+    \ $labels.tenant }} (another tenant-exporters target of the tenant is up)\n  \
+    \    summary_zh: 租戶 {{ $labels.tenant }} 的 exporter target {{ $labels.instance\
+    \ }} 停機（同租戶仍有其他 tenant-exporters target 為 up）\n      tier: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: TenantExporterUndeclared\n\
+    \    expr: \"group by(tenant, da_cluster, pack) (\\n  label_replace(max_over_time(pg_up{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"postgresql\\\", \\\"\\\", \\\"\
+    \\\")\\n  or label_replace(max_over_time(mysql_up{job=\\\"tenant-exporters\\\"\
+    }[1h]), \\\"pack\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(redis_up{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"redis\\\", \\\"\\\", \\\"\\\"\
+    )\\n  or label_replace(max_over_time(mongodb_up{job=\\\"tenant-exporters\\\"}[1h]),\
+    \ \\\"pack\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(elasticsearch_exporter_build_info{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"elasticsearch\\\", \\\"\\\", \\\
+    \"\\\")\\n  or label_replace(max_over_time(query_interval{query=\\\"oracle_liveness\\\
     \", job=\\\"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"oracle\\\", \\\"\\\"\
     , \\\"\\\")\\n  or label_replace(max_over_time(query_interval{query=\\\"db2_liveness\\\
     \", job=\\\"tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"db2\\\", \\\"\\\", \\\
@@ -108,25 +167,38 @@ data:
     tenant-exporters\\\"}[1h]), \\\"pack\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\"\
     )\\n  or label_replace(max_over_time(nginx_up{job=\\\"tenant-exporters\\\"}[1h]),\
     \ \\\"pack\\\", \\\"nginx\\\", \\\"\\\", \\\"\\\")\\n)\\nunless on(tenant, pack)\
-    \ tenant_expected_exporter\\nand on(tenant) tenant_metadata_info\\nunless on(tenant)\\\
-    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 15m\n   \
-    \ labels:\n      maintenance: mute\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: 'A {{ $labels.pack\
-    \ }} exporter of tenant {{ $labels.tenant }} has answered under job=\"tenant-exporters\"\
-    \ within the last hour, but the tenant''s _expected_exporters does not list {{\
-    \ $labels.pack }}, so TenantExporterAbsent does not cover that exporter: if it\
-    \ stops answering, nothing pages. Add {{ $labels.pack }} to the tenant''s top-level\
-    \ _expected_exporters list (for example _expected_exporters: [mariadb, redis]).'\n\
-    \      description_zh: '租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter\
-    \ 最近一小時內在 job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 {{ $labels.pack\
+    \ tenant_expected_exporter{expected_cluster=\\\"\\\"}\\nunless on(tenant, pack,\
+    \ da_cluster) (\\n  label_replace(group by(tenant, pack, expected_cluster) (tenant_expected_exporter{expected_cluster!=\\\
+    \"\\\"}),\\n    \\\"da_cluster\\\", \\\"$1\\\", \\\"expected_cluster\\\", \\\"\
+    (.+)\\\")\\n  or group by(tenant, pack) (tenant_expected_exporter{expected_cluster!=\\\
+    \"\\\"})\\n)\\nand on(tenant) tenant_metadata_info\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n\"\n    for: 15m\n    labels:\n      maintenance: mute\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'A {{ $labels.pack }} exporter of tenant {{ $labels.tenant\
+    \ }} has answered under job=\"tenant-exporters\" within the last hour, but the\
+    \ tenant''s _expected_exporters does not list {{ $labels.pack }}, so TenantExporterAbsent\
+    \ does not cover that exporter: if it stops answering, nothing pages. Add {{ $labels.pack\
+    \ }} to the tenant''s top-level _expected_exporters list (for example _expected_exporters:\
+    \ [mariadb, redis]).{{ with $labels.da_cluster }} The exporter answers in cluster\
+    \ {{ . }}: when the tenant declares {{ $labels.pack }} per cluster, the entry\
+    \ to add is {{ $labels.pack }}@{{ . }} (one kind is written either alone or as\
+    \ kind@cluster entries, not both); written alone, {{ $labels.pack }} covers every\
+    \ cluster but is satisfied by an exporter in any one of them.{{ end }}'\n    \
+    \  description_zh: '租戶 {{ $labels.tenant }} 的 {{ $labels.pack }} exporter 最近一小時內在\
+    \ job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 {{ $labels.pack\
     \ }}，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 {{ $labels.pack }} 加進租戶頂層的\
-    \ _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。'\n      owner:\
+    \ _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。{{ with $labels.da_cluster\
+    \ }}這個 exporter 在叢集 {{ . }} 回應：租戶若逐叢集宣告 {{ $labels.pack }}，要補的條目是 {{ $labels.pack\
+    \ }}@{{ . }}（同一個 kind 只能擇一：單獨寫，或寫成 kind@cluster）；單獨寫 {{ $labels.pack }} 涵蓋所有叢集，但任何一個叢集有\
+    \ exporter 回應就算存在。{{ end }}'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Tenant {{ $labels.tenant }} runs a {{ $labels.pack }} exporter{{\
+    \ with $labels.da_cluster }} in cluster {{ . }}{{ end }} but does not declare\
+    \ {{ $labels.pack }}{{ with $labels.da_cluster }} for that cluster{{ end }} in\
+    \ _expected_exporters\n      summary_zh: 租戶 {{ $labels.tenant }} 有 {{ $labels.pack\
+    \ }} exporter{{ with $labels.da_cluster }}（叢集 {{ . }}）{{ end }} 在回應，但沒有在 _expected_exporters\
+    \ {{ with $labels.da_cluster }}為該叢集{{ end }}宣告 {{ $labels.pack }}\n      tier:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Tenant {{ $labels.tenant }} runs a {{ $labels.pack }} exporter but does not\
-    \ declare {{ $labels.pack }} in _expected_exporters\n      summary_zh: 租戶 {{ $labels.tenant\
-    \ }} 有 {{ $labels.pack }} exporter 在回應，但沒有在 _expected_exporters 宣告 {{ $labels.pack\
-    \ }}\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

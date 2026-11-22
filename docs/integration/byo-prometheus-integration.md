@@ -134,7 +134,7 @@ relabel_configs:
 >     da_cluster: cluster-a   # 這個叢集的 ID；單一叢集也要設，值固定即可
 > ```
 >
-> prometheus-operator 寫在 Prometheus CR 的 `spec.externalLabels`。Prometheus 會把 external label 加在送往 Alertmanager 的告警、`/federate` 與 remote write 上，所以告警與中央 Prometheus 都分得出叢集。上線後用 `da-tools federation-check edge --prometheus <url>` 檢查這一行有沒有設。
+> prometheus-operator 寫在 Prometheus CR 的 `spec.externalLabels`。Prometheus 會把 external label 加在送往 Alertmanager 的告警、`/federate` 與 remote write 上，所以告警與中央 Prometheus 都分得出叢集。上線後用 `da-tools federation-check edge --prometheus <url>` 檢查這一行有沒有設。租戶若要逐叢集宣告預期的 exporter（`_expected_exporters: [mariadb@cluster-a, mariadb@cluster-b]`），`@` 後面寫的就是這個值；逐叢集的缺席判定在收了各叢集資料的中央 Prometheus 上才成立（[ADR-006](../adr/006-tenant-mapping-topologies.md) 的已知限制）。
 
 ### 驗證
 

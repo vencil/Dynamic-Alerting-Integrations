@@ -8,6 +8,10 @@ asks, per (tenant, pack), whether an exporter OF THAT KIND is reporting:
 
     tenant_expected_exporter unless on(tenant, pack) (<presence>)
 
+An entry may also be ``kind@cluster`` (ADR-006 contract 6): the series then
+carries ``expected_cluster`` and the question is asked per cluster — see
+"Per cluster" below.
+
 ``up`` cannot answer that — no label on it says which kind of exporter a
 target is — so the answer is read from a metric only that kind of exporter
 emits, on every scrape it answers, whether or not what it watches is
@@ -90,6 +94,38 @@ held to them by ``tests/rulepacks/test_exporter_presence.py``, which also
 holds the three alerts' ``expr`` equal to :func:`alert_exprs` (``--write`` and
 the check mode compare the parsed ``expr``, not a text block).
 
+Per cluster (``kind@cluster``, #4097)
+-------------------------------------
+``tenant_expected_exporter{tenant, pack, expected_cluster}`` says the kind must
+report FROM that cluster; a row without ``expected_cluster`` keeps the meaning
+above (one cluster reporting is enough). The cluster a presence series is from
+is its ``da_cluster`` — the external label of the Prometheus it came through,
+so it is on the series where two clusters' data meet (a central Prometheus)
+and on nothing a Prometheus scraped itself.
+
+* TenantExporterAbsent is two branches joined by ``or``
+  (:func:`absent_expr`). Rows with ``expected_cluster`` are reduced to one per
+  (tenant, pack, expected_cluster), the cluster is copied into ``da_cluster``
+  and ``expected_cluster`` dropped — the alert's identity is (tenant, pack,
+  da_cluster) — then ``unless on(tenant, pack, da_cluster) (<presence>)``.
+  A second ``unless on(tenant, pack)`` reads the presence series that carry
+  NO ``da_cluster`` (:func:`presence_expr` with ``unlabelled=True`` — the
+  same table, each selector with ``da_cluster=""``): such a series counts
+  for every declared cluster. That is what a Prometheus that scrapes the
+  exporters itself sees, so ``kind@cluster`` there reads as the bare kind
+  instead of paging for every declared cluster of every tenant. It is a
+  term of the expression, not a gate on "do I see labelled series": a gate
+  would flip whenever a federation link flaps, and reset ``for:``.
+  Rows without ``expected_cluster`` take the rule as it was.
+* TenantExporterUndeclared is per (tenant, pack, da_cluster) on its left
+  already. What is declared for such a row: the kind alone; or the kind for
+  that cluster; or — a row with no ``da_cluster`` — the kind for any cluster.
+* MassExporterOutage counts (tenant, pack) PAIRS, and a pair with entries for
+  three clusters is three rows: both sides are reduced to pairs first, and a
+  pair is absent when TenantExporterAbsent's expression has any row for it.
+  That expression is written there with ``without`` instead of ``by`` (see
+  :func:`absent_expr`).
+
 Regenerate the three expressions after editing the registry or a template::
 
     python3 scripts/tools/_lib_exporter_presence.py --write
@@ -114,6 +150,15 @@ from _lib_python import detect_cli_lang  # noqa: E402  (dev-rules §9: CLI help 
 #: The label of ``tenant_expected_exporter`` that carries the kind — the label
 #: ``user_threshold_unset{tenant, pack, key}`` already uses.
 KIND_LABEL = "pack"
+#: The label of ``tenant_expected_exporter`` that carries the cluster of a
+#: ``kind@cluster`` entry (collector.go collectTenantExpectedExporter). Not
+#: CLUSTER_LABEL: a row for a kind alone, federated from an edge, arrives with
+#: that edge's ``da_cluster`` stamped on it and would read as declared.
+EXPECTED_CLUSTER_LABEL = "expected_cluster"
+#: ADR-006: the label that says which cluster a series came from
+#: (check_cluster_identity.CLUSTER_LABEL; pinned equal by
+#: tests/rulepacks/test_exporter_presence.py).
+CLUSTER_LABEL = "da_cluster"
 
 
 def _registry():
@@ -174,33 +219,40 @@ PLATFORM_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("platform")
 _PAD = "  "
 
 
-def selector(metric: str) -> str:
+#: The matcher of a presence series that carries no cluster.
+UNLABELLED_SELECTOR = f'{CLUSTER_LABEL}=""'
+
+
+def selector(metric: str, unlabelled: bool = False) -> str:
     """*metric* under the tenant-exporters job. A table entry is a bare name or
     a selector with its own matchers (query-exporter's built-ins are told apart
-    by their `query` label); the job matcher joins those."""
+    by their `query` label); the job matcher joins those. *unlabelled*: only
+    the series that carry no ``da_cluster``."""
+    matchers = JOB_SELECTOR + (f", {UNLABELLED_SELECTOR}" if unlabelled else "")
     if metric.endswith("}"):
-        return f"{metric[:-1]}, {JOB_SELECTOR}}}"
-    return f"{metric}{{{JOB_SELECTOR}}}"
+        return f"{metric[:-1]}, {matchers}}}"
+    return f"{metric}{{{matchers}}}"
 
 
 def _indent(text: str, depth: int) -> str:
     return "\n".join(_PAD * depth + line for line in text.split("\n"))
 
 
-def _terms(kinds, wrap) -> str:
+def _terms(kinds, wrap, unlabelled: bool = False) -> str:
     table = presence_table()
     terms = []
     for kind in kinds:
-        inner = " or ".join(wrap(selector(m)) for m in table[kind])
+        inner = " or ".join(wrap(selector(m, unlabelled)) for m in table[kind])
         terms.append(f'label_replace({inner}, "{KIND_LABEL}", "{kind}", "", "")')
     return "\nor ".join(terms)
 
 
-def presence_expr() -> str:
+def presence_expr(unlabelled: bool = False) -> str:
     """Every series of a presence metric under the tenant-exporters job, with
     its kind as ``pack`` — one ``label_replace`` term per kind, ``or``-ed
-    (the terms differ in metric name and pack, so ``or`` keeps them all)."""
-    return _terms(presence_table(), lambda sel: sel)
+    (the terms differ in metric name and pack, so ``or`` keeps them all).
+    *unlabelled*: the same table, only the series with no ``da_cluster``."""
+    return _terms(presence_table(), lambda sel: sel, unlabelled)
 
 
 def presence_over_time_expr() -> str:
@@ -248,19 +300,138 @@ def unset_notice_expr(pack: str) -> str:
     ])
 
 
-def _absent_pairs() -> str:
-    return ("max without(instance, pod) (tenant_expected_exporter)\n"
-            f"unless on(tenant, {KIND_LABEL}) (\n" + _indent(presence_expr(), 1) + "\n)")
+def _unless(on: str, body: str) -> str:
+    return f"unless on({on}) (\n" + _indent(body, 1) + "\n)"
 
 
-def alert_exprs() -> dict[tuple[Path, str], str]:
-    """(pack, alertname) → the alert's whole ``expr`` (no trailing newline)."""
-    absent = _absent_pairs()
-    # The floor counts TENANTS (#3771 review): one tenant declaring seven kinds,
-    # all down, is seven pairs but no shared failure. `count without` both
-    # times — a `by (tenant)` would read to the platform-alert guard
-    # (_grar_validate) as an alert carrying a tenant label.
-    mass = "\n".join([
+def absent_expr(aggregate_by: bool = True) -> str:
+    """TenantExporterAbsent: every declared expectation nothing answers for.
+
+    Two branches, ``or``-ed (their label sets differ, so ``or`` keeps both):
+
+    * per cluster — the rows with ``expected_cluster``, the cluster copied
+      into ``da_cluster``; gone when a presence series of the kind carries
+      that ``da_cluster``, or when one carries no ``da_cluster`` at all.
+    * any cluster — the rows without ``expected_cluster``: the rule as it
+      was, labels included (``max without(instance, pod)`` keeps whatever
+      else the scrape put on the row).
+
+    *aggregate_by* is how the per-cluster rows are reduced before the cluster
+    is copied. The reduction is not optional: the same entry federated from
+    two edges arrives as two rows that differ only in the ``da_cluster`` each
+    edge stamped, and writing the declared cluster over it would leave two
+    series with one label set — an evaluation error, the rule silent.
+
+    * True (the alert): ``max by(tenant, pack, expected_cluster)``, then
+      ``expected_cluster`` is dropped. One alert per (tenant, pack, cluster)
+      whatever else the rows carry.
+    * False (MassExporterOutage, which only asks which PAIRS have a row):
+      ``max without(instance, pod, da_cluster)``. The platform-alert guard
+      (_grar_validate) reads any ``by (… tenant …)`` in a platform alert's
+      expr as "this alert carries a tenant label", which it does not.
+    """
+    declared = f'tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}!=""}}'
+    if aggregate_by:
+        rows = "\n".join([
+            "label_replace(",
+            "  label_replace(",
+            f"    max by(tenant, {KIND_LABEL}, {EXPECTED_CLUSTER_LABEL}) ({declared}),",
+            f'    "{CLUSTER_LABEL}", "$1", "{EXPECTED_CLUSTER_LABEL}", "(.+)"),',
+            f'  "{EXPECTED_CLUSTER_LABEL}", "", "", "")',
+        ])
+    else:
+        rows = "\n".join([
+            "label_replace(",
+            f"  max without(instance, pod, {CLUSTER_LABEL}) ({declared}),",
+            f'  "{CLUSTER_LABEL}", "$1", "{EXPECTED_CLUSTER_LABEL}", "(.+)")',
+        ])
+    per_cluster = "\n".join([
+        rows,
+        _unless(f"tenant, {KIND_LABEL}, {CLUSTER_LABEL}", presence_expr()),
+        _unless(f"tenant, {KIND_LABEL}", presence_expr(unlabelled=True)),
+    ])
+    any_cluster = "\n".join([
+        f'max without(instance, pod) (tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}=""}})',
+        _unless(f"tenant, {KIND_LABEL}", presence_expr()),
+    ])
+    return "\n".join(["(", _indent(per_cluster, 1), ")", "or", "(", _indent(any_cluster, 1), ")"])
+
+
+#: Every declared (tenant, pack) once, however many clusters it is declared
+#: for (and however many exporter replicas serve the row).
+DECLARED_PAIRS = (f"max without (instance, pod, {EXPECTED_CLUSTER_LABEL}) "
+                  "(tenant_expected_exporter)")
+
+
+def absent_pairs_expr() -> str:
+    """The declared (tenant, pack) pairs TenantExporterAbsent has ANY row for
+    — one row per pair, with the labels of :data:`DECLARED_PAIRS`, so the
+    count of them divides by the count of those."""
+    return "\n".join([
+        DECLARED_PAIRS,
+        f"and on(tenant, {KIND_LABEL}) (",
+        _indent(absent_expr(aggregate_by=False), 1),
+        ")",
+    ])
+
+
+def undeclared_expr() -> str:
+    """TenantExporterUndeclared: per (tenant, pack, cluster), an exporter that
+    answered and that no entry covers.
+
+    Per (tenant, pack) (#3771 review): a tenant declaring [mariadb] while it
+    also runs a redis exporter is named for redis. And per cluster (ADR-006,
+    #4097): the left side is a row for each ``da_cluster`` the exporter
+    answers in. Such a row is covered by
+
+    * the kind written alone — ``unless on(tenant, pack)``;
+    * the kind for that cluster — ``unless on(tenant, pack, da_cluster)``
+      against the declared rows with their cluster copied into
+      ``da_cluster``;
+    * for a row with NO ``da_cluster`` (a Prometheus that scraped the
+      exporter itself cannot say which cluster it is), the kind for any
+      cluster: the same ``unless``, whose right side also carries each
+      declared (tenant, pack) with no ``da_cluster`` — the label a left row
+      without one matches on.
+
+    So `mariadb@east` with a mariadb exporter answering in west names west:
+    nothing pages if it stops. The guard joins on tenant: threshold-exporter
+    down (no tenant_metadata_info at all) and a de-provisioned tenant (its
+    config gone, the lookback's memory of its exporter not yet) both stay
+    silent.
+    """
+    declared = f'tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}!=""}}'
+    return "\n".join([
+        f"group by(tenant, {CLUSTER_LABEL}, {KIND_LABEL}) (",
+        _indent(presence_over_time_expr(), 1),
+        ")",
+        f'unless on(tenant, {KIND_LABEL}) tenant_expected_exporter{{{EXPECTED_CLUSTER_LABEL}=""}}',
+        f"unless on(tenant, {KIND_LABEL}, {CLUSTER_LABEL}) (",
+        f"  label_replace(group by(tenant, {KIND_LABEL}, {EXPECTED_CLUSTER_LABEL}) ({declared}),",
+        f'    "{CLUSTER_LABEL}", "$1", "{EXPECTED_CLUSTER_LABEL}", "(.+)")',
+        f"  or group by(tenant, {KIND_LABEL}) ({declared})",
+        ")",
+        "and on(tenant) tenant_metadata_info",
+        "unless on(tenant)",
+        '(user_state_filter{filter="maintenance"} == 1)',
+    ])
+
+
+def mass_outage_expr() -> str:
+    """MassExporterOutage: more than 5 tenants and over 10% of the declared
+    (tenant, pack) pairs absent, while the job itself is there.
+
+    The floor counts TENANTS (#3771 review): one tenant declaring seven kinds,
+    all down, is seven pairs but no shared failure. The ratio counts PAIRS on
+    both sides (#4097): a pair declared for three clusters is three rows of
+    tenant_expected_exporter and up to three of TenantExporterAbsent — counted
+    as rows, one such tenant would weigh three times in the numerator, the
+    denominator, or both. `count without` throughout — a `by (tenant)` would
+    read to the platform-alert guard (_grar_validate) as an alert carrying a
+    tenant label.
+    """
+    absent = absent_pairs_expr()
+    return "\n".join([
         "(",
         f"  count without (tenant) (count without ({KIND_LABEL}) (",
         _indent(absent, 2),
@@ -271,34 +442,22 @@ def alert_exprs() -> dict[tuple[Path, str], str]:
         _indent(absent, 3),
         "    )",
         "    /",
-        f"    count without (tenant, {KIND_LABEL}) (max without (instance, pod) (tenant_expected_exporter))",
+        f"    count without (tenant, {KIND_LABEL}) ({DECLARED_PAIRS})",
         "  ) > 0.1",
         ")",
         'unless on() absent(up{job="tenant-exporters"})',
     ])
-    # Per (tenant, pack) (#3771 review): a tenant declaring [mariadb] while
-    # it also runs a redis exporter is named for redis. And per cluster
-    # (ADR-006, #4097): the declaration is the tenant's, the exporter is in a
-    # cluster, and the alert says which. The guard joins on
-    # tenant: threshold-exporter down (no tenant_metadata_info at all) and a
-    # de-provisioned tenant (its config gone, the lookback's memory of its
-    # exporter not yet) both stay silent.
-    undeclared = "\n".join([
-        f"group by(tenant, da_cluster, {KIND_LABEL}) (",
-        _indent(presence_over_time_expr(), 1),
-        ")",
-        f"unless on(tenant, {KIND_LABEL}) tenant_expected_exporter",
-        "and on(tenant) tenant_metadata_info",
-        "unless on(tenant)",
-        '(user_state_filter{filter="maintenance"} == 1)',
-    ])
+
+
+def alert_exprs() -> dict[tuple[Path, str], str]:
+    """(pack, alertname) → the alert's whole ``expr`` (no trailing newline)."""
     notices = {(Path(RULE_PACKS.directory) / RULE_PACKS.file_name(p), unset_notice_alert(p)):
                unset_notice_expr(p) for p in unset_notice_packs()}
     return {
         **notices,
-        (LIVENESS_PACK, "TenantExporterAbsent"): absent,
-        (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared,
-        (PLATFORM_PACK, "MassExporterOutage"): mass,
+        (LIVENESS_PACK, "TenantExporterAbsent"): absent_expr(),
+        (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared_expr(),
+        (PLATFORM_PACK, "MassExporterOutage"): mass_outage_expr(),
     }
 
 

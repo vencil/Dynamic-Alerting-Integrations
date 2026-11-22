@@ -1,0 +1,427 @@
+# promtool unit test — 逐叢集的存在判定：`_expected_exporters` 的 `kind@cluster`（#4097，ADR-006 契約第 6 點）。
+# Run: promtool test rules tests/rulepacks/rule-pack-liveness-per-cluster_test.yaml
+#
+# 對象：rule-pack-liveness.yaml 的 TenantExporterAbsent（Rule A）、TenantExporterUndeclared
+# （Rule C）、TenantExporterReplicaDown（Rule B）。三條的 expr 由
+# scripts/tools/_lib_exporter_presence.py 生成（Rule B 手寫、本 PR 沒動它的 expr）。
+# MassExporterOutage 的逐叢集案例在 platform-mass-outage-per-cluster_test.yaml。
+#
+# 序列的形狀：
+#   tenant_expected_exporter{tenant, pack}                    只寫 kind 的條目
+#   tenant_expected_exporter{tenant, pack, expected_cluster}  `kind@cluster` 的條目
+#   存在指標 / up 帶 da_cluster＝它經過的 Prometheus 的 external label（中央看到的）；
+#   沒有 da_cluster＝評估規則的這台 Prometheus 自己抓的。
+#
+#   L1  缺陷本身：宣告 [mariadb@east, mariadb@west, redis]，west 的 mariadb exporter 消失、
+#       east 健康 → Absent 只對 west 響，告警帶 da_cluster=west、不帶 expected_cluster
+#       （把逐叢集那支的 on(tenant, pack, da_cluster) 改成 on(tenant, pack) 就轉紅：east 擋住 west）
+#   L1b 同一份宣告由 east、west 兩個邊緣的 threshold-exporter 各送一份、federate 上來（兩列只差
+#       邊緣蓋上的 da_cluster）→ 仍然只有一則（不先 max by 收斂就是「同 labelset」的評估錯誤）
+#   L2  同樣的序列、租戶只寫 [mariadb] → 不響（只寫 kind 的原意：任一叢集有就算有；釘住）
+#   L3  單一 Prometheus、任何序列都沒有 da_cluster、宣告 [mariadb@east, mariadb@west]、健康 → 不響
+#       （拿掉 da_cluster="" 那一項 unless 就轉紅：每個宣告的叢集都響）
+#   L4  ⚠️ 已知限制：同 L3、exporter 消失 → 對 east、west【各】響一則，label 上是本地看不到的叢集
+#   L5  混合的中央：自己抓的（無 da_cluster）＋ federate 來的 east，宣告 [@central, @east]、健康 → 不響
+#   L5b ⚠️ 已知限制：同 L5、east 消失 → 不響（本地那份沒有 da_cluster 的序列替每個叢集擋掉）
+#   L6  叢集 ID 打錯：宣告 [mariadb@east, mariadb@wset]，east、west 都健康 → 對 da_cluster=wset 響
+#   L7  [redis@east, mariadb@east, mariadb@west]、全部健康（redis 只在 east）→ Absent、Undeclared 都不響
+#   L8  west 全程缺席；【另一個】叢集 east 的 federation 連線每 2 分鐘斷一次
+#       → west 的告警一路 firing、不被重置；east 斷不滿 3 分鐘，不響
+#   L9  Undeclared：宣告 [mariadb@east]，mariadb 在 east、west 都回應 → 只對 west 指名
+#       （把逐叢集那個 unless 的 on(...) 拿掉 da_cluster 就轉紅：east 的宣告蓋住 west）
+#   L10 Undeclared：只寫 [mariadb] 涵蓋每個叢集（east、west、無 da_cluster）→ 不響
+#   L10b Undeclared：沒有 da_cluster 的列（本地抓的），該 kind 有任何一個叢集的宣告就算宣告過 → 不響；
+#        同租戶沒宣告的 redis 照樣被指名
+#   L11 ReplicaDown 維持整個租戶：west 的 target up=0、east 的 up=1、只寫 [mariadb] → 對 west 的 target 響
+#       （Rule A 被 east 擋住，這是那個租戶唯一的訊號；配對改成逐叢集就轉紅）
+# tenant id 用 t-* placeholder（dev-rule：fixture 不寫死真實租戶名）。
+rule_files:
+  - ../../rule-packs/rule-pack-liveness.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── L1 缺陷本身：west 消失、east 健康 → 只對 west 響
+  - interval: 1m
+    name: L1-declared-east-and-west-west-vanishes-fires-for-west-only
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-1", pack="mariadb", expected_cluster="west"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-1", pack="redis"}'
+        values: '1x20'
+      # 第二個 threshold-exporter 副本送同一份（逐 pod 抓取）：仍是每個叢集一則。
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.10:8080", pod="te-1", tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.10:8080", pod="te-1", tenant="t-1", pack="mariadb", expected_cluster="west"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      # 兩個叢集內部網段重複：位址相同的另一台，在 west，2m 起消失。
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1 1 stale'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1 1 stale'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.5:9121", da_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_metadata_info{job="threshold-exporter", tenant="t-1", owner="", runbook_url="", tier=""}'
+        values: '1x20'
+    alert_rule_test:
+      # 2m 起缺席；for:3m → 4m 還在 pending，6m 已 firing。
+      - eval_time: 4m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          # 身分是 (tenant, pack, da_cluster)：沒有 expected_cluster，也沒有
+          # threshold-exporter 自己的 job / instance / pod。
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: t-1
+              pack: mariadb
+              da_cluster: west
+            exp_annotations:
+              summary: "Exporter absent for tenant t-1 (mariadb, da_cluster west)"
+              summary_zh: "租戶 t-1 (mariadb，da_cluster west) 的 exporter 缺席"
+              description: "No mariadb exporter of tenant t-1 has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _expected_exporters; if the tenant was de-provisioned, remove its conf.d entry too (otherwise this is a stale-config false positive). This alert carries da_cluster=west. For a kind declared per cluster (mariadb@west in _expected_exporters) that is the declared cluster no exporter answers from; the kind may be healthy in the tenant's other clusters. If west is not a cluster the tenant runs in (a misspelt cluster id, or a cluster it left), correct or remove that entry. For a kind declared alone the label only names the Prometheus the declaration came through: no cluster has one answering."
+              description_zh: "租戶 t-1 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _expected_exporters 移除；若租戶已退租，請確認 conf.d 裡它的設定也一併移除 (否則這是殘留組態造成的假陽性)。本告警帶 da_cluster=west。逐叢集宣告的 kind（_expected_exporters 裡的 mariadb@west）：這就是沒有 exporter 回應的那個宣告叢集，同租戶其他叢集的這一種 exporter 可能仍正常；若 west 不是租戶所在的叢集（叢集 ID 打錯，或已撤出），請更正或移除該條目。只寫 kind 的宣告：這個 label 只代表宣告經過的是哪一台 Prometheus，意思是沒有任何叢集有這一種 exporter 在回應。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 18m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+
+  # ── L1b 宣告從兩個邊緣各 federate 一份上來：兩列只差邊緣蓋上的 da_cluster
+  - interval: 1m
+    name: L1b-declaration-federated-from-two-edges-is-one-alert-per-cluster
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", tenant="t-1", pack="mariadb", expected_cluster="east", da_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", tenant="t-1", pack="mariadb", expected_cluster="west", da_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", tenant="t-1", pack="mariadb", expected_cluster="east", da_cluster="west"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", tenant="t-1", pack="mariadb", expected_cluster="west", da_cluster="west"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+    promql_expr_test:
+      # 宣告 west 的那一列是從 east 的邊緣送來的（身上是 da_cluster="east"）：告警的
+      # da_cluster 仍是宣告的 west，不是送它來的那個邊緣。
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 6m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="west"}'
+            value: 1
+
+  # ── L2 同樣的序列、只寫 kind → 不響（任一叢集有就算有）
+  - interval: 1m
+    name: L2-bare-kind-keeps-its-meaning-one-cluster-reporting-is-enough
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-1", pack="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1 1 stale'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1 1 stale'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── L3 單一 Prometheus（沒有任何 da_cluster）、逐叢集宣告、健康 → 不響
+  - interval: 1m
+    name: L3-single-prometheus-no-cluster-label-healthy-is-silent
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="west"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── L4 ⚠️ 已知限制：同 L3、本地的 exporter 消失 → 對每個宣告的叢集各響一則
+  #    （各叢集拿同一份 conf.d、各自評估規則的部署：這種部署請只寫 kind、各叢集用自己的 conf.d）
+  - interval: 1m
+    name: L4-known-limit-single-prometheus-exporter-gone-fires-for-every-declared-cluster
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="west"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104"}'
+        values: '1 1 stale'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104"}'
+        values: '1 1 stale'
+      # 別的租戶還在：job 沒有整個消失。
+      - series: 'up{job="tenant-exporters", tenant="t-2", instance="10.1.0.2:9104"}'
+        values: '1x20'
+    promql_expr_test:
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 6m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="east"}'
+            value: 1
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="west"}'
+            value: 1
+
+  # ── L5 混合的中央：自己抓的（無 da_cluster）＋ federate 來的 east，全部健康 → 不響
+  - interval: 1m
+    name: L5-mixed-centre-unlabelled-local-and-labelled-east-healthy-is-silent
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="central"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.9.0.1:9104"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.9.0.1:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── L5b ⚠️ 已知限制：同 L5、east 消失 → 不響。本地那份沒有 da_cluster 的序列對每個
+  #    宣告的叢集都算存在；要逐叢集，中央自己的抓取 job 得寫 da_cluster。
+  - interval: 1m
+    name: L5b-known-limit-unlabelled-local-presence-covers-every-declared-cluster
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="central"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.9.0.1:9104"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.9.0.1:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1 1 stale'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1 1 stale'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── L6 叢集 ID 打錯（wset）：兩個真的叢集都健康 → 對打錯的那個 ID 響
+  - interval: 1m
+    name: L6-misspelt-cluster-fires-naming-it
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="wset"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1x20'
+    promql_expr_test:
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 6m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="wset"}'
+            value: 1
+
+  # ── L7 redis 只宣告 east、mariadb 宣告 east 與 west，全部健康 → 都不響
+  - interval: 1m
+    name: L7-kinds-declared-for-different-clusters-all-healthy-is-silent
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="redis", expected_cluster="east"}'
+        values: '1x30'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x30'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="west"}'
+        values: '1x30'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.5:9121", da_cluster="east"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-1", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+
+  # ── L8 west 全程缺席；另一個叢集 east 的 federation 連線每 2 分鐘斷一次
+  - interval: 1m
+    name: L8-other-clusters-federation-flap-does-not-reset-a-firing-alert
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x24'
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="west"}'
+        values: '1x24'
+      # east：有 2 分鐘、斷 2 分鐘，反覆。它是這台 Prometheus 唯一帶 da_cluster 的序列，
+      # 「有沒有看到帶叢集的序列」這種閘門會跟著它翻面。
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1 1 stale _ 1 1 stale _ 1 1 stale _ 1 1 stale _ 1 1 stale _ 1 1 stale _ 1'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1 1 stale _ 1 1 stale _ 1 1 stale _ 1 1 stale _ 1 1 stale _ 1 1 stale _ 1'
+    promql_expr_test:
+      # west 從 0m 起缺席：3m 起 firing，之後每一分鐘都還是 firing。ALERTS_FOR_STATE 的值是
+      # 告警開始 pending 的時間：一路是 0，中途被重置過就不會是。
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 3m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="west"}'
+            value: 1
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 4m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="west"}'
+            value: 1
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 7m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="west"}'
+            value: 1
+      - expr: count by(tenant, pack, da_cluster, expected_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterAbsent"})
+        eval_time: 22m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="mariadb", da_cluster="west"}'
+            value: 1
+      - expr: max by(da_cluster) (ALERTS_FOR_STATE{alertname="TenantExporterAbsent", da_cluster="west"})
+        eval_time: 22m
+        exp_samples:
+          - labels: '{da_cluster="west"}'
+            value: 0
+      # east 每次只斷 2 分鐘，不滿 for:3m：從頭到尾沒有 firing 過。
+      - expr: count_over_time(ALERTS{alertstate="firing", alertname="TenantExporterAbsent", da_cluster="east"}[23m])
+        eval_time: 22m
+        exp_samples: []
+
+  # ── L9 Undeclared 逐叢集：宣告 mariadb@east，mariadb 卻也在 west 回應 → 只對 west 指名
+  - interval: 1m
+    name: L9-undeclared-declared-for-east-answers-in-west-names-west
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{job="threshold-exporter", tenant="t-1", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantExporterUndeclared
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-1
+              pack: mariadb
+              da_cluster: west
+            exp_annotations:
+              summary: "Tenant t-1 runs a mariadb exporter in cluster west but does not declare mariadb for that cluster in _expected_exporters"
+              summary_zh: "租戶 t-1 有 mariadb exporter（叢集 west） 在回應，但沒有在 _expected_exporters 為該叢集宣告 mariadb"
+              description: "A mariadb exporter of tenant t-1 has answered under job=\"tenant-exporters\" within the last hour, but the tenant's _expected_exporters does not list mariadb, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add mariadb to the tenant's top-level _expected_exporters list (for example _expected_exporters: [mariadb, redis]). The exporter answers in cluster west: when the tenant declares mariadb per cluster, the entry to add is mariadb@west (one kind is written either alone or as kind@cluster entries, not both); written alone, mariadb covers every cluster but is satisfied by an exporter in any one of them."
+              description_zh: "租戶 t-1 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但租戶的 _expected_exporters 沒有列出 mariadb，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 mariadb 加進租戶頂層的 _expected_exporters 列表（例如 _expected_exporters: [mariadb, redis]）。這個 exporter 在叢集 west 回應：租戶若逐叢集宣告 mariadb，要補的條目是 mariadb@west（同一個 kind 只能擇一：單獨寫，或寫成 kind@cluster）；單獨寫 mariadb 涵蓋所有叢集，但任何一個叢集有 exporter 回應就算存在。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 20m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── L10 Undeclared：只寫 kind 涵蓋每個叢集
+  - interval: 1m
+    name: L10-undeclared-bare-declaration-covers-every-cluster
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.9.0.1:9104"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-1", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+
+  # ── L10b Undeclared：沒有 da_cluster 的列，該 kind 有任一叢集的宣告就算宣告過；
+  #    沒宣告的 redis 照樣被指名（不是整個租戶被放過）
+  - interval: 1m
+    name: L10b-undeclared-unlabelled-row-is-covered-by-any-cluster-of-the-kind
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb", expected_cluster="east"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.9.0.1:9104"}'
+        values: '1x30'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-1", instance="10.9.0.5:9121"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-1", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    promql_expr_test:
+      - expr: count by(tenant, pack, da_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterUndeclared"})
+        eval_time: 20m
+        exp_samples:
+          - labels: '{tenant="t-1", pack="redis"}'
+            value: 1
+
+  # ── L11 ReplicaDown 維持整個租戶：west 的 target 掛、east 的健康、只寫 kind
+  - interval: 1m
+    name: L11-replica-down-pairs-tenant-wide-across-clusters
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-1", pack="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="east"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1 0x19'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+        values: '1 stale'
+    promql_expr_test:
+      - expr: count by(tenant, instance, da_cluster) (ALERTS{alertstate="firing", alertname="TenantExporterReplicaDown"})
+        eval_time: 12m
+        exp_samples:
+          - labels: '{tenant="t-1", instance="10.1.0.1:9104", da_cluster="west"}'
+            value: 1
+      # 只寫 kind：Rule A 被 east 擋住。
+      - expr: ALERTS{alertname="TenantExporterAbsent"}
+        eval_time: 12m
+        exp_samples: []

@@ -151,7 +151,9 @@ def conf_d_declared_exporter_tenants(config_dir: Path,
     served-values`, #2858, #4097) — the value collectTenantExpectedExporter
     reads, with every layer the exporter applies (root platform files'
     `tenants:` entries, the tenant file, the profile filling what neither
-    writes). A tenant the exporter serves no kind for counts as none. Raises what `load_served_facts` raises,
+    writes). The entries are kept as written — a kind, or `kind@cluster`
+    (#4097); either way the tenant emits tenant_expected_exporter and is in
+    the set. A tenant the exporter serves no kind for counts as none. Raises what `load_served_facts` raises,
     and ParseTreeError for no usable parse-tree (exit 2).
     """
     reader = _lib_parse_cache.reader_for(config_dir)

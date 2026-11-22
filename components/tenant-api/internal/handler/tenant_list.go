@@ -32,7 +32,7 @@ type TenantSummary struct {
 	Region      string `json:"region,omitempty"`
 	Tier        string `json:"tier,omitempty"`
 	Domain      string `json:"domain,omitempty"`
-	// The exporter kinds the tenant declares in `_expected_exporters`, in the order written, as threshold-exporter reads them through the tenant's layers (root platform files' entry, the tenant file over it, else its profile's) — the kinds tenant_expected_exporter is served for, so the ones TenantExporterAbsent watches. Omitted when none is declared, or when the value is one the exporter does not read (an unknown kind, a repeat, not a list).
+	// The entries the tenant declares in `_expected_exporters`, as written and in the order written — an exporter kind (`mariadb`) or `kind@cluster` (`mariadb@east`) — as threshold-exporter reads them through the tenant's layers (root platform files' entry, the tenant file over it, else its profile's): the entries tenant_expected_exporter is served for, so what TenantExporterAbsent watches. Omitted when none is declared, or when the value is one the exporter does not read (an unknown kind, a repeat, a kind written both with and without a cluster, not a list).
 	ExpectedExporters []string `json:"expected_exporters,omitempty"`
 	Owner             string   `json:"owner,omitempty"`
 	Tags              []string `json:"tags,omitempty"`

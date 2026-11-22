@@ -184,3 +184,20 @@ def test_the_kind_is_read_from_the_pack_label_not_the_removed_db_type():
     multi = lambda _u, _q: ([{"metric": {"pack": "redis"}}, {"metric": {"pack": "nginx"}}], None)  # noqa: E731
     with mock.patch.object(diagnose, "query_prometheus", side_effect=multi):
         assert diagnose.tenant_expected_kind("t1", "http://prom:9090") == ("nginx,redis", None)
+
+
+def test_a_kind_declared_per_cluster_is_named_once():
+    """#4097：`kind@cluster` 每個叢集一條序列，`pack` 相同、叢集在 `expected_cluster`。
+    kind 讀的是 `pack`：兩個叢集的 mariadb 仍是 mariadb，不會變成 "mariadb,mariadb"，
+    也不會把叢集名當成 kind。"""
+    per_cluster = lambda _u, _q: ([  # noqa: E731
+        {"metric": {"tenant": "t1", "pack": "mariadb", "expected_cluster": "east"}},
+        {"metric": {"tenant": "t1", "pack": "mariadb", "expected_cluster": "west"}}], None)
+    with mock.patch.object(diagnose, "query_prometheus", side_effect=per_cluster):
+        assert diagnose.tenant_expected_kind("t1", "http://prom:9090") == ("mariadb", None)
+    other = lambda _u, _q: ([  # noqa: E731
+        {"metric": {"tenant": "t1", "pack": "redis", "expected_cluster": "east"}},
+        {"metric": {"tenant": "t1", "pack": "redis", "expected_cluster": "west"}},
+        {"metric": {"tenant": "t1", "pack": "nginx"}}], None)
+    with mock.patch.object(diagnose, "query_prometheus", side_effect=other):
+        assert diagnose.tenant_expected_kind("t1", "http://prom:9090") == ("nginx,redis", None)

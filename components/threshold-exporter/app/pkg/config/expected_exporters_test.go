@@ -79,12 +79,37 @@ func TestExpectedExportersOf(t *testing.T) {
 		{"a rule pack without a presence metric", "[kubernetes]", nil, "entry [0] is not an exporter kind"},
 		{"an empty entry", `[""]`, nil, "entry [0] is not an exporter kind"},
 		{"a repeat", "[redis, mariadb, redis]", nil, "entry [2] repeats"},
-		{"per-cluster form is not read yet", "[mariadb@edge-1]", nil, "per-cluster expectations (`kind@cluster`) are not read yet"},
+		// kind@cluster (ADR-006 contract 6).
+		{"one kind in two clusters", "[mariadb@east, mariadb@west]", []string{"mariadb@east", "mariadb@west"}, ""},
+		{"per cluster beside a bare kind of another kind", "[mariadb@east, redis, mariadb@west]", []string{"mariadb@east", "redis", "mariadb@west"}, ""},
+		{"the same cluster for two kinds", "[redis@east, mariadb@east]", []string{"redis@east", "mariadb@east"}, ""},
+		{"a one-character cluster", "[redis@a]", []string{"redis@a"}, ""},
+		{"dots, underscores and hyphens inside a cluster", "[redis@eu-west.1_b]", []string{"redis@eu-west.1_b"}, ""},
+		{"a 63-character cluster", "[redis@" + strings.Repeat("a", 63) + "]", []string{"redis@" + strings.Repeat("a", 63)}, ""},
+		{"cluster ids differ by case", "[redis@East, redis@east]", []string{"redis@East", "redis@east"}, ""},
+		{"a 64-character cluster", "[redis@" + strings.Repeat("a", 64) + "]", nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"an empty cluster", `["redis@"]`, nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"a cluster with a space", `["redis@edge 1"]`, nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"a cluster with a quote", `['redis@e"1']`, nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"a cluster that is a regex", `["redis@.*"]`, nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"a cluster beginning with a hyphen", `[mariadb, "redis@-east"]`, nil, "entry [1] names a cluster after `@` that is not a cluster id"},
+		{"a cluster ending with a dot", `["redis@east."]`, nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"a non-ASCII cluster", `["redis@東"]`, nil, "entry [0] names a cluster after `@` that is not a cluster id"},
+		{"two @", `["redis@east@west"]`, nil, "entry [0] has more than one `@`"},
+		{"two @ and nothing between", `["redis@@east"]`, nil, "entry [0] has more than one `@`"},
+		{"no kind before @", `["@east"]`, nil, "entry [0] is not an exporter kind"},
+		{"an unknown kind before @", `[mariadb, "MySQL@east"]`, nil, "entry [1] is not an exporter kind"},
+		{"a pack without a presence metric before @", `["kubernetes@east"]`, nil, "entry [0] is not an exporter kind"},
+		{"a kind bare, then with a cluster", "[mariadb, redis, mariadb@east]", nil, "entries [0] and [2] name the same kind, one with `@cluster` and one without"},
+		{"a kind with a cluster, then bare", "[mariadb@east, mariadb]", nil, "entries [0] and [1] name the same kind, one with `@cluster` and one without"},
+		{"a kind in two clusters, then bare", "[mariadb@east, mariadb@west, mariadb]", nil, "entries [0] and [2] name the same kind"},
+		{"a repeated per-cluster entry", "[mariadb@east, mariadb@west, mariadb@east]", nil, "entry [2] repeats"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			sv := svOf(t, "_expected_exporters", tc.value)
-			kinds, problem := expectedExportersOf(sv)
+			entries, problem := expectedExportersOf(sv)
+			kinds := entryStrings(entries)
 			if !reflect.DeepEqual(kinds, tc.kinds) {
 				t.Errorf("kinds = %v, want %v", kinds, tc.kinds)
 			}
@@ -100,6 +125,13 @@ func TestExpectedExportersOf(t *testing.T) {
 				for _, k := range ExpectedExporterKinds() {
 					if !strings.Contains(problem, k) {
 						t.Errorf("problem does not name the allowed kind %q: %q", k, problem)
+					}
+				}
+				// ... and never the entry (#3703): no cluster a case wrote
+				// is in it.
+				for _, written := range []string{"east", "west", "edge", "東", strings.Repeat("a", 20)} {
+					if strings.Contains(tc.value, written) && strings.Contains(problem, written) {
+						t.Errorf("problem echoes %q of the entry: %q", written, problem)
 					}
 				}
 			}
@@ -127,6 +159,51 @@ func TestExpectedExportersReadAlike(t *testing.T) {
 	}
 	if readAlike("_expected_exporters", sv("[bogus-a]"), sv("[bogus-b]")) {
 		t.Error("two different unread values are read alike")
+	}
+	if !readAlike("_expected_exporters", sv("[redis@east, redis@west]"), sv("[redis@west, redis@east]")) {
+		t.Error("the same entries in another order are not read alike")
+	}
+	if readAlike("_expected_exporters", sv("[redis@east]"), sv("[redis]")) {
+		t.Error("a kind in one cluster and the kind alone are read alike")
+	}
+	if readAlike("_expected_exporters", sv("[redis@east]"), sv("[redis@west]")) {
+		t.Error("two different clusters are read alike")
+	}
+}
+
+// An entry is its kind and its cluster; written back it is the text it was
+// read from, and ExpectedExporterKind is the part before `@` of any text.
+func TestExpectedExporterEntry(t *testing.T) {
+	t.Parallel()
+	entries, problem := expectedExportersOf(svOf(t, "_expected_exporters", "[mariadb@east, redis]"))
+	if problem != "" {
+		t.Fatal(problem)
+	}
+	want := []ExpectedExporter{{Kind: "mariadb", Cluster: "east"}, {Kind: "redis"}}
+	if !reflect.DeepEqual(entries, want) {
+		t.Fatalf("entries = %+v, want %+v", entries, want)
+	}
+	for in, kind := range map[string]string{"mariadb@east": "mariadb", "redis": "redis", "": "", "@east": "", "a@b@c": "a"} {
+		if got := ExpectedExporterKind(in); got != kind {
+			t.Errorf("ExpectedExporterKind(%q) = %q, want %q", in, got, kind)
+		}
+	}
+}
+
+// isExpectedClusterID is the pattern the tenant-config schema carries for
+// the cluster part (tests/rulepacks/test_exporter_presence.py holds the two
+// to the same cases).
+func TestIsExpectedClusterID(t *testing.T) {
+	t.Parallel()
+	for id, want := range map[string]bool{
+		"a": true, "0": true, "east": true, "edge-1": true, "eu.west_1-b": true, "A9": true,
+		strings.Repeat("x", 63): true,
+		"":                      false, strings.Repeat("x", 64): false, "-a": false, "a-": false, ".a": false, "a.": false,
+		"_a": false, "a b": false, "a@b": false, "a/b": false, `a"b`: false, "a\nb": false, "é": false, "a,b": false,
+	} {
+		if got := isExpectedClusterID(id); got != want {
+			t.Errorf("isExpectedClusterID(%q) = %v, want %v", id, got, want)
+		}
 	}
 }
 
@@ -173,6 +250,22 @@ func TestExpectedExportersLayers(t *testing.T) {
 		{"the removed _metadata.db_type declares nothing", map[string]string{
 			"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: [mariadb]\n"}, nil},
 		{"not declared", map[string]string{"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: o\n"}, nil},
+		// Per-cluster entries layer as the value they are in: whole.
+		{"per-cluster entries in the tenant file", map[string]string{
+			"tx.yaml": "tenants:\n  tx:\n    _expected_exporters: [mariadb@east, mariadb@west, redis]\n"},
+			[]string{"mariadb@east", "mariadb@west", "redis"}},
+		{"tenant file's bare kind replaces the platform entry's per-cluster entries, no merge per kind", map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    _expected_exporters: [mariadb@east, mariadb@west]\n",
+			"tx.yaml":        "tenants:\n  tx:\n    _expected_exporters: [mariadb]\n"}, []string{"mariadb"}},
+		{"tenant file's per-cluster entry replaces the profile's bare kinds whole", map[string]string{
+			"_profiles.yaml": profiles,
+			"tx.yaml":        "tenants:\n  tx:\n    _profile: web\n    _expected_exporters: [nginx@east]\n"}, []string{"nginx@east"}},
+		{"a kind bare in one layer and per cluster in the layer over it is no mix: one value is read", map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    _expected_exporters: [redis]\n",
+			"tx.yaml":        "tenants:\n  tx:\n    _expected_exporters: [redis@east]\n"}, []string{"redis@east"}},
+		{"a mix in the winning layer serves nothing, not the layer below", map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    _expected_exporters: [redis]\n",
+			"tx.yaml":        "tenants:\n  tx:\n    _expected_exporters: [redis@east, redis]\n"}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -185,9 +278,9 @@ func TestExpectedExportersLayers(t *testing.T) {
 			var metrics []string
 			for _, e := range cfg.ResolveExpectedExporters() {
 				if e.Tenant == "tx" {
-					metrics = e.Kinds
+					metrics = entryStrings(e.Entries)
 				}
-				if len(e.Kinds) == 0 {
+				if len(e.Entries) == 0 {
 					t.Errorf("ResolveExpectedExporters lists %q with no kind: the opt-in guard", e.Tenant)
 				}
 			}

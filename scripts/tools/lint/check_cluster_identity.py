@@ -48,13 +48,26 @@ excused from it. `up` and `scrape_*` are every target's: they are flat
 only under a `job` this file lists as a platform job, and a `job` it does
 not know is a failure of the shipped-tree test, not a guess.
 
+Two shapes say what their series carry themselves, whatever the source:
+a selector with the matcher `da_cluster=""` selects exactly the series
+WITHOUT the label and is flat; `label_replace(v, "da_cluster", "<text>", …)`
+with a non-empty replacement writes the label and is cluster. They are how
+"expected in this cluster" is written (ADR-006 contract 6): the declared
+cluster is copied from `tenant_expected_exporter{expected_cluster}` into
+`da_cluster` and matched `on (tenant, pack, da_cluster)` against presence,
+and presence with no cluster at all is read separately, `on (tenant, pack)`.
+
 Not judged (say so rather than look covered)
 --------------------------------------------
   * "expected but absent" per cluster (ADR-006 contract 6): `expected unless
     on (tenant, pack) present` has a flat left side, so one reporting
     cluster hides a silent one and nothing here says so. That is closed by
-    declaring the expected clusters, not by a grouping.
-  * `label_replace` / `label_join` that write `da_cluster`.
+    declaring the expected clusters (`kind@cluster` in `_expected_exporters`,
+    TenantExporterAbsent's per-cluster branch), not by a grouping; a tenant
+    that declares the kind alone asked for exactly that reading.
+  * whether a `label_replace` that writes `da_cluster` matches every series
+    (one that does not leaves the series as it was), a `label_replace` that
+    writes it empty, and `label_join` into it.
   * a tenant's own metric whose name starts with a platform family's prefix
     (`user_…`, `da_…`): `resolve_family` is the repo's one table of whose
     metric a name is, and it is read as is.
@@ -190,6 +203,9 @@ def selector_scope(node: dict, records: "dict[str, str]") -> str:
         exact = [m["value"] for m in node["matchers"]
                  if m["name"] == "__name__" and m["type"] == "="]
         name = exact[0] if len(exact) == 1 else ""
+    if any(m["name"] == CLUSTER_LABEL and m["type"] == "=" and m["value"] == ""
+           for m in node["matchers"]):
+        return FLAT   # exactly the series that carry no cluster
     job = _job_of(node)
     if job is not None and job in CLUSTER_JOBS:
         return CLUSTER
@@ -206,6 +222,13 @@ def selector_scope(node: dict, records: "dict[str, str]") -> str:
                           or (isinstance(spec, tuple) and spec[-1] in CLUSTER_JOBS))
         return CLUSTER if cluster_family else FLAT
     return CLUSTER
+
+
+def _writes_cluster(args: list) -> bool:
+    """`label_replace(v, "da_cluster", "<non-empty>", src, regex)`: the series
+    that come out carry the cluster label."""
+    return (len(args) == 5 and all(a["kind"] == "string" for a in args[1:3])
+            and args[1]["value"] == CLUSTER_LABEL and args[2]["value"] != "")
 
 
 def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]") -> "str | None":
@@ -225,6 +248,8 @@ def judge(node: dict, records: "dict[str, str]", found: "list[tuple[str, str]]")
             return FLAT
         if node["name"] in _SCALAR_CALLS:
             return None
+        if node["name"] == "label_replace" and _writes_cluster(node["args"]):
+            return CLUSTER
         # PromQL's functions take one vector; the other arguments are scalars or strings
         return next((sc for sc in scopes if sc is not None), None)
     if kind == "aggregate":
@@ -325,15 +350,34 @@ def _record_scopes(rules: list, trees: list) -> "dict[str, str]":
 def rule_scopes(root: "Path | None" = None) -> "tuple[dict[str, str], dict[str, set[str]]]":
     """({recorded name: scope}, {alert name: the scopes of the rules of that
     name}) for the rule-pack tree — what a test needs to know which series
-    and which alerts carry `da_cluster`."""
+    and which alerts carry `da_cluster`.
+
+    An alert whose expression is `a or b` at the top fires from either side,
+    each with its own labels: both sides' scopes are in its set, so a rule
+    that is per cluster for one kind of input and per tenant for another
+    (TenantExporterAbsent: entries declared `kind@cluster`, and kinds
+    declared alone) reads as {cluster, flat} and not as cluster-scoped
+    throughout. (`judge` still holds the whole of such an expression to the
+    contract: there, `or` with a cluster side is cluster.)"""
     rules = _rules(root or PROJECT_ROOT)
     trees = _lib_consumer_read.promql_shape([r[3] for r in rules])
     records = _record_scopes(rules, trees)
     alerts: "dict[str, set[str]]" = {}
     for (_f, _g, name, _e, is_record), tree in zip(rules, trees):
         if not is_record:
-            alerts.setdefault(name, set()).add(judge(tree, records, []) or FLAT)
+            alerts.setdefault(name, set()).update(
+                judge(side, records, []) or FLAT for side in _or_sides(tree))
     return records, alerts
+
+
+def _or_sides(node: dict) -> "list[dict]":
+    """The operands of the `or` (of `or`s) *node* is at the top, parentheses
+    seen through; [node] when it is not one."""
+    if node["kind"] == "paren":
+        return _or_sides(node["expr"])
+    if node["kind"] == "binary" and node["op"] == "or":
+        return _or_sides(node["lhs"]) + _or_sides(node["rhs"])
+    return [node]
 
 
 #: A comment that sets out to be a declaration; one that then does not read

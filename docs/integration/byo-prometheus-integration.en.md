@@ -134,7 +134,7 @@ relabel_configs:
 >     da_cluster: cluster-a   # this cluster's id; a single cluster sets it too, one fixed value
 > ```
 >
-> With prometheus-operator it goes in the Prometheus CR's `spec.externalLabels`. Prometheus adds external labels to alerts sent to Alertmanager, to `/federate` and to remote write, so both alerts and a central Prometheus can tell clusters apart. Once it is live, `da-tools federation-check edge --prometheus <url>` checks that this line is set.
+> With prometheus-operator it goes in the Prometheus CR's `spec.externalLabels`. Prometheus adds external labels to alerts sent to Alertmanager, to `/federate` and to remote write, so both alerts and a central Prometheus can tell clusters apart. Once it is live, `da-tools federation-check edge --prometheus <url>` checks that this line is set. A tenant that declares the exporters it expects per cluster (`_expected_exporters: [mariadb@cluster-a, mariadb@cluster-b]`) writes this value after `@`; per-cluster absence is judged on the central Prometheus that receives every cluster's data (the known limits in [ADR-006](../adr/006-tenant-mapping-topologies.en.md)).
 
 ### Verification
 

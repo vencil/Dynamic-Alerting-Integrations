@@ -182,6 +182,15 @@ def test_every_identity_label_is_one(label):
     ("time()", None), ("pi()", None),
     ("vector(1)", cid.FLAT),
     ('label_replace(vector(1), "tenant", "t", "__name__", ".*")', cid.FLAT),
+    # the two shapes that say what they carry themselves (ADR-006 contract 6)
+    ('db_up{da_cluster=""}', cid.FLAT), ('up{job="tenant-exporters", da_cluster=""}', cid.FLAT),
+    ('db_up{da_cluster="east"}', cid.CLUSTER), ('db_up{da_cluster!=""}', cid.CLUSTER),
+    ('db_up{da_cluster=~""}', cid.CLUSTER),   # only the equality matcher is taken as "none"
+    ('label_replace(user_threshold, "da_cluster", "$1", "expected_cluster", "(.+)")', cid.CLUSTER),
+    ('label_replace(user_threshold, "da_cluster", "east", "", "")', cid.CLUSTER),
+    ('label_replace(user_threshold, "da_cluster", "", "", "")', cid.FLAT),
+    ('label_replace(user_threshold, "cluster", "$1", "da_cluster", "(.+)")', cid.FLAT),
+    ('label_join(user_threshold, "da_cluster", "-", "a", "b")', cid.FLAT),
 ])
 def test_scope_of_each_shape(expr, want):
     assert scope(expr) == want
@@ -281,6 +290,37 @@ def _tree(tmp_path: Path, rules: "list[tuple[str, str]]") -> Path:
     return tmp_path
 
 
+def test_an_alert_that_is_an_or_carries_both_sides_scopes(tmp_path):
+    """An alert that is `a or b` fires from either side with that side's
+    labels: `rule_scopes` lists both (parentheses and nested `or`s seen
+    through), where `judge` holds the whole expression to the contract."""
+    root = _tree(tmp_path, [
+        ("XPerClusterOrTenant", "(max by (tenant, da_cluster) (x_up)) or (user_threshold unless on (tenant) x_up)"),
+        ("XNested", "user_threshold or ((tenant_metadata_info) or max by (tenant, da_cluster) (x_up))"),
+        ("XBothCluster", "x_a or x_b"),
+        ("XBothFlat", "user_threshold or tenant_metadata_info"),
+        ("XNotAnOr", "max by (tenant, da_cluster) (x_up) unless on (tenant) (user_threshold or x_b)"),
+    ])
+    _records, alerts = cid.rule_scopes(root)
+    assert alerts == {
+        "XPerClusterOrTenant": {cid.CLUSTER, cid.FLAT},
+        "XNested": {cid.CLUSTER, cid.FLAT},
+        "XBothCluster": {cid.CLUSTER},
+        "XBothFlat": {cid.FLAT},
+        "XNotAnOr": {cid.CLUSTER},
+    }
+    assert scope("(max by (tenant, da_cluster) (x_up)) or (user_threshold unless on (tenant) x_up)") == cid.CLUSTER
+
+
+def test_the_shipped_absence_alert_is_per_cluster_and_per_tenant():
+    """TenantExporterAbsent: per cluster for `kind@cluster` entries, per
+    tenant for a kind declared alone — both, not one."""
+    _records, alerts = cid.rule_scopes()
+    assert alerts["TenantExporterAbsent"] == {cid.CLUSTER, cid.FLAT}
+    assert alerts["TenantExporterUndeclared"] == {cid.CLUSTER}
+    assert alerts["MassExporterOutage"] == {cid.FLAT}
+
+
 def test_scopes_settle_through_a_chain_of_recording_rules(tmp_path):
     root = _tree(tmp_path, [
         ("XDown", "tenant:x:c unless on (tenant, instance) tenant:x:b"),
@@ -356,6 +396,29 @@ def test_a_per_tenant_series_is_not_matched_on_the_cluster_label(expr, want):
     found = []
     cid.judge(_lib_consumer_read.promql_shape([expr])[0], {}, found)
     assert found == want
+
+
+_EXPECTED = ('label_replace(max by (tenant, pack, expected_cluster) (user_threshold), '
+             '"da_cluster", "$1", "expected_cluster", "(.+)")')
+
+
+@pytest.mark.parametrize("expr, want", [
+    # expected in a cluster, against presence per cluster: the contract
+    (_EXPECTED + ' unless on (tenant, pack, da_cluster) db_up', []),
+    # … and against presence that carries no cluster: a flat side, matched per tenant
+    (_EXPECTED + ' unless on (tenant, pack) db_up{da_cluster=""}', []),
+    # the cluster dropped from the match against presence that HAS one: the masking
+    (_EXPECTED + ' unless on (tenant, pack) db_up', [("on-drops-cluster", "tenant,pack")]),
+    # the declared cluster never copied: a flat side matched on the cluster label
+    ('max by (tenant, pack, expected_cluster) (user_threshold) unless on (tenant, pack, da_cluster) db_up',
+     [("on-cluster-with-flat-side", "tenant,pack,da_cluster")]),
+    # presence with no cluster matched on the cluster label never matches
+    (_EXPECTED + ' unless on (tenant, pack, da_cluster) db_up{da_cluster=""}',
+     [("on-cluster-with-flat-side", "tenant,pack,da_cluster")]),
+], ids=["per-cluster", "unlabelled-presence", "match-drops-cluster", "cluster-not-copied",
+        "unlabelled-on-cluster"])
+def test_expected_in_a_cluster_is_matched_per_cluster(expr, want):
+    assert found(expr) == want
 
 
 def _declared_tree(tmp_path: Path, comment: str, expr: str, between: str = "") -> Path:

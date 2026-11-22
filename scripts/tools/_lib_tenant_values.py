@@ -1685,16 +1685,32 @@ class TenantFacts(NamedTuple):
     as `TenantValues.values["_metadata"]`; `routing` (#4109) the tenant's
     `_routing` as the exporter module's routing resolver reads it, as
     `TenantValues.routing` (None when it accepts none);
-    `expected_exporters` (#4097) the exporter kinds the tenant declares in
+    `expected_exporters` (#4097) the entries the tenant declares in
     `_expected_exporters`, as `TenantValues.values["_expected_exporters"]` —
-    the kinds `tenant_expected_exporter{tenant, pack}` is served for, `()`
-    when it declares none or the exporter does not read the value."""
+    each as written, an exporter kind or `kind@cluster`: the entries
+    `tenant_expected_exporter` is served for, `()` when it declares none or
+    the exporter does not read the value. A consumer that asks BY KIND takes
+    `expected_exporter_kind` of an entry."""
     custom_alerts: "tuple[CustomAlertEntry, ...]"
     custom_alerts_error: str | None
     custom_alerts_finding: str | None
     metadata: dict[str, Any]
     routing: "dict[str, Any] | None" = None
     expected_exporters: "tuple[str, ...]" = ()
+
+
+def expected_exporter_kind(entry: str) -> str:
+    """The exporter kind of one `_expected_exporters` entry as written
+    (`mariadb@east` → `mariadb`, `redis` → `redis`): the part before `@`, as
+    the exporter's own `ExpectedExporterKind` (pkg/config
+    expected_exporters.go). What anything that filters, groups or compares BY
+    KIND uses; the entry itself is shown and served as written."""
+    return entry.partition("@")[0]
+
+
+def expected_exporter_kinds(entries: "Iterable[str]") -> "list[str]":
+    """The kinds *entries* name, each once, in the order first written."""
+    return list(dict.fromkeys(expected_exporter_kind(e) for e in entries))
 
 
 class ServedFacts(NamedTuple):

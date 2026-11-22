@@ -1589,12 +1589,14 @@ definitions:
       environment:
         type: string
       expected_exporters:
-        description: The exporter kinds the tenant declares in `_expected_exporters`,
-          in the order written, as threshold-exporter reads them through the tenant's
-          layers (root platform files' entry, the tenant file over it, else its profile's)
-          — the kinds tenant_expected_exporter is served for, so the ones TenantExporterAbsent
+        description: 'The entries the tenant declares in `_expected_exporters`, as
+          written and in the order written — an exporter kind (`mariadb`) or `kind@cluster`
+          (`mariadb@east`) — as threshold-exporter reads them through the tenant''s
+          layers (root platform files'' entry, the tenant file over it, else its profile''s):
+          the entries tenant_expected_exporter is served for, so what TenantExporterAbsent
           watches. Omitted when none is declared, or when the value is one the exporter
-          does not read (an unknown kind, a repeat, not a list).
+          does not read (an unknown kind, a repeat, a kind written both with and without
+          a cluster, not a list).'
         items:
           type: string
         type: array
@@ -3686,9 +3688,10 @@ paths:
         in: query
         name: domain
         type: string
-      - description: An exporter kind the tenant declares in _expected_exporters (exact
-          match against any one of its kinds). Replaces db_type, which is refused
-          with 400.
+      - description: An exporter kind the tenant declares in _expected_exporters,
+          alone or per cluster (mariadb matches a tenant declaring mariadb or mariadb@east);
+          or a whole kind@cluster entry, matched exactly. Replaces db_type, which
+          is refused with 400.
         in: query
         name: expected_exporters
         type: string
