@@ -275,7 +275,7 @@ da-tools generate-routes \
   --output-alertmanager --base-config alertmanager.yaml --dry-run
 ```
 
-**預期輸出**：印 `Found 1 tenant(s) with routing config: redis-prod`，以及合併後的完整 `alertmanager.yml`。產生的 route 以 `tenant="redis-prod"` 比對、送往 `tenant-redis-prod` receiver；另有一條同租戶 critical 抑制 warning 的 inhibit rule。工具一次產生 conf.d 裡**所有**有 `_routing` 的租戶，沒有只產單一租戶的選項（尚未實作）；沒有 `_routing` 的租戶不會產生 route。
+**預期輸出**：印 `Found 1 tenant(s) with routing config: redis-prod`，以及合併後的完整 `alertmanager.yml`。產生的 route 以 `tenant="redis-prod"` 比對、送往 `tenant-redis-prod` receiver；另有兩條同租戶 critical 抑制 warning 的 inhibit rule（帶 `da_cluster` 的告警一條、不帶的一條）。工具一次產生 conf.d 裡**所有**有 `_routing` 的租戶，沒有只產單一租戶的選項（尚未實作）；沒有 `_routing` 的租戶不會產生 route。
 
 產生器不再輸出「自己貼進去」的片段：不帶模式旗標是結束碼 2，輸出一律是合併後的完整設定（[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）。你的舊設定是來源（`--base-config`），合併結果是另一份產物：舊設定裡你的路由、receiver、inhibit rule 原樣保留，加上產生的；產物不能再拿來當 base。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，它的 `--apply` 與 `--output-configmap --base-config` 會整個取代 `route.routes`（舊子路由全部消失），雙軌期間不能用那顆映像做合併 <!-- image-caveat: v2.9.0 -->
 

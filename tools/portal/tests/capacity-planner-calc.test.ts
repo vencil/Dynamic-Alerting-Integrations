@@ -35,7 +35,7 @@ describe('computeCapacityEstimates', () => {
     expect(r.exporterMB).toBeCloseTo(50 + (2600 * 0.1) / 1024, 9);
     expect(r.promMemMB).toBeCloseTo((2600 * (7200 / 15) * 2) / 1024 ** 2 + 256, 9);
     expect(r.reloadMs).toBeCloseTo(50 + 10 * 5 + 2600 * 0.01, 9); // 126
-    expect(r.amInhibits).toBe(4); // 3 base rules + 1 dedup rule, whatever the tenant count (#3899)
+    expect(r.amInhibits).toBe(5); // 3 base rules + 2 dedup rules, whatever the tenant count (#3899, #4097)
   });
 
   it('adds per-pack route overrides only when more than 3 packs are selected', () => {
@@ -55,14 +55,14 @@ describe('computeCapacityEstimates', () => {
     expect(r.promMemMB).toBe(256);
     expect(r.reloadMs).toBe(50);
     expect(r.amRoutes).toBe(0);
-    expect(r.amInhibits).toBe(3); // no tenant: no dedup rule, the base's three only
+    expect(r.amInhibits).toBe(3); // no tenant: no dedup rules, the base's three only
   });
 
   it('inhibit rules do not grow with tenants or alerts (#3899)', () => {
     const few = computeCapacityEstimates({ packs: PACKS, tenantCount: 1, instancesPerTenant: 1, scrapeInterval: 15, retentionDays: 15 });
     const many = computeCapacityEstimates({ packs: [...PACKS, ...PACKS], tenantCount: 500, instancesPerTenant: 1, scrapeInterval: 15, retentionDays: 15 });
-    expect(few.amInhibits).toBe(4);
-    expect(many.amInhibits).toBe(4);
+    expect(few.amInhibits).toBe(5);
+    expect(many.amInhibits).toBe(5);
   });
 
   it('TSDB grows with retention and shrinks with longer scrape interval', () => {

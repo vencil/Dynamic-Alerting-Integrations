@@ -23,7 +23,7 @@ lang: zh
 |------|------|------|----------|
 | 備份/維護期間假陽性風暴 | **Silent Mode** | Sentinel alert → inhibit_rules 攔截通知（TSDB 有紀錄） | `_silent_mode` |
 | 計畫性維護忘記關閉 | **Maintenance Mode** | `maintenance: mute` 的告警在 PromQL 層不觸發，不是全部（[範圍](../design/config-driven.md#27-三態運營模式-operational-modes)；可設 `expires` 自動失效） | `_state_maintenance` |
-| Warning + Critical 重複告警 | **Severity Dedup** | 一條涵蓋所有租戶的 inhibit rule（同租戶、同 `metric_group` 配對；`disable` 的租戶在排除清單） | `_severity_dedup` |
+| Warning + Critical 重複告警 | **Severity Dedup** | 兩條涵蓋所有租戶的 inhibit rule（同租戶、同 `metric_group`、同 `da_cluster` 配對；告警不帶 `da_cluster` 時同租戶、同 `metric_group` 配對；`disable` 的租戶在排除清單） | `_severity_dedup` |
 | 通知目的地寫死在中央 | **Alert Routing** | Per-tenant route + receiver（6 種 type） | `_routing` |
 
 Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`（RFC3339，如 `"2099-04-01T00:00:00Z"`；解析不了時印 WARN 並忽略這筆設定——不靜音、maintenance 不生效）自動失效和 `reason` 欄位，防止「設了忘記關」。
@@ -234,7 +234,7 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 
 ### 功能
 
-讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定（你自己的設定，即來源）後輸出完整、合法的 Alertmanager 設定，見 Step 5。⚠️ Severity dedup 的 inhibit rule 由本工具產生（一條，`_severity_dedup: disable` 的租戶在它的 `tenant!~` 排除清單裡），**不要**寫進 base：base 裡若有路由產生器自己寫出的 severity dedup 規則（現在的全域形狀，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的空白、順序、引號、一個元素寫多個 matcher、舊式 `*_match` 不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重））會被拒收（結束碼 1、不寫檔），因為它會原樣進到輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`）。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
+讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定（你自己的設定，即來源）後輸出完整、合法的 Alertmanager 設定，見 Step 5。⚠️ Severity dedup 的 inhibit rule 由本工具產生（兩條：帶 `da_cluster` 的告警同叢集才配對，不帶的整個租戶配對；`_severity_dedup: disable` 的租戶在兩條的 `tenant!~` 排除清單裡；[#4097](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4097)），**不要**寫進 base：base 裡若有路由產生器自己寫出的 severity dedup 規則（現在的兩條之一、#3899 到 #4097 之間不比對 `da_cluster` 的單一全域規則，或 #3899 之前的 per-tenant 形狀；比對以產生器重建後的 matcher 集合為準：matcher 的空白、順序、引號、一個元素寫多個 matcher、舊式 `*_match` 不影響，但 `tenant!~` 排除清單須是產生器的寫法（排序、去重））會被拒收（結束碼 1、不寫檔），因為它會原樣進到輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`）。運維在 base 自己寫的 inhibit 規則屬於運維政策：dedup 守衛不判，即使它會蓋過 `_severity_dedup`（含 `disable`）；Watchdog 不得被抑制、platform 告警不得被租戶規則靜音、`equal` 標籤要有存在性 gate 等其他不變式照常適用（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
 
 ### 模式
 
@@ -442,20 +442,75 @@ _routing:
     type: "slack"
     api_url: {secret: {key: slack-url}}
     channel: "#db-alerts"
-    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
-    text: >-
-      *Tenant*: {{ .CommonLabels.tenant }}
-      *Severity*: {{ .CommonLabels.severity }}
-      {{ range .Alerts }}
-        - {{ .Annotations.summary }}
+    title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }} ({{ .CommonLabels.tenant }})'
+    text: |-
+      {{ range .Alerts -}}
+      {{ with .Labels.da_cluster }}[{{ . }}] {{ end }}{{ .Status | toUpper }} {{ .Labels.severity }}: {{ or .Annotations.summary_zh .Annotations.summary }}
+      {{ or .Annotations.description_zh .Annotations.description }}
       {{ end }}
 ```
 
+同一條告警在 `east`、`west` 兩個叢集觸發時，上面的模板送出：
+
+```text
+FIRING: MariaDBHighConnections (t1)
+[east] FIRING warning: MariaDB high connections on t1
+91% of max_connections
+[west] FIRING warning: MariaDB high connections on t1
+82% of max_connections
+```
+
+receiver 開了 `send_resolved: true` 時，`east` 先恢復、`west` 還在觸發，下一則通知兩條都在，各自標出狀態：
+
+```text
+FIRING: MariaDBHighConnections (t1)
+[east] RESOLVED warning: MariaDB high connections on t1
+91% of max_connections
+[west] FIRING warning: MariaDB high connections on t1
+82% of max_connections
+```
+
+內文用 `{{ range .Alerts }}` 逐條列出，是因為一則通知可以裝好幾條告警（好幾個 instance，或好幾個叢集），而 `.CommonAnnotations`／`.CommonLabels` 只有每一條都相同的值：各條的 `description` 不同時，`{{ .CommonAnnotations.description }}` 印出來是空的。`{{ with .Labels.da_cluster }}` 讓沒有這個 label 的告警不印出空括號；`{{ .Status | toUpper }}` 在迴圈裡是該條告警自己的狀態（標題裡的 `.Status` 是整組的：只要還有一條在觸發就是 `firing`）；`or .Annotations.summary_zh .Annotations.summary` 有中文 annotation 時用中文，沒有就用英文。
+
 Email 和 Teams 使用相同的 Go template 語法，僅欄位名稱不同：
-- Email：`html` 欄位（HTML 格式）
+- Email：`text` 欄位（純文字）或 `html` 欄位（HTML 格式）。只寫 `text` 時，Alertmanager 仍會附上內建模板的 HTML 部分，多數郵件軟體顯示的是 HTML 那一份
 - Teams：`text` 欄位（Markdown 格式）
 
-**可用變數：** `.CommonLabels.alertname`, `.CommonLabels.tenant`, `.CommonLabels.severity`, `.CommonAnnotations.summary`, `.CommonAnnotations.description`, `.Status`, `.Alerts`（支援 `{{ range }}` 迴圈）。詳見 [Alertmanager 官方範本](https://prometheus.io/docs/alerting/latest/notifications/)
+**可用變數：** `.Status`、`.Alerts`（支援 `{{ range }}` 迴圈，每條有 `.Labels`、`.Annotations`）；整組共同的值在 `.CommonLabels`（如 `.CommonLabels.alertname`、`.CommonLabels.tenant`）與 `.CommonAnnotations`；`.GroupLabels` 只有 `group_by` 列出的 label。詳見 [Alertmanager 官方範本](https://prometheus.io/docs/alerting/latest/notifications/)
+
+### 一個租戶跑在多個叢集時的通知
+
+同一個租戶可以跑在好幾個叢集（[ADR-006](../adr/006-tenant-mapping-topologies.md) 的「多叢集同租戶」），送到 Alertmanager 的每條告警都帶 `da_cluster`。
+
+**預設行為。** 分組（`group_by`）不含叢集：同一條告警在兩個叢集同時觸發時是**一則**通知，裡面有兩條告警。平台不附通知模板，沒寫 `title`／`text` 的 receiver 用的是 Alertmanager 內建模板：
+
+- Email 內文、PagerDuty 的 details、webhook payload 逐條列出告警，連同它的 label（含 `da_cluster`）與 annotation。
+- 單行標題／主旨是 `[FIRING:2] <告警名> <租戶> (…)`，沒有叢集。只有一個叢集觸發時，標題會帶出叢集，因為那時它是整組共同的 label。
+- 內建的 Slack 模板只有標題、沒有內文，兩個叢集同時觸發時看不出是哪兩個。Slack receiver 請用上一節那種逐條列出告警的模板。
+- PagerDuty 一組是一個 incident，該告警在所有叢集都恢復後才 resolve。
+
+**要每個叢集各收一則。** 把 `da_cluster` 加進 `group_by`。所有租戶的 route 一起改，寫在 `_defaults.yaml`（`_routing_enforced` 的 NOC route 不讀 `_routing_defaults`，它的 `group_by` 寫在 `_routing_enforced` 自己裡面）：
+
+```yaml
+_routing_defaults:
+  group_by: ["alertname", "tenant", "da_cluster"]
+```
+
+只改一個租戶，寫在它的 `_routing`（租戶自己寫了 `group_by` 時，以租戶的為準）：
+
+```yaml
+tenants:
+  db-a:
+    _routing:
+      group_by: ["alertname", "da_cluster"]
+```
+
+租戶自助告警（`_custom_alerts` 產生的 `Custom_*`）走另一條路由，分組固定是租戶加告警名，不受這個設定影響。
+
+**兩項代價。**
+
+1. 講整個租戶的告警（只從 threshold-exporter 的序列算出來，例如「租戶沒設定閾值」）帶的是評估它的那台 Prometheus 的叢集。幾台 Prometheus 評估同一批規則時，這類告警會變成每台各一則通知。
+2. 在運作中的 Alertmanager 上改一條 route 的 `group_by`，該 route 當下觸發中的每一組都會再通知一次（分組的 key 變了）；以分組為 key 的接收端（PagerDuty）會開新的 incident，舊的 incident Alertmanager 不會替它 resolve（恢復通知送到的是新的 key），要手動關閉。
 
 ---
 
