@@ -1,4 +1,4 @@
-"""The read-only modes of seven tools run without PyYAML (#3981).
+"""The read-only modes of five tools run without PyYAML (#3981).
 
 `check_repo_name --ci` and `check_doc_links --ci` are `language: python`
 pre-commit hooks with no `additional_dependencies`: their environment has no
@@ -64,12 +64,10 @@ ROWS = [
     ("lint/check_doc_links.py", ["--ci", "--repo-root", "{tree}"]),
     ("dx/add_frontmatter.py", ["--check", "--base-dir", "{tree}/docs"]),
     ("dx/add_frontmatter.py", ["--dry-run", "--base-dir", "{tree}/docs"]),
-    # #3981, third batch: four `--check` hooks (`language: python`, no
+    # #3981, third batch: two `--check` hooks (`language: python`, no
     # `additional_dependencies`) whose writing modes use the artifact entry.
     ("dx/gen_tenant_id_json.py", ["--check"]),
     ("dx/gen_am_duration_json.py", ["--check"]),
-    ("dx/sync_schema.py", ["--check"]),
-    ("dx/gen_recipe_contract.py", ["--check"]),
 ]
 
 

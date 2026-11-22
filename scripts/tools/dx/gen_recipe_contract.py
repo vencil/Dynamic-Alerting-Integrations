@@ -537,19 +537,8 @@ def run(root, update):
     """Stale relpaths; writes the stale files when *update*."""
     c, grammar = load(root)
     stale = []
-    if update:
-        # Imported here, not at the top: `_lib_io` imports PyYAML, and
-        # `--check` runs as a pre-commit hook in an environment that has
-        # none (#3981).
-        from _lib_io import (  # noqa: E402, PLC0415
-            OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
     for rel, render in targets(root, c, grammar):
         path = Path(root) / rel
-        if update:
-            try:
-                check_repo_artifact(path)  # before the read: a FIFO would block it
-            except OutputWriteError as e:
-                raise ContractError(str(e)) from e
         try:
             current = path.read_text(encoding="utf-8") if path.exists() or rel not in WHOLE_FILE_TARGETS else ""
         except (OSError, UnicodeDecodeError) as e:
@@ -558,17 +547,14 @@ def run(root, update):
         if wanted != current:
             stale.append(rel)
             if update:
-                try:
-                    ensure_dir(path.parent)
-                    # The artifact entry writes LF on every platform. With
-                    # os.linesep (CRLF on Windows) the eol=lf gitattribute hides
-                    # the difference from the working-tree status and from
-                    # --check (read_text normalizes CRLF→LF) — but esbuild reads
-                    # the raw bytes, so a CRLF portal copy taints the bundle's
-                    # sourcemap and re-hashes the shared chunk.
-                    write_repo_artifact(path, wanted)
-                except OutputWriteError as e:
-                    raise ContractError(str(e)) from e
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # newline="\n": force LF on every platform. Without it,
+                # Path.write_text uses os.linesep (CRLF on Windows), which the
+                # eol=lf gitattribute hides from the working-tree status and
+                # from --check (read_text normalizes CRLF→LF) — but esbuild
+                # reads the raw bytes, so a CRLF portal copy taints the
+                # bundle's sourcemap and re-hashes the shared chunk.
+                path.write_text(wanted, encoding="utf-8", newline="\n")
     return stale
 
 

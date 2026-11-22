@@ -108,9 +108,10 @@ def main() -> int:
     from _lib_io import (  # noqa: E402, PLC0415
         OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
     try:
-        # Every copy is judged before the first is written: a copy that is
-        # no regular file (a FIFO blocked the write, a symlink was written
-        # through) leaves the others as they were.
+        # Every copy is judged before the first is written: with one of
+        # them no regular file (a FIFO, a directory) the others are left as
+        # they were. A write that fails later — a directory that takes no
+        # new file — still leaves the copies before it rewritten.
         for _rel, path in targets:
             check_repo_artifact(path)
         for rel, path in targets:

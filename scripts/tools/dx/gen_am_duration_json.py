@@ -111,14 +111,8 @@ def main() -> int:
 
     # Imported here, not at the top: `_lib_io` imports PyYAML, and `--check`
     # runs as a pre-commit hook in an environment that has none (#3981).
-    from _lib_io import (  # noqa: E402, PLC0415
-        OutputWriteError, check_repo_artifact, ensure_dir, write_repo_artifact)
+    from _lib_io import OutputWriteError, ensure_dir, write_repo_artifact  # noqa: E402, PLC0415
     try:
-        # Every copy is judged before the first is written: a copy that is
-        # no regular file (a FIFO blocked the write, a symlink was written
-        # through) leaves the others as they were.
-        for _rel, path in targets:
-            check_repo_artifact(path)
         for rel, path in targets:
             ensure_dir(path.parent)
             # The artifact entry writes LF on every platform (CRLF would
