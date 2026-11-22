@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 # Import the module to test
 import migrate_to_operator as mto  # noqa: E402
+from _lib_exitcodes import Report, emit_result  # noqa: E402  (#3216: in-process main() → its document)
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 
@@ -176,7 +177,7 @@ class TestParseConfigMapRules:
         monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(temp_configmap_dir),
                                           "--output-dir", str(out)])
         with pytest.raises(SystemExit) as exc:
-            mto.main()
+            emit_result(mto.main())
         assert exc.value.code == 2
         assert not out.exists() or not any(out.iterdir()), sorted(out.iterdir())
         assert "Source directory error" not in capsys.readouterr().err
@@ -395,7 +396,7 @@ class TestMainJsonEnvelope:
             "--output-dir", str(output_dir),
             *argv_tail,
         ]):
-            mto.main()
+            emit_result(mto.main())
 
     def _assert_checklist_envelope(self, captured):
         """checklist-only envelope 的共同形狀斷言。"""
@@ -644,13 +645,17 @@ class TestOutputModeMatrix:
         if row.json_mode:
             argv.append("--json")
 
-        # exit code：main() 正常 return（無 sys.exit）⇒ process exit 0
+        # exit code：main() 正常 return（無 sys.exit）⇒ process exit 0。
+        # #3216：--json 時 main() 交回 Report（由 run() 編碼並寫出），這裡以
+        # emit_result 走同一步；文字模式照舊 return None。
         with patch("sys.argv", argv):
             try:
-                ret = mto.main()
+                returned = mto.main()
+                ret = emit_result(returned)
             except SystemExit as exc:  # pragma: no cover - 只為診斷訊息
                 pytest.fail(f"main() raised SystemExit({exc.code}); expected exit 0")
-        assert ret is None
+        assert isinstance(returned, Report) == row.json_mode
+        assert ret == (0 if row.json_mode else None)
 
         captured = capsys.readouterr()
 
@@ -778,6 +783,20 @@ class TestPlanStdout:
             assert result == snapshot, f"plan_stdout mutated result for {row}"
             assert first == second
 
+    @pytest.mark.parametrize("row", [r for r in OUTPUT_MODE_MATRIX if r.json_mode],
+                             ids=[i for r, i in zip(OUTPUT_MODE_MATRIX, _MATRIX_IDS)
+                                  if r.json_mode])
+    def test_the_document_main_hands_back_is_the_one_plan_stdout_spells(self, row):
+        """#3216：--json 時 main() 交回 `stdout_json_document(...)` 的 Report，
+        不再印 `plan_stdout` 的文字。兩者是同一份文件——這張矩陣釘的仍是
+        使用者拿到的東西，而不是一條 main() 已經不走的路。"""
+        from _lib_exitcodes import encode_json
+        doc = mto.stdout_json_document(
+            checklist_only=row.checklist_only, dry_run=row.dry_run,
+            result=self._fake_result(), checklist=self._CHK,
+            namespace="monitoring", source_dir=Path("/src"))
+        assert self._plan(row) == [encode_json(doc) + "\n"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
@@ -814,7 +833,7 @@ class TestWritingIsOptIn:
             "migrate_to_operator.py",
             "--source-dir", str(temp_configmap_dir),
         ]):
-            mto.main()
+            emit_result(mto.main())
 
         for root, snap in zip(roots, before):
             assert self._tree(root) == snap, (
@@ -835,7 +854,7 @@ class TestWritingIsOptIn:
             "migrate_to_operator.py",
             "--source-dir", str(temp_configmap_dir),
         ]):
-            mto.main()
+            emit_result(mto.main())
 
         out = capsys.readouterr().out
         assert out.strip(), (
@@ -864,7 +883,7 @@ class TestWritingIsOptIn:
             "--source-dir", str(temp_configmap_dir),
             "--output-dir", str(temp_output_dir),
         ]):
-            mto.main()
+            emit_result(mto.main())
         capsys.readouterr()
 
         checklist = temp_output_dir / "MIGRATION-CHECKLIST.md"
@@ -914,7 +933,7 @@ class TestReadsNoConfd:
         monkeypatch.setattr(_lib_parse_tree, "load", counting)
         monkeypatch.setattr(_lib_parse_tree, "list_tree", counting_list)
         monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(src), "--dry-run"])
-        mto.main()
+        emit_result(mto.main())
         assert loads == [], loads
         assert [os.path.realpath(d) for d in lists] == [os.path.realpath(src)], lists
         assert "tenants" not in capsys.readouterr().err
@@ -1007,7 +1026,7 @@ class TestSourceFilesAreWhatTheReadersSay:
             "--output-dir", str(out),
         ]):
             with pytest.raises(SystemExit) as exc_info:
-                mto.main()
+                emit_result(mto.main())
         return exc_info.value.code
 
     @pytest.mark.parametrize("json_mode", [False, True])
@@ -1025,7 +1044,7 @@ class TestSourceFilesAreWhatTheReadersSay:
         with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
                                 "--output-dir", str(out), *argv_json]):
             with pytest.raises(SystemExit) as exc_info:
-                mto.main()
+                emit_result(mto.main())
         assert exc_info.value.code == 2
         assert not out.exists(), "nothing may be written when a rule file is refused"
         captured = capsys.readouterr()
@@ -1040,7 +1059,7 @@ class TestSourceFilesAreWhatTheReadersSay:
             "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", encoding="utf-8")
         with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src), "--checklist-only"]):
             with pytest.raises(SystemExit) as exc_info:
-                mto.main()
+                emit_result(mto.main())
         assert exc_info.value.code == 2
         assert "bad.yaml" in capsys.readouterr().err
 
@@ -1075,7 +1094,7 @@ class TestSourceFilesAreWhatTheReadersSay:
         with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
                                 "--output-dir", str(out), *extra]):
             try:
-                mto.main()
+                emit_result(mto.main())
                 code = 0
             except SystemExit as exc:
                 code = exc.code or 0
@@ -1106,7 +1125,7 @@ class TestSourceFilesAreWhatTheReadersSay:
             argv += ["--output-dir", str(tmp_path / "out")]
         with patch("sys.argv", argv):
             try:
-                mto.main()
+                emit_result(mto.main())
                 code = 0
             except SystemExit as exc:
                 code = exc.code or 0
@@ -1162,7 +1181,7 @@ class TestSourceFilesAreWhatTheReadersSay:
             "--output-dir", str(out),
         ]):
             with pytest.raises(SystemExit) as exc_info:
-                mto.main()
+                emit_result(mto.main())
         assert exc_info.value.code == 2
         assert not out.exists(), "nothing may be written when a source file is unreadable"
         err = capsys.readouterr().err

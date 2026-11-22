@@ -34,6 +34,13 @@ CLI
 ``check_planning_status_sync.py``
     [--base <ref>] [--pr-number <N>] [--strict] [--ci] [--json]
 
+``--json`` answers with ONE document on stdout, findings or none (#3216: it
+followed the human report to stderr when there were findings, so ``--json |
+jq`` read nothing exactly then). The document goes back to
+``_lib_exitcodes.run`` as a ``Report``. Under GitHub Actions the
+``::warning`` lines of a ``--json`` run go to stderr: on stdout they came
+before the document. The human report is unchanged — findings on stderr.
+
 CI gotcha
 ---------
 The `actions/checkout` step MUST set ``fetch-depth: 0`` so `<base>..HEAD`
@@ -45,12 +52,12 @@ Exit codes
 ----------
 - 0  no findings, or findings present in soft-warn mode
 - 1  findings present in ``--strict`` / ``--ci`` mode
-- 2  setup error (missing git, missing base ref, missing pyyaml, etc.)
+- 2  setup error (missing git, missing base ref, missing pyyaml, etc.);
+     ``--json`` whose document could not be written to stdout
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -66,7 +73,7 @@ REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "dx"))
 sys.path.insert(0, str(SCRIPT_DIR))  # Docker flat layout
 sys.path.insert(0, str(SCRIPT_DIR.parent))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 try:
     from generate_planning_index import discover_all, PlanningEntry  # noqa: E402
 except ImportError as e:
@@ -273,8 +280,8 @@ def _format_human(hits: List[TrailerHit], issues: List[ValidationIssue]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_json(hits: List[TrailerHit], issues: List[ValidationIssue]) -> str:
-    payload = {
+def _json_document(hits: List[TrailerHit], issues: List[ValidationIssue]) -> dict:
+    return {
         "trailers": [
             {"verb": h.verb, "id": h.id, "commit": h.commit_sha} for h in hits
         ],
@@ -282,10 +289,9 @@ def _format_json(hits: List[TrailerHit], issues: List[ValidationIssue]) -> str:
             {"id": i.id, "kind": i.kind, "detail": i.detail} for i in issues
         ],
     }
-    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
-def _emit_gha_warnings(issues: List[ValidationIssue]) -> None:
+def _emit_gha_warnings(issues: List[ValidationIssue], stream=None) -> None:
     """Emit `::warning::` workflow-command lines so issues render as inline
     annotations on the GitHub Actions PR check UI (not just buried in step log).
 
@@ -307,7 +313,7 @@ def _emit_gha_warnings(issues: List[ValidationIssue]) -> None:
             .replace("\n", "%0A")
         )
         # `title=` shows up as the annotation header in the PR Checks tab.
-        print(f"::warning title=planning-sync ({issue.kind})::{issue.id}: {msg}")
+        print(f"::warning title=planning-sync ({issue.kind})::{issue.id}: {msg}", file=stream)
 
 
 def main() -> int:
@@ -350,20 +356,17 @@ def main() -> int:
     entries = discover_all()
     issues = validate_sync(hits, entries, pr_number=args.pr_number)
 
-    report = _format_json(hits, issues) if args.json else _format_human(hits, issues)
+    status = EXIT_VIOLATION if issues and (args.strict or args.ci) else EXIT_OK
+    gha = bool(issues) and os.environ.get("GITHUB_ACTIONS") == "true"
+    if args.json:
+        if gha:
+            _emit_gha_warnings(issues, stream=sys.stderr)
+        return Report(_json_document(hits, issues), status)
     sink = sys.stderr if issues else sys.stdout
-    sink.write(report)
-
-    # When running inside GitHub Actions, additionally emit `::warning::`
-    # workflow-command lines so each issue surfaces as a UI annotation on the
-    # PR Checks tab — soft-warn is otherwise invisible (the check is green and
-    # the stderr message is buried in the step log).
-    if issues and os.environ.get("GITHUB_ACTIONS") == "true":
+    sink.write(_format_human(hits, issues))
+    if gha:
         _emit_gha_warnings(issues)
-
-    if issues and (args.strict or args.ci):
-        return EXIT_VIOLATION
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
