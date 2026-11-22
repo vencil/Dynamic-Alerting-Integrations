@@ -62,7 +62,7 @@ report 寫到 `docs/internal/audit-reports/rules-drift-YYYY-MM.md`（atomic writ
 |---|---|---|
 | `validate_docs_versions.py`（`check_release_tag_currency`）| 版號字面：`tools/vX` / `--set image.tag=vX` / `da-* --version` 輸出 vs 當前 release | TB-F1 |
 | `check_doc_k8s_refs.py` | `k8s/**` manifest 路徑存在 + doc 宣稱的 workload kind vs 實際 `k8s/`（`kubectl ... statefulset/deployment <元件>`）| TB-F4 |
-| `check_doc_datools_cmds.py` | 文件裡 `da-tools guard/parser/batch-pr` 子命令 vs dispatcher 實際集 | F3（`guard /conf.d`）|
+| `check_doc_datools_cmds.py` | 文件裡 `da-tools guard/parser` 子命令 vs dispatcher 實際集 | F3（`guard /conf.d`）|
 
 > **刻意沒做的廣義版**（記取教訓，別重造）：「掃所有 repo 路徑是否存在」「驗所有 `da-tools <任意命令>`」實跑都是 **~88% false-positive**（文件充斥 example/aspirational：`my-db.yaml` / `describe-tenant` / 「PR-3 預定加」的工具）—— 廣義 lint = 你燒過的 reactive-whack-a-mole 反模式。三支都**收斂到真 artifact 才有的窄域**（k8s/、binary-wrapper 子命令）。
 

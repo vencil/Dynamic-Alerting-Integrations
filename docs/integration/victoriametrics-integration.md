@@ -107,18 +107,16 @@ vmalert \
 ```
 customer PromRule YAML
     ↓ da-parser import
-ParsedRule JSON（含 dialect / vm_only / prom_portable 標註）
-    ↓ Profile Builder（library）  
-Cluster + Profile-as-Directory-Default
-    ↓ da-batchpr apply
-Hierarchy-aware Batch PRs
+ParsedRule JSON（含 dialect / vm_only / prom_portable 標註，分診用）
+    ↓ da-tools migrate（逐租戶）
+conf.d 租戶檔 → 客戶自己的 PR
     ↓ da-guard
 Dangling Defaults Guard 檢查（路由交 generate-routes）
     ↓
 conf.d/ 樹（GitOps merge）
 ```
 
-> ⚠️ 上圖是設計。Profile Builder → `da-batchpr apply` 這兩步目前沒有接通（experimental，見 [`batch-pr`](../cli-reference.md#batch-pr)）；要導入客戶規則請用逐租戶的 [`migrate`](../cli-reference.md#migrate)。
+轉換步驟見 [`migrate`](../cli-reference.md#migrate)；產出 `_custom_alerts` recipe 的批次導入見 [#4226](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/4226)。
 
 ### 5.2 MetricsQL handling 與 anti-vendor-lock-in
 
@@ -192,7 +190,7 @@ conf.d/ 樹（GitOps merge）
 
 - [ ] 跑 `da-parser import` 對 customer PromRule corpus
 - [ ] 檢查 dialect 分布 + non-portable 比例
-- [ ] 逐租戶跑 [`da-tools migrate`](../cli-reference.md#migrate) 產出 conf.d 租戶檔（Profile Builder 與 `da-batchpr apply` 尚未接通，見 [`batch-pr`](../cli-reference.md#batch-pr)）
+- [ ] 逐租戶跑 [`da-tools migrate`](../cli-reference.md#migrate) 產出 conf.d 租戶檔
 - [ ] 跑 `da-guard` 過 schema / cardinality / redundant-override 檢查；exit 4（樹上有路由或 domain policy，[#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) 起 da-guard 不判）時再跑 `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] 詳情 → [Migration Toolkit Installation](../migration-toolkit-installation.md)
 

@@ -1,7 +1,7 @@
 """Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 
 Single source of truth for the 0/1/2 exit-code convention shared by the
-Python tool suite and the Go binaries (da-guard / da-parser / da-batchpr).
+Python tool suite and the Go binaries (da-guard / da-parser).
 Before #452 the convention lived in three divergent ad-hoc spots
 (_lib_godispatch._EXIT_CALLER_ERROR, diag_pr_ci.EXIT_*, trufflehog_to_sarif
 .EXIT_*); this module unifies the base contract so call sites share one

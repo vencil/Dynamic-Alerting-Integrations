@@ -2,15 +2,15 @@
 // Go (ADR-036 §2, §7 step 9; #3206). The exporter's walker
 // (pkg/config.ScanDirTree), the in-memory source behind /simulate
 // (pkg/config.ScanFromConfigSource), da-guard (parse-tree and the routing
-// evidence), the batch-PR allocator, the profile emitter and tenant-api (its
+// evidence) and tenant-api (its
 // tenant enumerators, write paths and refusal disclosure) all ask it; none of
 // them restates a rule. It lives under pkg/ so tenant-api, a separate module,
 // can import it.
 //
 // ⛔ WHY ONE COPY. The #1911 family is one shape repeated: a single conf.d
 // tree, several enumerators, each with its own hand-written name rules, quietly
-// disagreeing. #1605 measured the write plane's copy — `internal/batchpr`'s
-// allocator answered differently from the exporter's walker on eleven of the
+// disagreeing. #1605 measured the write plane's copy — a since-retired
+// PR allocator answered differently from the exporter's walker on eleven of the
 // shared matrix's twenty-three names, four of them silently. Until #3206 there
 // were still four Go copies (this package, two in pkg/config, one in
 // tenant-api) kept equal only by each asserting the same JSON matrix.
@@ -201,12 +201,11 @@ func IsReserved(base string) bool { return strings.HasPrefix(base, "_") }
 // tenant id from a filename. A basename only decides CLASSIFICATION: is this
 // file read at all, and is it the chain carrier.
 //
-// What this function answers is the WRITE PLANE's naming convention: the
-// proposal emitter names each tenant's carrier `safeFilename(id)+".yaml"` and
-// the batch-PR allocator recovers the id back out of that name. Those two are
-// the round trip that needs checking, and this is the rule they share. A
-// carrier whose filename and whose `tenants:` key disagree is legal on disk and
-// the exporter will happily serve the key — it is the PR routing that loses it.
+// What this function answers is the WRITE PLANE's naming convention: the id a
+// tenant's carrier is named for (`<id>.yaml`), which tenant-api's enumerators
+// and da-guard's parse-tree recover back out of that name. A carrier whose
+// filename and whose `tenants:` key disagree is legal on disk and the exporter
+// will happily serve the key — it is the name-based routing that loses it.
 func TenantNamedBy(base string) (tenant string, ok bool) {
 	stem, isYAML := SplitCarrier(base)
 	if !isYAML || stem == "" || IsHidden(base) || IsReserved(base) {

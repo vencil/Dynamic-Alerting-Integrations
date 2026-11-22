@@ -485,17 +485,16 @@ jobs:
       # C-11 extras: cross-compile binaries + air-gapped tar + Release
       # ----------------------------------------------------------------
 
-      - name: Cross-compile da-guard + da-batchpr + da-parser binaries (6 OS/ARCH each)
+      - name: Cross-compile da-guard + da-parser binaries (6 OS/ARCH each)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/da-guard-bin"
-          # All three Go CLIs use the same matrix + ldflags. C-10 PR-5
-          # added da-batchpr alongside da-guard; C-8 PR-2 adds
+          # Both Go CLIs use the same matrix + ldflags. C-8 PR-2 added
           # da-parser for the Prometheus rule import path. The build flags
           # are scripts/ops/go_build.sh's (#3425), as the da-tools image's.
-          for BIN in da-guard da-batchpr da-parser; do
+          for BIN in da-guard da-parser; do
             for OS in linux darwin windows; do
               for ARCH in amd64 arm64; do
                 EXT=""
@@ -518,20 +517,18 @@ jobs:
           cd "$RUNNER_TEMP/da-guard-bin"
           # Linux + macOS: tar.gz. Windows: zip (Windows users
           # commonly lack tar/gzip; zip is universal).
-          # Globs cover all three binaries (guard / batchpr / parser).
+          # Globs cover both binaries (guard / parser).
           for f in da-guard-linux-* da-guard-darwin-* \
-                   da-batchpr-linux-* da-batchpr-darwin-* \
                    da-parser-linux-* da-parser-darwin-*; do
             tar czf "${f}.tar.gz" "$f"
           done
-          for f in da-guard-windows-* da-batchpr-windows-* da-parser-windows-*; do
+          for f in da-guard-windows-* da-parser-windows-*; do
             zip -q "${f%.exe}.zip" "$f"
           done
           # Sum every artefact reviewers can download, including the
           # raw binaries for security-team teams that prefer to verify
           # the binary directly rather than the archive.
           sha256sum da-guard-linux-* da-guard-darwin-* da-guard-windows-* \
-                    da-batchpr-linux-* da-batchpr-darwin-* da-batchpr-windows-* \
                     da-parser-linux-* da-parser-darwin-* da-parser-windows-* \
                     *.tar.gz *.zip > SHA256SUMS
           echo "--- Archive listing ---"

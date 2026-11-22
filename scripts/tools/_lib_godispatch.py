@@ -1,10 +1,9 @@
 """Shared dispatcher for da-tools subcommands that wrap a Go binary.
 
-v2.8.0 ships three Python dispatchers that each forward to a Go binary
-built from components/threshold-exporter/app/cmd/:
+Two Python dispatchers each forward to a Go binary built from
+components/threshold-exporter/app/cmd/:
 
   - guard_dispatch.py    → da-guard
-  - batchpr_dispatch.py  → da-batchpr
   - parser_dispatch.py   → da-parser
 
 The dispatchers shared ~95% of their code (~270 LOC each, ~810 LOC
@@ -96,7 +95,7 @@ class GoBinaryDispatcher:
         subcommands: Set of valid subcommands for this dispatcher.
             Validation only — the Go binary owns per-subcommand flag
             schemas; we don't second-guess flag values.
-        pass_subcommand: If True (batchpr / parser pattern), forward
+        pass_subcommand: If True (parser pattern), forward
             the subcommand as the first arg to the Go binary; the Go
             binary is itself a multi-subcommand dispatcher. If False
             (guard pattern), strip the subcommand before forwarding —
