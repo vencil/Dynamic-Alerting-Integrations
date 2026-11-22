@@ -71,10 +71,10 @@ volumes:
                 path: jvm-recording.yml
               - key: jvm-alert.yml
                 path: jvm-alert.yml
-        # ... the remaining Rule Packs follow the same pattern
+        # ...
 ```
 
-The volume is mounted at `/etc/prometheus/rules`, and the Prometheus config reads it with `rule_files: ["/etc/prometheus/rules/*.yml"]`.
+The remaining Rule Packs follow the same pattern, one `configMap` source each. The volume is mounted at `/etc/prometheus/rules`, and the Prometheus config reads it with `rule_files: ["/etc/prometheus/rules/*.yml"]`.
 
 Unloading the JVM Rule Pack:
 

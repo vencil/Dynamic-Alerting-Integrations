@@ -13,18 +13,29 @@ comments or CHANGELOG entries.
 
 The rules (one place: `match_quote`):
 
-* An **elision line** is a whole line that, once its indentation and an
-  optional comment leader (`#`, `//`, `--`, `;`) are off, starts with `...`
-  or `…`. The rest of the line is a free note (`# ... the other Rule Packs
-  likewise`). An elision inside a line (`foo … bar`) is not one: that line
-  does not match, and the block is red.
-* The block is cut at its elision lines into **segments**. Each segment must
-  EQUAL a run of consecutive whole lines of the source. Two normalisations
-  only: each side's common indentation is removed (a doc may lift a nested
-  excerpt to the left margin), and trailing whitespace is dropped. No
-  Unicode folding, no punctuation or whitespace squeezing: `→` written `->`,
-  a full-width `；` written `;`, a clause cut off the end of a line are what
-  this guard exists to catch.
+* An **elision line** is a line that, once its indentation and trailing
+  whitespace are off, is exactly one of `ELISION_MARKERS`: `# ...`,
+  `// ...`, `-- ...`, `; ...`, or the same with `…`. Nothing else is one: no
+  note after the marker (a note is unchecked text inside a quote — it goes in
+  the prose), and no bare `...` / `…` (a JS spread, a Python stub, YAML's
+  document end are source lines, not elisions). An elision inside a line
+  (`foo … bar`) is not one either: that line does not match, and the block
+  is red. A block with an elision line whose source holds a line that is
+  itself a marker is red (`ambiguous elision marker`): the guard cannot tell
+  the quoted line from the elision, so it does not guess.
+* The block is cut at its elision lines into **segments**; each segment is
+  a run of consecutive source lines. Equality is per character after
+  trailing whitespace is dropped, with ONE indentation offset: there is a
+  single whitespace prefix P such that every non-blank block line d is
+  matched by the source line P + d (no tab expansion), and a blank block
+  line by a blank source line. P is set where the first segment is placed
+  (the source line's indentation minus the block line's, which must be a
+  suffix of it), and holds for the whole block: a doc may lift an excerpt
+  to the left margin, but not re-nest one line under another, turn a tab
+  into spaces or move a recipe to column 0. No Unicode folding, no
+  punctuation or whitespace squeezing: `→` written `->`, a full-width `；`
+  written `;`, a clause cut off the end of a line are what this guard
+  exists to catch.
 * Segments appear in the source in order and do not overlap; between two
   segments the source skips at least one line (an elision that elides
   nothing misleads as much as one that is not marked). A leading or trailing
@@ -36,30 +47,43 @@ The rules (one place: `match_quote`):
   (0 or 2+ times is red); the first segment is searched from the anchor's
   line on. Without an anchor the search starts at the top. No line numbers,
   no regex.
-* `src` is a path relative to the repository root, of a regular file inside
-  it, outside the directories the repository ignores (`UNTRACKED_DIRS`).
+* `src` is a path relative to the repository root, of a regular file, with
+  no symlink on its path (the file itself or a directory above it), and not
+  a Markdown page (`.md`): a page that repeats another page verbatim uses
+  pymdownx.snippets, and a quote of a page — the doc itself, its
+  translation — would vouch for nothing.
 * The `.quote` vocabulary is closed: `.quote`, `src` (mandatory), `anchor`;
   any other attribute is an error. It is read by the docs' YAML inventory's
   `parse_declaration` (the one reading of fence attributes), and on a YAML
-  block it excludes every consumer attribute of md-yaml-fence-check.
+  block it excludes every consumer attribute of md-yaml-fence-check. A
+  fence opening line whose info mentions `quote` (any case) or `src=` but
+  that is no `.quote` block the site renders (`{.Quote}`, `src2=`, an info
+  without braces) is an error too, not a block silently skipped.
 * A page `foo.md` and its translation `foo.en.md` carry the same number of
   `.quote` blocks with the same multiset of `src` (a quote updated in one
   language and not the other is the drift this pairing catches).
 
+Placement is greedy, and that is exact: once P is fixed, whether a segment
+equals the source at a position does not depend on where the other segments
+are, and the only constraints between segments are their order and the
+one-line minimum gap; placing each segment at its earliest allowed position
+leaves every later segment the most room, so if any placement exists the
+greedy one is found. Of the first segment's positions only the earliest one
+for each distinct P is tried (a later position with the same P only takes
+room away). Cost: O(source lines x block lines) per distinct P.
+
 Which code blocks exist is the site's renderer's answer, read through
 scripts/tools/_lib_doc_yaml_inventory.py (`Renderer`, `locate_blocks`): no
-fence regex of its own (#3814).
+fence regex of its own (#3814). A block's lines are the file's lines with
+the opening fence's container prefix (list indentation, `> `) removed.
 
 What it does not do, on purpose: it runs no tool, no subprocess and no git,
-and opens no network connection; it reads files only. "Is `src` tracked by
-git" is therefore approximated without git: the file exists, is a regular
-file whose real path is inside the repository, and no directory on its path
-is one the repository ignores (`UNTRACKED_DIRS`, mirrored from .gitignore's
-directory entries). A single ignored FILE elsewhere (a `_scratch.json`) is
-not recognised locally; CI checks out tracked files only, so a quote of an
-untracked file is red there (`src` does not exist). Editing a source file
-does not run this hook locally (its `files:` covers docs/ and the guard);
-ci.yml's Lint job runs it on every PR.
+and opens no network connection; it reads files only. Whether `src` is
+tracked by git is therefore not judged locally: CI checks out tracked files
+only, so a quote of an untracked file is red there (`src` does not exist)
+— loud, not silent. Editing a source file does not run this hook locally
+(its `files:` covers docs/ and the guard); ci.yml's Lint job runs it on
+every PR.
 
 Exit codes: 0 every declared quote matches; 1 a violation; 2 the site's
 renderer is not installed or mkdocs.yml cannot be read (never a skip).
@@ -74,7 +98,6 @@ import difflib
 import os
 import re
 import sys
-import textwrap
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,51 +107,42 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 import _lib_doc_yaml_inventory as inventory  # noqa: E402  (the renderer and the fence vocabulary)
 
-#: An elision line: indentation, an optional comment leader, then `...` / `…`.
-ELISION_RE = re.compile(r"^\s*(?:(?:#|//|--|;)\s*)?(?:\.\.\.|…)")
-
-#: Directories the repository ignores (.gitignore's directory entries), as
-#: repo-relative prefixes; `ANYWHERE_DIRS` match at any depth. A `src` under
-#: one is not a tracked file.
-UNTRACKED_DIRS = (
-    ".git/", ".build/", ".vibe/", "site/", "tmp/", "dev/", ".schemathesis/",
-    "docs/assets/dist/", "docs/rule-packs/", "docs/internal/design-reviews/",
-    "tests/_test_output/", "tests/_test_multidb_output/", "_ci_logs/",
-)
-ANYWHERE_DIRS = frozenset({
-    "node_modules", "__pycache__", ".pytest_cache", ".ruff_cache", ".hypothesis",
-    ".benchmarks", "htmlcov", ".vite", ".idea",
-})
+#: The whole elision lines, once indentation and trailing whitespace are off.
+ELISION_MARKERS = frozenset(f"{lead} {dots}" for lead in ("#", "//", "--", ";")
+                            for dots in ("...", "…"))
 
 #: An inline code span in the rendered HTML: a `<code` outside a `<pre>`.
 _PRE_RE = re.compile(r"<pre\b.*?</pre>", re.S)
+#: A fence opening, once the container prefix is off: its info text after it.
+_FENCE_OPEN_RE = re.compile(r"^(?:`{3,}|~{3,})(?P<info>.*)$")
+_LOOKS_LIKE_QUOTE_RE = re.compile(r"quote|src\s*=", re.I)
 
 
 @dataclass
 class Quote:
     path: str                 # the doc, repo-relative
     line: int                 # 1-based line of the opening fence
-    body: "list[str]"         # the block's lines
+    body: "list[str]"         # the block's lines, container prefix off
     src: "str | None" = None
     anchor: "str | None" = None
     errors: "list[str]" = field(default_factory=list)
 
 
 def is_elision(line: str) -> bool:
-    return bool(ELISION_RE.match(line))
+    return line.strip() in ELISION_MARKERS
 
 
-def _norm(lines: "list[str]") -> "list[str]":
-    """Trailing whitespace off, then the common indentation."""
-    return textwrap.dedent("\n".join(line.rstrip() for line in lines)).split("\n")
+def _indent(line: str) -> str:
+    return line[:len(line) - len(line.lstrip(" \t"))]
 
 
 def split_segments(body: "list[str]"):
     """``(segments, leading, trailing, problem)``: *segments* are
     ``(offset, lines)`` with *offset* the index in *body* of the segment's
-    first line; *leading* / *trailing*: the block starts / ends with an
-    elision line. *problem* names a block that cannot be matched (nothing
-    but elisions, two elision lines with nothing between)."""
+    first line, lines with trailing whitespace off; *leading* / *trailing*:
+    the block starts / ends with an elision line. *problem* is
+    ``(offset, message)`` for a block that cannot be matched."""
+    body = [line.rstrip() for line in body]
     cuts = [i for i, line in enumerate(body) if is_elision(line)]
     leading = bool(cuts) and cuts[0] == 0
     trailing = bool(cuts) and cuts[-1] == len(body) - 1
@@ -142,131 +156,177 @@ def split_segments(body: "list[str]"):
     if trailing and segments:
         segments = segments[:-1]
     problem = None
-    if not segments or all(not seg for _, seg in segments):
-        problem = "the block has no line to compare (only elision lines, or empty)"
+    if not segments or all(not any(seg) for _, seg in segments):
+        problem = (0, "the block has no line to compare (only elision lines or blank lines)")
     else:
         for off, seg in segments:
             if not seg:
-                problem = (f"two elision lines with nothing between (block line {off}): "
-                           "write one")
+                problem = (off - 1, "two elision lines with nothing between: write one")
+                break
+            if not any(seg):
+                problem = (off, "a segment of blank lines only: the elision lines around it "
+                                "say nothing about where it is")
                 break
     return segments, leading, trailing, problem
 
 
-def _positions(want: "list[str]", src: "list[str]", lo: int) -> "list[int]":
-    """Every i >= lo where src[i:i+len(want)], normalised, equals *want*."""
-    k = len(want)
-    first = want[0].strip()
-    return [i for i in range(lo, len(src) - k + 1)
-            if src[i].strip() == first and _norm(src[i:i + k]) == want]
+def _fits(seg: "list[str]", src: "list[str]", i: int, prefix: str) -> bool:
+    if i + len(seg) > len(src):
+        return False
+    for d, s in zip(seg, src[i:i + len(seg)]):
+        if (s != "") if d == "" else (s != prefix + d):
+            return False
+    return True
+
+
+def _prefix_at(seg: "list[str]", src: "list[str]", i: int) -> "str | None":
+    """The P the first segment placed at *i* implies, or None."""
+    j = next(k for k, d in enumerate(seg) if d)
+    if i + j >= len(src):
+        return None
+    d, s = seg[j], src[i + j]
+    di, si = _indent(d), _indent(s)
+    if not si.endswith(di):
+        return None
+    return si[:len(si) - len(di)]
 
 
 def match_quote(body: "list[str]", src: "list[str]", start: int = 0):
-    """Hold a quote's *body* to its source lines *src*, searching from
-    *start* (the anchor's line). Returns None when it matches, else
-    ``(segment index, body offset, message)`` for the first segment that
-    could not be placed (the deepest one any placement reached)."""
+    """Hold a quote's *body* to its source lines *src* (trailing whitespace
+    already off), searching from *start* (the anchor's line). Returns None
+    when it matches, else ``(body offset, message)`` for the first block line
+    that could not be placed."""
     segments, leading, trailing, problem = split_segments(body)
     if problem:
-        return (0, 0, problem)
-    wants = [_norm(seg) for _, seg in segments]
-    deepest = [0, start]   # (segment index, the lowest line it was searched from)
+        return problem
+    if leading or trailing or len(segments) > 1:
+        marker = next((n for n, s in enumerate(src) if is_elision(s)), None)
+        if marker is not None:
+            return (0, f"ambiguous elision marker: source line {marker + 1} is itself an "
+                       f"elision marker ({src[marker].strip()!r}); quote this file without "
+                       "elisions, or quote another part of it")
+    first = segments[0][1]
+    tried: "set[str]" = set()
+    best = (0, start, None)   # (segments placed, the lowest line the next one was searched from, P)
+    for i in range(start, len(src)):
+        if leading and i == 0:
+            continue   # a leading elision line must stand for a line
+        prefix = _prefix_at(first, src, i)
+        if prefix is None or prefix in tried or not _fits(first, src, i, prefix):
+            continue
+        tried.add(prefix)
+        end, placed = i + len(first), 1
+        for _, seg in segments[1:]:
+            lo = end + 1   # an elision skips at least one line
+            hit = next((k for k in range(lo, len(src)) if _fits(seg, src, k, prefix)), None)
+            if hit is None:
+                break
+            end, placed = hit + len(seg), placed + 1
+        else:
+            if not (trailing and end >= len(src)):
+                return None
+        if placed > best[0] or best[2] is None:
+            best = (placed, end + 1, prefix)
+    placed, lo, prefix = best
+    if placed == len(segments):
+        return (segments[-1][0] + len(segments[-1][1]),
+                f"the trailing elision line stands for no line: segment {placed} ends at the "
+                "end of the source")
+    if placed == 0 and leading and start == 0:
+        p0 = _prefix_at(first, src, 0)
+        if p0 is not None and _fits(first, src, 0, p0):
+            return (segments[0][0] - 1, "the leading elision line stands for no line: "
+                                        "segment 1 starts at source line 1")
+    off, seg = segments[placed]
+    return (off, _explain(seg, src, lo if placed else start, placed, prefix))
 
-    def place(idx: int, lo: int) -> bool:
-        if idx == len(wants):
-            return True
-        if idx > deepest[0]:
-            deepest[:] = [idx, lo]
-        for i in _positions(wants[idx], src, lo):
-            if idx == 0 and leading and i == 0:
-                continue   # a leading elision line must stand for a line
-            end = i + len(wants[idx])
-            if idx == len(wants) - 1:
-                if trailing and end >= len(src):
-                    continue   # a trailing elision line must stand for a line
-                return True
-            if place(idx + 1, end + 1):   # +1: an elision skips at least one line
-                return True
-        return False
 
-    if place(0, start):
-        return None
-    idx, lo = deepest
-    off, seg = segments[idx]
-    return (idx, off, _explain(wants[idx], src, lo, idx, leading, trailing, len(wants)))
-
-
-def _explain(want, src, lo, idx, leading, trailing, n) -> str:
-    """Why segment *idx* (normalised *want*) has no place at or after source
-    line *lo*: its longest prefix found in the source and the first line that
+def _explain(seg, src, lo, idx, prefix) -> str:
+    """Why segment *idx* has no place at or after source line *lo*: its
+    longest prefix found there (with P when known) and the first line that
     differs, or the source line closest to its first line."""
-    k = len(want)
+    k = len(seg)
     best, best_i = 0, None
     for i in range(lo, len(src)):
-        window = _norm(src[i:i + k])
+        p = prefix if prefix is not None else _prefix_at(seg, src, i)
+        if p is None:
+            continue
         run = 0
-        while run < min(len(window), k) and window[run] == want[run]:
+        while run < k and i + run < len(src) and _fits(seg[run:run + 1], src, i + run, p):
             run += 1
         if run > best:
             best, best_i = run, i
     after = f"at or after source line {lo + 1}"
+    shown = "" if prefix is None else f" with the indentation offset {prefix!r} set by segment 1"
     if best_i is not None and best == k:
-        # the whole segment is in the source, but not where the rules allow
-        why = ("an elision line must stand for at least one source line"
-               if (idx == 0 and leading) or (idx == n - 1 and trailing)
-               else "segments must follow each other in order with at least one source "
-                    "line skipped between them")
-        return (f"segment {idx + 1} equals source lines {best_i + 1}-{best_i + k}, but {why}")
+        return (f"segment {idx + 1} equals source lines {best_i + 1}-{best_i + k}, but segments "
+                "must follow each other in order with at least one source line skipped "
+                "between them")
     if best_i is not None:
-        got = _norm(src[best_i:best_i + k])
-        theirs = got[best] if best < len(got) else "<end of file>"
-        return (f"segment {idx + 1} is not a run of source lines {after}; closest: its first "
-                f"{best} line(s) match source lines {best_i + 1}-{best_i + best}, then segment "
-                f"line {best + 1} {want[best]!r} != source line {best_i + best + 1} "
+        theirs = src[best_i + best] if best_i + best < len(src) else "<end of file>"
+        return (f"segment {idx + 1} is not a run of source lines {after}{shown}; closest: its "
+                f"first {best} line(s) match source lines {best_i + 1}-{best_i + best}, then "
+                f"segment line {best + 1} {seg[best]!r} != source line {best_i + best + 1} "
                 f"{theirs!r}")
-    target = want[0].strip()
-    scored = [(difflib.SequenceMatcher(None, target, line.strip()).ratio(), j)
+    target = next(d for d in seg if d)
+    for j in range(lo, len(src)):
+        if src[j].strip() == target.strip():
+            return (f"segment {idx + 1} is not a run of source lines {after}{shown}: its "
+                    f"line {target!r} is source line {j + 1} {src[j]!r} with a different "
+                    "indentation (one offset holds for the whole block)")
+    scored = [(difflib.SequenceMatcher(None, target.strip(), line.strip()).ratio(), j)
               for j, line in enumerate(src)]
-    ratio, j = max(scored) if scored else (0.0, -1)
-    if j < 0:
+    if not scored:
         return f"segment {idx + 1}: the source is empty"
-    return (f"segment {idx + 1} is not a run of source lines {after}: its first line "
-            f"{want[0]!r} is in no source line; the closest is source line {j + 1} "
+    _, j = max(scored)
+    return (f"segment {idx + 1} is not a run of source lines {after}{shown}: its line "
+            f"{target!r} is in no source line; the closest is source line {j + 1} "
             f"{src[j].strip()!r}")
 
 
 def resolve_src(root: Path, src: str) -> "tuple[Path | None, str | None]":
-    """(path, None) for a `src` that names a tracked-looking regular file in
-    the repository, else (None, why)."""
+    """(path, None) for a `src` that names a regular, non-Markdown file in
+    the repository with no symlink on its path, else (None, why)."""
     if src.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", src) or "\\" in src:
-        return None, f"src={src!r} must be a path relative to the repository root, with '/'"
+        return None, "it must be a path relative to the repository root, with '/'"
     parts = src.split("/")
     if any(p in ("", ".", "..") for p in parts):
-        return None, f"src={src!r} must be a plain repo path (no '.', '..' or empty part)"
-    rel = "/".join(parts)
-    for d in UNTRACKED_DIRS:
-        if (rel + "/").startswith(d):
-            return None, f"src={src!r} is under {d}, which the repository ignores (no tracked file)"
-    if ANYWHERE_DIRS & set(parts[:-1]):
-        return None, f"src={src!r} is under a directory the repository ignores"
-    path = root / rel
+        return None, "it must be a plain repo path (no '.', '..' or empty part)"
+    if parts[-1].lower().endswith(".md"):
+        return None, ("it is a Markdown page: a page repeated verbatim is embedded "
+                      "with pymdownx.snippets (--8<--), not quoted")
+    for k in range(1, len(parts) + 1):
+        if (root.joinpath(*parts[:k])).is_symlink():
+            return None, f"{'/'.join(parts[:k])} is a symlink (not allowed on the path)"
+    path = root.joinpath(*parts)
     if not path.is_file():
-        return None, f"src={src!r} does not exist (or is not a regular file)"
-    real = Path(os.path.realpath(path))
-    try:
-        real.relative_to(Path(os.path.realpath(root)))
-    except ValueError:
-        return None, f"src={src!r} resolves outside the repository ({real})"
+        return None, "it does not exist (or is not a regular file)"
     return path, None
 
 
 def read_lines(path: Path) -> "list[str]":
-    """The source's lines, split on '\\n' only; a final newline adds no line."""
+    """The source's lines, split on '\\n' only, trailing whitespace off; a
+    final newline adds no line."""
     text = path.read_bytes().decode("utf-8")
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
-    return lines
+    return [line.rstrip() for line in lines]
+
+
+def _strip_container(lines: "list[str]", i: int, n: int, prefix: str):
+    """The block's *n* lines from line *i*, its container *prefix* off, or
+    (None, line) for a line that does not carry it."""
+    out = []
+    for k in range(i, i + n):
+        line = lines[k]
+        if line.startswith(prefix):
+            out.append(line[len(prefix):])
+        elif line.strip() == "" or line.rstrip() == prefix.rstrip():
+            out.append("")
+        else:
+            return None, k
+    return out, None
 
 
 def collect(root: Path, renderer: "inventory.Renderer"):
@@ -281,16 +341,22 @@ def collect(root: Path, renderer: "inventory.Renderer"):
         stats["fenced"] += len(blocks)
         stats["inline"] += _PRE_RE.sub("", renderer.html).count("<code")
         tab = renderer.md.tab_length
+        openings: "set[int]" = set()
         for block, i in inventory.locate_blocks(rel, lines, blocks, tab_length=tab,
                                                 errors=errors,
                                                 select=inventory.is_quote_fence,
                                                 kind=".quote"):
+            openings.add(i - 1)
             n = block.source.count("\n") + 1
-            opening = lines[i - 1].expandtabs(tab)
+            opening = lines[i - 1]
             prefix = inventory._CONTAINER_PREFIX_RE.match(opening).group(0)
-            body = block.source.split("\n") if ">" in prefix else lines[i:i + n]
-            q = Quote(rel, i, body, src=block.attrs.get("src"))
-            decl = inventory.parse_declaration(block, inventory._info_text(opening[len(prefix):]))
+            body, bad = _strip_container(lines, i, n, prefix)
+            q = Quote(rel, i, body or [], src=block.attrs.get("src"))
+            decl = inventory.parse_declaration(
+                block, inventory._info_text(opening.expandtabs(tab)[len(prefix.expandtabs(tab)):]))
+            if bad is not None:
+                q.errors.append(f"line {bad + 1} does not carry the fence's container "
+                                f"prefix {prefix!r}")
             if decl.errors:
                 q.errors.extend(decl.errors)
             elif decl.quote is None:   # pragma: no cover — is_quote_fence picked it
@@ -298,8 +364,29 @@ def collect(root: Path, renderer: "inventory.Renderer"):
             else:
                 q.src, q.anchor = decl.quote
             quotes.append(q)
+        errors.extend(_unrecognised(rel, lines, blocks, openings, tab))
     stats["quotes"] = len(quotes)
     return quotes, errors, stats
+
+
+def _unrecognised(rel, lines, blocks, openings, tab):
+    """A fence opening whose info mentions `quote` or `src=` that is no
+    `.quote` block, outside every rendered code block's body."""
+    inside: "set[int]" = set()
+    for block, i in inventory.locate_blocks(rel, lines, blocks, tab_length=tab, errors=[],
+                                            select=lambda b: True, kind="code"):
+        inside.update(range(i, i + block.source.count("\n") + 1))
+    out = []
+    for k, line in enumerate(lines):
+        m = _FENCE_OPEN_RE.match(inventory._CONTAINER_PREFIX_RE.sub("", line, count=1))
+        if (m and _LOOKS_LIKE_QUOTE_RE.search(m.group("info")) and k not in openings
+                and k not in inside):
+            out.append((rel, k + 1, (
+                f"this fence's info {m.group('info').strip()!r} looks like a quote declaration, "
+                "but the site renders no `.quote` block here: write "
+                "```<lang> {.quote src=\"<repo path>\"} (lower-case .quote, braces, src= / "
+                "anchor= only)")))
+    return out
 
 
 def judge(root: Path, q: Quote) -> None:
@@ -313,7 +400,7 @@ def judge(root: Path, q: Quote) -> None:
     try:
         src = read_lines(path)
     except UnicodeDecodeError as e:
-        q.errors.append(f"src={q.src!r} is not UTF-8 text ({e})")
+        q.errors.append(f"it is not UTF-8 text ({e})")
         return
     start = 0
     if q.anchor is not None:
@@ -326,13 +413,14 @@ def judge(root: Path, q: Quote) -> None:
         start = text[:text.index(q.anchor)].count("\n")
     miss = match_quote(q.body, src, start)
     if miss is not None:
-        _, off, message = miss
-        q.errors.append(f"(block line {q.line + 1 + off}) {message}")
+        off, message = miss
+        q.errors.append(f"(line {q.line + 1 + off}) {message}")
 
 
 def pair_errors(quotes: "list[Quote]", docs: "set[str]") -> "list[tuple[str, int, str]]":
     """`foo.md` and `foo.en.md`: the same number of `.quote` blocks and the
-    same multiset of `src` (#1558)."""
+    same multiset of `src` (#1558). Reported on the Chinese page, at its
+    first `.quote` (line 1 when it has none); the English lines are named."""
     by: "dict[str, list[Quote]]" = {}
     for q in quotes:
         by.setdefault(q.path, []).append(q)
@@ -341,13 +429,13 @@ def pair_errors(quotes: "list[Quote]", docs: "set[str]") -> "list[tuple[str, int
         zh = en[:-len(".en.md")] + ".md"
         if zh not in docs:
             continue
-        a = Counter(q.src for q in by.get(zh, []))
-        b = Counter(q.src for q in by.get(en, []))
+        zq, eq = by.get(zh, []), by.get(en, [])
+        a, b = Counter(q.src for q in zq), Counter(q.src for q in eq)
         if a != b:
-            line = (by.get(zh) or by.get(en))[0].line
-            out.append((zh, line, (
+            out.append((zh, zq[0].line if zq else 1, (
                 f"{zh} has {sum(a.values())} .quote block(s) {sorted(a.elements())} and "
-                f"{en} has {sum(b.values())} {sorted(b.elements())}: a page and its "
+                f"{en} has {sum(b.values())} {sorted(b.elements())} (at line(s) "
+                f"{', '.join(str(q.line) for q in eq) or 'none'}): a page and its "
                 "translation quote the same sources the same number of times")))
     return out
 

@@ -77,10 +77,10 @@ volumes:
                 path: jvm-recording.yml
               - key: jvm-alert.yml
                 path: jvm-alert.yml
-        # ... 其餘 Rule Pack 比照
+        # ...
 ```
 
-這個 volume 掛在 `/etc/prometheus/rules`，Prometheus 設定以 `rule_files: ["/etc/prometheus/rules/*.yml"]` 讀取。
+其餘 Rule Pack 依同樣寫法各接一個 `configMap` 來源。這個 volume 掛在 `/etc/prometheus/rules`，Prometheus 設定以 `rule_files: ["/etc/prometheus/rules/*.yml"]` 讀取。
 
 卸載 JVM 的 Rule Pack：
 
