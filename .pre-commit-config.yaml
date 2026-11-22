@@ -18,7 +18,7 @@
 # `make pr-preflight` fails when the guards are not on the push path.
 #
 # These hooks run the lightweight CI checks locally before each commit,
-# catching drift issues early (tool-map, rule-pack stats, glossary, etc.).
+# catching drift issues early (tool-map, rule-pack stats, etc.).
 #
 # ⛔ A NEW auto-stage hook must declare its CI execution point (#2694): call it
 # by id (`pre-commit run <id> --all-files`) in a workflow, or register it in
@@ -416,14 +416,6 @@ repos:
         # 改變 --check 的判定而本 hook 不跑，由 CI 全量 pytest 裡的
         # test_repo_check_is_green 攔。
         files: ^(scripts/|components/da-tools/app/|tests/)
-        additional_dependencies: ['pyyaml']
-
-      - id: glossary-check
-        name: Glossary abbreviation sync
-        entry: python3 -X utf8 scripts/tools/dx/sync_glossary_abbr.py --check
-        language: python
-        pass_filenames: false
-        files: ^docs/.*\.md$
         additional_dependencies: ['pyyaml']
 
       # ⛔ The name used to be "Changelog format", which is what a reader

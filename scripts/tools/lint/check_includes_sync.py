@@ -158,10 +158,10 @@ def main() -> int:
         print(f"Includes directory not found: {INCLUDES_DIR}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    # Find Chinese includes (*.md but not *.en.md and not abbreviations.md)
+    # Find Chinese includes (*.md but not *.en.md)
     zh_files = sorted(
         f for f in INCLUDES_DIR.glob("*.md")
-        if not f.name.endswith(".en.md") and f.name != "abbreviations.md"
+        if not f.name.endswith(".en.md")
     )
 
     if not zh_files:

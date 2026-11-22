@@ -337,16 +337,6 @@ def _legacy_rules(tmp: Path) -> str:
     return str(p)
 
 
-def _glossary(tmp: Path) -> str:
-    p = tmp / "glossary.md"
-    p.write_text(
-        "# Glossary\n\n"
-        "**ADR (Architecture Decision Record)** — a design decision.\n\n"
-        "**BYO (Bring Your Own)** — customer-supplied component.\n",
-        encoding="utf-8")
-    return str(p)
-
-
 def _mapping_conf_d(tmp: Path) -> str:
     d = tmp / "conf.d"
     d.mkdir()
@@ -618,8 +608,8 @@ class Row:
     # batch_diagnose reads its ConfigMap through a fake `kubectl` on PATH).
     env: Callable[[Ctx], dict[str, str]] | None = None
     # Bad-path shapes to drive. A FILE tool whose own mkdir -p creates the
-    # parent (sync_glossary_abbr) legitimately succeeds on missing_parent, so
-    # it lists parent_is_file only.
+    # parent legitimately succeeds on missing_parent, so it lists
+    # parent_is_file only.
     shapes: tuple[str, ...] = ("missing_parent", "parent_is_file")
     # The head the tool prints in front of the shared ``cannot <action> …``
     # message, on the same line. The default is the one the shared emitter
@@ -795,11 +785,6 @@ ROWS: list[Row] = [
         shapes=("artifact_is_dir",),
         artifact=_artefact, variant=_artefact)
       for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
-    R("dx/sync_glossary_abbr.py", "--output", "file", "artifact",
-      lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
-      reach="tmp glossary.md with two **ABBR (Expansion)** entries",
-      out_name="abbreviations.md",
-      shapes=("parent_is_file", "target_is_dir")),
     # A non-default `prefix`. This tool funnels every error through
     # `_emit_error`, which stamps a de-identified error CODE — a documented
     # `--redact` contract (the SME triages by code without a re-run, and under
@@ -1922,8 +1907,8 @@ RAW_UNDER_OUT: dict[Key, tuple[str, tuple[str, ...]]] = {
 #: Otherwise operator. Both directions are faults: an operator flag the tool
 #: reads back, and an artifact flag (a) and (c) do not explain.
 #: ⚠️ (b) has no list here: every row whose default is tracked
-#: (generate_adr_index / generate_planning_index --target, sync_glossary_abbr
-#: --output) also reads it back, so an entry would explain nothing (a)
+#: (generate_adr_index / generate_planning_index --target) also reads it
+#: back, so an entry would explain nothing (a)
 #: does not — measured: removing one changed no outcome. A row that needs
 #: (b) adds the list then, held to `git ls-files`. It stays the static
 #: trigger for constant-path writers this gate does not run.

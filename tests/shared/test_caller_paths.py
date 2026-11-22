@@ -309,8 +309,6 @@ DX_SITES = [
      ["--output-dir", "{D}"], "--output-dir {D}", 2),
     ("generate-rule-pack-readme --rule-packs-dir", "dx/generate_rule_pack_readme.py",
      ["--rule-packs-dir", "{D}"], "--rule-packs-dir {D}", 2),
-    ("sync-glossary-abbr --glossary", "dx/sync_glossary_abbr.py",
-     ["--glossary", "{F}", "--check"], "--glossary {F}", 2),
     ("doc-coverage --repo-root", "dx/doc_coverage.py", ["--repo-root", "{D}"],
      "--repo-root {D}", 2),
     # The docs directory is derived from --repo-root: named without the flag.
