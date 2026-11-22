@@ -92,7 +92,7 @@ func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
 	obs.RecordReload("RBAC", false)              // failure: counter 1, gauge 0
 	obs.RecordReload("RBAC", false)              // failure: counter 2, gauge 0
 	obs.RecordReload("groups", false)            // single failure: counter 1, gauge 0
-	obs.RecordReload("tenantorg", true)          // success: counter 0, gauge stays 1
+	obs.RecordReload("tenantorg", true)          // success: counter 0, gauge 1
 	obs.RecordReload("garbage-component", false) // unknown component → no-op
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -106,7 +106,7 @@ func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
 		`tenant_api_config_reload_failures_total{component="RBAC"} 2`,
 		`tenant_api_config_reload_failures_total{component="groups"} 1`,
 		`tenant_api_config_reload_failures_total{component="views"} 0`,
-		// --- current-state gauge (default 1; a single failure flips to 0) ---
+		// --- current-state gauge (starts 0; success → 1, a single failure → 0) ---
 		`# TYPE tenant_api_config_last_reload_successful gauge`,
 		`tenant_api_config_last_reload_successful{component="RBAC"} 0`,
 		// groups: ONE failure flips the gauge to 0 even though the counter (1) is
@@ -114,7 +114,8 @@ func TestConfigReloadObserver_RecordAndExposition(t *testing.T) {
 		// up.
 		`tenant_api_config_last_reload_successful{component="groups"} 0`,
 		`tenant_api_config_last_reload_successful{component="tenantorg"} 1`,
-		`tenant_api_config_last_reload_successful{component="views"} 1`,
+		// views: nothing reported — stays at the "not yet confirmed" 0 (#1073).
+		`tenant_api_config_last_reload_successful{component="views"} 0`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics missing line:\n  %s\n--- body ---\n%s", want, body)
@@ -128,8 +129,8 @@ func TestConfigReloadObserver_GaugeRecovers(t *testing.T) {
 	t.Parallel()
 	var m ConfigReloadMetrics
 	var _ configwatcher.ReloadObserver = &m
-	// gauge starts at the zero value on a bare struct (0) — NewConfigReloadObserver
-	// is what initializes to 1; here we exercise the transitions directly.
+	// gauge starts at the zero value (0), as it does from NewConfigReloadObserver;
+	// here we exercise the transitions directly.
 	m.RecordReload("groups", false)
 	if m.StateSnapshot()["groups"] != 0 {
 		t.Fatalf("after failure, state[groups] = %d, want 0", m.StateSnapshot()["groups"])
@@ -165,9 +166,8 @@ func TestConfigReloadMetrics_Snapshots(t *testing.T) {
 	}
 }
 
-// With no store ever installed, the counter renders at 0 and the gauge at 1
-// (assumed-current) — a never-wired / never-reloaded deployment must not
-// false-alarm the == 0 stale alert.
+// With no store ever installed, both families still render every series, at 0:
+// no manager's load has been confirmed (#1073).
 func TestConfigReloadMetrics_DisabledDefaults(t *testing.T) {
 	activeConfigReloadMetrics.Store(nil)
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -176,10 +176,41 @@ func TestConfigReloadMetrics_DisabledDefaults(t *testing.T) {
 	body := w.Body.String()
 	for _, want := range []string{
 		`tenant_api_config_reload_failures_total{component="RBAC"} 0`,
-		`tenant_api_config_last_reload_successful{component="RBAC"} 1`,
+		`tenant_api_config_last_reload_successful{component="RBAC"} 0`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics with store unwired missing:\n  %s\n--- body ---\n%s", want, body)
+		}
+	}
+}
+
+// #1073: a fresh observer starts every last-reload-successful gauge at 0 ("not
+// yet confirmed"). Wiring a manager replays its initial-load outcome, so only a
+// component no manager reported for — one main forgot to wire — keeps reading
+// 0, which is what makes TenantApiConfigReloadStale (== 0) fire for it. Were the
+// starting value 1, an unwired component would read 1 for ever: a false green.
+func TestNewConfigReloadObserver_UnwiredComponentReadsZero(t *testing.T) {
+	// NOT t.Parallel: NewConfigReloadObserver installs the package-level store.
+	m := NewConfigReloadObserver().(*ConfigReloadMetrics)
+	for c, v := range m.StateSnapshot() {
+		if v != 0 {
+			t.Errorf("fresh observer: last_reload_successful{component=%q} = %d, want 0", c, v)
+		}
+	}
+	// Every component but one reports a successful (replayed) load; the one left
+	// out must still read 0.
+	comps := ConfigReloadComponents()
+	unwired := comps[len(comps)-1]
+	for _, c := range comps[:len(comps)-1] {
+		m.RecordReload(c, true)
+	}
+	snap := m.StateSnapshot()
+	if snap[unwired] != 0 {
+		t.Errorf("unwired component %q reads %d, want 0", unwired, snap[unwired])
+	}
+	for _, c := range comps[:len(comps)-1] {
+		if snap[c] != 1 {
+			t.Errorf("wired component %q reads %d, want 1", c, snap[c])
 		}
 	}
 }
