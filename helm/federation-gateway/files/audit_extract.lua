@@ -1,4 +1,4 @@
--- federation-gateway audit-query extractor (ADR-020 Layer 2, IV-2f).
+-- federation-gateway audit-query extractor (ADR-020 §稽核日誌與指標).
 -- Rendered from the Helm chart (helm/federation-gateway).
 --
 -- This is the SECOND Lua filter in the chain. It is placed AFTER the

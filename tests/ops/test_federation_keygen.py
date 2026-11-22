@@ -4,7 +4,7 @@ The load-bearing invariant is the `kid`: tenant-api stamps every token with
 the RFC 7638 thumbprint of its signing key, and the gateway resolves the
 JWKS key by that same `kid`. `test_rfc7638_kid_matches_published_vector`
 pins the thumbprint algorithm to the RFC's worked example so the Python
-side cannot silently drift from the Go signer (ADR-020 IV-2l, #518).
+side cannot silently drift from the Go signer (ADR-020 §Token, #518).
 """
 from __future__ import annotations
 

@@ -1,12 +1,12 @@
-# promtool behavioural test for TenantApiSingleWriterBreach (ADR-023 L3 / Deferred
-# A3 / #787). Validates the codified runtime single-writer-breach contract:
+# promtool behavioural test for TenantApiSingleWriterBreach (ADR-023 §執行期偵測 / §Lease
+# / #787). Validates the codified runtime single-writer-breach contract:
 #   1) FIRES when the live Deployment declares 2 replicas, SUSTAINED past `for: 2m`
 #      — modelled with the scrape-added job/instance labels PRESENT so the test
 #      proves `max by (namespace, deployment)` collapses them to one logical series
 #      and the firing alert carries only {severity, namespace, deployment} (a raw
 #      `> 1` on the un-aggregated series would leak job/instance and, under an HA
 #      KSM, fire per-instance — this guards the silent-never-fire / label-leak trap).
-#   2) does NOT fire at the pinned, healthy single replica (the L1-guarded steady state).
+#   2) does NOT fire at the pinned, healthy single replica (the config-guarded steady state).
 #   3) does NOT fire on a sub-`for` transient (a 1-min spike to 2 that a GitOps
 #      self-heal reverts to 1) — the `for: 2m` debounce must hold so a corrected
 #      drift does not page.
@@ -18,7 +18,7 @@
 #      `or` of the two gauges is what catches an actual-running-pod breach the spec
 #      arm alone would miss. (The network-partition ghost pod is NOT testable here and
 #      NOT claimed: KSM reads control-plane state, which can't see a partitioned node —
-#      that residual is what L3 Lease+fencing closes, see the rule comment.)
+#      that residual is what the deferred Lease + fencing would close, see the rule comment.)
 # Evaluated at 1m resolution so the `for: 2m` window is cheap and exact.
 # Run: promtool test rules tests/rulepacks/platform-single-writer-breach_test.yaml
 rule_files:
@@ -67,7 +67,7 @@ tests:
                 what set it — check `kubectl get events`, the GitOps app's sync history
                 / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
                 This alert is ALSO the codified re-eval trigger for the deferred K8s
-                Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
+                Lease (ADR-023 §Lease / #787): if multi-writer is now a real
                 operational need, build leader-election — do NOT raise replicaCount.
                 Details: docs/api/tenant-api-hardening.md §5.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
@@ -134,7 +134,7 @@ tests:
                 what set it — check `kubectl get events`, the GitOps app's sync history
                 / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
                 This alert is ALSO the codified re-eval trigger for the deferred K8s
-                Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
+                Lease (ADR-023 §Lease / #787): if multi-writer is now a real
                 operational need, build leader-election — do NOT raise replicaCount.
                 Details: docs/api/tenant-api-hardening.md §5.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
@@ -178,7 +178,7 @@ tests:
                 what set it — check `kubectl get events`, the GitOps app's sync history
                 / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
                 This alert is ALSO the codified re-eval trigger for the deferred K8s
-                Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
+                Lease (ADR-023 §Lease / #787): if multi-writer is now a real
                 operational need, build leader-election — do NOT raise replicaCount.
                 Details: docs/api/tenant-api-hardening.md §5.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"

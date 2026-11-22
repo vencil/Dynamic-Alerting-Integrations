@@ -1,4 +1,4 @@
-# Test Prometheus config — federation E2E (ADR-020 IV-2j, #516).
+# Test Prometheus config — federation E2E (ADR-020, #516).
 # Scrapes only the fixture-exporter. honor_labels keeps the `tenant`
 # label carried by the fixture series (Prometheus would otherwise not
 # touch it, but honor_labels makes the intent explicit and also keeps

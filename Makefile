@@ -148,7 +148,7 @@ bench-e2e-aggregate: ## Aggregate existing per-run-*.json under tests/e2e-bench/
 	@cd tests/e2e-bench && python3 aggregate.py $(ARGS)
 
 .PHONY: federation-e2e
-federation-e2e: ## ADR-020 IV-2j (#516) federation request-path E2E — docker-compose gateway/proxy/storage, renders the real chart config, runs the pytest scenarios. NOT part of `make test`.
+federation-e2e: ## ADR-020 (#516) federation request-path E2E — docker-compose gateway/proxy/storage, renders the real chart config, runs the pytest scenarios. NOT part of `make test`.
 	@bash ./scripts/ops/federation_e2e_run.sh
 
 .PHONY: test-alert

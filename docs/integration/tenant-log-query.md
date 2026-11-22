@@ -15,7 +15,7 @@ lang: zh
 > log（query-in-place）。資料流向與隔離原語不同，但**授權平面複用同一套 federation-gateway**。
 >
 > **EN mirror**：依平台語言政策（中文為主 SSOT、不執行 ZH→EN 遷移），本指南為 ZH-only
-> （同 [ADR-021](../adr/021-tenant-log-query-federation.md) §語言、姊妹件 `tenant-federation.md`）。
+> （同 [ADR-021](../adr/021-tenant-log-query-federation.md) §狀態、姊妹件 `tenant-federation.md`）。
 
 ## 0. 這版你能查什麼（先設定預期）
 

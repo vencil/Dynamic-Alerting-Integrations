@@ -871,7 +871,7 @@ groups:
             same storm next reload.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
-      # --- Prometheus Rule Evaluation Health (ADR-020 IV-2c, #508) ---
+      # --- Prometheus Rule Evaluation Health (ADR-020 §儲存後端的查詢上限, #508) ---
       # The federation blast-radius caps (--query.max-samples /
       # --query.timeout) are GLOBAL — they also bound this
       # Prometheus's own recording / alerting rule evaluation. A
@@ -893,7 +893,7 @@ groups:
             and alerts built on them silently stop firing — the
             platform goes blind. A likely cause is a rule query
             exceeding the global --query.max-samples cap (ADR-020
-            IV-2c); inspect the failing rule on /rules and either
+            §儲存後端的查詢上限); inspect the failing rule on /rules and either
             optimise it or raise the cap + the Prometheus memory
             limit together.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md"
@@ -1490,7 +1490,7 @@ groups:
             image into your registry and repoint it.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
 
-      # --- tenant-api read-HA defer re-trigger (ADR-023 A4 / #678 / #788, CLOSED-deferred) ---
+      # --- tenant-api read-HA defer re-trigger (ADR-023 §讀寫拆分部署 / #678 / #788, CLOSED-deferred) ---
       # CODIFIED re-trigger for a CLOSED-deferred design item. #678 (TRK-325
       # read/write CQRS split) and its RFC duplicate #788 were closed deferred:
       # tenant-api's read path (GET /tenants /search /effective /me + the SSE
@@ -1502,7 +1502,7 @@ groups:
       # "revisit when Portal scales" note in a closed issue is a clue nobody sees;
       # THIS alert is the codified clue — it fires (info, never pages) once read
       # engagement has genuinely SUSTAINED, telling the platform team "read HA is
-      # now a real requirement → reopen ADR-023 Deferred A4".
+      # now a real requirement → reopen ADR-023 §讀寫拆分部署".
       #
       # Signal: 7-day trailing AVERAGE of concurrent SSE clients > 2. avg_over_time
       # (not max) so a transient spike — one busy afternoon — does NOT trip it; only
@@ -1524,9 +1524,9 @@ groups:
       # signal. COMPLEMENTARY read-QPS face an operator should also weigh:
       # rate(tenant_api_requests_total) (read-dominated; writes are the tiny
       # sum(rate(tenant_api_writes_total)), every result) — NOT encoded here,
-      # to keep the contract single-signal and promtool-testable. CAVEAT when it fires: A4 (this split) only buys READ
-      # zero-downtime; the WRITE path (Save) still drops on every deploy until A3
-      # (K8s Lease, #787) lands — sequence both, don't ship A4 alone.
+      # to keep the contract single-signal and promtool-testable. CAVEAT when it fires: the read/write split only buys READ
+      # zero-downtime; the WRITE path (Save) still drops on every deploy until the
+      # K8s Lease (#787, ADR-023 §Lease) lands — sequence both, don't ship the split alone.
       # Behavioural contract: tests/rulepacks/platform-read-ha-trigger_test.yaml.
       - alert: TenantApiReadHANeeded
         expr: |
@@ -1541,7 +1541,7 @@ groups:
           severity: info
           alert_source: platform
         annotations:
-          summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 A4)"
+          summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 §讀寫拆分部署)"
           description: |
             The 7-day average of concurrent tenant-api SSE (/api/v1/events)
             clients has exceeded 2 — the Tenant-Manager read path is now a
@@ -1549,28 +1549,29 @@ groups:
             ADR-023 assumed when it accepted a brief read outage on every
             `strategy: Recreate` deploy. This is the codified RE-TRIGGER for the
             deferred read/write split (#678 / #788, closed deferred; see ADR-023
-            Deferred A4). NOT an outage. Action: reopen the CQRS split, and
-            sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone
-            leaves writes (Save) dropping on deploy. Details:
+            §讀寫拆分部署). NOT an outage. Action: reopen the CQRS split, and
+            sequence it WITH the write-plane K8s Lease (ADR-023 §Lease) — the
+            split alone leaves writes (Save) dropping on deploy. Details:
             docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
 
-      # --- tenant-api single-writer RUNTIME breach (ADR-023 L3 / A3 / #787) ---
+      # --- tenant-api single-writer RUNTIME breach (ADR-023 §執行期偵測 / §Lease / #787) ---
       # The DETECTIVE control for the one residual vector ADR-023 leaves open.
-      # L1 (Helm `fail` guard + check_single_writer_invariant.py) and L2
-      # (`strategy: Recreate`) are STATIC — they bind only the config-authoring /
+      # The config guard (Helm `fail` guard + check_single_writer_invariant.py) and
+      # the `strategy: Recreate` pin are STATIC — they bind only the config-authoring /
       # deploy-time vector. Three paths drive replicas > 1 AFTER deploy and bypass
       # every static check: `kubectl scale --replicas=2`, an HPA a controller
       # (KEDA) materialises at runtime, or a GitOps controller reconciling a hand-
       # patched `replicas` (especially when `replicas` sits under
-      # `ignoreDifferences` — a common footgun that silently defeats L1/L2). Two
+      # `ignoreDifferences` — a common footgun that silently defeats both). Two
       # pods then push to the same git working tree → tree corruption + SILENT
-      # data loss (ADR-023 背景). The real fix is L3 (K8s Lease, A3 / #787),
+      # data loss (ADR-023 背景). The real fix is the K8s Lease (ADR-023 §Lease / #787),
       # deferred until a forcing trigger. This alert IS that trigger, codified as a
       # LEADING signal: instead of discovering the breach via a corruption incident
       # (lagging — the worst possible discovery), it pages the moment the live
       # Deployment declares > 1 replica, and doubles as the codified re-eval trigger
-      # for #787 (mirrors how the sibling TenantApiReadHANeeded codifies A4's).
+      # for #787 (mirrors how the sibling TenantApiReadHANeeded codifies the
+      # read/write split's).
       #
       # Signal: TWO KSM gauges OR'd, for the `tenant-api` Deployment in WHATEVER
       # namespace the chart is installed into (#1595 D1b: the selector used to pin
@@ -1586,7 +1587,7 @@ groups:
       # the `> 1` comparison silently never match — the same anti-silent-fire
       # discipline the SSE alerts use.
       #   - kube_deployment_spec_replicas  = INTENT (declared). The earliest signal
-      #     and the exact runtime mirror of the L1 replicaCount==1 guard; catches
+      #     and the exact runtime mirror of the config guard's replicaCount==1 check; catches
       #     kubectl scale / HPA / GitOps-patch the instant they mutate intent.
       #   - kube_deployment_status_replicas = REALITY (actual non-terminated pods).
       #     Catches a divergence where pods actually run > 1 while spec still reads 1
@@ -1598,8 +1599,8 @@ groups:
       # still reaches git/users but is invisible to the control plane. KSM/Prometheus
       # read control-plane state, which is exactly what's unreliable about a
       # partitioned node; an in-cluster observer cannot see a fully-partitioned
-      # ghost. That irreducible residual is PRECISELY why L3 (K8s Lease + a fencing
-      # token on the git push, ADR-023 A3 / #787) is the only true close — this
+      # ghost. That irreducible residual is PRECISELY why the deferred K8s Lease (+ a
+      # fencing token on the git push, ADR-023 §Lease / #787) is the only true close — this
       # two-gauge net narrows the gap, it does not seal it.
       # `for: 2m` debounces a GitOps self-heal that reverts a manual scale within its
       # sync loop (no page for a corrected transient) yet still pages fast on a STUCK
@@ -1607,8 +1608,8 @@ groups:
       # invariant a sustained 2-min dual-writer window is worth paging even if GitOps
       # later heals it (the window may have already corrupted git; a manual scale of
       # a single-writer service is a process problem to surface, not suppress).
-      # severity critical (an ACTIVE correctness breach, unlike A4's info planning
-      # signal). Depends on KSM being up (a dead KSM is the KSM-absence alert's job).
+      # severity critical (an ACTIVE correctness breach, unlike the read/write
+      # split trigger's info planning signal). Depends on KSM being up (a dead KSM is the KSM-absence alert's job).
       # Behavioural contract: tests/rulepacks/platform-single-writer-breach_test.yaml.
       - alert: TenantApiSingleWriterBreach
         expr: |
@@ -1640,7 +1641,7 @@ groups:
             what set it — check `kubectl get events`, the GitOps app's sync history
             / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
             This alert is ALSO the codified re-eval trigger for the deferred K8s
-            Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
+            Lease (ADR-023 §Lease / #787): if multi-writer is now a real
             operational need, build leader-election — do NOT raise replicaCount.
             Details: docs/api/tenant-api-hardening.md §5.7.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
@@ -2159,7 +2160,7 @@ groups:
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
 
   # ============================================================
-  # Federation Audit (ADR-020 IV-2f, issue #511)
+  # Federation Audit (ADR-020 §稽核日誌與指標, issue #511)
   # Monitors the federation data plane via the metric
   # tenant_federation_requests_total{tenant,status}, emitted by the
   # audit-metrics sidecar in helm/federation-gateway. status enum:

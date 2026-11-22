@@ -409,7 +409,7 @@ da-tools grafana-import \
 | Top row | **Backend Errors /s (5m)** (Stat) | `sum(rate(...{status="backend_error"}[5m]))` | Storage-backend 5xx — **a platform fault, not a tenant rejection**; red ≥0.05 req/s |
 | Row 1 | **Request Rate by Status** (TimeSeries, stacked) | `sum by(status) (rate(...[5m]))` | Traffic composition stacked by status enum |
 | Row 1 | **Requests by Status (1h)** (PieChart, donut) | `sum by(status) (increase(...[1h]))` | Share per status over the last hour |
-| Row 2 | **3-Layer Rejection Rate** (TimeSeries) | three series: `status="rate_limited"` / `status=~"auth_failed\|bad_request"` / `status="backend_error"` | Which layer rejects (ADR-020 defence layering): gateway rate-limit (429) → auth / request rejected (4xx) → storage backend error (5xx) |
+| Row 2 | **3-Layer Rejection Rate** (TimeSeries) | three series: `status="rate_limited"` / `status=~"auth_failed\|bad_request"` / `status="backend_error"` | Which layer rejects (ADR-020 §三層資源防護): gateway rate-limit (429) → auth / request rejected (4xx) → storage backend error (5xx) |
 | Row 2 | **Requests per Tenant (5m rate)** (BarChart, horizontal) | `sum by(tenant) (rate(...[5m]))` | Watch for one tenant dominating the gateway |
 | Row 3 | **Per-Tenant Request Breakdown** (Table, paginated) | `sum by(tenant, status) (rate(...[10m]))` (instant) | One row per tenant × status |
 

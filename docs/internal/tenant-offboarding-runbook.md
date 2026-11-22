@@ -12,7 +12,7 @@ updated_at: 2026-05-19
 
 # 租戶 Offboarding Runbook — Federation 清理
 
-> 移除一個租戶時，**federation 的兩樣東西不會隨租戶設定檔 `conf.d/<tenant>.yaml`（或 `.yml`）一起消失**，必須手動清掉，否則留下殭屍憑證與孤兒 subset 紀錄。本 runbook 是 ADR-020 §Token model 的 offboarding 收尾程序（issue [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521)）。
+> 移除一個租戶時，**federation 的兩樣東西不會隨租戶設定檔 `conf.d/<tenant>.yaml`（或 `.yml`）一起消失**，必須手動清掉，否則留下殭屍憑證與孤兒 subset 紀錄。本 runbook 是 ADR-020 §Token 的 offboarding 收尾程序（issue [#521](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/521)）。
 
 ## 背景：為什麼 offboarding 不會自動清乾淨
 
@@ -20,8 +20,8 @@ updated_at: 2026-05-19
 
 | 殘留物 | 存放處 | 不清會怎樣 |
 |---|---|---|
-| **federation token records** | `tenant-federation-store` ConfigMap（runtime state，ADR-020 Posture B）| token 在密碼學上仍合法、gateway 仍會驗過 —— 殭屍憑證，直到 4h TTL 到期 |
-| **federation subset 紀錄** | tenant-api state store 的 `_federation.<tenant>.yaml`（Kubernetes 上是 `tenant-api-state` ConfigMap 的 key；per-tenant 指標子集，ADR-020 IV-2e；[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）| 孤兒紀錄永久殘留；若日後 tenant id 被重用，會變成意外的既存狀態 |
+| **federation token records** | `tenant-federation-store` ConfigMap（runtime state，ADR-020 §Token）| token 在密碼學上仍合法、gateway 仍會驗過 —— 殭屍憑證，直到 4h TTL 到期 |
+| **federation subset 紀錄** | tenant-api state store 的 `_federation.<tenant>.yaml`（Kubernetes 上是 `tenant-api-state` ConfigMap 的 key；per-tenant 指標子集，ADR-020 §隔離與治理的分界；[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）| 孤兒紀錄永久殘留；若日後 tenant id 被重用，會變成意外的既存狀態 |
 
 風險等級 **低**：殭屍 token 對已刪租戶注入 `{tenant="X"}` 只會回空集（無 live 資料外洩），且受 gateway per-token / per-tenant 限流約束 —— 屬 offboarding-completeness / 合規問題。但「低」不等於「可略過」：稽核（SOC 2 / ISO 27001）會檢查 offboarding 流程是否完整。
 
@@ -107,7 +107,7 @@ tenant-api 內建一個**被動偵測器**：週期性掃描，若發現 federat
 | 階段 | 時間 | gateway 回應 | 計入 `tenant_federation_requests_total`？ |
 |---|---|---|---|
 | 撤銷後、token 未到期 | 撤銷後 ≤ 4h（至 token 原 TTL 到期）| `403` —— 撤銷 token 仍是合法 JWT，claim 已注入 | **計入** `{status="auth_failed"}` |
-| token 到期後 | > 4h | `401` —— `jwt_authn` 在 claim 注入前就擋下 | **不計入** —— access log 無 `tenant_id`（ADR-020 §Audit log「Metric 邊界」）|
+| token 到期後 | > 4h | `401` —— `jwt_authn` 在 claim 注入前就擋下 | **不計入** —— access log 無 `tenant_id`（ADR-020 §稽核日誌與指標）|
 
 ### `FederationRejectionRateAnomaly` 不會對已退租租戶誤報
 

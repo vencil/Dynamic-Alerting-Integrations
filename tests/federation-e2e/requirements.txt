@@ -1,4 +1,4 @@
-# Federation E2E venv dependencies (ADR-020 IV-2j, #516). The runner
+# Federation E2E venv dependencies (ADR-020, #516). The runner
 # (scripts/ops/federation_e2e_run.sh) installs these FIRST, then runs
 # every Python step — config render-extract, keygen, the pytest driver —
 # inside the venv, so the harness needs nothing on the system python.

@@ -238,7 +238,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
 				Put("/custom-alerts", handler.PutTenantCustomAlerts(deps))
 
-			// Federation metric subset (v2.9.0 — ADR-020 IV-2e). PUT's
+			// Federation metric subset (v2.9.0 — ADR-020 §隔離與治理的分界). PUT's
 			// tenant-admin check is inside the handler (route middleware
 			// only confirms authentication + read on the tenant).
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
@@ -310,7 +310,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			Get(eventsRoute, rd.Events)
 
 		// Federation 2-tier policy — platform whitelist (v2.9.0 —
-		// ADR-020 IV-2e). Always registered: the policy is independent
+		// ADR-020 §隔離與治理的分界). Always registered: the policy is independent
 		// of token signing. GET is the metric whitelist a tenant admin needs
 		// to choose its subset (PUT /tenants/{id}/federation) — platform
 		// config naming no tenant — so any tenant reader may read it. PUT's
@@ -344,7 +344,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		r.With(platformRead).
 			Post("/audit/tenants/{id}/access-report/dry-run", handler.DryRunTenantAccessReport(deps))
 
-		// Federation token endpoint (v2.9.0 — ADR-020 IV-2d).
+		// Federation token endpoint (v2.9.0 — ADR-020 §Token).
 		// Registered only when a signing key is configured. Route-level
 		// middleware checks read on some tenant; per-tenant admin permission
 		// is enforced inside each handler because the tenant ID is in

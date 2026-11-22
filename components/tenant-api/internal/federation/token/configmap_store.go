@@ -20,7 +20,7 @@ import (
 // ConfigMap. A binary that reads a document carrying a *newer* version
 // refuses to write it back — otherwise a rolling update would let an
 // old replica silently drop fields a newer replica added (ADR-020
-// Posture B; Gemini round-5 review).
+// §Token).
 const storeSchemaVersion = "v1"
 
 // ConfigMap data keys. store.json is tenant-api's source of truth;
@@ -56,7 +56,7 @@ func (d *storeDoc) newerSchema() bool {
 }
 
 // configMapStore is a RecordStore backed by a single Kubernetes
-// ConfigMap shared across tenant-api replicas (ADR-020 Posture B).
+// ConfigMap shared across tenant-api replicas (ADR-020 §Token).
 // tenant-api stays stateless — the ConfigMap is the only state.
 //
 // Layout — two data keys:

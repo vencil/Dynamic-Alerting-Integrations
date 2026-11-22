@@ -1281,8 +1281,8 @@ repos:
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
         # phantom-writer / dual-writer breach (git tree corruption, duplicate PRs).
-        # Layer 2 of ADR-023 enforcement; layer 1 is the chart's render-time
-        # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
+        # ADR-023 §設定守衛, together with the chart's render-time
+        # `fail` guard. Horizontal write scaling needs a K8s Lease (ADR-023 §Lease).
 
       - id: cross-ns-url-check
         name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns)"

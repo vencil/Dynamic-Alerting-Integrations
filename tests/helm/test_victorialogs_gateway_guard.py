@@ -15,7 +15,7 @@ goes red rather than shipping a cross-tenant breach:
      verified header the Lua injects must reach VictoriaLogs. Route-level removal
      runs in the router AFTER the Lua and would strip the injected value ->
      no AccountID -> VictoriaLogs default partition 0 = cross-tenant breach.
-     (This is the exact footgun ADR-021 §Blast radius was amended to warn about.)
+     (This is the exact footgun ADR-021 §注入前驗證 warns about.)
 
 Two layers (mirrors test_single_writer_guard.py): a static layer that needs no
 helm (so helm-less runners still catch a regression) and a render layer gated on

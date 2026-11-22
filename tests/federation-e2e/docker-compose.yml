@@ -1,4 +1,4 @@
-# Federation E2E harness — ADR-020 IV-2j (#516). Local + CI; NOT part of
+# Federation E2E harness — ADR-020 (#516). Local + CI; NOT part of
 # `make test` / pre-commit. Launched by scripts/ops/federation_e2e_run.sh,
 # which renders the gateway config from the REAL Helm chart into
 # rendered/ before `compose up` (see README — no configuration drift).
@@ -40,7 +40,7 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=2h"
-      # Layer 1 blast-radius cap (ADR-020 IV-2c). Set LOW for the E2E:
+      # Layer 1 blast-radius cap (ADR-020 §儲存後端的查詢上限). Set LOW for the E2E:
       # the fixture exposes ~16 series per tenant, so an all-series
       # instant query (S7) loads 16 samples and trips a cap of 12, while
       # ordinary single-family scenario queries (<=6 series) stay under.

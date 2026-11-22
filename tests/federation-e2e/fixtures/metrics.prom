@@ -1,4 +1,4 @@
-# Fixture metrics for the federation E2E (ADR-020 IV-2j, #516).
+# Fixture metrics for the federation E2E (ADR-020, #516).
 # Two tenants — db-a and db-b — each with the same metric families so
 # cross-tenant isolation (S2) can be proven by the `tenant` label of the
 # returned series. db-a values are ~100x, db-b values are ~7x, a second

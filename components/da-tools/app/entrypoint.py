@@ -82,7 +82,7 @@ def _build_help_text(lang):
 
 命令 (Federation — 多叢集):
     rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
-    fed-key           產生 / 輪替 federation JWT 簽章金鑰 (ADR-020 IV-2l)
+    fed-key           產生 / 輪替 federation JWT 簽章金鑰 (ADR-020 §Token)
 
 命令 (Guard — Dangling Defaults Guard, v2.8.0):
     guard             驗證 conf.d/ 樹是否安全 (schema + cardinality；路由交給 generate-routes)
@@ -173,7 +173,7 @@ Commands (Operator-Native — CRD generation & validation):
 
 Commands (Federation — multi-cluster):
     rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
-    fed-key           Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l)
+    fed-key           Generate / rotate the federation JWT signing keypair (ADR-020 §Token)
 
 Commands (Guard — Dangling Defaults Guard, v2.8.0):
     guard             Validate a conf.d/ tree (schema + cardinality; routing: generate-routes)
@@ -401,7 +401,7 @@ COMMAND_MAP = {
     "migrate-credentials": "migrate_credentials.py",
     # Group E: Federation (multi-cluster)
     "rule-pack-split": "generate_rule_pack_split.py",
-    # Tenant federation (ADR-020 IV-2l) — RS256 signing-key generation /
+    # Tenant federation (ADR-020 §Token) — RS256 signing-key generation /
     # rotation; see scripts/tools/ops/federation_keygen.py.
     "fed-key": "federation_keygen.py",
     # Group F: Policy (OPA/Rego)

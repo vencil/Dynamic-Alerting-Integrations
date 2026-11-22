@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """federation_keygen.py — federation JWT 簽章金鑰的生成 / 輪替工具。
 
-ADR-020 IV-2l。產生 tenant-api 簽 federation token 用的 RS256 keypair,
+ADR-020 §Token。產生 tenant-api 簽 federation token 用的 RS256 keypair,
 並輸出兩個下游消費端要的 artifact:
 
   - 私鑰  → 直接吐成 Kubernetes Secret manifest 到 stdout。私鑰**不落地、
@@ -159,7 +159,7 @@ def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         prog="da-tools fed-key",
-        description="Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l).",
+        description="Generate / rotate the federation JWT signing keypair (ADR-020 §Token).",
     )
     parser.add_argument("--rotate", action="store_true",
                         help="rotation mode — merge the new public key into --existing-jwks")

@@ -1,6 +1,6 @@
 package fedpolicy
 
-// Federation policy — the 2-tier metric allowlist (ADR-020 IV-2e).
+// Federation policy — the 2-tier metric allowlist (ADR-020 §隔離與治理的分界).
 //
 // Two tiers, deliberately in SEPARATE files:
 //
@@ -18,7 +18,7 @@ package fedpolicy
 // so cross-tenant isolation holds regardless of the whitelist — a
 // tenant querying a non-whitelisted metric simply gets its own series
 // for it. The whitelist drives the UI catalogue, the admission
-// validator, and tenant-subset curation. See ADR-020 §MVP 範圍.
+// validator, and tenant-subset curation. See ADR-020 §隔離與治理的分界.
 //
 // Why one file per tenant and not a single shared document: tenant-api
 // is commit-on-write GitOps. A shared subsets file would serialise
@@ -189,7 +189,7 @@ func ValidateWhitelist(cfg *Config) []PolicyViolation {
 }
 
 // EffectiveSubset returns subset filtered to metrics still present in
-// the platform whitelist — read-repair (ADR-020 IV-2e).
+// the platform whitelist — read-repair (ADR-020 §隔離與治理的分界).
 //
 // The stored per-tenant subset file can go stale: a metric valid when
 // the tenant selected it may later be removed from the platform
@@ -200,7 +200,7 @@ func ValidateWhitelist(cfg *Config) []PolicyViolation {
 // re-validated against the current whitelist.
 //
 // The whitelist is a governance mechanism, not a query-time security
-// boundary (see ADR-020 §MVP 範圍 — cross-tenant isolation is enforced
+// boundary (see ADR-020 §隔離與治理的分界 — cross-tenant isolation is enforced
 // solely by the proxy's `tenant` label injection), so an over-broad
 // stored subset is a consistency wart, not a breach.
 func EffectiveSubset(subset *Subset, whitelist *Config) *Subset {

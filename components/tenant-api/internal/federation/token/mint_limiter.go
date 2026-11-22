@@ -9,7 +9,7 @@ import (
 // shields the backing store from a runaway client (e.g. a mis-written
 // CronJob in an issuance loop): with the ConfigMap store every
 // successful mint rewrites the store object into etcd (ADR-020
-// Posture B; Gemini round-4 review). maxTokensPerTenant caps the burst
+// §Token). maxTokensPerTenant caps the burst
 // size; this caps the sustained rate.
 const (
 	mintWindow        = time.Minute

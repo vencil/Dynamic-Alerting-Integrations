@@ -5,7 +5,7 @@ Writes  <rendered>/private-key.pem  — the driver RS256-signs federation
 tokens with it — and  <rendered>/jwks.json  — the gateway's jwt_authn
 verifies presented tokens against it. The key id is the RFC 7638 JWK
 thumbprint, mirroring scripts/tools/ops/federation_keygen.py so the
-token shape matches what tenant-api produces (ADR-020 IV-2j, #516).
+token shape matches what tenant-api produces (ADR-020, #516).
 """
 import base64
 import hashlib

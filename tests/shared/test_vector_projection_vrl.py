@@ -1,4 +1,4 @@
-"""test_vector_projection_vrl.py — ADR-021 Phase 1 (b) projection / #609
+"""test_vector_projection_vrl.py — ADR-021 §平台副本與租戶副本 projection / #609
 
 Pins the Vector tenant-sanitized projection: the fan-out that writes each
 tenant's federation_audit rows, SANITIZED, into its own VictoriaLogs
@@ -18,7 +18,7 @@ Two tiers (each independently gated on a binary being on PATH):
     copies, gateway_operational stays 0:0). Mirrors the runbook §4.4 manual
     `vector validate` step, now codified.
 
-Maps to ADR-021 implementation-plan AC (L224-226) and §Ingestion fan-out.
+Maps to ADR-021 §寫入時只留白名單欄位 and §平台副本與租戶副本.
 """
 from __future__ import annotations
 
@@ -235,7 +235,7 @@ class TestProjectionEnabledShape:
     def test_transforms_render_with_failclosed_error_handling(self, repo_root: Path) -> None:
         """tenant_project must be drop_on_error + NOT reroute_dropped — a VRL
         error drops the event from the tenant branch (never default-allows it
-        into a partition). This is the Gemini 1c / §Fork B invariant."""
+        into a partition). This is the ADR-021 §寫入時只留白名單欄位 invariant."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
         tp = cfg["transforms"]["tenant_project"]
         assert tp["type"] == "remap"

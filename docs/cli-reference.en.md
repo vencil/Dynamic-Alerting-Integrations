@@ -172,7 +172,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 | `operator-check` | Operator CRD deployment status verification (checks + diagnostic report) | `[--namespace <ns>]` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING / UNHEALTHY / ORPHAN) | `--prometheus <url>` or `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3), Federation Scenario B | `--rule-packs-dir <dir>` |
-| `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l): private-key Secret manifest → stdout, public JWKS → file | (none, bootstrap default) / `--rotate --existing-jwks <file>` |
+| `fed-key` | Generate / rotate the federation JWT signing keypair (ADR-020 §Token): private-key Secret manifest → stdout, public JWKS → file | (none, bootstrap default) / `--rotate --existing-jwks <file>` |
 
 ### Configuration Generation Tools
 
@@ -938,7 +938,7 @@ da-tools federation-check central --prometheus http://central:9090 --json
 
 #### fed-key
 
-Generate / rotate the federation JWT signing keypair (ADR-020 IV-2l).
+Generate / rotate the federation JWT signing keypair (ADR-020 §Token).
 
 **Purpose**: tenant-api signs federation tokens with an RS256 private key; federation-gateway verifies them against the matching public key's JWKS. This tool generates an RSA keypair and emits the two downstream artifacts: the private key → a Kubernetes Secret manifest (stdout, never written to disk); the public key → a JWKS file. Each public key's `kid` is its RFC 7638 JWK thumbprint, which matches the `kid` header tenant-api computes by construction.
 

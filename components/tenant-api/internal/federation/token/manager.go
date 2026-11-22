@@ -8,7 +8,7 @@
 // signature with the public half of the key and never call back here, so
 // verification is fully stateless.
 //
-// Storage (ADR-020 Posture B):
+// Storage (ADR-020 §Token):
 //   - Token Records are operational state — machine-written on every
 //     issuance, high churn. The production store is a shared Kubernetes
 //     ConfigMap (configmap_store.go) so tenant-api stays stateless and
@@ -41,7 +41,7 @@ import (
 )
 
 // DefaultTTL is the federation-token lifetime when none is configured.
-// ADR-020 §Token model fixes 4h as the balance point between "short
+// ADR-020 §Token fixes 4h as the balance point between "short
 // enough that the absence of a revocation list is acceptable" and
 // "long enough that re-signing is not operationally painful".
 const DefaultTTL = 4 * time.Hour
@@ -54,7 +54,7 @@ const issuer = "tenant-api"
 // single audience lets a verifier reject a token replayed against a
 // DIFFERENT plane that happens to trust the same signing key — so a
 // metrics-proxy token cannot be presented to the logs plane and vice
-// versa (cross-plane replay). ADR-020 Wave-0 decision 3 / ADR-021 §B.
+// versa (cross-plane replay). ADR-020 §Token / ADR-021 §Token.
 type Capability string
 
 const (
@@ -89,8 +89,7 @@ func audienceFor(c Capability) string {
 
 // clockSkewLeeway backdates the JWT `iat` claim. A signer clock a few
 // seconds ahead of the verifier would otherwise place `iat` in the
-// verifier's future and get a just-issued token rejected (ADR-020;
-// Gemini round-7 review). The gateway verifier sets a matching leeway.
+// verifier's future and get a just-issued token rejected. The gateway verifier sets a matching leeway.
 const clockSkewLeeway = time.Minute
 
 // tokenIDPrefix namespaces the public token handle. The audit log
@@ -189,7 +188,7 @@ func (e *MintRateLimitedError) RetryAfter() time.Duration { return e.Wait }
 // Claims is the JWT payload of a federation token.
 //
 // TenantID and TokenID are the cross-component contract fixed by
-// ADR-020 Wave-0 decision 3: the proxy reads TenantID to inject
+// ADR-020 §Token: the proxy reads TenantID to inject
 // {tenant_id="<X>"} into every selector, and the API gateway reads
 // TokenID as the per-token rate-limit key.
 //
@@ -364,7 +363,7 @@ func (m *Manager) issue(tenantID, issuedBy, description string, capability Capab
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	// Stamp the key id so the gateway verifier selects the right JWKS key
-	// by `kid` rather than trying every key (ADR-020 IV-2l).
+	// by `kid` rather than trying every key (ADR-020 §Token).
 	tok.Header["kid"] = m.kid
 	signed, err := tok.SignedString(m.key)
 	if err != nil {
@@ -415,7 +414,7 @@ func (m *Manager) Get(tokenID string) (Record, bool, error) {
 }
 
 // Delete revokes a token: it removes the bookkeeping Record and adds
-// the token id to the revoked set (ADR-020 Posture B). expiresAt is
+// the token id to the revoked set (ADR-020 §Token). expiresAt is
 // the token's JWT expiry — the revoked entry self-prunes once past it.
 // Reports whether a record was present.
 func (m *Manager) Delete(tokenID string, expiresAt time.Time) (bool, error) {

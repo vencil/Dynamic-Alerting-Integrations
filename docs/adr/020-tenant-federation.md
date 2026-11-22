@@ -1,5 +1,5 @@
 ---
-title: "ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint"
+title: "ADR-020: 租戶把自己的指標拉回自家系統 — 用現成的標籤注入代理，不自寫端點"
 tags: [adr, federation, multi-tenant, security]
 audience: [platform-engineers, contributors]
 version: v2.9.0
@@ -9,437 +9,334 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-11
-updated_at: 2026-05-19
+updated_at: 2026-11-22
 ---
 
-# ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint
-
-> Tenant-user 拉取**自己**的 metrics 子集回 tenant 側 infra 自管 federation。
-> 平台**不自寫** federation endpoint，採 prom-label-proxy 做 label-enforced rewriting。
->
-> 與 [ADR-004 (Federation — Central-Exporter-First)](./004-federation-central-exporter-first.md) 是兩件事：ADR-004 是**平台內部**多叢集 federation（中央 exporter 服務邊緣 Prometheus），本 ADR 是**跨平台邊界** federation（tenant 把自己的 metrics 拉回 tenant 自有 Prom/VM 自管）。
+# ADR-020: 租戶把自己的指標拉回自家系統 — 用現成的標籤注入代理，不自寫端點
 
 ## 狀態
 
-✅ **Accepted**（v2.8.0 起草，issue [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)；v2.9.0 federation epic 實作期間經 owner 拍板正式昇格，設計鎖定見 issue [#504](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/504)）
+✅ **Accepted**（v2.9.0）。
 
-> EN mirror：原規劃「進入 `Accepted` 後再起 EN 翻譯」已不執行 —— 平台語言政策定案「中文為主 SSOT、不執行 ZH→EN 遷移」後，ADR EN mirror 慣例停止（ADR-019 同樣無 EN mirror）。本 ADR 不另製 `.en.md`。
+- 2026-05-17 修訂：撤銷集取代本 ADR 起初「不做伺服器端撤銷清單、只靠短效期與限流」的決定。`DELETE` token 把 `token_id` 寫進 token store 的撤銷集，gateway 定期重讀並拒絕清單內的 token；限流仍是必備的補償控制。見「Token」。
+- 2026-10-11 修訂：白名單與租戶子集移出 conf.d（平台存放租戶設定的 git 目錄），改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），不再 commit。強制通過收錄檢查的紀錄因此只在 tenant-api 的日誌裡，見「已知限制」。
+
+> 依語言政策，本 ADR 不另製 `.en.md`。
+
+## 決策摘要
+
+租戶要把**自己**的指標從平台拉回自家的 Prometheus／VictoriaMetrics（下稱 federation，聯邦查詢）。平台**不自寫查詢端點**，而是在儲存後端前面放開源的 [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy)：它解析每個 PromQL（Prometheus 的查詢語言）查詢，把 `{tenant="<租戶>"}` 強制加進每個 selector（查詢裡挑選時間序列的條件），租戶因此只查得到帶自己 `tenant` 標籤的 series（時間序列）。
+
+proxy 前面再放一個 Envoy gateway，負責驗 JWT（JSON Web Token，tenant-api 簽過章的短效憑證）、查撤銷清單、限流；儲存後端自己設單次查詢的資源上限。三層各做自己擅長的事，沒有一層是自寫的查詢引擎。
+
+本 ADR 與 [ADR-004](./004-federation-central-exporter-first.md) 是兩件事：ADR-004 是**平台內部**的多叢集 federation（中央 exporter 服務邊緣叢集）；本 ADR 是**跨出平台邊界**，租戶把資料拉走。
 
 ## 背景
 
-### 客戶需求
+### 租戶要什麼
 
-進入 v2.8.0 客戶導入準備階段，多個 prospective customer 在 RFP / pre-onboarding 訪談中提出需求：
+已有自建 Prometheus／VictoriaMetrics 的租戶，想把屬於自己的指標子集拉回去，用來：
 
-- 我們已有自己的 Prometheus / VictoriaMetrics infra（NOC / SRE team 自管）
-- 想把**屬於我們自己** tenant 的 metrics 子集拉回我們 infra，做：
-  - 自己 SRE team 的 long-term retention（平台側預設 retention 可能不滿足合規）
-  - 整合到自己既有 Grafana dashboard / oncall workflow
-  - 自管告警 evaluation（不依賴平台 Alertmanager）
+- 由自己的 SRE 團隊做長期保留（平台的預設保留期可能不符合合規要求）；
+- 接進既有的 Grafana 看板與值班流程；
+- 自己評估告警，不依賴平台的 Alertmanager。
 
-**注意定位**：這不是「平台幫客戶 federation」（那是 [ADR-004](./004-federation-central-exporter-first.md)），是「**客戶從平台拉自己的 metrics 出去**」。資料流向相反，trust boundary 也不同——ADR-004 是「平台信任邊緣叢集（同組織內 N 個 cluster）」的 inbound 場景；ADR-020 是「平台對客戶（cross-org）」的 outbound 場景，被取走的資料離開平台控制邊界後就可能被 tenant 自己再轉、再存、再泄。Multi-tenant isolation 與 audit 需求因此更嚴格。
+資料流向與 ADR-004 相反：被拉走的資料離開平台的控制範圍後，可能被租戶再轉送、再保存。所以租戶隔離與稽核要求比平台內部更嚴。
 
-### 既有 federation 架構覆蓋空白
+### 難在哪裡
 
-| 場景 | 既有方案 | 缺口 |
-|---|---|---|
-| 平台內部多叢集 federation | ADR-004 中央 exporter + 邊緣 remote_read | ✅ 覆蓋 |
-| 平台自管 alert eval | tenant-api SSE + Alertmanager | ✅ 覆蓋 |
-| **Tenant 拉自己 metrics 回 tenant 側自管** | ⛔ **無方案** | 🎯 本 ADR |
+「給租戶開一個讀取端點」表面簡單，實際有四個交叉約束：
 
-### 為什麼這是個棘手的問題
-
-「給 tenant 開一個 read endpoint 把自己 metrics 拉出去」表面簡單，實際有四個交叉約束：
-
-1. **Multi-tenant isolation**（強制）— Tenant A 絕對不能讀到 Tenant B 的資料。Platform 後端 storage（VictoriaMetrics / Mimir / Prom）通常**沒有強制的 label filter**：寫一個自寫 endpoint 容易在 label sanitization 漏一個矩陣維度（cluster / node / namespace 在某些 metric 上不帶 tenant），變成 multi-tenant breach。
-2. **Blast radius**（強制）— Tenant 拉自己 100 萬 series 的查詢若沒限制，會把 platform storage 拖垮（影響其他 tenant + 影響平台 alert eval pipeline）。
-3. **Auth / Token lifecycle**（強制）— Token 簽發 / 失效 / 替換 / 撤銷的 surface。
-4. **平台 engineering cost**（限制）— 自寫 endpoint + 多 tenant rewrite engine 是 6+ month workload；在單一 minor release 的時程內不現實。
-
-### 設計討論紀錄
-
-[Issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380) 記錄四輪 strategic discussion 與兩輪外部 adversarial review，locked decision 摘要：
-
-- **不自寫 endpoint**：用既有開源 proxy（prom-label-proxy）做 label injection
-- **MVP 2-tier policy**（Platform whitelist + Tenant subset）— Domain layer 暫 drop 到 Future Work
-- **Token TTL 4h + 無 server-side revocation list** — 明寫 trade-off 換實作簡單
-- **Blast radius 三件組**：concurrency cap / request timeout / series count cap
-- **3-tier permission model**（include compliance / audit 角色分離）→ Future Work，等 compliance 客戶觸發再做
+1. **租戶隔離**（強制）：租戶 A 絕不能讀到租戶 B 的資料。儲存後端（Prometheus／VictoriaMetrics）本身沒有強制的標籤過濾；自寫端點很容易在某個維度上漏掉過濾（有些指標以 cluster、node、namespace 為鍵，不帶租戶），變成跨租戶外洩。
+2. **爆炸半徑**（強制）：一個沒有上限的查詢可以拖垮儲存後端，波及其他租戶與平台自己的告警評估。
+3. **Token 的生命週期**（強制）：簽發、到期、撤銷都要有明確的做法。
+4. **工程成本**（限制）：自寫端點加上多租戶的查詢改寫引擎，是數個月的工作量。
 
 ## 決策
 
-### 主決策
-
-**採 prom-label-proxy 作為 label-enforced read proxy，不自寫 federation endpoint。**
+### 請求路徑
 
 ```mermaid
 flowchart LR
     API["tenant-api（簽發 federation JWT）"]
-    G["Tenant 自管 Grafana / Prometheus"]
+    G["租戶自管的 Grafana / Prometheus"]
     GW["federation-gateway · Envoy（驗章 / 撤銷 / 限流）"]
     PX["federation-proxy · prom-label-proxy"]
-    ST[("平台 Storage · Prometheus / VictoriaMetrics")]
+    ST[("平台儲存 · Prometheus / VictoriaMetrics")]
 
     API -. "4h RS256 JWT" .-> G
-    G -- "federation query + Bearer JWT" --> GW
-    GW -- "已驗證請求" --> PX
+    G -- "federation 查詢 + Bearer JWT" --> GW
+    GW -- "已驗證的請求" --> PX
     PX -- "注入 tenant 標籤後轉送" --> ST
 ```
 
-prom-label-proxy 是 prometheus-community 維護的成熟開源工具，front 任何相容 Prometheus query API 的後端（Prometheus / Thanos / 單機 VictoriaMetrics），在 query path 強制把 `{tenant="<X>"}` 注入所有 selector。
+平台負責四件事：
 
-**VictoriaMetrics cluster** 模式不經 prom-label-proxy：其租戶隔離由 API gateway 直接把 URL 改寫到 `/select/<accountID>/prometheus/` 達成（gateway 已從驗證過的 JWT 取得 `tenant_id`）。proxy 選型理由（為什麼不是 vmauth）見 §為什麼不用其他方案。
+1. **部署 proxy 與 gateway**：`helm/federation-proxy`（prom-label-proxy，可放在 Prometheus、Thanos 或單機 VictoriaMetrics 前面）與 `helm/federation-gateway`（Envoy）。
+2. **tenant-api 的 token 端點**：`POST`／`GET`／`DELETE /api/v1/federation/tokens`，簽發、列舉、撤銷租戶的 federation token。
+3. **白名單**：平台維護可被拉走的指標白名單，租戶從中選自己的子集（見下）。
+4. **稽核日誌與指標**：誰拉了什麼、多少、有沒有被拒。
 
-Platform 側只負責：
+VictoriaMetrics **叢集版**不經 prom-label-proxy：它本身以 URL 路徑上的 `accountID` 分租戶，gateway 的 `vm-cluster` 模式直接把路徑改寫成 `/select/<tenant_id>/prometheus/`（`tenant_id` 取自已驗證的 JWT）。
 
-1. **Helm chart** 把 prom-label-proxy 拉進部署（`helm/federation-proxy` chart，issue [#506](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/506)；front Prometheus / Thanos / VictoriaMetrics 單機）
-2. **tenant-api token endpoint** 簽發 / 列舉 / 撤銷 tenant federation token
-3. **Policy schema validation**（platform whitelist + tenant subset 兩層）
-4. **Audit log + anomaly metric**（誰拉了什麼、拉多少、是否超 cap）
+### 隔離與治理的分界
 
-### MVP 範圍（2-tier policy）
-
-**架構安全聲明 —— 安全邊界與治理邊界分離**：
-
-- **安全邊界（資料平面）**：跨租戶隔離 100% 來自 prom-label-proxy 在 query path 強制注入的 `{tenant="<X>"}` label matcher。租戶查得到的資料恆等於「帶它自己 `tenant` label 的 series」—— 前提是該 metric 在 data-layer 確實帶 `tenant` label（見 §前提約束；缺 label 時結果為 empty vector，不是洩漏）。
-- **治理邊界（控制平面）**：2-tier policy（platform whitelist + tenant subset）是 UI catalogue、admission validator 檢查標的、subset 策展的依據，**不在 query path 做硬阻擋**。緊急阻斷某 metric 外洩須走 ingestion 階段（見下方 ⚠️）。
+- **安全邊界（資料面）**：跨租戶隔離完全來自 proxy 注入的 `{tenant="<X>"}`。租戶查得到的，恆等於帶它自己 `tenant` 標籤的 series。某個指標若在資料層沒帶 `tenant` 標籤，結果是空的，不是外洩（見下一節）。
+- **治理邊界（控制面）**：白名單與租戶子集是目錄、收錄檢查的對象、子集挑選的依據，**不在查詢路徑上擋任何東西**。
 
 ```
-┌───────────────────────────────────────────────┐
-│ Platform whitelist (maintainer-managed)       │
-│ 允許 tenant 拉的 metric name + label 範圍上限 │
-└───────────────────────────────────────────────┘
-                    ↓ intersect
-┌───────────────────────────────────────────────┐
-│ Tenant subset (tenant-self-managed via API)   │
-│ Tenant 從 whitelist 中選自己要拉的子集        │
-└───────────────────────────────────────────────┘
-                    ↓ inform（非 enforce）
-┌───────────────────────────────────────────────┐
-│ prom-label-proxy                              │
-│ 強制注入 tenant="<X>" 到所有 query            │
-└───────────────────────────────────────────────┘
+平台白名單（平台維護）：允許租戶拉的指標
+            ↓ 取交集
+租戶子集（租戶經 API 自管）：從白名單中挑自己要的
+            ↓ 僅供參考，不強制
+prom-label-proxy：對每個查詢強制注入 tenant="<X>"
 ```
 
-**為什麼 whitelist 不能在 query path 強制**：prom-label-proxy 只做 label 注入、無 metric-name allowlist 能力，gateway 也無法可靠地用 regex 從 PromQL AST 攔截 metric name。租戶若查 whitelist 外的 metric，proxy 一樣注入它自己的 tenant label，它只會拿到自己的資料（查自己的 custom metric 因此是 feature，不是漏洞）。`tenant subset ⊆ whitelist` 的不變式為治理一致性、非安全邊界：靜態檔案過期時以 read-repair（讀取端取交集）修復，不掃改租戶檔。
+白名單無法在查詢路徑上強制：prom-label-proxy 只做標籤注入，沒有指標名稱的允許清單；gateway 也無法可靠地從 PromQL 裡辨認指標名稱。租戶查白名單外的指標，proxy 一樣注入它自己的 `tenant`，它只拿得到自己的資料，所以「查自己的自訂指標」是功能，不是漏洞。「租戶子集 ⊆ 白名單」只是治理上的一致性：白名單移除了某個指標、而租戶子集還留著時，讀取端取交集修正（read-repair），不回頭改租戶的紀錄。
 
-> **⚠️ Hard-revocation 警告**：whitelist 不在 query path 強制執行，所以**從 whitelist 移除一個 metric 無法阻斷對它的查詢**。read-repair 只擋「發現」（GET 不再列出它），擋不住「已知名稱的查詢」：已知該 metric 名稱的租戶仍可直接對 gateway 送該 PromQL、無阻礙地拉到自己的資料。**若需緊急阻斷某 metric 被 federate（例如該 metric 被發現夾帶 PII），改 whitelist 無效**——必須在 **ingestion 階段**處理：Prometheus / VictoriaMetrics 的 `relabel_configs` 以 `drop` action 丟棄該 metric，或調整底層存取權限。federation proxy 不具備阻擋特定 metric 的能力。
+> ⚠️ **從白名單移除指標，擋不住對它的查詢。** 白名單移除只讓它不再出現在列表裡，知道名稱的租戶仍可直接送那個 PromQL，拿到自己的資料。若要緊急阻斷某個指標被拉走（例如發現它夾帶個資），必須在**寫入階段**處理：Prometheus／VictoriaMetrics 的 `relabel_configs` 以 `drop` 丟掉該指標，或調整底層存取權限。federation 的 proxy 沒有阻擋特定指標的能力。
 
-**Domain layer**（讓 tenant 內再分 sub-team scope）**留 Future Work**。理由：v2.9.0 customer base 是「單一 SRE/NOC team 拉自己 tenant 全部」，sub-team scope 是更晚的需求；現在做會增加 2-tier → 3-tier schema 複雜度，但無 customer signal。
+### 資料層的租戶標籤
 
-### 前提約束：Data-layer Label Enrichment Guarantee
+平台資料層的租戶標籤名是 **`tenant`**（Prometheus relabel 的 `target_label: tenant`、threshold-exporter、rule pack 一律用它）；proxy 注入的就是這個標籤（`helm/federation-proxy` 的 `tenant.label`，預設 `tenant`）。JWT 裡的租戶 claim 名是 `tenant_id`，與指標標籤是兩個獨立的命名空間，不要求一致。資料層的租戶標籤盤點見 [`federation-label-enrichment-audit.md`](../internal/federation-label-enrichment-audit.md)。
 
-平台 data-layer 的租戶 label 名為 **`tenant`**（Prometheus relabel `target_label: tenant`、threshold-exporter、tenant-scoped rule pack 一律 `on(tenant)`）。本 ADR prose 凡指「proxy 注入到 metric 的 label」一律為 `tenant`。JWT claim 名為 `tenant_id`——claim 名與 metric label 名為獨立命名空間，互不要求一致；§Token model 與 token JSON 範例的 `tenant_id` 即 claim。data-layer 租戶 label 現況盤點詳 [`federation-label-enrichment-audit.md`](../internal/federation-label-enrichment-audit.md)（issue [#505](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/505)）。
+白名單裡的每個指標，平台**必須**確保在抓取或寫入階段就帶上 `tenant` 標籤。否則 proxy 注入 `{tenant="<X>"}` 後查詢結果是空的：租戶看到看板一片空白、回報「federation 壞了」，SRE 得從 token 一路查到 scrape 設定才找得到原因。容易踩到的來源是原生不帶 `tenant` 的指標，例如 cAdvisor 的 `container_*`、node-exporter 的 `node_*`、kube-state-metrics 的 `kube_*`，以及從上游 Prometheus 轉進來、上游沒打標籤的指標。
 
-所有 platform whitelist 列入的 metric，平台**必須**確保在 ingest / scrape 階段（Prometheus `scrape_configs.relabel_configs`、VictoriaMetrics `relabel_config`、或統一 ingestion pipeline）已可靠注入 `tenant` label。
+### 白名單收錄檢查
 
-**為什麼這是 prerequisite**：proxy 在 query path 強制把 `{tenant="<X>"}` 注入到所有 selector。如果某 metric 原生不帶 `tenant` label，query 結果就是 empty vector——tenant 看到「dashboard 空白」，會報修「federation 壞了」，SRE 要從 token 一路查到 scrape config 才能發現是 data-layer 沒打 label。是個典型的 silent-failure 地雷。
+平台把新指標加進白名單時（`PUT` 白名單），tenant-api 對每個**新加入**的指標問後端：過去 24 小時有沒有帶 `tenant` 標籤的 series。
 
-**典型踩坑 metric 來源**（無 `tenant` native label）：
+- **只用 series metadata API**（`GET /api/v1/series`），不用 range query。後者會把 24 小時的原始樣本載進記憶體，高基數指標可能讓 Prometheus 記憶體耗盡。
+- **先問 `metric{tenant!=""}`**，過濾由 TSDB（Prometheus 的時間序列資料庫）的索引完成，幾乎不花成本；非空就通過。空的再問 `metric` 本身有沒有 series。
+- 每次呼叫三重限制：`limit=1`、回應本文最多讀 1 MiB、單次 5 秒逾時，檢查本身不會變成資源黑洞。一次 `PUT` 最多新增 30 個指標，最多 8 個並行檢查。
+- 擋下的判準是「**沒有任何** series 帶 `tenant`」，不是「有 series 缺 `tenant`」。共享的 Kubernetes 叢集裡，`up`、`container_*` 這類指標在租戶 pod 上帶 `tenant`、在平台 pod（kube-system、API server）上不帶；proxy 注入後每個租戶只看得到自己的 series，那些沒標籤的平台 series 無害。若以「任一 series 缺標籤」為準，所有 Kubernetes 原生指標都會永遠進不了白名單。
 
-- `container_*`（cAdvisor）
-- `node_*`（node-exporter）
-- `kube_*`（kube-state-metrics）
-- 任何透過 federation 從上游 Prom 抓進來、上游沒打 tenant label 的 metric
-
-#### Admission validator（soft gate + force override）
-
-whitelist 加入新 metric 時，admission validator 對「過去 24h 該 metric 在後端 storage 至少有一筆帶 `tenant` label 的 sample」做檢查（2-tier policy schema 與 admission validator 見 issue [#510](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/510)）。
-
-檢查只走 **Series metadata API**（`GET /api/v1/series`），不用 range query —— 後者會把 24h raw sample 載進記憶體、對高基數 metric 把 Prometheus 打到 OOM。探測用 `metric{tenant!=""}` 把過濾下推 TSDB inverted index（近零成本）；每次呼叫三重 bound（`limit=1` + `io.LimitReader` + `context` 5s timeout），validator 自身不會變成 resource sink。後端不可達 / timeout 視為 WARN（查不到無法證明 metric 壞）。validator 另含 **PII label-name heuristic**：metric 的 label 名命中 `email` / `customer` / `user_ip` 等樣式 → 列為 advisory soft warning（非 hard block，heuristic 必然不精準）。
-
-hard-block 的判準是「**沒有任何** series 帶 `tenant` label」，**不是**「有 series 缺 label」。K8s 共享叢集裡 `up` / `container_*` 等 metric，租戶 pod 帶 `tenant`、平台 pod（kube-system / API server）不帶——proxy 注入 `{tenant="<X>"}` 已把每個租戶隔離到自己的 series，平台那些無 label 的 series 無害。若以「任一 series 缺 label」為準則，會把所有 K8s 原生 metric 永久 hard-block。故探測 `metric{tenant!=""}`：非空即 Pass。
-
-**輸出分三種**：
-
-| 觀察結果 | Validator 行為 | 為何 |
+| 觀察結果 | 處置 | 理由 |
 |---|---|---|
-| metric 有帶 `tenant` label 的 series | ✅ Pass | 該 metric 可 federate；共用 metric 上同時存在的無 `tenant` 平台 series 不影響（proxy 注入 `{tenant="<X>"}` 自動隔離） |
-| metric 有 sample、但**沒有任何** series 帶 `tenant` label | ⛔ **Hard block** | True positive failure mode——scrape config 沒打 label，federate 後對所有租戶都是 empty vector |
-| 過去 24h 完全無 sample | ⚠️ **WARN，不 block**——要求 admin 顯式 `--force` 才能通過 | Cold start（新 tenant deploy 新 service）/ sparse metric（`critical_error_count` 週發一次）都是合法情境；hard block 會卡死合法 whitelist 更新 |
+| 有帶 `tenant` 的 series | 通過 | 可以 federate；同一指標上沒帶 `tenant` 的平台 series 不影響 |
+| 有 series，但**沒有任何**帶 `tenant` | 擋下（400），不可強制 | scrape 設定沒打標籤，federate 之後對每個租戶都是空的 |
+| 過去 24 小時完全沒有 series | 警告：沒帶 `force` 回 400，帶 `force` 加理由才通過 | 剛上線的服務、一週才出現一次的稀疏指標都是合法情況；硬擋會卡死合法的白名單更新 |
+| 後端連不上或逾時 | 同上一列 | 查不到不能證明指標壞了 |
+| 標籤**名稱**像個資（`email`、`customer`、`user_ip` 等） | 同上一列 | 名稱推測必然不精準，交給人判斷 |
 
-`--force` bypass 路徑同時寫進兩處稽核軌跡：tenant-api 的 slog audit line，以及該次 git commit message 的 `[Bypass-Validator]` trailer（operator + reason + metrics）—— commit message 是 GitOps 不可繞、不會 rotate 的固化軌跡。hard block **不可** `--force`。**為什麼不直接 hard block 全部**：cardinality guard 也是 soft gate 設計（[ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) precedent）——平台級防護要區分「結構性錯誤（hard block）」與「資料時序性缺漏（warn + 人工確認）」，否則 false positive 把合法 ops 鎖死。
+區分「結構性錯誤（擋下）」與「資料時序上的缺漏（警告、人工確認）」是平台防護的一貫做法，例如 [ADR-017](./017-defaults-yaml-inheritance-dual-hash.md) 的基數防護；全部硬擋會讓誤判鎖死合法操作。
 
-### Token model
+強制通過時，tenant-api 寫一行警告日誌（操作者、理由、指標），並把同樣內容寫進這次 state store 寫入的稽核事件（`state_write` 的 `notes` 欄位）。白名單與租戶子集存在 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），不在 git 裡。
 
-| 屬性 | 設計選擇 | 理由 / trade-off |
+### Token
+
+| 項目 | 做法 | 理由 |
 |---|---|---|
-| **簽發方** | tenant-api `/api/v1/federation/tokens` POST | 與既有 tenant-api auth pipeline 一致；不另起 service |
-| **TTL** | 4h（hardcoded MVP，Helm value 可調） | 4h 在「短到撤銷不重要」與「長到 ops 不痛苦」之間平衡 |
-| **撤銷機制** | ⚠️ **無 server-side revocation list**（MVP）。⚠️⚠️ **Compensating control 強制要求**：API Gateway 必須實作嚴格 per-token + per-IP rate limiting（見 §Blast radius Layer 2），確保 4h 曝險窗內外洩 token 即便被併發濫用也無法把後端 storage CPU 打滿 | Trade-off：避免 token revocation table 的 cache / propagation / TTL 複雜度。換來代價：token 洩漏後**最多** 4h 曝險（前提：gateway rate limit 確實到位；缺它則 4h 曝險升級為 4h DoS 樂園）。Gateway rate limit **不是** nice-to-have，是放棄 revocation 的對價 |
-| **Scope binding** | token 內 embed `tenant_id` claim，proxy 強制 inject | proxy 不能信 query string 帶的 tenant_id |
-| **Refresh** | 過期前 tenant 自行重新簽發；無 sliding refresh | 簡化實作；4h 重簽對 self-service tenant 不痛 |
+| 簽發 | tenant-api `POST /api/v1/federation/tokens` | 沿用既有的 tenant-api 認證流程，不另起服務 |
+| 效期 | 預設 4 小時（`--federation-token-ttl` 或 `TA_FEDERATION_TOKEN_TTL` 可調） | 短到撤銷不再那麼關鍵，長到重簽不擾人 |
+| 範圍綁定 | JWT 內含 `tenant_id` claim；gateway 只用驗證過的 claim 設定租戶，不信請求裡帶的值 | 查詢字串或 header 裡的租戶 id 都可以偽造 |
+| 撤銷 | `DELETE /api/v1/federation/tokens/{id}` 把 `token_id` 寫進 `tenant-federation-store` ConfigMap 的撤銷集；gateway 掛載衍生的 `revoked.txt`，每 30 秒重讀一次，清單內的 token 回 403 | 撤銷要經 ConfigMap 同步與重讀，不是即時生效；撤銷紀錄被竄改的偵測見 [ADR-028](028-federation-revocation-tamper-evidence.md) |
+| 續期 | 到期前由租戶自己重新簽發；不做滑動續期 | 實作簡單；每 4 小時重簽對自助的租戶不痛 |
+| 每租戶上限 | 同時有效的 token 最多 16 個 | 讓「輪流用多個 token 放大配額」有上限（見 gateway 的每租戶限流） |
 
-**簽章金鑰**：RS256 簽章金鑰的生成 / 輪替由 `da-tools fed-key` 命令負責（issue [#518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/518)）——私鑰吐成 Kubernetes Secret manifest（不落地）、公鑰吐成 JWKS 供 gateway。每把公鑰的 `kid` 為其 **RFC 7638 thumbprint**；tenant-api 簽 token 時對載入金鑰算同一 thumbprint、注入 `kid` header，故 gateway `jwt_authn` 可用 `kid` O(1) 選鑰（輪替期 JWKS 多鑰並存也不會放大壞簽章 flood 的 RSA 成本）。計畫性輪替走 grace-period overlap、私鑰外洩走緊急汰換——標準流程見 [`federation-key-rotation-runbook.md`](../internal/federation-key-rotation-runbook.md)。
+**gateway 的限流是撤銷之外必備的補償控制**：撤銷生效前、或撤銷機制失效時，外洩的 token 在剩餘效期內仍可使用，限流保證它即使被並發濫用，也打不滿後端的 CPU。缺了限流，4 小時的曝險就變成 4 小時的阻斷服務窗口。
 
-### Blast radius：3-layer defense
+**簽章金鑰**：RS256 金鑰由 `da-tools fed-key` 產生與輪替。私鑰直接輸出成 Kubernetes Secret manifest 到 stdout（不落地），公鑰寫成 JWKS（公鑰集合的 JSON 格式）給 gateway。每把公鑰的 `kid` 是它的 RFC 7638 thumbprint（公鑰的確定性指紋）；tenant-api 簽 token 時對載入的金鑰算同一個 thumbprint 填進 `kid`，gateway 的 `jwt_authn` 因此可以直接按 `kid` 選鑰，輪替期間 JWKS 裡有多把鑰也不會讓偽造簽章的洪水放大 RSA 驗章成本。計畫性輪替與私鑰外洩的處理見 [`federation-key-rotation-runbook.md`](../internal/federation-key-rotation-runbook.md)。
 
-Blast-radius 控制分布於三層，每層做它最適合的事——`prom-label-proxy` 是極輕量的 label-injection middleware（解析 PromQL AST 注入 label 後把 request 原封轉給後端），不解析 response body、不追蹤 per-token state，無法獨力承擔 series cap 或 concurrency 控制。三層職責一覽：
+### 三層資源防護
 
-- **Layer 1 — Storage backend**：query 資源上限（sample / series cap + timeout），防 OOM-by-query。
-- **Layer 2 — API Gateway（Envoy）**：per-token / per-tenant 限流 + 並發控制，防 token-level abuse。
-- **Layer 3 — Proxy（prom-label-proxy）**：強制 `{tenant="<X>"}` 注入，租戶隔離的核心保證。
+prom-label-proxy 是很輕的中介層：解析 PromQL、注入標籤、把請求原樣轉給後端。它不解析回應、不追蹤每個 token 的狀態，扛不了 series 上限或並發控制。所以資源防護分在三層：
 
-三層由內而外標號（Layer 1 = 最內層 storage）；請求實際流向為 gateway → proxy → storage。
+- **儲存後端**：單次查詢的資源上限，防止一個查詢耗盡記憶體。
+- **gateway（Envoy）**：每個 IP、每個 token、每個租戶的限流，防止 token 層級的濫用。
+- **proxy（prom-label-proxy）**：強制注入 `{tenant="<X>"}`，租戶隔離的核心。
 
-#### Layer 1 — Storage backend（series / sample 上限）
+請求實際的流向是 gateway → proxy → 儲存後端。三層缺一不可，職責也不能錯放：指望 proxy 擋 series 上限，最後還是得自寫中介層，違背不自寫端點的初衷。
 
-| 後端 | Flag / Config | 防護對象 |
-|---|---|---|
-| Prometheus | `--query.max-samples`（單 query sample 總數上限） + `--query.timeout`（global query 超時） | 防 OOM-by-query |
-| VictoriaMetrics | `-search.maxUniqueTimeseries`（單 query 唯一 series 上限） + `-search.maxSamplesPerQuery` + `-search.maxQueryDuration` | 同上 |
+#### 儲存後端的查詢上限
 
-平台必須在部署時**強制配置**這些 flag。**Starting default**（上線後觀察實際 customer query pattern 再 tuning）：
-
-| Flag | Starting default | Tuning range | Rationale |
+| 後端 | 設定 | 起始值（上線後依實際查詢調整） | 說明 |
 |---|---|---|---|
-| Prom `--query.max-samples` | 5M | 5M–50M（Prom native 預設 50M）| federation read 比 internal eval 嚴；5M 是「典型 1000 series × 1d @ 30s scrape ≈ 3M」之上的保守起點，觀察 false-positive 再放寬 |
-| VM `-search.maxUniqueTimeseries` | 100k | 50k–300k（VM native 預設 300k）| 同上邏輯；100k 對應「能撐 cluster-wide dashboard panel 但擋 `count by (instance) (...)` 意外高基查詢」 |
-| Prom `--query.timeout` / VM `-search.maxQueryDuration` | 25s（storage；gateway 維持 30s）| storage < gateway | **Cascading timeout（非等值）**：storage 須**短於** gateway —— inner layer 先逾時才能砍 query、釋放記憶體並回精確 error code 給 gateway 記錄。兩層相等會 race：gateway 計時較早起跑、會先 504，Prometheus 卻還在跑、clean error 無處可回 |
+| Prometheus | `--query.max-samples` | 5M（可調 5M–50M；原生預設 50M） | 「1000 series × 1 天 × 30 秒抓取 ≈ 3M」之上的保守起點 |
+| Prometheus | `--query.timeout` | 25s | 見下方逾時說明 |
+| VictoriaMetrics | `-search.maxUniqueTimeseries` | 100k（可調 50k–300k；原生預設 300k） | 撐得起叢集層級的看板面板，擋住 `count by (instance) (...)` 這類意外的高基數查詢 |
+| VictoriaMetrics | `-search.maxSamplesPerQuery`、`-search.maxQueryDuration` | 25s（後者） | 同上 |
 
-#### Layer 2 — API Gateway（per-token concurrency + per-token rate limit）
+平台自帶的 Prometheus（`k8s/03-monitoring/deployment-prometheus.yaml`）已設 `--query.max-samples=5000000` 與 `--query.timeout=25s`。VictoriaMetrics 不是平台部署的元件，由使用它的人照上表設定（`helm/federation-gateway/README.md` 有說明）。超過 `--query.max-samples` 時 Prometheus 回 422。
 
-`prom-label-proxy` 沒有 per-token concurrency 原生支援 → 必須由前置 **API Gateway** 擋。Gateway 以 **Envoy**（`distroless` image）實作，交付為 `helm/federation-gateway` chart（issue [#507](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/507)）。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生 `jwt_authn` filter（純設定、audited、無 alg-confusion footgun）。
+**逾時要內短外長，不能相等**：儲存後端 25 秒、gateway 路由 30 秒。內層先逾時，才能砍掉查詢、釋放記憶體，並把精確的錯誤碼回給 gateway 記錄。兩層相等會互搶：gateway 的計時從請求抵達就開始，會先回 504，而 Prometheus 還在跑，乾淨的錯誤無處可回。
 
-Gateway 的 filter chain 採 cheap-before-expensive 排序：
+#### Gateway 驗章、撤銷與限流
+
+gateway 是 Envoy（distroless 映像：只含執行檔與必要函式庫、沒有 shell 與套件管理器的容器映像），交付為 `helm/federation-gateway`。選 Envoy 的關鍵：最不能錯的 RS256 驗章交給原生的 `jwt_authn` filter，純設定、不必自己寫驗章邏輯。
+
+filter 依「便宜的先做」排序：
 
 ```
-per-IP local_ratelimit
-  → jwt_authn（RS256 驗章，kid O(1) 選鑰）
-  → Lua（revoked-set 查驗 + 已驗證 tenant header 覆寫）
-  → per-token / per-tenant local_ratelimit
+每 IP 限流
+  → jwt_authn（RS256 驗章，按 kid 選鑰）
+  → Lua（Envoy 內嵌的腳本 filter：查撤銷集；以驗證過的 claim 覆寫租戶 header）
+  → 每 token 限流 → 每租戶限流
+  → buffer → 稽核用 Lua
   → router
 ```
 
-per-token + per-tenant 雙層限流以 wildcard descriptor 達成（防單 token 濫用 + 防 round-robin ≤16 token 的 Sybil）。revoked-set 由 Lua filter time-gated 重讀 ConfigMap projected volume。詳 `helm/federation-gateway` chart README。
+- 每 IP 限流在驗章之前，偽造 token 的洪水在花掉任何 RSA 運算之前就被丟掉。
+- 限流以驗證過的 `token_id`、`tenant_id` 為鍵，不以 IP 為鍵：否則同一個公司 NAT 後面的租戶會互相影響。每 token 限流擋單一外洩 token 的濫用；每租戶限流擋「輪流使用最多 16 個 token 來放大配額」。
+- chart 預設值：每 token 突發 10 次、持續每分鐘 15 次；每租戶突發 20 次、持續每分鐘 60 次；每 IP 突發 200、持續每秒 100 次。每 token 的可調範圍是每分鐘 15 到 60 次。
+- 刻意不用一般 Web API 的量級（例如每秒 10 次）：PromQL 查詢很耗 CPU 與記憶體，一個外洩 token 以每秒 10 次打 4 小時是十四萬多次查詢，足以打滿後端。
+- 所有限流都是每個 Envoy 實例各算各的：N 個副本時實際上限是 N 倍。限流是軟性、近似的控制，硬上限在儲存後端。
+- `prom-label-proxy` 模式下，Prometheus 的 `remote_read`（`/api/v1/read`）回 403：prom-label-proxy 無法對它注入標籤。路由前先把路徑正規化（合併重複斜線、解析 `.`／`..`、解碼 `%2F`），`/api/v1//read`、`/api/v1%2Fread` 這類變形也擋得住。
 
-**Rate limit 取值**：per-token sustained ≈ 30 req/min（平均每 2s 一次 query），對應 Grafana 預設 dashboard refresh interval（30s）× 多 panel 場景的合理上限；容忍「打開 dashboard 一次性發 ~10 個 panel query」的初始 burst。**刻意不用 web API 數量級（如 10 r/s）**：PromQL query 是 CPU/memory-expensive 操作；一個外洩 token 在 4h 曝險窗 + 10 r/s ≈ 144k 次 query，足以把後端 storage CPU 打滿。Web API 預設值對 TSDB read 而言錯了一個數量級。Tuning corridor：panel-heavy customer 可調高至 60 req/min；觀察到 abuse 則降到 15 req/min。
+#### 代理注入租戶標籤
 
-Rate-limit key 用 `token_id`（由 JWT claim 解出），**不是用 IP**——否則公司 NAT 後所有 tenant 互相影響。
+prom-label-proxy 在這一層只做一件事：把 `{tenant="<X>"}` 強制注入每個 selector。`<X>` 來自 gateway 設定的 `X-Tenant-Id` header，不來自租戶。
 
-#### Layer 3 — Proxy（label injection）
+注入必須同時涵蓋**查詢 API** 與 **metadata API**。Grafana 的變數下拉選單（例如 `label_values(pod)`）走的是 `/api/v1/series`、`/api/v1/labels`、`/api/v1/label/<name>/values`；沒擋住，租戶 A 會在自家 Grafana 的下拉選單裡看到租戶 B 的 pod 名稱、instance、主機名。chart 寫死 `-enable-label-apis`，把注入延伸到 `/api/v1/labels` 與 `/api/v1/label/<name>/values`（`/api/v1/series` 不論這個旗標都會注入），而且不開放覆寫。
 
-`prom-label-proxy` 在此層只做一件事：強制把 `{tenant="<X>"}` 注入所有 selector（核心安全保證）。
+上面三個是最常用的，不是全部。完整的 HTTP API 面由 federation E2E（`tests/federation-e2e/test_federation_e2e.py` 的 metadata API 情境）守住：proxy 服務的端點（查詢、metadata、rules、alerts）都限縮到該租戶；它不服務的端點（`/api/v1/targets`、`/api/v1/metadata`、`/api/v1/status/config` 與 `/api/v1/status/tsdb`、admin API、`/api/v1/write`）一律不回 200。
 
-> **Audit log 不在此層**：access log 由 **Layer 2 gateway** 產出（見 §Audit log + anomaly metric），因為只有 gateway 持有 `jwt_authn` 驗證過的 claims（`tenant_id` / `token_id`）；Layer 3 proxy 看不到 token。
+### 稽核日誌與指標
 
-**⚠️ Metadata API 防護承諾（critical）**：proxy 的 enforcement 必須**同時涵蓋 Query API 與 Metadata API**，否則跨租戶拓樸資訊外洩：
+稽核分兩個維度，存放的地方也不同。
 
-| API class | Endpoints | 為何必須涵蓋 |
-|---|---|---|
-| Query API | `/api/v1/query`, `/api/v1/query_range` | 明顯目標 |
-| **Metadata API** | `/api/v1/series`, `/api/v1/labels`, `/api/v1/label/<name>/values` | Grafana variable dropdown（`label_values(pod)` 等）走這些 endpoint。**沒擋 = tenant A 在自家 Grafana variable dropdown 看到 tenant B 的 pod name / instance / hostname → multi-tenant breach** |
+**資料面：誰查了什麼。** 由 gateway 產出，因為只有 gateway 持有 `jwt_authn` 驗證過的 claim（proxy 看不到 token）。每個請求一行 JSON，欄位：`ts`、`tenant_id`、`token_id`、`account_id`（只在 [ADR-021](021-tenant-log-query-federation.md) 的日誌查詢模式有值）、`method`、`path`（不含查詢字串，避免把放在 URL 裡的 token 寫進日誌；截斷 2048 字元）、`query`、`status`（原始 HTTP 碼）、`duration_ms`、`upstream`、`response_flags`。
 
-> ⚠️ 上表 endpoints 為**最常見**且 Grafana 必用的子集，**非 exhaustive**。Prom HTTP API 還有 `/api/v1/metadata`、`/api/v1/targets`、VM `/api/v1/status/active_queries` 等也可能洩漏 metadata。實作的 acceptance criteria 含「完整 Prom HTTP API surface audit」，把所有 query/metadata endpoint 逐一驗 enforcement coverage（不只本表列出的 3 個）。
+- `query`：Envoy 的存取日誌沒有讀取請求本文的變數，所以由稽核用的 Lua 統一抽出 PromQL：GET 取自查詢字串、POST 取自表單本文，格式一致。buffer 與稽核 Lua 排在限流**之後**，被限流拒絕的請求不會被緩衝進 Envoy 記憶體。
+- 刻意不記「回傳了幾條 series」：那要 Envoy 緩衝並解析回應本文，成本太高；資源上限靠儲存後端執行，不靠日誌統計。也沒有「命中哪條白名單規則」：白名單不在查詢路徑上執行。
 
-prom-label-proxy 必須**顯式啟用** label/metadata API enforcement（`--enable-label-apis`；早期版本預設 OFF）。Helm chart 必須 hardcode 啟用，**不開放 customer override**。Smoke test：簽 token A，用它連 `/api/v1/series?match[]={__name__=~".+"}` 查所有 series，驗證 response 不含任何 tenant B 的 label value；同樣對 `/api/v1/labels` 與 `/api/v1/label/pod/values` 各驗一次，並擴張至上述 non-exhaustive note 列出的其他 endpoint。
+日誌寫兩份：一份到 stdout（給日誌採集器，持久度等同節點的容器日誌輪替）；一份到 pod 內的 emptyDir（隨 pod 建立、隨 pod 刪除的暫存目錄），給 gateway pod 裡的 audit-metrics sidecar（與 gateway 同 pod 執行的輔助容器，這裡是 Vector）讀取並產生指標，這份是暫存的指標來源，不是正式紀錄。裝了平台的 Vector 與 VictoriaLogs chart 後，stdout 那份會被收進中央日誌庫的平台分區（`0:0`），可以查詢超過 pod 生命週期的歷史。
 
-#### Default 值 rationale（上線後實測可調）
+指標 **`tenant_federation_requests_total{tenant,status}`** 由 sidecar 產生（Envoy 原生的 stats 產生不了每租戶的高基數標籤）。`status` 是 HTTP 碼的分桶：
 
-| 控制項 | 預設值 | Where | Rationale |
-|---|---|---|---|
-| Concurrency / token | 4 | Gateway L7 | 一個 tenant 的 Grafana / 自管 alert eval / oncall 並行 query 通常 ≤ 3；4 留 headroom 擋明顯 abuse |
-| Request timeout | gateway 30s / storage 25s | Gateway L7 + storage backend | Grafana 預設 query timeout 在 30s 附近；長跑離線分析應走 batch export 非 federation 即時 path。storage 取 25s（< gateway）為 **cascading timeout** —— inner 先逾時、乾淨回錯；等值會 race |
-| Series per query | 100k | Storage backend | 100k series 是「撐得起 cluster-wide dashboard panel」與「不至於 OOM」的中間值；擋住 `count by (instance) (...)` 類意外高基查詢 |
-| Sample per query | 5M | Storage backend | 與 series cap 互補：tenant 可能拉低基數但長時段範圍 |
-
-**三層缺一不可，且職責不可錯位**：proxy 擋 label 注入；storage 擋 query 資源；gateway 擋 token-level abuse。錯放層（例如指望 proxy 擋 series cap）= 工程上做不到，最後還是得自寫 middleware，**違背本 ADR 不自寫 endpoint 的初衷**。
-
-### Audit log + anomaly metric
-
-audit log（issue [#511](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/511)）**分兩個維度，物理分離**。
-
-#### Data-plane audit（誰查了什麼）
-
-由 **Layer 2 gateway（Envoy）** 產出，不經 tenant-api。每個 federation request 一筆 JSON：
-
-```jsonc
-{
-  "ts": "2026-05-11T10:23:00Z",
-  "tenant_id": "db-anonymized-001",
-  "token_id": "ftk_8a3f...",
-  "method": "POST",
-  "path": "/api/v1/query_range",              // 不含 query string，截斷 2048 字元
-  "query": "rate(http_requests_total[5m])",   // Lua 統一抽取，見下
-  "status": 200,                              // 原始 HTTP code
-  "duration_ms": 1843
-}
-```
-
-- **`query`**：Envoy access log 無 native 的 request-body 變數，故由 audit Lua filter（`audit_extract.lua`）**統一抽取** PromQL —— GET 取自 URL query-string、POST 取自 form body，URL-decode、截斷 2048 字元，GET/POST 輸出格式一致。audit / `buffer` filter 置於限流器**之後**，被限流拒絕的請求因此不進 Envoy 記憶體緩衝。
-- **`status`**：access log 記**原始 HTTP code**；下游 metric 的 `status` label 才是分桶 enum。
-- audit schema **不含** `matched_whitelist_rule`（whitelist 不在查詢路徑執行，沒有「規則匹配」這回事）與 `series_returned`（Envoy 不該 buffer 並解 response body 來數 series——成本過高；blast-radius 的執行靠 storage 的 `--query.max-samples`，不靠 log 算）。
-
-新 metric **`tenant_federation_requests_total{tenant,status}`** 由 gateway pod 的 **audit-metrics sidecar** tail access log 產出（原為 mtail；#1278 D1 起改為上游 Vector 跑 `files/audit-metrics.vector.yaml`，metric 名稱、label 與 bucket 不變）（Envoy 原生 stats 無法產生 per-tenant 高基數 label）。`status` label 為 HTTP code 分桶 enum：
-
-| enum | HTTP | 意義 |
+| 值 | HTTP | 意義 |
 |---|---|---|
 | `ok` | 2xx | 成功 |
-| `client_aborted` | 0 / 499 | client 在收到回應前中斷連線（如 Grafana 切換時間範圍 / 下拉選單時取消查詢）；非平台拒絕，不計入 rejection rate |
+| `client_aborted` | 0 / 499 | client 在收到回應前中斷（例如 Grafana 切換時間範圍時取消查詢）；不是平台拒絕 |
 | `rate_limited` | 429 | gateway 限流 |
-| `auth_failed` | 401 / 403 | JWT 驗證失敗 / token 撤銷 |
-| `bad_request` | 其他 4xx（含 422）| 錯誤請求；422 = storage `--query.max-samples` 超標（blast-radius 觸發訊號） |
+| `auth_failed` | 401 / 403 | JWT 驗證失敗或 token 已撤銷 |
+| `bad_request` | 其他 4xx（含 422） | 錯誤請求；422 是儲存後端的查詢上限觸發 |
 | `backend_error` | 5xx | 平台故障 |
 
-配 alert `FederationRejectionRateAnomaly`（per-tenant rejection ratio 異常 → `severity: warning`，notify platform ops；非 `severity: none` inhibit sentinel）。該規則 join `tenant_metadata_info`，只評估仍在 conf.d 的活躍租戶 —— 已退租租戶的殭屍 token 持續被 `403` 拒絕（撤銷後、4h TTL 未到期前計入 `auth_failed`，見下「Metric 邊界」）不會誤報（[#550](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550)）。
+**指標的邊界**：只計有 `tenant_id` 的請求。偽造或過期的 JWT 在 claim 注入前就被 `jwt_authn` 以 401 擋下，日誌裡沒有 `tenant_id`，不計入（它們沒有租戶，屬攻擊噪音，看 Envoy `jwt_authn` 自己的 stats）。被撤銷的 token 不同：它是合法 JWT，由撤銷集擋下回 403，計入 `auth_failed`。
 
-> **Metric 邊界**：audit-metrics sidecar 以 `tenant_id` 為必要分桶欄位，故**純 JWT 驗證失敗**的請求（偽造 / 過期 token —— `jwt_authn` 在 claim 注入前就 401，access log 無 `tenant_id`）**不計入** `tenant_federation_requests_total`：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy `jwt_authn` 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 `auth_failed`。
+告警 **`FederationRejectionRateAnomaly`**（`warning`，通知平台維運）：某租戶 10 分鐘內被拒（`rate_limited`、`auth_failed`、`bad_request`）的比例超過 50%、且被拒速率超過約每分鐘 1 次，持續 15 分鐘。規則以 `and on (tenant) tenant_metadata_info` 只評估仍在 conf.d 的租戶：已退租租戶的殘留 token 在到期前持續被 403 擋下，不會誤報。看板 `k8s/03-monitoring/federation-audit-dashboard.json` 有請求量、拒絕率與三層拒絕率的面板。
 
-#### Control-plane audit（誰授權了什麼）
+**控制面：誰授權了什麼。** 不另建儲存，用既有的兩處：
 
-federation 控制平面操作（簽發／撤銷 token、改 whitelist／subset、`--force` bypass）的稽核軌跡**是既有的兩個持久層，不需另建 store**：
+- token 的簽發與撤銷：`tenant-federation-store` ConfigMap 裡的 token 紀錄（`token_id`、`tenant_id`、`issued_by`、`issued_at`、`expires_at`）與撤銷集。
+- 白名單與子集的變更：tenant-api 每次寫 state store 的 `state_write` 稽核事件（作者、寫入的鍵；強制通過時含理由）。
 
-- **token 生命週期** → `tenant-federation-store` ConfigMap 內的 token `Record`（`token_id` / `tenant_id` / `issued_by` / `issued_at` / `expires_at`）+ revoked set。
-- **whitelist / subset 變更** → GitOps commit 歷史，每次變更一個 commit，帶 author 與（`--force` 時）bypass trailer（ADR-009 / 011）。
-- tenant-api 的 slog request log 為輔助訊號（走 stderr，非持久查詢來源）。
+這兩處加上 tenant-api 的請求日誌，都只是日誌層級的紀錄；**它們不能當計費依據**：稽核日誌記的是請求**次數**，不是查詢**成本**（掃了幾條 series、花了多少 CPU）。
 
-#### 持久化邊界（已知 trade-off）
+### 範例
 
-data-plane audit log 的**持久、可中央查詢的合規儲存不在本 ADR 交付範圍**。撰寫本 ADR 時平台沒有 log 聚合 stack（無 Loki / ELK / Fluentd / Vector；⚠️ [ADR-021](021-tenant-log-query-federation.md) 之後平台已出貨 Vector＋VictoriaLogs chart，部署後 gateway 的 audit 列會進平台分區 `0:0`）；把 audit log 寫 per-pod PVC 是 cloud-native anti-pattern——RWO PVC 在 gateway 的 `replicaCount>1` / `podAntiAffinity` 下根本無法多副本掛載，RWX 則拖入 NFS／EFS 依賴。交付的是：
+**proxy 注入的標籤。** 預設值渲染 `helm/federation-proxy`：
 
-1. **aggregate 層**——`tenant_federation_requests_total` 進 Prometheus，本即 durable + queryable（誰拉多少、拒絕率多少）。
-2. **per-request 層**——結構化 JSON 寫 gateway stdout（collector-ready），持久度等同 node container-log 輪替，**尚非中央可查**；另有一份 in-pod emptyDir mirror 供 audit-metrics sidecar，為 ephemeral metrics feed，非系統紀錄。
+```text
+$ helm template f helm/federation-proxy | grep -A6 'args:'
+          args:
+            - -label=tenant
+            # Per-tenant value comes from a gateway-set header, never the
+            # client — the gateway verifies the JWT first (ADR-020 §代理注入租戶標籤).
+            - -header-name=X-Tenant-Id
+            - -upstream=http://prometheus.monitoring.svc:9090
+            - -insecure-listen-address=0.0.0.0:8080
+```
 
-真正的中央 forensic log store（node-level log shipper + Loki／SIEM + retention policy）為 follow-up [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)。觸發條件：合規客戶要求中央 forensic 查詢，或 stdout audit log volume 超出 node container-log 輪替可用保留。
+注入本身用 chart 釘的同一版 prom-label-proxy（v0.16.2）的 `injectproxy.NewPromQLEnforcer` 跑（chart 沒設 `-error-on-replace`，所以租戶自帶的 `tenant` 條件被覆寫而不是報錯）：
 
-> **與 chargeback 無關**：把 audit log 變中央可查（#539）解決的是「合規 forensic 查詢」，不是「計費」—— audit log 記**請求次數**、不記**查詢成本**（掃了幾條 series、耗多少 CPU），不能當帳單來源。federation 流量計費為何不能靠這條 log、正解為何，見 §Future Work item 5。
+```text
+rate(http_requests_total[5m])
+  -> rate(http_requests_total{tenant="tenant-a"}[5m]) err=<nil>
+count by (tenant) (up{tenant="tenant-b"})
+  -> count by (tenant) (up{tenant="tenant-a"}) err=<nil>
+```
 
-## 為什麼不用其他方案
+第二個查詢是試探別的租戶：要求 `tenant-b` 的條件被換成自己的 `tenant-a`。
 
-### 替代方案 A：Self-built federation endpoint（純自寫）
+**白名單收錄檢查。** 對一個假後端呼叫收錄檢查（`fedpolicy.AdmissionValidator.Check`）：後端裡 `http_requests_total` 有帶 `tenant` 與 `customer_email` 標籤的 series；`node_load1` 只有不帶 `tenant` 的 series；`batch_job_failures` 過去 24 小時沒有任何 series。結果：
 
-「在 tenant-api 加 `/api/v1/federation/read` proxy 到後端 storage，自己做 label rewrite。」
+```text
+http_requests_total -> state=pass pii=[customer_email] err=<nil>
+  reason: metric "http_requests_total" has series carrying the "tenant" label
+node_load1 -> state=hard_block pii=[] err=<nil>
+  reason: metric "node_load1" has samples but no series carries a "tenant" label; federating it would return an empty vector for every tenant — fix the scrape/relabel config first
+batch_job_failures -> state=warn pii=[] err=<nil>
+  reason: metric "batch_job_failures" has no samples in the last 24h0m0s — legitimate for a cold-start or sparse metric, but unverifiable; re-submit with force to proceed
+```
 
-**問題**：
+`http_requests_total` 雖然通過，標籤名 `customer_email` 命中個資推測，所以與 `batch_job_failures` 一樣，要帶 `force` 與理由才能加進白名單；`node_load1` 不論是否帶 `force` 都會被擋。
 
-1. **Label sanitization 是地雷**：後端 storage 不同 metric 的 label 矩陣不一致（有些 metric 帶 `tenant`，有些只帶 `cluster_id` + reverse mapping）。自寫 sanitizer 漏一個矩陣維度 = multi-tenant breach。prom-label-proxy 在 production 跑了多年，這類 corner case 已被解掉
-2. **Engineering cost**：6+ months 寫一個「比現成開源 proxy 還弱」的東西，無 value-add
-3. **Maintenance cost**：自寫的安全 patch 要自己追
+## 後果與已知限制
 
-**結論**：拒絕。Open-source proxy 是「贏家通吃」場景：自寫只虧不賺。
+**得到的**
 
-### 替代方案 B：純 RBAC on remote_read（無 proxy）
+- 租戶拿到標準的 Prometheus 查詢介面，接進既有的 Grafana 與值班流程沒有摩擦。
+- 標籤層級的隔離由長期在正式環境使用的開源 proxy 保證；資源隔離由儲存後端執行；限流由 gateway 執行。三層用的都是成熟的元件，不是自寫。
+- proxy 抽象掉了後端，儲存後端換成什麼（Prometheus／Thanos／VictoriaMetrics）不影響 federation 介面。
 
-「給 tenant 後端 Prom 開 read-only user，靠 storage 層 RBAC 做隔離。」
+**代價**
 
-**對 VM 客戶**：VictoriaMetrics 沒有 native multi-tenant RBAC——這條路對 VM 客戶不成立。
+- 三個元件（proxy、gateway、儲存後端）要一起協調：每次上游升級都要跨層回歸測試，任一層設錯都可能造成靜默失效或安全破口。prom-label-proxy 上游有不相容變更時，chart 要跟著改。
+- VictoriaMetrics 叢集版的隔離不走 proxy，而是 gateway 的路徑改寫，架構上多一條分支。
+- 撤銷要經 ConfigMap 同步與 gateway 每 30 秒的重讀才生效；在那之前，以及撤銷機制本身失效時，外洩 token 的曝險只靠限流收斂。
+- 資料層前提：白名單裡的每個指標都必須在抓取或寫入階段帶 `tenant` 標籤，收錄檢查是必需的，不是加分項。
+- metadata API 的覆蓋是不顯眼的風險：容易只想到 `/api/v1/query` 而漏掉 `/series`、`/labels`；E2E 的 metadata 情境是這個風險的安全網。
+- 收錄檢查的強制通過留了人為判斷的空間：稽核紀錄只能事後追蹤，誤用仍可能埋雷。
+- 每個請求都寫一行稽核日誌，高頻拉取的租戶會產生不小的日誌量。
 
-**對 Prom 客戶**：
+**已知限制**
 
-1. **Prometheus 本身沒 multi-tenant RBAC**：要靠 Cortex / Mimir 這種第三方層做，但既有平台後端不是 Mimir（見 `byo-prometheus-integration.md`，平台**不**強制客戶用特定後端）
-2. **PromQL metadata leakage**：tenant 可以寫 `count by (tenant) (up)` 之類的 query 探測其他 tenant 是否存在；純 RBAC（檔案級權限 / basic auth）擋不掉這類查詢層資料外洩。**proxy 方案如 prom-label-proxy 在 query path 強制注入 `{tenant="<X>"}` matcher 才擋得住**——這正是它存在的原因
-3. **Audit 缺口**：純 RBAC 只記「誰連線」，不記「誰拉了什麼 query / 多少 series」；compliance 要求的查詢層稽核做不到
+- **已決定、尚未實作：每個 token 的並發上限。** 本 ADR 決定在 gateway 限制每個 token 同時進行的查詢數（起始值 4：一個租戶的 Grafana、自管告警評估、值班查詢並行通常不超過 3）。`helm/federation-gateway` 目前只有速率限流，沒有每 token 的並發限制；並發目前只受儲存後端與限流間接約束。
+- **每 token 限流的實際上限隨 gateway 副本數變動。** 本 ADR 決定每 token 持續約每分鐘 30 次（對應 Grafana 預設 30 秒刷新、多面板的看板），可調範圍每分鐘 15 到 60 次。chart 的設定是每個 Envoy 實例每分鐘 15 次：預設 2 個副本時合計約每分鐘 30 次，與決定相符；自動擴展到上限 8 個副本時約每分鐘 120 次，超出 15 到 60 的範圍。要固定上限，得改用全域限流（例如以 Redis 為後端），目前沒有。
+- **強制通過收錄檢查的稽核只在 tenant-api 的日誌裡。** 操作者、理由、指標寫在 tenant-api 的警告日誌與 `state_write` 稽核事件；白名單存在 state store，沒有 git 歷史。這份紀錄能保留多久，等於 tenant-api 日誌的保留期。
+- **稽核日誌沒有中央、可長期查詢的合規儲存。** stdout 那份的保留等同節點的容器日誌輪替；裝了平台的 Vector 與 VictoriaLogs 才收進中央日誌庫，但它的保留期與合規查詢需求沒有在本 ADR 定義。不寫每個 pod 自己的 PVC：ReadWriteOnce 的 PVC 在 gateway 多副本時無法同時掛載，ReadWriteMany 又引入 NFS／EFS 依賴。
+- **租戶內不再細分。** 白名單與子集只有兩層，沒有「租戶內的子團隊範圍」。需要時 schema 要從 `{平台白名單, 租戶子集}` 擴成三層，等有租戶提出再做。
+- **沒有合規角色分離。** 合規、稽核、操作者的權限沒有分開，等有合規客戶（SOX、ISO 27001、SOC 2）要求時再做。
+- **series 上限一刀切。** 每個租戶套同樣的上限，沒有依歷史流量自動調整。
+- **不能依 federation 流量計費。** 稽核日誌只有請求次數，分不出一次拉 10 條 series 還是 10 萬條。要計費得開儲存後端的查詢日誌（Prometheus 的 `query_log_file`、VictoriaMetrics 的查詢日誌），送進中央日誌庫，由離線管線算每個 `tenant_id` 實際掃描的 series 數與 CPU 時間。
+- **新租戶的冷啟動。** 剛上線、還沒有資料的租戶查到的是空結果，不是錯誤；租戶指南要說明。
 
-**結論**：拒絕。沒有 universal 後端 RBAC；prom-label-proxy 本來就是補這缺口的方案。
+## 考慮過的替代方案
 
-### 替代方案 C：Push-based（remote_write to tenant）
+### 自寫聯邦端點
 
-「平台主動 remote_write tenant 自己的 metrics 到 tenant 端 Prom/VM。」
+在 tenant-api 加一個端點直接轉給儲存後端，自己改寫查詢。不採用：
 
-**問題**：
+1. 標籤過濾是地雷：不同指標的標籤組合不一致（有的帶 `tenant`，有的只帶 `cluster_id` 再反查），自寫的過濾漏一個維度就是跨租戶外洩。prom-label-proxy 已在大量正式環境處理過這類邊角情況。
+2. 工程成本：花數個月寫一個比現成開源 proxy 還弱的東西，沒有附加價值。
+3. 維護成本：自寫元件的安全修補要自己追。
 
-1. **逆向 trust**：平台要主動連到 tenant 內網，network ingress 與 firewall 規則複雜度爆炸
-2. **Tenant 控制權**：tenant 沒法選擇拉什麼、何時拉、拉多少；只能照平台 push 的 schedule
-3. **Backpressure**：tenant 端 storage 滿了 / 慢了，會反壓回平台 remote_write queue
-4. **Multi-tenant ergonomic 倒置**：tenant N 個的話平台要維護 N 條 outbound remote_write，運維極差
+### 只靠儲存端的權限控管
 
-**結論**：拒絕。Pull-based 是 Prom ecosystem 的 first-principle，不要違背它。
+給租戶開後端的唯讀帳號，靠儲存層的權限做隔離。不採用：
 
-### 替代方案 D：label-injection proxy（採用）
+1. VictoriaMetrics 沒有原生的多租戶權限控管；Prometheus 本身也沒有，要靠 Cortex／Mimir 這類第三方層，而平台不強制客戶用特定後端（見 [`byo-prometheus-integration.md`](../integration/byo-prometheus-integration.md)）。
+2. 擋不住查詢層的資訊外洩：租戶可以寫 `count by (tenant) (up)` 探測其他租戶是否存在；檔案權限或 basic auth 擋不住這種查詢。要在查詢路徑上注入 `{tenant="<X>"}` 才擋得住，這正是 proxy 存在的原因。
+3. 稽核缺口：權限控管只記「誰連線」，不記「誰查了什麼」。
 
-優點（vs A/B/C）：
+### 平台主動推送
 
-- **Engineering cost**：用既有開源 proxy + Helm 整合，相對自寫 6+ months 是數量級的節省
-- **Label injection 安全性**：prom-label-proxy 在 label injection / query rewrite 範疇是 multi-year production-hardened（**注意 scope 限定**：proxy 不負責 series cap / 並發控制——那些靠 storage backend + API gateway，見 §Blast radius 3-layer。但每層用的都是 well-established 工具，不是自寫）
-- **Ecosystem 對齊**：Prom 客戶看到 prom-label-proxy = 熟悉，沒新東西要學
-- **後端解耦**：proxy 在「客戶 → 後端 storage」中間，後端 storage 換什麼（Prom / VM / Mimir）proxy 都吃
+平台用 `remote_write` 主動把租戶的指標推到租戶端。不採用：
 
-缺點（已接受）：
+1. 信任方向反過來：平台要主動連進租戶內網，網路與防火牆規則複雜度暴增。
+2. 租戶失去控制權：拉什麼、何時拉、拉多少都只能照平台的排程。
+3. 背壓：租戶端儲存滿了或變慢，會反壓回平台的 `remote_write` 佇列。
+4. N 個租戶就要維護 N 條外送 `remote_write`，維運極差。
 
-- **3 component coordination**（proxy + gateway + storage backend）比自寫單 endpoint 多三套變動點，每次 upstream 升級要 multi-layer regression
-- VM cluster 模式的隔離不走 proxy，改由 gateway URL rewrite 處理——架構上多一條分支
+拉取是 Prometheus 生態的基本模式，不要違背它。
 
-**結論**：採用。本 ADR 主決策。Multi-component 缺點 acceptable，因為每層都是 well-established 工具，不是自寫——比自寫 endpoint 的單點變成「全平台單點 multi-tenant breach 風險」要好。
+### 代理選型：prom-label-proxy 而非 vmauth
 
-### Proxy 選型：prom-label-proxy 而非 vmauth
+曾考慮「VictoriaMetrics 客戶走 vmauth、Prometheus 客戶走 prom-label-proxy」。不可行：
 
-採用 label-injection proxy 後，仍要在 vmauth 與 prom-label-proxy 間選一個。設計初稿曾規劃「VM 客戶走 vmauth、Prom 客戶走 prom-label-proxy」的配對，盤點後確認不可行：
+1. vmauth 是認證路由器，不解析 PromQL、不注入標籤；它的多租戶只靠把使用者路由到 VictoriaMetrics 叢集版的 `accountID` 路徑，對單機版沒有隔離能力。
+2. vmauth 依靠**靜態** `auth.yml` 的帳號或 bearer token 路由，消化不了 tenant-api 動態簽發、4 小時到期的 RS256 JWT；每次簽發都重寫 `auth.yml` 不可行。
 
-1. **vmauth 不做 label 注入**：vmauth 是 auth router，不解析 PromQL、不注入 label matcher。其多租戶僅靠把使用者路由到 VictoriaMetrics cluster 的 `accountID` 路徑達成，對單機 VM 無隔離能力。
-2. **vmauth 吃不下動態 JWT**：vmauth 靠**靜態 `auth.yml`** 的 username / bearer token 路由，無法消化 tenant-api 動態簽發的 RS256 federation JWT（4h TTL，每次簽發都重寫 `auth.yml` 不可行）。
+所以統一採 prom-label-proxy；VictoriaMetrics 叢集版由 gateway 改寫路徑處理。
 
-故統一採 prom-label-proxy。VictoriaMetrics **cluster** 的租戶隔離不走 proxy，改由 API gateway 直接 URL-rewrite 到 `/select/<accountID>/prometheus/`（gateway 已從驗證過的 JWT 取得 `tenant_id`）。
+## 相關
 
-## 實作計畫
-
-本 ADR 經 v2.9.0 federation epic（[#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)）實作完成，工作分解：
-
-| 階段 | 內容 |
-|---|---|
-| 1 | 本 ADR draft + 外部 adversarial review |
-| 2 | prom-label-proxy 整合 + `helm/federation-proxy` chart |
-| 3 | API Gateway（Envoy）rate-limit `helm/federation-gateway` chart + JWT claim extraction |
-| 4 | Storage backend tuning：平台 Prometheus deployment 加 `--query.max-samples` / `--query.timeout`（BYO-VM 的 `-search.maxUniqueTimeseries` 等以文件交代，VM 非平台部署元件）|
-| 5 | tenant-api token endpoint：`POST/GET/DELETE /api/v1/federation/tokens` + 簽章 + ConfigMap-backed 持久化 |
-| 6 | 2-tier whitelist/subset policy schema + admission validator（`tenant` label-enrichment 驗證，擋 empty-vector silent failure）|
-| 7 | Audit log + anomaly metric：結構化 log + sentinel alert + Grafana dashboard |
-| 8 | Metadata API smoke test：簽 token A 驗 `/series`/`/labels`/`/label/<name>/values` 都不洩 tenant B 拓樸 |
-| 9 | 端對端整合測試 + user-facing guide + Helm chart README + sample policy |
-
-各階段的 sub-issue 與 PR 追溯見 epic [#380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)。設計過程中，外部 adversarial review 補入了三層 blast-radius defense（原稿誤把三件組全放 proxy layer）、admission validator 的 `tenant` enrichment 驗證、以及 Metadata API smoke test——這些都已併入上表。
-
-## 後果（Consequences）
-
-### 正面
-
-- Tenant 拿到 standards-compliant federation 介面（Prom remote_read / VM read API），整合既有 oncall workflow 零摩擦
-- Platform engineering cost 相對自寫 6+ months 是數量級的節省
-- Multi-tenant **label-level** isolation 由 production-hardened proxy 保證；resource isolation 由 storage backend 強制；rate isolation 由 API gateway 強制——三層每層都是 well-established 工具，不是自寫
-- 後端 storage 演進不影響 federation 介面（proxy 抽象層解耦）
-- 2-tier policy 讓 platform 與 tenant 各自有 audit-able 控制點
-
-### 負面
-
-- **3-component coordination**（proxy + API gateway + storage backend）——每次 upstream 升級要 multi-layer regression；任一層配錯都會造成 silent failure 或安全破口
-- Token TTL 4h + 無 revocation list = token 洩漏曝險窗 4h；**critical dependency on gateway rate limit**——gateway 配錯 → 4h 變 DoS 樂園
-- **Data-layer prerequisite**：所有 whitelist 列入的 metric 必須在 ingest/scrape 階段帶 `tenant` label；admission validator 是必需，不是 nice-to-have
-- **Metadata API coverage 是非顯性風險**：prom-label-proxy `--enable-label-apis` 是顯式 flag——Helm chart 設計時容易只想到 `/api/v1/query` 而漏掉 `/series` / `/labels`；smoke test 是這個非顯性風險的安全網
-- **Admission validator soft-gate 留人為判斷空間**：`--force` 路徑（針對 cold-start / sparse-metric）依賴 admin 判斷正確性；audit log 是事後追蹤手段，misuse 仍可能埋雷
-- Domain layer scope 在 MVP 缺席，sub-team 客戶來時要 schema migration
-- prom-label-proxy 上游 break change，platform Helm chart 須同步更新
-- Audit log size：每個 federation request 寫一筆 → tenant 高頻拉時 log volume 不小，需 retention policy
-
-### 中性
-
-- 新 tenant-api endpoint 一組（`/api/v1/federation/*`）— 比照既有 `/api/v1/events` / `/api/v1/tenants` 風格
-- 文件多一份 [`docs/integration/tenant-federation.md`](../integration/tenant-federation.md) — 租戶 onboarding 操作指南（與 [`federation-integration.md`](../integration/federation-integration.md) ADR-004 平行）
-- 新增 platform Grafana dashboard：3-layer rejection rate（gateway 429 / proxy 4xx / storage 5xx）給 platform ops 觀察 blast radius hit rate
-
-## Future Work
-
-按優先排序：
-
-1. **Server-side revocation list**（觸發條件：compliance 客戶 RFP 顯式要求 / 第一次 token 洩漏事件）。設計時須處理 cache propagation TTL（典型 5min vs 即時 invalidate 二選一）
-2. **Domain-layer policy（3-tier）**（觸發條件：tenant 內 sub-team 隔離需求）。schema 從 `{platform_whitelist, tenant_subset}` 擴成 `{platform_whitelist, tenant_subset, domain_scope}`
-3. **3-tier permission model**（compliance / audit / operator 角色分離）— 觸發條件：合規客戶（SOX / ISO 27001 / SOC 2）。可能與「server-side revocation」同時 trigger，一起做
-4. **Series cap auto-tuning**：依 tenant 歷史 federation 流量 dynamic 調 `max_series_per_response`（避免一刀切過鬆 / 過嚴）
-5. **Federation 流量 chargeback**（觸發條件：平台商業化、federation 流量要計費）。**不可**靠 gateway audit log 加總 —— `tenant_federation_requests_total` 只計「請求**次數**」，分不出一次拉 10 條 series 還是 100,000 條（IV-2f 刻意砍掉 `series_returned`：Envoy 不該 buffer + 解壓 + 解析 response body 數 series，成本過高），一次重查詢與一次輕查詢計同樣的帳不可行。正解：開後端 storage 的 query logging（Prometheus 的 `query_log_file` 全域設定 / VictoriaMetrics 的 query log）→ 倒進中央 log store → 由離線大數據 pipeline 非同步算每個 `tenant_id` 實際掃描的 series 數與 CPU 時間，作為企業級帳單來源。中央 log store 基礎設施可與 item 6 / [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539) 一起評估（#539 收 gateway audit log、chargeback 另需 storage query log 進同一個 store）。前置盤點見 [#552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/552)。
-6. **中央 forensic log store**：node-level log shipper + Loki／SIEM + retention policy，把 data-plane audit log 變成中央可查的合規儲存（follow-up [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)）
-
-## 關聯
-
-- **[ADR-004 (Federation — Central-Exporter-First)](./004-federation-central-exporter-first.md)** — 平台內部多叢集 federation。本 ADR 與之**互補**（platform-internal vs cross-boundary），非取代
-- **[ADR-009 (Tenant Manager CRUD API)](./009-tenant-manager-crud-api.md)** — tenant-api 既有 endpoint pattern，本 ADR 的 token endpoint 沿用其 conventions
-- **[`docs/integration/tenant-federation.md`](../integration/tenant-federation.md)** — 本 ADR 的租戶 onboarding 操作指南（IV-2h）
-- **[`docs/integration/victoriametrics-integration.md`](../integration/victoriametrics-integration.md)** — §7「已知 gap / Future Work」table 已預先 cross-link 本 ADR
-- **[Issue #380](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/380)** — 本 ADR + federation 實作 epic
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐⭐⭐ |
-| [009-tenant-manager-crud-api](009-tenant-manager-crud-api.md) | ⭐⭐ |
-| [federation-integration](../integration/federation-integration.md) | ⭐⭐ |
-| [victoriametrics-integration](../integration/victoriametrics-integration.md) | ⭐⭐ |
-| [README](README.md) | ⭐⭐ |
+- [ADR-004](./004-federation-central-exporter-first.md)：平台內部的多叢集 federation，與本 ADR 互補，不是取代。
+- [ADR-009](./009-tenant-manager-crud-api.md)：tenant-api 既有的端點慣例，token 端點沿用。
+- [ADR-021](021-tenant-log-query-federation.md)：租戶在平台上查自己的日誌，沿用本 ADR 的 gateway 與 token。
+- [ADR-028](028-federation-revocation-tamper-evidence.md)：撤銷紀錄被竄改的偵測。
+- [`tenant-federation.md`](../integration/tenant-federation.md)：租戶上手指南；[`victoriametrics-integration.md`](../integration/victoriametrics-integration.md)：VictoriaMetrics 整合。
+- [`tenant-offboarding-runbook.md`](../internal/tenant-offboarding-runbook.md)：退租時清掉 federation token 與子集紀錄。
+- 實作位置：`helm/federation-proxy/`、`helm/federation-gateway/`（`files/envoy.yaml`、`files/revoked_check.lua`、`files/audit_extract.lua`、`files/audit-metrics.vector.yaml`）、`components/tenant-api/internal/federation/`（`token/`、`fedpolicy/`）、`components/tenant-api/internal/handler/federation/`、`scripts/tools/ops/federation_keygen.py`、`tests/federation-e2e/`。
