@@ -430,3 +430,90 @@ def test_git_that_cannot_run_is_a_named_refusal(monkeypatch, tmp_path, capsys, e
         call()
     assert exc.value.code == 2
     assert "cannot run git" in capsys.readouterr().err
+
+
+# ── the same decisions, in-process (#2852 follow-up) ─────────────────────────
+# The end-to-end cells above run each tool in a subprocess, which coverage
+# does not see. These call the helper itself on the same real layouts, so
+# every branch of require_git_project_root is measured where it runs.
+
+def _helper_in_process(monkeypatch, **env: str):
+    """The repo's helper, called in this process with *env* as the only git
+    variables (the test may itself run under a git hook)."""
+    sys.path.insert(0, str(TOOLS))
+    import _lib_compat  # noqa: PLC0415
+    for k in [k for k in os.environ if k.startswith("GIT_")]:
+        monkeypatch.delenv(k)
+    for k, v in {**_GIT_ENV, **env}.items():
+        monkeypatch.setenv(k, v)
+    return _lib_compat.require_git_project_root
+
+
+def _refused(capsys, call, *args) -> str:
+    with pytest.raises(SystemExit) as exc:
+        call(*args)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR:") and "(#2852)" in err, err
+    return err
+
+
+@pytest.mark.parametrize("kind", ["clone", "worktree"])
+def test_in_process_own_tree_is_returned(kind, tmp_path, monkeypatch):
+    root, _ = _layout(kind, tmp_path)
+    helper = _helper_in_process(monkeypatch)
+    assert helper(root / "scripts" / "tools") == root
+
+
+def test_in_process_another_work_tree_root_is_refused(tmp_path, monkeypatch, capsys):
+    root, outer = _layout("vendored", tmp_path)
+    helper = _helper_in_process(monkeypatch)
+    err = _refused(capsys, helper, root / "scripts" / "tools")
+    assert f"git reports the work tree root {outer}" in err
+
+
+def test_in_process_relative_and_gitfile_git_dir_are_accepted(tmp_path, monkeypatch):
+    clone, _ = _layout("clone", tmp_path / "c")
+    assert _helper_in_process(monkeypatch, GIT_DIR=".git")(
+        clone / "scripts" / "tools") == clone
+    wt, _ = _layout("worktree", tmp_path / "w")
+    assert (wt / ".git").is_file()
+    assert _helper_in_process(monkeypatch, GIT_DIR=str(wt / ".git"))(
+        wt / "scripts" / "tools") == wt
+
+
+@pytest.mark.parametrize("var", ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE"])
+def test_in_process_foreign_inherited_variable_is_refused(var, tmp_path, monkeypatch, capsys):
+    root, outer = _own_clone_inside_outer(tmp_path)
+    value = {"GIT_DIR": outer / ".git", "GIT_INDEX_FILE": outer / ".git" / "index",
+             "GIT_WORK_TREE": outer}[var]
+    helper = _helper_in_process(monkeypatch, **{var: str(value)})
+    err = _refused(capsys, helper, root / "scripts" / "tools")
+    assert f"inherited {var}={value}" in err
+
+
+def test_in_process_gitfile_pointing_elsewhere_is_refused(tmp_path, monkeypatch, capsys):
+    root, outer = _own_clone_inside_outer(tmp_path)
+    gitfile = tmp_path / "foreign.gitfile"
+    gitfile.write_text(f"gitdir: {outer / '.git'}\n", encoding="utf-8")
+    helper = _helper_in_process(monkeypatch, GIT_DIR=str(gitfile))
+    err = _refused(capsys, helper, root / "scripts" / "tools")
+    assert f"inherited GIT_DIR={gitfile}" in err
+
+
+def test_a_root_that_cannot_be_compared_is_a_named_refusal(monkeypatch, tmp_path, capsys):
+    """git answers with a toplevel that does not exist: samefile raises,
+    which must be a named refusal, not a traceback."""
+    def fake(argv, **kw):
+        out = b"GIT_DIR\n" if "--local-env-vars" in argv else b"/no/such/toplevel\n"
+        return subprocess.CompletedProcess(argv, 0, out, b"")
+    call = _helper_with_fake_run(monkeypatch, tmp_path, fake)
+    err = _refused(capsys, call)
+    assert "git's work tree root '/no/such/toplevel' cannot be compared" in err
+
+
+def test_git_that_hangs_is_a_named_refusal(monkeypatch, tmp_path, capsys):
+    def fake(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+    call = _helper_with_fake_run(monkeypatch, tmp_path, fake)
+    assert "timed out" in _refused(capsys, call)
